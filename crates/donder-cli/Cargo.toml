@@ -1,0 +1,14 @@
+[package]
+name = "donder-cli"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "donder"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+donder-project.workspace = true
+serde_json.workspace = true

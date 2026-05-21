@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Rust build output
+target/
+
+# Frontend build output
+dist/
+
+# Logs
+*.log
+chrome-*.txt
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local editor/project state
+.idea/
+
+# Local environment files
+.env
+.env.*

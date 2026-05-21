@@ -1,0 +1,25 @@
+[package]
+name = "donder-desktop"
+edition.workspace = true
+version.workspace = true
+description = "Donder desktop IDE"
+authors = ["Donder"]
+license = "MIT"
+
+[lib]
+name = "donder_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "donder-desktop"
+path = "src/main.rs"
+
+[dependencies]
+donder-project.workspace = true
+serde.workspace = true
+tauri.workspace = true
+tauri-plugin-dialog.workspace = true
+walkdir.workspace = true
+
+[build-dependencies]
+tauri-build.workspace = true
