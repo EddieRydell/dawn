@@ -1,8 +1,7 @@
 # Dawn v1 Language Specification
 
 This document describes the normative Dawn v1 language with examples and
-semantic rules. The complete grammar lives in
-[dawn-language-grammar.md](dawn-language-grammar.md).
+semantic rules.
 
 Dawn v1 is a family of typed documents with shared lexical rules, top-level
 typed imports, typed values, diagnostics, and one project-owned symbol graph.

@@ -1,7 +1,6 @@
 import display Main from <displays/Main.display.dawn>;
 import sequence Demo from <sequences/Demo.sequence.dawn>;
 
-// Root project document: owns the typed import graph.
 project SampleShow {
   version 1;
 

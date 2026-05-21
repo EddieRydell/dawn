@@ -1,7 +1,0 @@
-[package]
-name = "dawn-lang"
-edition.workspace = true
-version.workspace = true
-
-[dependencies]
-thiserror.workspace = true
