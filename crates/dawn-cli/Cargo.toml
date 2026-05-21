@@ -1,14 +1,14 @@
 [package]
-name = "donder-cli"
+name = "dawn-cli"
 edition.workspace = true
 version.workspace = true
 
 [[bin]]
-name = "donder"
+name = "dawn"
 path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-donder-project.workspace = true
+dawn-project.workspace = true
 serde_json.workspace = true

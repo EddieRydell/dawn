@@ -1,9 +1,9 @@
 {
-  "name": "donder-workspace",
+  "name": "dawn-workspace",
   "private": true,
   "scripts": {
-    "dev": "pnpm --filter @donder/desktop dev",
-    "desktop": "pnpm --filter @donder/desktop tauri dev"
+    "dev": "pnpm --filter @dawn/desktop dev",
+    "desktop": "pnpm --filter @dawn/desktop tauri dev"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"

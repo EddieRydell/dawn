@@ -136,7 +136,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       const selected = await open({
         directory: true,
         multiple: false,
-        title: "Open Donder Project"
+        title: "Open Dawn Project"
       });
       if (typeof selected === "string") {
         await get().openProject(selected);
@@ -147,7 +147,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
   },
   openProject: async (path) => {
     if (!path.trim()) {
-      set({ status: "Enter a project folder or project.donder path." });
+      set({ status: "Enter a project folder or project.dawn path." });
       return;
     }
 
@@ -404,5 +404,5 @@ function formatError(error: unknown) {
 }
 
 function isSequenceFile(path: string | null | undefined) {
-  return Boolean(path?.endsWith(".sequence.donder"));
+  return Boolean(path?.endsWith(".sequence.dawn"));
 }

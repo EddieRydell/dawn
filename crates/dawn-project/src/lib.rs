@@ -3,18 +3,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use donder_core::dsl::{compile_source, compiler::CompiledScript};
-use donder_core::effects;
-use donder_core::engine::Frame;
-use donder_core::model::{
-    BlendMode, BuiltInEffect, ChannelOrder, Color, ColorModel, Controller,
-    ControllerId, ControllerProtocol, EffectId, EffectInstance, EffectKind, EffectParams,
-    FixtureDef, FixtureGroup, FixtureId, GroupId, GroupMember, Layout, LayoutShape, NodeId,
-    NodeTimeline, OutputMapping, ParamSchema, ParamType, ParamValue, Patch, PixelType,
-    Position2D, Sequence, Show, TimeRange, TrackItem,
+use dawn_core::dsl::{compile_source, compiler::CompiledScript};
+use dawn_core::effects;
+use dawn_core::engine::Frame;
+use dawn_core::model::{
+    BlendMode, BuiltInEffect, ChannelOrder, Color, ColorModel, Controller, ControllerId,
+    ControllerProtocol, EffectId, EffectInstance, EffectKind, EffectParams, FixtureDef,
+    FixtureGroup, FixtureId, GroupId, GroupMember, Layout, LayoutShape, NodeId, NodeTimeline,
+    OutputMapping, ParamSchema, ParamType, ParamValue, Patch, PixelType, Position2D, Sequence,
+    Show, TimeRange, TrackItem,
 };
-use donder_lang::project as lang;
-use donder_lang::Value;
+use dawn_lang::project as lang;
+use dawn_lang::Value;
 use indexmap::IndexMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,19 +85,27 @@ pub fn check_project(project: impl AsRef<Path>) -> Result<CompiledProject> {
     reject_legacy_suffix(&project_file, &mut diagnostics);
 
     let mut graph = GraphLoader::new(root.clone());
-    let project_doc = match graph.load_donder(&project_file, &mut diagnostics)? {
+    let project_doc = match graph.load_dawn(&project_file, &mut diagnostics)? {
         lang::ProjectDocument::Project(doc) => doc,
         _ => {
-            diagnostics.push(Diagnostic::error(&project_file, "expected project document"));
+            diagnostics.push(Diagnostic::error(
+                &project_file,
+                "expected project document",
+            ));
             return Err(ProjectError::Validation { diagnostics });
         }
     };
-    validate_version(project_doc.version, "project", &project_file, &mut diagnostics);
+    validate_version(
+        project_doc.version,
+        "project",
+        &project_file,
+        &mut diagnostics,
+    );
 
     let mut displays = Vec::new();
     for include in &project_doc.displays {
         let path = resolve_include(&project_file, &include.path, &root, &mut diagnostics);
-        let doc = match graph.load_donder(&path, &mut diagnostics)? {
+        let doc = match graph.load_dawn(&path, &mut diagnostics)? {
             lang::ProjectDocument::Display(doc) => doc,
             _ => {
                 diagnostics.push(Diagnostic::error(&path, "expected display document"));
@@ -109,7 +117,10 @@ pub fn check_project(project: impl AsRef<Path>) -> Result<CompiledProject> {
     }
 
     if displays.is_empty() {
-        diagnostics.push(Diagnostic::error(&project_file, "project must include at least one display"));
+        diagnostics.push(Diagnostic::error(
+            &project_file,
+            "project must include at least one display",
+        ));
     }
 
     let mut symbol_table = SymbolTable::default();
@@ -122,13 +133,19 @@ pub fn check_project(project: impl AsRef<Path>) -> Result<CompiledProject> {
 
     for (display_path, display_symbol, display) in &displays {
         if display.name.name != *display_symbol {
-            diagnostics.push(Diagnostic::error(display_path, format!(
-                "display include name '{}' does not match display declaration '{}'",
-                display_symbol, display.name.name
-            )));
+            diagnostics.push(Diagnostic::error(
+                display_path,
+                format!(
+                    "display include name '{}' does not match display declaration '{}'",
+                    display_symbol, display.name.name
+                ),
+            ));
         }
         if !display_ids.insert(display.name.name.clone()) {
-            diagnostics.push(Diagnostic::error(display_path, format!("duplicate display '{}'", display.name.name)));
+            diagnostics.push(Diagnostic::error(
+                display_path,
+                format!("duplicate display '{}'", display.name.name),
+            ));
         }
         compile_display(
             display_path,
@@ -147,13 +164,19 @@ pub fn check_project(project: impl AsRef<Path>) -> Result<CompiledProject> {
 
     validate_group_members(&groups, &fixtures, &mut diagnostics, &project_file);
     validate_layouts(&layout_fixtures, &fixtures, &mut diagnostics, &project_file);
-    validate_patches(&patches, &fixtures, &controllers, &mut diagnostics, &project_file);
+    validate_patches(
+        &patches,
+        &fixtures,
+        &controllers,
+        &mut diagnostics,
+        &project_file,
+    );
 
     let mut sequences = Vec::new();
     let mut script_cache = IndexMap::new();
     for include in &project_doc.sequences {
         let path = resolve_include(&project_file, &include.path, &root, &mut diagnostics);
-        let doc = match graph.load_donder(&path, &mut diagnostics)? {
+        let doc = match graph.load_dawn(&path, &mut diagnostics)? {
             lang::ProjectDocument::Sequence(doc) => doc,
             _ => {
                 diagnostics.push(Diagnostic::error(&path, "expected sequence document"));
@@ -186,7 +209,10 @@ pub fn check_project(project: impl AsRef<Path>) -> Result<CompiledProject> {
     };
 
     detect_cycles(&graph.edges, &mut diagnostics);
-    if diagnostics.iter().any(|d| d.severity == DiagnosticSeverity::Error) {
+    if diagnostics
+        .iter()
+        .any(|d| d.severity == DiagnosticSeverity::Error)
+    {
         return Err(ProjectError::Validation { diagnostics });
     }
 
@@ -212,7 +238,7 @@ pub fn render_frame(sequence_file: impl AsRef<Path>, time: f64) -> Result<Frame>
         .iter()
         .position(|sequence| sequence.name == sequence_name_from_path(&sequence_file))
         .unwrap_or(0);
-    Ok(donder_core::evaluate(
+    Ok(dawn_core::evaluate(
         &compiled.show,
         sequence_index,
         time,
@@ -224,13 +250,13 @@ pub fn render_frame(sequence_file: impl AsRef<Path>, time: f64) -> Result<Frame>
 
 fn find_project_for_sequence(sequence_file: &Path) -> Result<PathBuf> {
     for ancestor in sequence_file.ancestors() {
-        let candidate = ancestor.join("project.donder");
+        let candidate = ancestor.join("project.dawn");
         if candidate.exists() {
             return Ok(candidate);
         }
     }
     Err(ProjectError::Message(format!(
-        "could not find project.donder above {}",
+        "could not find project.dawn above {}",
         sequence_file.display()
     )))
 }
@@ -253,7 +279,7 @@ fn compile_display(
     fixtures: &mut Vec<FixtureDef>,
     groups: &mut Vec<FixtureGroup>,
     controllers: &mut Vec<Controller>,
-    layout_fixtures: &mut Vec<donder_core::model::FixtureLayout>,
+    layout_fixtures: &mut Vec<dawn_core::model::FixtureLayout>,
     patches: &mut Vec<Patch>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<()> {
@@ -261,10 +287,15 @@ fn compile_display(
 
     for source in &display.fixtures {
         if symbols.fixtures.contains_key(&source.name.name) {
-            diagnostics.push(Diagnostic::error(display_path, format!("duplicate fixture '{}'", source.name.name)));
+            diagnostics.push(Diagnostic::error(
+                display_path,
+                format!("duplicate fixture '{}'", source.name.name),
+            ));
             continue;
         }
-        let Some(pixel_count) = const_expr_to_u32(display_path, &source.pixel_count, &consts, diagnostics) else {
+        let Some(pixel_count) =
+            const_expr_to_u32(display_path, &source.pixel_count, &consts, diagnostics)
+        else {
             continue;
         };
         let id = FixtureId((symbols.fixtures.len() + 1) as u32);
@@ -272,20 +303,31 @@ fn compile_display(
         fixtures.push(FixtureDef {
             id,
             name: source.name.name.clone(),
-            color_model: source.color_model.as_ref().and_then(|id| parse_color_model(&id.name)).unwrap_or(ColorModel::Rgb),
+            color_model: source
+                .color_model
+                .as_ref()
+                .and_then(|id| parse_color_model(&id.name))
+                .unwrap_or(ColorModel::Rgb),
             pixel_count,
             pixel_type: PixelType::Smart,
-            bulb_shape: donder_core::model::BulbShape::LED,
+            bulb_shape: dawn_core::model::BulbShape::LED,
             requires_layout: true,
             requires_patch: true,
             display_radius_override: None,
-            channel_order: source.channel_order.as_ref().and_then(|id| parse_channel_order(&id.name)).unwrap_or(ChannelOrder::Rgb),
+            channel_order: source
+                .channel_order
+                .as_ref()
+                .and_then(|id| parse_channel_order(&id.name))
+                .unwrap_or(ChannelOrder::Rgb),
         });
     }
 
     for source in &display.groups {
         if symbols.groups.contains_key(&source.name.name) {
-            diagnostics.push(Diagnostic::error(display_path, format!("duplicate group '{}'", source.name.name)));
+            diagnostics.push(Diagnostic::error(
+                display_path,
+                format!("duplicate group '{}'", source.name.name),
+            ));
             continue;
         }
         let id = GroupId((symbols.groups.len() + 1) as u32);
@@ -304,7 +346,13 @@ fn compile_display(
                 } else if let Some(id) = symbols.groups.get(&member.name) {
                     Some(GroupMember::Group(*id))
                 } else {
-                    diagnostics.push(Diagnostic::error(display_path, format!("group '{}' references unknown member '{}'", source.name.name, member.name)));
+                    diagnostics.push(Diagnostic::error(
+                        display_path,
+                        format!(
+                            "group '{}' references unknown member '{}'",
+                            source.name.name, member.name
+                        ),
+                    ));
                     None
                 }
             })
@@ -320,7 +368,7 @@ fn compile_display(
         let path = resolve_include(display_path, &include.path, root, diagnostics);
         match include.section.name.as_str() {
             "controllers" => {
-                let doc = match graph.load_donder(&path, diagnostics)? {
+                let doc = match graph.load_dawn(&path, diagnostics)? {
                     lang::ProjectDocument::Controllers(doc) => doc,
                     _ => {
                         diagnostics.push(Diagnostic::error(&path, "expected controllers document"));
@@ -330,7 +378,10 @@ fn compile_display(
                 validate_version(doc.version, "controllers", &path, diagnostics);
                 for source in doc.controllers {
                     if symbols.controllers.contains_key(&source.name.name) {
-                        diagnostics.push(Diagnostic::error(&path, format!("duplicate controller '{}'", source.name.name)));
+                        diagnostics.push(Diagnostic::error(
+                            &path,
+                            format!("duplicate controller '{}'", source.name.name),
+                        ));
                         continue;
                     }
                     let id = ControllerId((symbols.controllers.len() + 1) as u32);
@@ -347,7 +398,7 @@ fn compile_display(
                 }
             }
             "layout" => {
-                let doc = match graph.load_donder(&path, diagnostics)? {
+                let doc = match graph.load_dawn(&path, diagnostics)? {
                     lang::ProjectDocument::Layout(doc) => doc,
                     _ => {
                         diagnostics.push(Diagnostic::error(&path, "expected layout document"));
@@ -356,25 +407,34 @@ fn compile_display(
                 };
                 validate_version(doc.version, "layout", &path, diagnostics);
                 for source in doc.fixtures {
-                    let Some(fixture_id) = symbols.fixtures.get(&source.fixture.name).copied() else {
-                        diagnostics.push(Diagnostic::error(&path, format!("layout references unknown fixture '{}'", source.fixture.name)));
+                    let Some(fixture_id) = symbols.fixtures.get(&source.fixture.name).copied()
+                    else {
+                        diagnostics.push(Diagnostic::error(
+                            &path,
+                            format!(
+                                "layout references unknown fixture '{}'",
+                                source.fixture.name
+                            ),
+                        ));
                         continue;
                     };
-                    let shape = source.shape.map_or(LayoutShape::Custom, |shape| match shape {
-                        lang::LayoutShapeSource::Line { start, end } => LayoutShape::Line {
-                            start: to_position(start),
-                            end: to_position(end),
-                        },
-                        lang::LayoutShapeSource::Grid {
-                            top_left,
-                            bottom_right,
-                            columns,
-                        } => LayoutShape::Grid {
-                            top_left: to_position(top_left),
-                            bottom_right: to_position(bottom_right),
-                            columns,
-                        },
-                    });
+                    let shape = source
+                        .shape
+                        .map_or(LayoutShape::Custom, |shape| match shape {
+                            lang::LayoutShapeSource::Line { start, end } => LayoutShape::Line {
+                                start: to_position(start),
+                                end: to_position(end),
+                            },
+                            lang::LayoutShapeSource::Grid {
+                                top_left,
+                                bottom_right,
+                                columns,
+                            } => LayoutShape::Grid {
+                                top_left: to_position(top_left),
+                                bottom_right: to_position(bottom_right),
+                                columns,
+                            },
+                        });
                     let pixel_count = fixtures
                         .iter()
                         .find(|fixture| fixture.id == fixture_id)
@@ -385,7 +445,7 @@ fn compile_display(
                     } else {
                         source.positions.into_iter().map(to_position).collect()
                     };
-                    layout_fixtures.push(donder_core::model::FixtureLayout {
+                    layout_fixtures.push(dawn_core::model::FixtureLayout {
                         fixture_id,
                         pixel_positions: positions,
                         shape,
@@ -393,7 +453,7 @@ fn compile_display(
                 }
             }
             "patch" => {
-                let doc = match graph.load_donder(&path, diagnostics)? {
+                let doc = match graph.load_dawn(&path, diagnostics)? {
                     lang::ProjectDocument::Patch(doc) => doc,
                     _ => {
                         diagnostics.push(Diagnostic::error(&path, "expected patch document"));
@@ -402,12 +462,24 @@ fn compile_display(
                 };
                 validate_version(doc.version, "patch", &path, diagnostics);
                 for source in doc.patches {
-                    let Some(fixture_id) = symbols.fixtures.get(&source.fixture.name).copied() else {
-                        diagnostics.push(Diagnostic::error(&path, format!("patch references unknown fixture '{}'", source.fixture.name)));
+                    let Some(fixture_id) = symbols.fixtures.get(&source.fixture.name).copied()
+                    else {
+                        diagnostics.push(Diagnostic::error(
+                            &path,
+                            format!("patch references unknown fixture '{}'", source.fixture.name),
+                        ));
                         continue;
                     };
-                    let Some(controller_id) = symbols.controllers.get(&source.controller.name).copied() else {
-                        diagnostics.push(Diagnostic::error(&path, format!("patch references unknown controller '{}'", source.controller.name)));
+                    let Some(controller_id) =
+                        symbols.controllers.get(&source.controller.name).copied()
+                    else {
+                        diagnostics.push(Diagnostic::error(
+                            &path,
+                            format!(
+                                "patch references unknown controller '{}'",
+                                source.controller.name
+                            ),
+                        ));
                         continue;
                     };
                     patches.push(Patch {
@@ -422,7 +494,10 @@ fn compile_display(
                     });
                 }
             }
-            other => diagnostics.push(Diagnostic::error(display_path, format!("unknown include section '{other}'"))),
+            other => diagnostics.push(Diagnostic::error(
+                display_path,
+                format!("unknown include section '{other}'"),
+            )),
         }
     }
 
@@ -453,7 +528,10 @@ fn compile_sequence(
                 }
                 Err(errors) => diagnostics.push(Diagnostic::error(
                     &script_path,
-                    format!("script '{}' failed to compile: {errors:?}", script.name.name),
+                    format!(
+                        "script '{}' failed to compile: {errors:?}",
+                        script.name.name
+                    ),
                 )),
             },
             Err(err) => diagnostics.push(Diagnostic::error(
@@ -466,22 +544,43 @@ fn compile_sequence(
     let mut node_timelines: HashMap<NodeId, NodeTimeline> = HashMap::new();
     for (index, event) in doc.events.iter().enumerate() {
         let Some(node_id) = resolve_target(&event.target.name, symbols) else {
-            diagnostics.push(Diagnostic::error(sequence_path, format!("event {} references unknown target '{}'", index + 1, event.target.name)));
+            diagnostics.push(Diagnostic::error(
+                sequence_path,
+                format!(
+                    "event {} references unknown target '{}'",
+                    index + 1,
+                    event.target.name
+                ),
+            ));
             continue;
         };
         let Some(kind) = resolve_effect_kind(&event.effect.name, script_cache) else {
-            diagnostics.push(Diagnostic::error(sequence_path, format!("event {} references unknown effect '{}'", index + 1, event.effect.name)));
+            diagnostics.push(Diagnostic::error(
+                sequence_path,
+                format!(
+                    "event {} references unknown effect '{}'",
+                    index + 1,
+                    event.effect.name
+                ),
+            ));
             continue;
         };
-        if !event.start.is_finite() || event.start < 0.0 || !event.duration.is_finite() || event.duration <= 0.0 {
-            diagnostics.push(Diagnostic::error(sequence_path, format!("event {} has invalid start/duration", index + 1)));
+        if !event.start.is_finite()
+            || event.start < 0.0
+            || !event.duration.is_finite()
+            || event.duration <= 0.0
+        {
+            diagnostics.push(Diagnostic::error(
+                sequence_path,
+                format!("event {} has invalid start/duration", index + 1),
+            ));
             continue;
         }
         let schemas = match &kind {
             EffectKind::BuiltIn(effect) => effects::effect_schema(effect),
             EffectKind::Script(name) => script_cache
                 .get(name)
-                .map(|script| donder_core::registry::types::extract_script_schemas(script))
+                .map(|script| dawn_core::registry::types::extract_script_schemas(script))
                 .unwrap_or_default(),
         };
         let params = convert_params(sequence_path, &event.params, &schemas, diagnostics);
@@ -537,16 +636,25 @@ fn convert_params(
 
     for assignment in values {
         if !seen.insert(assignment.name.name.clone()) {
-            diagnostics.push(Diagnostic::error(path, format!("duplicate parameter '{}'", assignment.name.name)));
+            diagnostics.push(Diagnostic::error(
+                path,
+                format!("duplicate parameter '{}'", assignment.name.name),
+            ));
             continue;
         }
         let Some(schema) = by_name.get(&assignment.name.name) else {
-            diagnostics.push(Diagnostic::error(path, format!("unknown parameter '{}'", assignment.name.name)));
+            diagnostics.push(Diagnostic::error(
+                path,
+                format!("unknown parameter '{}'", assignment.name.name),
+            ));
             continue;
         };
         match const_expr_to_param_value(&assignment.value, &schema.param_type) {
             Some(converted) => params.set_mut(schema.key.clone(), converted),
-            None => diagnostics.push(Diagnostic::error(path, format!("invalid value for parameter '{}'", assignment.name.name))),
+            None => diagnostics.push(Diagnostic::error(
+                path,
+                format!("invalid value for parameter '{}'", assignment.name.name),
+            )),
         }
     }
 
@@ -622,18 +730,28 @@ fn const_expr_to_param_value(expr: &lang::ConstExpr, param_type: &ParamType) -> 
     }
 }
 
-fn const_table(path: &Path, consts: &[lang::ConstDecl], diagnostics: &mut Vec<Diagnostic>) -> HashMap<String, Value> {
+fn const_table(
+    path: &Path,
+    consts: &[lang::ConstDecl],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> HashMap<String, Value> {
     let mut table = HashMap::new();
     for decl in consts {
         if table.contains_key(&decl.name.name) {
-            diagnostics.push(Diagnostic::error(path, format!("duplicate const '{}'", decl.name.name)));
+            diagnostics.push(Diagnostic::error(
+                path,
+                format!("duplicate const '{}'", decl.name.name),
+            ));
             continue;
         }
         match eval_project_const(&decl.value, &table) {
             Ok(value) => {
                 table.insert(decl.name.name.clone(), value);
             }
-            Err(message) => diagnostics.push(Diagnostic::error(path, format!("invalid const '{}': {message}", decl.name.name))),
+            Err(message) => diagnostics.push(Diagnostic::error(
+                path,
+                format!("invalid const '{}': {message}", decl.name.name),
+            )),
         }
     }
     table
@@ -658,11 +776,20 @@ fn const_expr_to_u32(
     }
 }
 
-fn eval_project_const(expr: &lang::ConstExpr, consts: &HashMap<String, Value>) -> std::result::Result<Value, String> {
+fn eval_project_const(
+    expr: &lang::ConstExpr,
+    consts: &HashMap<String, Value>,
+) -> std::result::Result<Value, String> {
     match &expr.kind {
         lang::ConstExprKind::Value(value) => Ok(value.clone()),
-        lang::ConstExprKind::Ref(name) => Ok(consts.get(name).cloned().unwrap_or_else(|| Value::Ref(name.clone()))),
-        lang::ConstExprKind::Unary { op: lang::ConstUnaryOp::Neg, expr } => match eval_project_const(expr, consts)? {
+        lang::ConstExprKind::Ref(name) => Ok(consts
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| Value::Ref(name.clone()))),
+        lang::ConstExprKind::Unary {
+            op: lang::ConstUnaryOp::Neg,
+            expr,
+        } => match eval_project_const(expr, consts)? {
             Value::Int(value) => Ok(Value::Int(-value)),
             Value::Float(value) => Ok(Value::Float(-value)),
             _ => Err("unary '-' requires a number".to_string()),
@@ -670,7 +797,8 @@ fn eval_project_const(expr: &lang::ConstExpr, consts: &HashMap<String, Value>) -
         lang::ConstExprKind::Binary { op, left, right } => {
             let left = eval_project_const(left, consts)?;
             let right = eval_project_const(right, consts)?;
-            eval_const_binary(*op, left, right).ok_or_else(|| "binary const operator requires numbers".to_string())
+            eval_const_binary(*op, left, right)
+                .ok_or_else(|| "binary const operator requires numbers".to_string())
         }
     }
 }
@@ -732,25 +860,25 @@ fn parse_channel_order(name: &str) -> Option<ChannelOrder> {
     }
 }
 
-fn parse_color_mode(name: &str) -> Option<donder_core::model::ColorMode> {
+fn parse_color_mode(name: &str) -> Option<dawn_core::model::ColorMode> {
     match name {
-        "Static" => Some(donder_core::model::ColorMode::Static),
-        "GradientPerPulse" => Some(donder_core::model::ColorMode::GradientPerPulse),
-        "GradientThroughEffect" => Some(donder_core::model::ColorMode::GradientThroughEffect),
-        "GradientAcrossItems" => Some(donder_core::model::ColorMode::GradientAcrossItems),
+        "Static" => Some(dawn_core::model::ColorMode::Static),
+        "GradientPerPulse" => Some(dawn_core::model::ColorMode::GradientPerPulse),
+        "GradientThroughEffect" => Some(dawn_core::model::ColorMode::GradientThroughEffect),
+        "GradientAcrossItems" => Some(dawn_core::model::ColorMode::GradientAcrossItems),
         _ => None,
     }
 }
 
-fn parse_wipe_direction(name: &str) -> Option<donder_core::model::WipeDirection> {
+fn parse_wipe_direction(name: &str) -> Option<dawn_core::model::WipeDirection> {
     match name {
-        "Horizontal" => Some(donder_core::model::WipeDirection::Horizontal),
-        "Vertical" => Some(donder_core::model::WipeDirection::Vertical),
-        "DiagonalUp" => Some(donder_core::model::WipeDirection::DiagonalUp),
-        "DiagonalDown" => Some(donder_core::model::WipeDirection::DiagonalDown),
-        "Burst" => Some(donder_core::model::WipeDirection::Burst),
-        "Circle" => Some(donder_core::model::WipeDirection::Circle),
-        "Diamond" => Some(donder_core::model::WipeDirection::Diamond),
+        "Horizontal" => Some(dawn_core::model::WipeDirection::Horizontal),
+        "Vertical" => Some(dawn_core::model::WipeDirection::Vertical),
+        "DiagonalUp" => Some(dawn_core::model::WipeDirection::DiagonalUp),
+        "DiagonalDown" => Some(dawn_core::model::WipeDirection::DiagonalDown),
+        "Burst" => Some(dawn_core::model::WipeDirection::Burst),
+        "Circle" => Some(dawn_core::model::WipeDirection::Circle),
+        "Diamond" => Some(dawn_core::model::WipeDirection::Diamond),
         _ => None,
     }
 }
@@ -775,8 +903,12 @@ fn validate_group_members(
     for group in groups {
         for member in &group.members {
             match member {
-                GroupMember::Fixture(id) if !fixture_ids.contains(id) => diagnostics.push(Diagnostic::error(path, "group has unresolved fixture member")),
-                GroupMember::Group(id) if !group_ids.contains(id) => diagnostics.push(Diagnostic::error(path, "group has unresolved group member")),
+                GroupMember::Fixture(id) if !fixture_ids.contains(id) => diagnostics.push(
+                    Diagnostic::error(path, "group has unresolved fixture member"),
+                ),
+                GroupMember::Group(id) if !group_ids.contains(id) => {
+                    diagnostics.push(Diagnostic::error(path, "group has unresolved group member"))
+                }
                 _ => {}
             }
         }
@@ -784,15 +916,26 @@ fn validate_group_members(
 }
 
 fn validate_layouts(
-    layouts: &[donder_core::model::FixtureLayout],
+    layouts: &[dawn_core::model::FixtureLayout],
     fixtures: &[FixtureDef],
     diagnostics: &mut Vec<Diagnostic>,
     path: &Path,
 ) {
     for layout in layouts {
-        if let Some(fixture) = fixtures.iter().find(|fixture| fixture.id == layout.fixture_id) {
+        if let Some(fixture) = fixtures
+            .iter()
+            .find(|fixture| fixture.id == layout.fixture_id)
+        {
             if layout.pixel_positions.len() != fixture.pixel_count as usize {
-                diagnostics.push(Diagnostic::error(path, format!("layout for fixture {} has {} positions, expected {}", fixture.name, layout.pixel_positions.len(), fixture.pixel_count)));
+                diagnostics.push(Diagnostic::error(
+                    path,
+                    format!(
+                        "layout for fixture {} has {} positions, expected {}",
+                        fixture.name,
+                        layout.pixel_positions.len(),
+                        fixture.pixel_count
+                    ),
+                ));
             }
         }
     }
@@ -834,7 +977,7 @@ impl GraphLoader {
         }
     }
 
-    fn load_donder(
+    fn load_dawn(
         &mut self,
         path: &Path,
         diagnostics: &mut Vec<Diagnostic>,
@@ -842,19 +985,29 @@ impl GraphLoader {
         let path = canonical_or_original(path);
         reject_legacy_suffix(&path, diagnostics);
         if !path.starts_with(&self.root) {
-            diagnostics.push(Diagnostic::warning(&path, "external reference leaves the project folder"));
+            diagnostics.push(Diagnostic::warning(
+                &path,
+                "external reference leaves the project folder",
+            ));
         }
         if !self.visiting.insert(path.clone()) {
             diagnostics.push(Diagnostic::error(&path, "include cycle detected"));
         }
         let raw = fs::read_to_string(&path).map_err(|err| {
-            diagnostics.push(Diagnostic::error(&path, format!("could not read Donder document: {err}")));
+            diagnostics.push(Diagnostic::error(
+                &path,
+                format!("could not read Dawn document: {err}"),
+            ));
             ProjectError::Validation {
                 diagnostics: diagnostics.clone(),
             }
         })?;
         let parsed = lang::parse_document(&path, &raw).map_err(|errors| {
-            diagnostics.extend(errors.into_iter().map(|diagnostic| Diagnostic::error(diagnostic.path, diagnostic.message)));
+            diagnostics.extend(
+                errors
+                    .into_iter()
+                    .map(|diagnostic| Diagnostic::error(diagnostic.path, diagnostic.message)),
+            );
             ProjectError::Validation {
                 diagnostics: diagnostics.clone(),
             }
@@ -864,14 +1017,12 @@ impl GraphLoader {
     }
 }
 
-fn validate_version(
-    version: u32,
-    expected: &str,
-    path: &Path,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn validate_version(version: u32, expected: &str, path: &Path, diagnostics: &mut Vec<Diagnostic>) {
     if version != 1 {
-        diagnostics.push(Diagnostic::error(path, format!("unsupported {expected} version {version}")));
+        diagnostics.push(Diagnostic::error(
+            path,
+            format!("unsupported {expected} version {version}"),
+        ));
     }
 }
 
@@ -885,7 +1036,10 @@ fn resolve_include(
     let path = canonical_or_original(&base.join(include));
     reject_legacy_suffix(&path, diagnostics);
     if !path.starts_with(root) {
-        diagnostics.push(Diagnostic::warning(&path, "external reference leaves the project folder"));
+        diagnostics.push(Diagnostic::warning(
+            &path,
+            "external reference leaves the project folder",
+        ));
     }
     path
 }
@@ -894,12 +1048,22 @@ fn detect_cycles(edges: &[(PathBuf, PathBuf)], diagnostics: &mut Vec<Diagnostic>
     let mut stack = Vec::<PathBuf>::new();
     let mut visiting = HashSet::<PathBuf>::new();
     let mut visited = HashSet::<PathBuf>::new();
-    let adjacency = edges.iter().fold(HashMap::<&PathBuf, Vec<&PathBuf>>::new(), |mut acc, (from, to)| {
-        acc.entry(from).or_default().push(to);
-        acc
-    });
+    let adjacency = edges.iter().fold(
+        HashMap::<&PathBuf, Vec<&PathBuf>>::new(),
+        |mut acc, (from, to)| {
+            acc.entry(from).or_default().push(to);
+            acc
+        },
+    );
     for node in adjacency.keys() {
-        visit_cycle(node, &adjacency, &mut stack, &mut visiting, &mut visited, diagnostics);
+        visit_cycle(
+            node,
+            &adjacency,
+            &mut stack,
+            &mut visiting,
+            &mut visited,
+            diagnostics,
+        );
     }
 }
 
@@ -915,7 +1079,17 @@ fn visit_cycle<'a>(
         return;
     }
     if !visiting.insert(node.clone()) {
-        diagnostics.push(Diagnostic::error(node, format!("include cycle: {}", stack.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(" -> "))));
+        diagnostics.push(Diagnostic::error(
+            node,
+            format!(
+                "include cycle: {}",
+                stack
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            ),
+        ));
         return;
     }
     stack.push(node.clone());
@@ -932,7 +1106,7 @@ fn visit_cycle<'a>(
 fn normalize_project_path(path: &Path) -> Result<PathBuf> {
     reject_legacy_path(path)?;
     let candidate = if path.is_dir() {
-        path.join("project.donder")
+        path.join("project.dawn")
     } else {
         path.to_path_buf()
     };
@@ -945,14 +1119,19 @@ fn canonical_or_original(path: &Path) -> PathBuf {
 
 fn reject_legacy_path(path: &Path) -> Result<()> {
     if is_legacy_suffix(path) {
-        return Err(ProjectError::Message("legacy .jsonc and .vibe files are no longer accepted; use .donder".to_string()));
+        return Err(ProjectError::Message(
+            "legacy .jsonc and .vibe files are no longer accepted; use .dawn".to_string(),
+        ));
     }
     Ok(())
 }
 
 fn reject_legacy_suffix(path: &Path, diagnostics: &mut Vec<Diagnostic>) {
     if is_legacy_suffix(path) {
-        diagnostics.push(Diagnostic::error(path, "legacy .jsonc and .vibe files are no longer accepted; use .donder"));
+        diagnostics.push(Diagnostic::error(
+            path,
+            "legacy .jsonc and .vibe files are no longer accepted; use .dawn",
+        ));
     }
 }
 
@@ -969,18 +1148,18 @@ pub fn create_starter_project(path: impl AsRef<Path>, name: &str) -> std::io::Re
     fs::create_dir_all(root.join("sequences"))?;
     fs::create_dir_all(root.join("effects"))?;
     fs::write(
-        root.join("project.donder"),
+        root.join("project.dawn"),
         format!(
             r#"project {project_name} {{
   version 1;
-  display Main from "displays/Main.display.donder";
-  sequence Demo from "sequences/Demo.sequence.donder";
+  display Main from "displays/Main.display.dawn";
+  sequence Demo from "sequences/Demo.sequence.dawn";
 }}
 "#
         ),
     )?;
     fs::write(
-        root.join("displays/Main.display.donder"),
+        root.join("displays/Main.display.dawn"),
         r#"display Main {
   version 1;
   const RoofPixels: Int = 50;
@@ -995,14 +1174,14 @@ pub fn create_starter_project(path: impl AsRef<Path>, name: &str) -> std::io::Re
     members [Roofline];
   }
 
-  include controllers from "controllers.donder";
-  include layout from "layout.donder";
-  include patch from "patch.donder";
+  include controllers from "controllers.dawn";
+  include layout from "layout.dawn";
+  include patch from "patch.dawn";
 }
 "#,
     )?;
     fs::write(
-        root.join("displays/controllers.donder"),
+        root.join("displays/controllers.dawn"),
         r#"controllers {
   version 1;
 
@@ -1013,7 +1192,7 @@ pub fn create_starter_project(path: impl AsRef<Path>, name: &str) -> std::io::Re
 "#,
     )?;
     fs::write(
-        root.join("displays/layout.donder"),
+        root.join("displays/layout.dawn"),
         r#"layout {
   version 1;
 
@@ -1027,7 +1206,7 @@ pub fn create_starter_project(path: impl AsRef<Path>, name: &str) -> std::io::Re
 "#,
     )?;
     fs::write(
-        root.join("displays/patch.donder"),
+        root.join("displays/patch.dawn"),
         r#"patch {
   version 1;
 
@@ -1039,7 +1218,7 @@ pub fn create_starter_project(path: impl AsRef<Path>, name: &str) -> std::io::Re
 "#,
     )?;
     fs::write(
-        root.join("sequences/Demo.sequence.donder"),
+        root.join("sequences/Demo.sequence.dawn"),
         r##"sequence Demo {
   version 1;
   display Main;
@@ -1091,7 +1270,7 @@ mod tests {
         assert_eq!(compiled.show.fixtures.len(), 1);
         assert_eq!(compiled.show.sequences.len(), 1);
 
-        let frame = render_frame(dir.path().join("sequences/Demo.sequence.donder"), 1.0)
+        let frame = render_frame(dir.path().join("sequences/Demo.sequence.dawn"), 1.0)
             .expect("frame should render");
         assert_eq!(frame.pixels.len(), 50 * 4);
         assert_eq!(frame.fixture_spans.len(), 1);
@@ -1101,7 +1280,7 @@ mod tests {
     fn missing_event_target_is_validation_error() {
         let dir = tempfile::tempdir().expect("temp dir");
         create_starter_project(dir.path(), "BrokenShow").expect("starter project");
-        let sequence = dir.path().join("sequences/Demo.sequence.donder");
+        let sequence = dir.path().join("sequences/Demo.sequence.dawn");
         let content = fs::read_to_string(&sequence)
             .expect("read sequence")
             .replace("event All", "event Missing");
@@ -1119,7 +1298,8 @@ mod tests {
     fn legacy_jsonc_is_rejected() {
         let dir = tempfile::tempdir().expect("temp dir");
         fs::write(dir.path().join("project.jsonc"), "{}").expect("write jsonc");
-        let err = check_project(dir.path().join("project.jsonc")).expect_err("legacy path should fail");
+        let err =
+            check_project(dir.path().join("project.jsonc")).expect_err("legacy path should fail");
         assert!(err.to_string().contains("no longer accepted"));
     }
 
@@ -1127,7 +1307,7 @@ mod tests {
     fn unknown_param_is_validation_error() {
         let dir = tempfile::tempdir().expect("temp dir");
         create_starter_project(dir.path(), "BrokenShow").expect("starter project");
-        let sequence = dir.path().join("sequences/Demo.sequence.donder");
+        let sequence = dir.path().join("sequences/Demo.sequence.dawn");
         let content = fs::read_to_string(&sequence)
             .expect("read sequence")
             .replace("Color #40c4ff;", "NotAParam 1;");

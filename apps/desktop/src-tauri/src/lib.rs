@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use donder_project::{Diagnostic, DiagnosticSeverity, ProjectError};
+use dawn_project::{Diagnostic, DiagnosticSeverity, ProjectError};
 use serde::Serialize;
 use tauri::State;
 use walkdir::WalkDir;
@@ -64,7 +64,7 @@ struct FrameSummary {
 fn open_project(path: String, state: State<'_, AppState>) -> Result<ProjectState, String> {
     let path = PathBuf::from(path);
     let project_file = if path.is_dir() {
-        path.join("project.donder")
+        path.join("project.dawn")
     } else {
         path
     };
@@ -73,7 +73,10 @@ fn open_project(path: String, state: State<'_, AppState>) -> Result<ProjectState
         .map(Path::to_path_buf)
         .ok_or_else(|| "project file has no parent".to_string())?;
     {
-        let mut session = state.project.lock().map_err(|_| "project state lock failed")?;
+        let mut session = state
+            .project
+            .lock()
+            .map_err(|_| "project state lock failed")?;
         session.root = Some(root.clone());
         session.project_file = Some(project_file.clone());
     }
@@ -83,13 +86,22 @@ fn open_project(path: String, state: State<'_, AppState>) -> Result<ProjectState
 #[tauri::command]
 fn check_project(state: State<'_, AppState>) -> Result<ProjectState, String> {
     let (root, project_file) = {
-        let session = state.project.lock().map_err(|_| "project state lock failed")?;
+        let session = state
+            .project
+            .lock()
+            .map_err(|_| "project state lock failed")?;
         (
-            session.root.clone().ok_or_else(|| "no project open".to_string())?,
-            session.project_file.clone().ok_or_else(|| "no project open".to_string())?,
+            session
+                .root
+                .clone()
+                .ok_or_else(|| "no project open".to_string())?,
+            session
+                .project_file
+                .clone()
+                .ok_or_else(|| "no project open".to_string())?,
         )
     };
-    let diagnostics = match donder_project::check_project(&project_file) {
+    let diagnostics = match dawn_project::check_project(&project_file) {
         Ok(compiled) => compiled.diagnostics,
         Err(ProjectError::Validation { diagnostics }) => diagnostics,
         Err(err) => return Err(err.to_string()),
@@ -113,7 +125,11 @@ fn write_file(path: String, content: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn rename_path(path: String, new_name: String, state: State<'_, AppState>) -> Result<FileOperationState, String> {
+fn rename_path(
+    path: String,
+    new_name: String,
+    state: State<'_, AppState>,
+) -> Result<FileOperationState, String> {
     let root = project_root(&state)?;
     validate_file_name(&new_name)?;
     let old_path = ensure_inside_root(&root, PathBuf::from(path))?;
@@ -137,7 +153,11 @@ fn rename_path(path: String, new_name: String, state: State<'_, AppState>) -> Re
 }
 
 #[tauri::command]
-fn move_paths(paths: Vec<String>, new_parent: String, state: State<'_, AppState>) -> Result<FileOperationState, String> {
+fn move_paths(
+    paths: Vec<String>,
+    new_parent: String,
+    state: State<'_, AppState>,
+) -> Result<FileOperationState, String> {
     let root = project_root(&state)?;
     let new_parent = ensure_inside_root(&root, PathBuf::from(new_parent))?;
     if !new_parent.is_dir() {
@@ -176,7 +196,10 @@ fn move_paths(paths: Vec<String>, new_parent: String, state: State<'_, AppState>
 
 #[tauri::command]
 fn open_sequence(path: String, state: State<'_, AppState>) -> Result<(), String> {
-    let mut session = state.project.lock().map_err(|_| "project state lock failed")?;
+    let mut session = state
+        .project
+        .lock()
+        .map_err(|_| "project state lock failed")?;
     session.active_sequence = Some(PathBuf::from(path));
     Ok(())
 }
@@ -184,13 +207,16 @@ fn open_sequence(path: String, state: State<'_, AppState>) -> Result<(), String>
 #[tauri::command]
 fn render_frame(time: f64, state: State<'_, AppState>) -> Result<FrameSummary, String> {
     let sequence = {
-        let session = state.project.lock().map_err(|_| "project state lock failed")?;
+        let session = state
+            .project
+            .lock()
+            .map_err(|_| "project state lock failed")?;
         session
             .active_sequence
             .clone()
             .ok_or_else(|| "no sequence open".to_string())?
     };
-    let frame = donder_project::render_frame(sequence, time).map_err(|err| err.to_string())?;
+    let frame = dawn_project::render_frame(sequence, time).map_err(|err| err.to_string())?;
     Ok(FrameSummary {
         pixels: frame.pixels.len() / 4,
         fixture_spans: frame.fixture_spans.len(),
@@ -225,7 +251,7 @@ pub fn run() {
             seek
         ])
         .run(tauri::generate_context!())
-        .expect("failed to run Donder");
+        .expect("failed to run Dawn");
 }
 
 fn list_source_files(root: &Path) -> Vec<String> {
@@ -237,7 +263,7 @@ fn list_source_files(root: &Path) -> Vec<String> {
         .filter(|path| {
             path.extension()
                 .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext == "donder")
+                .is_some_and(|ext| ext == "dawn")
         })
         .map(|path| path.display().to_string())
         .collect::<Vec<_>>();
@@ -252,7 +278,12 @@ fn list_project_entries(root: &Path) -> Vec<ProjectEntryDto> {
         .filter_map(Result::ok)
         .map(|entry| ProjectEntryDto {
             path: entry.path().display().to_string(),
-            kind: if entry.file_type().is_dir() { "directory" } else { "file" }.to_string(),
+            kind: if entry.file_type().is_dir() {
+                "directory"
+            } else {
+                "file"
+            }
+            .to_string(),
         })
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.path.cmp(&right.path));
@@ -260,8 +291,14 @@ fn list_project_entries(root: &Path) -> Vec<ProjectEntryDto> {
 }
 
 fn project_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
-    let session = state.project.lock().map_err(|_| "project state lock failed")?;
-    session.root.clone().ok_or_else(|| "no project open".to_string())
+    let session = state
+        .project
+        .lock()
+        .map_err(|_| "project state lock failed")?;
+    session
+        .root
+        .clone()
+        .ok_or_else(|| "no project open".to_string())
 }
 
 fn ensure_inside_root(root: &Path, path: PathBuf) -> Result<PathBuf, String> {
@@ -269,9 +306,14 @@ fn ensure_inside_root(root: &Path, path: PathBuf) -> Result<PathBuf, String> {
     let canonical_path = if path.exists() {
         path.canonicalize().map_err(|err| err.to_string())?
     } else {
-        let parent = path.parent().ok_or_else(|| "path has no parent".to_string())?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| "path has no parent".to_string())?;
         let canonical_parent = parent.canonicalize().map_err(|err| err.to_string())?;
-        canonical_parent.join(path.file_name().ok_or_else(|| "path has no file name".to_string())?)
+        canonical_parent.join(
+            path.file_name()
+                .ok_or_else(|| "path has no file name".to_string())?,
+        )
     };
     if canonical_path.starts_with(&canonical_root) {
         Ok(canonical_path)
@@ -290,8 +332,15 @@ fn validate_file_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn update_active_sequence_after_move(state: &State<'_, AppState>, old_path: &Path, new_path: &Path) -> Result<(), String> {
-    let mut session = state.project.lock().map_err(|_| "project state lock failed")?;
+fn update_active_sequence_after_move(
+    state: &State<'_, AppState>,
+    old_path: &Path,
+    new_path: &Path,
+) -> Result<(), String> {
+    let mut session = state
+        .project
+        .lock()
+        .map_err(|_| "project state lock failed")?;
     if session.active_sequence.as_deref() == Some(old_path) {
         session.active_sequence = Some(new_path.to_path_buf());
     }

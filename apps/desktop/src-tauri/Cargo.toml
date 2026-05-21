@@ -1,21 +1,21 @@
 [package]
-name = "donder-desktop"
+name = "dawn-desktop"
 edition.workspace = true
 version.workspace = true
-description = "Donder desktop IDE"
-authors = ["Donder"]
+description = "Dawn desktop IDE"
+authors = ["Dawn"]
 license = "MIT"
 
 [lib]
-name = "donder_desktop_lib"
+name = "dawn_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "donder-desktop"
+name = "dawn-desktop"
 path = "src/main.rs"
 
 [dependencies]
-donder-project.workspace = true
+dawn-project.workspace = true
 serde.workspace = true
 tauri.workspace = true
 tauri-plugin-dialog.workspace = true

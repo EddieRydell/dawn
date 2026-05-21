@@ -111,7 +111,7 @@ export function WorkbenchShell() {
       <header className="topbar" onMouseDown={dragWindow} onDoubleClick={toggleWindowMaximize}>
         <div className="brand">
           <span className="logo-mark">D</span>
-          <span>Donder</span>
+          <span>Dawn</span>
         </div>
         <nav
           className="menubar"
@@ -162,7 +162,7 @@ export function WorkbenchShell() {
             ))}
           </MenuButton>
           <MenuButton label="Help" open={menuOpen === "Help"} onOpen={() => setMenuOpen(menuOpen === "Help" ? null : "Help")}>
-            <MenuItem label="About Donder" onClick={() => setStatus("Donder 0.1.0 IDE prototype")} />
+            <MenuItem label="About Dawn" onClick={() => setStatus("Dawn 0.1.0 IDE prototype")} />
           </MenuButton>
         </nav>
         <div className="topbar-actions">

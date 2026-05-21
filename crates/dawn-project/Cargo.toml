@@ -1,11 +1,11 @@
 [package]
-name = "donder-project"
+name = "dawn-project"
 edition.workspace = true
 version.workspace = true
 
 [dependencies]
-donder-core.workspace = true
-donder-lang.workspace = true
+dawn-core.workspace = true
+dawn-lang.workspace = true
 indexmap.workspace = true
 thiserror.workspace = true
 walkdir.workspace = true

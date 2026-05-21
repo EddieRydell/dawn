@@ -145,8 +145,15 @@ pub struct LayoutSource {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LayoutShapeSource {
-    Line { start: PositionSource, end: PositionSource },
-    Grid { top_left: PositionSource, bottom_right: PositionSource, columns: u32 },
+    Line {
+        start: PositionSource,
+        end: PositionSource,
+    },
+    Grid {
+        top_left: PositionSource,
+        bottom_right: PositionSource,
+        columns: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -193,8 +200,15 @@ pub struct ConstExpr {
 pub enum ConstExprKind {
     Value(Value),
     Ref(String),
-    Unary { op: ConstUnaryOp, expr: Box<ConstExpr> },
-    Binary { op: ConstBinaryOp, left: Box<ConstExpr>, right: Box<ConstExpr> },
+    Unary {
+        op: ConstUnaryOp,
+        expr: Box<ConstExpr>,
+    },
+    Binary {
+        op: ConstBinaryOp,
+        left: Box<ConstExpr>,
+        right: Box<ConstExpr>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,7 +244,14 @@ struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     fn new(path: &'a Path, source: &'a str) -> Self {
-        Self { path, source, bytes: source.as_bytes(), pos: 0, tokens: Vec::new(), diagnostics: Vec::new() }
+        Self {
+            path,
+            source,
+            bytes: source.as_bytes(),
+            pos: 0,
+            tokens: Vec::new(),
+            diagnostics: Vec::new(),
+        }
     }
 
     fn tokenize(mut self) -> Result<Vec<Token>, Vec<Diagnostic>> {
@@ -260,30 +281,47 @@ impl<'a> Lexer<'a> {
                 b'0'..=b'9' => self.number(start),
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.ident(start),
                 other => {
-                    self.diagnostics.push(Diagnostic::error(
-                        self.path,
-                        DiagnosticCode::Lex,
-                        format!("unexpected character '{}'", other as char),
-                    ).at(Span::new(start, start + 1)));
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            self.path,
+                            DiagnosticCode::Lex,
+                            format!("unexpected character '{}'", other as char),
+                        )
+                        .at(Span::new(start, start + 1)),
+                    );
                     self.pos += 1;
                 }
             }
         }
-        self.tokens.push(Token { kind: TokenKind::Eof, span: Span::new(self.pos, self.pos) });
-        if self.diagnostics.is_empty() { Ok(self.tokens) } else { Err(self.diagnostics) }
+        self.tokens.push(Token {
+            kind: TokenKind::Eof,
+            span: Span::new(self.pos, self.pos),
+        });
+        if self.diagnostics.is_empty() {
+            Ok(self.tokens)
+        } else {
+            Err(self.diagnostics)
+        }
     }
 
     fn one(&mut self, kind: TokenKind, start: usize) {
         self.pos += 1;
-        self.tokens.push(Token { kind, span: Span::new(start, self.pos) });
+        self.tokens.push(Token {
+            kind,
+            span: Span::new(start, self.pos),
+        });
     }
 
     fn skip_ws_and_comments(&mut self) {
         loop {
-            while self.pos < self.bytes.len() && matches!(self.bytes[self.pos], b' ' | b'\t' | b'\r' | b'\n') {
+            while self.pos < self.bytes.len()
+                && matches!(self.bytes[self.pos], b' ' | b'\t' | b'\r' | b'\n')
+            {
                 self.pos += 1;
             }
-            if self.bytes.get(self.pos) == Some(&b'/') && self.bytes.get(self.pos + 1) == Some(&b'/') {
+            if self.bytes.get(self.pos) == Some(&b'/')
+                && self.bytes.get(self.pos + 1) == Some(&b'/')
+            {
                 self.pos += 2;
                 while self.pos < self.bytes.len() && self.bytes[self.pos] != b'\n' {
                     self.pos += 1;
@@ -297,15 +335,28 @@ impl<'a> Lexer<'a> {
     fn string(&mut self, start: usize) {
         self.pos += 1;
         let content_start = self.pos;
-        while self.pos < self.bytes.len() && self.bytes[self.pos] != b'"' && self.bytes[self.pos] != b'\n' {
+        while self.pos < self.bytes.len()
+            && self.bytes[self.pos] != b'"'
+            && self.bytes[self.pos] != b'\n'
+        {
             self.pos += 1;
         }
         if self.bytes.get(self.pos) == Some(&b'"') {
             let value = self.source[content_start..self.pos].to_string();
             self.pos += 1;
-            self.tokens.push(Token { kind: TokenKind::String(value), span: Span::new(start, self.pos) });
+            self.tokens.push(Token {
+                kind: TokenKind::String(value),
+                span: Span::new(start, self.pos),
+            });
         } else {
-            self.diagnostics.push(Diagnostic::error(self.path, DiagnosticCode::Lex, "unterminated string literal").at(Span::new(start, self.pos)));
+            self.diagnostics.push(
+                Diagnostic::error(
+                    self.path,
+                    DiagnosticCode::Lex,
+                    "unterminated string literal",
+                )
+                .at(Span::new(start, self.pos)),
+            );
         }
     }
 
@@ -338,9 +389,15 @@ impl<'a> Lexer<'a> {
             _ => None,
         };
         if let Some((r, g, b)) = color {
-            self.tokens.push(Token { kind: TokenKind::Color(r, g, b), span: Span::new(start, self.pos) });
+            self.tokens.push(Token {
+                kind: TokenKind::Color(r, g, b),
+                span: Span::new(start, self.pos),
+            });
         } else {
-            self.diagnostics.push(Diagnostic::error(self.path, DiagnosticCode::Lex, "invalid color literal").at(Span::new(start, self.pos)));
+            self.diagnostics.push(
+                Diagnostic::error(self.path, DiagnosticCode::Lex, "invalid color literal")
+                    .at(Span::new(start, self.pos)),
+            );
         }
     }
 
@@ -349,7 +406,9 @@ impl<'a> Lexer<'a> {
             self.pos += 1;
         }
         let mut is_float = false;
-        if self.bytes.get(self.pos) == Some(&b'.') && self.bytes.get(self.pos + 1).is_some_and(u8::is_ascii_digit) {
+        if self.bytes.get(self.pos) == Some(&b'.')
+            && self.bytes.get(self.pos + 1).is_some_and(u8::is_ascii_digit)
+        {
             is_float = true;
             self.pos += 1;
             while self.pos < self.bytes.len() && self.bytes[self.pos].is_ascii_digit() {
@@ -359,19 +418,33 @@ impl<'a> Lexer<'a> {
         let text = &self.source[start..self.pos];
         if is_float {
             match text.parse::<f64>() {
-                Ok(value) => self.tokens.push(Token { kind: TokenKind::Float(value), span: Span::new(start, self.pos) }),
-                Err(_) => self.diagnostics.push(Diagnostic::error(self.path, DiagnosticCode::Lex, "invalid float literal").at(Span::new(start, self.pos))),
+                Ok(value) => self.tokens.push(Token {
+                    kind: TokenKind::Float(value),
+                    span: Span::new(start, self.pos),
+                }),
+                Err(_) => self.diagnostics.push(
+                    Diagnostic::error(self.path, DiagnosticCode::Lex, "invalid float literal")
+                        .at(Span::new(start, self.pos)),
+                ),
             }
         } else {
             match text.parse::<i64>() {
-                Ok(value) => self.tokens.push(Token { kind: TokenKind::Int(value), span: Span::new(start, self.pos) }),
-                Err(_) => self.diagnostics.push(Diagnostic::error(self.path, DiagnosticCode::Lex, "invalid int literal").at(Span::new(start, self.pos))),
+                Ok(value) => self.tokens.push(Token {
+                    kind: TokenKind::Int(value),
+                    span: Span::new(start, self.pos),
+                }),
+                Err(_) => self.diagnostics.push(
+                    Diagnostic::error(self.path, DiagnosticCode::Lex, "invalid int literal")
+                        .at(Span::new(start, self.pos)),
+                ),
             }
         }
     }
 
     fn ident(&mut self, start: usize) {
-        while self.pos < self.bytes.len() && (self.bytes[self.pos].is_ascii_alphanumeric() || self.bytes[self.pos] == b'_') {
+        while self.pos < self.bytes.len()
+            && (self.bytes[self.pos].is_ascii_alphanumeric() || self.bytes[self.pos] == b'_')
+        {
             self.pos += 1;
         }
         self.tokens.push(Token {
@@ -390,7 +463,12 @@ struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     fn new(path: &'a Path, tokens: Vec<Token>) -> Self {
-        Self { path, tokens, pos: 0, diagnostics: Vec::new() }
+        Self {
+            path,
+            tokens,
+            pos: 0,
+            diagnostics: Vec::new(),
+        }
     }
 
     fn parse_document(mut self) -> Result<ProjectDocument, Vec<Diagnostic>> {
@@ -401,7 +479,9 @@ impl<'a> Parser<'a> {
             Some("layout") => self.parse_layout_doc().map(ProjectDocument::Layout),
             Some("patch") => self.parse_patch_doc().map(ProjectDocument::Patch),
             Some("sequence") => self.parse_sequence().map(ProjectDocument::Sequence),
-            _ => Err(self.error("expected document kind: project, display, controllers, layout, patch, or sequence")),
+            _ => Err(self.error(
+                "expected document kind: project, display, controllers, layout, patch, or sequence",
+            )),
         };
         match result {
             Ok(doc) if self.diagnostics.is_empty() => Ok(doc),
@@ -425,7 +505,12 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect(TokenKind::RBrace)?;
-        Ok(ProjectDoc { name, version: version.unwrap_or(1), displays, sequences })
+        Ok(ProjectDoc {
+            name,
+            version: version.unwrap_or(1),
+            displays,
+            sequences,
+        })
     }
 
     fn parse_display(&mut self) -> Result<DisplayDoc, ()> {
@@ -448,7 +533,14 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect(TokenKind::RBrace)?;
-        Ok(DisplayDoc { name, version: version.unwrap_or(1), consts, fixtures, groups, includes })
+        Ok(DisplayDoc {
+            name,
+            version: version.unwrap_or(1),
+            consts,
+            fixtures,
+            groups,
+            includes,
+        })
     }
 
     fn parse_controllers(&mut self) -> Result<ControllerDoc, ()> {
@@ -464,7 +556,10 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect(TokenKind::RBrace)?;
-        Ok(ControllerDoc { version: version.unwrap_or(1), controllers })
+        Ok(ControllerDoc {
+            version: version.unwrap_or(1),
+            controllers,
+        })
     }
 
     fn parse_layout_doc(&mut self) -> Result<LayoutDoc, ()> {
@@ -480,7 +575,10 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect(TokenKind::RBrace)?;
-        Ok(LayoutDoc { version: version.unwrap_or(1), fixtures })
+        Ok(LayoutDoc {
+            version: version.unwrap_or(1),
+            fixtures,
+        })
     }
 
     fn parse_patch_doc(&mut self) -> Result<PatchDoc, ()> {
@@ -496,7 +594,10 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect(TokenKind::RBrace)?;
-        Ok(PatchDoc { version: version.unwrap_or(1), patches })
+        Ok(PatchDoc {
+            version: version.unwrap_or(1),
+            patches,
+        })
     }
 
     fn parse_sequence(&mut self) -> Result<SequenceDoc, ()> {
@@ -542,7 +643,10 @@ impl<'a> Parser<'a> {
         Ok(SequenceDoc {
             name,
             version: version.unwrap_or(1),
-            display: display.unwrap_or_else(|| Ident { name: String::new(), span: Span::default() }),
+            display: display.unwrap_or_else(|| Ident {
+                name: String::new(),
+                span: Span::default(),
+            }),
             duration: duration.unwrap_or(0.0),
             frame_rate,
             audio,
@@ -564,7 +668,11 @@ impl<'a> Parser<'a> {
         self.keyword("from")?;
         let path = self.string()?;
         let end = self.expect(TokenKind::Semicolon)?;
-        Ok(NamedInclude { name, path, span: start.merge(end) })
+        Ok(NamedInclude {
+            name,
+            path,
+            span: start.merge(end),
+        })
     }
 
     fn include_stmt(&mut self) -> Result<SectionInclude, ()> {
@@ -626,7 +734,10 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::RBrace)?;
         Ok(FixtureSource {
             name,
-            pixel_count: pixel_count.unwrap_or(ConstExpr { kind: ConstExprKind::Value(Value::Int(0)), span: Span::default() }),
+            pixel_count: pixel_count.unwrap_or(ConstExpr {
+                kind: ConstExprKind::Value(Value::Int(0)),
+                span: Span::default(),
+            }),
             color_model,
             channel_order,
         })
@@ -688,7 +799,11 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect(TokenKind::RBrace)?;
-        Ok(LayoutSource { fixture, shape, positions })
+        Ok(LayoutSource {
+            fixture,
+            shape,
+            positions,
+        })
     }
 
     fn shape_stmt(&mut self) -> Result<LayoutShapeSource, ()> {
@@ -721,7 +836,9 @@ impl<'a> Parser<'a> {
                 while !self.check(&TokenKind::RBrace) && !self.at_eof() {
                     match self.peek_ident() {
                         Some("top_left") => top_left = Some(self.position_stmt("top_left")?),
-                        Some("bottom_right") => bottom_right = Some(self.position_stmt("bottom_right")?),
+                        Some("bottom_right") => {
+                            bottom_right = Some(self.position_stmt("bottom_right")?)
+                        }
                         Some("columns") => {
                             self.keyword("columns")?;
                             columns = self.int()? as u32;
@@ -772,7 +889,10 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::RBrace)?;
         Ok(PatchSource {
             fixture,
-            controller: controller.unwrap_or(Ident { name: String::new(), span: Span::default() }),
+            controller: controller.unwrap_or(Ident {
+                name: String::new(),
+                span: Span::default(),
+            }),
             port,
         })
     }
@@ -816,7 +936,10 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::RBrace)?;
         Ok(EventSource {
             target,
-            effect: effect.unwrap_or(Ident { name: String::new(), span: Span::default() }),
+            effect: effect.unwrap_or(Ident {
+                name: String::new(),
+                span: Span::default(),
+            }),
             start: start.unwrap_or(0.0),
             duration: duration.unwrap_or(0.0),
             params,
@@ -869,7 +992,10 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect(TokenKind::RBrace)?;
-        Ok(PositionSource { x: x.unwrap_or(0.0), y: y.unwrap_or(0.0) })
+        Ok(PositionSource {
+            x: x.unwrap_or(0.0),
+            y: y.unwrap_or(0.0),
+        })
     }
 
     fn const_expr(&mut self) -> Result<ConstExpr, ()> {
@@ -889,7 +1015,14 @@ impl<'a> Parser<'a> {
             self.advance();
             let right = self.multiplicative()?;
             let span = left.span.merge(right.span);
-            left = ConstExpr { kind: ConstExprKind::Binary { op, left: Box::new(left), right: Box::new(right) }, span };
+            left = ConstExpr {
+                kind: ConstExprKind::Binary {
+                    op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                },
+                span,
+            };
         }
         Ok(left)
     }
@@ -907,7 +1040,14 @@ impl<'a> Parser<'a> {
             self.advance();
             let right = self.unary()?;
             let span = left.span.merge(right.span);
-            left = ConstExpr { kind: ConstExprKind::Binary { op, left: Box::new(left), right: Box::new(right) }, span };
+            left = ConstExpr {
+                kind: ConstExprKind::Binary {
+                    op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                },
+                span,
+            };
         }
         Ok(left)
     }
@@ -918,7 +1058,13 @@ impl<'a> Parser<'a> {
             self.advance();
             let expr = self.primary()?;
             let span = start.merge(expr.span);
-            return Ok(ConstExpr { kind: ConstExprKind::Unary { op: ConstUnaryOp::Neg, expr: Box::new(expr) }, span });
+            return Ok(ConstExpr {
+                kind: ConstExprKind::Unary {
+                    op: ConstUnaryOp::Neg,
+                    expr: Box::new(expr),
+                },
+                span,
+            });
         }
         self.primary()
     }
@@ -928,27 +1074,45 @@ impl<'a> Parser<'a> {
         match self.peek().clone() {
             TokenKind::Int(value) => {
                 self.advance();
-                Ok(ConstExpr { kind: ConstExprKind::Value(Value::Int(value)), span })
+                Ok(ConstExpr {
+                    kind: ConstExprKind::Value(Value::Int(value)),
+                    span,
+                })
             }
             TokenKind::Float(value) => {
                 self.advance();
-                Ok(ConstExpr { kind: ConstExprKind::Value(Value::Float(value)), span })
+                Ok(ConstExpr {
+                    kind: ConstExprKind::Value(Value::Float(value)),
+                    span,
+                })
             }
             TokenKind::String(value) => {
                 self.advance();
-                Ok(ConstExpr { kind: ConstExprKind::Value(Value::String(value)), span })
+                Ok(ConstExpr {
+                    kind: ConstExprKind::Value(Value::String(value)),
+                    span,
+                })
             }
             TokenKind::Color(r, g, b) => {
                 self.advance();
-                Ok(ConstExpr { kind: ConstExprKind::Value(Value::Color(r, g, b)), span })
+                Ok(ConstExpr {
+                    kind: ConstExprKind::Value(Value::Color(r, g, b)),
+                    span,
+                })
             }
             TokenKind::Ident(value) if value == "true" || value == "false" => {
                 self.advance();
-                Ok(ConstExpr { kind: ConstExprKind::Value(Value::Bool(value == "true")), span })
+                Ok(ConstExpr {
+                    kind: ConstExprKind::Value(Value::Bool(value == "true")),
+                    span,
+                })
             }
             TokenKind::Ident(value) => {
                 self.advance();
-                Ok(ConstExpr { kind: ConstExprKind::Ref(value), span })
+                Ok(ConstExpr {
+                    kind: ConstExprKind::Ref(value),
+                    span,
+                })
             }
             TokenKind::LParen => {
                 self.advance();
@@ -973,7 +1137,10 @@ impl<'a> Parser<'a> {
             }
         }
         let end = self.expect(TokenKind::RBracket)?;
-        let values = items.into_iter().map(fold_const_expr_value).collect::<Option<Vec<_>>>();
+        let values = items
+            .into_iter()
+            .map(fold_const_expr_value)
+            .collect::<Option<Vec<_>>>();
         let Some(values) = values else {
             return Err(self.error("array const expressions may only contain compile-time values"));
         };
@@ -992,7 +1159,9 @@ impl<'a> Parser<'a> {
             let value = self.const_expr()?;
             self.expect(TokenKind::Semicolon)?;
             let Some(value) = fold_const_expr_value(value) else {
-                return Err(self.error("record const expressions may only contain compile-time values"));
+                return Err(
+                    self.error("record const expressions may only contain compile-time values")
+                );
             };
             fields.push((name.name, value));
         }
@@ -1023,7 +1192,10 @@ impl<'a> Parser<'a> {
     fn eval_const(&mut self, expr: &ConstExpr) -> Result<Value, ()> {
         match &expr.kind {
             ConstExprKind::Value(value) => Ok(value.clone()),
-            ConstExprKind::Unary { op: ConstUnaryOp::Neg, expr } => match self.eval_const(expr)? {
+            ConstExprKind::Unary {
+                op: ConstUnaryOp::Neg,
+                expr,
+            } => match self.eval_const(expr)? {
                 Value::Int(value) => Ok(Value::Int(-value)),
                 Value::Float(value) => Ok(Value::Float(-value)),
                 _ => Err(self.error("unary '-' requires a number")),
@@ -1031,7 +1203,8 @@ impl<'a> Parser<'a> {
             ConstExprKind::Binary { op, left, right } => {
                 let left = self.eval_const(left)?;
                 let right = self.eval_const(right)?;
-                eval_binary(*op, left, right).ok_or_else(|| self.error("binary const operator requires numbers"))
+                eval_binary(*op, left, right)
+                    .ok_or_else(|| self.error("binary const operator requires numbers"))
             }
             ConstExprKind::Ref(name) => Ok(Value::Ref(name.clone())),
         }
@@ -1091,7 +1264,10 @@ impl<'a> Parser<'a> {
 
     fn unexpected_stmt(&mut self) -> Result<(), ()> {
         self.error("unexpected statement");
-        while !self.check(&TokenKind::Semicolon) && !self.check(&TokenKind::RBrace) && !self.at_eof() {
+        while !self.check(&TokenKind::Semicolon)
+            && !self.check(&TokenKind::RBrace)
+            && !self.at_eof()
+        {
             self.advance();
         }
         if self.check(&TokenKind::Semicolon) {
@@ -1101,7 +1277,8 @@ impl<'a> Parser<'a> {
     }
 
     fn error(&mut self, message: impl Into<String>) {
-        self.diagnostics.push(Diagnostic::error(self.path, DiagnosticCode::Parse, message).at(self.span()));
+        self.diagnostics
+            .push(Diagnostic::error(self.path, DiagnosticCode::Parse, message).at(self.span()));
     }
 
     fn peek(&self) -> &TokenKind {
@@ -1120,7 +1297,9 @@ impl<'a> Parser<'a> {
     }
 
     fn span(&self) -> Span {
-        self.tokens.get(self.pos).map_or_else(Span::default, |token| token.span)
+        self.tokens
+            .get(self.pos)
+            .map_or_else(Span::default, |token| token.span)
     }
 
     fn at_eof(&self) -> bool {
@@ -1167,14 +1346,19 @@ fn fold_const_expr_value(expr: ConstExpr) -> Option<Value> {
     match expr.kind {
         ConstExprKind::Value(value) => Some(value),
         ConstExprKind::Ref(name) => Some(Value::Ref(name)),
-        ConstExprKind::Unary { op: ConstUnaryOp::Neg, expr } => match fold_const_expr_value(*expr)? {
+        ConstExprKind::Unary {
+            op: ConstUnaryOp::Neg,
+            expr,
+        } => match fold_const_expr_value(*expr)? {
             Value::Int(value) => Some(Value::Int(-value)),
             Value::Float(value) => Some(Value::Float(-value)),
             _ => None,
         },
-        ConstExprKind::Binary { op, left, right } => {
-            eval_binary(op, fold_const_expr_value(*left)?, fold_const_expr_value(*right)?)
-        }
+        ConstExprKind::Binary { op, left, right } => eval_binary(
+            op,
+            fold_const_expr_value(*left)?,
+            fold_const_expr_value(*right)?,
+        ),
     }
 }
 
@@ -1184,21 +1368,29 @@ mod tests {
 
     #[test]
     fn parses_project_file() {
-        let doc = parse_document(Path::new("project.donder"), r#"
+        let doc = parse_document(
+            Path::new("project.dawn"),
+            r#"
 project TestShow {
   version 1;
-  display Main from "displays/Main.display.donder";
-  sequence Demo from "sequences/Demo.sequence.donder";
+  display Main from "displays/Main.display.dawn";
+  sequence Demo from "sequences/Demo.sequence.dawn";
 }
-"#).expect("parse");
-        let ProjectDocument::Project(project) = doc else { panic!("expected project") };
+"#,
+        )
+        .expect("parse");
+        let ProjectDocument::Project(project) = doc else {
+            panic!("expected project")
+        };
         assert_eq!(project.name.name, "TestShow");
         assert_eq!(project.displays[0].name.name, "Main");
     }
 
     #[test]
     fn parses_display_file() {
-        let doc = parse_document(Path::new("display.donder"), r#"
+        let doc = parse_document(
+            Path::new("display.dawn"),
+            r#"
 display Main {
   version 1;
   const RoofPixels: Int = 50;
@@ -1208,17 +1400,23 @@ display Main {
     channel_order Rgb;
   }
   group All { members [Roofline]; }
-  include controllers from "controllers.donder";
+  include controllers from "controllers.dawn";
 }
-"#).expect("parse");
-        let ProjectDocument::Display(display) = doc else { panic!("expected display") };
+"#,
+        )
+        .expect("parse");
+        let ProjectDocument::Display(display) = doc else {
+            panic!("expected display")
+        };
         assert_eq!(display.fixtures[0].name.name, "Roofline");
         assert_eq!(display.groups[0].members[0].name, "Roofline");
     }
 
     #[test]
     fn parses_sequence_file() {
-        let doc = parse_document(Path::new("sequence.donder"), r#"
+        let doc = parse_document(
+            Path::new("sequence.dawn"),
+            r#"
 sequence Demo {
   version 1;
   display Main;
@@ -1230,14 +1428,20 @@ sequence Demo {
     params { Color #40c4ff; }
   }
 }
-"#).expect("parse");
-        let ProjectDocument::Sequence(sequence) = doc else { panic!("expected sequence") };
+"#,
+        )
+        .expect("parse");
+        let ProjectDocument::Sequence(sequence) = doc else {
+            panic!("expected sequence")
+        };
         assert_eq!(sequence.events[0].params[0].name.name, "Color");
     }
 
     #[test]
     fn parses_array_and_record_const_values() {
-        let doc = parse_document(Path::new("sequence.donder"), r#"
+        let doc = parse_document(
+            Path::new("sequence.dawn"),
+            r#"
 sequence Demo {
   version 1;
   display Main;
@@ -1251,9 +1455,19 @@ sequence Demo {
     }
   }
 }
-"#).expect("parse");
-        let ProjectDocument::Sequence(sequence) = doc else { panic!("expected sequence") };
-        assert!(matches!(sequence.events[0].params[0].value.kind, ConstExprKind::Value(Value::Array(_))));
-        assert!(matches!(sequence.events[0].params[1].value.kind, ConstExprKind::Value(Value::Record(_))));
+"#,
+        )
+        .expect("parse");
+        let ProjectDocument::Sequence(sequence) = doc else {
+            panic!("expected sequence")
+        };
+        assert!(matches!(
+            sequence.events[0].params[0].value.kind,
+            ConstExprKind::Value(Value::Array(_))
+        ));
+        assert!(matches!(
+            sequence.events[0].params[1].value.kind,
+            ConstExprKind::Value(Value::Record(_))
+        ));
     }
 }

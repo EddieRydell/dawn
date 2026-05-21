@@ -2,11 +2,11 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use donder_project::{DiagnosticSeverity, ProjectError};
+use dawn_project::{DiagnosticSeverity, ProjectError};
 
 #[derive(Debug, Parser)]
-#[command(name = "donder")]
-#[command(about = "Donder source graph tooling")]
+#[command(name = "dawn")]
+#[command(about = "Dawn source graph tooling")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -33,12 +33,12 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::New { path, name } => {
-            donder_project::create_starter_project(&path, &name)
+            dawn_project::create_starter_project(&path, &name)
                 .with_context(|| format!("failed to create project at {}", path.display()))?;
             println!("created {}", path.display());
             Ok(())
         }
-        Command::Check { project } => match donder_project::check_project(&project) {
+        Command::Check { project } => match dawn_project::check_project(&project) {
             Ok(compiled) => {
                 print_diagnostics(&compiled.diagnostics);
                 println!(
@@ -59,7 +59,7 @@ fn main() -> anyhow::Result<()> {
             sequence_file,
             time,
         } => {
-            let frame = donder_project::render_frame(&sequence_file, time)?;
+            let frame = dawn_project::render_frame(&sequence_file, time)?;
             println!(
                 "{}",
                 serde_json::json!({
@@ -74,7 +74,7 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-fn print_diagnostics(diagnostics: &[donder_project::Diagnostic]) {
+fn print_diagnostics(diagnostics: &[dawn_project::Diagnostic]) {
     for diagnostic in diagnostics {
         let severity = match diagnostic.severity {
             DiagnosticSeverity::Error => "error",

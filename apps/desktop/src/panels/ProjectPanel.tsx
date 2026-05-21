@@ -309,7 +309,7 @@ function parentPath(path: string) {
 }
 
 function isEditableSource(path: string) {
-  return path.endsWith(".donder");
+  return path.endsWith(".dawn");
 }
 
 function useElementSize(ref: RefObject<HTMLElement>) {

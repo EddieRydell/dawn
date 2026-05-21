@@ -1,6 +1,6 @@
 import type { SerializedDockview } from "dockview-react";
 
-const storageKey = "donder-layouts";
+const storageKey = "dawn-layouts";
 const version = 2;
 
 type LayoutStore = {

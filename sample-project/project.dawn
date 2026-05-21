@@ -1,0 +1,5 @@
+project SampleShow {
+  version 1;
+  display Main from "displays/Main.display.dawn";
+  sequence Demo from "sequences/Demo.sequence.dawn";
+}

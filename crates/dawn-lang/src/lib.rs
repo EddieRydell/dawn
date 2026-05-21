@@ -56,7 +56,11 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    pub fn error(path: impl Into<PathBuf>, code: DiagnosticCode, message: impl Into<String>) -> Self {
+    pub fn error(
+        path: impl Into<PathBuf>,
+        code: DiagnosticCode,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             severity: DiagnosticSeverity::Error,
             code,

@@ -594,6 +594,61 @@ dependencies = [
 ]
 
 [[package]]
+name = "dawn-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dawn-project",
+ "serde_json",
+]
+
+[[package]]
+name = "dawn-core"
+version = "0.1.0"
+dependencies = [
+ "indexmap 2.14.0",
+ "log",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "strum",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
+name = "dawn-desktop"
+version = "0.1.0"
+dependencies = [
+ "dawn-project",
+ "serde",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "walkdir",
+]
+
+[[package]]
+name = "dawn-lang"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "dawn-project"
+version = "0.1.0"
+dependencies = [
+ "dawn-core",
+ "dawn-lang",
+ "indexmap 2.14.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "walkdir",
+]
+
+[[package]]
 name = "dbus"
 version = "0.9.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -725,61 +780,6 @@ dependencies = [
  "precomputed-hash",
  "selectors",
  "tendril",
-]
-
-[[package]]
-name = "donder-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "donder-project",
- "serde_json",
-]
-
-[[package]]
-name = "donder-core"
-version = "0.1.0"
-dependencies = [
- "indexmap 2.14.0",
- "log",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "strum",
- "ts-rs",
- "uuid",
-]
-
-[[package]]
-name = "donder-desktop"
-version = "0.1.0"
-dependencies = [
- "donder-project",
- "serde",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "walkdir",
-]
-
-[[package]]
-name = "donder-lang"
-version = "0.1.0"
-dependencies = [
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "donder-project"
-version = "0.1.0"
-dependencies = [
- "donder-core",
- "donder-lang",
- "indexmap 2.14.0",
- "tempfile",
- "thiserror 2.0.18",
- "walkdir",
 ]
 
 [[package]]

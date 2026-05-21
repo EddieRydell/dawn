@@ -3,10 +3,12 @@ pub mod types {
 
     use indexmap::IndexMap;
 
+    use crate::dsl::ast::ParamType as DslParamType;
     use crate::dsl::compiler::CompiledScript;
     use crate::effects;
-    use crate::dsl::ast::ParamType as DslParamType;
-    use crate::model::{Color, ColorGradient, Curve, EffectKind, ParamKey, ParamSchema, ParamType, ParamValue};
+    use crate::model::{
+        Color, ColorGradient, Curve, EffectKind, ParamKey, ParamSchema, ParamType, ParamValue,
+    };
 
     pub fn effect_schema_for_kind(
         kind: &EffectKind,
@@ -29,7 +31,11 @@ pub mod types {
                 let param_type = match &param.ty {
                     DslParamType::Float(range) => {
                         let (min, max) = range.unwrap_or((0.0, 1.0));
-                        ParamType::Float { min, max, step: 0.01 }
+                        ParamType::Float {
+                            min,
+                            max,
+                            step: 0.01,
+                        }
                     }
                     DslParamType::Int(range) => {
                         let (min, max) = range.unwrap_or((0, 100));
@@ -51,13 +57,17 @@ pub mod types {
                             options: item.variants.clone(),
                         })
                         .or_else(|| {
-                            compiled.flags.iter().find(|item| item.name == *name).map(|item| {
-                                ParamType::Flags {
+                            compiled
+                                .flags
+                                .iter()
+                                .find(|item| item.name == *name)
+                                .map(|item| ParamType::Flags {
                                     options: item.flags.clone(),
-                                }
-                            })
+                                })
                         })
-                        .unwrap_or_else(|| ParamType::Text { options: Vec::new() }),
+                        .unwrap_or_else(|| ParamType::Text {
+                            options: Vec::new(),
+                        }),
                 };
                 let default = schema_placeholder_default(&param_type);
                 ParamSchema {
@@ -80,12 +90,16 @@ pub mod types {
                 ParamValue::ColorList(vec![Color::WHITE; (*min_colors).max(1)])
             }
             ParamType::Curve => ParamValue::Curve(Curve::linear()),
-            ParamType::ColorGradient { .. } => ParamValue::ColorGradient(ColorGradient::solid(Color::WHITE)),
+            ParamType::ColorGradient { .. } => {
+                ParamValue::ColorGradient(ColorGradient::solid(Color::WHITE))
+            }
             ParamType::ColorMode { .. } => ParamValue::ColorMode(crate::model::ColorMode::Static),
             ParamType::WipeDirection { .. } => {
                 ParamValue::WipeDirection(crate::model::WipeDirection::Horizontal)
             }
-            ParamType::Text { options } => ParamValue::Text(options.first().cloned().unwrap_or_default()),
+            ParamType::Text { options } => {
+                ParamValue::Text(options.first().cloned().unwrap_or_default())
+            }
             ParamType::Enum { options } => {
                 ParamValue::EnumVariant(options.first().cloned().unwrap_or_default())
             }

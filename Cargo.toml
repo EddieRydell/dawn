@@ -1,9 +1,9 @@
 [workspace]
 members = [
-  "crates/donder-core",
-  "crates/donder-lang",
-  "crates/donder-project",
-  "crates/donder-cli",
+  "crates/dawn-core",
+  "crates/dawn-lang",
+  "crates/dawn-project",
+  "crates/dawn-cli",
   "apps/desktop/src-tauri",
 ]
 resolver = "2"
@@ -15,9 +15,9 @@ version = "0.1.0"
 [workspace.dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-donder-core = { path = "crates/donder-core" }
-donder-lang = { path = "crates/donder-lang" }
-donder-project = { path = "crates/donder-project" }
+dawn-core = { path = "crates/dawn-core" }
+dawn-lang = { path = "crates/dawn-lang" }
+dawn-project = { path = "crates/dawn-project" }
 indexmap = { version = "2", features = ["serde"] }
 json-strip-comments = "1"
 log = "0.4"

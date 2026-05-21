@@ -19,7 +19,7 @@ export class ErrorBoundary extends React.Component<React.PropsWithChildren, Erro
     if (this.state.error) {
       return (
         <main className="fatal-error">
-          <h1>Donder hit a frontend error</h1>
+          <h1>Dawn hit a frontend error</h1>
           <pre>{this.state.error.stack ?? this.state.error.message}</pre>
         </main>
       );

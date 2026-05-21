@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default permissions for Donder",
+  "description": "Default permissions for Dawn",
   "windows": ["main"],
   "permissions": [
     "core:default",

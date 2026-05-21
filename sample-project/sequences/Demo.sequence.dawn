@@ -4,7 +4,7 @@ sequence Demo {
   duration 10s;
   frame_rate 40;
 
-  script Pulse from "../effects/Pulse.effect.donder";
+  script Pulse from "../effects/Pulse.effect.dawn";
 
   event All {
     effect Solid;

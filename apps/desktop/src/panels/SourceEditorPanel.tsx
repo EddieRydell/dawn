@@ -5,7 +5,7 @@ import { useWorkbench } from "../store/workbenchStore";
 
 loader.config({ monaco });
 
-let donderRegistered = false;
+let dawnRegistered = false;
 
 export function SourceEditorPanel() {
   const activeFile = useWorkbench((state) => state.activeFile);
@@ -13,14 +13,14 @@ export function SourceEditorPanel() {
   const setFileContent = useWorkbench((state) => state.setFileContent);
 
   const language = useMemo(() => {
-    if (activeFile?.endsWith(".donder")) return "donder";
+    if (activeFile?.endsWith(".dawn")) return "dawn";
     return "json";
   }, [activeFile]);
 
   const handleEditorMount: OnMount = useCallback((editor, monacoApi) => {
-    if (!donderRegistered) {
-      monacoApi.languages.register({ id: "donder", extensions: [".donder", ".effect.donder"] });
-      donderRegistered = true;
+    if (!dawnRegistered) {
+      monacoApi.languages.register({ id: "dawn", extensions: [".dawn", ".effect.dawn"] });
+      dawnRegistered = true;
     }
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void useWorkbench.getState().saveFile();
@@ -37,7 +37,7 @@ export function SourceEditorPanel() {
     <section className="editor-pane">
       <div className="workbench-content">
         <Editor
-          path={activeEditor?.path ?? "donder://empty"}
+          path={activeEditor?.path ?? "dawn://empty"}
           height="100%"
           language={language}
           theme="vs-dark"

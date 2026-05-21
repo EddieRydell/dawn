@@ -1,5 +1,5 @@
 [package]
-name = "donder-lang"
+name = "dawn-lang"
 edition.workspace = true
 version.workspace = true
 
