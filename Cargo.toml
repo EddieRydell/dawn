@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/donder-core",
+  "crates/donder-lang",
   "crates/donder-project",
   "crates/donder-cli",
   "apps/desktop/src-tauri",
@@ -15,6 +16,7 @@ version = "0.1.0"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 donder-core = { path = "crates/donder-core" }
+donder-lang = { path = "crates/donder-lang" }
 donder-project = { path = "crates/donder-project" }
 indexmap = { version = "2", features = ["serde"] }
 json-strip-comments = "1"

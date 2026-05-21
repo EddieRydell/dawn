@@ -1,0 +1,25 @@
+sequence Demo {
+  version 1;
+  display Main;
+  duration 10s;
+  frame_rate 40;
+
+  script Pulse from "../effects/Pulse.effect.donder";
+
+  event All {
+    effect Solid;
+    at 0s for 4s;
+    params {
+      Color #40c4ff;
+    }
+  }
+
+  event All {
+    effect Pulse;
+    at 4s for 6s;
+    params {
+      speed 1.4;
+      base #ff4fd8;
+    }
+  }
+}

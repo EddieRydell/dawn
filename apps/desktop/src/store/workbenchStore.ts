@@ -99,7 +99,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       ? nextEditors[Math.min(closedIndex, nextEditors.length - 1)]?.path ?? null
       : activeFile;
     const nextActiveSequence = activeSequence === path
-      ? nextActiveFile?.endsWith(".sequence.jsonc") ? nextActiveFile : null
+      ? isSequenceFile(nextActiveFile) ? nextActiveFile : null
       : activeSequence;
 
     set({
@@ -109,7 +109,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       status: nextActiveFile ? `Editing ${nextActiveFile}` : "No file open"
     });
 
-    if (nextActiveFile?.endsWith(".sequence.jsonc")) {
+    if (isSequenceFile(nextActiveFile)) {
       try {
         await invoke("open_sequence", { path: nextActiveFile });
         await get().renderFrame();
@@ -147,7 +147,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
   },
   openProject: async (path) => {
     if (!path.trim()) {
-      set({ status: "Enter a project folder or project.jsonc path." });
+      set({ status: "Enter a project folder or project.donder path." });
       return;
     }
 
@@ -195,7 +195,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       set({ activeFile: path, status: `Opening ${path}` });
       const content = await invoke<string>("read_file", { path });
       let activeSequence = get().activeSequence;
-      if (path.endsWith(".sequence.jsonc")) {
+      if (isSequenceFile(path)) {
         await invoke("open_sequence", { path });
         activeSequence = path;
       }
@@ -204,7 +204,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
         activeSequence,
         status: `Editing ${path}`
       }));
-      if (path.endsWith(".sequence.jsonc")) {
+      if (isSequenceFile(path)) {
         await get().renderFrame();
       }
     } catch (error) {
@@ -376,7 +376,7 @@ function activateEditor(
   if (!editor) return;
 
   let activeSequence = get().activeSequence;
-  if (path.endsWith(".sequence.jsonc")) {
+  if (isSequenceFile(path)) {
     activeSequence = path;
     void invoke("open_sequence", { path })
       .then(() => get().renderFrame())
@@ -401,4 +401,8 @@ function isDescendantPath(path: string, parent: string) {
 
 function formatError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isSequenceFile(path: string | null | undefined) {
+  return Boolean(path?.endsWith(".sequence.donder"));
 }

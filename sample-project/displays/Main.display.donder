@@ -1,0 +1,18 @@
+display Main {
+  version 1;
+  const RoofPixels: Int = 50;
+
+  fixture Roofline {
+    pixel_count RoofPixels;
+    color_model Rgb;
+    channel_order Rgb;
+  }
+
+  group All {
+    members [Roofline];
+  }
+
+  include controllers from "controllers.donder";
+  include layout from "layout.donder";
+  include patch from "patch.donder";
+}

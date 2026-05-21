@@ -764,13 +764,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "donder-lang"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "donder-project"
 version = "0.1.0"
 dependencies = [
  "donder-core",
+ "donder-lang",
  "indexmap 2.14.0",
- "serde",
- "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "walkdir",

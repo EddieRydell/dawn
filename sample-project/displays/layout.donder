@@ -1,0 +1,10 @@
+layout {
+  version 1;
+
+  fixture Roofline {
+    shape line {
+      start { x 0.1; y 0.45; };
+      end { x 0.9; y 0.45; };
+    }
+  }
+}

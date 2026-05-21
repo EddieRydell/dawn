@@ -309,7 +309,7 @@ function parentPath(path: string) {
 }
 
 function isEditableSource(path: string) {
-  return path.endsWith(".jsonc") || path.endsWith(".vibe");
+  return path.endsWith(".donder");
 }
 
 function useElementSize(ref: RefObject<HTMLElement>) {

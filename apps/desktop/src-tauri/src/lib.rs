@@ -64,7 +64,7 @@ struct FrameSummary {
 fn open_project(path: String, state: State<'_, AppState>) -> Result<ProjectState, String> {
     let path = PathBuf::from(path);
     let project_file = if path.is_dir() {
-        path.join("project.jsonc")
+        path.join("project.donder")
     } else {
         path
     };
@@ -237,7 +237,7 @@ fn list_source_files(root: &Path) -> Vec<String> {
         .filter(|path| {
             path.extension()
                 .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext == "jsonc" || ext == "vibe")
+                .is_some_and(|ext| ext == "donder")
         })
         .map(|path| path.display().to_string())
         .collect::<Vec<_>>();

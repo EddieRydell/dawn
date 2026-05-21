@@ -5,17 +5,23 @@ import { useWorkbench } from "../store/workbenchStore";
 
 loader.config({ monaco });
 
+let donderRegistered = false;
+
 export function SourceEditorPanel() {
   const activeFile = useWorkbench((state) => state.activeFile);
   const activeEditor = useWorkbench((state) => state.openEditors.find((editor) => editor.path === state.activeFile) ?? null);
   const setFileContent = useWorkbench((state) => state.setFileContent);
 
   const language = useMemo(() => {
-    if (activeFile?.endsWith(".vibe")) return "javascript";
+    if (activeFile?.endsWith(".donder")) return "donder";
     return "json";
   }, [activeFile]);
 
-  const handleEditorMount: OnMount = useCallback((editor) => {
+  const handleEditorMount: OnMount = useCallback((editor, monacoApi) => {
+    if (!donderRegistered) {
+      monacoApi.languages.register({ id: "donder", extensions: [".donder", ".effect.donder"] });
+      donderRegistered = true;
+    }
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void useWorkbench.getState().saveFile();
     });
