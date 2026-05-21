@@ -1,0 +1,28 @@
+effect Strobe {
+  version 1;
+  spatial false;
+
+  enum duty_mode { narrow, balanced, wide }
+
+  param rate: int(1, 30) = 8;
+  param duty: duty_mode = duty_mode.balanced;
+  param color: color = #fff;
+  param enabled: bool = true;
+  param rate_curve: curve<int(1, 30)>;
+
+  let duty_width = switch duty {
+    case duty_mode.narrow: 0.15;
+    case duty_mode.balanced: 0.5;
+    case duty_mode.wide: 0.8;
+    default: 0.5;
+  };
+
+  let dynamic_rate = rate_curve(t);
+  let flash_phase = fract(t * dynamic_rate);
+
+  if enabled && flash_phase < duty_width {
+    color
+  } else {
+    #000
+  }
+}

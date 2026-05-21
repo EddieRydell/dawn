@@ -1,0 +1,8 @@
+curve StrobeRate {
+  version 1;
+  range int(1, 30);
+
+  key 0.0 4 linear;
+  key 0.5 18 linear;
+  key 1.0 8 linear;
+}

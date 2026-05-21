@@ -1,18 +1,11 @@
+import hardware StageHardware from <../hardware/StageHardware.hardware.dawn>;
+import layout StageLayout from <../layouts/StageLayout.layout.dawn>;
+import patch StagePatch from <../patches/StagePatch.patch.dawn>;
+
 display Main {
   version 1;
-  const RoofPixels: Int = 50;
 
-  fixture Roofline {
-    pixel_count RoofPixels;
-    color_model Rgb;
-    channel_order Rgb;
-  }
-
-  group All {
-    members [Roofline];
-  }
-
-  include controllers from "controllers.dawn";
-  include layout from "layout.dawn";
-  include patch from "patch.dawn";
+  hardware StageHardware;
+  layout StageLayout;
+  patch StagePatch;
 }

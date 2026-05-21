@@ -1,25 +1,70 @@
+import effect Pulse from <../effects/Pulse.effect.dawn>;
+import effect Strobe from <../effects/Strobe.effect.dawn>;
+import curve PulseEnvelope from <../curves/PulseEnvelope.curve.dawn>;
+import curve SunsetPalette from <../curves/SunsetPalette.curve.dawn>;
+import curve StrobeRate from <../curves/StrobeRate.curve.dawn>;
+import curve Gate from <../curves/Gate.curve.dawn>;
+
 sequence Demo {
   version 1;
-  display Main;
-  duration 10s;
-  frame_rate 40;
 
-  script Pulse from "../effects/Pulse.effect.dawn";
+  duration 1m30s40ms;
+  frame_rate 60;
+  audio <audio/demo.wav>;
 
-  event All {
-    effect Solid;
-    at 0s for 4s;
-    params {
-      Color #40c4ff;
-    }
+  event Intro {
+    at 0s for 10s;
+    effect Pulse(
+      speed 0.8,
+      repeats 2,
+      enabled true,
+      mode Pulse.speed_mode.slow,
+      active_channels Pulse.channels.blue,
+      base #40c4ff,
+      intensity PulseEnvelope,
+      palette SunsetPalette,
+      gate Gate
+    );
   }
 
-  event All {
-    effect Pulse;
-    at 4s for 6s;
-    params {
-      speed 1.4;
-      base #ff4fd8;
-    }
+  event Drop {
+    at 10s40ms for 6s;
+    effect Pulse(
+      speed 1.4,
+      repeats 4,
+      enabled true,
+      mode Pulse.speed_mode.fast,
+      active_channels Pulse.channels.red | Pulse.channels.green | Pulse.channels.blue,
+      base #ff4fd8,
+      intensity PulseEnvelope,
+      palette SunsetPalette,
+      gate Gate
+    );
+  }
+
+  event BlackoutStrobe {
+    at 20s for 500ms;
+    effect Strobe(
+      rate 12,
+      duty Strobe.duty_mode.narrow,
+      color #fff,
+      enabled true,
+      rate_curve StrobeRate
+    );
+  }
+
+  event Outro {
+    at 1m20s for 10s40ms;
+    effect Pulse(
+      speed 0.5,
+      repeats 1,
+      enabled false,
+      mode Pulse.speed_mode.med,
+      active_channels Pulse.channels.red | Pulse.channels.blue,
+      base #ffd166,
+      intensity PulseEnvelope,
+      palette SunsetPalette,
+      gate Gate
+    );
   }
 }

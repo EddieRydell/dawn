@@ -1,8 +1,54 @@
-@name "Pulse"
-@spatial true
+effect Pulse {
+  version 1;
+  spatial true;
 
-param speed: float(0.1, 10.0) = 1.0;
-param base: color = #40c4ff;
+  enum speed_mode { slow, med, fast }
+  flags channels { red, green, blue }
 
-let brightness = 0.35 + 0.65 * abs(sin((t + pos) * speed * 6.28318));
-base * brightness
+  param speed: float(0.1, 10.0) = 1.0;
+  param repeats: int(1, 16) = 2;
+  param enabled: bool = true;
+  param mode: speed_mode = speed_mode.med;
+  param active_channels: channels = channels.red | channels.green | channels.blue;
+  param base: color = #40c4ff;
+  param intensity: curve<float(0.0, 1.0)>;
+  param palette: curve<color>;
+  param gate: curve<bool>;
+
+  fn clamp01(v: float): float {
+    if v <= 0.0 {
+      0.0
+    } else {
+      if v > 1.0 {
+        1.0
+      } else {
+        v
+      }
+    }
+  }
+
+  let mode_rate = switch mode {
+    case speed_mode.slow: 0.5;
+    case speed_mode.med: 1.0;
+    case speed_mode.fast: 2.0;
+    default: 1.0;
+  };
+
+  let phase = fract(t * speed * mode_rate);
+  let centered = abs((phase - 0.5) * 2.0);
+  let spatial_wave = abs(sin((t + pos) * speed * TAU));
+  let normalized_pos = (pos / 1.0) % 1.0;
+  let shaped = clamp01((0.25 + 0.75 * spatial_wave - centered * 0.1) ** 1.25);
+  let pulse = intensity(phase);
+  let colorized = mix(base, palette(normalized_pos), 0.5);
+  let gated = !(!enabled) && gate(fract(t * repeats));
+  let parity = (repeats & 1) ^ 0;
+  let exact_once = repeats == 1;
+  let allowed = mode != speed_mode.slow || exact_once || repeats >= 2 || parity == 1;
+
+  if gated && allowed && shaped >= 0.1 {
+    colorized * pulse * shaped
+  } else {
+    #000
+  }
+}
