@@ -4,9 +4,15 @@ export type Diagnostic = {
   message: string;
 };
 
+export type ProjectEntry = {
+  path: string;
+  kind: "directory" | "file";
+};
+
 export type ProjectState = {
   root: string;
   files: string[];
+  entries: ProjectEntry[];
   diagnostics: Diagnostic[];
 };
 

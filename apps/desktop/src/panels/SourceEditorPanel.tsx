@@ -1,43 +1,51 @@
-import Editor, { loader } from "@monaco-editor/react";
-import { Save, SearchCheck } from "lucide-react";
+import Editor, { loader, type OnMount } from "@monaco-editor/react";
 import * as monaco from "monaco-editor";
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useWorkbench } from "../store/workbenchStore";
 
 loader.config({ monaco });
 
 export function SourceEditorPanel() {
   const activeFile = useWorkbench((state) => state.activeFile);
-  const fileContent = useWorkbench((state) => state.fileContent);
-  const dirty = useWorkbench((state) => state.dirty);
+  const activeEditor = useWorkbench((state) => state.openEditors.find((editor) => editor.path === state.activeFile) ?? null);
   const setFileContent = useWorkbench((state) => state.setFileContent);
-  const saveFile = useWorkbench((state) => state.saveFile);
-  const runCheck = useWorkbench((state) => state.runCheck);
 
   const language = useMemo(() => {
     if (activeFile?.endsWith(".vibe")) return "javascript";
     return "json";
   }, [activeFile]);
 
+  const handleEditorMount: OnMount = useCallback((editor) => {
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+      void useWorkbench.getState().saveFile();
+    });
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Tab, () => {
+      useWorkbench.getState().activateNextEditor(1);
+    });
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Tab, () => {
+      useWorkbench.getState().activateNextEditor(-1);
+    });
+  }, []);
+
   return (
     <section className="editor-pane">
-      <div className="toolbar">
-        <span>{activeFile ? `${dirty ? "* " : ""}${activeFile}` : "No file open"}</span>
-        <button title="Save" onClick={() => void saveFile()} disabled={!activeFile}>
-          <Save size={17} />
-        </button>
-        <button title="Check project" onClick={() => void runCheck()}>
-          <SearchCheck size={17} />
-        </button>
-      </div>
       <div className="workbench-content">
         <Editor
+          path={activeEditor?.path ?? "donder://empty"}
           height="100%"
           language={language}
           theme="vs-dark"
-          value={fileContent}
+          value={activeEditor?.content ?? ""}
           onChange={(value) => setFileContent(value ?? "")}
-          options={{ minimap: { enabled: false }, fontSize: 13 }}
+          onMount={handleEditorMount}
+          saveViewState
+          options={{
+            minimap: { enabled: false },
+            fontSize: 13,
+            automaticLayout: true,
+            scrollBeyondLastLine: false,
+            tabSize: 2
+          }}
         />
       </div>
     </section>

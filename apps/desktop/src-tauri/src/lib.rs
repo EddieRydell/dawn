@@ -23,7 +23,14 @@ struct ProjectSession {
 struct ProjectState {
     root: String,
     files: Vec<String>,
+    entries: Vec<ProjectEntryDto>,
     diagnostics: Vec<DiagnosticDto>,
+}
+
+#[derive(Serialize)]
+struct ProjectEntryDto {
+    path: String,
+    kind: String,
 }
 
 #[derive(Serialize)]
@@ -90,6 +97,7 @@ fn check_project(state: State<'_, AppState>) -> Result<ProjectState, String> {
     Ok(ProjectState {
         root: root.display().to_string(),
         files: list_source_files(&root),
+        entries: list_project_entries(&root),
         diagnostics: diagnostics.into_iter().map(to_diagnostic_dto).collect(),
     })
 }
@@ -235,6 +243,20 @@ fn list_source_files(root: &Path) -> Vec<String> {
         .collect::<Vec<_>>();
     files.sort();
     files
+}
+
+fn list_project_entries(root: &Path) -> Vec<ProjectEntryDto> {
+    let mut entries = WalkDir::new(root)
+        .min_depth(1)
+        .into_iter()
+        .filter_map(Result::ok)
+        .map(|entry| ProjectEntryDto {
+            path: entry.path().display().to_string(),
+            kind: if entry.file_type().is_dir() { "directory" } else { "file" }.to_string(),
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.path.cmp(&right.path));
+    entries
 }
 
 fn project_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {

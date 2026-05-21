@@ -1,7 +1,17 @@
 import { ChevronDown, ChevronRight, FileCode, Folder } from "lucide-react";
-import { type KeyboardEvent, type RefObject, useEffect, useMemo, useRef, useState } from "react";
-import { Tree, type MoveHandler, type NodeRendererProps, type RenameHandler } from "react-arborist";
+import {
+  type KeyboardEvent,
+  type PointerEvent,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
+import { Tree, type MoveHandler, type NodeRendererProps, type RenameHandler, type RowRendererProps } from "react-arborist";
 import { useWorkbench } from "../store/workbenchStore";
+import type { ProjectEntry } from "../types";
 
 type FileTreeNode = {
   id: string;
@@ -11,6 +21,15 @@ type FileTreeNode = {
   children?: FileTreeNode[];
 };
 
+type DragState = {
+  node: FileTreeNode;
+  startX: number;
+  startY: number;
+  dragging: boolean;
+};
+
+let suppressNextTreeClick = false;
+
 export function ProjectPanel() {
   const projectState = useWorkbench((state) => state.projectState);
   const activeFile = useWorkbench((state) => state.activeFile);
@@ -19,23 +38,74 @@ export function ProjectPanel() {
   const movePaths = useWorkbench((state) => state.movePaths);
   const setStatus = useWorkbench((state) => state.setStatus);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const dragState = useRef<DragState | null>(null);
+  const [dragPreview, setDragPreview] = useState<{ label: string; x: number; y: number } | null>(null);
   const size = useElementSize(containerRef);
 
-  const treeData = useMemo(() => buildTreeData(projectState?.root, projectState?.files ?? []), [projectState]);
+  const treeData = useMemo(
+    () => buildTreeData(projectState?.root, projectState?.entries, projectState?.files ?? []),
+    [projectState]
+  );
 
-  const onRename: RenameHandler<FileTreeNode> = async ({ name, node }) => {
+  const onRename: RenameHandler<FileTreeNode> = useCallback(async ({ name, node }) => {
     if (name === node.data.name) return;
     await renamePath(node.data.path, name);
-  };
+  }, [renamePath]);
 
-  const onMove: MoveHandler<FileTreeNode> = async ({ dragNodes, parentNode }) => {
+  const onMove: MoveHandler<FileTreeNode> = useCallback(async ({ dragNodes, parentNode }) => {
     if (!projectState?.root) return;
     const newParent = parentNode?.data.path ?? projectState.root;
     await movePaths(
       dragNodes.filter((node) => !node.isRoot).map((node) => node.data.path),
       newParent
     );
-  };
+  }, [movePaths, projectState?.root]);
+
+  const startPointerDrag = useCallback((event: PointerEvent<HTMLElement>, node: FileTreeNode) => {
+    if (event.button !== 0) return;
+    if ((event.target as HTMLElement).closest("button, input")) return;
+    dragState.current = {
+      node,
+      startX: event.clientX,
+      startY: event.clientY,
+      dragging: false
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }, []);
+
+  const updatePointerDrag = useCallback((event: PointerEvent<HTMLElement>) => {
+    const current = dragState.current;
+    if (!current) return;
+
+    const moved = Math.hypot(event.clientX - current.startX, event.clientY - current.startY);
+    if (!current.dragging && moved < 4) return;
+
+    current.dragging = true;
+    suppressNextTreeClick = true;
+    setDragPreview({ label: current.node.name, x: event.clientX, y: event.clientY });
+    event.preventDefault();
+  }, []);
+
+  const finishPointerDrag = useCallback(async (event: PointerEvent<HTMLElement>) => {
+    const current = dragState.current;
+    dragState.current = null;
+    setDragPreview(null);
+    if (!current?.dragging || !projectState?.root) return;
+
+    const targetRow = document
+      .elementFromPoint(event.clientX, event.clientY)
+      ?.closest<HTMLElement>("[data-tree-path]");
+    const targetPath = targetRow?.dataset.treePath;
+    const targetKind = targetRow?.dataset.treeKind;
+    const newParent = targetKind === "directory" && targetPath
+      ? targetPath
+      : targetPath
+        ? parentPath(targetPath)
+        : projectState.root;
+
+    if (!newParent || parentPath(current.node.path) === newParent) return;
+    await movePaths([current.node.path], newParent);
+  }, [movePaths, projectState?.root]);
 
   return (
     <section className="panel project-panel">
@@ -51,6 +121,7 @@ export function ProjectPanel() {
             indent={14}
             openByDefault
             selection={activeFile ?? undefined}
+            renderRow={FileTreeRowContainer}
             onActivate={(node) => {
               if (node.data.kind === "file") {
                 void openFile(node.data.path);
@@ -58,16 +129,34 @@ export function ProjectPanel() {
             }}
             onRename={onRename}
             onMove={onMove}
+            disableDrag
             disableDrop={({ parentNode }) => Boolean(parentNode && parentNode.data.kind !== "directory")}
             disableEdit={(node) => node.kind === "file" && !isEditableSource(node.path)}
-            dndRootElement={document.body}
           >
-            {FileTreeRow}
+            {(props) => (
+              <FileTreeRow
+                {...props}
+                onPointerDown={startPointerDrag}
+                onPointerMove={updatePointerDrag}
+                onPointerUp={finishPointerDrag}
+                onPointerCancel={() => {
+                  dragState.current = null;
+                  setDragPreview(null);
+                }}
+              />
+            )}
           </Tree>
         ) : null}
         {treeData.length > 0 ? (
           <div className="tree-hint" onDoubleClick={() => setStatus("Use F2 to rename; drag files or folders to move them.")}>
-            F2 rename · drag to move
+            F2 rename - drag to move
+          </div>
+        ) : null}
+        {dragPreview ? (
+          <div className="tree-drag-layer">
+            <div className="tree-drag-preview" style={{ transform: `translate(${dragPreview.x + 8}px, ${dragPreview.y + 8}px)` }}>
+              {dragPreview.label}
+            </div>
           </div>
         ) : null}
       </div>
@@ -75,12 +164,48 @@ export function ProjectPanel() {
   );
 }
 
-function FileTreeRow({ node, style, dragHandle }: NodeRendererProps<FileTreeNode>) {
+function FileTreeRowContainer({ node, attrs, innerRef, children }: RowRendererProps<FileTreeNode>) {
+  return (
+    <div
+      {...attrs}
+      ref={innerRef}
+      onFocus={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        if (suppressNextTreeClick) {
+          suppressNextTreeClick = false;
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        node.handleClick(event);
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function FileTreeRow({
+  node,
+  style,
+  dragHandle,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onPointerCancel
+}: NodeRendererProps<FileTreeNode> & {
+  onPointerDown: (event: PointerEvent<HTMLElement>, node: FileTreeNode) => void;
+  onPointerMove: (event: PointerEvent<HTMLElement>) => void;
+  onPointerUp: (event: PointerEvent<HTMLElement>) => void;
+  onPointerCancel: () => void;
+}) {
   const isDirectory = node.data.kind === "directory";
 
   return (
     <div
       ref={dragHandle}
+      data-tree-kind={node.data.kind}
+      data-tree-path={node.data.path}
       className={[
         "tree-row",
         node.isSelected ? "selected" : "",
@@ -89,6 +214,10 @@ function FileTreeRow({ node, style, dragHandle }: NodeRendererProps<FileTreeNode
         node.willReceiveDrop ? "drop-target" : ""
       ].join(" ")}
       style={style}
+      onPointerDown={(event) => onPointerDown(event, node.data)}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
       onDoubleClick={() => {
         if (isDirectory) node.toggle();
       }}
@@ -131,22 +260,23 @@ function RenameInput({ node }: { node: NodeRendererProps<FileTreeNode>["node"] }
   );
 }
 
-function buildTreeData(root: string | undefined, files: string[]): FileTreeNode[] {
+function buildTreeData(root: string | undefined, entries: ProjectEntry[] | undefined, files: string[]): FileTreeNode[] {
   const rootNode: FileTreeNode = { id: root ?? "project", name: root ? leafName(root) : "Project", path: root ?? "", kind: "directory", children: [] };
+  const projectEntries = entries ?? files.map((path) => ({ path, kind: "file" as const }));
 
-  for (const file of files) {
-    const relative = root ? file.replace(`${root}\\`, "").replace(`${root}/`, "") : file;
+  for (const entry of projectEntries) {
+    const relative = root ? entry.path.replace(`${root}\\`, "").replace(`${root}/`, "") : entry.path;
     const parts = relative.split(/[\\/]/).filter(Boolean);
     let cursor = rootNode;
 
     parts.forEach((part, index) => {
-      const isFile = index === parts.length - 1;
-      const path = isFile ? file : joinTreePath(cursor.path, part);
-      const kind: FileTreeNode["kind"] = isFile ? "file" : "directory";
+      const isEntry = index === parts.length - 1;
+      const path = isEntry ? entry.path : joinTreePath(cursor.path, part);
+      const kind: FileTreeNode["kind"] = isEntry ? entry.kind : "directory";
       let child = cursor.children?.find((node) => node.name === part && node.kind === kind);
 
       if (!child) {
-        child = { id: path, name: part, path, kind, children: isFile ? undefined : [] };
+        child = { id: path, name: part, path, kind, children: kind === "file" ? undefined : [] };
         cursor.children = cursor.children ?? [];
         cursor.children.push(child);
         cursor.children.sort(compareTreeNodes);
@@ -173,6 +303,11 @@ function joinTreePath(parent: string, child: string) {
   return parent ? `${parent}\\${child}` : child;
 }
 
+function parentPath(path: string) {
+  const index = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
+  return index > 0 ? path.slice(0, index) : "";
+}
+
 function isEditableSource(path: string) {
   return path.endsWith(".jsonc") || path.endsWith(".vibe");
 }
@@ -186,7 +321,8 @@ function useElementSize(ref: RefObject<HTMLElement>) {
 
     const update = () => {
       const rect = element.getBoundingClientRect();
-      setSize({ width: Math.max(1, rect.width), height: Math.max(0, rect.height - 20) });
+      const next = { width: Math.max(1, rect.width), height: Math.max(0, rect.height - 20) };
+      setSize((current) => (current.width === next.width && current.height === next.height ? current : next));
     };
     update();
 

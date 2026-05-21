@@ -7,12 +7,13 @@ import {
   LayoutDashboard,
   Pause,
   Play,
+  RefreshCw,
   SearchCheck,
   Settings,
-  TerminalSquare
+  X
 } from "lucide-react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { sampleProjectPath, useWorkbench } from "./store/workbenchStore";
+import { useWorkbench } from "./store/workbenchStore";
 import { DockLayout } from "./workbench/DockLayout";
 import { resetWorkbenchLayout, toggleWorkbenchPanel } from "./workbench/dockBridge";
 import type { PanelId } from "./workbench/panelIds";
@@ -28,8 +29,9 @@ export function WorkbenchShell() {
   const activeFile = useWorkbench((state) => state.activeFile);
   const frame = useWorkbench((state) => state.frame);
   const panelVisibility = useWorkbench((state) => state.panelVisibility);
-  const openProject = useWorkbench((state) => state.openProject);
-  const saveFile = useWorkbench((state) => state.saveFile);
+  const openProjectDialog = useWorkbench((state) => state.openProjectDialog);
+  const closeProject = useWorkbench((state) => state.closeProject);
+  const reloadFile = useWorkbench((state) => state.reloadFile);
   const runCheck = useWorkbench((state) => state.runCheck);
   const setStatus = useWorkbench((state) => state.setStatus);
   const setPlaying = useWorkbench((state) => state.setPlaying);
@@ -121,8 +123,11 @@ export function WorkbenchShell() {
           }}
         >
           <MenuButton label="File" open={menuOpen === "File"} onOpen={() => setMenuOpen(menuOpen === "File" ? null : "File")}>
-            <MenuItem icon={<FolderOpen size={15} />} label="Open Smoke Project" onClick={() => openProject(sampleProjectPath)} />
-            <MenuItem label="Save" onClick={saveFile} disabled={!activeFile} />
+            <MenuItem icon={<FolderOpen size={15} />} label="Open Project..." onClick={openProjectDialog} />
+            <MenuItem icon={<X size={15} />} label="Close Project" onClick={closeProject} disabled={!projectState} />
+            <MenuSeparator />
+            <MenuItem icon={<RefreshCw size={15} />} label="Reload File from Disk" onClick={reloadFile} disabled={!activeFile} />
+            <MenuSeparator />
             <MenuItem icon={<SearchCheck size={15} />} label="Check Project" onClick={runCheck} disabled={!projectState} />
           </MenuButton>
           <MenuButton label="Settings" open={menuOpen === "Settings"} onOpen={() => setMenuOpen(menuOpen === "Settings" ? null : "Settings")}>
@@ -244,6 +249,10 @@ function MenuItem({
       <span>{label}</span>
     </button>
   );
+}
+
+function MenuSeparator() {
+  return <div className="menu-separator" role="separator" />;
 }
 
 function formatError(error: unknown) {
