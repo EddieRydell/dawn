@@ -59,7 +59,8 @@ impl Document {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
     pub fn kind(&self) -> Option<DocKind> { child(&self.syntax) }
     pub fn name(&self) -> Option<Name> { child(&self.syntax) }
-    pub fn block(&self) -> Option<BalancedBlock> { child(&self.syntax) }
+    pub fn body(&self) -> Option<DocumentBody> { child(&self.syntax) }
+    pub fn block(&self) -> Option<DocumentBody> { child(&self.syntax) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,6 +75,22 @@ impl AstNode for DocKind {
 }
 
 impl DocKind {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn token(&self) -> Option<SyntaxToken> { self.syntax.first_token() }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Keyword { syntax: SyntaxNode }
+
+impl AstNode for Keyword {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::Keyword }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl Keyword {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
     pub fn token(&self) -> Option<SyntaxToken> { self.syntax.first_token() }
 }
@@ -108,6 +125,74 @@ impl AstNode for PathLit {
 impl PathLit {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
     pub fn raw_text(&self) -> Option<String> { text_between(&self.syntax, SyntaxKind::Lt, SyntaxKind::Gt) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentBody { syntax: SyntaxNode }
+
+impl AstNode for DocumentBody {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::DocumentBody }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl DocumentBody {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn items(&self) -> Vec<BodyItem> { children(&self.syntax) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BodyItem { syntax: SyntaxNode }
+
+impl AstNode for BodyItem {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::BodyItem }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl BodyItem {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn keyword_stmt(&self) -> Option<KeywordStmt> { child(&self.syntax) }
+    pub fn ident_stmt(&self) -> Option<IdentStmt> { child(&self.syntax) }
+    pub fn block(&self) -> Option<BalancedBlock> { child(&self.syntax) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeywordStmt { syntax: SyntaxNode }
+
+impl AstNode for KeywordStmt {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::KeywordStmt }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl KeywordStmt {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn keyword(&self) -> Option<Keyword> { child(&self.syntax) }
+    pub fn body(&self) -> Option<DocumentBody> { child(&self.syntax) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdentStmt { syntax: SyntaxNode }
+
+impl AstNode for IdentStmt {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::IdentStmt }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl IdentStmt {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn name(&self) -> Option<Name> { child(&self.syntax) }
+    pub fn body(&self) -> Option<DocumentBody> { child(&self.syntax) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

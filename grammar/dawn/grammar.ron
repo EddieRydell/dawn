@@ -129,8 +129,13 @@
             "ImportDecl",
             "Document",
             "DocKind",
+            "Keyword",
             "Name",
             "PathLit",
+            "DocumentBody",
+            "BodyItem",
+            "KeywordStmt",
+            "IdentStmt",
             "BalancedBlock",
             "BalancedItem",
         ],
@@ -158,7 +163,7 @@
                 pattern: [
                     (node: "DocKind"),
                     (node: "Name"),
-                    (node: "BalancedBlock"),
+                    (node: "DocumentBody"),
                 ],
             ),
             (
@@ -176,6 +181,59 @@
                     ]),
                 ],
             ),
+            (
+                name: "Keyword",
+                pattern: [
+                    (choice: [
+                        (token: "DisplayKw"),
+                        (token: "HardwareKw"),
+                        (token: "LayoutKw"),
+                        (token: "PatchKw"),
+                        (token: "SequenceKw"),
+                        (token: "CurveKw"),
+                        (token: "EffectKw"),
+                        (token: "EventKw"),
+                        (token: "VersionKw"),
+                        (token: "LabelKw"),
+                        (token: "DescriptionKw"),
+                        (token: "ControllerKw"),
+                        (token: "InputKw"),
+                        (token: "OutputKw"),
+                        (token: "UniverseKw"),
+                        (token: "FixtureKw"),
+                        (token: "GroupKw"),
+                        (token: "MembersKw"),
+                        (token: "FilterKw"),
+                        (token: "RouteKw"),
+                        (token: "TargetKw"),
+                        (token: "AtKw"),
+                        (token: "ForKw"),
+                        (token: "DurationKw"),
+                        (token: "FrameRateKw"),
+                        (token: "AudioKw"),
+                        (token: "RangeKw"),
+                        (token: "KeyKw"),
+                        (token: "EnumKw"),
+                        (token: "FlagsKw"),
+                        (token: "ParamKw"),
+                        (token: "SpatialKw"),
+                        (token: "FnKw"),
+                        (token: "LetKw"),
+                        (token: "IfKw"),
+                        (token: "ElseKw"),
+                        (token: "SwitchKw"),
+                        (token: "CaseKw"),
+                        (token: "DefaultKw"),
+                        (token: "FloatKw"),
+                        (token: "IntKw"),
+                        (token: "BoolKw"),
+                        (token: "ColorKw"),
+                        (token: "GradientKw"),
+                        (token: "PathKw"),
+                        (token: "VirtualStringKw"),
+                    ]),
+                ],
+            ),
             (name: "Name", pattern: [(token: "Ident")]),
             (
                 name: "PathLit",
@@ -183,6 +241,46 @@
                     (token: "Lt"),
                     (repeat: "PathToken"),
                     (token: "Gt"),
+                ],
+            ),
+            (
+                name: "DocumentBody",
+                pattern: [
+                    (token: "LBrace"),
+                    (repeat: "BodyItem"),
+                    (token: "RBrace"),
+                ],
+            ),
+            (
+                name: "BodyItem",
+                pattern: [
+                    (choice: [
+                        (node: "KeywordStmt"),
+                        (node: "IdentStmt"),
+                        (node: "BalancedBlock"),
+                    ]),
+                ],
+            ),
+            (
+                name: "KeywordStmt",
+                pattern: [
+                    (node: "Keyword"),
+                    (repeat: "HeaderToken"),
+                    (choice: [
+                        (node: "DocumentBody"),
+                        (token: "Semicolon"),
+                    ]),
+                ],
+            ),
+            (
+                name: "IdentStmt",
+                pattern: [
+                    (node: "Name"),
+                    (repeat: "HeaderToken"),
+                    (choice: [
+                        (node: "DocumentBody"),
+                        (token: "Semicolon"),
+                    ]),
                 ],
             ),
             (
@@ -225,6 +323,11 @@
                 ],
             ),
             (
+                name: "HeaderToken",
+                include: "all_tokens",
+                exclude: ["LBrace", "RBrace", "Semicolon"],
+            ),
+            (
                 name: "AnyTokenExceptBrace",
                 include: "all_tokens",
                 exclude: ["LBrace", "RBrace"],
@@ -262,12 +365,18 @@
                 accessors: [
                     (name: "kind", kind: "child", node: "DocKind"),
                     (name: "name", kind: "child", node: "Name"),
-                    (name: "block", kind: "child", node: "BalancedBlock"),
+                    (name: "body", kind: "child", node: "DocumentBody"),
+                    (name: "block", kind: "child", node: "DocumentBody"),
                 ],
             ),
             (
                 name: "DocKind",
                 syntax: "DocKind",
+                accessors: [(name: "token", kind: "first_token")],
+            ),
+            (
+                name: "Keyword",
+                syntax: "Keyword",
                 accessors: [(name: "token", kind: "first_token")],
             ),
             (
@@ -279,6 +388,38 @@
                 name: "PathLit",
                 syntax: "PathLit",
                 accessors: [(name: "raw_text", kind: "text_between", start: "Lt", end: "Gt")],
+            ),
+            (
+                name: "DocumentBody",
+                syntax: "DocumentBody",
+                accessors: [
+                    (name: "items", kind: "children", node: "BodyItem"),
+                ],
+            ),
+            (
+                name: "BodyItem",
+                syntax: "BodyItem",
+                accessors: [
+                    (name: "keyword_stmt", kind: "child", node: "KeywordStmt"),
+                    (name: "ident_stmt", kind: "child", node: "IdentStmt"),
+                    (name: "block", kind: "child", node: "BalancedBlock"),
+                ],
+            ),
+            (
+                name: "KeywordStmt",
+                syntax: "KeywordStmt",
+                accessors: [
+                    (name: "keyword", kind: "child", node: "Keyword"),
+                    (name: "body", kind: "child", node: "DocumentBody"),
+                ],
+            ),
+            (
+                name: "IdentStmt",
+                syntax: "IdentStmt",
+                accessors: [
+                    (name: "name", kind: "child", node: "Name"),
+                    (name: "body", kind: "child", node: "DocumentBody"),
+                ],
             ),
             (
                 name: "BalancedBlock",
