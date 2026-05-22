@@ -77,22 +77,7 @@ impl AstNode for DocKind {
 impl DocKind {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
     pub fn token(&self) -> Option<SyntaxToken> { self.syntax.first_token() }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Keyword { syntax: SyntaxNode }
-
-impl AstNode for Keyword {
-    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::Keyword }
-    fn cast(node: SyntaxNode) -> Option<Self> {
-        Self::can_cast(node.kind()).then_some(Self { syntax: node })
-    }
-    fn syntax(&self) -> &SyntaxNode { &self.syntax }
-}
-
-impl Keyword {
-    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
-    pub fn token(&self) -> Option<SyntaxToken> { self.syntax.first_token() }
+    pub fn text(&self) -> Option<String> { self.syntax.first_token().map(|token| token.text().to_string()) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +94,7 @@ impl AstNode for Name {
 impl Name {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
     pub fn ident(&self) -> Option<SyntaxToken> { token(&self.syntax, SyntaxKind::Ident) }
+    pub fn text(&self) -> Option<String> { token_text(&self.syntax, SyntaxKind::Ident) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,43 +142,44 @@ impl AstNode for BodyItem {
 
 impl BodyItem {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
-    pub fn keyword_stmt(&self) -> Option<KeywordStmt> { child(&self.syntax) }
-    pub fn ident_stmt(&self) -> Option<IdentStmt> { child(&self.syntax) }
+    pub fn stmt(&self) -> Option<Stmt> { child(&self.syntax) }
     pub fn block(&self) -> Option<BalancedBlock> { child(&self.syntax) }
+    pub fn variant(&self) -> Option<BodyItemKind> { BodyItemKind::from_node(&self.syntax) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeywordStmt { syntax: SyntaxNode }
+pub struct Stmt { syntax: SyntaxNode }
 
-impl AstNode for KeywordStmt {
-    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::KeywordStmt }
+impl AstNode for Stmt {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::Stmt }
     fn cast(node: SyntaxNode) -> Option<Self> {
         Self::can_cast(node.kind()).then_some(Self { syntax: node })
     }
     fn syntax(&self) -> &SyntaxNode { &self.syntax }
 }
 
-impl KeywordStmt {
+impl Stmt {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
-    pub fn keyword(&self) -> Option<Keyword> { child(&self.syntax) }
+    pub fn head(&self) -> Option<StmtHead> { child(&self.syntax) }
+    pub fn header_tokens(&self) -> Vec<SyntaxToken> { tokens_matching(&self.syntax, |kind| matches!(kind, SyntaxKind::Ampersand | SyntaxKind::AndAnd | SyntaxKind::Bang | SyntaxKind::BangEq | SyntaxKind::BlockComment | SyntaxKind::Caret | SyntaxKind::CaseKw | SyntaxKind::Colon | SyntaxKind::Color | SyntaxKind::Comma | SyntaxKind::DefaultKw | SyntaxKind::Dot | SyntaxKind::ElseKw | SyntaxKind::Eq | SyntaxKind::EqEq | SyntaxKind::FalseKw | SyntaxKind::Float | SyntaxKind::FnKw | SyntaxKind::ForKw | SyntaxKind::FromKw | SyntaxKind::Ge | SyntaxKind::Gt | SyntaxKind::Ident | SyntaxKind::IfKw | SyntaxKind::ImportKw | SyntaxKind::Int | SyntaxKind::InvalidColor | SyntaxKind::LBracket | SyntaxKind::LParen | SyntaxKind::Le | SyntaxKind::LetKw | SyntaxKind::LineComment | SyntaxKind::Lt | SyntaxKind::Minus | SyntaxKind::OrOr | SyntaxKind::Percent | SyntaxKind::Pipe | SyntaxKind::Plus | SyntaxKind::Question | SyntaxKind::RBracket | SyntaxKind::RParen | SyntaxKind::Shl | SyntaxKind::Shr | SyntaxKind::Slash | SyntaxKind::Star | SyntaxKind::StarStar | SyntaxKind::String | SyntaxKind::SwitchKw | SyntaxKind::TrueKw | SyntaxKind::Whitespace)) }
     pub fn body(&self) -> Option<DocumentBody> { child(&self.syntax) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IdentStmt { syntax: SyntaxNode }
+pub struct StmtHead { syntax: SyntaxNode }
 
-impl AstNode for IdentStmt {
-    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::IdentStmt }
+impl AstNode for StmtHead {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::StmtHead }
     fn cast(node: SyntaxNode) -> Option<Self> {
         Self::can_cast(node.kind()).then_some(Self { syntax: node })
     }
     fn syntax(&self) -> &SyntaxNode { &self.syntax }
 }
 
-impl IdentStmt {
+impl StmtHead {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
-    pub fn name(&self) -> Option<Name> { child(&self.syntax) }
-    pub fn body(&self) -> Option<DocumentBody> { child(&self.syntax) }
+    pub fn token(&self) -> Option<SyntaxToken> { self.syntax.first_token() }
+    pub fn text(&self) -> Option<String> { self.syntax.first_token().map(|token| token.text().to_string()) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -226,31 +213,19 @@ impl BalancedItem {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DocKindValue {
-    Project,
-    Display,
-    Hardware,
-    Layout,
-    Patch,
-    Sequence,
-    Curve,
-    Effect,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BodyItemKind {
+    Stmt(Stmt),
+    BalancedBlock(BalancedBlock),
 }
 
-impl DocKindValue {
-    pub fn from_token(kind: SyntaxKind) -> Option<Self> {
-        Some(match kind {
-            SyntaxKind::ProjectKw => Self::Project,
-            SyntaxKind::DisplayKw => Self::Display,
-            SyntaxKind::HardwareKw => Self::Hardware,
-            SyntaxKind::LayoutKw => Self::Layout,
-            SyntaxKind::PatchKw => Self::Patch,
-            SyntaxKind::SequenceKw => Self::Sequence,
-            SyntaxKind::CurveKw => Self::Curve,
-            SyntaxKind::EffectKw => Self::Effect,
-            _ => return None,
-        })
+impl BodyItemKind {
+    pub fn from_node(node: &SyntaxNode) -> Option<Self> {
+        for child in node.children() {
+            if let Some(node) = Stmt::cast(child.clone()) { return Some(Self::Stmt(node)); }
+            if let Some(node) = BalancedBlock::cast(child.clone()) { return Some(Self::BalancedBlock(node)); }
+        }
+        None
     }
 }
 
@@ -264,6 +239,19 @@ fn children<N: AstNode>(node: &SyntaxNode) -> Vec<N> {
 
 fn token(node: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxToken> {
     node.children_with_tokens().filter_map(|element| element.into_token()).find(|token| token.kind() == kind)
+}
+
+#[allow(dead_code)]
+fn tokens(node: &SyntaxNode, kind: SyntaxKind) -> Vec<SyntaxToken> {
+    tokens_matching(node, |token_kind| token_kind == kind)
+}
+
+fn tokens_matching(node: &SyntaxNode, predicate: impl Fn(SyntaxKind) -> bool) -> Vec<SyntaxToken> {
+    node.children_with_tokens().filter_map(|element| element.into_token()).filter(|token| predicate(token.kind())).collect()
+}
+
+fn token_text(node: &SyntaxNode, kind: SyntaxKind) -> Option<String> {
+    token(node, kind).map(|token| token.text().to_string())
 }
 
 fn text_between(node: &SyntaxNode, start: SyntaxKind, end: SyntaxKind) -> Option<String> {

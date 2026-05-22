@@ -152,7 +152,9 @@ fn gen_kind(grammar: &Grammar) -> String {
         out.push_str(")\n");
     }
     out.push_str("    }\n}\n\n");
-    out.push_str(&format!("impl From<{syntax_kind}> for rowan::SyntaxKind {{\n"));
+    out.push_str(&format!(
+        "impl From<{syntax_kind}> for rowan::SyntaxKind {{\n"
+    ));
     out.push_str(&format!("    fn from(kind: {syntax_kind}) -> Self {{\n"));
     out.push_str("        rowan::SyntaxKind(kind as u16)\n");
     out.push_str("    }\n");
@@ -162,8 +164,12 @@ fn gen_kind(grammar: &Grammar) -> String {
     out.push_str(&format!("impl rowan::Language for {language_type} {{\n"));
     out.push_str(&format!("    type Kind = {syntax_kind};\n\n"));
     out.push_str("    fn kind_from_raw(raw: rowan::SyntaxKind) -> Self::Kind {\n");
-    out.push_str(&format!("        assert!(raw.0 <= {syntax_kind}::Error as u16);\n"));
-    out.push_str(&format!("        unsafe {{ std::mem::transmute::<u16, {syntax_kind}>(raw.0) }}\n"));
+    out.push_str(&format!(
+        "        assert!(raw.0 <= {syntax_kind}::Error as u16);\n"
+    ));
+    out.push_str(&format!(
+        "        unsafe {{ std::mem::transmute::<u16, {syntax_kind}>(raw.0) }}\n"
+    ));
     out.push_str("    }\n\n");
     out.push_str("    fn kind_to_raw(kind: Self::Kind) -> rowan::SyntaxKind {\n");
     out.push_str("        rowan::SyntaxKind(kind as u16)\n");
@@ -177,7 +183,10 @@ fn gen_lexer(grammar: &Grammar) -> String {
     out.push_str("use regex::Regex;\n\n");
     out.push_str("use crate::diagnostic::{Diagnostic, DiagnosticKind};\n");
     out.push_str("use crate::generated::diagnostic::INVALID_TOKEN_DIAGNOSTIC;\n");
-    out.push_str(&format!("use crate::generated::kind::{} as SyntaxKind;\n\n", grammar.language.syntax_kind));
+    out.push_str(&format!(
+        "use crate::generated::kind::{} as SyntaxKind;\n\n",
+        grammar.language.syntax_kind
+    ));
     out.push_str("#[derive(Debug, Clone, PartialEq, Eq)]\n");
     out.push_str("pub struct LexToken {\n");
     out.push_str("    pub kind: SyntaxKind,\n");
@@ -248,7 +257,10 @@ fn gen_parser(grammar: &Grammar) -> String {
     out.push_str("use rowan::{GreenNode, GreenNodeBuilder};\n\n");
     out.push_str("use crate::diagnostic::Diagnostic;\n");
     out.push_str("use crate::generated::diagnostic::{UNEXPECTED_EOF_DIAGNOSTIC, UNEXPECTED_TOKEN_DIAGNOSTIC};\n");
-    out.push_str(&format!("use crate::generated::kind::{} as SyntaxKind;\n", grammar.language.syntax_kind));
+    out.push_str(&format!(
+        "use crate::generated::kind::{} as SyntaxKind;\n",
+        grammar.language.syntax_kind
+    ));
     out.push_str("use crate::generated::lexer::LexToken;\n\n");
 
     for (name, tokens) in &grammar_sets.named_token_slices {
@@ -313,7 +325,9 @@ fn emit_expression_tables(out: &mut String, grammar: &Grammar, grammar_sets: &Gr
     out.push_str("#[derive(Clone, Copy)]\n");
     out.push_str("struct PrefixOp { token: SyntaxKind, node: SyntaxKind }\n\n");
     out.push_str("#[derive(Clone, Copy)]\n");
-    out.push_str("struct InfixOp { token: SyntaxKind, node: SyntaxKind, left_bp: u8, right_bp: u8 }\n\n");
+    out.push_str(
+        "struct InfixOp { token: SyntaxKind, node: SyntaxKind, left_bp: u8, right_bp: u8 }\n\n",
+    );
     out.push_str("#[derive(Clone, Copy)]\n");
     out.push_str("struct PostfixOp { node: SyntaxKind, items: &'static [Item], first: &'static [SyntaxKind] }\n\n");
 
@@ -325,7 +339,11 @@ fn emit_expression_tables(out: &mut String, grammar: &Grammar, grammar_sets: &Gr
                 let node = atom.node.as_ref().expect("validated");
                 grammar_sets.rule_first(node).clone()
             };
-            emit_token_slice(out, &format!("EXPR_{expr_index}_ATOM_{atom_index}_FIRST"), &first);
+            emit_token_slice(
+                out,
+                &format!("EXPR_{expr_index}_ATOM_{atom_index}_FIRST"),
+                &first,
+            );
         }
         for (postfix_index, postfix) in expression.postfix.iter().enumerate() {
             let first = first_of_sequence(
@@ -379,7 +397,9 @@ fn emit_expression_tables(out: &mut String, grammar: &Grammar, grammar_sets: &Gr
             }
         }
 
-        out.push_str(&format!("static EXPR_{expr_index}_ATOMS: &[ExprAtom] = &[\n"));
+        out.push_str(&format!(
+            "static EXPR_{expr_index}_ATOMS: &[ExprAtom] = &[\n"
+        ));
         for (atom_index, atom) in expression.atoms.iter().enumerate() {
             let item = if let Some(token) = &atom.token {
                 format!("Item::Token(SyntaxKind::{token})")
@@ -396,7 +416,9 @@ fn emit_expression_tables(out: &mut String, grammar: &Grammar, grammar_sets: &Gr
         }
         out.push_str("];\n\n");
 
-        out.push_str(&format!("static EXPR_{expr_index}_PREFIX: &[PrefixOp] = &[\n"));
+        out.push_str(&format!(
+            "static EXPR_{expr_index}_PREFIX: &[PrefixOp] = &[\n"
+        ));
         for prefix in &expression.prefix {
             out.push_str(&format!(
                 "    PrefixOp {{ token: SyntaxKind::{}, node: SyntaxKind::{} }},\n",
@@ -412,7 +434,9 @@ fn emit_expression_tables(out: &mut String, grammar: &Grammar, grammar_sets: &Gr
                 precedence.insert(infix.precedence.clone(), bp);
             }
         }
-        out.push_str(&format!("static EXPR_{expr_index}_INFIX: &[InfixOp] = &[\n"));
+        out.push_str(&format!(
+            "static EXPR_{expr_index}_INFIX: &[InfixOp] = &[\n"
+        ));
         for infix in &expression.infix {
             let bp = precedence[&infix.precedence];
             let (left_bp, right_bp) = if infix.associativity == "right" {
@@ -427,7 +451,9 @@ fn emit_expression_tables(out: &mut String, grammar: &Grammar, grammar_sets: &Gr
         }
         out.push_str("];\n\n");
 
-        out.push_str(&format!("static EXPR_{expr_index}_POSTFIX: &[PostfixOp] = &[\n"));
+        out.push_str(&format!(
+            "static EXPR_{expr_index}_POSTFIX: &[PostfixOp] = &[\n"
+        ));
         for (postfix_index, postfix) in expression.postfix.iter().enumerate() {
             out.push_str(&format!(
                 "    PostfixOp {{ node: SyntaxKind::{}, items: EXPR_{expr_index}_POSTFIX_{postfix_index}_ITEMS, first: EXPR_{expr_index}_POSTFIX_{postfix_index}_FIRST }},\n",
@@ -714,7 +740,16 @@ fn first_of_item(
     if let Some(choice) = &item.choice {
         return choice
             .iter()
-            .flat_map(|alt| first_of_item(alt, first, nullable_rules, rule_indices, token_sets, token_set_indices))
+            .flat_map(|alt| {
+                first_of_item(
+                    alt,
+                    first,
+                    nullable_rules,
+                    rule_indices,
+                    token_sets,
+                    token_set_indices,
+                )
+            })
             .collect();
     }
     if let Some(token_set) = &item.token_set {
@@ -750,9 +785,9 @@ fn item_nullable_with(
         return nullable_rules[*rule_indices.get(node).expect("validated")];
     }
     if let Some(choice) = &item.choice {
-        return choice.iter().any(|alt| {
-            item_nullable_with(alt, nullable_rules, rule_indices, token_set_indices)
-        });
+        return choice
+            .iter()
+            .any(|alt| item_nullable_with(alt, nullable_rules, rule_indices, token_set_indices));
     }
     false
 }
@@ -795,8 +830,14 @@ fn collect_follow(
     let mut changed = false;
     for (index, item) in items.iter().enumerate() {
         let rest = &items[index + 1..];
-        let mut item_follow =
-            first_of_sequence(rest, first, nullable_rules, rule_indices, token_sets, token_set_indices);
+        let mut item_follow = first_of_sequence(
+            rest,
+            first,
+            nullable_rules,
+            rule_indices,
+            token_sets,
+            token_set_indices,
+        );
         if pattern_nullable_with(rest, nullable_rules, rule_indices, token_set_indices) {
             item_follow.extend(parent_follow.iter().cloned());
         }
@@ -891,14 +932,24 @@ fn item_expr(
         );
     }
     if let Some(expr) = &item.expr {
-        return format!("Item::Expr({})", expression_indices.get(expr).expect("validated"));
+        return format!(
+            "Item::Expr({})",
+            expression_indices.get(expr).expect("validated")
+        );
     }
     if let Some(choice) = &item.choice {
         let choice_name = format!("CHOICE_{}_{}", rule_index, item_index);
         let mut seen = BTreeSet::new();
         let mut alternatives = Vec::new();
         for (alt_index, alt) in choice.iter().enumerate() {
-            let alt_first = first_of_item(alt, first, nullable_rules, rule_indices, token_sets, token_set_indices);
+            let alt_first = first_of_item(
+                alt,
+                first,
+                nullable_rules,
+                rule_indices,
+                token_sets,
+                token_set_indices,
+            );
             let overlap = seen.intersection(&alt_first).cloned().collect::<Vec<_>>();
             assert!(
                 overlap.is_empty(),
@@ -934,9 +985,13 @@ fn item_expr(
 }
 
 fn gen_ast(grammar: &Grammar) -> String {
+    let token_sets = ast_token_sets(grammar);
     let mut out = String::from(header());
     out.push_str("use crate::{SyntaxNode, SyntaxToken};\n");
-    out.push_str(&format!("use crate::generated::kind::{} as SyntaxKind;\n\n", grammar.language.syntax_kind));
+    out.push_str(&format!(
+        "use crate::generated::kind::{} as SyntaxKind;\n\n",
+        grammar.language.syntax_kind
+    ));
     out.push_str("pub trait AstNode: Sized {\n");
     out.push_str("    fn can_cast(kind: SyntaxKind) -> bool;\n");
     out.push_str("    fn cast(node: SyntaxNode) -> Option<Self>;\n");
@@ -990,6 +1045,35 @@ fn gen_ast(grammar: &Grammar) -> String {
                         accessor.name, token
                     ));
                 }
+                "token_text" => {
+                    let token = accessor.token.as_ref().expect("validated");
+                    out.push_str(&format!(
+                        "    pub fn {}(&self) -> Option<String> {{ token_text(&self.syntax, SyntaxKind::{}) }}\n",
+                        accessor.name, token
+                    ));
+                }
+                "first_token_text" => {
+                    out.push_str(&format!(
+                        "    pub fn {}(&self) -> Option<String> {{ self.syntax.first_token().map(|token| token.text().to_string()) }}\n",
+                        accessor.name
+                    ));
+                }
+                "tokens" => {
+                    if let Some(token) = &accessor.token {
+                        out.push_str(&format!(
+                            "    pub fn {}(&self) -> Vec<SyntaxToken> {{ tokens(&self.syntax, SyntaxKind::{}) }}\n",
+                            accessor.name, token
+                        ));
+                    } else {
+                        let token_set = accessor.token_set.as_ref().expect("validated");
+                        let predicate =
+                            token_set_predicate(token_sets.get(token_set).expect("validated"));
+                        out.push_str(&format!(
+                            "    pub fn {}(&self) -> Vec<SyntaxToken> {{ tokens_matching(&self.syntax, |kind| {}) }}\n",
+                            accessor.name, predicate
+                        ));
+                    }
+                }
                 "text_between" => {
                     let start = accessor.start.as_ref().expect("validated");
                     let end = accessor.end.as_ref().expect("validated");
@@ -998,30 +1082,76 @@ fn gen_ast(grammar: &Grammar) -> String {
                         accessor.name, start, end
                     ));
                 }
-                _ => {}
+                "enum" => {
+                    let ast_enum = accessor.r#enum.as_ref().expect("validated");
+                    if let Some(token) = &accessor.token {
+                        out.push_str(&format!(
+                            "    pub fn {}(&self) -> Option<{}> {{ token(&self.syntax, SyntaxKind::{}).and_then(|token| {}::from_token(token.kind())) }}\n",
+                            accessor.name, ast_enum, token, ast_enum
+                        ));
+                    } else {
+                        out.push_str(&format!(
+                            "    pub fn {}(&self) -> Option<{}> {{ self.syntax.first_token().and_then(|token| {}::from_token(token.kind())) }}\n",
+                            accessor.name, ast_enum, ast_enum
+                        ));
+                    }
+                }
+                "child_enum" => {
+                    let ast_enum = accessor.r#enum.as_ref().expect("validated");
+                    out.push_str(&format!(
+                        "    pub fn {}(&self) -> Option<{}> {{ {}::from_node(&self.syntax) }}\n",
+                        accessor.name, ast_enum, ast_enum
+                    ));
+                }
+                _ => unreachable!("validated accessor kind"),
             }
         }
         out.push_str("}\n\n");
     }
 
     for ast_enum in &grammar.ast.enums {
-        out.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
-        out.push_str(&format!("pub enum {} {{\n", ast_enum.name));
-        for (variant, _) in &ast_enum.variants {
-            out.push_str(&format!("    {},\n", variant));
+        match ast_enum.kind.as_str() {
+            "token" => {
+                out.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
+                out.push_str(&format!("pub enum {} {{\n", ast_enum.name));
+                for (variant, _) in &ast_enum.variants {
+                    out.push_str(&format!("    {},\n", variant));
+                }
+                out.push_str("}\n\n");
+                out.push_str(&format!("impl {} {{\n", ast_enum.name));
+                out.push_str("    pub fn from_token(kind: SyntaxKind) -> Option<Self> {\n");
+                out.push_str("        Some(match kind {\n");
+                for (variant, token) in &ast_enum.variants {
+                    out.push_str(&format!(
+                        "            SyntaxKind::{} => Self::{},\n",
+                        token, variant
+                    ));
+                }
+                out.push_str("            _ => return None,\n");
+                out.push_str("        })\n    }\n}\n\n");
+            }
+            "node" => {
+                out.push_str("#[derive(Debug, Clone, PartialEq, Eq)]\n");
+                out.push_str(&format!("pub enum {} {{\n", ast_enum.name));
+                for (variant, node) in &ast_enum.variants {
+                    out.push_str(&format!("    {}({}),\n", variant, node));
+                }
+                out.push_str("}\n\n");
+                out.push_str(&format!("impl {} {{\n", ast_enum.name));
+                out.push_str("    pub fn from_node(node: &SyntaxNode) -> Option<Self> {\n");
+                out.push_str("        for child in node.children() {\n");
+                for (variant, ast_node) in &ast_enum.variants {
+                    out.push_str(&format!(
+                        "            if let Some(node) = {}::cast(child.clone()) {{ return Some(Self::{}(node)); }}\n",
+                        ast_node, variant
+                    ));
+                }
+                out.push_str("        }\n");
+                out.push_str("        None\n");
+                out.push_str("    }\n}\n\n");
+            }
+            _ => unreachable!("validated AST enum kind"),
         }
-        out.push_str("}\n\n");
-        out.push_str(&format!("impl {} {{\n", ast_enum.name));
-        out.push_str("    pub fn from_token(kind: SyntaxKind) -> Option<Self> {\n");
-        out.push_str("        Some(match kind {\n");
-        for (variant, token) in &ast_enum.variants {
-            out.push_str(&format!(
-                "            SyntaxKind::{} => Self::{},\n",
-                token, variant
-            ));
-        }
-        out.push_str("            _ => return None,\n");
-        out.push_str("        })\n    }\n}\n\n");
     }
 
     out.push_str("fn child<N: AstNode>(node: &SyntaxNode) -> Option<N> {\n");
@@ -1030,6 +1160,13 @@ fn gen_ast(grammar: &Grammar) -> String {
     out.push_str("    node.children().filter_map(N::cast).collect()\n}\n\n");
     out.push_str("fn token(node: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxToken> {\n");
     out.push_str("    node.children_with_tokens().filter_map(|element| element.into_token()).find(|token| token.kind() == kind)\n}\n\n");
+    out.push_str("#[allow(dead_code)]\n");
+    out.push_str("fn tokens(node: &SyntaxNode, kind: SyntaxKind) -> Vec<SyntaxToken> {\n");
+    out.push_str("    tokens_matching(node, |token_kind| token_kind == kind)\n}\n\n");
+    out.push_str("fn tokens_matching(node: &SyntaxNode, predicate: impl Fn(SyntaxKind) -> bool) -> Vec<SyntaxToken> {\n");
+    out.push_str("    node.children_with_tokens().filter_map(|element| element.into_token()).filter(|token| predicate(token.kind())).collect()\n}\n\n");
+    out.push_str("fn token_text(node: &SyntaxNode, kind: SyntaxKind) -> Option<String> {\n");
+    out.push_str("    token(node, kind).map(|token| token.text().to_string())\n}\n\n");
     out.push_str("fn text_between(node: &SyntaxNode, start: SyntaxKind, end: SyntaxKind) -> Option<String> {\n");
     out.push_str("    let mut seen_start = false;\n");
     out.push_str("    let mut text = String::new();\n");
@@ -1042,9 +1179,90 @@ fn gen_ast(grammar: &Grammar) -> String {
     out
 }
 
+fn ast_token_sets(grammar: &Grammar) -> BTreeMap<String, BTreeSet<String>> {
+    let all_tokens = grammar
+        .token_names()
+        .into_iter()
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    grammar
+        .syntax
+        .token_sets
+        .iter()
+        .map(|set| {
+            let mut tokens = if set.include.as_deref() == Some("all_tokens") {
+                all_tokens.clone()
+            } else {
+                set.tokens.iter().cloned().collect::<BTreeSet<_>>()
+            };
+            for token in &set.exclude {
+                tokens.remove(token);
+            }
+            (set.name.clone(), tokens)
+        })
+        .collect()
+}
+
+fn token_set_predicate(tokens: &BTreeSet<String>) -> String {
+    if tokens.is_empty() {
+        return "false".to_string();
+    }
+    let tokens = tokens
+        .iter()
+        .map(|token| format!("SyntaxKind::{token}"))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    format!("matches!(kind, {tokens})")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn toy_grammar(ast: &str) -> Grammar {
+        ron::Options::default()
+            .with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME)
+            .from_str(&format!(
+                r#"(
+                    language: (type_name: "ToyLanguage", syntax_kind: "ToyKind"),
+                    diagnostics: (
+                        invalid_token: "InvalidToken",
+                        unexpected_token: "UnexpectedToken",
+                        unexpected_eof: "UnexpectedEof",
+                        kinds: [
+                            (name: "InvalidToken", message: "invalid token"),
+                            (name: "UnexpectedToken", message: "unexpected token"),
+                            (name: "UnexpectedEof", message: "unexpected eof"),
+                        ],
+                    ),
+                    tokens: (
+                        rules: [
+                            (name: "Whitespace", regex: "[ \n]+", trivia: skip),
+                            (name: "LetKw", literal: "let"),
+                            (name: "Ident", regex: "[A-Za-z_][A-Za-z0-9_]*"),
+                            (name: "Int", regex: "[0-9]+"),
+                            (name: "Semicolon", literal: ";"),
+                        ],
+                    ),
+                    syntax: (
+                        entry: "File",
+                        nodes: ["File", "Stmt", "LetStmt", "Name"],
+                        rules: [
+                            (name: "File", pattern: [(repeat: "Stmt")]),
+                            (name: "Stmt", pattern: [(choice: [(node: "LetStmt"), (node: "Name")])]),
+                            (name: "LetStmt", pattern: [(token: "LetKw"), (repeat: "HeaderToken"), (token: "Semicolon")]),
+                            (name: "Name", pattern: [(token: "Ident")]),
+                        ],
+                        token_sets: [
+                            (name: "HeaderToken", tokens: ["Ident", "Int"]),
+                        ],
+                    ),
+                    expressions: (items: []),
+                    ast: {ast},
+                )"#
+            ))
+            .unwrap()
+    }
 
     #[test]
     fn generation_includes_pratt_expression_tables_for_non_dawn_grammar() {
@@ -1103,5 +1321,147 @@ mod tests {
         assert!(parser.contains("Item::Expr(0)"));
         assert!(parser.contains("static EXPRESSIONS: &[Expression]"));
         assert!(parser.contains("InfixOp { token: SyntaxKind::Plus"));
+    }
+
+    #[test]
+    fn generation_emits_rich_ast_accessors_and_node_enums() {
+        let grammar = toy_grammar(
+            r#"(
+                root: "File",
+                nodes: [
+                    (name: "File", syntax: "File", accessors: [(name: "statements", kind: "children", node: "Stmt")]),
+                    (
+                        name: "Stmt",
+                        syntax: "Stmt",
+                        accessors: [
+                            (name: "let_stmt", kind: "child", node: "LetStmt"),
+                            (name: "name", kind: "child", node: "Name"),
+                            (name: "variant", kind: "child_enum", enum: "StmtKind"),
+                        ],
+                    ),
+                    (
+                        name: "LetStmt",
+                        syntax: "LetStmt",
+                        accessors: [
+                            (name: "keyword", kind: "token", token: "LetKw"),
+                            (name: "keyword_text", kind: "token_text", token: "LetKw"),
+                            (name: "header_tokens", kind: "tokens", token_set: "HeaderToken"),
+                            (name: "value", kind: "enum", enum: "LetValue", token: "LetKw"),
+                        ],
+                    ),
+                    (
+                        name: "Name",
+                        syntax: "Name",
+                        accessors: [
+                            (name: "text", kind: "token_text", token: "Ident"),
+                            (name: "first_text", kind: "first_token_text"),
+                            (name: "idents", kind: "tokens", token: "Ident"),
+                        ],
+                    ),
+                ],
+                enums: [
+                    (name: "LetValue", from_node: "LetStmt", variants: [("Let", "LetKw")]),
+                    (
+                        name: "StmtKind",
+                        kind: "node",
+                        from_node: "Stmt",
+                        variants: [("LetStmt", "LetStmt"), ("Name", "Name")],
+                    ),
+                ],
+            )"#,
+        );
+        grammar.validate().unwrap();
+
+        let ast = generate(&grammar)
+            .into_iter()
+            .find_map(|(path, text)| (path == "src/generated/ast.rs").then_some(text))
+            .unwrap();
+        assert!(ast.contains("pub fn keyword_text(&self) -> Option<String>"));
+        assert!(ast.contains("pub fn header_tokens(&self) -> Vec<SyntaxToken>"));
+        assert!(ast.contains("pub fn value(&self) -> Option<LetValue>"));
+        assert!(ast.contains("pub enum StmtKind"));
+        assert!(ast.contains("LetStmt(LetStmt)"));
+        assert!(ast.contains("pub fn variant(&self) -> Option<StmtKind>"));
+        assert!(ast.contains("pub fn from_token(kind: SyntaxKind) -> Option<Self>"));
+    }
+
+    #[test]
+    fn validation_rejects_invalid_accessor_kind() {
+        let grammar = toy_grammar(
+            r#"(
+                root: "File",
+                nodes: [
+                    (name: "File", syntax: "File", accessors: [(name: "bad", kind: "missing")]),
+                    (name: "Stmt", syntax: "Stmt", accessors: []),
+                    (name: "LetStmt", syntax: "LetStmt", accessors: []),
+                    (name: "Name", syntax: "Name", accessors: []),
+                ],
+                enums: [],
+            )"#,
+        );
+
+        let error = grammar.validate().unwrap_err().to_string();
+        assert!(error.contains("invalid kind 'missing'"));
+    }
+
+    #[test]
+    fn validation_rejects_invalid_accessor_fields() {
+        let grammar = toy_grammar(
+            r#"(
+                root: "File",
+                nodes: [
+                    (name: "File", syntax: "File", accessors: [(name: "bad", kind: "token_text")]),
+                    (name: "Stmt", syntax: "Stmt", accessors: []),
+                    (name: "LetStmt", syntax: "LetStmt", accessors: []),
+                    (name: "Name", syntax: "Name", accessors: []),
+                ],
+                enums: [],
+            )"#,
+        );
+
+        let error = grammar.validate().unwrap_err().to_string();
+        assert!(error.contains("missing token"));
+    }
+
+    #[test]
+    fn validation_rejects_token_set_and_token_together() {
+        let grammar = toy_grammar(
+            r#"(
+                root: "File",
+                nodes: [
+                    (
+                        name: "File",
+                        syntax: "File",
+                        accessors: [(name: "bad", kind: "tokens", token: "Ident", token_set: "HeaderToken")],
+                    ),
+                    (name: "Stmt", syntax: "Stmt", accessors: []),
+                    (name: "LetStmt", syntax: "LetStmt", accessors: []),
+                    (name: "Name", syntax: "Name", accessors: []),
+                ],
+                enums: [],
+            )"#,
+        );
+
+        let error = grammar.validate().unwrap_err().to_string();
+        assert!(error.contains("exactly one of token or token_set"));
+    }
+
+    #[test]
+    fn validation_rejects_mismatched_enum_accessor() {
+        let grammar = toy_grammar(
+            r#"(
+                root: "File",
+                nodes: [
+                    (name: "File", syntax: "File", accessors: [(name: "bad", kind: "enum", enum: "LetValue")]),
+                    (name: "Stmt", syntax: "Stmt", accessors: []),
+                    (name: "LetStmt", syntax: "LetStmt", accessors: []),
+                    (name: "Name", syntax: "Name", accessors: []),
+                ],
+                enums: [(name: "LetValue", from_node: "LetStmt", variants: [("Let", "LetKw")])],
+            )"#,
+        );
+
+        let error = grammar.validate().unwrap_err().to_string();
+        assert!(error.contains("expected 'File'"));
     }
 }
