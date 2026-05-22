@@ -10,38 +10,156 @@ pub trait AstNode: Sized {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceFile { syntax: SyntaxNode }
+pub struct BinaryExpr { syntax: SyntaxNode }
 
-impl AstNode for SourceFile {
-    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::SourceFile }
+impl AstNode for BinaryExpr {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::BinaryExpr }
     fn cast(node: SyntaxNode) -> Option<Self> {
         Self::can_cast(node.kind()).then_some(Self { syntax: node })
     }
     fn syntax(&self) -> &SyntaxNode { &self.syntax }
 }
 
-impl SourceFile {
+impl BinaryExpr {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
-    pub fn imports(&self) -> Vec<ImportDecl> { children(&self.syntax) }
-    pub fn document(&self) -> Option<Document> { child(&self.syntax) }
+    pub fn left(&self) -> Option<Expr> { self.syntax.children().filter_map(Expr::cast).next() }
+    pub fn right(&self) -> Option<Expr> { self.syntax.children().filter_map(Expr::cast).last() }
+    pub fn op(&self) -> Option<SyntaxToken> { self.syntax.children_with_tokens().filter_map(|e| e.into_token()).find(|t| matches!(t.kind(), SyntaxKind::Ampersand | SyntaxKind::AndAnd | SyntaxKind::BangEq | SyntaxKind::Caret | SyntaxKind::DotDot | SyntaxKind::EqEq | SyntaxKind::Ge | SyntaxKind::Gt | SyntaxKind::Le | SyntaxKind::Lt | SyntaxKind::Minus | SyntaxKind::OrOr | SyntaxKind::Percent | SyntaxKind::Pipe | SyntaxKind::Plus | SyntaxKind::Shl | SyntaxKind::Shr | SyntaxKind::Slash | SyntaxKind::Star | SyntaxKind::StarStar)) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportDecl { syntax: SyntaxNode }
+pub struct Block { syntax: SyntaxNode }
 
-impl AstNode for ImportDecl {
-    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::ImportDecl }
+impl AstNode for Block {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::Block }
     fn cast(node: SyntaxNode) -> Option<Self> {
         Self::can_cast(node.kind()).then_some(Self { syntax: node })
     }
     fn syntax(&self) -> &SyntaxNode { &self.syntax }
 }
 
-impl ImportDecl {
+impl Block {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
-    pub fn kind(&self) -> Option<DocKind> { child(&self.syntax) }
-    pub fn name(&self) -> Option<Name> { child(&self.syntax) }
-    pub fn path(&self) -> Option<PathLit> { child(&self.syntax) }
+    pub fn items(&self) -> Vec<Item> { children(&self.syntax) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoolLit { syntax: SyntaxNode }
+
+impl AstNode for BoolLit {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::BoolLit }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl BoolLit {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn token(&self) -> Option<SyntaxToken> { self.syntax.children_with_tokens().filter_map(|element| element.into_token()).find(|token| matches!(token.kind(), SyntaxKind::TrueKw | SyntaxKind::FalseKw)) }
+    pub fn text(&self) -> Option<String> { self.syntax.first_token().map(|token| token.text().to_string()) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallArgList { syntax: SyntaxNode }
+
+impl AstNode for CallArgList {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::CallArgList }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl CallArgList {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn args(&self) -> Vec<Expr> { children(&self.syntax) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallExpr { syntax: SyntaxNode }
+
+impl AstNode for CallExpr {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::CallExpr }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl CallExpr {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn callee(&self) -> Option<Expr> { self.syntax.children().filter_map(Expr::cast).next() }
+    pub fn args(&self) -> Vec<Expr> { child::<CallArgList>(&self.syntax).map(|args| children(args.syntax())).unwrap_or_default() }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColorLit { syntax: SyntaxNode }
+
+impl AstNode for ColorLit {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::ColorLit }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl ColorLit {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn token(&self) -> Option<SyntaxToken> { token_at(&self.syntax, SyntaxKind::Color, 0) }
+    pub fn text(&self) -> Option<String> { self.syntax.first_token().map(|token| token.text().to_string()) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Command { syntax: SyntaxNode }
+
+impl AstNode for Command {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::Command }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl Command {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn head(&self) -> Option<CommandHead> { child_at(&self.syntax, 0) }
+    pub fn args(&self) -> Vec<Expr> { children(&self.syntax) }
+    pub fn initializer(&self) -> Option<CommandInitializer> { child_at(&self.syntax, 0) }
+    pub fn body(&self) -> Option<Block> { child_at(&self.syntax, 0) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandHead { syntax: SyntaxNode }
+
+impl AstNode for CommandHead {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::CommandHead }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl CommandHead {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn name(&self) -> Option<Name> { child_at(&self.syntax, 0) }
+    pub fn text(&self) -> Option<String> { self.name().and_then(|name| name.text()) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandInitializer { syntax: SyntaxNode }
+
+impl AstNode for CommandInitializer {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::CommandInitializer }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl CommandInitializer {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn value(&self) -> Option<Expr> { child_at(&self.syntax, 0) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,27 +175,163 @@ impl AstNode for Document {
 
 impl Document {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
-    pub fn kind(&self) -> Option<DocKind> { child(&self.syntax) }
-    pub fn name(&self) -> Option<Name> { child(&self.syntax) }
-    pub fn body(&self) -> Option<DocumentBody> { child(&self.syntax) }
-    pub fn block(&self) -> Option<DocumentBody> { child(&self.syntax) }
+    pub fn kind(&self) -> Option<Name> { child_at(&self.syntax, 0) }
+    pub fn name(&self) -> Option<Name> { child_at(&self.syntax, 1) }
+    pub fn block(&self) -> Option<Block> { child_at(&self.syntax, 0) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DocKind { syntax: SyntaxNode }
+pub struct DurationLit { syntax: SyntaxNode }
 
-impl AstNode for DocKind {
-    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::DocKind }
+impl AstNode for DurationLit {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::DurationLit }
     fn cast(node: SyntaxNode) -> Option<Self> {
         Self::can_cast(node.kind()).then_some(Self { syntax: node })
     }
     fn syntax(&self) -> &SyntaxNode { &self.syntax }
 }
 
-impl DocKind {
+impl DurationLit {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
-    pub fn token(&self) -> Option<SyntaxToken> { self.syntax.first_token() }
+    pub fn token(&self) -> Option<SyntaxToken> { token_at(&self.syntax, SyntaxKind::Duration, 0) }
     pub fn text(&self) -> Option<String> { self.syntax.first_token().map(|token| token.text().to_string()) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Expr { syntax: SyntaxNode }
+
+impl AstNode for Expr {
+    fn can_cast(kind: SyntaxKind) -> bool { matches!(kind, SyntaxKind::Expr | SyntaxKind::BinaryExpr | SyntaxKind::BoolLit | SyntaxKind::CallExpr | SyntaxKind::ColorLit | SyntaxKind::DurationLit | SyntaxKind::FloatLit | SyntaxKind::IntLit | SyntaxKind::ListExpr | SyntaxKind::NameRef | SyntaxKind::ParenExpr | SyntaxKind::PrefixExpr | SyntaxKind::StringLit) }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl Expr {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn kind(&self) -> Option<ExprKind> { ExprKind::from_node(&self.syntax) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FloatLit { syntax: SyntaxNode }
+
+impl AstNode for FloatLit {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::FloatLit }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl FloatLit {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn token(&self) -> Option<SyntaxToken> { token_at(&self.syntax, SyntaxKind::Float, 0) }
+    pub fn text(&self) -> Option<String> { self.syntax.first_token().map(|token| token.text().to_string()) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FnDecl { syntax: SyntaxNode }
+
+impl AstNode for FnDecl {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::FnDecl }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl FnDecl {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn name(&self) -> Option<Name> { child_at(&self.syntax, 0) }
+    pub fn params(&self) -> Option<ParamList> { child_at(&self.syntax, 0) }
+    pub fn return_type(&self) -> Option<TypeRef> { child_at(&self.syntax, 0) }
+    pub fn body(&self) -> Option<Block> { child_at(&self.syntax, 0) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportDecl { syntax: SyntaxNode }
+
+impl AstNode for ImportDecl {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::ImportDecl }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl ImportDecl {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn kind(&self) -> Option<Name> { child_at(&self.syntax, 0) }
+    pub fn name(&self) -> Option<Name> { child_at(&self.syntax, 1) }
+    pub fn path(&self) -> Option<PathLit> { child_at(&self.syntax, 0) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntLit { syntax: SyntaxNode }
+
+impl AstNode for IntLit {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::IntLit }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl IntLit {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn token(&self) -> Option<SyntaxToken> { token_at(&self.syntax, SyntaxKind::Int, 0) }
+    pub fn text(&self) -> Option<String> { self.syntax.first_token().map(|token| token.text().to_string()) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Item { syntax: SyntaxNode }
+
+impl AstNode for Item {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::Item }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl Item {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn kind(&self) -> Option<ItemKind> { ItemKind::from_node(&self.syntax) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LetStmt { syntax: SyntaxNode }
+
+impl AstNode for LetStmt {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::LetStmt }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl LetStmt {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn name(&self) -> Option<Name> { child_at(&self.syntax, 0) }
+    pub fn ty(&self) -> Option<TypeRef> { child_at(&self.syntax, 0) }
+    pub fn value(&self) -> Option<Expr> { child_at(&self.syntax, 0) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListExpr { syntax: SyntaxNode }
+
+impl AstNode for ListExpr {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::ListExpr }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl ListExpr {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn items(&self) -> Vec<Expr> { children(&self.syntax) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,8 +347,72 @@ impl AstNode for Name {
 
 impl Name {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
-    pub fn ident(&self) -> Option<SyntaxToken> { token(&self.syntax, SyntaxKind::Ident) }
-    pub fn text(&self) -> Option<String> { token_text(&self.syntax, SyntaxKind::Ident) }
+    pub fn text(&self) -> Option<String> { self.syntax.first_token().map(|token| token.text().to_string()) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameRef { syntax: SyntaxNode }
+
+impl AstNode for NameRef {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::NameRef }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl NameRef {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn name(&self) -> Option<Name> { child_at(&self.syntax, 0) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Param { syntax: SyntaxNode }
+
+impl AstNode for Param {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::Param }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl Param {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn name(&self) -> Option<Name> { child_at(&self.syntax, 0) }
+    pub fn ty(&self) -> Option<TypeRef> { child_at(&self.syntax, 0) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamList { syntax: SyntaxNode }
+
+impl AstNode for ParamList {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::ParamList }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl ParamList {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn params(&self) -> Vec<Param> { children(&self.syntax) }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParenExpr { syntax: SyntaxNode }
+
+impl AstNode for ParenExpr {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::ParenExpr }
+    fn cast(node: SyntaxNode) -> Option<Self> {
+        Self::can_cast(node.kind()).then_some(Self { syntax: node })
+    }
+    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+}
+
+impl ParenExpr {
+    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn expr(&self) -> Option<Expr> { child_at(&self.syntax, 0) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,120 +428,138 @@ impl AstNode for PathLit {
 
 impl PathLit {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
+    pub fn tokens(&self) -> Vec<SyntaxToken> { tokens_matching(&self.syntax, |kind| matches!(kind, SyntaxKind::Ampersand | SyntaxKind::AndAnd | SyntaxKind::Bang | SyntaxKind::BangEq | SyntaxKind::BlockComment | SyntaxKind::Caret | SyntaxKind::Colon | SyntaxKind::Color | SyntaxKind::Comma | SyntaxKind::Dot | SyntaxKind::DotDot | SyntaxKind::Duration | SyntaxKind::Eq | SyntaxKind::EqEq | SyntaxKind::FalseKw | SyntaxKind::Float | SyntaxKind::FnKw | SyntaxKind::FromKw | SyntaxKind::Ge | SyntaxKind::Ident | SyntaxKind::ImportKw | SyntaxKind::Int | SyntaxKind::InvalidColor | SyntaxKind::LBrace | SyntaxKind::LBracket | SyntaxKind::LParen | SyntaxKind::Le | SyntaxKind::LetKw | SyntaxKind::LineComment | SyntaxKind::Minus | SyntaxKind::OrOr | SyntaxKind::Percent | SyntaxKind::Pipe | SyntaxKind::Plus | SyntaxKind::Question | SyntaxKind::RBrace | SyntaxKind::RBracket | SyntaxKind::RParen | SyntaxKind::Semicolon | SyntaxKind::Shl | SyntaxKind::Shr | SyntaxKind::Slash | SyntaxKind::Star | SyntaxKind::StarStar | SyntaxKind::String | SyntaxKind::TrueKw | SyntaxKind::Whitespace)) }
     pub fn raw_text(&self) -> Option<String> { text_between(&self.syntax, SyntaxKind::Lt, SyntaxKind::Gt) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DocumentBody { syntax: SyntaxNode }
+pub struct PrefixExpr { syntax: SyntaxNode }
 
-impl AstNode for DocumentBody {
-    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::DocumentBody }
+impl AstNode for PrefixExpr {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::PrefixExpr }
     fn cast(node: SyntaxNode) -> Option<Self> {
         Self::can_cast(node.kind()).then_some(Self { syntax: node })
     }
     fn syntax(&self) -> &SyntaxNode { &self.syntax }
 }
 
-impl DocumentBody {
+impl PrefixExpr {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
-    pub fn items(&self) -> Vec<BodyItem> { children(&self.syntax) }
+    pub fn op(&self) -> Option<SyntaxToken> { self.syntax.first_token() }
+    pub fn expr(&self) -> Option<Expr> { self.syntax.children().filter_map(Expr::cast).last() }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BodyItem { syntax: SyntaxNode }
+pub struct SourceFile { syntax: SyntaxNode }
 
-impl AstNode for BodyItem {
-    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::BodyItem }
+impl AstNode for SourceFile {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::SourceFile }
     fn cast(node: SyntaxNode) -> Option<Self> {
         Self::can_cast(node.kind()).then_some(Self { syntax: node })
     }
     fn syntax(&self) -> &SyntaxNode { &self.syntax }
 }
 
-impl BodyItem {
+impl SourceFile {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
-    pub fn stmt(&self) -> Option<Stmt> { child(&self.syntax) }
-    pub fn block(&self) -> Option<BalancedBlock> { child(&self.syntax) }
-    pub fn variant(&self) -> Option<BodyItemKind> { BodyItemKind::from_node(&self.syntax) }
+    pub fn imports(&self) -> Vec<ImportDecl> { children(&self.syntax) }
+    pub fn document(&self) -> Option<Document> { child_at(&self.syntax, 0) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Stmt { syntax: SyntaxNode }
+pub struct StringLit { syntax: SyntaxNode }
 
-impl AstNode for Stmt {
-    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::Stmt }
+impl AstNode for StringLit {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::StringLit }
     fn cast(node: SyntaxNode) -> Option<Self> {
         Self::can_cast(node.kind()).then_some(Self { syntax: node })
     }
     fn syntax(&self) -> &SyntaxNode { &self.syntax }
 }
 
-impl Stmt {
+impl StringLit {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
-    pub fn head(&self) -> Option<StmtHead> { child(&self.syntax) }
-    pub fn header_tokens(&self) -> Vec<SyntaxToken> { tokens_matching(&self.syntax, |kind| matches!(kind, SyntaxKind::Ampersand | SyntaxKind::AndAnd | SyntaxKind::Bang | SyntaxKind::BangEq | SyntaxKind::BlockComment | SyntaxKind::Caret | SyntaxKind::CaseKw | SyntaxKind::Colon | SyntaxKind::Color | SyntaxKind::Comma | SyntaxKind::DefaultKw | SyntaxKind::Dot | SyntaxKind::ElseKw | SyntaxKind::Eq | SyntaxKind::EqEq | SyntaxKind::FalseKw | SyntaxKind::Float | SyntaxKind::FnKw | SyntaxKind::ForKw | SyntaxKind::FromKw | SyntaxKind::Ge | SyntaxKind::Gt | SyntaxKind::Ident | SyntaxKind::IfKw | SyntaxKind::ImportKw | SyntaxKind::Int | SyntaxKind::InvalidColor | SyntaxKind::LBracket | SyntaxKind::LParen | SyntaxKind::Le | SyntaxKind::LetKw | SyntaxKind::LineComment | SyntaxKind::Lt | SyntaxKind::Minus | SyntaxKind::OrOr | SyntaxKind::Percent | SyntaxKind::Pipe | SyntaxKind::Plus | SyntaxKind::Question | SyntaxKind::RBracket | SyntaxKind::RParen | SyntaxKind::Shl | SyntaxKind::Shr | SyntaxKind::Slash | SyntaxKind::Star | SyntaxKind::StarStar | SyntaxKind::String | SyntaxKind::SwitchKw | SyntaxKind::TrueKw | SyntaxKind::Whitespace)) }
-    pub fn body(&self) -> Option<DocumentBody> { child(&self.syntax) }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StmtHead { syntax: SyntaxNode }
-
-impl AstNode for StmtHead {
-    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::StmtHead }
-    fn cast(node: SyntaxNode) -> Option<Self> {
-        Self::can_cast(node.kind()).then_some(Self { syntax: node })
-    }
-    fn syntax(&self) -> &SyntaxNode { &self.syntax }
-}
-
-impl StmtHead {
-    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
-    pub fn token(&self) -> Option<SyntaxToken> { self.syntax.first_token() }
+    pub fn token(&self) -> Option<SyntaxToken> { token_at(&self.syntax, SyntaxKind::String, 0) }
     pub fn text(&self) -> Option<String> { self.syntax.first_token().map(|token| token.text().to_string()) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BalancedBlock { syntax: SyntaxNode }
+pub struct TypeRef { syntax: SyntaxNode }
 
-impl AstNode for BalancedBlock {
-    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::BalancedBlock }
+impl AstNode for TypeRef {
+    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::TypeRef }
     fn cast(node: SyntaxNode) -> Option<Self> {
         Self::can_cast(node.kind()).then_some(Self { syntax: node })
     }
     fn syntax(&self) -> &SyntaxNode { &self.syntax }
 }
 
-impl BalancedBlock {
+impl TypeRef {
     pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
-    pub fn items(&self) -> Vec<BalancedItem> { children(&self.syntax) }
+    pub fn name(&self) -> Option<Name> { child_at(&self.syntax, 0) }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BalancedItem { syntax: SyntaxNode }
-
-impl AstNode for BalancedItem {
-    fn can_cast(kind: SyntaxKind) -> bool { kind == SyntaxKind::BalancedItem }
-    fn cast(node: SyntaxNode) -> Option<Self> {
-        Self::can_cast(node.kind()).then_some(Self { syntax: node })
-    }
-    fn syntax(&self) -> &SyntaxNode { &self.syntax }
+pub enum ItemKind {
+    FnDecl(FnDecl),
+    LetStmt(LetStmt),
+    Command(Command),
 }
 
-impl BalancedItem {
-    pub fn syntax(&self) -> &SyntaxNode { &self.syntax }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BodyItemKind {
-    Stmt(Stmt),
-    BalancedBlock(BalancedBlock),
-}
-
-impl BodyItemKind {
+impl ItemKind {
     pub fn from_node(node: &SyntaxNode) -> Option<Self> {
         for child in node.children() {
-            if let Some(node) = Stmt::cast(child.clone()) { return Some(Self::Stmt(node)); }
-            if let Some(node) = BalancedBlock::cast(child.clone()) { return Some(Self::BalancedBlock(node)); }
+            if let Some(node) = FnDecl::cast(child.clone()) { return Some(Self::FnDecl(node)); }
+            if let Some(node) = LetStmt::cast(child.clone()) { return Some(Self::LetStmt(node)); }
+            if let Some(node) = Command::cast(child.clone()) { return Some(Self::Command(node)); }
+        }
+        None
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExprKind {
+    NameRef(NameRef),
+    StringLit(StringLit),
+    IntLit(IntLit),
+    FloatLit(FloatLit),
+    BoolLit(BoolLit),
+    ColorLit(ColorLit),
+    DurationLit(DurationLit),
+    ListExpr(ListExpr),
+    ParenExpr(ParenExpr),
+    PrefixExpr(PrefixExpr),
+    BinaryExpr(BinaryExpr),
+    CallExpr(CallExpr),
+}
+
+impl ExprKind {
+    pub fn from_node(node: &SyntaxNode) -> Option<Self> {
+        if let Some(node) = NameRef::cast(node.clone()) { return Some(Self::NameRef(node)); }
+        if let Some(node) = StringLit::cast(node.clone()) { return Some(Self::StringLit(node)); }
+        if let Some(node) = IntLit::cast(node.clone()) { return Some(Self::IntLit(node)); }
+        if let Some(node) = FloatLit::cast(node.clone()) { return Some(Self::FloatLit(node)); }
+        if let Some(node) = BoolLit::cast(node.clone()) { return Some(Self::BoolLit(node)); }
+        if let Some(node) = ColorLit::cast(node.clone()) { return Some(Self::ColorLit(node)); }
+        if let Some(node) = DurationLit::cast(node.clone()) { return Some(Self::DurationLit(node)); }
+        if let Some(node) = ListExpr::cast(node.clone()) { return Some(Self::ListExpr(node)); }
+        if let Some(node) = ParenExpr::cast(node.clone()) { return Some(Self::ParenExpr(node)); }
+        if let Some(node) = PrefixExpr::cast(node.clone()) { return Some(Self::PrefixExpr(node)); }
+        if let Some(node) = BinaryExpr::cast(node.clone()) { return Some(Self::BinaryExpr(node)); }
+        if let Some(node) = CallExpr::cast(node.clone()) { return Some(Self::CallExpr(node)); }
+        for child in node.children() {
+            if let Some(node) = NameRef::cast(child.clone()) { return Some(Self::NameRef(node)); }
+            if let Some(node) = StringLit::cast(child.clone()) { return Some(Self::StringLit(node)); }
+            if let Some(node) = IntLit::cast(child.clone()) { return Some(Self::IntLit(node)); }
+            if let Some(node) = FloatLit::cast(child.clone()) { return Some(Self::FloatLit(node)); }
+            if let Some(node) = BoolLit::cast(child.clone()) { return Some(Self::BoolLit(node)); }
+            if let Some(node) = ColorLit::cast(child.clone()) { return Some(Self::ColorLit(node)); }
+            if let Some(node) = DurationLit::cast(child.clone()) { return Some(Self::DurationLit(node)); }
+            if let Some(node) = ListExpr::cast(child.clone()) { return Some(Self::ListExpr(node)); }
+            if let Some(node) = ParenExpr::cast(child.clone()) { return Some(Self::ParenExpr(node)); }
+            if let Some(node) = PrefixExpr::cast(child.clone()) { return Some(Self::PrefixExpr(node)); }
+            if let Some(node) = BinaryExpr::cast(child.clone()) { return Some(Self::BinaryExpr(node)); }
+            if let Some(node) = CallExpr::cast(child.clone()) { return Some(Self::CallExpr(node)); }
         }
         None
     }
@@ -233,12 +569,20 @@ fn child<N: AstNode>(node: &SyntaxNode) -> Option<N> {
     node.children().find_map(N::cast)
 }
 
+fn child_at<N: AstNode>(node: &SyntaxNode, index: usize) -> Option<N> {
+    node.children().filter_map(N::cast).nth(index)
+}
+
 fn children<N: AstNode>(node: &SyntaxNode) -> Vec<N> {
     node.children().filter_map(N::cast).collect()
 }
 
 fn token(node: &SyntaxNode, kind: SyntaxKind) -> Option<SyntaxToken> {
     node.children_with_tokens().filter_map(|element| element.into_token()).find(|token| token.kind() == kind)
+}
+
+fn token_at(node: &SyntaxNode, kind: SyntaxKind, index: usize) -> Option<SyntaxToken> {
+    node.children_with_tokens().filter_map(|element| element.into_token()).filter(|token| token.kind() == kind).nth(index)
 }
 
 #[allow(dead_code)]
@@ -250,10 +594,12 @@ fn tokens_matching(node: &SyntaxNode, predicate: impl Fn(SyntaxKind) -> bool) ->
     node.children_with_tokens().filter_map(|element| element.into_token()).filter(|token| predicate(token.kind())).collect()
 }
 
+#[allow(dead_code)]
 fn token_text(node: &SyntaxNode, kind: SyntaxKind) -> Option<String> {
     token(node, kind).map(|token| token.text().to_string())
 }
 
+#[allow(dead_code)]
 fn text_between(node: &SyntaxNode, start: SyntaxKind, end: SyntaxKind) -> Option<String> {
     let mut seen_start = false;
     let mut text = String::new();

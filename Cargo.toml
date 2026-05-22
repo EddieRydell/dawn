@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/dawn-syntax",
+  "crates/dawn-semantics",
   "crates/syntax-gen",
 ]
 resolver = "2"

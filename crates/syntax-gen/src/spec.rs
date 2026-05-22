@@ -10,6 +10,7 @@ use serde::Deserialize;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Grammar {
+    pub version: u32,
     pub language: LanguageSpec,
     pub diagnostics: DiagnosticsSpec,
     pub tokens: TokensSpec,
@@ -30,7 +31,11 @@ impl Grammar {
         for expression in &self.expressions.items {
             kinds.extend(expression.node_kinds());
         }
+        let mut seen = BTreeSet::new();
         kinds
+            .into_iter()
+            .filter(|kind| seen.insert(*kind))
+            .collect()
     }
 
     pub fn token_names(&self) -> BTreeSet<&str> {
@@ -51,6 +56,9 @@ impl Grammar {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if self.version != 2 {
+            bail!("syntax grammar version must be 2");
+        }
         ensure_rust_type("language.type_name", &self.language.type_name)?;
         ensure_rust_type("language.syntax_kind", &self.language.syntax_kind)?;
         ensure_unique("syntax kind", self.syntax_kinds())?;
@@ -133,6 +141,7 @@ impl Grammar {
             }
             validate_pattern(&rule.pattern, &tokens, &nodes, &token_sets, &expressions)?;
         }
+        self.validate_generated_accessors()?;
         for node in &self.syntax.nodes {
             if !self.syntax.rules.iter().any(|rule| rule.name == *node) {
                 bail!("syntax node '{node}' has no rule");
@@ -154,249 +163,51 @@ impl Grammar {
             }
         }
 
-        self.validate_ast(&tokens, &nodes)?;
         self.validate_expressions(&tokens, &nodes)?;
+        self.validate_ast(&nodes)?;
         self.validate_ll(&tokens)?;
         Ok(())
     }
 
-    fn validate_ast(&self, tokens: &BTreeSet<&str>, nodes: &BTreeSet<&str>) -> Result<()> {
+    fn validate_generated_accessors(&self) -> Result<()> {
+        let mut enum_names = BTreeSet::new();
+        for rule in &self.syntax.rules {
+            let mut labels = BTreeSet::from(["syntax".to_string()]);
+            let mut variable_targets = BTreeSet::new();
+            validate_accessor_items(
+                &rule.pattern,
+                &rule.name,
+                &mut labels,
+                &mut variable_targets,
+                &mut enum_names,
+                false,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn validate_ast(&self, nodes: &BTreeSet<&str>) -> Result<()> {
         if !nodes.contains(self.ast.root.as_str()) {
             bail!(
                 "AST root '{}' is not declared as a syntax node",
                 self.ast.root
             );
         }
-        let ast_nodes = self
-            .ast
-            .nodes
-            .iter()
-            .map(|node| node.name.as_str())
-            .collect::<BTreeSet<_>>();
-        let ast_enums = self
-            .ast
-            .enums
-            .iter()
-            .map(|ast_enum| (ast_enum.name.as_str(), ast_enum))
-            .collect::<BTreeMap<_, _>>();
-        for ast_node in &self.ast.nodes {
-            ensure_rust_type("AST node", &ast_node.name)?;
-            if !nodes.contains(ast_node.syntax.as_str()) {
-                bail!(
-                    "AST node '{}' references undeclared syntax node '{}'",
-                    ast_node.name,
-                    ast_node.syntax
-                );
-            }
-            for accessor in &ast_node.accessors {
-                ensure_rust_value("AST accessor", &accessor.name)?;
-                match accessor.kind.as_str() {
-                    "child" | "children" => {
-                        accessor.require_only(&["node"], &ast_node.name)?;
-                        let Some(node) = &accessor.node else {
-                            bail!(
-                                "AST accessor '{}.{}' is missing node",
-                                ast_node.name,
-                                accessor.name
-                            );
-                        };
-                        if !ast_nodes.contains(node.as_str()) {
-                            bail!(
-                                "AST accessor '{}.{}' references undeclared AST node '{}'",
-                                ast_node.name,
-                                accessor.name,
-                                node
-                            );
-                        }
-                    }
-                    "token" => {
-                        accessor.require_only(&["token"], &ast_node.name)?;
-                        let Some(token) = &accessor.token else {
-                            bail!(
-                                "AST accessor '{}.{}' is missing token",
-                                ast_node.name,
-                                accessor.name
-                            );
-                        };
-                        require_token(tokens, token)?;
-                    }
-                    "first_token" | "first_token_text" => {
-                        accessor.require_only(&[], &ast_node.name)?;
-                    }
-                    "token_text" => {
-                        accessor.require_only(&["token"], &ast_node.name)?;
-                        let Some(token) = &accessor.token else {
-                            bail!(
-                                "AST accessor '{}.{}' is missing token",
-                                ast_node.name,
-                                accessor.name
-                            );
-                        };
-                        require_token(tokens, token)?;
-                    }
-                    "tokens" => {
-                        accessor.require_only(&["token", "token_set"], &ast_node.name)?;
-                        match (&accessor.token, &accessor.token_set) {
-                            (Some(token), None) => require_token(tokens, token)?,
-                            (None, Some(token_set)) => {
-                                if !self
-                                    .syntax
-                                    .token_sets
-                                    .iter()
-                                    .any(|set| set.name == *token_set)
-                                {
-                                    bail!("undeclared token set '{token_set}'");
-                                }
-                            }
-                            _ => bail!(
-                                "AST accessor '{}.{}' must specify exactly one of token or token_set",
-                                ast_node.name,
-                                accessor.name
-                            ),
-                        }
-                    }
-                    "text_between" => {
-                        accessor.require_only(&["start", "end"], &ast_node.name)?;
-                        let Some(start) = &accessor.start else {
-                            bail!(
-                                "AST accessor '{}.{}' is missing start",
-                                ast_node.name,
-                                accessor.name
-                            );
-                        };
-                        let Some(end) = &accessor.end else {
-                            bail!(
-                                "AST accessor '{}.{}' is missing end",
-                                ast_node.name,
-                                accessor.name
-                            );
-                        };
-                        require_token(tokens, start)?;
-                        require_token(tokens, end)?;
-                    }
-                    "enum" => {
-                        accessor.require_only(&["enum", "token"], &ast_node.name)?;
-                        let Some(enum_name) = &accessor.r#enum else {
-                            bail!(
-                                "AST accessor '{}.{}' is missing enum",
-                                ast_node.name,
-                                accessor.name
-                            );
-                        };
-                        let Some(ast_enum) = ast_enums.get(enum_name.as_str()) else {
-                            bail!(
-                                "AST accessor '{}.{}' references undeclared AST enum '{}'",
-                                ast_node.name,
-                                accessor.name,
-                                enum_name
-                            );
-                        };
-                        if ast_enum.kind != "token" {
-                            bail!(
-                                "AST accessor '{}.{}' references non-token AST enum '{}'",
-                                ast_node.name,
-                                accessor.name,
-                                enum_name
-                            );
-                        }
-                        if ast_enum.from_node != ast_node.syntax {
-                            bail!(
-                                "AST accessor '{}.{}' enum '{}' is from node '{}', expected '{}'",
-                                ast_node.name,
-                                accessor.name,
-                                enum_name,
-                                ast_enum.from_node,
-                                ast_node.syntax
-                            );
-                        }
-                        if let Some(token) = &accessor.token {
-                            require_token(tokens, token)?;
-                        }
-                    }
-                    "child_enum" => {
-                        accessor.require_only(&["enum"], &ast_node.name)?;
-                        let Some(enum_name) = &accessor.r#enum else {
-                            bail!(
-                                "AST accessor '{}.{}' is missing enum",
-                                ast_node.name,
-                                accessor.name
-                            );
-                        };
-                        let Some(ast_enum) = ast_enums.get(enum_name.as_str()) else {
-                            bail!(
-                                "AST accessor '{}.{}' references undeclared AST enum '{}'",
-                                ast_node.name,
-                                accessor.name,
-                                enum_name
-                            );
-                        };
-                        if ast_enum.kind != "node" {
-                            bail!(
-                                "AST accessor '{}.{}' references non-node AST enum '{}'",
-                                ast_node.name,
-                                accessor.name,
-                                enum_name
-                            );
-                        }
-                        if ast_enum.from_node != ast_node.syntax {
-                            bail!(
-                                "AST accessor '{}.{}' enum '{}' is from node '{}', expected '{}'",
-                                ast_node.name,
-                                accessor.name,
-                                enum_name,
-                                ast_enum.from_node,
-                                ast_node.syntax
-                            );
-                        }
-                    }
-                    other => bail!(
-                        "AST accessor '{}.{}' has invalid kind '{}'",
-                        ast_node.name,
-                        accessor.name,
-                        other
-                    ),
-                }
-            }
-        }
-
-        for ast_enum in &self.ast.enums {
-            ensure_rust_type("AST enum", &ast_enum.name)?;
-            if !nodes.contains(ast_enum.from_node.as_str()) {
-                bail!(
-                    "AST enum '{}' references undeclared node '{}'",
-                    ast_enum.name,
-                    ast_enum.from_node
-                );
-            }
-            if ast_enum.kind != "token" && ast_enum.kind != "node" {
-                bail!(
-                    "AST enum '{}' has invalid kind '{}'",
-                    ast_enum.name,
-                    ast_enum.kind
-                );
-            }
-            for (variant, target) in &ast_enum.variants {
-                ensure_rust_type("AST enum variant", variant)?;
-                match ast_enum.kind.as_str() {
-                    "token" => require_token(tokens, target)?,
-                    "node" => {
-                        if !ast_nodes.contains(target.as_str()) {
-                            bail!(
-                                "AST enum '{}' variant '{}' references undeclared AST node '{}'",
-                                ast_enum.name,
-                                variant,
-                                target
-                            );
-                        }
-                    }
-                    _ => unreachable!("validated AST enum kind"),
-                }
+        for node in &self.ast.nodes {
+            if !nodes.contains(node.as_str()) {
+                bail!("AST metadata references undeclared syntax node '{node}'");
             }
         }
         Ok(())
     }
 
     fn validate_expressions(&self, tokens: &BTreeSet<&str>, nodes: &BTreeSet<&str>) -> Result<()> {
+        let expressions = self
+            .expressions
+            .items
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<BTreeSet<_>>();
         for expression in &self.expressions.items {
             ensure_rust_type("expression", &expression.name)?;
             if expression.atoms.is_empty() {
@@ -448,7 +259,7 @@ impl Grammar {
                     tokens,
                     nodes,
                     &BTreeSet::new(),
-                    &BTreeSet::new(),
+                    &expressions,
                 )?;
                 if pattern_nullable(&postfix.pattern) {
                     bail!(
@@ -472,18 +283,28 @@ impl Grammar {
         for (rule_index, rule) in self.syntax.rules.iter().enumerate() {
             for (item_index, item) in rule.pattern.iter().enumerate() {
                 if let Some(repeat) = &item.repeat {
-                    let first = sets.first_of_repeat(repeat);
+                    let first = first_of_sequence(
+                        repeat,
+                        &sets.first,
+                        &sets.nullable_rules,
+                        &sets.rule_indices,
+                        &sets.token_sets,
+                        &sets.token_set_indices,
+                        &sets.expression_indices,
+                        &sets.expression_first,
+                    );
                     if first.is_empty() {
-                        bail!(
-                            "repeat '{}' in rule '{}' cannot consume input",
-                            repeat,
-                            rule.name
-                        );
+                        bail!("repeat item in rule '{}' cannot consume input", rule.name);
                     }
-                    if let Some(target_index) = sets.rule_indices.get(repeat) {
-                        if sets.nullable_rules[*target_index] {
-                            bail!("repeat '{}' in rule '{}' is nullable", repeat, rule.name);
-                        }
+                    if pattern_nullable_with(
+                        repeat,
+                        &sets.nullable_rules,
+                        &sets.rule_indices,
+                        &sets.token_set_indices,
+                        &sets.expression_indices,
+                        &sets.expression_first,
+                    ) {
+                        bail!("repeat item in rule '{}' is nullable", rule.name);
                     }
                     let rest = &rule.pattern[item_index + 1..];
                     let mut item_follow = first_of_sequence(
@@ -493,12 +314,16 @@ impl Grammar {
                         &sets.rule_indices,
                         &sets.token_sets,
                         &sets.token_set_indices,
+                        &sets.expression_indices,
+                        &sets.expression_first,
                     );
                     if pattern_nullable_with(
                         rest,
                         &sets.nullable_rules,
                         &sets.rule_indices,
                         &sets.token_set_indices,
+                        &sets.expression_indices,
+                        &sets.expression_first,
                     ) {
                         item_follow.extend(sets.follow[rule_index].iter().cloned());
                     }
@@ -508,8 +333,7 @@ impl Grammar {
                         .collect::<Vec<_>>();
                     if !overlap.is_empty() {
                         bail!(
-                            "repeat '{}' in rule '{}' has unsafe FIRST/FOLLOW conflict on {:?}",
-                            repeat,
+                            "repeat item in rule '{}' has unsafe FIRST/FOLLOW conflict on {:?}",
                             rule.name,
                             overlap
                         );
@@ -577,6 +401,15 @@ fn validate_pattern(
 ) -> Result<()> {
     for item in pattern {
         item.validate_shape()?;
+        if let Some(label) = &item.label {
+            ensure_rust_value("pattern label", label)?;
+        }
+        if let Some(enum_name) = &item.r#enum {
+            ensure_rust_type("pattern enum", enum_name)?;
+            if item.choice.is_none() {
+                bail!("pattern enum '{enum_name}' can only be attached to a choice item");
+            }
+        }
         if let Some(token) = &item.token {
             require_token(tokens, token)?;
         }
@@ -586,9 +419,10 @@ fn validate_pattern(
             }
         }
         if let Some(repeat) = &item.repeat {
-            if !nodes.contains(repeat.as_str()) && !token_sets.contains(repeat.as_str()) {
-                bail!("repeat references undeclared node or token set '{repeat}'");
-            }
+            validate_pattern(repeat, tokens, nodes, token_sets, expressions)?;
+        }
+        if let Some(optional) = &item.optional {
+            validate_pattern(optional, tokens, nodes, token_sets, expressions)?;
         }
         if let Some(choice) = &item.choice {
             validate_pattern(choice, tokens, nodes, token_sets, expressions)?;
@@ -605,6 +439,104 @@ fn validate_pattern(
         }
     }
     Ok(())
+}
+
+fn validate_accessor_items(
+    pattern: &[PatternItem],
+    rule_name: &str,
+    labels: &mut BTreeSet<String>,
+    variable_targets: &mut BTreeSet<String>,
+    enum_names: &mut BTreeSet<String>,
+    in_variable: bool,
+) -> Result<()> {
+    for item in pattern {
+        if let Some(enum_name) = &item.r#enum {
+            if !enum_names.insert(enum_name.clone()) {
+                bail!("duplicate generated enum '{enum_name}'");
+            }
+        }
+        if let Some(label) = &item.label {
+            if !labels.insert(label.clone()) {
+                bail!("duplicate accessor label '{}.{}'", rule_name, label);
+            }
+            if let Some(target) = accessor_child_target(item) {
+                if !in_variable && variable_targets.contains(target) {
+                    bail!(
+                        "accessor '{}.{}' is ambiguous after variable-length '{}' children",
+                        rule_name,
+                        label,
+                        target
+                    );
+                }
+            }
+        }
+        if let Some(repeat) = &item.repeat {
+            collect_accessor_targets(repeat, variable_targets);
+            let mut repeat_labels = BTreeSet::new();
+            validate_accessor_items(
+                repeat,
+                rule_name,
+                &mut repeat_labels,
+                &mut BTreeSet::new(),
+                enum_names,
+                true,
+            )?;
+        }
+        if let Some(optional) = &item.optional {
+            validate_accessor_items(
+                optional,
+                rule_name,
+                labels,
+                variable_targets,
+                enum_names,
+                in_variable,
+            )?;
+        }
+        if let Some(choice) = &item.choice {
+            validate_accessor_items(
+                choice,
+                rule_name,
+                labels,
+                variable_targets,
+                enum_names,
+                in_variable,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn accessor_child_target(item: &PatternItem) -> Option<&str> {
+    item.node
+        .as_deref()
+        .or(item.expr.as_deref())
+        .or_else(|| item.optional.as_deref().and_then(optional_accessor_target))
+}
+
+fn optional_accessor_target(items: &[PatternItem]) -> Option<&str> {
+    items
+        .iter()
+        .find_map(|item| item.node.as_deref().or(item.expr.as_deref()))
+}
+
+fn collect_accessor_targets(items: &[PatternItem], targets: &mut BTreeSet<String>) {
+    for item in items {
+        if let Some(node) = &item.node {
+            targets.insert(node.clone());
+        }
+        if let Some(expr) = &item.expr {
+            targets.insert(expr.clone());
+        }
+        if let Some(repeat) = &item.repeat {
+            collect_accessor_targets(repeat, targets);
+        }
+        if let Some(optional) = &item.optional {
+            collect_accessor_targets(optional, targets);
+        }
+        if let Some(choice) = &item.choice {
+            collect_accessor_targets(choice, targets);
+        }
+    }
 }
 
 fn ensure_unique<'a>(label: &str, values: impl IntoIterator<Item = &'a str>) -> Result<()> {
@@ -747,18 +679,30 @@ pub struct SyntaxSpec {
 #[serde(deny_unknown_fields)]
 pub struct RuleSpec {
     pub name: String,
+    #[serde(default = "default_ast_enabled")]
+    pub ast: bool,
     pub pattern: Vec<PatternItem>,
+}
+
+fn default_ast_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct PatternItem {
     #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default, rename = "enum")]
+    pub r#enum: Option<String>,
+    #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
     pub node: Option<String>,
     #[serde(default)]
-    pub repeat: Option<String>,
+    pub repeat: Option<Vec<PatternItem>>,
+    #[serde(default)]
+    pub optional: Option<Vec<PatternItem>>,
     #[serde(default)]
     pub choice: Option<Vec<PatternItem>>,
     #[serde(default)]
@@ -773,6 +717,7 @@ impl PatternItem {
             self.token.is_some(),
             self.node.is_some(),
             self.repeat.is_some(),
+            self.optional.is_some(),
             self.choice.is_some(),
             self.token_set.is_some(),
             self.expr.is_some(),
@@ -879,80 +824,16 @@ pub struct PostfixExpressionSpec {
 #[serde(deny_unknown_fields)]
 pub struct AstSpec {
     pub root: String,
-    pub nodes: Vec<AstNodeSpec>,
-    pub enums: Vec<AstEnumSpec>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AstNodeSpec {
-    pub name: String,
-    pub syntax: String,
-    pub accessors: Vec<AccessorSpec>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AccessorSpec {
-    pub name: String,
-    pub kind: String,
     #[serde(default)]
-    pub node: Option<String>,
-    #[serde(default)]
-    pub token: Option<String>,
-    #[serde(default)]
-    pub token_set: Option<String>,
-    #[serde(default, rename = "enum")]
-    pub r#enum: Option<String>,
-    #[serde(default)]
-    pub start: Option<String>,
-    #[serde(default)]
-    pub end: Option<String>,
-}
-
-impl AccessorSpec {
-    fn require_only(&self, allowed: &[&str], ast_node: &str) -> Result<()> {
-        let fields = [
-            ("node", self.node.is_some()),
-            ("token", self.token.is_some()),
-            ("token_set", self.token_set.is_some()),
-            ("enum", self.r#enum.is_some()),
-            ("start", self.start.is_some()),
-            ("end", self.end.is_some()),
-        ];
-        for (field, present) in fields {
-            if present && !allowed.contains(&field) {
-                bail!(
-                    "AST accessor '{}.{}' has invalid field '{}' for kind '{}'",
-                    ast_node,
-                    self.name,
-                    field,
-                    self.kind
-                );
-            }
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AstEnumSpec {
-    pub name: String,
-    pub from_node: String,
-    #[serde(default = "default_ast_enum_kind")]
-    pub kind: String,
-    pub variants: Vec<(String, String)>,
-}
-
-fn default_ast_enum_kind() -> String {
-    "token".to_string()
+    pub nodes: Vec<String>,
 }
 
 struct GrammarAnalysis<'a> {
     grammar: &'a Grammar,
     rule_indices: BTreeMap<String, usize>,
     token_set_indices: BTreeMap<String, usize>,
+    expression_indices: BTreeMap<String, usize>,
+    expression_first: Vec<BTreeSet<String>>,
     token_sets: Vec<BTreeSet<String>>,
     first: Vec<BTreeSet<String>>,
     follow: Vec<BTreeSet<String>>,
@@ -975,6 +856,13 @@ impl<'a> GrammarAnalysis<'a> {
             .enumerate()
             .map(|(index, set)| (set.name.clone(), index))
             .collect::<BTreeMap<_, _>>();
+        let expression_indices = grammar
+            .expressions
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, expression)| (expression.name.clone(), index))
+            .collect::<BTreeMap<_, _>>();
         let all_tokens = grammar
             .token_names()
             .into_iter()
@@ -996,6 +884,12 @@ impl<'a> GrammarAnalysis<'a> {
                 tokens
             })
             .collect::<Vec<_>>();
+        let expression_first = grammar
+            .expressions
+            .items
+            .iter()
+            .map(|expression| expression_first(expression))
+            .collect::<Vec<_>>();
 
         let mut nullable_rules = vec![false; grammar.syntax.rules.len()];
         loop {
@@ -1007,6 +901,8 @@ impl<'a> GrammarAnalysis<'a> {
                         &nullable_rules,
                         &rule_indices,
                         &token_set_indices,
+                        &expression_indices,
+                        &expression_first,
                     )
                 {
                     nullable_rules[index] = true;
@@ -1029,6 +925,8 @@ impl<'a> GrammarAnalysis<'a> {
                     &rule_indices,
                     &token_sets,
                     &token_set_indices,
+                    &expression_indices,
+                    &expression_first,
                 );
                 changed |= extend_set(&mut first[index], item_first);
             }
@@ -1050,6 +948,8 @@ impl<'a> GrammarAnalysis<'a> {
                     &rule_indices,
                     &token_sets,
                     &token_set_indices,
+                    &expression_indices,
+                    &expression_first,
                 );
             }
             if !changed {
@@ -1061,18 +961,12 @@ impl<'a> GrammarAnalysis<'a> {
             grammar,
             rule_indices,
             token_set_indices,
+            expression_indices,
+            expression_first,
             token_sets,
             first,
             follow,
             nullable_rules,
-        }
-    }
-
-    fn first_of_repeat(&self, name: &str) -> BTreeSet<String> {
-        if let Some(index) = self.rule_indices.get(name) {
-            self.first[*index].clone()
-        } else {
-            self.token_sets[*self.token_set_indices.get(name).expect("validated")].clone()
         }
     }
 
@@ -1084,13 +978,8 @@ impl<'a> GrammarAnalysis<'a> {
     fn nullable_cycles(&self) -> Vec<Vec<String>> {
         let mut graph = BTreeMap::<String, BTreeSet<String>>::new();
         for rule in &self.grammar.syntax.rules {
-            let deps = rule
-                .pattern
-                .iter()
-                .filter_map(|item| item.node.as_ref().or(item.repeat.as_ref()))
-                .filter(|name| self.rule_indices.contains_key(*name))
-                .cloned()
-                .collect();
+            let mut deps = BTreeSet::new();
+            collect_rule_deps(&rule.pattern, &self.rule_indices, &mut deps);
             graph.insert(rule.name.clone(), deps);
         }
         find_cycles(&self.ordered_rule_names(), &graph)
@@ -1107,6 +996,16 @@ impl<'a> GrammarAnalysis<'a> {
         let mut seen = BTreeSet::new();
         let mut queue = VecDeque::new();
         queue.push_back(self.grammar.syntax.entry.clone());
+        for expression in &self.grammar.expressions.items {
+            for atom in &expression.atoms {
+                if let Some(node) = &atom.node {
+                    queue.push_back(node.clone());
+                }
+            }
+            for postfix in &expression.postfix {
+                collect_rule_refs(&postfix.pattern, &self.rule_indices, &mut queue);
+            }
+        }
         while let Some(rule_name) = queue.pop_front() {
             if !seen.insert(rule_name.clone()) {
                 continue;
@@ -1164,6 +1063,8 @@ impl<'a> GrammarAnalysis<'a> {
                     &self.nullable_rules,
                     &self.rule_indices,
                     &self.token_set_indices,
+                    &self.expression_indices,
+                    &self.expression_first,
                 ) {
                     break;
                 }
@@ -1189,6 +1090,8 @@ fn validate_choice_conflicts(
                 &sets.rule_indices,
                 &sets.token_sets,
                 &sets.token_set_indices,
+                &sets.expression_indices,
+                &sets.expression_first,
             );
             let overlap = seen.intersection(&first).cloned().collect::<Vec<_>>();
             if !overlap.is_empty() {
@@ -1217,12 +1120,36 @@ fn collect_rule_refs(
             }
         }
         if let Some(repeat) = &item.repeat {
-            if rule_indices.contains_key(repeat) {
-                queue.push_back(repeat.clone());
-            }
+            collect_rule_refs(repeat, rule_indices, queue);
+        }
+        if let Some(optional) = &item.optional {
+            collect_rule_refs(optional, rule_indices, queue);
         }
         if let Some(choice) = &item.choice {
             collect_rule_refs(choice, rule_indices, queue);
+        }
+    }
+}
+
+fn collect_rule_deps(
+    pattern: &[PatternItem],
+    rule_indices: &BTreeMap<String, usize>,
+    deps: &mut BTreeSet<String>,
+) {
+    for item in pattern {
+        if let Some(node) = &item.node {
+            if rule_indices.contains_key(node) {
+                deps.insert(node.clone());
+            }
+        }
+        if let Some(repeat) = &item.repeat {
+            collect_rule_deps(repeat, rule_indices, deps);
+        }
+        if let Some(optional) = &item.optional {
+            collect_rule_deps(optional, rule_indices, deps);
+        }
+        if let Some(choice) = &item.choice {
+            collect_rule_deps(choice, rule_indices, deps);
         }
     }
 }
@@ -1232,8 +1159,11 @@ fn collect_token_set_refs(pattern: &[PatternItem], used: &mut BTreeSet<String>) 
         if let Some(name) = &item.token_set {
             used.insert(name.clone());
         }
-        if let Some(name) = &item.repeat {
-            used.insert(name.clone());
+        if let Some(repeat) = &item.repeat {
+            collect_token_set_refs(repeat, used);
+        }
+        if let Some(optional) = &item.optional {
+            collect_token_set_refs(optional, used);
         }
         if let Some(choice) = &item.choice {
             collect_token_set_refs(choice, used);
@@ -1250,6 +1180,31 @@ fn collect_prefix_node(item: &PatternItem, deps: &mut BTreeSet<String>) {
             collect_prefix_node(alt, deps);
         }
     }
+    if let Some(repeat) = &item.repeat {
+        for item in repeat {
+            collect_prefix_node(item, deps);
+        }
+    }
+    if let Some(optional) = &item.optional {
+        for item in optional {
+            collect_prefix_node(item, deps);
+        }
+    }
+}
+
+fn expression_first(expression: &ExpressionSpec) -> BTreeSet<String> {
+    let mut first = expression
+        .prefix
+        .iter()
+        .map(|prefix| prefix.token.clone())
+        .collect::<BTreeSet<_>>();
+    first.extend(
+        expression
+            .atoms
+            .iter()
+            .filter_map(|atom| atom.token.as_ref().cloned()),
+    );
+    first
 }
 
 fn find_cycles(names: &[String], graph: &BTreeMap<String, BTreeSet<String>>) -> Vec<Vec<String>> {
@@ -1299,6 +1254,8 @@ fn first_of_sequence(
     rule_indices: &BTreeMap<String, usize>,
     token_sets: &[BTreeSet<String>],
     token_set_indices: &BTreeMap<String, usize>,
+    expression_indices: &BTreeMap<String, usize>,
+    expression_first: &[BTreeSet<String>],
 ) -> BTreeSet<String> {
     let mut result = BTreeSet::new();
     for item in items {
@@ -1309,8 +1266,17 @@ fn first_of_sequence(
             rule_indices,
             token_sets,
             token_set_indices,
+            expression_indices,
+            expression_first,
         ));
-        if !item_nullable_with(item, nullable_rules, rule_indices, token_set_indices) {
+        if !item_nullable_with(
+            item,
+            nullable_rules,
+            rule_indices,
+            token_set_indices,
+            expression_indices,
+            expression_first,
+        ) {
             break;
         }
     }
@@ -1324,6 +1290,8 @@ fn first_of_item(
     rule_indices: &BTreeMap<String, usize>,
     token_sets: &[BTreeSet<String>],
     token_set_indices: &BTreeMap<String, usize>,
+    expression_indices: &BTreeMap<String, usize>,
+    expression_first: &[BTreeSet<String>],
 ) -> BTreeSet<String> {
     if let Some(token) = &item.token {
         return BTreeSet::from([token.clone()]);
@@ -1332,10 +1300,28 @@ fn first_of_item(
         return first[*rule_indices.get(node).expect("validated")].clone();
     }
     if let Some(repeat) = &item.repeat {
-        if let Some(index) = rule_indices.get(repeat) {
-            return first[*index].clone();
-        }
-        return token_sets[*token_set_indices.get(repeat).expect("validated")].clone();
+        return first_of_sequence(
+            repeat,
+            first,
+            nullable_rules,
+            rule_indices,
+            token_sets,
+            token_set_indices,
+            expression_indices,
+            expression_first,
+        );
+    }
+    if let Some(optional) = &item.optional {
+        return first_of_sequence(
+            optional,
+            first,
+            nullable_rules,
+            rule_indices,
+            token_sets,
+            token_set_indices,
+            expression_indices,
+            expression_first,
+        );
     }
     if let Some(choice) = &item.choice {
         return choice
@@ -1348,6 +1334,8 @@ fn first_of_item(
                     rule_indices,
                     token_sets,
                     token_set_indices,
+                    expression_indices,
+                    expression_first,
                 )
             })
             .collect();
@@ -1355,11 +1343,16 @@ fn first_of_item(
     if let Some(token_set) = &item.token_set {
         return token_sets[*token_set_indices.get(token_set).expect("validated")].clone();
     }
+    if let Some(expr) = &item.expr {
+        return expression_first[*expression_indices.get(expr).expect("validated")].clone();
+    }
     BTreeSet::new()
 }
 
 fn pattern_nullable(pattern: &[PatternItem]) -> bool {
-    pattern.iter().all(|item| item.repeat.is_some())
+    pattern
+        .iter()
+        .all(|item| item.repeat.is_some() || item.optional.is_some())
 }
 
 fn pattern_nullable_with(
@@ -1367,10 +1360,19 @@ fn pattern_nullable_with(
     nullable_rules: &[bool],
     rule_indices: &BTreeMap<String, usize>,
     token_set_indices: &BTreeMap<String, usize>,
+    expression_indices: &BTreeMap<String, usize>,
+    expression_first: &[BTreeSet<String>],
 ) -> bool {
-    pattern
-        .iter()
-        .all(|item| item_nullable_with(item, nullable_rules, rule_indices, token_set_indices))
+    pattern.iter().all(|item| {
+        item_nullable_with(
+            item,
+            nullable_rules,
+            rule_indices,
+            token_set_indices,
+            expression_indices,
+            expression_first,
+        )
+    })
 }
 
 fn item_nullable_with(
@@ -1378,18 +1380,34 @@ fn item_nullable_with(
     nullable_rules: &[bool],
     rule_indices: &BTreeMap<String, usize>,
     token_set_indices: &BTreeMap<String, usize>,
+    expression_indices: &BTreeMap<String, usize>,
+    expression_first: &[BTreeSet<String>],
 ) -> bool {
     if let Some(repeat) = &item.repeat {
-        return rule_indices.contains_key(repeat) || token_set_indices.contains_key(repeat);
+        let _ = repeat;
+        return true;
+    }
+    if let Some(optional) = &item.optional {
+        let _ = optional;
+        return true;
     }
     if let Some(node) = &item.node {
         return nullable_rules[*rule_indices.get(node).expect("validated")];
     }
     if let Some(choice) = &item.choice {
-        return choice
-            .iter()
-            .any(|alt| item_nullable_with(alt, nullable_rules, rule_indices, token_set_indices));
+        return choice.iter().any(|alt| {
+            item_nullable_with(
+                alt,
+                nullable_rules,
+                rule_indices,
+                token_set_indices,
+                expression_indices,
+                expression_first,
+            )
+        });
     }
+    let _ = expression_indices;
+    let _ = expression_first;
     false
 }
 
@@ -1402,6 +1420,8 @@ fn collect_follow(
     rule_indices: &BTreeMap<String, usize>,
     token_sets: &[BTreeSet<String>],
     token_set_indices: &BTreeMap<String, usize>,
+    expression_indices: &BTreeMap<String, usize>,
+    expression_first: &[BTreeSet<String>],
 ) -> bool {
     let mut changed = false;
     for (index, item) in items.iter().enumerate() {
@@ -1413,8 +1433,17 @@ fn collect_follow(
             rule_indices,
             token_sets,
             token_set_indices,
+            expression_indices,
+            expression_first,
         );
-        if pattern_nullable_with(rest, nullable_rules, rule_indices, token_set_indices) {
+        if pattern_nullable_with(
+            rest,
+            nullable_rules,
+            rule_indices,
+            token_set_indices,
+            expression_indices,
+            expression_first,
+        ) {
             item_follow.extend(parent_follow.iter().cloned());
         }
         changed |= collect_follow_for_item(
@@ -1422,9 +1451,12 @@ fn collect_follow(
             item_follow,
             follow,
             first,
+            nullable_rules,
             rule_indices,
             token_sets,
             token_set_indices,
+            expression_indices,
+            expression_first,
         );
     }
     changed
@@ -1435,9 +1467,12 @@ fn collect_follow_for_item(
     item_follow: BTreeSet<String>,
     follow: &mut [BTreeSet<String>],
     first: &[BTreeSet<String>],
+    nullable_rules: &[bool],
     rule_indices: &BTreeMap<String, usize>,
     token_sets: &[BTreeSet<String>],
     token_set_indices: &BTreeMap<String, usize>,
+    expression_indices: &BTreeMap<String, usize>,
+    expression_first: &[BTreeSet<String>],
 ) -> bool {
     let mut changed = false;
     if let Some(node) = &item.node {
@@ -1446,11 +1481,42 @@ fn collect_follow_for_item(
             item_follow,
         );
     } else if let Some(repeat) = &item.repeat {
-        if let Some(rule_index) = rule_indices.get(repeat) {
-            let mut repeat_follow = item_follow;
-            repeat_follow.extend(first[*rule_index].iter().cloned());
-            changed |= extend_set(&mut follow[*rule_index], repeat_follow);
-        }
+        let mut repeat_follow = item_follow;
+        repeat_follow.extend(first_of_sequence(
+            repeat,
+            first,
+            nullable_rules,
+            rule_indices,
+            token_sets,
+            token_set_indices,
+            expression_indices,
+            expression_first,
+        ));
+        changed |= collect_follow(
+            repeat,
+            &repeat_follow,
+            follow,
+            first,
+            nullable_rules,
+            rule_indices,
+            token_sets,
+            token_set_indices,
+            expression_indices,
+            expression_first,
+        );
+    } else if let Some(optional) = &item.optional {
+        changed |= collect_follow(
+            optional,
+            &item_follow,
+            follow,
+            first,
+            nullable_rules,
+            rule_indices,
+            token_sets,
+            token_set_indices,
+            expression_indices,
+            expression_first,
+        );
     } else if let Some(choice) = &item.choice {
         for alt in choice {
             changed |= collect_follow_for_item(
@@ -1458,9 +1524,12 @@ fn collect_follow_for_item(
                 item_follow.clone(),
                 follow,
                 first,
+                nullable_rules,
                 rule_indices,
                 token_sets,
                 token_set_indices,
+                expression_indices,
+                expression_first,
             );
         }
     }
@@ -1483,6 +1552,7 @@ mod tests {
 
     fn valid_grammar() -> String {
         r#"(
+            version: 2,
             language: (type_name: "ToyLanguage", syntax_kind: "ToyKind"),
             diagnostics: (
                 invalid_token: "InvalidToken",
@@ -1509,7 +1579,7 @@ mod tests {
                 entry: "File",
                 nodes: ["File", "Stmt", "Name"],
                 rules: [
-                    (name: "File", pattern: [(repeat: "Stmt")]),
+                    (name: "File", pattern: [(repeat: [(node: "Stmt")])]),
                     (name: "Stmt", pattern: [(token: "LetKw"), (node: "Name"), (token: "Eq"), (expr: "Expr"), (token: "Semicolon")]),
                     (name: "Name", pattern: [(token: "Ident")]),
                 ],
@@ -1527,12 +1597,7 @@ mod tests {
             ),
             ast: (
                 root: "File",
-                nodes: [
-                    (name: "File", syntax: "File", accessors: [(name: "statements", kind: "children", node: "Stmt")]),
-                    (name: "Stmt", syntax: "Stmt", accessors: [(name: "name", kind: "child", node: "Name")]),
-                    (name: "Name", syntax: "Name", accessors: [(name: "ident", kind: "token", token: "Ident")]),
-                ],
-                enums: [],
+                nodes: [],
             ),
         )"#.to_string()
     }
@@ -1586,5 +1651,45 @@ mod tests {
         let grammar =
             valid_grammar().replace("associativity: \"left\"", "associativity: \"sideways\"");
         assert!(validate(&grammar).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_accessor_labels() {
+        let grammar = valid_grammar().replace(
+            "(name: \"Name\", pattern: [(token: \"Ident\")])",
+            "(name: \"Name\", pattern: [(label: \"text\", token: \"Ident\"), (label: \"text\", token: \"Ident\")])",
+        );
+        let error = validate(&grammar).unwrap_err().to_string();
+        assert!(error.contains("duplicate accessor label"));
+    }
+
+    #[test]
+    fn rejects_accessor_label_collisions_with_generated_methods() {
+        let grammar = valid_grammar().replace(
+            "(name: \"Name\", pattern: [(token: \"Ident\")])",
+            "(name: \"Name\", pattern: [(label: \"syntax\", token: \"Ident\")])",
+        );
+        let error = validate(&grammar).unwrap_err().to_string();
+        assert!(error.contains("duplicate accessor label"));
+    }
+
+    #[test]
+    fn rejects_duplicate_generated_enum_names() {
+        let grammar = valid_grammar().replace(
+            "(name: \"Name\", pattern: [(token: \"Ident\")])",
+            "(name: \"Name\", pattern: [(enum: \"Dup\", choice: [(token: \"Ident\")]), (enum: \"Dup\", choice: [(token: \"LetKw\")])])",
+        );
+        let error = validate(&grammar).unwrap_err().to_string();
+        assert!(error.contains("duplicate generated enum"));
+    }
+
+    #[test]
+    fn rejects_ambiguous_variable_length_label_layouts() {
+        let grammar = valid_grammar().replace(
+            "(name: \"File\", pattern: [(repeat: [(node: \"Stmt\")])])",
+            "(name: \"File\", pattern: [(repeat: [(node: \"Stmt\")]), (label: \"tail\", node: \"Stmt\")])",
+        );
+        let error = validate(&grammar).unwrap_err().to_string();
+        assert!(error.contains("ambiguous after variable-length"));
     }
 }

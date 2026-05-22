@@ -18,6 +18,8 @@ enum Item {
     Node(usize),
     RepeatRule { index: usize, stop: &'static [SyntaxKind] },
     RepeatTokenSet { index: usize, stop: &'static [SyntaxKind] },
+    RepeatItems { items: &'static [Item], first: &'static [SyntaxKind], stop: &'static [SyntaxKind] },
+    OptionalItems { items: &'static [Item], first: &'static [SyntaxKind] },
     Choice(&'static [Alternative]),
     TokenSet(usize),
     Expr(usize),
@@ -93,6 +95,19 @@ impl Parser {
                     }
                 }
             }
+            Item::RepeatItems { items, first, stop } => {
+                while self.peek().is_some_and(|kind| contains(first, kind)) {
+                    self.parse_items(items);
+                    if self.peek().is_some_and(|kind| contains(stop, kind)) {
+                        break;
+                    }
+                }
+            }
+            Item::OptionalItems { items, first } => {
+                if self.peek().is_some_and(|kind| contains(first, kind)) {
+                    self.parse_items(items);
+                }
+            }
             Item::Choice(alternatives) => {
                 let Some(kind) = self.peek() else {
                     self.error_here(UNEXPECTED_EOF_DIAGNOSTIC.message());
@@ -128,6 +143,7 @@ impl Parser {
     fn parse_expr(&mut self, expr_index: usize, min_bp: u8) {
         let expr = EXPRESSIONS[expr_index];
         self.builder.start_node(expr.root.into());
+        let lhs_checkpoint = self.builder.checkpoint();
 
         if let Some(prefix) = expr.prefix.iter().find(|prefix| self.peek() == Some(prefix.token)) {
             self.builder.start_node(prefix.node.into());
@@ -144,7 +160,7 @@ impl Parser {
 
         loop {
             if let Some(postfix) = expr.postfix.iter().find(|postfix| self.peek().is_some_and(|kind| contains(postfix.first, kind))) {
-                self.builder.start_node(postfix.node.into());
+                self.builder.start_node_at(lhs_checkpoint, postfix.node.into());
                 self.parse_items(postfix.items);
                 self.builder.finish_node();
                 continue;
@@ -152,7 +168,7 @@ impl Parser {
             let Some(op) = expr.infix.iter().find(|op| self.peek() == Some(op.token) && op.left_bp >= min_bp) else {
                 break;
             };
-            self.builder.start_node(op.node.into());
+            self.builder.start_node_at(lhs_checkpoint, op.node.into());
             self.bump();
             self.parse_expr(expr_index, op.right_bp);
             self.builder.finish_node();

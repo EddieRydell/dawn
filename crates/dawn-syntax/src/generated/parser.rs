@@ -8,22 +8,32 @@ use crate::generated::kind::SyntaxKind as SyntaxKind;
 use crate::generated::lexer::LexToken;
 
 static ITEM_0_0_STOP: &[SyntaxKind] = &[
+    SyntaxKind::FromKw,
     SyntaxKind::Ident,
 ];
 
-static ITEM_10_1_STOP: &[SyntaxKind] = &[
+static ITEM_14_1_STOP: &[SyntaxKind] = &[
+    SyntaxKind::Gt,
+];
+
+static ITEM_22_1_STOP: &[SyntaxKind] = &[
+    SyntaxKind::RBracket,
+];
+
+static ITEM_24_1_STOP: &[SyntaxKind] = &[
+    SyntaxKind::RParen,
+];
+
+static ITEM_3_1_STOP: &[SyntaxKind] = &[
     SyntaxKind::RBrace,
 ];
 
 static ITEM_6_1_STOP: &[SyntaxKind] = &[
-    SyntaxKind::Gt,
-];
-
-static ITEM_7_1_STOP: &[SyntaxKind] = &[
-    SyntaxKind::RBrace,
+    SyntaxKind::RParen,
 ];
 
 static ITEM_9_1_STOP: &[SyntaxKind] = &[
+    SyntaxKind::Eq,
     SyntaxKind::LBrace,
     SyntaxKind::Semicolon,
 ];
@@ -35,23 +45,20 @@ static TOKEN_SET_0: &[SyntaxKind] = &[
     SyntaxKind::BangEq,
     SyntaxKind::BlockComment,
     SyntaxKind::Caret,
-    SyntaxKind::CaseKw,
     SyntaxKind::Colon,
     SyntaxKind::Color,
     SyntaxKind::Comma,
-    SyntaxKind::DefaultKw,
     SyntaxKind::Dot,
-    SyntaxKind::ElseKw,
+    SyntaxKind::DotDot,
+    SyntaxKind::Duration,
     SyntaxKind::Eq,
     SyntaxKind::EqEq,
     SyntaxKind::FalseKw,
     SyntaxKind::Float,
     SyntaxKind::FnKw,
-    SyntaxKind::ForKw,
     SyntaxKind::FromKw,
     SyntaxKind::Ge,
     SyntaxKind::Ident,
-    SyntaxKind::IfKw,
     SyntaxKind::ImportKw,
     SyntaxKind::Int,
     SyntaxKind::InvalidColor,
@@ -77,114 +84,6 @@ static TOKEN_SET_0: &[SyntaxKind] = &[
     SyntaxKind::Star,
     SyntaxKind::StarStar,
     SyntaxKind::String,
-    SyntaxKind::SwitchKw,
-    SyntaxKind::TrueKw,
-    SyntaxKind::Whitespace,
-];
-
-static TOKEN_SET_1: &[SyntaxKind] = &[
-    SyntaxKind::Ampersand,
-    SyntaxKind::AndAnd,
-    SyntaxKind::Bang,
-    SyntaxKind::BangEq,
-    SyntaxKind::BlockComment,
-    SyntaxKind::Caret,
-    SyntaxKind::CaseKw,
-    SyntaxKind::Colon,
-    SyntaxKind::Color,
-    SyntaxKind::Comma,
-    SyntaxKind::DefaultKw,
-    SyntaxKind::Dot,
-    SyntaxKind::ElseKw,
-    SyntaxKind::Eq,
-    SyntaxKind::EqEq,
-    SyntaxKind::FalseKw,
-    SyntaxKind::Float,
-    SyntaxKind::FnKw,
-    SyntaxKind::ForKw,
-    SyntaxKind::FromKw,
-    SyntaxKind::Ge,
-    SyntaxKind::Gt,
-    SyntaxKind::Ident,
-    SyntaxKind::IfKw,
-    SyntaxKind::ImportKw,
-    SyntaxKind::Int,
-    SyntaxKind::InvalidColor,
-    SyntaxKind::LBracket,
-    SyntaxKind::LParen,
-    SyntaxKind::Le,
-    SyntaxKind::LetKw,
-    SyntaxKind::LineComment,
-    SyntaxKind::Lt,
-    SyntaxKind::Minus,
-    SyntaxKind::OrOr,
-    SyntaxKind::Percent,
-    SyntaxKind::Pipe,
-    SyntaxKind::Plus,
-    SyntaxKind::Question,
-    SyntaxKind::RBracket,
-    SyntaxKind::RParen,
-    SyntaxKind::Shl,
-    SyntaxKind::Shr,
-    SyntaxKind::Slash,
-    SyntaxKind::Star,
-    SyntaxKind::StarStar,
-    SyntaxKind::String,
-    SyntaxKind::SwitchKw,
-    SyntaxKind::TrueKw,
-    SyntaxKind::Whitespace,
-];
-
-static TOKEN_SET_2: &[SyntaxKind] = &[
-    SyntaxKind::Ampersand,
-    SyntaxKind::AndAnd,
-    SyntaxKind::Bang,
-    SyntaxKind::BangEq,
-    SyntaxKind::BlockComment,
-    SyntaxKind::Caret,
-    SyntaxKind::CaseKw,
-    SyntaxKind::Colon,
-    SyntaxKind::Color,
-    SyntaxKind::Comma,
-    SyntaxKind::DefaultKw,
-    SyntaxKind::Dot,
-    SyntaxKind::ElseKw,
-    SyntaxKind::Eq,
-    SyntaxKind::EqEq,
-    SyntaxKind::FalseKw,
-    SyntaxKind::Float,
-    SyntaxKind::FnKw,
-    SyntaxKind::ForKw,
-    SyntaxKind::FromKw,
-    SyntaxKind::Ge,
-    SyntaxKind::Gt,
-    SyntaxKind::Ident,
-    SyntaxKind::IfKw,
-    SyntaxKind::ImportKw,
-    SyntaxKind::Int,
-    SyntaxKind::InvalidColor,
-    SyntaxKind::LBracket,
-    SyntaxKind::LParen,
-    SyntaxKind::Le,
-    SyntaxKind::LetKw,
-    SyntaxKind::LineComment,
-    SyntaxKind::Lt,
-    SyntaxKind::Minus,
-    SyntaxKind::OrOr,
-    SyntaxKind::Percent,
-    SyntaxKind::Pipe,
-    SyntaxKind::Plus,
-    SyntaxKind::Question,
-    SyntaxKind::RBracket,
-    SyntaxKind::RParen,
-    SyntaxKind::Semicolon,
-    SyntaxKind::Shl,
-    SyntaxKind::Shr,
-    SyntaxKind::Slash,
-    SyntaxKind::Star,
-    SyntaxKind::StarStar,
-    SyntaxKind::String,
-    SyntaxKind::SwitchKw,
     SyntaxKind::TrueKw,
     SyntaxKind::Whitespace,
 ];
@@ -192,138 +91,206 @@ static TOKEN_SET_2: &[SyntaxKind] = &[
 fn token_set(index: usize) -> &'static [SyntaxKind] {
     match index {
         0 => TOKEN_SET_0,
-        1 => TOKEN_SET_1,
-        2 => TOKEN_SET_2,
         _ => unreachable!("generated parser requested invalid token set"),
     }
 }
 
 static CHOICE_4_0_ALT_0_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::Ident,
+    SyntaxKind::FnKw,
 ];
 
 static CHOICE_4_0_ALT_1_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::FnKw,
+    SyntaxKind::LetKw,
 ];
 
 static CHOICE_4_0_ALT_2_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::LetKw,
-];
-
-static CHOICE_4_0_ALT_3_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::IfKw,
-];
-
-static CHOICE_4_0_ALT_4_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::ElseKw,
-];
-
-static CHOICE_4_0_ALT_5_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::SwitchKw,
-];
-
-static CHOICE_4_0_ALT_6_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::CaseKw,
-];
-
-static CHOICE_4_0_ALT_7_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::DefaultKw,
-];
-
-static CHOICE_4_0_ALT_8_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::ForKw,
+    SyntaxKind::FromKw,
+    SyntaxKind::Ident,
 ];
 
 static CHOICE_4_0: &[Alternative] = &[
-    Alternative { item: Item::Token(SyntaxKind::Ident), first: CHOICE_4_0_ALT_0_FIRST },
-    Alternative { item: Item::Token(SyntaxKind::FnKw), first: CHOICE_4_0_ALT_1_FIRST },
-    Alternative { item: Item::Token(SyntaxKind::LetKw), first: CHOICE_4_0_ALT_2_FIRST },
-    Alternative { item: Item::Token(SyntaxKind::IfKw), first: CHOICE_4_0_ALT_3_FIRST },
-    Alternative { item: Item::Token(SyntaxKind::ElseKw), first: CHOICE_4_0_ALT_4_FIRST },
-    Alternative { item: Item::Token(SyntaxKind::SwitchKw), first: CHOICE_4_0_ALT_5_FIRST },
-    Alternative { item: Item::Token(SyntaxKind::CaseKw), first: CHOICE_4_0_ALT_6_FIRST },
-    Alternative { item: Item::Token(SyntaxKind::DefaultKw), first: CHOICE_4_0_ALT_7_FIRST },
-    Alternative { item: Item::Token(SyntaxKind::ForKw), first: CHOICE_4_0_ALT_8_FIRST },
+    Alternative { item: Item::Node(5), first: CHOICE_4_0_ALT_0_FIRST },
+    Alternative { item: Item::Node(8), first: CHOICE_4_0_ALT_1_FIRST },
+    Alternative { item: Item::Node(9), first: CHOICE_4_0_ALT_2_FIRST },
 ];
 
-static CHOICE_8_0_ALT_0_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::CaseKw,
-    SyntaxKind::DefaultKw,
-    SyntaxKind::ElseKw,
-    SyntaxKind::FnKw,
-    SyntaxKind::ForKw,
-    SyntaxKind::Ident,
-    SyntaxKind::IfKw,
-    SyntaxKind::LetKw,
-    SyntaxKind::SwitchKw,
-];
-
-static CHOICE_8_0_ALT_1_FIRST: &[SyntaxKind] = &[
+static CHOICE_9_3_ALT_0_FIRST: &[SyntaxKind] = &[
     SyntaxKind::LBrace,
 ];
 
-static CHOICE_8_0: &[Alternative] = &[
-    Alternative { item: Item::Node(9), first: CHOICE_8_0_ALT_0_FIRST },
-    Alternative { item: Item::Node(10), first: CHOICE_8_0_ALT_1_FIRST },
-];
-
-static CHOICE_9_2_ALT_0_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::LBrace,
-];
-
-static CHOICE_9_2_ALT_1_FIRST: &[SyntaxKind] = &[
+static CHOICE_9_3_ALT_1_FIRST: &[SyntaxKind] = &[
     SyntaxKind::Semicolon,
 ];
 
-static CHOICE_9_2: &[Alternative] = &[
-    Alternative { item: Item::Node(7), first: CHOICE_9_2_ALT_0_FIRST },
-    Alternative { item: Item::Token(SyntaxKind::Semicolon), first: CHOICE_9_2_ALT_1_FIRST },
+static CHOICE_9_3: &[Alternative] = &[
+    Alternative { item: Item::Node(3), first: CHOICE_9_3_ALT_0_FIRST },
+    Alternative { item: Item::Token(SyntaxKind::Semicolon), first: CHOICE_9_3_ALT_1_FIRST },
 ];
 
-static CHOICE_11_0_ALT_0_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::LBrace,
+static CHOICE_13_0_ALT_0_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Ident,
 ];
 
-static CHOICE_11_0_ALT_1_FIRST: &[SyntaxKind] = &[
+static CHOICE_13_0_ALT_1_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::FromKw,
+];
+
+static CHOICE_13_0: &[Alternative] = &[
+    Alternative { item: Item::Token(SyntaxKind::Ident), first: CHOICE_13_0_ALT_0_FIRST },
+    Alternative { item: Item::Token(SyntaxKind::FromKw), first: CHOICE_13_0_ALT_1_FIRST },
+];
+
+static CHOICE_19_0_ALT_0_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::TrueKw,
+];
+
+static CHOICE_19_0_ALT_1_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::FalseKw,
+];
+
+static CHOICE_19_0: &[Alternative] = &[
+    Alternative { item: Item::Token(SyntaxKind::TrueKw), first: CHOICE_19_0_ALT_0_FIRST },
+    Alternative { item: Item::Token(SyntaxKind::FalseKw), first: CHOICE_19_0_ALT_1_FIRST },
+];
+
+static ITEM_0_0_REPEAT_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::ImportKw,
+];
+
+static ITEM_0_0_REPEAT_ITEMS: &[Item] = &[
+    Item::Node(1),
+];
+
+static ITEM_3_1_REPEAT_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::FnKw,
+    SyntaxKind::FromKw,
+    SyntaxKind::Ident,
+    SyntaxKind::LetKw,
+];
+
+static ITEM_3_1_REPEAT_ITEMS: &[Item] = &[
+    Item::Node(4),
+];
+
+static ITEM_5_3_OPTIONAL_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::FromKw,
+    SyntaxKind::Ident,
+];
+
+static ITEM_5_3_OPTIONAL_ITEMS: &[Item] = &[
+    Item::Node(12),
+];
+
+static ITEM_6_3_OPTIONAL_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Comma,
+];
+
+static ITEM_6_3_OPTIONAL_ITEMS: &[Item] = &[
+    Item::Token(SyntaxKind::Comma),
+];
+
+static ITEM_6_1_REPEAT_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::FromKw,
+    SyntaxKind::Ident,
+];
+
+static ITEM_6_1_REPEAT_ITEMS: &[Item] = &[
+    Item::Node(7),
+    Item::OptionalItems { items: ITEM_6_3_OPTIONAL_ITEMS, first: ITEM_6_3_OPTIONAL_FIRST },
+];
+
+static ITEM_7_1_OPTIONAL_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::FromKw,
+    SyntaxKind::Ident,
+];
+
+static ITEM_7_1_OPTIONAL_ITEMS: &[Item] = &[
+    Item::Node(12),
+];
+
+static ITEM_8_2_OPTIONAL_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::FromKw,
+    SyntaxKind::Ident,
+];
+
+static ITEM_8_2_OPTIONAL_ITEMS: &[Item] = &[
+    Item::Node(12),
+];
+
+static ITEM_8_3_OPTIONAL_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Eq,
+];
+
+static ITEM_8_3_OPTIONAL_ITEMS: &[Item] = &[
+    Item::Token(SyntaxKind::Eq),
+    Item::Expr(0),
+];
+
+static ITEM_9_1_REPEAT_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Bang,
+    SyntaxKind::Color,
+    SyntaxKind::Duration,
+    SyntaxKind::FalseKw,
+    SyntaxKind::Float,
+    SyntaxKind::FromKw,
+    SyntaxKind::Ident,
+    SyntaxKind::Int,
+    SyntaxKind::LBracket,
+    SyntaxKind::LParen,
+    SyntaxKind::Minus,
+    SyntaxKind::String,
+    SyntaxKind::TrueKw,
+];
+
+static ITEM_9_1_REPEAT_ITEMS: &[Item] = &[
+    Item::Expr(0),
+];
+
+static ITEM_9_2_OPTIONAL_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Eq,
+];
+
+static ITEM_9_2_OPTIONAL_ITEMS: &[Item] = &[
+    Item::Node(11),
+];
+
+static ITEM_14_1_REPEAT_FIRST: &[SyntaxKind] = &[
     SyntaxKind::Ampersand,
     SyntaxKind::AndAnd,
     SyntaxKind::Bang,
     SyntaxKind::BangEq,
     SyntaxKind::BlockComment,
     SyntaxKind::Caret,
-    SyntaxKind::CaseKw,
     SyntaxKind::Colon,
     SyntaxKind::Color,
     SyntaxKind::Comma,
-    SyntaxKind::DefaultKw,
     SyntaxKind::Dot,
-    SyntaxKind::ElseKw,
+    SyntaxKind::DotDot,
+    SyntaxKind::Duration,
     SyntaxKind::Eq,
     SyntaxKind::EqEq,
     SyntaxKind::FalseKw,
     SyntaxKind::Float,
     SyntaxKind::FnKw,
-    SyntaxKind::ForKw,
     SyntaxKind::FromKw,
     SyntaxKind::Ge,
-    SyntaxKind::Gt,
     SyntaxKind::Ident,
-    SyntaxKind::IfKw,
     SyntaxKind::ImportKw,
     SyntaxKind::Int,
     SyntaxKind::InvalidColor,
+    SyntaxKind::LBrace,
     SyntaxKind::LBracket,
     SyntaxKind::LParen,
     SyntaxKind::Le,
     SyntaxKind::LetKw,
     SyntaxKind::LineComment,
-    SyntaxKind::Lt,
     SyntaxKind::Minus,
     SyntaxKind::OrOr,
     SyntaxKind::Percent,
     SyntaxKind::Pipe,
     SyntaxKind::Plus,
     SyntaxKind::Question,
+    SyntaxKind::RBrace,
     SyntaxKind::RBracket,
     SyntaxKind::RParen,
     SyntaxKind::Semicolon,
@@ -333,23 +300,80 @@ static CHOICE_11_0_ALT_1_FIRST: &[SyntaxKind] = &[
     SyntaxKind::Star,
     SyntaxKind::StarStar,
     SyntaxKind::String,
-    SyntaxKind::SwitchKw,
     SyntaxKind::TrueKw,
     SyntaxKind::Whitespace,
 ];
 
-static CHOICE_11_0: &[Alternative] = &[
-    Alternative { item: Item::Node(10), first: CHOICE_11_0_ALT_0_FIRST },
-    Alternative { item: Item::TokenSet(2), first: CHOICE_11_0_ALT_1_FIRST },
+static ITEM_14_1_REPEAT_ITEMS: &[Item] = &[
+    Item::TokenSet(0),
+];
+
+static ITEM_22_3_OPTIONAL_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Comma,
+];
+
+static ITEM_22_3_OPTIONAL_ITEMS: &[Item] = &[
+    Item::Token(SyntaxKind::Comma),
+];
+
+static ITEM_22_1_REPEAT_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Bang,
+    SyntaxKind::Color,
+    SyntaxKind::Duration,
+    SyntaxKind::FalseKw,
+    SyntaxKind::Float,
+    SyntaxKind::FromKw,
+    SyntaxKind::Ident,
+    SyntaxKind::Int,
+    SyntaxKind::LBracket,
+    SyntaxKind::LParen,
+    SyntaxKind::Minus,
+    SyntaxKind::String,
+    SyntaxKind::TrueKw,
+];
+
+static ITEM_22_1_REPEAT_ITEMS: &[Item] = &[
+    Item::Expr(0),
+    Item::OptionalItems { items: ITEM_22_3_OPTIONAL_ITEMS, first: ITEM_22_3_OPTIONAL_FIRST },
+];
+
+static ITEM_24_3_OPTIONAL_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Comma,
+];
+
+static ITEM_24_3_OPTIONAL_ITEMS: &[Item] = &[
+    Item::Token(SyntaxKind::Comma),
+];
+
+static ITEM_24_1_REPEAT_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Bang,
+    SyntaxKind::Color,
+    SyntaxKind::Duration,
+    SyntaxKind::FalseKw,
+    SyntaxKind::Float,
+    SyntaxKind::FromKw,
+    SyntaxKind::Ident,
+    SyntaxKind::Int,
+    SyntaxKind::LBracket,
+    SyntaxKind::LParen,
+    SyntaxKind::Minus,
+    SyntaxKind::String,
+    SyntaxKind::TrueKw,
+];
+
+static ITEM_24_1_REPEAT_ITEMS: &[Item] = &[
+    Item::Expr(0),
+    Item::OptionalItems { items: ITEM_24_3_OPTIONAL_ITEMS, first: ITEM_24_3_OPTIONAL_FIRST },
 ];
 
 static RULE_0_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::FromKw,
     SyntaxKind::Ident,
     SyntaxKind::ImportKw,
 ];
 
 static RULE_0_ITEMS: &[Item] = &[
-    Item::RepeatRule { index: 1, stop: ITEM_0_0_STOP },
+    Item::RepeatItems { items: ITEM_0_0_REPEAT_ITEMS, first: ITEM_0_0_REPEAT_FIRST, stop: ITEM_0_0_STOP },
     Item::Node(2),
 ];
 
@@ -359,41 +383,39 @@ static RULE_1_FIRST: &[SyntaxKind] = &[
 
 static RULE_1_ITEMS: &[Item] = &[
     Item::Token(SyntaxKind::ImportKw),
-    Item::Node(3),
-    Item::Node(5),
+    Item::Node(13),
+    Item::Node(13),
     Item::Token(SyntaxKind::FromKw),
-    Item::Node(6),
+    Item::Node(14),
     Item::Token(SyntaxKind::Semicolon),
 ];
 
 static RULE_2_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::FromKw,
     SyntaxKind::Ident,
 ];
 
 static RULE_2_ITEMS: &[Item] = &[
+    Item::Node(13),
+    Item::Node(13),
     Item::Node(3),
-    Item::Node(5),
-    Item::Node(7),
 ];
 
 static RULE_3_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::Ident,
+    SyntaxKind::LBrace,
 ];
 
 static RULE_3_ITEMS: &[Item] = &[
-    Item::Token(SyntaxKind::Ident),
+    Item::Token(SyntaxKind::LBrace),
+    Item::RepeatItems { items: ITEM_3_1_REPEAT_ITEMS, first: ITEM_3_1_REPEAT_FIRST, stop: ITEM_3_1_STOP },
+    Item::Token(SyntaxKind::RBrace),
 ];
 
 static RULE_4_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::CaseKw,
-    SyntaxKind::DefaultKw,
-    SyntaxKind::ElseKw,
     SyntaxKind::FnKw,
-    SyntaxKind::ForKw,
+    SyntaxKind::FromKw,
     SyntaxKind::Ident,
-    SyntaxKind::IfKw,
     SyntaxKind::LetKw,
-    SyntaxKind::SwitchKw,
 ];
 
 static RULE_4_ITEMS: &[Item] = &[
@@ -401,135 +423,193 @@ static RULE_4_ITEMS: &[Item] = &[
 ];
 
 static RULE_5_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::Ident,
+    SyntaxKind::FnKw,
 ];
 
 static RULE_5_ITEMS: &[Item] = &[
-    Item::Token(SyntaxKind::Ident),
+    Item::Token(SyntaxKind::FnKw),
+    Item::Node(13),
+    Item::Node(6),
+    Item::OptionalItems { items: ITEM_5_3_OPTIONAL_ITEMS, first: ITEM_5_3_OPTIONAL_FIRST },
+    Item::Node(3),
 ];
 
 static RULE_6_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::Lt,
+    SyntaxKind::LParen,
 ];
 
 static RULE_6_ITEMS: &[Item] = &[
-    Item::Token(SyntaxKind::Lt),
-    Item::RepeatTokenSet { index: 0, stop: ITEM_6_1_STOP },
-    Item::Token(SyntaxKind::Gt),
+    Item::Token(SyntaxKind::LParen),
+    Item::RepeatItems { items: ITEM_6_1_REPEAT_ITEMS, first: ITEM_6_1_REPEAT_FIRST, stop: ITEM_6_1_STOP },
+    Item::Token(SyntaxKind::RParen),
 ];
 
 static RULE_7_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::LBrace,
+    SyntaxKind::FromKw,
+    SyntaxKind::Ident,
 ];
 
 static RULE_7_ITEMS: &[Item] = &[
-    Item::Token(SyntaxKind::LBrace),
-    Item::RepeatRule { index: 8, stop: ITEM_7_1_STOP },
-    Item::Token(SyntaxKind::RBrace),
+    Item::Node(13),
+    Item::OptionalItems { items: ITEM_7_1_OPTIONAL_ITEMS, first: ITEM_7_1_OPTIONAL_FIRST },
 ];
 
 static RULE_8_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::CaseKw,
-    SyntaxKind::DefaultKw,
-    SyntaxKind::ElseKw,
-    SyntaxKind::FnKw,
-    SyntaxKind::ForKw,
-    SyntaxKind::Ident,
-    SyntaxKind::IfKw,
-    SyntaxKind::LBrace,
     SyntaxKind::LetKw,
-    SyntaxKind::SwitchKw,
 ];
 
 static RULE_8_ITEMS: &[Item] = &[
-    Item::Choice(CHOICE_8_0),
+    Item::Token(SyntaxKind::LetKw),
+    Item::Node(13),
+    Item::OptionalItems { items: ITEM_8_2_OPTIONAL_ITEMS, first: ITEM_8_2_OPTIONAL_FIRST },
+    Item::OptionalItems { items: ITEM_8_3_OPTIONAL_ITEMS, first: ITEM_8_3_OPTIONAL_FIRST },
+    Item::Token(SyntaxKind::Semicolon),
 ];
 
 static RULE_9_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::CaseKw,
-    SyntaxKind::DefaultKw,
-    SyntaxKind::ElseKw,
-    SyntaxKind::FnKw,
-    SyntaxKind::ForKw,
+    SyntaxKind::FromKw,
     SyntaxKind::Ident,
-    SyntaxKind::IfKw,
-    SyntaxKind::LetKw,
-    SyntaxKind::SwitchKw,
 ];
 
 static RULE_9_ITEMS: &[Item] = &[
-    Item::Node(4),
-    Item::RepeatTokenSet { index: 1, stop: ITEM_9_1_STOP },
-    Item::Choice(CHOICE_9_2),
+    Item::Node(10),
+    Item::RepeatItems { items: ITEM_9_1_REPEAT_ITEMS, first: ITEM_9_1_REPEAT_FIRST, stop: ITEM_9_1_STOP },
+    Item::OptionalItems { items: ITEM_9_2_OPTIONAL_ITEMS, first: ITEM_9_2_OPTIONAL_FIRST },
+    Item::Choice(CHOICE_9_3),
 ];
 
 static RULE_10_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::LBrace,
+    SyntaxKind::FromKw,
+    SyntaxKind::Ident,
 ];
 
 static RULE_10_ITEMS: &[Item] = &[
-    Item::Token(SyntaxKind::LBrace),
-    Item::RepeatRule { index: 11, stop: ITEM_10_1_STOP },
-    Item::Token(SyntaxKind::RBrace),
+    Item::Node(13),
 ];
 
 static RULE_11_FIRST: &[SyntaxKind] = &[
-    SyntaxKind::Ampersand,
-    SyntaxKind::AndAnd,
-    SyntaxKind::Bang,
-    SyntaxKind::BangEq,
-    SyntaxKind::BlockComment,
-    SyntaxKind::Caret,
-    SyntaxKind::CaseKw,
-    SyntaxKind::Colon,
-    SyntaxKind::Color,
-    SyntaxKind::Comma,
-    SyntaxKind::DefaultKw,
-    SyntaxKind::Dot,
-    SyntaxKind::ElseKw,
     SyntaxKind::Eq,
-    SyntaxKind::EqEq,
-    SyntaxKind::FalseKw,
-    SyntaxKind::Float,
-    SyntaxKind::FnKw,
-    SyntaxKind::ForKw,
-    SyntaxKind::FromKw,
-    SyntaxKind::Ge,
-    SyntaxKind::Gt,
-    SyntaxKind::Ident,
-    SyntaxKind::IfKw,
-    SyntaxKind::ImportKw,
-    SyntaxKind::Int,
-    SyntaxKind::InvalidColor,
-    SyntaxKind::LBrace,
-    SyntaxKind::LBracket,
-    SyntaxKind::LParen,
-    SyntaxKind::Le,
-    SyntaxKind::LetKw,
-    SyntaxKind::LineComment,
-    SyntaxKind::Lt,
-    SyntaxKind::Minus,
-    SyntaxKind::OrOr,
-    SyntaxKind::Percent,
-    SyntaxKind::Pipe,
-    SyntaxKind::Plus,
-    SyntaxKind::Question,
-    SyntaxKind::RBracket,
-    SyntaxKind::RParen,
-    SyntaxKind::Semicolon,
-    SyntaxKind::Shl,
-    SyntaxKind::Shr,
-    SyntaxKind::Slash,
-    SyntaxKind::Star,
-    SyntaxKind::StarStar,
-    SyntaxKind::String,
-    SyntaxKind::SwitchKw,
-    SyntaxKind::TrueKw,
-    SyntaxKind::Whitespace,
 ];
 
 static RULE_11_ITEMS: &[Item] = &[
-    Item::Choice(CHOICE_11_0),
+    Item::Token(SyntaxKind::Eq),
+    Item::Expr(0),
+];
+
+static RULE_12_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::FromKw,
+    SyntaxKind::Ident,
+];
+
+static RULE_12_ITEMS: &[Item] = &[
+    Item::Node(13),
+];
+
+static RULE_13_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::FromKw,
+    SyntaxKind::Ident,
+];
+
+static RULE_13_ITEMS: &[Item] = &[
+    Item::Choice(CHOICE_13_0),
+];
+
+static RULE_14_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Lt,
+];
+
+static RULE_14_ITEMS: &[Item] = &[
+    Item::Token(SyntaxKind::Lt),
+    Item::RepeatItems { items: ITEM_14_1_REPEAT_ITEMS, first: ITEM_14_1_REPEAT_FIRST, stop: ITEM_14_1_STOP },
+    Item::Token(SyntaxKind::Gt),
+];
+
+static RULE_15_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::FromKw,
+    SyntaxKind::Ident,
+];
+
+static RULE_15_ITEMS: &[Item] = &[
+    Item::Node(13),
+];
+
+static RULE_16_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::String,
+];
+
+static RULE_16_ITEMS: &[Item] = &[
+    Item::Token(SyntaxKind::String),
+];
+
+static RULE_17_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Int,
+];
+
+static RULE_17_ITEMS: &[Item] = &[
+    Item::Token(SyntaxKind::Int),
+];
+
+static RULE_18_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Float,
+];
+
+static RULE_18_ITEMS: &[Item] = &[
+    Item::Token(SyntaxKind::Float),
+];
+
+static RULE_19_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::FalseKw,
+    SyntaxKind::TrueKw,
+];
+
+static RULE_19_ITEMS: &[Item] = &[
+    Item::Choice(CHOICE_19_0),
+];
+
+static RULE_20_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Color,
+];
+
+static RULE_20_ITEMS: &[Item] = &[
+    Item::Token(SyntaxKind::Color),
+];
+
+static RULE_21_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Duration,
+];
+
+static RULE_21_ITEMS: &[Item] = &[
+    Item::Token(SyntaxKind::Duration),
+];
+
+static RULE_22_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::LBracket,
+];
+
+static RULE_22_ITEMS: &[Item] = &[
+    Item::Token(SyntaxKind::LBracket),
+    Item::RepeatItems { items: ITEM_22_1_REPEAT_ITEMS, first: ITEM_22_1_REPEAT_FIRST, stop: ITEM_22_1_STOP },
+    Item::Token(SyntaxKind::RBracket),
+];
+
+static RULE_23_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::LParen,
+];
+
+static RULE_23_ITEMS: &[Item] = &[
+    Item::Token(SyntaxKind::LParen),
+    Item::Expr(0),
+    Item::Token(SyntaxKind::RParen),
+];
+
+static RULE_24_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::LParen,
+];
+
+static RULE_24_ITEMS: &[Item] = &[
+    Item::Token(SyntaxKind::LParen),
+    Item::RepeatItems { items: ITEM_24_1_REPEAT_ITEMS, first: ITEM_24_1_REPEAT_FIRST, stop: ITEM_24_1_STOP },
+    Item::Token(SyntaxKind::RParen),
 ];
 
 const ENTRY_RULE: usize = 0;
@@ -538,15 +618,28 @@ static RULES: &[Rule] = &[
     Rule { kind: SyntaxKind::SourceFile, items: RULE_0_ITEMS, first: RULE_0_FIRST },
     Rule { kind: SyntaxKind::ImportDecl, items: RULE_1_ITEMS, first: RULE_1_FIRST },
     Rule { kind: SyntaxKind::Document, items: RULE_2_ITEMS, first: RULE_2_FIRST },
-    Rule { kind: SyntaxKind::DocKind, items: RULE_3_ITEMS, first: RULE_3_FIRST },
-    Rule { kind: SyntaxKind::StmtHead, items: RULE_4_ITEMS, first: RULE_4_FIRST },
-    Rule { kind: SyntaxKind::Name, items: RULE_5_ITEMS, first: RULE_5_FIRST },
-    Rule { kind: SyntaxKind::PathLit, items: RULE_6_ITEMS, first: RULE_6_FIRST },
-    Rule { kind: SyntaxKind::DocumentBody, items: RULE_7_ITEMS, first: RULE_7_FIRST },
-    Rule { kind: SyntaxKind::BodyItem, items: RULE_8_ITEMS, first: RULE_8_FIRST },
-    Rule { kind: SyntaxKind::Stmt, items: RULE_9_ITEMS, first: RULE_9_FIRST },
-    Rule { kind: SyntaxKind::BalancedBlock, items: RULE_10_ITEMS, first: RULE_10_FIRST },
-    Rule { kind: SyntaxKind::BalancedItem, items: RULE_11_ITEMS, first: RULE_11_FIRST },
+    Rule { kind: SyntaxKind::Block, items: RULE_3_ITEMS, first: RULE_3_FIRST },
+    Rule { kind: SyntaxKind::Item, items: RULE_4_ITEMS, first: RULE_4_FIRST },
+    Rule { kind: SyntaxKind::FnDecl, items: RULE_5_ITEMS, first: RULE_5_FIRST },
+    Rule { kind: SyntaxKind::ParamList, items: RULE_6_ITEMS, first: RULE_6_FIRST },
+    Rule { kind: SyntaxKind::Param, items: RULE_7_ITEMS, first: RULE_7_FIRST },
+    Rule { kind: SyntaxKind::LetStmt, items: RULE_8_ITEMS, first: RULE_8_FIRST },
+    Rule { kind: SyntaxKind::Command, items: RULE_9_ITEMS, first: RULE_9_FIRST },
+    Rule { kind: SyntaxKind::CommandHead, items: RULE_10_ITEMS, first: RULE_10_FIRST },
+    Rule { kind: SyntaxKind::CommandInitializer, items: RULE_11_ITEMS, first: RULE_11_FIRST },
+    Rule { kind: SyntaxKind::TypeRef, items: RULE_12_ITEMS, first: RULE_12_FIRST },
+    Rule { kind: SyntaxKind::Name, items: RULE_13_ITEMS, first: RULE_13_FIRST },
+    Rule { kind: SyntaxKind::PathLit, items: RULE_14_ITEMS, first: RULE_14_FIRST },
+    Rule { kind: SyntaxKind::NameRef, items: RULE_15_ITEMS, first: RULE_15_FIRST },
+    Rule { kind: SyntaxKind::StringLit, items: RULE_16_ITEMS, first: RULE_16_FIRST },
+    Rule { kind: SyntaxKind::IntLit, items: RULE_17_ITEMS, first: RULE_17_FIRST },
+    Rule { kind: SyntaxKind::FloatLit, items: RULE_18_ITEMS, first: RULE_18_FIRST },
+    Rule { kind: SyntaxKind::BoolLit, items: RULE_19_ITEMS, first: RULE_19_FIRST },
+    Rule { kind: SyntaxKind::ColorLit, items: RULE_20_ITEMS, first: RULE_20_FIRST },
+    Rule { kind: SyntaxKind::DurationLit, items: RULE_21_ITEMS, first: RULE_21_FIRST },
+    Rule { kind: SyntaxKind::ListExpr, items: RULE_22_ITEMS, first: RULE_22_FIRST },
+    Rule { kind: SyntaxKind::ParenExpr, items: RULE_23_ITEMS, first: RULE_23_FIRST },
+    Rule { kind: SyntaxKind::CallArgList, items: RULE_24_ITEMS, first: RULE_24_FIRST },
 ];
 
 const PREFIX_BINDING_POWER: u8 = 200;
@@ -566,7 +659,98 @@ struct InfixOp { token: SyntaxKind, node: SyntaxKind, left_bp: u8, right_bp: u8 
 #[derive(Clone, Copy)]
 struct PostfixOp { node: SyntaxKind, items: &'static [Item], first: &'static [SyntaxKind] }
 
+static EXPR_0_ATOM_0_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::FromKw,
+    SyntaxKind::Ident,
+];
+
+static EXPR_0_ATOM_1_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::String,
+];
+
+static EXPR_0_ATOM_2_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Int,
+];
+
+static EXPR_0_ATOM_3_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Float,
+];
+
+static EXPR_0_ATOM_4_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::FalseKw,
+    SyntaxKind::TrueKw,
+];
+
+static EXPR_0_ATOM_5_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Color,
+];
+
+static EXPR_0_ATOM_6_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Duration,
+];
+
+static EXPR_0_ATOM_7_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::LBracket,
+];
+
+static EXPR_0_ATOM_8_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::LParen,
+];
+
+static EXPR_0_POSTFIX_0_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::LParen,
+];
+
+static EXPR_0_POSTFIX_0_ITEMS: &[Item] = &[
+    Item::Node(24),
+];
+
+static EXPR_0_ATOMS: &[ExprAtom] = &[
+    ExprAtom { item: Item::Node(15), first: EXPR_0_ATOM_0_FIRST },
+    ExprAtom { item: Item::Node(16), first: EXPR_0_ATOM_1_FIRST },
+    ExprAtom { item: Item::Node(17), first: EXPR_0_ATOM_2_FIRST },
+    ExprAtom { item: Item::Node(18), first: EXPR_0_ATOM_3_FIRST },
+    ExprAtom { item: Item::Node(19), first: EXPR_0_ATOM_4_FIRST },
+    ExprAtom { item: Item::Node(20), first: EXPR_0_ATOM_5_FIRST },
+    ExprAtom { item: Item::Node(21), first: EXPR_0_ATOM_6_FIRST },
+    ExprAtom { item: Item::Node(22), first: EXPR_0_ATOM_7_FIRST },
+    ExprAtom { item: Item::Node(23), first: EXPR_0_ATOM_8_FIRST },
+];
+
+static EXPR_0_PREFIX: &[PrefixOp] = &[
+    PrefixOp { token: SyntaxKind::Minus, node: SyntaxKind::PrefixExpr },
+    PrefixOp { token: SyntaxKind::Bang, node: SyntaxKind::PrefixExpr },
+];
+
+static EXPR_0_INFIX: &[InfixOp] = &[
+    InfixOp { token: SyntaxKind::OrOr, node: SyntaxKind::BinaryExpr, left_bp: 10, right_bp: 11 },
+    InfixOp { token: SyntaxKind::AndAnd, node: SyntaxKind::BinaryExpr, left_bp: 20, right_bp: 21 },
+    InfixOp { token: SyntaxKind::Pipe, node: SyntaxKind::BinaryExpr, left_bp: 30, right_bp: 31 },
+    InfixOp { token: SyntaxKind::Caret, node: SyntaxKind::BinaryExpr, left_bp: 40, right_bp: 41 },
+    InfixOp { token: SyntaxKind::Ampersand, node: SyntaxKind::BinaryExpr, left_bp: 50, right_bp: 51 },
+    InfixOp { token: SyntaxKind::EqEq, node: SyntaxKind::BinaryExpr, left_bp: 60, right_bp: 61 },
+    InfixOp { token: SyntaxKind::BangEq, node: SyntaxKind::BinaryExpr, left_bp: 60, right_bp: 61 },
+    InfixOp { token: SyntaxKind::Lt, node: SyntaxKind::BinaryExpr, left_bp: 70, right_bp: 71 },
+    InfixOp { token: SyntaxKind::Le, node: SyntaxKind::BinaryExpr, left_bp: 70, right_bp: 71 },
+    InfixOp { token: SyntaxKind::Gt, node: SyntaxKind::BinaryExpr, left_bp: 70, right_bp: 71 },
+    InfixOp { token: SyntaxKind::Ge, node: SyntaxKind::BinaryExpr, left_bp: 70, right_bp: 71 },
+    InfixOp { token: SyntaxKind::DotDot, node: SyntaxKind::BinaryExpr, left_bp: 80, right_bp: 81 },
+    InfixOp { token: SyntaxKind::Shl, node: SyntaxKind::BinaryExpr, left_bp: 90, right_bp: 91 },
+    InfixOp { token: SyntaxKind::Shr, node: SyntaxKind::BinaryExpr, left_bp: 90, right_bp: 91 },
+    InfixOp { token: SyntaxKind::Plus, node: SyntaxKind::BinaryExpr, left_bp: 100, right_bp: 101 },
+    InfixOp { token: SyntaxKind::Minus, node: SyntaxKind::BinaryExpr, left_bp: 100, right_bp: 101 },
+    InfixOp { token: SyntaxKind::Star, node: SyntaxKind::BinaryExpr, left_bp: 110, right_bp: 111 },
+    InfixOp { token: SyntaxKind::Slash, node: SyntaxKind::BinaryExpr, left_bp: 110, right_bp: 111 },
+    InfixOp { token: SyntaxKind::Percent, node: SyntaxKind::BinaryExpr, left_bp: 110, right_bp: 111 },
+    InfixOp { token: SyntaxKind::StarStar, node: SyntaxKind::BinaryExpr, left_bp: 120, right_bp: 120 },
+];
+
+static EXPR_0_POSTFIX: &[PostfixOp] = &[
+    PostfixOp { node: SyntaxKind::CallExpr, items: EXPR_0_POSTFIX_0_ITEMS, first: EXPR_0_POSTFIX_0_FIRST },
+];
+
 static EXPRESSIONS: &[Expression] = &[
+    Expression { root: SyntaxKind::Expr, atoms: EXPR_0_ATOMS, prefix: EXPR_0_PREFIX, infix: EXPR_0_INFIX, postfix: EXPR_0_POSTFIX },
 ];
 
 #[derive(Clone, Copy)]
@@ -589,6 +773,8 @@ enum Item {
     Node(usize),
     RepeatRule { index: usize, stop: &'static [SyntaxKind] },
     RepeatTokenSet { index: usize, stop: &'static [SyntaxKind] },
+    RepeatItems { items: &'static [Item], first: &'static [SyntaxKind], stop: &'static [SyntaxKind] },
+    OptionalItems { items: &'static [Item], first: &'static [SyntaxKind] },
     Choice(&'static [Alternative]),
     TokenSet(usize),
     Expr(usize),
@@ -664,6 +850,19 @@ impl Parser {
                     }
                 }
             }
+            Item::RepeatItems { items, first, stop } => {
+                while self.peek().is_some_and(|kind| contains(first, kind)) {
+                    self.parse_items(items);
+                    if self.peek().is_some_and(|kind| contains(stop, kind)) {
+                        break;
+                    }
+                }
+            }
+            Item::OptionalItems { items, first } => {
+                if self.peek().is_some_and(|kind| contains(first, kind)) {
+                    self.parse_items(items);
+                }
+            }
             Item::Choice(alternatives) => {
                 let Some(kind) = self.peek() else {
                     self.error_here(UNEXPECTED_EOF_DIAGNOSTIC.message());
@@ -699,6 +898,7 @@ impl Parser {
     fn parse_expr(&mut self, expr_index: usize, min_bp: u8) {
         let expr = EXPRESSIONS[expr_index];
         self.builder.start_node(expr.root.into());
+        let lhs_checkpoint = self.builder.checkpoint();
 
         if let Some(prefix) = expr.prefix.iter().find(|prefix| self.peek() == Some(prefix.token)) {
             self.builder.start_node(prefix.node.into());
@@ -715,7 +915,7 @@ impl Parser {
 
         loop {
             if let Some(postfix) = expr.postfix.iter().find(|postfix| self.peek().is_some_and(|kind| contains(postfix.first, kind))) {
-                self.builder.start_node(postfix.node.into());
+                self.builder.start_node_at(lhs_checkpoint, postfix.node.into());
                 self.parse_items(postfix.items);
                 self.builder.finish_node();
                 continue;
@@ -723,7 +923,7 @@ impl Parser {
             let Some(op) = expr.infix.iter().find(|op| self.peek() == Some(op.token) && op.left_bp >= min_bp) else {
                 break;
             };
-            self.builder.start_node(op.node.into());
+            self.builder.start_node_at(lhs_checkpoint, op.node.into());
             self.bump();
             self.parse_expr(expr_index, op.right_bp);
             self.builder.finish_node();
