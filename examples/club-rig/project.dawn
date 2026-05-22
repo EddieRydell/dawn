@@ -1,0 +1,21 @@
+import display MainDisplay from <displays/main.display.dawn>;
+import hardware MainRig from <hardware/main.hardware.dawn>;
+import layout StageLayout from <layouts/stage.layout.dawn>;
+import patch HousePatch from <patches/house.patch.dawn>;
+import sequence OpeningLook from <sequences/opening.sequence.dawn>;
+
+project ClubRig {
+  version "0.1.0";
+  label "Club Rig";
+  description "Small Dawn sample project for syntax iteration.";
+
+  display MainDisplay;
+  hardware MainRig;
+  layout StageLayout;
+  patch HousePatch;
+
+  sequence OpeningLook {
+    duration 45s;
+    frame_rate 60;
+  }
+}

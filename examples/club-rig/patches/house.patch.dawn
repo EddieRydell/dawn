@@ -1,0 +1,13 @@
+patch HousePatch {
+  route WallBars {
+    target WallController;
+    universe 1;
+    start 1;
+  }
+
+  route Movers {
+    target FloorController;
+    universe 11;
+    start 1;
+  }
+}

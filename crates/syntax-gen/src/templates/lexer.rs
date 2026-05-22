@@ -5,12 +5,12 @@ pub fn lex(source: &str) -> (Vec<LexToken>, Vec<Diagnostic>) {
 
     while cursor < source.len() {
         let rest = &source[cursor..];
-        let Some((rule, len)) = best_match(rest) else {
+        let Some((rule, len, force_diagnostic)) = best_match(rest) else {
             let len = rest.chars().next().map(char::len_utf8).unwrap_or(1);
             diagnostics.push(Diagnostic::new(
-                DiagnosticKind::InvalidToken,
+                INVALID_TOKEN_DIAGNOSTIC,
                 cursor..cursor + len,
-                DiagnosticKind::InvalidToken.message(),
+                INVALID_TOKEN_DIAGNOSTIC.message(),
             ));
             cursor += len;
             continue;
@@ -18,7 +18,7 @@ pub fn lex(source: &str) -> (Vec<LexToken>, Vec<Diagnostic>) {
 
         let start = cursor;
         cursor += len;
-        if let Some(kind) = rule.diagnostic {
+        if let Some(kind) = rule.diagnostic.filter(|_| force_diagnostic) {
             diagnostics.push(Diagnostic::new(kind, start..cursor, kind.message()));
         }
         if !rule.skip {
@@ -33,35 +33,35 @@ pub fn lex(source: &str) -> (Vec<LexToken>, Vec<Diagnostic>) {
     (tokens, diagnostics)
 }
 
-fn best_match(text: &str) -> Option<(Rule, usize)> {
+fn best_match(text: &str) -> Option<(Rule, usize, bool)> {
     let regexes = regexes();
     let mut best = None;
     for rule in RULES {
-        let len = match rule.matcher {
+        let candidate = match rule.matcher {
             Matcher::Regex(index) => regexes[index]
                 .find(text)
                 .filter(|matched| matched.start() == 0)
-                .map(|matched| matched.end()),
+                .map(|matched| (matched.end(), rule.diagnostic.is_some())),
             Matcher::Delimited { start, end } => {
                 if text.starts_with(start) {
-                    Some(
-                        text[start.len()..]
-                            .find(end)
-                            .map(|offset| start.len() + offset + end.len())
-                            .unwrap_or(text.len()),
-                    )
+                    Some(match text[start.len()..].find(end) {
+                        Some(offset) => (start.len() + offset + end.len(), false),
+                        None => (text.len(), rule.diagnostic.is_some()),
+                    })
                 } else {
                     None
                 }
             }
-            Matcher::Literal(literal) => text.starts_with(literal).then_some(literal.len()),
+            Matcher::Literal(literal) => text
+                .starts_with(literal)
+                .then_some((literal.len(), rule.diagnostic.is_some())),
         };
 
-        let Some(len) = len.filter(|len| *len > 0) else {
+        let Some((len, diagnostic)) = candidate.filter(|(len, _)| *len > 0) else {
             continue;
         };
-        if best.is_none_or(|(_, best_len)| len > best_len) {
-            best = Some((*rule, len));
+        if best.is_none_or(|(_, best_len, _)| len > best_len) {
+            best = Some((*rule, len, diagnostic));
         }
     }
     best

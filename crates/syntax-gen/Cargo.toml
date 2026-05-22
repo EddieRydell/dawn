@@ -1,5 +1,5 @@
 [package]
-name = "dawn-syntax-gen"
+name = "syntax-gen"
 edition.workspace = true
 version.workspace = true
 
@@ -9,3 +9,6 @@ clap.workspace = true
 ron.workspace = true
 regex.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

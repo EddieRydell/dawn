@@ -1,0 +1,13 @@
+layout StageLayout {
+  spatial units meters;
+
+  fixture bar_01 at [-3.0, 0.0, 2.5] for PixelBar;
+  fixture bar_02 at [-1.0, 0.0, 2.5] for PixelBar;
+  fixture bar_03 at [1.0, 0.0, 2.5] for PixelBar;
+  fixture bar_04 at [3.0, 0.0, 2.5] for PixelBar;
+
+  fixture spot_01 at [-3.5, -1.2, 3.0] for Spot;
+  fixture spot_02 at [-1.2, -1.2, 3.0] for Spot;
+  fixture spot_03 at [1.2, -1.2, 3.0] for Spot;
+  fixture spot_04 at [3.5, -1.2, 3.0] for Spot;
+}

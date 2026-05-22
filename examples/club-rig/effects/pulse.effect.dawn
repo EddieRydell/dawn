@@ -1,0 +1,10 @@
+effect Pulse {
+  param base color = #2244ff;
+  param accent color = #ffcc66;
+  param speed float = 0.75;
+
+  fn sample(t float, fixture Fixture) {
+    let phase = (sin(t * speed) + 1.0) / 2.0;
+    color mix(base, accent, phase);
+  }
+}
