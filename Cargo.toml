@@ -1,11 +1,7 @@
 [workspace]
 members = [
-  "crates/dawn-core",
-  "crates/dawn-grammar-codegen",
-  "crates/dawn-lang",
-  "crates/dawn-project",
-  "crates/dawn-cli",
-  "apps/desktop/src-tauri",
+  "crates/dawn-syntax",
+  "crates/dawn-syntax-gen",
 ]
 resolver = "2"
 
@@ -16,13 +12,12 @@ version = "0.1.0"
 [workspace.dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-dawn-core = { path = "crates/dawn-core" }
-dawn-lang = { path = "crates/dawn-lang" }
-dawn-project = { path = "crates/dawn-project" }
 indexmap = { version = "2", features = ["serde"] }
 json-strip-comments = "1"
+lalrpop-util = { version = "0.23.1", features = ["lexer", "unicode"] }
 log = "0.4"
 logos = "0.15"
+rowan = "0.16"
 ron = "0.8"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }

@@ -1,0 +1,12 @@
+[package]
+name = "dawn-syntax-gen"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+ron.workspace = true
+serde.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,82 @@
+(
+    root: "SourceFile",
+
+    nodes: [
+        (
+            name: "SourceFile",
+            syntax: "SourceFile",
+            accessors: [
+                (name: "imports", kind: "children", node: "ImportDecl"),
+                (name: "document", kind: "child", node: "Document"),
+            ],
+        ),
+        (
+            name: "ImportDecl",
+            syntax: "ImportDecl",
+            accessors: [
+                (name: "kind", kind: "child", node: "DocKind"),
+                (name: "name", kind: "child", node: "Name"),
+                (name: "path", kind: "child", node: "PathLit"),
+            ],
+        ),
+        (
+            name: "Document",
+            syntax: "Document",
+            accessors: [
+                (name: "kind", kind: "child", node: "DocKind"),
+                (name: "name", kind: "child", node: "Name"),
+                (name: "block", kind: "child", node: "BalancedBlock"),
+            ],
+        ),
+        (
+            name: "DocKind",
+            syntax: "DocKind",
+            accessors: [
+                (name: "token", kind: "first_token"),
+            ],
+        ),
+        (
+            name: "Name",
+            syntax: "Name",
+            accessors: [
+                (name: "ident", kind: "token", token: "Ident"),
+            ],
+        ),
+        (
+            name: "PathLit",
+            syntax: "PathLit",
+            accessors: [
+                (name: "raw_text", kind: "text_between", start: "Lt", end: "Gt"),
+            ],
+        ),
+        (
+            name: "BalancedBlock",
+            syntax: "BalancedBlock",
+            accessors: [
+                (name: "items", kind: "children", node: "BalancedItem"),
+            ],
+        ),
+        (
+            name: "BalancedItem",
+            syntax: "BalancedItem",
+            accessors: [],
+        ),
+    ],
+
+    enums: [
+        (
+            name: "DocKindValue",
+            from_node: "DocKind",
+            variants: [
+                ("Project", "ProjectKw"),
+                ("Display", "DisplayKw"),
+                ("Hardware", "HardwareKw"),
+                ("Layout", "LayoutKw"),
+                ("Patch", "PatchKw"),
+                ("Sequence", "SequenceKw"),
+                ("Curve", "CurveKw"),
+                ("Effect", "EffectKw"),
+            ],
+        ),
+    ],
+)

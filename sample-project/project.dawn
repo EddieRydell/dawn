@@ -1,9 +1,0 @@
-import display Main from <displays/Main.display.dawn>;
-import sequence Demo from <sequences/Demo.sequence.dawn>;
-
-project SampleShow {
-  version 1;
-
-  display Main;
-  sequence Demo;
-}

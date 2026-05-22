@@ -1,9 +1,0 @@
-curve SunsetPalette {
-  version 1;
-  range color;
-
-  key 0.0 #1b1b5f linear;
-  key 0.35 #40c4ff ease_in_out;
-  key 0.7 #ff4fd8 ease_in_out;
-  key 1.0 #ffd166 linear;
-}
