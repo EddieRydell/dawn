@@ -914,9 +914,12 @@ fn gen_mod(header: &str) -> String {
 
 fn gen_diagnostic(header: &str) -> String {
     format!(
-        r#"{header}#[derive(Debug, Clone, PartialEq, Eq)]
+        r#"{header}use std::ops::Range;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LowerDiagnostic {{
     pub kind: LowerDiagnosticKind,
+    pub range: Option<Range<usize>>,
 }}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -926,17 +929,19 @@ pub enum LowerDiagnosticKind {{
 }}
 
 impl LowerDiagnostic {{
-    pub fn missing_required(parent: &'static str, field: &'static str) -> Self {{
+    pub fn missing_required(parent: &'static str, field: &'static str, range: Range<usize>) -> Self {{
         Self {{
             kind: LowerDiagnosticKind::MissingRequiredSyntax {{ parent, field }},
+            range: Some(range),
         }}
     }}
 
-    pub fn unknown_operator(operator: impl Into<String>) -> Self {{
+    pub fn unknown_operator(operator: impl Into<String>, range: Range<usize>) -> Self {{
         Self {{
             kind: LowerDiagnosticKind::UnknownOperator {{
                 operator: operator.into(),
             }},
+            range: Some(range),
         }}
     }}
 
@@ -1008,6 +1013,8 @@ fn gen_lower(header: &str, grammar: &Grammar, semantics: &SemanticsSpec) -> Stri
         r#"{header}use dawn_syntax::ast;
 use dawn_syntax::ast::AstNode;
 use dawn_syntax::SyntaxKind;
+use dawn_syntax::SyntaxNode;
+use dawn_syntax::SyntaxToken;
 
 use super::diagnostic::LowerDiagnostic;
 use super::hir;
@@ -1061,10 +1068,20 @@ impl LowerCtx {{
     gen_operator_lower(&mut out, "prefix", &prefix_ty, &semantics.operators.prefix);
     gen_operator_lower(&mut out, "binary", &binary_ty, &semantics.operators.binary);
     out.push_str(
-        r#"    fn missing(&mut self, parent: &'static str, field: &'static str) {
+        r#"    fn missing(&mut self, parent: &'static str, field: &'static str, range: std::ops::Range<usize>) {
         self.diagnostics
-            .push(LowerDiagnostic::missing_required(parent, field));
+            .push(LowerDiagnostic::missing_required(parent, field, range));
     }
+}
+
+fn node_range(node: &SyntaxNode) -> std::ops::Range<usize> {
+    let range = node.text_range();
+    u32::from(range.start()) as usize..u32::from(range.end()) as usize
+}
+
+fn token_range(token: &SyntaxToken) -> std::ops::Range<usize> {
+    let range = token.text_range();
+    u32::from(range.start()) as usize..u32::from(range.end()) as usize
 }
 "#,
     );
@@ -1161,7 +1178,7 @@ fn lower_field_expr(rule: &LowerRule, plan: &FieldPlan, shape: &AccessorShape) -
             } else {
                 let (prefix, final_part) = plan.accessor.split_at(plan.accessor.len() - 1);
                 format!(
-                    "{{ let Some(value) = {prefix} else {{ self.missing(\"{parent}\", \"{field}\"); return None; }}; value.{final_part}().into_iter().filter_map(|item| self.{item_method}(item)).collect() }}",
+                    "{{ let Some(value) = {prefix} else {{ self.missing(\"{parent}\", \"{field}\", node_range(syntax.syntax())); return None; }}; value.{final_part}().into_iter().filter_map(|item| self.{item_method}(item)).collect() }}",
                     prefix = access_expr("syntax", prefix, true, false),
                     parent = rule.syntax,
                     field = plan.name,
@@ -1198,13 +1215,13 @@ fn lower_field_expr(rule: &LowerRule, plan: &FieldPlan, shape: &AccessorShape) -
 fn scalar_expr(rule: &LowerRule, plan: &FieldPlan, scalar: &str) -> String {
     match scalar {
         "text" | "raw_text" => format!(
-            "{{ let Some(value) = {access} else {{ self.missing(\"{parent}\", \"{field}\"); return None; }}; value }}",
+            "{{ let Some(value) = {access} else {{ self.missing(\"{parent}\", \"{field}\", node_range(syntax.syntax())); return None; }}; value }}",
             access = access_expr("syntax", &plan.accessor, true, false),
             parent = rule.syntax,
             field = plan.name
         ),
         "bool" => format!(
-            "{{ let Some(value) = {access} else {{ self.missing(\"{parent}\", \"{field}\"); return None; }}; value == \"true\" }}",
+            "{{ let Some(value) = {access} else {{ self.missing(\"{parent}\", \"{field}\", node_range(syntax.syntax())); return None; }}; value == \"true\" }}",
             access = access_expr("syntax", &plan.accessor, true, false),
             parent = rule.syntax,
             field = plan.name
@@ -1217,7 +1234,7 @@ fn scalar_expr(rule: &LowerRule, plan: &FieldPlan, scalar: &str) -> String {
 
 fn operator_field_expr(rule: &LowerRule, plan: &FieldPlan, method: &str) -> String {
     format!(
-        "{{ let Some(op_token) = {access} else {{ self.missing(\"{parent}\", \"{field}\"); return None; }}; self.{method}(op_token.kind(), op_token.text())? }}",
+        "{{ let Some(op_token) = {access} else {{ self.missing(\"{parent}\", \"{field}\", node_range(syntax.syntax())); return None; }}; self.{method}(op_token.kind(), op_token.text(), token_range(&op_token))? }}",
         access = access_expr("syntax", &plan.accessor, true, false),
         parent = rule.syntax,
         field = plan.name
@@ -1226,7 +1243,7 @@ fn operator_field_expr(rule: &LowerRule, plan: &FieldPlan, method: &str) -> Stri
 
 fn required_lower_expr(rule: &LowerRule, plan: &FieldPlan, method: &str) -> String {
     format!(
-        "{{ let Some(value) = {access} else {{ self.missing(\"{parent}\", \"{field}\"); return None; }}; self.{method}(value)? }}",
+        "{{ let Some(value) = {access} else {{ self.missing(\"{parent}\", \"{field}\", node_range(syntax.syntax())); return None; }}; self.{method}(value)? }}",
         access = access_expr("syntax", &plan.accessor, true, false),
         parent = rule.syntax,
         field = plan.name
@@ -1319,7 +1336,7 @@ fn wrapper_chain(root: &str, target: &str, hir: &BTreeMap<&str, &HirDecl>) -> Ve
 
 fn gen_operator_lower(out: &mut String, label: &str, hir_enum: &str, mappings: &[OperatorMapping]) {
     out.push_str(&format!(
-        "    fn {label}_op(&mut self, kind: SyntaxKind, text: &str) -> Option<hir::{hir_enum}> {{\n"
+        "    fn {label}_op(&mut self, kind: SyntaxKind, text: &str, range: std::ops::Range<usize>) -> Option<hir::{hir_enum}> {{\n"
     ));
     out.push_str("        match kind {\n");
     for mapping in mappings {
@@ -1330,7 +1347,7 @@ fn gen_operator_lower(out: &mut String, label: &str, hir_enum: &str, mappings: &
     }
     out.push_str(
         r#"            _ => {
-                self.diagnostics.push(LowerDiagnostic::unknown_operator(text));
+                self.diagnostics.push(LowerDiagnostic::unknown_operator(text, range));
                 None
             }
         }

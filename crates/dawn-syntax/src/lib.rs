@@ -14,7 +14,7 @@ pub type SyntaxNode = rowan::SyntaxNode<DawnLanguage>;
 pub type SyntaxToken = rowan::SyntaxToken<DawnLanguage>;
 pub type SyntaxElement = rowan::SyntaxElement<DawnLanguage>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parse {
     green: GreenNode,
     diagnostics: Vec<Diagnostic>,

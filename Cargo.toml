@@ -2,6 +2,7 @@
 members = [
   "crates/dawn-syntax",
   "crates/dawn-semantics",
+  "crates/dawn-analysis",
   "crates/syntax-gen",
 ]
 resolver = "2"
@@ -21,6 +22,7 @@ logos = "0.15"
 rowan = "0.16"
 ron = "0.8"
 regex = "1"
+salsa = "0.26.2"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

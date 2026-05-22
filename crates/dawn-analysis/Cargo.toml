@@ -1,0 +1,9 @@
+[package]
+name = "dawn-analysis"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+dawn-semantics = { path = "../dawn-semantics" }
+dawn-syntax = { path = "../dawn-syntax" }
+salsa.workspace = true
