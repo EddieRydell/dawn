@@ -6,6 +6,801 @@ use crate::diagnostic::{Diagnostic, DiagnosticKind};
 use crate::generated::kind::SyntaxKind;
 use crate::generated::lexer::LexToken;
 
+static TOKEN_SET_0: &[SyntaxKind] = &[
+    SyntaxKind::Ampersand,
+    SyntaxKind::AndAnd,
+    SyntaxKind::AtKw,
+    SyntaxKind::AudioKw,
+    SyntaxKind::Bang,
+    SyntaxKind::BangEq,
+    SyntaxKind::BoolKw,
+    SyntaxKind::Caret,
+    SyntaxKind::CaseKw,
+    SyntaxKind::Colon,
+    SyntaxKind::Color,
+    SyntaxKind::ColorKw,
+    SyntaxKind::Comma,
+    SyntaxKind::ControllerKw,
+    SyntaxKind::CurveKw,
+    SyntaxKind::DefaultKw,
+    SyntaxKind::DescriptionKw,
+    SyntaxKind::DisplayKw,
+    SyntaxKind::Dot,
+    SyntaxKind::DurationKw,
+    SyntaxKind::EffectKw,
+    SyntaxKind::ElseKw,
+    SyntaxKind::EnumKw,
+    SyntaxKind::Eq,
+    SyntaxKind::EqEq,
+    SyntaxKind::EventKw,
+    SyntaxKind::FalseKw,
+    SyntaxKind::FilterKw,
+    SyntaxKind::FixtureKw,
+    SyntaxKind::FlagsKw,
+    SyntaxKind::Float,
+    SyntaxKind::FloatKw,
+    SyntaxKind::FnKw,
+    SyntaxKind::ForKw,
+    SyntaxKind::FrameRateKw,
+    SyntaxKind::FromKw,
+    SyntaxKind::Ge,
+    SyntaxKind::GradientKw,
+    SyntaxKind::GroupKw,
+    SyntaxKind::HardwareKw,
+    SyntaxKind::Ident,
+    SyntaxKind::IfKw,
+    SyntaxKind::ImportKw,
+    SyntaxKind::InputKw,
+    SyntaxKind::Int,
+    SyntaxKind::IntKw,
+    SyntaxKind::KeyKw,
+    SyntaxKind::LBracket,
+    SyntaxKind::LParen,
+    SyntaxKind::LabelKw,
+    SyntaxKind::LayoutKw,
+    SyntaxKind::Le,
+    SyntaxKind::LetKw,
+    SyntaxKind::MembersKw,
+    SyntaxKind::MillisecondsKw,
+    SyntaxKind::Minus,
+    SyntaxKind::MinutesKw,
+    SyntaxKind::OrOr,
+    SyntaxKind::OutputKw,
+    SyntaxKind::ParamKw,
+    SyntaxKind::PatchKw,
+    SyntaxKind::PathKw,
+    SyntaxKind::Percent,
+    SyntaxKind::Pipe,
+    SyntaxKind::Plus,
+    SyntaxKind::ProjectKw,
+    SyntaxKind::Question,
+    SyntaxKind::RBracket,
+    SyntaxKind::RParen,
+    SyntaxKind::RangeKw,
+    SyntaxKind::RouteKw,
+    SyntaxKind::SecondsKw,
+    SyntaxKind::Semicolon,
+    SyntaxKind::SequenceKw,
+    SyntaxKind::Slash,
+    SyntaxKind::SpatialKw,
+    SyntaxKind::Star,
+    SyntaxKind::StarStar,
+    SyntaxKind::String,
+    SyntaxKind::SwitchKw,
+    SyntaxKind::TargetKw,
+    SyntaxKind::TrueKw,
+    SyntaxKind::UniverseKw,
+    SyntaxKind::VersionKw,
+    SyntaxKind::VirtualStringKw,
+];
+
+static TOKEN_SET_1: &[SyntaxKind] = &[
+    SyntaxKind::Ampersand,
+    SyntaxKind::AndAnd,
+    SyntaxKind::AtKw,
+    SyntaxKind::AudioKw,
+    SyntaxKind::Bang,
+    SyntaxKind::BangEq,
+    SyntaxKind::BlockComment,
+    SyntaxKind::BoolKw,
+    SyntaxKind::Caret,
+    SyntaxKind::CaseKw,
+    SyntaxKind::Colon,
+    SyntaxKind::Color,
+    SyntaxKind::ColorKw,
+    SyntaxKind::Comma,
+    SyntaxKind::ControllerKw,
+    SyntaxKind::CurveKw,
+    SyntaxKind::DefaultKw,
+    SyntaxKind::DescriptionKw,
+    SyntaxKind::DisplayKw,
+    SyntaxKind::Dot,
+    SyntaxKind::DurationKw,
+    SyntaxKind::EffectKw,
+    SyntaxKind::ElseKw,
+    SyntaxKind::EnumKw,
+    SyntaxKind::Eq,
+    SyntaxKind::EqEq,
+    SyntaxKind::EventKw,
+    SyntaxKind::FalseKw,
+    SyntaxKind::FilterKw,
+    SyntaxKind::FixtureKw,
+    SyntaxKind::FlagsKw,
+    SyntaxKind::Float,
+    SyntaxKind::FloatKw,
+    SyntaxKind::FnKw,
+    SyntaxKind::ForKw,
+    SyntaxKind::FrameRateKw,
+    SyntaxKind::FromKw,
+    SyntaxKind::Ge,
+    SyntaxKind::GradientKw,
+    SyntaxKind::GroupKw,
+    SyntaxKind::Gt,
+    SyntaxKind::HardwareKw,
+    SyntaxKind::Ident,
+    SyntaxKind::IfKw,
+    SyntaxKind::ImportKw,
+    SyntaxKind::InputKw,
+    SyntaxKind::Int,
+    SyntaxKind::IntKw,
+    SyntaxKind::InvalidColor,
+    SyntaxKind::KeyKw,
+    SyntaxKind::LBracket,
+    SyntaxKind::LParen,
+    SyntaxKind::LabelKw,
+    SyntaxKind::LayoutKw,
+    SyntaxKind::Le,
+    SyntaxKind::LetKw,
+    SyntaxKind::LineComment,
+    SyntaxKind::Lt,
+    SyntaxKind::MembersKw,
+    SyntaxKind::MillisecondsKw,
+    SyntaxKind::Minus,
+    SyntaxKind::MinutesKw,
+    SyntaxKind::OrOr,
+    SyntaxKind::OutputKw,
+    SyntaxKind::ParamKw,
+    SyntaxKind::PatchKw,
+    SyntaxKind::PathKw,
+    SyntaxKind::Percent,
+    SyntaxKind::Pipe,
+    SyntaxKind::Plus,
+    SyntaxKind::ProjectKw,
+    SyntaxKind::Question,
+    SyntaxKind::RBracket,
+    SyntaxKind::RParen,
+    SyntaxKind::RangeKw,
+    SyntaxKind::RouteKw,
+    SyntaxKind::SecondsKw,
+    SyntaxKind::Semicolon,
+    SyntaxKind::SequenceKw,
+    SyntaxKind::Shl,
+    SyntaxKind::Shr,
+    SyntaxKind::Slash,
+    SyntaxKind::SpatialKw,
+    SyntaxKind::Star,
+    SyntaxKind::StarStar,
+    SyntaxKind::String,
+    SyntaxKind::SwitchKw,
+    SyntaxKind::TargetKw,
+    SyntaxKind::TrueKw,
+    SyntaxKind::UniverseKw,
+    SyntaxKind::VersionKw,
+    SyntaxKind::VirtualStringKw,
+    SyntaxKind::Whitespace,
+];
+
+fn token_set(index: usize) -> &'static [SyntaxKind] {
+    match index {
+        0 => TOKEN_SET_0,
+        1 => TOKEN_SET_1,
+        _ => &[],
+    }
+}
+
+static CHOICE_3_0_ALT_0_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::ProjectKw,
+];
+
+static CHOICE_3_0_ALT_1_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::DisplayKw,
+];
+
+static CHOICE_3_0_ALT_2_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::HardwareKw,
+];
+
+static CHOICE_3_0_ALT_3_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::LayoutKw,
+];
+
+static CHOICE_3_0_ALT_4_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::PatchKw,
+];
+
+static CHOICE_3_0_ALT_5_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::SequenceKw,
+];
+
+static CHOICE_3_0_ALT_6_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::CurveKw,
+];
+
+static CHOICE_3_0_ALT_7_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::EffectKw,
+];
+
+static CHOICE_3_0: &[Alternative] = &[
+    Alternative { item: Item::Token(SyntaxKind::ProjectKw), first: CHOICE_3_0_ALT_0_FIRST },
+    Alternative { item: Item::Token(SyntaxKind::DisplayKw), first: CHOICE_3_0_ALT_1_FIRST },
+    Alternative { item: Item::Token(SyntaxKind::HardwareKw), first: CHOICE_3_0_ALT_2_FIRST },
+    Alternative { item: Item::Token(SyntaxKind::LayoutKw), first: CHOICE_3_0_ALT_3_FIRST },
+    Alternative { item: Item::Token(SyntaxKind::PatchKw), first: CHOICE_3_0_ALT_4_FIRST },
+    Alternative { item: Item::Token(SyntaxKind::SequenceKw), first: CHOICE_3_0_ALT_5_FIRST },
+    Alternative { item: Item::Token(SyntaxKind::CurveKw), first: CHOICE_3_0_ALT_6_FIRST },
+    Alternative { item: Item::Token(SyntaxKind::EffectKw), first: CHOICE_3_0_ALT_7_FIRST },
+];
+
+static CHOICE_7_0_ALT_0_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::LBrace,
+];
+
+static CHOICE_7_0_ALT_1_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Ampersand,
+    SyntaxKind::AndAnd,
+    SyntaxKind::AtKw,
+    SyntaxKind::AudioKw,
+    SyntaxKind::Bang,
+    SyntaxKind::BangEq,
+    SyntaxKind::BlockComment,
+    SyntaxKind::BoolKw,
+    SyntaxKind::Caret,
+    SyntaxKind::CaseKw,
+    SyntaxKind::Colon,
+    SyntaxKind::Color,
+    SyntaxKind::ColorKw,
+    SyntaxKind::Comma,
+    SyntaxKind::ControllerKw,
+    SyntaxKind::CurveKw,
+    SyntaxKind::DefaultKw,
+    SyntaxKind::DescriptionKw,
+    SyntaxKind::DisplayKw,
+    SyntaxKind::Dot,
+    SyntaxKind::DurationKw,
+    SyntaxKind::EffectKw,
+    SyntaxKind::ElseKw,
+    SyntaxKind::EnumKw,
+    SyntaxKind::Eq,
+    SyntaxKind::EqEq,
+    SyntaxKind::EventKw,
+    SyntaxKind::FalseKw,
+    SyntaxKind::FilterKw,
+    SyntaxKind::FixtureKw,
+    SyntaxKind::FlagsKw,
+    SyntaxKind::Float,
+    SyntaxKind::FloatKw,
+    SyntaxKind::FnKw,
+    SyntaxKind::ForKw,
+    SyntaxKind::FrameRateKw,
+    SyntaxKind::FromKw,
+    SyntaxKind::Ge,
+    SyntaxKind::GradientKw,
+    SyntaxKind::GroupKw,
+    SyntaxKind::Gt,
+    SyntaxKind::HardwareKw,
+    SyntaxKind::Ident,
+    SyntaxKind::IfKw,
+    SyntaxKind::ImportKw,
+    SyntaxKind::InputKw,
+    SyntaxKind::Int,
+    SyntaxKind::IntKw,
+    SyntaxKind::InvalidColor,
+    SyntaxKind::KeyKw,
+    SyntaxKind::LBracket,
+    SyntaxKind::LParen,
+    SyntaxKind::LabelKw,
+    SyntaxKind::LayoutKw,
+    SyntaxKind::Le,
+    SyntaxKind::LetKw,
+    SyntaxKind::LineComment,
+    SyntaxKind::Lt,
+    SyntaxKind::MembersKw,
+    SyntaxKind::MillisecondsKw,
+    SyntaxKind::Minus,
+    SyntaxKind::MinutesKw,
+    SyntaxKind::OrOr,
+    SyntaxKind::OutputKw,
+    SyntaxKind::ParamKw,
+    SyntaxKind::PatchKw,
+    SyntaxKind::PathKw,
+    SyntaxKind::Percent,
+    SyntaxKind::Pipe,
+    SyntaxKind::Plus,
+    SyntaxKind::ProjectKw,
+    SyntaxKind::Question,
+    SyntaxKind::RBracket,
+    SyntaxKind::RParen,
+    SyntaxKind::RangeKw,
+    SyntaxKind::RouteKw,
+    SyntaxKind::SecondsKw,
+    SyntaxKind::Semicolon,
+    SyntaxKind::SequenceKw,
+    SyntaxKind::Shl,
+    SyntaxKind::Shr,
+    SyntaxKind::Slash,
+    SyntaxKind::SpatialKw,
+    SyntaxKind::Star,
+    SyntaxKind::StarStar,
+    SyntaxKind::String,
+    SyntaxKind::SwitchKw,
+    SyntaxKind::TargetKw,
+    SyntaxKind::TrueKw,
+    SyntaxKind::UniverseKw,
+    SyntaxKind::VersionKw,
+    SyntaxKind::VirtualStringKw,
+    SyntaxKind::Whitespace,
+];
+
+static CHOICE_7_0: &[Alternative] = &[
+    Alternative { item: Item::Node(6), first: CHOICE_7_0_ALT_0_FIRST },
+    Alternative { item: Item::TokenSet(1), first: CHOICE_7_0_ALT_1_FIRST },
+];
+
+static RULE_0_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::CurveKw,
+    SyntaxKind::DisplayKw,
+    SyntaxKind::EffectKw,
+    SyntaxKind::HardwareKw,
+    SyntaxKind::ImportKw,
+    SyntaxKind::LayoutKw,
+    SyntaxKind::PatchKw,
+    SyntaxKind::ProjectKw,
+    SyntaxKind::SequenceKw,
+];
+
+static RULE_0_FOLLOW: &[SyntaxKind] = &[
+];
+
+static RULE_0_ITEMS: &[Item] = &[
+    Item::RepeatRule(1),
+    Item::Node(2),
+];
+
+static RULE_1_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::ImportKw,
+];
+
+static RULE_1_FOLLOW: &[SyntaxKind] = &[
+    SyntaxKind::CurveKw,
+    SyntaxKind::DisplayKw,
+    SyntaxKind::EffectKw,
+    SyntaxKind::HardwareKw,
+    SyntaxKind::ImportKw,
+    SyntaxKind::LayoutKw,
+    SyntaxKind::PatchKw,
+    SyntaxKind::ProjectKw,
+    SyntaxKind::SequenceKw,
+];
+
+static RULE_1_ITEMS: &[Item] = &[
+    Item::Token(SyntaxKind::ImportKw),
+    Item::Node(3),
+    Item::Node(4),
+    Item::Token(SyntaxKind::FromKw),
+    Item::Node(5),
+    Item::Token(SyntaxKind::Semicolon),
+];
+
+static RULE_2_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::CurveKw,
+    SyntaxKind::DisplayKw,
+    SyntaxKind::EffectKw,
+    SyntaxKind::HardwareKw,
+    SyntaxKind::LayoutKw,
+    SyntaxKind::PatchKw,
+    SyntaxKind::ProjectKw,
+    SyntaxKind::SequenceKw,
+];
+
+static RULE_2_FOLLOW: &[SyntaxKind] = &[
+];
+
+static RULE_2_ITEMS: &[Item] = &[
+    Item::Node(3),
+    Item::Node(4),
+    Item::Node(6),
+];
+
+static RULE_3_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::CurveKw,
+    SyntaxKind::DisplayKw,
+    SyntaxKind::EffectKw,
+    SyntaxKind::HardwareKw,
+    SyntaxKind::LayoutKw,
+    SyntaxKind::PatchKw,
+    SyntaxKind::ProjectKw,
+    SyntaxKind::SequenceKw,
+];
+
+static RULE_3_FOLLOW: &[SyntaxKind] = &[
+    SyntaxKind::Ident,
+];
+
+static RULE_3_ITEMS: &[Item] = &[
+    Item::Choice(CHOICE_3_0),
+];
+
+static RULE_4_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Ident,
+];
+
+static RULE_4_FOLLOW: &[SyntaxKind] = &[
+    SyntaxKind::FromKw,
+    SyntaxKind::LBrace,
+];
+
+static RULE_4_ITEMS: &[Item] = &[
+    Item::Token(SyntaxKind::Ident),
+];
+
+static RULE_5_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Lt,
+];
+
+static RULE_5_FOLLOW: &[SyntaxKind] = &[
+    SyntaxKind::Semicolon,
+];
+
+static RULE_5_ITEMS: &[Item] = &[
+    Item::Token(SyntaxKind::Lt),
+    Item::RepeatTokenSet(0),
+    Item::Token(SyntaxKind::Gt),
+];
+
+static RULE_6_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::LBrace,
+];
+
+static RULE_6_FOLLOW: &[SyntaxKind] = &[
+    SyntaxKind::Ampersand,
+    SyntaxKind::AndAnd,
+    SyntaxKind::AtKw,
+    SyntaxKind::AudioKw,
+    SyntaxKind::Bang,
+    SyntaxKind::BangEq,
+    SyntaxKind::BlockComment,
+    SyntaxKind::BoolKw,
+    SyntaxKind::Caret,
+    SyntaxKind::CaseKw,
+    SyntaxKind::Colon,
+    SyntaxKind::Color,
+    SyntaxKind::ColorKw,
+    SyntaxKind::Comma,
+    SyntaxKind::ControllerKw,
+    SyntaxKind::CurveKw,
+    SyntaxKind::DefaultKw,
+    SyntaxKind::DescriptionKw,
+    SyntaxKind::DisplayKw,
+    SyntaxKind::Dot,
+    SyntaxKind::DurationKw,
+    SyntaxKind::EffectKw,
+    SyntaxKind::ElseKw,
+    SyntaxKind::EnumKw,
+    SyntaxKind::Eq,
+    SyntaxKind::EqEq,
+    SyntaxKind::EventKw,
+    SyntaxKind::FalseKw,
+    SyntaxKind::FilterKw,
+    SyntaxKind::FixtureKw,
+    SyntaxKind::FlagsKw,
+    SyntaxKind::Float,
+    SyntaxKind::FloatKw,
+    SyntaxKind::FnKw,
+    SyntaxKind::ForKw,
+    SyntaxKind::FrameRateKw,
+    SyntaxKind::FromKw,
+    SyntaxKind::Ge,
+    SyntaxKind::GradientKw,
+    SyntaxKind::GroupKw,
+    SyntaxKind::Gt,
+    SyntaxKind::HardwareKw,
+    SyntaxKind::Ident,
+    SyntaxKind::IfKw,
+    SyntaxKind::ImportKw,
+    SyntaxKind::InputKw,
+    SyntaxKind::Int,
+    SyntaxKind::IntKw,
+    SyntaxKind::InvalidColor,
+    SyntaxKind::KeyKw,
+    SyntaxKind::LBrace,
+    SyntaxKind::LBracket,
+    SyntaxKind::LParen,
+    SyntaxKind::LabelKw,
+    SyntaxKind::LayoutKw,
+    SyntaxKind::Le,
+    SyntaxKind::LetKw,
+    SyntaxKind::LineComment,
+    SyntaxKind::Lt,
+    SyntaxKind::MembersKw,
+    SyntaxKind::MillisecondsKw,
+    SyntaxKind::Minus,
+    SyntaxKind::MinutesKw,
+    SyntaxKind::OrOr,
+    SyntaxKind::OutputKw,
+    SyntaxKind::ParamKw,
+    SyntaxKind::PatchKw,
+    SyntaxKind::PathKw,
+    SyntaxKind::Percent,
+    SyntaxKind::Pipe,
+    SyntaxKind::Plus,
+    SyntaxKind::ProjectKw,
+    SyntaxKind::Question,
+    SyntaxKind::RBrace,
+    SyntaxKind::RBracket,
+    SyntaxKind::RParen,
+    SyntaxKind::RangeKw,
+    SyntaxKind::RouteKw,
+    SyntaxKind::SecondsKw,
+    SyntaxKind::Semicolon,
+    SyntaxKind::SequenceKw,
+    SyntaxKind::Shl,
+    SyntaxKind::Shr,
+    SyntaxKind::Slash,
+    SyntaxKind::SpatialKw,
+    SyntaxKind::Star,
+    SyntaxKind::StarStar,
+    SyntaxKind::String,
+    SyntaxKind::SwitchKw,
+    SyntaxKind::TargetKw,
+    SyntaxKind::TrueKw,
+    SyntaxKind::UniverseKw,
+    SyntaxKind::VersionKw,
+    SyntaxKind::VirtualStringKw,
+    SyntaxKind::Whitespace,
+];
+
+static RULE_6_ITEMS: &[Item] = &[
+    Item::Token(SyntaxKind::LBrace),
+    Item::RepeatRule(7),
+    Item::Token(SyntaxKind::RBrace),
+];
+
+static RULE_7_FIRST: &[SyntaxKind] = &[
+    SyntaxKind::Ampersand,
+    SyntaxKind::AndAnd,
+    SyntaxKind::AtKw,
+    SyntaxKind::AudioKw,
+    SyntaxKind::Bang,
+    SyntaxKind::BangEq,
+    SyntaxKind::BlockComment,
+    SyntaxKind::BoolKw,
+    SyntaxKind::Caret,
+    SyntaxKind::CaseKw,
+    SyntaxKind::Colon,
+    SyntaxKind::Color,
+    SyntaxKind::ColorKw,
+    SyntaxKind::Comma,
+    SyntaxKind::ControllerKw,
+    SyntaxKind::CurveKw,
+    SyntaxKind::DefaultKw,
+    SyntaxKind::DescriptionKw,
+    SyntaxKind::DisplayKw,
+    SyntaxKind::Dot,
+    SyntaxKind::DurationKw,
+    SyntaxKind::EffectKw,
+    SyntaxKind::ElseKw,
+    SyntaxKind::EnumKw,
+    SyntaxKind::Eq,
+    SyntaxKind::EqEq,
+    SyntaxKind::EventKw,
+    SyntaxKind::FalseKw,
+    SyntaxKind::FilterKw,
+    SyntaxKind::FixtureKw,
+    SyntaxKind::FlagsKw,
+    SyntaxKind::Float,
+    SyntaxKind::FloatKw,
+    SyntaxKind::FnKw,
+    SyntaxKind::ForKw,
+    SyntaxKind::FrameRateKw,
+    SyntaxKind::FromKw,
+    SyntaxKind::Ge,
+    SyntaxKind::GradientKw,
+    SyntaxKind::GroupKw,
+    SyntaxKind::Gt,
+    SyntaxKind::HardwareKw,
+    SyntaxKind::Ident,
+    SyntaxKind::IfKw,
+    SyntaxKind::ImportKw,
+    SyntaxKind::InputKw,
+    SyntaxKind::Int,
+    SyntaxKind::IntKw,
+    SyntaxKind::InvalidColor,
+    SyntaxKind::KeyKw,
+    SyntaxKind::LBrace,
+    SyntaxKind::LBracket,
+    SyntaxKind::LParen,
+    SyntaxKind::LabelKw,
+    SyntaxKind::LayoutKw,
+    SyntaxKind::Le,
+    SyntaxKind::LetKw,
+    SyntaxKind::LineComment,
+    SyntaxKind::Lt,
+    SyntaxKind::MembersKw,
+    SyntaxKind::MillisecondsKw,
+    SyntaxKind::Minus,
+    SyntaxKind::MinutesKw,
+    SyntaxKind::OrOr,
+    SyntaxKind::OutputKw,
+    SyntaxKind::ParamKw,
+    SyntaxKind::PatchKw,
+    SyntaxKind::PathKw,
+    SyntaxKind::Percent,
+    SyntaxKind::Pipe,
+    SyntaxKind::Plus,
+    SyntaxKind::ProjectKw,
+    SyntaxKind::Question,
+    SyntaxKind::RBracket,
+    SyntaxKind::RParen,
+    SyntaxKind::RangeKw,
+    SyntaxKind::RouteKw,
+    SyntaxKind::SecondsKw,
+    SyntaxKind::Semicolon,
+    SyntaxKind::SequenceKw,
+    SyntaxKind::Shl,
+    SyntaxKind::Shr,
+    SyntaxKind::Slash,
+    SyntaxKind::SpatialKw,
+    SyntaxKind::Star,
+    SyntaxKind::StarStar,
+    SyntaxKind::String,
+    SyntaxKind::SwitchKw,
+    SyntaxKind::TargetKw,
+    SyntaxKind::TrueKw,
+    SyntaxKind::UniverseKw,
+    SyntaxKind::VersionKw,
+    SyntaxKind::VirtualStringKw,
+    SyntaxKind::Whitespace,
+];
+
+static RULE_7_FOLLOW: &[SyntaxKind] = &[
+    SyntaxKind::Ampersand,
+    SyntaxKind::AndAnd,
+    SyntaxKind::AtKw,
+    SyntaxKind::AudioKw,
+    SyntaxKind::Bang,
+    SyntaxKind::BangEq,
+    SyntaxKind::BlockComment,
+    SyntaxKind::BoolKw,
+    SyntaxKind::Caret,
+    SyntaxKind::CaseKw,
+    SyntaxKind::Colon,
+    SyntaxKind::Color,
+    SyntaxKind::ColorKw,
+    SyntaxKind::Comma,
+    SyntaxKind::ControllerKw,
+    SyntaxKind::CurveKw,
+    SyntaxKind::DefaultKw,
+    SyntaxKind::DescriptionKw,
+    SyntaxKind::DisplayKw,
+    SyntaxKind::Dot,
+    SyntaxKind::DurationKw,
+    SyntaxKind::EffectKw,
+    SyntaxKind::ElseKw,
+    SyntaxKind::EnumKw,
+    SyntaxKind::Eq,
+    SyntaxKind::EqEq,
+    SyntaxKind::EventKw,
+    SyntaxKind::FalseKw,
+    SyntaxKind::FilterKw,
+    SyntaxKind::FixtureKw,
+    SyntaxKind::FlagsKw,
+    SyntaxKind::Float,
+    SyntaxKind::FloatKw,
+    SyntaxKind::FnKw,
+    SyntaxKind::ForKw,
+    SyntaxKind::FrameRateKw,
+    SyntaxKind::FromKw,
+    SyntaxKind::Ge,
+    SyntaxKind::GradientKw,
+    SyntaxKind::GroupKw,
+    SyntaxKind::Gt,
+    SyntaxKind::HardwareKw,
+    SyntaxKind::Ident,
+    SyntaxKind::IfKw,
+    SyntaxKind::ImportKw,
+    SyntaxKind::InputKw,
+    SyntaxKind::Int,
+    SyntaxKind::IntKw,
+    SyntaxKind::InvalidColor,
+    SyntaxKind::KeyKw,
+    SyntaxKind::LBrace,
+    SyntaxKind::LBracket,
+    SyntaxKind::LParen,
+    SyntaxKind::LabelKw,
+    SyntaxKind::LayoutKw,
+    SyntaxKind::Le,
+    SyntaxKind::LetKw,
+    SyntaxKind::LineComment,
+    SyntaxKind::Lt,
+    SyntaxKind::MembersKw,
+    SyntaxKind::MillisecondsKw,
+    SyntaxKind::Minus,
+    SyntaxKind::MinutesKw,
+    SyntaxKind::OrOr,
+    SyntaxKind::OutputKw,
+    SyntaxKind::ParamKw,
+    SyntaxKind::PatchKw,
+    SyntaxKind::PathKw,
+    SyntaxKind::Percent,
+    SyntaxKind::Pipe,
+    SyntaxKind::Plus,
+    SyntaxKind::ProjectKw,
+    SyntaxKind::Question,
+    SyntaxKind::RBrace,
+    SyntaxKind::RBracket,
+    SyntaxKind::RParen,
+    SyntaxKind::RangeKw,
+    SyntaxKind::RouteKw,
+    SyntaxKind::SecondsKw,
+    SyntaxKind::Semicolon,
+    SyntaxKind::SequenceKw,
+    SyntaxKind::Shl,
+    SyntaxKind::Shr,
+    SyntaxKind::Slash,
+    SyntaxKind::SpatialKw,
+    SyntaxKind::Star,
+    SyntaxKind::StarStar,
+    SyntaxKind::String,
+    SyntaxKind::SwitchKw,
+    SyntaxKind::TargetKw,
+    SyntaxKind::TrueKw,
+    SyntaxKind::UniverseKw,
+    SyntaxKind::VersionKw,
+    SyntaxKind::VirtualStringKw,
+    SyntaxKind::Whitespace,
+];
+
+static RULE_7_ITEMS: &[Item] = &[
+    Item::Choice(CHOICE_7_0),
+];
+
+const ENTRY_RULE: usize = 0;
+
+static RULES: &[Rule] = &[
+    Rule { kind: SyntaxKind::SourceFile, items: RULE_0_ITEMS, first: RULE_0_FIRST, follow: RULE_0_FOLLOW },
+    Rule { kind: SyntaxKind::ImportDecl, items: RULE_1_ITEMS, first: RULE_1_FIRST, follow: RULE_1_FOLLOW },
+    Rule { kind: SyntaxKind::Document, items: RULE_2_ITEMS, first: RULE_2_FIRST, follow: RULE_2_FOLLOW },
+    Rule { kind: SyntaxKind::DocKind, items: RULE_3_ITEMS, first: RULE_3_FIRST, follow: RULE_3_FOLLOW },
+    Rule { kind: SyntaxKind::Name, items: RULE_4_ITEMS, first: RULE_4_FIRST, follow: RULE_4_FOLLOW },
+    Rule { kind: SyntaxKind::PathLit, items: RULE_5_ITEMS, first: RULE_5_FIRST, follow: RULE_5_FOLLOW },
+    Rule { kind: SyntaxKind::BalancedBlock, items: RULE_6_ITEMS, first: RULE_6_FIRST, follow: RULE_6_FOLLOW },
+    Rule { kind: SyntaxKind::BalancedItem, items: RULE_7_ITEMS, first: RULE_7_FIRST, follow: RULE_7_FOLLOW },
+];
+
+#[derive(Clone, Copy)]
+struct Rule {
+    kind: SyntaxKind,
+    items: &'static [Item],
+    first: &'static [SyntaxKind],
+    follow: &'static [SyntaxKind],
+}
+
+#[derive(Clone, Copy)]
+struct Alternative {
+    item: Item,
+    first: &'static [SyntaxKind],
+}
+
+#[derive(Clone, Copy)]
+enum Item {
+    Token(SyntaxKind),
+    Node(usize),
+    RepeatRule(usize),
+    RepeatTokenSet(usize),
+    Choice(&'static [Alternative]),
+    TokenSet(usize),
+}
+
 pub fn parse_green(tokens: Vec<LexToken>) -> (GreenNode, Vec<Diagnostic>) {
     let mut parser = Parser {
         builder: GreenNodeBuilder::new(),
@@ -13,7 +808,10 @@ pub fn parse_green(tokens: Vec<LexToken>) -> (GreenNode, Vec<Diagnostic>) {
         tokens,
         cursor: 0,
     };
-    parser.source_file();
+    parser.parse_rule(ENTRY_RULE);
+    while parser.peek().is_some() {
+        parser.error_token(DiagnosticKind::UnexpectedToken.message());
+    }
     (parser.builder.finish(), parser.diagnostics)
 }
 
@@ -25,111 +823,76 @@ struct Parser {
 }
 
 impl Parser {
-    fn source_file(&mut self) {
-        self.builder.start_node(SyntaxKind::SourceFile.into());
-        self.skip_trivia();
-        while self.at(SyntaxKind::ImportKw) {
-            self.import_decl();
-            self.skip_trivia();
-        }
-        if self.peek().is_some_and(SyntaxKind::is_doc_kind) {
-            self.document();
-        } else {
-            self.error_here("expected document");
-        }
-        while self.peek().is_some() {
-            self.error_token("unexpected token after document");
-        }
+    fn parse_rule(&mut self, index: usize) {
+        let rule = RULES[index];
+        self.builder.start_node(rule.kind.into());
+        self.parse_items(rule.items, rule.follow);
         self.builder.finish_node();
     }
 
-    fn import_decl(&mut self) {
-        self.builder.start_node(SyntaxKind::ImportDecl.into());
-        self.expect(SyntaxKind::ImportKw, "expected 'import'");
-        self.doc_kind();
-        self.name();
-        self.expect(SyntaxKind::FromKw, "expected 'from'");
-        self.path_lit();
-        self.expect(SyntaxKind::Semicolon, "expected ';'");
-        self.builder.finish_node();
-    }
-
-    fn document(&mut self) {
-        self.builder.start_node(SyntaxKind::Document.into());
-        self.doc_kind();
-        self.name();
-        self.balanced_block();
-        self.builder.finish_node();
-    }
-
-    fn doc_kind(&mut self) {
-        self.builder.start_node(SyntaxKind::DocKind.into());
-        if self.peek().is_some_and(SyntaxKind::is_doc_kind) {
-            self.bump();
-        } else {
-            self.error_here("expected document kind");
+    fn parse_items(&mut self, items: &'static [Item], follow: &'static [SyntaxKind]) {
+        for item in items {
+            self.parse_item(*item, follow);
         }
-        self.builder.finish_node();
     }
 
-    fn name(&mut self) {
-        self.builder.start_node(SyntaxKind::Name.into());
-        self.expect(SyntaxKind::Ident, "expected name");
-        self.builder.finish_node();
-    }
-
-    fn path_lit(&mut self) {
-        self.builder.start_node(SyntaxKind::PathLit.into());
-        self.expect(SyntaxKind::Lt, "expected '<'");
-        while self.peek().is_some_and(|kind| kind != SyntaxKind::Gt && kind != SyntaxKind::LBrace && kind != SyntaxKind::RBrace) {
-            self.bump();
-        }
-        self.expect(SyntaxKind::Gt, "expected '>'");
-        self.builder.finish_node();
-    }
-
-    fn balanced_block(&mut self) {
-        self.builder.start_node(SyntaxKind::BalancedBlock.into());
-        if !self.expect(SyntaxKind::LBrace, "expected '{'") {
-            self.builder.finish_node();
-            return;
-        }
-        while let Some(kind) = self.peek() {
-            if kind == SyntaxKind::RBrace {
-                break;
+    fn parse_item(&mut self, item: Item, follow: &'static [SyntaxKind]) {
+        match item {
+            Item::Token(kind) => {
+                self.expect(kind);
             }
-            self.balanced_item();
+            Item::Node(index) => {
+                if self.peek().is_some_and(|kind| contains(RULES[index].first, kind)) {
+                    self.parse_rule(index);
+                } else {
+                    self.error_here(DiagnosticKind::UnexpectedEof.message());
+                }
+            }
+            Item::RepeatRule(index) => {
+                while self.peek().is_some_and(|kind| contains(RULES[index].first, kind)) {
+                    self.parse_rule(index);
+                    if self.peek().is_some_and(|kind| contains(follow, kind)) {
+                        break;
+                    }
+                }
+            }
+            Item::RepeatTokenSet(index) => {
+                while self.peek().is_some_and(|kind| contains(token_set(index), kind)) {
+                    self.bump();
+                    if self.peek().is_some_and(|kind| contains(follow, kind)) {
+                        break;
+                    }
+                }
+            }
+            Item::Choice(alternatives) => {
+                let Some(kind) = self.peek() else {
+                    self.error_here(DiagnosticKind::UnexpectedEof.message());
+                    return;
+                };
+                if let Some(alternative) = alternatives.iter().find(|alternative| contains(alternative.first, kind)) {
+                    self.parse_item(alternative.item, follow);
+                } else {
+                    self.error_here(DiagnosticKind::UnexpectedToken.message());
+                }
+            }
+            Item::TokenSet(index) => {
+                if self.peek().is_some_and(|kind| contains(token_set(index), kind)) {
+                    self.bump();
+                } else {
+                    self.error_here(DiagnosticKind::UnexpectedToken.message());
+                }
+            }
         }
-        self.expect(SyntaxKind::RBrace, "expected '}'");
-        self.builder.finish_node();
     }
 
-    fn balanced_item(&mut self) {
-        self.builder.start_node(SyntaxKind::BalancedItem.into());
-        if self.at(SyntaxKind::LBrace) {
-            self.balanced_block();
-        } else if self.at(SyntaxKind::RBrace) {
-            self.error_here("unexpected '}'");
-        } else {
-            self.bump();
-        }
-        self.builder.finish_node();
-    }
-
-    fn expect(&mut self, kind: SyntaxKind, message: &str) -> bool {
-        self.skip_trivia();
-        if self.at(kind) {
+    fn expect(&mut self, kind: SyntaxKind) -> bool {
+        if self.peek() == Some(kind) {
             self.bump();
             true
         } else {
-            self.error_here(message);
+            self.error_here(DiagnosticKind::UnexpectedToken.message());
             false
         }
-    }
-
-    fn at(&mut self, kind: SyntaxKind) -> bool {
-        self.skip_trivia();
-        self.peek() == Some(kind)
     }
 
     fn skip_trivia(&mut self) {
@@ -153,9 +916,10 @@ impl Parser {
     }
 
     fn bump_raw(&mut self) {
-        let token = &self.tokens[self.cursor];
-        self.builder.token(token.kind.into(), &token.text);
-        self.cursor += 1;
+        if let Some(token) = self.tokens.get(self.cursor) {
+            self.builder.token(token.kind.into(), &token.text);
+            self.cursor += 1;
+        }
     }
 
     fn error_token(&mut self, message: &str) {
@@ -177,9 +941,17 @@ impl Parser {
             .map(|token| token.range.clone())
             .unwrap_or(0..0);
         self.diagnostics.push(Diagnostic::new(
-            DiagnosticKind::UnexpectedEof,
+            if self.cursor >= self.tokens.len() {
+                DiagnosticKind::UnexpectedEof
+            } else {
+                DiagnosticKind::UnexpectedToken
+            },
             range,
             message,
         ));
     }
+}
+
+fn contains(tokens: &[SyntaxKind], kind: SyntaxKind) -> bool {
+    tokens.contains(&kind)
 }

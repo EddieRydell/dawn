@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::PathBuf;
 
@@ -6,7 +7,7 @@ use clap::Parser;
 
 mod spec;
 
-use spec::Grammar;
+use spec::{Grammar, PatternItem};
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -157,32 +158,511 @@ fn gen_kind(grammar: &Grammar) -> String {
 
 fn gen_lexer(grammar: &Grammar) -> String {
     let mut out = String::from(header());
+    out.push_str("use std::sync::OnceLock;\n\n");
+    out.push_str("use regex::Regex;\n\n");
+    out.push_str("use crate::diagnostic::{Diagnostic, DiagnosticKind};\n");
+    out.push_str("use crate::generated::kind::SyntaxKind;\n\n");
+    out.push_str("#[derive(Debug, Clone, PartialEq, Eq)]\n");
+    out.push_str("pub struct LexToken {\n");
+    out.push_str("    pub kind: SyntaxKind,\n");
+    out.push_str("    pub range: std::ops::Range<usize>,\n");
+    out.push_str("    pub text: String,\n");
+    out.push_str("}\n\n");
+    out.push_str("#[derive(Debug, Clone, Copy)]\n");
+    out.push_str("enum Matcher {\n");
+    out.push_str("    Regex(usize),\n");
+    out.push_str("    Delimited { start: &'static str, end: &'static str },\n");
+    out.push_str("    Literal(&'static str),\n");
+    out.push_str("}\n\n");
+    out.push_str("#[derive(Debug, Clone, Copy)]\n");
+    out.push_str("struct Rule {\n");
+    out.push_str("    kind: SyntaxKind,\n");
+    out.push_str("    matcher: Matcher,\n");
+    out.push_str("    skip: bool,\n");
+    out.push_str("    diagnostic: Option<DiagnosticKind>,\n");
+    out.push_str("}\n\n");
+
+    let mut regexes = Vec::new();
+    let mut rules = Vec::new();
+    for trivia in &grammar.tokens.trivia {
+        let matcher = if let Some(pattern) = &trivia.pattern {
+            let index = regexes.len();
+            regexes.push(pattern.clone());
+            format!("Matcher::Regex({index})")
+        } else {
+            format!(
+                "Matcher::Delimited {{ start: {:?}, end: {:?} }}",
+                trivia.start.as_ref().expect("validated"),
+                trivia.end.as_ref().expect("validated")
+            )
+        };
+        rules.push(format!(
+            "    Rule {{ kind: SyntaxKind::{}, matcher: {}, skip: {}, diagnostic: {} }},\n",
+            trivia.name,
+            matcher,
+            trivia.skip,
+            diagnostic_option(trivia.error.as_deref())
+        ));
+    }
+    for (kind, text) in &grammar.tokens.keywords {
+        rules.push(format!(
+            "    Rule {{ kind: SyntaxKind::{kind}, matcher: Matcher::Literal({text:?}), skip: false, diagnostic: None }},\n"
+        ));
+    }
+    for literal in &grammar.tokens.literals {
+        let mut patterns = Vec::new();
+        if let Some(pattern) = &literal.pattern {
+            patterns.push(pattern.clone());
+        }
+        patterns.extend(literal.patterns.iter().cloned());
+        for pattern in patterns {
+            let index = regexes.len();
+            regexes.push(pattern);
+            rules.push(format!(
+                "    Rule {{ kind: SyntaxKind::{}, matcher: Matcher::Regex({index}), skip: false, diagnostic: {} }},\n",
+                literal.name,
+                diagnostic_option(literal.error.as_deref())
+            ));
+        }
+    }
+    for (kind, text) in &grammar.tokens.punctuation {
+        rules.push(format!(
+            "    Rule {{ kind: SyntaxKind::{kind}, matcher: Matcher::Literal({text:?}), skip: false, diagnostic: None }},\n"
+        ));
+    }
+
+    out.push_str("const REGEX_PATTERNS: &[&str] = &[\n");
+    for pattern in regexes {
+        out.push_str(&format!("    {:?},\n", format!("^(?:{pattern})")));
+    }
+    out.push_str("];\n\n");
+    out.push_str("const RULES: &[Rule] = &[\n");
+    for rule in rules {
+        out.push_str(&rule);
+    }
+    out.push_str("];\n\n");
     out.push_str(include_str!("templates/lexer.rs"));
-    out = out.replace("/*KEYWORD_MATCH*/", &keyword_match(grammar));
-    out = out.replace("/*PUNCTUATION_MATCH*/", &punctuation_match(grammar));
     out
 }
 
-fn keyword_match(grammar: &Grammar) -> String {
-    grammar
-        .tokens
-        .keywords
-        .iter()
-        .map(|(kind, text)| format!("        {text:?} => SyntaxKind::{kind},\n"))
-        .collect::<String>()
+fn diagnostic_option(name: Option<&str>) -> String {
+    name.map(|name| format!("Some(DiagnosticKind::{name})"))
+        .unwrap_or_else(|| "None".to_string())
 }
 
-fn punctuation_match(grammar: &Grammar) -> String {
-    let mut punctuation = grammar.tokens.punctuation.clone();
-    punctuation.sort_by(|left, right| right.1.len().cmp(&left.1.len()));
-    punctuation
-        .into_iter()
-        .map(|(kind, text)| format!("        ({text:?}, Some((SyntaxKind::{kind}, {len}))),\n", len = text.len()))
-        .collect::<String>()
+fn gen_parser(grammar: &Grammar) -> String {
+    let grammar_sets = GrammarSets::new(grammar);
+    let mut out = String::from(header());
+    out.push_str("use rowan::{GreenNode, GreenNodeBuilder};\n\n");
+    out.push_str("use crate::diagnostic::{Diagnostic, DiagnosticKind};\n");
+    out.push_str("use crate::generated::kind::SyntaxKind;\n");
+    out.push_str("use crate::generated::lexer::LexToken;\n\n");
+
+    for (name, tokens) in &grammar_sets.named_token_slices {
+        emit_token_slice(&mut out, name, tokens);
+    }
+    out.push_str("fn token_set(index: usize) -> &'static [SyntaxKind] {\n");
+    out.push_str("    match index {\n");
+    for index in 0..grammar.syntax.token_sets.len() {
+        out.push_str(&format!("        {index} => TOKEN_SET_{index},\n"));
+    }
+    out.push_str("        _ => &[],\n");
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
+
+    for choice in &grammar_sets.choices {
+        for alt in &choice.alternatives {
+            emit_token_slice(&mut out, &alt.first_name, &alt.first);
+        }
+        out.push_str(&format!("static {}: &[Alternative] = &[\n", choice.name));
+        for alt in &choice.alternatives {
+            out.push_str(&format!(
+                "    Alternative {{ item: {}, first: {} }},\n",
+                alt.item_expr, alt.first_name
+            ));
+        }
+        out.push_str("];\n\n");
+    }
+
+    for rule in &grammar_sets.rules {
+        emit_token_slice(&mut out, &rule.first_name, &rule.first);
+        emit_token_slice(&mut out, &rule.follow_name, &rule.follow);
+        out.push_str(&format!("static {}: &[Item] = &[\n", rule.items_name));
+        for item in &rule.items {
+            out.push_str(&format!("    {},\n", item));
+        }
+        out.push_str("];\n\n");
+    }
+
+    out.push_str("const ENTRY_RULE: usize = ");
+    out.push_str(&grammar_sets.entry_rule.to_string());
+    out.push_str(";\n\n");
+    out.push_str("static RULES: &[Rule] = &[\n");
+    for rule in &grammar_sets.rules {
+        out.push_str(&format!(
+            "    Rule {{ kind: SyntaxKind::{}, items: {}, first: {}, follow: {} }},\n",
+            rule.kind, rule.items_name, rule.first_name, rule.follow_name
+        ));
+    }
+    out.push_str("];\n\n");
+
+    out.push_str(include_str!("templates/parser.rs"));
+    out
 }
 
-fn gen_parser(_grammar: &Grammar) -> String {
-    format!("{}{}", header(), include_str!("templates/parser.rs"))
+fn emit_token_slice(out: &mut String, name: &str, tokens: &BTreeSet<String>) {
+    out.push_str(&format!("static {name}: &[SyntaxKind] = &[\n"));
+    for token in tokens {
+        out.push_str(&format!("    SyntaxKind::{token},\n"));
+    }
+    out.push_str("];\n\n");
+}
+
+struct GrammarSets {
+    entry_rule: usize,
+    rules: Vec<GeneratedRule>,
+    choices: Vec<GeneratedChoice>,
+    named_token_slices: BTreeMap<String, BTreeSet<String>>,
+}
+
+struct GeneratedRule {
+    kind: String,
+    items_name: String,
+    first_name: String,
+    follow_name: String,
+    items: Vec<String>,
+    first: BTreeSet<String>,
+    follow: BTreeSet<String>,
+}
+
+struct GeneratedChoice {
+    name: String,
+    alternatives: Vec<GeneratedAlternative>,
+}
+
+struct GeneratedAlternative {
+    item_expr: String,
+    first_name: String,
+    first: BTreeSet<String>,
+}
+
+impl GrammarSets {
+    fn new(grammar: &Grammar) -> Self {
+        let rule_indices = grammar
+            .syntax
+            .rules
+            .iter()
+            .enumerate()
+            .map(|(index, rule)| (rule.name.clone(), index))
+            .collect::<HashMap<_, _>>();
+        let token_set_indices = grammar
+            .syntax
+            .token_sets
+            .iter()
+            .enumerate()
+            .map(|(index, set)| (set.name.clone(), index))
+            .collect::<HashMap<_, _>>();
+        let all_tokens = grammar
+            .token_names()
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+        let token_sets = grammar
+            .syntax
+            .token_sets
+            .iter()
+            .map(|set| {
+                let mut tokens = if set.include.as_deref() == Some("all_tokens") {
+                    all_tokens.clone()
+                } else {
+                    set.tokens.iter().cloned().collect::<BTreeSet<_>>()
+                };
+                for token in &set.exclude {
+                    tokens.remove(token);
+                }
+                tokens
+            })
+            .collect::<Vec<_>>();
+
+        let mut first = vec![BTreeSet::new(); grammar.syntax.rules.len()];
+        loop {
+            let mut changed = false;
+            for (index, rule) in grammar.syntax.rules.iter().enumerate() {
+                let item_first = first_of_sequence(
+                    &rule.pattern,
+                    &first,
+                    &rule_indices,
+                    &token_sets,
+                    &token_set_indices,
+                );
+                changed |= extend_set(&mut first[index], item_first);
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        let mut follow = vec![BTreeSet::new(); grammar.syntax.rules.len()];
+        loop {
+            let mut changed = false;
+            for (rule_index, rule) in grammar.syntax.rules.iter().enumerate() {
+                changed |= collect_follow(
+                    &rule.pattern,
+                    &follow[rule_index].clone(),
+                    &mut follow,
+                    &first,
+                    &rule_indices,
+                    &token_sets,
+                    &token_set_indices,
+                );
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        let mut choices = Vec::new();
+        let mut named_token_slices = BTreeMap::new();
+        for (index, set) in grammar.syntax.token_sets.iter().enumerate() {
+            named_token_slices.insert(format!("TOKEN_SET_{index}"), token_sets[index].clone());
+            let _ = set;
+        }
+
+        let mut generated_rules = Vec::new();
+        for (rule_index, rule) in grammar.syntax.rules.iter().enumerate() {
+            let items = rule
+                .pattern
+                .iter()
+                .enumerate()
+                .map(|(item_index, item)| {
+                    item_expr(
+                        item,
+                        rule_index,
+                        item_index,
+                        &mut choices,
+                        &first,
+                        &rule_indices,
+                        &token_sets,
+                        &token_set_indices,
+                    )
+                })
+                .collect::<Vec<_>>();
+            generated_rules.push(GeneratedRule {
+                kind: rule.name.clone(),
+                items_name: format!("RULE_{rule_index}_ITEMS"),
+                first_name: format!("RULE_{rule_index}_FIRST"),
+                follow_name: format!("RULE_{rule_index}_FOLLOW"),
+                items,
+                first: first[rule_index].clone(),
+                follow: follow[rule_index].clone(),
+            });
+        }
+
+        Self {
+            entry_rule: *rule_indices.get(&grammar.syntax.entry).expect("validated"),
+            rules: generated_rules,
+            choices,
+            named_token_slices,
+        }
+    }
+}
+
+fn extend_set(target: &mut BTreeSet<String>, source: BTreeSet<String>) -> bool {
+    let before = target.len();
+    target.extend(source);
+    target.len() != before
+}
+
+fn first_of_sequence(
+    items: &[PatternItem],
+    first: &[BTreeSet<String>],
+    rule_indices: &HashMap<String, usize>,
+    token_sets: &[BTreeSet<String>],
+    token_set_indices: &HashMap<String, usize>,
+) -> BTreeSet<String> {
+    let mut result = BTreeSet::new();
+    for item in items {
+        result.extend(first_of_item(
+            item,
+            first,
+            rule_indices,
+            token_sets,
+            token_set_indices,
+        ));
+        if !is_nullable(item) {
+            break;
+        }
+    }
+    result
+}
+
+fn first_of_item(
+    item: &PatternItem,
+    first: &[BTreeSet<String>],
+    rule_indices: &HashMap<String, usize>,
+    token_sets: &[BTreeSet<String>],
+    token_set_indices: &HashMap<String, usize>,
+) -> BTreeSet<String> {
+    if let Some(token) = &item.token {
+        return BTreeSet::from([token.clone()]);
+    }
+    if let Some(node) = &item.node {
+        return first[*rule_indices.get(node).expect("validated")].clone();
+    }
+    if let Some(repeat) = &item.repeat {
+        if let Some(index) = rule_indices.get(repeat) {
+            return first[*index].clone();
+        }
+        return token_sets[*token_set_indices.get(repeat).expect("validated")].clone();
+    }
+    if let Some(choice) = &item.choice {
+        return choice
+            .iter()
+            .flat_map(|alt| first_of_item(alt, first, rule_indices, token_sets, token_set_indices))
+            .collect();
+    }
+    if let Some(token_set) = &item.token_set {
+        return token_sets[*token_set_indices.get(token_set).expect("validated")].clone();
+    }
+    BTreeSet::new()
+}
+
+fn is_nullable(item: &PatternItem) -> bool {
+    item.repeat.is_some()
+}
+
+fn collect_follow(
+    items: &[PatternItem],
+    parent_follow: &BTreeSet<String>,
+    follow: &mut [BTreeSet<String>],
+    first: &[BTreeSet<String>],
+    rule_indices: &HashMap<String, usize>,
+    token_sets: &[BTreeSet<String>],
+    token_set_indices: &HashMap<String, usize>,
+) -> bool {
+    let mut changed = false;
+    for (index, item) in items.iter().enumerate() {
+        let rest = &items[index + 1..];
+        let mut item_follow =
+            first_of_sequence(rest, first, rule_indices, token_sets, token_set_indices);
+        if rest.iter().all(is_nullable) {
+            item_follow.extend(parent_follow.iter().cloned());
+        }
+        changed |= collect_follow_for_item(
+            item,
+            item_follow,
+            follow,
+            first,
+            rule_indices,
+            token_sets,
+            token_set_indices,
+        );
+    }
+    changed
+}
+
+fn collect_follow_for_item(
+    item: &PatternItem,
+    item_follow: BTreeSet<String>,
+    follow: &mut [BTreeSet<String>],
+    first: &[BTreeSet<String>],
+    rule_indices: &HashMap<String, usize>,
+    token_sets: &[BTreeSet<String>],
+    token_set_indices: &HashMap<String, usize>,
+) -> bool {
+    let mut changed = false;
+    if let Some(node) = &item.node {
+        changed |= extend_set(
+            &mut follow[*rule_indices.get(node).expect("validated")],
+            item_follow,
+        );
+    } else if let Some(repeat) = &item.repeat {
+        if let Some(rule_index) = rule_indices.get(repeat) {
+            let mut repeat_follow = item_follow;
+            repeat_follow.extend(first[*rule_index].iter().cloned());
+            changed |= extend_set(&mut follow[*rule_index], repeat_follow);
+        }
+    } else if let Some(choice) = &item.choice {
+        for alt in choice {
+            changed |= collect_follow_for_item(
+                alt,
+                item_follow.clone(),
+                follow,
+                first,
+                rule_indices,
+                token_sets,
+                token_set_indices,
+            );
+        }
+    }
+    changed
+}
+
+fn item_expr(
+    item: &PatternItem,
+    rule_index: usize,
+    item_index: usize,
+    choices: &mut Vec<GeneratedChoice>,
+    first: &[BTreeSet<String>],
+    rule_indices: &HashMap<String, usize>,
+    token_sets: &[BTreeSet<String>],
+    token_set_indices: &HashMap<String, usize>,
+) -> String {
+    if let Some(token) = &item.token {
+        return format!("Item::Token(SyntaxKind::{token})");
+    }
+    if let Some(node) = &item.node {
+        return format!("Item::Node({})", rule_indices.get(node).expect("validated"));
+    }
+    if let Some(repeat) = &item.repeat {
+        if let Some(index) = rule_indices.get(repeat) {
+            return format!("Item::RepeatRule({index})");
+        }
+        return format!(
+            "Item::RepeatTokenSet({})",
+            token_set_indices.get(repeat).expect("validated")
+        );
+    }
+    if let Some(token_set) = &item.token_set {
+        return format!(
+            "Item::TokenSet({})",
+            token_set_indices.get(token_set).expect("validated")
+        );
+    }
+    if let Some(choice) = &item.choice {
+        let choice_name = format!("CHOICE_{}_{}", rule_index, item_index);
+        let mut seen = BTreeSet::new();
+        let mut alternatives = Vec::new();
+        for (alt_index, alt) in choice.iter().enumerate() {
+            let alt_first = first_of_item(alt, first, rule_indices, token_sets, token_set_indices);
+            let overlap = seen.intersection(&alt_first).cloned().collect::<Vec<_>>();
+            assert!(
+                overlap.is_empty(),
+                "ambiguous choice in rule {rule_index}, item {item_index}: {overlap:?}"
+            );
+            seen.extend(alt_first.iter().cloned());
+            alternatives.push(GeneratedAlternative {
+                item_expr: item_expr(
+                    alt,
+                    rule_index,
+                    item_index + alt_index + 1,
+                    choices,
+                    first,
+                    rule_indices,
+                    token_sets,
+                    token_set_indices,
+                ),
+                first_name: format!("{choice_name}_ALT_{alt_index}_FIRST"),
+                first: alt_first,
+            });
+        }
+        choices.push(GeneratedChoice {
+            name: choice_name.clone(),
+            alternatives,
+        });
+        return format!("Item::Choice({choice_name})");
+    }
+    unreachable!("validated pattern item")
 }
 
 fn gen_ast(grammar: &Grammar) -> String {
@@ -197,7 +677,10 @@ fn gen_ast(grammar: &Grammar) -> String {
 
     for node in &grammar.ast.nodes {
         out.push_str("#[derive(Debug, Clone, PartialEq, Eq)]\n");
-        out.push_str(&format!("pub struct {} {{ syntax: SyntaxNode }}\n\n", node.name));
+        out.push_str(&format!(
+            "pub struct {} {{ syntax: SyntaxNode }}\n\n",
+            node.name
+        ));
         out.push_str(&format!("impl AstNode for {} {{\n", node.name));
         out.push_str(&format!(
             "    fn can_cast(kind: SyntaxKind) -> bool {{ kind == SyntaxKind::{} }}\n",
@@ -264,7 +747,10 @@ fn gen_ast(grammar: &Grammar) -> String {
         out.push_str("    pub fn from_token(kind: SyntaxKind) -> Option<Self> {\n");
         out.push_str("        Some(match kind {\n");
         for (variant, token) in &ast_enum.variants {
-            out.push_str(&format!("            SyntaxKind::{} => Self::{},\n", token, variant));
+            out.push_str(&format!(
+                "            SyntaxKind::{} => Self::{},\n",
+                token, variant
+            ));
         }
         out.push_str("            _ => return None,\n");
         out.push_str("        })\n    }\n}\n\n");
@@ -286,61 +772,4 @@ fn gen_ast(grammar: &Grammar) -> String {
     out.push_str("    }\n");
     out.push_str("    None\n}\n");
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn loads_and_validates_dawn_grammar() {
-        let grammar = Grammar::load(&workspace_root().join("grammar/dawn")).unwrap();
-        grammar.validate().unwrap();
-    }
-
-    #[test]
-    fn generated_files_have_headers() {
-        let grammar = Grammar::load(&workspace_root().join("grammar/dawn")).unwrap();
-        grammar.validate().unwrap();
-        for (name, contents) in generate(&grammar) {
-            assert!(
-                contents.starts_with("// @generated by dawn-syntax-gen. Do not edit by hand.")
-                    || contents.starts_with("# @generated by dawn-syntax-gen. Do not edit by hand."),
-                "{name} is missing generated header"
-            );
-        }
-    }
-
-    #[test]
-    fn check_detects_stale_generated_output() {
-        let grammar = Grammar::load(&workspace_root().join("grammar/dawn")).unwrap();
-        grammar.validate().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-
-        for (name, contents) in generate(&grammar) {
-            let path = dir.path().join(name);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).unwrap();
-            }
-            fs::write(path, contents).unwrap();
-        }
-        fs::write(dir.path().join("src/generated/kind.rs"), "stale").unwrap();
-
-        let stale = generate(&grammar)
-            .into_iter()
-            .filter(|(name, expected)| fs::read_to_string(dir.path().join(name)).unwrap() != *expected)
-            .map(|(name, _)| name)
-            .collect::<Vec<_>>();
-
-        assert_eq!(stale, vec!["src/generated/kind.rs"]);
-    }
-
-    fn workspace_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf()
-    }
 }

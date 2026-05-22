@@ -199,18 +199,5 @@
         ),
     ],
 
-    recovery: [
-        (
-            rule: "SourceFile",
-            strategy: "recover_until_doc_or_eof",
-        ),
-        (
-            rule: "ImportDecl",
-            strategy: "recover_until_semicolon_or_doc",
-        ),
-        (
-            rule: "BalancedBlock",
-            strategy: "recover_until_matching_brace_or_eof",
-        ),
-    ],
+    recovery: [],
 )

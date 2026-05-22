@@ -7,6 +7,5 @@ version.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 ron.workspace = true
+regex.workspace = true
 serde.workspace = true
-tempfile.workspace = true
-thiserror.workspace = true

@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
+use regex::Regex;
 use ron::extensions::Extensions;
 use serde::Deserialize;
 
@@ -31,7 +32,12 @@ impl Grammar {
         kinds.extend(self.tokens.trivia.iter().map(|item| item.name.as_str()));
         kinds.extend(self.tokens.keywords.iter().map(|(name, _)| name.as_str()));
         kinds.extend(self.tokens.literals.iter().map(|item| item.name.as_str()));
-        kinds.extend(self.tokens.punctuation.iter().map(|(name, _)| name.as_str()));
+        kinds.extend(
+            self.tokens
+                .punctuation
+                .iter()
+                .map(|(name, _)| name.as_str()),
+        );
         kinds.extend(self.syntax.nodes.iter().map(String::as_str));
         kinds
     }
@@ -43,7 +49,12 @@ impl Grammar {
             .map(|item| item.name.as_str())
             .chain(self.tokens.keywords.iter().map(|(name, _)| name.as_str()))
             .chain(self.tokens.literals.iter().map(|item| item.name.as_str()))
-            .chain(self.tokens.punctuation.iter().map(|(name, _)| name.as_str()))
+            .chain(
+                self.tokens
+                    .punctuation
+                    .iter()
+                    .map(|(name, _)| name.as_str()),
+            )
             .collect()
     }
 
@@ -56,7 +67,12 @@ impl Grammar {
         )?;
 
         let tokens = self.token_names();
-        let nodes = self.syntax.nodes.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        let nodes = self
+            .syntax
+            .nodes
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
 
         if !nodes.contains(self.syntax.entry.as_str()) {
             bail!("syntax entry node '{}' is not declared", self.syntax.entry);
@@ -98,7 +114,11 @@ impl Grammar {
             if !nodes.contains(recovery.rule.as_str()) {
                 bail!("recovery references undeclared rule '{}'", recovery.rule);
             }
-            ensure_name("recovery strategy", &recovery.strategy)?;
+            bail!(
+                "recovery strategy '{}' for rule '{}' is not supported; recovery is derived from FIRST/FOLLOW sets",
+                recovery.strategy,
+                recovery.rule
+            );
         }
 
         let diagnostics = self
@@ -110,13 +130,22 @@ impl Grammar {
         for trivia in &self.tokens.trivia {
             ensure_name("trivia", &trivia.name)?;
             if trivia.pattern.is_none() && (trivia.start.is_none() || trivia.end.is_none()) {
-                bail!("trivia '{}' needs pattern or start/end delimiters", trivia.name);
+                bail!(
+                    "trivia '{}' needs pattern or start/end delimiters",
+                    trivia.name
+                );
             }
             if trivia.error.is_some() && trivia.end.is_none() {
-                bail!("trivia '{}' declares an error without an end delimiter", trivia.name);
+                bail!(
+                    "trivia '{}' declares an error without an end delimiter",
+                    trivia.name
+                );
             }
             if let Some(error) = &trivia.error {
                 require_diagnostic(&diagnostics, error)?;
+            }
+            if let Some(pattern) = &trivia.pattern {
+                validate_regex("trivia", &trivia.name, pattern)?;
             }
             let _ = trivia.skip;
         }
@@ -125,20 +154,41 @@ impl Grammar {
             if literal.pattern.is_none() && literal.patterns.is_empty() {
                 bail!("literal '{}' needs pattern or patterns", literal.name);
             }
-            if literal.normalize.as_deref().is_some_and(|value| value != "remove_underscores") {
+            if let Some(value) = &literal.value {
+                if value != "text" && value != "i64" {
+                    bail!(
+                        "literal '{}' has unsupported value mode '{}'",
+                        literal.name,
+                        value
+                    );
+                }
+            }
+            if literal
+                .normalize
+                .as_deref()
+                .is_some_and(|value| value != "remove_underscores")
+            {
                 bail!("literal '{}' has unsupported normalize mode", literal.name);
             }
             if let Some(error) = &literal.error {
                 require_diagnostic(&diagnostics, error)?;
             }
-            let _ = &literal.value;
+            if let Some(pattern) = &literal.pattern {
+                validate_regex("literal", &literal.name, pattern)?;
+            }
+            for pattern in &literal.patterns {
+                validate_regex("literal", &literal.name, pattern)?;
+            }
         }
         for error in &self.tokens.errors {
             require_diagnostic(&diagnostics, error)?;
         }
 
         if !nodes.contains(self.ast.root.as_str()) {
-            bail!("AST root '{}' is not declared as a syntax node", self.ast.root);
+            bail!(
+                "AST root '{}' is not declared as a syntax node",
+                self.ast.root
+            );
         }
         let ast_nodes = self
             .ast
@@ -158,15 +208,28 @@ impl Grammar {
                 match accessor.kind.as_str() {
                     "child" | "children" => {
                         let Some(node) = &accessor.node else {
-                            bail!("AST accessor '{}.{}' is missing node", ast_node.name, accessor.name);
+                            bail!(
+                                "AST accessor '{}.{}' is missing node",
+                                ast_node.name,
+                                accessor.name
+                            );
                         };
                         if !ast_nodes.contains(node.as_str()) {
-                            bail!("AST accessor '{}.{}' references undeclared AST node '{}'", ast_node.name, accessor.name, node);
+                            bail!(
+                                "AST accessor '{}.{}' references undeclared AST node '{}'",
+                                ast_node.name,
+                                accessor.name,
+                                node
+                            );
                         }
                     }
                     "token" => {
                         let Some(token) = &accessor.token else {
-                            bail!("AST accessor '{}.{}' is missing token", ast_node.name, accessor.name);
+                            bail!(
+                                "AST accessor '{}.{}' is missing token",
+                                ast_node.name,
+                                accessor.name
+                            );
                         };
                         require_token(&tokens, token)?;
                     }
@@ -175,14 +238,23 @@ impl Grammar {
                         require_token(&tokens, accessor.start.as_deref().unwrap_or(""))?;
                         require_token(&tokens, accessor.end.as_deref().unwrap_or(""))?;
                     }
-                    other => bail!("AST accessor '{}.{}' has invalid kind '{}'", ast_node.name, accessor.name, other),
+                    other => bail!(
+                        "AST accessor '{}.{}' has invalid kind '{}'",
+                        ast_node.name,
+                        accessor.name,
+                        other
+                    ),
                 }
             }
         }
 
         for ast_enum in &self.ast.enums {
             if !nodes.contains(ast_enum.from_node.as_str()) {
-                bail!("AST enum '{}' references undeclared node '{}'", ast_enum.name, ast_enum.from_node);
+                bail!(
+                    "AST enum '{}' references undeclared node '{}'",
+                    ast_enum.name,
+                    ast_enum.from_node
+                );
             }
             for (_, token) in &ast_enum.variants {
                 require_token(&tokens, token)?;
@@ -192,7 +264,11 @@ impl Grammar {
         for tier in &self.precedence.tiers {
             ensure_name("precedence tier", &tier.name)?;
             if tier.associativity != "left" && tier.associativity != "right" {
-                bail!("precedence tier '{}' has invalid associativity '{}'", tier.name, tier.associativity);
+                bail!(
+                    "precedence tier '{}' has invalid associativity '{}'",
+                    tier.name,
+                    tier.associativity
+                );
             }
             for token in &tier.operators {
                 require_token(&tokens, token)?;
@@ -209,8 +285,18 @@ impl Grammar {
     }
 }
 
+fn validate_regex(label: &str, name: &str, pattern: &str) -> Result<()> {
+    let regex = Regex::new(&format!("^(?:{pattern})"))
+        .with_context(|| format!("{label} '{name}' has invalid regex pattern {pattern:?}"))?;
+    if regex.find("").is_some_and(|matched| matched.end() == 0) {
+        bail!("{label} '{name}' regex pattern must not match an empty string");
+    }
+    Ok(())
+}
+
 fn load_ron<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
-    let text = fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let text =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     ron::Options::default()
         .with_default_extension(Extensions::IMPLICIT_SOME)
         .from_str(&text)

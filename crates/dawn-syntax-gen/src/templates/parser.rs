@@ -1,8 +1,26 @@
-use rowan::{GreenNode, GreenNodeBuilder};
+#[derive(Clone, Copy)]
+struct Rule {
+    kind: SyntaxKind,
+    items: &'static [Item],
+    first: &'static [SyntaxKind],
+    follow: &'static [SyntaxKind],
+}
 
-use crate::diagnostic::{Diagnostic, DiagnosticKind};
-use crate::generated::kind::SyntaxKind;
-use crate::generated::lexer::LexToken;
+#[derive(Clone, Copy)]
+struct Alternative {
+    item: Item,
+    first: &'static [SyntaxKind],
+}
+
+#[derive(Clone, Copy)]
+enum Item {
+    Token(SyntaxKind),
+    Node(usize),
+    RepeatRule(usize),
+    RepeatTokenSet(usize),
+    Choice(&'static [Alternative]),
+    TokenSet(usize),
+}
 
 pub fn parse_green(tokens: Vec<LexToken>) -> (GreenNode, Vec<Diagnostic>) {
     let mut parser = Parser {
@@ -11,7 +29,10 @@ pub fn parse_green(tokens: Vec<LexToken>) -> (GreenNode, Vec<Diagnostic>) {
         tokens,
         cursor: 0,
     };
-    parser.source_file();
+    parser.parse_rule(ENTRY_RULE);
+    while parser.peek().is_some() {
+        parser.error_token(DiagnosticKind::UnexpectedToken.message());
+    }
     (parser.builder.finish(), parser.diagnostics)
 }
 
@@ -23,111 +44,76 @@ struct Parser {
 }
 
 impl Parser {
-    fn source_file(&mut self) {
-        self.builder.start_node(SyntaxKind::SourceFile.into());
-        self.skip_trivia();
-        while self.at(SyntaxKind::ImportKw) {
-            self.import_decl();
-            self.skip_trivia();
-        }
-        if self.peek().is_some_and(SyntaxKind::is_doc_kind) {
-            self.document();
-        } else {
-            self.error_here("expected document");
-        }
-        while self.peek().is_some() {
-            self.error_token("unexpected token after document");
-        }
+    fn parse_rule(&mut self, index: usize) {
+        let rule = RULES[index];
+        self.builder.start_node(rule.kind.into());
+        self.parse_items(rule.items, rule.follow);
         self.builder.finish_node();
     }
 
-    fn import_decl(&mut self) {
-        self.builder.start_node(SyntaxKind::ImportDecl.into());
-        self.expect(SyntaxKind::ImportKw, "expected 'import'");
-        self.doc_kind();
-        self.name();
-        self.expect(SyntaxKind::FromKw, "expected 'from'");
-        self.path_lit();
-        self.expect(SyntaxKind::Semicolon, "expected ';'");
-        self.builder.finish_node();
-    }
-
-    fn document(&mut self) {
-        self.builder.start_node(SyntaxKind::Document.into());
-        self.doc_kind();
-        self.name();
-        self.balanced_block();
-        self.builder.finish_node();
-    }
-
-    fn doc_kind(&mut self) {
-        self.builder.start_node(SyntaxKind::DocKind.into());
-        if self.peek().is_some_and(SyntaxKind::is_doc_kind) {
-            self.bump();
-        } else {
-            self.error_here("expected document kind");
+    fn parse_items(&mut self, items: &'static [Item], follow: &'static [SyntaxKind]) {
+        for item in items {
+            self.parse_item(*item, follow);
         }
-        self.builder.finish_node();
     }
 
-    fn name(&mut self) {
-        self.builder.start_node(SyntaxKind::Name.into());
-        self.expect(SyntaxKind::Ident, "expected name");
-        self.builder.finish_node();
-    }
-
-    fn path_lit(&mut self) {
-        self.builder.start_node(SyntaxKind::PathLit.into());
-        self.expect(SyntaxKind::Lt, "expected '<'");
-        while self.peek().is_some_and(|kind| kind != SyntaxKind::Gt && kind != SyntaxKind::LBrace && kind != SyntaxKind::RBrace) {
-            self.bump();
-        }
-        self.expect(SyntaxKind::Gt, "expected '>'");
-        self.builder.finish_node();
-    }
-
-    fn balanced_block(&mut self) {
-        self.builder.start_node(SyntaxKind::BalancedBlock.into());
-        if !self.expect(SyntaxKind::LBrace, "expected '{'") {
-            self.builder.finish_node();
-            return;
-        }
-        while let Some(kind) = self.peek() {
-            if kind == SyntaxKind::RBrace {
-                break;
+    fn parse_item(&mut self, item: Item, follow: &'static [SyntaxKind]) {
+        match item {
+            Item::Token(kind) => {
+                self.expect(kind);
             }
-            self.balanced_item();
+            Item::Node(index) => {
+                if self.peek().is_some_and(|kind| contains(RULES[index].first, kind)) {
+                    self.parse_rule(index);
+                } else {
+                    self.error_here(DiagnosticKind::UnexpectedEof.message());
+                }
+            }
+            Item::RepeatRule(index) => {
+                while self.peek().is_some_and(|kind| contains(RULES[index].first, kind)) {
+                    self.parse_rule(index);
+                    if self.peek().is_some_and(|kind| contains(follow, kind)) {
+                        break;
+                    }
+                }
+            }
+            Item::RepeatTokenSet(index) => {
+                while self.peek().is_some_and(|kind| contains(token_set(index), kind)) {
+                    self.bump();
+                    if self.peek().is_some_and(|kind| contains(follow, kind)) {
+                        break;
+                    }
+                }
+            }
+            Item::Choice(alternatives) => {
+                let Some(kind) = self.peek() else {
+                    self.error_here(DiagnosticKind::UnexpectedEof.message());
+                    return;
+                };
+                if let Some(alternative) = alternatives.iter().find(|alternative| contains(alternative.first, kind)) {
+                    self.parse_item(alternative.item, follow);
+                } else {
+                    self.error_here(DiagnosticKind::UnexpectedToken.message());
+                }
+            }
+            Item::TokenSet(index) => {
+                if self.peek().is_some_and(|kind| contains(token_set(index), kind)) {
+                    self.bump();
+                } else {
+                    self.error_here(DiagnosticKind::UnexpectedToken.message());
+                }
+            }
         }
-        self.expect(SyntaxKind::RBrace, "expected '}'");
-        self.builder.finish_node();
     }
 
-    fn balanced_item(&mut self) {
-        self.builder.start_node(SyntaxKind::BalancedItem.into());
-        if self.at(SyntaxKind::LBrace) {
-            self.balanced_block();
-        } else if self.at(SyntaxKind::RBrace) {
-            self.error_here("unexpected '}'");
-        } else {
-            self.bump();
-        }
-        self.builder.finish_node();
-    }
-
-    fn expect(&mut self, kind: SyntaxKind, message: &str) -> bool {
-        self.skip_trivia();
-        if self.at(kind) {
+    fn expect(&mut self, kind: SyntaxKind) -> bool {
+        if self.peek() == Some(kind) {
             self.bump();
             true
         } else {
-            self.error_here(message);
+            self.error_here(DiagnosticKind::UnexpectedToken.message());
             false
         }
-    }
-
-    fn at(&mut self, kind: SyntaxKind) -> bool {
-        self.skip_trivia();
-        self.peek() == Some(kind)
     }
 
     fn skip_trivia(&mut self) {
@@ -151,9 +137,10 @@ impl Parser {
     }
 
     fn bump_raw(&mut self) {
-        let token = &self.tokens[self.cursor];
-        self.builder.token(token.kind.into(), &token.text);
-        self.cursor += 1;
+        if let Some(token) = self.tokens.get(self.cursor) {
+            self.builder.token(token.kind.into(), &token.text);
+            self.cursor += 1;
+        }
     }
 
     fn error_token(&mut self, message: &str) {
@@ -175,9 +162,17 @@ impl Parser {
             .map(|token| token.range.clone())
             .unwrap_or(0..0);
         self.diagnostics.push(Diagnostic::new(
-            DiagnosticKind::UnexpectedEof,
+            if self.cursor >= self.tokens.len() {
+                DiagnosticKind::UnexpectedEof
+            } else {
+                DiagnosticKind::UnexpectedToken
+            },
             range,
             message,
         ));
     }
+}
+
+fn contains(tokens: &[SyntaxKind], kind: SyntaxKind) -> bool {
+    tokens.contains(&kind)
 }
