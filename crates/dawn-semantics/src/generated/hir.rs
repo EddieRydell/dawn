@@ -108,18 +108,42 @@ pub struct NameRef {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Literal {
-    String(RawLiteral<ast::StringLit>),
-    Int(RawLiteral<ast::IntLit>),
-    Float(RawLiteral<ast::FloatLit>),
+    String(StringLiteral),
+    Int(IntLiteral),
+    Float(FloatLiteral),
     Bool(BoolLiteral),
-    Color(RawLiteral<ast::ColorLit>),
-    Duration(RawLiteral<ast::DurationLit>),
+    Color(ColorLiteral),
+    Duration(DurationLiteral),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RawLiteral<Syntax> {
+pub struct StringLiteral {
     pub raw_text: String,
-    pub syntax: Syntax,
+    pub syntax: ast::StringLit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntLiteral {
+    pub raw_text: String,
+    pub syntax: ast::IntLit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FloatLiteral {
+    pub raw_text: String,
+    pub syntax: ast::FloatLit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColorLiteral {
+    pub raw_text: String,
+    pub syntax: ast::ColorLit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DurationLiteral {
+    pub raw_text: String,
+    pub syntax: ast::DurationLit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,3 +215,4 @@ pub enum BinaryOp {
     Rem,
     Pow,
 }
+

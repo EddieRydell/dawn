@@ -29,108 +29,7 @@ impl SemanticsSpec {
     }
 
     pub fn validate(&self, grammar: &Grammar) -> Result<()> {
-        if self.version != 1 {
-            bail!("semantic spec version must be 1");
-        }
-
-        ensure_unique(
-            "HIR declaration",
-            self.hir.iter().map(|decl| decl.name.as_str()),
-        )?;
-        let hir_names = self
-            .hir
-            .iter()
-            .map(|decl| decl.name.as_str())
-            .collect::<BTreeSet<_>>();
-        if !hir_names.contains(self.root.as_str()) {
-            bail!("semantic root '{}' is not declared", self.root);
-        }
-
-        for decl in &self.hir {
-            ensure_rust_type("HIR declaration", &decl.name)?;
-            match decl {
-                HirDecl {
-                    kind: HirDeclKind::Struct,
-                    fields,
-                    ..
-                } => {
-                    ensure_unique("HIR field", fields.iter().map(|field| field.name.as_str()))?;
-                    for field in fields {
-                        ensure_rust_value("HIR field", &field.name)?;
-                        validate_type_ref(&field.ty, &hir_names)?;
-                    }
-                }
-                HirDecl {
-                    kind: HirDeclKind::Enum,
-                    variants,
-                    ..
-                } => {
-                    ensure_unique("HIR enum variant", variants.iter().map(|v| v.name.as_str()))?;
-                    for variant in variants {
-                        ensure_rust_type("HIR enum variant", &variant.name)?;
-                        if let Some(ty) = &variant.ty {
-                            validate_type_ref(ty, &hir_names)?;
-                        }
-                    }
-                }
-            }
-        }
-
-        let syntax_nodes = grammar
-            .syntax
-            .nodes
-            .iter()
-            .map(String::as_str)
-            .chain(
-                grammar
-                    .expressions
-                    .items
-                    .iter()
-                    .map(|expr| expr.root_node.as_str()),
-            )
-            .chain(grammar.expressions.items.iter().flat_map(|expr| {
-                expr.prefix
-                    .iter()
-                    .map(|op| op.node.as_str())
-                    .chain(expr.infix.iter().map(|op| op.node.as_str()))
-                    .chain(expr.postfix.iter().map(|op| op.node.as_str()))
-            }))
-            .collect::<BTreeSet<_>>();
-        let accessors = syntax_accessors(grammar);
-
-        for rule in &self.lower {
-            if !syntax_nodes.contains(rule.syntax.as_str()) {
-                bail!(
-                    "semantic lowering references unknown syntax node '{}'",
-                    rule.syntax
-                );
-            }
-            if !hir_names.contains(rule.hir.as_str()) {
-                bail!(
-                    "semantic lowering references unknown HIR type '{}'",
-                    rule.hir
-                );
-            }
-            let node_accessors = accessors.get(rule.syntax.as_str());
-            for field in &rule.fields {
-                ensure_rust_value("lowering field", &field.name)?;
-                if let Some(accessor) = &field.accessor {
-                    let valid = node_accessors
-                        .is_some_and(|items| items.contains(accessor.as_str()))
-                        || special_accessor(&rule.syntax, accessor);
-                    if !valid {
-                        bail!(
-                            "semantic lowering references unknown accessor '{}.{}'",
-                            rule.syntax,
-                            accessor
-                        );
-                    }
-                }
-            }
-        }
-
-        validate_operator_mappings(grammar, &self.operators)?;
-        Ok(())
+        Validator::new(grammar, self)?.validate()
     }
 }
 
@@ -140,12 +39,14 @@ pub struct HirDecl {
     pub name: String,
     pub kind: HirDeclKind,
     #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
     pub fields: Vec<HirField>,
     #[serde(default)]
     pub variants: Vec<HirVariant>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HirDeclKind {
     Struct,
@@ -172,14 +73,27 @@ pub struct LowerRule {
     pub syntax: String,
     pub hir: String,
     #[serde(default)]
+    pub dispatch: Option<String>,
+    #[serde(default)]
     pub fields: Vec<LowerField>,
+    #[serde(default)]
+    pub variants: Vec<LowerVariant>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LowerField {
     pub name: String,
-    pub accessor: Option<String>,
+    pub accessor: String,
+    #[serde(default)]
+    pub scalar: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LowerVariant {
+    pub syntax: String,
+    pub target: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -196,113 +110,752 @@ pub struct OperatorMapping {
     pub variant: String,
 }
 
-fn validate_operator_mappings(grammar: &Grammar, operators: &OperatorSpec) -> Result<()> {
-    let prefix_tokens = grammar
-        .expressions
-        .items
-        .iter()
-        .flat_map(|expr| expr.prefix.iter().map(|op| op.token.as_str()))
-        .collect::<BTreeSet<_>>();
-    let binary_tokens = grammar
-        .expressions
-        .items
-        .iter()
-        .flat_map(|expr| expr.infix.iter().map(|op| op.token.as_str()))
-        .collect::<BTreeSet<_>>();
-
-    validate_operator_group("prefix", &prefix_tokens, &operators.prefix)?;
-    validate_operator_group("binary", &binary_tokens, &operators.binary)?;
-    Ok(())
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TypeRef {
+    Named(String),
+    Option(Box<TypeRef>),
+    Vec(Box<TypeRef>),
+    Box(Box<TypeRef>),
 }
 
-fn validate_operator_group(
-    label: &str,
-    expected: &BTreeSet<&str>,
-    mappings: &[OperatorMapping],
-) -> Result<()> {
-    ensure_unique(
-        &format!("{label} operator mapping"),
-        mappings.iter().map(|mapping| mapping.token.as_str()),
-    )?;
-    for mapping in mappings {
-        ensure_rust_type("operator variant", &mapping.variant)?;
-        if !expected.contains(mapping.token.as_str()) {
+impl TypeRef {
+    fn parse(text: &str) -> Result<Self> {
+        let text = text.trim();
+        for wrapper in ["Option", "Vec", "Box"] {
+            let prefix = format!("{wrapper}<");
+            if let Some(inner) = text
+                .strip_prefix(&prefix)
+                .and_then(|ty| ty.strip_suffix('>'))
+            {
+                let inner = Box::new(Self::parse(inner)?);
+                return Ok(match wrapper {
+                    "Option" => Self::Option(inner),
+                    "Vec" => Self::Vec(inner),
+                    "Box" => Self::Box(inner),
+                    _ => unreachable!(),
+                });
+            }
+        }
+        if !matches!(text, "String" | "bool") {
+            ensure_rust_type("HIR type reference", text)?;
+        }
+        Ok(Self::Named(text.to_string()))
+    }
+
+    fn named(&self) -> Option<&str> {
+        match self {
+            Self::Named(name) => Some(name),
+            Self::Box(inner) => inner.named(),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AccessorShape {
+    One(String),
+    Many(String),
+    Scalar(String),
+}
+
+impl AccessorShape {
+    fn target(&self) -> &str {
+        match self {
+            Self::One(target) | Self::Many(target) | Self::Scalar(target) => target,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FieldPlan {
+    name: String,
+    ty: TypeRef,
+    accessor: Vec<String>,
+    scalar: Option<String>,
+}
+
+struct Validator<'a> {
+    grammar: &'a Grammar,
+    semantics: &'a SemanticsSpec,
+    hir: BTreeMap<&'a str, &'a HirDecl>,
+    syntax_nodes: BTreeSet<&'a str>,
+    accessors: BTreeMap<String, BTreeMap<String, AccessorShape>>,
+}
+
+impl<'a> Validator<'a> {
+    fn new(grammar: &'a Grammar, semantics: &'a SemanticsSpec) -> Result<Self> {
+        let hir = semantics
+            .hir
+            .iter()
+            .map(|decl| (decl.name.as_str(), decl))
+            .collect();
+        Ok(Self {
+            grammar,
+            semantics,
+            hir,
+            syntax_nodes: syntax_nodes(grammar),
+            accessors: syntax_accessors(grammar),
+        })
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.semantics.version != 1 {
+            bail!("semantic spec version must be 1");
+        }
+        ensure_unique(
+            "HIR declaration",
+            self.semantics.hir.iter().map(|decl| decl.name.as_str()),
+        )?;
+        if !self.hir.contains_key(self.semantics.root.as_str()) {
+            bail!("semantic root '{}' is not declared", self.semantics.root);
+        }
+
+        for decl in &self.semantics.hir {
+            self.validate_hir_decl(decl)?;
+        }
+
+        ensure_unique(
+            "lowering syntax rule",
+            self.semantics.lower.iter().map(|rule| rule.syntax.as_str()),
+        )?;
+        for rule in &self.semantics.lower {
+            self.validate_lower_rule(rule)?;
+        }
+        self.validate_operator_mappings()?;
+        Ok(())
+    }
+
+    fn validate_hir_decl(&self, decl: &HirDecl) -> Result<()> {
+        ensure_rust_type("HIR declaration", &decl.name)?;
+        if let Some(source) = &decl.source {
+            if source != "SyntaxNode" && !self.syntax_nodes.contains(source.as_str()) {
+                bail!(
+                    "HIR declaration '{}' references unknown source syntax '{}'",
+                    decl.name,
+                    source
+                );
+            }
+        }
+        match decl.kind {
+            HirDeclKind::Struct => {
+                if !decl.variants.is_empty() {
+                    bail!("HIR struct '{}' cannot declare variants", decl.name);
+                }
+                ensure_unique(
+                    "HIR field",
+                    decl.fields.iter().map(|field| field.name.as_str()),
+                )?;
+                for field in &decl.fields {
+                    ensure_rust_value("HIR field", &field.name)?;
+                    self.validate_type_ref(&TypeRef::parse(&field.ty)?)?;
+                }
+            }
+            HirDeclKind::Enum => {
+                if !decl.fields.is_empty() {
+                    bail!("HIR enum '{}' cannot declare fields", decl.name);
+                }
+                ensure_unique(
+                    "HIR enum variant",
+                    decl.variants.iter().map(|variant| variant.name.as_str()),
+                )?;
+                for variant in &decl.variants {
+                    ensure_rust_type("HIR enum variant", &variant.name)?;
+                    if let Some(ty) = &variant.ty {
+                        self.validate_type_ref(&TypeRef::parse(ty)?)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_type_ref(&self, ty: &TypeRef) -> Result<()> {
+        match ty {
+            TypeRef::Named(name) => {
+                if matches!(name.as_str(), "String" | "bool")
+                    || self.hir.contains_key(name.as_str())
+                {
+                    Ok(())
+                } else {
+                    bail!("HIR type reference '{name}' is not declared")
+                }
+            }
+            TypeRef::Option(inner) | TypeRef::Vec(inner) | TypeRef::Box(inner) => {
+                self.validate_type_ref(inner)
+            }
+        }
+    }
+
+    fn validate_lower_rule(&self, rule: &LowerRule) -> Result<()> {
+        if !self.syntax_nodes.contains(rule.syntax.as_str()) {
             bail!(
-                "{label} operator mapping references unknown token '{}'",
-                mapping.token
+                "semantic lowering references unknown syntax node '{}'",
+                rule.syntax
             );
         }
-    }
-    let actual = mappings
-        .iter()
-        .map(|mapping| mapping.token.as_str())
-        .collect::<BTreeSet<_>>();
-    for token in expected {
-        if !actual.contains(token) {
-            bail!("missing {label} operator mapping for token '{token}'");
+        let Some(decl) = self.hir.get(rule.hir.as_str()).copied() else {
+            bail!(
+                "semantic lowering references unknown HIR type '{}'",
+                rule.hir
+            );
+        };
+        match decl.kind {
+            HirDeclKind::Struct => self.validate_struct_lower(rule, decl),
+            HirDeclKind::Enum => self.validate_enum_lower(rule, decl),
         }
     }
-    Ok(())
-}
 
-fn validate_type_ref(ty: &str, hir_names: &BTreeSet<&str>) -> Result<()> {
-    let inner = ty
-        .strip_prefix("Vec<")
-        .and_then(|ty| ty.strip_suffix('>'))
-        .or_else(|| {
-            ty.strip_prefix("Option<")
-                .and_then(|ty| ty.strip_suffix('>'))
-        })
-        .unwrap_or(ty);
-    if matches!(inner, "String" | "bool") || hir_names.contains(inner) {
-        return Ok(());
+    fn validate_struct_lower(&self, rule: &LowerRule, decl: &HirDecl) -> Result<()> {
+        if rule.dispatch.is_some() || !rule.variants.is_empty() {
+            bail!(
+                "struct lowering rule '{} -> {}' cannot dispatch variants",
+                rule.syntax,
+                rule.hir
+            );
+        }
+        ensure_unique(
+            "lowering field",
+            rule.fields.iter().map(|field| field.name.as_str()),
+        )?;
+        let declared = decl
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<BTreeSet<_>>();
+        let lowered = rule
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<BTreeSet<_>>();
+        for field in declared.difference(&lowered) {
+            bail!(
+                "lowering rule '{} -> {}' does not populate HIR field '{}'",
+                rule.syntax,
+                rule.hir,
+                field
+            );
+        }
+        for field in lowered.difference(&declared) {
+            bail!(
+                "lowering rule '{} -> {}' populates unknown HIR field '{}'",
+                rule.syntax,
+                rule.hir,
+                field
+            );
+        }
+        for field in &rule.fields {
+            ensure_rust_value("lowering field", &field.name)?;
+            let hir_field = decl
+                .fields
+                .iter()
+                .find(|candidate| candidate.name == field.name)
+                .expect("checked above");
+            let shape = self.validate_accessor_path(&rule.syntax, &field.accessor)?;
+            self.validate_lower_field_type(rule, field, &TypeRef::parse(&hir_field.ty)?, &shape)?;
+        }
+        Ok(())
     }
-    bail!("HIR type reference '{ty}' is not declared")
+
+    fn validate_enum_lower(&self, rule: &LowerRule, decl: &HirDecl) -> Result<()> {
+        if !rule.fields.is_empty() {
+            bail!(
+                "enum lowering rule '{} -> {}' cannot declare fields",
+                rule.syntax,
+                rule.hir
+            );
+        }
+        let dispatch = rule.dispatch.as_deref().unwrap_or("kind");
+        let shape = self.validate_accessor_path(&rule.syntax, dispatch)?;
+        if !matches!(shape, AccessorShape::Scalar(_)) {
+            bail!(
+                "enum lowering dispatch '{}.{}' must be a scalar enum accessor",
+                rule.syntax,
+                dispatch
+            );
+        }
+        ensure_unique(
+            "lowering enum variant",
+            rule.variants.iter().map(|variant| variant.syntax.as_str()),
+        )?;
+        for variant in &rule.variants {
+            if !self.syntax_nodes.contains(variant.syntax.as_str()) {
+                bail!(
+                    "enum lowering target references unknown syntax node '{}'",
+                    variant.syntax
+                );
+            }
+            self.validate_target_path(&decl.name, &variant.target)?;
+        }
+        Ok(())
+    }
+
+    fn validate_lower_field_type(
+        &self,
+        rule: &LowerRule,
+        field: &LowerField,
+        ty: &TypeRef,
+        shape: &AccessorShape,
+    ) -> Result<()> {
+        if let Some(scalar) = &field.scalar {
+            match scalar.as_str() {
+                "text" | "raw_text" => {
+                    if ty.named() != Some("String") {
+                        bail!(
+                            "scalar '{}' for '{}.{}' requires a String field",
+                            scalar,
+                            rule.hir,
+                            field.name
+                        );
+                    }
+                }
+                "bool" => {
+                    if ty.named() != Some("bool") {
+                        bail!(
+                            "scalar 'bool' for '{}.{}' requires a bool field",
+                            rule.hir,
+                            field.name
+                        );
+                    }
+                }
+                "operator(prefix)" | "operator(binary)" => {
+                    self.require_operator_field_ty(ty, &rule.hir, &field.name)?
+                }
+                _ => bail!("unknown lowering scalar '{}'", scalar),
+            }
+            return Ok(());
+        }
+
+        match ty {
+            TypeRef::Vec(inner) => {
+                if !matches!(shape, AccessorShape::Many(_)) {
+                    bail!(
+                        "lowering field '{}.{}' expects a repeated accessor",
+                        rule.hir,
+                        field.name
+                    );
+                }
+                self.require_lowerable_type(inner, shape.target())
+            }
+            TypeRef::Option(inner) => self.require_lowerable_type(inner, shape.target()),
+            TypeRef::Box(_) | TypeRef::Named(_) => {
+                if !matches!(shape, AccessorShape::One(_)) {
+                    bail!(
+                        "lowering field '{}.{}' expects a single accessor",
+                        rule.hir,
+                        field.name
+                    );
+                }
+                self.require_lowerable_type(ty, shape.target())
+            }
+        }
+    }
+
+    fn require_operator_field_ty(&self, ty: &TypeRef, hir: &str, field: &str) -> Result<()> {
+        let Some(name) = ty.named() else {
+            bail!("operator scalar for '{hir}.{field}' requires a named HIR enum type");
+        };
+        let Some(decl) = self.hir.get(name).copied() else {
+            bail!("operator scalar for '{hir}.{field}' references unknown HIR type '{name}'");
+        };
+        if decl.kind == HirDeclKind::Enum
+            && decl.variants.iter().all(|variant| variant.ty.is_none())
+        {
+            Ok(())
+        } else {
+            bail!("operator scalar for '{hir}.{field}' requires a payload-free HIR enum type")
+        }
+    }
+
+    fn require_lowerable_type(&self, ty: &TypeRef, syntax_target: &str) -> Result<()> {
+        let Some(hir_name) = ty.named() else {
+            bail!("nested containers are not supported in lowering fields");
+        };
+        if matches!(hir_name, "String" | "bool") {
+            bail!("scalar HIR type '{hir_name}' needs an explicit scalar lowering");
+        }
+        let Some(rule) = self
+            .semantics
+            .lower
+            .iter()
+            .find(|rule| rule.syntax == syntax_target)
+        else {
+            bail!("no lowering rule declared for syntax node '{syntax_target}'");
+        };
+        if rule.hir != hir_name {
+            bail!(
+                "syntax node '{}' lowers to '{}', not '{}'",
+                syntax_target,
+                rule.hir,
+                hir_name
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_accessor_path(&self, syntax: &str, accessor: &str) -> Result<AccessorShape> {
+        let mut current = syntax.to_string();
+        let mut final_shape = None;
+        for part in accessor.split('.') {
+            ensure_rust_value("accessor", part)?;
+            let Some(shape) = self
+                .accessors
+                .get(&current)
+                .and_then(|items| items.get(part))
+                .cloned()
+            else {
+                bail!("semantic lowering references unknown accessor '{current}.{part}'");
+            };
+            current = shape.target().to_string();
+            final_shape = Some(shape);
+        }
+        final_shape.with_context(|| "accessor path must not be empty")
+    }
+
+    fn validate_target_path(&self, root: &str, target: &str) -> Result<()> {
+        let mut current = root;
+        for part in target.split("::") {
+            ensure_rust_type("enum target path", part)?;
+            let Some(decl) = self.hir.get(current).copied() else {
+                bail!(
+                    "enum target path '{}' references unknown HIR '{}'",
+                    target,
+                    current
+                );
+            };
+            if decl.kind != HirDeclKind::Enum {
+                bail!(
+                    "enum target path '{}' passes through non-enum '{}'",
+                    target,
+                    current
+                );
+            }
+            let Some(variant) = decl.variants.iter().find(|variant| variant.name == part) else {
+                bail!(
+                    "enum target path '{}' references unknown variant '{}::{}'",
+                    target,
+                    current,
+                    part
+                );
+            };
+            current = variant.ty.as_deref().unwrap_or("");
+        }
+        if current.is_empty() {
+            bail!("enum target path '{}' ends at payload-free variant", target);
+        }
+        Ok(())
+    }
+
+    fn validate_operator_mappings(&self) -> Result<()> {
+        let prefix_tokens = self
+            .grammar
+            .expressions
+            .items
+            .iter()
+            .flat_map(|expr| expr.prefix.iter().map(|op| op.token.as_str()))
+            .collect::<BTreeSet<_>>();
+        let binary_tokens = self
+            .grammar
+            .expressions
+            .items
+            .iter()
+            .flat_map(|expr| expr.infix.iter().map(|op| op.token.as_str()))
+            .collect::<BTreeSet<_>>();
+
+        let prefix_ty = self.operator_type("prefix")?;
+        let binary_ty = self.operator_type("binary")?;
+        self.validate_operator_group(
+            "prefix",
+            &prefix_ty,
+            &prefix_tokens,
+            &self.semantics.operators.prefix,
+        )?;
+        self.validate_operator_group(
+            "binary",
+            &binary_ty,
+            &binary_tokens,
+            &self.semantics.operators.binary,
+        )?;
+        Ok(())
+    }
+
+    fn operator_type(&self, label: &str) -> Result<String> {
+        let scalar = format!("operator({label})");
+        let mut found = BTreeSet::new();
+        for rule in &self.semantics.lower {
+            let Some(decl) = self.hir.get(rule.hir.as_str()).copied() else {
+                continue;
+            };
+            for field in &rule.fields {
+                if field.scalar.as_deref() == Some(scalar.as_str()) {
+                    let hir_field = decl
+                        .fields
+                        .iter()
+                        .find(|candidate| candidate.name == field.name)
+                        .expect("validated");
+                    let ty = TypeRef::parse(&hir_field.ty)?;
+                    let Some(named) = ty.named() else {
+                        bail!(
+                            "{scalar} field '{}.{}' must use a named HIR enum type",
+                            rule.hir,
+                            field.name
+                        );
+                    };
+                    found.insert(named.to_string());
+                }
+            }
+        }
+        match found.len() {
+            1 => Ok(found.into_iter().next().expect("len checked")),
+            0 => bail!("no HIR field uses scalar '{scalar}'"),
+            _ => bail!("scalar '{scalar}' is used with multiple HIR types: {found:?}"),
+        }
+    }
+
+    fn validate_operator_group(
+        &self,
+        label: &str,
+        hir_enum: &str,
+        expected: &BTreeSet<&str>,
+        mappings: &[OperatorMapping],
+    ) -> Result<()> {
+        ensure_unique(
+            &format!("{label} operator mapping"),
+            mappings.iter().map(|mapping| mapping.token.as_str()),
+        )?;
+        let Some(decl) = self.hir.get(hir_enum).copied() else {
+            bail!("{label} operator mappings require HIR enum '{hir_enum}'");
+        };
+        let variants = decl
+            .variants
+            .iter()
+            .map(|variant| variant.name.as_str())
+            .collect::<BTreeSet<_>>();
+        for mapping in mappings {
+            ensure_rust_type("operator variant", &mapping.variant)?;
+            if !expected.contains(mapping.token.as_str()) {
+                bail!(
+                    "{label} operator mapping references unknown token '{}'",
+                    mapping.token
+                );
+            }
+            if !variants.contains(mapping.variant.as_str()) {
+                bail!(
+                    "{label} operator mapping references unknown variant '{}::{}'",
+                    hir_enum,
+                    mapping.variant
+                );
+            }
+        }
+        let actual = mappings
+            .iter()
+            .map(|mapping| mapping.token.as_str())
+            .collect::<BTreeSet<_>>();
+        for token in expected {
+            if !actual.contains(token) {
+                bail!("missing {label} operator mapping for token '{token}'");
+            }
+        }
+        Ok(())
+    }
 }
 
-fn syntax_accessors(grammar: &Grammar) -> BTreeMap<&str, BTreeSet<&str>> {
+fn syntax_nodes(grammar: &Grammar) -> BTreeSet<&str> {
+    let mut nodes = grammar
+        .syntax
+        .nodes
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    for expr in &grammar.expressions.items {
+        nodes.insert(expr.root_node.as_str());
+        nodes.extend(expr.prefix.iter().map(|item| item.node.as_str()));
+        nodes.extend(expr.infix.iter().map(|item| item.node.as_str()));
+        nodes.extend(expr.postfix.iter().map(|item| item.node.as_str()));
+    }
+    nodes
+}
+
+fn syntax_accessors(grammar: &Grammar) -> BTreeMap<String, BTreeMap<String, AccessorShape>> {
     let mut accessors = BTreeMap::new();
     for rule in &grammar.syntax.rules {
-        let mut names = BTreeSet::new();
-        collect_labels(&rule.pattern, &mut names);
-        names.insert("syntax");
-        accessors.insert(rule.name.as_str(), names);
+        let mut node_accessors = BTreeMap::new();
+        collect_accessors_for_items(&rule.pattern, &mut node_accessors, false);
+        if emits_text_convenience(&rule.pattern) {
+            node_accessors.insert(
+                "text".to_string(),
+                AccessorShape::Scalar("String".to_string()),
+            );
+        }
+        if emits_raw_text_convenience(&rule.pattern) {
+            node_accessors.insert(
+                "raw_text".to_string(),
+                AccessorShape::Scalar("String".to_string()),
+            );
+        }
+        node_accessors.insert(
+            "syntax".to_string(),
+            AccessorShape::Scalar("SyntaxNode".to_string()),
+        );
+        accessors.insert(rule.name.clone(), node_accessors);
+    }
+    for expression in &grammar.expressions.items {
+        accessors
+            .entry(expression.root_node.clone())
+            .or_default()
+            .insert(
+                "kind".to_string(),
+                AccessorShape::Scalar(format!("{}Kind", expression.name)),
+            );
+        for prefix in &expression.prefix {
+            let entry = accessors.entry(prefix.node.clone()).or_default();
+            entry.insert(
+                "op".to_string(),
+                AccessorShape::Scalar("SyntaxToken".to_string()),
+            );
+            entry.insert(
+                "expr".to_string(),
+                AccessorShape::One(expression.name.clone()),
+            );
+        }
+        for infix in &expression.infix {
+            let entry = accessors.entry(infix.node.clone()).or_default();
+            entry.insert(
+                "left".to_string(),
+                AccessorShape::One(expression.name.clone()),
+            );
+            entry.insert(
+                "right".to_string(),
+                AccessorShape::One(expression.name.clone()),
+            );
+            entry.insert(
+                "op".to_string(),
+                AccessorShape::Scalar("SyntaxToken".to_string()),
+            );
+        }
+        for postfix in &expression.postfix {
+            let mut nested_many = Vec::new();
+            for item in &postfix.pattern {
+                if let Some(node) = &item.node {
+                    if let Some(nested) = accessors.get(node).cloned() {
+                        for (name, shape) in nested {
+                            if matches!(shape, AccessorShape::Many(_)) {
+                                nested_many.push((name, shape));
+                            }
+                        }
+                    }
+                }
+            }
+            let entry = accessors.entry(postfix.node.clone()).or_default();
+            entry.insert(
+                "callee".to_string(),
+                AccessorShape::One(expression.name.clone()),
+            );
+            for (name, shape) in nested_many {
+                entry.insert(name, shape);
+            }
+        }
     }
     accessors
 }
 
-fn collect_labels<'a>(items: &'a [PatternItem], labels: &mut BTreeSet<&'a str>) {
+fn collect_accessors_for_items(
+    items: &[PatternItem],
+    accessors: &mut BTreeMap<String, AccessorShape>,
+    repeated: bool,
+) {
     for item in items {
         if let Some(label) = &item.label {
-            labels.insert(label.as_str());
+            if let Some(target) = item.node.as_ref().or(item.expr.as_ref()) {
+                let shape = if repeated {
+                    AccessorShape::Many(target.clone())
+                } else {
+                    AccessorShape::One(target.clone())
+                };
+                accessors.insert(label.clone(), shape);
+            } else if item.token.is_some()
+                || item
+                    .choice
+                    .as_ref()
+                    .is_some_and(|choice| choice_is_tokens(choice))
+            {
+                accessors.insert(
+                    label.clone(),
+                    AccessorShape::Scalar("SyntaxToken".to_string()),
+                );
+            } else if let Some(repeat) = &item.repeat {
+                if let Some(target) = repeated_target(repeat) {
+                    accessors.insert(label.clone(), AccessorShape::Many(target.to_string()));
+                } else if repeated_token_set(repeat).is_some() {
+                    accessors.insert(
+                        label.clone(),
+                        AccessorShape::Many("SyntaxToken".to_string()),
+                    );
+                }
+            } else if let Some(optional) = &item.optional {
+                if let Some(target) = optional_target(optional) {
+                    accessors.insert(label.clone(), AccessorShape::One(target.to_string()));
+                }
+            } else if let (Some(enum_name), Some(_)) = (&item.r#enum, &item.choice) {
+                accessors.insert(label.clone(), AccessorShape::Scalar(enum_name.clone()));
+            }
         }
         if let Some(repeat) = &item.repeat {
-            collect_labels(repeat, labels);
+            collect_accessors_for_items(repeat, accessors, true);
         }
         if let Some(optional) = &item.optional {
-            collect_labels(optional, labels);
+            collect_accessors_for_items(optional, accessors, repeated);
         }
         if let Some(choice) = &item.choice {
-            collect_labels(choice, labels);
+            collect_accessors_for_items(choice, accessors, repeated);
         }
     }
 }
 
-fn special_accessor(syntax: &str, accessor: &str) -> bool {
-    matches!(
-        (syntax, accessor),
-        ("Name", "text")
-            | ("PathLit", "raw_text")
-            | ("CommandHead", "text")
-            | ("Expr", "kind")
-            | ("PrefixExpr", "op")
-            | ("PrefixExpr", "expr")
-            | ("BinaryExpr", "left")
-            | ("BinaryExpr", "right")
-            | ("BinaryExpr", "op")
-            | ("CallExpr", "callee")
-            | ("CallExpr", "args")
-    )
+fn repeated_target(items: &[PatternItem]) -> Option<&str> {
+    items.iter().find_map(|item| {
+        item.node
+            .as_deref()
+            .or(item.expr.as_deref())
+            .or_else(|| item.repeat.as_deref().and_then(repeated_target))
+    })
+}
+
+fn optional_target(items: &[PatternItem]) -> Option<&str> {
+    items
+        .iter()
+        .find_map(|item| item.node.as_deref().or(item.expr.as_deref()))
+}
+
+fn repeated_token_set(items: &[PatternItem]) -> Option<&str> {
+    items.iter().find_map(|item| item.token_set.as_deref())
+}
+
+fn choice_is_tokens(choice: &[PatternItem]) -> bool {
+    choice.iter().all(|item| {
+        item.token.is_some()
+            || item
+                .choice
+                .as_ref()
+                .is_some_and(|choice| choice_is_tokens(choice))
+    })
+}
+
+fn emits_text_convenience(pattern: &[PatternItem]) -> bool {
+    pattern.len() == 1 && pattern_item_is_only_tokens(&pattern[0])
+}
+
+fn pattern_item_is_only_tokens(item: &PatternItem) -> bool {
+    item.token.is_some()
+        || item
+            .choice
+            .as_ref()
+            .is_some_and(|choice| choice.iter().all(pattern_item_is_only_tokens))
+}
+
+fn emits_raw_text_convenience(pattern: &[PatternItem]) -> bool {
+    pattern
+        .iter()
+        .any(|item| item.label.as_deref() == Some("tokens") && item.repeat.is_some())
 }
 
 fn ensure_unique<'a>(label: &str, values: impl IntoIterator<Item = &'a str>) -> Result<()> {
@@ -340,140 +893,19 @@ fn ensure_identifier(label: &str, value: &str, upper: bool) -> Result<()> {
 }
 
 pub fn generate(
-    _grammar: &Grammar,
-    _semantics: &SemanticsSpec,
+    grammar: &Grammar,
+    semantics: &SemanticsSpec,
     header: &str,
 ) -> Vec<(&'static str, String)> {
     vec![
         ("src/generated/mod.rs", gen_mod(header)),
         ("src/generated/diagnostic.rs", gen_diagnostic(header)),
-        ("src/generated/hir.rs", gen_hir(header)),
-        ("src/generated/lower.rs", gen_lower(header)),
+        ("src/generated/hir.rs", gen_hir(header, semantics)),
+        (
+            "src/generated/lower.rs",
+            gen_lower(header, grammar, semantics),
+        ),
     ]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn grammar() -> Grammar {
-        ron::Options::default()
-            .with_default_extension(Extensions::IMPLICIT_SOME)
-            .from_str(
-                r#"(
-                    version: 2,
-                    language: (type_name: "ToyLanguage", syntax_kind: "ToyKind"),
-                    diagnostics: (
-                        invalid_token: "InvalidToken",
-                        unexpected_token: "UnexpectedToken",
-                        unexpected_eof: "UnexpectedEof",
-                        kinds: [
-                            (name: "InvalidToken", message: "invalid token"),
-                            (name: "UnexpectedToken", message: "unexpected token"),
-                            (name: "UnexpectedEof", message: "unexpected eof"),
-                        ],
-                    ),
-                    tokens: (
-                        rules: [
-                            (name: "Whitespace", regex: "[ \n]+", trivia: skip),
-                            (name: "Ident", regex: "[A-Za-z]+"),
-                            (name: "Int", regex: "[0-9]+"),
-                            (name: "Minus", literal: "-"),
-                            (name: "Plus", literal: "+"),
-                        ],
-                    ),
-                    syntax: (
-                        entry: "File",
-                        nodes: ["File", "Name"],
-                        rules: [
-                            (name: "File", pattern: [(label: "name", node: "Name"), (expr: "Expr")]),
-                            (name: "Name", pattern: [(label: "token", token: "Ident")]),
-                        ],
-                        token_sets: [],
-                    ),
-                    expressions: (
-                        items: [(
-                            name: "Expr",
-                            root_node: "Expr",
-                            atoms: [(token: "Int"), (node: "Name")],
-                            prefix: [(token: "Minus", node: "PrefixExpr")],
-                            infix: [(token: "Plus", node: "BinaryExpr", precedence: "Add", associativity: "left")],
-                        )],
-                    ),
-                    ast: (root: "File", nodes: []),
-                )"#,
-            )
-            .unwrap()
-    }
-
-    fn semantics(text: &str) -> SemanticsSpec {
-        ron::Options::default()
-            .with_default_extension(Extensions::IMPLICIT_SOME)
-            .from_str(text)
-            .unwrap()
-    }
-
-    fn valid_semantics() -> String {
-        r#"(
-            version: 1,
-            root: "File",
-            hir: [
-                (name: "File", kind: struct, fields: [(name: "name", ty: "Ident")]),
-                (name: "Ident", kind: struct, fields: [(name: "text", ty: "String")]),
-            ],
-            lower: [
-                (syntax: "File", hir: "File", fields: [(name: "name", accessor: "name")]),
-                (syntax: "Name", hir: "Ident", fields: [(name: "text", accessor: "text")]),
-            ],
-            operators: (
-                prefix: [(token: "Minus", variant: "Neg")],
-                binary: [(token: "Plus", variant: "Add")],
-            ),
-        )"#
-        .to_string()
-    }
-
-    #[test]
-    fn validates_semantics_spec() {
-        let grammar = grammar();
-        grammar.validate().unwrap();
-        semantics(&valid_semantics()).validate(&grammar).unwrap();
-    }
-
-    #[test]
-    fn rejects_unknown_syntax_accessor() {
-        let grammar = grammar();
-        let spec = valid_semantics().replace("accessor: \"name\"", "accessor: \"missing\"");
-        let error = semantics(&spec).validate(&grammar).unwrap_err().to_string();
-        assert!(error.contains("unknown accessor"));
-    }
-
-    #[test]
-    fn rejects_missing_operator_mapping() {
-        let grammar = grammar();
-        let spec = valid_semantics().replace("(token: \"Plus\", variant: \"Add\")", "");
-        let error = semantics(&spec).validate(&grammar).unwrap_err().to_string();
-        assert!(error.contains("missing binary operator mapping"));
-    }
-
-    #[test]
-    fn rejects_duplicate_hir_names() {
-        let grammar = grammar();
-        let spec = valid_semantics().replace(
-            "(name: \"Ident\", kind: struct, fields: [(name: \"text\", ty: \"String\")]),",
-            "(name: \"Ident\", kind: struct, fields: [(name: \"text\", ty: \"String\")]),\n                (name: \"Ident\", kind: struct, fields: []),",
-        );
-        let error = semantics(&spec).validate(&grammar).unwrap_err().to_string();
-        assert!(error.contains("duplicate HIR declaration"));
-    }
-
-    #[test]
-    fn rejects_invalid_hir_type_reference() {
-        let grammar = grammar();
-        let spec = valid_semantics().replace("ty: \"Ident\"", "ty: \"Missing\"");
-        let error = semantics(&spec).validate(&grammar).unwrap_err().to_string();
-        assert!(error.contains("not declared"));
-    }
 }
 
 fn gen_mod(header: &str) -> String {
@@ -523,242 +955,81 @@ impl LowerDiagnostic {{
     )
 }
 
-fn gen_hir(header: &str) -> String {
-    format!(
-        r#"{header}use dawn_syntax::ast;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceFile {{
-    pub imports: Vec<Import>,
-    pub document: Document,
-    pub syntax: ast::SourceFile,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Import {{
-    pub kind: Ident,
-    pub name: Ident,
-    pub path: PathLiteral,
-    pub syntax: ast::ImportDecl,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Document {{
-    pub kind: Ident,
-    pub name: Ident,
-    pub block: Block,
-    pub syntax: ast::Document,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Block {{
-    pub items: Vec<Item>,
-    pub syntax: ast::Block,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Item {{
-    FnDecl(FnDecl),
-    LetStmt(LetStmt),
-    Command(Command),
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FnDecl {{
-    pub name: Ident,
-    pub params: Vec<Param>,
-    pub return_type: Option<TypeRef>,
-    pub body: Block,
-    pub syntax: ast::FnDecl,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Param {{
-    pub name: Ident,
-    pub ty: Option<TypeRef>,
-    pub syntax: ast::Param,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LetStmt {{
-    pub name: Ident,
-    pub ty: Option<TypeRef>,
-    pub value: Option<Expr>,
-    pub syntax: ast::LetStmt,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Command {{
-    pub name: Ident,
-    pub args: Vec<Expr>,
-    pub initializer: Option<Expr>,
-    pub body: Option<Block>,
-    pub syntax: ast::Command,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeRef {{
-    pub name: Ident,
-    pub syntax: ast::TypeRef,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Ident {{
-    pub text: String,
-    pub syntax: ast::Name,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PathLiteral {{
-    pub raw_text: String,
-    pub syntax: ast::PathLit,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Expr {{
-    NameRef(NameRef),
-    Literal(Literal),
-    List(List),
-    Paren(Paren),
-    Call(Call),
-    Prefix(Prefix),
-    Binary(Binary),
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NameRef {{
-    pub name: Ident,
-    pub syntax: ast::NameRef,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Literal {{
-    String(RawLiteral<ast::StringLit>),
-    Int(RawLiteral<ast::IntLit>),
-    Float(RawLiteral<ast::FloatLit>),
-    Bool(BoolLiteral),
-    Color(RawLiteral<ast::ColorLit>),
-    Duration(RawLiteral<ast::DurationLit>),
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RawLiteral<Syntax> {{
-    pub raw_text: String,
-    pub syntax: Syntax,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BoolLiteral {{
-    pub value: bool,
-    pub syntax: ast::BoolLit,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct List {{
-    pub items: Vec<Expr>,
-    pub syntax: ast::ListExpr,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Paren {{
-    pub expr: Box<Expr>,
-    pub syntax: ast::ParenExpr,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Call {{
-    pub callee: Box<Expr>,
-    pub args: Vec<Expr>,
-    pub syntax: ast::CallExpr,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Prefix {{
-    pub op: PrefixOp,
-    pub expr: Box<Expr>,
-    pub syntax: ast::PrefixExpr,
-}}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Binary {{
-    pub left: Box<Expr>,
-    pub op: BinaryOp,
-    pub right: Box<Expr>,
-    pub syntax: ast::BinaryExpr,
-}}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PrefixOp {{
-    Neg,
-    Not,
-}}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BinaryOp {{
-    LogicalOr,
-    LogicalAnd,
-    BitOr,
-    BitXor,
-    BitAnd,
-    Eq,
-    NotEq,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-    Range,
-    Shl,
-    Shr,
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Rem,
-    Pow,
-}}
-"#
-    )
+fn gen_hir(header: &str, semantics: &SemanticsSpec) -> String {
+    let mut out = format!("{header}use dawn_syntax::ast;\n\n");
+    for decl in &semantics.hir {
+        let copy = decl.kind == HirDeclKind::Enum
+            && decl.variants.iter().all(|variant| variant.ty.is_none());
+        if copy {
+            out.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
+        } else {
+            out.push_str("#[derive(Debug, Clone, PartialEq, Eq)]\n");
+        }
+        match decl.kind {
+            HirDeclKind::Struct => {
+                out.push_str(&format!("pub struct {} {{\n", decl.name));
+                for field in &decl.fields {
+                    out.push_str(&format!("    pub {}: {},\n", field.name, field.ty));
+                }
+                if let Some(source) = &decl.source {
+                    let ty = if source == "SyntaxNode" {
+                        "dawn_syntax::SyntaxNode".to_string()
+                    } else {
+                        format!("ast::{source}")
+                    };
+                    out.push_str(&format!("    pub syntax: {ty},\n"));
+                }
+                out.push_str("}\n\n");
+            }
+            HirDeclKind::Enum => {
+                out.push_str(&format!("pub enum {} {{\n", decl.name));
+                for variant in &decl.variants {
+                    if let Some(ty) = &variant.ty {
+                        out.push_str(&format!("    {}({}),\n", variant.name, ty));
+                    } else {
+                        out.push_str(&format!("    {},\n", variant.name));
+                    }
+                }
+                out.push_str("}\n\n");
+            }
+        }
+    }
+    out
 }
 
-fn gen_lower(header: &str) -> String {
-    format!(
+fn gen_lower(header: &str, grammar: &Grammar, semantics: &SemanticsSpec) -> String {
+    let accessors = syntax_accessors(grammar);
+    let hir = semantics
+        .hir
+        .iter()
+        .map(|decl| (decl.name.as_str(), decl))
+        .collect::<BTreeMap<_, _>>();
+    let mut out = format!(
         r#"{header}use dawn_syntax::ast;
+use dawn_syntax::ast::AstNode;
 use dawn_syntax::SyntaxKind;
 
 use super::diagnostic::LowerDiagnostic;
 use super::hir;
 
-macro_rules! required {{
-    ($self:ident, $parent:literal, $field:literal, $value:expr, $lower:ident) => {{{{
-        let Some(value) = $value else {{
-            $self.missing($parent, $field);
-            return None;
-        }};
-        let Some(value) = $self.$lower(value) else {{
-            return None;
-        }};
-        value
-    }}}};
-}}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoweredSourceFile {{
-    pub root: Option<hir::SourceFile>,
+    pub root: Option<hir::{root}>,
     pub diagnostics: Vec<LowerDiagnostic>,
 }}
 
 pub fn lower_parse(parse: &dawn_syntax::Parse) -> LoweredSourceFile {{
     let mut ctx = LowerCtx::default();
-    let root = parse.source_file().and_then(|source| ctx.source_file(source));
+    let root = ast::{root_syntax}::cast(parse.syntax_node()).and_then(|source| ctx.{root_method}(source));
     LoweredSourceFile {{
         root,
         diagnostics: ctx.diagnostics,
     }}
 }}
 
-pub fn lower_source_file(source: ast::SourceFile) -> LoweredSourceFile {{
+pub fn lower_source_file(source: ast::{root_syntax}) -> LoweredSourceFile {{
     let mut ctx = LowerCtx::default();
-    let root = ctx.source_file(source);
+    let root = ctx.{root_method}(source);
     LoweredSourceFile {{
         root,
         diagnostics: ctx.diagnostics,
@@ -771,301 +1042,513 @@ struct LowerCtx {{
 }}
 
 impl LowerCtx {{
-    fn source_file(&mut self, syntax: ast::SourceFile) -> Option<hir::SourceFile> {{
-        let imports = syntax
-            .imports()
-            .into_iter()
-            .filter_map(|import| self.import(import))
-            .collect();
-        let document = required!(self, "SourceFile", "document", syntax.document(), document);
-        Some(hir::SourceFile {{
-            imports,
-            document,
-            syntax,
-        }})
-    }}
+"#,
+        root = semantics.root,
+        root_syntax = root_syntax(semantics),
+        root_method = to_snake(root_syntax(semantics)),
+    );
 
-    fn import(&mut self, syntax: ast::ImportDecl) -> Option<hir::Import> {{
-        let kind = required!(self, "ImportDecl", "kind", syntax.kind(), ident);
-        let name = required!(self, "ImportDecl", "name", syntax.name(), ident);
-        let path = required!(self, "ImportDecl", "path", syntax.path(), path_literal);
-        Some(hir::Import {{
-            kind,
-            name,
-            path,
-            syntax,
-        }})
-    }}
+    for rule in &semantics.lower {
+        let decl = hir.get(rule.hir.as_str()).expect("validated");
+        match decl.kind {
+            HirDeclKind::Struct => gen_struct_lower(&mut out, rule, decl, &accessors),
+            HirDeclKind::Enum => gen_enum_lower(&mut out, rule, decl, &hir),
+        }
+    }
 
-    fn document(&mut self, syntax: ast::Document) -> Option<hir::Document> {{
-        let kind = required!(self, "Document", "kind", syntax.kind(), ident);
-        let name = required!(self, "Document", "name", syntax.name(), ident);
-        let block = required!(self, "Document", "block", syntax.block(), block);
-        Some(hir::Document {{
-            kind,
-            name,
-            block,
-            syntax,
-        }})
-    }}
-
-    fn block(&mut self, syntax: ast::Block) -> Option<hir::Block> {{
-        let items = syntax
-            .items()
-            .into_iter()
-            .filter_map(|item| self.item(item))
-            .collect();
-        Some(hir::Block {{ items, syntax }})
-    }}
-
-    fn item(&mut self, syntax: ast::Item) -> Option<hir::Item> {{
-        match syntax.kind()? {{
-            ast::ItemKind::FnDecl(item) => self.fn_decl(item).map(hir::Item::FnDecl),
-            ast::ItemKind::LetStmt(item) => self.let_stmt(item).map(hir::Item::LetStmt),
-            ast::ItemKind::Command(item) => self.command(item).map(hir::Item::Command),
-        }}
-    }}
-
-    fn fn_decl(&mut self, syntax: ast::FnDecl) -> Option<hir::FnDecl> {{
-        let name = required!(self, "FnDecl", "name", syntax.name(), ident);
-        let params = syntax
-            .params()
-            .map(|params| {{
-                params
-                    .params()
-                    .into_iter()
-                    .filter_map(|param| self.param(param))
-                    .collect()
-            }})
-            .unwrap_or_else(|| {{
-                self.missing("FnDecl", "params");
-                Vec::new()
-            }});
-        let return_type = syntax.return_type().and_then(|ty| self.type_ref(ty));
-        let body = required!(self, "FnDecl", "body", syntax.body(), block);
-        Some(hir::FnDecl {{
-            name,
-            params,
-            return_type,
-            body,
-            syntax,
-        }})
-    }}
-
-    fn param(&mut self, syntax: ast::Param) -> Option<hir::Param> {{
-        let name = required!(self, "Param", "name", syntax.name(), ident);
-        let ty = syntax.ty().and_then(|ty| self.type_ref(ty));
-        Some(hir::Param {{ name, ty, syntax }})
-    }}
-
-    fn let_stmt(&mut self, syntax: ast::LetStmt) -> Option<hir::LetStmt> {{
-        let name = required!(self, "LetStmt", "name", syntax.name(), ident);
-        let ty = syntax.ty().and_then(|ty| self.type_ref(ty));
-        let value = syntax.value().and_then(|expr| self.expr(expr));
-        Some(hir::LetStmt {{
-            name,
-            ty,
-            value,
-            syntax,
-        }})
-    }}
-
-    fn command(&mut self, syntax: ast::Command) -> Option<hir::Command> {{
-        let head = required!(self, "Command", "head", syntax.head(), command_head);
-        let args = syntax
-            .args()
-            .into_iter()
-            .filter_map(|arg| self.expr(arg))
-            .collect();
-        let initializer = syntax
-            .initializer()
-            .and_then(|initializer| initializer.value())
-            .and_then(|expr| self.expr(expr));
-        let body = syntax.body().and_then(|block| self.block(block));
-        Some(hir::Command {{
-            name: head,
-            args,
-            initializer,
-            body,
-            syntax,
-        }})
-    }}
-
-    fn command_head(&mut self, syntax: ast::CommandHead) -> Option<hir::Ident> {{
-        let name = required!(self, "CommandHead", "name", syntax.name(), ident);
-        Some(name)
-    }}
-
-    fn type_ref(&mut self, syntax: ast::TypeRef) -> Option<hir::TypeRef> {{
-        let name = required!(self, "TypeRef", "name", syntax.name(), ident);
-        Some(hir::TypeRef {{ name, syntax }})
-    }}
-
-    fn ident(&mut self, syntax: ast::Name) -> Option<hir::Ident> {{
-        let text = syntax.text().unwrap_or_else(|| {{
-            self.missing("Name", "text");
-            String::new()
-        }});
-        Some(hir::Ident {{ text, syntax }})
-    }}
-
-    fn path_literal(&mut self, syntax: ast::PathLit) -> Option<hir::PathLiteral> {{
-        let raw_text = syntax.raw_text().unwrap_or_else(|| {{
-            self.missing("PathLit", "raw_text");
-            String::new()
-        }});
-        Some(hir::PathLiteral {{ raw_text, syntax }})
-    }}
-
-    fn expr(&mut self, syntax: ast::Expr) -> Option<hir::Expr> {{
-        match syntax.kind()? {{
-            ast::ExprKind::NameRef(expr) => self.name_ref(expr).map(hir::Expr::NameRef),
-            ast::ExprKind::StringLit(expr) => self.string_lit(expr).map(hir::Literal::String).map(hir::Expr::Literal),
-            ast::ExprKind::IntLit(expr) => self.int_lit(expr).map(hir::Literal::Int).map(hir::Expr::Literal),
-            ast::ExprKind::FloatLit(expr) => self.float_lit(expr).map(hir::Literal::Float).map(hir::Expr::Literal),
-            ast::ExprKind::BoolLit(expr) => self.bool_lit(expr).map(hir::Literal::Bool).map(hir::Expr::Literal),
-            ast::ExprKind::ColorLit(expr) => self.color_lit(expr).map(hir::Literal::Color).map(hir::Expr::Literal),
-            ast::ExprKind::DurationLit(expr) => self.duration_lit(expr).map(hir::Literal::Duration).map(hir::Expr::Literal),
-            ast::ExprKind::ListExpr(expr) => Some(hir::Expr::List(hir::List {{
-                items: expr.items().into_iter().filter_map(|item| self.expr(item)).collect(),
-                syntax: expr,
-            }})),
-            ast::ExprKind::ParenExpr(expr) => {{
-                let inner = required!(self, "ParenExpr", "expr", expr.expr(), expr);
-                Some(hir::Expr::Paren(hir::Paren {{
-                    expr: Box::new(inner),
-                    syntax: expr,
-                }}))
-            }}
-            ast::ExprKind::CallExpr(expr) => {{
-                let callee = required!(self, "CallExpr", "callee", expr.callee(), expr);
-                let args = expr.args().into_iter().filter_map(|arg| self.expr(arg)).collect();
-                Some(hir::Expr::Call(hir::Call {{
-                    callee: Box::new(callee),
-                    args,
-                    syntax: expr,
-                }}))
-            }}
-            ast::ExprKind::PrefixExpr(expr) => {{
-                let Some(op_token) = expr.op() else {{
-                    self.missing("PrefixExpr", "op");
-                    return None;
-                }};
-                let op = self.prefix_op(op_token.kind(), op_token.text())?;
-                let inner = required!(self, "PrefixExpr", "expr", expr.expr(), expr);
-                Some(hir::Expr::Prefix(hir::Prefix {{
-                    op,
-                    expr: Box::new(inner),
-                    syntax: expr,
-                }}))
-            }}
-            ast::ExprKind::BinaryExpr(expr) => {{
-                let left = required!(self, "BinaryExpr", "left", expr.left(), expr);
-                let Some(op_token) = expr.op() else {{
-                    self.missing("BinaryExpr", "op");
-                    return None;
-                }};
-                let op = self.binary_op(op_token.kind(), op_token.text())?;
-                let right = required!(self, "BinaryExpr", "right", expr.right(), expr);
-                Some(hir::Expr::Binary(hir::Binary {{
-                    left: Box::new(left),
-                    op,
-                    right: Box::new(right),
-                    syntax: expr,
-                }}))
-            }}
-        }}
-    }}
-
-    fn name_ref(&mut self, syntax: ast::NameRef) -> Option<hir::NameRef> {{
-        let name = required!(self, "NameRef", "name", syntax.name(), ident);
-        Some(hir::NameRef {{ name, syntax }})
-    }}
-
-    fn string_lit(&mut self, syntax: ast::StringLit) -> Option<hir::RawLiteral<ast::StringLit>> {{
-        self.raw_lit("StringLit", syntax.text(), syntax)
-    }}
-
-    fn int_lit(&mut self, syntax: ast::IntLit) -> Option<hir::RawLiteral<ast::IntLit>> {{
-        self.raw_lit("IntLit", syntax.text(), syntax)
-    }}
-
-    fn float_lit(&mut self, syntax: ast::FloatLit) -> Option<hir::RawLiteral<ast::FloatLit>> {{
-        self.raw_lit("FloatLit", syntax.text(), syntax)
-    }}
-
-    fn color_lit(&mut self, syntax: ast::ColorLit) -> Option<hir::RawLiteral<ast::ColorLit>> {{
-        self.raw_lit("ColorLit", syntax.text(), syntax)
-    }}
-
-    fn duration_lit(&mut self, syntax: ast::DurationLit) -> Option<hir::RawLiteral<ast::DurationLit>> {{
-        self.raw_lit("DurationLit", syntax.text(), syntax)
-    }}
-
-    fn raw_lit<Syntax>(&mut self, parent: &'static str, raw_text: Option<String>, syntax: Syntax) -> Option<hir::RawLiteral<Syntax>> {{
-        let raw_text = raw_text.unwrap_or_else(|| {{
-            self.missing(parent, "token");
-            String::new()
-        }});
-        Some(hir::RawLiteral {{ raw_text, syntax }})
-    }}
-
-    fn bool_lit(&mut self, syntax: ast::BoolLit) -> Option<hir::BoolLiteral> {{
-        let text = syntax.text().unwrap_or_else(|| {{
-            self.missing("BoolLit", "token");
-            String::new()
-        }});
-        Some(hir::BoolLiteral {{
-            value: text == "true",
-            syntax,
-        }})
-    }}
-
-    fn prefix_op(&mut self, kind: SyntaxKind, text: &str) -> Option<hir::PrefixOp> {{
-        match kind {{
-            SyntaxKind::Minus => Some(hir::PrefixOp::Neg),
-            SyntaxKind::Bang => Some(hir::PrefixOp::Not),
-            _ => {{
-                self.diagnostics.push(LowerDiagnostic::unknown_operator(text));
-                None
-            }}
-        }}
-    }}
-
-    fn binary_op(&mut self, kind: SyntaxKind, text: &str) -> Option<hir::BinaryOp> {{
-        match kind {{
-            SyntaxKind::OrOr => Some(hir::BinaryOp::LogicalOr),
-            SyntaxKind::AndAnd => Some(hir::BinaryOp::LogicalAnd),
-            SyntaxKind::Pipe => Some(hir::BinaryOp::BitOr),
-            SyntaxKind::Caret => Some(hir::BinaryOp::BitXor),
-            SyntaxKind::Ampersand => Some(hir::BinaryOp::BitAnd),
-            SyntaxKind::EqEq => Some(hir::BinaryOp::Eq),
-            SyntaxKind::BangEq => Some(hir::BinaryOp::NotEq),
-            SyntaxKind::Lt => Some(hir::BinaryOp::Lt),
-            SyntaxKind::Le => Some(hir::BinaryOp::Le),
-            SyntaxKind::Gt => Some(hir::BinaryOp::Gt),
-            SyntaxKind::Ge => Some(hir::BinaryOp::Ge),
-            SyntaxKind::DotDot => Some(hir::BinaryOp::Range),
-            SyntaxKind::Shl => Some(hir::BinaryOp::Shl),
-            SyntaxKind::Shr => Some(hir::BinaryOp::Shr),
-            SyntaxKind::Plus => Some(hir::BinaryOp::Add),
-            SyntaxKind::Minus => Some(hir::BinaryOp::Sub),
-            SyntaxKind::Star => Some(hir::BinaryOp::Mul),
-            SyntaxKind::Slash => Some(hir::BinaryOp::Div),
-            SyntaxKind::Percent => Some(hir::BinaryOp::Rem),
-            SyntaxKind::StarStar => Some(hir::BinaryOp::Pow),
-            _ => {{
-                self.diagnostics.push(LowerDiagnostic::unknown_operator(text));
-                None
-            }}
-        }}
-    }}
-
-    fn missing(&mut self, parent: &'static str, field: &'static str) {{
+    let prefix_ty = operator_hir_type(semantics, &hir, "prefix");
+    let binary_ty = operator_hir_type(semantics, &hir, "binary");
+    gen_operator_lower(&mut out, "prefix", &prefix_ty, &semantics.operators.prefix);
+    gen_operator_lower(&mut out, "binary", &binary_ty, &semantics.operators.binary);
+    out.push_str(
+        r#"    fn missing(&mut self, parent: &'static str, field: &'static str) {
         self.diagnostics
             .push(LowerDiagnostic::missing_required(parent, field));
-    }}
-}}
-"#
+    }
+}
+"#,
+    );
+    out
+}
+
+fn root_syntax(semantics: &SemanticsSpec) -> &str {
+    semantics
+        .lower
+        .iter()
+        .find(|rule| rule.hir == semantics.root)
+        .map(|rule| rule.syntax.as_str())
+        .expect("validated")
+}
+
+fn operator_hir_type(
+    semantics: &SemanticsSpec,
+    hir: &BTreeMap<&str, &HirDecl>,
+    label: &str,
+) -> String {
+    let scalar = format!("operator({label})");
+    for rule in &semantics.lower {
+        let decl = hir.get(rule.hir.as_str()).expect("validated");
+        for field in &rule.fields {
+            if field.scalar.as_deref() == Some(scalar.as_str()) {
+                return decl
+                    .fields
+                    .iter()
+                    .find(|candidate| candidate.name == field.name)
+                    .map(|field| field.ty.clone())
+                    .expect("validated");
+            }
+        }
+    }
+    unreachable!("validated")
+}
+
+fn gen_struct_lower(
+    out: &mut String,
+    rule: &LowerRule,
+    decl: &HirDecl,
+    accessors: &BTreeMap<String, BTreeMap<String, AccessorShape>>,
+) {
+    out.push_str(&format!(
+        "    fn {}(&mut self, syntax: ast::{}) -> Option<hir::{}> {{\n",
+        to_snake(&rule.syntax),
+        rule.syntax,
+        rule.hir
+    ));
+    let plans = rule
+        .fields
+        .iter()
+        .map(|field| {
+            let hir_field = decl
+                .fields
+                .iter()
+                .find(|candidate| candidate.name == field.name)
+                .expect("validated");
+            FieldPlan {
+                name: field.name.clone(),
+                ty: TypeRef::parse(&hir_field.ty).expect("validated"),
+                accessor: field.accessor.split('.').map(str::to_string).collect(),
+                scalar: field.scalar.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    for plan in &plans {
+        let shape = accessor_path_shape(accessors, &rule.syntax, &plan.accessor);
+        let expr = lower_field_expr(rule, plan, &shape);
+        out.push_str(&format!("        let {} = {};\n", plan.name, expr));
+    }
+    out.push_str(&format!("        Some(hir::{} {{\n", rule.hir));
+    for field in &decl.fields {
+        out.push_str(&format!("            {},\n", field.name));
+    }
+    if decl.source.is_some() {
+        out.push_str("            syntax,\n");
+    }
+    out.push_str("        })\n    }\n\n");
+}
+
+fn lower_field_expr(rule: &LowerRule, plan: &FieldPlan, shape: &AccessorShape) -> String {
+    if let Some(scalar) = &plan.scalar {
+        return scalar_expr(rule, plan, scalar);
+    }
+    match &plan.ty {
+        TypeRef::Vec(_inner) => {
+            let item_method = to_snake(shape.target());
+            if plan.accessor.len() == 1 {
+                format!(
+                    "{access}.into_iter().filter_map(|item| self.{item_method}(item)).collect()",
+                    access = access_expr("syntax", &plan.accessor, false, true)
+                )
+            } else {
+                let (prefix, final_part) = plan.accessor.split_at(plan.accessor.len() - 1);
+                format!(
+                    "{{ let Some(value) = {prefix} else {{ self.missing(\"{parent}\", \"{field}\"); return None; }}; value.{final_part}().into_iter().filter_map(|item| self.{item_method}(item)).collect() }}",
+                    prefix = access_expr("syntax", prefix, true, false),
+                    parent = rule.syntax,
+                    field = plan.name,
+                    final_part = final_part[0]
+                )
+            }
+        }
+        TypeRef::Option(inner) => {
+            let method = to_snake(shape.target());
+            let lowered = if matches!(**inner, TypeRef::Box(_)) {
+                format!(".and_then(|value| self.{method}(value).map(Box::new))")
+            } else {
+                format!(".and_then(|value| self.{method}(value))")
+            };
+            format!(
+                "{}{lowered}",
+                access_expr("syntax", &plan.accessor, true, false)
+            )
+        }
+        TypeRef::Box(_) => {
+            let method = to_snake(shape.target());
+            format!(
+                "{{ let value = {}; Box::new(value) }}",
+                required_lower_expr(rule, plan, &method)
+            )
+        }
+        TypeRef::Named(_) => {
+            let method = to_snake(shape.target());
+            required_lower_expr(rule, plan, &method)
+        }
+    }
+}
+
+fn scalar_expr(rule: &LowerRule, plan: &FieldPlan, scalar: &str) -> String {
+    match scalar {
+        "text" | "raw_text" => format!(
+            "{{ let Some(value) = {access} else {{ self.missing(\"{parent}\", \"{field}\"); return None; }}; value }}",
+            access = access_expr("syntax", &plan.accessor, true, false),
+            parent = rule.syntax,
+            field = plan.name
+        ),
+        "bool" => format!(
+            "{{ let Some(value) = {access} else {{ self.missing(\"{parent}\", \"{field}\"); return None; }}; value == \"true\" }}",
+            access = access_expr("syntax", &plan.accessor, true, false),
+            parent = rule.syntax,
+            field = plan.name
+        ),
+        "operator(prefix)" => operator_field_expr(rule, plan, "prefix_op"),
+        "operator(binary)" => operator_field_expr(rule, plan, "binary_op"),
+        _ => unreachable!("validated"),
+    }
+}
+
+fn operator_field_expr(rule: &LowerRule, plan: &FieldPlan, method: &str) -> String {
+    format!(
+        "{{ let Some(op_token) = {access} else {{ self.missing(\"{parent}\", \"{field}\"); return None; }}; self.{method}(op_token.kind(), op_token.text())? }}",
+        access = access_expr("syntax", &plan.accessor, true, false),
+        parent = rule.syntax,
+        field = plan.name
     )
+}
+
+fn required_lower_expr(rule: &LowerRule, plan: &FieldPlan, method: &str) -> String {
+    format!(
+        "{{ let Some(value) = {access} else {{ self.missing(\"{parent}\", \"{field}\"); return None; }}; self.{method}(value)? }}",
+        access = access_expr("syntax", &plan.accessor, true, false),
+        parent = rule.syntax,
+        field = plan.name
+    )
+}
+
+fn access_expr(base: &str, parts: &[String], optional_chain: bool, final_many: bool) -> String {
+    let mut expr = base.to_string();
+    for (index, part) in parts.iter().enumerate() {
+        let last = index == parts.len() - 1;
+        if index == 0 {
+            expr = format!("{expr}.{part}()");
+        } else if last && final_many {
+            expr = format!("{expr}.map(|value| value.{part}()).unwrap_or_default()");
+        } else if optional_chain {
+            expr = format!("{expr}.and_then(|value| value.{part}())");
+        } else {
+            expr = format!("{expr}.and_then(|value| value.{part}())");
+        }
+    }
+    expr
+}
+
+fn accessor_path_shape(
+    accessors: &BTreeMap<String, BTreeMap<String, AccessorShape>>,
+    syntax: &str,
+    parts: &[String],
+) -> AccessorShape {
+    let mut current = syntax.to_string();
+    let mut shape = None;
+    for part in parts {
+        let item = accessors
+            .get(&current)
+            .and_then(|items| items.get(part))
+            .expect("validated")
+            .clone();
+        current = item.target().to_string();
+        shape = Some(item);
+    }
+    shape.expect("validated")
+}
+
+fn gen_enum_lower(
+    out: &mut String,
+    rule: &LowerRule,
+    decl: &HirDecl,
+    hir: &BTreeMap<&str, &HirDecl>,
+) {
+    let dispatch = rule.dispatch.as_deref().unwrap_or("kind");
+    out.push_str(&format!(
+        "    fn {}(&mut self, syntax: ast::{}) -> Option<hir::{}> {{\n",
+        to_snake(&rule.syntax),
+        rule.syntax,
+        rule.hir
+    ));
+    out.push_str(&format!("        match syntax.{dispatch}()? {{\n"));
+    for variant in &rule.variants {
+        let lower_method = to_snake(&variant.syntax);
+        let maps = wrapper_chain(&decl.name, &variant.target, hir);
+        out.push_str(&format!(
+            "            ast::{}Kind::{}(node) => self.{lower_method}(node){}{},\n",
+            rule.syntax,
+            variant.syntax,
+            maps.iter()
+                .map(|wrapper| format!(".map(hir::{wrapper})"))
+                .collect::<Vec<_>>()
+                .join(""),
+            if maps.is_empty() { "" } else { "" }
+        ));
+    }
+    out.push_str("        }\n    }\n\n");
+}
+
+fn wrapper_chain(root: &str, target: &str, hir: &BTreeMap<&str, &HirDecl>) -> Vec<String> {
+    let mut current = root.to_string();
+    let mut wrappers = Vec::new();
+    for part in target.split("::") {
+        wrappers.push(format!("{current}::{part}"));
+        let decl = hir.get(current.as_str()).expect("validated");
+        let variant = decl
+            .variants
+            .iter()
+            .find(|variant| variant.name == part)
+            .expect("validated");
+        current = variant.ty.clone().expect("validated");
+    }
+    wrappers.reverse();
+    wrappers
+}
+
+fn gen_operator_lower(out: &mut String, label: &str, hir_enum: &str, mappings: &[OperatorMapping]) {
+    out.push_str(&format!(
+        "    fn {label}_op(&mut self, kind: SyntaxKind, text: &str) -> Option<hir::{hir_enum}> {{\n"
+    ));
+    out.push_str("        match kind {\n");
+    for mapping in mappings {
+        out.push_str(&format!(
+            "            SyntaxKind::{} => Some(hir::{}::{}),\n",
+            mapping.token, hir_enum, mapping.variant
+        ));
+    }
+    out.push_str(
+        r#"            _ => {
+                self.diagnostics.push(LowerDiagnostic::unknown_operator(text));
+                None
+            }
+        }
+    }
+
+"#,
+    );
+}
+
+fn to_snake(name: &str) -> String {
+    let mut out = String::new();
+    for (index, ch) in name.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if index > 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn grammar() -> Grammar {
+        ron::Options::default()
+            .with_default_extension(Extensions::IMPLICIT_SOME)
+            .from_str(
+                r#"(
+                    version: 2,
+                    language: (type_name: "ToyLanguage", syntax_kind: "ToyKind"),
+                    diagnostics: (
+                        invalid_token: "InvalidToken",
+                        unexpected_token: "UnexpectedToken",
+                        unexpected_eof: "UnexpectedEof",
+                        kinds: [
+                            (name: "InvalidToken", message: "invalid token"),
+                            (name: "UnexpectedToken", message: "unexpected token"),
+                            (name: "UnexpectedEof", message: "unexpected eof"),
+                        ],
+                    ),
+                    tokens: (
+                        rules: [
+                            (name: "Whitespace", regex: "[ \n]+", trivia: skip),
+                            (name: "Ident", regex: "[A-Za-z]+"),
+                            (name: "Int", regex: "[0-9]+"),
+                            (name: "Minus", literal: "-"),
+                            (name: "Plus", literal: "+"),
+                        ],
+                    ),
+                    syntax: (
+                        entry: "File",
+                        nodes: ["File", "Name"],
+                        rules: [
+                            (name: "File", pattern: [(label: "name", node: "Name"), (label: "expr", expr: "Expr")]),
+                            (name: "Name", pattern: [(label: "token", token: "Ident")]),
+                        ],
+                        token_sets: [],
+                    ),
+                    expressions: (
+                        items: [(
+                            name: "Expr",
+                            root_node: "Expr",
+                            atoms: [(token: "Int"), (node: "Name")],
+                            prefix: [(token: "Minus", node: "PrefixExpr")],
+                            infix: [(token: "Plus", node: "BinaryExpr", precedence: "Add", associativity: "left")],
+                        )],
+                    ),
+                    ast: (root: "File", nodes: []),
+                )"#,
+            )
+            .unwrap()
+    }
+
+    fn semantics(text: &str) -> SemanticsSpec {
+        ron::Options::default()
+            .with_default_extension(Extensions::IMPLICIT_SOME)
+            .from_str(text)
+            .unwrap()
+    }
+
+    fn valid_semantics() -> String {
+        r#"(
+            version: 1,
+            root: "Program",
+            hir: [
+                (name: "Program", kind: struct, source: "File", fields: [(name: "name", ty: "Ident"), (name: "expr", ty: "Expr")]),
+                (name: "Ident", kind: struct, source: "Name", fields: [(name: "text", ty: "String")]),
+                (name: "Expr", kind: enum, variants: [
+                    (name: "Ident", ty: "Ident"),
+                    (name: "Prefix", ty: "PrefixExpr"),
+                    (name: "Binary", ty: "BinaryExpr"),
+                ]),
+                (name: "PrefixExpr", kind: struct, source: "PrefixExpr", fields: [(name: "op", ty: "PrefixOp"), (name: "expr", ty: "Box<Expr>")]),
+                (name: "BinaryExpr", kind: struct, source: "BinaryExpr", fields: [(name: "left", ty: "Box<Expr>"), (name: "op", ty: "BinaryOp"), (name: "right", ty: "Box<Expr>")]),
+                (name: "PrefixOp", kind: enum, variants: [(name: "Neg")]),
+                (name: "BinaryOp", kind: enum, variants: [(name: "Add")]),
+            ],
+            lower: [
+                (syntax: "File", hir: "Program", fields: [(name: "name", accessor: "name"), (name: "expr", accessor: "expr")]),
+                (syntax: "Name", hir: "Ident", fields: [(name: "text", accessor: "text", scalar: "text")]),
+                (syntax: "Expr", hir: "Expr", dispatch: "kind", variants: [
+                    (syntax: "Name", target: "Ident"),
+                    (syntax: "PrefixExpr", target: "Prefix"),
+                    (syntax: "BinaryExpr", target: "Binary"),
+                ]),
+                (syntax: "PrefixExpr", hir: "PrefixExpr", fields: [(name: "op", accessor: "op", scalar: "operator(prefix)"), (name: "expr", accessor: "expr")]),
+                (syntax: "BinaryExpr", hir: "BinaryExpr", fields: [(name: "left", accessor: "left"), (name: "op", accessor: "op", scalar: "operator(binary)"), (name: "right", accessor: "right")]),
+            ],
+            operators: (
+                prefix: [(token: "Minus", variant: "Neg")],
+                binary: [(token: "Plus", variant: "Add")],
+            ),
+        )"#
+        .to_string()
+    }
+
+    #[test]
+    fn validates_semantics_spec() {
+        let grammar = grammar();
+        grammar.validate().unwrap();
+        semantics(&valid_semantics()).validate(&grammar).unwrap();
+    }
+
+    #[test]
+    fn rejects_unknown_syntax_accessor() {
+        let grammar = grammar();
+        let spec = valid_semantics().replace("accessor: \"name\"", "accessor: \"missing\"");
+        let error = semantics(&spec).validate(&grammar).unwrap_err().to_string();
+        assert!(error.contains("unknown accessor"));
+    }
+
+    #[test]
+    fn rejects_missing_operator_mapping() {
+        let grammar = grammar();
+        let spec = valid_semantics().replace("(token: \"Plus\", variant: \"Add\")", "");
+        let error = semantics(&spec).validate(&grammar).unwrap_err().to_string();
+        assert!(error.contains("missing binary operator mapping"));
+    }
+
+    #[test]
+    fn rejects_duplicate_hir_names() {
+        let grammar = grammar();
+        let spec = valid_semantics().replace(
+            "(name: \"Ident\", kind: struct, source: \"Name\", fields: [(name: \"text\", ty: \"String\")]),",
+            "(name: \"Ident\", kind: struct, source: \"Name\", fields: [(name: \"text\", ty: \"String\")]),\n                (name: \"Ident\", kind: struct, fields: []),",
+        );
+        let error = semantics(&spec).validate(&grammar).unwrap_err().to_string();
+        assert!(error.contains("duplicate HIR declaration"));
+    }
+
+    #[test]
+    fn rejects_invalid_hir_type_reference() {
+        let grammar = grammar();
+        let spec = valid_semantics().replace("ty: \"Ident\"", "ty: \"Missing\"");
+        let error = semantics(&spec).validate(&grammar).unwrap_err().to_string();
+        assert!(error.contains("not declared"));
+    }
+
+    #[test]
+    fn rejects_missing_hir_field_population() {
+        let grammar = grammar();
+        let spec = valid_semantics().replace(
+            "(syntax: \"File\", hir: \"Program\", fields: [(name: \"name\", accessor: \"name\"), (name: \"expr\", accessor: \"expr\")])",
+            "(syntax: \"File\", hir: \"Program\", fields: [(name: \"name\", accessor: \"name\")])",
+        );
+        let error = semantics(&spec).validate(&grammar).unwrap_err().to_string();
+        assert!(error.contains("does not populate HIR field"));
+    }
+
+    #[test]
+    fn rejects_extra_lower_field() {
+        let grammar = grammar();
+        let spec = valid_semantics().replace(
+            "(syntax: \"Name\", hir: \"Ident\", fields: [(name: \"text\", accessor: \"text\", scalar: \"text\")])",
+            "(syntax: \"Name\", hir: \"Ident\", fields: [(name: \"text\", accessor: \"text\", scalar: \"text\"), (name: \"extra\", accessor: \"text\", scalar: \"text\")])",
+        );
+        let error = semantics(&spec).validate(&grammar).unwrap_err().to_string();
+        assert!(error.contains("unknown HIR field"));
+    }
+
+    #[test]
+    fn rejects_invalid_enum_target_path() {
+        let grammar = grammar();
+        let spec = valid_semantics().replace("target: \"Binary\"", "target: \"Missing\"");
+        let error = semantics(&spec).validate(&grammar).unwrap_err().to_string();
+        assert!(error.contains("unknown variant"));
+    }
+
+    #[test]
+    fn rejects_invalid_operator_variant() {
+        let grammar = grammar();
+        let spec = valid_semantics().replace("variant: \"Add\"", "variant: \"Missing\"");
+        let error = semantics(&spec).validate(&grammar).unwrap_err().to_string();
+        assert!(error.contains("unknown variant"));
+    }
+
+    #[test]
+    fn generated_hir_uses_toy_names() {
+        let spec = semantics(&valid_semantics());
+        let hir = gen_hir("", &spec);
+        assert!(hir.contains("pub struct Program"));
+        assert!(hir.contains("pub enum PrefixOp"));
+        assert!(!hir.contains("SourceFile"));
+    }
+
+    #[test]
+    fn generated_lower_changes_with_rules() {
+        let grammar = grammar();
+        let mut spec = semantics(&valid_semantics());
+        let lower = gen_lower("", &grammar, &spec);
+        assert!(lower.contains("fn file"));
+        spec.lower[0].fields[0].accessor = "expr".to_string();
+        let changed = gen_lower("", &grammar, &spec);
+        assert_ne!(lower, changed);
+    }
 }
