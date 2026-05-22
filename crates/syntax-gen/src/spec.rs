@@ -1475,7 +1475,7 @@ mod tests {
 
     fn validate(text: &str) -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let path = dir.path().join("grammar.ron");
+        let path = dir.path().join("syntax.ron");
         fs::write(&path, text)?;
         let grammar = Grammar::load(&path)?;
         grammar.validate()
