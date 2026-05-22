@@ -2,6 +2,7 @@
 
 use dawn_syntax::ast;
 use dawn_syntax::ast::AstNode;
+use dawn_syntax::LexToken;
 use dawn_syntax::SyntaxKind;
 use dawn_syntax::SyntaxNode;
 use dawn_syntax::SyntaxToken;
@@ -16,7 +17,7 @@ pub struct LoweredSourceFile {
 }
 
 pub fn lower_parse(parse: &dawn_syntax::Parse) -> LoweredSourceFile {
-    let mut ctx = LowerCtx::default();
+    let mut ctx = LowerCtx::new(parse.tokens());
     let root = ast::SourceFile::cast(parse.syntax_node()).and_then(|source| ctx.source_file(source));
     LoweredSourceFile {
         root,
@@ -33,43 +34,61 @@ pub fn lower_source_file(source: ast::SourceFile) -> LoweredSourceFile {
     }
 }
 
-#[derive(Default)]
 struct LowerCtx {
     diagnostics: Vec<LowerDiagnostic>,
+    source_map: SourceMap,
+}
+
+impl LowerCtx {
+    fn new(tokens: &[LexToken]) -> Self {
+        Self {
+            diagnostics: Vec::new(),
+            source_map: SourceMap::new(tokens),
+        }
+    }
+}
+
+impl Default for LowerCtx {
+    fn default() -> Self {
+        Self {
+            diagnostics: Vec::new(),
+            source_map: SourceMap::default(),
+        }
+    }
 }
 
 impl LowerCtx {
     fn source_file(&mut self, syntax: ast::SourceFile) -> Option<hir::SourceFile> {
         let imports = syntax.imports().into_iter().filter_map(|item| self.import_decl(item)).collect();
-        let document = { let Some(value) = syntax.document() else { self.missing("SourceFile", "document", node_range(syntax.syntax())); return None; }; self.document(value)? };
+        let document = { let Some(value) = syntax.document() else { self.missing("SourceFile", "document", self.node_range(syntax.syntax())); return None; }; self.document(value)? };
         Some(hir::SourceFile {
             imports,
             document,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn import_decl(&mut self, syntax: ast::ImportDecl) -> Option<hir::Import> {
-        let kind = { let Some(value) = syntax.kind() else { self.missing("ImportDecl", "kind", node_range(syntax.syntax())); return None; }; self.name(value)? };
-        let name = { let Some(value) = syntax.name() else { self.missing("ImportDecl", "name", node_range(syntax.syntax())); return None; }; self.name(value)? };
-        let path = { let Some(value) = syntax.path() else { self.missing("ImportDecl", "path", node_range(syntax.syntax())); return None; }; self.path_lit(value)? };
+        let kind = { let Some(value) = syntax.kind() else { self.missing("ImportDecl", "kind", self.node_range(syntax.syntax())); return None; }; self.name(value)? };
+        let name = { let Some(value) = syntax.name() else { self.missing("ImportDecl", "name", self.node_range(syntax.syntax())); return None; }; self.name(value)? };
+        let path = { let Some(value) = syntax.path() else { self.missing("ImportDecl", "path", self.node_range(syntax.syntax())); return None; }; self.path_lit(value)? };
         Some(hir::Import {
             kind,
             name,
             path,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn document(&mut self, syntax: ast::Document) -> Option<hir::Document> {
-        let kind = { let Some(value) = syntax.kind() else { self.missing("Document", "kind", node_range(syntax.syntax())); return None; }; self.name(value)? };
-        let name = { let Some(value) = syntax.name() else { self.missing("Document", "name", node_range(syntax.syntax())); return None; }; self.name(value)? };
-        let block = { let Some(value) = syntax.block() else { self.missing("Document", "block", node_range(syntax.syntax())); return None; }; self.block(value)? };
+        let kind = { let Some(value) = syntax.kind() else { self.missing("Document", "kind", self.node_range(syntax.syntax())); return None; }; self.name(value)? };
+        let name = { let Some(value) = syntax.name() else { self.missing("Document", "name", self.node_range(syntax.syntax())); return None; }; self.name(value)? };
+        let block = { let Some(value) = syntax.block() else { self.missing("Document", "block", self.node_range(syntax.syntax())); return None; }; self.block(value)? };
         Some(hir::Document {
             kind,
             name,
             block,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
@@ -77,7 +96,7 @@ impl LowerCtx {
         let items = syntax.items().into_iter().filter_map(|item| self.item(item)).collect();
         Some(hir::Block {
             items,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
@@ -90,43 +109,43 @@ impl LowerCtx {
     }
 
     fn fn_decl(&mut self, syntax: ast::FnDecl) -> Option<hir::FnDecl> {
-        let name = { let Some(value) = syntax.name() else { self.missing("FnDecl", "name", node_range(syntax.syntax())); return None; }; self.name(value)? };
-        let params = { let Some(value) = syntax.params() else { self.missing("FnDecl", "params", node_range(syntax.syntax())); return None; }; value.params().into_iter().filter_map(|item| self.param(item)).collect() };
+        let name = { let Some(value) = syntax.name() else { self.missing("FnDecl", "name", self.node_range(syntax.syntax())); return None; }; self.name(value)? };
+        let params = { let Some(value) = syntax.params() else { self.missing("FnDecl", "params", self.node_range(syntax.syntax())); return None; }; value.params().into_iter().filter_map(|item| self.param(item)).collect() };
         let return_type = syntax.return_type().and_then(|value| self.type_ref(value));
-        let body = { let Some(value) = syntax.body() else { self.missing("FnDecl", "body", node_range(syntax.syntax())); return None; }; self.block(value)? };
+        let body = { let Some(value) = syntax.body() else { self.missing("FnDecl", "body", self.node_range(syntax.syntax())); return None; }; self.block(value)? };
         Some(hir::FnDecl {
             name,
             params,
             return_type,
             body,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn param(&mut self, syntax: ast::Param) -> Option<hir::Param> {
-        let name = { let Some(value) = syntax.name() else { self.missing("Param", "name", node_range(syntax.syntax())); return None; }; self.name(value)? };
+        let name = { let Some(value) = syntax.name() else { self.missing("Param", "name", self.node_range(syntax.syntax())); return None; }; self.name(value)? };
         let ty = syntax.ty().and_then(|value| self.type_ref(value));
         Some(hir::Param {
             name,
             ty,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn let_stmt(&mut self, syntax: ast::LetStmt) -> Option<hir::LetStmt> {
-        let name = { let Some(value) = syntax.name() else { self.missing("LetStmt", "name", node_range(syntax.syntax())); return None; }; self.name(value)? };
+        let name = { let Some(value) = syntax.name() else { self.missing("LetStmt", "name", self.node_range(syntax.syntax())); return None; }; self.name(value)? };
         let ty = syntax.ty().and_then(|value| self.type_ref(value));
         let value = syntax.value().and_then(|value| self.expr(value));
         Some(hir::LetStmt {
             name,
             ty,
             value,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn command(&mut self, syntax: ast::Command) -> Option<hir::Command> {
-        let name = { let Some(value) = syntax.head().and_then(|value| value.name()) else { self.missing("Command", "name", node_range(syntax.syntax())); return None; }; self.name(value)? };
+        let name = { let Some(value) = syntax.head().and_then(|value| value.name()) else { self.missing("Command", "name", self.node_range(syntax.syntax())); return None; }; self.name(value)? };
         let args = syntax.args().into_iter().filter_map(|item| self.expr(item)).collect();
         let initializer = syntax.initializer().and_then(|value| value.value()).and_then(|value| self.expr(value));
         let body = syntax.body().and_then(|value| self.block(value));
@@ -135,31 +154,32 @@ impl LowerCtx {
             args,
             initializer,
             body,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn type_ref(&mut self, syntax: ast::TypeRef) -> Option<hir::TypeRef> {
-        let name = { let Some(value) = syntax.name() else { self.missing("TypeRef", "name", node_range(syntax.syntax())); return None; }; self.name(value)? };
+        let name = { let Some(value) = syntax.name() else { self.missing("TypeRef", "name", self.node_range(syntax.syntax())); return None; }; self.name(value)? };
         Some(hir::TypeRef {
             name,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn name(&mut self, syntax: ast::Name) -> Option<hir::Ident> {
-        let text = { let Some(value) = syntax.text() else { self.missing("Name", "text", node_range(syntax.syntax())); return None; }; value };
+        let text = { let Some(value) = syntax.text() else { self.missing("Name", "text", self.node_range(syntax.syntax())); return None; }; value };
         Some(hir::Ident {
             text,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn path_lit(&mut self, syntax: ast::PathLit) -> Option<hir::PathLiteral> {
-        let raw_text = { let Some(value) = syntax.raw_text() else { self.missing("PathLit", "raw_text", node_range(syntax.syntax())); return None; }; value };
+        let raw_text = { let Some(value) = syntax.raw_text() else { self.missing("PathLit", "raw_text", self.node_range(syntax.syntax())); return None; }; value };
         Some(hir::PathLiteral {
             raw_text,
-            syntax,
+            range: self.node_range(syntax.syntax()),
+            inner_range: self.path_literal_inner_range(&syntax),
         })
     }
 
@@ -181,58 +201,58 @@ impl LowerCtx {
     }
 
     fn name_ref(&mut self, syntax: ast::NameRef) -> Option<hir::NameRef> {
-        let name = { let Some(value) = syntax.name() else { self.missing("NameRef", "name", node_range(syntax.syntax())); return None; }; self.name(value)? };
+        let name = { let Some(value) = syntax.name() else { self.missing("NameRef", "name", self.node_range(syntax.syntax())); return None; }; self.name(value)? };
         Some(hir::NameRef {
             name,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn string_lit(&mut self, syntax: ast::StringLit) -> Option<hir::StringLiteral> {
-        let raw_text = { let Some(value) = syntax.text() else { self.missing("StringLit", "raw_text", node_range(syntax.syntax())); return None; }; value };
+        let raw_text = { let Some(value) = syntax.text() else { self.missing("StringLit", "raw_text", self.node_range(syntax.syntax())); return None; }; value };
         Some(hir::StringLiteral {
             raw_text,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn int_lit(&mut self, syntax: ast::IntLit) -> Option<hir::IntLiteral> {
-        let raw_text = { let Some(value) = syntax.text() else { self.missing("IntLit", "raw_text", node_range(syntax.syntax())); return None; }; value };
+        let raw_text = { let Some(value) = syntax.text() else { self.missing("IntLit", "raw_text", self.node_range(syntax.syntax())); return None; }; value };
         Some(hir::IntLiteral {
             raw_text,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn float_lit(&mut self, syntax: ast::FloatLit) -> Option<hir::FloatLiteral> {
-        let raw_text = { let Some(value) = syntax.text() else { self.missing("FloatLit", "raw_text", node_range(syntax.syntax())); return None; }; value };
+        let raw_text = { let Some(value) = syntax.text() else { self.missing("FloatLit", "raw_text", self.node_range(syntax.syntax())); return None; }; value };
         Some(hir::FloatLiteral {
             raw_text,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn color_lit(&mut self, syntax: ast::ColorLit) -> Option<hir::ColorLiteral> {
-        let raw_text = { let Some(value) = syntax.text() else { self.missing("ColorLit", "raw_text", node_range(syntax.syntax())); return None; }; value };
+        let raw_text = { let Some(value) = syntax.text() else { self.missing("ColorLit", "raw_text", self.node_range(syntax.syntax())); return None; }; value };
         Some(hir::ColorLiteral {
             raw_text,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn duration_lit(&mut self, syntax: ast::DurationLit) -> Option<hir::DurationLiteral> {
-        let raw_text = { let Some(value) = syntax.text() else { self.missing("DurationLit", "raw_text", node_range(syntax.syntax())); return None; }; value };
+        let raw_text = { let Some(value) = syntax.text() else { self.missing("DurationLit", "raw_text", self.node_range(syntax.syntax())); return None; }; value };
         Some(hir::DurationLiteral {
             raw_text,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn bool_lit(&mut self, syntax: ast::BoolLit) -> Option<hir::BoolLiteral> {
-        let value = { let Some(value) = syntax.text() else { self.missing("BoolLit", "value", node_range(syntax.syntax())); return None; }; value == "true" };
+        let value = { let Some(value) = syntax.text() else { self.missing("BoolLit", "value", self.node_range(syntax.syntax())); return None; }; value == "true" };
         Some(hir::BoolLiteral {
             value,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
@@ -240,47 +260,47 @@ impl LowerCtx {
         let items = syntax.items().into_iter().filter_map(|item| self.expr(item)).collect();
         Some(hir::List {
             items,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn paren_expr(&mut self, syntax: ast::ParenExpr) -> Option<hir::Paren> {
-        let expr = { let value = { let Some(value) = syntax.expr() else { self.missing("ParenExpr", "expr", node_range(syntax.syntax())); return None; }; self.expr(value)? }; Box::new(value) };
+        let expr = { let value = { let Some(value) = syntax.expr() else { self.missing("ParenExpr", "expr", self.node_range(syntax.syntax())); return None; }; self.expr(value)? }; Box::new(value) };
         Some(hir::Paren {
             expr,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn call_expr(&mut self, syntax: ast::CallExpr) -> Option<hir::Call> {
-        let callee = { let value = { let Some(value) = syntax.callee() else { self.missing("CallExpr", "callee", node_range(syntax.syntax())); return None; }; self.expr(value)? }; Box::new(value) };
+        let callee = { let value = { let Some(value) = syntax.callee() else { self.missing("CallExpr", "callee", self.node_range(syntax.syntax())); return None; }; self.expr(value)? }; Box::new(value) };
         let args = syntax.args().into_iter().filter_map(|item| self.expr(item)).collect();
         Some(hir::Call {
             callee,
             args,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn prefix_expr(&mut self, syntax: ast::PrefixExpr) -> Option<hir::Prefix> {
-        let op = { let Some(op_token) = syntax.op() else { self.missing("PrefixExpr", "op", node_range(syntax.syntax())); return None; }; self.prefix_op(op_token.kind(), op_token.text(), token_range(&op_token))? };
-        let expr = { let value = { let Some(value) = syntax.expr() else { self.missing("PrefixExpr", "expr", node_range(syntax.syntax())); return None; }; self.expr(value)? }; Box::new(value) };
+        let op = { let Some(op_token) = syntax.op() else { self.missing("PrefixExpr", "op", self.node_range(syntax.syntax())); return None; }; self.prefix_op(op_token.kind(), op_token.text(), self.token_range(&op_token))? };
+        let expr = { let value = { let Some(value) = syntax.expr() else { self.missing("PrefixExpr", "expr", self.node_range(syntax.syntax())); return None; }; self.expr(value)? }; Box::new(value) };
         Some(hir::Prefix {
             op,
             expr,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
     fn binary_expr(&mut self, syntax: ast::BinaryExpr) -> Option<hir::Binary> {
-        let left = { let value = { let Some(value) = syntax.left() else { self.missing("BinaryExpr", "left", node_range(syntax.syntax())); return None; }; self.expr(value)? }; Box::new(value) };
-        let op = { let Some(op_token) = syntax.op() else { self.missing("BinaryExpr", "op", node_range(syntax.syntax())); return None; }; self.binary_op(op_token.kind(), op_token.text(), token_range(&op_token))? };
-        let right = { let value = { let Some(value) = syntax.right() else { self.missing("BinaryExpr", "right", node_range(syntax.syntax())); return None; }; self.expr(value)? }; Box::new(value) };
+        let left = { let value = { let Some(value) = syntax.left() else { self.missing("BinaryExpr", "left", self.node_range(syntax.syntax())); return None; }; self.expr(value)? }; Box::new(value) };
+        let op = { let Some(op_token) = syntax.op() else { self.missing("BinaryExpr", "op", self.node_range(syntax.syntax())); return None; }; self.binary_op(op_token.kind(), op_token.text(), self.token_range(&op_token))? };
+        let right = { let value = { let Some(value) = syntax.right() else { self.missing("BinaryExpr", "right", self.node_range(syntax.syntax())); return None; }; self.expr(value)? }; Box::new(value) };
         Some(hir::Binary {
             left,
             op,
             right,
-            syntax,
+            range: self.node_range(syntax.syntax()),
         })
     }
 
@@ -324,18 +344,93 @@ impl LowerCtx {
         }
     }
 
+    fn node_range(&self, node: &SyntaxNode) -> std::ops::Range<usize> {
+        self.source_map.node_range(node)
+    }
+
+    fn token_range(&self, token: &SyntaxToken) -> std::ops::Range<usize> {
+        self.source_map.token_range(token)
+    }
+
+    fn path_literal_inner_range(&self, path: &ast::PathLit) -> Option<std::ops::Range<usize>> {
+        let start = path
+            .syntax()
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::Lt)?;
+        let end = path
+            .syntax()
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::Gt)?;
+
+        let start = self.token_range(&start).end;
+        let end = self.token_range(&end).start;
+        Some(start..end)
+    }
+
     fn missing(&mut self, parent: &'static str, field: &'static str, range: std::ops::Range<usize>) {
         self.diagnostics
             .push(LowerDiagnostic::missing_required(parent, field, range));
     }
 }
 
-fn node_range(node: &SyntaxNode) -> std::ops::Range<usize> {
+#[derive(Default)]
+struct SourceMap {
+    tokens: Vec<SourceTokenRange>,
+}
+
+struct SourceTokenRange {
+    compact: std::ops::Range<usize>,
+    source: std::ops::Range<usize>,
+}
+
+impl SourceMap {
+    fn new(tokens: &[LexToken]) -> Self {
+        let mut compact_start = 0;
+        let tokens = tokens
+            .iter()
+            .map(|token| {
+                let compact_end = compact_start + token.text.len();
+                let mapped = SourceTokenRange {
+                    compact: compact_start..compact_end,
+                    source: token.range.clone(),
+                };
+                compact_start = compact_end;
+                mapped
+            })
+            .collect();
+        Self { tokens }
+    }
+
+    fn node_range(&self, node: &SyntaxNode) -> std::ops::Range<usize> {
+        self.source_range(compact_node_range(node))
+    }
+
+    fn token_range(&self, token: &SyntaxToken) -> std::ops::Range<usize> {
+        self.source_range(compact_token_range(token))
+    }
+
+    fn source_range(&self, compact: std::ops::Range<usize>) -> std::ops::Range<usize> {
+        let Some(first) = self.tokens.iter().find(|token| token.compact.end > compact.start) else {
+            return compact;
+        };
+        let last = self
+            .tokens
+            .iter()
+            .rev()
+            .find(|token| token.compact.start < compact.end)
+            .unwrap_or(first);
+        first.source.start..last.source.end
+    }
+}
+
+fn compact_node_range(node: &SyntaxNode) -> std::ops::Range<usize> {
     let range = node.text_range();
     u32::from(range.start()) as usize..u32::from(range.end()) as usize
 }
 
-fn token_range(token: &SyntaxToken) -> std::ops::Range<usize> {
+fn compact_token_range(token: &SyntaxToken) -> std::ops::Range<usize> {
     let range = token.text_range();
     u32::from(range.start()) as usize..u32::from(range.end()) as usize
 }

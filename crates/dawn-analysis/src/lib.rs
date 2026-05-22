@@ -3,8 +3,8 @@ use std::fmt;
 use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
 
-use dawn_semantics::{hir, lower_parse, LowerDiagnosticKind};
-use dawn_syntax::{parse, SyntaxKind, SyntaxNode};
+use dawn_semantics::{hir, lower_parse, LowerDiagnosticKind, LoweredSourceFile};
+use dawn_syntax::parse;
 use salsa::Setter;
 
 #[salsa::input]
@@ -31,36 +31,9 @@ fn parse_file(db: &dyn salsa::Database, file: FileInput) -> dawn_syntax::Parse {
 }
 
 #[salsa::tracked]
-fn lower_file(db: &dyn salsa::Database, file: FileInput) -> LoweredFacts {
+fn lower_file(db: &dyn salsa::Database, file: FileInput) -> LoweredSourceFile {
     let parse = parse_file(db, file);
-    let lowered = lower_parse(&parse);
-    let file_id = FileId(file.id(db));
-
-    let mut diagnostics = lowered
-        .diagnostics
-        .iter()
-        .map(|diagnostic| AnalysisDiagnostic {
-            file: file_id,
-            message: diagnostic.message(),
-            severity: DiagnosticSeverity::Error,
-            range: diagnostic.range.clone(),
-            source: DiagnosticSource::Lowering,
-            code: DiagnosticCode::Lowering(diagnostic.kind.clone().into()),
-        })
-        .collect::<Vec<_>>();
-
-    let mut imports = Vec::new();
-    let mut document_symbols = Vec::new();
-    if let Some(root) = &lowered.root {
-        imports = collect_import_facts(file_id, root, &mut diagnostics);
-        collect_document_symbols(file_id, root, &mut document_symbols);
-    }
-
-    LoweredFacts {
-        diagnostics,
-        imports,
-        document_symbols,
-    }
+    lower_parse(&parse)
 }
 
 #[salsa::tracked]
@@ -83,12 +56,31 @@ fn file_facts(db: &dyn salsa::Database, file: FileInput) -> FileFacts {
                 code: DiagnosticCode::Syntax(diagnostic.kind),
             }),
     );
-    diagnostics.extend(lowered.diagnostics);
+    diagnostics.extend(
+        lowered
+            .diagnostics
+            .iter()
+            .map(|diagnostic| AnalysisDiagnostic {
+                file: file_id,
+                message: diagnostic.message(),
+                severity: DiagnosticSeverity::Error,
+                range: diagnostic.range.clone(),
+                source: DiagnosticSource::Lowering,
+                code: DiagnosticCode::Lowering(diagnostic.kind.clone().into()),
+            }),
+    );
+
+    let mut imports = Vec::new();
+    let mut document_symbols = Vec::new();
+    if let Some(root) = &lowered.root {
+        imports = collect_import_facts(file_id, root, &mut diagnostics);
+        collect_document_symbols(file_id, root, &mut document_symbols);
+    }
 
     FileFacts {
         diagnostics,
-        imports: lowered.imports,
-        document_symbols: lowered.document_symbols,
+        imports,
+        document_symbols,
     }
 }
 
@@ -335,13 +327,6 @@ struct FileFacts {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct LoweredFacts {
-    diagnostics: Vec<AnalysisDiagnostic>,
-    imports: Vec<ImportFact>,
-    document_symbols: Vec<DocumentSymbol>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 struct ImportFact {
     kind: String,
     name: String,
@@ -533,8 +518,8 @@ fn collect_document_symbols(
             name: import.name.text.clone(),
             kind: SymbolKind::Import,
             file,
-            range: node_range(import.syntax.syntax()),
-            selection_range: node_range(import.name.syntax.syntax()),
+            range: import.range.clone(),
+            selection_range: import.name.range.clone(),
         });
     }
 
@@ -542,8 +527,8 @@ fn collect_document_symbols(
         name: root.document.name.text.clone(),
         kind: SymbolKind::Document,
         file,
-        range: node_range(root.document.syntax.syntax()),
-        selection_range: node_range(root.document.name.syntax.syntax()),
+        range: root.document.range.clone(),
+        selection_range: root.document.name.range.clone(),
     });
 
     collect_block_symbols(file, &root.document.block, symbols);
@@ -558,7 +543,7 @@ fn collect_import_facts(
         .iter()
         .map(|import| {
             let raw_path = import.path.raw_text.clone();
-            let path_range = path_literal_inner_range(&import.path.syntax);
+            let path_range = import.path.inner_range.clone();
             let path = match DawnPath::parse(raw_path.clone()) {
                 Ok(path) => Some(path),
                 Err(_) => {
@@ -579,7 +564,7 @@ fn collect_import_facts(
                 name: import.name.text.clone(),
                 raw_path,
                 path,
-                range: node_range(import.syntax.syntax()),
+                range: import.range.clone(),
                 path_range,
             }
         })
@@ -594,16 +579,16 @@ fn collect_block_symbols(file: FileId, block: &hir::Block, symbols: &mut Vec<Doc
                     name: function.name.text.clone(),
                     kind: SymbolKind::Function,
                     file,
-                    range: node_range(function.syntax.syntax()),
-                    selection_range: node_range(function.name.syntax.syntax()),
+                    range: function.range.clone(),
+                    selection_range: function.name.range.clone(),
                 });
                 for param in &function.params {
                     symbols.push(DocumentSymbol {
                         name: param.name.text.clone(),
                         kind: SymbolKind::Parameter,
                         file,
-                        range: node_range(param.syntax.syntax()),
-                        selection_range: node_range(param.name.syntax.syntax()),
+                        range: param.range.clone(),
+                        selection_range: param.name.range.clone(),
                     });
                 }
                 collect_block_symbols(file, &function.body, symbols);
@@ -613,8 +598,8 @@ fn collect_block_symbols(file: FileId, block: &hir::Block, symbols: &mut Vec<Doc
                     name: let_stmt.name.text.clone(),
                     kind: SymbolKind::Let,
                     file,
-                    range: node_range(let_stmt.syntax.syntax()),
-                    selection_range: node_range(let_stmt.name.syntax.syntax()),
+                    range: let_stmt.range.clone(),
+                    selection_range: let_stmt.name.range.clone(),
                 });
             }
             hir::Item::Command(command) => {
@@ -622,8 +607,8 @@ fn collect_block_symbols(file: FileId, block: &hir::Block, symbols: &mut Vec<Doc
                     name: command.name.text.clone(),
                     kind: SymbolKind::Command,
                     file,
-                    range: node_range(command.syntax.syntax()),
-                    selection_range: node_range(command.name.syntax.syntax()),
+                    range: command.range.clone(),
+                    selection_range: command.name.range.clone(),
                 });
                 if let Some(body) = &command.body {
                     collect_block_symbols(file, body, symbols);
@@ -631,33 +616,6 @@ fn collect_block_symbols(file: FileId, block: &hir::Block, symbols: &mut Vec<Doc
             }
         }
     }
-}
-
-fn node_range(node: &SyntaxNode) -> Range<usize> {
-    let range = node.text_range();
-    u32::from(range.start()) as usize..u32::from(range.end()) as usize
-}
-
-fn token_range(token: &dawn_syntax::SyntaxToken) -> Range<usize> {
-    let range = token.text_range();
-    u32::from(range.start()) as usize..u32::from(range.end()) as usize
-}
-
-fn path_literal_inner_range(path: &dawn_syntax::ast::PathLit) -> Option<Range<usize>> {
-    let start = path
-        .syntax()
-        .children_with_tokens()
-        .filter_map(|element| element.into_token())
-        .find(|token| token.kind() == SyntaxKind::Lt)?;
-    let end = path
-        .syntax()
-        .children_with_tokens()
-        .filter_map(|element| element.into_token())
-        .find(|token| token.kind() == SyntaxKind::Gt)?;
-
-    let start = token_range(&start).end;
-    let end = token_range(&end).start;
-    Some(start..end)
 }
 
 fn normalize_path(path: PathBuf) -> PathBuf {
@@ -803,7 +761,7 @@ effect Main {
 
         assert!(diagnostic.message.contains("unresolved import"));
         assert_eq!(diagnostic.code, DiagnosticCode::UnresolvedImport);
-        assert_eq!(diagnostic.range, Some(24..51));
+        assert_eq!(diagnostic.range, Some(28..55));
     }
 
     #[test]
@@ -904,7 +862,10 @@ effect Main {
 
         assert_eq!(analysis.file(file).unwrap().revision(), 0);
         assert_eq!(analysis.cached_revision(file).unwrap(), 0);
-        assert_eq!(analysis.cached_path(file).unwrap(), PathBuf::from("main.effect.dawn"));
+        assert_eq!(
+            analysis.cached_path(file).unwrap(),
+            PathBuf::from("main.effect.dawn")
+        );
     }
 
     #[test]
@@ -915,19 +876,30 @@ effect Main {
             "import effect Pulse from <effects/pulse.effect.dawn>;\neffect Main {}",
         );
 
-        assert!(analysis.diagnostics(main).unwrap().iter().any(|diagnostic| {
-            diagnostic.source == DiagnosticSource::Analysis
-                && diagnostic.code == DiagnosticCode::UnresolvedImport
-        }));
+        assert!(analysis
+            .diagnostics(main)
+            .unwrap()
+            .iter()
+            .any(|diagnostic| {
+                diagnostic.source == DiagnosticSource::Analysis
+                    && diagnostic.code == DiagnosticCode::UnresolvedImport
+            }));
         assert_eq!(analysis.file(main).unwrap().revision(), 0);
 
         let target = analysis.set_file("show/effects/pulse.effect.dawn", "effect Pulse {}");
 
-        assert!(!analysis.diagnostics(main).unwrap().iter().any(|diagnostic| {
-            diagnostic.source == DiagnosticSource::Analysis
-                && diagnostic.code == DiagnosticCode::UnresolvedImport
-        }));
-        assert_eq!(analysis.imports(main).unwrap()[0].resolved_file, Some(target));
+        assert!(!analysis
+            .diagnostics(main)
+            .unwrap()
+            .iter()
+            .any(|diagnostic| {
+                diagnostic.source == DiagnosticSource::Analysis
+                    && diagnostic.code == DiagnosticCode::UnresolvedImport
+            }));
+        assert_eq!(
+            analysis.imports(main).unwrap()[0].resolved_file,
+            Some(target)
+        );
         assert_eq!(analysis.file(main).unwrap().revision(), 0);
     }
 
@@ -954,7 +926,10 @@ effect Main {
         let analysis = Analysis::new();
         let missing = FileId(99);
 
-        assert_eq!(analysis.file(missing), Err(AnalysisError::UnknownFile(missing)));
+        assert_eq!(
+            analysis.file(missing),
+            Err(AnalysisError::UnknownFile(missing))
+        );
         assert_eq!(
             analysis.analyze_file(missing),
             Err(AnalysisError::UnknownFile(missing))
@@ -963,7 +938,10 @@ effect Main {
             analysis.diagnostics(missing),
             Err(AnalysisError::UnknownFile(missing))
         );
-        assert_eq!(analysis.imports(missing), Err(AnalysisError::UnknownFile(missing)));
+        assert_eq!(
+            analysis.imports(missing),
+            Err(AnalysisError::UnknownFile(missing))
+        );
         assert_eq!(
             analysis.document_symbols(missing),
             Err(AnalysisError::UnknownFile(missing))

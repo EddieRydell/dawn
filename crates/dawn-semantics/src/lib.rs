@@ -16,31 +16,49 @@ mod tests {
         lower_parse(&parse)
     }
 
+    fn range_text<'a>(source: &'a str, range: &std::ops::Range<usize>) -> &'a str {
+        &source[range.clone()]
+    }
+
+    fn assert_send_sync<T: Send + Sync>() {}
+
     #[test]
     fn lowers_import_and_document() {
-        let lowered =
-            lower("import display MainDisplay from <displays/main.display.dawn>;\neffect Pulse {}");
+        let source =
+            "import display MainDisplay from <displays/main.display.dawn>;\neffect Pulse {}";
+        let lowered = lower(source);
         assert_eq!(lowered.diagnostics, []);
 
         let root = lowered.root.unwrap();
+        assert_eq!(range_text(source, &root.range), source);
         assert_eq!(root.imports[0].kind.text, "display");
         assert_eq!(root.imports[0].name.text, "MainDisplay");
         assert_eq!(root.imports[0].path.raw_text, "displays/main.display.dawn");
+        assert_eq!(range_text(source, &root.imports[0].kind.range), "display");
+        assert_eq!(
+            range_text(source, &root.imports[0].name.range),
+            "MainDisplay"
+        );
+        assert_eq!(
+            range_text(source, root.imports[0].path.inner_range.as_ref().unwrap()),
+            "displays/main.display.dawn"
+        );
         assert_eq!(root.document.kind.text, "effect");
         assert_eq!(root.document.name.text, "Pulse");
+        assert_eq!(range_text(source, &root.document.kind.range), "effect");
+        assert_eq!(range_text(source, &root.document.name.range), "Pulse");
         assert!(root.document.block.items.is_empty());
     }
 
     #[test]
     fn lowers_functions_params_lets_and_commands() {
-        let lowered = lower(
-            r#"effect Pulse {
+        let source = r#"effect Pulse {
   fn sample(t float) color {
     let phase float = 1.0;
     color base = accent {}
   }
-}"#,
-        );
+}"#;
+        let lowered = lower(source);
         assert_eq!(lowered.diagnostics, []);
 
         let root = lowered.root.unwrap();
@@ -48,14 +66,20 @@ mod tests {
             panic!("expected function");
         };
         assert_eq!(function.name.text, "sample");
+        assert!(range_text(source, &function.range).starts_with("fn sample"));
+        assert_eq!(range_text(source, &function.name.range), "sample");
         assert_eq!(function.params[0].name.text, "t");
         assert_eq!(function.params[0].ty.as_ref().unwrap().name.text, "float");
+        assert_eq!(range_text(source, &function.params[0].range), "t float");
+        assert_eq!(range_text(source, &function.params[0].name.range), "t");
         assert_eq!(function.return_type.as_ref().unwrap().name.text, "color");
 
         let hir::Item::LetStmt(let_stmt) = &function.body.items[0] else {
             panic!("expected let");
         };
         assert_eq!(let_stmt.name.text, "phase");
+        assert!(range_text(source, &let_stmt.range).starts_with("let phase"));
+        assert_eq!(range_text(source, &let_stmt.name.range), "phase");
         assert!(let_stmt.ty.is_some());
         assert!(matches!(
             let_stmt.value.as_ref().unwrap(),
@@ -66,6 +90,8 @@ mod tests {
             panic!("expected command");
         };
         assert_eq!(command.name.text, "color");
+        assert!(range_text(source, &command.range).starts_with("color base"));
+        assert_eq!(range_text(source, &command.name.range), "color");
         assert_eq!(command.args.len(), 1);
         assert!(command.initializer.is_some());
         assert!(command.body.is_some());
@@ -105,5 +131,10 @@ mod tests {
                 }
             )
         }));
+    }
+
+    #[test]
+    fn lowered_source_file_is_send_sync() {
+        assert_send_sync::<LoweredSourceFile>();
     }
 }

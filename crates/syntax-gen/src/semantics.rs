@@ -961,7 +961,11 @@ impl LowerDiagnostic {{
 }
 
 fn gen_hir(header: &str, semantics: &SemanticsSpec) -> String {
-    let mut out = format!("{header}use dawn_syntax::ast;\n\n");
+    let has_source = semantics.hir.iter().any(|decl| decl.source.is_some());
+    let mut out = header.to_string();
+    if has_source {
+        out.push_str("use std::ops::Range;\n\n");
+    }
     for decl in &semantics.hir {
         let copy = decl.kind == HirDeclKind::Enum
             && decl.variants.iter().all(|variant| variant.ty.is_none());
@@ -976,13 +980,11 @@ fn gen_hir(header: &str, semantics: &SemanticsSpec) -> String {
                 for field in &decl.fields {
                     out.push_str(&format!("    pub {}: {},\n", field.name, field.ty));
                 }
-                if let Some(source) = &decl.source {
-                    let ty = if source == "SyntaxNode" {
-                        "dawn_syntax::SyntaxNode".to_string()
-                    } else {
-                        format!("ast::{source}")
-                    };
-                    out.push_str(&format!("    pub syntax: {ty},\n"));
+                if decl.source.is_some() {
+                    out.push_str("    pub range: Range<usize>,\n");
+                    if decl.name == "PathLiteral" {
+                        out.push_str("    pub inner_range: Option<Range<usize>>,\n");
+                    }
                 }
                 out.push_str("}\n\n");
             }
@@ -1012,6 +1014,7 @@ fn gen_lower(header: &str, grammar: &Grammar, semantics: &SemanticsSpec) -> Stri
     let mut out = format!(
         r#"{header}use dawn_syntax::ast;
 use dawn_syntax::ast::AstNode;
+use dawn_syntax::LexToken;
 use dawn_syntax::SyntaxKind;
 use dawn_syntax::SyntaxNode;
 use dawn_syntax::SyntaxToken;
@@ -1026,7 +1029,7 @@ pub struct LoweredSourceFile {{
 }}
 
 pub fn lower_parse(parse: &dawn_syntax::Parse) -> LoweredSourceFile {{
-    let mut ctx = LowerCtx::default();
+    let mut ctx = LowerCtx::new(parse.tokens());
     let root = ast::{root_syntax}::cast(parse.syntax_node()).and_then(|source| ctx.{root_method}(source));
     LoweredSourceFile {{
         root,
@@ -1043,9 +1046,27 @@ pub fn lower_source_file(source: ast::{root_syntax}) -> LoweredSourceFile {{
     }}
 }}
 
-#[derive(Default)]
 struct LowerCtx {{
     diagnostics: Vec<LowerDiagnostic>,
+    source_map: SourceMap,
+}}
+
+impl LowerCtx {{
+    fn new(tokens: &[LexToken]) -> Self {{
+        Self {{
+            diagnostics: Vec::new(),
+            source_map: SourceMap::new(tokens),
+        }}
+    }}
+}}
+
+impl Default for LowerCtx {{
+    fn default() -> Self {{
+        Self {{
+            diagnostics: Vec::new(),
+            source_map: SourceMap::default(),
+        }}
+    }}
 }}
 
 impl LowerCtx {{
@@ -1068,18 +1089,93 @@ impl LowerCtx {{
     gen_operator_lower(&mut out, "prefix", &prefix_ty, &semantics.operators.prefix);
     gen_operator_lower(&mut out, "binary", &binary_ty, &semantics.operators.binary);
     out.push_str(
-        r#"    fn missing(&mut self, parent: &'static str, field: &'static str, range: std::ops::Range<usize>) {
+        r#"    fn node_range(&self, node: &SyntaxNode) -> std::ops::Range<usize> {
+        self.source_map.node_range(node)
+    }
+
+    fn token_range(&self, token: &SyntaxToken) -> std::ops::Range<usize> {
+        self.source_map.token_range(token)
+    }
+
+    fn path_literal_inner_range(&self, path: &ast::PathLit) -> Option<std::ops::Range<usize>> {
+        let start = path
+            .syntax()
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::Lt)?;
+        let end = path
+            .syntax()
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::Gt)?;
+
+        let start = self.token_range(&start).end;
+        let end = self.token_range(&end).start;
+        Some(start..end)
+    }
+
+    fn missing(&mut self, parent: &'static str, field: &'static str, range: std::ops::Range<usize>) {
         self.diagnostics
             .push(LowerDiagnostic::missing_required(parent, field, range));
     }
 }
 
-fn node_range(node: &SyntaxNode) -> std::ops::Range<usize> {
+#[derive(Default)]
+struct SourceMap {
+    tokens: Vec<SourceTokenRange>,
+}
+
+struct SourceTokenRange {
+    compact: std::ops::Range<usize>,
+    source: std::ops::Range<usize>,
+}
+
+impl SourceMap {
+    fn new(tokens: &[LexToken]) -> Self {
+        let mut compact_start = 0;
+        let tokens = tokens
+            .iter()
+            .map(|token| {
+                let compact_end = compact_start + token.text.len();
+                let mapped = SourceTokenRange {
+                    compact: compact_start..compact_end,
+                    source: token.range.clone(),
+                };
+                compact_start = compact_end;
+                mapped
+            })
+            .collect();
+        Self { tokens }
+    }
+
+    fn node_range(&self, node: &SyntaxNode) -> std::ops::Range<usize> {
+        self.source_range(compact_node_range(node))
+    }
+
+    fn token_range(&self, token: &SyntaxToken) -> std::ops::Range<usize> {
+        self.source_range(compact_token_range(token))
+    }
+
+    fn source_range(&self, compact: std::ops::Range<usize>) -> std::ops::Range<usize> {
+        let Some(first) = self.tokens.iter().find(|token| token.compact.end > compact.start) else {
+            return compact;
+        };
+        let last = self
+            .tokens
+            .iter()
+            .rev()
+            .find(|token| token.compact.start < compact.end)
+            .unwrap_or(first);
+        first.source.start..last.source.end
+    }
+}
+
+fn compact_node_range(node: &SyntaxNode) -> std::ops::Range<usize> {
     let range = node.text_range();
     u32::from(range.start()) as usize..u32::from(range.end()) as usize
 }
 
-fn token_range(token: &SyntaxToken) -> std::ops::Range<usize> {
+fn compact_token_range(token: &SyntaxToken) -> std::ops::Range<usize> {
     let range = token.text_range();
     u32::from(range.start()) as usize..u32::from(range.end()) as usize
 }
@@ -1158,7 +1254,10 @@ fn gen_struct_lower(
         out.push_str(&format!("            {},\n", field.name));
     }
     if decl.source.is_some() {
-        out.push_str("            syntax,\n");
+        out.push_str("            range: self.node_range(syntax.syntax()),\n");
+        if decl.name == "PathLiteral" {
+            out.push_str("            inner_range: self.path_literal_inner_range(&syntax),\n");
+        }
     }
     out.push_str("        })\n    }\n\n");
 }
@@ -1178,7 +1277,7 @@ fn lower_field_expr(rule: &LowerRule, plan: &FieldPlan, shape: &AccessorShape) -
             } else {
                 let (prefix, final_part) = plan.accessor.split_at(plan.accessor.len() - 1);
                 format!(
-                    "{{ let Some(value) = {prefix} else {{ self.missing(\"{parent}\", \"{field}\", node_range(syntax.syntax())); return None; }}; value.{final_part}().into_iter().filter_map(|item| self.{item_method}(item)).collect() }}",
+                    "{{ let Some(value) = {prefix} else {{ self.missing(\"{parent}\", \"{field}\", self.node_range(syntax.syntax())); return None; }}; value.{final_part}().into_iter().filter_map(|item| self.{item_method}(item)).collect() }}",
                     prefix = access_expr("syntax", prefix, true, false),
                     parent = rule.syntax,
                     field = plan.name,
@@ -1215,13 +1314,13 @@ fn lower_field_expr(rule: &LowerRule, plan: &FieldPlan, shape: &AccessorShape) -
 fn scalar_expr(rule: &LowerRule, plan: &FieldPlan, scalar: &str) -> String {
     match scalar {
         "text" | "raw_text" => format!(
-            "{{ let Some(value) = {access} else {{ self.missing(\"{parent}\", \"{field}\", node_range(syntax.syntax())); return None; }}; value }}",
+            "{{ let Some(value) = {access} else {{ self.missing(\"{parent}\", \"{field}\", self.node_range(syntax.syntax())); return None; }}; value }}",
             access = access_expr("syntax", &plan.accessor, true, false),
             parent = rule.syntax,
             field = plan.name
         ),
         "bool" => format!(
-            "{{ let Some(value) = {access} else {{ self.missing(\"{parent}\", \"{field}\", node_range(syntax.syntax())); return None; }}; value == \"true\" }}",
+            "{{ let Some(value) = {access} else {{ self.missing(\"{parent}\", \"{field}\", self.node_range(syntax.syntax())); return None; }}; value == \"true\" }}",
             access = access_expr("syntax", &plan.accessor, true, false),
             parent = rule.syntax,
             field = plan.name
@@ -1234,7 +1333,7 @@ fn scalar_expr(rule: &LowerRule, plan: &FieldPlan, scalar: &str) -> String {
 
 fn operator_field_expr(rule: &LowerRule, plan: &FieldPlan, method: &str) -> String {
     format!(
-        "{{ let Some(op_token) = {access} else {{ self.missing(\"{parent}\", \"{field}\", node_range(syntax.syntax())); return None; }}; self.{method}(op_token.kind(), op_token.text(), token_range(&op_token))? }}",
+        "{{ let Some(op_token) = {access} else {{ self.missing(\"{parent}\", \"{field}\", self.node_range(syntax.syntax())); return None; }}; self.{method}(op_token.kind(), op_token.text(), self.token_range(&op_token))? }}",
         access = access_expr("syntax", &plan.accessor, true, false),
         parent = rule.syntax,
         field = plan.name
@@ -1243,7 +1342,7 @@ fn operator_field_expr(rule: &LowerRule, plan: &FieldPlan, method: &str) -> Stri
 
 fn required_lower_expr(rule: &LowerRule, plan: &FieldPlan, method: &str) -> String {
     format!(
-        "{{ let Some(value) = {access} else {{ self.missing(\"{parent}\", \"{field}\", node_range(syntax.syntax())); return None; }}; self.{method}(value)? }}",
+        "{{ let Some(value) = {access} else {{ self.missing(\"{parent}\", \"{field}\", self.node_range(syntax.syntax())); return None; }}; self.{method}(value)? }}",
         access = access_expr("syntax", &plan.accessor, true, false),
         parent = rule.syntax,
         field = plan.name
@@ -1555,7 +1654,30 @@ mod tests {
         let hir = gen_hir("", &spec);
         assert!(hir.contains("pub struct Program"));
         assert!(hir.contains("pub enum PrefixOp"));
+        assert!(hir.contains("use std::ops::Range;"));
+        assert!(hir.contains("pub range: Range<usize>"));
+        assert!(!hir.contains("use dawn_syntax::ast"));
+        assert!(!hir.contains("pub syntax:"));
         assert!(!hir.contains("SourceFile"));
+    }
+
+    #[test]
+    fn generated_path_literal_has_inner_range_metadata() {
+        let spec = semantics(
+            r#"(
+                version: 1,
+                root: "PathLiteral",
+                hir: [
+                    (name: "PathLiteral", kind: struct, source: "PathLit", fields: [(name: "raw_text", ty: "String")]),
+                ],
+                lower: [],
+                operators: (prefix: [], binary: []),
+            )"#,
+        );
+        let hir = gen_hir("", &spec);
+        assert!(hir.contains("pub range: Range<usize>"));
+        assert!(hir.contains("pub inner_range: Option<Range<usize>>"));
+        assert!(!hir.contains("pub syntax:"));
     }
 
     #[test]

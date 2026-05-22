@@ -17,6 +17,7 @@ pub type SyntaxElement = rowan::SyntaxElement<DawnLanguage>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parse {
     green: GreenNode,
+    tokens: Vec<LexToken>,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -33,6 +34,10 @@ impl Parse {
         &self.diagnostics
     }
 
+    pub fn tokens(&self) -> &[LexToken] {
+        &self.tokens
+    }
+
     pub fn source_file(&self) -> Option<ast::SourceFile> {
         ast::SourceFile::cast(self.syntax_node())
     }
@@ -40,9 +45,13 @@ impl Parse {
 
 pub fn parse(source: &str) -> Parse {
     let (tokens, mut diagnostics) = lex(source);
-    let (green, mut parse_diagnostics) = parse_green(tokens);
+    let (green, mut parse_diagnostics) = parse_green(tokens.clone());
     diagnostics.append(&mut parse_diagnostics);
-    Parse { green, diagnostics }
+    Parse {
+        green,
+        tokens,
+        diagnostics,
+    }
 }
 
 #[cfg(test)]
