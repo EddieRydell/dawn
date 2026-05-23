@@ -1,17 +1,15 @@
 import * as monaco from "monaco-editor";
 import type { OpenEditor } from "../store/workbenchStore";
 import type { LanguageProblem } from "../types";
-import { DawnLspClient, dawnLanguageIdForPath, ensureDawnLanguageRegistered, isDawnFile } from "./dawnLanguageClient";
+import { dawnLanguageIdForPath, ensureDawnLanguageRegistered } from "./dawnLanguage";
 
 type DawnEditorProject = {
   root: string;
-  languageServiceUrl: string;
 };
 
 type RuntimeCallbacks = {
   onContentChanged: (path: string, content: string) => void;
   onProblemsChanged: (problems: LanguageProblem[]) => void;
-  onError: (message: string) => void;
   saveFile: () => Promise<void>;
   activateNextEditor: (direction: 1 | -1) => void;
 };
@@ -20,14 +18,12 @@ export class DawnEditorRuntime {
   private editor: monaco.editor.IStandaloneCodeEditor | undefined;
   private container: HTMLElement | undefined;
   private project: DawnEditorProject | null = null;
-  private lspClient: DawnLspClient | undefined;
   private models = new Map<string, monaco.editor.ITextModel>();
   private modelDisposables = new Map<string, monaco.IDisposable>();
   private syncingModels = new Set<string>();
   private openEditors: OpenEditor[] = [];
   private activeFile: string | null = null;
   private started = false;
-  private disposed = false;
 
   constructor(private readonly callbacks: RuntimeCallbacks) {}
 
@@ -59,26 +55,19 @@ export class DawnEditorRuntime {
 
     this.syncOpenFiles(this.openEditors);
     this.setActiveFile(this.activeFile);
-    void this.startLanguageClient();
   }
 
   async setProject(project: DawnEditorProject | null): Promise<void> {
-    const sameProject =
-      this.project?.root === project?.root &&
-      this.project?.languageServiceUrl === project?.languageServiceUrl;
+    const sameProject = this.project?.root === project?.root;
     if (sameProject) return;
 
     this.project = project;
-    await this.disposeLanguageClient();
 
     if (!project) {
       this.callbacks.onProblemsChanged([]);
       this.editor?.setModel(null);
       this.disposeModels();
-      return;
     }
-
-    await this.startLanguageClient();
   }
 
   syncOpenFiles(openEditors: OpenEditor[]): void {
@@ -130,8 +119,6 @@ export class DawnEditorRuntime {
   }
 
   async dispose(): Promise<void> {
-    this.disposed = true;
-    await this.disposeLanguageClient();
     this.editor?.dispose();
     this.editor = undefined;
     this.disposeModels();
@@ -161,9 +148,6 @@ export class DawnEditorRuntime {
     const existing = this.models.get(openEditor.path);
     if (existing) {
       monaco.editor.setModelLanguage(existing, languageId);
-      if (isDawnFile(openEditor.path)) {
-        this.lspClient?.openModel(existing);
-      }
       return existing;
     }
 
@@ -176,56 +160,12 @@ export class DawnEditorRuntime {
       model.onDidChangeContent(() => {
         if (this.syncingModels.has(openEditor.path)) return;
         this.callbacks.onContentChanged(openEditor.path, model.getValue());
-        this.lspClient?.scheduleChange(model);
       })
     );
-    if (isDawnFile(openEditor.path)) {
-      this.lspClient?.openModel(model);
-    }
     return model;
   }
 
-  private async startLanguageClient() {
-    if (!this.project || !this.editor || this.lspClient || this.disposed) return;
-
-    const project = this.project;
-    const client = new DawnLspClient({
-      url: project.languageServiceUrl,
-      projectRoot: project.root,
-      onDiagnostics: this.callbacks.onProblemsChanged,
-      onError: this.callbacks.onError
-    });
-
-    try {
-      await client.start();
-      const stillCurrent =
-        this.project?.root === project.root &&
-        this.project?.languageServiceUrl === project.languageServiceUrl;
-      if (!stillCurrent || this.disposed || this.lspClient) {
-        await client.dispose();
-        return;
-      }
-      this.lspClient = client;
-      for (const model of this.models.values()) {
-        client.openModel(model);
-      }
-    } catch (error) {
-      await client.dispose();
-      this.callbacks.onError(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  private async disposeLanguageClient() {
-    const client = this.lspClient;
-    if (!client) return;
-    this.lspClient = undefined;
-    await client.dispose().catch((error) => {
-      this.callbacks.onError(error instanceof Error ? error.message : String(error));
-    });
-  }
-
   private disposeModel(path: string, model: monaco.editor.ITextModel) {
-    this.lspClient?.closeModel(model);
     this.modelDisposables.get(path)?.dispose();
     this.modelDisposables.delete(path);
     model.dispose();

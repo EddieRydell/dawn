@@ -6,7 +6,6 @@ export function SourceEditorPanel() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const runtimeRef = useRef<DawnEditorRuntime | null>(null);
   const projectState = useWorkbench((state) => state.projectState);
-  const languageServiceUrl = useWorkbench((state) => state.languageServiceUrl);
   const activeFile = useWorkbench((state) => state.activeFile);
   const pendingRevealProblem = useWorkbench((state) => state.pendingRevealProblem);
   const openEditors = useWorkbench((state) => state.openEditors);
@@ -15,7 +14,6 @@ export function SourceEditorPanel() {
   const clearPendingRevealProblem = useWorkbench((state) => state.clearPendingRevealProblem);
   const saveFile = useWorkbench((state) => state.saveFile);
   const activateNextEditor = useWorkbench((state) => state.activateNextEditor);
-  const setStatus = useWorkbench((state) => state.setStatus);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -24,7 +22,6 @@ export function SourceEditorPanel() {
     const runtime = new DawnEditorRuntime({
       onContentChanged: setEditorContent,
       onProblemsChanged: setLanguageProblems,
-      onError: setStatus,
       saveFile,
       activateNextEditor
     });
@@ -35,15 +32,11 @@ export function SourceEditorPanel() {
       runtimeRef.current = null;
       void runtime.dispose();
     };
-  }, [activateNextEditor, saveFile, setEditorContent, setLanguageProblems, setStatus]);
+  }, [activateNextEditor, saveFile, setEditorContent, setLanguageProblems]);
 
   useEffect(() => {
-    void runtimeRef.current?.setProject(
-      projectState && languageServiceUrl
-        ? { root: projectState.root, languageServiceUrl }
-        : null
-    );
-  }, [projectState, languageServiceUrl]);
+    void runtimeRef.current?.setProject(projectState ? { root: projectState.root } : null);
+  }, [projectState]);
 
   useEffect(() => {
     runtimeRef.current?.syncOpenFiles(openEditors);

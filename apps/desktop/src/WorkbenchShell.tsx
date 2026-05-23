@@ -27,7 +27,6 @@ export function WorkbenchShell() {
   const playing = useWorkbench((state) => state.playing);
   const status = useWorkbench((state) => state.status);
   const projectState = useWorkbench((state) => state.projectState);
-  const languageServiceStatus = useWorkbench((state) => state.languageServiceStatus);
   const activeFile = useWorkbench((state) => state.activeFile);
   const frame = useWorkbench((state) => state.frame);
   const panelVisibility = useWorkbench((state) => state.panelVisibility);
@@ -188,7 +187,6 @@ export function WorkbenchShell() {
       <DockLayout />
       <footer className="statusbar">
         <span>{status}</span>
-        <span>Language: {languageServiceStatus}</span>
         <span>{projectState ? `${projectState.files.length} files` : "No project"}</span>
       </footer>
     </main>

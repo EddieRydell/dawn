@@ -16,13 +16,6 @@ export type LanguageProblem = {
   endColumn: number;
 };
 
-export type LanguageServiceStatus = "starting" | "ready" | "disconnected" | "failed";
-
-export type LanguageServiceStatusEvent = {
-  status: LanguageServiceStatus;
-  message?: string;
-};
-
 export type ProjectEntry = {
   path: string;
   kind: "directory" | "file";

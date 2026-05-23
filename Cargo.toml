@@ -2,7 +2,6 @@
 members = [
   "apps/desktop/src-tauri",
   "crates/dawn-project",
-  "crates/syntax-gen",
 ]
 resolver = "2"
 
@@ -11,31 +10,10 @@ edition = "2021"
 version = "0.1.0"
 
 [workspace.dependencies]
-anyhow = "1"
-clap = { version = "4", features = ["derive"] }
 indexmap = { version = "2", features = ["serde"] }
-json-strip-comments = "1"
-lalrpop-util = { version = "0.23.1", features = ["lexer", "unicode"] }
-log = "0.4"
-logos = "0.15"
-rowan = "0.16"
-ron = "0.8"
-regex = "1"
-salsa = "0.26.2"
-schemars = "1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 serde_yaml = "0.9"
-strum = { version = "0.28", features = ["derive"] }
 tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
-tempfile = "3"
-thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "net", "process", "sync"] }
-tokio-tungstenite = "0.27"
-tower-lsp = "0.20"
-ts-rs = { version = "12", features = ["no-serde-warnings"] }
-uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
-futures-util = "0.3"

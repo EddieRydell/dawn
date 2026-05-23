@@ -1,8 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { create } from "zustand";
-import type { FileOperationState, FrameSummary, LanguageProblem, LanguageServiceStatus, LanguageServiceStatusEvent, ProjectState } from "../types";
+import type { FileOperationState, FrameSummary, LanguageProblem, ProjectState } from "../types";
 import type { PanelId } from "../workbench/panelIds";
 
 type PanelVisibility = Record<PanelId, boolean>;
@@ -15,8 +14,6 @@ export type OpenEditor = {
 
 type WorkbenchState = {
   projectState: ProjectState | null;
-  languageServiceUrl: string | null;
-  languageServiceStatus: LanguageServiceStatus;
   languageProblems: LanguageProblem[];
   pendingRevealProblem: LanguageProblem | null;
   activeFile: string | null;
@@ -37,7 +34,6 @@ type WorkbenchState = {
   togglePlayback: () => void;
   setStatus: (status: string) => void;
   setLanguageProblems: (languageProblems: LanguageProblem[]) => void;
-  setLanguageServiceStatus: (status: LanguageServiceStatus, message?: string) => void;
   openProblem: (problem: LanguageProblem) => Promise<void>;
   clearPendingRevealProblem: () => void;
   setPanelVisible: (panelId: PanelId, visible: boolean) => void;
@@ -69,8 +65,6 @@ const initialPanelVisibility: PanelVisibility = {
 
 export const useWorkbench = create<WorkbenchState>((set, get) => ({
   projectState: null,
-  languageServiceUrl: null,
-  languageServiceStatus: "disconnected",
   languageProblems: [],
   pendingRevealProblem: null,
   activeFile: null,
@@ -140,11 +134,6 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
   },
   setStatus: (status) => set({ status }),
   setLanguageProblems: (languageProblems) => set({ languageProblems }),
-  setLanguageServiceStatus: (languageServiceStatus, message) =>
-    set({
-      languageServiceStatus,
-      status: message ?? languageServiceStatusLabel(languageServiceStatus)
-    }),
   openProblem: async (problem) => {
     set({ pendingRevealProblem: problem });
     await get().openFile(problem.path);
@@ -178,11 +167,8 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       if (!(await flushAutosave(set, get))) return;
       set({ status: "Opening project..." });
       const projectState = await invoke<ProjectState>("open_project", { path });
-      const bridge = await invoke<{ url: string; status: LanguageServiceStatus }>("start_language_service", { projectRoot: projectState.root });
       set({
         projectState,
-        languageServiceUrl: bridge.url,
-        languageServiceStatus: bridge.status,
         languageProblems: [],
         pendingRevealProblem: null,
         activeFile: null,
@@ -202,11 +188,8 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
   },
   closeProject: async () => {
     if (!(await flushAutosave(set, get))) return;
-    await invoke("stop_language_service").catch(() => undefined);
     set({
       projectState: null,
-      languageServiceUrl: null,
-      languageServiceStatus: "disconnected",
       languageProblems: [],
       pendingRevealProblem: null,
       activeFile: null,
@@ -315,10 +298,6 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     }
   }
 }));
-
-void listen<LanguageServiceStatusEvent>("language-service/status", (event) => {
-  useWorkbench.getState().setLanguageServiceStatus(event.payload.status, event.payload.message);
-});
 
 function scheduleAutosave(
   path: string,
@@ -458,19 +437,5 @@ function formatError(error: unknown) {
 }
 
 function isSequenceFile(path: string | null | undefined) {
-  return Boolean(path?.endsWith(".sequence.dawn") || path?.endsWith(".events.dawn"));
-}
-
-function languageServiceStatusLabel(status: LanguageServiceStatus) {
-  switch (status) {
-    case "starting":
-      return "Language service starting";
-    case "ready":
-      return "Language service ready";
-    case "failed":
-      return "Language service failed";
-    case "disconnected":
-    default:
-      return "Language service disconnected";
-  }
+  return Boolean(path?.endsWith(".sequence.dawn"));
 }
