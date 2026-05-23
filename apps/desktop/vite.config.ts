@@ -7,5 +7,8 @@ export default defineConfig({
   server: {
     port: 1430,
     strictPort: true
+  },
+  worker: {
+    format: "es"
   }
 });

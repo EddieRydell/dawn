@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { create } from "zustand";
-import type { FileOperationState, FrameSummary, ProjectState } from "../types";
+import type { FileOperationState, FrameSummary, LanguageProblem, LanguageServiceStatus, LanguageServiceStatusEvent, ProjectState } from "../types";
 import type { PanelId } from "../workbench/panelIds";
 
 type PanelVisibility = Record<PanelId, boolean>;
@@ -14,6 +15,10 @@ export type OpenEditor = {
 
 type WorkbenchState = {
   projectState: ProjectState | null;
+  languageServiceUrl: string | null;
+  languageServiceStatus: LanguageServiceStatus;
+  languageProblems: LanguageProblem[];
+  pendingRevealProblem: LanguageProblem | null;
   activeFile: string | null;
   openEditors: OpenEditor[];
   activeSequence: string | null;
@@ -23,6 +28,7 @@ type WorkbenchState = {
   status: string;
   panelVisibility: PanelVisibility;
   setFileContent: (content: string) => void;
+  setEditorContent: (path: string, content: string) => void;
   activateFile: (path: string) => void;
   activateNextEditor: (direction: 1 | -1) => void;
   closeFile: (path: string) => Promise<void>;
@@ -30,6 +36,10 @@ type WorkbenchState = {
   setPlaying: (playing: boolean) => void;
   togglePlayback: () => void;
   setStatus: (status: string) => void;
+  setLanguageProblems: (languageProblems: LanguageProblem[]) => void;
+  setLanguageServiceStatus: (status: LanguageServiceStatus, message?: string) => void;
+  openProblem: (problem: LanguageProblem) => Promise<void>;
+  clearPendingRevealProblem: () => void;
   setPanelVisible: (panelId: PanelId, visible: boolean) => void;
   setPanelVisibility: (visibility: Partial<PanelVisibility>) => void;
   openProjectDialog: () => Promise<void>;
@@ -59,6 +69,10 @@ const initialPanelVisibility: PanelVisibility = {
 
 export const useWorkbench = create<WorkbenchState>((set, get) => ({
   projectState: null,
+  languageServiceUrl: null,
+  languageServiceStatus: "disconnected",
+  languageProblems: [],
+  pendingRevealProblem: null,
   activeFile: null,
   openEditors: [],
   activeSequence: null,
@@ -71,12 +85,10 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     const { activeFile } = get();
     if (!activeFile) return;
 
-    set((state) => ({
-      openEditors: state.openEditors.map((editor) =>
-        editor.path === activeFile ? { ...editor, content, dirty: true } : editor
-      )
-    }));
-    scheduleAutosave(activeFile, set, get);
+    updateEditorContent(activeFile, content, set, get);
+  },
+  setEditorContent: (path, content) => {
+    updateEditorContent(path, content, set, get);
   },
   activateFile: (path) => activateEditor(path, set, get),
   activateNextEditor: (direction) => {
@@ -127,6 +139,17 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     set({ playing, status: playing ? "Playback started" : "Playback paused" });
   },
   setStatus: (status) => set({ status }),
+  setLanguageProblems: (languageProblems) => set({ languageProblems }),
+  setLanguageServiceStatus: (languageServiceStatus, message) =>
+    set({
+      languageServiceStatus,
+      status: message ?? languageServiceStatusLabel(languageServiceStatus)
+    }),
+  openProblem: async (problem) => {
+    set({ pendingRevealProblem: problem });
+    await get().openFile(problem.path);
+  },
+  clearPendingRevealProblem: () => set({ pendingRevealProblem: null }),
   setPanelVisible: (panelId, visible) =>
     set((state) => ({ panelVisibility: { ...state.panelVisibility, [panelId]: visible } })),
   setPanelVisibility: (visibility) =>
@@ -155,8 +178,13 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       if (!(await flushAutosave(set, get))) return;
       set({ status: "Opening project..." });
       const projectState = await invoke<ProjectState>("open_project", { path });
+      const bridge = await invoke<{ url: string; status: LanguageServiceStatus }>("start_language_service", { projectRoot: projectState.root });
       set({
         projectState,
+        languageServiceUrl: bridge.url,
+        languageServiceStatus: bridge.status,
+        languageProblems: [],
+        pendingRevealProblem: null,
         activeFile: null,
         openEditors: [],
         activeSequence: null,
@@ -174,8 +202,13 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
   },
   closeProject: async () => {
     if (!(await flushAutosave(set, get))) return;
+    await invoke("stop_language_service").catch(() => undefined);
     set({
       projectState: null,
+      languageServiceUrl: null,
+      languageServiceStatus: "disconnected",
+      languageProblems: [],
+      pendingRevealProblem: null,
       activeFile: null,
       openEditors: [],
       activeSequence: null,
@@ -283,6 +316,10 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
   }
 }));
 
+void listen<LanguageServiceStatusEvent>("language-service/status", (event) => {
+  useWorkbench.getState().setLanguageServiceStatus(event.payload.status, event.payload.message);
+});
+
 function scheduleAutosave(
   path: string,
   set: WorkbenchSet,
@@ -294,6 +331,23 @@ function scheduleAutosave(
     void saveEditor(path, set, get, "Autosaved");
   }, 650);
   autosaveTimers.set(path, timer);
+}
+
+function updateEditorContent(
+  path: string,
+  content: string,
+  set: WorkbenchSet,
+  get: () => WorkbenchState
+) {
+  const editor = get().openEditors.find((item) => item.path === path);
+  if (!editor || editor.content === content) return;
+
+  set((state) => ({
+    openEditors: state.openEditors.map((item) =>
+      item.path === path ? { ...item, content, dirty: true } : item
+    )
+  }));
+  scheduleAutosave(path, set, get);
 }
 
 function clearAutosave(path?: string) {
@@ -405,4 +459,18 @@ function formatError(error: unknown) {
 
 function isSequenceFile(path: string | null | undefined) {
   return Boolean(path?.endsWith(".sequence.dawn"));
+}
+
+function languageServiceStatusLabel(status: LanguageServiceStatus) {
+  switch (status) {
+    case "starting":
+      return "Language service starting";
+    case "ready":
+      return "Language service ready";
+    case "failed":
+      return "Language service failed";
+    case "disconnected":
+    default:
+      return "Language service disconnected";
+  }
 }

@@ -12,7 +12,8 @@ import {
   Settings,
   X
 } from "lucide-react";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useWorkbench } from "./store/workbenchStore";
 import { DockLayout } from "./workbench/DockLayout";
 import { resetWorkbenchLayout, toggleWorkbenchPanel } from "./workbench/dockBridge";
@@ -26,6 +27,7 @@ export function WorkbenchShell() {
   const playing = useWorkbench((state) => state.playing);
   const status = useWorkbench((state) => state.status);
   const projectState = useWorkbench((state) => state.projectState);
+  const languageServiceStatus = useWorkbench((state) => state.languageServiceStatus);
   const activeFile = useWorkbench((state) => state.activeFile);
   const frame = useWorkbench((state) => state.frame);
   const panelVisibility = useWorkbench((state) => state.panelVisibility);
@@ -50,7 +52,8 @@ export function WorkbenchShell() {
 
   useEffect(() => {
     function closeMenusOnOutsideClick(event: MouseEvent) {
-      if (!menuRef.current?.contains(event.target as Node)) {
+      const target = event.target as HTMLElement;
+      if (!menuRef.current?.contains(target) && !target.closest(".menu-popover")) {
         setMenuOpen(null);
       }
     }
@@ -185,6 +188,7 @@ export function WorkbenchShell() {
       <DockLayout />
       <footer className="statusbar">
         <span>{status}</span>
+        <span>Language: {languageServiceStatus}</span>
         <span>{projectState ? `${projectState.files.length} files` : "No project"}</span>
       </footer>
     </main>
@@ -216,12 +220,45 @@ function MenuButton({
   onOpen: () => void;
   children: React.ReactNode;
 }) {
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const [popoverPosition, setPopoverPosition] = useState({ top: 0, left: 0 });
+
+  useLayoutEffect(() => {
+    if (!open) return;
+
+    function updatePosition() {
+      const rect = buttonRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      const width = 220;
+      setPopoverPosition({
+        top: rect.bottom + 2,
+        left: Math.max(4, Math.min(rect.left, window.innerWidth - width - 4))
+      });
+    }
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open]);
+
   return (
     <div className="menu-root">
-      <button className={open ? "menu-button active" : "menu-button"} onClick={onOpen}>
+      <button ref={buttonRef} className={open ? "menu-button active" : "menu-button"} onClick={onOpen}>
         <span>{label}</span>
       </button>
-      {open ? <div className="menu-popover">{children}</div> : null}
+      {open
+        ? createPortal(
+            <div className="menu-popover" style={{ top: popoverPosition.top, left: popoverPosition.left }}>
+              {children}
+            </div>,
+            document.body
+          )
+        : null}
     </div>
   );
 }

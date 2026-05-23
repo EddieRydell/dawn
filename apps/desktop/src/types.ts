@@ -4,6 +4,25 @@ export type Diagnostic = {
   message: string;
 };
 
+export type LanguageProblem = {
+  path: string;
+  message: string;
+  severity: "Error" | "Warning" | "Info" | "Hint";
+  source?: string;
+  code?: string;
+  line: number;
+  column: number;
+  endLine: number;
+  endColumn: number;
+};
+
+export type LanguageServiceStatus = "starting" | "ready" | "disconnected" | "failed";
+
+export type LanguageServiceStatusEvent = {
+  status: LanguageServiceStatus;
+  message?: string;
+};
+
 export type ProjectEntry = {
   path: string;
   kind: "directory" | "file";

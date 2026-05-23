@@ -1,0 +1,19 @@
+{
+  "id": "dawn-lsp",
+  "name": "Dawn Language Server",
+  "programArgs": {
+    "default": "sh -c \"cargo run -p dawn-lsp\"",
+    "windows": "cmd /c C:\\Users\\eddie\\dawn\\scripts\\dawn-lsp.cmd"
+  },
+  "fileTypeMappings": [
+    {
+      "fileType": {
+        "name": "Dawn",
+        "patterns": [
+          "*.dawn"
+        ]
+      },
+      "languageId": "dawn"
+    }
+  ]
+}

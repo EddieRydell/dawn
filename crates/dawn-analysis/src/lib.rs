@@ -37,10 +37,33 @@ fn lower_file(db: &dyn salsa::Database, file: FileInput) -> LoweredSourceFile {
 }
 
 #[salsa::tracked]
-fn file_facts(db: &dyn salsa::Database, file: FileInput) -> FileFacts {
+fn file_import_facts(db: &dyn salsa::Database, file: FileInput) -> Vec<ImportFact> {
+    let lowered = lower_file(db, file);
+
+    lowered
+        .root
+        .as_ref()
+        .map(collect_import_facts)
+        .unwrap_or_default()
+}
+
+#[salsa::tracked]
+fn file_document_symbols(db: &dyn salsa::Database, file: FileInput) -> Vec<DocumentSymbol> {
+    let lowered = lower_file(db, file);
+    let file_id = FileId::from_raw(file.id(db));
+
+    let mut document_symbols = Vec::new();
+    if let Some(root) = &lowered.root {
+        collect_document_symbols(file_id, root, &mut document_symbols);
+    }
+    document_symbols
+}
+
+#[salsa::tracked]
+fn file_local_diagnostics(db: &dyn salsa::Database, file: FileInput) -> Vec<AnalysisDiagnostic> {
     let parse = parse_file(db, file);
     let lowered = lower_file(db, file);
-    let file_id = FileId(file.id(db));
+    let file_id = FileId::from_raw(file.id(db));
 
     let mut diagnostics = Vec::new();
     diagnostics.extend(
@@ -70,26 +93,59 @@ fn file_facts(db: &dyn salsa::Database, file: FileInput) -> FileFacts {
             }),
     );
 
-    let mut imports = Vec::new();
-    let mut document_symbols = Vec::new();
-    if let Some(root) = &lowered.root {
-        imports = collect_import_facts(file_id, root, &mut diagnostics);
-        collect_document_symbols(file_id, root, &mut document_symbols);
+    diagnostics.extend(
+        file_import_facts(db, file)
+            .into_iter()
+            .filter_map(|import| {
+                import.path_error.map(|_| AnalysisDiagnostic {
+                    file: file_id,
+                    message: format!("invalid import path '{}'", import.raw_path),
+                    severity: DiagnosticSeverity::Error,
+                    range: import.path_range.clone(),
+                    source: DiagnosticSource::Analysis,
+                    code: DiagnosticCode::InvalidImportPath,
+                })
+            }),
+    );
+
+    diagnostics
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FileId(u32);
+
+impl FileId {
+    fn from_raw(raw: u32) -> Self {
+        Self(raw)
     }
 
-    FileFacts {
-        diagnostics,
-        imports,
-        document_symbols,
+    fn raw(self) -> u32 {
+        self.0
+    }
+
+    fn index(self) -> usize {
+        self.0 as usize
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct FileId(pub u32);
+struct SourceRootId(u32);
+
+impl SourceRootId {
+    fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SourceRoot {
+    path: PathBuf,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceFile {
     id: FileId,
+    root: SourceRootId,
     path: PathBuf,
     text: String,
     revision: u64,
@@ -114,8 +170,11 @@ impl SourceFile {
 }
 
 pub struct Analysis {
+    roots: Vec<SourceRoot>,
+    default_root: SourceRootId,
     files: Vec<SourceFile>,
-    paths: HashMap<PathBuf, FileId>,
+    paths: HashMap<(SourceRootId, PathBuf), FileId>,
+    workspace_paths: HashMap<PathBuf, FileId>,
     inputs: Vec<FileInput>,
     db: AnalysisDb,
 }
@@ -123,17 +182,25 @@ pub struct Analysis {
 impl fmt::Debug for Analysis {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Analysis")
+            .field("roots", &self.roots)
             .field("files", &self.files)
             .field("paths", &self.paths)
+            .field("workspace_paths", &self.workspace_paths)
             .finish_non_exhaustive()
     }
 }
 
 impl Default for Analysis {
     fn default() -> Self {
+        let default_root = SourceRootId(0);
         Self {
+            roots: vec![SourceRoot {
+                path: PathBuf::new(),
+            }],
+            default_root,
             files: Vec::new(),
             paths: HashMap::new(),
+            workspace_paths: HashMap::new(),
             inputs: Vec::new(),
             db: AnalysisDb::default(),
         }
@@ -146,31 +213,54 @@ impl Analysis {
     }
 
     pub fn set_file(&mut self, path: impl Into<PathBuf>, text: impl Into<String>) -> FileId {
+        self.set_file_in_root(self.default_root, path, text)
+    }
+
+    fn set_file_in_root(
+        &mut self,
+        root: SourceRootId,
+        path: impl Into<PathBuf>,
+        text: impl Into<String>,
+    ) -> FileId {
         let path = normalize_path(path.into());
         let text = text.into();
+        self.source_root(root);
+        let path_key = (root, path.clone());
 
-        if let Some(id) = self.paths.get(&path).copied() {
-            let source = &mut self.files[id.0 as usize];
+        if let Some(id) = self.paths.get(&path_key).copied() {
+            let source = &mut self.files[id.index()];
             if source.text != text {
                 source.text = text.clone();
                 source.revision += 1;
-                let input = self.inputs[id.0 as usize];
+                let input = self.inputs[id.index()];
                 input.set_text(&mut self.db).to(text);
                 input.set_revision(&mut self.db).to(source.revision);
             }
             return id;
         }
 
-        let id = FileId(self.files.len() as u32);
-        let input = FileInput::new(&self.db, id.0, path.clone(), text.clone(), 0);
+        let id = FileId::from_raw(self.files.len() as u32);
+        let input = FileInput::new(&self.db, id.raw(), path.clone(), text.clone(), 0);
+        let workspace_path = self.workspace_path(root, &path);
         self.files.push(SourceFile {
             id,
+            root,
             path: path.clone(),
             text,
             revision: 0,
         });
         self.inputs.push(input);
-        self.paths.insert(path, id);
+        self.paths.insert(path_key, id);
+        self.workspace_paths.entry(workspace_path).or_insert(id);
+        id
+    }
+
+    #[cfg(test)]
+    fn add_source_root(&mut self, path: impl Into<PathBuf>) -> SourceRootId {
+        let id = SourceRootId(self.roots.len() as u32);
+        self.roots.push(SourceRoot {
+            path: normalize_path(path.into()),
+        });
         id
     }
 
@@ -179,7 +269,7 @@ impl Analysis {
         file: FileId,
         text: impl Into<String>,
     ) -> Result<(), AnalysisError> {
-        let index = file.0 as usize;
+        let index = file.index();
         let text = text.into();
         let revision = {
             let source = self.source_file_mut(file)?;
@@ -205,10 +295,9 @@ impl Analysis {
 
     pub fn analyze_file(&self, file: FileId) -> Result<FileAnalysis, AnalysisError> {
         let source = self.source_file(file)?;
-        let facts = file_facts(&self.db, self.inputs[file.0 as usize]);
-        let mut diagnostics = facts.diagnostics;
-        let imports = facts
-            .imports
+        let input = self.inputs[file.index()];
+        let mut diagnostics = file_local_diagnostics(&self.db, input);
+        let imports = file_import_facts(&self.db, input)
             .into_iter()
             .map(|import| {
                 let resolved_file = import
@@ -242,20 +331,20 @@ impl Analysis {
         Ok(FileAnalysis {
             diagnostics,
             imports,
-            document_symbols: facts.document_symbols,
+            document_symbols: file_document_symbols(&self.db, input),
         })
     }
 
     #[cfg(test)]
     fn cached_revision(&self, file: FileId) -> Result<u64, AnalysisError> {
         self.source_file(file)?;
-        Ok(self.inputs[file.0 as usize].revision(&self.db))
+        Ok(self.inputs[file.index()].revision(&self.db))
     }
 
     #[cfg(test)]
     fn cached_path(&self, file: FileId) -> Result<PathBuf, AnalysisError> {
         self.source_file(file)?;
-        Ok(self.inputs[file.0 as usize].path(&self.db))
+        Ok(self.inputs[file.index()].path(&self.db))
     }
 
     pub fn diagnostics(&self, file: FileId) -> Result<Vec<AnalysisDiagnostic>, AnalysisError> {
@@ -273,27 +362,52 @@ impl Analysis {
 
     fn source_file(&self, file: FileId) -> Result<&SourceFile, AnalysisError> {
         self.files
-            .get(file.0 as usize)
+            .get(file.index())
             .filter(|source| source.id == file)
             .ok_or(AnalysisError::UnknownFile(file))
     }
 
     fn source_file_mut(&mut self, file: FileId) -> Result<&mut SourceFile, AnalysisError> {
         self.files
-            .get_mut(file.0 as usize)
+            .get_mut(file.index())
             .filter(|source| source.id == file)
             .ok_or(AnalysisError::UnknownFile(file))
     }
 
+    fn source_root(&self, root: SourceRootId) -> &SourceRoot {
+        &self.roots[root.index()]
+    }
+
+    fn workspace_path(&self, root: SourceRootId, path: &Path) -> PathBuf {
+        let mut workspace_path = self.source_root(root).path.clone();
+        workspace_path.push(path);
+        normalize_path(workspace_path)
+    }
+
+    fn source_workspace_path(&self, source: &SourceFile) -> PathBuf {
+        self.workspace_path(source.root, &source.path)
+    }
+
     fn resolve_import(&self, source: &SourceFile, path: &DawnPath) -> Option<FileId> {
-        let mut resolved = source
+        let mut root_relative = source
             .path
             .parent()
             .unwrap_or_else(|| Path::new(""))
             .to_path_buf();
-        resolved.push(path.to_path_buf());
-        let resolved = normalize_path(resolved);
-        self.paths.get(&resolved).copied()
+        root_relative.push(path.to_path_buf());
+        let root_relative = normalize_path(root_relative);
+        if let Some(file) = self.paths.get(&(source.root, root_relative)).copied() {
+            return Some(file);
+        }
+
+        let mut workspace_path = self
+            .source_workspace_path(source)
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf();
+        workspace_path.push(path.to_path_buf());
+        let workspace_path = normalize_path(workspace_path);
+        self.workspace_paths.get(&workspace_path).copied()
     }
 }
 
@@ -305,7 +419,7 @@ pub enum AnalysisError {
 impl fmt::Display for AnalysisError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnknownFile(file) => write!(f, "unknown file id {}", file.0),
+            Self::UnknownFile(file) => write!(f, "unknown file id {}", file.raw()),
         }
     }
 }
@@ -320,18 +434,12 @@ pub struct FileAnalysis {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct FileFacts {
-    diagnostics: Vec<AnalysisDiagnostic>,
-    imports: Vec<ImportFact>,
-    document_symbols: Vec<DocumentSymbol>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 struct ImportFact {
     kind: String,
     name: String,
     raw_path: String,
     path: Option<DawnPath>,
+    path_error: Option<DawnPathParseError>,
     range: Range<usize>,
     path_range: Option<Range<usize>>,
 }
@@ -534,29 +642,15 @@ fn collect_document_symbols(
     collect_block_symbols(file, &root.document.block, symbols);
 }
 
-fn collect_import_facts(
-    file: FileId,
-    root: &hir::SourceFile,
-    diagnostics: &mut Vec<AnalysisDiagnostic>,
-) -> Vec<ImportFact> {
+fn collect_import_facts(root: &hir::SourceFile) -> Vec<ImportFact> {
     root.imports
         .iter()
         .map(|import| {
             let raw_path = import.path.raw_text.clone();
             let path_range = import.path.inner_range.clone();
-            let path = match DawnPath::parse(raw_path.clone()) {
-                Ok(path) => Some(path),
-                Err(_) => {
-                    diagnostics.push(AnalysisDiagnostic {
-                        file,
-                        message: format!("invalid import path '{raw_path}'"),
-                        severity: DiagnosticSeverity::Error,
-                        range: path_range.clone(),
-                        source: DiagnosticSource::Analysis,
-                        code: DiagnosticCode::InvalidImportPath,
-                    });
-                    None
-                }
+            let (path, path_error) = match DawnPath::parse(raw_path.clone()) {
+                Ok(path) => (Some(path), None),
+                Err(error) => (None, Some(error)),
             };
 
             ImportFact {
@@ -564,6 +658,7 @@ fn collect_import_facts(
                 name: import.name.text.clone(),
                 raw_path,
                 path,
+                path_error,
                 range: import.range.clone(),
                 path_range,
             }
@@ -649,6 +744,10 @@ effect Main {
     }
   }
 }"#
+    }
+
+    fn input(analysis: &Analysis, file: FileId) -> FileInput {
+        analysis.inputs[file.index()]
     }
 
     #[test]
@@ -765,6 +864,64 @@ effect Main {
     }
 
     #[test]
+    fn file_import_facts_extract_imports_without_unresolved_diagnostics() {
+        let mut analysis = Analysis::new();
+        let file = analysis.set_file(
+            "shows/main.effect.dawn",
+            "import effect Missing from <effects/missing.effect.dawn>;\neffect Main {}",
+        );
+
+        let imports = file_import_facts(&analysis.db, input(&analysis, file));
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].kind, "effect");
+        assert_eq!(imports[0].name, "Missing");
+        assert_eq!(imports[0].raw_path, "effects/missing.effect.dawn");
+        assert!(imports[0].path.is_some());
+        assert!(imports[0].path_error.is_none());
+
+        let diagnostics = file_local_diagnostics(&analysis.db, input(&analysis, file));
+        assert!(!diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == DiagnosticCode::UnresolvedImport));
+    }
+
+    #[test]
+    fn file_local_diagnostics_stay_file_local() {
+        let mut analysis = Analysis::new();
+        let syntax = analysis.set_file("syntax.effect.dawn", "effect Pulse { color true }");
+        let lowering = analysis.set_file("empty.effect.dawn", "");
+        let invalid_import = analysis.set_file(
+            "invalid-import.effect.dawn",
+            "import effect Broken from <>;\neffect Main {}",
+        );
+        let unresolved_import = analysis.set_file(
+            "unresolved.effect.dawn",
+            "import effect Missing from <effects/missing.effect.dawn>;\neffect Main {}",
+        );
+
+        assert!(
+            file_local_diagnostics(&analysis.db, input(&analysis, syntax))
+                .iter()
+                .any(|diagnostic| diagnostic.source == DiagnosticSource::Syntax)
+        );
+        assert!(
+            file_local_diagnostics(&analysis.db, input(&analysis, lowering))
+                .iter()
+                .any(|diagnostic| diagnostic.source == DiagnosticSource::Lowering)
+        );
+        assert!(
+            file_local_diagnostics(&analysis.db, input(&analysis, invalid_import))
+                .iter()
+                .any(|diagnostic| diagnostic.code == DiagnosticCode::InvalidImportPath)
+        );
+        assert!(
+            !file_local_diagnostics(&analysis.db, input(&analysis, unresolved_import))
+                .iter()
+                .any(|diagnostic| diagnostic.code == DiagnosticCode::UnresolvedImport)
+        );
+    }
+
+    #[test]
     fn document_symbols_include_expected_top_level_and_nested_names() {
         let mut analysis = Analysis::new();
         let main = analysis.set_file("show/main.effect.dawn", valid_source());
@@ -782,6 +939,20 @@ effect Main {
         assert!(names.contains(&(SymbolKind::Parameter, "t")));
         assert!(names.contains(&(SymbolKind::Let, "phase")));
         assert!(names.contains(&(SymbolKind::Command, "color")));
+    }
+
+    #[test]
+    fn document_symbols_are_available_from_focused_query() {
+        let mut analysis = Analysis::new();
+        let main = analysis.set_file("show/main.effect.dawn", valid_source());
+
+        let queried = file_document_symbols(&analysis.db, input(&analysis, main));
+        let public = analysis.document_symbols(main).unwrap();
+
+        assert_eq!(queried, public);
+        assert!(queried
+            .iter()
+            .any(|symbol| symbol.kind == SymbolKind::Document && symbol.name == "Main"));
     }
 
     #[test]
@@ -901,6 +1072,37 @@ effect Main {
             Some(target)
         );
         assert_eq!(analysis.file(main).unwrap().revision(), 0);
+    }
+
+    #[test]
+    fn relative_parent_import_resolution_matches_existing_path_behavior() {
+        let mut analysis = Analysis::new();
+        let main = analysis.set_file(
+            "show/scenes/main.effect.dawn",
+            "import effect Pulse from <../effects/pulse.effect.dawn>;\neffect Main {}",
+        );
+        let target = analysis.set_file("show/effects/pulse.effect.dawn", "effect Pulse {}");
+
+        let imports = analysis.imports(main).unwrap();
+        assert_eq!(imports[0].resolved_file, Some(target));
+        assert!(analysis.diagnostics(main).unwrap().is_empty());
+    }
+
+    #[test]
+    fn relative_imports_can_escape_source_root_to_registered_workspace_file() {
+        let mut analysis = Analysis::new();
+        let project = analysis.add_source_root("projects/show");
+        let shared = analysis.add_source_root("shared");
+        let main = analysis.set_file_in_root(
+            project,
+            "main.effect.dawn",
+            "import effect Pulse from <../../shared/pulse.effect.dawn>;\neffect Main {}",
+        );
+        let target = analysis.set_file_in_root(shared, "pulse.effect.dawn", "effect Pulse {}");
+
+        let imports = analysis.imports(main).unwrap();
+        assert_eq!(imports[0].resolved_file, Some(target));
+        assert!(analysis.diagnostics(main).unwrap().is_empty());
     }
 
     #[test]

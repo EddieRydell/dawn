@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use ron::extensions::Extensions;
+use serde::Deserialize;
 
 mod semantics;
 mod spec;
@@ -22,7 +24,11 @@ struct Args {
     #[arg(long)]
     semantics: Option<PathBuf>,
     #[arg(long)]
+    builtins: Option<PathBuf>,
+    #[arg(long)]
     out: PathBuf,
+    #[arg(long)]
+    monarch_out: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -33,18 +39,34 @@ fn main() -> Result<()> {
 
     let grammar = Grammar::load(&args.grammar)?;
     grammar.validate()?;
-    let files = if let Some(path) = &args.semantics {
+    let mut files = if let Some(path) = &args.semantics {
         let semantics = SemanticsSpec::load(path)?;
         semantics.validate(&grammar)?;
         generate_semantics(&grammar, &semantics)
     } else {
         generate(&grammar)
     };
+    let monarch_file = if let Some(path) = &args.monarch_out {
+        let builtins = args
+            .builtins
+            .as_deref()
+            .map(BuiltinsSpec::load)
+            .transpose()?;
+        Some((path.clone(), gen_monarch(&grammar, builtins.as_ref())))
+    } else {
+        None
+    };
 
     if args.write {
         fs::create_dir_all(&args.out)?;
-        for (name, contents) in files {
+        for (name, contents) in files.drain(..) {
             let path = args.out.join(name);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(path, contents)?;
+        }
+        if let Some((path, contents)) = monarch_file {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
@@ -59,7 +81,14 @@ fn main() -> Result<()> {
         let actual = fs::read_to_string(&path)
             .with_context(|| format!("failed to read generated file {}", path.display()))?;
         if actual != expected {
-            stale.push(name);
+            stale.push(name.to_string());
+        }
+    }
+    if let Some((path, expected)) = monarch_file {
+        let actual = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read generated file {}", path.display()))?;
+        if actual != expected {
+            stale.push(path.display().to_string());
         }
     }
 
@@ -67,6 +96,52 @@ fn main() -> Result<()> {
         bail!("generated files are stale: {}", stale.join(", "));
     }
     Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BuiltinsSpec {
+    version: u32,
+    primitives: Vec<String>,
+    documents: Vec<BuiltinDocument>,
+    records: Vec<BuiltinRecord>,
+}
+
+impl BuiltinsSpec {
+    fn load(path: &std::path::Path) -> Result<Self> {
+        let text = fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        let spec: Self = ron::Options::default()
+            .with_default_extension(Extensions::IMPLICIT_SOME)
+            .from_str(&text)
+            .with_context(|| format!("failed to parse {}", path.display()))?;
+        if spec.version != 1 {
+            bail!("builtins spec version must be 1");
+        }
+        Ok(spec)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BuiltinDocument {
+    name: String,
+    fields: Vec<BuiltinField>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BuiltinRecord {
+    name: String,
+    fields: Vec<BuiltinField>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BuiltinField {
+    name: String,
+    ty: String,
+    cardinality: String,
 }
 
 pub fn generate_semantics(
@@ -99,6 +174,100 @@ fn gen_mod() -> String {
     out.push_str("pub mod lexer;\n");
     out.push_str("pub mod parser;\n");
     out
+}
+
+fn gen_monarch(grammar: &Grammar, builtins: Option<&BuiltinsSpec>) -> String {
+    let mut keywords = BTreeSet::new();
+    let mut operators = BTreeSet::new();
+    for token in &grammar.tokens.rules {
+        if let Some(literal) = &token.literal {
+            if token.name.ends_with("Kw") {
+                keywords.insert(literal.clone());
+            } else if literal.chars().all(|ch| !ch.is_alphanumeric() && ch != '_') {
+                operators.insert(literal.clone());
+            }
+        }
+    }
+
+    let mut vocabulary = BTreeSet::new();
+    let mut types = BTreeSet::new();
+    if let Some(builtins) = builtins {
+        for primitive in &builtins.primitives {
+            types.insert(primitive.clone());
+        }
+        for document in &builtins.documents {
+            vocabulary.insert(document.name.clone());
+            for field in &document.fields {
+                vocabulary.insert(field.name.clone());
+                collect_type_names(&field.ty, &mut types);
+                let _ = &field.cardinality;
+            }
+        }
+        for record in &builtins.records {
+            types.insert(record.name.clone());
+            for field in &record.fields {
+                vocabulary.insert(field.name.clone());
+                collect_type_names(&field.ty, &mut types);
+                let _ = &field.cardinality;
+            }
+        }
+    }
+
+    let mut out = String::from(header());
+    out.push_str("import type { languages } from \"monaco-editor\";\n\n");
+    out.push_str("export const dawnMonarch: languages.IMonarchLanguage = {\n");
+    emit_ts_array(&mut out, "keywords", keywords.iter());
+    emit_ts_array(&mut out, "operators", operators.iter());
+    emit_ts_array(&mut out, "dawnVocabulary", vocabulary.iter());
+    emit_ts_array(&mut out, "types", types.iter());
+    out.push_str("  tokenizer: {\n");
+    out.push_str("    root: [\n");
+    out.push_str("      [/\\/\\/.*$/, \"comment\"],\n");
+    out.push_str("      [/\\/\\*/, \"comment\", \"@comment\"],\n");
+    out.push_str("      [/<[^>]*>/, \"string\"],\n");
+    out.push_str("      [/\"([^\"\\\\]|\\\\.)*$/, \"string.invalid\"],\n");
+    out.push_str("      [/\"/, \"string\", \"@string\"],\n");
+    out.push_str("      [/#[0-9A-Fa-f]{3}([0-9A-Fa-f]{3})?/, \"number.hex\"],\n");
+    out.push_str("      [/([0-9][0-9_]*(\\.[0-9_]+)?|\\.[0-9][0-9_]*)[a-zA-Z]+/, \"number\"],\n");
+    out.push_str("      [/(([0-9][0-9_]*\\.[0-9][0-9_]*|\\.[0-9][0-9_]*)([eE][+-]?[0-9][0-9_]*)?|[0-9][0-9_]*[eE][+-]?[0-9][0-9_]*)/, \"number.float\"],\n");
+    out.push_str("      [/[0-9][0-9_]*/, \"number\"],\n");
+    out.push_str("      [/[A-Za-z_][A-Za-z0-9_]*/, { cases: { \"@keywords\": \"keyword\", \"@types\": \"type\", \"@dawnVocabulary\": \"identifier.predefined\", \"@default\": \"identifier\" } }],\n");
+    out.push_str("      [/[{}\\[\\]()]/, \"delimiter.bracket\"],\n");
+    out.push_str("      [/[;,.]/, \"delimiter\"],\n");
+    out.push_str("      [/[=!<>?:&|+\\-*\\/%^]+/, { cases: { \"@operators\": \"operator\", \"@default\": \"operator\" } }]\n");
+    out.push_str("    ],\n");
+    out.push_str("    comment: [[/[^/*]+/, \"comment\"], [/\\*\\//, \"comment\", \"@pop\"], [/[/*]/, \"comment\"]],\n");
+    out.push_str("    string: [[/[^\"\\\\]+/, \"string\"], [/\\\\./, \"string.escape\"], [/\"/, \"string\", \"@pop\"]]\n");
+    out.push_str("  }\n");
+    out.push_str("};\n");
+    out
+}
+
+fn collect_type_names(ty: &str, output: &mut BTreeSet<String>) {
+    let mut current = String::new();
+    for ch in ty.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            current.push(ch);
+        } else if !current.is_empty() {
+            output.insert(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        output.insert(current);
+    }
+}
+
+fn emit_ts_array<'a>(out: &mut String, name: &str, values: impl Iterator<Item = &'a String>) {
+    out.push_str(&format!("  {name}: ["));
+    let mut first = true;
+    for value in values {
+        if !first {
+            out.push_str(", ");
+        }
+        first = false;
+        out.push_str(&format!("{value:?}"));
+    }
+    out.push_str("],\n");
 }
 
 fn gen_diagnostic(grammar: &Grammar) -> String {
@@ -1878,5 +2047,41 @@ mod tests {
         assert!(ast.contains("pub enum StmtKind"));
         assert!(ast.contains("LetStmt(LetStmt)"));
         assert!(ast.contains("pub fn kind(&self) -> Option<StmtKind>"));
+    }
+
+    #[test]
+    fn monarch_generation_includes_keywords_and_builtin_vocabulary() {
+        let grammar = toy_grammar(
+            r#"(
+                root: "File",
+                nodes: [],
+            )"#,
+        );
+        grammar.validate().unwrap();
+        let builtins = BuiltinsSpec {
+            version: 1,
+            primitives: vec!["Intensity".to_string()],
+            documents: vec![BuiltinDocument {
+                name: "fixture".to_string(),
+                fields: vec![BuiltinField {
+                    name: "channels".to_string(),
+                    ty: "Range<Intensity>".to_string(),
+                    cardinality: "required_one".to_string(),
+                }],
+            }],
+            records: vec![BuiltinRecord {
+                name: "FixtureType".to_string(),
+                fields: Vec::new(),
+            }],
+        };
+
+        let monarch = gen_monarch(&grammar, Some(&builtins));
+
+        assert!(monarch.contains("export const dawnMonarch"));
+        assert!(monarch.contains("\"let\""));
+        assert!(monarch.contains("\"fixture\""));
+        assert!(monarch.contains("\"channels\""));
+        assert!(monarch.contains("\"FixtureType\""));
+        assert!(monarch.contains("\"Intensity\""));
     }
 }

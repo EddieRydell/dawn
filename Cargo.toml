@@ -1,8 +1,10 @@
 [workspace]
 members = [
+  "apps/desktop/src-tauri",
   "crates/dawn-syntax",
   "crates/dawn-semantics",
   "crates/dawn-analysis",
+  "crates/dawn-lsp",
   "crates/syntax-gen",
 ]
 resolver = "2"
@@ -32,6 +34,10 @@ tauri-build = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tempfile = "3"
 thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "net", "process", "sync"] }
+tokio-tungstenite = "0.27"
+tower-lsp = "0.20"
 ts-rs = { version = "12", features = ["no-serde-warnings"] }
 uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
+futures-util = "0.3"

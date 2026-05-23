@@ -1,22 +1,25 @@
 import { useWorkbench } from "../store/workbenchStore";
-import type { Diagnostic } from "../types";
-
-const emptyDiagnostics: Diagnostic[] = [];
 
 export function ProblemsPanel() {
-  const diagnostics = useWorkbench((state) => state.projectState?.diagnostics ?? emptyDiagnostics);
-  const openFile = useWorkbench((state) => state.openFile);
+  const problems = useWorkbench((state) => state.languageProblems);
+  const openProblem = useWorkbench((state) => state.openProblem);
 
   return (
     <section className="panel problems">
-      {diagnostics.length === 0 ? (
+      {problems.length === 0 ? (
         <div className="empty-problems">No problems reported.</div>
       ) : (
-        diagnostics.map((diagnostic, index) => (
-          <button key={index} className={`problem ${diagnostic.severity.toLowerCase()}`} onClick={() => void openFile(diagnostic.path)}>
-            <strong>{diagnostic.severity}</strong>
-            <span>{diagnostic.message}</span>
-            <small>{diagnostic.path}</small>
+        problems.map((problem, index) => (
+          <button
+            key={`${problem.path}:${problem.line}:${problem.column}:${index}`}
+            className={`problem ${problem.severity.toLowerCase()}`}
+            onClick={() => void openProblem(problem)}
+          >
+            <strong>{problem.severity}</strong>
+            <span>{problem.message}</span>
+            <small>
+              {problem.path}:{problem.line}:{problem.column}
+            </small>
           </button>
         ))
       )}

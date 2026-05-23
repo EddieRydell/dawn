@@ -15,10 +15,13 @@ name = "dawn-desktop"
 path = "src/main.rs"
 
 [dependencies]
-dawn-project.workspace = true
+futures-util.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tauri.workspace = true
 tauri-plugin-dialog.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
 walkdir.workspace = true
 
 [build-dependencies]
