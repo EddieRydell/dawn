@@ -6,9 +6,18 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub type DawnFile = IndexMap<String, DawnObject>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Time {
     pub milliseconds: u64,
+}
+
+impl Serialize for Time {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&format!("{}ms", self.milliseconds))
+    }
 }
 
 impl<'de> Deserialize<'de> for Time {
@@ -83,10 +92,19 @@ fn parse_time_ms(value: &str) -> Result<u64, &'static str> {
     Ok(total)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelRange {
     pub start: u16,
     pub end: u16,
+}
+
+impl Serialize for ChannelRange {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&format!("{}..{}", self.start, self.end))
+    }
 }
 
 impl<'de> Deserialize<'de> for ChannelRange {
