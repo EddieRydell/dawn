@@ -1,7 +1,0 @@
-[package]
-name = "dawn-semantics"
-edition.workspace = true
-version.workspace = true
-
-[dependencies]
-dawn-syntax = { path = "../dawn-syntax" }

@@ -1,8 +1,0 @@
-[package]
-name = "dawn-syntax"
-edition.workspace = true
-version.workspace = true
-
-[dependencies]
-regex.workspace = true
-rowan.workspace = true

@@ -1,10 +1,95 @@
+use std::collections::HashMap;
+use std::error::Error;
 use std::fmt;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-pub type DawnFile = IndexMap<String, DawnObject>;
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+pub enum Authored {}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+pub enum Resolved {}
+
+pub type AuthoredProject = Project<Authored>;
+pub type ResolvedProject = Project<Resolved>;
+pub type DawnFile = IndexMap<String, DawnObject<Authored>>;
+
+pub trait ModelMode {
+    type ProjectDisplay: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type ProjectSequence: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type DisplayController: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type DisplayPatch: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type DisplayLayout: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type LayoutFixture: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type FixturePlacementFixture: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type GroupMember: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type RouteFixture: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type RouteController: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type SequenceAudio: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type EffectTargetGroup: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type EffectTargetFixture: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type SequenceEffectScript: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type AutomationClipCurve: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type AutomationClipTarget: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+}
+
+impl ModelMode for Authored {
+    type ProjectDisplay = InlineOrImport<Display<Authored>>;
+    type ProjectSequence = InlineOrImport<Sequence<Authored>>;
+    type DisplayController = InlineOrImport<Controller>;
+    type DisplayPatch = InlineOrImport<Patch<Authored>>;
+    type DisplayLayout = InlineOrImport<Layout<Authored>>;
+    type LayoutFixture = FixturePlacement<Authored>;
+    type FixturePlacementFixture = InlineOrImport<Fixture>;
+    type GroupMember = FixtureRef;
+    type RouteFixture = FixtureRef;
+    type RouteController = ControllerRef;
+    type SequenceAudio = Option<ImportRef>;
+    type EffectTargetGroup = GroupRef;
+    type EffectTargetFixture = FixtureRef;
+    type SequenceEffectScript = InlineOrImport<String>;
+    type AutomationClipCurve = InlineOrImport<Curve>;
+    type AutomationClipTarget = SequenceEffectRef;
+}
+
+impl ModelMode for Resolved {
+    type ProjectDisplay = Display<Resolved>;
+    type ProjectSequence = Sequence<Resolved>;
+    type DisplayController = Controller;
+    type DisplayPatch = Patch<Resolved>;
+    type DisplayLayout = Layout<Resolved>;
+    type LayoutFixture = FixturePlacement<Resolved>;
+    type FixturePlacementFixture = Fixture;
+    type GroupMember = FixtureIndex;
+    type RouteFixture = FixtureIndex;
+    type RouteController = ControllerIndex;
+    type SequenceAudio = Option<DawnPath>;
+    type EffectTargetGroup = GroupIndex;
+    type EffectTargetFixture = FixtureIndex;
+    type SequenceEffectScript = ScriptSource;
+    type AutomationClipCurve = InlineOrImport<Curve>;
+    type AutomationClipTarget = SequenceEffectIndex;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct FixtureIndex(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct ControllerIndex(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct GroupIndex(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct SequenceEffectIndex(pub usize);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Time {
@@ -131,14 +216,18 @@ impl<'de> Deserialize<'de> for ChannelRange {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum DawnObject {
-    Project(Project),
-    Display(Display),
+#[serde(bound(
+    serialize = "Project<M>: Serialize, Display<M>: Serialize, Layout<M>: Serialize, Patch<M>: Serialize, Sequence<M>: Serialize",
+    deserialize = "Project<M>: Deserialize<'de>, Display<M>: Deserialize<'de>, Layout<M>: Deserialize<'de>, Patch<M>: Deserialize<'de>, Sequence<M>: Deserialize<'de>"
+))]
+pub enum DawnObject<M: ModelMode = Authored> {
+    Project(Project<M>),
+    Display(Display<M>),
     Controller(Controller),
-    Layout(Layout),
+    Layout(Layout<M>),
     Fixture(Fixture),
-    Patch(Patch),
-    Sequence(Sequence),
+    Patch(Patch<M>),
+    Sequence(Sequence<M>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -146,6 +235,10 @@ pub enum DawnObject {
 pub struct DawnPath(String);
 
 impl DawnPath {
+    pub fn new(path: impl Into<String>) -> Self {
+        Self(path.into())
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -256,21 +349,29 @@ impl<T> InlineOrImport<T> {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct Project {
+#[serde(bound(
+    serialize = "M::ProjectDisplay: Serialize, M::ProjectSequence: Serialize",
+    deserialize = "M::ProjectDisplay: Deserialize<'de>, M::ProjectSequence: Deserialize<'de>"
+))]
+pub struct Project<M: ModelMode = Authored> {
     pub name: String,
-    pub display: InlineOrImport<Display>,
+    pub display: M::ProjectDisplay,
     #[serde(default)]
-    pub sequences: Vec<InlineOrImport<Sequence>>,
+    pub sequences: Vec<M::ProjectSequence>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct Display {
+#[serde(bound(
+    serialize = "M::DisplayController: Serialize, M::DisplayPatch: Serialize, M::DisplayLayout: Serialize",
+    deserialize = "M::DisplayController: Deserialize<'de>, M::DisplayPatch: Deserialize<'de>, M::DisplayLayout: Deserialize<'de>"
+))]
+pub struct Display<M: ModelMode = Authored> {
     pub name: String,
     #[serde(default)]
-    pub controllers: Vec<InlineOrImport<Controller>>,
-    pub patch: InlineOrImport<Patch>,
-    pub layout: InlineOrImport<Layout>,
+    pub controllers: Vec<M::DisplayController>,
+    pub patch: M::DisplayPatch,
+    pub layout: M::DisplayLayout,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -298,13 +399,35 @@ pub struct Universe {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct Layout {
+#[serde(bound(
+    serialize = "M::LayoutFixture: Serialize, Group<M>: Serialize",
+    deserialize = "M::LayoutFixture: Deserialize<'de>, Group<M>: Deserialize<'de>"
+))]
+pub struct Layout<M: ModelMode = Authored> {
     pub name: String,
     pub units: DistanceUnit,
     #[serde(default)]
-    pub fixtures: Vec<FixturePlacement>,
+    pub fixtures: Vec<M::LayoutFixture>,
     #[serde(default)]
-    pub groups: Vec<Group>,
+    pub groups: Vec<Group<M>>,
+}
+
+impl Layout<Resolved> {
+    pub fn fixture(&self, index: FixtureIndex) -> Option<&FixturePlacement<Resolved>> {
+        self.fixtures.get(index.0)
+    }
+
+    pub fn group_members(&self, index: GroupIndex) -> Option<&[FixtureIndex]> {
+        self.groups
+            .get(index.0)
+            .map(|group| group.members.as_slice())
+    }
+}
+
+impl Display<Resolved> {
+    pub fn controller(&self, index: ControllerIndex) -> Option<&Controller> {
+        self.controllers.get(index.0)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -322,9 +445,13 @@ impl Default for DistanceUnit {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct FixturePlacement {
+#[serde(bound(
+    serialize = "M::FixturePlacementFixture: Serialize",
+    deserialize = "M::FixturePlacementFixture: Deserialize<'de>"
+))]
+pub struct FixturePlacement<M: ModelMode = Authored> {
     pub id: String,
-    pub fixture: InlineOrImport<Fixture>,
+    pub fixture: M::FixturePlacementFixture,
     pub transform: Transform,
 }
 
@@ -443,56 +570,87 @@ pub struct LineSegment {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct Group {
+#[serde(bound(
+    serialize = "M::GroupMember: Serialize",
+    deserialize = "M::GroupMember: Deserialize<'de>"
+))]
+pub struct Group<M: ModelMode = Authored> {
     pub name: String,
-    pub members: Vec<FixtureRef>,
+    pub members: Vec<M::GroupMember>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct Patch {
+#[serde(bound(
+    serialize = "Route<M>: Serialize",
+    deserialize = "Route<M>: Deserialize<'de>"
+))]
+pub struct Patch<M: ModelMode = Authored> {
     #[serde(default)]
-    pub routes: Vec<Route>,
+    pub routes: Vec<Route<M>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct Route {
-    pub fixture: FixtureRef,
-    pub controller: ControllerRef,
+#[serde(bound(
+    serialize = "M::RouteFixture: Serialize, M::RouteController: Serialize",
+    deserialize = "M::RouteFixture: Deserialize<'de>, M::RouteController: Deserialize<'de>"
+))]
+pub struct Route<M: ModelMode = Authored> {
+    pub fixture: M::RouteFixture,
+    pub controller: M::RouteController,
     pub universe: u32,
     pub start: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct Sequence {
+#[serde(bound(
+    serialize = "M::SequenceAudio: Serialize, SequenceEffect<M>: Serialize, AutomationClip<M>: Serialize",
+    deserialize = "M::SequenceAudio: Deserialize<'de>, SequenceEffect<M>: Deserialize<'de>, AutomationClip<M>: Deserialize<'de>"
+))]
+pub struct Sequence<M: ModelMode = Authored> {
     pub duration: Time,
     pub frame_rate: u32,
-    pub audio: Option<ImportRef>,
+    pub audio: M::SequenceAudio,
     #[serde(default)]
-    pub effects: Vec<SequenceEffect>,
+    pub effects: Vec<SequenceEffect<M>>,
     #[serde(default)]
-    pub automation_clips: Vec<AutomationClip>,
+    pub automation_clips: Vec<AutomationClip<M>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", content = "name", rename_all = "snake_case")]
-pub enum EffectTarget {
-    Group(GroupRef),
-    Fixture(FixtureRef),
+#[serde(bound(
+    serialize = "M::EffectTargetGroup: Serialize, M::EffectTargetFixture: Serialize",
+    deserialize = "M::EffectTargetGroup: Deserialize<'de>, M::EffectTargetFixture: Deserialize<'de>"
+))]
+pub enum EffectTarget<M: ModelMode = Authored> {
+    Group(M::EffectTargetGroup),
+    Fixture(M::EffectTargetFixture),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct SequenceEffect {
+#[serde(bound(
+    serialize = "EffectTarget<M>: Serialize, M::SequenceEffectScript: Serialize",
+    deserialize = "EffectTarget<M>: Deserialize<'de>, M::SequenceEffectScript: Deserialize<'de>"
+))]
+pub struct SequenceEffect<M: ModelMode = Authored> {
     pub id: String,
     pub start: Time,
     pub duration: Time,
-    pub target: EffectTarget,
+    pub target: EffectTarget<M>,
     #[serde(default)]
     pub params: IndexMap<String, EffectParam>,
-    pub script: InlineOrImport<String>,
+    pub script: M::SequenceEffectScript,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum ScriptSource {
+    Inline(String),
+    External(DawnPath),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -533,11 +691,780 @@ pub enum EffectParam {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct AutomationClip {
+#[serde(bound(
+    serialize = "M::AutomationClipCurve: Serialize, M::AutomationClipTarget: Serialize",
+    deserialize = "M::AutomationClipCurve: Deserialize<'de>, M::AutomationClipTarget: Deserialize<'de>"
+))]
+pub struct AutomationClip<M: ModelMode = Authored> {
     pub id: String,
     pub start: Time,
     pub duration: Time,
-    pub curve: InlineOrImport<Curve>,
+    pub curve: M::AutomationClipCurve,
     #[serde(default)]
-    pub targets: Vec<SequenceEffectRef>,
+    pub targets: Vec<M::AutomationClipTarget>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectKind {
+    Project,
+    Display,
+    Controller,
+    Layout,
+    Fixture,
+    Patch,
+    Sequence,
+}
+
+impl fmt::Display for ObjectKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Project => "project",
+            Self::Display => "display",
+            Self::Controller => "controller",
+            Self::Layout => "layout",
+            Self::Fixture => "fixture",
+            Self::Patch => "patch",
+            Self::Sequence => "sequence",
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedImport {
+    pub source_path: DawnPath,
+    pub object: DawnObject<Authored>,
+}
+
+#[derive(Debug, Clone)]
+pub enum LowerError {
+    MissingProject {
+        key: String,
+    },
+    WrongObjectKind {
+        key: String,
+        expected: ObjectKind,
+        actual: ObjectKind,
+    },
+    WrongImportedObjectKind {
+        import: String,
+        expected: ObjectKind,
+        actual: ObjectKind,
+    },
+    Import {
+        import: String,
+        message: String,
+    },
+    DuplicateFixtureId {
+        id: String,
+    },
+    UnknownFixture {
+        id: String,
+    },
+    DuplicateControllerName {
+        name: String,
+    },
+    UnknownController {
+        name: String,
+    },
+    DuplicateGroupName {
+        name: String,
+    },
+    UnknownGroup {
+        name: String,
+    },
+    DuplicateSequenceEffectId {
+        id: String,
+    },
+    UnknownSequenceEffect {
+        id: String,
+    },
+}
+
+impl fmt::Display for LowerError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingProject { key } => {
+                write!(formatter, "project object `{key}` was not found")
+            }
+            Self::WrongObjectKind {
+                key,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "object `{key}` must be a {expected}, but found a {actual}"
+            ),
+            Self::WrongImportedObjectKind {
+                import,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "import `{import}` must resolve to a {expected}, but found a {actual}"
+            ),
+            Self::Import { import, message } => {
+                write!(formatter, "failed to resolve import `{import}`: {message}")
+            }
+            Self::DuplicateFixtureId { id } => write!(formatter, "duplicate fixture id `{id}`"),
+            Self::UnknownFixture { id } => write!(formatter, "unknown fixture `{id}`"),
+            Self::DuplicateControllerName { name } => {
+                write!(formatter, "duplicate controller `{name}`")
+            }
+            Self::UnknownController { name } => write!(formatter, "unknown controller `{name}`"),
+            Self::DuplicateGroupName { name } => write!(formatter, "duplicate group `{name}`"),
+            Self::UnknownGroup { name } => write!(formatter, "unknown group `{name}`"),
+            Self::DuplicateSequenceEffectId { id } => {
+                write!(formatter, "duplicate sequence effect `{id}`")
+            }
+            Self::UnknownSequenceEffect { id } => {
+                write!(formatter, "unknown sequence effect `{id}`")
+            }
+        }
+    }
+}
+
+impl Error for LowerError {}
+
+#[derive(Debug)]
+pub enum LoadProjectError {
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    Yaml {
+        path: PathBuf,
+        source: serde_yaml::Error,
+    },
+    Lower(LowerError),
+}
+
+impl fmt::Display for LoadProjectError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io { path, source } => {
+                write!(formatter, "failed to read `{}`: {source}", path.display())
+            }
+            Self::Yaml { path, source } => {
+                write!(formatter, "failed to parse `{}`: {source}", path.display())
+            }
+            Self::Lower(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+impl Error for LoadProjectError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Io { source, .. } => Some(source),
+            Self::Yaml { source, .. } => Some(source),
+            Self::Lower(source) => Some(source),
+        }
+    }
+}
+
+impl From<LowerError> for LoadProjectError {
+    fn from(error: LowerError) -> Self {
+        Self::Lower(error)
+    }
+}
+
+pub fn load_project(
+    project_path: impl AsRef<Path>,
+    project_key: &str,
+) -> Result<ResolvedProject, LoadProjectError> {
+    let project_path = absolutize_path(project_path.as_ref());
+    let file = load_dawn_file(&project_path)?;
+    let source_path = DawnPath::new(path_to_string(&project_path));
+    let mut loader = FsImportLoader::default();
+
+    lower_project(
+        &file,
+        project_key,
+        &source_path,
+        |source_path, import, expected| loader.resolve(source_path, import, expected),
+    )
+    .map_err(LoadProjectError::Lower)
+}
+
+pub fn lower_project(
+    file: &DawnFile,
+    project_key: &str,
+    source_path: &DawnPath,
+    mut resolver: impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+) -> Result<ResolvedProject, LowerError> {
+    let object = file
+        .get(project_key)
+        .ok_or_else(|| LowerError::MissingProject {
+            key: project_key.to_string(),
+        })?;
+    let DawnObject::Project(project) = object else {
+        return Err(LowerError::WrongObjectKind {
+            key: project_key.to_string(),
+            expected: ObjectKind::Project,
+            actual: object.kind(),
+        });
+    };
+    lower_project_object(project, source_path, &mut resolver)
+}
+
+impl<M: ModelMode> DawnObject<M> {
+    pub fn kind(&self) -> ObjectKind {
+        match self {
+            Self::Project(_) => ObjectKind::Project,
+            Self::Display(_) => ObjectKind::Display,
+            Self::Controller(_) => ObjectKind::Controller,
+            Self::Layout(_) => ObjectKind::Layout,
+            Self::Fixture(_) => ObjectKind::Fixture,
+            Self::Patch(_) => ObjectKind::Patch,
+            Self::Sequence(_) => ObjectKind::Sequence,
+        }
+    }
+}
+
+fn lower_project_object(
+    project: &Project<Authored>,
+    source_path: &DawnPath,
+    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+) -> Result<Project<Resolved>, LowerError> {
+    let (display, display_source) =
+        resolve_display(&project.display, source_path, ObjectKind::Display, resolver)?;
+    let (layout, layout_source) = resolve_layout(
+        &display.layout,
+        &display_source,
+        ObjectKind::Layout,
+        resolver,
+    )?;
+
+    let mut sequences = Vec::with_capacity(project.sequences.len());
+    for sequence in &project.sequences {
+        let (sequence, sequence_source) =
+            resolve_sequence(sequence, source_path, ObjectKind::Sequence, resolver)?;
+        sequences.push(lower_sequence(
+            &sequence,
+            &sequence_source,
+            &layout,
+            &layout_source,
+            resolver,
+        )?);
+    }
+
+    Ok(Project {
+        name: project.name.clone(),
+        display: lower_display(&display, &display_source, resolver)?,
+        sequences,
+    })
+}
+
+fn lower_display(
+    display: &Display<Authored>,
+    source_path: &DawnPath,
+    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+) -> Result<Display<Resolved>, LowerError> {
+    let mut controllers = Vec::with_capacity(display.controllers.len());
+    for controller in &display.controllers {
+        let (controller, _) = resolve_controller(controller, source_path, resolver)?;
+        controllers.push(controller);
+    }
+    let controller_indices = controller_indices(&controllers)?;
+
+    let (layout, layout_source) =
+        resolve_layout(&display.layout, source_path, ObjectKind::Layout, resolver)?;
+    let layout = lower_layout(&layout, &layout_source, resolver)?;
+    let fixture_indices = fixture_indices(&layout.fixtures)?;
+
+    let (patch, _) = resolve_patch(&display.patch, source_path, ObjectKind::Patch, resolver)?;
+    let patch = lower_patch(&patch, &fixture_indices, &controller_indices)?;
+
+    Ok(Display {
+        name: display.name.clone(),
+        controllers,
+        patch,
+        layout,
+    })
+}
+
+fn lower_layout(
+    layout: &Layout<Authored>,
+    source_path: &DawnPath,
+    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+) -> Result<Layout<Resolved>, LowerError> {
+    let mut fixtures = Vec::with_capacity(layout.fixtures.len());
+    for placement in &layout.fixtures {
+        let (fixture, _) = resolve_fixture(&placement.fixture, source_path, resolver)?;
+        fixtures.push(FixturePlacement {
+            id: placement.id.clone(),
+            fixture,
+            transform: placement.transform,
+        });
+    }
+
+    let fixture_indices = fixture_indices(&fixtures)?;
+    let mut groups = Vec::with_capacity(layout.groups.len());
+    let mut group_names = HashMap::with_capacity(layout.groups.len());
+    for (group_index, group) in layout.groups.iter().enumerate() {
+        if group_names
+            .insert(group.name.clone(), GroupIndex(group_index))
+            .is_some()
+        {
+            return Err(LowerError::DuplicateGroupName {
+                name: group.name.clone(),
+            });
+        }
+
+        let mut members = Vec::with_capacity(group.members.len());
+        for member in &group.members {
+            let id = member.as_str();
+            let Some(index) = fixture_indices.get(id).copied() else {
+                return Err(LowerError::UnknownFixture { id: id.to_string() });
+            };
+            members.push(index);
+        }
+        groups.push(Group {
+            name: group.name.clone(),
+            members,
+        });
+    }
+
+    Ok(Layout {
+        name: layout.name.clone(),
+        units: layout.units,
+        fixtures,
+        groups,
+    })
+}
+
+fn lower_patch(
+    patch: &Patch<Authored>,
+    fixtures: &HashMap<String, FixtureIndex>,
+    controllers: &HashMap<String, ControllerIndex>,
+) -> Result<Patch<Resolved>, LowerError> {
+    let mut routes = Vec::with_capacity(patch.routes.len());
+    for route in &patch.routes {
+        let fixture = fixtures
+            .get(route.fixture.as_str())
+            .copied()
+            .ok_or_else(|| LowerError::UnknownFixture {
+                id: route.fixture.as_str().to_string(),
+            })?;
+        let controller = controllers
+            .get(route.controller.as_str())
+            .copied()
+            .ok_or_else(|| LowerError::UnknownController {
+                name: route.controller.as_str().to_string(),
+            })?;
+        routes.push(Route {
+            fixture,
+            controller,
+            universe: route.universe,
+            start: route.start,
+        });
+    }
+
+    Ok(Patch { routes })
+}
+
+fn lower_sequence(
+    sequence: &Sequence<Authored>,
+    sequence_source_path: &DawnPath,
+    layout: &Layout<Authored>,
+    layout_source_path: &DawnPath,
+    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+) -> Result<Sequence<Resolved>, LowerError> {
+    let resolved_layout = lower_layout(layout, layout_source_path, resolver)?;
+    let fixtures = fixture_indices(&resolved_layout.fixtures)?;
+    let groups = group_indices(&resolved_layout.groups)?;
+
+    let mut effect_indices = HashMap::with_capacity(sequence.effects.len());
+    let mut effects = Vec::with_capacity(sequence.effects.len());
+    for (effect_index, effect) in sequence.effects.iter().enumerate() {
+        if effect_indices
+            .insert(effect.id.clone(), SequenceEffectIndex(effect_index))
+            .is_some()
+        {
+            return Err(LowerError::DuplicateSequenceEffectId {
+                id: effect.id.clone(),
+            });
+        }
+        effects.push(lower_sequence_effect(
+            effect,
+            &fixtures,
+            &groups,
+            sequence_source_path,
+        )?);
+    }
+
+    let mut automation_clips = Vec::with_capacity(sequence.automation_clips.len());
+    for clip in &sequence.automation_clips {
+        let mut targets = Vec::with_capacity(clip.targets.len());
+        for target in &clip.targets {
+            let id = target.as_str();
+            let Some(index) = effect_indices.get(id).copied() else {
+                return Err(LowerError::UnknownSequenceEffect { id: id.to_string() });
+            };
+            targets.push(index);
+        }
+        automation_clips.push(AutomationClip {
+            id: clip.id.clone(),
+            start: clip.start.clone(),
+            duration: clip.duration.clone(),
+            curve: clip.curve.clone(),
+            targets,
+        });
+    }
+
+    Ok(Sequence {
+        duration: sequence.duration.clone(),
+        frame_rate: sequence.frame_rate,
+        audio: sequence
+            .audio
+            .as_ref()
+            .map(|audio| resolve_path(sequence_source_path, audio.path())),
+        effects,
+        automation_clips,
+    })
+}
+
+fn lower_sequence_effect(
+    effect: &SequenceEffect<Authored>,
+    fixtures: &HashMap<String, FixtureIndex>,
+    groups: &HashMap<String, GroupIndex>,
+    source_path: &DawnPath,
+) -> Result<SequenceEffect<Resolved>, LowerError> {
+    let target = match &effect.target {
+        EffectTarget::Group(group) => {
+            let name = group.as_str();
+            let Some(index) = groups.get(name).copied() else {
+                return Err(LowerError::UnknownGroup {
+                    name: name.to_string(),
+                });
+            };
+            EffectTarget::Group(index)
+        }
+        EffectTarget::Fixture(fixture) => {
+            let id = fixture.as_str();
+            let Some(index) = fixtures.get(id).copied() else {
+                return Err(LowerError::UnknownFixture { id: id.to_string() });
+            };
+            EffectTarget::Fixture(index)
+        }
+    };
+
+    Ok(SequenceEffect {
+        id: effect.id.clone(),
+        start: effect.start.clone(),
+        duration: effect.duration.clone(),
+        target,
+        params: effect.params.clone(),
+        script: match &effect.script {
+            InlineOrImport::Inline(script) => ScriptSource::Inline(script.clone()),
+            InlineOrImport::Import { import } => {
+                ScriptSource::External(resolve_path(source_path, import.path()))
+            }
+        },
+    })
+}
+
+fn fixture_indices(
+    fixtures: &[FixturePlacement<Resolved>],
+) -> Result<HashMap<String, FixtureIndex>, LowerError> {
+    let mut indices = HashMap::with_capacity(fixtures.len());
+    for (index, fixture) in fixtures.iter().enumerate() {
+        if indices
+            .insert(fixture.id.clone(), FixtureIndex(index))
+            .is_some()
+        {
+            return Err(LowerError::DuplicateFixtureId {
+                id: fixture.id.clone(),
+            });
+        }
+    }
+    Ok(indices)
+}
+
+fn controller_indices(
+    controllers: &[Controller],
+) -> Result<HashMap<String, ControllerIndex>, LowerError> {
+    let mut indices = HashMap::with_capacity(controllers.len());
+    for (index, controller) in controllers.iter().enumerate() {
+        if indices
+            .insert(controller.name.clone(), ControllerIndex(index))
+            .is_some()
+        {
+            return Err(LowerError::DuplicateControllerName {
+                name: controller.name.clone(),
+            });
+        }
+    }
+    Ok(indices)
+}
+
+fn group_indices(groups: &[Group<Resolved>]) -> Result<HashMap<String, GroupIndex>, LowerError> {
+    let mut indices = HashMap::with_capacity(groups.len());
+    for (index, group) in groups.iter().enumerate() {
+        if indices
+            .insert(group.name.clone(), GroupIndex(index))
+            .is_some()
+        {
+            return Err(LowerError::DuplicateGroupName {
+                name: group.name.clone(),
+            });
+        }
+    }
+    Ok(indices)
+}
+
+fn resolve_path(source_path: &DawnPath, import_path: &DawnPath) -> DawnPath {
+    let path = import_path.as_str();
+    if path.starts_with('/') || path.contains(':') {
+        return DawnPath(path.to_string());
+    }
+
+    let source = source_path.as_str().replace('\\', "/");
+    let Some((directory, _)) = source.rsplit_once('/') else {
+        return DawnPath(path.to_string());
+    };
+    DawnPath(normalize_path(&format!("{directory}/{path}")))
+}
+
+fn normalize_path(path: &str) -> String {
+    let mut parts = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    parts.join("/")
+}
+
+fn resolve_import(
+    source_path: &DawnPath,
+    import: &ImportRef,
+    expected: ObjectKind,
+    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+) -> Result<ResolvedImport, LowerError> {
+    let resolved = resolver(source_path, import, expected)?;
+    if resolved.object.kind() != expected {
+        return Err(LowerError::WrongImportedObjectKind {
+            import: import.raw().to_string(),
+            expected,
+            actual: resolved.object.kind(),
+        });
+    }
+    Ok(resolved)
+}
+
+#[derive(Default)]
+struct FsImportLoader {
+    files: HashMap<PathBuf, DawnFile>,
+}
+
+impl FsImportLoader {
+    fn resolve(
+        &mut self,
+        source_path: &DawnPath,
+        import: &ImportRef,
+        _expected: ObjectKind,
+    ) -> Result<ResolvedImport, LowerError> {
+        let import_path = resolve_import_file_path(source_path, import.path());
+        let file = self
+            .load_cached(&import_path)
+            .map_err(|error| LowerError::Import {
+                import: import.raw().to_string(),
+                message: error.to_string(),
+            })?;
+        let object = select_imported_object(file, import)?;
+
+        Ok(ResolvedImport {
+            source_path: DawnPath::new(path_to_string(&import_path)),
+            object,
+        })
+    }
+
+    fn load_cached(&mut self, path: &Path) -> Result<&DawnFile, LoadProjectError> {
+        let path = absolutize_path(path);
+        if !self.files.contains_key(&path) {
+            let file = load_dawn_file(&path)?;
+            self.files.insert(path.clone(), file);
+        }
+        Ok(self
+            .files
+            .get(&path)
+            .expect("file was inserted before lookup"))
+    }
+}
+
+fn select_imported_object(
+    file: &DawnFile,
+    import: &ImportRef,
+) -> Result<DawnObject<Authored>, LowerError> {
+    if let Some(object) = import.object() {
+        return file
+            .get(object.as_str())
+            .cloned()
+            .ok_or_else(|| LowerError::Import {
+                import: import.raw().to_string(),
+                message: format!("object `{}` was not found", object.as_str()),
+            });
+    }
+
+    if file.len() == 1 {
+        return Ok(file
+            .values()
+            .next()
+            .expect("file length was checked")
+            .clone());
+    }
+
+    Err(LowerError::Import {
+        import: import.raw().to_string(),
+        message: "import must name an object when the target file has zero or multiple objects"
+            .to_string(),
+    })
+}
+
+fn load_dawn_file(path: &Path) -> Result<DawnFile, LoadProjectError> {
+    let text = fs::read_to_string(path).map_err(|source| LoadProjectError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    serde_yaml::from_str(&text).map_err(|source| LoadProjectError::Yaml {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+fn resolve_import_file_path(source_path: &DawnPath, import_path: &DawnPath) -> PathBuf {
+    let import_path = PathBuf::from(import_path.as_str());
+    if import_path.is_absolute() {
+        return import_path;
+    }
+
+    PathBuf::from(source_path.as_str())
+        .parent()
+        .map(|parent| parent.join(&import_path))
+        .unwrap_or(import_path)
+}
+
+fn absolutize_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|current_dir| current_dir.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    }
+}
+
+fn path_to_string(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn resolve_display(
+    value: &InlineOrImport<Display<Authored>>,
+    source_path: &DawnPath,
+    expected: ObjectKind,
+    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+) -> Result<(Display<Authored>, DawnPath), LowerError> {
+    match value {
+        InlineOrImport::Inline(display) => Ok((display.clone(), source_path.clone())),
+        InlineOrImport::Import { import } => {
+            let resolved = resolve_import(source_path, import, expected, resolver)?;
+            let DawnObject::Display(display) = resolved.object else {
+                unreachable!("resolved import kind was checked");
+            };
+            Ok((display, resolved.source_path))
+        }
+    }
+}
+
+fn resolve_controller(
+    value: &InlineOrImport<Controller>,
+    source_path: &DawnPath,
+    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+) -> Result<(Controller, DawnPath), LowerError> {
+    match value {
+        InlineOrImport::Inline(controller) => Ok((controller.clone(), source_path.clone())),
+        InlineOrImport::Import { import } => {
+            let resolved = resolve_import(source_path, import, ObjectKind::Controller, resolver)?;
+            let DawnObject::Controller(controller) = resolved.object else {
+                unreachable!("resolved import kind was checked");
+            };
+            Ok((controller, resolved.source_path))
+        }
+    }
+}
+
+fn resolve_layout(
+    value: &InlineOrImport<Layout<Authored>>,
+    source_path: &DawnPath,
+    expected: ObjectKind,
+    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+) -> Result<(Layout<Authored>, DawnPath), LowerError> {
+    match value {
+        InlineOrImport::Inline(layout) => Ok((layout.clone(), source_path.clone())),
+        InlineOrImport::Import { import } => {
+            let resolved = resolve_import(source_path, import, expected, resolver)?;
+            let DawnObject::Layout(layout) = resolved.object else {
+                unreachable!("resolved import kind was checked");
+            };
+            Ok((layout, resolved.source_path))
+        }
+    }
+}
+
+fn resolve_fixture(
+    value: &InlineOrImport<Fixture>,
+    source_path: &DawnPath,
+    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+) -> Result<(Fixture, DawnPath), LowerError> {
+    match value {
+        InlineOrImport::Inline(fixture) => Ok((fixture.clone(), source_path.clone())),
+        InlineOrImport::Import { import } => {
+            let resolved = resolve_import(source_path, import, ObjectKind::Fixture, resolver)?;
+            let DawnObject::Fixture(fixture) = resolved.object else {
+                unreachable!("resolved import kind was checked");
+            };
+            Ok((fixture, resolved.source_path))
+        }
+    }
+}
+
+fn resolve_patch(
+    value: &InlineOrImport<Patch<Authored>>,
+    source_path: &DawnPath,
+    expected: ObjectKind,
+    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+) -> Result<(Patch<Authored>, DawnPath), LowerError> {
+    match value {
+        InlineOrImport::Inline(patch) => Ok((patch.clone(), source_path.clone())),
+        InlineOrImport::Import { import } => {
+            let resolved = resolve_import(source_path, import, expected, resolver)?;
+            let DawnObject::Patch(patch) = resolved.object else {
+                unreachable!("resolved import kind was checked");
+            };
+            Ok((patch, resolved.source_path))
+        }
+    }
+}
+
+fn resolve_sequence(
+    value: &InlineOrImport<Sequence<Authored>>,
+    source_path: &DawnPath,
+    expected: ObjectKind,
+    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+) -> Result<(Sequence<Authored>, DawnPath), LowerError> {
+    match value {
+        InlineOrImport::Inline(sequence) => Ok((sequence.clone(), source_path.clone())),
+        InlineOrImport::Import { import } => {
+            let resolved = resolve_import(source_path, import, expected, resolver)?;
+            let DawnObject::Sequence(sequence) = resolved.object else {
+                unreachable!("resolved import kind was checked");
+            };
+            Ok((sequence, resolved.source_path))
+        }
+    }
 }

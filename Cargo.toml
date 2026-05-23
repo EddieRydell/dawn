@@ -2,10 +2,6 @@
 members = [
   "apps/desktop/src-tauri",
   "crates/dawn-project",
-  "crates/dawn-syntax",
-  "crates/dawn-semantics",
-  "crates/dawn-analysis",
-  "crates/dawn-lsp",
   "crates/syntax-gen",
 ]
 resolver = "2"

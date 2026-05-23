@@ -1,7 +1,0 @@
-[package]
-name = "dawn-analysis"
-edition.workspace = true
-version.workspace = true
-
-[dependencies]
-dawn-project = { path = "../dawn-project" }

@@ -3,4 +3,40 @@ opening:
   duration: 45s
   frame_rate: 60
   audio: opening.wav
-  events: opening.events.dawn
+  effects:
+    - id: evt_0001
+      start: 0s
+      duration: 8s
+      target:
+        type: group
+        name: WallBars
+      params:
+        base:
+          type: color
+          value: "#111827"
+        accent:
+          type: color
+          value: "#66e3ff"
+        speed:
+          type: float
+          value: 0.5
+      script:
+        import: ../effects/pulse.effect.dawn
+    - id: evt_0004
+      start: 24s
+      duration: 8s
+      target:
+        type: group
+        name: WallBars
+      params:
+        base:
+          type: color
+          value: "#180a2a"
+        accent:
+          type: color
+          value: "#ff4fd8"
+        speed:
+          type: float
+          value: 1.25
+      script:
+        import: ../effects/pulse.effect.dawn
