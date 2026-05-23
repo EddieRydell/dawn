@@ -133,21 +133,31 @@ impl DawnPath {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(transparent)]
-pub struct FixtureName(String);
+macro_rules! string_ref {
+    ($name:ident) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+        #[serde(transparent)]
+        pub struct $name(String);
 
-impl FixtureName {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
+        impl $name {
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+    };
 }
+
+string_ref!(ObjectName);
+string_ref!(FixtureRef);
+string_ref!(GroupRef);
+string_ref!(ControllerRef);
+string_ref!(SequenceEffectRef);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportRef {
     raw: String,
     path: DawnPath,
-    object: Option<FixtureName>,
+    object: Option<ObjectName>,
 }
 
 impl ImportRef {
@@ -159,7 +169,7 @@ impl ImportRef {
         &self.path
     }
 
-    pub fn object(&self) -> Option<&FixtureName> {
+    pub fn object(&self) -> Option<&ObjectName> {
         self.object.as_ref()
     }
 }
@@ -175,7 +185,7 @@ impl<'de> Deserialize<'de> for ImportRef {
                 if object.is_empty() {
                     return Err(de::Error::custom("import object name must not be empty"));
                 }
-                (path, Some(FixtureName(object.to_string())))
+                (path, Some(ObjectName(object.to_string())))
             }
             None => (raw.as_str(), None),
         };
@@ -417,7 +427,7 @@ pub struct LineSegment {
 #[serde(deny_unknown_fields)]
 pub struct Group {
     pub name: String,
-    pub members: Vec<String>,
+    pub members: Vec<FixtureRef>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -430,8 +440,8 @@ pub struct Patch {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Route {
-    pub target: Fixture,
-    pub controller: Controller,
+    pub fixture: FixtureRef,
+    pub controller: ControllerRef,
     pub universe: u32,
     pub start: u32,
 }
@@ -449,10 +459,10 @@ pub struct Sequence {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "type", deny_unknown_fields)]
+#[serde(tag = "type", content = "name", rename_all = "snake_case")]
 pub enum EffectTarget {
-    Group(Group),
-    Fixture(Fixture),
+    Group(GroupRef),
+    Fixture(FixtureRef),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -511,5 +521,5 @@ pub struct AutomationClip {
     pub duration: Time,
     pub curve: InlineOrImport<Curve>,
     #[serde(default)]
-    pub targets: Vec<SequenceEffect>,
+    pub targets: Vec<SequenceEffectRef>,
 }
