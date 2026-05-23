@@ -1,0 +1,4 @@
+{"id":"evt_0001","type":"effect","target":"WallBars","effect":"../effects/pulse.effect.dawn","start":0.0,"duration":8.0,"params":{"base":"#111827","accent":"#66e3ff","speed":0.5}}
+{"id":"evt_0002","type":"animate","target":"Movers","param":"dimmer","start":8.0,"duration":4.0,"curve":"ease_in_out","from":0,"to":255}
+{"id":"evt_0003","type":"set","target":"Movers","param":"color","start":8.0,"value":"#ffcc66"}
+{"id":"evt_0004","type":"effect","target":"WallBars","effect":"../effects/pulse.effect.dawn","start":24.0,"duration":8.0,"params":{"base":"#180a2a","accent":"#ff4fd8","speed":1.25}}

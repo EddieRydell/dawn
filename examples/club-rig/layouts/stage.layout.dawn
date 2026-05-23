@@ -1,13 +1,58 @@
-layout StageLayout {
-  spatial units meters;
-
-  fixture bar_01 at [-3.0, 0.0, 2.5] for PixelBar;
-  fixture bar_02 at [-1.0, 0.0, 2.5] for PixelBar;
-  fixture bar_03 at [1.0, 0.0, 2.5] for PixelBar;
-  fixture bar_04 at [3.0, 0.0, 2.5] for PixelBar;
-
-  fixture spot_01 at [-3.5, -1.2, 3.0] for Spot;
-  fixture spot_02 at [-1.2, -1.2, 3.0] for Spot;
-  fixture spot_03 at [1.2, -1.2, 3.0] for Spot;
-  fixture spot_04 at [3.5, -1.2, 3.0] for Spot;
-}
+stage:
+  type: layout
+  name: stage
+  units: meters
+  fixtures:
+    - id: bar_01
+      fixture:
+        import: ../hardware/main.hardware.dawn::pixel_bar_50
+      transform:
+        position: { x: -3.0, y: 0.0, z: 2.5 }
+    - id: bar_02
+      fixture:
+        import: ../hardware/main.hardware.dawn::pixel_bar_50
+      transform:
+        position: { x: -1.0, y: 0.0, z: 2.5 }
+    - id: bar_03
+      fixture:
+        import: ../hardware/main.hardware.dawn::pixel_bar_50
+      transform:
+        position: { x: 1.0, y: 0.0, z: 2.5 }
+    - id: bar_04
+      fixture:
+        import: ../hardware/main.hardware.dawn::pixel_bar_50
+      transform:
+        position: { x: 3.0, y: 0.0, z: 2.5 }
+    - id: spot_01
+      fixture:
+        import: ../hardware/main.hardware.dawn::spot_rgb
+      transform:
+        position: { x: -3.5, y: -1.2, z: 3.0 }
+    - id: spot_02
+      fixture:
+        import: ../hardware/main.hardware.dawn::spot_rgb
+      transform:
+        position: { x: -1.2, y: -1.2, z: 3.0 }
+    - id: spot_03
+      fixture:
+        import: ../hardware/main.hardware.dawn::spot_rgb
+      transform:
+        position: { x: 1.2, y: -1.2, z: 3.0 }
+    - id: spot_04
+      fixture:
+        import: ../hardware/main.hardware.dawn::spot_rgb
+      transform:
+        position: { x: 3.5, y: -1.2, z: 3.0 }
+  groups:
+    - name: WallBars
+      members:
+        - fixture: bar_01
+        - fixture: bar_02
+        - fixture: bar_03
+        - fixture: bar_04
+    - name: Movers
+      members:
+        - fixture: spot_01
+        - fixture: spot_02
+        - fixture: spot_03
+        - fixture: spot_04

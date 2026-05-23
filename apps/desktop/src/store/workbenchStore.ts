@@ -458,7 +458,7 @@ function formatError(error: unknown) {
 }
 
 function isSequenceFile(path: string | null | undefined) {
-  return Boolean(path?.endsWith(".sequence.dawn"));
+  return Boolean(path?.endsWith(".sequence.dawn") || path?.endsWith(".events.dawn"));
 }
 
 function languageServiceStatusLabel(status: LanguageServiceStatus) {

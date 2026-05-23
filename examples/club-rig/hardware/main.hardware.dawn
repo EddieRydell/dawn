@@ -1,25 +1,18 @@
-hardware MainRig {
-  fixture PixelBar {
-    channels 150;
-    pixel_count 50;
-    color rgb;
-  }
+pixel_bar_50:
+  type: fixture
+  name: PixelBar
+  color_model: rgb
+  geometry:
+    type: line
+    from: { x: -0.5, y: 0.0, z: 0.0 }
+    to: { x: 0.5, y: 0.0, z: 0.0 }
+    pixels: 50
 
-  fixture Spot {
-    channels 16;
-    params {
-      dimmer int range 0..255;
-      pan float range -270..270;
-      tilt float range -135..135;
-      color color;
-    }
-  }
-
-  group WallBars {
-    members [bar_01, bar_02, bar_03, bar_04];
-  }
-
-  group Movers {
-    members [spot_01, spot_02, spot_03, spot_04];
-  }
-}
+spot_rgb:
+  type: fixture
+  name: Spot
+  color_model: rgb
+  geometry:
+    type: points
+    points:
+      - { x: 0.0, y: 0.0, z: 0.0 }

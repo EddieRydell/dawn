@@ -1,7 +1,7 @@
 import * as monaco from "monaco-editor";
 import type { OpenEditor } from "../store/workbenchStore";
 import type { LanguageProblem } from "../types";
-import { DawnLspClient, ensureDawnLanguageRegistered, isDawnFile } from "./dawnLanguageClient";
+import { DawnLspClient, dawnLanguageIdForPath, ensureDawnLanguageRegistered, isDawnFile } from "./dawnLanguageClient";
 
 type DawnEditorProject = {
   root: string;
@@ -157,11 +157,11 @@ export class DawnEditorRuntime {
   }
 
   private ensureModel(openEditor: OpenEditor) {
-    const languageId = isDawnFile(openEditor.path) ? "dawn" : "plaintext";
+    const languageId = dawnLanguageIdForPath(openEditor.path);
     const existing = this.models.get(openEditor.path);
     if (existing) {
       monaco.editor.setModelLanguage(existing, languageId);
-      if (languageId === "dawn") {
+      if (isDawnFile(openEditor.path)) {
         this.lspClient?.openModel(existing);
       }
       return existing;
@@ -179,7 +179,7 @@ export class DawnEditorRuntime {
         this.lspClient?.scheduleChange(model);
       })
     );
-    if (languageId === "dawn") {
+    if (isDawnFile(openEditor.path)) {
       this.lspClient?.openModel(model);
     }
     return model;

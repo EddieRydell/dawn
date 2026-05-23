@@ -142,9 +142,16 @@ mod tests {
     }
 
     #[test]
-    fn club_rig_examples_parse_without_diagnostics() {
+    fn club_rig_effect_examples_parse_without_diagnostics() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/club-rig");
-        let files = dawn_files(&root);
+        let files = dawn_files(&root)
+            .into_iter()
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.ends_with(".effect.dawn"))
+            })
+            .collect::<Vec<_>>();
         assert!(!files.is_empty());
 
         for file in files {

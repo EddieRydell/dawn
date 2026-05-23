@@ -1,17 +1,22 @@
-display MainDisplay {
-  label "Main room LED wall and house fixtures";
-
-  controller WallController {
-    output artnet {
-      universe 1 range 1..510;
-      universe 2 range 1..510;
-    }
-  }
-
-  controller FloorController {
-    output sACN {
-      universe 11 range 1..510;
-      universe 12 range 1..510;
-    }
-  }
-}
+main:
+  type: display
+  name: main
+  layout:
+    import: ../layouts/stage.layout.dawn::stage
+  patch:
+    import: ../patches/house.patch.dawn::house
+  controllers:
+    - name: WallController
+      protocol: artnet
+      universes:
+        - id: 1
+          range: "1..510"
+        - id: 2
+          range: "1..510"
+    - name: FloorController
+      protocol: sacn
+      universes:
+        - id: 11
+          range: "1..510"
+        - id: 12
+          range: "1..510"

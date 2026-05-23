@@ -6,7 +6,6 @@ use std::sync::Arc;
 use dawn_analysis::{
     Analysis, AnalysisDiagnostic, DiagnosticCode, DiagnosticSeverity, FileId, SymbolKind,
 };
-use dawn_syntax::{ast, AstNode, LexToken, SyntaxKind, SyntaxNode};
 use tokio::sync::Mutex;
 use tower_lsp::jsonrpc::Result as JsonRpcResult;
 use tower_lsp::lsp_types::{
@@ -26,8 +25,9 @@ use walkdir::{DirEntry, WalkDir};
 const DIAGNOSTIC_SOURCE: &str = "dawn";
 const IGNORED_DIRS: &[&str] = &[".git", "target", "node_modules", "dist"];
 const KEYWORD_COMPLETIONS: &[&str] = &[
-    "import", "from", "fn", "let", "true", "false", "project", "effect", "display", "hardware",
-    "layout", "patch", "sequence",
+    "project", "layout", "display", "fixture", "patch", "sequence", "name", "sequences",
+    "duration", "frame_rate", "events", "fixtures", "groups", "controllers", "routes",
+    "geometry", "transform", "position", "rotation", "scale", "group", "type", "true", "false",
 ];
 const TYPE_COMPLETIONS: &[&str] = &["float", "int", "bool", "color", "duration", "Fixture"];
 const TOKEN_LEGEND: &[&str] = &[
@@ -548,8 +548,7 @@ pub fn convert_diagnostic(
 
 fn diagnostic_code(code: &DiagnosticCode) -> &'static str {
     match code {
-        DiagnosticCode::Syntax(_) => "syntax",
-        DiagnosticCode::Lowering(_) => "lowering",
+        DiagnosticCode::InvalidDocument => "invalid-document",
         DiagnosticCode::InvalidImportPath => "invalid-import-path",
         DiagnosticCode::UnresolvedImport => "unresolved-import",
     }
@@ -587,7 +586,6 @@ struct SemanticRange {
 }
 
 fn semantic_token_ranges(analysis: &Analysis, file: FileId, text: &str) -> Vec<SemanticRange> {
-    let parse = dawn_syntax::parse(text);
     let mut ranges = Vec::new();
 
     if let Ok(imports) = analysis.imports(file) {
@@ -614,32 +612,14 @@ fn semantic_token_ranges(analysis: &Analysis, file: FileId, text: &str) -> Vec<S
         }));
     }
 
-    if let Some(source_file) = parse.source_file() {
-        let mut ast_ranges = Vec::new();
-        collect_ast_semantic_ranges(&source_file.syntax().clone(), &mut ast_ranges);
-        for ast_range in ast_ranges {
-            if !ranges
-                .iter()
-                .any(|range| ranges_overlap(&range.range, &ast_range.range))
-            {
-                ranges.push(ast_range);
-            }
-        }
-    }
-
-    for token in parse.tokens() {
+    for token in lex_for_semantics(text) {
         if ranges
             .iter()
             .any(|range| ranges_overlap(&range.range, &token.range))
         {
             continue;
         }
-        if let Some(kind) = lexical_semantic_kind(token.kind) {
-            ranges.push(SemanticRange {
-                range: token.range.clone(),
-                kind,
-            });
-        }
+        ranges.push(token);
     }
 
     ranges.retain(|range| range.range.start < range.range.end);
@@ -663,71 +643,96 @@ fn semantic_token_ranges(analysis: &Analysis, file: FileId, text: &str) -> Vec<S
     non_overlapping
 }
 
-fn collect_ast_semantic_ranges(node: &SyntaxNode, ranges: &mut Vec<SemanticRange>) {
-    for descendant in node.descendants() {
-        match descendant.kind() {
-            SyntaxKind::ImportDecl => {
-                if let Some(import) = ast::ImportDecl::cast(descendant.clone()) {
-                    if let Some(kind) = import.kind() {
-                        push_node_range(ranges, kind.syntax(), SemanticKind::Type);
-                    }
+fn lex_for_semantics(text: &str) -> Vec<SemanticRange> {
+    let mut ranges = Vec::new();
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let start = index;
+        let byte = bytes[index];
+        if byte == b'#' {
+            let end = text[index..]
+                .find('\n')
+                .map(|relative| index + relative)
+                .unwrap_or(text.len());
+            ranges.push(SemanticRange {
+                range: index..end,
+                kind: if looks_like_color(&text[index..end]) {
+                    SemanticKind::String
+                } else {
+                    SemanticKind::Comment
+                },
+            });
+            index = end;
+        } else if byte == b'"' {
+            index += 1;
+            while index < bytes.len() {
+                if bytes[index] == b'\\' {
+                    index += 2;
+                } else if bytes[index] == b'"' {
+                    index += 1;
+                    break;
+                } else {
+                    index += 1;
                 }
             }
-            SyntaxKind::Document => {
-                if let Some(document) = ast::Document::cast(descendant.clone()) {
-                    if let Some(kind) = document.kind() {
-                        push_node_range(ranges, kind.syntax(), SemanticKind::Type);
-                    }
+            ranges.push(SemanticRange {
+                range: start..index.min(text.len()),
+                kind: SemanticKind::String,
+            });
+        } else if byte.is_ascii_digit() {
+            index += 1;
+            while index < bytes.len()
+                && (bytes[index].is_ascii_digit() || matches!(bytes[index], b'.' | b'_'))
+            {
+                index += 1;
+            }
+            if index < bytes.len() && bytes[index].is_ascii_alphabetic() {
+                while index < bytes.len() && bytes[index].is_ascii_alphabetic() {
+                    index += 1;
                 }
             }
-            SyntaxKind::TypeRef => {
-                if let Some(type_ref) = ast::TypeRef::cast(descendant.clone()) {
-                    if let Some(name) = type_ref.name() {
-                        push_node_range(ranges, name.syntax(), SemanticKind::Type);
-                    }
-                }
+            ranges.push(SemanticRange {
+                range: start..index,
+                kind: SemanticKind::Number,
+            });
+        } else if byte.is_ascii_alphabetic() || byte == b'_' {
+            index += 1;
+            while index < bytes.len()
+                && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+            {
+                index += 1;
             }
-            SyntaxKind::NameRef => {
-                push_node_range(ranges, &descendant, SemanticKind::Variable);
+            let word = &text[start..index];
+            if KEYWORD_COMPLETIONS.contains(&word) {
+                ranges.push(SemanticRange {
+                    range: start..index,
+                    kind: SemanticKind::Keyword,
+                });
+            } else if TYPE_COMPLETIONS.contains(&word) {
+                ranges.push(SemanticRange {
+                    range: start..index,
+                    kind: SemanticKind::Type,
+                });
             }
-            _ => {}
+        } else {
+            index += 1;
+            if matches!(byte, b':' | b'-' | b'{' | b'}' | b'[' | b']' | b',' | b'.') {
+                ranges.push(SemanticRange {
+                    range: start..index,
+                    kind: SemanticKind::Operator,
+                });
+            }
         }
     }
+    ranges
 }
 
-fn lexical_semantic_kind(kind: SyntaxKind) -> Option<SemanticKind> {
-    Some(match kind {
-        SyntaxKind::ImportKw
-        | SyntaxKind::FromKw
-        | SyntaxKind::FnKw
-        | SyntaxKind::LetKw
-        | SyntaxKind::TrueKw
-        | SyntaxKind::FalseKw => SemanticKind::Keyword,
-        SyntaxKind::LineComment | SyntaxKind::BlockComment => SemanticKind::Comment,
-        SyntaxKind::String | SyntaxKind::Color | SyntaxKind::InvalidColor => SemanticKind::String,
-        SyntaxKind::Duration | SyntaxKind::Float | SyntaxKind::Int => SemanticKind::Number,
-        SyntaxKind::StarStar
-        | SyntaxKind::EqEq
-        | SyntaxKind::BangEq
-        | SyntaxKind::Le
-        | SyntaxKind::Ge
-        | SyntaxKind::AndAnd
-        | SyntaxKind::OrOr
-        | SyntaxKind::Shl
-        | SyntaxKind::Shr
-        | SyntaxKind::DotDot
-        | SyntaxKind::Eq
-        | SyntaxKind::Plus
-        | SyntaxKind::Minus
-        | SyntaxKind::Star
-        | SyntaxKind::Slash
-        | SyntaxKind::Percent
-        | SyntaxKind::Pipe
-        | SyntaxKind::Ampersand
-        | SyntaxKind::Caret
-        | SyntaxKind::Bang => SemanticKind::Operator,
-        _ => return None,
-    })
+fn looks_like_color(text: &str) -> bool {
+    let color = text.trim();
+    color.len() == 7
+        && color.starts_with('#')
+        && color[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn encode_semantic_tokens(
@@ -787,17 +792,6 @@ fn encode_semantic_tokens(
     }
 }
 
-fn push_node_range(ranges: &mut Vec<SemanticRange>, node: &SyntaxNode, kind: SemanticKind) {
-    ranges.push(SemanticRange {
-        range: text_range(node.text_range()),
-        kind,
-    });
-}
-
-fn text_range(range: rowan::TextRange) -> Range<usize> {
-    usize::from(range.start())..usize::from(range.end())
-}
-
 fn range_contains(range: &Range<usize>, offset: usize) -> bool {
     range.start <= offset && offset <= range.end
 }
@@ -849,11 +843,34 @@ fn markdown_hover(contents: String, range: Option<LspRange>) -> Hover {
     }
 }
 
-fn token_at(text: &str, offset: usize) -> Option<LexToken> {
-    dawn_syntax::lex(text)
-        .0
-        .into_iter()
-        .find(|token| token.kind == SyntaxKind::Ident && range_contains(&token.range, offset))
+#[derive(Debug, Clone)]
+struct WordToken {
+    text: String,
+}
+
+fn token_at(text: &str, offset: usize) -> Option<WordToken> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_alphabetic() || bytes[index] == b'_' {
+            let start = index;
+            index += 1;
+            while index < bytes.len()
+                && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+            {
+                index += 1;
+            }
+            let range = start..index;
+            if range_contains(&range, offset) {
+                return Some(WordToken {
+                    text: text[range.clone()].to_string(),
+                });
+            }
+        } else {
+            index += 1;
+        }
+    }
+    None
 }
 
 fn relative_label(base: &Path, path: &Path) -> String {
@@ -1081,7 +1098,7 @@ fn normalize_path(path: PathBuf) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dawn_analysis::{DiagnosticSource, LoweringDiagnosticCode};
+    use dawn_analysis::DiagnosticSource;
     use tower_lsp::lsp_types::{DiagnosticSeverity as LspDiagnosticSeverity, NumberOrString};
 
     fn file_uri(path: &Path) -> Url {
@@ -1142,11 +1159,8 @@ mod tests {
             message: "missing document".to_string(),
             severity: DiagnosticSeverity::Error,
             range: None,
-            source: DiagnosticSource::Lowering,
-            code: DiagnosticCode::Lowering(LoweringDiagnosticCode::MissingRequiredSyntax {
-                parent: "SourceFile",
-                field: "document",
-            }),
+            source: DiagnosticSource::Analysis,
+            code: DiagnosticCode::InvalidDocument,
         };
 
         let converted = convert_diagnostic(&LineIndex::new(""), diagnostic);
@@ -1156,7 +1170,7 @@ mod tests {
         );
         assert_eq!(
             converted.code,
-            Some(NumberOrString::String("lowering".to_string()))
+            Some(NumberOrString::String("invalid-document".to_string()))
         );
     }
 
@@ -1178,10 +1192,8 @@ mod tests {
             (
                 DiagnosticSeverity::Info,
                 LspDiagnosticSeverity::INFORMATION,
-                DiagnosticCode::Lowering(LoweringDiagnosticCode::UnknownOperator {
-                    operator: "?".to_string(),
-                }),
-                "lowering",
+                DiagnosticCode::InvalidDocument,
+                "invalid-document",
             ),
         ];
 
@@ -1237,20 +1249,22 @@ mod tests {
     #[test]
     fn open_change_and_symbols_flow_updates_state() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("main.effect.dawn");
+        let path = temp.path().join("project.dawn");
         let uri = file_uri(&path);
         let mut state = LspState::new();
 
-        let invalid = state.did_open(uri.clone(), 1, "effect Main { color true }".to_string());
+        let invalid = state.did_open(uri.clone(), 1, "club:\n  type: project\n".to_string());
         assert!(!invalid.is_empty());
 
-        let valid_text = "effect Main { let value = 1; }".to_string();
+        let valid_text = "club:\n  type: project\n  name: club\n  display:\n    import: main.display.dawn::main\n".to_string();
+        state
+            .analysis
+            .set_file(temp.path().join("main.display.dawn"), "main:\n  type: display\n  name: main\n  layout:\n    import: stage.layout.dawn::stage\n  patch:\n    import: house.patch.dawn::house\n");
         let valid = state.did_change(&uri, 2, valid_text);
         assert!(valid.is_empty());
 
         let symbols = state.document_symbols(&uri).unwrap();
-        assert!(symbols.iter().any(|symbol| symbol.name == "Main"));
-        assert!(symbols.iter().any(|symbol| symbol.name == "value"));
+        assert!(symbols.iter().any(|symbol| symbol.name == "club"));
 
         state.did_close(&uri);
         assert_eq!(state.documents.get(&uri).unwrap().version, 2);
@@ -1260,9 +1274,9 @@ mod tests {
     #[test]
     fn semantic_tokens_map_roles_and_split_multiline_comments() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("main.effect.dawn");
+        let path = temp.path().join("project.dawn");
         let uri = file_uri(&path);
-        let text = "/* one\n   two */\nimport effect Pulse from <effects/pulse.effect.dawn>;\neffect Main { fn sample(t float) { let phase = 1; color phase; } }";
+        let text = "# one\nclub:\n  type: project\n  name: club\n  display:\n    import: displays/main.display.dawn::main\n";
         let mut state = LspState::new();
         state.did_open(uri.clone(), 1, text.to_string());
 
@@ -1274,35 +1288,19 @@ mod tests {
         assert!(tokens
             .data
             .iter()
-            .any(|token| token.delta_line > 0 && token.token_type == SemanticKind::Comment as u32));
-        assert!(tokens
-            .data
-            .iter()
             .any(|token| token.token_type == SemanticKind::Class as u32));
-        assert!(tokens
-            .data
-            .iter()
-            .any(|token| token.token_type == SemanticKind::Function as u32));
-        assert!(tokens
-            .data
-            .iter()
-            .any(|token| token.token_type == SemanticKind::Parameter as u32));
-        assert!(tokens
-            .data
-            .iter()
-            .any(|token| token.token_type == SemanticKind::Variable as u32));
     }
 
     #[test]
     fn semantic_tokens_treat_import_path_as_single_string_range() {
         let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("main.effect.dawn");
+        let path = temp.path().join("project.dawn");
         let uri = file_uri(&path);
-        let text = "import effect Pulse from <effects/pulse.effect.dawn>;\neffect Main {}";
+        let text = "club:\n  type: project\n  name: club\n  display:\n    import: displays/main.display.dawn::main\n";
         let mut state = LspState::new();
         state.did_open(uri.clone(), 1, text.to_string());
 
-        let path_start = text.find("effects").unwrap();
+        let path_start = text.find("displays").unwrap();
         let path_position = LineIndex::new(text).position(path_start);
         let tokens = state.semantic_tokens(&uri).unwrap();
         let mut line = 0;
@@ -1328,28 +1326,28 @@ mod tests {
     fn completion_returns_keywords_symbols_and_import_paths() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
-        std::fs::create_dir_all(root.join("effects")).unwrap();
-        let main_path = root.join("main.effect.dawn");
-        let target_path = root.join("effects/pulse.effect.dawn");
-        std::fs::write(&target_path, "effect Pulse {}").unwrap();
-        let text = "import effect Pulse from <eff>;\neffect Main { let phase = 1; }";
+        std::fs::create_dir_all(root.join("displays")).unwrap();
+        let main_path = root.join("project.dawn");
+        let target_path = root.join("displays/main.display.dawn");
+        std::fs::write(&target_path, "main:\n  type: display\n  name: main\n  layout:\n    import: ../layouts/stage.layout.dawn::stage\n  patch:\n    import: ../patches/house.patch.dawn::house\n").unwrap();
+        let text = "club:\n  type: project\n  name: club\n  display:\n    import: displays/main.display.dawn::main\n";
         let uri = file_uri(&main_path);
         let mut state = LspState::new();
         state.scan_workspace_root(root);
         state.did_open(uri.clone(), 1, text.to_string());
 
         let top = state
-            .completion(&uri, Position::new(1, 8))
+            .completion(&uri, Position::new(2, 8))
             .and_then(|response| match response {
                 CompletionResponse::Array(items) => Some(items),
                 _ => None,
             })
             .unwrap();
-        assert!(top.iter().any(|item| item.label == "fn"));
-        assert!(top.iter().any(|item| item.label == "phase"));
+        assert!(top.iter().any(|item| item.label == "project"));
+        assert!(top.iter().any(|item| item.label == "club"));
 
         let path_items = state
-            .completion(&uri, Position::new(0, 27))
+            .completion(&uri, Position::new(4, 12))
             .and_then(|response| match response {
                 CompletionResponse::Array(items) => Some(items),
                 _ => None,
@@ -1357,26 +1355,26 @@ mod tests {
             .unwrap();
         assert!(path_items
             .iter()
-            .any(|item| item.label == "effects/pulse.effect.dawn"));
+            .any(|item| item.label == "displays/main.display.dawn"));
     }
 
     #[test]
     fn hover_describes_symbols_and_import_paths() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
-        std::fs::create_dir_all(root.join("effects")).unwrap();
-        std::fs::write(root.join("effects/pulse.effect.dawn"), "effect Pulse {}").unwrap();
-        let main_path = root.join("main.effect.dawn");
+        std::fs::create_dir_all(root.join("displays")).unwrap();
+        std::fs::write(root.join("displays/main.display.dawn"), "main:\n  type: display\n  name: main\n  layout:\n    import: ../layouts/stage.layout.dawn::stage\n  patch:\n    import: ../patches/house.patch.dawn::house\n").unwrap();
+        let main_path = root.join("project.dawn");
         let uri = file_uri(&main_path);
-        let text = "import effect Pulse from <effects/pulse.effect.dawn>;\neffect Main { fn sample(t float) { let phase = 1; } }";
+        let text = "club:\n  type: project\n  name: club\n  display:\n    import: displays/main.display.dawn::main\n";
         let mut state = LspState::new();
         state.scan_workspace_root(root);
         state.did_open(uri.clone(), 1, text.to_string());
 
-        let function_hover = state.hover(&uri, Position::new(1, 17)).unwrap();
-        assert!(hover_text(&function_hover).contains("function `sample`"));
+        let symbol_hover = state.hover(&uri, Position::new(2, 8)).unwrap();
+        assert!(hover_text(&symbol_hover).contains("document `club`"));
 
-        let import_hover = state.hover(&uri, Position::new(0, 30)).unwrap();
+        let import_hover = state.hover(&uri, Position::new(4, 12)).unwrap();
         assert!(hover_text(&import_hover).contains("import target"));
     }
 
@@ -1384,40 +1382,28 @@ mod tests {
     fn definition_resolves_imports_declarations_and_name_refs() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
-        std::fs::create_dir_all(root.join("effects")).unwrap();
-        let target_path = root.join("effects/pulse.effect.dawn");
-        std::fs::write(&target_path, "effect Pulse {}").unwrap();
-        let main_path = root.join("main.effect.dawn");
+        std::fs::create_dir_all(root.join("displays")).unwrap();
+        let target_path = root.join("displays/main.display.dawn");
+        std::fs::write(&target_path, "main:\n  type: display\n  name: main\n  layout:\n    import: ../layouts/stage.layout.dawn::stage\n  patch:\n    import: ../patches/house.patch.dawn::house\n").unwrap();
+        let main_path = root.join("project.dawn");
         let uri = file_uri(&main_path);
-        let text = "import effect Pulse from <effects/pulse.effect.dawn>;\neffect Main { fn sample(t float) { let phase = 1; color phase; } }";
+        let text = "club:\n  type: project\n  name: club\n  display:\n    import: displays/main.display.dawn::main\n";
         let mut state = LspState::new();
         state.scan_workspace_root(root);
         state.did_open(uri.clone(), 1, text.to_string());
 
-        let import_definition = state.definition(&uri, Position::new(0, 30)).unwrap();
+        let import_definition = state.definition(&uri, Position::new(4, 12)).unwrap();
         let GotoDefinitionResponse::Scalar(import_location) = import_definition else {
             panic!("expected scalar definition");
         };
         assert_eq!(import_location.uri, file_uri(&target_path));
 
-        let alias_definition = state.definition(&uri, Position::new(0, 15)).unwrap();
-        let GotoDefinitionResponse::Scalar(alias_location) = alias_definition else {
-            panic!("expected scalar definition");
-        };
-        assert_eq!(alias_location.uri, file_uri(&target_path));
-
-        let declaration_definition = state.definition(&uri, Position::new(1, 17)).unwrap();
+        let declaration_definition = state.definition(&uri, Position::new(2, 8)).unwrap();
         let GotoDefinitionResponse::Scalar(declaration_location) = declaration_definition else {
             panic!("expected scalar definition");
         };
         assert_eq!(declaration_location.uri, uri);
-        assert_eq!(declaration_location.range.start, Position::new(1, 17));
-
-        let reference_definition = state.definition(&uri, Position::new(1, 60)).unwrap();
-        let GotoDefinitionResponse::Scalar(reference_location) = reference_definition else {
-            panic!("expected scalar definition");
-        };
-        assert_eq!(reference_location.range.start, Position::new(1, 39));
+        assert_eq!(declaration_location.range.start, Position::new(0, 0));
     }
 
     #[test]

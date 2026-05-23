@@ -3,6 +3,9 @@ import type { LanguageProblem } from "../types";
 import { dawnMonarch } from "./generated/dawnMonarch";
 
 const DAWN_LANGUAGE_ID = "dawn";
+const DAWN_YAML_LANGUAGE_ID = "dawn-yaml";
+const DAWN_JSONL_LANGUAGE_ID = "dawn-jsonl";
+const DAWN_LANGUAGE_IDS = [DAWN_LANGUAGE_ID, DAWN_YAML_LANGUAGE_ID, DAWN_JSONL_LANGUAGE_ID];
 const MARKER_OWNER = "dawn-lsp";
 const CHANGE_DEBOUNCE_MS = 120;
 const TOKEN_LEGEND = [
@@ -87,15 +90,19 @@ type DawnLspClientOptions = {
 };
 
 export function ensureDawnLanguageRegistered() {
-  if (!monaco.languages.getLanguages().some((language) => language.id === DAWN_LANGUAGE_ID)) {
-    monaco.languages.register({
-      id: DAWN_LANGUAGE_ID,
-      extensions: [".dawn"],
-      aliases: ["Dawn", "dawn"]
-    });
+  for (const id of DAWN_LANGUAGE_IDS) {
+    if (!monaco.languages.getLanguages().some((language) => language.id === id)) {
+      monaco.languages.register({
+        id,
+        extensions: id === DAWN_LANGUAGE_ID ? [".dawn"] : [],
+        aliases: ["Dawn", "dawn"]
+      });
+    }
   }
   if (!dawnLanguageRegistered) {
     monaco.languages.setMonarchTokensProvider(DAWN_LANGUAGE_ID, dawnMonarch);
+    monaco.languages.setMonarchTokensProvider(DAWN_YAML_LANGUAGE_ID, dawnYamlMonarch);
+    monaco.languages.setMonarchTokensProvider(DAWN_JSONL_LANGUAGE_ID, dawnJsonlMonarch);
     monaco.editor.defineTheme("dawn-dark", {
       base: "vs-dark",
       inherit: true,
@@ -114,6 +121,13 @@ export function ensureDawnLanguageRegistered() {
 
 export function isDawnFile(path: string) {
   return path.endsWith(".dawn");
+}
+
+export function dawnLanguageIdForPath(path: string) {
+  if (path.endsWith(".effect.dawn")) return DAWN_LANGUAGE_ID;
+  if (path.endsWith(".events.dawn")) return DAWN_JSONL_LANGUAGE_ID;
+  if (path.endsWith(".dawn")) return DAWN_YAML_LANGUAGE_ID;
+  return "plaintext";
 }
 
 export class DawnLspClient {
@@ -279,7 +293,7 @@ export class DawnLspClient {
 
   private registerProviders(): void {
     this.providerDisposables.push(
-      monaco.languages.registerCompletionItemProvider(DAWN_LANGUAGE_ID, {
+      ...DAWN_LANGUAGE_IDS.map((languageId) => monaco.languages.registerCompletionItemProvider(languageId, {
         triggerCharacters: [".", "/", "\"", "<"],
         provideCompletionItems: async (model, position) => {
           const result = await this.request("textDocument/completion", {
@@ -302,8 +316,8 @@ export class DawnLspClient {
             suggestions: items.map((item) => completionItem(item as LspCompletionItem, replacementRange))
           };
         }
-      }),
-      monaco.languages.registerHoverProvider(DAWN_LANGUAGE_ID, {
+      })),
+      ...DAWN_LANGUAGE_IDS.map((languageId) => monaco.languages.registerHoverProvider(languageId, {
         provideHover: async (model, position) => {
           const hover = await this.request("textDocument/hover", {
             textDocument: textDocument(model),
@@ -315,8 +329,8 @@ export class DawnLspClient {
             contents: hoverContents(hover.contents)
           };
         }
-      }),
-      monaco.languages.registerDefinitionProvider(DAWN_LANGUAGE_ID, {
+      })),
+      ...DAWN_LANGUAGE_IDS.map((languageId) => monaco.languages.registerDefinitionProvider(languageId, {
         provideDefinition: async (model, position) => {
           const definition = await this.request("textDocument/definition", {
             textDocument: textDocument(model),
@@ -324,8 +338,8 @@ export class DawnLspClient {
           });
           return definitionLocations(definition);
         }
-      }),
-      monaco.languages.registerDocumentSymbolProvider(DAWN_LANGUAGE_ID, {
+      })),
+      ...DAWN_LANGUAGE_IDS.map((languageId) => monaco.languages.registerDocumentSymbolProvider(languageId, {
         provideDocumentSymbols: async (model) => {
           const result = await this.request("textDocument/documentSymbol", {
             textDocument: textDocument(model)
@@ -333,8 +347,8 @@ export class DawnLspClient {
           if (!Array.isArray(result)) return [];
           return result.map((symbol) => documentSymbol(symbol as LspDocumentSymbol));
         }
-      }),
-      monaco.languages.registerDocumentSemanticTokensProvider(DAWN_LANGUAGE_ID, {
+      })),
+      ...DAWN_LANGUAGE_IDS.map((languageId) => monaco.languages.registerDocumentSemanticTokensProvider(languageId, {
         getLegend: () => ({ tokenTypes: TOKEN_LEGEND, tokenModifiers: [] }),
         provideDocumentSemanticTokens: async (model) => {
           const result = await this.request("textDocument/semanticTokens/full", {
@@ -344,7 +358,7 @@ export class DawnLspClient {
           return { data: new Uint32Array(data.flatMap(semanticTokenData)) };
         },
         releaseDocumentSemanticTokens: () => undefined
-      })
+      }))
     );
   }
 
@@ -433,8 +447,36 @@ export class DawnLspClient {
 }
 
 function isDawnModel(model: monaco.editor.ITextModel): boolean {
-  return model.getLanguageId() === DAWN_LANGUAGE_ID && model.uri.scheme === "file";
+  return DAWN_LANGUAGE_IDS.includes(model.getLanguageId()) && model.uri.scheme === "file";
 }
+
+const dawnYamlMonarch: monaco.languages.IMonarchLanguage = {
+  tokenizer: {
+    root: [
+      [/#.*$/, "comment"],
+      [/^[ \t-]*([A-Za-z_][A-Za-z0-9_]*)(?=\s*:)/, "keyword"],
+      [/"([^"\\]|\\.)*"/, "string"],
+      [/'[^']*'/, "string"],
+      [/#[0-9A-Fa-f]{6}\b/, "number.hex"],
+      [/\b\d+(\.\d+)?s?\b/, "number"],
+      [/\b(true|false|null)\b/, "keyword"],
+      [/[{}\[\],:]/, "delimiter"]
+    ]
+  }
+};
+
+const dawnJsonlMonarch: monaco.languages.IMonarchLanguage = {
+  tokenizer: {
+    root: [
+      [/"([^"\\]|\\.)*"(?=\s*:)/, "keyword"],
+      [/"([^"\\]|\\.)*"/, "string"],
+      [/#(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{3})\b/, "number.hex"],
+      [/\b-?\d+(\.\d+)?\b/, "number"],
+      [/\b(true|false|null)\b/, "keyword"],
+      [/[{}\[\],:]/, "delimiter"]
+    ]
+  }
+};
 
 function textDocument(model: monaco.editor.ITextModel): LspTextDocumentIdentifier {
   return { uri: model.uri.toString() };

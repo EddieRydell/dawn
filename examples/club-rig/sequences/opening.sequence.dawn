@@ -1,31 +1,6 @@
-import effect Pulse from <../effects/pulse.effect.dawn>;
-
-sequence OpeningLook {
-  duration 45s;
-  frame_rate 60;
-  audio "opening.wav";
-
-  at 0s {
-    target WallBars;
-    effect Pulse {
-      base #111827;
-      accent #66e3ff;
-      speed 0.5;
-    }
-  }
-
-  at 8s {
-    target Movers;
-    dimmer curve ease_in_out from 0 to 255 duration 4s;
-    color #ffcc66;
-  }
-
-  at 24s {
-    target WallBars;
-    effect Pulse {
-      base #180a2a;
-      accent #ff4fd8;
-      speed 1.25;
-    }
-  }
-}
+opening:
+  type: sequence
+  duration: 45s
+  frame_rate: 60
+  audio: opening.wav
+  events: opening.events.dawn

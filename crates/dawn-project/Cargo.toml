@@ -1,0 +1,11 @@
+[package]
+name = "dawn-project"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+indexmap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
