@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -60,6 +61,12 @@ struct FileOperationState {
 struct FileMove {
     old_path: String,
     new_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlannedMove {
+    old_path: ProjectPath,
+    new_path: ProjectPath,
 }
 
 #[derive(Serialize, specta::Type)]
@@ -397,42 +404,13 @@ fn move_paths(
     state: State<'_, AppState>,
 ) -> Result<FileOperationState, String> {
     let fs = project_fs(&state)?;
-    let new_parent = ProjectPath::parse(new_parent)?;
-    if !fs.is_dir(&new_parent) {
-        return Err("drop target is not a directory".to_string());
-    }
-
-    let mut moved = Vec::new();
-    for path in paths {
-        let old_path = ProjectPath::parse(path)?;
-        let name = old_path
-            .file_name()
-            .ok_or_else(|| "path has no file name".to_string())?;
-        let new_path = new_parent.join(PathBuf::from(name))?;
-        if old_path == new_path {
-            continue;
-        }
-        if fs.is_dir(&old_path) && new_path.starts_with(&old_path) {
-            return Err("cannot move a directory into itself".to_string());
-        }
-        if fs.exists(&new_path) {
-            return Err(format!(
-                "target already exists: {}",
-                new_path.to_slash_string()
-            ));
-        }
-        fs.rename(&old_path, &new_path)
-            .map_err(|err| err.to_string())?;
-        update_active_sequence_after_move(&state, &old_path, &new_path)?;
-        moved.push(FileMove {
-            old_path: old_path.to_slash_string(),
-            new_path: new_path.to_slash_string(),
-        });
-    }
+    let planned_moves = plan_moves(&fs, paths, new_parent)?;
+    apply_planned_moves(&fs, &planned_moves)?;
+    update_active_sequence_after_moves(&state, &planned_moves)?;
 
     Ok(FileOperationState {
         project: check_project(state)?,
-        moved,
+        moved: file_moves_from_plan(&planned_moves),
     })
 }
 
@@ -653,9 +631,124 @@ fn validate_file_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn plan_moves(
+    fs: &ProjectFs,
+    paths: Vec<String>,
+    new_parent: String,
+) -> Result<Vec<PlannedMove>, String> {
+    let new_parent = ProjectPath::parse(new_parent)?;
+    if !fs.is_dir(&new_parent) {
+        return Err("drop target is not a directory".to_string());
+    }
+
+    let mut selected_paths = Vec::new();
+    let mut seen_sources = HashSet::new();
+    for path in paths {
+        let old_path = ProjectPath::parse(path)?;
+        if !seen_sources.insert(old_path.clone()) {
+            return Err(format!(
+                "duplicate source path: {}",
+                old_path.to_slash_string()
+            ));
+        }
+        selected_paths.push(old_path);
+    }
+    reject_nested_selected_paths(&selected_paths)?;
+
+    let mut planned_moves = Vec::new();
+    let mut seen_destinations = HashSet::new();
+    for old_path in selected_paths {
+        let name = old_path
+            .file_name()
+            .ok_or_else(|| "path has no file name".to_string())?;
+        let new_path = new_parent.join(PathBuf::from(name))?;
+        if old_path == new_path {
+            continue;
+        }
+        if fs.is_dir(&old_path) && new_path.starts_with(&old_path) {
+            return Err("cannot move a directory into itself".to_string());
+        }
+        if !seen_destinations.insert(new_path.clone()) {
+            return Err(format!(
+                "duplicate destination path: {}",
+                new_path.to_slash_string()
+            ));
+        }
+        if fs.exists(&new_path) {
+            return Err(format!(
+                "target already exists: {}",
+                new_path.to_slash_string()
+            ));
+        }
+        planned_moves.push(PlannedMove { old_path, new_path });
+    }
+
+    Ok(planned_moves)
+}
+
+fn reject_nested_selected_paths(paths: &[ProjectPath]) -> Result<(), String> {
+    for (left_index, left) in paths.iter().enumerate() {
+        for right in paths.iter().skip(left_index + 1) {
+            if left.starts_with(right) || right.starts_with(left) {
+                return Err(format!(
+                    "cannot move nested selected paths together: {} and {}",
+                    left.to_slash_string(),
+                    right.to_slash_string()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_planned_moves(fs: &ProjectFs, planned_moves: &[PlannedMove]) -> Result<(), String> {
+    let mut completed = Vec::new();
+    for planned_move in planned_moves {
+        if let Err(error) = fs.rename(&planned_move.old_path, &planned_move.new_path) {
+            let rollback_error = rollback_completed_moves(fs, &completed);
+            return Err(match rollback_error {
+                Ok(()) => error.to_string(),
+                Err(rollback_error) => format!("{}; rollback failed: {}", error, rollback_error),
+            });
+        }
+        completed.push(planned_move.clone());
+    }
+    Ok(())
+}
+
+fn rollback_completed_moves(fs: &ProjectFs, completed: &[PlannedMove]) -> Result<(), String> {
+    let mut errors = Vec::new();
+    for completed_move in completed.iter().rev() {
+        if let Err(error) = fs.rename(&completed_move.new_path, &completed_move.old_path) {
+            errors.push(format!(
+                "{} -> {}: {}",
+                completed_move.new_path.to_slash_string(),
+                completed_move.old_path.to_slash_string(),
+                error
+            ));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn file_moves_from_plan(planned_moves: &[PlannedMove]) -> Vec<FileMove> {
+    planned_moves
+        .iter()
+        .map(|planned_move| FileMove {
+            old_path: planned_move.old_path.to_slash_string(),
+            new_path: planned_move.new_path.to_slash_string(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn problem_defaults_missing_ranges_to_one_based_start() {
@@ -713,6 +806,173 @@ mod tests {
         assert!(!source.contains(&["Walk", "Dir"].join("")));
         assert!(!source.contains(&["ensure", "inside", "root"].join("_")));
     }
+
+    #[test]
+    fn apply_planned_moves_rolls_back_completed_moves_after_later_rename_failure() {
+        let root = temp_project_dir("move-rollback");
+        std::fs::write(root.join("a.dawn"), "a").unwrap();
+        std::fs::write(root.join("b.dawn"), "b").unwrap();
+        std::fs::create_dir(root.join("target")).unwrap();
+        let fs = ProjectFs::open_ambient(&root).unwrap();
+        let planned_moves = plan_moves(
+            &fs,
+            vec!["a.dawn".to_string(), "b.dawn".to_string()],
+            "target".to_string(),
+        )
+        .unwrap();
+        std::fs::remove_file(root.join("b.dawn")).unwrap();
+
+        let result = apply_planned_moves(&fs, &planned_moves);
+
+        assert!(result.is_err());
+        assert!(root.join("a.dawn").exists());
+        assert!(!root.join("target").join("a.dawn").exists());
+    }
+
+    #[test]
+    fn plan_moves_rejects_duplicate_destination_paths_before_rename() {
+        let root = temp_project_dir("move-duplicate-destination");
+        std::fs::create_dir(root.join("one")).unwrap();
+        std::fs::create_dir(root.join("two")).unwrap();
+        std::fs::create_dir(root.join("target")).unwrap();
+        std::fs::write(root.join("one").join("same.dawn"), "one").unwrap();
+        std::fs::write(root.join("two").join("same.dawn"), "two").unwrap();
+        let fs = ProjectFs::open_ambient(&root).unwrap();
+
+        let result = plan_moves(
+            &fs,
+            vec!["one/same.dawn".to_string(), "two/same.dawn".to_string()],
+            "target".to_string(),
+        );
+
+        assert!(result
+            .unwrap_err()
+            .contains("duplicate destination path: target/same.dawn"));
+        assert!(root.join("one").join("same.dawn").exists());
+        assert!(root.join("two").join("same.dawn").exists());
+    }
+
+    #[test]
+    fn plan_moves_rejects_duplicate_source_paths_before_rename() {
+        let root = temp_project_dir("move-duplicate-source");
+        std::fs::create_dir(root.join("target")).unwrap();
+        std::fs::write(root.join("source.dawn"), "source").unwrap();
+        let fs = ProjectFs::open_ambient(&root).unwrap();
+
+        let result = plan_moves(
+            &fs,
+            vec!["source.dawn".to_string(), "source.dawn".to_string()],
+            "target".to_string(),
+        );
+
+        assert!(result
+            .unwrap_err()
+            .contains("duplicate source path: source.dawn"));
+        assert!(root.join("source.dawn").exists());
+        assert!(!root.join("target").join("source.dawn").exists());
+    }
+
+    #[test]
+    fn plan_moves_rejects_nested_selected_paths_before_rename() {
+        let root = temp_project_dir("move-nested-selection");
+        std::fs::create_dir(root.join("folder")).unwrap();
+        std::fs::create_dir(root.join("target")).unwrap();
+        std::fs::write(root.join("folder").join("file.dawn"), "file").unwrap();
+        let fs = ProjectFs::open_ambient(&root).unwrap();
+
+        let result = plan_moves(
+            &fs,
+            vec!["folder".to_string(), "folder/file.dawn".to_string()],
+            "target".to_string(),
+        );
+
+        assert!(result
+            .unwrap_err()
+            .contains("cannot move nested selected paths together"));
+        assert!(root.join("folder").exists());
+        assert!(root.join("folder").join("file.dawn").exists());
+    }
+
+    #[test]
+    fn plan_moves_rejects_existing_later_target_before_rename() {
+        let root = temp_project_dir("move-existing-later-target");
+        std::fs::create_dir(root.join("target")).unwrap();
+        std::fs::write(root.join("a.dawn"), "a").unwrap();
+        std::fs::write(root.join("b.dawn"), "b").unwrap();
+        std::fs::write(root.join("target").join("b.dawn"), "existing").unwrap();
+        let fs = ProjectFs::open_ambient(&root).unwrap();
+
+        let result = plan_moves(
+            &fs,
+            vec!["a.dawn".to_string(), "b.dawn".to_string()],
+            "target".to_string(),
+        );
+
+        assert!(result
+            .unwrap_err()
+            .contains("target already exists: target/b.dawn"));
+        assert!(root.join("a.dawn").exists());
+        assert!(!root.join("target").join("a.dawn").exists());
+    }
+
+    #[test]
+    fn successful_batch_move_returns_expected_file_moves() {
+        let root = temp_project_dir("move-success");
+        std::fs::create_dir(root.join("target")).unwrap();
+        std::fs::write(root.join("a.dawn"), "a").unwrap();
+        std::fs::write(root.join("b.dawn"), "b").unwrap();
+        let fs = ProjectFs::open_ambient(&root).unwrap();
+        let planned_moves = plan_moves(
+            &fs,
+            vec!["a.dawn".to_string(), "b.dawn".to_string()],
+            "target".to_string(),
+        )
+        .unwrap();
+
+        apply_planned_moves(&fs, &planned_moves).unwrap();
+        let moved = file_moves_from_plan(&planned_moves);
+
+        assert_eq!(moved.len(), 2);
+        assert_eq!(moved[0].old_path, "a.dawn");
+        assert_eq!(moved[0].new_path, "target/a.dawn");
+        assert_eq!(moved[1].old_path, "b.dawn");
+        assert_eq!(moved[1].new_path, "target/b.dawn");
+        assert!(root.join("target").join("a.dawn").exists());
+        assert!(root.join("target").join("b.dawn").exists());
+    }
+
+    #[test]
+    fn active_sequence_updates_only_after_full_batch_succeeds() {
+        let mut session = ProjectSession {
+            active_sequence: Some(ProjectPath::new("sequence.dawn")),
+            ..ProjectSession::default()
+        };
+        let planned_moves = vec![PlannedMove {
+            old_path: ProjectPath::new("sequence.dawn"),
+            new_path: ProjectPath::new("target/sequence.dawn"),
+        }];
+
+        assert_eq!(
+            session.active_sequence,
+            Some(ProjectPath::new("sequence.dawn"))
+        );
+        update_project_session_active_sequence_after_moves(&mut session, &planned_moves);
+
+        assert_eq!(
+            session.active_sequence,
+            Some(ProjectPath::new("target/sequence.dawn"))
+        );
+    }
+
+    fn temp_project_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("dawn-desktop-{label}-{nanos}"));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
 }
 
 fn update_active_sequence_after_move(
@@ -720,16 +980,37 @@ fn update_active_sequence_after_move(
     old_path: &ProjectPath,
     new_path: &ProjectPath,
 ) -> Result<(), String> {
+    update_active_sequence_after_moves(
+        state,
+        &[PlannedMove {
+            old_path: old_path.clone(),
+            new_path: new_path.clone(),
+        }],
+    )
+}
+
+fn update_active_sequence_after_moves(
+    state: &State<'_, AppState>,
+    planned_moves: &[PlannedMove],
+) -> Result<(), String> {
     let mut session = state
         .project
         .lock()
         .map_err(|_| "project state lock failed")?;
-    if session
-        .active_sequence
-        .as_ref()
-        .is_some_and(|active_sequence| active_sequence == old_path)
-    {
-        session.active_sequence = Some(new_path.clone());
-    }
+    update_project_session_active_sequence_after_moves(&mut session, planned_moves);
     Ok(())
+}
+
+fn update_project_session_active_sequence_after_moves(
+    session: &mut ProjectSession,
+    planned_moves: &[PlannedMove],
+) {
+    if let Some(active_sequence) = session.active_sequence.as_ref() {
+        if let Some(planned_move) = planned_moves
+            .iter()
+            .find(|planned_move| &planned_move.old_path == active_sequence)
+        {
+            session.active_sequence = Some(planned_move.new_path.clone());
+        }
+    }
 }
