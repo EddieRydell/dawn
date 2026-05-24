@@ -8,8 +8,8 @@ stage:
       import: ../fixtures/main.fixture.dawn::pixel_bar_50
     transform:
       position:
-        x: -1.2553350925445557
-        y: -2.0354422964155674
+        x: -2.3915892243385315
+        y: -2.567305985838175
         z: 0.0
       rotation:
         x: 0.0
@@ -104,8 +104,8 @@ stage:
       import: ../fixtures/main.fixture.dawn::spot_rgb
     transform:
       position:
-        x: 0.696232271194458
-        y: 1.2062315225601197
+        x: -0.5762305736541748
+        y: 1.0460614442825318
         z: 0.0
       rotation:
         x: 0.0
@@ -168,8 +168,8 @@ stage:
       import: ../fixtures/main.fixture.dawn::pixel_bar_50
     transform:
       position:
-        x: -0.5268030315637589
-        y: 0.5357677102088927
+        x: -1.5817844569683075
+        y: 1.9710507452487944
         z: 0.0
       rotation:
         x: 60.0
@@ -200,8 +200,8 @@ stage:
       import: ../fixtures/main.fixture.dawn::pixel_bar_50
     transform:
       position:
-        x: -1.109655737876892
-        y: 4.072883136570454
+        x: -8.271044135093689
+        y: -8.071961395442486
         z: 0.0
       rotation:
         x: 0.0

@@ -31,3 +31,4 @@ Do not add compatibility layers, shims, fallbacks, or allow for legacy code when
 The goal is fast development, not support. Minimize clutter and favor having a single way of doing things. SSOT is your friend.
 Do not use git or commands associated with it unless the user specifically requests it.
 Do not use .env files to store information.
+Do not jump to editing if the conversation is about diagnosing an issue or discussing architecture/design decisions.

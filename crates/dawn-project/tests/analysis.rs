@@ -3,11 +3,147 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dawn_project::{
-    analyze_project, analyze_project_with_overlays, apply_fixture_document_edit,
-    apply_layout_document_edit, get_fixture_document, get_layout_document, DiagnosticCode,
-    DocumentEditResult, FixtureDefinitionDocument, FixtureDocument, Geometry, ProjectOverlay,
-    ProjectPath,
+    analyze_project as core_analyze_project,
+    analyze_project_with_overlays as core_analyze_project_with_overlays,
+    apply_fixture_document_edit as core_apply_fixture_document_edit,
+    apply_layout_document_edit as core_apply_layout_document_edit,
+    get_fixture_document as core_get_fixture_document,
+    get_layout_document as core_get_layout_document, DiagnosticCode, DocumentEditResult,
+    FixtureDefinitionDocument, FixtureDocument, Geometry, ProjectAnalysis, ProjectFs,
+    ProjectOverlay, ProjectPath,
 };
+
+fn project_context(project_path: impl AsRef<Path>) -> (ProjectFs, ProjectPath, PathBuf) {
+    let project_path = project_path.as_ref();
+    let root = project_path
+        .parent()
+        .expect("test project path should have a parent")
+        .to_path_buf();
+    let fs = ProjectFs::open_ambient(&root).expect("test project root should open");
+    let relative = relative_project_path(&root, project_path);
+    (fs, relative, root)
+}
+
+fn relative_project_path(root: &Path, path: &Path) -> ProjectPath {
+    ProjectPath::parse(
+        path.strip_prefix(root)
+            .expect("test path should be inside project root"),
+    )
+    .expect("test path should parse as project-relative")
+}
+
+fn normalize_overlays(root: &Path, overlays: Vec<ProjectOverlay>) -> Vec<ProjectOverlay> {
+    overlays
+        .into_iter()
+        .map(|overlay| ProjectOverlay {
+            path: if overlay.path.as_path().is_absolute() {
+                relative_project_path(root, overlay.path.as_path())
+            } else {
+                overlay.path
+            },
+            content: overlay.content,
+        })
+        .collect()
+}
+
+fn analyze_project(project_path: impl AsRef<Path>, project_key: &str) -> ProjectAnalysis {
+    let (fs, project_path, _) = project_context(project_path);
+    core_analyze_project(&fs, project_path, project_key)
+}
+
+fn analyze_project_with_overlays(
+    project_path: impl AsRef<Path>,
+    project_key: Option<&str>,
+    overlays: Vec<ProjectOverlay>,
+) -> ProjectAnalysis {
+    let (fs, project_path, root) = project_context(project_path);
+    core_analyze_project_with_overlays(
+        &fs,
+        project_path,
+        project_key,
+        normalize_overlays(&root, overlays),
+    )
+}
+
+fn get_layout_document(
+    path: impl AsRef<Path>,
+    object_key: &str,
+    project_path: impl AsRef<Path>,
+    overlays: Vec<ProjectOverlay>,
+) -> Result<dawn_project::LayoutDocument, String> {
+    let (fs, project_path, root) = project_context(project_path);
+    let path = relative_project_path(&root, path.as_ref());
+    core_get_layout_document(
+        &fs,
+        path,
+        object_key,
+        project_path,
+        normalize_overlays(&root, overlays),
+    )
+}
+
+fn get_fixture_document(
+    path: impl AsRef<Path>,
+    selected_object_key: Option<&str>,
+    overlays: Vec<ProjectOverlay>,
+) -> Result<FixtureDocument, String> {
+    let root = path
+        .as_ref()
+        .parent()
+        .expect("fixture path should have a parent");
+    let fs = ProjectFs::open_ambient(root).expect("test project root should open");
+    let path = relative_project_path(root, path.as_ref());
+    core_get_fixture_document(
+        &fs,
+        path,
+        selected_object_key,
+        normalize_overlays(root, overlays),
+    )
+}
+
+fn apply_layout_document_edit(
+    path: impl AsRef<Path>,
+    object_key: &str,
+    document: dawn_project::LayoutDocument,
+    base_content: String,
+    overlays: Vec<ProjectOverlay>,
+    project_path: impl AsRef<Path>,
+    allow_breaking_references: bool,
+) -> Result<DocumentEditResult<dawn_project::LayoutDocument>, String> {
+    let (fs, project_path, root) = project_context(project_path);
+    let path = relative_project_path(&root, path.as_ref());
+    core_apply_layout_document_edit(
+        &fs,
+        path,
+        object_key,
+        document,
+        base_content,
+        normalize_overlays(&root, overlays),
+        project_path,
+        allow_breaking_references,
+    )
+}
+
+fn apply_fixture_document_edit(
+    path: impl AsRef<Path>,
+    document: FixtureDocument,
+    base_content: String,
+    overlays: Vec<ProjectOverlay>,
+    project_path: impl AsRef<Path>,
+    allow_breaking_references: bool,
+) -> Result<DocumentEditResult<FixtureDocument>, String> {
+    let (fs, project_path, root) = project_context(project_path);
+    let path = relative_project_path(&root, path.as_ref());
+    core_apply_fixture_document_edit(
+        &fs,
+        path,
+        document,
+        base_content,
+        normalize_overlays(&root, overlays),
+        project_path,
+        allow_breaking_references,
+    )
+}
 
 #[test]
 fn analyzes_club_rig_to_resolved_project() {
@@ -105,12 +241,12 @@ club:
     assert!(analysis.resolved.is_none());
     assert!(analysis
         .files
-        .contains_key(&ProjectPath::new(&project_path)));
+        .contains_key(&ProjectPath::new("project.dawn")));
     assert_eq!(analysis.diagnostics.len(), 1);
     assert_eq!(analysis.diagnostics[0].code, DiagnosticCode::Import);
     assert_eq!(
         analysis.diagnostics[0].path,
-        ProjectPath::new(&project_path)
+        ProjectPath::new("project.dawn")
     );
     assert!(analysis.diagnostics[0].range.is_some());
 }
@@ -125,7 +261,7 @@ fn overlay_content_takes_precedence_over_disk() {
         &project_path,
         None,
         vec![ProjectOverlay {
-            path: ProjectPath::new(&project_path),
+            path: ProjectPath::new("project.dawn"),
             content: minimal_project("club"),
         }],
     );
@@ -232,7 +368,7 @@ stage:
     .unwrap();
 
     let overlay = ProjectOverlay {
-        path: ProjectPath::new(&fixture_path),
+        path: ProjectPath::new("fixtures.dawn"),
         content: r#"
 pixel_bar:
   type: fixture
@@ -253,6 +389,149 @@ pixel_bar:
     assert_eq!(fixture.name, "OverlayBar");
     assert!(matches!(fixture.geometry, Geometry::Points { ref points } if points.len() == 1));
     assert_eq!(document.fixture_catalog[0].display_name, "OverlayBar");
+}
+
+#[test]
+fn fixture_documents_include_render_plans_for_points_lines_and_arcs() {
+    let dir = temp_dir("fixture-render-plans");
+    let fixture_path = dir.join("fixtures.dawn");
+    fs::write(
+        &fixture_path,
+        r#"
+point_fixture:
+  type: fixture
+  name: Point
+  color_model: rgb
+  geometry:
+    type: points
+    points:
+      - { x: 1.0, y: 2.0, z: 0.0 }
+line_fixture:
+  type: fixture
+  name: Line
+  color_model: rgb
+  geometry:
+    type: lines
+    points:
+      - { x: 0.0, y: 0.0, z: 0.0 }
+      - { x: 2.0, y: 0.0, z: 0.0 }
+    pixels: 3
+arc_fixture:
+  type: fixture
+  name: Arc
+  color_model: rgb
+  geometry:
+    type: arc
+    center: { x: 0.0, y: 0.0, z: 0.0 }
+    radius: 1.0
+    startDegrees: 0.0
+    endDegrees: 270.0
+    pixels: 4
+"#,
+    )
+    .unwrap();
+
+    let document = get_fixture_document(&fixture_path, None, Vec::new()).unwrap();
+    let point = document
+        .fixtures
+        .iter()
+        .find(|fixture| fixture.object_key == "point_fixture")
+        .unwrap();
+    let line = document
+        .fixtures
+        .iter()
+        .find(|fixture| fixture.object_key == "line_fixture")
+        .unwrap();
+    let arc = document
+        .fixtures
+        .iter()
+        .find(|fixture| fixture.object_key == "arc_fixture")
+        .unwrap();
+
+    assert_eq!(point.render_plan.emitters.len(), 1);
+    assert_eq!(line.render_plan.emitters.len(), 3);
+    assert!(matches!(
+        line.render_plan.guides.as_slice(),
+        [dawn_project::GeometryRenderGuide::Line { .. }]
+    ));
+    assert_eq!(arc.render_plan.emitters.len(), 4);
+    assert!(matches!(
+        arc.render_plan.guides.as_slice(),
+        [dawn_project::GeometryRenderGuide::Arc {
+            large_arc: true,
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn layout_documents_include_transformed_render_bounds() {
+    let dir = temp_dir("layout-render-bounds");
+    let project_path = dir.join("project.dawn");
+    let layout_path = dir.join("layout.dawn");
+    fs::write(
+        &project_path,
+        project_with_layout_import("layout.dawn::stage"),
+    )
+    .unwrap();
+    fs::write(
+        &layout_path,
+        r#"
+stage:
+  type: layout
+  name: stage
+  units: meters
+  fixtures:
+    - id: pixel
+      fixture:
+        name: Pixel
+        color_model: rgb
+        geometry:
+          type: points
+          points:
+            - { x: 1.0, y: 2.0, z: 0.0 }
+      transform:
+        position: { x: 10.0, y: 20.0, z: 0.0 }
+        scale: { x: 2.0, y: 3.0, z: 1.0 }
+  groups: []
+"#,
+    )
+    .unwrap();
+
+    let document = get_layout_document(&layout_path, "stage", &project_path, Vec::new()).unwrap();
+
+    assert!(document.render_bounds.min_x < 12.0);
+    assert!(document.render_bounds.max_x > 12.0);
+    assert!(document.render_bounds.min_y < 26.0);
+    assert!(document.render_bounds.max_y > 26.0);
+}
+
+#[test]
+fn panel_files_do_not_reintroduce_geometry_helpers() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let panel_paths = [
+        root.join("apps/desktop/src/panels/LayoutViewer.tsx"),
+        root.join("apps/desktop/src/panels/FixtureViewer.tsx"),
+    ];
+    let forbidden = [
+        "samplePolylinePoints",
+        "sampleArcPoints",
+        "function bulbRadius",
+        "geometryBounds",
+        "niceScaleLength",
+        "formatScaleLength",
+    ];
+
+    for path in panel_paths {
+        let source = fs::read_to_string(&path).unwrap();
+        for needle in forbidden {
+            assert!(
+                !source.contains(needle),
+                "{} reintroduced {needle}",
+                path.display()
+            );
+        }
+    }
 }
 
 #[test]
@@ -337,7 +616,7 @@ pixel:
             fixture: dawn_project::LayoutFixtureRef::Import {
                 import: "layout.dawn::pixel".to_string(),
                 object_key: Some("pixel".to_string()),
-                source_path: Some(ProjectPath::new(&layout_path).to_slash_string()),
+                source_path: Some(ProjectPath::new("layout.dawn").to_slash_string()),
             },
             resolved_fixture: dawn_project::ResolvedLayoutFixture {
                 name: catalog_item.display_name,
@@ -345,6 +624,7 @@ pixel:
                 bulb_size: catalog_item.bulb_size,
                 geometry: catalog_item.geometry,
                 geometry_summary: catalog_item.geometry_summary,
+                render_plan: catalog_item.render_plan,
                 source_path: catalog_item.source_path,
                 object_key: Some(catalog_item.object_key),
             },
@@ -492,7 +772,7 @@ pixel:
     .unwrap();
     let base_content = fs::read_to_string(&fixture_path).unwrap();
     let document = FixtureDocument {
-        path: ProjectPath::new(&fixture_path).to_slash_string(),
+        path: ProjectPath::new("fixtures.dawn").to_slash_string(),
         selected_object_key: Some("arc".to_string()),
         fixtures: vec![FixtureDefinitionDocument {
             object_key: "arc".to_string(),
@@ -507,6 +787,7 @@ pixel:
                 pixels: 8,
             },
             geometry_summary: String::new(),
+            render_plan: empty_render_plan(),
         }],
     };
 
@@ -541,7 +822,7 @@ pixel:
             &fixture_path,
             Some("arc"),
             vec![ProjectOverlay {
-                path: ProjectPath::new(&fixture_path),
+                path: ProjectPath::new("fixtures.dawn"),
                 content: outcome.serialized_content,
             }]
         )
@@ -591,7 +872,7 @@ pixel_bar:
     .unwrap();
     let base_content = fs::read_to_string(&fixture_path).unwrap();
     let document = FixtureDocument {
-        path: ProjectPath::new(&fixture_path).to_slash_string(),
+        path: ProjectPath::new("fixtures.dawn").to_slash_string(),
         selected_object_key: Some("pixel_bar".to_string()),
         fixtures: vec![FixtureDefinitionDocument {
             object_key: "pixel_bar".to_string(),
@@ -614,6 +895,7 @@ pixel_bar:
                 pixels: 50,
             },
             geometry_summary: String::new(),
+            render_plan: empty_render_plan(),
         }],
     };
 
@@ -786,6 +1068,157 @@ fn reports_multiple_project_objects_when_inference_is_ambiguous() {
     assert!(analysis.diagnostics[0].message.contains("found 2"));
 }
 
+#[test]
+fn source_relative_imports_resolve_inside_nested_directories() {
+    let dir = temp_dir("nested-imports");
+    fs::create_dir_all(dir.join("shows")).unwrap();
+    fs::write(
+        dir.join("project.dawn"),
+        r#"
+club:
+  type: project
+  name: club
+  display:
+    import: shows/display.dawn::main
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("shows/display.dawn"),
+        r#"
+main:
+  type: display
+  name: main
+  controllers: []
+  patch:
+    routes: []
+  layout:
+    import: layout.dawn::stage
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("shows/layout.dawn"),
+        r#"
+stage:
+  type: layout
+  name: stage
+  units: meters
+  fixtures: []
+  groups: []
+"#,
+    )
+    .unwrap();
+
+    let analysis = analyze_project(dir.join("project.dawn"), "club");
+
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis
+        .files
+        .contains_key(&ProjectPath::new("shows/layout.dawn")));
+    assert!(analysis.resolved.is_some());
+}
+
+#[test]
+fn absolute_imports_are_rejected_as_project_containment_errors() {
+    let dir = temp_dir("absolute-import");
+    fs::write(
+        dir.join("project.dawn"),
+        format!(
+            r#"
+club:
+  type: project
+  name: club
+  display:
+    import: "{}::main"
+"#,
+            dir.join("display.dawn")
+                .to_string_lossy()
+                .replace('\\', "/")
+        ),
+    )
+    .unwrap();
+
+    let analysis = analyze_project(dir.join("project.dawn"), "club");
+
+    assert!(analysis.resolved.is_none());
+    assert_eq!(analysis.diagnostics[0].code, DiagnosticCode::Import);
+    assert!(analysis.diagnostics[0]
+        .message
+        .contains("absolute imports are not allowed"));
+}
+
+#[test]
+fn escaping_relative_imports_are_rejected() {
+    let dir = temp_dir("escaping-import");
+    fs::write(
+        dir.join("project.dawn"),
+        r#"
+club:
+  type: project
+  name: club
+  display:
+    import: ../display.dawn::main
+"#,
+    )
+    .unwrap();
+
+    let analysis = analyze_project(dir.join("project.dawn"), "club");
+
+    assert!(analysis.resolved.is_none());
+    assert_eq!(analysis.diagnostics[0].code, DiagnosticCode::Import);
+    assert!(analysis.diagnostics[0]
+        .message
+        .contains("escapes the project root"));
+}
+
+#[test]
+fn sequence_assets_cannot_resolve_outside_project() {
+    let dir = temp_dir("escaping-sequence-assets");
+    fs::write(
+        dir.join("project.dawn"),
+        r#"
+club:
+  type: project
+  name: club
+  display:
+    name: main
+    controllers: []
+    patch:
+      routes: []
+    layout:
+      name: stage
+      units: meters
+      fixtures: []
+      groups: []
+  sequences:
+    - duration: 1s
+      frame_rate: 60
+      audio: ../song.wav
+      effects: []
+"#,
+    )
+    .unwrap();
+
+    let analysis = analyze_project(dir.join("project.dawn"), "club");
+
+    assert!(analysis.resolved.is_none());
+    assert_eq!(analysis.diagnostics[0].code, DiagnosticCode::Lower);
+    assert!(analysis.diagnostics[0]
+        .message
+        .contains("escapes the project root"));
+}
+
+#[test]
+fn document_path_parsing_rejects_absolute_and_escaping_paths() {
+    assert!(ProjectPath::parse("/tmp/project.dawn").is_err());
+    assert!(ProjectPath::parse("../project.dawn").is_err());
+}
+
 fn minimal_project(key: &str) -> String {
     format!(
         r#"
@@ -846,4 +1279,18 @@ fn temp_dir(label: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("dawn-project-{label}-{nanos}"));
     fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn empty_render_plan() -> dawn_project::GeometryRenderPlan {
+    dawn_project::GeometryRenderPlan {
+        emitters: Vec::new(),
+        guides: Vec::new(),
+        bounds: dawn_project::GeometryRenderBounds {
+            min_x: -1.0,
+            min_y: -1.0,
+            max_x: 1.0,
+            max_y: 1.0,
+        },
+        bulb_radius: 0.035,
+    }
 }

@@ -2,12 +2,24 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { Copy, Crosshair, LocateFixed, Trash2, ZoomIn, ZoomOut } from "lucide-react";
 import type {
   FixtureCatalogItem,
-  Geometry,
   LayoutDocument,
   LayoutFixturePlacement,
   Point3,
   ResolvedLayoutFixture
 } from "../generated/bindings";
+import {
+  fixtureTransform,
+  fitViewBox,
+  matchViewBoxAspect,
+  renderGeometryPlan,
+  ScaleBar,
+  svgEventPoint,
+  svgPixelHeight,
+  svgPixelWidth,
+  type SvgPoint,
+  type ViewBox,
+  zoomViewBox
+} from "./geometryRender";
 
 type LayoutViewerProps = {
   document: LayoutDocument;
@@ -18,13 +30,7 @@ type LayoutViewerProps = {
   onDocumentChange: (document: LayoutDocument) => Promise<void>;
 };
 
-type ViewBox = { x: number; y: number; width: number; height: number };
-type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
-type SvgPoint = { x: number; y: number };
-type FixtureRenderPoint = SvgPoint & { key: string };
-
-const defaultBulbSize = 1;
-const bulbSizeUnitRadius = 0.035;
+const viewBoxOptions = { minSize: 1, paddingScale: 0.18, paddingBase: 0.5 };
 
 export function LayoutViewer({
   document,
@@ -39,9 +45,9 @@ export function LayoutViewer({
   const dragRef = useRef<{ fixtureId: string; offset: SvgPoint } | null>(null);
   const documentKeyRef = useRef<string | null>(null);
   const [dragPreview, setDragPreview] = useState<{ fixtureId: string; position: Point3 } | null>(null);
-  const bounds = useMemo(() => documentBounds(document), [document]);
+  const bounds = document.renderBounds;
   const [viewportAspect, setViewportAspect] = useState(16 / 9);
-  const [viewBox, setViewBox] = useState<ViewBox>(() => fitViewBox(bounds, 16 / 9));
+  const [viewBox, setViewBox] = useState<ViewBox>(() => fitViewBox(bounds, 16 / 9, viewBoxOptions));
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -63,7 +69,7 @@ export function LayoutViewer({
     const documentKey = `${document.path}::${document.objectKey}`;
     if (documentKeyRef.current === documentKey) return;
     documentKeyRef.current = documentKey;
-    setViewBox(fitViewBox(bounds, viewportAspect));
+    setViewBox(fitViewBox(bounds, viewportAspect, viewBoxOptions));
   }, [bounds, document.objectKey, document.path, viewportAspect]);
 
   useEffect(() => {
@@ -98,9 +104,9 @@ export function LayoutViewer({
     <div className="layout-viewer">
       <div className="layout-canvas-column">
         <div className="layout-canvas-toolbar">
-          <button title="Fit to view" onClick={() => setViewBox(fitViewBox(bounds, viewportAspect))}><LocateFixed size={15} /></button>
-          <button title="Zoom in" onClick={() => setViewBox((box) => zoomViewBox(box, 0.82))}><ZoomIn size={15} /></button>
-          <button title="Zoom out" onClick={() => setViewBox((box) => zoomViewBox(box, 1.18))}><ZoomOut size={15} /></button>
+          <button title="Fit to view" onClick={() => setViewBox(fitViewBox(bounds, viewportAspect, viewBoxOptions))}><LocateFixed size={15} /></button>
+          <button title="Zoom in" onClick={() => setViewBox((box) => zoomViewBox(box, 0.82, 0.25))}><ZoomIn size={15} /></button>
+          <button title="Zoom out" onClick={() => setViewBox((box) => zoomViewBox(box, 1.18, 0.25))}><ZoomOut size={15} /></button>
           <span>{document.units}</span>
         </div>
         <svg
@@ -139,7 +145,7 @@ export function LayoutViewer({
           }}
           onWheel={(event) => {
             event.preventDefault();
-            setViewBox((box) => zoomViewBox(box, event.deltaY < 0 ? 0.9 : 1.1));
+            setViewBox((box) => zoomViewBox(box, event.deltaY < 0 ? 0.9 : 1.1, 0.25));
           }}
           onClick={(event) => {
             if (event.target === event.currentTarget) onSelectFixture(null);
@@ -174,7 +180,7 @@ export function LayoutViewer({
               />
             ))}
           </g>
-          <ScaleBar viewBox={viewBox} units={document.units} svg={svgRef.current} />
+          <ScaleBar viewBox={viewBox} units={unitLabel(document.units)} svg={svgRef.current} />
         </svg>
       </div>
       <aside className="layout-inspector">
@@ -239,23 +245,6 @@ export function LayoutViewer({
   );
 }
 
-function ScaleBar({ viewBox, units, svg }: { viewBox: ViewBox; units: string; svg: SVGSVGElement | null }) {
-  const length = niceScaleLength(viewBox.width * 0.18);
-  const x = viewBox.x + viewBox.width * 0.055;
-  const y = viewBox.y + viewBox.height * 0.9;
-  const tick = viewBox.height * 0.018;
-  const fontSize = screenPixelsToUserY(viewBox, svg, 12);
-  const labelStrokeWidth = screenPixelsToUserY(viewBox, svg, 3);
-  return (
-    <g className="canvas-scale-bar">
-      <line x1={x} y1={y} x2={x + length} y2={y} />
-      <line x1={x} y1={y - tick} x2={x} y2={y + tick} />
-      <line x1={x + length} y1={y - tick} x2={x + length} y2={y + tick} />
-      <text x={x} y={y - tick * 1.8} fontSize={fontSize} strokeWidth={labelStrokeWidth}>{formatScaleLength(length)} {unitLabel(units)}</text>
-    </g>
-  );
-}
-
 function FixtureShape({
   fixture,
   selected,
@@ -271,15 +260,14 @@ function FixtureShape({
   return (
     <g
       className={className}
+      transform={fixtureTransform(fixture.transform)}
       onMouseDown={(event) => {
         event.stopPropagation();
         onMouseDown(event);
       }}
       onClick={(event) => event.stopPropagation()}
     >
-      {renderGeometry(fixture.resolvedFixture.geometry, fixture) ?? (
-        <circle cx={fixture.transform.position.x ?? 0} cy={fixture.transform.position.y ?? 0} r={fixtureBulbRadius(fixture)} />
-      )}
+      {renderGeometryPlan(fixture.resolvedFixture.renderPlan)}
     </g>
   );
 }
@@ -428,141 +416,6 @@ function formatNumberInput(value: number) {
   return Number.isFinite(value) ? String(value) : "0";
 }
 
-function renderGeometry(geometry: Geometry, fixture: LayoutFixturePlacement) {
-  const bulbRadius = fixtureBulbRadius(fixture);
-  switch (geometry.type) {
-    case "points":
-      return renderEmitterPoints(pointsToRenderPoints(geometry.points, fixture), bulbRadius);
-    case "lines": {
-      const emitters = pointsToRenderPoints(samplePolylinePoints(geometry.points, geometry.pixels), fixture);
-      return (
-        <>
-          {geometry.points.slice(0, -1).map((point, index) => {
-            const from = transformPoint(point, fixture);
-            const to = transformPoint(geometry.points[index + 1], fixture);
-            return from && to ? <line key={index} className="layout-fixture-guide" x1={from.x} y1={from.y} x2={to.x} y2={to.y} /> : null;
-          })}
-          {renderEmitterPoints(emitters, bulbRadius)}
-        </>
-      );
-    }
-    case "arc": {
-      const center = transformPoint(geometry.center, fixture);
-      if (!center || geometry.radius == null || geometry.startDegrees == null || geometry.endDegrees == null) return null;
-      const arcPoints = sampleArcPoints(geometry.center, geometry.radius, geometry.startDegrees, geometry.endDegrees, geometry.pixels);
-      const emitters = pointsToRenderPoints(arcPoints, fixture);
-      const start = emitters[0];
-      const end = emitters[emitters.length - 1];
-      if (!start || !end) return null;
-      const largeArc = Math.abs(geometry.endDegrees - geometry.startDegrees) > 180 ? 1 : 0;
-      const scale = fixture.transform.scale ?? { x: 1, y: 1, z: 1 };
-      const radiusX = Math.abs(geometry.radius * (scale.x ?? 1));
-      const radiusY = Math.abs(geometry.radius * (scale.y ?? 1));
-      const rotation = fixture.transform.rotation?.z ?? 0;
-      return (
-        <>
-          <path className="layout-fixture-guide" d={`M ${start.x} ${start.y} A ${radiusX} ${radiusY} ${rotation} ${largeArc} 1 ${end.x} ${end.y}`} />
-          {renderEmitterPoints(emitters, bulbRadius)}
-        </>
-      );
-    }
-  }
-}
-
-function renderEmitterPoints(points: FixtureRenderPoint[], radius: number) {
-  return points.map((point) => (
-    <circle key={point.key} className="layout-fixture-emitter" cx={point.x} cy={point.y} r={radius} />
-  ));
-}
-
-function fixtureBulbRadius(fixture: LayoutFixturePlacement) {
-  return bulbRadius(fixture.resolvedFixture.bulbSize);
-}
-
-function normalizedBulbSize(value: number | null | undefined) {
-  return Math.max(0.05, value ?? defaultBulbSize);
-}
-
-function bulbRadius(value: number | null | undefined) {
-  return normalizedBulbSize(value) * bulbSizeUnitRadius;
-}
-
-function pointsToRenderPoints(points: Point3[], fixture: LayoutFixturePlacement): FixtureRenderPoint[] {
-  return points.flatMap((point, index) => {
-    const transformed = transformPoint(point, fixture);
-    return transformed ? [{ ...transformed, key: `emitter-${index}` }] : [];
-  });
-}
-
-function samplePolylinePoints(points: Point3[], pixels: number): Point3[] {
-  const count = Math.max(1, Math.floor(pixels));
-  if (points.length === 0) return [];
-  if (points.length === 1) return [{ ...points[0] }];
-
-  const segments = points.slice(0, -1).map((from, index) => ({
-    from,
-    to: points[index + 1],
-    length: pointDistance(from, points[index + 1])
-  }));
-  const totalLength = segments.reduce((sum, segment) => sum + segment.length, 0);
-  if (totalLength === 0) return Array.from({ length: count }, () => ({ ...points[0] }));
-
-  if (count === 1) return [pointAtDistance(segments, totalLength / 2)];
-  return Array.from({ length: count }, (_, index) =>
-    pointAtDistance(segments, totalLength * (index / (count - 1)))
-  );
-}
-
-function pointAtDistance(segments: { from: Point3; to: Point3; length: number }[], distance: number): Point3 {
-  let remaining = distance;
-  for (const segment of segments) {
-    if (segment.length === 0) continue;
-    if (remaining <= segment.length) return interpolatePoint(segment.from, segment.to, remaining / segment.length);
-    remaining -= segment.length;
-  }
-  const last = segments[segments.length - 1]?.to ?? { x: 0, y: 0, z: 0 };
-  return { ...last };
-}
-
-function interpolatePoint(from: Point3, to: Point3, t: number): Point3 {
-  return {
-    x: lerp(from.x ?? 0, to.x ?? 0, t),
-    y: lerp(from.y ?? 0, to.y ?? 0, t),
-    z: lerp(from.z ?? 0, to.z ?? 0, t)
-  };
-}
-
-function pointDistance(from: Point3, to: Point3) {
-  const dx = (to.x ?? 0) - (from.x ?? 0);
-  const dy = (to.y ?? 0) - (from.y ?? 0);
-  const dz = (to.z ?? 0) - (from.z ?? 0);
-  return Math.sqrt(dx * dx + dy * dy + dz * dz);
-}
-
-function sampleArcPoints(center: Point3, radius: number, startDegrees: number, endDegrees: number, pixels: number): Point3[] {
-  const count = Math.max(1, Math.floor(pixels));
-  if (count === 1) {
-    return [arcPoint(center, radius, (startDegrees + endDegrees) / 2)];
-  }
-
-  return Array.from({ length: count }, (_, index) =>
-    arcPoint(center, radius, lerp(startDegrees, endDegrees, index / (count - 1)))
-  );
-}
-
-function arcPoint(center: Point3, radius: number, degrees: number): Point3 {
-  const radians = (degrees * Math.PI) / 180;
-  return {
-    x: (center.x ?? 0) + radius * Math.cos(radians),
-    y: (center.y ?? 0) + radius * Math.sin(radians),
-    z: center.z ?? 0
-  };
-}
-
-function lerp(from: number, to: number, t: number) {
-  return from + (to - from) * t;
-}
-
 function updatePlacement(document: LayoutDocument, id: string, update: (fixture: LayoutFixturePlacement) => LayoutFixturePlacement): LayoutDocument {
   return { ...document, fixtures: document.fixtures.map((fixture) => fixture.id === id ? update(fixture) : fixture) };
 }
@@ -598,126 +451,14 @@ function catalogToResolvedFixture(item: FixtureCatalogItem): ResolvedLayoutFixtu
     bulbSize: item.bulbSize,
     geometry: item.geometry,
     geometrySummary: item.geometrySummary,
+    renderPlan: item.renderPlan,
     sourcePath: item.sourcePath,
     objectKey: item.objectKey
   };
 }
 
-function transformPoint(point: Point3 | undefined, fixture: LayoutFixturePlacement): SvgPoint | null {
-  if (!point || point.x == null || point.y == null) return null;
-  const position = fixture.transform.position;
-  const scale = fixture.transform.scale ?? { x: 1, y: 1, z: 1 };
-  const rotation = fixture.transform.rotation ?? { x: 0, y: 0, z: 0 };
-  const radians = ((rotation.z ?? 0) * Math.PI) / 180;
-  const x = point.x * (scale.x ?? 1);
-  const y = point.y * (scale.y ?? 1);
-  return {
-    x: (position.x ?? 0) + x * Math.cos(radians) - y * Math.sin(radians),
-    y: (position.y ?? 0) + x * Math.sin(radians) + y * Math.cos(radians)
-  };
-}
-
-function documentBounds(document: LayoutDocument): Bounds {
-  const points = document.fixtures.flatMap(fixturePoints);
-  if (!points.length) return { minX: -5, minY: -4, maxX: 5, maxY: 4 };
-  return points.reduce((bounds, point) => ({
-    minX: Math.min(bounds.minX, point.x),
-    minY: Math.min(bounds.minY, point.y),
-    maxX: Math.max(bounds.maxX, point.x),
-    maxY: Math.max(bounds.maxY, point.y)
-  }), { minX: points[0].x, minY: points[0].y, maxX: points[0].x, maxY: points[0].y });
-}
-
-function fixturePoints(fixture: LayoutFixturePlacement): SvgPoint[] {
-  const geometry = fixture.resolvedFixture.geometry;
-  if (geometry.type === "points") return geometry.points.map((point) => transformPoint(point, fixture)).filter(Boolean) as SvgPoint[];
-  if (geometry.type === "lines") return geometry.points.map((point) => transformPoint(point, fixture)).filter(Boolean) as SvgPoint[];
-  const center = transformPoint(geometry.center, fixture);
-  if (!center || geometry.radius == null) return [transformPoint({ ...fixture.transform.position }, fixture)].filter(Boolean) as SvgPoint[];
-  return [{ x: center.x - geometry.radius, y: center.y - geometry.radius }, { x: center.x + geometry.radius, y: center.y + geometry.radius }];
-}
-
-function fitViewBox(bounds: Bounds, viewportAspect: number): ViewBox {
-  const width = Math.max(bounds.maxX - bounds.minX, 1);
-  const height = Math.max(bounds.maxY - bounds.minY, 1);
-  const padding = Math.max(width, height) * 0.18 + 0.5;
-  let fittedWidth = width + padding * 2;
-  let fittedHeight = height + padding * 2;
-  const aspect = Math.max(viewportAspect, 0.1);
-  if (fittedWidth / fittedHeight > aspect) {
-    fittedHeight = fittedWidth / aspect;
-  } else {
-    fittedWidth = fittedHeight * aspect;
-  }
-  const centerX = (bounds.minX + bounds.maxX) / 2;
-  const centerY = (bounds.minY + bounds.maxY) / 2;
-  return {
-    x: centerX - fittedWidth / 2,
-    y: -(centerY + fittedHeight / 2),
-    width: fittedWidth,
-    height: fittedHeight
-  };
-}
-
-function zoomViewBox(viewBox: ViewBox, factor: number): ViewBox {
-  const width = Math.max(viewBox.width * factor, 0.25);
-  const height = Math.max(viewBox.height * factor, 0.25);
-  return { x: viewBox.x + (viewBox.width - width) / 2, y: viewBox.y + (viewBox.height - height) / 2, width, height };
-}
-
-function matchViewBoxAspect(viewBox: ViewBox, viewportAspect: number): ViewBox {
-  const aspect = Math.max(viewportAspect, 0.1);
-  let width = viewBox.width;
-  let height = viewBox.height;
-  if (width / height > aspect) {
-    height = width / aspect;
-  } else {
-    width = height * aspect;
-  }
-  return {
-    x: viewBox.x + (viewBox.width - width) / 2,
-    y: viewBox.y + (viewBox.height - height) / 2,
-    width,
-    height
-  };
-}
-
-function niceScaleLength(target: number) {
-  if (!Number.isFinite(target) || target <= 0) return 1;
-  const exponent = Math.floor(Math.log10(target));
-  const magnitude = 10 ** exponent;
-  const normalized = target / magnitude;
-  const step = normalized >= 5 ? 5 : normalized >= 2 ? 2 : 1;
-  return step * magnitude;
-}
-
-function formatScaleLength(length: number) {
-  return Number.isInteger(length) ? `${length}` : length.toFixed(length < 0.1 ? 3 : length < 1 ? 2 : 1).replace(/0+$/, "").replace(/\.$/, "");
-}
-
 function unitLabel(units: string) {
   return units === "meters" ? "m" : "ft";
-}
-
-function svgEventPoint(event: MouseEvent, svg: SVGSVGElement | null): SvgPoint {
-  if (!svg) return { x: 0, y: 0 };
-  const point = svg.createSVGPoint();
-  point.x = event.clientX;
-  point.y = event.clientY;
-  const transformed = point.matrixTransform(svg.getScreenCTM()?.inverse());
-  return { x: transformed.x, y: transformed.y };
-}
-
-function svgPixelWidth(svg: SVGSVGElement | null) {
-  return Math.max(svg?.clientWidth ?? 1, 1);
-}
-
-function svgPixelHeight(svg: SVGSVGElement | null) {
-  return Math.max(svg?.clientHeight ?? 1, 1);
-}
-
-function screenPixelsToUserY(viewBox: ViewBox, svg: SVGSVGElement | null, pixels: number) {
-  return (pixels / svgPixelHeight(svg)) * viewBox.height;
 }
 
 function authoredFixtureLabel(fixture: LayoutFixturePlacement) {

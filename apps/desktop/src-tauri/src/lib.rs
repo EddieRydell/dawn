@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -8,13 +7,13 @@ use dawn_project::{
     get_fixture_document as inspect_fixture_document,
     get_layout_document as inspect_layout_document, inspect_document as inspect_dawn_document,
     DiagnosticCode, DiagnosticSeverity, DocumentDescriptor, DocumentEditResult, FixtureDocument,
-    LayoutDocument, ProjectDiagnostic, ProjectOverlay, ProjectPath, TextRange,
+    LayoutDocument, ProjectDiagnostic, ProjectFs, ProjectFsEntryKind, ProjectOverlay, ProjectPath,
+    TextRange,
 };
 use serde::{Deserialize, Serialize};
 use specta_typescript::Typescript;
 use tauri::State;
 use tauri_specta::{collect_commands, Builder};
-use walkdir::WalkDir;
 
 #[derive(Default)]
 struct AppState {
@@ -23,7 +22,8 @@ struct AppState {
 
 #[derive(Default)]
 struct ProjectSession {
-    root: Option<ProjectPath>,
+    root_display: Option<String>,
+    fs: Option<ProjectFs>,
     project_file: Option<ProjectPath>,
     active_sequence: Option<ProjectPath>,
 }
@@ -140,22 +140,29 @@ struct LanguageProblem {
 #[specta::specta]
 fn open_project(path: String, state: State<'_, AppState>) -> Result<ProjectState, String> {
     let path = PathBuf::from(path);
-    let project_file = if path.is_dir() {
-        path.join("project.dawn")
+    let (root, project_file) = if path.is_dir() {
+        (path, ProjectPath::new("project.dawn"))
     } else {
-        path
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| "project file has no file name".to_string())?;
+        let root = path
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| "project file has no parent".to_string())?;
+        (root, ProjectPath::parse(PathBuf::from(file_name))?)
     };
-    let root = project_file
-        .parent()
-        .map(Path::to_path_buf)
-        .ok_or_else(|| "project file has no parent".to_string())?;
+    let fs = ProjectFs::open_ambient(&root).map_err(|error| error.to_string())?;
+    let root_display = root.to_string_lossy().replace('\\', "/");
     {
         let mut session = state
             .project
             .lock()
             .map_err(|_| "project state lock failed")?;
-        session.root = Some(ProjectPath::new(root));
-        session.project_file = Some(ProjectPath::new(project_file));
+        session.root_display = Some(root_display);
+        session.fs = Some(fs);
+        session.project_file = Some(project_file);
+        session.active_sequence = None;
     }
     check_project(state)
 }
@@ -163,20 +170,26 @@ fn open_project(path: String, state: State<'_, AppState>) -> Result<ProjectState
 #[tauri::command]
 #[specta::specta]
 fn check_project(state: State<'_, AppState>) -> Result<ProjectState, String> {
-    let root = {
+    let (root, fs) = {
         let session = state
             .project
             .lock()
             .map_err(|_| "project state lock failed")?;
-        session
-            .root
-            .clone()
-            .ok_or_else(|| "no project open".to_string())?
+        (
+            session
+                .root_display
+                .clone()
+                .ok_or_else(|| "no project open".to_string())?,
+            session
+                .fs
+                .clone()
+                .ok_or_else(|| "no project open".to_string())?,
+        )
     };
     Ok(ProjectState {
-        root: root.to_slash_string(),
-        files: list_source_files(root.as_path()),
-        entries: list_project_entries(root.as_path()),
+        root,
+        files: list_source_files(&fs)?,
+        entries: list_project_entries(&fs)?,
         diagnostics: Vec::new(),
     })
 }
@@ -187,15 +200,10 @@ fn analyze_project(
     overlays: Vec<ProjectOverlayInput>,
     state: State<'_, AppState>,
 ) -> Result<AnalysisState, String> {
+    let fs = project_fs(&state)?;
     let project_file = current_project_file(&state)?;
-    let overlays = overlays
-        .into_iter()
-        .map(|overlay| ProjectOverlay {
-            path: ProjectPath::new(overlay.path),
-            content: overlay.content,
-        })
-        .collect::<Vec<_>>();
-    let analysis = analyze_project_with_overlays(&project_file, None, overlays);
+    let overlays = project_overlays_from_inputs(overlays)?;
+    let analysis = analyze_project_with_overlays(&fs, project_file, None, overlays);
     let object_count = analysis
         .files
         .values()
@@ -220,8 +228,13 @@ fn analyze_project(
 fn inspect_document(
     path: String,
     overlays: Vec<ProjectOverlayInput>,
+    state: State<'_, AppState>,
 ) -> Result<DocumentDescriptor, String> {
-    inspect_dawn_document(path, project_overlays_from_inputs(overlays))
+    inspect_dawn_document(
+        &project_fs(&state)?,
+        ProjectPath::parse(path)?,
+        project_overlays_from_inputs(overlays)?,
+    )
 }
 
 #[tauri::command]
@@ -233,10 +246,11 @@ fn get_layout_document(
     state: State<'_, AppState>,
 ) -> Result<LayoutDocument, String> {
     inspect_layout_document(
-        path,
+        &project_fs(&state)?,
+        ProjectPath::parse(path)?,
         &object_key,
         current_project_file(&state)?,
-        project_overlays_from_inputs(overlays),
+        project_overlays_from_inputs(overlays)?,
     )
 }
 
@@ -246,11 +260,13 @@ fn get_fixture_document(
     path: String,
     selected_object_key: Option<String>,
     overlays: Vec<ProjectOverlayInput>,
+    state: State<'_, AppState>,
 ) -> Result<FixtureDocument, String> {
     inspect_fixture_document(
-        path,
+        &project_fs(&state)?,
+        ProjectPath::parse(path)?,
         selected_object_key.as_deref(),
-        project_overlays_from_inputs(overlays),
+        project_overlays_from_inputs(overlays)?,
     )
 }
 
@@ -266,11 +282,12 @@ fn apply_layout_document_edit(
     state: State<'_, AppState>,
 ) -> Result<LayoutDocumentEditResponse, String> {
     let result = edit_layout_document(
-        &path,
+        &project_fs(&state)?,
+        ProjectPath::parse(path)?,
         &object_key,
         document,
         base_content,
-        project_overlays_from_inputs(overlays),
+        project_overlays_from_inputs(overlays)?,
         current_project_file(&state)?,
         allow_breaking_references,
     )?;
@@ -302,10 +319,11 @@ fn apply_fixture_document_edit(
     state: State<'_, AppState>,
 ) -> Result<FixtureDocumentEditResponse, String> {
     let result = edit_fixture_document(
-        &path,
+        &project_fs(&state)?,
+        ProjectPath::parse(path)?,
         document,
         base_content,
-        project_overlays_from_inputs(overlays),
+        project_overlays_from_inputs(overlays)?,
         current_project_file(&state)?,
         allow_breaking_references,
     )?;
@@ -328,14 +346,18 @@ fn apply_fixture_document_edit(
 
 #[tauri::command]
 #[specta::specta]
-fn read_file(path: String) -> Result<String, String> {
-    fs::read_to_string(path).map_err(|err| err.to_string())
+fn read_file(path: String, state: State<'_, AppState>) -> Result<String, String> {
+    project_fs(&state)?
+        .read_to_string(&ProjectPath::parse(path)?)
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
 #[specta::specta]
-fn write_file(path: String, content: String) -> Result<(), String> {
-    fs::write(path, content).map_err(|err| err.to_string())
+fn write_file(path: String, content: String, state: State<'_, AppState>) -> Result<(), String> {
+    project_fs(&state)?
+        .write(&ProjectPath::parse(path)?, content)
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -345,24 +367,24 @@ fn rename_path(
     new_name: String,
     state: State<'_, AppState>,
 ) -> Result<FileOperationState, String> {
-    let root = project_root(&state)?;
+    let fs = project_fs(&state)?;
     validate_file_name(&new_name)?;
-    let old_path = ensure_inside_root(root.as_path(), PathBuf::from(path))?;
+    let old_path = ProjectPath::parse(path)?;
     let new_path = old_path
         .parent()
         .ok_or_else(|| "path has no parent".to_string())?
-        .join(new_name);
-    let new_path = ensure_inside_root(root.as_path(), new_path)?;
-    if new_path.exists() {
+        .join(new_name)?;
+    if fs.exists(&new_path) {
         return Err("target path already exists".to_string());
     }
-    fs::rename(&old_path, &new_path).map_err(|err| err.to_string())?;
+    fs.rename(&old_path, &new_path)
+        .map_err(|err| err.to_string())?;
     update_active_sequence_after_move(&state, &old_path, &new_path)?;
     Ok(FileOperationState {
         project: check_project(state)?,
         moved: vec![FileMove {
-            old_path: ProjectPath::new(&old_path).to_slash_string(),
-            new_path: ProjectPath::new(&new_path).to_slash_string(),
+            old_path: old_path.to_slash_string(),
+            new_path: new_path.to_slash_string(),
         }],
     })
 }
@@ -374,33 +396,37 @@ fn move_paths(
     new_parent: String,
     state: State<'_, AppState>,
 ) -> Result<FileOperationState, String> {
-    let root = project_root(&state)?;
-    let new_parent = ensure_inside_root(root.as_path(), PathBuf::from(new_parent))?;
-    if !new_parent.is_dir() {
+    let fs = project_fs(&state)?;
+    let new_parent = ProjectPath::parse(new_parent)?;
+    if !fs.is_dir(&new_parent) {
         return Err("drop target is not a directory".to_string());
     }
 
     let mut moved = Vec::new();
     for path in paths {
-        let old_path = ensure_inside_root(root.as_path(), PathBuf::from(path))?;
+        let old_path = ProjectPath::parse(path)?;
         let name = old_path
             .file_name()
             .ok_or_else(|| "path has no file name".to_string())?;
-        let new_path = ensure_inside_root(root.as_path(), new_parent.join(name))?;
+        let new_path = new_parent.join(PathBuf::from(name))?;
         if old_path == new_path {
             continue;
         }
-        if old_path.is_dir() && new_path.starts_with(&old_path) {
+        if fs.is_dir(&old_path) && new_path.starts_with(&old_path) {
             return Err("cannot move a directory into itself".to_string());
         }
-        if new_path.exists() {
-            return Err(format!("target already exists: {}", new_path.display()));
+        if fs.exists(&new_path) {
+            return Err(format!(
+                "target already exists: {}",
+                new_path.to_slash_string()
+            ));
         }
-        fs::rename(&old_path, &new_path).map_err(|err| err.to_string())?;
+        fs.rename(&old_path, &new_path)
+            .map_err(|err| err.to_string())?;
         update_active_sequence_after_move(&state, &old_path, &new_path)?;
         moved.push(FileMove {
-            old_path: ProjectPath::new(&old_path).to_slash_string(),
-            new_path: ProjectPath::new(&new_path).to_slash_string(),
+            old_path: old_path.to_slash_string(),
+            new_path: new_path.to_slash_string(),
         });
     }
 
@@ -417,7 +443,7 @@ fn open_sequence(path: String, state: State<'_, AppState>) -> Result<(), String>
         .project
         .lock()
         .map_err(|_| "project state lock failed")?;
-    session.active_sequence = Some(ProjectPath::new(path));
+    session.active_sequence = Some(ProjectPath::parse(path)?);
     Ok(())
 }
 
@@ -496,31 +522,34 @@ fn command_builder() -> Builder<tauri::Wry> {
     ])
 }
 
-fn list_source_files(root: &Path) -> Vec<String> {
-    let mut files = WalkDir::new(root)
+fn list_source_files(fs: &ProjectFs) -> Result<Vec<String>, String> {
+    let mut files = fs
+        .list_entries()
+        .map_err(|error| error.to_string())?
         .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.path().to_path_buf())
-        .filter(|path| {
-            path.extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext == "dawn")
+        .filter(|entry| {
+            entry.kind == ProjectFsEntryKind::File
+                && entry
+                    .path
+                    .as_path()
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext == "dawn")
         })
-        .map(|path| ProjectPath::new(path).to_slash_string())
+        .map(|entry| entry.path.to_slash_string())
         .collect::<Vec<_>>();
     files.sort();
-    files
+    Ok(files)
 }
 
-fn list_project_entries(root: &Path) -> Vec<ProjectEntry> {
-    let mut entries = WalkDir::new(root)
-        .min_depth(1)
+fn list_project_entries(fs: &ProjectFs) -> Result<Vec<ProjectEntry>, String> {
+    let mut entries = fs
+        .list_entries()
+        .map_err(|error| error.to_string())?
         .into_iter()
-        .filter_map(Result::ok)
         .map(|entry| ProjectEntry {
-            path: ProjectPath::new(entry.path()).to_slash_string(),
-            kind: if entry.file_type().is_dir() {
+            path: entry.path.to_slash_string(),
+            kind: if entry.kind == ProjectFsEntryKind::Directory {
                 ProjectEntryKind::Directory
             } else {
                 ProjectEntryKind::File
@@ -528,16 +557,16 @@ fn list_project_entries(root: &Path) -> Vec<ProjectEntry> {
         })
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.path.cmp(&right.path));
-    entries
+    Ok(entries)
 }
 
-fn project_root(state: &State<'_, AppState>) -> Result<ProjectPath, String> {
+fn project_fs(state: &State<'_, AppState>) -> Result<ProjectFs, String> {
     let session = state
         .project
         .lock()
         .map_err(|_| "project state lock failed")?;
     session
-        .root
+        .fs
         .clone()
         .ok_or_else(|| "no project open".to_string())
 }
@@ -568,12 +597,16 @@ fn problem_from_diagnostic(diagnostic: &ProjectDiagnostic) -> LanguageProblem {
     }
 }
 
-fn project_overlays_from_inputs(overlays: Vec<ProjectOverlayInput>) -> Vec<ProjectOverlay> {
+fn project_overlays_from_inputs(
+    overlays: Vec<ProjectOverlayInput>,
+) -> Result<Vec<ProjectOverlay>, String> {
     overlays
         .into_iter()
-        .map(|overlay| ProjectOverlay {
-            path: ProjectPath::new(overlay.path),
-            content: overlay.content,
+        .map(|overlay| {
+            Ok(ProjectOverlay {
+                path: ProjectPath::parse(overlay.path)?,
+                content: overlay.content,
+            })
         })
         .collect()
 }
@@ -608,27 +641,6 @@ fn range_to_one_based(range: Option<TextRange>) -> (u32, u32, u32, u32) {
         range.end.line.saturating_add(1),
         range.end.character.saturating_add(1).max(1),
     )
-}
-
-fn ensure_inside_root(root: &Path, path: PathBuf) -> Result<PathBuf, String> {
-    let canonical_root = root.canonicalize().map_err(|err| err.to_string())?;
-    let canonical_path = if path.exists() {
-        path.canonicalize().map_err(|err| err.to_string())?
-    } else {
-        let parent = path
-            .parent()
-            .ok_or_else(|| "path has no parent".to_string())?;
-        let canonical_parent = parent.canonicalize().map_err(|err| err.to_string())?;
-        canonical_parent.join(
-            path.file_name()
-                .ok_or_else(|| "path has no file name".to_string())?,
-        )
-    };
-    if canonical_path.starts_with(&canonical_root) {
-        Ok(canonical_path)
-    } else {
-        Err("path is outside the open project".to_string())
-    }
 }
 
 fn validate_file_name(name: &str) -> Result<(), String> {
@@ -689,12 +701,24 @@ mod tests {
         assert_eq!(problem.end_line, 3);
         assert_eq!(problem.end_column, 12);
     }
+
+    #[test]
+    fn runtime_backend_does_not_use_ambient_fs_or_walkdir() {
+        let source =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"))
+                .unwrap();
+
+        assert!(!source.contains(&["use std", "fs;"].join("::")));
+        assert!(!source.contains(&["walkdir", ""].join("::")));
+        assert!(!source.contains(&["Walk", "Dir"].join("")));
+        assert!(!source.contains(&["ensure", "inside", "root"].join("_")));
+    }
 }
 
 fn update_active_sequence_after_move(
     state: &State<'_, AppState>,
-    old_path: &Path,
-    new_path: &Path,
+    old_path: &ProjectPath,
+    new_path: &ProjectPath,
 ) -> Result<(), String> {
     let mut session = state
         .project
@@ -703,9 +727,9 @@ fn update_active_sequence_after_move(
     if session
         .active_sequence
         .as_ref()
-        .is_some_and(|active_sequence| active_sequence.as_path() == old_path)
+        .is_some_and(|active_sequence| active_sequence == old_path)
     {
-        session.active_sequence = Some(ProjectPath::new(new_path));
+        session.active_sequence = Some(new_path.clone());
     }
     Ok(())
 }

@@ -21,13 +21,13 @@ path = "src/export_bindings.rs"
 
 [dependencies]
 dawn-project = { path = "../../../crates/dawn-project", features = ["bindings"] }
+cap-std.workspace = true
 serde.workspace = true
 specta.workspace = true
 specta-typescript.workspace = true
 tauri.workspace = true
 tauri-specta.workspace = true
 tauri-plugin-dialog.workspace = true
-walkdir.workspace = true
 
 [build-dependencies]
 tauri-build.workspace = true

@@ -72,6 +72,7 @@ export type FixtureCatalogItem = {
 	bulbSize: number | null,
 	geometry: Geometry,
 	geometrySummary: string,
+	renderPlan: GeometryRenderPlan,
 };
 
 export type FixtureDefinitionDocument = {
@@ -81,6 +82,7 @@ export type FixtureDefinitionDocument = {
 	bulbSize: number | null,
 	geometry: Geometry,
 	geometrySummary: string,
+	renderPlan: GeometryRenderPlan,
 };
 
 export type FixtureDocument = {
@@ -99,6 +101,28 @@ export type FrameSummary = {
 
 export type Geometry = { type: "points"; points: Point3[] } | { type: "lines"; points: Point3[]; pixels: number } | { type: "arc"; center: Point3; radius: number | null; startDegrees: number | null; endDegrees: number | null; pixels: number };
 
+export type GeometryRenderBounds = {
+	minX: number | null,
+	minY: number | null,
+	maxX: number | null,
+	maxY: number | null,
+};
+
+export type GeometryRenderGuide = { type: "line"; from: GeometryRenderPoint; to: GeometryRenderPoint } | { type: "arc"; start: GeometryRenderPoint; end: GeometryRenderPoint; radiusX: number | null; radiusY: number | null; rotation: number | null; largeArc: boolean };
+
+export type GeometryRenderPlan = {
+	emitters: GeometryRenderPoint[],
+	guides: GeometryRenderGuide[],
+	bounds: GeometryRenderBounds,
+	bulbRadius: number | null,
+};
+
+export type GeometryRenderPoint = {
+	x: number | null,
+	y: number | null,
+	z: number | null,
+};
+
 export type LanguageProblem = {
 	path: string,
 	severity: DiagnosticSeverity,
@@ -116,6 +140,7 @@ export type LayoutDocument = {
 	objectKey: string,
 	name: string,
 	units: DistanceUnit,
+	renderBounds: GeometryRenderBounds,
 	fixtures: LayoutFixturePlacement[],
 	groups: LayoutGroupDocument[],
 	fixtureCatalog: FixtureCatalogItem[],
@@ -170,6 +195,7 @@ export type ResolvedLayoutFixture = {
 	bulbSize: number | null,
 	geometry: Geometry,
 	geometrySummary: string,
+	renderPlan: GeometryRenderPlan,
 	sourcePath: string,
 	objectKey: string | null,
 };

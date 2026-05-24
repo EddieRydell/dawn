@@ -165,7 +165,7 @@ export class DawnEditorRuntime {
       return existing;
     }
 
-    const uri = monaco.Uri.file(openEditor.path);
+    const uri = monaco.Uri.parse(`dawn://project/${encodeDawnUriPath(openEditor.path)}`);
     const model = monaco.editor.getModel(uri) ?? monaco.editor.createModel(openEditor.content, languageId, uri);
     monaco.editor.setModelLanguage(model, languageId);
     this.models.set(openEditor.path, model);
@@ -215,6 +215,14 @@ export class DawnEditorRuntime {
 
 function pathKey(path: string): string {
   return path.replace(/^\\\\\?\\/, "").replace(/\\/g, "/").toLowerCase();
+}
+
+function encodeDawnUriPath(path: string): string {
+  return path
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((part) => encodeURIComponent(part))
+    .join("/");
 }
 
 function markerFromProblem(

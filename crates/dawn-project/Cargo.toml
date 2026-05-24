@@ -7,6 +7,7 @@ version.workspace = true
 bindings = ["dep:specta"]
 
 [dependencies]
+cap-std.workspace = true
 indexmap.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true

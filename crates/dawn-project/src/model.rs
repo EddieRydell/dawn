@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
-use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
+use cap_std::fs::Dir;
 use indexmap::IndexMap;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -67,7 +68,7 @@ impl ModelMode for Resolved {
     type GroupMember = FixtureIndex;
     type RouteFixture = FixtureIndex;
     type RouteController = ControllerIndex;
-    type SequenceAudio = Option<DawnPath>;
+    type SequenceAudio = Option<ProjectPath>;
     type EffectTargetGroup = GroupIndex;
     type EffectTargetFixture = FixtureIndex;
     type SequenceEffectScript = ScriptSource;
@@ -235,15 +236,17 @@ pub struct ProjectPath(PathBuf);
 
 impl ProjectPath {
     pub fn new(path: impl AsRef<Path>) -> Self {
+        Self::parse(path).expect("project path must be relative and contained")
+    }
+
+    pub fn parse(path: impl AsRef<Path>) -> Result<Self, String> {
         let path = path.as_ref();
-        let absolute = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            std::env::current_dir()
-                .map(|current_dir| current_dir.join(path))
-                .unwrap_or_else(|_| path.to_path_buf())
-        };
-        Self(lexically_normalize_path(&absolute))
+        let normalized = normalize_project_path(path)?;
+        Ok(Self(normalized))
+    }
+
+    pub fn root() -> Self {
+        Self(PathBuf::new())
     }
 
     pub fn as_path(&self) -> &Path {
@@ -254,8 +257,24 @@ impl ProjectPath {
         self.0.parent().map(Self::new)
     }
 
-    pub fn join(&self, path: impl AsRef<Path>) -> Self {
-        Self::new(self.0.join(path))
+    pub fn join(&self, path: impl AsRef<Path>) -> Result<Self, String> {
+        let path = path.as_ref();
+        if path.is_absolute() {
+            return Err("project path must be relative".to_string());
+        }
+        Self::parse(self.0.join(path))
+    }
+
+    pub fn file_name(&self) -> Option<&std::ffi::OsStr> {
+        self.0.file_name()
+    }
+
+    pub fn starts_with(&self, base: &ProjectPath) -> bool {
+        self.0.starts_with(&base.0)
+    }
+
+    pub fn is_root(&self) -> bool {
+        self.0.as_os_str().is_empty()
     }
 
     pub fn to_slash_string(&self) -> String {
@@ -273,10 +292,29 @@ impl AsRef<Path> for ProjectPath {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DawnPath(PathBuf);
+impl Serialize for ProjectPath {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_slash_string())
+    }
+}
 
-impl DawnPath {
+impl<'de> Deserialize<'de> for ProjectPath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(raw).map_err(de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportPath(PathBuf);
+
+impl ImportPath {
     pub fn new(path: impl AsRef<Path>) -> Self {
         Self(path.as_ref().to_path_buf())
     }
@@ -287,24 +325,6 @@ impl DawnPath {
 
     pub fn to_slash_string(&self) -> String {
         path_to_slash_string(&self.0)
-    }
-}
-
-impl Serialize for DawnPath {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&self.to_slash_string())
-    }
-}
-
-impl<'de> Deserialize<'de> for DawnPath {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        String::deserialize(deserializer).map(Self::new)
     }
 }
 
@@ -335,7 +355,7 @@ string_ref!(SequenceEffectRef);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportRef {
     raw: String,
-    path: DawnPath,
+    path: ImportPath,
     object: Option<ObjectName>,
 }
 
@@ -349,7 +369,7 @@ impl ImportRef {
         &self.raw
     }
 
-    pub fn path(&self) -> &DawnPath {
+    pub fn path(&self) -> &ImportPath {
         &self.path
     }
 
@@ -378,7 +398,7 @@ impl<'de> Deserialize<'de> for ImportRef {
         }
         Ok(Self {
             raw: raw.clone(),
-            path: DawnPath::new(path),
+            path: ImportPath::new(path),
             object,
         })
     }
@@ -541,8 +561,12 @@ pub struct Fixture {
 }
 
 fn default_bulb_size() -> f64 {
-    1.0
+    DEFAULT_BULB_SIZE
 }
+
+pub const DEFAULT_BULB_SIZE: f64 = 1.0;
+pub const MIN_BULB_SIZE: f64 = 0.05;
+pub const BULB_SIZE_UNIT_RADIUS: f64 = 0.035;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[cfg_attr(feature = "bindings", derive(specta::Type))]
@@ -648,6 +672,57 @@ pub enum Geometry {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct GeometryRenderPoint {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct GeometryRenderBounds {
+    pub min_x: f64,
+    pub min_y: f64,
+    pub max_x: f64,
+    pub max_y: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum GeometryRenderGuide {
+    Line {
+        from: GeometryRenderPoint,
+        to: GeometryRenderPoint,
+    },
+    Arc {
+        start: GeometryRenderPoint,
+        end: GeometryRenderPoint,
+        radius_x: f64,
+        radius_y: f64,
+        rotation: f64,
+        large_arc: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct GeometryRenderPlan {
+    pub emitters: Vec<GeometryRenderPoint>,
+    pub guides: Vec<GeometryRenderGuide>,
+    pub bounds: GeometryRenderBounds,
+    pub bulb_radius: f64,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[serde(bound(
@@ -730,7 +805,7 @@ pub struct SequenceEffect<M: ModelMode = Authored> {
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ScriptSource {
     Inline(String),
-    External(DawnPath),
+    External(ProjectPath),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -1019,6 +1094,110 @@ pub struct ProjectOverlay {
     pub content: String,
 }
 
+#[derive(Clone)]
+pub struct ProjectFs {
+    root: Arc<Dir>,
+}
+
+impl fmt::Debug for ProjectFs {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("ProjectFs").finish_non_exhaustive()
+    }
+}
+
+impl ProjectFs {
+    pub fn open_ambient(root: impl AsRef<Path>) -> Result<Self, std::io::Error> {
+        Ok(Self {
+            root: Arc::new(Dir::open_ambient_dir(root, cap_std::ambient_authority())?),
+        })
+    }
+
+    pub fn read_to_string(&self, path: &ProjectPath) -> Result<String, std::io::Error> {
+        self.root.read_to_string(path.as_path())
+    }
+
+    pub fn write(
+        &self,
+        path: &ProjectPath,
+        content: impl AsRef<[u8]>,
+    ) -> Result<(), std::io::Error> {
+        self.root.write(path.as_path(), content)
+    }
+
+    pub fn rename(&self, from: &ProjectPath, to: &ProjectPath) -> Result<(), std::io::Error> {
+        self.root.rename(from.as_path(), &self.root, to.as_path())
+    }
+
+    pub fn exists(&self, path: &ProjectPath) -> bool {
+        self.root.metadata(path.as_path()).is_ok()
+    }
+
+    pub fn is_dir(&self, path: &ProjectPath) -> bool {
+        self.root
+            .metadata(path.as_path())
+            .is_ok_and(|metadata| metadata.is_dir())
+    }
+
+    pub fn is_file(&self, path: &ProjectPath) -> bool {
+        self.root
+            .metadata(path.as_path())
+            .is_ok_and(|metadata| metadata.is_file())
+    }
+
+    pub fn list_entries(&self) -> Result<Vec<ProjectFsEntry>, std::io::Error> {
+        let mut entries = Vec::new();
+        self.list_entries_inner(&ProjectPath::root(), &mut entries)?;
+        entries.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(entries)
+    }
+
+    fn list_entries_inner(
+        &self,
+        parent: &ProjectPath,
+        entries: &mut Vec<ProjectFsEntry>,
+    ) -> Result<(), std::io::Error> {
+        let dir_path = if parent.is_root() {
+            Path::new(".")
+        } else {
+            parent.as_path()
+        };
+        let dir = self.root.open_dir(dir_path)?;
+        for entry in dir.entries()? {
+            let entry = entry?;
+            let file_name = entry.file_name();
+            let path = parent.join(PathBuf::from(file_name)).map_err(|message| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, message)
+            })?;
+            let metadata = entry.metadata()?;
+            let kind = if metadata.is_dir() {
+                ProjectFsEntryKind::Directory
+            } else {
+                ProjectFsEntryKind::File
+            };
+            entries.push(ProjectFsEntry {
+                path: path.clone(),
+                kind,
+            });
+            if metadata.is_dir() {
+                self.list_entries_inner(&path, entries)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectFsEntry {
+    pub path: ProjectPath,
+    pub kind: ProjectFsEntryKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectFsEntryKind {
+    Directory,
+    File,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[cfg_attr(feature = "bindings", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
@@ -1054,6 +1233,7 @@ pub struct LayoutDocument {
     pub object_key: String,
     pub name: String,
     pub units: DistanceUnit,
+    pub render_bounds: GeometryRenderBounds,
     pub fixtures: Vec<LayoutFixturePlacement>,
     pub groups: Vec<LayoutGroupDocument>,
     pub fixture_catalog: Vec<FixtureCatalogItem>,
@@ -1107,6 +1287,7 @@ pub struct ResolvedLayoutFixture {
     pub bulb_size: f64,
     pub geometry: Geometry,
     pub geometry_summary: String,
+    pub render_plan: GeometryRenderPlan,
     pub source_path: String,
     pub object_key: Option<String>,
 }
@@ -1123,6 +1304,7 @@ pub struct FixtureCatalogItem {
     pub bulb_size: f64,
     pub geometry: Geometry,
     pub geometry_summary: String,
+    pub render_plan: GeometryRenderPlan,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1144,6 +1326,7 @@ pub struct FixtureDefinitionDocument {
     pub bulb_size: f64,
     pub geometry: Geometry,
     pub geometry_summary: String,
+    pub render_plan: GeometryRenderPlan,
 }
 
 #[derive(Debug, Clone)]
@@ -1166,11 +1349,11 @@ pub enum DocumentEditResult<T> {
 }
 
 pub fn inspect_document(
-    path: impl AsRef<Path>,
+    fs: &ProjectFs,
+    path: ProjectPath,
     overlays: Vec<ProjectOverlay>,
 ) -> Result<DocumentDescriptor, String> {
-    let path = ProjectPath::new(path.as_ref());
-    let text = read_text_with_overlays(&path, &overlays)?;
+    let text = read_text_with_overlays(fs, &path, &overlays)?;
     let file: DawnFile = serde_yaml::from_str(&text).map_err(|error| error.to_string())?;
     let objects = file
         .iter()
@@ -1205,12 +1388,12 @@ pub fn inspect_document(
 }
 
 pub fn get_fixture_document(
-    path: impl AsRef<Path>,
+    fs: &ProjectFs,
+    path: ProjectPath,
     selected_object_key: Option<&str>,
     overlays: Vec<ProjectOverlay>,
 ) -> Result<FixtureDocument, String> {
-    let path = ProjectPath::new(path.as_ref());
-    let text = read_text_with_overlays(&path, &overlays)?;
+    let text = read_text_with_overlays(fs, &path, &overlays)?;
     let file: DawnFile = serde_yaml::from_str(&text).map_err(|error| error.to_string())?;
     let fixtures = file
         .iter()
@@ -1234,13 +1417,13 @@ pub fn get_fixture_document(
 }
 
 pub fn get_layout_document(
-    path: impl AsRef<Path>,
+    fs: &ProjectFs,
+    path: ProjectPath,
     object_key: &str,
-    project_path: impl AsRef<Path>,
+    project_path: ProjectPath,
     overlays: Vec<ProjectOverlay>,
 ) -> Result<LayoutDocument, String> {
-    let path = ProjectPath::new(path.as_ref());
-    let analysis = analyze_project_with_overlays(project_path, None, overlays.clone());
+    let analysis = analyze_project_with_overlays(fs, project_path, None, overlays.clone());
     if let Some(diagnostic) = analysis.diagnostics.iter().find(|diagnostic| {
         diagnostic.severity == DiagnosticSeverity::Error
             && diagnostic.path == path
@@ -1252,7 +1435,7 @@ pub fn get_layout_document(
         ));
     }
 
-    let text = read_text_with_overlays(&path, &overlays)?;
+    let text = read_text_with_overlays(fs, &path, &overlays)?;
     let file: DawnFile = serde_yaml::from_str(&text).map_err(|error| error.to_string())?;
     let object = file
         .get(object_key)
@@ -1273,16 +1456,15 @@ pub fn get_layout_document(
 }
 
 pub fn apply_layout_document_edit(
-    path: impl AsRef<Path>,
+    fs: &ProjectFs,
+    path: ProjectPath,
     object_key: &str,
     document: LayoutDocument,
     base_content: String,
     overlays: Vec<ProjectOverlay>,
-    project_path: impl AsRef<Path>,
+    project_path: ProjectPath,
     allow_breaking_references: bool,
 ) -> Result<DocumentEditResult<LayoutDocument>, String> {
-    let path = ProjectPath::new(path.as_ref());
-    let project_path = ProjectPath::new(project_path.as_ref());
     let file: DawnFile = serde_yaml::from_str(&base_content).map_err(|error| error.to_string())?;
     let Some(DawnObject::Layout(current_layout)) = file.get(object_key) else {
         return Err(format!("layout object `{object_key}` was not found"));
@@ -1293,10 +1475,11 @@ pub fn apply_layout_document_edit(
     let object = DawnObject::Layout(layout);
     let serialized = replace_top_level_object(&base_content, object_key, &object)?;
     let next_overlays = overlay_after_save(path.clone(), serialized.clone(), overlays.clone());
-    let analysis = analyze_project_with_overlays(project_path.as_path(), None, next_overlays);
+    let analysis = analyze_project_with_overlays(fs, project_path.clone(), None, next_overlays);
     let introduced_errors = introduced_error_diagnostics(
         &analyze_project_with_overlays(
-            project_path.as_path(),
+            fs,
+            project_path.clone(),
             None,
             overlay_after_save(path.clone(), base_content, overlays),
         ),
@@ -1310,9 +1493,10 @@ pub fn apply_layout_document_edit(
     }
 
     let refreshed_document = get_layout_document(
-        path.as_path(),
+        fs,
+        path.clone(),
         object_key,
-        analysis.root_path.as_path(),
+        analysis.root_path.clone(),
         vec![ProjectOverlay {
             path: path.clone(),
             content: serialized.clone(),
@@ -1326,14 +1510,14 @@ pub fn apply_layout_document_edit(
 }
 
 pub fn apply_fixture_document_edit(
-    path: impl AsRef<Path>,
+    fs: &ProjectFs,
+    path: ProjectPath,
     document: FixtureDocument,
     base_content: String,
     overlays: Vec<ProjectOverlay>,
-    project_path: impl AsRef<Path>,
+    project_path: ProjectPath,
     allow_breaking_references: bool,
 ) -> Result<DocumentEditResult<FixtureDocument>, String> {
-    let path = ProjectPath::new(path.as_ref());
     validate_fixture_document(&document)?;
     let file: DawnFile = serde_yaml::from_str(&base_content).map_err(|error| error.to_string())?;
     let mut replacements = BTreeMap::new();
@@ -1352,12 +1536,12 @@ pub fn apply_fixture_document_edit(
         );
     }
     let serialized = replace_top_level_objects(&base_content, replacements)?;
-    let project_path = ProjectPath::new(project_path.as_ref());
     let next_overlays = overlay_after_save(path.clone(), serialized.clone(), overlays.clone());
-    let analysis = analyze_project_with_overlays(project_path.as_path(), None, next_overlays);
+    let analysis = analyze_project_with_overlays(fs, project_path.clone(), None, next_overlays);
     let introduced_errors = introduced_error_diagnostics(
         &analyze_project_with_overlays(
-            project_path.as_path(),
+            fs,
+            project_path,
             None,
             overlay_after_save(path.clone(), base_content, overlays),
         ),
@@ -1371,7 +1555,8 @@ pub fn apply_fixture_document_edit(
     }
 
     let refreshed_document = get_fixture_document(
-        path.as_path(),
+        fs,
+        path.clone(),
         document.selected_object_key.as_deref(),
         vec![ProjectOverlay {
             path: path.clone(),
@@ -1386,6 +1571,7 @@ pub fn apply_fixture_document_edit(
 }
 
 fn read_text_with_overlays(
+    fs: &ProjectFs,
     path: &ProjectPath,
     overlays: &[ProjectOverlay],
 ) -> Result<String, String> {
@@ -1394,7 +1580,7 @@ fn read_text_with_overlays(
         .find(|overlay| overlay.path == *path)
         .map(|overlay| overlay.content.clone())
         .map(Ok)
-        .unwrap_or_else(|| fs::read_to_string(path.as_path()).map_err(|error| error.to_string()))
+        .unwrap_or_else(|| fs.read_to_string(path).map_err(|error| error.to_string()))
 }
 
 fn layout_to_document(
@@ -1413,6 +1599,7 @@ fn layout_to_document(
         object_key: object_key.to_string(),
         name: layout.name.clone(),
         units: layout.units,
+        render_bounds: layout_render_bounds(&resolved_layout.fixtures),
         fixtures: layout
             .fixtures
             .iter()
@@ -1452,8 +1639,9 @@ fn placement_to_document(
             None,
         ),
         InlineOrImport::Import { import } => {
-            let resolved_path =
-                resolve_import_file_path(source_path, import.path()).to_slash_string();
+            let resolved_path = resolve_import_file_path(source_path, import.path())
+                .map(|path| path.to_slash_string())
+                .unwrap_or_else(|_| import.path().to_slash_string());
             (
                 LayoutFixtureRef::Import {
                     import: import.raw().to_string(),
@@ -1475,6 +1663,10 @@ fn placement_to_document(
             bulb_size: resolved.fixture.bulb_size,
             geometry: resolved.fixture.geometry.clone(),
             geometry_summary: geometry_summary(&resolved.fixture.geometry),
+            render_plan: geometry_render_plan(
+                &resolved.fixture.geometry,
+                resolved.fixture.bulb_size,
+            ),
             source_path: resolved_source_path,
             object_key: resolved_object_key,
         },
@@ -1506,6 +1698,7 @@ fn fixture_catalog_from_analysis(
                 bulb_size: fixture.bulb_size,
                 geometry: fixture.geometry.clone(),
                 geometry_summary: geometry_summary(&fixture.geometry),
+                render_plan: geometry_render_plan(&fixture.geometry, fixture.bulb_size),
             });
         }
     }
@@ -1524,6 +1717,333 @@ fn geometry_summary(geometry: &Geometry) -> String {
         Geometry::Lines { pixels, .. } => format!("lines, {pixels} pixels"),
         Geometry::Arc { pixels, .. } => format!("arc, {pixels} pixels"),
     }
+}
+
+fn geometry_render_plan(geometry: &Geometry, bulb_size: f64) -> GeometryRenderPlan {
+    let bulb_radius = bulb_radius(bulb_size);
+    let (emitters, guides) = match geometry {
+        Geometry::Points { points } => (
+            points.iter().map(render_point_from_point3).collect(),
+            Vec::new(),
+        ),
+        Geometry::Lines { points, pixels } => {
+            (sample_polyline_points(points, *pixels), line_guides(points))
+        }
+        Geometry::Arc {
+            center,
+            radius,
+            start_degrees,
+            end_degrees,
+            pixels,
+        } => {
+            let emitters =
+                sample_arc_points(center, *radius, *start_degrees, *end_degrees, *pixels);
+            let start = arc_point(center, *radius, *start_degrees);
+            let end = arc_point(center, *radius, *end_degrees);
+            let guide = GeometryRenderGuide::Arc {
+                start,
+                end,
+                radius_x: *radius,
+                radius_y: *radius,
+                rotation: 0.0,
+                large_arc: (end_degrees - start_degrees).abs() > 180.0,
+            };
+            (emitters, vec![guide])
+        }
+    };
+    let bounds =
+        render_bounds(&emitters, &guides, bulb_radius).unwrap_or_else(default_render_bounds);
+    GeometryRenderPlan {
+        emitters,
+        guides,
+        bounds,
+        bulb_radius,
+    }
+}
+
+fn sample_polyline_points(points: &[Point3], pixels: u32) -> Vec<GeometryRenderPoint> {
+    let count = (pixels as usize).max(1);
+    if points.is_empty() {
+        return Vec::new();
+    }
+    if points.len() == 1 {
+        return vec![render_point_from_point3(&points[0])];
+    }
+
+    let segments = points
+        .windows(2)
+        .map(|pair| PolylineSegment {
+            from: pair[0],
+            to: pair[1],
+            length: point_distance(&pair[0], &pair[1]),
+        })
+        .collect::<Vec<_>>();
+    let total_length = segments.iter().map(|segment| segment.length).sum::<f64>();
+    if total_length == 0.0 {
+        return (0..count)
+            .map(|_| render_point_from_point3(&points[0]))
+            .collect();
+    }
+
+    if count == 1 {
+        return vec![point_at_distance(&segments, total_length / 2.0)];
+    }
+    (0..count)
+        .map(|index| {
+            point_at_distance(
+                &segments,
+                total_length * (index as f64 / (count - 1) as f64),
+            )
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PolylineSegment {
+    from: Point3,
+    to: Point3,
+    length: f64,
+}
+
+fn point_at_distance(segments: &[PolylineSegment], distance: f64) -> GeometryRenderPoint {
+    let mut remaining = distance;
+    for segment in segments {
+        if segment.length == 0.0 {
+            continue;
+        }
+        if remaining <= segment.length {
+            return interpolate_point(&segment.from, &segment.to, remaining / segment.length);
+        }
+        remaining -= segment.length;
+    }
+    segments
+        .last()
+        .map(|segment| render_point_from_point3(&segment.to))
+        .unwrap_or(GeometryRenderPoint {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        })
+}
+
+fn sample_arc_points(
+    center: &Point3,
+    radius: f64,
+    start_degrees: f64,
+    end_degrees: f64,
+    pixels: u32,
+) -> Vec<GeometryRenderPoint> {
+    let count = (pixels as usize).max(1);
+    if count == 1 {
+        return vec![arc_point(
+            center,
+            radius,
+            (start_degrees + end_degrees) / 2.0,
+        )];
+    }
+    (0..count)
+        .map(|index| {
+            arc_point(
+                center,
+                radius,
+                lerp(
+                    start_degrees,
+                    end_degrees,
+                    index as f64 / (count - 1) as f64,
+                ),
+            )
+        })
+        .collect()
+}
+
+fn line_guides(points: &[Point3]) -> Vec<GeometryRenderGuide> {
+    points
+        .windows(2)
+        .map(|pair| GeometryRenderGuide::Line {
+            from: render_point_from_point3(&pair[0]),
+            to: render_point_from_point3(&pair[1]),
+        })
+        .collect()
+}
+
+fn render_bounds(
+    emitters: &[GeometryRenderPoint],
+    guides: &[GeometryRenderGuide],
+    bulb_radius: f64,
+) -> Option<GeometryRenderBounds> {
+    let mut accumulator = BoundsAccumulator::new();
+    for point in emitters {
+        accumulator.include(point.x - bulb_radius, point.y - bulb_radius);
+        accumulator.include(point.x + bulb_radius, point.y + bulb_radius);
+    }
+    for guide in guides {
+        match guide {
+            GeometryRenderGuide::Line { from, to } => {
+                accumulator.include_point(*from);
+                accumulator.include_point(*to);
+            }
+            GeometryRenderGuide::Arc {
+                start,
+                end,
+                radius_x,
+                radius_y,
+                ..
+            } => {
+                accumulator.include(start.x - radius_x.abs(), start.y - radius_y.abs());
+                accumulator.include(start.x + radius_x.abs(), start.y + radius_y.abs());
+                accumulator.include(end.x - radius_x.abs(), end.y - radius_y.abs());
+                accumulator.include(end.x + radius_x.abs(), end.y + radius_y.abs());
+            }
+        }
+    }
+    accumulator.finish()
+}
+
+fn layout_render_bounds(fixtures: &[FixturePlacement<Resolved>]) -> GeometryRenderBounds {
+    let mut accumulator = BoundsAccumulator::new();
+    for fixture in fixtures {
+        let plan = geometry_render_plan(&fixture.fixture.geometry, fixture.fixture.bulb_size);
+        for emitter in &plan.emitters {
+            let point = transform_render_point(*emitter, &fixture.transform);
+            let radius = transformed_radius(plan.bulb_radius, &fixture.transform);
+            accumulator.include(point.x - radius, point.y - radius);
+            accumulator.include(point.x + radius, point.y + radius);
+        }
+        for guide in &plan.guides {
+            match guide {
+                GeometryRenderGuide::Line { from, to } => {
+                    accumulator.include_point(transform_render_point(*from, &fixture.transform));
+                    accumulator.include_point(transform_render_point(*to, &fixture.transform));
+                }
+                GeometryRenderGuide::Arc {
+                    start,
+                    end,
+                    radius_x,
+                    radius_y,
+                    ..
+                } => {
+                    let start = transform_render_point(*start, &fixture.transform);
+                    let end = transform_render_point(*end, &fixture.transform);
+                    let scale = fixture.transform.scale;
+                    let radius_x = (radius_x * scale.x).abs();
+                    let radius_y = (radius_y * scale.y).abs();
+                    accumulator.include(start.x - radius_x, start.y - radius_y);
+                    accumulator.include(start.x + radius_x, start.y + radius_y);
+                    accumulator.include(end.x - radius_x, end.y - radius_y);
+                    accumulator.include(end.x + radius_x, end.y + radius_y);
+                }
+            }
+        }
+    }
+    accumulator.finish().unwrap_or(GeometryRenderBounds {
+        min_x: -5.0,
+        min_y: -4.0,
+        max_x: 5.0,
+        max_y: 4.0,
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BoundsAccumulator {
+    bounds: Option<GeometryRenderBounds>,
+}
+
+impl BoundsAccumulator {
+    fn new() -> Self {
+        Self { bounds: None }
+    }
+
+    fn include_point(&mut self, point: GeometryRenderPoint) {
+        self.include(point.x, point.y);
+    }
+
+    fn include(&mut self, x: f64, y: f64) {
+        self.bounds = Some(match self.bounds {
+            Some(bounds) => GeometryRenderBounds {
+                min_x: bounds.min_x.min(x),
+                min_y: bounds.min_y.min(y),
+                max_x: bounds.max_x.max(x),
+                max_y: bounds.max_y.max(y),
+            },
+            None => GeometryRenderBounds {
+                min_x: x,
+                min_y: y,
+                max_x: x,
+                max_y: y,
+            },
+        });
+    }
+
+    fn finish(self) -> Option<GeometryRenderBounds> {
+        self.bounds
+    }
+}
+
+fn default_render_bounds() -> GeometryRenderBounds {
+    GeometryRenderBounds {
+        min_x: -1.0,
+        min_y: -1.0,
+        max_x: 1.0,
+        max_y: 1.0,
+    }
+}
+
+fn bulb_radius(value: f64) -> f64 {
+    value.max(MIN_BULB_SIZE) * BULB_SIZE_UNIT_RADIUS
+}
+
+fn transform_render_point(
+    point: GeometryRenderPoint,
+    transform: &Transform,
+) -> GeometryRenderPoint {
+    let radians = transform.rotation.z.to_radians();
+    let x = point.x * transform.scale.x;
+    let y = point.y * transform.scale.y;
+    GeometryRenderPoint {
+        x: transform.position.x + x * radians.cos() - y * radians.sin(),
+        y: transform.position.y + x * radians.sin() + y * radians.cos(),
+        z: transform.position.z + point.z * transform.scale.z,
+    }
+}
+
+fn transformed_radius(radius: f64, transform: &Transform) -> f64 {
+    radius * transform.scale.x.abs().max(transform.scale.y.abs())
+}
+
+fn render_point_from_point3(point: &Point3) -> GeometryRenderPoint {
+    GeometryRenderPoint {
+        x: point.x,
+        y: point.y,
+        z: point.z,
+    }
+}
+
+fn interpolate_point(from: &Point3, to: &Point3, t: f64) -> GeometryRenderPoint {
+    GeometryRenderPoint {
+        x: lerp(from.x, to.x, t),
+        y: lerp(from.y, to.y, t),
+        z: lerp(from.z, to.z, t),
+    }
+}
+
+fn point_distance(from: &Point3, to: &Point3) -> f64 {
+    let dx = to.x - from.x;
+    let dy = to.y - from.y;
+    let dz = to.z - from.z;
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
+fn arc_point(center: &Point3, radius: f64, degrees: f64) -> GeometryRenderPoint {
+    let radians = degrees.to_radians();
+    GeometryRenderPoint {
+        x: center.x + radius * radians.cos(),
+        y: center.y + radius * radians.sin(),
+        z: center.z,
+    }
+}
+
+fn lerp(from: f64, to: f64, t: f64) -> f64 {
+    from + (to - from) * t
 }
 
 fn plural(count: usize) -> &'static str {
@@ -1588,6 +2108,7 @@ fn fixture_to_document(object_key: &str, fixture: &Fixture) -> FixtureDefinition
         bulb_size: fixture.bulb_size,
         geometry: fixture.geometry.clone(),
         geometry_summary: geometry_summary(&fixture.geometry),
+        render_plan: geometry_render_plan(&fixture.geometry, fixture.bulb_size),
     }
 }
 
@@ -1845,17 +2366,22 @@ fn overlay_after_save(
     next
 }
 
-pub fn analyze_project(project_path: impl AsRef<Path>, project_key: &str) -> ProjectAnalysis {
-    analyze_project_with_overlays(project_path, Some(project_key), Vec::new())
+pub fn analyze_project(
+    fs: &ProjectFs,
+    project_path: ProjectPath,
+    project_key: &str,
+) -> ProjectAnalysis {
+    analyze_project_with_overlays(fs, project_path, Some(project_key), Vec::new())
 }
 
 pub fn analyze_project_with_overlays(
-    project_path: impl AsRef<Path>,
+    fs: &ProjectFs,
+    project_path: ProjectPath,
     project_key: Option<&str>,
     overlays: Vec<ProjectOverlay>,
 ) -> ProjectAnalysis {
-    let root_path = ProjectPath::new(project_path.as_ref());
-    let mut session = AnalysisSession::new(overlays);
+    let root_path = project_path;
+    let mut session = AnalysisSession::new(fs.clone(), overlays);
     session.visit_file(root_path.clone());
 
     let inferred_project_key = if let Some(project_key) = project_key {
@@ -1952,12 +2478,12 @@ fn infer_project_key(root_path: &ProjectPath, session: &mut AnalysisSession) -> 
 }
 
 pub fn load_project(
-    project_path: impl AsRef<Path>,
+    fs: &ProjectFs,
+    project_path: ProjectPath,
     project_key: &str,
 ) -> Result<ResolvedProject, LoadProjectError> {
-    let project_path = ProjectPath::new(project_path.as_ref());
-    let file = load_dawn_file(&project_path)?;
-    let mut loader = FsImportLoader::default();
+    let file = load_dawn_file(fs, &project_path)?;
+    let mut loader = FsImportLoader::new(fs.clone());
 
     lower_project(
         &file,
@@ -2216,7 +2742,8 @@ fn lower_sequence(
         audio: sequence
             .audio
             .as_ref()
-            .map(|audio| resolve_path(sequence_source_path, audio.path())),
+            .map(|audio| resolve_path(sequence_source_path, audio.path(), audio.raw()))
+            .transpose()?,
         effects,
         automation_clips,
     })
@@ -2256,7 +2783,7 @@ fn lower_sequence_effect(
         script: match &effect.script {
             InlineOrImport::Inline(script) => ScriptSource::Inline(script.clone()),
             InlineOrImport::Import { import } => {
-                ScriptSource::External(resolve_path(source_path, import.path()))
+                ScriptSource::External(resolve_path(source_path, import.path(), import.raw())?)
             }
         },
     })
@@ -2311,12 +2838,15 @@ fn group_indices(groups: &[Group<Resolved>]) -> Result<HashMap<String, GroupInde
     Ok(indices)
 }
 
-fn resolve_path(source_path: &ProjectPath, import_path: &DawnPath) -> DawnPath {
-    if import_path.as_path().is_absolute() {
-        return DawnPath::new(ProjectPath::new(import_path.as_path()).as_path());
-    }
-
-    DawnPath::new(resolve_import_file_path(source_path, import_path).as_path())
+fn resolve_path(
+    source_path: &ProjectPath,
+    import_path: &ImportPath,
+    raw: &str,
+) -> Result<ProjectPath, LowerError> {
+    resolve_import_file_path(source_path, import_path).map_err(|message| LowerError::Import {
+        import: raw.to_string(),
+        message,
+    })
 }
 
 fn resolve_import(
@@ -2340,8 +2870,8 @@ fn resolve_import(
     Ok(resolved)
 }
 
-#[derive(Default)]
 struct AnalysisSession {
+    fs: ProjectFs,
     files: IndexMap<ProjectPath, AnalyzedFile>,
     diagnostics: Vec<ProjectDiagnostic>,
     visiting: HashSet<ProjectPath>,
@@ -2349,13 +2879,16 @@ struct AnalysisSession {
 }
 
 impl AnalysisSession {
-    fn new(overlays: Vec<ProjectOverlay>) -> Self {
+    fn new(fs: ProjectFs, overlays: Vec<ProjectOverlay>) -> Self {
         Self {
+            fs,
+            files: IndexMap::new(),
+            diagnostics: Vec::new(),
+            visiting: HashSet::new(),
             overlays: overlays
                 .into_iter()
                 .map(|overlay| (overlay.path, overlay.content))
                 .collect(),
-            ..Self::default()
         }
     }
 
@@ -2375,7 +2908,7 @@ impl AnalysisSession {
             .get(&path)
             .cloned()
             .map(Ok)
-            .unwrap_or_else(|| fs::read_to_string(path.as_path()))
+            .unwrap_or_else(|| self.fs.read_to_string(&path))
         {
             Ok(text) => text,
             Err(source) => {
@@ -2427,7 +2960,19 @@ impl AnalysisSession {
         );
 
         for import in imports {
-            let import_path = resolve_import_file_path(&path, import.path());
+            let import_path = match resolve_import_file_path(&path, import.path()) {
+                Ok(import_path) => import_path,
+                Err(message) => {
+                    self.diagnostics.push(ProjectDiagnostic {
+                        path: path.clone(),
+                        range: import_range(&text, &import),
+                        severity: DiagnosticSeverity::Error,
+                        code: DiagnosticCode::Import,
+                        message: format!("invalid import `{}`: {message}", import.raw()),
+                    });
+                    continue;
+                }
+            };
             if !self.can_load_file(&import_path) {
                 self.diagnostics.push(ProjectDiagnostic {
                     path: path.clone(),
@@ -2450,7 +2995,7 @@ impl AnalysisSession {
     }
 
     fn can_load_file(&self, path: &ProjectPath) -> bool {
-        self.overlays.contains_key(path) || path.as_path().is_file()
+        self.overlays.contains_key(path) || self.fs.is_file(path)
     }
 
     fn locate_lower_error(
@@ -2521,7 +3066,13 @@ impl AnalysisImportResolver<'_> {
         import: &ImportRef,
         _expected: ObjectKind,
     ) -> Result<ResolvedImport, LowerError> {
-        let import_path = resolve_import_file_path(source_path, import.path());
+        let import_path =
+            resolve_import_file_path(source_path, import.path()).map_err(|message| {
+                LowerError::Import {
+                    import: import.raw().to_string(),
+                    message,
+                }
+            })?;
         let analyzed = self
             .files
             .get(&import_path)
@@ -2635,19 +3186,32 @@ fn collect_layout_imports(layout: &Layout<Authored>, imports: &mut Vec<ImportRef
     }
 }
 
-#[derive(Default)]
 struct FsImportLoader {
+    fs: ProjectFs,
     files: HashMap<ProjectPath, DawnFile>,
 }
 
 impl FsImportLoader {
+    fn new(fs: ProjectFs) -> Self {
+        Self {
+            fs,
+            files: HashMap::new(),
+        }
+    }
+
     fn resolve(
         &mut self,
         source_path: &ProjectPath,
         import: &ImportRef,
         _expected: ObjectKind,
     ) -> Result<ResolvedImport, LowerError> {
-        let import_path = resolve_import_file_path(source_path, import.path());
+        let import_path =
+            resolve_import_file_path(source_path, import.path()).map_err(|message| {
+                LowerError::Import {
+                    import: import.raw().to_string(),
+                    message,
+                }
+            })?;
         let file = self
             .load_cached(&import_path)
             .map_err(|error| LowerError::Import {
@@ -2664,7 +3228,7 @@ impl FsImportLoader {
 
     fn load_cached(&mut self, path: &ProjectPath) -> Result<&DawnFile, LoadProjectError> {
         if !self.files.contains_key(path) {
-            let file = load_dawn_file(path)?;
+            let file = load_dawn_file(&self.fs, path)?;
             self.files.insert(path.clone(), file);
         }
         Ok(self
@@ -2703,26 +3267,31 @@ fn select_imported_object(
     })
 }
 
-fn load_dawn_file(path: &ProjectPath) -> Result<DawnFile, LoadProjectError> {
-    let text = fs::read_to_string(path.as_path()).map_err(|source| LoadProjectError::Io {
-        path: path.clone(),
-        source,
-    })?;
+fn load_dawn_file(fs: &ProjectFs, path: &ProjectPath) -> Result<DawnFile, LoadProjectError> {
+    let text = fs
+        .read_to_string(path)
+        .map_err(|source| LoadProjectError::Io {
+            path: path.clone(),
+            source,
+        })?;
     serde_yaml::from_str(&text).map_err(|source| LoadProjectError::Yaml {
         path: path.clone(),
         source,
     })
 }
 
-fn resolve_import_file_path(source_path: &ProjectPath, import_path: &DawnPath) -> ProjectPath {
+fn resolve_import_file_path(
+    source_path: &ProjectPath,
+    import_path: &ImportPath,
+) -> Result<ProjectPath, String> {
     if import_path.as_path().is_absolute() {
-        return ProjectPath::new(import_path.as_path());
+        return Err("absolute imports are not allowed".to_string());
     }
 
     source_path
         .parent()
         .map(|parent| parent.join(import_path.as_path()))
-        .unwrap_or_else(|| ProjectPath::new(import_path.as_path()))
+        .unwrap_or_else(|| ProjectPath::parse(import_path.as_path()))
 }
 
 fn relative_import_path(source_path: &ProjectPath, target_path: &ProjectPath) -> String {
@@ -2765,6 +3334,25 @@ fn relative_path_between(from_dir: &Path, target_path: &Path) -> PathBuf {
     } else {
         relative
     }
+}
+
+fn normalize_project_path(path: &Path) -> Result<PathBuf, String> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                return Err("project path must be relative".to_string());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err("project path escapes the project root".to_string());
+                }
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    Ok(normalized)
 }
 
 fn lexically_normalize_path(path: &Path) -> PathBuf {
@@ -2913,5 +3501,91 @@ fn resolve_sequence(
             };
             Ok((sequence, resolved.source_path))
         }
+    }
+}
+
+#[cfg(test)]
+mod geometry_render_tests {
+    use super::*;
+
+    #[test]
+    fn line_sampling_covers_empty_single_midpoint_endpoints_and_zero_length() {
+        assert!(sample_polyline_points(&[], 4).is_empty());
+
+        let single = sample_polyline_points(&[point(2.0, 3.0, 4.0)], 4);
+        assert_eq!(single, vec![render_point(2.0, 3.0, 4.0)]);
+
+        let line = [point(0.0, 0.0, 0.0), point(10.0, 0.0, 0.0)];
+        assert_eq!(
+            sample_polyline_points(&line, 1),
+            vec![render_point(5.0, 0.0, 0.0)]
+        );
+        assert_eq!(
+            sample_polyline_points(&line, 3),
+            vec![
+                render_point(0.0, 0.0, 0.0),
+                render_point(5.0, 0.0, 0.0),
+                render_point(10.0, 0.0, 0.0)
+            ]
+        );
+
+        let zero = [point(1.0, 1.0, 0.0), point(1.0, 1.0, 0.0)];
+        assert_eq!(
+            sample_polyline_points(&zero, 3),
+            vec![
+                render_point(1.0, 1.0, 0.0),
+                render_point(1.0, 1.0, 0.0),
+                render_point(1.0, 1.0, 0.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn arc_sampling_covers_midpoint_endpoints_and_large_arc() {
+        let center = point(0.0, 0.0, 0.0);
+        let midpoint = sample_arc_points(&center, 1.0, 0.0, 180.0, 1);
+        assert_close(midpoint[0].x, 0.0);
+        assert_close(midpoint[0].y, 1.0);
+
+        let points = sample_arc_points(&center, 1.0, 0.0, 180.0, 3);
+        assert_close(points[0].x, 1.0);
+        assert_close(points[0].y, 0.0);
+        assert_close(points[1].x, 0.0);
+        assert_close(points[1].y, 1.0);
+        assert_close(points[2].x, -1.0);
+        assert_close(points[2].y, 0.0);
+
+        let plan = geometry_render_plan(
+            &Geometry::Arc {
+                center,
+                radius: 1.0,
+                start_degrees: 0.0,
+                end_degrees: 270.0,
+                pixels: 4,
+            },
+            DEFAULT_BULB_SIZE,
+        );
+        assert!(matches!(
+            plan.guides.as_slice(),
+            [GeometryRenderGuide::Arc {
+                large_arc: true,
+                ..
+            }]
+        ));
+    }
+
+    fn point(x: f64, y: f64, z: f64) -> Point3 {
+        Point3 { x, y, z }
+    }
+
+    fn render_point(x: f64, y: f64, z: f64) -> GeometryRenderPoint {
+        GeometryRenderPoint { x, y, z }
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 0.000001,
+            "expected {actual} to be close to {expected}"
+        );
     }
 }

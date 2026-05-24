@@ -54,7 +54,7 @@ export function ProjectPanel() {
 
   const onMove: MoveHandler<FileTreeNode> = useCallback(async ({ dragNodes, parentNode }) => {
     if (!projectState?.root) return;
-    const newParent = parentNode?.data.path ?? projectState.root;
+    const newParent = parentNode?.data.path ?? "";
     await movePaths(
       dragNodes.filter((node) => !node.isRoot).map((node) => node.data.path),
       newParent
@@ -101,9 +101,9 @@ export function ProjectPanel() {
       ? targetPath
       : targetPath
         ? parentPath(targetPath)
-        : projectState.root;
+        : "";
 
-    if (!newParent || parentPath(current.node.path) === newParent) return;
+    if (parentPath(current.node.path) === newParent) return;
     await movePaths([current.node.path], newParent);
   }, [movePaths, projectState?.root]);
 
@@ -261,12 +261,11 @@ function RenameInput({ node }: { node: NodeRendererProps<FileTreeNode>["node"] }
 }
 
 function buildTreeData(root: string | undefined, entries: ProjectEntry[] | undefined, files: string[]): FileTreeNode[] {
-  const rootNode: FileTreeNode = { id: root ?? "project", name: root ? leafName(root) : "Project", path: root ?? "", kind: "directory", children: [] };
+  const rootNode: FileTreeNode = { id: "project", name: root ? leafName(root) : "Project", path: "", kind: "directory", children: [] };
   const projectEntries = entries ?? files.map((path) => ({ path, kind: "file" as const }));
 
   for (const entry of projectEntries) {
-    const relative = root ? entry.path.replace(`${root}\\`, "").replace(`${root}/`, "") : entry.path;
-    const parts = relative.split(/[\\/]/).filter(Boolean);
+    const parts = entry.path.split(/[\\/]/).filter(Boolean);
     let cursor = rootNode;
 
     parts.forEach((part, index) => {
