@@ -7,7 +7,7 @@ import { clearDockLayout, loadDockLayout, saveDockLayout } from "./persistence";
 import { isPanelId, panelIds, type PanelId } from "./panelIds";
 import { dockComponents, panelRegistry } from "./registry";
 
-const layoutKey = "main";
+const layoutKey = "main-v2";
 
 export function DockLayout() {
   const apiRef = useRef<DockviewApi | null>(null);
@@ -127,18 +127,6 @@ function togglePanel(api: DockviewApi | null, panelId: PanelId) {
 }
 
 function getTogglePosition(api: DockviewApi, panelId: PanelId) {
-  if (panelId === "layout" && api.getPanel("preview")) {
-    return {
-      position: { direction: "within" as const, referencePanel: "preview" },
-      initialWidth: panelRegistry.layout.preferredWidth
-    };
-  }
-  if (panelId === "output" && api.getPanel("preview")) {
-    return {
-      position: { direction: "below" as const, referencePanel: "preview" },
-      initialHeight: panelRegistry.output.preferredHeight
-    };
-  }
   if (panelId === "project" && api.getPanel("editor")) {
     return { position: { direction: "left" as const, referencePanel: "editor" }, initialWidth: panelRegistry.project.preferredWidth };
   }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Copy, LocateFixed, Plus, Trash2, ZoomIn, ZoomOut } from "lucide-react";
-import type { ColorModel, FixtureDefinitionDocument, FixtureDocument, Geometry, LineSegment, Point3 } from "../generated/bindings";
+import type { ColorModel, FixtureDefinitionDocument, FixtureDocument, Geometry, Point3 } from "../generated/bindings";
 
 type FixtureViewerProps = {
   document: FixtureDocument;
@@ -180,10 +180,9 @@ export function FixtureViewer({ document, selectedObjectKey, onSelectObject, onD
               Geometry
               <select value={selected.geometry.type} onChange={(event) => void commitFixture(selected.objectKey, (fixture) => ({
                 ...fixture,
-                geometry: defaultGeometry(event.target.value as Geometry["type"])
+                geometry: geometryForType(event.target.value as Geometry["type"], fixture.geometry)
               }))}>
                 <option value="points">points</option>
-                <option value="line">line</option>
                 <option value="lines">lines</option>
                 <option value="arc">arc</option>
               </select>
@@ -219,20 +218,11 @@ function GeometryEditor({ geometry, onChange }: { geometry: Geometry; onChange: 
   if (geometry.type === "points") {
     return <PointList points={geometry.points} onChange={(points) => onChange({ ...geometry, points })} />;
   }
-  if (geometry.type === "line") {
-    return (
-      <>
-        <PointEditor label="From" point={geometry.from} onChange={(from) => onChange({ ...geometry, from })} />
-        <PointEditor label="To" point={geometry.to} onChange={(to) => onChange({ ...geometry, to })} />
-        <NumberField label="Pixels" value={geometry.pixels} onChange={(pixels) => onChange({ ...geometry, pixels })} />
-      </>
-    );
-  }
   if (geometry.type === "lines") {
     return (
       <>
         <PointList points={geometry.points} onChange={(points) => onChange({ ...geometry, points })} />
-        <SegmentList segments={geometry.lines} onChange={(lines) => onChange({ ...geometry, lines })} />
+        <NumberField label="Pixels" value={geometry.pixels} min={1} onChange={(pixels) => onChange({ ...geometry, pixels })} />
       </>
     );
   }
@@ -261,27 +251,12 @@ function PointList({ points, onChange }: { points: Point3[]; onChange: (points: 
   );
 }
 
-function SegmentList({ segments, onChange }: { segments: LineSegment[]; onChange: (segments: LineSegment[]) => void }) {
-  return (
-    <div className="geometry-list">
-      {segments.map((segment, index) => (
-        <div key={index} className="geometry-row">
-          <NumberField label="From" value={segment.from} onChange={(from) => onChange(segments.map((item, itemIndex) => itemIndex === index ? { ...item, from } : item))} />
-          <NumberField label="To" value={segment.to} onChange={(to) => onChange(segments.map((item, itemIndex) => itemIndex === index ? { ...item, to } : item))} />
-          <button title="Remove segment" onClick={() => onChange(segments.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={13} /></button>
-        </div>
-      ))}
-      <button onClick={() => onChange([...segments, { from: 0, to: 0 }])}>Add segment</button>
-    </div>
-  );
-}
-
 function PointEditor({ label, point, onChange }: { label: string; point: Point3; onChange: (point: Point3) => void }) {
   return (
     <fieldset className="point-editor">
       <legend>{label}</legend>
       {(["x", "y", "z"] as const).map((axis) => (
-        <input key={axis} type="number" step="0.1" value={point[axis] ?? 0} onChange={(event) => onChange({ ...point, [axis]: Number(event.target.value) })} />
+        <NumericInput key={axis} step={0.1} value={point[axis] ?? 0} onChange={(value) => onChange({ ...point, [axis]: value })} />
       ))}
     </fieldset>
   );
@@ -291,32 +266,67 @@ function NumberField({ label, value, step, min, onChange }: { label: string; val
   return (
     <label>
       {label}
-      <input type="number" step={step} min={min} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <NumericInput step={step} min={min} value={value} onChange={onChange} />
     </label>
   );
+}
+
+function NumericInput({
+  value,
+  step,
+  min,
+  onChange
+}: {
+  value: number;
+  step?: number;
+  min?: number;
+  onChange: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(() => formatNumberInput(value));
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) setDraft(formatNumberInput(value));
+  }, [focused, value]);
+
+  return (
+    <input
+      type="number"
+      step={step}
+      min={min}
+      value={draft}
+      onFocus={() => setFocused(true)}
+      onChange={(event) => {
+        const next = event.target.value;
+        setDraft(next);
+        if (next === "") return;
+        const parsed = Number(next);
+        if (Number.isFinite(parsed)) onChange(parsed);
+      }}
+      onBlur={() => {
+        setFocused(false);
+        const parsed = Number(draft);
+        setDraft(draft !== "" && Number.isFinite(parsed) ? formatNumberInput(parsed) : formatNumberInput(value));
+      }}
+    />
+  );
+}
+
+function formatNumberInput(value: number) {
+  return Number.isFinite(value) ? String(value) : "0";
 }
 
 function renderGeometry(geometry: Geometry, bulbSize: number | null | undefined) {
   const radius = bulbRadius(bulbSize);
   if (geometry.type === "points") return renderEmitterPoints(geometry.points, radius);
-  if (geometry.type === "line") {
-    const points = sampleLinePoints(geometry.from, geometry.to, geometry.pixels);
-    return (
-      <>
-        <line className="layout-fixture-guide" x1={geometry.from.x ?? 0} y1={geometry.from.y ?? 0} x2={geometry.to.x ?? 0} y2={geometry.to.y ?? 0} />
-        {renderEmitterPoints(points, radius)}
-      </>
-    );
-  }
   if (geometry.type === "lines") {
     return (
       <>
-        {geometry.lines.map((line, index) => {
-          const from = geometry.points[line.from] ?? { x: 0, y: 0, z: 0 };
-          const to = geometry.points[line.to] ?? { x: 0, y: 0, z: 0 };
+        {geometry.points.slice(0, -1).map((from, index) => {
+          const to = geometry.points[index + 1];
           return <line key={index} className="layout-fixture-guide" x1={from.x ?? 0} y1={from.y ?? 0} x2={to.x ?? 0} y2={to.y ?? 0} />;
         })}
-        {renderEmitterPoints(geometry.points, radius)}
+        {renderEmitterPoints(samplePolylinePoints(geometry.points, geometry.pixels), radius)}
       </>
     );
   }
@@ -353,7 +363,6 @@ function geometryBounds(geometry: Geometry): Bounds {
 
 function geometryPoints(geometry: Geometry): Point3[] {
   if (geometry.type === "points") return geometry.points;
-  if (geometry.type === "line") return [geometry.from, geometry.to];
   if (geometry.type === "lines") return geometry.points;
   const radius = geometry.radius ?? 1;
   const startDegrees = geometry.startDegrees ?? 0;
@@ -411,24 +420,49 @@ function bulbRadius(value: number | null | undefined) {
   return normalizedBulbSize(value) * bulbSizeUnitRadius;
 }
 
-function sampleLinePoints(from: Point3, to: Point3, pixels: number): Point3[] {
+function samplePolylinePoints(points: Point3[], pixels: number): Point3[] {
   const count = Math.max(1, Math.floor(pixels));
-  if (count === 1) {
-    return [{
-      x: ((from.x ?? 0) + (to.x ?? 0)) / 2,
-      y: ((from.y ?? 0) + (to.y ?? 0)) / 2,
-      z: ((from.z ?? 0) + (to.z ?? 0)) / 2
-    }];
-  }
+  if (points.length === 0) return [];
+  if (points.length === 1) return [{ ...points[0] }];
 
-  return Array.from({ length: count }, (_, index) => {
-    const t = index / (count - 1);
-    return {
-      x: lerp(from.x ?? 0, to.x ?? 0, t),
-      y: lerp(from.y ?? 0, to.y ?? 0, t),
-      z: lerp(from.z ?? 0, to.z ?? 0, t)
-    };
-  });
+  const segments = points.slice(0, -1).map((from, index) => ({
+    from,
+    to: points[index + 1],
+    length: pointDistance(from, points[index + 1])
+  }));
+  const totalLength = segments.reduce((sum, segment) => sum + segment.length, 0);
+  if (totalLength === 0) return Array.from({ length: count }, () => ({ ...points[0] }));
+
+  if (count === 1) return [pointAtDistance(segments, totalLength / 2)];
+  return Array.from({ length: count }, (_, index) =>
+    pointAtDistance(segments, totalLength * (index / (count - 1)))
+  );
+}
+
+function pointAtDistance(segments: { from: Point3; to: Point3; length: number }[], distance: number): Point3 {
+  let remaining = distance;
+  for (const segment of segments) {
+    if (segment.length === 0) continue;
+    if (remaining <= segment.length) return interpolatePoint(segment.from, segment.to, remaining / segment.length);
+    remaining -= segment.length;
+  }
+  const last = segments[segments.length - 1]?.to ?? { x: 0, y: 0, z: 0 };
+  return { ...last };
+}
+
+function interpolatePoint(from: Point3, to: Point3, t: number): Point3 {
+  return {
+    x: lerp(from.x ?? 0, to.x ?? 0, t),
+    y: lerp(from.y ?? 0, to.y ?? 0, t),
+    z: lerp(from.z ?? 0, to.z ?? 0, t)
+  };
+}
+
+function pointDistance(from: Point3, to: Point3) {
+  const dx = (to.x ?? 0) - (from.x ?? 0);
+  const dy = (to.y ?? 0) - (from.y ?? 0);
+  const dz = (to.z ?? 0) - (from.z ?? 0);
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 
 function sampleArcPoints(center: Point3, radius: number, startDegrees: number, endDegrees: number, pixels: number): Point3[] {
@@ -446,9 +480,14 @@ function lerp(from: number, to: number, t: number) {
   return from + (to - from) * t;
 }
 
+function geometryForType(type: Geometry["type"], current: Geometry): Geometry {
+  if (type === "points" && current.type === "lines") return { type, points: samplePolylinePoints(current.points, current.pixels) };
+  if (type === "lines" && current.type === "points") return { type, points: current.points, pixels: Math.max(1, current.points.length) };
+  return defaultGeometry(type);
+}
+
 function defaultGeometry(type: Geometry["type"]): Geometry {
-  if (type === "line") return { type, from: { x: -0.5, y: 0, z: 0 }, to: { x: 0.5, y: 0, z: 0 }, pixels: 2 };
-  if (type === "lines") return { type, points: [{ x: -0.5, y: 0, z: 0 }, { x: 0.5, y: 0, z: 0 }], lines: [{ from: 0, to: 1 }] };
+  if (type === "lines") return { type, points: [{ x: -0.5, y: 0, z: 0 }, { x: 0.5, y: 0, z: 0 }], pixels: 2 };
   if (type === "arc") return { type, center: { x: 0, y: 0, z: 0 }, radius: 1, startDegrees: 0, endDegrees: 180, pixels: 8 };
   return { type, points: [{ x: 0, y: 0, z: 0 }] };
 }

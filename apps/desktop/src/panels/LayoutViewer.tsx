@@ -371,17 +371,61 @@ function PointEditor({ label, point, onChange }: { label: string; point: Point3;
     <fieldset className="point-editor">
       <legend>{label}</legend>
       {(["x", "y", "z"] as const).map((axis) => (
-        <input
+        <NumericInput
           key={axis}
-          aria-label={`${label} ${axis}`}
-          type="number"
-          step="0.1"
+          ariaLabel={`${label} ${axis}`}
+          step={0.1}
           value={point[axis] ?? 0}
-          onChange={(event) => onChange({ ...point, [axis]: Number(event.target.value) })}
+          onChange={(value) => onChange({ ...point, [axis]: value })}
         />
       ))}
     </fieldset>
   );
+}
+
+function NumericInput({
+  value,
+  step,
+  ariaLabel,
+  onChange
+}: {
+  value: number;
+  step?: number;
+  ariaLabel?: string;
+  onChange: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(() => formatNumberInput(value));
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) setDraft(formatNumberInput(value));
+  }, [focused, value]);
+
+  return (
+    <input
+      aria-label={ariaLabel}
+      type="number"
+      step={step}
+      value={draft}
+      onFocus={() => setFocused(true)}
+      onChange={(event) => {
+        const next = event.target.value;
+        setDraft(next);
+        if (next === "") return;
+        const parsed = Number(next);
+        if (Number.isFinite(parsed)) onChange(parsed);
+      }}
+      onBlur={() => {
+        setFocused(false);
+        const parsed = Number(draft);
+        setDraft(draft !== "" && Number.isFinite(parsed) ? formatNumberInput(parsed) : formatNumberInput(value));
+      }}
+    />
+  );
+}
+
+function formatNumberInput(value: number) {
+  return Number.isFinite(value) ? String(value) : "0";
 }
 
 function renderGeometry(geometry: Geometry, fixture: LayoutFixturePlacement) {
@@ -389,24 +433,13 @@ function renderGeometry(geometry: Geometry, fixture: LayoutFixturePlacement) {
   switch (geometry.type) {
     case "points":
       return renderEmitterPoints(pointsToRenderPoints(geometry.points, fixture), bulbRadius);
-    case "line": {
-      const from = transformPoint(geometry.from, fixture);
-      const to = transformPoint(geometry.to, fixture);
-      const emitters = pointsToRenderPoints(sampleLinePoints(geometry.from, geometry.to, geometry.pixels), fixture);
-      return (
-        <>
-          {from && to ? <line className="layout-fixture-guide" x1={from.x} y1={from.y} x2={to.x} y2={to.y} /> : null}
-          {renderEmitterPoints(emitters, bulbRadius)}
-        </>
-      );
-    }
     case "lines": {
-      const emitters = pointsToRenderPoints(geometry.points, fixture);
+      const emitters = pointsToRenderPoints(samplePolylinePoints(geometry.points, geometry.pixels), fixture);
       return (
         <>
-          {geometry.lines.map((line, index) => {
-            const from = transformPoint(geometry.points[line.from], fixture);
-            const to = transformPoint(geometry.points[line.to], fixture);
+          {geometry.points.slice(0, -1).map((point, index) => {
+            const from = transformPoint(point, fixture);
+            const to = transformPoint(geometry.points[index + 1], fixture);
             return from && to ? <line key={index} className="layout-fixture-guide" x1={from.x} y1={from.y} x2={to.x} y2={to.y} /> : null;
           })}
           {renderEmitterPoints(emitters, bulbRadius)}
@@ -443,8 +476,7 @@ function renderEmitterPoints(points: FixtureRenderPoint[], radius: number) {
 }
 
 function fixtureBulbRadius(fixture: LayoutFixturePlacement) {
-  const scale = fixture.transform.scale ?? { x: 1, y: 1, z: 1 };
-  return bulbRadius(fixture.resolvedFixture.bulbSize) * (Math.abs(scale.x ?? 1) + Math.abs(scale.y ?? 1)) / 2;
+  return bulbRadius(fixture.resolvedFixture.bulbSize);
 }
 
 function normalizedBulbSize(value: number | null | undefined) {
@@ -462,24 +494,49 @@ function pointsToRenderPoints(points: Point3[], fixture: LayoutFixturePlacement)
   });
 }
 
-function sampleLinePoints(from: Point3, to: Point3, pixels: number): Point3[] {
+function samplePolylinePoints(points: Point3[], pixels: number): Point3[] {
   const count = Math.max(1, Math.floor(pixels));
-  if (count === 1) {
-    return [{
-      x: ((from.x ?? 0) + (to.x ?? 0)) / 2,
-      y: ((from.y ?? 0) + (to.y ?? 0)) / 2,
-      z: ((from.z ?? 0) + (to.z ?? 0)) / 2
-    }];
-  }
+  if (points.length === 0) return [];
+  if (points.length === 1) return [{ ...points[0] }];
 
-  return Array.from({ length: count }, (_, index) => {
-    const t = index / (count - 1);
-    return {
-      x: lerp(from.x ?? 0, to.x ?? 0, t),
-      y: lerp(from.y ?? 0, to.y ?? 0, t),
-      z: lerp(from.z ?? 0, to.z ?? 0, t)
-    };
-  });
+  const segments = points.slice(0, -1).map((from, index) => ({
+    from,
+    to: points[index + 1],
+    length: pointDistance(from, points[index + 1])
+  }));
+  const totalLength = segments.reduce((sum, segment) => sum + segment.length, 0);
+  if (totalLength === 0) return Array.from({ length: count }, () => ({ ...points[0] }));
+
+  if (count === 1) return [pointAtDistance(segments, totalLength / 2)];
+  return Array.from({ length: count }, (_, index) =>
+    pointAtDistance(segments, totalLength * (index / (count - 1)))
+  );
+}
+
+function pointAtDistance(segments: { from: Point3; to: Point3; length: number }[], distance: number): Point3 {
+  let remaining = distance;
+  for (const segment of segments) {
+    if (segment.length === 0) continue;
+    if (remaining <= segment.length) return interpolatePoint(segment.from, segment.to, remaining / segment.length);
+    remaining -= segment.length;
+  }
+  const last = segments[segments.length - 1]?.to ?? { x: 0, y: 0, z: 0 };
+  return { ...last };
+}
+
+function interpolatePoint(from: Point3, to: Point3, t: number): Point3 {
+  return {
+    x: lerp(from.x ?? 0, to.x ?? 0, t),
+    y: lerp(from.y ?? 0, to.y ?? 0, t),
+    z: lerp(from.z ?? 0, to.z ?? 0, t)
+  };
+}
+
+function pointDistance(from: Point3, to: Point3) {
+  const dx = (to.x ?? 0) - (from.x ?? 0);
+  const dy = (to.y ?? 0) - (from.y ?? 0);
+  const dz = (to.z ?? 0) - (from.z ?? 0);
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 
 function sampleArcPoints(center: Point3, radius: number, startDegrees: number, endDegrees: number, pixels: number): Point3[] {
@@ -574,7 +631,6 @@ function documentBounds(document: LayoutDocument): Bounds {
 function fixturePoints(fixture: LayoutFixturePlacement): SvgPoint[] {
   const geometry = fixture.resolvedFixture.geometry;
   if (geometry.type === "points") return geometry.points.map((point) => transformPoint(point, fixture)).filter(Boolean) as SvgPoint[];
-  if (geometry.type === "line") return [transformPoint(geometry.from, fixture), transformPoint(geometry.to, fixture)].filter(Boolean) as SvgPoint[];
   if (geometry.type === "lines") return geometry.points.map((point) => transformPoint(point, fixture)).filter(Boolean) as SvgPoint[];
   const center = transformPoint(geometry.center, fixture);
   if (!center || geometry.radius == null) return [transformPoint({ ...fixture.transform.position }, fixture)].filter(Boolean) as SvgPoint[];

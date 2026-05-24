@@ -24,8 +24,8 @@ stage:
       import: ../fixtures/main.fixture.dawn::pixel_bar_50
     transform:
       position:
-        x: 0.6451092958450317
-        y: 3.071722038090229
+        x: 0.23495829105377197
+        y: -4.157194368541241
         z: 0.0
       rotation:
         x: 0.0
@@ -200,8 +200,8 @@ stage:
       import: ../fixtures/main.fixture.dawn::pixel_bar_50
     transform:
       position:
-        x: -0.19183862209320068
-        y: 4.408669479191303
+        x: -1.109655737876892
+        y: 4.072883136570454
         z: 0.0
       rotation:
         x: 0.0

@@ -146,7 +146,11 @@ fn layout_document_resolves_imported_fixture_geometry_like_inline_geometry() {
     let fixture_path = dir.join("fixtures.dawn");
     let layout_path = dir.join("layout.dawn");
 
-    fs::write(&project_path, project_with_layout_import("layout.dawn::stage")).unwrap();
+    fs::write(
+        &project_path,
+        project_with_layout_import("layout.dawn::stage"),
+    )
+    .unwrap();
     fs::write(&fixture_path, pixel_fixture_file()).unwrap();
     fs::write(
         &layout_path,
@@ -166,9 +170,10 @@ stage:
         name: PixelBar
         color_model: rgb
         geometry:
-          type: line
-          from: { x: -0.5, y: 0.0, z: 0.0 }
-          to: { x: 0.5, y: 0.0, z: 0.0 }
+          type: lines
+          points:
+            - { x: -0.5, y: 0.0, z: 0.0 }
+            - { x: 0.5, y: 0.0, z: 0.0 }
           pixels: 50
       transform:
         position: { x: 1.0, y: 0.0, z: 0.0 }
@@ -185,7 +190,7 @@ stage:
     assert_eq!(imported.color_model, inline.color_model);
     assert!(matches!(
         imported.geometry,
-        Geometry::Line { pixels: 50, .. }
+        Geometry::Lines { pixels: 50, .. }
     ));
     assert_eq!(imported.geometry_summary, inline.geometry_summary);
     assert_eq!(imported.object_key.as_deref(), Some("pixel_bar"));
@@ -322,30 +327,37 @@ pixel:
     )
     .unwrap();
     let base_content = fs::read_to_string(&layout_path).unwrap();
-    let mut document = get_layout_document(&layout_path, "stage", &project_path, Vec::new()).unwrap();
+    let mut document =
+        get_layout_document(&layout_path, "stage", &project_path, Vec::new()).unwrap();
     let catalog_item = document.fixture_catalog[0].clone();
-    document.fixtures.push(dawn_project::LayoutFixturePlacement {
-        id: "pixel_01".to_string(),
-        fixture: dawn_project::LayoutFixtureRef::Import {
-            import: "layout.dawn::pixel".to_string(),
-            object_key: Some("pixel".to_string()),
-            source_path: Some(ProjectPath::new(&layout_path).to_slash_string()),
-        },
-        resolved_fixture: dawn_project::ResolvedLayoutFixture {
-            name: catalog_item.display_name,
-            color_model: catalog_item.color_model,
-            bulb_size: catalog_item.bulb_size,
-            geometry: catalog_item.geometry,
-            geometry_summary: catalog_item.geometry_summary,
-            source_path: catalog_item.source_path,
-            object_key: Some(catalog_item.object_key),
-        },
-        transform: dawn_project::Transform {
-            position: dawn_project::Point3 { x: 1.0, y: 2.0, z: 0.0 },
-            rotation: Default::default(),
-            scale: Default::default(),
-        },
-    });
+    document
+        .fixtures
+        .push(dawn_project::LayoutFixturePlacement {
+            id: "pixel_01".to_string(),
+            fixture: dawn_project::LayoutFixtureRef::Import {
+                import: "layout.dawn::pixel".to_string(),
+                object_key: Some("pixel".to_string()),
+                source_path: Some(ProjectPath::new(&layout_path).to_slash_string()),
+            },
+            resolved_fixture: dawn_project::ResolvedLayoutFixture {
+                name: catalog_item.display_name,
+                color_model: catalog_item.color_model,
+                bulb_size: catalog_item.bulb_size,
+                geometry: catalog_item.geometry,
+                geometry_summary: catalog_item.geometry_summary,
+                source_path: catalog_item.source_path,
+                object_key: Some(catalog_item.object_key),
+            },
+            transform: dawn_project::Transform {
+                position: dawn_project::Point3 {
+                    x: 1.0,
+                    y: 2.0,
+                    z: 0.0,
+                },
+                rotation: Default::default(),
+                scale: Default::default(),
+            },
+        });
 
     let result = apply_layout_document_edit(
         &layout_path,
@@ -362,7 +374,9 @@ pixel:
         panic!("layout edit should apply");
     };
     assert!(outcome.serialized_content.contains("# leading comment"));
-    assert!(outcome.serialized_content.contains("# fixture comment stays put"));
+    assert!(outcome
+        .serialized_content
+        .contains("# fixture comment stays put"));
     assert!(outcome.serialized_content.contains("id: pixel_01"));
 }
 
@@ -371,7 +385,11 @@ fn layout_document_edit_repairs_group_members_on_rename_and_delete() {
     let dir = temp_dir("layout-edit-repairs-groups");
     let project_path = dir.join("project.dawn");
     let layout_path = dir.join("layout.dawn");
-    fs::write(&project_path, project_with_layout_import("layout.dawn::stage")).unwrap();
+    fs::write(
+        &project_path,
+        project_with_layout_import("layout.dawn::stage"),
+    )
+    .unwrap();
     fs::write(
         &layout_path,
         r#"
@@ -407,7 +425,8 @@ stage:
     )
     .unwrap();
     let base_content = fs::read_to_string(&layout_path).unwrap();
-    let mut document = get_layout_document(&layout_path, "stage", &project_path, Vec::new()).unwrap();
+    let mut document =
+        get_layout_document(&layout_path, "stage", &project_path, Vec::new()).unwrap();
     document.fixtures[0].id = "new_id".to_string();
     document.fixtures.pop();
 
@@ -435,7 +454,11 @@ fn fixture_document_edit_supports_crud_and_blocks_new_reference_errors() {
     let project_path = dir.join("project.dawn");
     let fixture_path = dir.join("fixtures.dawn");
     let layout_path = dir.join("layout.dawn");
-    fs::write(&project_path, project_with_layout_import("layout.dawn::stage")).unwrap();
+    fs::write(
+        &project_path,
+        project_with_layout_import("layout.dawn::stage"),
+    )
+    .unwrap();
     fs::write(
         &layout_path,
         r#"
@@ -498,22 +521,208 @@ pixel:
     .unwrap();
     assert!(matches!(blocked, DocumentEditResult::Blocked(_)));
 
-    let applied =
-        apply_fixture_document_edit(&fixture_path, document, base_content, Vec::new(), &project_path, true)
-            .unwrap();
+    let applied = apply_fixture_document_edit(
+        &fixture_path,
+        document,
+        base_content,
+        Vec::new(),
+        &project_path,
+        true,
+    )
+    .unwrap();
     let DocumentEditResult::Applied(outcome) = applied else {
         panic!("fixture edit should apply with override");
     };
     assert!(outcome.serialized_content.contains("# keep me"));
     assert!(outcome.serialized_content.contains("bulb_size: 1.0"));
     assert!(outcome.serialized_content.contains("type: arc"));
-    assert_eq!(get_fixture_document(&fixture_path, Some("arc"), vec![ProjectOverlay {
-        path: ProjectPath::new(&fixture_path),
-        content: outcome.serialized_content,
-    }])
-    .unwrap()
-    .fixtures
-    .len(), 1);
+    assert_eq!(
+        get_fixture_document(
+            &fixture_path,
+            Some("arc"),
+            vec![ProjectOverlay {
+                path: ProjectPath::new(&fixture_path),
+                content: outcome.serialized_content,
+            }]
+        )
+        .unwrap()
+        .fixtures
+        .len(),
+        1
+    );
+}
+
+#[test]
+fn fixture_document_edit_serializes_lines_without_legacy_fields() {
+    let dir = temp_dir("fixture-edit-lines-serialization");
+    let project_path = dir.join("project.dawn");
+    let fixture_path = dir.join("fixtures.dawn");
+    fs::write(
+        &project_path,
+        r#"
+club:
+  type: project
+  name: club
+  display:
+    name: main
+    controllers: []
+    patch:
+      routes: []
+    layout:
+      name: stage
+      units: meters
+      fixtures: []
+      groups: []
+"#,
+    )
+    .unwrap();
+    fs::write(
+        &fixture_path,
+        r#"
+pixel_bar:
+  type: fixture
+  name: PixelBar
+  color_model: rgb
+  geometry:
+    type: points
+    points: []
+"#,
+    )
+    .unwrap();
+    let base_content = fs::read_to_string(&fixture_path).unwrap();
+    let document = FixtureDocument {
+        path: ProjectPath::new(&fixture_path).to_slash_string(),
+        selected_object_key: Some("pixel_bar".to_string()),
+        fixtures: vec![FixtureDefinitionDocument {
+            object_key: "pixel_bar".to_string(),
+            name: "PixelBar".to_string(),
+            color_model: dawn_project::ColorModel::Rgb,
+            bulb_size: 1.0,
+            geometry: Geometry::Lines {
+                points: vec![
+                    dawn_project::Point3 {
+                        x: -0.5,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    dawn_project::Point3 {
+                        x: 0.5,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                ],
+                pixels: 50,
+            },
+            geometry_summary: String::new(),
+        }],
+    };
+
+    let result = apply_fixture_document_edit(
+        &fixture_path,
+        document,
+        base_content,
+        Vec::new(),
+        &project_path,
+        false,
+    )
+    .unwrap();
+
+    let DocumentEditResult::Applied(outcome) = result else {
+        panic!("fixture edit should apply");
+    };
+    assert!(outcome.serialized_content.contains("type: lines"));
+    assert!(outcome.serialized_content.contains("points:"));
+    assert!(outcome.serialized_content.contains("pixels: 50"));
+    assert!(!outcome.serialized_content.contains("type: line\n"));
+    assert!(!outcome.serialized_content.contains("from:"));
+    assert!(!outcome.serialized_content.contains("to:"));
+    assert!(!outcome.serialized_content.contains("lines:"));
+}
+
+#[test]
+fn rejects_legacy_line_geometry() {
+    let dir = temp_dir("legacy-line-geometry");
+    let project_path = dir.join("project.dawn");
+    fs::write(
+        &project_path,
+        r#"
+club:
+  type: project
+  name: club
+  display:
+    name: main
+    controllers: []
+    patch:
+      routes: []
+    layout:
+      name: stage
+      units: meters
+      fixtures:
+        - id: bar
+          fixture:
+            name: PixelBar
+            color_model: rgb
+            geometry:
+              type: line
+              from: { x: -0.5, y: 0.0, z: 0.0 }
+              to: { x: 0.5, y: 0.0, z: 0.0 }
+              pixels: 50
+          transform:
+            position: { x: 0.0, y: 0.0, z: 0.0 }
+      groups: []
+"#,
+    )
+    .unwrap();
+
+    let analysis = analyze_project(&project_path, "club");
+
+    assert!(analysis.resolved.is_none());
+    assert_eq!(analysis.diagnostics.len(), 1);
+    assert_eq!(analysis.diagnostics[0].code, DiagnosticCode::Yaml);
+}
+
+#[test]
+fn rejects_legacy_lines_segment_list() {
+    let dir = temp_dir("legacy-lines-segments");
+    let project_path = dir.join("project.dawn");
+    fs::write(
+        &project_path,
+        r#"
+club:
+  type: project
+  name: club
+  display:
+    name: main
+    controllers: []
+    patch:
+      routes: []
+    layout:
+      name: stage
+      units: meters
+      fixtures:
+        - id: bar
+          fixture:
+            name: PixelBar
+            color_model: rgb
+            geometry:
+              type: lines
+              points:
+                - { x: -0.5, y: 0.0, z: 0.0 }
+                - { x: 0.5, y: 0.0, z: 0.0 }
+              lines:
+                - { from: 0, to: 1 }
+          transform:
+            position: { x: 0.0, y: 0.0, z: 0.0 }
+      groups: []
+"#,
+    )
+    .unwrap();
+
+    let analysis = analyze_project(&project_path, "club");
+
+    assert!(analysis.resolved.is_none());
+    assert_eq!(analysis.diagnostics.len(), 1);
+    assert_eq!(analysis.diagnostics[0].code, DiagnosticCode::Yaml);
 }
 
 #[test]
@@ -621,9 +830,10 @@ pixel_bar:
   name: PixelBar
   color_model: rgb
   geometry:
-    type: line
-    from: { x: -0.5, y: 0.0, z: 0.0 }
-    to: { x: 0.5, y: 0.0, z: 0.0 }
+    type: lines
+    points:
+      - { x: -0.5, y: 0.0, z: 0.0 }
+      - { x: 0.5, y: 0.0, z: 0.0 }
     pixels: 50
 "#
 }

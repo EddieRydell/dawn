@@ -97,7 +97,7 @@ export type FrameSummary = {
 	warnings: string[] | null,
 };
 
-export type Geometry = { type: "points"; points: Point3[] } | { type: "line"; from: Point3; to: Point3; pixels: number } | { type: "lines"; points: Point3[]; lines: LineSegment[] } | { type: "arc"; center: Point3; radius: number | null; startDegrees: number | null; endDegrees: number | null; pixels: number };
+export type Geometry = { type: "points"; points: Point3[] } | { type: "lines"; points: Point3[]; pixels: number } | { type: "arc"; center: Point3; radius: number | null; startDegrees: number | null; endDegrees: number | null; pixels: number };
 
 export type LanguageProblem = {
 	path: string,
@@ -135,11 +135,6 @@ export type LayoutFixtureRef = { type: "import"; import: string; objectKey: stri
 export type LayoutGroupDocument = {
 	name: string,
 	members: string[],
-};
-
-export type LineSegment = {
-	from: number,
-	to: number,
 };
 
 export type ObjectKind = "project" | "display" | "controller" | "layout" | "fixture" | "patch" | "sequence";

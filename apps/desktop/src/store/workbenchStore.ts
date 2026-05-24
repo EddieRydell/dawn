@@ -87,7 +87,7 @@ type WorkbenchState = {
   closeProject: () => Promise<void>;
   openFile: (path: string) => Promise<void>;
   saveFile: () => Promise<void>;
-  reloadFile: () => Promise<void>;
+  reloadProjectFromDisk: () => Promise<void>;
   runCheck: () => Promise<void>;
   renderFrame: () => Promise<void>;
   renamePath: (path: string, newName: string) => Promise<void>;
@@ -107,9 +107,7 @@ let fixtureRequestSerial = 0;
 const initialPanelVisibility: PanelVisibility = {
   project: true,
   editor: true,
-  preview: true,
-  layout: false,
-  output: false
+  preview: true
 };
 
 export const useWorkbench = create<WorkbenchState>((set, get) => ({
@@ -349,26 +347,33 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     clearAutosave(activeFile);
     await saveEditor(activeFile, set, get, "Saved");
   },
-  reloadFile: async () => {
-    const { activeFile } = get();
-    if (!activeFile) return;
+  reloadProjectFromDisk: async () => {
+    const { projectState } = get();
+    if (!projectState) return;
 
     try {
-      const content = await unwrapCommand(commands.readFile(activeFile));
-      set((state) => ({
-        openEditors: state.openEditors.map((editor) =>
-          editor.path === activeFile ? { ...editor, content, dirty: false } : editor
-        ),
-        status: `Reloaded ${activeFile}`
-      }));
-      void inspectDocumentForPath(activeFile, set, get);
-      if (get().editorViewsByPath[activeFile] === "layout") {
-        void loadLayoutView(activeFile, get().layoutView.objectKey, set, get);
-      } else if (get().editorViewsByPath[activeFile] === "fixture") {
-        void loadFixtureView(activeFile, get().fixtureView.selectedObjectKey, set, get);
-      }
-      await get().renderFrame();
+      clearAutosave();
+      clearLayoutRefresh();
+      clearFixtureRefresh();
+      set({ status: "Reloading project..." });
+      const nextProjectState = await unwrapCommand(commands.openProject(projectState.root));
+      set({
+        projectState: nextProjectState,
+        languageProblems: [],
+        pendingRevealProblem: null,
+        activeFile: null,
+        openEditors: [],
+        editorViewsByPath: {},
+        layoutView: emptyLayoutView(),
+        fixtureView: emptyFixtureView(),
+        activeSequence: null,
+        frame: null,
+        status: `Reloaded ${nextProjectState.root}`
+      });
       await runProjectAnalysis(set, get);
+      if (nextProjectState.files[0]) {
+        await get().openFile(nextProjectState.files[0]);
+      }
     } catch (error) {
       set({ status: formatError(error) });
     }

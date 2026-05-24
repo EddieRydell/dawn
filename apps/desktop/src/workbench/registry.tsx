@@ -1,6 +1,4 @@
 import type { FunctionComponent } from "react";
-import { LayoutPanel } from "../panels/LayoutPanel";
-import { OutputPanel } from "../panels/OutputPanel";
 import { PreviewPanel } from "../panels/PreviewPanel";
 import { ProjectPanel } from "../panels/ProjectPanel";
 import { SourceEditorPanel } from "../panels/SourceEditorPanel";
@@ -38,20 +36,6 @@ export const panelRegistry: Record<PanelId, PanelDefinition> = {
     preferredWidth: 360,
     minimumWidth: 280,
     minimumHeight: 220
-  },
-  layout: {
-    id: "layout",
-    title: "Layout",
-    component: LayoutPanel,
-    preferredWidth: 360,
-    minimumWidth: 260
-  },
-  output: {
-    id: "output",
-    title: "Output",
-    component: OutputPanel,
-    preferredHeight: 220,
-    minimumHeight: 120
   }
 };
 

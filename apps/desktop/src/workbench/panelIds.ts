@@ -1,4 +1,4 @@
-export const panelIds = ["project", "editor", "preview", "layout", "output"] as const;
+export const panelIds = ["project", "editor", "preview"] as const;
 
 export type PanelId = (typeof panelIds)[number];
 

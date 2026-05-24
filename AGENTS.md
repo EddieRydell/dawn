@@ -19,12 +19,15 @@ Use standard Rust 2021 style and run `cargo fmt` before submitting Rust changes.
 
 ## Testing Guidelines
 
-Rust integration tests live under `crates/*/tests`. Do not add or modify tests unless specifically requested. When tests are requested for project analysis, document edits, diagnostics, or model behavior, prefer fixtures from `examples/club-rig` for realistic project flows and use temporary test directories for invalid or synthetic Dawn documents. For frontend changes, run the desktop build at minimum unless asked to add a test harness.
-
-## Commit & Pull Request Guidelines
-
-Recent commit history is informal, so use short, imperative commit messages going forward, for example `Add project diagnostic test` or `Update desktop bindings`. Pull requests should include a concise description, the commands run (`cargo test`, build, bindings check), linked issues when applicable, and screenshots or screen recordings for visible desktop UI changes.
+Rust integration tests live under `crates/*/tests`. Do not add or modify tests unless specifically requested. When tests are requested for project analysis, document edits, diagnostics, or model behavior, prefer fixtures from `examples/club-rig` for realistic project flows and use temporary test directories for invalid or synthetic Dawn documents.
 
 ## Agent-Specific Instructions
 
-Do not write tests unless specifically requested. Do not hand-edit generated bindings or Tauri schema files unless explicitly requested; regenerate them with the project scripts. Avoid unrelated edits to lockfiles, IDE files, or generated assets. Check both Rust and desktop manifests before assuming a command or dependency belongs at the workspace root.
+Do not write tests unless specifically requested. 
+Do not hand-edit generated bindings or Tauri schema files unless explicitly requested; regenerate them with the project scripts. 
+Avoid unrelated edits to lockfiles, IDE files, or generated assets. 
+Check both Rust and desktop manifests before assuming a command or dependency belongs at the workspace root. 
+Do not add compatibility layers, shims, fallbacks, or allow for legacy code when adding features or refactoring. 
+The goal is fast development, not support. Minimize clutter and favor having a single way of doing things. SSOT is your friend.
+Do not use git or commands associated with it unless the user specifically requests it.
+Do not use .env files to store information.

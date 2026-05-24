@@ -1048,19 +1048,6 @@ button:hover {
   font-size: 13px;
 }
 
-.output-panel {
-  padding: 12px;
-}
-
-.output-panel pre {
-  margin: 0;
-  color: var(--text-muted);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
-}
-
 .dockview-theme-dark {
   --dv-background-color: var(--surface-1);
   --dv-paneview-active-outline-color: transparent;

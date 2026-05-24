@@ -635,14 +635,9 @@ pub enum Geometry {
     Points {
         points: Vec<Point3>,
     },
-    Line {
-        from: Point3,
-        to: Point3,
-        pixels: u32,
-    },
     Lines {
         points: Vec<Point3>,
-        lines: Vec<LineSegment>,
+        pixels: u32,
     },
     Arc {
         center: Point3,
@@ -651,14 +646,6 @@ pub enum Geometry {
         end_degrees: f64,
         pixels: u32,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[cfg_attr(feature = "bindings", derive(specta::Type))]
-#[serde(deny_unknown_fields)]
-pub struct LineSegment {
-    pub from: u32,
-    pub to: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1534,8 +1521,7 @@ fn fixture_catalog_from_analysis(
 fn geometry_summary(geometry: &Geometry) -> String {
     match geometry {
         Geometry::Points { points } => format!("{} point{}", points.len(), plural(points.len())),
-        Geometry::Line { pixels, .. } => format!("line, {pixels} pixels"),
-        Geometry::Lines { lines, .. } => format!("{} segment{}", lines.len(), plural(lines.len())),
+        Geometry::Lines { pixels, .. } => format!("lines, {pixels} pixels"),
         Geometry::Arc { pixels, .. } => format!("arc, {pixels} pixels"),
     }
 }
@@ -1619,7 +1605,10 @@ fn validate_fixture_document(document: &FixtureDocument) -> Result<(), String> {
     for fixture in &document.fixtures {
         validate_simple_identifier(&fixture.object_key, "fixture object key")?;
         if !keys.insert(fixture.object_key.as_str()) {
-            return Err(format!("duplicate fixture object key `{}`", fixture.object_key));
+            return Err(format!(
+                "duplicate fixture object key `{}`",
+                fixture.object_key
+            ));
         }
     }
     Ok(())
@@ -1676,7 +1665,9 @@ fn validate_simple_identifier(value: &str, label: &str) -> Result<(), String> {
         return Err(format!("{label} must start with a letter or underscore"));
     }
     if chars.any(|character| !(character.is_ascii_alphanumeric() || character == '_')) {
-        return Err(format!("{label} may only contain letters, numbers, and underscores"));
+        return Err(format!(
+            "{label} may only contain letters, numbers, and underscores"
+        ));
     }
     Ok(())
 }
@@ -1774,7 +1765,11 @@ fn top_level_object_blocks(text: &str) -> Vec<TopLevelObjectBlock> {
     let keyed_lines = lines
         .iter()
         .enumerate()
-        .filter_map(|(index, line)| line.key.as_ref().map(|key| (index, key.clone(), line.start)))
+        .filter_map(|(index, line)| {
+            line.key
+                .as_ref()
+                .map(|key| (index, key.clone(), line.start))
+        })
         .collect::<Vec<_>>();
 
     keyed_lines
@@ -1794,10 +1789,10 @@ fn top_level_object_blocks(text: &str) -> Vec<TopLevelObjectBlock> {
                 })
                 .unwrap_or(text.len());
             TopLevelObjectBlock {
-            key: key.clone(),
-            start: *start,
-            end,
-        }
+                key: key.clone(),
+                start: *start,
+                end,
+            }
         })
         .collect()
 }

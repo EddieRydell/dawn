@@ -1,6 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
-  Bug,
   Check,
   Circle,
   FolderOpen,
@@ -28,14 +27,12 @@ export function WorkbenchShell() {
   const status = useWorkbench((state) => state.status);
   const projectState = useWorkbench((state) => state.projectState);
   const activeFile = useWorkbench((state) => state.activeFile);
-  const frame = useWorkbench((state) => state.frame);
   const panelVisibility = useWorkbench((state) => state.panelVisibility);
   const openProjectDialog = useWorkbench((state) => state.openProjectDialog);
   const closeProject = useWorkbench((state) => state.closeProject);
-  const reloadFile = useWorkbench((state) => state.reloadFile);
+  const reloadProjectFromDisk = useWorkbench((state) => state.reloadProjectFromDisk);
   const runCheck = useWorkbench((state) => state.runCheck);
   const setStatus = useWorkbench((state) => state.setStatus);
-  const setPlaying = useWorkbench((state) => state.setPlaying);
   const togglePlayback = useWorkbench((state) => state.togglePlayback);
 
   useEffect(() => {
@@ -128,37 +125,19 @@ export function WorkbenchShell() {
             <MenuItem icon={<FolderOpen size={15} />} label="Open Project..." onClick={openProjectDialog} />
             <MenuItem icon={<X size={15} />} label="Close Project" onClick={closeProject} disabled={!projectState} />
             <MenuSeparator />
-            <MenuItem icon={<RefreshCw size={15} />} label="Reload File from Disk" onClick={reloadFile} disabled={!activeFile} />
+            <MenuItem icon={<RefreshCw size={15} />} label="Reload Project from Disk" onClick={reloadProjectFromDisk} disabled={!projectState} />
             <MenuSeparator />
             <MenuItem icon={<SearchCheck size={15} />} label="Check Project" onClick={runCheck} disabled={!projectState} />
-          </MenuButton>
-          <MenuButton label="Settings" open={menuOpen === "Settings"} onOpen={() => setMenuOpen(menuOpen === "Settings" ? null : "Settings")}>
+            <MenuSeparator />
             <MenuItem icon={<Settings size={15} />} label="Preferences" onClick={() => setStatus("Preferences are not implemented yet.")} />
-            <MenuItem label="Project Structure" onClick={() => togglePanel("layout")} />
           </MenuButton>
           <MenuButton label="Edit" open={menuOpen === "Edit"} onOpen={() => setMenuOpen(menuOpen === "Edit" ? null : "Edit")}>
             <MenuItem label="Format Document" onClick={() => setStatus("Format document is not wired yet.")} />
             <MenuItem label="Rename Symbol" onClick={() => setStatus("Rename symbol is not wired yet.")} />
           </MenuButton>
           <MenuButton label="View" open={menuOpen === "View"} onOpen={() => setMenuOpen(menuOpen === "View" ? null : "View")}>
-            {registeredPanels.map((panel) => (
-              <PanelMenuItem key={panel.id} panelId={panel.id} label={panel.title} visible={panelVisibility[panel.id]} onClick={togglePanel} />
-            ))}
-          </MenuButton>
-          <MenuButton label="Navigate" open={menuOpen === "Navigate"} onOpen={() => setMenuOpen(menuOpen === "Navigate" ? null : "Navigate")}>
-            <MenuItem label="Next Problem" onClick={() => setStatus("Next problem navigation is not wired yet.")} />
-            <MenuItem label="Go to Active Sequence" onClick={() => togglePanel("preview")} />
-          </MenuButton>
-          <MenuButton label="Run" open={menuOpen === "Run"} onOpen={() => setMenuOpen(menuOpen === "Run" ? null : "Run")}>
-            <MenuItem icon={<Play size={15} />} label="Play" onClick={() => setPlaying(true)} />
-            <MenuItem icon={<Pause size={15} />} label="Pause" onClick={() => setPlaying(false)} />
-          </MenuButton>
-          <MenuButton label="Tools" open={menuOpen === "Tools"} onOpen={() => setMenuOpen(menuOpen === "Tools" ? null : "Tools")}>
-            <MenuItem icon={<Bug size={15} />} label="Validate Project" onClick={runCheck} disabled={!projectState} />
-            <MenuItem label="Render Current Frame" onClick={() => setStatus(frame ? `${frame.pixels} pixels rendered` : "Open a sequence first.")} />
-          </MenuButton>
-          <MenuButton label="Window" open={menuOpen === "Window"} onOpen={() => setMenuOpen(menuOpen === "Window" ? null : "Window")}>
             <MenuItem icon={<LayoutDashboard size={15} />} label="Reset Layout" onClick={resetWorkbenchLayout} />
+            <MenuSeparator />
             {registeredPanels.map((panel) => (
               <PanelMenuItem key={panel.id} panelId={panel.id} label={panel.title} visible={panelVisibility[panel.id]} onClick={togglePanel} />
             ))}
