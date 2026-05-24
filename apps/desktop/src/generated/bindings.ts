@@ -69,6 +69,7 @@ export type FixtureCatalogItem = {
 	importString: string,
 	displayName: string,
 	colorModel: ColorModel,
+	bulbSize: number | null,
 	geometry: Geometry,
 	geometrySummary: string,
 };
@@ -77,6 +78,7 @@ export type FixtureDefinitionDocument = {
 	objectKey: string,
 	name: string,
 	colorModel: ColorModel,
+	bulbSize: number | null,
 	geometry: Geometry,
 	geometrySummary: string,
 };
@@ -128,7 +130,7 @@ export type LayoutFixturePlacement = {
 	transform: Transform,
 };
 
-export type LayoutFixtureRef = { type: "import"; import: string; objectKey: string | null; sourcePath: string | null } | { type: "inline"; name: string; colorModel: ColorModel; geometry: Geometry };
+export type LayoutFixtureRef = { type: "import"; import: string; objectKey: string | null; sourcePath: string | null } | { type: "inline"; name: string; colorModel: ColorModel; bulbSize: number | null; geometry: Geometry };
 
 export type LayoutGroupDocument = {
 	name: string,
@@ -170,6 +172,7 @@ export type ProjectState = {
 export type ResolvedLayoutFixture = {
 	name: string,
 	colorModel: ColorModel,
+	bulbSize: number | null,
 	geometry: Geometry,
 	geometrySummary: string,
 	sourcePath: string,

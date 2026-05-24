@@ -2,17 +2,27 @@ pixel_bar_50:
   type: fixture
   name: PixelBar
   color_model: rgb
+  bulb_size: 2.0
   geometry:
     type: line
-    from: { x: -0.5, y: 0.0, z: 0.0 }
-    to: { x: 0.5, y: 0.0, z: 0.0 }
+    from:
+      x: -1.0
+      y: 0.0
+      z: 0.0
+    to:
+      x: 5.0
+      y: 0.0
+      z: 0.0
     pixels: 50
 
 spot_rgb:
   type: fixture
   name: Spot
   color_model: rgb
+  bulb_size: 1.0
   geometry:
     type: points
     points:
-      - { x: 0.0, y: 0.0, z: 0.0 }
+    - x: 0.0
+      y: 0.0
+      z: 0.0

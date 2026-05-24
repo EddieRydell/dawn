@@ -535,7 +535,13 @@ pub struct FixturePlacement<M: ModelMode = Authored> {
 pub struct Fixture {
     pub name: String,
     pub color_model: ColorModel,
+    #[serde(default = "default_bulb_size")]
+    pub bulb_size: f64,
     pub geometry: Geometry,
+}
+
+fn default_bulb_size() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -1092,6 +1098,7 @@ pub enum LayoutFixtureRef {
     Inline {
         name: String,
         color_model: ColorModel,
+        bulb_size: f64,
         geometry: Geometry,
     },
 }
@@ -1110,6 +1117,7 @@ pub struct LayoutGroupDocument {
 pub struct ResolvedLayoutFixture {
     pub name: String,
     pub color_model: ColorModel,
+    pub bulb_size: f64,
     pub geometry: Geometry,
     pub geometry_summary: String,
     pub source_path: String,
@@ -1125,6 +1133,7 @@ pub struct FixtureCatalogItem {
     pub import_string: String,
     pub display_name: String,
     pub color_model: ColorModel,
+    pub bulb_size: f64,
     pub geometry: Geometry,
     pub geometry_summary: String,
 }
@@ -1145,6 +1154,7 @@ pub struct FixtureDefinitionDocument {
     pub object_key: String,
     pub name: String,
     pub color_model: ColorModel,
+    pub bulb_size: f64,
     pub geometry: Geometry,
     pub geometry_summary: String,
 }
@@ -1448,6 +1458,7 @@ fn placement_to_document(
             LayoutFixtureRef::Inline {
                 name: fixture.name.clone(),
                 color_model: fixture.color_model,
+                bulb_size: fixture.bulb_size,
                 geometry: fixture.geometry.clone(),
             },
             source_path.to_slash_string(),
@@ -1474,6 +1485,7 @@ fn placement_to_document(
         resolved_fixture: ResolvedLayoutFixture {
             name: resolved.fixture.name.clone(),
             color_model: resolved.fixture.color_model,
+            bulb_size: resolved.fixture.bulb_size,
             geometry: resolved.fixture.geometry.clone(),
             geometry_summary: geometry_summary(&resolved.fixture.geometry),
             source_path: resolved_source_path,
@@ -1504,6 +1516,7 @@ fn fixture_catalog_from_analysis(
                 import_string: format!("{import_path}::{key}"),
                 display_name: fixture.name.clone(),
                 color_model: fixture.color_model,
+                bulb_size: fixture.bulb_size,
                 geometry: fixture.geometry.clone(),
                 geometry_summary: geometry_summary(&fixture.geometry),
             });
@@ -1565,10 +1578,12 @@ fn document_to_placement(
         LayoutFixtureRef::Inline {
             name,
             color_model,
+            bulb_size,
             geometry,
         } => InlineOrImport::Inline(Fixture {
             name,
             color_model,
+            bulb_size,
             geometry,
         }),
     };
@@ -1584,6 +1599,7 @@ fn fixture_to_document(object_key: &str, fixture: &Fixture) -> FixtureDefinition
         object_key: object_key.to_string(),
         name: fixture.name.clone(),
         color_model: fixture.color_model,
+        bulb_size: fixture.bulb_size,
         geometry: fixture.geometry.clone(),
         geometry_summary: geometry_summary(&fixture.geometry),
     }
@@ -1593,6 +1609,7 @@ fn document_to_fixture(document: &FixtureDefinitionDocument) -> Fixture {
     Fixture {
         name: document.name.clone(),
         color_model: document.color_model,
+        bulb_size: document.bulb_size,
         geometry: document.geometry.clone(),
     }
 }

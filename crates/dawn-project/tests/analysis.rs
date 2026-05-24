@@ -146,11 +146,7 @@ fn layout_document_resolves_imported_fixture_geometry_like_inline_geometry() {
     let fixture_path = dir.join("fixtures.dawn");
     let layout_path = dir.join("layout.dawn");
 
-    fs::write(
-        &project_path,
-        project_with_layout_import("layout.dawn::stage"),
-    )
-    .unwrap();
+    fs::write(&project_path, project_with_layout_import("layout.dawn::stage")).unwrap();
     fs::write(&fixture_path, pixel_fixture_file()).unwrap();
     fs::write(
         &layout_path,
@@ -298,7 +294,11 @@ fn layout_document_edit_rewrites_only_layout_object_block() {
     let dir = temp_dir("layout-edit-preserves-unrelated");
     let project_path = dir.join("project.dawn");
     let layout_path = dir.join("layout.dawn");
-    fs::write(&project_path, project_with_layout_import("layout.dawn::stage")).unwrap();
+    fs::write(
+        &project_path,
+        project_with_layout_import("layout.dawn::stage"),
+    )
+    .unwrap();
     fs::write(
         &layout_path,
         r#"# leading comment
@@ -334,6 +334,7 @@ pixel:
         resolved_fixture: dawn_project::ResolvedLayoutFixture {
             name: catalog_item.display_name,
             color_model: catalog_item.color_model,
+            bulb_size: catalog_item.bulb_size,
             geometry: catalog_item.geometry,
             geometry_summary: catalog_item.geometry_summary,
             source_path: catalog_item.source_path,
@@ -474,6 +475,7 @@ pixel:
             object_key: "arc".to_string(),
             name: "Arc".to_string(),
             color_model: dawn_project::ColorModel::Rgb,
+            bulb_size: 1.0,
             geometry: Geometry::Arc {
                 center: dawn_project::Point3::default(),
                 radius: 1.0,
@@ -503,6 +505,7 @@ pixel:
         panic!("fixture edit should apply with override");
     };
     assert!(outcome.serialized_content.contains("# keep me"));
+    assert!(outcome.serialized_content.contains("bulb_size: 1.0"));
     assert!(outcome.serialized_content.contains("type: arc"));
     assert_eq!(get_fixture_document(&fixture_path, Some("arc"), vec![ProjectOverlay {
         path: ProjectPath::new(&fixture_path),

@@ -4,7 +4,8 @@ use std::sync::Mutex;
 
 use dawn_project::{
     analyze_project_with_overlays, apply_fixture_document_edit as edit_fixture_document,
-    apply_layout_document_edit as edit_layout_document, get_fixture_document as inspect_fixture_document,
+    apply_layout_document_edit as edit_layout_document,
+    get_fixture_document as inspect_fixture_document,
     get_layout_document as inspect_layout_document, inspect_document as inspect_dawn_document,
     DiagnosticCode, DiagnosticSeverity, DocumentDescriptor, DocumentEditResult, FixtureDocument,
     LayoutDocument, ProjectDiagnostic, ProjectOverlay, ProjectPath, TextRange,
@@ -86,7 +87,11 @@ struct AnalysisState {
 }
 
 #[derive(Serialize, specta::Type)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 enum LayoutDocumentEditResponse {
     Applied {
         serialized_content: String,
@@ -100,7 +105,11 @@ enum LayoutDocumentEditResponse {
 }
 
 #[derive(Serialize, specta::Type)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 enum FixtureDocumentEditResponse {
     Applied {
         serialized_content: String,
@@ -238,7 +247,11 @@ fn get_fixture_document(
     selected_object_key: Option<String>,
     overlays: Vec<ProjectOverlayInput>,
 ) -> Result<FixtureDocument, String> {
-    inspect_fixture_document(path, selected_object_key.as_deref(), project_overlays_from_inputs(overlays))
+    inspect_fixture_document(
+        path,
+        selected_object_key.as_deref(),
+        project_overlays_from_inputs(overlays),
+    )
 }
 
 #[tauri::command]

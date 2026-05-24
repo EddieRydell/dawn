@@ -21,6 +21,10 @@ type LayoutViewerProps = {
 type ViewBox = { x: number; y: number; width: number; height: number };
 type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 type SvgPoint = { x: number; y: number };
+type FixtureRenderPoint = SvgPoint & { key: string };
+
+const defaultBulbSize = 1;
+const bulbSizeUnitRadius = 0.035;
 
 export function LayoutViewer({
   document,
@@ -170,6 +174,7 @@ export function LayoutViewer({
               />
             ))}
           </g>
+          <ScaleBar viewBox={viewBox} units={document.units} svg={svgRef.current} />
         </svg>
       </div>
       <aside className="layout-inspector">
@@ -234,6 +239,23 @@ export function LayoutViewer({
   );
 }
 
+function ScaleBar({ viewBox, units, svg }: { viewBox: ViewBox; units: string; svg: SVGSVGElement | null }) {
+  const length = niceScaleLength(viewBox.width * 0.18);
+  const x = viewBox.x + viewBox.width * 0.055;
+  const y = viewBox.y + viewBox.height * 0.9;
+  const tick = viewBox.height * 0.018;
+  const fontSize = screenPixelsToUserY(viewBox, svg, 12);
+  const labelStrokeWidth = screenPixelsToUserY(viewBox, svg, 3);
+  return (
+    <g className="canvas-scale-bar">
+      <line x1={x} y1={y} x2={x + length} y2={y} />
+      <line x1={x} y1={y - tick} x2={x} y2={y + tick} />
+      <line x1={x + length} y1={y - tick} x2={x + length} y2={y + tick} />
+      <text x={x} y={y - tick * 1.8} fontSize={fontSize} strokeWidth={labelStrokeWidth}>{formatScaleLength(length)} {unitLabel(units)}</text>
+    </g>
+  );
+}
+
 function FixtureShape({
   fixture,
   selected,
@@ -256,7 +278,7 @@ function FixtureShape({
       onClick={(event) => event.stopPropagation()}
     >
       {renderGeometry(fixture.resolvedFixture.geometry, fixture) ?? (
-        <circle cx={fixture.transform.position.x ?? 0} cy={fixture.transform.position.y ?? 0} r="0.08" />
+        <circle cx={fixture.transform.position.x ?? 0} cy={fixture.transform.position.y ?? 0} r={fixtureBulbRadius(fixture)} />
       )}
     </g>
   );
@@ -363,34 +385,125 @@ function PointEditor({ label, point, onChange }: { label: string; point: Point3;
 }
 
 function renderGeometry(geometry: Geometry, fixture: LayoutFixturePlacement) {
+  const bulbRadius = fixtureBulbRadius(fixture);
   switch (geometry.type) {
     case "points":
-      return geometry.points.map((point, index) => {
-        const transformed = transformPoint(point, fixture);
-        return transformed ? <circle key={index} cx={transformed.x} cy={transformed.y} r="0.07" /> : null;
-      });
+      return renderEmitterPoints(pointsToRenderPoints(geometry.points, fixture), bulbRadius);
     case "line": {
       const from = transformPoint(geometry.from, fixture);
       const to = transformPoint(geometry.to, fixture);
-      return from && to ? <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} /> : null;
+      const emitters = pointsToRenderPoints(sampleLinePoints(geometry.from, geometry.to, geometry.pixels), fixture);
+      return (
+        <>
+          {from && to ? <line className="layout-fixture-guide" x1={from.x} y1={from.y} x2={to.x} y2={to.y} /> : null}
+          {renderEmitterPoints(emitters, bulbRadius)}
+        </>
+      );
     }
-    case "lines":
-      return geometry.lines.map((line, index) => {
-        const from = transformPoint(geometry.points[line.from], fixture);
-        const to = transformPoint(geometry.points[line.to], fixture);
-        return from && to ? <line key={index} x1={from.x} y1={from.y} x2={to.x} y2={to.y} /> : null;
-      });
+    case "lines": {
+      const emitters = pointsToRenderPoints(geometry.points, fixture);
+      return (
+        <>
+          {geometry.lines.map((line, index) => {
+            const from = transformPoint(geometry.points[line.from], fixture);
+            const to = transformPoint(geometry.points[line.to], fixture);
+            return from && to ? <line key={index} className="layout-fixture-guide" x1={from.x} y1={from.y} x2={to.x} y2={to.y} /> : null;
+          })}
+          {renderEmitterPoints(emitters, bulbRadius)}
+        </>
+      );
+    }
     case "arc": {
       const center = transformPoint(geometry.center, fixture);
       if (!center || geometry.radius == null || geometry.startDegrees == null || geometry.endDegrees == null) return null;
-      const scale = fixture.transform.scale ?? { x: 1, y: 1, z: 1 };
-      const radius = Math.abs(geometry.radius * ((scale.x ?? 1) + (scale.y ?? 1)) / 2);
-      const start = polar(center, radius, geometry.startDegrees);
-      const end = polar(center, radius, geometry.endDegrees);
+      const arcPoints = sampleArcPoints(geometry.center, geometry.radius, geometry.startDegrees, geometry.endDegrees, geometry.pixels);
+      const emitters = pointsToRenderPoints(arcPoints, fixture);
+      const start = emitters[0];
+      const end = emitters[emitters.length - 1];
+      if (!start || !end) return null;
       const largeArc = Math.abs(geometry.endDegrees - geometry.startDegrees) > 180 ? 1 : 0;
-      return <path d={`M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArc} 1 ${end.x} ${end.y}`} />;
+      const scale = fixture.transform.scale ?? { x: 1, y: 1, z: 1 };
+      const radiusX = Math.abs(geometry.radius * (scale.x ?? 1));
+      const radiusY = Math.abs(geometry.radius * (scale.y ?? 1));
+      const rotation = fixture.transform.rotation?.z ?? 0;
+      return (
+        <>
+          <path className="layout-fixture-guide" d={`M ${start.x} ${start.y} A ${radiusX} ${radiusY} ${rotation} ${largeArc} 1 ${end.x} ${end.y}`} />
+          {renderEmitterPoints(emitters, bulbRadius)}
+        </>
+      );
     }
   }
+}
+
+function renderEmitterPoints(points: FixtureRenderPoint[], radius: number) {
+  return points.map((point) => (
+    <circle key={point.key} className="layout-fixture-emitter" cx={point.x} cy={point.y} r={radius} />
+  ));
+}
+
+function fixtureBulbRadius(fixture: LayoutFixturePlacement) {
+  const scale = fixture.transform.scale ?? { x: 1, y: 1, z: 1 };
+  return bulbRadius(fixture.resolvedFixture.bulbSize) * (Math.abs(scale.x ?? 1) + Math.abs(scale.y ?? 1)) / 2;
+}
+
+function normalizedBulbSize(value: number | null | undefined) {
+  return Math.max(0.05, value ?? defaultBulbSize);
+}
+
+function bulbRadius(value: number | null | undefined) {
+  return normalizedBulbSize(value) * bulbSizeUnitRadius;
+}
+
+function pointsToRenderPoints(points: Point3[], fixture: LayoutFixturePlacement): FixtureRenderPoint[] {
+  return points.flatMap((point, index) => {
+    const transformed = transformPoint(point, fixture);
+    return transformed ? [{ ...transformed, key: `emitter-${index}` }] : [];
+  });
+}
+
+function sampleLinePoints(from: Point3, to: Point3, pixels: number): Point3[] {
+  const count = Math.max(1, Math.floor(pixels));
+  if (count === 1) {
+    return [{
+      x: ((from.x ?? 0) + (to.x ?? 0)) / 2,
+      y: ((from.y ?? 0) + (to.y ?? 0)) / 2,
+      z: ((from.z ?? 0) + (to.z ?? 0)) / 2
+    }];
+  }
+
+  return Array.from({ length: count }, (_, index) => {
+    const t = index / (count - 1);
+    return {
+      x: lerp(from.x ?? 0, to.x ?? 0, t),
+      y: lerp(from.y ?? 0, to.y ?? 0, t),
+      z: lerp(from.z ?? 0, to.z ?? 0, t)
+    };
+  });
+}
+
+function sampleArcPoints(center: Point3, radius: number, startDegrees: number, endDegrees: number, pixels: number): Point3[] {
+  const count = Math.max(1, Math.floor(pixels));
+  if (count === 1) {
+    return [arcPoint(center, radius, (startDegrees + endDegrees) / 2)];
+  }
+
+  return Array.from({ length: count }, (_, index) =>
+    arcPoint(center, radius, lerp(startDegrees, endDegrees, index / (count - 1)))
+  );
+}
+
+function arcPoint(center: Point3, radius: number, degrees: number): Point3 {
+  const radians = (degrees * Math.PI) / 180;
+  return {
+    x: (center.x ?? 0) + radius * Math.cos(radians),
+    y: (center.y ?? 0) + radius * Math.sin(radians),
+    z: center.z ?? 0
+  };
+}
+
+function lerp(from: number, to: number, t: number) {
+  return from + (to - from) * t;
 }
 
 function updatePlacement(document: LayoutDocument, id: string, update: (fixture: LayoutFixturePlacement) => LayoutFixturePlacement): LayoutDocument {
@@ -425,6 +538,7 @@ function catalogToResolvedFixture(item: FixtureCatalogItem): ResolvedLayoutFixtu
   return {
     name: item.displayName,
     colorModel: item.colorModel,
+    bulbSize: item.bulbSize,
     geometry: item.geometry,
     geometrySummary: item.geometrySummary,
     sourcePath: item.sourcePath,
@@ -512,6 +626,23 @@ function matchViewBoxAspect(viewBox: ViewBox, viewportAspect: number): ViewBox {
   };
 }
 
+function niceScaleLength(target: number) {
+  if (!Number.isFinite(target) || target <= 0) return 1;
+  const exponent = Math.floor(Math.log10(target));
+  const magnitude = 10 ** exponent;
+  const normalized = target / magnitude;
+  const step = normalized >= 5 ? 5 : normalized >= 2 ? 2 : 1;
+  return step * magnitude;
+}
+
+function formatScaleLength(length: number) {
+  return Number.isInteger(length) ? `${length}` : length.toFixed(length < 0.1 ? 3 : length < 1 ? 2 : 1).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function unitLabel(units: string) {
+  return units === "meters" ? "m" : "ft";
+}
+
 function svgEventPoint(event: MouseEvent, svg: SVGSVGElement | null): SvgPoint {
   if (!svg) return { x: 0, y: 0 };
   const point = svg.createSVGPoint();
@@ -521,17 +652,16 @@ function svgEventPoint(event: MouseEvent, svg: SVGSVGElement | null): SvgPoint {
   return { x: transformed.x, y: transformed.y };
 }
 
-function polar(center: SvgPoint, radius: number, degrees: number) {
-  const radians = (degrees * Math.PI) / 180;
-  return { x: center.x + radius * Math.cos(radians), y: center.y + radius * Math.sin(radians) };
-}
-
 function svgPixelWidth(svg: SVGSVGElement | null) {
   return Math.max(svg?.clientWidth ?? 1, 1);
 }
 
 function svgPixelHeight(svg: SVGSVGElement | null) {
   return Math.max(svg?.clientHeight ?? 1, 1);
+}
+
+function screenPixelsToUserY(viewBox: ViewBox, svg: SVGSVGElement | null, pixels: number) {
+  return (pixels / svgPixelHeight(svg)) * viewBox.height;
 }
 
 function authoredFixtureLabel(fixture: LayoutFixturePlacement) {
