@@ -2,7 +2,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use serde::Serialize;
+use dawn_project::{
+    analyze_project_with_overlays, get_layout_document as inspect_layout_document,
+    inspect_document as inspect_dawn_document, save_layout_document_content, DiagnosticCode,
+    DiagnosticSeverity, DocumentDescriptor, LayoutDocument, ProjectDiagnostic, ProjectOverlay,
+    TextRange,
+};
+use serde::{Deserialize, Serialize};
 use tauri::State;
 use walkdir::WalkDir;
 
@@ -23,7 +29,7 @@ struct ProjectState {
     root: String,
     files: Vec<String>,
     entries: Vec<ProjectEntryDto>,
-    diagnostics: Vec<DiagnosticDto>,
+    diagnostics: Vec<ProblemDto>,
 }
 
 #[derive(Serialize)]
@@ -46,17 +52,48 @@ struct FileMoveDto {
 }
 
 #[derive(Serialize)]
-struct DiagnosticDto {
-    severity: String,
-    path: String,
-    message: String,
-}
-
-#[derive(Serialize)]
 struct FrameSummary {
     pixels: usize,
     fixture_spans: usize,
     warnings: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OverlayDto {
+    path: String,
+    content: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnalysisStateDto {
+    diagnostics: Vec<ProblemDto>,
+    resolved: bool,
+    reachable_file_count: usize,
+    object_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LayoutSaveResultDto {
+    serialized_content: String,
+    project: ProjectState,
+    analysis: AnalysisStateDto,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ProblemDto {
+    path: String,
+    severity: String,
+    message: String,
+    code: String,
+    source: String,
+    line: u32,
+    column: u32,
+    end_line: u32,
+    end_column: u32,
 }
 
 #[tauri::command]
@@ -99,6 +136,87 @@ fn check_project(state: State<'_, AppState>) -> Result<ProjectState, String> {
         files: list_source_files(&root),
         entries: list_project_entries(&root),
         diagnostics: Vec::new(),
+    })
+}
+
+#[tauri::command]
+fn analyze_project(
+    overlays: Vec<OverlayDto>,
+    state: State<'_, AppState>,
+) -> Result<AnalysisStateDto, String> {
+    let project_file = current_project_file(&state)?;
+    let overlays = overlays
+        .into_iter()
+        .map(|overlay| ProjectOverlay {
+            path: PathBuf::from(overlay.path),
+            content: overlay.content,
+        })
+        .collect::<Vec<_>>();
+    let analysis = analyze_project_with_overlays(&project_file, None, overlays);
+    let object_count = analysis
+        .files
+        .values()
+        .filter_map(|file| file.file.as_ref())
+        .map(|file| file.len())
+        .sum();
+
+    Ok(AnalysisStateDto {
+        diagnostics: analysis
+            .diagnostics
+            .iter()
+            .map(problem_from_diagnostic)
+            .collect(),
+        resolved: analysis.resolved.is_some(),
+        reachable_file_count: analysis.files.len(),
+        object_count,
+    })
+}
+
+#[tauri::command]
+fn inspect_document(
+    path: String,
+    overlays: Vec<OverlayDto>,
+) -> Result<DocumentDescriptor, String> {
+    inspect_dawn_document(path, project_overlays_from_dto(overlays))
+}
+
+#[tauri::command]
+fn get_layout_document(
+    path: String,
+    object_key: String,
+    overlays: Vec<OverlayDto>,
+    state: State<'_, AppState>,
+) -> Result<LayoutDocument, String> {
+    inspect_layout_document(
+        path,
+        &object_key,
+        current_project_file(&state)?,
+        project_overlays_from_dto(overlays),
+    )
+}
+
+#[tauri::command]
+fn save_layout_document(
+    path: String,
+    object_key: String,
+    document: LayoutDocument,
+    base_content: Option<String>,
+    overlays: Vec<OverlayDto>,
+    state: State<'_, AppState>,
+) -> Result<LayoutSaveResultDto, String> {
+    let (serialized_content, analysis) = save_layout_document_content(
+        &path,
+        &object_key,
+        document,
+        base_content,
+        project_overlays_from_dto(overlays),
+    )?;
+    fs::write(&path, &serialized_content).map_err(|error| error.to_string())?;
+    let analysis_dto = analysis_to_dto(analysis);
+    Ok(LayoutSaveResultDto {
+        serialized_content,
+        project: check_project(state)?,
+        analysis: analysis_dto,
     })
 }
 
@@ -227,6 +345,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_project,
             check_project,
+            analyze_project,
+            inspect_document,
+            get_layout_document,
+            save_layout_document,
             read_file,
             write_file,
             rename_path,
@@ -288,6 +410,93 @@ fn project_root(state: &State<'_, AppState>) -> Result<PathBuf, String> {
         .ok_or_else(|| "no project open".to_string())
 }
 
+fn current_project_file(state: &State<'_, AppState>) -> Result<PathBuf, String> {
+    let session = state
+        .project
+        .lock()
+        .map_err(|_| "project state lock failed")?;
+    session
+        .project_file
+        .clone()
+        .ok_or_else(|| "no project open".to_string())
+}
+
+fn problem_from_diagnostic(diagnostic: &ProjectDiagnostic) -> ProblemDto {
+    let (line, column, end_line, end_column) = range_to_one_based(diagnostic.range);
+    ProblemDto {
+        path: diagnostic.path.display().to_string(),
+        severity: severity_to_string(diagnostic.severity),
+        message: diagnostic.message.clone(),
+        code: code_to_string(diagnostic.code),
+        source: "dawn-project".to_string(),
+        line,
+        column,
+        end_line,
+        end_column,
+    }
+}
+
+fn project_overlays_from_dto(overlays: Vec<OverlayDto>) -> Vec<ProjectOverlay> {
+    overlays
+        .into_iter()
+        .map(|overlay| ProjectOverlay {
+            path: PathBuf::from(overlay.path),
+            content: overlay.content,
+        })
+        .collect()
+}
+
+fn analysis_to_dto(analysis: dawn_project::ProjectAnalysis) -> AnalysisStateDto {
+    let object_count = analysis
+        .files
+        .values()
+        .filter_map(|file| file.file.as_ref())
+        .map(|file| file.len())
+        .sum();
+
+    AnalysisStateDto {
+        diagnostics: analysis
+            .diagnostics
+            .iter()
+            .map(problem_from_diagnostic)
+            .collect(),
+        resolved: analysis.resolved.is_some(),
+        reachable_file_count: analysis.files.len(),
+        object_count,
+    }
+}
+
+fn range_to_one_based(range: Option<TextRange>) -> (u32, u32, u32, u32) {
+    let Some(range) = range else {
+        return (1, 1, 1, 1);
+    };
+    (
+        range.start.line.saturating_add(1),
+        range.start.character.saturating_add(1),
+        range.end.line.saturating_add(1),
+        range.end.character.saturating_add(1).max(1),
+    )
+}
+
+fn severity_to_string(severity: DiagnosticSeverity) -> String {
+    match severity {
+        DiagnosticSeverity::Error => "Error",
+        DiagnosticSeverity::Warning => "Warning",
+    }
+    .to_string()
+}
+
+fn code_to_string(code: DiagnosticCode) -> String {
+    match code {
+        DiagnosticCode::Io => "io",
+        DiagnosticCode::Yaml => "yaml",
+        DiagnosticCode::Import => "import",
+        DiagnosticCode::Lower => "lower",
+        DiagnosticCode::ProjectKey => "project_key",
+    }
+    .to_string()
+}
+
 fn ensure_inside_root(root: &Path, path: PathBuf) -> Result<PathBuf, String> {
     let canonical_root = root.canonicalize().map_err(|err| err.to_string())?;
     let canonical_path = if path.exists() {
@@ -317,6 +526,56 @@ fn validate_file_name(name: &str) -> Result<(), String> {
         return Err("name cannot contain path separators".to_string());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn problem_defaults_missing_ranges_to_one_based_start() {
+        let diagnostic = ProjectDiagnostic {
+            path: PathBuf::from("project.dawn"),
+            range: None,
+            severity: DiagnosticSeverity::Error,
+            code: DiagnosticCode::ProjectKey,
+            message: "missing project".to_string(),
+        };
+
+        let problem = problem_from_diagnostic(&diagnostic);
+
+        assert_eq!(problem.line, 1);
+        assert_eq!(problem.column, 1);
+        assert_eq!(problem.end_line, 1);
+        assert_eq!(problem.end_column, 1);
+    }
+
+    #[test]
+    fn problem_converts_zero_based_ranges_to_one_based_ranges() {
+        let diagnostic = ProjectDiagnostic {
+            path: PathBuf::from("project.dawn"),
+            range: Some(TextRange {
+                start: dawn_project::TextPosition {
+                    line: 2,
+                    character: 4,
+                },
+                end: dawn_project::TextPosition {
+                    line: 2,
+                    character: 11,
+                },
+            }),
+            severity: DiagnosticSeverity::Warning,
+            code: DiagnosticCode::Yaml,
+            message: "bad yaml".to_string(),
+        };
+
+        let problem = problem_from_diagnostic(&diagnostic);
+
+        assert_eq!(problem.line, 3);
+        assert_eq!(problem.column, 5);
+        assert_eq!(problem.end_line, 3);
+        assert_eq!(problem.end_column, 12);
+    }
 }
 
 fn update_active_sequence_after_move(

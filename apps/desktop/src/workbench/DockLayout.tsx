@@ -113,10 +113,6 @@ function addDefaultLayout(api: DockviewApi) {
     position: { direction: "right", referencePanel: "editor" },
     initialWidth: panelRegistry.preview.preferredWidth
   });
-  addPanel(api, "problems", {
-    position: { direction: "below", referencePanel: "preview" },
-    initialHeight: panelRegistry.problems.preferredHeight
-  });
 }
 
 function togglePanel(api: DockviewApi | null, panelId: PanelId) {
@@ -137,9 +133,9 @@ function getTogglePosition(api: DockviewApi, panelId: PanelId) {
       initialWidth: panelRegistry.layout.preferredWidth
     };
   }
-  if (panelId === "output" && api.getPanel("problems")) {
+  if (panelId === "output" && api.getPanel("preview")) {
     return {
-      position: { direction: "within" as const, referencePanel: "problems" },
+      position: { direction: "below" as const, referencePanel: "preview" },
       initialHeight: panelRegistry.output.preferredHeight
     };
   }
@@ -148,9 +144,6 @@ function getTogglePosition(api: DockviewApi, panelId: PanelId) {
   }
   if (panelId === "preview" && api.getPanel("editor")) {
     return { position: { direction: "right" as const, referencePanel: "editor" }, initialWidth: panelRegistry.preview.preferredWidth };
-  }
-  if (panelId === "problems" && api.getPanel("preview")) {
-    return { position: { direction: "below" as const, referencePanel: "preview" }, initialHeight: panelRegistry.problems.preferredHeight };
   }
   return {};
 }

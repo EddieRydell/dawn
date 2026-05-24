@@ -19,9 +19,11 @@ export class DawnEditorRuntime {
   private container: HTMLElement | undefined;
   private project: DawnEditorProject | null = null;
   private models = new Map<string, monaco.editor.ITextModel>();
+  private modelPathKeys = new Map<string, string>();
   private modelDisposables = new Map<string, monaco.IDisposable>();
   private syncingModels = new Set<string>();
   private openEditors: OpenEditor[] = [];
+  private problems: LanguageProblem[] = [];
   private activeFile: string | null = null;
   private started = false;
 
@@ -66,6 +68,7 @@ export class DawnEditorRuntime {
     if (!project) {
       this.callbacks.onProblemsChanged([]);
       this.editor?.setModel(null);
+      this.setProblems([]);
       this.disposeModels();
     }
   }
@@ -75,6 +78,7 @@ export class DawnEditorRuntime {
     if (!this.editor) return;
 
     const openPaths = new Set(openEditors.map((editor) => editor.path));
+    const openPathKeys = new Set(openEditors.map((editor) => pathKey(editor.path)));
     for (const editor of openEditors) {
       const model = this.ensureModel(editor);
       if (model.getValue() !== editor.content && !editor.dirty) {
@@ -85,7 +89,7 @@ export class DawnEditorRuntime {
     }
 
     for (const [path, model] of this.models) {
-      if (openPaths.has(path)) continue;
+      if (openPaths.has(path) || openPathKeys.has(pathKey(path))) continue;
       this.disposeModel(path, model);
     }
 
@@ -108,6 +112,11 @@ export class DawnEditorRuntime {
     this.attachActiveModel(true);
   }
 
+  setProblems(problems: LanguageProblem[]): void {
+    this.problems = problems;
+    this.syncProblemMarkers();
+  }
+
   revealProblem(problem: LanguageProblem): void {
     const editor = this.editor;
     if (!editor || problem.path !== this.activeFile) return;
@@ -119,6 +128,7 @@ export class DawnEditorRuntime {
   }
 
   async dispose(): Promise<void> {
+    this.setProblems([]);
     this.editor?.dispose();
     this.editor = undefined;
     this.disposeModels();
@@ -155,6 +165,7 @@ export class DawnEditorRuntime {
     const model = monaco.editor.getModel(uri) ?? monaco.editor.createModel(openEditor.content, languageId, uri);
     monaco.editor.setModelLanguage(model, languageId);
     this.models.set(openEditor.path, model);
+    this.modelPathKeys.set(openEditor.path, pathKey(openEditor.path));
     this.modelDisposables.set(
       openEditor.path,
       model.onDidChangeContent(() => {
@@ -162,14 +173,17 @@ export class DawnEditorRuntime {
         this.callbacks.onContentChanged(openEditor.path, model.getValue());
       })
     );
+    this.applyProblemMarkers(openEditor.path, model);
     return model;
   }
 
   private disposeModel(path: string, model: monaco.editor.ITextModel) {
+    monaco.editor.setModelMarkers(model, "dawn-analysis", []);
     this.modelDisposables.get(path)?.dispose();
     this.modelDisposables.delete(path);
     model.dispose();
     this.models.delete(path);
+    this.modelPathKeys.delete(path);
   }
 
   private disposeModels() {
@@ -178,5 +192,68 @@ export class DawnEditorRuntime {
     }
     this.modelDisposables.clear();
     this.models.clear();
+  }
+
+  private syncProblemMarkers(): void {
+    for (const [path, model] of this.models) {
+      this.applyProblemMarkers(path, model);
+    }
+  }
+
+  private applyProblemMarkers(path: string, model: monaco.editor.ITextModel): void {
+    const modelPathKey = this.modelPathKeys.get(path) ?? pathKey(path);
+    const markers = this.problems
+      .filter((problem) => pathKey(problem.path) === modelPathKey)
+      .map((problem) => markerFromProblem(problem, model));
+    monaco.editor.setModelMarkers(model, "dawn-analysis", markers);
+  }
+}
+
+function pathKey(path: string): string {
+  return path.replace(/^\\\\\?\\/, "").replace(/\\/g, "/").toLowerCase();
+}
+
+function markerFromProblem(
+  problem: LanguageProblem,
+  model: monaco.editor.ITextModel
+): monaco.editor.IMarkerData {
+  const lineCount = model.getLineCount();
+  const startLineNumber = clamp(problem.line, 1, lineCount);
+  const endLineNumber = clamp(problem.endLine, startLineNumber, lineCount);
+  const startLineMaxColumn = model.getLineMaxColumn(startLineNumber);
+  const endLineMaxColumn = model.getLineMaxColumn(endLineNumber);
+  const startColumn = clamp(problem.column, 1, startLineMaxColumn);
+  const endColumn = clamp(
+    Math.max(problem.endColumn, startLineNumber === endLineNumber ? startColumn + 1 : 1),
+    1,
+    Math.max(endLineMaxColumn, 2)
+  );
+
+  return {
+    severity: markerSeverity(problem.severity),
+    message: problem.message,
+    source: problem.source ?? "dawn-analysis",
+    code: problem.code,
+    startLineNumber,
+    startColumn,
+    endLineNumber,
+    endColumn
+  };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function markerSeverity(severity: LanguageProblem["severity"]): monaco.MarkerSeverity {
+  switch (severity) {
+    case "Error":
+      return monaco.MarkerSeverity.Error;
+    case "Warning":
+      return monaco.MarkerSeverity.Warning;
+    case "Info":
+      return monaco.MarkerSeverity.Info;
+    case "Hint":
+      return monaco.MarkerSeverity.Hint;
   }
 }

@@ -8,6 +8,7 @@ export function SourceEditorPanel() {
   const projectState = useWorkbench((state) => state.projectState);
   const activeFile = useWorkbench((state) => state.activeFile);
   const pendingRevealProblem = useWorkbench((state) => state.pendingRevealProblem);
+  const languageProblems = useWorkbench((state) => state.languageProblems);
   const openEditors = useWorkbench((state) => state.openEditors);
   const setEditorContent = useWorkbench((state) => state.setEditorContent);
   const setLanguageProblems = useWorkbench((state) => state.setLanguageProblems);
@@ -45,6 +46,10 @@ export function SourceEditorPanel() {
   useEffect(() => {
     runtimeRef.current?.setActiveFile(activeFile);
   }, [activeFile]);
+
+  useEffect(() => {
+    runtimeRef.current?.setProblems(languageProblems);
+  }, [languageProblems]);
 
   useEffect(() => {
     if (!pendingRevealProblem || pendingRevealProblem.path !== activeFile) return;

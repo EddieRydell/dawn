@@ -501,6 +501,7 @@ dependencies = [
 name = "dawn-desktop"
 version = "0.1.0"
 dependencies = [
+ "dawn-project",
  "serde",
  "tauri",
  "tauri-build",

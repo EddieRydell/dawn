@@ -15,6 +15,7 @@ name = "dawn-desktop"
 path = "src/main.rs"
 
 [dependencies]
+dawn-project = { path = "../../../crates/dawn-project" }
 serde.workspace = true
 tauri.workspace = true
 tauri-plugin-dialog.workspace = true

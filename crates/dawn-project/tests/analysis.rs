@@ -2,7 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use dawn_project::{analyze_project, DiagnosticCode};
+use dawn_project::{
+    analyze_project, analyze_project_with_overlays, DiagnosticCode, ProjectOverlay,
+};
 
 #[test]
 fn analyzes_club_rig_to_resolved_project() {
@@ -99,10 +101,115 @@ club:
 
     assert!(analysis.resolved.is_none());
     assert!(analysis.files.contains_key(&project_path));
-    assert!(analysis
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == DiagnosticCode::Io));
+    assert_eq!(analysis.diagnostics.len(), 1);
+    assert_eq!(analysis.diagnostics[0].code, DiagnosticCode::Import);
+    assert_eq!(analysis.diagnostics[0].path, project_path);
+    assert!(analysis.diagnostics[0].range.is_some());
+}
+
+#[test]
+fn overlay_content_takes_precedence_over_disk() {
+    let dir = temp_dir("overlay-precedence");
+    let project_path = dir.join("project.dawn");
+    fs::write(&project_path, "not: [valid").unwrap();
+
+    let analysis = analyze_project_with_overlays(
+        &project_path,
+        None,
+        vec![ProjectOverlay {
+            path: project_path.clone(),
+            content: minimal_project("club"),
+        }],
+    );
+
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis.resolved.is_some());
+    assert_eq!(analysis.project_key, "club");
+}
+
+#[test]
+fn infers_single_root_project_key() {
+    let dir = temp_dir("infer-project-key");
+    let project_path = dir.join("project.dawn");
+    fs::write(&project_path, minimal_project("club")).unwrap();
+
+    let analysis = analyze_project_with_overlays(&project_path, None, Vec::new());
+
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis.resolved.is_some());
+    assert_eq!(analysis.project_key, "club");
+}
+
+#[test]
+fn reports_zero_project_objects_when_inference_is_ambiguous() {
+    let dir = temp_dir("zero-projects");
+    let project_path = dir.join("project.dawn");
+    fs::write(
+        &project_path,
+        r#"
+fixture:
+  type: fixture
+  name: Pixel
+  color_model: rgb
+  geometry:
+    type: points
+    points: []
+"#,
+    )
+    .unwrap();
+
+    let analysis = analyze_project_with_overlays(&project_path, None, Vec::new());
+
+    assert!(analysis.resolved.is_none());
+    assert_eq!(analysis.diagnostics.len(), 1);
+    assert_eq!(analysis.diagnostics[0].code, DiagnosticCode::ProjectKey);
+    assert!(analysis.diagnostics[0].message.contains("found none"));
+}
+
+#[test]
+fn reports_multiple_project_objects_when_inference_is_ambiguous() {
+    let dir = temp_dir("multiple-projects");
+    let project_path = dir.join("project.dawn");
+    fs::write(
+        &project_path,
+        format!("{}{}", minimal_project("club"), minimal_project("backup")),
+    )
+    .unwrap();
+
+    let analysis = analyze_project_with_overlays(&project_path, None, Vec::new());
+
+    assert!(analysis.resolved.is_none());
+    assert_eq!(analysis.diagnostics.len(), 1);
+    assert_eq!(analysis.diagnostics[0].code, DiagnosticCode::ProjectKey);
+    assert!(analysis.diagnostics[0].message.contains("found 2"));
+}
+
+fn minimal_project(key: &str) -> String {
+    format!(
+        r#"
+{key}:
+  type: project
+  name: {key}
+  display:
+    name: main
+    controllers: []
+    patch:
+      routes: []
+    layout:
+      name: stage
+      units: meters
+      fixtures: []
+      groups: []
+"#
+    )
 }
 
 fn temp_dir(label: &str) -> PathBuf {

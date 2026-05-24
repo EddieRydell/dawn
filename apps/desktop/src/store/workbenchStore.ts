@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { create } from "zustand";
-import type { FileOperationState, FrameSummary, LanguageProblem, ProjectState } from "../types";
+import type { AnalysisState, FileOperationState, FrameSummary, LanguageProblem, ProjectState } from "../types";
 import type { PanelId } from "../workbench/panelIds";
 
 type PanelVisibility = Record<PanelId, boolean>;
@@ -53,12 +53,12 @@ type WorkbenchState = {
 type WorkbenchSet = (partial: Partial<WorkbenchState> | ((state: WorkbenchState) => Partial<WorkbenchState>)) => void;
 
 const autosaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const analysisTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 const initialPanelVisibility: PanelVisibility = {
   project: true,
   editor: true,
   preview: true,
-  problems: true,
   layout: false,
   output: false
 };
@@ -177,6 +177,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
         frame: null,
         status: `Opened ${projectState.root}`
       });
+      await runProjectAnalysis(set, get);
       if (projectState.files[0]) {
         await get().openFile(projectState.files[0]);
       } else {
@@ -188,6 +189,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
   },
   closeProject: async () => {
     if (!(await flushAutosave(set, get))) return;
+    clearAnalysis();
     set({
       projectState: null,
       languageProblems: [],
@@ -246,6 +248,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
         status: `Reloaded ${activeFile}`
       }));
       await get().renderFrame();
+      await runProjectAnalysis(set, get);
     } catch (error) {
       set({ status: formatError(error) });
     }
@@ -253,13 +256,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
   runCheck: async () => {
     try {
       set({ status: "Checking project..." });
-      const projectState = await invoke<ProjectState>("check_project");
-      const errors = projectState.diagnostics.filter((diagnostic) => diagnostic.severity === "Error").length;
-      const warnings = projectState.diagnostics.length - errors;
-      set({
-        projectState,
-        status: errors || warnings ? `Check complete: ${errors} errors, ${warnings} warnings` : "Check complete: no problems"
-      });
+      await runProjectAnalysis(set, get);
     } catch (error) {
       set({ status: formatError(error) });
     }
@@ -283,6 +280,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       const result = await invoke<FileOperationState>("rename_path", { path, newName });
       applyFileOperationResult(result, set, get);
       set({ status: `Renamed ${path} to ${newName}` });
+      await runProjectAnalysis(set, get);
     } catch (error) {
       set({ status: formatError(error) });
     }
@@ -293,6 +291,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       const result = await invoke<FileOperationState>("move_paths", { paths, newParent });
       applyFileOperationResult(result, set, get);
       set({ status: result.moved.length ? `Moved ${result.moved.length} item${result.moved.length === 1 ? "" : "s"}` : "Move skipped" });
+      await runProjectAnalysis(set, get);
     } catch (error) {
       set({ status: formatError(error) });
     }
@@ -327,6 +326,7 @@ function updateEditorContent(
     )
   }));
   scheduleAutosave(path, set, get);
+  scheduleAnalysis(path, set, get);
 }
 
 function clearAutosave(path?: string) {
@@ -342,6 +342,67 @@ function clearAutosave(path?: string) {
     clearTimeout(timer);
   }
   autosaveTimers.clear();
+}
+
+function scheduleAnalysis(
+  path: string,
+  set: WorkbenchSet,
+  get: () => WorkbenchState
+) {
+  clearAnalysis(path);
+  const timer = setTimeout(() => {
+    analysisTimers.delete(path);
+    void runProjectAnalysis(set, get, { preserveStatus: true });
+  }, 300);
+  analysisTimers.set(path, timer);
+}
+
+function clearAnalysis(path?: string) {
+  if (path) {
+    const timer = analysisTimers.get(path);
+    if (!timer) return;
+    clearTimeout(timer);
+    analysisTimers.delete(path);
+    return;
+  }
+
+  for (const timer of analysisTimers.values()) {
+    clearTimeout(timer);
+  }
+  analysisTimers.clear();
+}
+
+async function runProjectAnalysis(
+  set: WorkbenchSet,
+  get: () => WorkbenchState,
+  options: { preserveStatus?: boolean } = {}
+) {
+  if (!get().projectState) return;
+
+  clearAnalysis();
+  const analysis = await invoke<AnalysisState>("analyze_project", {
+    overlays: dirtyEditorOverlays(get)
+  });
+  const errors = analysis.diagnostics.filter((diagnostic) => diagnostic.severity === "Error").length;
+  const warnings = analysis.diagnostics.filter((diagnostic) => diagnostic.severity === "Warning").length;
+  const status = errors || warnings
+    ? `Check complete: ${errors} errors, ${warnings} warnings`
+    : `Check complete: ${analysis.reachableFileCount} files, ${analysis.objectCount} objects`;
+
+  set((state) => ({
+    languageProblems: analysis.diagnostics,
+    projectState: state.projectState
+      ? { ...state.projectState, diagnostics: analysis.diagnostics }
+      : state.projectState,
+    status: options.preserveStatus ? state.status : status
+  }));
+}
+
+function dirtyEditorOverlays(get: () => WorkbenchState) {
+  return get()
+    .openEditors
+    .filter((editor) => editor.dirty)
+    .map((editor) => ({ path: editor.path, content: editor.content }));
 }
 
 async function saveEditor(
@@ -361,6 +422,7 @@ async function saveEditor(
       ),
       status: `${savedStatusPrefix} ${path}`
     }));
+    await runProjectAnalysis(set, get, { preserveStatus: true });
     return true;
   } catch (error) {
     set({ status: formatError(error) });
