@@ -40,3 +40,11 @@ opening:
           value: 1.25
       script:
         import: ../effects/pulse.effect.dawn
+  automation_clips:
+    - id: fade_in_evt_0001
+      start: 0s
+      duration: 8s
+      curve:
+        import: ../curves/fade-in.curve.dawn::fade_in
+      targets:
+        - evt_0001

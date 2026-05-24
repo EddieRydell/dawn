@@ -1,0 +1,20 @@
+[package]
+name = "dawn-desktop"
+edition.workspace = true
+version.workspace = true
+description = "Dawn desktop IDE"
+authors = ["Dawn"]
+license = "MIT"
+default-run = "dawn-desktop"
+
+[dependencies]
+dawn-project = { path = "../../crates/dawn-project" }
+dirs.workspace = true
+floem.workspace = true
+lucide-floem = "0.2.0"
+serde.workspace = true
+serde_json.workspace = true
+
+[[bin]]
+name = "dawn-desktop"
+path = "src/main.rs"

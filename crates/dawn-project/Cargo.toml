@@ -3,12 +3,8 @@ name = "dawn-project"
 edition.workspace = true
 version.workspace = true
 
-[features]
-bindings = ["dep:specta"]
-
 [dependencies]
 cap-std.workspace = true
 indexmap.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
-specta = { workspace = true, optional = true }

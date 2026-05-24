@@ -2,16 +2,23 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use dawn_project::{
+use dawn_project::analysis::{
     analyze_project as core_analyze_project,
-    analyze_project_with_overlays as core_analyze_project_with_overlays,
+    analyze_project_with_overlays as core_analyze_project_with_overlays, DiagnosticCode,
+    ProjectAnalysis, ProjectOverlay,
+};
+use dawn_project::document::{
     apply_fixture_document_edit as core_apply_fixture_document_edit,
     apply_layout_document_edit as core_apply_layout_document_edit,
     get_fixture_document as core_get_fixture_document,
-    get_layout_document as core_get_layout_document, DiagnosticCode, DocumentEditResult,
-    FixtureDefinitionDocument, FixtureDocument, Geometry, ProjectAnalysis, ProjectFs,
-    ProjectOverlay, ProjectPath,
+    get_layout_document as core_get_layout_document, DocumentEditResult, FixtureDefinitionDocument,
+    FixtureDocument, LayoutDocument, LayoutFixturePlacement, LayoutFixtureRef,
+    ResolvedLayoutFixture,
 };
+use dawn_project::fs::ProjectFs;
+use dawn_project::model::{ColorModel, Geometry, Point3, Transform};
+use dawn_project::path::ProjectPath;
+use dawn_project::render::{GeometryRenderBounds, GeometryRenderGuide, GeometryRenderPlan};
 
 fn project_context(project_path: impl AsRef<Path>) -> (ProjectFs, ProjectPath, PathBuf) {
     let project_path = project_path.as_ref();
@@ -70,7 +77,7 @@ fn get_layout_document(
     object_key: &str,
     project_path: impl AsRef<Path>,
     overlays: Vec<ProjectOverlay>,
-) -> Result<dawn_project::LayoutDocument, String> {
+) -> Result<LayoutDocument, String> {
     let (fs, project_path, root) = project_context(project_path);
     let path = relative_project_path(&root, path.as_ref());
     core_get_layout_document(
@@ -104,12 +111,12 @@ fn get_fixture_document(
 fn apply_layout_document_edit(
     path: impl AsRef<Path>,
     object_key: &str,
-    document: dawn_project::LayoutDocument,
+    document: LayoutDocument,
     base_content: String,
     overlays: Vec<ProjectOverlay>,
     project_path: impl AsRef<Path>,
     allow_breaking_references: bool,
-) -> Result<DocumentEditResult<dawn_project::LayoutDocument>, String> {
+) -> Result<DocumentEditResult<LayoutDocument>, String> {
     let (fs, project_path, root) = project_context(project_path);
     let path = relative_project_path(&root, path.as_ref());
     core_apply_layout_document_edit(
@@ -452,12 +459,12 @@ arc_fixture:
     assert_eq!(line.render_plan.emitters.len(), 3);
     assert!(matches!(
         line.render_plan.guides.as_slice(),
-        [dawn_project::GeometryRenderGuide::Line { .. }]
+        [GeometryRenderGuide::Line { .. }]
     ));
     assert_eq!(arc.render_plan.emitters.len(), 4);
     assert!(matches!(
         arc.render_plan.guides.as_slice(),
-        [dawn_project::GeometryRenderGuide::Arc {
+        [GeometryRenderGuide::Arc {
             large_arc: true,
             ..
         }]
@@ -509,20 +516,20 @@ stage:
 #[test]
 fn panel_files_do_not_reintroduce_geometry_helpers() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let panel_paths = [
-        root.join("apps/desktop/src/panels/LayoutViewer.tsx"),
-        root.join("apps/desktop/src/panels/FixtureViewer.tsx"),
+    let viewer_paths = [
+        root.join("apps/desktop/src/ui/layout_viewer.rs"),
+        root.join("apps/desktop/src/ui/fixture_viewer.rs"),
     ];
     let forbidden = [
-        "samplePolylinePoints",
-        "sampleArcPoints",
-        "function bulbRadius",
-        "geometryBounds",
-        "niceScaleLength",
-        "formatScaleLength",
+        "sample_polyline_points",
+        "sample_arc_points",
+        "bulb_radius",
+        "geometry_bounds",
+        "nice_scale_length",
+        "format_scale_length",
     ];
 
-    for path in panel_paths {
+    for path in viewer_paths {
         let source = fs::read_to_string(&path).unwrap();
         for needle in forbidden {
             assert!(
@@ -609,35 +616,33 @@ pixel:
     let mut document =
         get_layout_document(&layout_path, "stage", &project_path, Vec::new()).unwrap();
     let catalog_item = document.fixture_catalog[0].clone();
-    document
-        .fixtures
-        .push(dawn_project::LayoutFixturePlacement {
-            id: "pixel_01".to_string(),
-            fixture: dawn_project::LayoutFixtureRef::Import {
-                import: "layout.dawn::pixel".to_string(),
-                object_key: Some("pixel".to_string()),
-                source_path: Some(ProjectPath::new("layout.dawn").to_slash_string()),
+    document.fixtures.push(LayoutFixturePlacement {
+        id: "pixel_01".to_string(),
+        fixture: LayoutFixtureRef::Import {
+            import: "layout.dawn::pixel".to_string(),
+            object_key: Some("pixel".to_string()),
+            source_path: Some(ProjectPath::new("layout.dawn").to_slash_string()),
+        },
+        resolved_fixture: ResolvedLayoutFixture {
+            name: catalog_item.display_name,
+            color_model: catalog_item.color_model,
+            bulb_size: catalog_item.bulb_size,
+            geometry: catalog_item.geometry,
+            geometry_summary: catalog_item.geometry_summary,
+            render_plan: catalog_item.render_plan,
+            source_path: catalog_item.source_path,
+            object_key: Some(catalog_item.object_key),
+        },
+        transform: Transform {
+            position: Point3 {
+                x: 1.0,
+                y: 2.0,
+                z: 0.0,
             },
-            resolved_fixture: dawn_project::ResolvedLayoutFixture {
-                name: catalog_item.display_name,
-                color_model: catalog_item.color_model,
-                bulb_size: catalog_item.bulb_size,
-                geometry: catalog_item.geometry,
-                geometry_summary: catalog_item.geometry_summary,
-                render_plan: catalog_item.render_plan,
-                source_path: catalog_item.source_path,
-                object_key: Some(catalog_item.object_key),
-            },
-            transform: dawn_project::Transform {
-                position: dawn_project::Point3 {
-                    x: 1.0,
-                    y: 2.0,
-                    z: 0.0,
-                },
-                rotation: Default::default(),
-                scale: Default::default(),
-            },
-        });
+            rotation: Default::default(),
+            scale: Default::default(),
+        },
+    });
 
     let result = apply_layout_document_edit(
         &layout_path,
@@ -777,10 +782,10 @@ pixel:
         fixtures: vec![FixtureDefinitionDocument {
             object_key: "arc".to_string(),
             name: "Arc".to_string(),
-            color_model: dawn_project::ColorModel::Rgb,
+            color_model: ColorModel::Rgb,
             bulb_size: 1.0,
             geometry: Geometry::Arc {
-                center: dawn_project::Point3::default(),
+                center: Point3::default(),
                 radius: 1.0,
                 start_degrees: 0.0,
                 end_degrees: 180.0,
@@ -877,16 +882,16 @@ pixel_bar:
         fixtures: vec![FixtureDefinitionDocument {
             object_key: "pixel_bar".to_string(),
             name: "PixelBar".to_string(),
-            color_model: dawn_project::ColorModel::Rgb,
+            color_model: ColorModel::Rgb,
             bulb_size: 1.0,
             geometry: Geometry::Lines {
                 points: vec![
-                    dawn_project::Point3 {
+                    Point3 {
                         x: -0.5,
                         y: 0.0,
                         z: 0.0,
                     },
-                    dawn_project::Point3 {
+                    Point3 {
                         x: 0.5,
                         y: 0.0,
                         z: 0.0,
@@ -1281,11 +1286,11 @@ fn temp_dir(label: &str) -> PathBuf {
     path
 }
 
-fn empty_render_plan() -> dawn_project::GeometryRenderPlan {
-    dawn_project::GeometryRenderPlan {
+fn empty_render_plan() -> GeometryRenderPlan {
+    GeometryRenderPlan {
         emitters: Vec::new(),
         guides: Vec::new(),
-        bounds: dawn_project::GeometryRenderBounds {
+        bounds: GeometryRenderBounds {
             min_x: -1.0,
             min_y: -1.0,
             max_x: 1.0,

@@ -23,11 +23,10 @@ Regression coverage:
 
 Verification:
 - `cargo test`
-- `pnpm --filter @dawn/desktop build`
-- `pnpm --filter @dawn/desktop bindings:check`
+- `cargo check -p dawn-desktop`
 
 Files changed:
-- `apps/desktop/src-tauri/src/lib.rs`
+- `apps/desktop/src/workspace.rs`
 - `docs/fix_log.md`
 
 Follow-up risk:
