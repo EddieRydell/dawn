@@ -3,56 +3,208 @@ stage:
   name: stage
   units: meters
   fixtures:
-    - id: bar_01
-      fixture:
-        import: ../hardware/main.hardware.dawn::pixel_bar_50
-      transform:
-        position: { x: -3.0, y: 0.0, z: 2.5 }
-    - id: bar_02
-      fixture:
-        import: ../hardware/main.hardware.dawn::pixel_bar_50
-      transform:
-        position: { x: -1.0, y: 0.0, z: 2.5 }
-    - id: bar_03
-      fixture:
-        import: ../hardware/main.hardware.dawn::pixel_bar_50
-      transform:
-        position: { x: 1.0, y: 0.0, z: 2.5 }
-    - id: bar_04
-      fixture:
-        import: ../hardware/main.hardware.dawn::pixel_bar_50
-      transform:
-        position: { x: 3.0, y: 0.0, z: 2.5 }
-    - id: spot_01
-      fixture:
-        import: ../hardware/main.hardware.dawn::spot_rgb
-      transform:
-        position: { x: -3.5, y: -1.2, z: 3.0 }
-    - id: spot_02
-      fixture:
-        import: ../hardware/main.hardware.dawn::spot_rgb
-      transform:
-        position: { x: -1.2, y: -1.2, z: 3.0 }
-    - id: spot_03
-      fixture:
-        import: ../hardware/main.hardware.dawn::spot_rgb
-      transform:
-        position: { x: 1.2, y: -1.2, z: 3.0 }
-    - id: spot_04
-      fixture:
-        import: ../hardware/main.hardware.dawn::spot_rgb
-      transform:
-        position: { x: 3.5, y: -1.2, z: 3.0 }
+  - id: bar_01
+    fixture:
+      import: ../fixtures/main.fixture.dawn::pixel_bar_50
+    transform:
+      position:
+        x: -1.2553350925445557
+        y: -2.0354422964155674
+        z: 0.0
+      rotation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
+  - id: bar_02
+    fixture:
+      import: ../fixtures/main.fixture.dawn::pixel_bar_50
+    transform:
+      position:
+        x: 0.8057725429534912
+        y: -1.2223690673708916
+        z: 0.0
+      rotation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      scale:
+        x: 1.5
+        y: 1.0
+        z: 1.0
+  - id: bar_03
+    fixture:
+      import: ../fixtures/main.fixture.dawn::pixel_bar_50
+    transform:
+      position:
+        x: 1.0
+        y: 0.0
+        z: 0.0
+      rotation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
+  - id: bar_04
+    fixture:
+      import: ../fixtures/main.fixture.dawn::pixel_bar_50
+    transform:
+      position:
+        x: 2.5342092514038086
+        y: -0.6351692341268063
+        z: 0.0
+      rotation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
+  - id: spot_01
+    fixture:
+      import: ../fixtures/main.fixture.dawn::spot_rgb
+    transform:
+      position:
+        x: -3.5
+        y: -1.2
+        z: 3.0
+      rotation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
+  - id: spot_02
+    fixture:
+      import: ../fixtures/main.fixture.dawn::spot_rgb
+    transform:
+      position:
+        x: -0.06385474354028697
+        y: 2.74985818862915
+        z: 0.0
+      rotation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
+  - id: spot_03
+    fixture:
+      import: ../fixtures/main.fixture.dawn::spot_rgb
+    transform:
+      position:
+        x: 0.696232271194458
+        y: 1.2062315225601197
+        z: 0.0
+      rotation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
+  - id: spot_04
+    fixture:
+      import: ../fixtures/main.fixture.dawn::spot_rgb
+    transform:
+      position:
+        x: 3.5
+        y: -1.2
+        z: 3.0
+      rotation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
+  - id: pixelbar
+    fixture:
+      import: ../fixtures/main.fixture.dawn::pixel_bar_50
+    transform:
+      position:
+        x: 2.1758438222578382
+        y: 2.1095413804054255
+        z: 0.0
+      rotation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
+  - id: spot
+    fixture:
+      import: ../fixtures/main.fixture.dawn::spot_rgb
+    transform:
+      position:
+        x: -2.661732343956828
+        y: -0.2274379670619968
+        z: 0.0
+      rotation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
+  - id: pixelbar_2
+    fixture:
+      import: ../fixtures/main.fixture.dawn::pixel_bar_50
+    transform:
+      position:
+        x: -1.3264588564634323
+        y: -0.29504349231719984
+        z: 0.0
+      rotation:
+        x: 60.0
+        y: 60.0
+        z: 60.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
+  - id: spot_2
+    fixture:
+      import: ../fixtures/main.fixture.dawn::spot_rgb
+    transform:
+      position:
+        x: -0.08153529473633547
+        y: -0.49109186037766417
+        z: 0.0
+      rotation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   groups:
-    - name: WallBars
-      members:
-        - bar_01
-        - bar_02
-        - bar_03
-        - bar_04
-    - name: Movers
-      members:
-        - spot_01
-        - spot_02
-        - spot_03
-        - spot_04
+  - name: WallBars
+    members:
+    - bar_01
+    - bar_02
+    - bar_03
+    - bar_04
+  - name: Movers
+    members:
+    - spot_01
+    - spot_02
+    - spot_03
+    - spot_04

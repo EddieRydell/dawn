@@ -5,6 +5,7 @@ version.workspace = true
 description = "Dawn desktop IDE"
 authors = ["Dawn"]
 license = "MIT"
+default-run = "dawn-desktop"
 
 [lib]
 name = "dawn_desktop_lib"
@@ -14,10 +15,17 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "dawn-desktop"
 path = "src/main.rs"
 
+[[bin]]
+name = "export-bindings"
+path = "src/export_bindings.rs"
+
 [dependencies]
-dawn-project = { path = "../../../crates/dawn-project" }
+dawn-project = { path = "../../../crates/dawn-project", features = ["bindings"] }
 serde.workspace = true
+specta.workspace = true
+specta-typescript.workspace = true
 tauri.workspace = true
+tauri-specta.workspace = true
 tauri-plugin-dialog.workspace = true
 walkdir.workspace = true
 

@@ -10,8 +10,8 @@ import {
   useState
 } from "react";
 import { Tree, type MoveHandler, type NodeRendererProps, type RenameHandler, type RowRendererProps } from "react-arborist";
+import type { ProjectEntry } from "../generated/bindings";
 import { useWorkbench } from "../store/workbenchStore";
-import type { ProjectEntry } from "../types";
 
 type FileTreeNode = {
   id: string;

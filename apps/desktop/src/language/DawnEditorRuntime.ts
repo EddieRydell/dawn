@@ -1,6 +1,6 @@
 import * as monaco from "monaco-editor";
+import type { LanguageProblem } from "../generated/bindings";
 import type { OpenEditor } from "../store/workbenchStore";
-import type { LanguageProblem } from "../types";
 import { dawnLanguageIdForPath, ensureDawnLanguageRegistered } from "./dawnLanguage";
 
 type DawnEditorProject = {
@@ -127,6 +127,10 @@ export class DawnEditorRuntime {
     editor.focus();
   }
 
+  layout(): void {
+    this.editor?.layout();
+  }
+
   async dispose(): Promise<void> {
     this.setProblems([]);
     this.editor?.dispose();
@@ -251,9 +255,5 @@ function markerSeverity(severity: LanguageProblem["severity"]): monaco.MarkerSev
       return monaco.MarkerSeverity.Error;
     case "Warning":
       return monaco.MarkerSeverity.Warning;
-    case "Info":
-      return monaco.MarkerSeverity.Info;
-    case "Hint":
-      return monaco.MarkerSeverity.Hint;
   }
 }

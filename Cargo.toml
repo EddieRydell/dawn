@@ -13,7 +13,10 @@ version = "0.1.0"
 indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
-tauri = { version = "2", features = [] }
+specta = "=2.0.0-rc.25"
+specta-typescript = "0.0.12"
+tauri = { version = "2", features = ["specta"] }
 tauri-build = { version = "2", features = [] }
+tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 tauri-plugin-dialog = "2"
 walkdir = "2"

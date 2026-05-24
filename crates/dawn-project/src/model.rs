@@ -1,8 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use indexmap::IndexMap;
 use serde::de::{self, Visitor};
@@ -230,17 +230,81 @@ pub enum DawnObject<M: ModelMode = Authored> {
     Sequence(Sequence<M>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(transparent)]
-pub struct DawnPath(String);
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ProjectPath(PathBuf);
 
-impl DawnPath {
-    pub fn new(path: impl Into<String>) -> Self {
-        Self(path.into())
+impl ProjectPath {
+    pub fn new(path: impl AsRef<Path>) -> Self {
+        let path = path.as_ref();
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|current_dir| current_dir.join(path))
+                .unwrap_or_else(|_| path.to_path_buf())
+        };
+        Self(lexically_normalize_path(&absolute))
     }
 
-    pub fn as_str(&self) -> &str {
+    pub fn as_path(&self) -> &Path {
         &self.0
+    }
+
+    pub fn parent(&self) -> Option<Self> {
+        self.0.parent().map(Self::new)
+    }
+
+    pub fn join(&self, path: impl AsRef<Path>) -> Self {
+        Self::new(self.0.join(path))
+    }
+
+    pub fn to_slash_string(&self) -> String {
+        path_to_slash_string(&self.0)
+    }
+
+    pub fn display(&self) -> std::path::Display<'_> {
+        self.0.display()
+    }
+}
+
+impl AsRef<Path> for ProjectPath {
+    fn as_ref(&self) -> &Path {
+        self.as_path()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DawnPath(PathBuf);
+
+impl DawnPath {
+    pub fn new(path: impl AsRef<Path>) -> Self {
+        Self(path.as_ref().to_path_buf())
+    }
+
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+
+    pub fn to_slash_string(&self) -> String {
+        path_to_slash_string(&self.0)
+    }
+}
+
+impl Serialize for DawnPath {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_slash_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for DawnPath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(Self::new)
     }
 }
 
@@ -277,7 +341,8 @@ pub struct ImportRef {
 
 impl ImportRef {
     pub fn new(raw: impl Into<String>) -> Result<Self, String> {
-        serde_yaml::from_value(serde_yaml::Value::String(raw.into())).map_err(|error| error.to_string())
+        serde_yaml::from_value(serde_yaml::Value::String(raw.into()))
+            .map_err(|error| error.to_string())
     }
 
     pub fn raw(&self) -> &str {
@@ -313,7 +378,7 @@ impl<'de> Deserialize<'de> for ImportRef {
         }
         Ok(Self {
             raw: raw.clone(),
-            path: DawnPath(path.to_string()),
+            path: DawnPath::new(path),
             object,
         })
     }
@@ -343,8 +408,9 @@ impl<T> InlineOrImport<T> {
         }
     }
 
-    pub fn import_path(&self) -> Option<&str> {
-        self.import_ref().map(|import| import.path().as_str())
+    pub fn import_path(&self) -> Option<String> {
+        self.import_ref()
+            .map(|import| import.path().to_slash_string())
     }
 
     pub fn inline(&self) -> Option<&T> {
@@ -439,6 +505,7 @@ impl Display<Resolved> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
 pub enum DistanceUnit {
     Meters,
@@ -472,6 +539,7 @@ pub struct Fixture {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
 pub enum ColorModel {
     Rgb,
@@ -482,6 +550,7 @@ pub enum ColorModel {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
 #[serde(deny_unknown_fields)]
 pub struct Transform {
     pub position: Point3,
@@ -492,6 +561,7 @@ pub struct Transform {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
 #[serde(deny_unknown_fields)]
 pub struct Point3 {
     pub x: f64,
@@ -510,6 +580,7 @@ impl Default for Point3 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
 #[serde(deny_unknown_fields)]
 pub struct Rotation3 {
     pub x: f64,
@@ -528,6 +599,7 @@ impl Default for Rotation3 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
 #[serde(deny_unknown_fields)]
 pub struct Scale3 {
     pub x: f64,
@@ -546,7 +618,13 @@ impl Default for Scale3 {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum Geometry {
     Points {
         points: Vec<Point3>,
@@ -570,10 +648,11 @@ pub enum Geometry {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
 #[serde(deny_unknown_fields)]
 pub struct LineSegment {
-    pub from: usize,
-    pub to: usize,
+    pub from: u32,
+    pub to: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -712,7 +791,9 @@ pub struct AutomationClip<M: ModelMode = Authored> {
     pub targets: Vec<M::AutomationClipTarget>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
 pub enum ObjectKind {
     Project,
     Display,
@@ -739,7 +820,7 @@ impl fmt::Display for ObjectKind {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedImport {
-    pub source_path: DawnPath,
+    pub source_path: ProjectPath,
     pub object: DawnObject<Authored>,
 }
 
@@ -836,11 +917,11 @@ impl Error for LowerError {}
 #[derive(Debug)]
 pub enum LoadProjectError {
     Io {
-        path: PathBuf,
+        path: ProjectPath,
         source: std::io::Error,
     },
     Yaml {
-        path: PathBuf,
+        path: ProjectPath,
         source: serde_yaml::Error,
     },
     Lower(LowerError),
@@ -878,9 +959,9 @@ impl From<LowerError> for LoadProjectError {
 
 #[derive(Debug, Clone)]
 pub struct ProjectAnalysis {
-    pub root_path: PathBuf,
+    pub root_path: ProjectPath,
     pub project_key: String,
-    pub files: IndexMap<PathBuf, AnalyzedFile>,
+    pub files: IndexMap<ProjectPath, AnalyzedFile>,
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub resolved: Option<ResolvedProject>,
 }
@@ -895,27 +976,30 @@ impl ProjectAnalysis {
 
 #[derive(Debug, Clone)]
 pub struct AnalyzedFile {
-    pub path: PathBuf,
+    pub path: ProjectPath,
     pub text: Option<String>,
     pub file: Option<DawnFile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectDiagnostic {
-    pub path: PathBuf,
+    pub path: ProjectPath,
     pub range: Option<TextRange>,
     pub severity: DiagnosticSeverity,
     pub code: DiagnosticCode,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
 pub enum DiagnosticSeverity {
     Error,
     Warning,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
 pub enum DiagnosticCode {
     Io,
     Yaml,
@@ -938,27 +1022,39 @@ pub struct TextPosition {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectOverlay {
-    pub path: PathBuf,
+    pub path: ProjectPath,
     pub content: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentViewId {
+    Text,
+    Layout,
+    Fixture,
+}
+
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentDescriptor {
     pub path: String,
     pub objects: Vec<DocumentObjectDescriptor>,
-    pub available_views: Vec<String>,
-    pub default_object_keys: IndexMap<String, String>,
+    pub available_views: Vec<DocumentViewId>,
+    pub default_object_keys: BTreeMap<DocumentViewId, String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentObjectDescriptor {
     pub key: String,
-    pub kind: String,
+    pub kind: ObjectKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
 pub struct LayoutDocument {
     pub path: String,
@@ -971,18 +1067,22 @@ pub struct LayoutDocument {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
 pub struct LayoutFixturePlacement {
     pub id: String,
     pub fixture: LayoutFixtureRef,
+    pub resolved_fixture: ResolvedLayoutFixture,
     pub transform: Transform,
-    pub display_name: Option<String>,
-    pub color_model: Option<ColorModel>,
-    pub geometry: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum LayoutFixtureRef {
     Import {
         import: String,
@@ -997,6 +1097,7 @@ pub enum LayoutFixtureRef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
 pub struct LayoutGroupDocument {
     pub name: String,
@@ -1004,6 +1105,19 @@ pub struct LayoutGroupDocument {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedLayoutFixture {
+    pub name: String,
+    pub color_model: ColorModel,
+    pub geometry: Geometry,
+    pub geometry_summary: String,
+    pub source_path: String,
+    pub object_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
 #[serde(rename_all = "camelCase")]
 pub struct FixtureCatalogItem {
     pub object_key: String,
@@ -1011,38 +1125,114 @@ pub struct FixtureCatalogItem {
     pub import_string: String,
     pub display_name: String,
     pub color_model: ColorModel,
-    pub geometry: String,
+    pub geometry: Geometry,
+    pub geometry_summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct FixtureDocument {
+    pub path: String,
+    pub selected_object_key: Option<String>,
+    pub fixtures: Vec<FixtureDefinitionDocument>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "bindings", derive(specta::Type))]
+#[serde(rename_all = "camelCase")]
+pub struct FixtureDefinitionDocument {
+    pub object_key: String,
+    pub name: String,
+    pub color_model: ColorModel,
+    pub geometry: Geometry,
+    pub geometry_summary: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct DocumentEditOutcome<T> {
+    pub serialized_content: String,
+    pub analysis: ProjectAnalysis,
+    pub refreshed_document: T,
+}
+
+#[derive(Debug, Clone)]
+pub struct BlockedDocumentEdit {
+    pub diagnostics: Vec<ProjectDiagnostic>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum DocumentEditResult<T> {
+    Applied(DocumentEditOutcome<T>),
+    Blocked(BlockedDocumentEdit),
 }
 
 pub fn inspect_document(
     path: impl AsRef<Path>,
     overlays: Vec<ProjectOverlay>,
 ) -> Result<DocumentDescriptor, String> {
-    let path = absolutize_path(path.as_ref());
+    let path = ProjectPath::new(path.as_ref());
     let text = read_text_with_overlays(&path, &overlays)?;
     let file: DawnFile = serde_yaml::from_str(&text).map_err(|error| error.to_string())?;
     let objects = file
         .iter()
         .map(|(key, object)| DocumentObjectDescriptor {
             key: key.clone(),
-            kind: object.kind().to_string(),
+            kind: object.kind(),
         })
         .collect::<Vec<_>>();
-    let mut available_views = vec!["text".to_string()];
-    let mut default_object_keys = IndexMap::new();
+    let mut available_views = vec![DocumentViewId::Text];
+    let mut default_object_keys = BTreeMap::new();
     if let Some(key) = file.iter().find_map(|(key, object)| match object {
         DawnObject::Layout(_) => Some(key.clone()),
         _ => None,
     }) {
-        available_views.push("layout".to_string());
-        default_object_keys.insert("layout".to_string(), key);
+        available_views.push(DocumentViewId::Layout);
+        default_object_keys.insert(DocumentViewId::Layout, key);
+    }
+    if let Some(key) = file.iter().find_map(|(key, object)| match object {
+        DawnObject::Fixture(_) => Some(key.clone()),
+        _ => None,
+    }) {
+        available_views.push(DocumentViewId::Fixture);
+        default_object_keys.insert(DocumentViewId::Fixture, key);
     }
 
     Ok(DocumentDescriptor {
-        path: path_to_string(&path),
+        path: path.to_slash_string(),
         objects,
         available_views,
         default_object_keys,
+    })
+}
+
+pub fn get_fixture_document(
+    path: impl AsRef<Path>,
+    selected_object_key: Option<&str>,
+    overlays: Vec<ProjectOverlay>,
+) -> Result<FixtureDocument, String> {
+    let path = ProjectPath::new(path.as_ref());
+    let text = read_text_with_overlays(&path, &overlays)?;
+    let file: DawnFile = serde_yaml::from_str(&text).map_err(|error| error.to_string())?;
+    let fixtures = file
+        .iter()
+        .filter_map(|(key, object)| {
+            let DawnObject::Fixture(fixture) = object else {
+                return None;
+            };
+            Some(fixture_to_document(key, fixture))
+        })
+        .collect::<Vec<_>>();
+    let selected_object_key = selected_object_key
+        .filter(|key| fixtures.iter().any(|fixture| fixture.object_key == *key))
+        .map(str::to_string)
+        .or_else(|| fixtures.first().map(|fixture| fixture.object_key.clone()));
+
+    Ok(FixtureDocument {
+        path: path.to_slash_string(),
+        selected_object_key,
+        fixtures,
     })
 }
 
@@ -1052,14 +1242,17 @@ pub fn get_layout_document(
     project_path: impl AsRef<Path>,
     overlays: Vec<ProjectOverlay>,
 ) -> Result<LayoutDocument, String> {
-    let path = absolutize_path(path.as_ref());
+    let path = ProjectPath::new(path.as_ref());
     let analysis = analyze_project_with_overlays(project_path, None, overlays.clone());
-    if analysis
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error && absolutize_path(&diagnostic.path) == path)
-    {
-        return Err("document has parse or analysis errors".to_string());
+    if let Some(diagnostic) = analysis.diagnostics.iter().find(|diagnostic| {
+        diagnostic.severity == DiagnosticSeverity::Error
+            && diagnostic.path == path
+            && matches!(diagnostic.code, DiagnosticCode::Io | DiagnosticCode::Yaml)
+    }) {
+        return Err(format!(
+            "could not load layout `{object_key}`: {}",
+            diagnostic.message
+        ));
     }
 
     let text = read_text_with_overlays(&path, &overlays)?;
@@ -1070,63 +1263,164 @@ pub fn get_layout_document(
     let DawnObject::Layout(layout) = object else {
         return Err(format!("object `{object_key}` is not a layout"));
     };
-    let catalog = fixture_catalog_from_analysis(&analysis);
+    let catalog = fixture_catalog_from_analysis(&analysis, &path);
+    let mut resolver = AnalysisImportResolver {
+        files: &analysis.files,
+    };
+    let resolved_layout = lower_layout(layout, &path, &mut |source_path, import, expected| {
+        resolver.resolve(source_path, import, expected)
+    })
+    .map_err(|error| format!("could not load layout `{object_key}`: {error}"))?;
 
-    Ok(layout_to_document(&path, object_key, layout, &catalog))
+    layout_to_document(&path, object_key, layout, &resolved_layout, &catalog)
 }
 
-pub fn save_layout_document_content(
+pub fn apply_layout_document_edit(
     path: impl AsRef<Path>,
     object_key: &str,
     document: LayoutDocument,
-    base_content: Option<String>,
+    base_content: String,
     overlays: Vec<ProjectOverlay>,
-) -> Result<(String, ProjectAnalysis), String> {
-    let path = absolutize_path(path.as_ref());
-    let text = match base_content {
-        Some(content) => content,
-        None => read_text_with_overlays(&path, &overlays)?,
-    };
-    let mut file: DawnFile = serde_yaml::from_str(&text).map_err(|error| error.to_string())?;
-    if !matches!(file.get(object_key), Some(DawnObject::Layout(_))) {
+    project_path: impl AsRef<Path>,
+    allow_breaking_references: bool,
+) -> Result<DocumentEditResult<LayoutDocument>, String> {
+    let path = ProjectPath::new(path.as_ref());
+    let project_path = ProjectPath::new(project_path.as_ref());
+    let file: DawnFile = serde_yaml::from_str(&base_content).map_err(|error| error.to_string())?;
+    let Some(DawnObject::Layout(current_layout)) = file.get(object_key) else {
         return Err(format!("layout object `{object_key}` was not found"));
-    }
-    file.insert(
-        object_key.to_string(),
-        DawnObject::Layout(document_to_layout(document)?),
+    };
+    let mut layout = document_to_layout(document)?;
+    repair_layout_group_members(current_layout, &mut layout);
+    validate_layout_identifiers(&layout)?;
+    let object = DawnObject::Layout(layout);
+    let serialized = replace_top_level_object(&base_content, object_key, &object)?;
+    let next_overlays = overlay_after_save(path.clone(), serialized.clone(), overlays.clone());
+    let analysis = analyze_project_with_overlays(project_path.as_path(), None, next_overlays);
+    let introduced_errors = introduced_error_diagnostics(
+        &analyze_project_with_overlays(
+            project_path.as_path(),
+            None,
+            overlay_after_save(path.clone(), base_content, overlays),
+        ),
+        &analysis,
     );
-    let serialized = serde_yaml::to_string(&file).map_err(|error| error.to_string())?;
-    let next_overlays = overlay_after_save(path.clone(), serialized.clone(), overlays);
-    let project_path = infer_project_path_from_document(&path)?;
-    let analysis = analyze_project_with_overlays(project_path, None, next_overlays);
-    Ok((serialized, analysis))
+    if !allow_breaking_references && !introduced_errors.is_empty() {
+        return Ok(DocumentEditResult::Blocked(BlockedDocumentEdit {
+            diagnostics: introduced_errors,
+            message: "This edit introduces project reference errors.".to_string(),
+        }));
+    }
+
+    let refreshed_document = get_layout_document(
+        path.as_path(),
+        object_key,
+        analysis.root_path.as_path(),
+        vec![ProjectOverlay {
+            path: path.clone(),
+            content: serialized.clone(),
+        }],
+    )?;
+    Ok(DocumentEditResult::Applied(DocumentEditOutcome {
+        serialized_content: serialized,
+        analysis,
+        refreshed_document,
+    }))
 }
 
-fn read_text_with_overlays(path: &Path, overlays: &[ProjectOverlay]) -> Result<String, String> {
-    let path = absolutize_path(path);
+pub fn apply_fixture_document_edit(
+    path: impl AsRef<Path>,
+    document: FixtureDocument,
+    base_content: String,
+    overlays: Vec<ProjectOverlay>,
+    project_path: impl AsRef<Path>,
+    allow_breaking_references: bool,
+) -> Result<DocumentEditResult<FixtureDocument>, String> {
+    let path = ProjectPath::new(path.as_ref());
+    validate_fixture_document(&document)?;
+    let file: DawnFile = serde_yaml::from_str(&base_content).map_err(|error| error.to_string())?;
+    let mut replacements = BTreeMap::new();
+    for (key, object) in &file {
+        if matches!(object, DawnObject::Fixture(_)) {
+            replacements.insert(key.clone(), None);
+        }
+    }
+    for fixture in &document.fixtures {
+        replacements.insert(
+            fixture.object_key.clone(),
+            Some(serialize_top_level_object(
+                &fixture.object_key,
+                &DawnObject::Fixture(document_to_fixture(fixture)),
+            )?),
+        );
+    }
+    let serialized = replace_top_level_objects(&base_content, replacements)?;
+    let project_path = ProjectPath::new(project_path.as_ref());
+    let next_overlays = overlay_after_save(path.clone(), serialized.clone(), overlays.clone());
+    let analysis = analyze_project_with_overlays(project_path.as_path(), None, next_overlays);
+    let introduced_errors = introduced_error_diagnostics(
+        &analyze_project_with_overlays(
+            project_path.as_path(),
+            None,
+            overlay_after_save(path.clone(), base_content, overlays),
+        ),
+        &analysis,
+    );
+    if !allow_breaking_references && !introduced_errors.is_empty() {
+        return Ok(DocumentEditResult::Blocked(BlockedDocumentEdit {
+            diagnostics: introduced_errors,
+            message: "This edit introduces project reference errors.".to_string(),
+        }));
+    }
+
+    let refreshed_document = get_fixture_document(
+        path.as_path(),
+        document.selected_object_key.as_deref(),
+        vec![ProjectOverlay {
+            path: path.clone(),
+            content: serialized.clone(),
+        }],
+    )?;
+    Ok(DocumentEditResult::Applied(DocumentEditOutcome {
+        serialized_content: serialized,
+        analysis,
+        refreshed_document,
+    }))
+}
+
+fn read_text_with_overlays(
+    path: &ProjectPath,
+    overlays: &[ProjectOverlay],
+) -> Result<String, String> {
     overlays
         .iter()
-        .find(|overlay| absolutize_path(&overlay.path) == path)
+        .find(|overlay| overlay.path == *path)
         .map(|overlay| overlay.content.clone())
         .map(Ok)
-        .unwrap_or_else(|| fs::read_to_string(&path).map_err(|error| error.to_string()))
+        .unwrap_or_else(|| fs::read_to_string(path.as_path()).map_err(|error| error.to_string()))
 }
 
 fn layout_to_document(
-    path: &Path,
+    path: &ProjectPath,
     object_key: &str,
     layout: &Layout<Authored>,
+    resolved_layout: &Layout<Resolved>,
     catalog: &[FixtureCatalogItem],
-) -> LayoutDocument {
-    LayoutDocument {
-        path: path_to_string(path),
+) -> Result<LayoutDocument, String> {
+    if layout.fixtures.len() != resolved_layout.fixtures.len() {
+        return Err("resolved layout fixture count did not match authored layout".to_string());
+    }
+
+    Ok(LayoutDocument {
+        path: path.to_slash_string(),
         object_key: object_key.to_string(),
         name: layout.name.clone(),
         units: layout.units,
         fixtures: layout
             .fixtures
             .iter()
-            .map(|fixture| placement_to_document(fixture, path, catalog))
+            .zip(&resolved_layout.fixtures)
+            .map(|(fixture, resolved)| placement_to_document(fixture, resolved, path))
             .collect(),
         groups: layout
             .groups
@@ -1141,60 +1435,58 @@ fn layout_to_document(
             })
             .collect(),
         fixture_catalog: catalog.to_vec(),
-    }
+    })
 }
 
 fn placement_to_document(
     placement: &FixturePlacement<Authored>,
-    source_path: &Path,
-    catalog: &[FixtureCatalogItem],
+    resolved: &FixturePlacement<Resolved>,
+    source_path: &ProjectPath,
 ) -> LayoutFixturePlacement {
-    let mut display_name = None;
-    let mut color_model = None;
-    let mut geometry = None;
-    let fixture = match &placement.fixture {
-        InlineOrImport::Inline(fixture) => {
-            display_name = Some(fixture.name.clone());
-            color_model = Some(fixture.color_model);
-            geometry = Some(geometry_summary(&fixture.geometry));
+    let (fixture, resolved_source_path, resolved_object_key) = match &placement.fixture {
+        InlineOrImport::Inline(fixture) => (
             LayoutFixtureRef::Inline {
                 name: fixture.name.clone(),
                 color_model: fixture.color_model,
                 geometry: fixture.geometry.clone(),
-            }
-        }
+            },
+            source_path.to_slash_string(),
+            None,
+        ),
         InlineOrImport::Import { import } => {
-            let resolved_path = path_to_string(&absolutize_path(&resolve_import_file_path(
-                &DawnPath::new(path_to_string(source_path)),
-                import.path(),
-            )));
-            if let Some(item) = catalog
-                .iter()
-                .find(|item| item.source_path == resolved_path && Some(item.object_key.as_str()) == import.object().map(ObjectName::as_str))
-            {
-                display_name = Some(item.display_name.clone());
-                color_model = Some(item.color_model);
-                geometry = Some(item.geometry.clone());
-            }
-            LayoutFixtureRef::Import {
-                import: import.raw().to_string(),
-                object_key: import.object().map(|object| object.as_str().to_string()),
-                source_path: Some(resolved_path),
-            }
+            let resolved_path =
+                resolve_import_file_path(source_path, import.path()).to_slash_string();
+            (
+                LayoutFixtureRef::Import {
+                    import: import.raw().to_string(),
+                    object_key: import.object().map(|object| object.as_str().to_string()),
+                    source_path: Some(resolved_path.clone()),
+                },
+                resolved_path,
+                import.object().map(|object| object.as_str().to_string()),
+            )
         }
     };
 
     LayoutFixturePlacement {
         id: placement.id.clone(),
         fixture,
+        resolved_fixture: ResolvedLayoutFixture {
+            name: resolved.fixture.name.clone(),
+            color_model: resolved.fixture.color_model,
+            geometry: resolved.fixture.geometry.clone(),
+            geometry_summary: geometry_summary(&resolved.fixture.geometry),
+            source_path: resolved_source_path,
+            object_key: resolved_object_key,
+        },
         transform: placement.transform,
-        display_name,
-        color_model,
-        geometry,
     }
 }
 
-fn fixture_catalog_from_analysis(analysis: &ProjectAnalysis) -> Vec<FixtureCatalogItem> {
+fn fixture_catalog_from_analysis(
+    analysis: &ProjectAnalysis,
+    importing_source_path: &ProjectPath,
+) -> Vec<FixtureCatalogItem> {
     let mut catalog = Vec::new();
     for (path, analyzed) in &analysis.files {
         let Some(file) = analyzed.file.as_ref() else {
@@ -1204,14 +1496,16 @@ fn fixture_catalog_from_analysis(analysis: &ProjectAnalysis) -> Vec<FixtureCatal
             let DawnObject::Fixture(fixture) = object else {
                 continue;
             };
-            let source_path = path_to_string(path);
+            let source_path = path.to_slash_string();
+            let import_path = relative_import_path(importing_source_path, path);
             catalog.push(FixtureCatalogItem {
                 object_key: key.clone(),
                 source_path: source_path.clone(),
-                import_string: format!("{source_path}::{key}"),
+                import_string: format!("{import_path}::{key}"),
                 display_name: fixture.name.clone(),
                 color_model: fixture.color_model,
-                geometry: geometry_summary(&fixture.geometry),
+                geometry: fixture.geometry.clone(),
+                geometry_summary: geometry_summary(&fixture.geometry),
             });
         }
     }
@@ -1285,31 +1579,258 @@ fn document_to_placement(
     })
 }
 
+fn fixture_to_document(object_key: &str, fixture: &Fixture) -> FixtureDefinitionDocument {
+    FixtureDefinitionDocument {
+        object_key: object_key.to_string(),
+        name: fixture.name.clone(),
+        color_model: fixture.color_model,
+        geometry: fixture.geometry.clone(),
+        geometry_summary: geometry_summary(&fixture.geometry),
+    }
+}
+
+fn document_to_fixture(document: &FixtureDefinitionDocument) -> Fixture {
+    Fixture {
+        name: document.name.clone(),
+        color_model: document.color_model,
+        geometry: document.geometry.clone(),
+    }
+}
+
+fn validate_fixture_document(document: &FixtureDocument) -> Result<(), String> {
+    let mut keys = HashSet::new();
+    for fixture in &document.fixtures {
+        validate_simple_identifier(&fixture.object_key, "fixture object key")?;
+        if !keys.insert(fixture.object_key.as_str()) {
+            return Err(format!("duplicate fixture object key `{}`", fixture.object_key));
+        }
+    }
+    Ok(())
+}
+
+fn validate_layout_identifiers(layout: &Layout<Authored>) -> Result<(), String> {
+    let mut ids = HashSet::new();
+    for fixture in &layout.fixtures {
+        validate_simple_identifier(&fixture.id, "fixture placement id")?;
+        if !ids.insert(fixture.id.as_str()) {
+            return Err(format!("duplicate fixture placement id `{}`", fixture.id));
+        }
+    }
+    Ok(())
+}
+
+fn repair_layout_group_members(current: &Layout<Authored>, next: &mut Layout<Authored>) {
+    let mut renamed_by_index = HashMap::new();
+    for (current_fixture, next_fixture) in current.fixtures.iter().zip(&next.fixtures) {
+        if current_fixture.id != next_fixture.id {
+            renamed_by_index.insert(current_fixture.id.as_str(), next_fixture.id.as_str());
+        }
+    }
+    let next_ids = next
+        .fixtures
+        .iter()
+        .map(|fixture| fixture.id.as_str())
+        .collect::<HashSet<_>>();
+
+    for group in &mut next.groups {
+        let mut seen = HashSet::new();
+        group.members = group
+            .members
+            .iter()
+            .filter_map(|member| {
+                let current = member.as_str();
+                let repaired = renamed_by_index.get(current).copied().unwrap_or(current);
+                if next_ids.contains(repaired) && seen.insert(repaired.to_string()) {
+                    Some(FixtureRef::new(repaired))
+                } else {
+                    None
+                }
+            })
+            .collect();
+    }
+}
+
+fn validate_simple_identifier(value: &str, label: &str) -> Result<(), String> {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return Err(format!("{label} cannot be empty"));
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return Err(format!("{label} must start with a letter or underscore"));
+    }
+    if chars.any(|character| !(character.is_ascii_alphanumeric() || character == '_')) {
+        return Err(format!("{label} may only contain letters, numbers, and underscores"));
+    }
+    Ok(())
+}
+
+fn replace_top_level_object(
+    text: &str,
+    object_key: &str,
+    object: &DawnObject<Authored>,
+) -> Result<String, String> {
+    let mut replacements = BTreeMap::new();
+    replacements.insert(
+        object_key.to_string(),
+        Some(serialize_top_level_object(object_key, object)?),
+    );
+    replace_top_level_objects(text, replacements)
+}
+
+fn serialize_top_level_object(
+    object_key: &str,
+    object: &DawnObject<Authored>,
+) -> Result<String, String> {
+    let mut file = DawnFile::new();
+    file.insert(object_key.to_string(), object.clone());
+    serde_yaml::to_string(&file).map_err(|error| error.to_string())
+}
+
+fn replace_top_level_objects(
+    text: &str,
+    mut replacements: BTreeMap<String, Option<String>>,
+) -> Result<String, String> {
+    let blocks = top_level_object_blocks(text);
+    let mut output = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for block in blocks {
+        output.push_str(&text[cursor..block.start]);
+        cursor = block.end;
+        match replacements.remove(&block.key) {
+            Some(Some(serialized)) => {
+                output.push_str(serialized.trim_end_matches('\n'));
+                output.push('\n');
+            }
+            Some(None) => {}
+            None => output.push_str(&text[block.start..block.end]),
+        }
+    }
+    output.push_str(&text[cursor..]);
+    for serialized in replacements.into_values().flatten() {
+        if !output.ends_with('\n') && !output.is_empty() {
+            output.push('\n');
+        }
+        if !output.ends_with("\n\n") && !output.trim().is_empty() {
+            output.push('\n');
+        }
+        output.push_str(serialized.trim_end_matches('\n'));
+        output.push('\n');
+    }
+    Ok(output)
+}
+
+#[derive(Debug, Clone)]
+struct TopLevelObjectBlock {
+    key: String,
+    start: usize,
+    end: usize,
+}
+
+fn top_level_object_blocks(text: &str) -> Vec<TopLevelObjectBlock> {
+    #[derive(Debug)]
+    struct LineInfo {
+        start: usize,
+        key: Option<String>,
+        comment_or_blank: bool,
+    }
+
+    let mut lines = Vec::new();
+    let mut offset = 0;
+    for line in text.split_inclusive('\n') {
+        let line_without_newline = line.trim_end_matches(['\r', '\n']);
+        lines.push(LineInfo {
+            start: offset,
+            key: top_level_key(line_without_newline),
+            comment_or_blank: line_without_newline.trim().is_empty()
+                || line_without_newline.starts_with('#'),
+        });
+        offset += line.len();
+    }
+    if offset < text.len() {
+        let line = &text[offset..];
+        lines.push(LineInfo {
+            start: offset,
+            key: top_level_key(line),
+            comment_or_blank: line.trim().is_empty() || line.starts_with('#'),
+        });
+    }
+    let keyed_lines = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| line.key.as_ref().map(|key| (index, key.clone(), line.start)))
+        .collect::<Vec<_>>();
+
+    keyed_lines
+        .iter()
+        .enumerate()
+        .map(|(index, (line_index, key, start))| {
+            let end = keyed_lines
+                .get(index + 1)
+                .map(|(next_line_index, _, next_start)| {
+                    let mut boundary = *next_start;
+                    let mut candidate = *next_line_index;
+                    while candidate > line_index + 1 && lines[candidate - 1].comment_or_blank {
+                        candidate -= 1;
+                        boundary = lines[candidate].start;
+                    }
+                    boundary
+                })
+                .unwrap_or(text.len());
+            TopLevelObjectBlock {
+            key: key.clone(),
+            start: *start,
+            end,
+        }
+        })
+        .collect()
+}
+
+fn top_level_key(line: &str) -> Option<String> {
+    if line.is_empty() || line.starts_with(char::is_whitespace) || line.starts_with('#') {
+        return None;
+    }
+    let (key, rest) = line.split_once(':')?;
+    if key.is_empty()
+        || key == "---"
+        || key.chars().any(|character| {
+            character.is_whitespace() || matches!(character, '[' | ']' | '{' | '}' | ',')
+        })
+        || !(rest.is_empty() || rest.starts_with(char::is_whitespace))
+    {
+        return None;
+    }
+    Some(key.to_string())
+}
+
+fn introduced_error_diagnostics(
+    before: &ProjectAnalysis,
+    after: &ProjectAnalysis,
+) -> Vec<ProjectDiagnostic> {
+    after
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.severity == DiagnosticSeverity::Error
+                && !before.diagnostics.contains(diagnostic)
+        })
+        .cloned()
+        .collect()
+}
+
 fn overlay_after_save(
-    saved_path: PathBuf,
+    saved_path: ProjectPath,
     content: String,
     overlays: Vec<ProjectOverlay>,
 ) -> Vec<ProjectOverlay> {
-    let saved_path = absolutize_path(&saved_path);
     let mut next = overlays
         .into_iter()
-        .filter(|overlay| absolutize_path(&overlay.path) != saved_path)
+        .filter(|overlay| overlay.path != saved_path)
         .collect::<Vec<_>>();
     next.push(ProjectOverlay {
         path: saved_path,
         content,
     });
     next
-}
-
-fn infer_project_path_from_document(path: &Path) -> Result<PathBuf, String> {
-    for ancestor in path.ancestors() {
-        let candidate = ancestor.join("project.dawn");
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-    Err("could not find project.dawn for document".to_string())
 }
 
 pub fn analyze_project(project_path: impl AsRef<Path>, project_key: &str) -> ProjectAnalysis {
@@ -1321,7 +1842,7 @@ pub fn analyze_project_with_overlays(
     project_key: Option<&str>,
     overlays: Vec<ProjectOverlay>,
 ) -> ProjectAnalysis {
-    let root_path = absolutize_path(project_path.as_ref());
+    let root_path = ProjectPath::new(project_path.as_ref());
     let mut session = AnalysisSession::new(overlays);
     session.visit_file(root_path.clone());
 
@@ -1339,14 +1860,13 @@ pub fn analyze_project_with_overlays(
             .and_then(|analyzed| analyzed.file.as_ref())
         {
             if let Some(project_key) = inferred_project_key.as_deref() {
-                let source_path = DawnPath::new(path_to_string(&root_path));
                 let mut loader = AnalysisImportResolver {
                     files: &session.files,
                 };
                 match lower_project(
                     root_file,
                     project_key,
-                    &source_path,
+                    &root_path,
                     |source_path, import, expected| loader.resolve(source_path, import, expected),
                 ) {
                     Ok(project) => resolved = Some(project),
@@ -1374,7 +1894,7 @@ pub fn analyze_project_with_overlays(
     }
 }
 
-fn infer_project_key(root_path: &Path, session: &mut AnalysisSession) -> Option<String> {
+fn infer_project_key(root_path: &ProjectPath, session: &mut AnalysisSession) -> Option<String> {
     let Some(root_file) = session
         .files
         .get(root_path)
@@ -1395,7 +1915,7 @@ fn infer_project_key(root_path: &Path, session: &mut AnalysisSession) -> Option<
         [project_key] => Some(project_key.clone()),
         [] => {
             session.diagnostics.push(ProjectDiagnostic {
-                path: root_path.to_path_buf(),
+                path: root_path.clone(),
                 range: None,
                 severity: DiagnosticSeverity::Error,
                 code: DiagnosticCode::ProjectKey,
@@ -1405,7 +1925,7 @@ fn infer_project_key(root_path: &Path, session: &mut AnalysisSession) -> Option<
         }
         _ => {
             session.diagnostics.push(ProjectDiagnostic {
-                path: root_path.to_path_buf(),
+                path: root_path.clone(),
                 range: None,
                 severity: DiagnosticSeverity::Error,
                 code: DiagnosticCode::ProjectKey,
@@ -1423,15 +1943,14 @@ pub fn load_project(
     project_path: impl AsRef<Path>,
     project_key: &str,
 ) -> Result<ResolvedProject, LoadProjectError> {
-    let project_path = absolutize_path(project_path.as_ref());
+    let project_path = ProjectPath::new(project_path.as_ref());
     let file = load_dawn_file(&project_path)?;
-    let source_path = DawnPath::new(path_to_string(&project_path));
     let mut loader = FsImportLoader::default();
 
     lower_project(
         &file,
         project_key,
-        &source_path,
+        &project_path,
         |source_path, import, expected| loader.resolve(source_path, import, expected),
     )
     .map_err(LoadProjectError::Lower)
@@ -1440,8 +1959,8 @@ pub fn load_project(
 pub fn lower_project(
     file: &DawnFile,
     project_key: &str,
-    source_path: &DawnPath,
-    mut resolver: impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+    source_path: &ProjectPath,
+    mut resolver: impl FnMut(&ProjectPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
 ) -> Result<ResolvedProject, LowerError> {
     let object = file
         .get(project_key)
@@ -1474,8 +1993,12 @@ impl<M: ModelMode> DawnObject<M> {
 
 fn lower_project_object(
     project: &Project<Authored>,
-    source_path: &DawnPath,
-    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+    source_path: &ProjectPath,
+    resolver: &mut impl FnMut(
+        &ProjectPath,
+        &ImportRef,
+        ObjectKind,
+    ) -> Result<ResolvedImport, LowerError>,
 ) -> Result<Project<Resolved>, LowerError> {
     let (display, display_source) =
         resolve_display(&project.display, source_path, ObjectKind::Display, resolver)?;
@@ -1508,8 +2031,12 @@ fn lower_project_object(
 
 fn lower_display(
     display: &Display<Authored>,
-    source_path: &DawnPath,
-    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+    source_path: &ProjectPath,
+    resolver: &mut impl FnMut(
+        &ProjectPath,
+        &ImportRef,
+        ObjectKind,
+    ) -> Result<ResolvedImport, LowerError>,
 ) -> Result<Display<Resolved>, LowerError> {
     let mut controllers = Vec::with_capacity(display.controllers.len());
     for controller in &display.controllers {
@@ -1536,8 +2063,12 @@ fn lower_display(
 
 fn lower_layout(
     layout: &Layout<Authored>,
-    source_path: &DawnPath,
-    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+    source_path: &ProjectPath,
+    resolver: &mut impl FnMut(
+        &ProjectPath,
+        &ImportRef,
+        ObjectKind,
+    ) -> Result<ResolvedImport, LowerError>,
 ) -> Result<Layout<Resolved>, LowerError> {
     let mut fixtures = Vec::with_capacity(layout.fixtures.len());
     for placement in &layout.fixtures {
@@ -1616,10 +2147,14 @@ fn lower_patch(
 
 fn lower_sequence(
     sequence: &Sequence<Authored>,
-    sequence_source_path: &DawnPath,
+    sequence_source_path: &ProjectPath,
     layout: &Layout<Authored>,
-    layout_source_path: &DawnPath,
-    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+    layout_source_path: &ProjectPath,
+    resolver: &mut impl FnMut(
+        &ProjectPath,
+        &ImportRef,
+        ObjectKind,
+    ) -> Result<ResolvedImport, LowerError>,
 ) -> Result<Sequence<Resolved>, LowerError> {
     let resolved_layout = lower_layout(layout, layout_source_path, resolver)?;
     let fixtures = fixture_indices(&resolved_layout.fixtures)?;
@@ -1679,7 +2214,7 @@ fn lower_sequence_effect(
     effect: &SequenceEffect<Authored>,
     fixtures: &HashMap<String, FixtureIndex>,
     groups: &HashMap<String, GroupIndex>,
-    source_path: &DawnPath,
+    source_path: &ProjectPath,
 ) -> Result<SequenceEffect<Resolved>, LowerError> {
     let target = match &effect.target {
         EffectTarget::Group(group) => {
@@ -1764,38 +2299,23 @@ fn group_indices(groups: &[Group<Resolved>]) -> Result<HashMap<String, GroupInde
     Ok(indices)
 }
 
-fn resolve_path(source_path: &DawnPath, import_path: &DawnPath) -> DawnPath {
-    let path = import_path.as_str();
-    if path.starts_with('/') || path.contains(':') {
-        return DawnPath(path.to_string());
+fn resolve_path(source_path: &ProjectPath, import_path: &DawnPath) -> DawnPath {
+    if import_path.as_path().is_absolute() {
+        return DawnPath::new(ProjectPath::new(import_path.as_path()).as_path());
     }
 
-    let source = source_path.as_str().replace('\\', "/");
-    let Some((directory, _)) = source.rsplit_once('/') else {
-        return DawnPath(path.to_string());
-    };
-    DawnPath(normalize_path(&format!("{directory}/{path}")))
-}
-
-fn normalize_path(path: &str) -> String {
-    let mut parts = Vec::new();
-    for part in path.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            _ => parts.push(part),
-        }
-    }
-    parts.join("/")
+    DawnPath::new(resolve_import_file_path(source_path, import_path).as_path())
 }
 
 fn resolve_import(
-    source_path: &DawnPath,
+    source_path: &ProjectPath,
     import: &ImportRef,
     expected: ObjectKind,
-    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+    resolver: &mut impl FnMut(
+        &ProjectPath,
+        &ImportRef,
+        ObjectKind,
+    ) -> Result<ResolvedImport, LowerError>,
 ) -> Result<ResolvedImport, LowerError> {
     let resolved = resolver(source_path, import, expected)?;
     if resolved.object.kind() != expected {
@@ -1810,10 +2330,10 @@ fn resolve_import(
 
 #[derive(Default)]
 struct AnalysisSession {
-    files: IndexMap<PathBuf, AnalyzedFile>,
+    files: IndexMap<ProjectPath, AnalyzedFile>,
     diagnostics: Vec<ProjectDiagnostic>,
-    visiting: HashSet<PathBuf>,
-    overlays: HashMap<PathBuf, String>,
+    visiting: HashSet<ProjectPath>,
+    overlays: HashMap<ProjectPath, String>,
 }
 
 impl AnalysisSession {
@@ -1821,7 +2341,7 @@ impl AnalysisSession {
         Self {
             overlays: overlays
                 .into_iter()
-                .map(|overlay| (absolutize_path(&overlay.path), overlay.content))
+                .map(|overlay| (overlay.path, overlay.content))
                 .collect(),
             ..Self::default()
         }
@@ -1833,8 +2353,7 @@ impl AnalysisSession {
             .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
     }
 
-    fn visit_file(&mut self, path: PathBuf) {
-        let path = absolutize_path(&path);
+    fn visit_file(&mut self, path: ProjectPath) {
         if self.files.contains_key(&path) || !self.visiting.insert(path.clone()) {
             return;
         }
@@ -1844,7 +2363,7 @@ impl AnalysisSession {
             .get(&path)
             .cloned()
             .map(Ok)
-            .unwrap_or_else(|| fs::read_to_string(&path))
+            .unwrap_or_else(|| fs::read_to_string(path.as_path()))
         {
             Ok(text) => text,
             Err(source) => {
@@ -1895,9 +2414,8 @@ impl AnalysisSession {
             },
         );
 
-        let source_path = DawnPath::new(path_to_string(&path));
         for import in imports {
-            let import_path = resolve_import_file_path(&source_path, import.path());
+            let import_path = resolve_import_file_path(&path, import.path());
             if !self.can_load_file(&import_path) {
                 self.diagnostics.push(ProjectDiagnostic {
                     path: path.clone(),
@@ -1907,7 +2425,7 @@ impl AnalysisSession {
                     message: format!(
                         "failed to read import `{}`: file `{}` was not found",
                         import.raw(),
-                        absolutize_path(&import_path).display()
+                        import_path.display()
                     ),
                 });
                 continue;
@@ -1919,16 +2437,15 @@ impl AnalysisSession {
         self.visiting.remove(&path);
     }
 
-    fn can_load_file(&self, path: &Path) -> bool {
-        let path = absolutize_path(path);
-        self.overlays.contains_key(&path) || path.is_file()
+    fn can_load_file(&self, path: &ProjectPath) -> bool {
+        self.overlays.contains_key(path) || path.as_path().is_file()
     }
 
     fn locate_lower_error(
         &self,
-        root_path: &Path,
+        root_path: &ProjectPath,
         error: &LowerError,
-    ) -> (PathBuf, Option<TextRange>) {
+    ) -> (ProjectPath, Option<TextRange>) {
         let token = match error {
             LowerError::MissingProject { key } => Some(key.as_str()),
             LowerError::WrongObjectKind { key, .. } => Some(key.as_str()),
@@ -1950,14 +2467,18 @@ impl AnalysisSession {
             }
         }
 
-        (root_path.to_path_buf(), None)
+        (root_path.clone(), None)
     }
 
-    fn find_token(&self, preferred_path: &Path, token: &str) -> Option<(PathBuf, TextRange)> {
+    fn find_token(
+        &self,
+        preferred_path: &ProjectPath,
+        token: &str,
+    ) -> Option<(ProjectPath, TextRange)> {
         if let Some(file) = self.files.get(preferred_path) {
             if let Some(text) = file.text.as_deref() {
                 if let Some(range) = find_text_range(text, token) {
-                    return Some((preferred_path.to_path_buf(), range));
+                    return Some((preferred_path.clone(), range));
                 }
             }
         }
@@ -1978,17 +2499,17 @@ impl AnalysisSession {
 }
 
 struct AnalysisImportResolver<'a> {
-    files: &'a IndexMap<PathBuf, AnalyzedFile>,
+    files: &'a IndexMap<ProjectPath, AnalyzedFile>,
 }
 
 impl AnalysisImportResolver<'_> {
     fn resolve(
         &mut self,
-        source_path: &DawnPath,
+        source_path: &ProjectPath,
         import: &ImportRef,
         _expected: ObjectKind,
     ) -> Result<ResolvedImport, LowerError> {
-        let import_path = absolutize_path(&resolve_import_file_path(source_path, import.path()));
+        let import_path = resolve_import_file_path(source_path, import.path());
         let analyzed = self
             .files
             .get(&import_path)
@@ -2003,7 +2524,7 @@ impl AnalysisImportResolver<'_> {
         let object = select_imported_object(file, import)?;
 
         Ok(ResolvedImport {
-            source_path: DawnPath::new(path_to_string(&import_path)),
+            source_path: import_path,
             object,
         })
     }
@@ -2042,7 +2563,8 @@ fn find_text_range(text: &str, needle: &str) -> Option<TextRange> {
 }
 
 fn import_range(text: &str, import: &ImportRef) -> Option<TextRange> {
-    find_text_range(text, import.raw()).or_else(|| find_text_range(text, import.path().as_str()))
+    find_text_range(text, import.raw())
+        .or_else(|| find_text_range(text, &import.path().to_slash_string()))
 }
 
 fn collect_file_imports(file: &DawnFile) -> Vec<ImportRef> {
@@ -2103,13 +2625,13 @@ fn collect_layout_imports(layout: &Layout<Authored>, imports: &mut Vec<ImportRef
 
 #[derive(Default)]
 struct FsImportLoader {
-    files: HashMap<PathBuf, DawnFile>,
+    files: HashMap<ProjectPath, DawnFile>,
 }
 
 impl FsImportLoader {
     fn resolve(
         &mut self,
-        source_path: &DawnPath,
+        source_path: &ProjectPath,
         import: &ImportRef,
         _expected: ObjectKind,
     ) -> Result<ResolvedImport, LowerError> {
@@ -2123,20 +2645,19 @@ impl FsImportLoader {
         let object = select_imported_object(file, import)?;
 
         Ok(ResolvedImport {
-            source_path: DawnPath::new(path_to_string(&import_path)),
+            source_path: import_path,
             object,
         })
     }
 
-    fn load_cached(&mut self, path: &Path) -> Result<&DawnFile, LoadProjectError> {
-        let path = absolutize_path(path);
-        if !self.files.contains_key(&path) {
-            let file = load_dawn_file(&path)?;
+    fn load_cached(&mut self, path: &ProjectPath) -> Result<&DawnFile, LoadProjectError> {
+        if !self.files.contains_key(path) {
+            let file = load_dawn_file(path)?;
             self.files.insert(path.clone(), file);
         }
         Ok(self
             .files
-            .get(&path)
+            .get(path)
             .expect("file was inserted before lookup"))
     }
 }
@@ -2170,49 +2691,99 @@ fn select_imported_object(
     })
 }
 
-fn load_dawn_file(path: &Path) -> Result<DawnFile, LoadProjectError> {
-    let text = fs::read_to_string(path).map_err(|source| LoadProjectError::Io {
-        path: path.to_path_buf(),
+fn load_dawn_file(path: &ProjectPath) -> Result<DawnFile, LoadProjectError> {
+    let text = fs::read_to_string(path.as_path()).map_err(|source| LoadProjectError::Io {
+        path: path.clone(),
         source,
     })?;
     serde_yaml::from_str(&text).map_err(|source| LoadProjectError::Yaml {
-        path: path.to_path_buf(),
+        path: path.clone(),
         source,
     })
 }
 
-fn resolve_import_file_path(source_path: &DawnPath, import_path: &DawnPath) -> PathBuf {
-    let import_path = PathBuf::from(import_path.as_str());
-    if import_path.is_absolute() {
-        return import_path;
+fn resolve_import_file_path(source_path: &ProjectPath, import_path: &DawnPath) -> ProjectPath {
+    if import_path.as_path().is_absolute() {
+        return ProjectPath::new(import_path.as_path());
     }
 
-    PathBuf::from(source_path.as_str())
+    source_path
         .parent()
-        .map(|parent| parent.join(&import_path))
-        .unwrap_or(import_path)
+        .map(|parent| parent.join(import_path.as_path()))
+        .unwrap_or_else(|| ProjectPath::new(import_path.as_path()))
 }
 
-fn absolutize_path(path: &Path) -> PathBuf {
-    if path.is_absolute() {
-        path.to_path_buf()
+fn relative_import_path(source_path: &ProjectPath, target_path: &ProjectPath) -> String {
+    let Some(source_parent) = source_path.as_path().parent() else {
+        return target_path.to_slash_string();
+    };
+    path_to_slash_string(&relative_path_between(source_parent, target_path.as_path()))
+}
+
+fn relative_path_between(from_dir: &Path, target_path: &Path) -> PathBuf {
+    let from = lexically_normalize_path(from_dir);
+    let target = lexically_normalize_path(target_path);
+    let from_components = from.components().collect::<Vec<_>>();
+    let target_components = target.components().collect::<Vec<_>>();
+
+    let mut common = 0;
+    while common < from_components.len()
+        && common < target_components.len()
+        && from_components[common] == target_components[common]
+    {
+        common += 1;
+    }
+
+    if common == 0 {
+        return target;
+    }
+
+    let mut relative = PathBuf::new();
+    for component in &from_components[common..] {
+        if matches!(component, Component::Normal(_)) {
+            relative.push("..");
+        }
+    }
+    for component in &target_components[common..] {
+        relative.push(component.as_os_str());
+    }
+
+    if relative.as_os_str().is_empty() {
+        PathBuf::from(".")
     } else {
-        std::env::current_dir()
-            .map(|current_dir| current_dir.join(path))
-            .unwrap_or_else(|_| path.to_path_buf())
+        relative
     }
 }
 
-fn path_to_string(path: &Path) -> String {
+fn lexically_normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    normalized
+}
+
+fn path_to_slash_string(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
 fn resolve_display(
     value: &InlineOrImport<Display<Authored>>,
-    source_path: &DawnPath,
+    source_path: &ProjectPath,
     expected: ObjectKind,
-    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
-) -> Result<(Display<Authored>, DawnPath), LowerError> {
+    resolver: &mut impl FnMut(
+        &ProjectPath,
+        &ImportRef,
+        ObjectKind,
+    ) -> Result<ResolvedImport, LowerError>,
+) -> Result<(Display<Authored>, ProjectPath), LowerError> {
     match value {
         InlineOrImport::Inline(display) => Ok((display.clone(), source_path.clone())),
         InlineOrImport::Import { import } => {
@@ -2227,9 +2798,13 @@ fn resolve_display(
 
 fn resolve_controller(
     value: &InlineOrImport<Controller>,
-    source_path: &DawnPath,
-    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
-) -> Result<(Controller, DawnPath), LowerError> {
+    source_path: &ProjectPath,
+    resolver: &mut impl FnMut(
+        &ProjectPath,
+        &ImportRef,
+        ObjectKind,
+    ) -> Result<ResolvedImport, LowerError>,
+) -> Result<(Controller, ProjectPath), LowerError> {
     match value {
         InlineOrImport::Inline(controller) => Ok((controller.clone(), source_path.clone())),
         InlineOrImport::Import { import } => {
@@ -2244,10 +2819,14 @@ fn resolve_controller(
 
 fn resolve_layout(
     value: &InlineOrImport<Layout<Authored>>,
-    source_path: &DawnPath,
+    source_path: &ProjectPath,
     expected: ObjectKind,
-    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
-) -> Result<(Layout<Authored>, DawnPath), LowerError> {
+    resolver: &mut impl FnMut(
+        &ProjectPath,
+        &ImportRef,
+        ObjectKind,
+    ) -> Result<ResolvedImport, LowerError>,
+) -> Result<(Layout<Authored>, ProjectPath), LowerError> {
     match value {
         InlineOrImport::Inline(layout) => Ok((layout.clone(), source_path.clone())),
         InlineOrImport::Import { import } => {
@@ -2262,9 +2841,13 @@ fn resolve_layout(
 
 fn resolve_fixture(
     value: &InlineOrImport<Fixture>,
-    source_path: &DawnPath,
-    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
-) -> Result<(Fixture, DawnPath), LowerError> {
+    source_path: &ProjectPath,
+    resolver: &mut impl FnMut(
+        &ProjectPath,
+        &ImportRef,
+        ObjectKind,
+    ) -> Result<ResolvedImport, LowerError>,
+) -> Result<(Fixture, ProjectPath), LowerError> {
     match value {
         InlineOrImport::Inline(fixture) => Ok((fixture.clone(), source_path.clone())),
         InlineOrImport::Import { import } => {
@@ -2279,10 +2862,14 @@ fn resolve_fixture(
 
 fn resolve_patch(
     value: &InlineOrImport<Patch<Authored>>,
-    source_path: &DawnPath,
+    source_path: &ProjectPath,
     expected: ObjectKind,
-    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
-) -> Result<(Patch<Authored>, DawnPath), LowerError> {
+    resolver: &mut impl FnMut(
+        &ProjectPath,
+        &ImportRef,
+        ObjectKind,
+    ) -> Result<ResolvedImport, LowerError>,
+) -> Result<(Patch<Authored>, ProjectPath), LowerError> {
     match value {
         InlineOrImport::Inline(patch) => Ok((patch.clone(), source_path.clone())),
         InlineOrImport::Import { import } => {
@@ -2297,10 +2884,14 @@ fn resolve_patch(
 
 fn resolve_sequence(
     value: &InlineOrImport<Sequence<Authored>>,
-    source_path: &DawnPath,
+    source_path: &ProjectPath,
     expected: ObjectKind,
-    resolver: &mut impl FnMut(&DawnPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
-) -> Result<(Sequence<Authored>, DawnPath), LowerError> {
+    resolver: &mut impl FnMut(
+        &ProjectPath,
+        &ImportRef,
+        ObjectKind,
+    ) -> Result<ResolvedImport, LowerError>,
+) -> Result<(Sequence<Authored>, ProjectPath), LowerError> {
     match value {
         InlineOrImport::Inline(sequence) => Ok((sequence.clone(), source_path.clone())),
         InlineOrImport::Import { import } => {

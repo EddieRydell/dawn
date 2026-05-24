@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "pnpm --filter @dawn/desktop dev",
-    "desktop": "pnpm --filter @dawn/desktop tauri dev"
+    "desktop": "pnpm --filter @dawn/desktop dev"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"

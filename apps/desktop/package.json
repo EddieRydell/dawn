@@ -4,8 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev": "tauri dev",
     "build": "tsc && vite build",
+    "bindings": "cargo run -p dawn-desktop --bin export-bindings -- src/generated/bindings.ts",
+    "bindings:check": "cargo run -p dawn-desktop --bin export-bindings -- --check src/generated/bindings.ts",
     "tauri": "tauri"
   },
   "dependencies": {
