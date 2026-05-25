@@ -1,9 +1,12 @@
+use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
+
 use dawn_project::render::{GeometryRenderBounds, GeometryRenderPoint};
 use floem::context::{ComputeLayoutCx, EventCx, PaintCx, UpdateCx};
 use floem::event::{Event, EventPropagation};
+use floem::keyboard::Modifiers;
 use floem::kurbo::{Arc, Circle, Line, Point, Rect, Size, Stroke, Vec2};
 use floem::peniko::{Brush, Color};
-use floem::reactive::{create_effect, RwSignal, SignalGet, SignalUpdate};
+use floem::reactive::create_effect;
 use floem::views::Decorators;
 use floem::{View, ViewId};
 use floem_renderer::Renderer;
@@ -28,7 +31,6 @@ pub struct CanvasItem {
     pub id: String,
     pub kind: CanvasItemKind,
     pub label: Option<String>,
-    pub selected: bool,
     pub color: Color,
     pub interaction: CanvasItemInteraction,
 }
@@ -64,12 +66,6 @@ pub enum CanvasItemKind {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CanvasTool {
-    PanZoom,
-    Edit,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct CanvasCamera {
     pub center_x: f64,
@@ -77,20 +73,55 @@ pub struct CanvasCamera {
     pub scale: f64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct CanvasState {
-    pub tool: RwSignal<CanvasTool>,
-    pub camera: RwSignal<Option<CanvasCamera>>,
-    pub selected_target: RwSignal<Option<String>>,
+    data: Rc<RefCell<CanvasStateData>>,
+}
+
+#[derive(Debug, Default)]
+struct CanvasStateData {
+    camera: Option<CanvasCamera>,
+    selected_targets: BTreeSet<String>,
+    hovered_target: Option<String>,
 }
 
 impl CanvasState {
     pub fn new() -> Self {
         Self {
-            tool: RwSignal::new(CanvasTool::PanZoom),
-            camera: RwSignal::new(None),
-            selected_target: RwSignal::new(None),
+            data: Rc::new(RefCell::new(CanvasStateData::default())),
         }
+    }
+
+    fn camera(&self) -> Option<CanvasCamera> {
+        self.data.borrow().camera
+    }
+
+    fn set_camera(&self, camera: CanvasCamera) {
+        self.data.borrow_mut().camera = Some(camera);
+    }
+
+    fn selected_targets(&self) -> BTreeSet<String> {
+        self.data.borrow().selected_targets.clone()
+    }
+
+    fn selected_targets_contains(&self, id: &str) -> bool {
+        self.data.borrow().selected_targets.contains(id)
+    }
+
+    fn set_selected_targets(&self, selected_targets: BTreeSet<String>) {
+        self.data.borrow_mut().selected_targets = selected_targets;
+    }
+
+    fn update_selected_targets(&self, update: impl FnOnce(&mut BTreeSet<String>)) {
+        update(&mut self.data.borrow_mut().selected_targets);
+    }
+
+    fn hovered_target(&self) -> Option<String> {
+        self.data.borrow().hovered_target.clone()
+    }
+
+    fn set_hovered_target(&self, hovered_target: Option<String>) {
+        self.data.borrow_mut().hovered_target = hovered_target;
     }
 }
 
@@ -122,7 +153,7 @@ impl Default for CanvasConfig {
 #[derive(Default)]
 pub struct CanvasCallbacks {
     pub on_select: Option<Box<dyn Fn(String)>>,
-    pub on_drag_end: Option<Box<dyn Fn(String, f64, f64)>>,
+    pub on_drag_end: Option<Box<dyn Fn(Vec<String>, f64, f64)>>,
     pub on_delete: Option<Box<dyn Fn(Vec<String>)>>,
     pub on_drop_add: Option<Box<dyn Fn(f64, f64)>>,
 }
@@ -159,12 +190,6 @@ impl Canvas {
         create_effect(move |_| {
             id.update_state(CanvasUpdate::Scene(scene()));
         });
-        create_effect(move |_| {
-            state.tool.get();
-            state.camera.get();
-            state.selected_target.get();
-            id.request_paint();
-        });
         Self {
             id,
             scene: empty_scene(),
@@ -182,7 +207,7 @@ impl Canvas {
         self
     }
 
-    pub fn on_drag_end(mut self, callback: impl Fn(String, f64, f64) + 'static) -> Self {
+    pub fn on_drag_end(mut self, callback: impl Fn(Vec<String>, f64, f64) + 'static) -> Self {
         self.callbacks.on_drag_end = Some(Box::new(callback));
         self
     }
@@ -216,10 +241,10 @@ impl View for Canvas {
     fn compute_layout(&mut self, _cx: &mut ComputeLayoutCx) -> Option<Rect> {
         let layout = self.id.get_layout().unwrap_or_default();
         let size = Size::new(layout.size.width as f64, layout.size.height as f64);
-        let camera = self.state.camera.get_untracked().unwrap_or_else(|| {
+        let camera = self.state.camera().unwrap_or_else(|| {
             let viewport = CanvasViewport::fit(size, self.scene.bounds, self.config.fit_padding);
             let camera = viewport.camera();
-            self.state.camera.set(Some(camera));
+            self.state.set_camera(camera);
             camera
         });
         self.viewport = CanvasViewport::from_camera(
@@ -237,7 +262,7 @@ impl View for Canvas {
                 if event.button.is_primary() {
                     cx.update_active(self.id);
                     self.id.request_active();
-                    self.handle_pointer_down(event.pos)
+                    self.handle_pointer_down(event.pos, event.modifiers)
                 } else {
                     EventPropagation::Continue
                 }
@@ -251,10 +276,16 @@ impl View for Canvas {
                     EventPropagation::Continue
                 }
             }
-            Event::PointerLeave => EventPropagation::Continue,
+            Event::PointerLeave => {
+                self.state.set_hovered_target(None);
+                self.id.request_paint();
+                EventPropagation::Continue
+            }
             Event::FocusLost => {
                 self.gesture = None;
+                self.state.set_hovered_target(None);
                 self.id.clear_active();
+                self.id.request_paint();
                 EventPropagation::Continue
             }
             _ => EventPropagation::Continue,
@@ -284,9 +315,6 @@ impl View for Canvas {
 
 impl Canvas {
     fn handle_wheel(&mut self, position: Point, delta: Vec2) -> EventPropagation {
-        if self.state.tool.get_untracked() != CanvasTool::PanZoom {
-            return EventPropagation::Continue;
-        }
         let before = self.viewport.screen_to_world(position);
         let factor = (-delta.y * WHEEL_ZOOM_SENSITIVITY).exp();
         let next_scale = (self.viewport.scale * factor).clamp(MIN_ZOOM_SCALE, MAX_ZOOM_SCALE);
@@ -303,58 +331,90 @@ impl Canvas {
         EventPropagation::Stop
     }
 
-    fn handle_pointer_down(&mut self, position: Point) -> EventPropagation {
-        match self.state.tool.get_untracked() {
-            CanvasTool::PanZoom => {
-                self.gesture = Some(CanvasGesture::Pan {
+    fn handle_pointer_down(&mut self, position: Point, modifiers: Modifiers) -> EventPropagation {
+        self.state.set_hovered_target(None);
+        let additive = additive_selection(modifiers);
+
+        let Some(hit) = self.hit_test(position) else {
+            self.gesture = if additive {
+                Some(CanvasGesture::SelectBox {
                     start_screen: position,
+                    current_screen: position,
+                    active: false,
+                    additive: true,
+                })
+            } else {
+                Some(CanvasGesture::PendingPan {
+                    start_screen: position,
+                    current_screen: position,
                     start_camera: self.viewport.camera(),
+                    active: false,
+                })
+            };
+            self.id.request_paint();
+            return EventPropagation::Stop;
+        };
+
+        let selected_before = self.state.selected_targets_contains(&hit.id);
+
+        if hit.selectable {
+            if additive {
+                self.state.update_selected_targets(|selected| {
+                    selected.insert(hit.id.clone());
                 });
-                EventPropagation::Stop
+            } else if !selected_before {
+                let mut selected = BTreeSet::new();
+                selected.insert(hit.id.clone());
+                self.state.set_selected_targets(selected);
             }
-            CanvasTool::Edit => {
-                let hit = self.hit_test(position);
-                if let Some(hit) = hit {
-                    if hit.selectable {
-                        self.state.selected_target.set(Some(hit.id.clone()));
-                        if let Some(callback) = &self.callbacks.on_select {
-                            callback(hit.id.clone());
-                        }
-                    }
-                    self.gesture = hit.draggable.then_some(CanvasGesture::EditDrag {
-                        target_id: hit.id,
-                        start_screen: position,
-                        current_screen: position,
-                        active: false,
-                    });
-                    self.id.request_paint();
-                    EventPropagation::Stop
-                } else {
-                    self.gesture = Some(CanvasGesture::SelectBox {
-                        start_screen: position,
-                        current_screen: position,
-                        active: false,
-                    });
-                    self.id.request_paint();
-                    EventPropagation::Stop
-                }
+            if let Some(callback) = &self.callbacks.on_select {
+                callback(hit.id.clone());
             }
         }
+
+        let selected_targets = self.state.selected_targets();
+        self.gesture = hit.draggable.then_some(CanvasGesture::EditDrag {
+            target_ids: if selected_targets.contains(&hit.id) {
+                selected_targets
+            } else {
+                BTreeSet::from([hit.id])
+            },
+            start_screen: position,
+            current_screen: position,
+            active: false,
+        });
+        self.id.request_paint();
+        EventPropagation::Stop
     }
 
     fn handle_pointer_move(&mut self, position: Point) -> EventPropagation {
         match self.gesture.clone() {
-            Some(CanvasGesture::Pan {
+            Some(CanvasGesture::PendingPan {
                 start_screen,
                 start_camera,
+                active,
+                ..
             }) => {
-                let dx = (position.x - start_screen.x) / start_camera.scale;
-                let dy = (position.y - start_screen.y) / start_camera.scale;
-                self.update_camera(CanvasCamera {
-                    center_x: start_camera.center_x - dx,
-                    center_y: start_camera.center_y + dy,
-                    scale: start_camera.scale,
-                });
+                if let Some(CanvasGesture::PendingPan {
+                    current_screen,
+                    active: gesture_active,
+                    ..
+                }) = &mut self.gesture
+                {
+                    *current_screen = position;
+                    if !*gesture_active && position.distance(start_screen) >= DRAG_THRESHOLD_PX {
+                        *gesture_active = true;
+                    }
+                }
+                if active || position.distance(start_screen) >= DRAG_THRESHOLD_PX {
+                    let dx = (position.x - start_screen.x) / start_camera.scale;
+                    let dy = (position.y - start_screen.y) / start_camera.scale;
+                    self.update_camera(CanvasCamera {
+                        center_x: start_camera.center_x - dx,
+                        center_y: start_camera.center_y + dy,
+                        scale: start_camera.scale,
+                    });
+                }
                 EventPropagation::Stop
             }
             Some(CanvasGesture::EditDrag { .. }) => {
@@ -378,6 +438,7 @@ impl Canvas {
                     start_screen,
                     current_screen,
                     active,
+                    ..
                 }) = &mut self.gesture
                 {
                     *current_screen = position;
@@ -388,7 +449,14 @@ impl Canvas {
                 self.id.request_paint();
                 EventPropagation::Stop
             }
-            None => EventPropagation::Continue,
+            None => {
+                let hovered = self.hit_test(position).map(|hit| hit.id);
+                if hovered != self.state.hovered_target() {
+                    self.state.set_hovered_target(hovered);
+                    self.id.request_paint();
+                }
+                EventPropagation::Continue
+            }
         }
     }
 
@@ -397,9 +465,15 @@ impl Canvas {
             return EventPropagation::Continue;
         };
         match gesture {
-            CanvasGesture::Pan { .. } => EventPropagation::Stop,
+            CanvasGesture::PendingPan { active, .. } => {
+                if !active {
+                    self.state.set_selected_targets(BTreeSet::new());
+                    self.id.request_paint();
+                }
+                EventPropagation::Stop
+            }
             CanvasGesture::EditDrag {
-                target_id,
+                target_ids,
                 start_screen,
                 active,
                 ..
@@ -413,7 +487,7 @@ impl Canvas {
                         && self.callbacks.on_drag_end.is_some()
                     {
                         if let Some(callback) = &self.callbacks.on_drag_end {
-                            callback(target_id, dx, dy);
+                            callback(target_ids.into_iter().collect(), dx, dy);
                         }
                     }
                 }
@@ -423,13 +497,20 @@ impl Canvas {
             CanvasGesture::SelectBox {
                 start_screen,
                 active,
+                additive,
                 ..
             } => {
-                let selection = selection_rect(start_screen, position);
-                let selected = active
-                    .then(|| self.target_in_selection_rect(selection))
-                    .flatten();
-                self.state.selected_target.set(selected);
+                if active {
+                    let selection = selection_rect(start_screen, position);
+                    let selected = self.targets_in_selection_rect(selection);
+                    if additive {
+                        self.state.update_selected_targets(|targets| {
+                            targets.extend(selected);
+                        });
+                    } else {
+                        self.state.set_selected_targets(selected);
+                    }
+                }
                 self.id.request_paint();
                 EventPropagation::Stop
             }
@@ -437,7 +518,7 @@ impl Canvas {
     }
 
     fn update_camera(&mut self, camera: CanvasCamera) {
-        self.state.camera.set(Some(camera));
+        self.state.set_camera(camera);
         self.viewport = CanvasViewport::from_camera(self.viewport.size, self.scene.bounds, camera);
         self.id.request_paint();
     }
@@ -522,35 +603,61 @@ impl Canvas {
     }
 
     fn paint_items(&self, cx: &mut PaintCx) {
+        let selected_targets = self.state.selected_targets();
+        let hovered_target = self.state.hovered_target();
         for item in &self.scene.items {
             let offset = self.drag_offset_for(item);
+            let target_id = item_target_id(item);
+            let selected = target_id
+                .as_ref()
+                .is_some_and(|id| selected_targets.contains(id.as_str()));
+            let hovered = !selected
+                && target_id
+                    .as_ref()
+                    .is_some_and(|id| hovered_target.as_deref() == Some(id.as_str()));
             let brush = Brush::Solid(item.color);
-            let selected_brush = Brush::Solid(theme::color(theme::TEXT_INVERTED));
-            let guide_stroke = Stroke::new(if item.selected { 2.0 } else { 1.25 });
+            let highlight_brush = if selected {
+                Some(Brush::Solid(theme::color(theme::TEXT_INVERTED)))
+            } else if hovered {
+                Some(Brush::Solid(Color::rgba8(255, 255, 255, 170)))
+            } else {
+                None
+            };
+            let guide_stroke = Stroke::new(if selected {
+                2.0
+            } else if hovered {
+                1.75
+            } else {
+                1.25
+            });
             match &item.kind {
                 CanvasItemKind::Point { position, radius } => {
                     let center = self
                         .viewport
                         .world_to_screen(offset_point(*position, offset));
                     let radius = (radius * self.viewport.scale).max(self.config.min_point_radius);
-                    if item.selected {
+                    if let Some(highlight_brush) = &highlight_brush {
                         cx.stroke(
                             &Circle::new(center, radius + 3.0),
-                            &selected_brush,
+                            highlight_brush,
                             &Stroke::new(1.5),
                         );
                     }
                     cx.fill(&Circle::new(center, radius), &brush, 0.0);
                 }
                 CanvasItemKind::Line { from, to } => {
-                    cx.stroke(
-                        &Line::new(
-                            self.viewport.world_to_screen(offset_point(*from, offset)),
-                            self.viewport.world_to_screen(offset_point(*to, offset)),
-                        ),
-                        &brush,
-                        &guide_stroke,
+                    let line = Line::new(
+                        self.viewport.world_to_screen(offset_point(*from, offset)),
+                        self.viewport.world_to_screen(offset_point(*to, offset)),
                     );
+                    if let Some(highlight_brush) = &highlight_brush {
+                        cx.stroke(
+                            &line,
+                            highlight_brush,
+                            &Stroke::new(guide_stroke.width + 2.5),
+                        );
+                    }
+                    cx.stroke(&line, &brush, &guide_stroke);
                 }
                 CanvasItemKind::Arc {
                     start,
@@ -572,9 +679,24 @@ impl Canvas {
                         *large_arc,
                         !*sweep_positive,
                     ) {
+                        if let Some(highlight_brush) = &highlight_brush {
+                            cx.stroke(
+                                &arc,
+                                highlight_brush,
+                                &Stroke::new(guide_stroke.width + 2.5),
+                            );
+                        }
                         cx.stroke(&arc, &brush, &guide_stroke);
                     } else {
-                        cx.stroke(&Line::new(start, end), &brush, &guide_stroke);
+                        let line = Line::new(start, end);
+                        if let Some(highlight_brush) = &highlight_brush {
+                            cx.stroke(
+                                &line,
+                                highlight_brush,
+                                &Stroke::new(guide_stroke.width + 2.5),
+                            );
+                        }
+                        cx.stroke(&line, &brush, &guide_stroke);
                     }
                 }
             }
@@ -586,6 +708,7 @@ impl Canvas {
             start_screen,
             current_screen,
             active,
+            ..
         }) = self.gesture
         else {
             return;
@@ -607,7 +730,7 @@ impl Canvas {
             return None;
         };
         let Some(CanvasGesture::EditDrag {
-            target_id,
+            target_ids,
             start_screen,
             current_screen,
             active,
@@ -615,7 +738,7 @@ impl Canvas {
         else {
             return None;
         };
-        if !active || target_id != id {
+        if !active || !target_ids.contains(id) {
             return None;
         }
         let start = self.viewport.screen_to_world(*start_screen);
@@ -643,18 +766,24 @@ impl Canvas {
         })
     }
 
-    fn target_in_selection_rect(&self, selection: Rect) -> Option<String> {
-        self.scene.items.iter().rev().find_map(|item| {
-            let CanvasItemInteraction::Target { id, selectable, .. } = &item.interaction else {
-                return None;
-            };
-            if !selectable {
-                return None;
-            }
-            item_screen_bounds(&self.viewport, item)
-                .filter(|bounds| bounds.overlaps(selection))
-                .map(|_| id.clone())
-        })
+    fn targets_in_selection_rect(&self, selection: Rect) -> BTreeSet<String> {
+        self.scene
+            .items
+            .iter()
+            .fold(BTreeSet::new(), |mut targets, item| {
+                let CanvasItemInteraction::Target { id, selectable, .. } = &item.interaction else {
+                    return targets;
+                };
+                if !selectable {
+                    return targets;
+                }
+                if item_screen_bounds(&self.viewport, item)
+                    .is_some_and(|bounds| bounds.overlaps(selection))
+                {
+                    targets.insert(id.clone());
+                }
+                targets
+            })
     }
 }
 
@@ -744,12 +873,14 @@ impl CanvasViewport {
 
 #[derive(Debug, Clone)]
 enum CanvasGesture {
-    Pan {
+    PendingPan {
         start_screen: Point,
+        current_screen: Point,
         start_camera: CanvasCamera,
+        active: bool,
     },
     EditDrag {
-        target_id: String,
+        target_ids: BTreeSet<String>,
         start_screen: Point,
         current_screen: Point,
         active: bool,
@@ -758,6 +889,7 @@ enum CanvasGesture {
         start_screen: Point,
         current_screen: Point,
         active: bool,
+        additive: bool,
     },
 }
 
@@ -773,6 +905,17 @@ const MAX_ZOOM_SCALE: f64 = 2000.0;
 const WHEEL_ZOOM_SENSITIVITY: f64 = 0.0025;
 const HIT_TOLERANCE_PX: f64 = 8.0;
 const DRAG_THRESHOLD_PX: f64 = 3.0;
+
+fn additive_selection(modifiers: Modifiers) -> bool {
+    modifiers.shift() || modifiers.control()
+}
+
+fn item_target_id(item: &CanvasItem) -> Option<&String> {
+    match &item.interaction {
+        CanvasItemInteraction::Target { id, .. } => Some(id),
+        CanvasItemInteraction::None => None,
+    }
+}
 
 fn item_hit_distance(viewport: &CanvasViewport, item: &CanvasItem, position: Point) -> Option<f64> {
     match &item.kind {

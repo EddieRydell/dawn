@@ -40,14 +40,18 @@ pub fn workbench_view(
             }
 
             panes.push(
-                crate::ui::editor::editor_view(state.clone(), editor_gui, Rc::clone(&dispatch))
-                    .style(|s| {
-                        s.flex_grow(1.0)
-                            .flex_basis(0.0)
-                            .min_width(theme::MIN_EDITOR_WIDTH)
-                            .height_full()
-                    })
-                    .into_any(),
+                crate::ui::editor::editor_view(
+                    state.clone(),
+                    editor_gui.clone(),
+                    Rc::clone(&dispatch),
+                )
+                .style(|s| {
+                    s.flex_grow(1.0)
+                        .flex_basis(0.0)
+                        .min_width(theme::MIN_EDITOR_WIDTH)
+                        .height_full()
+                })
+                .into_any(),
             );
 
             if state.workbench_layout.inspector_visible {

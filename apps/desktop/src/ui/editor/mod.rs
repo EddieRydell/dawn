@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use dawn_project::document::{DocumentDescriptor, DocumentViewId};
 use dawn_project::path::ProjectPath;
 use floem::event::{Event, EventListener};
 use floem::peniko::Brush;
@@ -44,7 +45,10 @@ fn tab_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoVi
             .into_any()
     } else {
         let active_file = state.active_file.clone();
-        h_stack_from_iter(state.tabs.into_iter().map(move |tab| {
+        let active_buffer = state.active_buffer.clone();
+        let active_descriptor = state.active_descriptor.clone();
+        let tab_dispatch = Rc::clone(&dispatch);
+        let tabs = h_stack_from_iter(state.tabs.into_iter().map(move |tab| {
             let active = active_file.as_ref() == Some(&tab.path);
             let dirty = if tab.is_dirty() { "*" } else { "" };
             let title = format!(
@@ -55,10 +59,16 @@ fn tab_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoVi
                     .unwrap_or_else(|| tab.path.to_slash_string()),
                 dirty
             );
-            editor_tab(title, tab.path, active, Rc::clone(&dispatch))
-        }))
+            editor_tab(title, tab.path, active, Rc::clone(&tab_dispatch))
+        }));
+        h_stack((
+            tabs.style(|s| s.height_full().min_width(0.0)),
+            empty().style(|s| s.flex_grow(1.0).min_width(0.0)),
+            editor_mode_toggle(active_buffer, active_descriptor, dispatch),
+        ))
         .style(|s| {
-            s.height(theme::TAB_STRIP_HEIGHT)
+            s.width_full()
+                .height(theme::TAB_STRIP_HEIGHT)
                 .items_center()
                 .border_bottom(theme::BORDER_WIDTH)
                 .border_color(theme::color(theme::BORDER))
@@ -66,6 +76,105 @@ fn tab_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoVi
         })
         .into_any()
     }
+}
+
+fn editor_mode_toggle(
+    active_buffer: Option<crate::editor_session::EditorBuffer>,
+    active_descriptor: Option<DocumentDescriptor>,
+    dispatch: crate::ui::UiDispatch,
+) -> impl IntoView {
+    let Some(buffer) = active_buffer else {
+        return empty().into_any();
+    };
+    let has_gui = active_descriptor.as_ref().is_some_and(|descriptor| {
+        descriptor.available_views.contains(&DocumentViewId::Layout)
+            || descriptor
+                .available_views
+                .contains(&DocumentViewId::Fixture)
+    });
+    if !has_gui {
+        return empty().into_any();
+    }
+
+    let text_path = buffer.path.clone();
+    let gui_path = buffer.path.clone();
+    let text_dispatch = Rc::clone(&dispatch);
+    let gui_dispatch = Rc::clone(&dispatch);
+    h_stack((
+        editor_mode_button(
+            "Text",
+            buffer.view_mode == EditorViewMode::Text,
+            move || {
+                text_dispatch(AppAction::SetEditorViewMode {
+                    path: text_path.clone(),
+                    mode: EditorViewMode::Text,
+                });
+            },
+        ),
+        editor_mode_button("GUI", buffer.view_mode == EditorViewMode::Gui, move || {
+            gui_dispatch(AppAction::SetEditorViewMode {
+                path: gui_path.clone(),
+                mode: EditorViewMode::Gui,
+            });
+        }),
+    ))
+    .style(|s| {
+        s.items_center()
+            .margin_right(theme::SPACE_8)
+            .padding(theme::SPACE_2)
+            .gap(theme::SPACE_2)
+            .border(theme::BORDER_WIDTH)
+            .border_color(theme::color(theme::BORDER))
+            .border_radius(theme::CONTROL_RADIUS)
+            .background(theme::color(theme::PANEL_DARK))
+    })
+    .into_any()
+}
+
+fn editor_mode_button(
+    label: &'static str,
+    active: bool,
+    action: impl Fn() + 'static,
+) -> impl IntoView {
+    container(ui_static_label(label).style(move |s| {
+        let text_color = if active {
+            theme::color(theme::TEXT_INVERTED)
+        } else {
+            theme::color(theme::MUTED)
+        };
+        s.font_size(theme::FONT_SMALL)
+            .color(text_color)
+            .set(Foreground, Brush::Solid(text_color))
+    }))
+    .on_event_stop(EventListener::PointerDown, move |event| {
+        if let Event::PointerDown(event) = event {
+            if event.button.is_primary() {
+                action();
+            }
+        }
+    })
+    .style(move |s| {
+        let background = if active {
+            theme::color(theme::SURFACE_CONTROL_ACTIVE)
+        } else {
+            theme::color(theme::PANEL_DARK)
+        };
+        s.height(24.0)
+            .min_width(44.0)
+            .items_center()
+            .justify_center()
+            .padding_horiz(theme::SPACE_8)
+            .border_radius(theme::CONTROL_RADIUS)
+            .background(background)
+            .cursor(CursorStyle::Pointer)
+            .hover(move |s| {
+                if active {
+                    s
+                } else {
+                    s.background(theme::color(theme::SURFACE_CONTROL_HOVER))
+                }
+            })
+    })
 }
 
 fn editor_tab(

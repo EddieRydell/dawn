@@ -1,36 +1,29 @@
-use std::collections::HashMap;
-
-use floem::reactive::{RwSignal, SignalUpdate, SignalWith};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::ui::components::canvas::CanvasState;
 
 pub mod fixture;
 pub mod layout;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct EditorGuiUiState {
-    layout_canvases: RwSignal<HashMap<String, CanvasState>>,
+    layout_canvases: Rc<RefCell<HashMap<String, CanvasState>>>,
 }
 
 impl EditorGuiUiState {
     pub fn new() -> Self {
         Self {
-            layout_canvases: RwSignal::new(HashMap::new()),
+            layout_canvases: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
     pub fn layout_canvas(&self, path: &str, object_key: &str) -> CanvasState {
         let key = format!("{path}#{object_key}");
-        if let Some(state) = self
-            .layout_canvases
-            .with_untracked(|canvases| canvases.get(&key).copied())
-        {
+        if let Some(state) = self.layout_canvases.borrow().get(&key).cloned() {
             return state;
         }
         let state = CanvasState::new();
-        self.layout_canvases.update(|canvases| {
-            canvases.insert(key, state);
-        });
+        self.layout_canvases.borrow_mut().insert(key, state.clone());
         state
     }
 }

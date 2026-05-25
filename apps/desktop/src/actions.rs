@@ -39,8 +39,8 @@ pub enum AppAction {
         paths: Vec<ProjectPath>,
         new_parent: ProjectPath,
     },
-    NudgeLayoutFixture {
-        id: String,
+    NudgeLayoutFixtures {
+        ids: Vec<String>,
         dx: f64,
         dy: f64,
     },

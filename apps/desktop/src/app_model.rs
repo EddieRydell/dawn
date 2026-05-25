@@ -166,7 +166,7 @@ impl AppModel {
             AppAction::SetActiveFile(path) => self.editors.set_active_file(path),
             AppAction::UpdateActiveText(text) => {
                 self.editors.update_active_text(text);
-                self.refresh_analysis()?;
+                self.save_active_file()?;
             }
             AppAction::SaveActiveFile => self.save_active_file()?,
             AppAction::SetEditorViewMode { path, mode } => self.editors.set_view_mode(&path, mode),
@@ -206,15 +206,13 @@ impl AppModel {
                 self.editors.reconcile_moved_paths(&moves);
                 self.refresh_analysis()?;
             }
-            AppAction::NudgeLayoutFixture { id, dx, dy } => {
+            AppAction::NudgeLayoutFixtures { ids, dx, dy } => {
                 self.edit_active_layout(|document| {
-                    if let Some(fixture) = document
-                        .fixtures
-                        .iter_mut()
-                        .find(|fixture| fixture.id == id)
-                    {
-                        fixture.transform.position.x += dx;
-                        fixture.transform.position.y += dy;
+                    for fixture in &mut document.fixtures {
+                        if ids.contains(&fixture.id) {
+                            fixture.transform.position.x += dx;
+                            fixture.transform.position.y += dy;
+                        }
                     }
                 })?;
             }
@@ -339,6 +337,7 @@ impl AppModel {
         )? {
             DocumentEditResult::Applied(outcome) => {
                 self.editors.update_active_text(outcome.serialized_content);
+                self.save_active_file()?;
                 let analysis = outcome.analysis;
                 self.diagnostics = analysis.diagnostics.clone();
                 self.analysis = Some(analysis);
@@ -373,6 +372,7 @@ impl AppModel {
         )? {
             DocumentEditResult::Applied(outcome) => {
                 self.editors.update_active_text(outcome.serialized_content);
+                self.save_active_file()?;
                 let analysis = outcome.analysis;
                 self.diagnostics = analysis.diagnostics.clone();
                 self.analysis = Some(analysis);

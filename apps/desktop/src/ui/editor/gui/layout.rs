@@ -5,17 +5,13 @@ use dawn_project::model::DistanceUnit;
 use dawn_project::render::{
     transform_geometry_render_plan, GeometryRenderBounds, GeometryRenderGuide,
 };
-use floem::event::{Event, EventListener};
-use floem::peniko::Brush;
 use floem::prelude::*;
-use floem::reactive::{SignalGet, SignalUpdate};
-use floem::style::{CursorStyle, Foreground};
 
 use crate::actions::AppAction;
 use crate::app_model::AppSnapshot;
 use crate::ui::components::canvas::{
     canvas_with_state, CanvasItem, CanvasItemInteraction, CanvasItemKind, CanvasLayer, CanvasScene,
-    CanvasState, CanvasTool,
+    CanvasState,
 };
 use crate::ui::components::{ui_button, ui_static_label};
 use crate::ui::editor::gui::EditorGuiUiState;
@@ -38,9 +34,9 @@ pub fn layout_viewer(
     let scene_document = document.clone();
 
     v_stack((
-        layout_header(name, units, bounds, canvas_state),
+        layout_header(name, units, bounds),
         layout_body(
-            move || layout_canvas_scene(&scene_document, canvas_state.selected_target.get()),
+            move || layout_canvas_scene(&scene_document),
             canvas_state,
             fixtures,
             groups,
@@ -56,12 +52,7 @@ pub fn layout_viewer(
     .into_any()
 }
 
-fn layout_header(
-    name: String,
-    units: DistanceUnit,
-    bounds: GeometryRenderBounds,
-    canvas_state: CanvasState,
-) -> impl IntoView {
+fn layout_header(name: String, units: DistanceUnit, bounds: GeometryRenderBounds) -> impl IntoView {
     h_stack((
         ui_static_label("Layout").style(|s| s.font_bold()),
         ui_static_label(format!("{name}  {units:?}")),
@@ -70,7 +61,6 @@ fn layout_header(
             bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y
         )),
         empty().style(|s| s.flex_grow(1.0).min_width(0.0)),
-        canvas_tool_control(canvas_state),
     ))
     .style(|s| {
         s.width_full()
@@ -92,8 +82,8 @@ fn layout_body(
     let drag_dispatch = Rc::clone(&dispatch);
     h_stack((
         canvas_with_state(canvas_state, scene)
-            .on_drag_end(move |id, dx, dy| {
-                drag_dispatch(AppAction::NudgeLayoutFixture { id, dx, dy });
+            .on_drag_end(move |ids, dx, dy| {
+                drag_dispatch(AppAction::NudgeLayoutFixtures { ids, dx, dy });
             })
             .style(|s| {
                 s.flex_grow(1.0)
@@ -112,76 +102,6 @@ fn layout_body(
             .min_width(0.0)
             .min_height(0.0)
             .gap(theme::SPACE_12)
-    })
-}
-
-fn canvas_tool_control(canvas_state: CanvasState) -> impl IntoView {
-    dyn_container(
-        move || canvas_state.tool.get(),
-        move |tool| {
-            h_stack((
-                canvas_tool_button("Pan/Zoom", tool == CanvasTool::PanZoom, move || {
-                    canvas_state.tool.set(CanvasTool::PanZoom)
-                }),
-                canvas_tool_button("Edit", tool == CanvasTool::Edit, move || {
-                    canvas_state.tool.set(CanvasTool::Edit)
-                }),
-            ))
-            .style(|s| {
-                s.items_center()
-                    .padding(theme::SPACE_2)
-                    .gap(theme::SPACE_2)
-                    .border(theme::BORDER_WIDTH)
-                    .border_color(theme::color(theme::BORDER))
-                    .border_radius(theme::CONTROL_RADIUS)
-                    .background(theme::color(theme::PANEL_DARK))
-            })
-            .into_any()
-        },
-    )
-}
-
-fn canvas_tool_button(
-    label: &'static str,
-    active: bool,
-    action: impl Fn() + 'static,
-) -> impl IntoView {
-    container(ui_static_label(label).style(move |s| {
-        let text_color = if active {
-            theme::color(theme::TEXT_INVERTED)
-        } else {
-            theme::color(theme::MUTED)
-        };
-        s.font_size(theme::FONT_SMALL)
-            .color(text_color)
-            .set(Foreground, Brush::Solid(text_color))
-    }))
-    .on_event_stop(EventListener::PointerDown, move |event| {
-        if let Event::PointerDown(event) = event {
-            if event.button.is_primary() {
-                action();
-            }
-        }
-    })
-    .style(move |s| {
-        let bg = if active {
-            theme::color(theme::SURFACE_CONTROL_ACTIVE)
-        } else {
-            theme::color(theme::PANEL_DARK)
-        };
-        s.height(24.0)
-            .items_center()
-            .padding_horiz(theme::SPACE_8)
-            .border_radius(theme::CONTROL_RADIUS)
-            .background(bg)
-            .cursor(CursorStyle::Pointer)
-            .hover(move |s| {
-                if active {
-                    s
-                } else {
-                    s.background(theme::color(theme::SURFACE_CONTROL_HOVER))
-                }
-            })
     })
 }
 
@@ -252,29 +172,29 @@ fn fixture_row(fixture: LayoutFixturePlacement, dispatch: crate::ui::UiDispatch)
         v_stack((
             h_stack((
                 ui_button("Left").action(move || {
-                    nudge_left(AppAction::NudgeLayoutFixture {
-                        id: id_left.clone(),
+                    nudge_left(AppAction::NudgeLayoutFixtures {
+                        ids: vec![id_left.clone()],
                         dx: -theme::LAYOUT_NUDGE_STEP,
                         dy: 0.0,
                     })
                 }),
                 ui_button("Right").action(move || {
-                    nudge_right(AppAction::NudgeLayoutFixture {
-                        id: id_right.clone(),
+                    nudge_right(AppAction::NudgeLayoutFixtures {
+                        ids: vec![id_right.clone()],
                         dx: theme::LAYOUT_NUDGE_STEP,
                         dy: 0.0,
                     })
                 }),
                 ui_button("Up").action(move || {
-                    nudge_up(AppAction::NudgeLayoutFixture {
-                        id: id_up.clone(),
+                    nudge_up(AppAction::NudgeLayoutFixtures {
+                        ids: vec![id_up.clone()],
                         dx: 0.0,
                         dy: theme::LAYOUT_NUDGE_STEP,
                     })
                 }),
                 ui_button("Down").action(move || {
-                    nudge_down(AppAction::NudgeLayoutFixture {
-                        id: id_down.clone(),
+                    nudge_down(AppAction::NudgeLayoutFixtures {
+                        ids: vec![id_down.clone()],
                         dx: 0.0,
                         dy: -theme::LAYOUT_NUDGE_STEP,
                     })
@@ -318,7 +238,7 @@ fn groups_section(groups: Vec<LayoutGroupDocument>) -> impl IntoView {
     .style(|s| s.width_full().gap(theme::SPACE_6))
 }
 
-fn layout_canvas_scene(document: &LayoutDocument, selected_target: Option<String>) -> CanvasScene {
+fn layout_canvas_scene(document: &LayoutDocument) -> CanvasScene {
     let mut items = Vec::new();
     let mut layers = Vec::new();
     for fixture in &document.fixtures {
@@ -327,7 +247,6 @@ fn layout_canvas_scene(document: &LayoutDocument, selected_target: Option<String
             visible: true,
         });
         let color = fixture_color(&fixture.id);
-        let selected = selected_target.as_deref() == Some(fixture.id.as_str());
         let interaction = CanvasItemInteraction::Target {
             id: fixture.id.clone(),
             selectable: true,
@@ -362,7 +281,6 @@ fn layout_canvas_scene(document: &LayoutDocument, selected_target: Option<String
                 id: format!("{}:guide:{index}", fixture.id),
                 kind,
                 label: Some(fixture.id.clone()),
-                selected,
                 color,
                 interaction: interaction.clone(),
             });
@@ -375,7 +293,6 @@ fn layout_canvas_scene(document: &LayoutDocument, selected_target: Option<String
                     radius: plan.bulb_radius,
                 },
                 label: Some(fixture.id.clone()),
-                selected,
                 color,
                 interaction: interaction.clone(),
             });
