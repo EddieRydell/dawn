@@ -3,7 +3,8 @@ stage:
   name: stage
   units: meters
   fixtures:
-  - id: bar_01
+  - id: 1
+    name: Bar 01
     fixture:
       import: ../fixtures/main.fixture.dawn::pixel_bar_50
     transform:
@@ -19,13 +20,14 @@ stage:
         x: 1.0
         y: 1.0
         z: 1.0
-  - id: bar_02
+  - id: 2
+    name: Bar 02
     fixture:
       import: ../fixtures/main.fixture.dawn::pixel_bar_50
     transform:
       position:
-        x: -15.862267796325128
-        y: 14.537621299260502
+        x: -19.561120971766663
+        y: 5.928221666767273
         z: 0.0
       rotation:
         x: 0.0
@@ -35,7 +37,8 @@ stage:
         x: 10.0
         y: 1.0
         z: 1.0
-  - id: bar_03
+  - id: 3
+    name: Bar 03
     fixture:
       import: ../fixtures/main.fixture.dawn::pixel_bar_50
     transform:
@@ -51,7 +54,8 @@ stage:
         x: 1.0
         y: 1.0
         z: 1.0
-  - id: bar_04
+  - id: 4
+    name: Bar 04
     fixture:
       import: ../fixtures/main.fixture.dawn::pixel_bar_50
     transform:
@@ -67,7 +71,8 @@ stage:
         x: 1.0
         y: 1.0
         z: 1.0
-  - id: spot_01
+  - id: 5
+    name: Spot 01
     fixture:
       import: ../fixtures/main.fixture.dawn::spot_rgb
     transform:
@@ -83,7 +88,8 @@ stage:
         x: 1.0
         y: 1.0
         z: 1.0
-  - id: spot_02
+  - id: 6
+    name: Spot 02
     fixture:
       import: ../fixtures/main.fixture.dawn::spot_rgb
     transform:
@@ -99,7 +105,8 @@ stage:
         x: 1.0
         y: 1.0
         z: 1.0
-  - id: spot_03
+  - id: 7
+    name: Spot 03
     fixture:
       import: ../fixtures/main.fixture.dawn::spot_rgb
     transform:
@@ -115,7 +122,8 @@ stage:
         x: 1.0
         y: 1.0
         z: 1.0
-  - id: spot_04
+  - id: 8
+    name: Spot 04
     fixture:
       import: ../fixtures/main.fixture.dawn::spot_rgb
     transform:
@@ -131,7 +139,8 @@ stage:
         x: 1.0
         y: 1.0
         z: 1.0
-  - id: pixelbar
+  - id: 9
+    name: Pixelbar
     fixture:
       import: ../fixtures/main.fixture.dawn::pixel_bar_50
     transform:
@@ -147,7 +156,8 @@ stage:
         x: 1.0
         y: 1.0
         z: 1.0
-  - id: spot
+  - id: 10
+    name: Spot
     fixture:
       import: ../fixtures/main.fixture.dawn::spot_rgb
     transform:
@@ -163,7 +173,8 @@ stage:
         x: 1.0
         y: 1.0
         z: 1.0
-  - id: pixelbar_2
+  - id: 11
+    name: Pixelbar 2
     fixture:
       import: ../fixtures/main.fixture.dawn::pixel_bar_50
     transform:
@@ -179,7 +190,8 @@ stage:
         x: 1.0
         y: 1.0
         z: 1.0
-  - id: spot_2
+  - id: 12
+    name: Spot 2
     fixture:
       import: ../fixtures/main.fixture.dawn::spot_rgb
     transform:
@@ -195,7 +207,8 @@ stage:
         x: 1.0
         y: 1.0
         z: 1.0
-  - id: bar_02_copy
+  - id: 13
+    name: Bar 02 Copy
     fixture:
       import: ../fixtures/main.fixture.dawn::pixel_bar_50
     transform:
@@ -211,16 +224,108 @@ stage:
         x: 10.0
         y: 1.0
         z: 1.0
+  - id: 14
+    name: Fixture
+    fixture:
+      name: Fixture
+      color_model: rgb
+      bulb_size: 1.0
+      geometry:
+        type: points
+        points:
+        - x: 0.0
+          y: 0.0
+          z: 0.0
+    transform:
+      position:
+        x: 6.472132887907669
+        y: 12.06717589959929
+        z: 0.0
+      rotation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
+  - id: 15
+    name: Fixture 2
+    fixture:
+      name: Fixture
+      color_model: rgb
+      bulb_size: 1.0
+      geometry:
+        type: points
+        points:
+        - x: 0.0
+          y: 0.0
+          z: 0.0
+    transform:
+      position:
+        x: -0.9097770258968545
+        y: -17.693391003531765
+        z: 0.0
+      rotation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
+  - id: 16
+    name: Fixture 3
+    fixture:
+      name: Fixture
+      color_model: rgb
+      bulb_size: 1.0
+      geometry:
+        type: points
+        points:
+        - x: 0.0
+          y: 0.0
+          z: 0.0
+    transform:
+      position:
+        x: -7.192846819428418
+        y: -1.8781552212884272
+        z: 0.0
+      rotation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
+  - id: 17
+    name: Fixture 4
+    fixture:
+      import: ../fixtures/main.fixture.dawn::pixel_bar_50
+    transform:
+      position:
+        x: -6.600165458127279
+        y: 2.2464041831448576
+        z: 0.0
+      rotation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   groups:
   - name: WallBars
     members:
-    - bar_01
-    - bar_02
-    - bar_03
-    - bar_04
+    - 1
+    - 2
+    - 3
+    - 4
   - name: Movers
     members:
-    - spot_01
-    - spot_02
-    - spot_03
-    - spot_04
+    - 5
+    - 6
+    - 7
+    - 8

@@ -15,36 +15,43 @@ use dawn_project::document::{
     FixtureDocument, LayoutDocument, LayoutFixturePlacement, LayoutFixtureRef,
     ResolvedLayoutFixture,
 };
-use dawn_project::fs::ProjectFs;
-use dawn_project::model::{ColorModel, Geometry, Point3, Transform};
-use dawn_project::path::ProjectPath;
+use dawn_project::effect_script::{compile as compile_effect_script, FixtureContext, PixelContext};
+use dawn_project::fs::WorkspaceFs;
+use dawn_project::model::{
+    Color, ColorModel, Curve, CurveValue, CurveValueType, FixtureId, Geometry, Point3, Transform,
+};
+use dawn_project::path::{utf8_path, PathStringExt, Utf8PathBuf};
 use dawn_project::render::{GeometryRenderBounds, GeometryRenderGuide, GeometryRenderPlan};
 
-fn project_context(project_path: impl AsRef<Path>) -> (ProjectFs, ProjectPath, PathBuf) {
+fn project_context(project_path: impl AsRef<Path>) -> (WorkspaceFs, Utf8PathBuf, PathBuf) {
     let project_path = project_path.as_ref();
     let root = project_path
         .parent()
         .expect("test project path should have a parent")
         .to_path_buf();
-    let fs = ProjectFs::open_ambient(&root).expect("test project root should open");
+    let fs = WorkspaceFs::open(&root).expect("test project root should open");
     let relative = relative_project_path(&root, project_path);
     (fs, relative, root)
 }
 
-fn relative_project_path(root: &Path, path: &Path) -> ProjectPath {
-    ProjectPath::parse(
+fn relative_project_path(root: &Path, path: &Path) -> Utf8PathBuf {
+    utf8_path(
         path.strip_prefix(root)
             .expect("test path should be inside project root"),
     )
-    .expect("test path should parse as project-relative")
+    .expect("test path should be valid UTF-8")
+}
+
+fn canonical_test_path(path: impl AsRef<Path>) -> Utf8PathBuf {
+    utf8_path(path.as_ref().canonicalize().unwrap()).expect("test path should be valid UTF-8")
 }
 
 fn normalize_overlays(root: &Path, overlays: Vec<ProjectOverlay>) -> Vec<ProjectOverlay> {
     overlays
         .into_iter()
         .map(|overlay| ProjectOverlay {
-            path: if overlay.path.as_path().is_absolute() {
-                relative_project_path(root, overlay.path.as_path())
+            path: if overlay.path.as_std_path().is_absolute() {
+                relative_project_path(root, overlay.path.as_std_path())
             } else {
                 overlay.path
             },
@@ -98,7 +105,7 @@ fn get_fixture_document(
         .as_ref()
         .parent()
         .expect("fixture path should have a parent");
-    let fs = ProjectFs::open_ambient(root).expect("test project root should open");
+    let fs = WorkspaceFs::open(root).expect("test project root should open");
     let path = relative_project_path(root, path.as_ref());
     core_get_fixture_document(
         &fs,
@@ -170,6 +177,222 @@ fn analyzes_club_rig_to_resolved_project() {
 }
 
 #[test]
+fn color_serializes_as_hex_and_rejects_invalid_literals() {
+    let color: Color = serde_yaml::from_str("\"#2244ff\"").unwrap();
+    assert_eq!(color, Color::new(0x22, 0x44, 0xff));
+    assert!(serde_yaml::to_string(&color).unwrap().contains("#2244ff"));
+
+    let error = serde_yaml::from_str::<Color>("\"2244ff\"").unwrap_err();
+    assert!(error.to_string().contains("start with `#`"));
+}
+
+#[test]
+fn typed_curves_parse_serialize_and_interpolate() {
+    let float_curve: Curve = serde_yaml::from_str(
+        r##"
+value_type: float
+points:
+  - time: 0.0
+    value: 0.0
+  - time: 1.0
+    value: 10.0
+"##,
+    )
+    .unwrap();
+    assert_eq!(float_curve.value_type, CurveValueType::Float);
+    assert_eq!(float_curve.evaluate_float(0.5), Some(5.0));
+    assert!(serde_yaml::to_string(&float_curve)
+        .unwrap()
+        .contains("value_type: float"));
+
+    let color_curve: Curve = serde_yaml::from_str(
+        r##"
+value_type: color
+points:
+  - time: 0.0
+    value: "#000000"
+  - time: 1.0
+    value: "#ffffff"
+"##,
+    )
+    .unwrap();
+    assert_eq!(
+        color_curve.evaluate(0.5),
+        Some(CurveValue::Color(Color::new(128, 128, 128)))
+    );
+
+    let mismatch = serde_yaml::from_str::<Curve>(
+        r##"
+value_type: float
+points:
+  - time: 0.0
+    value: "#ffffff"
+"##,
+    )
+    .unwrap_err();
+    assert!(mismatch.to_string().contains("float curve points"));
+}
+
+#[test]
+fn effect_scripts_compile_and_evaluate_sample() {
+    let script = compile_effect_script(
+        r##"
+effect Pulse {
+  param color base = #000000;
+  param color accent = #ffffff;
+  param float speed = 1.0;
+
+  color sample(float t, Fixture fixture, Pixel pixel) {
+    float phase = (sin(t * speed) + 1.0) / 2.0;
+    return mix(base, accent, phase);
+  }
+}
+"##,
+    )
+    .unwrap();
+    assert_eq!(script.name, "Pulse");
+    assert_eq!(script.params.len(), 3);
+    let color = script
+        .sample(
+            0.0,
+            FixtureContext { index: 0 },
+            PixelContext { index: 0 },
+            &Default::default(),
+        )
+        .unwrap();
+    assert_eq!(color, Color::new(128, 128, 128));
+
+    let error = compile_effect_script(
+        "effect Bad { color nope(float t, Fixture fixture, Pixel pixel) { return #ffffff; } }",
+    )
+    .unwrap_err();
+    assert!(error[0].range.is_some());
+
+    let import_error = compile_effect_script(
+        r#"
+effect Bad {
+  param curve<float> fade = import "../curves/fade-in.curve.dawn::fade_in";
+  color sample(float t, Fixture fixture, Pixel pixel) {
+    return #ffffff;
+  }
+}
+"#,
+    )
+    .unwrap_err();
+    assert!(import_error[0]
+        .message
+        .contains("parameter defaults cannot import files"));
+}
+
+#[test]
+fn project_analysis_loads_effect_scripts_without_yaml_parsing() {
+    let project_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/club-rig/project.dawn");
+    let analysis = analyze_project(project_path, "club_rig");
+    let effect_path = analysis
+        .files
+        .keys()
+        .find(|path| path.to_slash_string().ends_with("pulse.effect.dawn"))
+        .expect("effect script should be reachable")
+        .clone();
+    let analyzed = analysis.files.get(&effect_path).unwrap();
+
+    assert!(analyzed.file.is_none());
+    assert!(analyzed.script.is_some());
+    assert!(analysis.compiled_script_for_path(&effect_path).is_some());
+}
+
+#[test]
+fn sequence_params_are_validated_against_script_schema() {
+    let dir = temp_dir("script-param-validation");
+    fs::create_dir_all(dir.join("effects")).unwrap();
+    fs::write(
+        dir.join("effects/pulse.effect.dawn"),
+        r##"
+effect Pulse {
+  param color base = #000000;
+  param float speed;
+
+  color sample(float t, Fixture fixture, Pixel pixel) {
+    return base;
+  }
+}
+"##,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("project.dawn"),
+        r##"
+club:
+  type: project
+  name: club
+  display:
+    name: main
+    controllers: []
+    patch:
+      routes: []
+    layout:
+      name: stage
+      units: meters
+      fixtures:
+        - id: 1
+          name: Pixel
+          fixture:
+            name: Pixel
+            color_model: rgb
+            geometry:
+              type: points
+              points: []
+          transform:
+            position: { x: 0.0, y: 0.0, z: 0.0 }
+      groups:
+        - name: all
+          members: [1]
+  sequences:
+    - duration: 1s
+      frame_rate: 60
+      audio:
+      effects:
+        - id: fx
+          start: 0s
+          duration: 1s
+          target:
+            type: group
+            name: all
+          params:
+            base:
+              type: float
+              value: 1.0
+            extra:
+              type: color
+              value: "#ffffff"
+          script:
+            import: effects/pulse.effect.dawn
+"##,
+    )
+    .unwrap();
+
+    let analysis = analyze_project(dir.join("project.dawn"), "club");
+
+    assert!(analysis.resolved.is_none());
+    assert!(analysis.diagnostics.iter().any(|diagnostic| diagnostic.code
+        == DiagnosticCode::Script
+        && diagnostic
+            .message
+            .contains("parameter `base` must be color")));
+    assert!(analysis
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == DiagnosticCode::Script
+            && diagnostic.message.contains("unknown parameter `extra`")));
+    assert!(analysis.diagnostics.iter().any(|diagnostic| diagnostic.code
+        == DiagnosticCode::Script
+        && diagnostic
+            .message
+            .contains("missing required parameter `speed`")));
+}
+
+#[test]
 fn reports_semantic_diagnostics_without_resolved_project() {
     let dir = temp_dir("semantic");
     let project_path = dir.join("project.dawn");
@@ -188,7 +411,8 @@ club:
       name: stage
       units: meters
       fixtures:
-        - id: bar_01
+        - id: 1
+          name: Bar 01
           fixture:
             name: PixelBar
             color_model: rgb
@@ -228,6 +452,166 @@ club:
 }
 
 #[test]
+fn resolves_numeric_fixture_references_across_layout_patch_and_sequences() {
+    let dir = temp_dir("numeric-fixture-refs");
+    let project_path = dir.join("project.dawn");
+    fs::write(
+        &project_path,
+        r##"
+club:
+  type: project
+  name: club
+  display:
+    name: main
+    controllers:
+      - name: WallController
+        protocol: artnet
+        universes: []
+    patch:
+      routes:
+        - fixture: 1
+          controller: WallController
+          universe: 1
+          start: 1
+    layout:
+      name: stage
+      units: meters
+      fixtures:
+        - id: 1
+          name: Front Bar 1
+          fixture:
+            name: PixelBar
+            color_model: rgb
+            geometry:
+              type: points
+              points:
+                - { x: 0.0, y: 0.0, z: 0.0 }
+          transform:
+            position: { x: 0.0, y: 0.0, z: 0.0 }
+      groups:
+        - name: WallBars
+          members: [1]
+  sequences:
+    - duration: 1s
+      frame_rate: 60
+      audio:
+      effects:
+        - id: group_fx
+          start: 0s
+          duration: 1s
+          target:
+            type: group
+            name: WallBars
+          params: {}
+          script: |
+            effect InlineGroup {
+              color sample(float t, Fixture fixture, Pixel pixel) {
+                return #ffffff;
+              }
+            }
+        - id: fixture_fx
+          start: 0s
+          duration: 1s
+          target:
+            type: fixture
+            id: 1
+          params: {}
+          script: |
+            effect InlineFixture {
+              color sample(float t, Fixture fixture, Pixel pixel) {
+                return #ffffff;
+              }
+            }
+"##,
+    )
+    .unwrap();
+
+    let analysis = analyze_project(&project_path, "club");
+
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let project = analysis.resolved.expect("numeric refs should resolve");
+    assert_eq!(project.display.layout.groups[0].members[0].0, 0);
+    assert_eq!(project.display.patch.routes[0].fixture.0, 0);
+    assert_eq!(project.sequences[0].effects.len(), 2);
+}
+
+#[test]
+fn rejects_duplicate_fixture_ids_and_empty_or_duplicate_fixture_names() {
+    for (label, fixture_overrides, expected) in [
+        (
+            "duplicate-id",
+            "        - id: 1\n          name: Second\n",
+            "duplicate fixture id `1`",
+        ),
+        (
+            "empty-name",
+            "        - id: 2\n          name: '   '\n",
+            "fixture name cannot be empty",
+        ),
+        (
+            "duplicate-name",
+            "        - id: 2\n          name: First\n",
+            "duplicate fixture name `First`",
+        ),
+    ] {
+        let dir = temp_dir(label);
+        let project_path = dir.join("project.dawn");
+        fs::write(
+            &project_path,
+            format!(
+                r#"
+club:
+  type: project
+  name: club
+  display:
+    name: main
+    controllers: []
+    patch:
+      routes: []
+    layout:
+      name: stage
+      units: meters
+      fixtures:
+        - id: 1
+          name: First
+          fixture:
+            name: Pixel
+            color_model: rgb
+            geometry:
+              type: points
+              points: []
+          transform:
+            position: {{ x: 0.0, y: 0.0, z: 0.0 }}
+{fixture_overrides}          fixture:
+            name: Pixel
+            color_model: rgb
+            geometry:
+              type: points
+              points: []
+          transform:
+            position: {{ x: 1.0, y: 0.0, z: 0.0 }}
+      groups: []
+"#
+            ),
+        )
+        .unwrap();
+
+        let analysis = analyze_project(&project_path, "club");
+
+        assert!(analysis.resolved.is_none());
+        assert!(
+            analysis.diagnostics[0].message.contains(expected),
+            "{:?}",
+            analysis.diagnostics
+        );
+    }
+}
+
+#[test]
 fn reports_import_diagnostics_and_keeps_parsed_files() {
     let dir = temp_dir("missing-import");
     let project_path = dir.join("project.dawn");
@@ -248,12 +632,12 @@ club:
     assert!(analysis.resolved.is_none());
     assert!(analysis
         .files
-        .contains_key(&ProjectPath::new("project.dawn")));
+        .contains_key(&canonical_test_path(dir.join("project.dawn"))));
     assert_eq!(analysis.diagnostics.len(), 1);
     assert_eq!(analysis.diagnostics[0].code, DiagnosticCode::Import);
     assert_eq!(
         analysis.diagnostics[0].path,
-        ProjectPath::new("project.dawn")
+        canonical_test_path(dir.join("project.dawn"))
     );
     assert!(analysis.diagnostics[0].range.is_some());
 }
@@ -268,7 +652,7 @@ fn overlay_content_takes_precedence_over_disk() {
         &project_path,
         None,
         vec![ProjectOverlay {
-            path: ProjectPath::new("project.dawn"),
+            path: Utf8PathBuf::from("project.dawn"),
             content: minimal_project("club"),
         }],
     );
@@ -303,12 +687,14 @@ stage:
   name: stage
   units: meters
   fixtures:
-    - id: imported
+    - id: 1
+      name: Imported
       fixture:
         import: fixtures.dawn::pixel_bar
       transform:
         position: { x: 0.0, y: 0.0, z: 0.0 }
-    - id: inline
+    - id: 2
+      name: Inline
       fixture:
         name: PixelBar
         color_model: rgb
@@ -364,7 +750,8 @@ stage:
   name: stage
   units: meters
   fixtures:
-    - id: imported
+    - id: 1
+      name: Imported
       fixture:
         import: fixtures.dawn::pixel_bar
       transform:
@@ -375,7 +762,7 @@ stage:
     .unwrap();
 
     let overlay = ProjectOverlay {
-        path: ProjectPath::new("fixtures.dawn"),
+        path: Utf8PathBuf::from("fixtures.dawn"),
         content: r#"
 pixel_bar:
   type: fixture
@@ -489,7 +876,8 @@ stage:
   name: stage
   units: meters
   fixtures:
-    - id: pixel
+    - id: 1
+      name: Pixel
       fixture:
         name: Pixel
         color_model: rgb
@@ -523,7 +911,6 @@ fn gui_editor_files_do_not_reintroduce_geometry_helpers() {
     let forbidden = [
         "sample_polyline_points",
         "sample_arc_points",
-        "bulb_radius",
         "geometry_bounds",
         "nice_scale_length",
         "format_scale_length",
@@ -560,7 +947,8 @@ stage:
   name: stage
   units: meters
   fixtures:
-    - id: missing
+    - id: 1
+      name: Missing
       fixture:
         import: missing.dawn::pixel_bar
       transform:
@@ -617,11 +1005,12 @@ pixel:
         get_layout_document(&layout_path, "stage", &project_path, Vec::new()).unwrap();
     let catalog_item = document.fixture_catalog[0].clone();
     document.fixtures.push(LayoutFixturePlacement {
-        id: "pixel_01".to_string(),
+        id: FixtureId(1),
+        name: "Pixel 01".to_string(),
         fixture: LayoutFixtureRef::Import {
             import: "layout.dawn::pixel".to_string(),
             object_key: Some("pixel".to_string()),
-            source_path: Some(ProjectPath::new("layout.dawn").to_slash_string()),
+            source_path: Some(Utf8PathBuf::from("layout.dawn").to_slash_string()),
         },
         resolved_fixture: ResolvedLayoutFixture {
             name: catalog_item.display_name,
@@ -662,7 +1051,8 @@ pixel:
     assert!(outcome
         .serialized_content
         .contains("# fixture comment stays put"));
-    assert!(outcome.serialized_content.contains("id: pixel_01"));
+    assert!(outcome.serialized_content.contains("id: 1"));
+    assert!(outcome.serialized_content.contains("name: Pixel 01"));
 }
 
 #[test]
@@ -683,7 +1073,8 @@ stage:
   name: stage
   units: meters
   fixtures:
-    - id: old
+    - id: 1
+      name: Old
       fixture:
         name: Pixel
         color_model: rgb
@@ -693,7 +1084,8 @@ stage:
             - { x: 0.0, y: 0.0, z: 0.0 }
       transform:
         position: { x: 0.0, y: 0.0, z: 0.0 }
-    - id: removed
+    - id: 2
+      name: Removed
       fixture:
         name: Pixel
         color_model: rgb
@@ -705,14 +1097,14 @@ stage:
         position: { x: 1.0, y: 0.0, z: 0.0 }
   groups:
     - name: all
-      members: [old, removed]
+      members: [1, 2]
 "#,
     )
     .unwrap();
     let base_content = fs::read_to_string(&layout_path).unwrap();
     let mut document =
         get_layout_document(&layout_path, "stage", &project_path, Vec::new()).unwrap();
-    document.fixtures[0].id = "new_id".to_string();
+    document.fixtures[0].id = FixtureId(3);
     document.fixtures.pop();
 
     let result = apply_layout_document_edit(
@@ -729,7 +1121,7 @@ stage:
     let DocumentEditResult::Applied(outcome) = result else {
         panic!("layout edit should apply");
     };
-    assert!(outcome.serialized_content.contains("- new_id"));
+    assert!(outcome.serialized_content.contains("- 3"));
     assert!(!outcome.serialized_content.contains("removed"));
 }
 
@@ -752,7 +1144,8 @@ stage:
   name: stage
   units: meters
   fixtures:
-    - id: imported
+    - id: 1
+      name: Imported
       fixture:
         import: fixtures.dawn::pixel
       transform:
@@ -777,7 +1170,7 @@ pixel:
     .unwrap();
     let base_content = fs::read_to_string(&fixture_path).unwrap();
     let document = FixtureDocument {
-        path: ProjectPath::new("fixtures.dawn").to_slash_string(),
+        path: Utf8PathBuf::from("fixtures.dawn").to_slash_string(),
         selected_object_key: Some("arc".to_string()),
         fixtures: vec![FixtureDefinitionDocument {
             object_key: "arc".to_string(),
@@ -827,7 +1220,7 @@ pixel:
             &fixture_path,
             Some("arc"),
             vec![ProjectOverlay {
-                path: ProjectPath::new("fixtures.dawn"),
+                path: Utf8PathBuf::from("fixtures.dawn"),
                 content: outcome.serialized_content,
             }]
         )
@@ -877,7 +1270,7 @@ pixel_bar:
     .unwrap();
     let base_content = fs::read_to_string(&fixture_path).unwrap();
     let document = FixtureDocument {
-        path: ProjectPath::new("fixtures.dawn").to_slash_string(),
+        path: Utf8PathBuf::from("fixtures.dawn").to_slash_string(),
         selected_object_key: Some("pixel_bar".to_string()),
         fixtures: vec![FixtureDefinitionDocument {
             object_key: "pixel_bar".to_string(),
@@ -945,7 +1338,8 @@ club:
       name: stage
       units: meters
       fixtures:
-        - id: bar
+        - id: 1
+          name: Bar
           fixture:
             name: PixelBar
             color_model: rgb
@@ -987,7 +1381,8 @@ club:
       name: stage
       units: meters
       fixtures:
-        - id: bar
+        - id: 1
+          name: Bar
           fixture:
             name: PixelBar
             color_model: rgb
@@ -1124,13 +1519,31 @@ stage:
     );
     assert!(analysis
         .files
-        .contains_key(&ProjectPath::new("shows/layout.dawn")));
+        .contains_key(&canonical_test_path(dir.join("shows/layout.dawn"))));
     assert!(analysis.resolved.is_some());
 }
 
 #[test]
-fn absolute_imports_are_rejected_as_project_containment_errors() {
+fn absolute_imports_are_allowed() {
     let dir = temp_dir("absolute-import");
+    let display_path = dir.join("display.dawn");
+    fs::write(
+        &display_path,
+        r#"
+main:
+  type: display
+  name: main
+  controllers: []
+  patch:
+    routes: []
+  layout:
+    name: stage
+    units: meters
+    fixtures: []
+    groups: []
+"#,
+    )
+    .unwrap();
     fs::write(
         dir.join("project.dawn"),
         format!(
@@ -1141,48 +1554,72 @@ club:
   display:
     import: "{}::main"
 "#,
-            dir.join("display.dawn")
-                .to_string_lossy()
-                .replace('\\', "/")
+            display_path.to_string_lossy().replace('\\', "/")
         ),
     )
     .unwrap();
 
     let analysis = analyze_project(dir.join("project.dawn"), "club");
 
-    assert!(analysis.resolved.is_none());
-    assert_eq!(analysis.diagnostics[0].code, DiagnosticCode::Import);
-    assert!(analysis.diagnostics[0]
-        .message
-        .contains("absolute imports are not allowed"));
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis.resolved.is_some());
 }
 
 #[test]
-fn escaping_relative_imports_are_rejected() {
+fn escaping_relative_imports_are_allowed_when_target_exists() {
     let dir = temp_dir("escaping-import");
+    let outside_display = dir.with_file_name(format!(
+        "{}-display.dawn",
+        dir.file_name().unwrap().to_string_lossy()
+    ));
+    fs::write(
+        &outside_display,
+        r#"
+main:
+  type: display
+  name: main
+  controllers: []
+  patch:
+    routes: []
+  layout:
+    name: stage
+    units: meters
+    fixtures: []
+    groups: []
+"#,
+    )
+    .unwrap();
     fs::write(
         dir.join("project.dawn"),
-        r#"
+        format!(
+            r#"
 club:
   type: project
   name: club
   display:
-    import: ../display.dawn::main
+    import: ../{}::main
 "#,
+            outside_display.file_name().unwrap().to_string_lossy()
+        ),
     )
     .unwrap();
 
     let analysis = analyze_project(dir.join("project.dawn"), "club");
 
-    assert!(analysis.resolved.is_none());
-    assert_eq!(analysis.diagnostics[0].code, DiagnosticCode::Import);
-    assert!(analysis.diagnostics[0]
-        .message
-        .contains("escapes the project root"));
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis.resolved.is_some());
 }
 
 #[test]
-fn sequence_assets_cannot_resolve_outside_project() {
+fn sequence_assets_resolve_outside_project() {
     let dir = temp_dir("escaping-sequence-assets");
     fs::write(
         dir.join("project.dawn"),
@@ -1211,17 +1648,23 @@ club:
 
     let analysis = analyze_project(dir.join("project.dawn"), "club");
 
-    assert!(analysis.resolved.is_none());
-    assert_eq!(analysis.diagnostics[0].code, DiagnosticCode::Lower);
-    assert!(analysis.diagnostics[0]
-        .message
-        .contains("escapes the project root"));
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(analysis.resolved.is_some());
 }
 
 #[test]
-fn document_path_parsing_rejects_absolute_and_escaping_paths() {
-    assert!(ProjectPath::parse("/tmp/project.dawn").is_err());
-    assert!(ProjectPath::parse("../project.dawn").is_err());
+fn utf8_paths_allow_absolute_and_escaping_paths() {
+    assert!(utf8_path(std::env::temp_dir().join("project.dawn"))
+        .unwrap()
+        .is_absolute());
+    assert_eq!(
+        Utf8PathBuf::from("../project.dawn").to_slash_string(),
+        "../project.dawn"
+    );
 }
 
 fn minimal_project(key: &str) -> String {

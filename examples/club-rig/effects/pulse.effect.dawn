@@ -1,10 +1,11 @@
 effect Pulse {
-  param base color = #2244ff;
-  param accent color = #ffcc66;
-  param speed float = 0.75;
+  param color base = #2244ff;
+  param color accent = #ffcc66;
+  param float speed = 0.75;
+  param curve<float> fade;
 
-  fn sample(t float, fixture Fixture) {
-    let phase = (sin(t * speed) + 1.0) / 2.0;
-    color mix(base, accent, phase);
+  color sample(float t, Fixture fixture, Pixel pixel) {
+    float phase = (sin(t * speed) + 1.0) / 2.0;
+    return mix(base, accent, fade(phase));
   }
 }

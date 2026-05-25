@@ -1,18 +1,22 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use indexmap::IndexMap;
 use serde::Serialize;
 
-use crate::fs::ProjectFs;
+use crate::effect_script::{
+    compile as compile_effect_script, CompiledEffect, ParamDefault, RuntimeValue, ScriptDiagnostic,
+};
+use crate::fs::WorkspaceFs;
 use crate::lower::{lower_project, select_imported_object, LowerError, ResolvedImport};
 use crate::model::*;
-use crate::path::{resolve_import_file_path, ProjectPath};
+use crate::path::{canonicalize_path, resolve_import_path, PathStringExt, Utf8PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct ProjectAnalysis {
-    pub root_path: ProjectPath,
+    pub root_path: Utf8PathBuf,
     pub project_key: String,
-    pub files: IndexMap<ProjectPath, AnalyzedFile>,
+    pub files: IndexMap<Utf8PathBuf, AnalyzedFile>,
+    pub scripts: IndexMap<String, EffectScriptAnalysis>,
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub resolved: Option<ResolvedProject>,
 }
@@ -39,18 +43,69 @@ impl ProjectAnalysis {
             .map(|file| file.len())
             .sum()
     }
+
+    pub fn compiled_script_for_path(&self, path: &Utf8PathBuf) -> Option<&CompiledEffect> {
+        self.scripts
+            .get(&path.to_slash_string())?
+            .result
+            .as_ref()
+            .ok()
+    }
+
+    pub fn sample_effect_script(
+        &self,
+        script_path: &Utf8PathBuf,
+        t: f64,
+        fixture: crate::effect_script::FixtureContext,
+        pixel: crate::effect_script::PixelContext,
+        params: BTreeMap<String, RuntimeValue>,
+    ) -> Result<Color, String> {
+        let script = self
+            .compiled_script_for_path(script_path)
+            .ok_or_else(|| format!("compiled script `{}` was not found", script_path))?;
+        script
+            .sample(t, fixture, pixel, &params)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn default_runtime_params_for_script(
+        &self,
+        script_path: &Utf8PathBuf,
+    ) -> BTreeMap<String, RuntimeValue> {
+        let Some(script_analysis) = self.scripts.get(&script_path.to_slash_string()) else {
+            return BTreeMap::new();
+        };
+        let Some(script) = script_analysis.result.as_ref().ok() else {
+            return BTreeMap::new();
+        };
+        script
+            .params
+            .iter()
+            .filter_map(|param| match &param.default {
+                Some(ParamDefault::Value(value)) => Some((param.name.clone(), value.clone())),
+                None => None,
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct AnalyzedFile {
-    pub path: ProjectPath,
+    pub path: Utf8PathBuf,
     pub text: Option<String>,
     pub file: Option<DawnFile>,
+    pub script: Option<EffectScriptAnalysis>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EffectScriptAnalysis {
+    pub source: ScriptSource,
+    pub result: Result<CompiledEffect, Vec<ScriptDiagnostic>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectDiagnostic {
-    pub path: ProjectPath,
+    pub path: Utf8PathBuf,
     pub range: Option<TextRange>,
     pub severity: DiagnosticSeverity,
     pub code: DiagnosticCode,
@@ -71,6 +126,7 @@ pub enum DiagnosticCode {
     Import,
     Lower,
     ProjectKey,
+    Script,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,24 +143,31 @@ pub struct TextPosition {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectOverlay {
-    pub path: ProjectPath,
+    pub path: Utf8PathBuf,
     pub content: String,
 }
 pub fn analyze_project(
-    fs: &ProjectFs,
-    project_path: ProjectPath,
+    fs: &WorkspaceFs,
+    project_path: Utf8PathBuf,
     project_key: &str,
 ) -> ProjectAnalysis {
     analyze_project_with_overlays(fs, project_path, Some(project_key), Vec::new())
 }
 
 pub fn analyze_project_with_overlays(
-    fs: &ProjectFs,
-    project_path: ProjectPath,
+    fs: &WorkspaceFs,
+    project_path: Utf8PathBuf,
     project_key: Option<&str>,
     overlays: Vec<ProjectOverlay>,
 ) -> ProjectAnalysis {
-    let root_path = project_path;
+    let root_path = canonicalize_path(&fs.resolve(&project_path));
+    let overlays = overlays
+        .into_iter()
+        .map(|overlay| ProjectOverlay {
+            path: canonicalize_path(&fs.resolve(&overlay.path)),
+            content: overlay.content,
+        })
+        .collect();
     let mut session = AnalysisSession::new(fs.clone(), overlays);
     session.visit_file(root_path.clone());
 
@@ -131,7 +194,12 @@ pub fn analyze_project_with_overlays(
                     &root_path,
                     |source_path, import, expected| loader.resolve(source_path, import, expected),
                 ) {
-                    Ok(project) => resolved = Some(project),
+                    Ok(project) => {
+                        session.validate_resolved_effects(&root_path, &project);
+                        if !session.has_errors() {
+                            resolved = Some(project);
+                        }
+                    }
                     Err(error) => {
                         let (path, range) = session.locate_lower_error(&root_path, &error);
                         session.diagnostics.push(ProjectDiagnostic {
@@ -151,12 +219,13 @@ pub fn analyze_project_with_overlays(
         root_path,
         project_key: inferred_project_key.unwrap_or_default(),
         files: session.files,
+        scripts: session.scripts,
         diagnostics: session.diagnostics,
         resolved,
     }
 }
 
-fn infer_project_key(root_path: &ProjectPath, session: &mut AnalysisSession) -> Option<String> {
+fn infer_project_key(root_path: &Utf8PathBuf, session: &mut AnalysisSession) -> Option<String> {
     let Some(root_file) = session
         .files
         .get(root_path)
@@ -201,19 +270,21 @@ fn infer_project_key(root_path: &ProjectPath, session: &mut AnalysisSession) -> 
     }
 }
 struct AnalysisSession {
-    fs: ProjectFs,
-    files: IndexMap<ProjectPath, AnalyzedFile>,
+    fs: WorkspaceFs,
+    files: IndexMap<Utf8PathBuf, AnalyzedFile>,
     diagnostics: Vec<ProjectDiagnostic>,
-    visiting: HashSet<ProjectPath>,
-    overlays: HashMap<ProjectPath, String>,
+    scripts: IndexMap<String, EffectScriptAnalysis>,
+    visiting: HashSet<Utf8PathBuf>,
+    overlays: HashMap<Utf8PathBuf, String>,
 }
 
 impl AnalysisSession {
-    fn new(fs: ProjectFs, overlays: Vec<ProjectOverlay>) -> Self {
+    fn new(fs: WorkspaceFs, overlays: Vec<ProjectOverlay>) -> Self {
         Self {
             fs,
             files: IndexMap::new(),
             diagnostics: Vec::new(),
+            scripts: IndexMap::new(),
             visiting: HashSet::new(),
             overlays: overlays
                 .into_iter()
@@ -228,7 +299,7 @@ impl AnalysisSession {
             .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
     }
 
-    fn visit_file(&mut self, path: ProjectPath) {
+    fn visit_file(&mut self, path: Utf8PathBuf) {
         if self.files.contains_key(&path) || !self.visiting.insert(path.clone()) {
             return;
         }
@@ -247,7 +318,7 @@ impl AnalysisSession {
                     range: None,
                     severity: DiagnosticSeverity::Error,
                     code: DiagnosticCode::Io,
-                    message: format!("failed to read `{}`: {source}", path.display()),
+                    message: format!("failed to read `{}`: {source}", path),
                 });
                 self.files.insert(
                     path.clone(),
@@ -255,12 +326,36 @@ impl AnalysisSession {
                         path: path.clone(),
                         text: None,
                         file: None,
+                        script: None,
                     },
                 );
                 self.visiting.remove(&path);
                 return;
             }
         };
+
+        if is_effect_script_path(&path) {
+            let result = compile_effect_script(&text);
+            for diagnostic in script_diagnostics(&path, &result) {
+                self.diagnostics.push(diagnostic);
+            }
+            let script = EffectScriptAnalysis {
+                source: ScriptSource::External(path.clone()),
+                result,
+            };
+            self.scripts.insert(path.to_slash_string(), script.clone());
+            self.files.insert(
+                path.clone(),
+                AnalyzedFile {
+                    path: path.clone(),
+                    text: Some(text.clone()),
+                    file: None,
+                    script: Some(script),
+                },
+            );
+            self.visiting.remove(&path);
+            return;
+        }
 
         let file = match serde_yaml::from_str::<DawnFile>(&text) {
             Ok(file) => Some(file),
@@ -286,70 +381,66 @@ impl AnalysisSession {
                 path: path.clone(),
                 text: Some(text.clone()),
                 file,
+                script: None,
             },
         );
 
         for import in imports {
-            let import_path = match resolve_import_file_path(&path, import.path()) {
-                Ok(import_path) => import_path,
-                Err(message) => {
-                    self.diagnostics.push(ProjectDiagnostic {
-                        path: path.clone(),
-                        range: import_range(&text, &import),
-                        severity: DiagnosticSeverity::Error,
-                        code: DiagnosticCode::Import,
-                        message: format!("invalid import `{}`: {message}", import.raw()),
-                    });
-                    continue;
-                }
-            };
-            if !self.can_load_file(&import_path) {
-                self.diagnostics.push(ProjectDiagnostic {
-                    path: path.clone(),
-                    range: import_range(&text, &import),
-                    severity: DiagnosticSeverity::Error,
-                    code: DiagnosticCode::Import,
-                    message: format!(
-                        "failed to read import `{}`: file `{}` was not found",
-                        import.raw(),
-                        import_path.display()
-                    ),
-                });
-                continue;
-            }
-
-            self.visit_file(import_path);
+            self.visit_import(&path, &text, import);
         }
 
         self.visiting.remove(&path);
     }
 
-    fn can_load_file(&self, path: &ProjectPath) -> bool {
+    fn can_load_file(&self, path: &Utf8PathBuf) -> bool {
         self.overlays.contains_key(path) || self.fs.is_file(path)
+    }
+
+    fn visit_import(&mut self, source_path: &Utf8PathBuf, text: &str, import: ImportRef) {
+        let import_path = resolve_import_path(source_path, import.path());
+        if !self.can_load_file(&import_path) {
+            self.diagnostics.push(ProjectDiagnostic {
+                path: source_path.clone(),
+                range: import_range(text, &import),
+                severity: DiagnosticSeverity::Error,
+                code: DiagnosticCode::Import,
+                message: format!(
+                    "failed to read import `{}`: file `{}` was not found",
+                    import.raw(),
+                    import_path
+                ),
+            });
+            return;
+        }
+
+        self.visit_file(import_path);
     }
 
     fn locate_lower_error(
         &self,
-        root_path: &ProjectPath,
+        root_path: &Utf8PathBuf,
         error: &LowerError,
-    ) -> (ProjectPath, Option<TextRange>) {
+    ) -> (Utf8PathBuf, Option<TextRange>) {
         let token = match error {
-            LowerError::MissingProject { key } => Some(key.as_str()),
-            LowerError::WrongObjectKind { key, .. } => Some(key.as_str()),
-            LowerError::WrongImportedObjectKind { import, .. } => Some(import.as_str()),
-            LowerError::Import { import, .. } => Some(import.as_str()),
-            LowerError::DuplicateFixtureId { id } => Some(id.as_str()),
-            LowerError::UnknownFixture { id } => Some(id.as_str()),
-            LowerError::DuplicateControllerName { name } => Some(name.as_str()),
-            LowerError::UnknownController { name } => Some(name.as_str()),
-            LowerError::DuplicateGroupName { name } => Some(name.as_str()),
-            LowerError::UnknownGroup { name } => Some(name.as_str()),
-            LowerError::DuplicateSequenceEffectId { id } => Some(id.as_str()),
-            LowerError::UnknownSequenceEffect { id } => Some(id.as_str()),
+            LowerError::MissingProject { key } => Some(key.clone()),
+            LowerError::WrongObjectKind { key, .. } => Some(key.clone()),
+            LowerError::WrongImportedObjectKind { import, .. } => Some(import.clone()),
+            LowerError::Import { import, .. } => Some(import.clone()),
+            LowerError::DuplicateFixtureId { id } => Some(id.to_string()),
+            LowerError::EmptyFixtureName => None,
+            LowerError::DuplicateFixtureName { name } => Some(name.clone()),
+            LowerError::UnknownFixture { id } => Some(id.to_string()),
+            LowerError::DuplicateControllerName { name } => Some(name.clone()),
+            LowerError::UnknownController { name } => Some(name.clone()),
+            LowerError::DuplicateGroupName { name } => Some(name.clone()),
+            LowerError::UnknownGroup { name } => Some(name.clone()),
+            LowerError::DuplicateSequenceEffectId { id } => Some(id.clone()),
+            LowerError::UnknownSequenceEffect { id } => Some(id.clone()),
+            LowerError::AutomationCurveType { id, .. } => Some(id.clone()),
         };
 
         if let Some(token) = token {
-            if let Some((path, range)) = self.find_token(root_path, token) {
+            if let Some((path, range)) = self.find_token(root_path, &token) {
                 return (path, Some(range));
             }
         }
@@ -359,9 +450,9 @@ impl AnalysisSession {
 
     fn find_token(
         &self,
-        preferred_path: &ProjectPath,
+        preferred_path: &Utf8PathBuf,
         token: &str,
-    ) -> Option<(ProjectPath, TextRange)> {
+    ) -> Option<(Utf8PathBuf, TextRange)> {
         if let Some(file) = self.files.get(preferred_path) {
             if let Some(text) = file.text.as_deref() {
                 if let Some(range) = find_text_range(text, token) {
@@ -383,36 +474,112 @@ impl AnalysisSession {
 
         None
     }
+
+    fn validate_resolved_effects(&mut self, root_path: &Utf8PathBuf, project: &ResolvedProject) {
+        for sequence in &project.sequences {
+            for effect in &sequence.effects {
+                let script = match &effect.script {
+                    ScriptSource::External(path) => self
+                        .scripts
+                        .get(&path.to_slash_string())
+                        .and_then(|script| script.result.as_ref().ok())
+                        .cloned(),
+                    ScriptSource::Inline(text) => {
+                        let key = format!("inline:{}:{}", root_path.to_slash_string(), effect.id);
+                        let result = compile_effect_script(text);
+                        for diagnostic in script_diagnostics(root_path, &result) {
+                            self.diagnostics.push(diagnostic);
+                        }
+                        let script = result.as_ref().ok().cloned();
+                        self.scripts.insert(
+                            key,
+                            EffectScriptAnalysis {
+                                source: ScriptSource::Inline(text.clone()),
+                                result,
+                            },
+                        );
+                        script
+                    }
+                };
+                if let Some(script) = script {
+                    self.validate_effect_params(root_path, &effect.id, &script, &effect.params);
+                }
+            }
+        }
+    }
+
+    fn validate_effect_params(
+        &mut self,
+        root_path: &Utf8PathBuf,
+        effect_id: &str,
+        script: &CompiledEffect,
+        params: &IndexMap<String, EffectParam<Resolved>>,
+    ) {
+        for name in params.keys() {
+            if script.param(name).is_none() {
+                self.diagnostics.push(ProjectDiagnostic {
+                    path: root_path.clone(),
+                    range: None,
+                    severity: DiagnosticSeverity::Error,
+                    code: DiagnosticCode::Script,
+                    message: format!(
+                        "effect `{effect_id}` passes unknown parameter `{name}` to script `{}`",
+                        script.name
+                    ),
+                });
+            }
+        }
+        for schema in &script.params {
+            match params.get(&schema.name) {
+                Some(param) if schema.value_type.matches_param(param) => {}
+                Some(_) => self.diagnostics.push(ProjectDiagnostic {
+                    path: root_path.clone(),
+                    range: None,
+                    severity: DiagnosticSeverity::Error,
+                    code: DiagnosticCode::Script,
+                    message: format!(
+                        "effect `{effect_id}` parameter `{}` must be {}",
+                        schema.name, schema.value_type
+                    ),
+                }),
+                None if schema.default.is_some() => {}
+                None => self.diagnostics.push(ProjectDiagnostic {
+                    path: root_path.clone(),
+                    range: None,
+                    severity: DiagnosticSeverity::Error,
+                    code: DiagnosticCode::Script,
+                    message: format!(
+                        "effect `{effect_id}` is missing required parameter `{}`",
+                        schema.name
+                    ),
+                }),
+            }
+        }
+    }
 }
 
 pub(crate) struct AnalysisImportResolver<'a> {
-    pub(crate) files: &'a IndexMap<ProjectPath, AnalyzedFile>,
+    pub(crate) files: &'a IndexMap<Utf8PathBuf, AnalyzedFile>,
 }
 
 impl AnalysisImportResolver<'_> {
     pub(crate) fn resolve(
         &mut self,
-        source_path: &ProjectPath,
+        source_path: &Utf8PathBuf,
         import: &ImportRef,
         _expected: ObjectKind,
     ) -> Result<ResolvedImport, LowerError> {
-        let import_path =
-            resolve_import_file_path(source_path, import.path()).map_err(|message| {
-                LowerError::Import {
-                    import: import.raw().to_string(),
-                    message,
-                }
-            })?;
+        let import_path = resolve_import_path(source_path, import.path());
         let analyzed = self
             .files
             .get(&import_path)
             .ok_or_else(|| LowerError::Import {
                 import: import.raw().to_string(),
-                message: format!("file `{}` was not loaded", import_path.display()),
+                message: format!("file `{}` was not loaded", import_path),
             })?;
         let file = analyzed.file.as_ref().ok_or_else(|| LowerError::Import {
             import: import.raw().to_string(),
-            message: format!("file `{}` did not parse", import_path.display()),
+            message: format!("file `{}` did not parse", import_path),
         })?;
         let object = select_imported_object(file, import)?;
 
@@ -458,6 +625,43 @@ fn find_text_range(text: &str, needle: &str) -> Option<TextRange> {
 fn import_range(text: &str, import: &ImportRef) -> Option<TextRange> {
     find_text_range(text, import.raw())
         .or_else(|| find_text_range(text, &import.path().to_slash_string()))
+}
+
+fn script_range(range: crate::effect_script::SourceRange) -> TextRange {
+    TextRange {
+        start: TextPosition {
+            line: range.start.line,
+            character: range.start.character,
+        },
+        end: TextPosition {
+            line: range.end.line,
+            character: range.end.character,
+        },
+    }
+}
+
+fn script_diagnostics(
+    path: &Utf8PathBuf,
+    result: &Result<CompiledEffect, Vec<ScriptDiagnostic>>,
+) -> Vec<ProjectDiagnostic> {
+    result
+        .as_ref()
+        .err()
+        .into_iter()
+        .flatten()
+        .map(|diagnostic| ProjectDiagnostic {
+            path: path.clone(),
+            range: diagnostic.range.map(script_range),
+            severity: DiagnosticSeverity::Error,
+            code: DiagnosticCode::Script,
+            message: diagnostic.message.clone(),
+        })
+        .collect()
+}
+
+fn is_effect_script_path(path: &Utf8PathBuf) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.ends_with(".effect.dawn"))
 }
 
 fn collect_file_imports(file: &DawnFile) -> Vec<ImportRef> {
@@ -512,6 +716,9 @@ fn collect_display_imports(display: &Display<Authored>, imports: &mut Vec<Import
 
 fn collect_sequence_imports(sequence: &Sequence<Authored>, imports: &mut Vec<ImportRef>) {
     for effect in &sequence.effects {
+        if let InlineOrImport::Import { import } = &effect.script {
+            imports.push(import.clone());
+        }
         for param in effect.params.values() {
             if let EffectParam::Curve {
                 curve: InlineOrImport::Import { import },

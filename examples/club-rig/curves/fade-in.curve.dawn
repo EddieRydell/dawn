@@ -1,5 +1,6 @@
 fade_in:
   type: curve
+  value_type: float
   points:
     - time: 0.0
       value: 0.0

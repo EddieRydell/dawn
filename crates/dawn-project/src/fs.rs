@@ -1,115 +1,131 @@
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
-use cap_std::fs::Dir;
+use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::path::ProjectPath;
+use crate::path::{lexical_normalize, utf8_path};
 
 #[derive(Clone)]
-pub struct ProjectFs {
-    root: Arc<Dir>,
+pub struct WorkspaceFs {
+    root: Arc<Utf8PathBuf>,
 }
 
-impl fmt::Debug for ProjectFs {
+impl fmt::Debug for WorkspaceFs {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("ProjectFs").finish_non_exhaustive()
+        formatter
+            .debug_struct("WorkspaceFs")
+            .field("root", &self.root)
+            .finish()
     }
 }
 
-impl ProjectFs {
-    pub fn open_ambient(root: impl AsRef<Path>) -> Result<Self, std::io::Error> {
+impl WorkspaceFs {
+    pub fn open(root: impl AsRef<Path>) -> Result<Self, std::io::Error> {
+        let root = utf8_path(root)
+            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
         Ok(Self {
-            root: Arc::new(Dir::open_ambient_dir(root, cap_std::ambient_authority())?),
+            root: Arc::new(lexical_normalize(&root)),
         })
     }
 
-    pub fn read_to_string(&self, path: &ProjectPath) -> Result<String, std::io::Error> {
-        self.root.read_to_string(path.as_path())
+    pub fn root(&self) -> &Utf8Path {
+        &self.root
     }
 
-    pub fn write(
-        &self,
-        path: &ProjectPath,
-        content: impl AsRef<[u8]>,
-    ) -> Result<(), std::io::Error> {
-        self.root.write(path.as_path(), content)
+    pub fn resolve(&self, path: &Utf8Path) -> Utf8PathBuf {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.root.join(path)
+        }
+    }
+
+    pub fn read_to_string(&self, path: &Utf8Path) -> Result<String, std::io::Error> {
+        std::fs::read_to_string(self.resolve(path).as_std_path())
+    }
+
+    pub fn write(&self, path: &Utf8Path, content: impl AsRef<[u8]>) -> Result<(), std::io::Error> {
+        std::fs::write(self.resolve(path).as_std_path(), content)
     }
 
     pub fn create_file(
         &self,
-        path: &ProjectPath,
+        path: &Utf8Path,
         content: impl AsRef<[u8]>,
     ) -> Result<(), std::io::Error> {
-        let mut options = cap_std::fs::OpenOptions::new();
+        let path = self.resolve(path);
+        let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
-        let mut file = self.root.open_with(path.as_path(), &options)?;
+        let mut file = options.open(path.as_std_path())?;
         std::io::Write::write_all(&mut file, content.as_ref())
     }
 
-    pub fn create_dir(&self, path: &ProjectPath) -> Result<(), std::io::Error> {
-        self.root.create_dir(path.as_path())
+    pub fn create_dir(&self, path: &Utf8Path) -> Result<(), std::io::Error> {
+        std::fs::create_dir(self.resolve(path).as_std_path())
     }
 
-    pub fn delete_path(&self, path: &ProjectPath) -> Result<(), std::io::Error> {
-        if self.is_dir(path) {
-            self.root.remove_dir_all(path.as_path())
+    pub fn delete_path(&self, path: &Utf8Path) -> Result<(), std::io::Error> {
+        let path = self.resolve(path);
+        if path.is_dir() {
+            std::fs::remove_dir_all(path.as_std_path())
         } else {
-            self.root.remove_file(path.as_path())
+            std::fs::remove_file(path.as_std_path())
         }
     }
 
-    pub fn rename(&self, from: &ProjectPath, to: &ProjectPath) -> Result<(), std::io::Error> {
-        self.root.rename(from.as_path(), &self.root, to.as_path())
+    pub fn rename(&self, from: &Utf8Path, to: &Utf8Path) -> Result<(), std::io::Error> {
+        std::fs::rename(
+            self.resolve(from).as_std_path(),
+            self.resolve(to).as_std_path(),
+        )
     }
 
-    pub fn exists(&self, path: &ProjectPath) -> bool {
-        self.root.metadata(path.as_path()).is_ok()
+    pub fn exists(&self, path: &Utf8Path) -> bool {
+        self.resolve(path).exists()
     }
 
-    pub fn is_dir(&self, path: &ProjectPath) -> bool {
-        self.root
-            .metadata(path.as_path())
-            .is_ok_and(|metadata| metadata.is_dir())
+    pub fn is_dir(&self, path: &Utf8Path) -> bool {
+        self.resolve(path).is_dir()
     }
 
-    pub fn is_file(&self, path: &ProjectPath) -> bool {
-        self.root
-            .metadata(path.as_path())
-            .is_ok_and(|metadata| metadata.is_file())
+    pub fn is_file(&self, path: &Utf8Path) -> bool {
+        self.resolve(path).is_file()
     }
 
-    pub fn list_entries(&self) -> Result<Vec<ProjectFsEntry>, std::io::Error> {
+    pub fn list_entries(&self) -> Result<Vec<WorkspaceEntry>, std::io::Error> {
         let mut entries = Vec::new();
-        self.list_entries_inner(&ProjectPath::root(), &mut entries)?;
+        self.list_entries_inner(Utf8Path::new(""), &mut entries)?;
         entries.sort_by(|left, right| left.path.cmp(&right.path));
         Ok(entries)
     }
 
     fn list_entries_inner(
         &self,
-        parent: &ProjectPath,
-        entries: &mut Vec<ProjectFsEntry>,
+        parent: &Utf8Path,
+        entries: &mut Vec<WorkspaceEntry>,
     ) -> Result<(), std::io::Error> {
-        let dir_path = if parent.is_root() {
-            Path::new(".")
-        } else {
-            parent.as_path()
-        };
-        let dir = self.root.open_dir(dir_path)?;
-        for entry in dir.entries()? {
+        let dir_path = self.resolve(parent);
+        for entry in std::fs::read_dir(dir_path.as_std_path())? {
             let entry = entry?;
-            let file_name = entry.file_name();
-            let path = parent.join(PathBuf::from(file_name)).map_err(|message| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, message)
+            let file_name = entry.file_name().into_string().map_err(|name| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("path is not valid UTF-8: {}", name.to_string_lossy()),
+                )
             })?;
+            let path = if parent.as_str().is_empty() {
+                Utf8PathBuf::from(file_name)
+            } else {
+                parent.join(file_name)
+            };
             let metadata = entry.metadata()?;
             let kind = if metadata.is_dir() {
-                ProjectFsEntryKind::Directory
+                WorkspaceEntryKind::Directory
             } else {
-                ProjectFsEntryKind::File
+                WorkspaceEntryKind::File
             };
-            entries.push(ProjectFsEntry {
+            entries.push(WorkspaceEntry {
                 path: path.clone(),
                 kind,
             });
@@ -122,13 +138,13 @@ impl ProjectFs {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProjectFsEntry {
-    pub path: ProjectPath,
-    pub kind: ProjectFsEntryKind,
+pub struct WorkspaceEntry {
+    pub path: Utf8PathBuf,
+    pub kind: WorkspaceEntryKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProjectFsEntryKind {
+pub enum WorkspaceEntryKind {
     Directory,
     File,
 }

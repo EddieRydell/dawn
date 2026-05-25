@@ -4,7 +4,8 @@ edition.workspace = true
 version.workspace = true
 
 [dependencies]
-cap-std.workspace = true
+camino.workspace = true
 indexmap.workspace = true
+pathdiff.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true

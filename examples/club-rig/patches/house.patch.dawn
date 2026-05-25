@@ -1,35 +1,35 @@
 house:
   type: patch
   routes:
-    - fixture: bar_01
+    - fixture: 1
       controller: WallController
       universe: 1
       start: 1
-    - fixture: bar_02
+    - fixture: 2
       controller: WallController
       universe: 1
       start: 51
-    - fixture: bar_03
+    - fixture: 3
       controller: WallController
       universe: 1
       start: 101
-    - fixture: bar_04
+    - fixture: 4
       controller: WallController
       universe: 1
       start: 151
-    - fixture: spot_01
+    - fixture: 5
       controller: FloorController
       universe: 11
       start: 1
-    - fixture: spot_02
+    - fixture: 6
       controller: FloorController
       universe: 11
       start: 33
-    - fixture: spot_03
+    - fixture: 7
       controller: FloorController
       universe: 11
       start: 65
-    - fixture: spot_04
+    - fixture: 8
       controller: FloorController
       universe: 11
       start: 97

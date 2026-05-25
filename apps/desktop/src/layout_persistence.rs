@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::editor_session::EditorSessionState;
 use crate::ui::theme;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,6 +15,10 @@ pub struct WorkbenchLayout {
     pub inspector_width: f64,
     #[serde(default)]
     pub active_inspector_tab: InspectorTab,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_project_root: Option<PathBuf>,
+    #[serde(default)]
+    pub editor_session: EditorSessionState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -32,13 +37,21 @@ impl Default for WorkbenchLayout {
             project_tree_width: theme::DEFAULT_LEFT_PANE_WIDTH,
             inspector_width: theme::DEFAULT_RIGHT_PANE_WIDTH,
             active_inspector_tab: InspectorTab::Diagnostics,
+            last_project_root: None,
+            editor_session: EditorSessionState::default(),
         }
     }
 }
 
 impl WorkbenchLayout {
     pub fn reset(&mut self) {
-        *self = Self::default();
+        let last_project_root = self.last_project_root.clone();
+        let editor_session = self.editor_session.clone();
+        *self = Self {
+            last_project_root,
+            editor_session,
+            ..Self::default()
+        };
     }
 }
 

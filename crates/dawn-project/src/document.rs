@@ -6,10 +6,12 @@ use crate::analysis::{
     analyze_project_with_overlays, AnalysisImportResolver, DiagnosticCode, DiagnosticSeverity,
     ProjectAnalysis, ProjectDiagnostic, ProjectOverlay,
 };
-use crate::fs::ProjectFs;
+use crate::fs::WorkspaceFs;
 use crate::lower::lower_layout;
 use crate::model::*;
-use crate::path::{relative_import_path, resolve_import_file_path, ProjectPath};
+use crate::path::{
+    canonicalize_path, resolve_import_path, serialized_import_path, PathStringExt, Utf8PathBuf,
+};
 use crate::render::{
     geometry_render_plan, geometry_summary, layout_render_bounds, GeometryRenderBounds,
     GeometryRenderPlan,
@@ -55,7 +57,8 @@ pub struct LayoutDocument {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LayoutFixturePlacement {
-    pub id: String,
+    pub id: FixtureId,
+    pub name: String,
     pub fixture: LayoutFixtureRef,
     pub resolved_fixture: ResolvedLayoutFixture,
     pub transform: Transform,
@@ -85,7 +88,7 @@ pub enum LayoutFixtureRef {
 #[serde(rename_all = "camelCase")]
 pub struct LayoutGroupDocument {
     pub name: String,
-    pub members: Vec<String>,
+    pub members: Vec<FixtureId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,10 +158,19 @@ pub enum DocumentEditResult<T> {
 }
 
 pub fn inspect_document(
-    fs: &ProjectFs,
-    path: ProjectPath,
+    fs: &WorkspaceFs,
+    path: Utf8PathBuf,
     overlays: Vec<ProjectOverlay>,
 ) -> Result<DocumentDescriptor, String> {
+    let path = canonicalize_path(&fs.resolve(&path));
+    if is_effect_script_path(&path) {
+        return Ok(DocumentDescriptor {
+            path: path.to_slash_string(),
+            objects: Vec::new(),
+            available_views: vec![DocumentViewId::Text],
+            default_object_keys: BTreeMap::new(),
+        });
+    }
     let text = read_text_with_overlays(fs, &path, &overlays)?;
     let file: DawnFile = serde_yaml::from_str(&text).map_err(|error| error.to_string())?;
     let objects = file
@@ -193,12 +205,18 @@ pub fn inspect_document(
     })
 }
 
+fn is_effect_script_path(path: &Utf8PathBuf) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.ends_with(".effect.dawn"))
+}
+
 pub fn get_fixture_document(
-    fs: &ProjectFs,
-    path: ProjectPath,
+    fs: &WorkspaceFs,
+    path: Utf8PathBuf,
     selected_object_key: Option<&str>,
     overlays: Vec<ProjectOverlay>,
 ) -> Result<FixtureDocument, String> {
+    let path = canonicalize_path(&fs.resolve(&path));
     let text = read_text_with_overlays(fs, &path, &overlays)?;
     let file: DawnFile = serde_yaml::from_str(&text).map_err(|error| error.to_string())?;
     let fixtures = file
@@ -223,12 +241,14 @@ pub fn get_fixture_document(
 }
 
 pub fn get_layout_document(
-    fs: &ProjectFs,
-    path: ProjectPath,
+    fs: &WorkspaceFs,
+    path: Utf8PathBuf,
     object_key: &str,
-    project_path: ProjectPath,
+    project_path: Utf8PathBuf,
     overlays: Vec<ProjectOverlay>,
 ) -> Result<LayoutDocument, String> {
+    let path = canonicalize_path(&fs.resolve(&path));
+    let project_path = canonicalize_path(&fs.resolve(&project_path));
     let analysis = analyze_project_with_overlays(fs, project_path, None, overlays.clone());
     if let Some(diagnostic) = analysis.diagnostics.iter().find(|diagnostic| {
         diagnostic.severity == DiagnosticSeverity::Error
@@ -262,15 +282,17 @@ pub fn get_layout_document(
 }
 
 pub fn apply_layout_document_edit(
-    fs: &ProjectFs,
-    path: ProjectPath,
+    fs: &WorkspaceFs,
+    path: Utf8PathBuf,
     object_key: &str,
     document: LayoutDocument,
     base_content: String,
     overlays: Vec<ProjectOverlay>,
-    project_path: ProjectPath,
+    project_path: Utf8PathBuf,
     allow_breaking_references: bool,
 ) -> Result<DocumentEditResult<LayoutDocument>, String> {
+    let path = canonicalize_path(&fs.resolve(&path));
+    let project_path = canonicalize_path(&fs.resolve(&project_path));
     let file: DawnFile = serde_yaml::from_str(&base_content).map_err(|error| error.to_string())?;
     let Some(DawnObject::Layout(current_layout)) = file.get(object_key) else {
         return Err(format!("layout object `{object_key}` was not found"));
@@ -316,14 +338,16 @@ pub fn apply_layout_document_edit(
 }
 
 pub fn apply_fixture_document_edit(
-    fs: &ProjectFs,
-    path: ProjectPath,
+    fs: &WorkspaceFs,
+    path: Utf8PathBuf,
     document: FixtureDocument,
     base_content: String,
     overlays: Vec<ProjectOverlay>,
-    project_path: ProjectPath,
+    project_path: Utf8PathBuf,
     allow_breaking_references: bool,
 ) -> Result<DocumentEditResult<FixtureDocument>, String> {
+    let path = canonicalize_path(&fs.resolve(&path));
+    let project_path = canonicalize_path(&fs.resolve(&project_path));
     validate_fixture_document(&document)?;
     let file: DawnFile = serde_yaml::from_str(&base_content).map_err(|error| error.to_string())?;
     let mut replacements = BTreeMap::new();
@@ -377,8 +401,8 @@ pub fn apply_fixture_document_edit(
 }
 
 fn read_text_with_overlays(
-    fs: &ProjectFs,
-    path: &ProjectPath,
+    fs: &WorkspaceFs,
+    path: &Utf8PathBuf,
     overlays: &[ProjectOverlay],
 ) -> Result<String, String> {
     overlays
@@ -390,7 +414,7 @@ fn read_text_with_overlays(
 }
 
 fn layout_to_document(
-    path: &ProjectPath,
+    path: &Utf8PathBuf,
     object_key: &str,
     layout: &Layout<Authored>,
     resolved_layout: &Layout<Resolved>,
@@ -417,11 +441,7 @@ fn layout_to_document(
             .iter()
             .map(|group| LayoutGroupDocument {
                 name: group.name.clone(),
-                members: group
-                    .members
-                    .iter()
-                    .map(|member| member.as_str().to_string())
-                    .collect(),
+                members: group.members.iter().copied().collect(),
             })
             .collect(),
         fixture_catalog: catalog.to_vec(),
@@ -431,7 +451,7 @@ fn layout_to_document(
 fn placement_to_document(
     placement: &FixturePlacement<Authored>,
     resolved: &FixturePlacement<Resolved>,
-    source_path: &ProjectPath,
+    source_path: &Utf8PathBuf,
 ) -> LayoutFixturePlacement {
     let (fixture, resolved_source_path, resolved_object_key) = match &placement.fixture {
         InlineOrImport::Inline(fixture) => (
@@ -445,9 +465,7 @@ fn placement_to_document(
             None,
         ),
         InlineOrImport::Import { import } => {
-            let resolved_path = resolve_import_file_path(source_path, import.path())
-                .map(|path| path.to_slash_string())
-                .unwrap_or_else(|_| import.path().to_slash_string());
+            let resolved_path = resolve_import_path(source_path, import.path()).to_slash_string();
             (
                 LayoutFixtureRef::Import {
                     import: import.raw().to_string(),
@@ -462,6 +480,7 @@ fn placement_to_document(
 
     LayoutFixturePlacement {
         id: placement.id.clone(),
+        name: placement.name.clone(),
         fixture,
         resolved_fixture: ResolvedLayoutFixture {
             name: resolved.fixture.name.clone(),
@@ -482,7 +501,7 @@ fn placement_to_document(
 
 fn fixture_catalog_from_analysis(
     analysis: &ProjectAnalysis,
-    importing_source_path: &ProjectPath,
+    importing_source_path: &Utf8PathBuf,
 ) -> Vec<FixtureCatalogItem> {
     let mut catalog = Vec::new();
     for (path, analyzed) in &analysis.files {
@@ -494,7 +513,7 @@ fn fixture_catalog_from_analysis(
                 continue;
             };
             let source_path = path.to_slash_string();
-            let import_path = relative_import_path(importing_source_path, path);
+            let import_path = serialized_import_path(importing_source_path, path);
             catalog.push(FixtureCatalogItem {
                 object_key: key.clone(),
                 source_path: source_path.clone(),
@@ -530,7 +549,7 @@ fn document_to_layout(document: LayoutDocument) -> Result<Layout<Authored>, Stri
             .into_iter()
             .map(|group| Group {
                 name: group.name,
-                members: group.members.into_iter().map(FixtureRef::new).collect(),
+                members: group.members,
             })
             .collect(),
     })
@@ -557,6 +576,7 @@ fn document_to_placement(
     };
     Ok(FixturePlacement {
         id: placement.id,
+        name: placement.name,
         fixture,
         transform: placement.transform,
     })
@@ -599,10 +619,17 @@ fn validate_fixture_document(document: &FixtureDocument) -> Result<(), String> {
 
 fn validate_layout_identifiers(layout: &Layout<Authored>) -> Result<(), String> {
     let mut ids = HashSet::new();
+    let mut names = HashSet::new();
     for fixture in &layout.fixtures {
-        validate_simple_identifier(&fixture.id, "fixture placement id")?;
-        if !ids.insert(fixture.id.as_str()) {
+        if !ids.insert(fixture.id) {
             return Err(format!("duplicate fixture placement id `{}`", fixture.id));
+        }
+        let name = fixture.name.trim();
+        if name.is_empty() {
+            return Err("fixture placement name cannot be empty".to_string());
+        }
+        if !names.insert(name.to_string()) {
+            return Err(format!("duplicate fixture placement name `{name}`"));
         }
     }
     Ok(())
@@ -612,13 +639,13 @@ fn repair_layout_group_members(current: &Layout<Authored>, next: &mut Layout<Aut
     let mut renamed_by_index = HashMap::new();
     for (current_fixture, next_fixture) in current.fixtures.iter().zip(&next.fixtures) {
         if current_fixture.id != next_fixture.id {
-            renamed_by_index.insert(current_fixture.id.as_str(), next_fixture.id.as_str());
+            renamed_by_index.insert(current_fixture.id, next_fixture.id);
         }
     }
     let next_ids = next
         .fixtures
         .iter()
-        .map(|fixture| fixture.id.as_str())
+        .map(|fixture| fixture.id)
         .collect::<HashSet<_>>();
 
     for group in &mut next.groups {
@@ -627,10 +654,9 @@ fn repair_layout_group_members(current: &Layout<Authored>, next: &mut Layout<Aut
             .members
             .iter()
             .filter_map(|member| {
-                let current = member.as_str();
-                let repaired = renamed_by_index.get(current).copied().unwrap_or(current);
-                if next_ids.contains(repaired) && seen.insert(repaired.to_string()) {
-                    Some(FixtureRef::new(repaired))
+                let repaired = renamed_by_index.get(member).copied().unwrap_or(*member);
+                if next_ids.contains(&repaired) && seen.insert(repaired) {
+                    Some(repaired)
                 } else {
                     None
                 }
@@ -813,7 +839,7 @@ fn introduced_error_diagnostics(
 }
 
 fn overlay_after_save(
-    saved_path: ProjectPath,
+    saved_path: Utf8PathBuf,
     content: String,
     overlays: Vec<ProjectOverlay>,
 ) -> Vec<ProjectOverlay> {

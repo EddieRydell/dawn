@@ -1,5 +1,6 @@
 use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 
+use dawn_project::model::FixtureId;
 use dawn_project::render::{GeometryRenderBounds, GeometryRenderPoint};
 use floem::context::{ComputeLayoutCx, EventCx, PaintCx, UpdateCx};
 use floem::event::{Event, EventPropagation};
@@ -39,7 +40,7 @@ pub struct CanvasItem {
 pub enum CanvasItemInteraction {
     None,
     Target {
-        id: String,
+        fixture_id: FixtureId,
         selectable: bool,
         draggable: bool,
     },
@@ -81,8 +82,8 @@ pub struct CanvasState {
 #[derive(Debug, Default)]
 struct CanvasStateData {
     camera: Option<CanvasCamera>,
-    selected_targets: BTreeSet<String>,
-    hovered_target: Option<String>,
+    selected_targets: BTreeSet<FixtureId>,
+    hovered_target: Option<FixtureId>,
 }
 
 impl CanvasState {
@@ -100,27 +101,27 @@ impl CanvasState {
         self.data.borrow_mut().camera = Some(camera);
     }
 
-    fn selected_targets(&self) -> BTreeSet<String> {
+    fn selected_targets(&self) -> BTreeSet<FixtureId> {
         self.data.borrow().selected_targets.clone()
     }
 
-    fn selected_targets_contains(&self, id: &str) -> bool {
-        self.data.borrow().selected_targets.contains(id)
+    fn selected_targets_contains(&self, fixture_id: FixtureId) -> bool {
+        self.data.borrow().selected_targets.contains(&fixture_id)
     }
 
-    fn set_selected_targets(&self, selected_targets: BTreeSet<String>) {
+    fn set_selected_targets(&self, selected_targets: BTreeSet<FixtureId>) {
         self.data.borrow_mut().selected_targets = selected_targets;
     }
 
-    fn update_selected_targets(&self, update: impl FnOnce(&mut BTreeSet<String>)) {
+    fn update_selected_targets(&self, update: impl FnOnce(&mut BTreeSet<FixtureId>)) {
         update(&mut self.data.borrow_mut().selected_targets);
     }
 
-    fn hovered_target(&self) -> Option<String> {
+    fn hovered_target(&self) -> Option<FixtureId> {
         self.data.borrow().hovered_target.clone()
     }
 
-    fn set_hovered_target(&self, hovered_target: Option<String>) {
+    fn set_hovered_target(&self, hovered_target: Option<FixtureId>) {
         self.data.borrow_mut().hovered_target = hovered_target;
     }
 }
@@ -152,10 +153,11 @@ impl Default for CanvasConfig {
 
 #[derive(Default)]
 pub struct CanvasCallbacks {
-    pub on_select: Option<Box<dyn Fn(String)>>,
-    pub on_drag_end: Option<Box<dyn Fn(Vec<String>, f64, f64)>>,
-    pub on_delete: Option<Box<dyn Fn(Vec<String>)>>,
+    pub on_select: Option<Box<dyn Fn(FixtureId)>>,
+    pub on_drag_end: Option<Box<dyn Fn(Vec<FixtureId>, f64, f64)>>,
+    pub on_delete: Option<Box<dyn Fn(Vec<FixtureId>)>>,
     pub on_drop_add: Option<Box<dyn Fn(f64, f64)>>,
+    pub on_secondary_click: Option<Box<dyn Fn(Point, f64, f64)>>,
 }
 
 enum CanvasUpdate {
@@ -202,23 +204,28 @@ impl Canvas {
         .keyboard_navigable()
     }
 
-    pub fn on_select(mut self, callback: impl Fn(String) + 'static) -> Self {
+    pub fn on_select(mut self, callback: impl Fn(FixtureId) + 'static) -> Self {
         self.callbacks.on_select = Some(Box::new(callback));
         self
     }
 
-    pub fn on_drag_end(mut self, callback: impl Fn(Vec<String>, f64, f64) + 'static) -> Self {
+    pub fn on_drag_end(mut self, callback: impl Fn(Vec<FixtureId>, f64, f64) + 'static) -> Self {
         self.callbacks.on_drag_end = Some(Box::new(callback));
         self
     }
 
-    pub fn on_delete(mut self, callback: impl Fn(Vec<String>) + 'static) -> Self {
+    pub fn on_delete(mut self, callback: impl Fn(Vec<FixtureId>) + 'static) -> Self {
         self.callbacks.on_delete = Some(Box::new(callback));
         self
     }
 
     pub fn on_drop_add(mut self, callback: impl Fn(f64, f64) + 'static) -> Self {
         self.callbacks.on_drop_add = Some(Box::new(callback));
+        self
+    }
+
+    pub fn on_secondary_click(mut self, callback: impl Fn(Point, f64, f64) + 'static) -> Self {
+        self.callbacks.on_secondary_click = Some(Box::new(callback));
         self
     }
 }
@@ -263,6 +270,10 @@ impl View for Canvas {
                     cx.update_active(self.id);
                     self.id.request_active();
                     self.handle_pointer_down(event.pos, event.modifiers)
+                } else if event.button.is_secondary() && self.callbacks.on_secondary_click.is_some()
+                {
+                    self.gesture = None;
+                    EventPropagation::Stop
                 } else {
                     EventPropagation::Continue
                 }
@@ -272,6 +283,8 @@ impl View for Canvas {
                 if event.button.is_primary() {
                     self.id.clear_active();
                     self.handle_pointer_up(event.pos)
+                } else if event.button.is_secondary() {
+                    self.handle_secondary_click(event.pos)
                 } else {
                     EventPropagation::Continue
                 }
@@ -355,29 +368,29 @@ impl Canvas {
             return EventPropagation::Stop;
         };
 
-        let selected_before = self.state.selected_targets_contains(&hit.id);
+        let selected_before = self.state.selected_targets_contains(hit.fixture_id);
 
         if hit.selectable {
             if additive {
                 self.state.update_selected_targets(|selected| {
-                    selected.insert(hit.id.clone());
+                    selected.insert(hit.fixture_id);
                 });
             } else if !selected_before {
                 let mut selected = BTreeSet::new();
-                selected.insert(hit.id.clone());
+                selected.insert(hit.fixture_id);
                 self.state.set_selected_targets(selected);
             }
             if let Some(callback) = &self.callbacks.on_select {
-                callback(hit.id.clone());
+                callback(hit.fixture_id);
             }
         }
 
         let selected_targets = self.state.selected_targets();
         self.gesture = hit.draggable.then_some(CanvasGesture::EditDrag {
-            target_ids: if selected_targets.contains(&hit.id) {
+            target_ids: if selected_targets.contains(&hit.fixture_id) {
                 selected_targets
             } else {
-                BTreeSet::from([hit.id])
+                BTreeSet::from([hit.fixture_id])
             },
             start_screen: position,
             current_screen: position,
@@ -450,7 +463,7 @@ impl Canvas {
                 EventPropagation::Stop
             }
             None => {
-                let hovered = self.hit_test(position).map(|hit| hit.id);
+                let hovered = self.hit_test(position).map(|hit| hit.fixture_id);
                 if hovered != self.state.hovered_target() {
                     self.state.set_hovered_target(hovered);
                     self.id.request_paint();
@@ -515,6 +528,18 @@ impl Canvas {
                 EventPropagation::Stop
             }
         }
+    }
+
+    fn handle_secondary_click(&mut self, position: Point) -> EventPropagation {
+        let Some(callback) = &self.callbacks.on_secondary_click else {
+            return EventPropagation::Continue;
+        };
+        self.gesture = None;
+        self.state.set_hovered_target(None);
+        let world = self.viewport.screen_to_world(position);
+        callback(position, world.x, world.y);
+        self.id.request_paint();
+        EventPropagation::Stop
     }
 
     fn update_camera(&mut self, camera: CanvasCamera) {
@@ -610,11 +635,11 @@ impl Canvas {
             let target_id = item_target_id(item);
             let selected = target_id
                 .as_ref()
-                .is_some_and(|id| selected_targets.contains(id.as_str()));
+                .is_some_and(|fixture_id| selected_targets.contains(&fixture_id));
             let hovered = !selected
                 && target_id
                     .as_ref()
-                    .is_some_and(|id| hovered_target.as_deref() == Some(id.as_str()));
+                    .is_some_and(|fixture_id| hovered_target == Some(*fixture_id));
             let brush = Brush::Solid(item.color);
             let highlight_brush = if selected {
                 Some(Brush::Solid(theme::color(theme::TEXT_INVERTED)))
@@ -726,7 +751,7 @@ impl Canvas {
     }
 
     fn drag_offset_for(&self, item: &CanvasItem) -> Option<(f64, f64)> {
-        let CanvasItemInteraction::Target { id, .. } = &item.interaction else {
+        let CanvasItemInteraction::Target { fixture_id, .. } = &item.interaction else {
             return None;
         };
         let Some(CanvasGesture::EditDrag {
@@ -738,7 +763,7 @@ impl Canvas {
         else {
             return None;
         };
-        if !active || !target_ids.contains(id) {
+        if !active || !target_ids.contains(fixture_id) {
             return None;
         }
         let start = self.viewport.screen_to_world(*start_screen);
@@ -749,7 +774,7 @@ impl Canvas {
     fn hit_test(&self, position: Point) -> Option<CanvasHit> {
         self.scene.items.iter().rev().find_map(|item| {
             let CanvasItemInteraction::Target {
-                id,
+                fixture_id,
                 selectable,
                 draggable,
             } = &item.interaction
@@ -759,19 +784,24 @@ impl Canvas {
             item_hit_distance(&self.viewport, item, position)
                 .filter(|distance| *distance <= HIT_TOLERANCE_PX)
                 .map(|_| CanvasHit {
-                    id: id.clone(),
+                    fixture_id: *fixture_id,
                     selectable: *selectable,
                     draggable: *draggable,
                 })
         })
     }
 
-    fn targets_in_selection_rect(&self, selection: Rect) -> BTreeSet<String> {
+    fn targets_in_selection_rect(&self, selection: Rect) -> BTreeSet<FixtureId> {
         self.scene
             .items
             .iter()
             .fold(BTreeSet::new(), |mut targets, item| {
-                let CanvasItemInteraction::Target { id, selectable, .. } = &item.interaction else {
+                let CanvasItemInteraction::Target {
+                    fixture_id,
+                    selectable,
+                    ..
+                } = &item.interaction
+                else {
                     return targets;
                 };
                 if !selectable {
@@ -780,7 +810,7 @@ impl Canvas {
                 if item_screen_bounds(&self.viewport, item)
                     .is_some_and(|bounds| bounds.overlaps(selection))
                 {
-                    targets.insert(id.clone());
+                    targets.insert(*fixture_id);
                 }
                 targets
             })
@@ -880,7 +910,7 @@ enum CanvasGesture {
         active: bool,
     },
     EditDrag {
-        target_ids: BTreeSet<String>,
+        target_ids: BTreeSet<FixtureId>,
         start_screen: Point,
         current_screen: Point,
         active: bool,
@@ -895,7 +925,7 @@ enum CanvasGesture {
 
 #[derive(Debug, Clone)]
 struct CanvasHit {
-    id: String,
+    fixture_id: FixtureId,
     selectable: bool,
     draggable: bool,
 }
@@ -910,9 +940,9 @@ fn additive_selection(modifiers: Modifiers) -> bool {
     modifiers.shift() || modifiers.control()
 }
 
-fn item_target_id(item: &CanvasItem) -> Option<&String> {
+fn item_target_id(item: &CanvasItem) -> Option<FixtureId> {
     match &item.interaction {
-        CanvasItemInteraction::Target { id, .. } => Some(id),
+        CanvasItemInteraction::Target { fixture_id, .. } => Some(*fixture_id),
         CanvasItemInteraction::None => None,
     }
 }

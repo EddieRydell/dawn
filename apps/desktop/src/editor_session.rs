@@ -1,17 +1,35 @@
 use std::collections::BTreeMap;
 
 use dawn_project::analysis::ProjectOverlay;
-use dawn_project::path::ProjectPath;
+use dawn_project::path::Utf8PathBuf;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum EditorViewMode {
     Text,
     Gui,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorSessionState {
+    #[serde(default)]
+    pub tabs: Vec<EditorTabState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_file: Option<Utf8PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorTabState {
+    pub path: Utf8PathBuf,
+    pub view_mode: EditorViewMode,
+}
+
 #[derive(Debug, Clone)]
 pub struct EditorBuffer {
-    pub path: ProjectPath,
+    pub path: Utf8PathBuf,
     pub text: String,
     pub saved_text: String,
     pub view_mode: EditorViewMode,
@@ -25,13 +43,13 @@ impl EditorBuffer {
 
 #[derive(Debug, Default, Clone)]
 pub struct EditorSession {
-    open_editors: BTreeMap<ProjectPath, EditorBuffer>,
-    tab_order: Vec<ProjectPath>,
-    active_file: Option<ProjectPath>,
+    open_editors: BTreeMap<Utf8PathBuf, EditorBuffer>,
+    tab_order: Vec<Utf8PathBuf>,
+    active_file: Option<Utf8PathBuf>,
 }
 
 impl EditorSession {
-    pub fn open_file(&mut self, path: ProjectPath, text: String) {
+    pub fn open_file(&mut self, path: Utf8PathBuf, text: String) {
         if !self.open_editors.contains_key(&path) {
             self.open_editors.insert(
                 path.clone(),
@@ -47,7 +65,7 @@ impl EditorSession {
         self.active_file = Some(path);
     }
 
-    pub fn close_file(&mut self, path: &ProjectPath) {
+    pub fn close_file(&mut self, path: &Utf8PathBuf) {
         self.open_editors.remove(path);
         self.tab_order.retain(|candidate| candidate != path);
         if self.active_file.as_ref() == Some(path) {
@@ -55,13 +73,13 @@ impl EditorSession {
         }
     }
 
-    pub fn set_active_file(&mut self, path: ProjectPath) {
+    pub fn set_active_file(&mut self, path: Utf8PathBuf) {
         if self.open_editors.contains_key(&path) {
             self.active_file = Some(path);
         }
     }
 
-    pub fn active_file(&self) -> Option<&ProjectPath> {
+    pub fn active_file(&self) -> Option<&Utf8PathBuf> {
         self.active_file.as_ref()
     }
 
@@ -82,7 +100,7 @@ impl EditorSession {
         }
     }
 
-    pub fn set_view_mode(&mut self, path: &ProjectPath, mode: EditorViewMode) {
+    pub fn set_view_mode(&mut self, path: &Utf8PathBuf, mode: EditorViewMode) {
         if let Some(buffer) = self.open_editors.get_mut(path) {
             buffer.view_mode = mode;
         }
@@ -119,7 +137,46 @@ impl EditorSession {
             .collect()
     }
 
-    pub fn mark_saved(&mut self, path: &ProjectPath, saved_text: String) {
+    pub fn state(&self) -> EditorSessionState {
+        EditorSessionState {
+            tabs: self
+                .tab_order
+                .iter()
+                .filter_map(|path| {
+                    self.open_editors.get(path).map(|buffer| EditorTabState {
+                        path: path.clone(),
+                        view_mode: buffer.view_mode,
+                    })
+                })
+                .collect(),
+            active_file: self.active_file.clone(),
+        }
+    }
+
+    pub fn restore(
+        &mut self,
+        tabs: Vec<(Utf8PathBuf, String, EditorViewMode)>,
+        active_file: Option<Utf8PathBuf>,
+    ) {
+        self.clear();
+        for (path, text, view_mode) in tabs {
+            self.open_editors.insert(
+                path.clone(),
+                EditorBuffer {
+                    path: path.clone(),
+                    saved_text: text.clone(),
+                    text,
+                    view_mode,
+                },
+            );
+            self.tab_order.push(path);
+        }
+        self.active_file = active_file
+            .filter(|path| self.open_editors.contains_key(path))
+            .or_else(|| self.tab_order.last().cloned());
+    }
+
+    pub fn mark_saved(&mut self, path: &Utf8PathBuf, saved_text: String) {
         if let Some(buffer) = self.open_editors.get_mut(path) {
             buffer.text = saved_text.clone();
             buffer.saved_text = saved_text;
@@ -145,7 +202,7 @@ impl EditorSession {
             .collect()
     }
 
-    pub fn reconcile_moved_paths(&mut self, moves: &[(ProjectPath, ProjectPath)]) {
+    pub fn reconcile_moved_paths(&mut self, moves: &[(Utf8PathBuf, Utf8PathBuf)]) {
         for (old_path, new_path) in moves {
             let changed_paths = self
                 .open_editors
@@ -174,7 +231,7 @@ impl EditorSession {
         }
     }
 
-    pub fn reconcile_deleted_path(&mut self, deleted_path: &ProjectPath) {
+    pub fn reconcile_deleted_path(&mut self, deleted_path: &Utf8PathBuf) {
         let closed_paths = self
             .open_editors
             .keys()
@@ -202,16 +259,16 @@ impl EditorSession {
 }
 
 fn moved_path(
-    path: &ProjectPath,
-    old_path: &ProjectPath,
-    new_path: &ProjectPath,
-) -> Option<ProjectPath> {
+    path: &Utf8PathBuf,
+    old_path: &Utf8PathBuf,
+    new_path: &Utf8PathBuf,
+) -> Option<Utf8PathBuf> {
     if path == old_path {
         return Some(new_path.clone());
     }
     if !path.starts_with(old_path) {
         return None;
     }
-    let relative = path.as_path().strip_prefix(old_path.as_path()).ok()?;
-    new_path.join(relative).ok()
+    let relative = path.strip_prefix(old_path).ok()?;
+    Some(new_path.join(relative))
 }

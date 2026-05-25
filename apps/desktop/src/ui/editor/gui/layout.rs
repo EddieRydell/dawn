@@ -1,10 +1,12 @@
 use std::rc::Rc;
 
 use dawn_project::document::{LayoutDocument, LayoutFixturePlacement, LayoutGroupDocument};
-use dawn_project::model::DistanceUnit;
+use dawn_project::model::{DistanceUnit, FixtureId};
 use dawn_project::render::{
     transform_geometry_render_plan, GeometryRenderBounds, GeometryRenderGuide,
 };
+use floem::file::{FileDialogOptions, FileSpec};
+use floem::file_action::open_file;
 use floem::prelude::*;
 
 use crate::actions::AppAction;
@@ -13,6 +15,7 @@ use crate::ui::components::canvas::{
     canvas_with_state, CanvasItem, CanvasItemInteraction, CanvasItemKind, CanvasLayer, CanvasScene,
     CanvasState,
 };
+use crate::ui::components::dropdown_menu::{DropdownMenuController, DropdownMenuEntry};
 use crate::ui::components::{ui_button, ui_static_label};
 use crate::ui::editor::gui::EditorGuiUiState;
 use crate::ui::theme;
@@ -20,6 +23,7 @@ use crate::ui::theme;
 pub fn layout_viewer(
     state: AppSnapshot,
     gui_state: EditorGuiUiState,
+    dropdown_menu: DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     let Some(document) = state.active_layout_document.clone() else {
@@ -40,6 +44,7 @@ pub fn layout_viewer(
             canvas_state,
             fixtures,
             groups,
+            dropdown_menu,
             dispatch,
         ),
     ))
@@ -77,13 +82,28 @@ fn layout_body(
     canvas_state: CanvasState,
     fixtures: Vec<LayoutFixturePlacement>,
     groups: Vec<LayoutGroupDocument>,
+    dropdown_menu: DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     let drag_dispatch = Rc::clone(&dispatch);
+    let menu_dispatch = Rc::clone(&dispatch);
+    let canvas = canvas_with_state(canvas_state, scene);
+    let canvas_id = canvas.id();
     h_stack((
-        canvas_with_state(canvas_state, scene)
+        canvas
             .on_drag_end(move |ids, dx, dy| {
-                drag_dispatch(AppAction::NudgeLayoutFixtures { ids, dx, dy });
+                drag_dispatch(AppAction::NudgeLayoutFixtures {
+                    fixture_ids: ids,
+                    dx,
+                    dy,
+                });
+            })
+            .on_secondary_click(move |position, x, y| {
+                dropdown_menu.open_at_view_point(
+                    canvas_id,
+                    position,
+                    layout_canvas_menu_entries(x, y, Rc::clone(&menu_dispatch)),
+                );
             })
             .style(|s| {
                 s.flex_grow(1.0)
@@ -105,6 +125,40 @@ fn layout_body(
     })
 }
 
+fn layout_canvas_menu_entries(
+    x: f64,
+    y: f64,
+    dispatch: crate::ui::UiDispatch,
+) -> Vec<DropdownMenuEntry> {
+    let new_fixture = Rc::clone(&dispatch);
+    let import_fixture = Rc::clone(&dispatch);
+    vec![
+        DropdownMenuEntry::item("New Fixture", true, move || {
+            new_fixture(AppAction::CreateInlineLayoutFixture { x, y });
+        }),
+        DropdownMenuEntry::item("Import Fixture", true, move || {
+            let import_fixture = Rc::clone(&import_fixture);
+            open_file(
+                FileDialogOptions::new()
+                    .title("Import Fixture")
+                    .allowed_types(vec![FileSpec {
+                        name: "Dawn",
+                        extensions: &["dawn"],
+                    }]),
+                move |selection| {
+                    if let Some(path) = selection.and_then(|info| info.path().first().cloned()) {
+                        import_fixture(AppAction::StartImportLayoutFixture {
+                            selected_file: path,
+                            x,
+                            y,
+                        });
+                    }
+                },
+            );
+        }),
+    ]
+}
+
 fn layout_right_rail(
     fixtures: Vec<LayoutFixturePlacement>,
     groups: Vec<LayoutGroupDocument>,
@@ -112,8 +166,8 @@ fn layout_right_rail(
 ) -> impl IntoView {
     scroll(
         v_stack((
-            fixture_controls_section(fixtures, dispatch),
-            groups_section(groups),
+            fixture_controls_section(fixtures.clone(), dispatch),
+            groups_section(fixtures, groups),
         ))
         .style(|s| s.width_full().gap(theme::SPACE_12)),
     )
@@ -149,16 +203,16 @@ fn fixture_row(fixture: LayoutFixturePlacement, dispatch: crate::ui::UiDispatch)
     let nudge_down = Rc::clone(&dispatch);
     let duplicate = Rc::clone(&dispatch);
     let delete = Rc::clone(&dispatch);
-    let id = fixture.id.clone();
-    let id_left = id.clone();
-    let id_right = id.clone();
-    let id_up = id.clone();
-    let id_down = id.clone();
-    let id_duplicate = id.clone();
-    let id_delete = id.clone();
+    let id = fixture.id;
+    let id_left = id;
+    let id_right = id;
+    let id_up = id;
+    let id_down = id;
+    let id_duplicate = id;
+    let id_delete = id;
 
     v_stack((
-        ui_static_label(fixture.id.clone()).style(|s| s.font_bold()),
+        ui_static_label(fixture.name.clone()).style(|s| s.font_bold()),
         ui_static_label(format!(
             "{}  {}",
             fixture.resolved_fixture.name, fixture.resolved_fixture.geometry_summary
@@ -173,28 +227,28 @@ fn fixture_row(fixture: LayoutFixturePlacement, dispatch: crate::ui::UiDispatch)
             h_stack((
                 ui_button("Left").action(move || {
                     nudge_left(AppAction::NudgeLayoutFixtures {
-                        ids: vec![id_left.clone()],
+                        fixture_ids: vec![id_left],
                         dx: -theme::LAYOUT_NUDGE_STEP,
                         dy: 0.0,
                     })
                 }),
                 ui_button("Right").action(move || {
                     nudge_right(AppAction::NudgeLayoutFixtures {
-                        ids: vec![id_right.clone()],
+                        fixture_ids: vec![id_right],
                         dx: theme::LAYOUT_NUDGE_STEP,
                         dy: 0.0,
                     })
                 }),
                 ui_button("Up").action(move || {
                     nudge_up(AppAction::NudgeLayoutFixtures {
-                        ids: vec![id_up.clone()],
+                        fixture_ids: vec![id_up],
                         dx: 0.0,
                         dy: theme::LAYOUT_NUDGE_STEP,
                     })
                 }),
                 ui_button("Down").action(move || {
                     nudge_down(AppAction::NudgeLayoutFixtures {
-                        ids: vec![id_down.clone()],
+                        fixture_ids: vec![id_down],
                         dx: 0.0,
                         dy: -theme::LAYOUT_NUDGE_STEP,
                     })
@@ -204,12 +258,12 @@ fn fixture_row(fixture: LayoutFixturePlacement, dispatch: crate::ui::UiDispatch)
             h_stack((
                 ui_button("Duplicate").action(move || {
                     duplicate(AppAction::DuplicateLayoutFixture {
-                        id: id_duplicate.clone(),
+                        fixture_id: id_duplicate,
                     })
                 }),
                 ui_button("Delete").action(move || {
                     delete(AppAction::DeleteLayoutFixture {
-                        id: id_delete.clone(),
+                        fixture_id: id_delete,
                     })
                 }),
             ))
@@ -226,14 +280,30 @@ fn fixture_row(fixture: LayoutFixturePlacement, dispatch: crate::ui::UiDispatch)
     })
 }
 
-fn groups_section(groups: Vec<LayoutGroupDocument>) -> impl IntoView {
+fn groups_section(
+    fixtures: Vec<LayoutFixturePlacement>,
+    groups: Vec<LayoutGroupDocument>,
+) -> impl IntoView {
+    let fixture_names = fixtures
+        .into_iter()
+        .map(|fixture| (fixture.id, fixture.name))
+        .collect::<std::collections::BTreeMap<_, _>>();
     v_stack((
         ui_static_label("Groups").style(|s| s.font_bold()),
-        v_stack_from_iter(
-            groups.into_iter().map(|group| {
-                ui_static_label(format!("{}  {}", group.name, group.members.join(", ")))
-            }),
-        ),
+        v_stack_from_iter(groups.into_iter().map(|group| {
+            let members = group
+                .members
+                .iter()
+                .map(|id| {
+                    fixture_names
+                        .get(id)
+                        .cloned()
+                        .unwrap_or_else(|| id.to_string())
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            ui_static_label(format!("{}  {}", group.name, members))
+        })),
     ))
     .style(|s| s.width_full().gap(theme::SPACE_6))
 }
@@ -243,12 +313,12 @@ fn layout_canvas_scene(document: &LayoutDocument) -> CanvasScene {
     let mut layers = Vec::new();
     for fixture in &document.fixtures {
         layers.push(CanvasLayer {
-            id: fixture.id.clone(),
+            id: fixture.id.to_string(),
             visible: true,
         });
         let color = fixture_color(&fixture.id);
         let interaction = CanvasItemInteraction::Target {
-            id: fixture.id.clone(),
+            fixture_id: fixture.id,
             selectable: true,
             draggable: true,
         };
@@ -280,7 +350,7 @@ fn layout_canvas_scene(document: &LayoutDocument) -> CanvasScene {
             items.push(CanvasItem {
                 id: format!("{}:guide:{index}", fixture.id),
                 kind,
-                label: Some(fixture.id.clone()),
+                label: Some(fixture.name.clone()),
                 color,
                 interaction: interaction.clone(),
             });
@@ -292,7 +362,7 @@ fn layout_canvas_scene(document: &LayoutDocument) -> CanvasScene {
                     position: emitter,
                     radius: plan.bulb_radius,
                 },
-                label: Some(fixture.id.clone()),
+                label: Some(fixture.name.clone()),
                 color,
                 interaction: interaction.clone(),
             });
@@ -306,7 +376,7 @@ fn layout_canvas_scene(document: &LayoutDocument) -> CanvasScene {
     }
 }
 
-fn fixture_color(id: &str) -> floem::peniko::Color {
+fn fixture_color(id: &FixtureId) -> floem::peniko::Color {
     const PALETTE: [(u8, u8, u8); 8] = [
         (118, 185, 255),
         (255, 202, 97),
@@ -317,9 +387,12 @@ fn fixture_color(id: &str) -> floem::peniko::Color {
         (236, 154, 207),
         (189, 214, 111),
     ];
-    let hash = id.bytes().fold(0usize, |accumulator, byte| {
-        accumulator.wrapping_mul(31).wrapping_add(byte as usize)
-    });
+    let hash =
+        id.0.to_ne_bytes()
+            .into_iter()
+            .fold(0usize, |accumulator, byte| {
+                accumulator.wrapping_mul(31).wrapping_add(byte as usize)
+            });
     let (red, green, blue) = PALETTE[hash % PALETTE.len()];
     floem::peniko::Color::rgb8(red, green, blue)
 }

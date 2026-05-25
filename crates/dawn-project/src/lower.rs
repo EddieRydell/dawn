@@ -5,11 +5,11 @@ use std::fmt;
 use indexmap::IndexMap;
 
 use crate::model::*;
-use crate::path::{resolve_import_file_path, ImportPath, ProjectPath};
+use crate::path::{resolve_import_path, Utf8PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct ResolvedImport {
-    pub source_path: ProjectPath,
+    pub source_path: Utf8PathBuf,
     pub object: DawnObject<Authored>,
 }
 
@@ -33,10 +33,14 @@ pub enum LowerError {
         message: String,
     },
     DuplicateFixtureId {
-        id: String,
+        id: FixtureId,
+    },
+    EmptyFixtureName,
+    DuplicateFixtureName {
+        name: String,
     },
     UnknownFixture {
-        id: String,
+        id: FixtureId,
     },
     DuplicateControllerName {
         name: String,
@@ -55,6 +59,10 @@ pub enum LowerError {
     },
     UnknownSequenceEffect {
         id: String,
+    },
+    AutomationCurveType {
+        id: String,
+        actual: CurveValueType,
     },
 }
 
@@ -84,6 +92,10 @@ impl fmt::Display for LowerError {
                 write!(formatter, "failed to resolve import `{import}`: {message}")
             }
             Self::DuplicateFixtureId { id } => write!(formatter, "duplicate fixture id `{id}`"),
+            Self::EmptyFixtureName => write!(formatter, "fixture name cannot be empty"),
+            Self::DuplicateFixtureName { name } => {
+                write!(formatter, "duplicate fixture name `{name}`")
+            }
             Self::UnknownFixture { id } => write!(formatter, "unknown fixture `{id}`"),
             Self::DuplicateControllerName { name } => {
                 write!(formatter, "duplicate controller `{name}`")
@@ -97,6 +109,13 @@ impl fmt::Display for LowerError {
             Self::UnknownSequenceEffect { id } => {
                 write!(formatter, "unknown sequence effect `{id}`")
             }
+            Self::AutomationCurveType { id, actual } => {
+                write!(
+                    formatter,
+                    "automation clip `{id}` requires a float curve, but found a {:?} curve",
+                    actual
+                )
+            }
         }
     }
 }
@@ -106,8 +125,8 @@ impl Error for LowerError {}
 pub fn lower_project(
     file: &DawnFile,
     project_key: &str,
-    source_path: &ProjectPath,
-    mut resolver: impl FnMut(&ProjectPath, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+    source_path: &Utf8PathBuf,
+    mut resolver: impl FnMut(&Utf8PathBuf, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
 ) -> Result<ResolvedProject, LowerError> {
     let object = file
         .get(project_key)
@@ -126,9 +145,9 @@ pub fn lower_project(
 
 fn lower_project_object(
     project: &Project<Authored>,
-    source_path: &ProjectPath,
+    source_path: &Utf8PathBuf,
     resolver: &mut impl FnMut(
-        &ProjectPath,
+        &Utf8PathBuf,
         &ImportRef,
         ObjectKind,
     ) -> Result<ResolvedImport, LowerError>,
@@ -164,9 +183,9 @@ fn lower_project_object(
 
 fn lower_display(
     display: &Display<Authored>,
-    source_path: &ProjectPath,
+    source_path: &Utf8PathBuf,
     resolver: &mut impl FnMut(
-        &ProjectPath,
+        &Utf8PathBuf,
         &ImportRef,
         ObjectKind,
     ) -> Result<ResolvedImport, LowerError>,
@@ -196,9 +215,9 @@ fn lower_display(
 
 pub(crate) fn lower_layout(
     layout: &Layout<Authored>,
-    source_path: &ProjectPath,
+    source_path: &Utf8PathBuf,
     resolver: &mut impl FnMut(
-        &ProjectPath,
+        &Utf8PathBuf,
         &ImportRef,
         ObjectKind,
     ) -> Result<ResolvedImport, LowerError>,
@@ -208,6 +227,7 @@ pub(crate) fn lower_layout(
         let (fixture, _) = resolve_fixture(&placement.fixture, source_path, resolver)?;
         fixtures.push(FixturePlacement {
             id: placement.id.clone(),
+            name: placement.name.clone(),
             fixture,
             transform: placement.transform,
         });
@@ -228,9 +248,8 @@ pub(crate) fn lower_layout(
 
         let mut members = Vec::with_capacity(group.members.len());
         for member in &group.members {
-            let id = member.as_str();
-            let Some(index) = fixture_indices.get(id).copied() else {
-                return Err(LowerError::UnknownFixture { id: id.to_string() });
+            let Some(index) = fixture_indices.get(member).copied() else {
+                return Err(LowerError::UnknownFixture { id: *member });
             };
             members.push(index);
         }
@@ -250,17 +269,15 @@ pub(crate) fn lower_layout(
 
 fn lower_patch(
     patch: &Patch<Authored>,
-    fixtures: &HashMap<String, FixtureIndex>,
+    fixtures: &HashMap<FixtureId, FixtureIndex>,
     controllers: &HashMap<String, ControllerIndex>,
 ) -> Result<Patch<Resolved>, LowerError> {
     let mut routes = Vec::with_capacity(patch.routes.len());
     for route in &patch.routes {
         let fixture = fixtures
-            .get(route.fixture.as_str())
+            .get(&route.fixture)
             .copied()
-            .ok_or_else(|| LowerError::UnknownFixture {
-                id: route.fixture.as_str().to_string(),
-            })?;
+            .ok_or_else(|| LowerError::UnknownFixture { id: route.fixture })?;
         let controller = controllers
             .get(route.controller.as_str())
             .copied()
@@ -280,11 +297,11 @@ fn lower_patch(
 
 fn lower_sequence(
     sequence: &Sequence<Authored>,
-    sequence_source_path: &ProjectPath,
+    sequence_source_path: &Utf8PathBuf,
     layout: &Layout<Authored>,
-    layout_source_path: &ProjectPath,
+    layout_source_path: &Utf8PathBuf,
     resolver: &mut impl FnMut(
-        &ProjectPath,
+        &Utf8PathBuf,
         &ImportRef,
         ObjectKind,
     ) -> Result<ResolvedImport, LowerError>,
@@ -324,6 +341,12 @@ fn lower_sequence(
             targets.push(index);
         }
         let curve = resolve_curve(&clip.curve, sequence_source_path, resolver)?;
+        if curve.value_type != CurveValueType::Float {
+            return Err(LowerError::AutomationCurveType {
+                id: clip.id.clone(),
+                actual: curve.value_type,
+            });
+        }
         automation_clips.push(AutomationClip {
             id: clip.id.clone(),
             start: clip.start.clone(),
@@ -348,31 +371,30 @@ fn lower_sequence(
 
 fn lower_sequence_effect(
     effect: &SequenceEffect<Authored>,
-    fixtures: &HashMap<String, FixtureIndex>,
+    fixtures: &HashMap<FixtureId, FixtureIndex>,
     groups: &HashMap<String, GroupIndex>,
-    source_path: &ProjectPath,
+    source_path: &Utf8PathBuf,
     resolver: &mut impl FnMut(
-        &ProjectPath,
+        &Utf8PathBuf,
         &ImportRef,
         ObjectKind,
     ) -> Result<ResolvedImport, LowerError>,
 ) -> Result<SequenceEffect<Resolved>, LowerError> {
     let target = match &effect.target {
-        EffectTarget::Group(group) => {
+        EffectTarget::Group { name: group } => {
             let name = group.as_str();
             let Some(index) = groups.get(name).copied() else {
                 return Err(LowerError::UnknownGroup {
                     name: name.to_string(),
                 });
             };
-            EffectTarget::Group(index)
+            EffectTarget::Group { name: index }
         }
-        EffectTarget::Fixture(fixture) => {
-            let id = fixture.as_str();
-            let Some(index) = fixtures.get(id).copied() else {
-                return Err(LowerError::UnknownFixture { id: id.to_string() });
+        EffectTarget::Fixture { id: fixture } => {
+            let Some(index) = fixtures.get(fixture).copied() else {
+                return Err(LowerError::UnknownFixture { id: *fixture });
             };
-            EffectTarget::Fixture(index)
+            EffectTarget::Fixture { id: index }
         }
     };
 
@@ -401,9 +423,9 @@ fn lower_sequence_effect(
 
 fn lower_effect_param(
     param: &EffectParam<Authored>,
-    source_path: &ProjectPath,
+    source_path: &Utf8PathBuf,
     resolver: &mut impl FnMut(
-        &ProjectPath,
+        &Utf8PathBuf,
         &ImportRef,
         ObjectKind,
     ) -> Result<ResolvedImport, LowerError>,
@@ -411,6 +433,10 @@ fn lower_effect_param(
     Ok(match param {
         EffectParam::Integer { value } => EffectParam::Integer { value: *value },
         EffectParam::Float { value } => EffectParam::Float { value: *value },
+        EffectParam::Boolean { value } => EffectParam::Boolean { value: *value },
+        EffectParam::Enum { value } => EffectParam::Enum {
+            value: value.clone(),
+        },
         EffectParam::Flags { value } => EffectParam::Flags {
             value: value.clone(),
         },
@@ -425,15 +451,23 @@ fn lower_effect_param(
 
 fn fixture_indices(
     fixtures: &[FixturePlacement<Resolved>],
-) -> Result<HashMap<String, FixtureIndex>, LowerError> {
+) -> Result<HashMap<FixtureId, FixtureIndex>, LowerError> {
     let mut indices = HashMap::with_capacity(fixtures.len());
+    let mut names = HashMap::with_capacity(fixtures.len());
     for (index, fixture) in fixtures.iter().enumerate() {
-        if indices
-            .insert(fixture.id.clone(), FixtureIndex(index))
+        if indices.insert(fixture.id, FixtureIndex(index)).is_some() {
+            return Err(LowerError::DuplicateFixtureId { id: fixture.id });
+        }
+        let name = fixture.name.trim();
+        if name.is_empty() {
+            return Err(LowerError::EmptyFixtureName);
+        }
+        if names
+            .insert(name.to_string(), FixtureIndex(index))
             .is_some()
         {
-            return Err(LowerError::DuplicateFixtureId {
-                id: fixture.id.clone(),
+            return Err(LowerError::DuplicateFixtureName {
+                name: name.to_string(),
             });
         }
     }
@@ -473,22 +507,20 @@ fn group_indices(groups: &[Group<Resolved>]) -> Result<HashMap<String, GroupInde
 }
 
 fn resolve_path(
-    source_path: &ProjectPath,
-    import_path: &ImportPath,
+    source_path: &Utf8PathBuf,
+    import_path: &Utf8PathBuf,
     raw: &str,
-) -> Result<ProjectPath, LowerError> {
-    resolve_import_file_path(source_path, import_path).map_err(|message| LowerError::Import {
-        import: raw.to_string(),
-        message,
-    })
+) -> Result<Utf8PathBuf, LowerError> {
+    let _ = raw;
+    Ok(resolve_import_path(source_path, import_path))
 }
 
 fn resolve_import(
-    source_path: &ProjectPath,
+    source_path: &Utf8PathBuf,
     import: &ImportRef,
     expected: ObjectKind,
     resolver: &mut impl FnMut(
-        &ProjectPath,
+        &Utf8PathBuf,
         &ImportRef,
         ObjectKind,
     ) -> Result<ResolvedImport, LowerError>,
@@ -533,14 +565,14 @@ pub(crate) fn select_imported_object(
 }
 fn resolve_display(
     value: &InlineOrImport<Display<Authored>>,
-    source_path: &ProjectPath,
+    source_path: &Utf8PathBuf,
     expected: ObjectKind,
     resolver: &mut impl FnMut(
-        &ProjectPath,
+        &Utf8PathBuf,
         &ImportRef,
         ObjectKind,
     ) -> Result<ResolvedImport, LowerError>,
-) -> Result<(Display<Authored>, ProjectPath), LowerError> {
+) -> Result<(Display<Authored>, Utf8PathBuf), LowerError> {
     match value {
         InlineOrImport::Inline(display) => Ok((display.clone(), source_path.clone())),
         InlineOrImport::Import { import } => {
@@ -555,13 +587,13 @@ fn resolve_display(
 
 fn resolve_controller(
     value: &InlineOrImport<Controller>,
-    source_path: &ProjectPath,
+    source_path: &Utf8PathBuf,
     resolver: &mut impl FnMut(
-        &ProjectPath,
+        &Utf8PathBuf,
         &ImportRef,
         ObjectKind,
     ) -> Result<ResolvedImport, LowerError>,
-) -> Result<(Controller, ProjectPath), LowerError> {
+) -> Result<(Controller, Utf8PathBuf), LowerError> {
     match value {
         InlineOrImport::Inline(controller) => Ok((controller.clone(), source_path.clone())),
         InlineOrImport::Import { import } => {
@@ -576,14 +608,14 @@ fn resolve_controller(
 
 fn resolve_layout(
     value: &InlineOrImport<Layout<Authored>>,
-    source_path: &ProjectPath,
+    source_path: &Utf8PathBuf,
     expected: ObjectKind,
     resolver: &mut impl FnMut(
-        &ProjectPath,
+        &Utf8PathBuf,
         &ImportRef,
         ObjectKind,
     ) -> Result<ResolvedImport, LowerError>,
-) -> Result<(Layout<Authored>, ProjectPath), LowerError> {
+) -> Result<(Layout<Authored>, Utf8PathBuf), LowerError> {
     match value {
         InlineOrImport::Inline(layout) => Ok((layout.clone(), source_path.clone())),
         InlineOrImport::Import { import } => {
@@ -598,13 +630,13 @@ fn resolve_layout(
 
 fn resolve_fixture(
     value: &InlineOrImport<Fixture>,
-    source_path: &ProjectPath,
+    source_path: &Utf8PathBuf,
     resolver: &mut impl FnMut(
-        &ProjectPath,
+        &Utf8PathBuf,
         &ImportRef,
         ObjectKind,
     ) -> Result<ResolvedImport, LowerError>,
-) -> Result<(Fixture, ProjectPath), LowerError> {
+) -> Result<(Fixture, Utf8PathBuf), LowerError> {
     match value {
         InlineOrImport::Inline(fixture) => Ok((fixture.clone(), source_path.clone())),
         InlineOrImport::Import { import } => {
@@ -619,14 +651,14 @@ fn resolve_fixture(
 
 fn resolve_patch(
     value: &InlineOrImport<Patch<Authored>>,
-    source_path: &ProjectPath,
+    source_path: &Utf8PathBuf,
     expected: ObjectKind,
     resolver: &mut impl FnMut(
-        &ProjectPath,
+        &Utf8PathBuf,
         &ImportRef,
         ObjectKind,
     ) -> Result<ResolvedImport, LowerError>,
-) -> Result<(Patch<Authored>, ProjectPath), LowerError> {
+) -> Result<(Patch<Authored>, Utf8PathBuf), LowerError> {
     match value {
         InlineOrImport::Inline(patch) => Ok((patch.clone(), source_path.clone())),
         InlineOrImport::Import { import } => {
@@ -641,14 +673,14 @@ fn resolve_patch(
 
 fn resolve_sequence(
     value: &InlineOrImport<Sequence<Authored>>,
-    source_path: &ProjectPath,
+    source_path: &Utf8PathBuf,
     expected: ObjectKind,
     resolver: &mut impl FnMut(
-        &ProjectPath,
+        &Utf8PathBuf,
         &ImportRef,
         ObjectKind,
     ) -> Result<ResolvedImport, LowerError>,
-) -> Result<(Sequence<Authored>, ProjectPath), LowerError> {
+) -> Result<(Sequence<Authored>, Utf8PathBuf), LowerError> {
     match value {
         InlineOrImport::Inline(sequence) => Ok((sequence.clone(), source_path.clone())),
         InlineOrImport::Import { import } => {
@@ -663,9 +695,9 @@ fn resolve_sequence(
 
 fn resolve_curve(
     value: &InlineOrImport<Curve>,
-    source_path: &ProjectPath,
+    source_path: &Utf8PathBuf,
     resolver: &mut impl FnMut(
-        &ProjectPath,
+        &Utf8PathBuf,
         &ImportRef,
         ObjectKind,
     ) -> Result<ResolvedImport, LowerError>,

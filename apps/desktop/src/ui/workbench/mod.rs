@@ -43,6 +43,7 @@ pub fn workbench_view(
                 crate::ui::editor::editor_view(
                     state.clone(),
                     editor_gui.clone(),
+                    dropdown_menu.clone(),
                     Rc::clone(&dispatch),
                 )
                 .style(|s| {

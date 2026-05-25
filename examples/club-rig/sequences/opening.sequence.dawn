@@ -20,6 +20,10 @@ opening:
         speed:
           type: float
           value: 0.5
+        fade:
+          type: curve
+          curve:
+            import: ../curves/fade-in.curve.dawn::fade_in
       script:
         import: ../effects/pulse.effect.dawn
     - id: evt_0004
@@ -38,6 +42,10 @@ opening:
         speed:
           type: float
           value: 1.25
+        fade:
+          type: curve
+          curve:
+            import: ../curves/fade-in.curve.dawn::fade_in
       script:
         import: ../effects/pulse.effect.dawn
   automation_clips:

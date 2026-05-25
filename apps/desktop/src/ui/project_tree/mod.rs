@@ -1,8 +1,8 @@
 use std::collections::{BTreeSet, HashSet};
 use std::rc::Rc;
 
-use dawn_project::fs::{ProjectFsEntry, ProjectFsEntryKind};
-use dawn_project::path::ProjectPath;
+use dawn_project::fs::{WorkspaceEntry, WorkspaceEntryKind};
+use dawn_project::path::{PathStringExt, Utf8PathBuf};
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::keyboard::{Key, Modifiers, NamedKey};
 use floem::peniko::Brush;
@@ -19,19 +19,19 @@ use crate::ui::components::{ui_label, ui_static_label, ui_text_input};
 #[derive(Clone)]
 pub struct ExplorerUiState {
     pub expanded: RwSignal<HashSet<String>>,
-    pub selected: RwSignal<Option<ProjectPath>>,
+    pub selected: RwSignal<Option<Utf8PathBuf>>,
     pub pending: RwSignal<Option<PendingExplorerEdit>>,
     pub pending_name: RwSignal<String>,
-    pub drag_source: RwSignal<Option<ProjectPath>>,
-    pub revealed_active_file: RwSignal<Option<ProjectPath>>,
+    pub drag_source: RwSignal<Option<Utf8PathBuf>>,
+    pub revealed_active_file: RwSignal<Option<Utf8PathBuf>>,
     pub root: RwSignal<Option<String>>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum PendingExplorerEdit {
-    CreateFile(ProjectPath),
-    CreateDirectory(ProjectPath),
-    Rename(ProjectPath),
+    CreateFile(Utf8PathBuf),
+    CreateDirectory(Utf8PathBuf),
+    Rename(Utf8PathBuf),
 }
 
 impl ExplorerUiState {
@@ -64,7 +64,7 @@ impl ExplorerUiState {
         self.revealed_active_file.set(None);
     }
 
-    pub fn reveal(&self, path: &ProjectPath) {
+    pub fn reveal(&self, path: &Utf8PathBuf) {
         let mut ancestors = ancestor_paths(path);
         ancestors.insert(String::new());
         self.expanded.update(|expanded| {
@@ -73,7 +73,7 @@ impl ExplorerUiState {
         self.selected.set(Some(path.clone()));
     }
 
-    pub fn reveal_active_file(&self, path: &ProjectPath) {
+    pub fn reveal_active_file(&self, path: &Utf8PathBuf) {
         if self.revealed_active_file.get().as_ref() == Some(path) {
             return;
         }
@@ -168,12 +168,12 @@ fn explorer_row(
     dropdown_menu: DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
     expanded: &HashSet<String>,
-    selected_path: Option<&ProjectPath>,
+    selected_path: Option<&Utf8PathBuf>,
     pending: Option<&PendingExplorerEdit>,
 ) -> impl IntoView {
     let path = row.path.clone();
     let row_key = path.to_slash_string();
-    let is_dir = row.kind == ProjectFsEntryKind::Directory;
+    let is_dir = row.kind == WorkspaceEntryKind::Directory;
     let is_expanded = expanded.contains(&row_key);
     let selected = selected_path.is_some_and(|selected| selected == &path);
 
@@ -304,7 +304,7 @@ fn explorer_row(
 }
 
 fn create_row(
-    parent: ProjectPath,
+    parent: Utf8PathBuf,
     is_file: bool,
     explorer: ExplorerUiState,
     dispatch: crate::ui::UiDispatch,
@@ -402,7 +402,7 @@ fn edit_row(
 }
 
 fn row_menu_entries(
-    path: ProjectPath,
+    path: Utf8PathBuf,
     is_dir: bool,
     explorer: ExplorerUiState,
     dispatch: crate::ui::UiDispatch,
@@ -410,13 +410,15 @@ fn row_menu_entries(
     let create_parent = if is_dir {
         path.clone()
     } else {
-        path.parent().unwrap_or_else(ProjectPath::root)
+        path.parent()
+            .map(camino::Utf8Path::to_path_buf)
+            .unwrap_or_default()
     };
     let file_state = explorer.clone();
     let file_parent = create_parent.clone();
     let folder_state = explorer.clone();
     let folder_parent = create_parent;
-    let can_modify = !path.is_root();
+    let can_modify = !path.as_str().is_empty();
     let rename_state = explorer.clone();
     let rename_path = path.clone();
     let delete_path = path.clone();
@@ -447,12 +449,10 @@ fn row_menu_entries(
     ]
 }
 
-fn begin_rename(explorer: &ExplorerUiState, path: ProjectPath) {
-    explorer.pending_name.set(
-        path.file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_default(),
-    );
+fn begin_rename(explorer: &ExplorerUiState, path: Utf8PathBuf) {
+    explorer
+        .pending_name
+        .set(path.file_name().map(str::to_string).unwrap_or_default());
     explorer
         .pending
         .set(Some(PendingExplorerEdit::Rename(path)));
@@ -460,24 +460,24 @@ fn begin_rename(explorer: &ExplorerUiState, path: ProjectPath) {
 
 fn visible_rows(
     root: &str,
-    entries: &[ProjectFsEntry],
+    entries: &[WorkspaceEntry],
     expanded: &HashSet<String>,
 ) -> Vec<ExplorerRow> {
     let mut rows = vec![ExplorerRow {
-        path: ProjectPath::root(),
+        path: Utf8PathBuf::new(),
         name: root.rsplit('/').next().unwrap_or(root).to_string(),
-        kind: ProjectFsEntryKind::Directory,
+        kind: WorkspaceEntryKind::Directory,
         depth: 0,
     }];
 
-    append_visible_children(&ProjectPath::root(), 1, entries, expanded, &mut rows);
+    append_visible_children(&Utf8PathBuf::new(), 1, entries, expanded, &mut rows);
     rows
 }
 
 fn append_visible_children(
-    parent: &ProjectPath,
+    parent: &Utf8PathBuf,
     depth: usize,
-    entries: &[ProjectFsEntry],
+    entries: &[WorkspaceEntry],
     expanded: &HashSet<String>,
     rows: &mut Vec<ExplorerRow>,
 ) {
@@ -487,11 +487,11 @@ fn append_visible_children(
 
     let mut children = entries
         .iter()
-        .filter(|entry| entry.path.parent().as_ref() == Some(parent))
+        .filter(|entry| entry.path.parent() == Some(parent.as_path()))
         .collect::<Vec<_>>();
     children.sort_by(|left, right| {
-        let left_dir = left.kind == ProjectFsEntryKind::Directory;
-        let right_dir = right.kind == ProjectFsEntryKind::Directory;
+        let left_dir = left.kind == WorkspaceEntryKind::Directory;
+        let right_dir = right.kind == WorkspaceEntryKind::Directory;
         (!left_dir, left.path.file_name()).cmp(&(!right_dir, right.path.file_name()))
     });
 
@@ -500,19 +500,19 @@ fn append_visible_children(
             name: entry
                 .path
                 .file_name()
-                .map(|name| name.to_string_lossy().to_string())
+                .map(str::to_string)
                 .unwrap_or_else(|| entry.path.to_slash_string()),
             depth,
             path: entry.path.clone(),
             kind: entry.kind,
         });
-        if entry.kind == ProjectFsEntryKind::Directory {
+        if entry.kind == WorkspaceEntryKind::Directory {
             append_visible_children(&entry.path, depth + 1, entries, expanded, rows);
         }
     }
 }
 
-fn ancestor_paths(path: &ProjectPath) -> BTreeSet<String> {
+fn ancestor_paths(path: &Utf8PathBuf) -> BTreeSet<String> {
     let mut ancestors = BTreeSet::new();
     let mut current = path.parent();
     while let Some(parent) = current {
@@ -533,7 +533,7 @@ fn toggle_expanded(expanded: &RwSignal<HashSet<String>>, path: &str) {
 struct ExplorerRenderState {
     rows: Vec<ExplorerRow>,
     expanded: HashSet<String>,
-    selected: Option<ProjectPath>,
+    selected: Option<Utf8PathBuf>,
     pending: Option<PendingExplorerEdit>,
 }
 
@@ -563,11 +563,11 @@ fn caret_view(is_dir: bool, expanded: bool) -> floem::AnyView {
     .into_any()
 }
 
-fn file_icon(kind: ProjectFsEntryKind, expanded: bool) -> impl IntoView {
+fn file_icon(kind: WorkspaceEntryKind, expanded: bool) -> impl IntoView {
     match (kind, expanded) {
-        (ProjectFsEntryKind::Directory, true) => Icon::FolderOpen.into_any(),
-        (ProjectFsEntryKind::Directory, false) => Icon::Folder.into_any(),
-        (ProjectFsEntryKind::File, _) => Icon::File.into_any(),
+        (WorkspaceEntryKind::Directory, true) => Icon::FolderOpen.into_any(),
+        (WorkspaceEntryKind::Directory, false) => Icon::Folder.into_any(),
+        (WorkspaceEntryKind::File, _) => Icon::File.into_any(),
     }
 }
 
@@ -626,8 +626,8 @@ fn panel_style(s: floem::style::Style) -> floem::style::Style {
 
 #[derive(Clone)]
 struct ExplorerRow {
-    path: ProjectPath,
+    path: Utf8PathBuf,
     name: String,
-    kind: ProjectFsEntryKind,
+    kind: WorkspaceEntryKind,
     depth: usize,
 }

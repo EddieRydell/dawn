@@ -20,7 +20,8 @@ use crate::editor_session::EditorViewMode;
 use crate::ui::components::dropdown_menu::{
     dropdown_menu_layer, DropdownMenuController, DropdownMenuEntry,
 };
-use crate::ui::components::{ui_button, ui_label, ui_static_label};
+use crate::ui::components::modal::modal_layer;
+use crate::ui::components::{ui_button, ui_label, ui_static_label, ui_text_input};
 use crate::ui::{fonts, theme};
 
 pub fn run() {
@@ -53,7 +54,6 @@ fn app_view(window_id: WindowId) -> impl IntoView {
     };
 
     let save_shortcut = Rc::clone(&dispatch);
-
     stack((
         v_stack((
             title_bar(
@@ -70,6 +70,8 @@ fn app_view(window_id: WindowId) -> impl IntoView {
             status_bar(snapshot),
         ))
         .style(|s| s.size_full()),
+        layout_fixture_import_modal(snapshot, Rc::clone(&dispatch)),
+        layout_fixture_name_modal(snapshot, Rc::clone(&dispatch)),
         dropdown_menu_layer(dropdown_menu.clone()),
     ))
     .on_event(EventListener::KeyDown, move |event| {
@@ -131,7 +133,7 @@ fn title_bar(
             title_button(Icon::Square).action(action::toggle_window_maximized),
             title_button(Icon::X)
                 .action(move || {
-                    close_dispatch(AppAction::CloseProject);
+                    close_dispatch(AppAction::Quit);
                     close_window(window_id);
                 })
                 .style(|s| {
@@ -371,4 +373,106 @@ fn status_bar(snapshot: crate::ui::UiSnapshot) -> impl IntoView {
             .background(theme::color(theme::STATUS_BAR))
             .font_size(theme::FONT_SMALL)
     })
+}
+
+fn layout_fixture_import_modal(
+    snapshot: crate::ui::UiSnapshot,
+    dispatch: crate::ui::UiDispatch,
+) -> impl IntoView {
+    let cancel = Rc::clone(&dispatch);
+    modal_layer(
+        move || snapshot.get().pending_layout_fixture_import,
+        move || cancel(AppAction::CancelImportLayoutFixture),
+        move |pending| import_modal_card(pending, Rc::clone(&dispatch)),
+    )
+}
+
+fn layout_fixture_name_modal(
+    snapshot: crate::ui::UiSnapshot,
+    dispatch: crate::ui::UiDispatch,
+) -> impl IntoView {
+    let cancel = Rc::clone(&dispatch);
+    modal_layer(
+        move || snapshot.get().pending_layout_fixture_name,
+        move || cancel(AppAction::CancelLayoutFixtureName),
+        move |pending| fixture_name_modal_card(pending, Rc::clone(&dispatch)),
+    )
+}
+
+fn fixture_name_modal_card(
+    pending: crate::app_model::PendingLayoutFixtureName,
+    dispatch: crate::ui::UiDispatch,
+) -> impl IntoView {
+    let name = RwSignal::new(pending.suggested_name);
+    let confirm = Rc::clone(&dispatch);
+    let cancel = Rc::clone(&dispatch);
+
+    v_stack((
+        ui_static_label("Fixture Name").style(|s| s.font_bold()),
+        ui_static_label(pending.context).style(|s| {
+            s.color(theme::color(theme::MUTED))
+                .font_size(theme::FONT_SMALL)
+        }),
+        ui_text_input(name).style(|s| s.width_full()),
+        h_stack((
+            empty().style(|s| s.flex_grow(1.0).min_width(0.0)),
+            ui_button("Cancel").action(move || {
+                cancel(AppAction::CancelLayoutFixtureName);
+            }),
+            ui_button("Create").action(move || {
+                confirm(AppAction::ConfirmLayoutFixtureName { name: name.get() });
+            }),
+        ))
+        .style(|s| s.width_full().items_center().gap(theme::SPACE_8)),
+    ))
+    .style(|s| s.width_full().min_height(0.0).gap(theme::SPACE_10))
+}
+
+fn import_modal_card(
+    pending: crate::app_model::PendingLayoutFixtureImport,
+    dispatch: crate::ui::UiDispatch,
+) -> impl IntoView {
+    let cancel = Rc::clone(&dispatch);
+    let rows = v_stack_from_iter(pending.fixtures.into_iter().map(move |fixture| {
+        let import = Rc::clone(&dispatch);
+        let object_key = fixture.object_key.clone();
+        h_stack((
+            v_stack((
+                ui_static_label(fixture.object_key).style(|s| s.font_bold()),
+                ui_static_label(format!("{}  {}", fixture.name, fixture.geometry_summary)).style(
+                    |s| {
+                        s.color(theme::color(theme::MUTED))
+                            .font_size(theme::FONT_SMALL)
+                    },
+                ),
+            ))
+            .style(|s| s.flex_grow(1.0).min_width(0.0).gap(theme::SPACE_3)),
+            ui_button("Import").action(move || {
+                import(AppAction::ConfirmImportLayoutFixture {
+                    object_key: object_key.clone(),
+                });
+            }),
+        ))
+        .style(|s| {
+            s.width_full()
+                .items_center()
+                .gap(theme::SPACE_8)
+                .padding_vert(theme::SPACE_8)
+                .border_bottom(theme::BORDER_WIDTH)
+                .border_color(theme::color(theme::BORDER))
+        })
+    }));
+
+    v_stack((
+        ui_static_label("Import Fixture").style(|s| s.font_bold()),
+        scroll(rows).style(|s| s.width_full().max_height(340.0).min_height(0.0)),
+        h_stack((
+            empty().style(|s| s.flex_grow(1.0).min_width(0.0)),
+            ui_button("Cancel").action(move || {
+                cancel(AppAction::CancelImportLayoutFixture);
+            }),
+        ))
+        .style(|s| s.width_full().items_center()),
+    ))
+    .style(|s| s.width_full().min_height(0.0).gap(theme::SPACE_10))
 }

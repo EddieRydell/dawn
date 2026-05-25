@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::path::{ImportPath, ProjectPath};
+use crate::path::{PathStringExt, Utf8PathBuf};
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub enum Authored {}
@@ -44,12 +44,12 @@ impl ModelMode for Authored {
     type DisplayLayout = InlineOrImport<Layout<Authored>>;
     type LayoutFixture = FixturePlacement<Authored>;
     type FixturePlacementFixture = InlineOrImport<Fixture>;
-    type GroupMember = FixtureRef;
-    type RouteFixture = FixtureRef;
+    type GroupMember = FixtureId;
+    type RouteFixture = FixtureId;
     type RouteController = ControllerRef;
     type SequenceAudio = Option<ImportRef>;
     type EffectTargetGroup = GroupRef;
-    type EffectTargetFixture = FixtureRef;
+    type EffectTargetFixture = FixtureId;
     type SequenceEffectScript = InlineOrImport<String>;
     type EffectParamCurve = InlineOrImport<Curve>;
     type AutomationClipCurve = InlineOrImport<Curve>;
@@ -67,7 +67,7 @@ impl ModelMode for Resolved {
     type GroupMember = FixtureIndex;
     type RouteFixture = FixtureIndex;
     type RouteController = ControllerIndex;
-    type SequenceAudio = Option<ProjectPath>;
+    type SequenceAudio = Option<Utf8PathBuf>;
     type EffectTargetGroup = GroupIndex;
     type EffectTargetFixture = FixtureIndex;
     type SequenceEffectScript = ScriptSource;
@@ -79,6 +79,16 @@ impl ModelMode for Resolved {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct FixtureIndex(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct FixtureId(pub u32);
+
+impl fmt::Display for FixtureId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(transparent)]
@@ -251,7 +261,6 @@ macro_rules! string_ref {
 }
 
 string_ref!(ObjectName);
-string_ref!(FixtureRef);
 string_ref!(GroupRef);
 string_ref!(ControllerRef);
 string_ref!(SequenceEffectRef);
@@ -259,7 +268,7 @@ string_ref!(SequenceEffectRef);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportRef {
     raw: String,
-    path: ImportPath,
+    path: Utf8PathBuf,
     object: Option<ObjectName>,
 }
 
@@ -273,7 +282,7 @@ impl ImportRef {
         &self.raw
     }
 
-    pub fn path(&self) -> &ImportPath {
+    pub fn path(&self) -> &Utf8PathBuf {
         &self.path
     }
 
@@ -302,7 +311,7 @@ impl<'de> Deserialize<'de> for ImportRef {
         }
         Ok(Self {
             raw: raw.clone(),
-            path: ImportPath::new(path),
+            path: Utf8PathBuf::from(path),
             object,
         })
     }
@@ -448,7 +457,8 @@ impl Default for DistanceUnit {
     deserialize = "M::FixturePlacementFixture: Deserialize<'de>"
 ))]
 pub struct FixturePlacement<M: ModelMode = Authored> {
-    pub id: String,
+    pub id: FixtureId,
+    pub name: String,
     pub fixture: M::FixturePlacementFixture,
     pub transform: Transform,
 }
@@ -621,14 +631,14 @@ pub struct Sequence<M: ModelMode = Authored> {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "type", content = "name", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[serde(bound(
     serialize = "M::EffectTargetGroup: Serialize, M::EffectTargetFixture: Serialize",
     deserialize = "M::EffectTargetGroup: Deserialize<'de>, M::EffectTargetFixture: Deserialize<'de>"
 ))]
 pub enum EffectTarget<M: ModelMode = Authored> {
-    Group(M::EffectTargetGroup),
-    Fixture(M::EffectTargetFixture),
+    Group { name: M::EffectTargetGroup },
+    Fixture { id: M::EffectTargetFixture },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -651,7 +661,7 @@ pub struct SequenceEffect<M: ModelMode = Authored> {
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ScriptSource {
     Inline(String),
-    External(ProjectPath),
+    External(Utf8PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -660,23 +670,229 @@ pub struct Flags {
     pub values: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
-    pub value: String,
+    pub red: u8,
+    pub green: u8,
+    pub blue: u8,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+impl Color {
+    pub fn new(red: u8, green: u8, blue: u8) -> Self {
+        Self { red, green, blue }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let raw = value
+            .strip_prefix('#')
+            .ok_or_else(|| "color literal must start with `#`".to_string())?;
+        if raw.len() != 6 || !raw.chars().all(|character| character.is_ascii_hexdigit()) {
+            return Err("color literal must look like `#rrggbb`".to_string());
+        }
+        let red = u8::from_str_radix(&raw[0..2], 16)
+            .map_err(|_| "red channel must be hexadecimal".to_string())?;
+        let green = u8::from_str_radix(&raw[2..4], 16)
+            .map_err(|_| "green channel must be hexadecimal".to_string())?;
+        let blue = u8::from_str_radix(&raw[4..6], 16)
+            .map_err(|_| "blue channel must be hexadecimal".to_string())?;
+        Ok(Self { red, green, blue })
+    }
+
+    pub fn to_hex(self) -> String {
+        format!("#{:02x}{:02x}{:02x}", self.red, self.green, self.blue)
+    }
+
+    pub fn scale(self, factor: f64) -> Self {
+        Self {
+            red: scale_channel(self.red, factor),
+            green: scale_channel(self.green, factor),
+            blue: scale_channel(self.blue, factor),
+        }
+    }
+
+    pub fn mix(self, other: Self, amount: f64) -> Self {
+        let amount = amount.clamp(0.0, 1.0);
+        Self {
+            red: lerp_channel(self.red, other.red, amount),
+            green: lerp_channel(self.green, other.green, amount),
+            blue: lerp_channel(self.blue, other.blue, amount),
+        }
+    }
+}
+
+impl Serialize for Color {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_hex())
+    }
+}
+
+impl<'de> Deserialize<'de> for Color {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(&raw).map_err(de::Error::custom)
+    }
+}
+
+fn scale_channel(channel: u8, factor: f64) -> u8 {
+    ((channel as f64) * factor).round().clamp(0.0, 255.0) as u8
+}
+
+fn lerp_channel(left: u8, right: u8, amount: f64) -> u8 {
+    ((left as f64) + ((right as f64) - (left as f64)) * amount)
+        .round()
+        .clamp(0.0, 255.0) as u8
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CurveValueType {
+    Float,
+    Color,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CurveValue {
+    Float(f64),
+    Color(Color),
+}
+
+impl CurveValue {
+    pub fn value_type(&self) -> CurveValueType {
+        match self {
+            Self::Float(_) => CurveValueType::Float,
+            Self::Color(_) => CurveValueType::Color,
+        }
+    }
+}
+
+impl Serialize for CurveValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Float(value) => serializer.serialize_f64(*value),
+            Self::Color(value) => value.serialize(serializer),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Curve {
+    pub value_type: CurveValueType,
     pub points: Vec<CurvePoint>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+impl Curve {
+    pub fn evaluate(&self, time: f64) -> Option<CurveValue> {
+        let first = self.points.first()?;
+        let last = self.points.last()?;
+        if time <= first.time {
+            return Some(first.value.clone());
+        }
+        if time >= last.time {
+            return Some(last.value.clone());
+        }
+        for pair in self.points.windows(2) {
+            let left = &pair[0];
+            let right = &pair[1];
+            if time >= left.time && time <= right.time {
+                let span = right.time - left.time;
+                let amount = if span.abs() < f64::EPSILON {
+                    0.0
+                } else {
+                    (time - left.time) / span
+                };
+                return Some(match (&left.value, &right.value) {
+                    (CurveValue::Float(left), CurveValue::Float(right)) => {
+                        CurveValue::Float(left + (right - left) * amount)
+                    }
+                    (CurveValue::Color(left), CurveValue::Color(right)) => {
+                        CurveValue::Color(left.mix(*right, amount))
+                    }
+                    _ => unreachable!("curve point value types are validated during parsing"),
+                });
+            }
+        }
+        Some(last.value.clone())
+    }
+
+    pub fn evaluate_float(&self, time: f64) -> Option<f64> {
+        match self.evaluate(time)? {
+            CurveValue::Float(value) => Some(value),
+            CurveValue::Color(_) => None,
+        }
+    }
+
+    pub fn evaluate_color(&self, time: f64) -> Option<Color> {
+        match self.evaluate(time)? {
+            CurveValue::Float(_) => None,
+            CurveValue::Color(value) => Some(value),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Curve {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawCurve {
+            value_type: CurveValueType,
+            points: Vec<RawCurvePoint>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawCurvePoint {
+            time: f64,
+            value: serde_yaml::Value,
+        }
+
+        let raw = RawCurve::deserialize(deserializer)?;
+        let mut points = Vec::with_capacity(raw.points.len());
+        for point in raw.points {
+            let value = match raw.value_type {
+                CurveValueType::Float => {
+                    point.value.as_f64().map(CurveValue::Float).ok_or_else(|| {
+                        de::Error::custom("float curve points must use numeric values")
+                    })?
+                }
+                CurveValueType::Color => {
+                    let Some(raw_color) = point.value.as_str() else {
+                        return Err(de::Error::custom(
+                            "color curve points must use `#rrggbb` string values",
+                        ));
+                    };
+                    CurveValue::Color(Color::parse(raw_color).map_err(de::Error::custom)?)
+                }
+            };
+            points.push(CurvePoint {
+                time: point.time,
+                value,
+            });
+        }
+        Ok(Self {
+            value_type: raw.value_type,
+            points,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CurvePoint {
     pub time: f64,
-    pub value: f64,
+    pub value: CurveValue,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -686,11 +902,28 @@ pub struct CurvePoint {
     deserialize = "M::EffectParamCurve: Deserialize<'de>"
 ))]
 pub enum EffectParam<M: ModelMode = Authored> {
-    Integer { value: u64 },
-    Float { value: f64 },
-    Flags { value: Flags },
-    Color { value: Color },
-    Curve { curve: M::EffectParamCurve },
+    Integer {
+        value: u64,
+    },
+    Float {
+        value: f64,
+    },
+    #[serde(rename = "bool")]
+    Boolean {
+        value: bool,
+    },
+    Enum {
+        value: String,
+    },
+    Flags {
+        value: Flags,
+    },
+    Color {
+        value: Color,
+    },
+    Curve {
+        curve: M::EffectParamCurve,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

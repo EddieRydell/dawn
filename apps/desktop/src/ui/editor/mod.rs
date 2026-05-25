@@ -1,7 +1,8 @@
 use std::rc::Rc;
 
+use dawn_project::analysis::{DiagnosticCode, ProjectAnalysis, ProjectDiagnostic};
 use dawn_project::document::{DocumentDescriptor, DocumentViewId};
-use dawn_project::path::ProjectPath;
+use dawn_project::path::{PathStringExt, Utf8PathBuf};
 use floem::event::{Event, EventListener};
 use floem::peniko::Brush;
 use floem::prelude::*;
@@ -22,11 +23,13 @@ pub mod gui;
 pub fn editor_view(
     state: AppSnapshot,
     gui_state: EditorGuiUiState,
+    dropdown_menu: crate::ui::components::dropdown_menu::DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     v_stack((
         tab_strip(state.clone(), Rc::clone(&dispatch)),
-        editor_body(state, gui_state, dispatch).style(|s| s.flex_grow(1.0).min_height(0.0)),
+        editor_body(state, gui_state, dropdown_menu, dispatch)
+            .style(|s| s.flex_grow(1.0).min_height(0.0)),
     ))
     .style(|s| s.height_full().background(theme::color(theme::SURFACE)))
 }
@@ -55,7 +58,7 @@ fn tab_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoVi
                 "{}{}",
                 tab.path
                     .file_name()
-                    .map(|name| name.to_string_lossy().to_string())
+                    .map(str::to_string)
                     .unwrap_or_else(|| tab.path.to_slash_string()),
                 dirty
             );
@@ -179,7 +182,7 @@ fn editor_mode_button(
 
 fn editor_tab(
     title: String,
-    path: ProjectPath,
+    path: Utf8PathBuf,
     active: bool,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
@@ -266,6 +269,7 @@ fn close_tab_button(action: impl Fn() + 'static) -> impl IntoView {
 fn editor_body(
     state: AppSnapshot,
     gui_state: EditorGuiUiState,
+    dropdown_menu: crate::ui::components::dropdown_menu::DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     let Some(buffer) = state.active_buffer.clone() else {
@@ -273,15 +277,35 @@ fn editor_body(
     };
 
     match buffer.view_mode {
-        EditorViewMode::Text => source_editor(buffer.path, buffer.text, dispatch).into_any(),
+        EditorViewMode::Text => {
+            if is_effect_script_path(&buffer.path) {
+                effect_script_editor(
+                    buffer.path,
+                    buffer.text,
+                    state.analysis,
+                    state.diagnostics,
+                    dispatch,
+                )
+                .into_any()
+            } else {
+                source_editor(buffer.path, buffer.text, dispatch).into_any()
+            }
+        }
         EditorViewMode::Gui => {
             if !is_dawn_path(&buffer.path) {
                 return source_editor(buffer.path, buffer.text, dispatch).into_any();
             }
             if state.active_layout_document.is_some() {
-                crate::ui::editor::gui::layout::layout_viewer(state, gui_state, dispatch).into_any()
+                crate::ui::editor::gui::layout::layout_viewer(
+                    state,
+                    gui_state,
+                    dropdown_menu,
+                    dispatch,
+                )
+                .into_any()
             } else if state.active_fixture_document.is_some() {
-                crate::ui::editor::gui::fixture::fixture_viewer(state, dispatch).into_any()
+                crate::ui::editor::gui::fixture::fixture_viewer(state, gui_state, dispatch)
+                    .into_any()
             } else {
                 center_message("No GUI editor for this document").into_any()
             }
@@ -290,7 +314,7 @@ fn editor_body(
 }
 
 fn source_editor(
-    path: ProjectPath,
+    path: Utf8PathBuf,
     text: String,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
@@ -319,6 +343,111 @@ fn source_editor(
         })
 }
 
+fn effect_script_editor(
+    path: Utf8PathBuf,
+    text: String,
+    analysis: Option<ProjectAnalysis>,
+    diagnostics: Vec<ProjectDiagnostic>,
+    dispatch: crate::ui::UiDispatch,
+) -> impl IntoView {
+    v_stack((
+        effect_script_header(path.clone(), analysis, diagnostics),
+        source_editor(path, text, dispatch).style(|s| s.flex_grow(1.0).min_height(0.0)),
+    ))
+    .style(|s| s.width_full().height_full())
+}
+
+fn effect_script_header(
+    path: Utf8PathBuf,
+    analysis: Option<ProjectAnalysis>,
+    diagnostics: Vec<ProjectDiagnostic>,
+) -> impl IntoView {
+    let script = analysis
+        .as_ref()
+        .and_then(|analysis| analysis.scripts.get(&path.to_slash_string()));
+    let script_diagnostics = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.path == path && diagnostic.code == DiagnosticCode::Script)
+        .collect::<Vec<_>>();
+    let has_script_errors = !script_diagnostics.is_empty();
+    let status = if script_diagnostics.is_empty()
+        && script
+            .as_ref()
+            .is_some_and(|script| script.result.as_ref().is_ok())
+    {
+        "Compiled"
+    } else {
+        "Compile errors"
+    };
+    let name = script
+        .and_then(|script| script.result.as_ref().ok())
+        .map(|script| script.name.clone())
+        .unwrap_or_else(|| "Effect script".to_string());
+    let params = script
+        .and_then(|script| script.result.as_ref().ok())
+        .map(|script| {
+            script
+                .params
+                .iter()
+                .map(|param| format!("{}: {}", param.name, param.value_type))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|summary| !summary.is_empty())
+        .unwrap_or_else(|| "No parameters".to_string());
+    let diagnostic_summary = match script_diagnostics.len() {
+        0 => "No script diagnostics".to_string(),
+        1 => script_diagnostics[0].message.clone(),
+        count => format!("{count} script diagnostics"),
+    };
+
+    v_stack((
+        h_stack((
+            ui_static_label(status).style(move |s| {
+                let color = if !has_script_errors {
+                    theme::color(theme::TEXT)
+                } else {
+                    theme::color(theme::DANGER)
+                };
+                s.font_size(theme::FONT_SMALL)
+                    .font_bold()
+                    .color(color)
+                    .set(Foreground, Brush::Solid(color))
+            }),
+            ui_static_label(name).style(|s| {
+                s.font_size(theme::FONT_SMALL)
+                    .font_bold()
+                    .color(theme::color(theme::TEXT))
+                    .set(Foreground, Brush::Solid(theme::color(theme::TEXT)))
+            }),
+        ))
+        .style(|s| s.items_center().gap(theme::SPACE_8)),
+        ui_static_label(params).style(|s| {
+            s.width_full()
+                .font_size(theme::FONT_SMALL)
+                .color(theme::color(theme::MUTED))
+                .set(Foreground, Brush::Solid(theme::color(theme::MUTED)))
+                .text_ellipsis()
+        }),
+        ui_static_label(diagnostic_summary).style(|s| {
+            s.width_full()
+                .font_size(theme::FONT_SMALL)
+                .color(theme::color(theme::MUTED))
+                .set(Foreground, Brush::Solid(theme::color(theme::MUTED)))
+                .text_ellipsis()
+        }),
+    ))
+    .style(|s| {
+        s.width_full()
+            .padding_horiz(theme::SPACE_10)
+            .padding_vert(theme::SPACE_8)
+            .gap(theme::SPACE_4)
+            .border_bottom(theme::BORDER_WIDTH)
+            .border_color(theme::color(theme::BORDER))
+            .background(theme::color(theme::PANEL))
+    })
+}
+
 fn center_message(message: &'static str) -> impl IntoView {
     container(ui_static_label(message)).style(|s| {
         s.width_full()
@@ -329,9 +458,14 @@ fn center_message(message: &'static str) -> impl IntoView {
     })
 }
 
-fn is_dawn_path(path: &ProjectPath) -> bool {
-    path.as_path()
+fn is_dawn_path(path: &Utf8PathBuf) -> bool {
+    path.as_std_path()
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension == "dawn")
+}
+
+fn is_effect_script_path(path: &Utf8PathBuf) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.ends_with(".effect.dawn"))
 }

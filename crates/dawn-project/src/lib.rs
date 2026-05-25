@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod document;
+pub mod effect_script;
 pub mod fs;
 pub mod load;
 pub mod lower;

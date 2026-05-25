@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    FixturePlacement, Geometry, Point3, Resolved, Transform, BULB_SIZE_UNIT_RADIUS, MIN_BULB_SIZE,
+    FixtureId, FixturePlacement, Geometry, Point3, Resolved, Transform, BULB_SIZE_UNIT_RADIUS,
+    MIN_BULB_SIZE,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -55,7 +56,7 @@ pub struct GeometryRenderPlan {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LayoutFixtureRenderPlan {
-    pub id: String,
+    pub id: FixtureId,
     pub emitters: Vec<GeometryRenderPoint>,
     pub guides: Vec<GeometryRenderGuide>,
     pub bounds: GeometryRenderBounds,
@@ -77,7 +78,7 @@ pub(crate) fn geometry_summary(geometry: &Geometry) -> String {
     }
 }
 
-pub(crate) fn geometry_render_plan(geometry: &Geometry, bulb_size: f64) -> GeometryRenderPlan {
+pub fn geometry_render_plan(geometry: &Geometry, bulb_size: f64) -> GeometryRenderPlan {
     let bulb_radius = bulb_radius(bulb_size);
     let (emitters, guides) = match geometry {
         Geometry::Points { points } => (
@@ -268,7 +269,7 @@ pub fn layout_render_plan(fixtures: &[FixturePlacement<Resolved>]) -> LayoutRend
             let plan = transform_geometry_render_plan(&local_plan, &fixture.transform);
             include_bounds(&mut accumulator, plan.bounds);
             LayoutFixtureRenderPlan {
-                id: fixture.id.clone(),
+                id: fixture.id,
                 emitters: plan.emitters,
                 guides: plan.guides,
                 bounds: plan.bounds,
@@ -283,9 +284,7 @@ pub fn layout_render_plan(fixtures: &[FixturePlacement<Resolved>]) -> LayoutRend
     }
 }
 
-pub(crate) fn layout_render_bounds(
-    fixtures: &[FixturePlacement<Resolved>],
-) -> GeometryRenderBounds {
+pub fn layout_render_bounds(fixtures: &[FixturePlacement<Resolved>]) -> GeometryRenderBounds {
     layout_render_plan(fixtures).bounds
 }
 
