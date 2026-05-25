@@ -7,6 +7,7 @@ use crate::ui::theme;
 
 pub fn workbench_view(
     snapshot: crate::ui::UiSnapshot,
+    dropdown_menu: crate::ui::dropdown_menu::DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     let explorer = crate::ui::project_tree::ExplorerUiState::new();
@@ -20,6 +21,7 @@ pub fn workbench_view(
                     crate::ui::project_tree::project_tree_view(
                         state.clone(),
                         explorer.clone(),
+                        dropdown_menu.clone(),
                         Rc::clone(&dispatch),
                     )
                     .style(move |s| {

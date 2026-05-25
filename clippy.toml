@@ -4,4 +4,8 @@ disallowed-methods = [
   { path = "floem::views::static_label", reason = "use crate::ui::components::ui_static_label so Dawn theme defaults are enforced" },
   { path = "floem::views::text_input", reason = "use crate::ui::components::ui_text_input so Dawn theme defaults are enforced" },
   { path = "floem::views::text_editor", reason = "use crate::ui::components::ui_text_editor so Dawn theme defaults are enforced" },
+  { path = "floem::menu::Menu::new", reason = "use crate::ui::dropdown_menu::DropdownMenuController for Dawn-rendered command menus" },
+  { path = "floem::menu::MenuItem::new", reason = "use crate::ui::dropdown_menu::DropdownMenuEntry for Dawn-rendered command menus" },
+  { path = "floem::action::add_overlay", reason = "only crate::ui::dropdown_menu owns command menu overlays" },
+  { path = "floem::action::remove_overlay", reason = "only crate::ui::dropdown_menu owns command menu overlays" },
 ]

@@ -1,6 +1,8 @@
 use floem::peniko::{Brush, Color};
-use floem::style::{CursorStyle, Foreground, Style};
+use floem::style::{CursorStyle, Foreground, Selectable, Style};
 use floem::views::{scroll, ButtonClass, LabelClass, PlaceholderTextClass, TextInputClass};
+
+use crate::ui::dropdown_menu::DropdownMenuStyle;
 
 pub const BACKGROUND: &str = "#111111";
 pub const SURFACE: &str = "#232323";
@@ -40,6 +42,10 @@ pub const WINDOW_HEIGHT: f64 = 800.0;
 pub const TITLE_BAR_HEIGHT: f64 = 32.0;
 pub const STATUS_BAR_HEIGHT: f64 = 26.0;
 pub const MENU_TAB_HEIGHT: f64 = 24.0;
+pub const MENU_POPOUT_WIDTH: f64 = 220.0;
+pub const MENU_ITEM_HEIGHT: f64 = 26.0;
+pub const MENU_SEPARATOR_HEIGHT: f64 = 1.0;
+pub const DROPDOWN_MENU_Z_INDEX: i32 = 999;
 pub const TITLE_BUTTON_WIDTH: f64 = 42.0;
 pub const TAB_STRIP_HEIGHT: f64 = 34.0;
 pub const TAB_HEIGHT: f64 = 32.0;
@@ -98,12 +104,37 @@ pub fn app_root_style(s: Style) -> Style {
         .apply(control_class_style())
 }
 
+pub fn dropdown_menu_style() -> DropdownMenuStyle {
+    DropdownMenuStyle {
+        initial_window_size: floem::kurbo::Size::new(WINDOW_WIDTH, WINDOW_HEIGHT),
+        font_family: APP_FONT.to_string(),
+        font_size: FONT_UI,
+        line_height: LINE_HEIGHT_UI as f32,
+        width: MENU_POPOUT_WIDTH,
+        row_height: MENU_ITEM_HEIGHT,
+        padding: SPACE_4,
+        row_padding_horiz: SPACE_8,
+        border_width: BORDER_WIDTH,
+        border_radius: CONTROL_RADIUS,
+        background: color(SURFACE_PANEL),
+        text: color(TEXT),
+        disabled_text: color(TEXT_DISABLED),
+        border: color(BORDER),
+        active_background: color(SURFACE_CONTROL_HOVER),
+        separator: color(BORDER),
+        separator_height: MENU_SEPARATOR_HEIGHT,
+        separator_margin_vert: SPACE_4,
+        z_index: DROPDOWN_MENU_Z_INDEX,
+    }
+}
+
 pub fn control_class_style() -> Style {
     let label_style = Style::new()
         .font_family(APP_FONT.to_string())
         .font_size(FONT_UI)
         .line_height(LINE_HEIGHT_UI as f32)
-        .color(color(TEXT));
+        .color(color(TEXT))
+        .set(Selectable, false);
 
     let button_style = Style::new()
         .height(ROW_HEIGHT)

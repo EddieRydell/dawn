@@ -1,10 +1,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use floem::event::{Event, EventListener};
 use floem::file::FileDialogOptions;
 use floem::file_action::open_file;
 use floem::kurbo::Size;
-use floem::menu::{Menu, MenuItem};
 use floem::prelude::*;
 use floem::window::{close_window, WindowConfig, WindowId};
 use floem::{action, views::drag_window_area, Application};
@@ -13,6 +13,7 @@ use crate::actions::AppAction;
 use crate::app_model::AppModel;
 use crate::editor_session::EditorViewMode;
 use crate::ui::components::{ui_button, ui_label, ui_static_label};
+use crate::ui::dropdown_menu::{dropdown_menu_layer, DropdownMenuController, DropdownMenuEntry};
 use crate::ui::theme;
 
 pub fn run() {
@@ -29,6 +30,7 @@ pub fn run() {
 fn app_view(window_id: WindowId) -> impl IntoView {
     let model = Rc::new(RefCell::new(AppModel::default()));
     let snapshot = RwSignal::new(model.borrow().snapshot());
+    let dropdown_menu = DropdownMenuController::new(theme::dropdown_menu_style());
 
     let dispatch = {
         let model = Rc::clone(&model);
@@ -41,17 +43,32 @@ fn app_view(window_id: WindowId) -> impl IntoView {
         }) as crate::ui::UiDispatch
     };
 
-    v_stack((
-        title_bar(window_id, snapshot, Rc::clone(&dispatch)),
-        crate::ui::workbench::workbench_view(snapshot, Rc::clone(&dispatch)),
-        status_bar(snapshot),
+    stack((
+        v_stack((
+            title_bar(
+                window_id,
+                snapshot,
+                dropdown_menu.clone(),
+                Rc::clone(&dispatch),
+            ),
+            crate::ui::workbench::workbench_view(
+                snapshot,
+                dropdown_menu.clone(),
+                Rc::clone(&dispatch),
+            ),
+            status_bar(snapshot),
+        ))
+        .style(|s| s.size_full()),
+        dropdown_menu_layer(dropdown_menu.clone()),
     ))
+    .on_resize(move |rect| dropdown_menu.set_window_size(rect.size()))
     .style(theme::app_root_style)
 }
 
 fn title_bar(
     window_id: WindowId,
     snapshot: crate::ui::UiSnapshot,
+    dropdown_menu: DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     let close_dispatch = Rc::clone(&dispatch);
@@ -64,11 +81,23 @@ fn title_bar(
                     .margin_right(theme::SPACE_10)
                     .padding_left(theme::SPACE_10)
             }),
-            menu_tab("File", file_menu(Rc::clone(&dispatch))),
-            menu_tab("Edit", edit_menu(Rc::clone(&dispatch))),
-            menu_tab("View", view_menu(snapshot, Rc::clone(&dispatch))),
-            menu_tab("Run", run_menu(Rc::clone(&dispatch))),
-            menu_tab("Help", help_menu(Rc::clone(&dispatch))),
+            menu_tab(
+                "File",
+                dropdown_menu.clone(),
+                file_menu(Rc::clone(&dispatch)),
+            ),
+            menu_tab(
+                "Edit",
+                dropdown_menu.clone(),
+                edit_menu(Rc::clone(&dispatch)),
+            ),
+            menu_tab(
+                "View",
+                dropdown_menu.clone(),
+                view_menu(snapshot, Rc::clone(&dispatch)),
+            ),
+            menu_tab("Run", dropdown_menu.clone(), run_menu(Rc::clone(&dispatch))),
+            menu_tab("Help", dropdown_menu, help_menu(Rc::clone(&dispatch))),
         ))
         .style(|s| s.height_full().items_center().gap(theme::SPACE_2)),
         drag_window_area(empty()).style(|s| s.flex_grow(1.0).height_full().min_width(0.0)),
@@ -99,16 +128,27 @@ fn title_bar(
     })
 }
 
-fn menu_tab(label_text: &'static str, menu: impl Fn() -> Menu + 'static) -> impl IntoView {
-    container(ui_static_label(label_text).style(|s| s.font_size(theme::FONT_SMALL)))
-        .style(|s| {
-            s.height(theme::MENU_TAB_HEIGHT)
-                .items_center()
-                .padding_horiz(theme::SPACE_9)
-                .background(theme::color(theme::PANEL_DARK))
-                .hover(|s| s.background(theme::color(theme::SELECTED)))
-        })
-        .popout_menu(menu)
+fn menu_tab(
+    label_text: &'static str,
+    dropdown_menu: DropdownMenuController,
+    menu: impl Fn() -> Vec<DropdownMenuEntry> + 'static,
+) -> impl IntoView {
+    let tab = container(ui_static_label(label_text).style(|s| s.font_size(theme::FONT_SMALL)));
+    let tab_id = tab.id();
+    tab.on_event_stop(EventListener::PointerDown, move |event| {
+        if let Event::PointerDown(event) = event {
+            if event.button.is_primary() {
+                dropdown_menu.open_below_view(tab_id, menu());
+            }
+        }
+    })
+    .style(|s| {
+        s.height(theme::MENU_TAB_HEIGHT)
+            .items_center()
+            .padding_horiz(theme::SPACE_9)
+            .background(theme::color(theme::PANEL_DARK))
+            .hover(|s| s.background(theme::color(theme::SELECTED)))
+    })
 }
 
 fn title_button(label: &'static str) -> floem::views::Button {
@@ -121,7 +161,7 @@ fn title_button(label: &'static str) -> floem::views::Button {
     })
 }
 
-fn file_menu(dispatch: crate::ui::UiDispatch) -> impl Fn() -> Menu {
+fn file_menu(dispatch: crate::ui::UiDispatch) -> impl Fn() -> Vec<DropdownMenuEntry> {
     move || {
         let open_project = Rc::clone(&dispatch);
         let close_project = Rc::clone(&dispatch);
@@ -129,8 +169,8 @@ fn file_menu(dispatch: crate::ui::UiDispatch) -> impl Fn() -> Menu {
         let save = Rc::clone(&dispatch);
         let settings = Rc::clone(&dispatch);
 
-        Menu::new("File")
-            .entry(MenuItem::new("Open Project").action(move || {
+        vec![
+            DropdownMenuEntry::item("Open Project", true, move || {
                 let open_project = Rc::clone(&open_project);
                 open_file(
                     FileDialogOptions::new()
@@ -143,36 +183,37 @@ fn file_menu(dispatch: crate::ui::UiDispatch) -> impl Fn() -> Menu {
                         }
                     },
                 );
-            }))
-            .entry(MenuItem::new("Close Project").action(move || {
+            }),
+            DropdownMenuEntry::item("Close Project", true, move || {
                 close_project(AppAction::CloseProject);
-            }))
-            .entry(MenuItem::new("New Project").action(move || {
+            }),
+            DropdownMenuEntry::item("New Project", true, move || {
                 new_project(AppAction::NewProject);
-            }))
-            .separator()
-            .entry(MenuItem::new("Save").action(move || {
+            }),
+            DropdownMenuEntry::separator(),
+            DropdownMenuEntry::item("Save", true, move || {
                 save(AppAction::SaveActiveFile);
-            }))
-            .entry(MenuItem::new("Settings").action(move || {
+            }),
+            DropdownMenuEntry::item("Settings", true, move || {
                 settings(AppAction::OpenSettings);
-            }))
+            }),
+        ]
     }
 }
 
-fn edit_menu(dispatch: crate::ui::UiDispatch) -> impl Fn() -> Menu {
+fn edit_menu(dispatch: crate::ui::UiDispatch) -> impl Fn() -> Vec<DropdownMenuEntry> {
     move || {
         let check = Rc::clone(&dispatch);
-        Menu::new("Edit").entry(MenuItem::new("Check").action(move || {
+        vec![DropdownMenuEntry::item("Check", true, move || {
             check(AppAction::Check);
-        }))
+        })]
     }
 }
 
 fn view_menu(
     snapshot: crate::ui::UiSnapshot,
     dispatch: crate::ui::UiDispatch,
-) -> impl Fn() -> Menu {
+) -> impl Fn() -> Vec<DropdownMenuEntry> {
     move || {
         let gui = Rc::clone(&dispatch);
         let text = Rc::clone(&dispatch);
@@ -180,61 +221,63 @@ fn view_menu(
         let toggle_inspector = Rc::clone(&dispatch);
         let reset_layout = Rc::clone(&dispatch);
 
-        Menu::new("View")
-            .entry(MenuItem::new("GUI").action(move || {
+        vec![
+            DropdownMenuEntry::item("GUI", true, move || {
                 if let Some(path) = snapshot.get().active_file {
                     gui(AppAction::SetEditorViewMode {
                         path,
                         mode: EditorViewMode::Gui,
                     });
                 }
-            }))
-            .entry(MenuItem::new("Text").action(move || {
+            }),
+            DropdownMenuEntry::item("Text", true, move || {
                 if let Some(path) = snapshot.get().active_file {
                     text(AppAction::SetEditorViewMode {
                         path,
                         mode: EditorViewMode::Text,
                     });
                 }
-            }))
-            .separator()
-            .entry(MenuItem::new("Toggle Project Tree").action(move || {
+            }),
+            DropdownMenuEntry::separator(),
+            DropdownMenuEntry::item("Toggle Project Tree", true, move || {
                 toggle_project_tree(AppAction::ToggleProjectTree);
-            }))
-            .entry(MenuItem::new("Toggle Inspector").action(move || {
+            }),
+            DropdownMenuEntry::item("Toggle Inspector", true, move || {
                 toggle_inspector(AppAction::ToggleInspector);
-            }))
-            .entry(MenuItem::new("Reset Layout").action(move || {
+            }),
+            DropdownMenuEntry::item("Reset Layout", true, move || {
                 reset_layout(AppAction::ResetLayout);
-            }))
+            }),
+        ]
     }
 }
 
-fn run_menu(dispatch: crate::ui::UiDispatch) -> impl Fn() -> Menu {
+fn run_menu(dispatch: crate::ui::UiDispatch) -> impl Fn() -> Vec<DropdownMenuEntry> {
     move || {
         let play = Rc::clone(&dispatch);
         let pause = Rc::clone(&dispatch);
         let stop = Rc::clone(&dispatch);
 
-        Menu::new("Run")
-            .entry(MenuItem::new("Play").action(move || {
+        vec![
+            DropdownMenuEntry::item("Play", true, move || {
                 play(AppAction::Play);
-            }))
-            .entry(MenuItem::new("Pause").action(move || {
+            }),
+            DropdownMenuEntry::item("Pause", true, move || {
                 pause(AppAction::Pause);
-            }))
-            .entry(MenuItem::new("Stop").action(move || {
+            }),
+            DropdownMenuEntry::item("Stop", true, move || {
                 stop(AppAction::Stop);
-            }))
+            }),
+        ]
     }
 }
 
-fn help_menu(dispatch: crate::ui::UiDispatch) -> impl Fn() -> Menu {
+fn help_menu(dispatch: crate::ui::UiDispatch) -> impl Fn() -> Vec<DropdownMenuEntry> {
     move || {
         let about = Rc::clone(&dispatch);
-        Menu::new("Help").entry(MenuItem::new("About Dawn").action(move || {
+        vec![DropdownMenuEntry::item("About Dawn", true, move || {
             about(AppAction::About);
-        }))
+        })]
     }
 }
 

@@ -3,15 +3,15 @@ use std::rc::Rc;
 
 use dawn_project::fs::{ProjectFsEntry, ProjectFsEntryKind};
 use dawn_project::path::ProjectPath;
-use floem::event::{Event, EventListener};
+use floem::event::{Event, EventListener, EventPropagation};
 use floem::keyboard::{Key, Modifiers, NamedKey};
-use floem::menu::{Menu, MenuItem};
 use floem::prelude::*;
 use lucide_floem::Icon;
 
 use crate::actions::AppAction;
 use crate::app_model::AppSnapshot;
 use crate::ui::components::{ui_label, ui_static_label, ui_text_input};
+use crate::ui::dropdown_menu::{DropdownMenuController, DropdownMenuEntry};
 
 #[derive(Clone)]
 pub struct ExplorerUiState {
@@ -89,6 +89,7 @@ impl Default for ExplorerUiState {
 pub fn project_tree_view(
     state: AppSnapshot,
     explorer: ExplorerUiState,
+    dropdown_menu: DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     let Some(root) = state.project_root.clone() else {
@@ -128,10 +129,12 @@ pub fn project_tree_view(
                     v_stack_from_iter(render.rows.into_iter().map({
                         let explorer = rows_explorer.clone();
                         let dispatch = Rc::clone(&rows_dispatch);
+                        let dropdown_menu = dropdown_menu.clone();
                         move |row| {
                             explorer_row(
                                 row,
                                 explorer.clone(),
+                                dropdown_menu.clone(),
                                 Rc::clone(&dispatch),
                                 &expanded,
                                 selected.as_ref(),
@@ -154,6 +157,7 @@ pub fn project_tree_view(
 fn explorer_row(
     row: ExplorerRow,
     explorer: ExplorerUiState,
+    dropdown_menu: DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
     expanded: &HashSet<String>,
     selected_path: Option<&ProjectPath>,
@@ -175,13 +179,13 @@ fn explorer_row(
     let row_dispatch = Rc::clone(&dispatch);
     let drag_state = explorer.clone();
     let drop_state = explorer.clone();
-    let context_state = explorer.clone();
     let pointer_down_state = explorer.clone();
+    let pointer_up_state = explorer.clone();
     let path_for_click = path.clone();
     let path_for_drag = path.clone();
     let path_for_drop = path.clone();
-    let path_for_menu = path.clone();
     let path_for_pointer_down = path.clone();
+    let path_for_pointer_up = path.clone();
     let drop_dispatch = Rc::clone(&dispatch);
     let menu_dispatch = Rc::clone(&dispatch);
 
@@ -194,67 +198,78 @@ fn explorer_row(
             )
         }),
         ui_label(move || row.name.clone()).style(|s| s.flex_grow(1.0).min_width(0.0)),
-    ))
-    .on_click_stop(move |_| {
-        open_state.selected.set(Some(path_for_click.clone()));
-        if is_dir {
-            toggle_expanded(&open_state.expanded, &path_for_click.to_slash_string());
-        } else {
-            row_dispatch(AppAction::OpenFile(path_for_click.clone()));
-        }
-    })
-    .on_event_stop(EventListener::DragStart, move |_| {
-        drag_state.drag_source.set(Some(path_for_drag.clone()));
-    })
-    .on_event_stop(EventListener::Drop, move |_| {
-        if is_dir {
-            if let Some(source) = drop_state.drag_source.get() {
-                if source != path_for_drop && !path_for_drop.starts_with(&source) {
-                    drop_dispatch(AppAction::MovePaths {
-                        paths: vec![source],
-                        new_parent: path_for_drop.clone(),
-                    });
-                    drop_state.drag_source.set(None);
+    ));
+    let row_view_id = row_view.id();
+    let row_view = row_view
+        .on_click_stop(move |_| {
+            open_state.selected.set(Some(path_for_click.clone()));
+            if is_dir {
+                toggle_expanded(&open_state.expanded, &path_for_click.to_slash_string());
+            } else {
+                row_dispatch(AppAction::OpenFile(path_for_click.clone()));
+            }
+        })
+        .on_event_stop(EventListener::DragStart, move |_| {
+            drag_state.drag_source.set(Some(path_for_drag.clone()));
+        })
+        .on_event_stop(EventListener::Drop, move |_| {
+            if is_dir {
+                if let Some(source) = drop_state.drag_source.get() {
+                    if source != path_for_drop && !path_for_drop.starts_with(&source) {
+                        drop_dispatch(AppAction::MovePaths {
+                            paths: vec![source],
+                            new_parent: path_for_drop.clone(),
+                        });
+                        drop_state.drag_source.set(None);
+                    }
                 }
             }
-        }
-    })
-    .draggable()
-    .on_event_cont(EventListener::PointerDown, move |event| {
-        if let Event::PointerDown(event) = event {
-            if event.button.is_secondary() {
-                pointer_down_state
-                    .selected
-                    .set(Some(path_for_pointer_down.clone()));
+        })
+        .draggable()
+        .on_event_cont(EventListener::PointerDown, move |event| {
+            if let Event::PointerDown(event) = event {
+                if event.button.is_secondary() {
+                    pointer_down_state
+                        .selected
+                        .set(Some(path_for_pointer_down.clone()));
+                }
             }
-        }
-    })
-    .context_menu(move || {
-        context_state.selected.set(Some(path_for_menu.clone()));
-        row_menu(
-            path_for_menu.clone(),
-            is_dir,
-            context_state.clone(),
-            Rc::clone(&menu_dispatch),
-        )
-    })
-    .style(move |s| {
-        let bg = if selected {
-            crate::ui::theme::color(crate::ui::theme::SELECTED)
-        } else {
-            crate::ui::theme::color(crate::ui::theme::SURFACE)
-        };
-        s.width_full()
-            .height(crate::ui::theme::PROJECT_ROW_HEIGHT)
-            .items_center()
-            .gap(crate::ui::theme::SPACE_5)
-            .padding_left(
-                crate::ui::theme::PROJECT_INDENT_BASE
-                    + row.depth as f64 * crate::ui::theme::PROJECT_INDENT_STEP,
-            )
-            .padding_right(crate::ui::theme::SPACE_4)
-            .background(bg)
-    });
+        })
+        .on_event(EventListener::PointerUp, move |event| {
+            if let Event::PointerUp(event) = event {
+                if event.button.is_secondary() {
+                    dropdown_menu.open_at_view_point(
+                        row_view_id,
+                        event.pos,
+                        row_menu_entries(
+                            path_for_pointer_up.clone(),
+                            is_dir,
+                            pointer_up_state.clone(),
+                            Rc::clone(&menu_dispatch),
+                        ),
+                    );
+                    return EventPropagation::Stop;
+                }
+            }
+            EventPropagation::Continue
+        })
+        .style(move |s| {
+            let bg = if selected {
+                crate::ui::theme::color(crate::ui::theme::SELECTED)
+            } else {
+                crate::ui::theme::color(crate::ui::theme::SURFACE)
+            };
+            s.width_full()
+                .height(crate::ui::theme::PROJECT_ROW_HEIGHT)
+                .items_center()
+                .gap(crate::ui::theme::SPACE_5)
+                .padding_left(
+                    crate::ui::theme::PROJECT_INDENT_BASE
+                        + row.depth as f64 * crate::ui::theme::PROJECT_INDENT_STEP,
+                )
+                .padding_right(crate::ui::theme::SPACE_4)
+                .background(bg)
+        });
 
     if let Some(PendingExplorerEdit::CreateFile(parent)) = pending {
         if parent == &path {
@@ -378,12 +393,12 @@ fn edit_row(
         .style(|s| s.width_full().height(crate::ui::theme::ROW_HEIGHT))
 }
 
-fn row_menu(
+fn row_menu_entries(
     path: ProjectPath,
     is_dir: bool,
     explorer: ExplorerUiState,
     dispatch: crate::ui::UiDispatch,
-) -> Menu {
+) -> Vec<DropdownMenuEntry> {
     let create_parent = if is_dir {
         path.clone()
     } else {
@@ -399,32 +414,29 @@ fn row_menu(
     let delete_path = path.clone();
     let delete_dispatch = Rc::clone(&dispatch);
 
-    Menu::new("Project")
-        .entry(MenuItem::new("Add File").action(move || {
+    vec![
+        DropdownMenuEntry::item("Add File", true, move || {
             file_state
                 .pending
                 .set(Some(PendingExplorerEdit::CreateFile(file_parent.clone())));
             file_state.pending_name.set("untitled".to_string());
-        }))
-        .entry(MenuItem::new("Add Directory").action(move || {
+        }),
+        DropdownMenuEntry::item("Add Directory", true, move || {
             folder_state
                 .pending
                 .set(Some(PendingExplorerEdit::CreateDirectory(
                     folder_parent.clone(),
                 )));
             folder_state.pending_name.set("folder".to_string());
-        }))
-        .separator()
-        .entry(
-            MenuItem::new("Rename")
-                .enabled(can_modify)
-                .action(move || begin_rename(&rename_state, rename_path.clone())),
-        )
-        .entry(
-            MenuItem::new("Remove")
-                .enabled(can_modify)
-                .action(move || delete_dispatch(AppAction::DeletePath(delete_path.clone()))),
-        )
+        }),
+        DropdownMenuEntry::separator(),
+        DropdownMenuEntry::item("Rename", can_modify, move || {
+            begin_rename(&rename_state, rename_path.clone())
+        }),
+        DropdownMenuEntry::item("Remove", can_modify, move || {
+            delete_dispatch(AppAction::DeletePath(delete_path.clone()))
+        }),
+    ]
 }
 
 fn begin_rename(explorer: &ExplorerUiState, path: ProjectPath) {
