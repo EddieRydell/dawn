@@ -5,7 +5,6 @@ use floem::file::FileDialogOptions;
 use floem::file_action::open_file;
 use floem::kurbo::Size;
 use floem::menu::{Menu, MenuItem};
-use floem::peniko::Color;
 use floem::prelude::*;
 use floem::window::{close_window, WindowConfig, WindowId};
 use floem::{action, views::drag_window_area, Application};
@@ -18,7 +17,7 @@ use crate::ui::theme;
 pub fn run() {
     let config = WindowConfig::default()
         .title("Dawn")
-        .size(Size::new(1240.0, 800.0))
+        .size(Size::new(theme::WINDOW_WIDTH, theme::WINDOW_HEIGHT))
         .resizable(true)
         .undecorated(true)
         .undecorated_shadow(true);
@@ -48,7 +47,9 @@ fn app_view(window_id: WindowId) -> impl IntoView {
     .style(move |s| {
         s.size_full()
             .background(theme::color(theme::BACKGROUND))
-            .font_family("Segoe UI".to_string())
+            .font_family(theme::APP_FONT.to_string())
+            .font_size(theme::FONT_UI)
+            .line_height(theme::LINE_HEIGHT_UI as f32)
             .color(theme::color(theme::TEXT))
     })
 }
@@ -63,10 +64,10 @@ fn title_bar(
     h_stack((
         h_stack((
             static_label("Dawn").style(|s| {
-                s.font_size(12.0)
+                s.font_size(theme::FONT_SMALL)
                     .font_bold()
-                    .margin_right(10.0)
-                    .padding_left(10.0)
+                    .margin_right(theme::SPACE_10)
+                    .padding_left(theme::SPACE_10)
             }),
             menu_tab("File", file_menu(Rc::clone(&dispatch))),
             menu_tab("Edit", edit_menu(Rc::clone(&dispatch))),
@@ -74,25 +75,8 @@ fn title_bar(
             menu_tab("Run", run_menu(Rc::clone(&dispatch))),
             menu_tab("Help", help_menu(Rc::clone(&dispatch))),
         ))
-        .style(|s| s.height_full().items_center().gap(2.0)),
-        drag_window_area(
-            label(move || {
-                snapshot
-                    .get()
-                    .active_file
-                    .map(|path| format!("Dawn - {}", path.to_slash_string()))
-                    .unwrap_or_else(|| "Dawn".to_string())
-            })
-            .style(|s| {
-                s.width_full()
-                    .height_full()
-                    .items_center()
-                    .justify_center()
-                    .font_size(12.0)
-                    .color(theme::color(theme::MUTED))
-            }),
-        )
-        .style(|s| s.flex_grow(1.0).height_full().min_width(0.0)),
+        .style(|s| s.height_full().items_center().gap(theme::SPACE_2)),
+        drag_window_area(empty()).style(|s| s.flex_grow(1.0).height_full().min_width(0.0)),
         h_stack((
             title_button("_").action(action::minimize_window),
             title_button("[]").action(action::toggle_window_maximized),
@@ -104,28 +88,28 @@ fn title_bar(
                 .style(|s| {
                     s.hover(|s| {
                         s.background(theme::color(theme::DANGER))
-                            .color(Color::WHITE)
+                            .color(theme::color(theme::TEXT_INVERTED))
                     })
                 }),
         ))
         .style(|s| s.height_full().items_center()),
     ))
     .style(move |s| {
-        s.height(32.0)
+        s.height(theme::TITLE_BAR_HEIGHT)
             .width_full()
             .items_center()
-            .border_bottom(1.0)
+            .border_bottom(theme::BORDER_WIDTH)
             .border_color(theme::color(theme::BORDER))
             .background(theme::color(theme::PANEL_DARK))
     })
 }
 
 fn menu_tab(label_text: &'static str, menu: impl Fn() -> Menu + 'static) -> impl IntoView {
-    container(static_label(label_text))
+    container(static_label(label_text).style(|s| s.font_size(theme::FONT_SMALL)))
         .style(|s| {
-            s.height(24.0)
+            s.height(theme::MENU_TAB_HEIGHT)
                 .items_center()
-                .padding_horiz(9.0)
+                .padding_horiz(theme::SPACE_9)
                 .background(theme::color(theme::PANEL_DARK))
                 .hover(|s| s.background(theme::color(theme::SELECTED)))
         })
@@ -134,9 +118,9 @@ fn menu_tab(label_text: &'static str, menu: impl Fn() -> Menu + 'static) -> impl
 
 fn title_button(label: &'static str) -> floem::views::Button {
     button(label).style(|s| {
-        s.width(42.0)
-            .height(32.0)
-            .border_radius(0.0)
+        s.width(theme::TITLE_BUTTON_WIDTH)
+            .height(theme::TITLE_BAR_HEIGHT)
+            .border_radius(theme::SQUARE_RADIUS)
             .background(theme::color(theme::PANEL_DARK))
             .hover(|s| s.background(theme::color(theme::SELECTED)))
     })
@@ -267,8 +251,8 @@ fn status_bar(snapshot: crate::ui::UiSnapshot) -> impl IntoView {
             match snapshot.analysis {
                 Some(analysis) => format!(
                     "{} files  {} objects  {} diagnostics",
-                    analysis.reachable_file_count,
-                    analysis.object_count,
+                    analysis.reachable_file_count(),
+                    analysis.object_count(),
                     snapshot.diagnostics.len()
                 ),
                 None => "No analysis".to_string(),
@@ -276,14 +260,14 @@ fn status_bar(snapshot: crate::ui::UiSnapshot) -> impl IntoView {
         }),
     ))
     .style(|s| {
-        s.height(26.0)
+        s.height(theme::STATUS_BAR_HEIGHT)
             .width_full()
             .items_center()
             .justify_between()
-            .padding_horiz(10.0)
-            .border_top(1.0)
+            .padding_horiz(theme::SPACE_10)
+            .border_top(theme::BORDER_WIDTH)
             .border_color(theme::color(theme::BORDER))
-            .background(Color::rgb8(238, 238, 236))
-            .font_size(12.0)
+            .background(theme::color(theme::STATUS_BAR))
+            .font_size(theme::FONT_SMALL)
     })
 }

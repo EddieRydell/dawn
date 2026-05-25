@@ -56,14 +56,14 @@ pub fn layout_viewer(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> imp
                             button("Left").action(move || {
                                 nudge_left(AppAction::NudgeLayoutFixture {
                                     id: id_left.clone(),
-                                    dx: -0.25,
+                                    dx: -theme::LAYOUT_NUDGE_STEP,
                                     dy: 0.0,
                                 })
                             }),
                             button("Right").action(move || {
                                 nudge_right(AppAction::NudgeLayoutFixture {
                                     id: id_right.clone(),
-                                    dx: 0.25,
+                                    dx: theme::LAYOUT_NUDGE_STEP,
                                     dy: 0.0,
                                 })
                             }),
@@ -71,14 +71,14 @@ pub fn layout_viewer(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> imp
                                 nudge_up(AppAction::NudgeLayoutFixture {
                                     id: id_up.clone(),
                                     dx: 0.0,
-                                    dy: 0.25,
+                                    dy: theme::LAYOUT_NUDGE_STEP,
                                 })
                             }),
                             button("Down").action(move || {
                                 nudge_down(AppAction::NudgeLayoutFixture {
                                     id: id_down.clone(),
                                     dx: 0.0,
-                                    dy: -0.25,
+                                    dy: -theme::LAYOUT_NUDGE_STEP,
                                 })
                             }),
                             button("Duplicate").action(move || {
@@ -92,19 +92,19 @@ pub fn layout_viewer(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> imp
                                 })
                             }),
                         ))
-                        .style(|s| s.gap(4.0).items_center()),
+                        .style(|s| s.gap(theme::SPACE_4).items_center()),
                     ))
                     .style(|s| {
-                        s.padding(8.0)
-                            .gap(3.0)
-                            .border_bottom(1.0)
+                        s.padding(theme::SPACE_8)
+                            .gap(theme::SPACE_3)
+                            .border_bottom(theme::BORDER_WIDTH)
                             .border_color(theme::color(theme::BORDER))
                     })
                 },
             )))
             .style(|s| s.flex_grow(1.0).min_height(0.0)),
         ))
-        .style(|s| s.flex_grow(1.0).min_width(0.0).gap(8.0)),
+        .style(|s| s.flex_grow(1.0).min_width(0.0).gap(theme::SPACE_8)),
         v_stack((
             static_label("Groups").style(|s| s.font_bold()),
             v_stack_from_iter(groups.into_iter().map(|group| {
@@ -112,17 +112,17 @@ pub fn layout_viewer(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> imp
             })),
         ))
         .style(|s| {
-            s.width(240.0)
-                .padding_left(12.0)
-                .gap(6.0)
-                .border_left(1.0)
+            s.width(theme::GROUPS_PANE_WIDTH)
+                .padding_left(theme::SPACE_12)
+                .gap(theme::SPACE_6)
+                .border_left(theme::BORDER_WIDTH)
                 .border_color(theme::color(theme::BORDER))
         }),
     ))
     .style(|s| {
         s.height_full()
-            .padding(12.0)
-            .gap(12.0)
+            .padding(theme::SPACE_12)
+            .gap(theme::SPACE_12)
             .background(theme::color(theme::SURFACE))
     })
     .into_any()

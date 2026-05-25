@@ -1,8 +1,7 @@
 use std::collections::BTreeMap;
 
+use dawn_project::analysis::ProjectOverlay;
 use dawn_project::path::ProjectPath;
-
-use crate::workspace::ProjectOverlayInput;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorViewMode {
@@ -127,12 +126,12 @@ impl EditorSession {
         }
     }
 
-    pub fn dirty_overlays(&self) -> Vec<ProjectOverlayInput> {
+    pub fn dirty_overlays(&self) -> Vec<ProjectOverlay> {
         self.open_editors
             .values()
             .filter(|buffer| buffer.is_dirty())
-            .map(|buffer| ProjectOverlayInput {
-                path: buffer.path.to_slash_string(),
+            .map(|buffer| ProjectOverlay {
+                path: buffer.path.clone(),
                 content: buffer.text.clone(),
             })
             .collect()

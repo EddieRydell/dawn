@@ -1,10 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use dawn_project::analysis::{
-    analyze_project_with_overlays, DiagnosticCode, DiagnosticSeverity, ProjectAnalysis,
-    ProjectDiagnostic, ProjectOverlay, TextRange,
-};
+use dawn_project::analysis::{analyze_project_with_overlays, ProjectAnalysis, ProjectOverlay};
 use dawn_project::document::{
     apply_fixture_document_edit as edit_fixture_document,
     apply_layout_document_edit as edit_layout_document,
@@ -12,9 +9,8 @@ use dawn_project::document::{
     get_layout_document as inspect_layout_document, inspect_document as inspect_dawn_document,
     DocumentDescriptor, DocumentEditResult, FixtureDocument, LayoutDocument,
 };
-use dawn_project::fs::{ProjectFs, ProjectFsEntryKind};
+use dawn_project::fs::{ProjectFs, ProjectFsEntry, ProjectFsEntryKind};
 use dawn_project::path::ProjectPath;
-use serde::Serialize;
 
 #[derive(Debug, Default)]
 pub struct WorkspaceService {
@@ -24,112 +20,14 @@ pub struct WorkspaceService {
     active_sequence: Option<ProjectPath>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ProjectState {
-    pub root: String,
-    pub files: Vec<String>,
-    pub entries: Vec<ProjectEntry>,
-    pub diagnostics: Vec<LanguageProblem>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ProjectEntry {
-    pub path: String,
-    pub kind: ProjectEntryKind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ProjectEntryKind {
-    Directory,
-    File,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FileOperationState {
-    pub project: ProjectState,
-    pub moved: Vec<FileMove>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FileMove {
-    pub old_path: String,
-    pub new_path: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PlannedMove {
     old_path: ProjectPath,
     new_path: ProjectPath,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FrameSummary {
-    pub pixels: u32,
-    pub fixture_spans: u32,
-    pub warnings: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProjectOverlayInput {
-    pub path: String,
-    pub content: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AnalysisState {
-    pub diagnostics: Vec<LanguageProblem>,
-    pub resolved: bool,
-    pub reachable_file_count: u32,
-    pub object_count: u32,
-}
-
-#[derive(Debug, Clone)]
-pub enum LayoutDocumentEditResponse {
-    Applied {
-        serialized_content: String,
-        analysis: AnalysisState,
-        refreshed_document: LayoutDocument,
-    },
-    Blocked {
-        diagnostics: Vec<LanguageProblem>,
-        message: String,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub enum FixtureDocumentEditResponse {
-    Applied {
-        serialized_content: String,
-        analysis: AnalysisState,
-        refreshed_document: FixtureDocument,
-    },
-    Blocked {
-        diagnostics: Vec<LanguageProblem>,
-        message: String,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LanguageProblem {
-    pub path: String,
-    pub severity: DiagnosticSeverity,
-    pub message: String,
-    pub code: DiagnosticCode,
-    pub source: String,
-    pub line: u32,
-    pub column: u32,
-    pub end_line: u32,
-    pub end_column: u32,
-}
-
 impl WorkspaceService {
-    pub fn open_project(&mut self, path: impl AsRef<Path>) -> Result<ProjectState, String> {
+    pub fn open_project(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
         let path = path.as_ref();
         let (root, project_file) = if path.is_dir() {
             (path.to_path_buf(), ProjectPath::new("project.dawn"))
@@ -148,7 +46,7 @@ impl WorkspaceService {
         self.fs = Some(fs);
         self.project_file = Some(project_file);
         self.active_sequence = None;
-        self.snapshot()
+        Ok(())
     }
 
     pub fn close_project(&mut self) {
@@ -158,51 +56,43 @@ impl WorkspaceService {
         self.active_sequence = None;
     }
 
-    pub fn snapshot(&self) -> Result<ProjectState, String> {
-        let root = self.root_display.clone().ok_or_else(no_project)?;
-        let fs = self.project_fs()?;
-        Ok(ProjectState {
-            root,
-            files: list_source_files(fs)?,
-            entries: list_project_entries(fs)?,
-            diagnostics: Vec::new(),
-        })
+    pub fn project_root_display(&self) -> Option<&str> {
+        self.root_display.as_deref()
     }
 
-    pub fn analyze(&self, overlays: Vec<ProjectOverlayInput>) -> Result<AnalysisState, String> {
-        let analysis = analyze_project_with_overlays(
+    pub fn project_entries(&self) -> Result<Vec<ProjectFsEntry>, String> {
+        list_project_entries(self.project_fs()?)
+    }
+
+    pub fn analyze(&self, overlays: Vec<ProjectOverlay>) -> Result<ProjectAnalysis, String> {
+        Ok(analyze_project_with_overlays(
             self.project_fs()?,
             self.current_project_file()?,
             None,
-            project_overlays_from_inputs(overlays)?,
-        );
-        Ok(analysis_to_state(analysis))
+            overlays,
+        ))
     }
 
     pub fn inspect_document(
         &self,
         path: ProjectPath,
-        overlays: Vec<ProjectOverlayInput>,
+        overlays: Vec<ProjectOverlay>,
     ) -> Result<DocumentDescriptor, String> {
-        inspect_dawn_document(
-            self.project_fs()?,
-            path,
-            project_overlays_from_inputs(overlays)?,
-        )
+        inspect_dawn_document(self.project_fs()?, path, overlays)
     }
 
     pub fn layout_document(
         &self,
         path: ProjectPath,
         object_key: &str,
-        overlays: Vec<ProjectOverlayInput>,
+        overlays: Vec<ProjectOverlay>,
     ) -> Result<LayoutDocument, String> {
         inspect_layout_document(
             self.project_fs()?,
             path,
             object_key,
             self.current_project_file()?,
-            project_overlays_from_inputs(overlays)?,
+            overlays,
         )
     }
 
@@ -210,14 +100,9 @@ impl WorkspaceService {
         &self,
         path: ProjectPath,
         selected_object_key: Option<&str>,
-        overlays: Vec<ProjectOverlayInput>,
+        overlays: Vec<ProjectOverlay>,
     ) -> Result<FixtureDocument, String> {
-        inspect_fixture_document(
-            self.project_fs()?,
-            path,
-            selected_object_key,
-            project_overlays_from_inputs(overlays)?,
-        )
+        inspect_fixture_document(self.project_fs()?, path, selected_object_key, overlays)
     }
 
     pub fn apply_layout_edit(
@@ -226,34 +111,19 @@ impl WorkspaceService {
         object_key: &str,
         document: LayoutDocument,
         base_content: String,
-        overlays: Vec<ProjectOverlayInput>,
+        overlays: Vec<ProjectOverlay>,
         allow_breaking_references: bool,
-    ) -> Result<LayoutDocumentEditResponse, String> {
-        let result = edit_layout_document(
+    ) -> Result<DocumentEditResult<LayoutDocument>, String> {
+        edit_layout_document(
             self.project_fs()?,
             path,
             object_key,
             document,
             base_content,
-            project_overlays_from_inputs(overlays)?,
+            overlays,
             self.current_project_file()?,
             allow_breaking_references,
-        )?;
-        Ok(match result {
-            DocumentEditResult::Applied(outcome) => LayoutDocumentEditResponse::Applied {
-                serialized_content: outcome.serialized_content,
-                analysis: analysis_to_state(outcome.analysis),
-                refreshed_document: outcome.refreshed_document,
-            },
-            DocumentEditResult::Blocked(blocked) => LayoutDocumentEditResponse::Blocked {
-                diagnostics: blocked
-                    .diagnostics
-                    .iter()
-                    .map(problem_from_diagnostic)
-                    .collect(),
-                message: blocked.message,
-            },
-        })
+        )
     }
 
     pub fn apply_fixture_edit(
@@ -261,33 +131,18 @@ impl WorkspaceService {
         path: ProjectPath,
         document: FixtureDocument,
         base_content: String,
-        overlays: Vec<ProjectOverlayInput>,
+        overlays: Vec<ProjectOverlay>,
         allow_breaking_references: bool,
-    ) -> Result<FixtureDocumentEditResponse, String> {
-        let result = edit_fixture_document(
+    ) -> Result<DocumentEditResult<FixtureDocument>, String> {
+        edit_fixture_document(
             self.project_fs()?,
             path,
             document,
             base_content,
-            project_overlays_from_inputs(overlays)?,
+            overlays,
             self.current_project_file()?,
             allow_breaking_references,
-        )?;
-        Ok(match result {
-            DocumentEditResult::Applied(outcome) => FixtureDocumentEditResponse::Applied {
-                serialized_content: outcome.serialized_content,
-                analysis: analysis_to_state(outcome.analysis),
-                refreshed_document: outcome.refreshed_document,
-            },
-            DocumentEditResult::Blocked(blocked) => FixtureDocumentEditResponse::Blocked {
-                diagnostics: blocked
-                    .diagnostics
-                    .iter()
-                    .map(problem_from_diagnostic)
-                    .collect(),
-                message: blocked.message,
-            },
-        })
+        )
     }
 
     pub fn read_file(&self, path: ProjectPath) -> Result<String, String> {
@@ -302,11 +157,7 @@ impl WorkspaceService {
             .map_err(|error| error.to_string())
     }
 
-    pub fn create_file(
-        &mut self,
-        parent: ProjectPath,
-        name: &str,
-    ) -> Result<(ProjectState, ProjectPath), String> {
+    pub fn create_file(&mut self, parent: ProjectPath, name: &str) -> Result<ProjectPath, String> {
         let name = file_name_with_default_extension(name)?;
         validate_file_name(&name)?;
         let fs = self.project_fs()?.clone();
@@ -319,14 +170,14 @@ impl WorkspaceService {
         }
         fs.create_file(&path, [])
             .map_err(|error| error.to_string())?;
-        Ok((self.snapshot()?, path))
+        Ok(path)
     }
 
     pub fn create_directory(
         &mut self,
         parent: ProjectPath,
         name: &str,
-    ) -> Result<(ProjectState, ProjectPath), String> {
+    ) -> Result<ProjectPath, String> {
         validate_file_name(name)?;
         let fs = self.project_fs()?.clone();
         if !parent.is_root() && !fs.is_dir(&parent) {
@@ -337,10 +188,10 @@ impl WorkspaceService {
             return Err("target path already exists".to_string());
         }
         fs.create_dir(&path).map_err(|error| error.to_string())?;
-        Ok((self.snapshot()?, path))
+        Ok(path)
     }
 
-    pub fn delete_path(&mut self, path: ProjectPath) -> Result<ProjectState, String> {
+    pub fn delete_path(&mut self, path: ProjectPath) -> Result<(), String> {
         let fs = self.project_fs()?.clone();
         if path.is_root() {
             return Err("cannot delete project root".to_string());
@@ -356,14 +207,14 @@ impl WorkspaceService {
         {
             self.active_sequence = None;
         }
-        self.snapshot()
+        Ok(())
     }
 
     pub fn rename_path(
         &mut self,
         path: ProjectPath,
         new_name: &str,
-    ) -> Result<FileOperationState, String> {
+    ) -> Result<Vec<(ProjectPath, ProjectPath)>, String> {
         validate_file_name(new_name)?;
         let fs = self.project_fs()?.clone();
         let new_path = path
@@ -382,29 +233,20 @@ impl WorkspaceService {
                 new_path: new_path.clone(),
             }],
         );
-        Ok(FileOperationState {
-            project: self.snapshot()?,
-            moved: vec![FileMove {
-                old_path: path.to_slash_string(),
-                new_path: new_path.to_slash_string(),
-            }],
-        })
+        Ok(vec![(path, new_path)])
     }
 
     pub fn move_paths(
         &mut self,
         paths: Vec<ProjectPath>,
         new_parent: ProjectPath,
-    ) -> Result<FileOperationState, String> {
+    ) -> Result<Vec<(ProjectPath, ProjectPath)>, String> {
         let fs = self.project_fs()?.clone();
         let planned_moves = plan_moves(&fs, paths, new_parent)?;
         apply_planned_moves(&fs, &planned_moves)?;
         update_active_sequence_after_moves(&mut self.active_sequence, &planned_moves);
 
-        Ok(FileOperationState {
-            project: self.snapshot()?,
-            moved: file_moves_from_plan(&planned_moves),
-        })
+        Ok(project_path_moves_from_plan(&planned_moves))
     }
 
     pub fn open_sequence(&mut self, path: ProjectPath) -> Result<(), String> {
@@ -422,17 +264,6 @@ impl WorkspaceService {
         self.active_sequence.as_ref()
     }
 
-    pub fn render_frame(&self, _time: f64) -> Result<FrameSummary, String> {
-        self.active_sequence
-            .as_ref()
-            .ok_or_else(|| "no sequence open".to_string())?;
-        Ok(FrameSummary {
-            pixels: 0,
-            fixture_spans: 0,
-            warnings: Some(Vec::new()),
-        })
-    }
-
     fn project_fs(&self) -> Result<&ProjectFs, String> {
         self.fs.as_ref().ok_or_else(no_project)
     }
@@ -446,106 +277,13 @@ fn no_project() -> String {
     "no project open".to_string()
 }
 
-fn list_source_files(fs: &ProjectFs) -> Result<Vec<String>, String> {
-    let mut files = fs
-        .list_entries()
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .filter(|entry| {
-            entry.kind == ProjectFsEntryKind::File
-                && entry
-                    .path
-                    .as_path()
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| ext == "dawn")
-        })
-        .map(|entry| entry.path.to_slash_string())
-        .collect::<Vec<_>>();
-    files.sort();
-    Ok(files)
-}
-
-fn list_project_entries(fs: &ProjectFs) -> Result<Vec<ProjectEntry>, String> {
-    let mut entries = fs
-        .list_entries()
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .map(|entry| ProjectEntry {
-            path: entry.path.to_slash_string(),
-            kind: if entry.kind == ProjectFsEntryKind::Directory {
-                ProjectEntryKind::Directory
-            } else {
-                ProjectEntryKind::File
-            },
-        })
-        .collect::<Vec<_>>();
+fn list_project_entries(fs: &ProjectFs) -> Result<Vec<ProjectFsEntry>, String> {
+    let mut entries = fs.list_entries().map_err(|error| error.to_string())?;
     entries.sort_by(|left, right| {
-        (left.kind != ProjectEntryKind::Directory, &left.path)
-            .cmp(&(right.kind != ProjectEntryKind::Directory, &right.path))
+        (left.kind != ProjectFsEntryKind::Directory, &left.path)
+            .cmp(&(right.kind != ProjectFsEntryKind::Directory, &right.path))
     });
     Ok(entries)
-}
-
-fn problem_from_diagnostic(diagnostic: &ProjectDiagnostic) -> LanguageProblem {
-    let (line, column, end_line, end_column) = range_to_one_based(diagnostic.range);
-    LanguageProblem {
-        path: diagnostic.path.to_slash_string(),
-        severity: diagnostic.severity,
-        message: diagnostic.message.clone(),
-        code: diagnostic.code,
-        source: "dawn-project".to_string(),
-        line,
-        column,
-        end_line,
-        end_column,
-    }
-}
-
-fn project_overlays_from_inputs(
-    overlays: Vec<ProjectOverlayInput>,
-) -> Result<Vec<ProjectOverlay>, String> {
-    overlays
-        .into_iter()
-        .map(|overlay| {
-            Ok(ProjectOverlay {
-                path: ProjectPath::parse(overlay.path)?,
-                content: overlay.content,
-            })
-        })
-        .collect()
-}
-
-fn analysis_to_state(analysis: ProjectAnalysis) -> AnalysisState {
-    let object_count = analysis
-        .files
-        .values()
-        .filter_map(|file| file.file.as_ref())
-        .map(|file| file.len())
-        .sum::<usize>() as u32;
-
-    AnalysisState {
-        diagnostics: analysis
-            .diagnostics
-            .iter()
-            .map(problem_from_diagnostic)
-            .collect(),
-        resolved: analysis.resolved.is_some(),
-        reachable_file_count: analysis.files.len() as u32,
-        object_count,
-    }
-}
-
-fn range_to_one_based(range: Option<TextRange>) -> (u32, u32, u32, u32) {
-    let Some(range) = range else {
-        return (1, 1, 1, 1);
-    };
-    (
-        range.start.line.saturating_add(1),
-        range.start.character.saturating_add(1),
-        range.end.line.saturating_add(1),
-        range.end.character.saturating_add(1).max(1),
-    )
 }
 
 fn validate_file_name(name: &str) -> Result<(), String> {
@@ -673,13 +411,10 @@ fn rollback_completed_moves(fs: &ProjectFs, completed: &[PlannedMove]) -> Result
     }
 }
 
-fn file_moves_from_plan(planned_moves: &[PlannedMove]) -> Vec<FileMove> {
+fn project_path_moves_from_plan(planned_moves: &[PlannedMove]) -> Vec<(ProjectPath, ProjectPath)> {
     planned_moves
         .iter()
-        .map(|planned_move| FileMove {
-            old_path: planned_move.old_path.to_slash_string(),
-            new_path: planned_move.new_path.to_slash_string(),
-        })
+        .map(|planned_move| (planned_move.old_path.clone(), planned_move.new_path.clone()))
         .collect()
 }
 
@@ -724,13 +459,16 @@ mod tests {
         let mut service = WorkspaceService::default();
         let root = workspace_root().join("examples/club-rig");
 
-        let project = service.open_project(root).unwrap();
+        service.open_project(root).unwrap();
+        let entries = service.project_entries().unwrap();
         let analysis = service.analyze(Vec::new()).unwrap();
 
-        assert!(project.files.contains(&"project.dawn".to_string()));
-        assert!(analysis.resolved);
+        assert!(entries
+            .iter()
+            .any(|entry| entry.path == ProjectPath::new("project.dawn")));
+        assert!(analysis.is_resolved());
         assert_eq!(analysis.diagnostics.len(), 0);
-        assert!(analysis.object_count > 0);
+        assert!(analysis.object_count() > 0);
     }
 
     #[test]
@@ -741,17 +479,17 @@ mod tests {
         let original = service.read_file(ProjectPath::new("project.dawn")).unwrap();
 
         let analysis = service
-            .analyze(vec![ProjectOverlayInput {
-                path: "project.dawn".to_string(),
+            .analyze(vec![ProjectOverlay {
+                path: ProjectPath::new("project.dawn"),
                 content: "not: [valid".to_string(),
             }])
             .unwrap();
 
-        assert!(!analysis.resolved);
+        assert!(!analysis.is_resolved());
         assert!(analysis
             .diagnostics
             .iter()
-            .any(|problem| problem.code == DiagnosticCode::Yaml));
+            .any(|problem| problem.code == dawn_project::analysis::DiagnosticCode::Yaml));
         assert_eq!(
             service.read_file(ProjectPath::new("project.dawn")).unwrap(),
             original

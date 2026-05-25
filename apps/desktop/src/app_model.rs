@@ -1,11 +1,13 @@
 use crate::actions::AppAction;
 use crate::editor_session::{EditorBuffer, EditorSession};
 use crate::layout_persistence::{load_panel_layout, save_panel_layout, PanelLayout};
-use crate::workspace::{
-    AnalysisState, FixtureDocumentEditResponse, LanguageProblem, LayoutDocumentEditResponse,
-    ProjectState, WorkspaceService,
+use crate::ui::theme;
+use crate::workspace::WorkspaceService;
+use dawn_project::analysis::{ProjectAnalysis, ProjectDiagnostic};
+use dawn_project::document::{
+    DocumentDescriptor, DocumentEditResult, DocumentViewId, FixtureDocument, LayoutDocument,
 };
-use dawn_project::document::{DocumentDescriptor, DocumentViewId, FixtureDocument, LayoutDocument};
+use dawn_project::fs::ProjectFsEntry;
 use dawn_project::path::ProjectPath;
 
 #[derive(Debug, Clone)]
@@ -29,17 +31,19 @@ pub struct AppModel {
     pub editors: EditorSession,
     pub panel_layout: PanelLayout,
     pub playback: PlaybackState,
-    pub project: Option<ProjectState>,
-    pub analysis: Option<AnalysisState>,
-    pub diagnostics: Vec<LanguageProblem>,
+    pub project_root: Option<String>,
+    pub project_entries: Vec<ProjectFsEntry>,
+    pub analysis: Option<ProjectAnalysis>,
+    pub diagnostics: Vec<ProjectDiagnostic>,
     pub status: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct AppSnapshot {
-    pub project: Option<ProjectState>,
-    pub analysis: Option<AnalysisState>,
-    pub diagnostics: Vec<LanguageProblem>,
+    pub project_root: Option<String>,
+    pub project_entries: Vec<ProjectFsEntry>,
+    pub analysis: Option<ProjectAnalysis>,
+    pub diagnostics: Vec<ProjectDiagnostic>,
     pub panel_layout: PanelLayout,
     pub playback: PlaybackState,
     pub tabs: Vec<EditorBuffer>,
@@ -48,7 +52,6 @@ pub struct AppSnapshot {
     pub active_descriptor: Option<DocumentDescriptor>,
     pub active_layout_document: Option<LayoutDocument>,
     pub active_fixture_document: Option<FixtureDocument>,
-    pub preview_frame: Option<crate::workspace::FrameSummary>,
     pub status: String,
 }
 
@@ -59,7 +62,8 @@ impl Default for AppModel {
             editors: EditorSession::default(),
             panel_layout: load_panel_layout(),
             playback: PlaybackState::default(),
-            project: None,
+            project_root: None,
+            project_entries: Vec::new(),
             analysis: None,
             diagnostics: Vec::new(),
             status: "No project open".to_string(),
@@ -102,9 +106,9 @@ impl AppModel {
                 .fixture_document(path.clone(), object_key, self.editors.dirty_overlays())
                 .ok()
         });
-        let preview_frame = self.workspace.render_frame(self.playback.time).ok();
         AppSnapshot {
-            project: self.project.clone(),
+            project_root: self.project_root.clone(),
+            project_entries: self.project_entries.clone(),
             analysis: self.analysis.clone(),
             diagnostics: self.diagnostics.clone(),
             panel_layout: self.panel_layout.clone(),
@@ -115,7 +119,6 @@ impl AppModel {
             active_descriptor,
             active_layout_document,
             active_fixture_document,
-            preview_frame,
             status: self.status.clone(),
         }
     }
@@ -124,8 +127,8 @@ impl AppModel {
         match action {
             AppAction::OpenProject(path) => {
                 self.flush_autosave()?;
-                let project = self.workspace.open_project(path)?;
-                self.project = Some(project);
+                self.workspace.open_project(path)?;
+                self.refresh_project_entries()?;
                 self.editors.clear();
                 self.refresh_analysis()?;
                 self.status = "Project opened".to_string();
@@ -136,7 +139,8 @@ impl AppModel {
             AppAction::CloseProject => {
                 self.flush_autosave()?;
                 self.workspace.close_project();
-                self.project = None;
+                self.project_root = None;
+                self.project_entries.clear();
                 self.analysis = None;
                 self.diagnostics.clear();
                 self.editors.clear();
@@ -146,7 +150,7 @@ impl AppModel {
                 self.status = "Settings are not implemented yet".to_string();
             }
             AppAction::Reload | AppAction::Check => {
-                self.project = Some(self.workspace.snapshot()?);
+                self.refresh_project_entries()?;
                 self.refresh_analysis()?;
                 self.status = "Project checked".to_string();
             }
@@ -169,55 +173,36 @@ impl AppModel {
             AppAction::CycleTabs { reverse } => self.editors.cycle_tabs(reverse),
             AppAction::RenamePath { path, new_name } => {
                 self.flush_autosave()?;
-                let result = self.workspace.rename_path(path.clone(), &new_name)?;
-                self.project = Some(result.project);
-                let moves = result
-                    .moved
-                    .iter()
-                    .map(|moved| {
-                        Ok((
-                            ProjectPath::parse(&moved.old_path)?,
-                            ProjectPath::parse(&moved.new_path)?,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, String>>()?;
+                let moves = self.workspace.rename_path(path.clone(), &new_name)?;
+                self.refresh_project_entries()?;
                 self.editors.reconcile_moved_paths(&moves);
                 self.refresh_analysis()?;
             }
             AppAction::CreateFile { parent, name } => {
                 self.flush_autosave()?;
-                let (project, path) = self.workspace.create_file(parent, &name)?;
-                self.project = Some(project);
+                let path = self.workspace.create_file(parent, &name)?;
+                self.refresh_project_entries()?;
                 let text = self.workspace.read_file(path.clone())?;
                 self.editors.open_file(path, text);
                 self.refresh_analysis()?;
             }
             AppAction::CreateDirectory { parent, name } => {
                 self.flush_autosave()?;
-                let (project, _) = self.workspace.create_directory(parent, &name)?;
-                self.project = Some(project);
+                self.workspace.create_directory(parent, &name)?;
+                self.refresh_project_entries()?;
                 self.refresh_analysis()?;
             }
             AppAction::DeletePath(path) => {
                 self.flush_autosave()?;
-                self.project = Some(self.workspace.delete_path(path.clone())?);
+                self.workspace.delete_path(path.clone())?;
+                self.refresh_project_entries()?;
                 self.editors.reconcile_deleted_path(&path);
                 self.refresh_analysis()?;
             }
             AppAction::MovePaths { paths, new_parent } => {
                 self.flush_autosave()?;
-                let result = self.workspace.move_paths(paths, new_parent)?;
-                self.project = Some(result.project);
-                let moves = result
-                    .moved
-                    .iter()
-                    .map(|moved| {
-                        Ok((
-                            ProjectPath::parse(&moved.old_path)?,
-                            ProjectPath::parse(&moved.new_path)?,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, String>>()?;
+                let moves = self.workspace.move_paths(paths, new_parent)?;
+                self.refresh_project_entries()?;
                 self.editors.reconcile_moved_paths(&moves);
                 self.refresh_analysis()?;
             }
@@ -246,8 +231,8 @@ impl AppModel {
                             &duplicate.id,
                             document.fixtures.iter().map(|fixture| fixture.id.as_str()),
                         );
-                        duplicate.transform.position.x += 1.0;
-                        duplicate.transform.position.y += 1.0;
+                        duplicate.transform.position.x += theme::LAYOUT_DUPLICATE_OFFSET;
+                        duplicate.transform.position.y += theme::LAYOUT_DUPLICATE_OFFSET;
                         document.fixtures.push(duplicate);
                     }
                 })?;
@@ -267,7 +252,8 @@ impl AppModel {
                         .iter_mut()
                         .find(|fixture| fixture.object_key == object_key)
                     {
-                        fixture.bulb_size = (fixture.bulb_size + delta).max(0.05);
+                        fixture.bulb_size =
+                            (fixture.bulb_size + delta).max(theme::FIXTURE_MIN_BULB_SIZE);
                     }
                 })?;
             }
@@ -310,8 +296,7 @@ impl AppModel {
                 self.status = "Dawn desktop IDE".to_string();
             }
             AppAction::Seek(time) => {
-                self.playback.time = time.clamp(0.0, 30.0);
-                let _ = self.workspace.render_frame(self.playback.time)?;
+                self.playback.time = time.clamp(0.0, theme::PREVIEW_DURATION_SECONDS);
             }
             AppAction::ToggleLeftPane => {
                 self.panel_layout.left_visible = !self.panel_layout.left_visible;
@@ -351,22 +336,16 @@ impl AppModel {
             self.editors.dirty_overlays(),
             false,
         )? {
-            LayoutDocumentEditResponse::Applied {
-                serialized_content,
-                analysis,
-                ..
-            } => {
-                self.editors.update_active_text(serialized_content);
+            DocumentEditResult::Applied(outcome) => {
+                self.editors.update_active_text(outcome.serialized_content);
+                let analysis = outcome.analysis;
                 self.diagnostics = analysis.diagnostics.clone();
                 self.analysis = Some(analysis);
                 self.status = "Layout edit applied".to_string();
             }
-            LayoutDocumentEditResponse::Blocked {
-                diagnostics,
-                message,
-            } => {
-                self.diagnostics = diagnostics;
-                self.status = message;
+            DocumentEditResult::Blocked(blocked) => {
+                self.diagnostics = blocked.diagnostics;
+                self.status = blocked.message;
             }
         }
         Ok(())
@@ -391,24 +370,27 @@ impl AppModel {
             self.editors.dirty_overlays(),
             false,
         )? {
-            FixtureDocumentEditResponse::Applied {
-                serialized_content,
-                analysis,
-                ..
-            } => {
-                self.editors.update_active_text(serialized_content);
+            DocumentEditResult::Applied(outcome) => {
+                self.editors.update_active_text(outcome.serialized_content);
+                let analysis = outcome.analysis;
                 self.diagnostics = analysis.diagnostics.clone();
                 self.analysis = Some(analysis);
                 self.status = "Fixture edit applied".to_string();
             }
-            FixtureDocumentEditResponse::Blocked {
-                diagnostics,
-                message,
-            } => {
-                self.diagnostics = diagnostics;
-                self.status = message;
+            DocumentEditResult::Blocked(blocked) => {
+                self.diagnostics = blocked.diagnostics;
+                self.status = blocked.message;
             }
         }
+        Ok(())
+    }
+
+    pub fn refresh_project_entries(&mut self) -> Result<(), String> {
+        self.project_root = self
+            .workspace
+            .project_root_display()
+            .map(ToString::to_string);
+        self.project_entries = self.workspace.project_entries()?;
         Ok(())
     }
 

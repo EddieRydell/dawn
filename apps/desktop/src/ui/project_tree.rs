@@ -1,16 +1,16 @@
 use std::collections::{BTreeSet, HashSet};
 use std::rc::Rc;
 
+use dawn_project::fs::{ProjectFsEntry, ProjectFsEntryKind};
 use dawn_project::path::ProjectPath;
-use floem::event::EventListener;
+use floem::event::{Event, EventListener};
+use floem::keyboard::{Key, Modifiers, NamedKey};
 use floem::menu::{Menu, MenuItem};
 use floem::prelude::*;
-use floem::views::Button;
 use lucide_floem::Icon;
 
 use crate::actions::AppAction;
 use crate::app_model::AppSnapshot;
-use crate::workspace::{ProjectEntry, ProjectEntryKind};
 
 #[derive(Clone)]
 pub struct ExplorerUiState {
@@ -84,7 +84,7 @@ pub fn project_tree_view(
     explorer: ExplorerUiState,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
-    let Some(project) = state.project.clone() else {
+    let Some(root) = state.project_root.clone() else {
         return v_stack((header("Project"), static_label("No project open")))
             .style(panel_style)
             .into_any();
@@ -94,8 +94,7 @@ pub fn project_tree_view(
         explorer.reveal_active_file(active_file);
     }
 
-    let root = project.root.clone();
-    let entries = project.entries.clone();
+    let entries = state.project_entries.clone();
     let rows_explorer = explorer.clone();
     let rows_dispatch = Rc::clone(&dispatch);
 
@@ -155,7 +154,7 @@ fn explorer_row(
 ) -> impl IntoView {
     let path = row.path.clone();
     let row_key = path.to_slash_string();
-    let is_dir = row.kind == ProjectEntryKind::Directory;
+    let is_dir = row.kind == ProjectFsEntryKind::Directory;
     let is_expanded = expanded.contains(&row_key);
     let selected = selected_path.is_some_and(|selected| selected == &path);
 
@@ -170,16 +169,23 @@ fn explorer_row(
     let drag_state = explorer.clone();
     let drop_state = explorer.clone();
     let context_state = explorer.clone();
+    let pointer_down_state = explorer.clone();
     let path_for_click = path.clone();
     let path_for_drag = path.clone();
     let path_for_drop = path.clone();
     let path_for_menu = path.clone();
+    let path_for_pointer_down = path.clone();
     let drop_dispatch = Rc::clone(&dispatch);
     let menu_dispatch = Rc::clone(&dispatch);
 
     let row_view = h_stack((
         caret_view(is_dir, is_expanded),
-        file_icon(row.kind, is_expanded).style(|s| s.size(15.0, 15.0)),
+        file_icon(row.kind, is_expanded).style(|s| {
+            s.size(
+                crate::ui::theme::PROJECT_ICON_SIZE,
+                crate::ui::theme::PROJECT_ICON_SIZE,
+            )
+        }),
         label(move || row.name.clone()).style(|s| s.flex_grow(1.0).min_width(0.0)),
     ))
     .on_click_stop(move |_| {
@@ -207,7 +213,17 @@ fn explorer_row(
         }
     })
     .draggable()
+    .on_event_cont(EventListener::PointerDown, move |event| {
+        if let Event::PointerDown(event) = event {
+            if event.button.is_secondary() {
+                pointer_down_state
+                    .selected
+                    .set(Some(path_for_pointer_down.clone()));
+            }
+        }
+    })
     .context_menu(move || {
+        context_state.selected.set(Some(path_for_menu.clone()));
         row_menu(
             path_for_menu.clone(),
             is_dir,
@@ -222,11 +238,14 @@ fn explorer_row(
             crate::ui::theme::color(crate::ui::theme::SURFACE)
         };
         s.width_full()
-            .height(26.0)
+            .height(crate::ui::theme::PROJECT_ROW_HEIGHT)
             .items_center()
-            .gap(5.0)
-            .padding_left(6.0 + row.depth as f32 * 14.0)
-            .padding_right(4.0)
+            .gap(crate::ui::theme::SPACE_5)
+            .padding_left(
+                crate::ui::theme::PROJECT_INDENT_BASE
+                    + row.depth as f64 * crate::ui::theme::PROJECT_INDENT_STEP,
+            )
+            .padding_right(crate::ui::theme::SPACE_4)
             .background(bg)
     });
 
@@ -286,7 +305,7 @@ fn create_row(
             move || explorer.pending.set(None)
         },
     )
-    .style(|s| s.padding_left(24.0))
+    .style(|s| s.padding_left(crate::ui::theme::SPACE_24))
 }
 
 fn edit_name_row(
@@ -313,7 +332,12 @@ fn edit_name_row(
             move || explorer.pending.set(None)
         },
     )
-    .style(move |s| s.padding_left(6.0 + row.depth as f32 * 14.0))
+    .style(move |s| {
+        s.padding_left(
+            crate::ui::theme::PROJECT_INDENT_BASE
+                + row.depth as f64 * crate::ui::theme::PROJECT_INDENT_STEP,
+        )
+    })
 }
 
 fn edit_row(
@@ -322,14 +346,29 @@ fn edit_row(
     apply: impl Fn() + 'static,
     cancel: impl Fn() + 'static,
 ) -> impl IntoView {
-    h_stack((
-        text_input(name)
-            .placeholder(placeholder)
-            .style(|s| s.flex_grow(1.0).height(24.0)),
-        icon_button(Icon::Check, "Apply").action(apply),
-        icon_button(Icon::X, "Cancel").action(cancel),
-    ))
-    .style(|s| s.width_full().height(28.0).items_center().gap(4.0))
+    let apply = Rc::new(apply);
+    let cancel = Rc::new(cancel);
+    let cancel_on_escape = Rc::clone(&cancel);
+    let cancel_on_focus_lost = Rc::clone(&cancel);
+
+    text_input(name)
+        .placeholder(placeholder)
+        .on_key_down(
+            Key::Named(NamedKey::Enter),
+            |modifiers| modifiers == Modifiers::empty(),
+            {
+                let apply = Rc::clone(&apply);
+                move |_| apply()
+            },
+        )
+        .on_key_down(
+            Key::Named(NamedKey::Escape),
+            |modifiers| modifiers == Modifiers::empty(),
+            move |_| cancel_on_escape(),
+        )
+        .on_event_stop(EventListener::FocusLost, move |_| cancel_on_focus_lost())
+        .request_focus(|| {})
+        .style(|s| s.width_full().height(crate::ui::theme::ROW_HEIGHT))
 }
 
 fn row_menu(
@@ -394,13 +433,13 @@ fn begin_rename(explorer: &ExplorerUiState, path: ProjectPath) {
 
 fn visible_rows(
     root: &str,
-    entries: &[ProjectEntry],
+    entries: &[ProjectFsEntry],
     expanded: &HashSet<String>,
 ) -> Vec<ExplorerRow> {
     let mut rows = vec![ExplorerRow {
         path: ProjectPath::root(),
         name: root.rsplit('/').next().unwrap_or(root).to_string(),
-        kind: ProjectEntryKind::Directory,
+        kind: ProjectFsEntryKind::Directory,
         depth: 0,
     }];
 
@@ -411,7 +450,7 @@ fn visible_rows(
 fn append_visible_children(
     parent: &ProjectPath,
     depth: usize,
-    entries: &[ProjectEntry],
+    entries: &[ProjectFsEntry],
     expanded: &HashSet<String>,
     rows: &mut Vec<ExplorerRow>,
 ) {
@@ -422,32 +461,32 @@ fn append_visible_children(
     let mut children = entries
         .iter()
         .filter_map(|entry| {
-            let path = ProjectPath::parse(&entry.path).ok()?;
-            if path.parent().as_ref() == Some(parent) {
-                Some((path, entry))
+            if entry.path.parent().as_ref() == Some(parent) {
+                Some(entry)
             } else {
                 None
             }
         })
         .collect::<Vec<_>>();
-    children.sort_by(|(left_path, left), (right_path, right)| {
-        let left_dir = left.kind == ProjectEntryKind::Directory;
-        let right_dir = right.kind == ProjectEntryKind::Directory;
-        (!left_dir, left_path.file_name()).cmp(&(!right_dir, right_path.file_name()))
+    children.sort_by(|left, right| {
+        let left_dir = left.kind == ProjectFsEntryKind::Directory;
+        let right_dir = right.kind == ProjectFsEntryKind::Directory;
+        (!left_dir, left.path.file_name()).cmp(&(!right_dir, right.path.file_name()))
     });
 
-    for (path, entry) in children {
+    for entry in children {
         rows.push(ExplorerRow {
-            name: path
+            name: entry
+                .path
                 .file_name()
                 .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| entry.path.clone()),
+                .unwrap_or_else(|| entry.path.to_slash_string()),
             depth,
-            path: path.clone(),
+            path: entry.path.clone(),
             kind: entry.kind,
         });
-        if entry.kind == ProjectEntryKind::Directory {
-            append_visible_children(&path, depth + 1, entries, expanded, rows);
+        if entry.kind == ProjectFsEntryKind::Directory {
+            append_visible_children(&entry.path, depth + 1, entries, expanded, rows);
         }
     }
 }
@@ -479,7 +518,14 @@ struct ExplorerRenderState {
 
 fn caret_view(is_dir: bool, expanded: bool) -> floem::AnyView {
     if !is_dir {
-        return empty().style(|s| s.size(18.0, 18.0)).into_any();
+        return empty()
+            .style(|s| {
+                s.size(
+                    crate::ui::theme::PROJECT_CARET_SLOT_SIZE,
+                    crate::ui::theme::PROJECT_CARET_SLOT_SIZE,
+                )
+            })
+            .into_any();
     }
 
     let icon = if expanded {
@@ -487,25 +533,27 @@ fn caret_view(is_dir: bool, expanded: bool) -> floem::AnyView {
     } else {
         Icon::ChevronRight
     };
-    icon.style(|s| s.size(15.0, 15.0)).into_any()
+    icon.style(|s| {
+        s.size(
+            crate::ui::theme::PROJECT_ICON_SIZE,
+            crate::ui::theme::PROJECT_ICON_SIZE,
+        )
+    })
+    .into_any()
 }
 
-fn file_icon(kind: ProjectEntryKind, expanded: bool) -> impl IntoView {
+fn file_icon(kind: ProjectFsEntryKind, expanded: bool) -> impl IntoView {
     match (kind, expanded) {
-        (ProjectEntryKind::Directory, true) => Icon::FolderOpen.into_any(),
-        (ProjectEntryKind::Directory, false) => Icon::Folder.into_any(),
-        (ProjectEntryKind::File, _) => Icon::File.into_any(),
+        (ProjectFsEntryKind::Directory, true) => Icon::FolderOpen.into_any(),
+        (ProjectFsEntryKind::Directory, false) => Icon::Folder.into_any(),
+        (ProjectFsEntryKind::File, _) => Icon::File.into_any(),
     }
-}
-
-fn icon_button(icon: Icon, _title: &'static str) -> Button {
-    button(icon.style(|s| s.size(14.0, 14.0))).style(|s| s.size(24.0, 22.0).padding(3.0))
 }
 
 fn header(text: &'static str) -> impl IntoView {
     static_label(text).style(|s| {
-        s.height(24.0)
-            .font_size(12.0)
+        s.height(crate::ui::theme::ROW_HEIGHT)
+            .font_size(crate::ui::theme::FONT_SMALL)
             .font_bold()
             .color(crate::ui::theme::color(crate::ui::theme::MUTED))
     })
@@ -513,8 +561,8 @@ fn header(text: &'static str) -> impl IntoView {
 
 fn panel_style(s: floem::style::Style) -> floem::style::Style {
     s.height_full()
-        .padding(8.0)
-        .gap(6.0)
+        .padding(crate::ui::theme::SPACE_8)
+        .gap(crate::ui::theme::SPACE_6)
         .background(crate::ui::theme::color(crate::ui::theme::SURFACE))
 }
 
@@ -522,6 +570,6 @@ fn panel_style(s: floem::style::Style) -> floem::style::Style {
 struct ExplorerRow {
     path: ProjectPath,
     name: String,
-    kind: ProjectEntryKind,
+    kind: ProjectFsEntryKind,
     depth: usize,
 }

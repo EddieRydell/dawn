@@ -23,6 +23,22 @@ impl ProjectAnalysis {
             .iter()
             .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
     }
+
+    pub fn is_resolved(&self) -> bool {
+        self.resolved.is_some()
+    }
+
+    pub fn reachable_file_count(&self) -> usize {
+        self.files.len()
+    }
+
+    pub fn object_count(&self) -> usize {
+        self.files
+            .values()
+            .filter_map(|file| file.file.as_ref())
+            .map(|file| file.len())
+            .sum()
+    }
 }
 
 #[derive(Debug, Clone)]

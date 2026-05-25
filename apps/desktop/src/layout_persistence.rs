@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::ui::theme;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PanelLayout {
@@ -20,7 +22,6 @@ pub enum RightPaneTab {
     #[default]
     Diagnostics,
     Preview,
-    Inspector,
 }
 
 impl Default for PanelLayout {
@@ -28,8 +29,8 @@ impl Default for PanelLayout {
         Self {
             left_visible: true,
             right_visible: true,
-            left_width: 260.0,
-            right_width: 320.0,
+            left_width: theme::DEFAULT_LEFT_PANE_WIDTH,
+            right_width: theme::DEFAULT_RIGHT_PANE_WIDTH,
             active_right_tab: RightPaneTab::Diagnostics,
         }
     }

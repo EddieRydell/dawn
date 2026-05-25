@@ -1,6 +1,5 @@
 use std::rc::Rc;
 
-use dawn_project::path::ProjectPath;
 use floem::prelude::*;
 
 use crate::actions::AppAction;
@@ -29,47 +28,45 @@ pub fn preview_view(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl
             button("Play").action(move || play(AppAction::Play)),
             button("Pause").action(move || pause(AppAction::Pause)),
         ))
-        .style(|s| s.gap(6.0)),
+        .style(|s| s.gap(theme::SPACE_6)),
         h_stack((
-            button("-0.05").action(move || back(AppAction::Seek((time - 0.05).max(0.0)))),
-            label(move || format!("{time:.2}s / 30.00s")),
-            button("+0.05").action(move || forward(AppAction::Seek((time + 0.05).min(30.0)))),
+            button(format!("-{:.2}", theme::PREVIEW_STEP_SECONDS)).action(move || {
+                back(AppAction::Seek(
+                    (time - theme::PREVIEW_STEP_SECONDS).max(0.0),
+                ))
+            }),
+            label(move || format!("{time:.2}s / {:.2}s", theme::PREVIEW_DURATION_SECONDS)),
+            button(format!("+{:.2}", theme::PREVIEW_STEP_SECONDS)).action(move || {
+                forward(AppAction::Seek(
+                    (time + theme::PREVIEW_STEP_SECONDS).min(theme::PREVIEW_DURATION_SECONDS),
+                ))
+            }),
         ))
-        .style(|s| s.gap(8.0).items_center()),
-        frame_readout(state),
+        .style(|s| s.gap(theme::SPACE_8).items_center()),
+        sequence_readout(state),
     ))
-    .style(|s| s.height_full().padding(10.0).gap(10.0))
+    .style(|s| {
+        s.height_full()
+            .padding(theme::SPACE_10)
+            .gap(theme::SPACE_10)
+    })
 }
 
-fn frame_readout(state: AppSnapshot) -> impl IntoView {
+fn sequence_readout(state: AppSnapshot) -> impl IntoView {
     let active_sequence = state
         .active_file
         .as_ref()
-        .map(ProjectPath::to_slash_string)
+        .map(|path| path.to_slash_string())
         .unwrap_or_else(|| "No active file".to_string());
-    let frame = state.preview_frame.clone();
 
     v_stack((
-        static_label("Frame"),
+        static_label("Sequence"),
         label(move || format!("Active: {active_sequence}")),
-        label(move || {
-            frame
-                .as_ref()
-                .map(|frame| {
-                    format!(
-                        "{} pixels, {} fixture spans, {} warnings",
-                        frame.pixels,
-                        frame.fixture_spans,
-                        frame.warnings.as_ref().map_or(0, Vec::len)
-                    )
-                })
-                .unwrap_or_else(|| "No sequence frame".to_string())
-        }),
     ))
     .style(|s| {
-        s.padding(10.0)
-            .gap(6.0)
-            .border(1.0)
+        s.padding(theme::SPACE_10)
+            .gap(theme::SPACE_6)
+            .border(theme::BORDER_WIDTH)
             .border_color(theme::color(theme::BORDER))
             .background(theme::color(theme::PANEL))
     })

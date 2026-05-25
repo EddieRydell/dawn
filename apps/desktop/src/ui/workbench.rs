@@ -12,7 +12,7 @@ pub fn workbench_view(
     dyn_container(
         move || snapshot.get(),
         move |state| {
-            explorer.reset_for_root(state.project.as_ref().map(|project| project.root.clone()));
+            explorer.reset_for_root(state.project_root.clone());
             let mut panes = Vec::new();
             if state.panel_layout.left_visible {
                 panes.push(
@@ -24,7 +24,7 @@ pub fn workbench_view(
                     .style(move |s| {
                         s.width(state.panel_layout.left_width)
                             .height_full()
-                            .border_right(1.0)
+                            .border_right(theme::BORDER_WIDTH)
                             .border_color(theme::color(theme::BORDER))
                     })
                     .into_any(),
@@ -36,7 +36,7 @@ pub fn workbench_view(
                     .style(|s| {
                         s.flex_grow(1.0)
                             .flex_basis(0.0)
-                            .min_width(320.0)
+                            .min_width(theme::MIN_EDITOR_WIDTH)
                             .height_full()
                     })
                     .into_any(),
@@ -48,7 +48,7 @@ pub fn workbench_view(
                         .style(move |s| {
                             s.width(state.panel_layout.right_width)
                                 .height_full()
-                                .border_left(1.0)
+                                .border_left(theme::BORDER_WIDTH)
                                 .border_color(theme::color(theme::BORDER))
                         })
                         .into_any(),
@@ -71,7 +71,6 @@ fn right_pane(
 
     let diagnostics = Rc::clone(&dispatch);
     let preview = Rc::clone(&dispatch);
-    let inspector = Rc::clone(&dispatch);
     let active = state.panel_layout.active_right_tab;
 
     let body = match active {
@@ -81,7 +80,6 @@ fn right_pane(
         RightPaneTab::Preview => {
             crate::ui::preview::preview_view(state.clone(), Rc::clone(&dispatch)).into_any()
         }
-        RightPaneTab::Inspector => inspector_view(state.clone()).into_any(),
     };
 
     v_stack((
@@ -94,15 +92,12 @@ fn right_pane(
             tab_button("Preview", active == RightPaneTab::Preview, move || {
                 preview(AppAction::SetRightPaneTab(RightPaneTab::Preview))
             }),
-            tab_button("Inspector", active == RightPaneTab::Inspector, move || {
-                inspector(AppAction::SetRightPaneTab(RightPaneTab::Inspector))
-            }),
         ))
         .style(|s| {
-            s.height(32.0)
+            s.height(theme::TOOLBAR_HEIGHT)
                 .items_center()
-                .gap(4.0)
-                .padding_horiz(8.0)
+                .gap(theme::SPACE_4)
+                .padding_horiz(theme::SPACE_8)
                 .background(theme::color(theme::PANEL))
         }),
         body.style(|s| s.flex_grow(1.0).min_height(0.0)),
@@ -117,34 +112,10 @@ fn tab_button(label: &'static str, active: bool, action: impl Fn() + 'static) ->
         } else {
             theme::color(theme::PANEL)
         };
-        s.height(24.0).padding_horiz(8.0).background(bg)
+        s.height(theme::ROW_HEIGHT)
+            .padding_horiz(theme::SPACE_8)
+            .background(bg)
     })
-}
-
-fn inspector_view(state: crate::app_model::AppSnapshot) -> impl IntoView {
-    let descriptor = state.active_descriptor.clone();
-    let object_rows = descriptor
-        .as_ref()
-        .map(|descriptor| {
-            descriptor
-                .objects
-                .iter()
-                .map(|object| format!("{}  {}", object.kind, object.key))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    v_stack((
-        static_label("Inspector").style(|s| s.font_bold().margin_bottom(8.0)),
-        label(move || {
-            descriptor
-                .as_ref()
-                .map(|descriptor| descriptor.path.clone())
-                .unwrap_or_else(|| "No active document".to_string())
-        }),
-        v_stack_from_iter(object_rows.into_iter().map(static_label)).style(|s| s.margin_top(10.0)),
-    ))
-    .style(|s| s.padding(10.0).gap(4.0))
 }
 
 use crate::actions::AppAction;

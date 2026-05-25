@@ -22,10 +22,10 @@ fn tab_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoVi
     if state.tabs.is_empty() {
         h_stack((static_label("No open editors"),))
             .style(|s| {
-                s.height(34.0)
+                s.height(theme::TAB_STRIP_HEIGHT)
                     .items_center()
-                    .padding_horiz(10.0)
-                    .border_bottom(1.0)
+                    .padding_horiz(theme::SPACE_10)
+                    .border_bottom(theme::BORDER_WIDTH)
                     .border_color(theme::color(theme::BORDER))
                     .background(theme::color(theme::PANEL))
             })
@@ -55,18 +55,18 @@ fn tab_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoVi
                 } else {
                     theme::color(theme::PANEL_DARK)
                 };
-                s.height(32.0)
+                s.height(theme::TAB_HEIGHT)
                     .items_center()
-                    .padding_horiz(4.0)
-                    .border_right(1.0)
+                    .padding_horiz(theme::SPACE_4)
+                    .border_right(theme::BORDER_WIDTH)
                     .border_color(theme::color(theme::BORDER))
                     .background(bg)
             })
         }))
         .style(|s| {
-            s.height(34.0)
+            s.height(theme::TAB_STRIP_HEIGHT)
                 .items_center()
-                .border_bottom(1.0)
+                .border_bottom(theme::BORDER_WIDTH)
                 .border_color(theme::color(theme::BORDER))
                 .background(theme::color(theme::PANEL))
         })
@@ -136,17 +136,20 @@ fn mode_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoV
                 })
                 .unwrap_or_else(|| "Text file".to_string())
         })
-        .style(|s| s.margin_left(8.0).color(theme::color(theme::MUTED)))
+        .style(|s| {
+            s.margin_left(theme::SPACE_8)
+                .color(theme::color(theme::MUTED))
+        })
         .into_any(),
     );
 
     h_stack_from_iter(controls)
         .style(|s| {
-            s.height(32.0)
+            s.height(theme::TOOLBAR_HEIGHT)
                 .items_center()
-                .gap(6.0)
-                .padding_horiz(10.0)
-                .border_bottom(1.0)
+                .gap(theme::SPACE_6)
+                .padding_horiz(theme::SPACE_10)
+                .border_bottom(theme::BORDER_WIDTH)
                 .border_color(theme::color(theme::BORDER))
                 .background(theme::color(theme::PANEL))
         })
@@ -194,8 +197,8 @@ fn source_editor(
         .style(|s| {
             s.width_full()
                 .height_full()
-                .font_family("Cascadia Mono".to_string())
-                .font_size(13.0)
+                .font_family(theme::MONO_FONT.to_string())
+                .font_size(theme::FONT_EDITOR)
                 .background(theme::color(theme::SURFACE))
         })
 }

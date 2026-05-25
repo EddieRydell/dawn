@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use dawn_project::path::ProjectPath;
+use dawn_project::analysis::TextRange;
 use floem::prelude::*;
 
 use crate::actions::AppAction;
@@ -13,24 +13,27 @@ pub fn diagnostics_view(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> 
         static_label("No diagnostics").into_any()
     } else {
         scroll(
-            v_stack_from_iter(rows.into_iter().map(move |problem| {
+            v_stack_from_iter(rows.into_iter().map(move |diagnostic| {
                 let dispatch = Rc::clone(&dispatch);
-                let path = ProjectPath::parse(&problem.path).ok();
+                let path = diagnostic.path.clone();
+                let (line, column) = range_start_to_one_based(diagnostic.range);
                 let summary = format!(
                     "{}:{}:{}  {:?}  {}",
-                    problem.path, problem.line, problem.column, problem.severity, problem.message
+                    diagnostic.path.to_slash_string(),
+                    line,
+                    column,
+                    diagnostic.severity,
+                    diagnostic.message
                 );
                 button(summary)
                     .action(move || {
-                        if let Some(path) = path.clone() {
-                            dispatch(AppAction::OpenFile(path));
-                        }
+                        dispatch(AppAction::OpenFile(path.clone()));
                     })
                     .style(|s| {
                         s.width_full()
                             .justify_start()
-                            .padding(8.0)
-                            .border_bottom(1.0)
+                            .padding(theme::SPACE_8)
+                            .border_bottom(theme::BORDER_WIDTH)
                             .border_color(theme::color(theme::BORDER))
                     })
             }))
@@ -43,5 +46,16 @@ pub fn diagnostics_view(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> 
         static_label("Diagnostics").style(|s| s.font_bold()),
         body.style(|s| s.flex_grow(1.0).min_height(0.0)),
     ))
-    .style(|s| s.height_full().padding(10.0).gap(8.0))
+    .style(|s| s.height_full().padding(theme::SPACE_10).gap(theme::SPACE_8))
+}
+
+fn range_start_to_one_based(range: Option<TextRange>) -> (u32, u32) {
+    range
+        .map(|range| {
+            (
+                range.start.line.saturating_add(1),
+                range.start.character.saturating_add(1),
+            )
+        })
+        .unwrap_or((1, 1))
 }

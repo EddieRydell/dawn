@@ -48,13 +48,13 @@ pub fn fixture_viewer(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> im
                         button("Bulb -").action(move || {
                             smaller(AppAction::AdjustFixtureBulb {
                                 object_key: key_smaller.clone(),
-                                delta: -0.05,
+                                delta: -theme::FIXTURE_BULB_STEP,
                             })
                         }),
                         button("Bulb +").action(move || {
                             larger(AppAction::AdjustFixtureBulb {
                                 object_key: key_larger.clone(),
-                                delta: 0.05,
+                                delta: theme::FIXTURE_BULB_STEP,
                             })
                         }),
                         button("Duplicate").action(move || {
@@ -68,12 +68,12 @@ pub fn fixture_viewer(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> im
                             })
                         }),
                     ))
-                    .style(|s| s.gap(4.0).items_center()),
+                    .style(|s| s.gap(theme::SPACE_4).items_center()),
                 ))
                 .style(|s| {
-                    s.padding(10.0)
-                        .gap(4.0)
-                        .border_bottom(1.0)
+                    s.padding(theme::SPACE_10)
+                        .gap(theme::SPACE_4)
+                        .border_bottom(theme::BORDER_WIDTH)
                         .border_color(theme::color(theme::BORDER))
                 })
             },
@@ -82,8 +82,8 @@ pub fn fixture_viewer(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> im
     ))
     .style(|s| {
         s.height_full()
-            .padding(12.0)
-            .gap(8.0)
+            .padding(theme::SPACE_12)
+            .gap(theme::SPACE_8)
             .background(theme::color(theme::SURFACE))
     })
     .into_any()
