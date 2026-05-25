@@ -4,6 +4,7 @@ use floem::event::{Event, EventListener};
 use floem::peniko::Brush;
 use floem::prelude::*;
 use floem::style::{CursorStyle, Foreground};
+use lucide_floem::{Icon, StrokeWidth};
 
 use crate::ui::components::ui_static_label;
 use crate::ui::theme;
@@ -14,6 +15,7 @@ pub fn workbench_view(
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     let explorer = crate::ui::project_tree::ExplorerUiState::new();
+    let editor_gui = crate::ui::editor::gui::EditorGuiUiState::new();
     dyn_container(
         move || snapshot.get(),
         move |state| {
@@ -38,7 +40,7 @@ pub fn workbench_view(
             }
 
             panes.push(
-                crate::ui::editor::editor_view(state.clone(), Rc::clone(&dispatch))
+                crate::ui::editor::editor_view(state.clone(), editor_gui, Rc::clone(&dispatch))
                     .style(|s| {
                         s.flex_grow(1.0)
                             .flex_basis(0.0)
@@ -77,6 +79,7 @@ fn inspector_pane(
 
     let diagnostics = Rc::clone(&dispatch);
     let preview = Rc::clone(&dispatch);
+    let close = Rc::clone(&dispatch);
     let active = state.workbench_layout.active_inspector_tab;
 
     let body = match active {
@@ -100,6 +103,9 @@ fn inspector_pane(
             inspector_tab("Preview", active == InspectorTab::Preview, move || {
                 preview(AppAction::SetInspectorTab(InspectorTab::Preview))
             }),
+            empty().style(|s| s.flex_grow(1.0).min_width(0.0)),
+            close_pane_button(move || close(AppAction::ToggleInspector))
+                .style(|s| s.margin_right(theme::SPACE_6)),
         ))
         .style(|s| {
             s.height(theme::TAB_STRIP_HEIGHT)
@@ -111,6 +117,32 @@ fn inspector_pane(
         body.style(|s| s.flex_grow(1.0).min_height(0.0)),
     ))
     .style(|s| s.height_full().background(theme::color(theme::SURFACE)))
+}
+
+fn close_pane_button(action: impl Fn() + 'static) -> impl IntoView {
+    container(Icon::X.style(|s| {
+        s.size(13.0, 13.0)
+            .set(StrokeWidth, 1.8)
+            .set(Foreground, Brush::Solid(theme::color(theme::MUTED)))
+    }))
+    .on_event_stop(EventListener::PointerDown, move |event| {
+        if let Event::PointerDown(event) = event {
+            if event.button.is_primary() {
+                action();
+            }
+        }
+    })
+    .style(|s| {
+        s.size(20.0, 20.0)
+            .items_center()
+            .justify_center()
+            .border_radius(theme::CONTROL_RADIUS)
+            .cursor(CursorStyle::Pointer)
+            .hover(|s| {
+                s.background(theme::color(theme::SURFACE_CONTROL_HOVER))
+                    .set(Foreground, Brush::Solid(theme::color(theme::TEXT)))
+            })
+    })
 }
 
 fn inspector_tab(label: &'static str, active: bool, action: impl Fn() + 'static) -> impl IntoView {

@@ -12,6 +12,7 @@ dawn-project = { path = "../../crates/dawn-project" }
 dirs.workspace = true
 fontdb = "0.16.2"
 floem.workspace = true
+floem_renderer = "0.2.0"
 lucide-floem = "0.2.0"
 serde.workspace = true
 serde_json.workspace = true

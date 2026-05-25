@@ -39,6 +39,7 @@ pub enum GeometryRenderGuide {
         radius_y: f64,
         rotation: f64,
         large_arc: bool,
+        sweep_positive: bool,
     },
 }
 
@@ -49,6 +50,23 @@ pub struct GeometryRenderPlan {
     pub guides: Vec<GeometryRenderGuide>,
     pub bounds: GeometryRenderBounds,
     pub bulb_radius: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutFixtureRenderPlan {
+    pub id: String,
+    pub emitters: Vec<GeometryRenderPoint>,
+    pub guides: Vec<GeometryRenderGuide>,
+    pub bounds: GeometryRenderBounds,
+    pub bulb_radius: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutRenderPlan {
+    pub fixtures: Vec<LayoutFixtureRenderPlan>,
+    pub bounds: GeometryRenderBounds,
 }
 
 pub(crate) fn geometry_summary(geometry: &Geometry) -> String {
@@ -87,6 +105,7 @@ pub(crate) fn geometry_render_plan(geometry: &Geometry, bulb_size: f64) -> Geome
                 radius_y: *radius,
                 rotation: 0.0,
                 large_arc: (end_degrees - start_degrees).abs() > 180.0,
+                sweep_positive: end_degrees >= start_degrees,
             };
             (emitters, vec![guide])
         }
@@ -239,50 +258,107 @@ fn render_bounds(
     accumulator.finish()
 }
 
+pub fn layout_render_plan(fixtures: &[FixturePlacement<Resolved>]) -> LayoutRenderPlan {
+    let mut accumulator = BoundsAccumulator::new();
+    let fixtures = fixtures
+        .iter()
+        .map(|fixture| {
+            let local_plan =
+                geometry_render_plan(&fixture.fixture.geometry, fixture.fixture.bulb_size);
+            let plan = transform_geometry_render_plan(&local_plan, &fixture.transform);
+            include_bounds(&mut accumulator, plan.bounds);
+            LayoutFixtureRenderPlan {
+                id: fixture.id.clone(),
+                emitters: plan.emitters,
+                guides: plan.guides,
+                bounds: plan.bounds,
+                bulb_radius: plan.bulb_radius,
+            }
+        })
+        .collect();
+
+    LayoutRenderPlan {
+        fixtures,
+        bounds: accumulator.finish().unwrap_or_else(default_layout_bounds),
+    }
+}
+
 pub(crate) fn layout_render_bounds(
     fixtures: &[FixturePlacement<Resolved>],
 ) -> GeometryRenderBounds {
-    let mut accumulator = BoundsAccumulator::new();
-    for fixture in fixtures {
-        let plan = geometry_render_plan(&fixture.fixture.geometry, fixture.fixture.bulb_size);
-        for emitter in &plan.emitters {
-            let point = transform_render_point(*emitter, &fixture.transform);
-            let radius = transformed_radius(plan.bulb_radius, &fixture.transform);
-            accumulator.include(point.x - radius, point.y - radius);
-            accumulator.include(point.x + radius, point.y + radius);
-        }
-        for guide in &plan.guides {
-            match guide {
-                GeometryRenderGuide::Line { from, to } => {
-                    accumulator.include_point(transform_render_point(*from, &fixture.transform));
-                    accumulator.include_point(transform_render_point(*to, &fixture.transform));
-                }
-                GeometryRenderGuide::Arc {
-                    start,
-                    end,
-                    radius_x,
-                    radius_y,
-                    ..
-                } => {
-                    let start = transform_render_point(*start, &fixture.transform);
-                    let end = transform_render_point(*end, &fixture.transform);
-                    let scale = fixture.transform.scale;
-                    let radius_x = (radius_x * scale.x).abs();
-                    let radius_y = (radius_y * scale.y).abs();
-                    accumulator.include(start.x - radius_x, start.y - radius_y);
-                    accumulator.include(start.x + radius_x, start.y + radius_y);
-                    accumulator.include(end.x - radius_x, end.y - radius_y);
-                    accumulator.include(end.x + radius_x, end.y + radius_y);
-                }
-            }
-        }
+    layout_render_plan(fixtures).bounds
+}
+
+pub fn transform_geometry_render_plan(
+    plan: &GeometryRenderPlan,
+    transform: &Transform,
+) -> GeometryRenderPlan {
+    let bulb_radius = transformed_radius(plan.bulb_radius, transform);
+    let emitters = plan
+        .emitters
+        .iter()
+        .map(|point| transform_render_point(*point, transform))
+        .collect::<Vec<_>>();
+    let guides = plan
+        .guides
+        .iter()
+        .map(|guide| transform_render_guide(guide, transform))
+        .collect::<Vec<_>>();
+    let bounds =
+        render_bounds(&emitters, &guides, bulb_radius).unwrap_or_else(default_render_bounds);
+    GeometryRenderPlan {
+        emitters,
+        guides,
+        bounds,
+        bulb_radius,
     }
-    accumulator.finish().unwrap_or(GeometryRenderBounds {
+}
+
+fn default_layout_bounds() -> GeometryRenderBounds {
+    GeometryRenderBounds {
         min_x: -5.0,
         min_y: -4.0,
         max_x: 5.0,
         max_y: 4.0,
-    })
+    }
+}
+
+fn include_bounds(accumulator: &mut BoundsAccumulator, bounds: GeometryRenderBounds) {
+    accumulator.include(bounds.min_x, bounds.min_y);
+    accumulator.include(bounds.max_x, bounds.max_y);
+}
+
+fn transform_render_guide(
+    guide: &GeometryRenderGuide,
+    transform: &Transform,
+) -> GeometryRenderGuide {
+    match guide {
+        GeometryRenderGuide::Line { from, to } => GeometryRenderGuide::Line {
+            from: transform_render_point(*from, transform),
+            to: transform_render_point(*to, transform),
+        },
+        GeometryRenderGuide::Arc {
+            start,
+            end,
+            radius_x,
+            radius_y,
+            rotation,
+            large_arc,
+            sweep_positive,
+        } => GeometryRenderGuide::Arc {
+            start: transform_render_point(*start, transform),
+            end: transform_render_point(*end, transform),
+            radius_x: (radius_x * transform.scale.x).abs(),
+            radius_y: (radius_y * transform.scale.y).abs(),
+            rotation: rotation + transform.rotation.z,
+            large_arc: *large_arc,
+            sweep_positive: if transform.scale.x.signum() == transform.scale.y.signum() {
+                *sweep_positive
+            } else {
+                !*sweep_positive
+            },
+        },
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

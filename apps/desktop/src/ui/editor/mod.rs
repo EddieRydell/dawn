@@ -13,14 +13,19 @@ use crate::actions::AppAction;
 use crate::app_model::AppSnapshot;
 use crate::editor_session::EditorViewMode;
 use crate::ui::components::{ui_static_label, ui_text_editor};
+use crate::ui::editor::gui::EditorGuiUiState;
 use crate::ui::theme;
 
 pub mod gui;
 
-pub fn editor_view(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoView {
+pub fn editor_view(
+    state: AppSnapshot,
+    gui_state: EditorGuiUiState,
+    dispatch: crate::ui::UiDispatch,
+) -> impl IntoView {
     v_stack((
         tab_strip(state.clone(), Rc::clone(&dispatch)),
-        editor_body(state, dispatch).style(|s| s.flex_grow(1.0).min_height(0.0)),
+        editor_body(state, gui_state, dispatch).style(|s| s.flex_grow(1.0).min_height(0.0)),
     ))
     .style(|s| s.height_full().background(theme::color(theme::SURFACE)))
 }
@@ -149,7 +154,11 @@ fn close_tab_button(action: impl Fn() + 'static) -> impl IntoView {
     })
 }
 
-fn editor_body(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoView {
+fn editor_body(
+    state: AppSnapshot,
+    gui_state: EditorGuiUiState,
+    dispatch: crate::ui::UiDispatch,
+) -> impl IntoView {
     let Some(buffer) = state.active_buffer.clone() else {
         return center_message("Open a file from the project explorer").into_any();
     };
@@ -161,7 +170,7 @@ fn editor_body(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl Into
                 return source_editor(buffer.path, buffer.text, dispatch).into_any();
             }
             if state.active_layout_document.is_some() {
-                crate::ui::editor::gui::layout::layout_viewer(state, dispatch).into_any()
+                crate::ui::editor::gui::layout::layout_viewer(state, gui_state, dispatch).into_any()
             } else if state.active_fixture_document.is_some() {
                 crate::ui::editor::gui::fixture::fixture_viewer(state, dispatch).into_any()
             } else {

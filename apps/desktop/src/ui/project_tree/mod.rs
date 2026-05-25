@@ -5,8 +5,11 @@ use dawn_project::fs::{ProjectFsEntry, ProjectFsEntryKind};
 use dawn_project::path::ProjectPath;
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::keyboard::{Key, Modifiers, NamedKey};
+use floem::peniko::Brush;
 use floem::prelude::*;
+use floem::style::{CursorStyle, Foreground};
 use lucide_floem::Icon;
+use lucide_floem::StrokeWidth;
 
 use crate::actions::AppAction;
 use crate::app_model::AppSnapshot;
@@ -93,9 +96,13 @@ pub fn project_tree_view(
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     let Some(root) = state.project_root.clone() else {
-        return v_stack((header("Project"), ui_static_label("No project open")))
-            .style(panel_style)
-            .into_any();
+        let close = Rc::clone(&dispatch);
+        return v_stack((
+            panel_header("Project", move || close(AppAction::ToggleProjectTree)),
+            ui_static_label("No project open"),
+        ))
+        .style(panel_style)
+        .into_any();
     };
 
     if let Some(active_file) = state.active_file.as_ref() {
@@ -105,9 +112,10 @@ pub fn project_tree_view(
     let entries = state.project_entries.clone();
     let rows_explorer = explorer.clone();
     let rows_dispatch = Rc::clone(&dispatch);
+    let close = Rc::clone(&dispatch);
 
     v_stack((
-        header("Project"),
+        panel_header("Project", move || close(AppAction::ToggleProjectTree)),
         scroll(
             dyn_container(
                 {
@@ -563,12 +571,49 @@ fn file_icon(kind: ProjectFsEntryKind, expanded: bool) -> impl IntoView {
     }
 }
 
-fn header(text: &'static str) -> impl IntoView {
-    ui_static_label(text).style(|s| {
-        s.height(crate::ui::theme::ROW_HEIGHT)
-            .font_size(crate::ui::theme::FONT_SMALL)
-            .font_bold()
-            .color(crate::ui::theme::color(crate::ui::theme::MUTED))
+fn panel_header(text: &'static str, close: impl Fn() + 'static) -> impl IntoView {
+    h_stack((
+        ui_static_label(text).style(|s| {
+            s.flex_grow(1.0)
+                .min_width(0.0)
+                .font_size(crate::ui::theme::FONT_SMALL)
+                .font_bold()
+                .color(crate::ui::theme::color(crate::ui::theme::MUTED))
+        }),
+        close_pane_button(close),
+    ))
+    .style(|s| s.height(crate::ui::theme::ROW_HEIGHT).items_center())
+}
+
+fn close_pane_button(action: impl Fn() + 'static) -> impl IntoView {
+    container(Icon::X.style(|s| {
+        s.size(13.0, 13.0).set(StrokeWidth, 1.8).set(
+            Foreground,
+            Brush::Solid(crate::ui::theme::color(crate::ui::theme::MUTED)),
+        )
+    }))
+    .on_event_stop(EventListener::PointerDown, move |event| {
+        if let Event::PointerDown(event) = event {
+            if event.button.is_primary() {
+                action();
+            }
+        }
+    })
+    .style(|s| {
+        s.size(20.0, 20.0)
+            .items_center()
+            .justify_center()
+            .border_radius(crate::ui::theme::CONTROL_RADIUS)
+            .cursor(CursorStyle::Pointer)
+            .hover(|s| {
+                s.background(crate::ui::theme::color(
+                    crate::ui::theme::SURFACE_CONTROL_HOVER,
+                ))
+                .set(
+                    Foreground,
+                    Brush::Solid(crate::ui::theme::color(crate::ui::theme::TEXT)),
+                )
+            })
     })
 }
 
