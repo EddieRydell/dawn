@@ -1,0 +1,7 @@
+disallowed-methods = [
+  { path = "floem::views::button", reason = "use crate::ui::components::ui_button so Dawn theme defaults are enforced" },
+  { path = "floem::views::label", reason = "use crate::ui::components::ui_label so Dawn theme defaults are enforced" },
+  { path = "floem::views::static_label", reason = "use crate::ui::components::ui_static_label so Dawn theme defaults are enforced" },
+  { path = "floem::views::text_input", reason = "use crate::ui::components::ui_text_input so Dawn theme defaults are enforced" },
+  { path = "floem::views::text_editor", reason = "use crate::ui::components::ui_text_editor so Dawn theme defaults are enforced" },
+]

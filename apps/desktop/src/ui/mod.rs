@@ -1,13 +1,9 @@
-pub mod dawn_syntax;
-pub mod diagnostics;
+pub mod components;
 pub mod editor;
-pub mod fixture_viewer;
-pub mod geometry;
-pub mod layout_viewer;
-pub mod preview;
+pub mod inspector;
 pub mod project_tree;
-pub mod shell;
 pub mod theme;
+pub mod window;
 pub mod workbench;
 
 use std::rc::Rc;

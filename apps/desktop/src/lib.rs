@@ -1,3 +1,5 @@
+#![deny(clippy::disallowed_methods)]
+
 pub mod actions;
 pub mod app_model;
 pub mod editor_session;
@@ -6,5 +8,5 @@ pub mod ui;
 pub mod workspace;
 
 pub fn run() {
-    ui::shell::run();
+    ui::window::run();
 }

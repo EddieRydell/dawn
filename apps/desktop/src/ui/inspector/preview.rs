@@ -4,6 +4,7 @@ use floem::prelude::*;
 
 use crate::actions::AppAction;
 use crate::app_model::AppSnapshot;
+use crate::ui::components::{ui_button, ui_label, ui_static_label};
 use crate::ui::theme;
 
 pub fn preview_view(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoView {
@@ -16,27 +17,27 @@ pub fn preview_view(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl
     let time = state.playback.time;
 
     v_stack((
-        static_label("Preview").style(|s| s.font_bold()),
+        ui_static_label("Preview").style(|s| s.font_bold()),
         h_stack((
-            button("Use Active Sequence").action(move || {
+            ui_button("Use Active Sequence").action(move || {
                 if let Some(path) = active_file.clone() {
                     if path.to_slash_string().ends_with(".dawn") {
                         open_sequence(AppAction::OpenSequence(path));
                     }
                 }
             }),
-            button("Play").action(move || play(AppAction::Play)),
-            button("Pause").action(move || pause(AppAction::Pause)),
+            ui_button("Play").action(move || play(AppAction::Play)),
+            ui_button("Pause").action(move || pause(AppAction::Pause)),
         ))
         .style(|s| s.gap(theme::SPACE_6)),
         h_stack((
-            button(format!("-{:.2}", theme::PREVIEW_STEP_SECONDS)).action(move || {
+            ui_button(format!("-{:.2}", theme::PREVIEW_STEP_SECONDS)).action(move || {
                 back(AppAction::Seek(
                     (time - theme::PREVIEW_STEP_SECONDS).max(0.0),
                 ))
             }),
-            label(move || format!("{time:.2}s / {:.2}s", theme::PREVIEW_DURATION_SECONDS)),
-            button(format!("+{:.2}", theme::PREVIEW_STEP_SECONDS)).action(move || {
+            ui_label(move || format!("{time:.2}s / {:.2}s", theme::PREVIEW_DURATION_SECONDS)),
+            ui_button(format!("+{:.2}", theme::PREVIEW_STEP_SECONDS)).action(move || {
                 forward(AppAction::Seek(
                     (time + theme::PREVIEW_STEP_SECONDS).min(theme::PREVIEW_DURATION_SECONDS),
                 ))
@@ -60,8 +61,8 @@ fn sequence_readout(state: AppSnapshot) -> impl IntoView {
         .unwrap_or_else(|| "No active file".to_string());
 
     v_stack((
-        static_label("Sequence"),
-        label(move || format!("Active: {active_sequence}")),
+        ui_static_label("Sequence"),
+        ui_label(move || format!("Active: {active_sequence}")),
     ))
     .style(|s| {
         s.padding(theme::SPACE_10)

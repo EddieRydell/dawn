@@ -11,6 +11,7 @@ use lucide_floem::Icon;
 
 use crate::actions::AppAction;
 use crate::app_model::AppSnapshot;
+use crate::ui::components::{ui_label, ui_static_label, ui_text_input};
 
 #[derive(Clone)]
 pub struct ExplorerUiState {
@@ -79,13 +80,19 @@ impl ExplorerUiState {
     }
 }
 
+impl Default for ExplorerUiState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub fn project_tree_view(
     state: AppSnapshot,
     explorer: ExplorerUiState,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     let Some(root) = state.project_root.clone() else {
-        return v_stack((header("Project"), static_label("No project open")))
+        return v_stack((header("Project"), ui_static_label("No project open")))
             .style(panel_style)
             .into_any();
     };
@@ -186,7 +193,7 @@ fn explorer_row(
                 crate::ui::theme::PROJECT_ICON_SIZE,
             )
         }),
-        label(move || row.name.clone()).style(|s| s.flex_grow(1.0).min_width(0.0)),
+        ui_label(move || row.name.clone()).style(|s| s.flex_grow(1.0).min_width(0.0)),
     ))
     .on_click_stop(move |_| {
         open_state.selected.set(Some(path_for_click.clone()));
@@ -351,7 +358,7 @@ fn edit_row(
     let cancel_on_escape = Rc::clone(&cancel);
     let cancel_on_focus_lost = Rc::clone(&cancel);
 
-    text_input(name)
+    ui_text_input(name)
         .placeholder(placeholder)
         .on_key_down(
             Key::Named(NamedKey::Enter),
@@ -460,13 +467,7 @@ fn append_visible_children(
 
     let mut children = entries
         .iter()
-        .filter_map(|entry| {
-            if entry.path.parent().as_ref() == Some(parent) {
-                Some(entry)
-            } else {
-                None
-            }
-        })
+        .filter(|entry| entry.path.parent().as_ref() == Some(parent))
         .collect::<Vec<_>>();
     children.sort_by(|left, right| {
         let left_dir = left.kind == ProjectFsEntryKind::Directory;
@@ -551,7 +552,7 @@ fn file_icon(kind: ProjectFsEntryKind, expanded: bool) -> impl IntoView {
 }
 
 fn header(text: &'static str) -> impl IntoView {
-    static_label(text).style(|s| {
+    ui_static_label(text).style(|s| {
         s.height(crate::ui::theme::ROW_HEIGHT)
             .font_size(crate::ui::theme::FONT_SMALL)
             .font_bold()

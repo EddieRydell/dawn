@@ -7,7 +7,10 @@ use floem::prelude::*;
 use crate::actions::AppAction;
 use crate::app_model::AppSnapshot;
 use crate::editor_session::EditorViewMode;
+use crate::ui::components::{ui_button, ui_label, ui_static_label, ui_text_editor};
 use crate::ui::theme;
+
+pub mod gui;
 
 pub fn editor_view(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoView {
     v_stack((
@@ -20,7 +23,7 @@ pub fn editor_view(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl 
 
 fn tab_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoView {
     if state.tabs.is_empty() {
-        h_stack((static_label("No open editors"),))
+        h_stack((ui_static_label("No open editors"),))
             .style(|s| {
                 s.height(theme::TAB_STRIP_HEIGHT)
                     .items_center()
@@ -46,8 +49,8 @@ fn tab_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoVi
                 dirty
             );
             h_stack((
-                button(title).action(move || activate(AppAction::SetActiveFile(path.clone()))),
-                button("x").action(move || close(AppAction::CloseFile(close_path.clone()))),
+                ui_button(title).action(move || activate(AppAction::SetActiveFile(path.clone()))),
+                ui_button("x").action(move || close(AppAction::CloseFile(close_path.clone()))),
             ))
             .style(move |s| {
                 let bg = if active {
@@ -93,7 +96,7 @@ fn mode_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoV
 
     let mut controls = Vec::new();
     controls.push(
-        button("Text")
+        ui_button("Text")
             .action(move || {
                 text_dispatch(AppAction::SetEditorViewMode {
                     path: path.clone(),
@@ -104,7 +107,7 @@ fn mode_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoV
     );
     if is_dawn {
         controls.push(
-            button("GUI")
+            ui_button("GUI")
                 .action(move || {
                     if has_gui {
                         gui_dispatch(AppAction::SetEditorViewMode {
@@ -117,12 +120,12 @@ fn mode_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoV
         );
     }
     controls.push(
-        button("Save")
+        ui_button("Save")
             .action(move || save(AppAction::SaveActiveFile))
             .into_any(),
     );
     controls.push(
-        label(move || {
+        ui_label(move || {
             state
                 .active_descriptor
                 .as_ref()
@@ -168,9 +171,9 @@ fn editor_body(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl Into
                 return source_editor(buffer.path, buffer.text, dispatch).into_any();
             }
             if state.active_layout_document.is_some() {
-                crate::ui::layout_viewer::layout_viewer(state, dispatch).into_any()
+                crate::ui::editor::gui::layout::layout_viewer(state, dispatch).into_any()
             } else if state.active_fixture_document.is_some() {
-                crate::ui::fixture_viewer::fixture_viewer(state, dispatch).into_any()
+                crate::ui::editor::gui::fixture::fixture_viewer(state, dispatch).into_any()
             } else {
                 center_message("No GUI editor for this document").into_any()
             }
@@ -184,7 +187,7 @@ fn source_editor(
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     let dispatch_updates = Rc::clone(&dispatch);
-    text_editor(text)
+    ui_text_editor(text)
         .placeholder("File contents")
         .update(move |event| {
             let Some(editor) = event.editor else {
@@ -204,7 +207,7 @@ fn source_editor(
 }
 
 fn center_message(message: &'static str) -> impl IntoView {
-    container(static_label(message)).style(|s| {
+    container(ui_static_label(message)).style(|s| {
         s.width_full()
             .height_full()
             .items_center()

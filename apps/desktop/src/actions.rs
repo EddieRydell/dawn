@@ -66,8 +66,8 @@ pub enum AppAction {
     Stop,
     About,
     Seek(f64),
-    ToggleLeftPane,
-    ToggleRightPane,
-    SetRightPaneTab(crate::layout_persistence::RightPaneTab),
+    ToggleProjectTree,
+    ToggleInspector,
+    SetInspectorTab(crate::layout_persistence::InspectorTab),
     ResetLayout,
 }

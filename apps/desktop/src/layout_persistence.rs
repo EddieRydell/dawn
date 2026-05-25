@@ -7,44 +7,44 @@ use crate::ui::theme;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PanelLayout {
-    pub left_visible: bool,
-    pub right_visible: bool,
-    pub left_width: f64,
-    pub right_width: f64,
+pub struct WorkbenchLayout {
+    pub project_tree_visible: bool,
+    pub inspector_visible: bool,
+    pub project_tree_width: f64,
+    pub inspector_width: f64,
     #[serde(default)]
-    pub active_right_tab: RightPaneTab,
+    pub active_inspector_tab: InspectorTab,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub enum RightPaneTab {
+pub enum InspectorTab {
     #[default]
     Diagnostics,
     Preview,
 }
 
-impl Default for PanelLayout {
+impl Default for WorkbenchLayout {
     fn default() -> Self {
         Self {
-            left_visible: true,
-            right_visible: true,
-            left_width: theme::DEFAULT_LEFT_PANE_WIDTH,
-            right_width: theme::DEFAULT_RIGHT_PANE_WIDTH,
-            active_right_tab: RightPaneTab::Diagnostics,
+            project_tree_visible: true,
+            inspector_visible: true,
+            project_tree_width: theme::DEFAULT_LEFT_PANE_WIDTH,
+            inspector_width: theme::DEFAULT_RIGHT_PANE_WIDTH,
+            active_inspector_tab: InspectorTab::Diagnostics,
         }
     }
 }
 
-impl PanelLayout {
+impl WorkbenchLayout {
     pub fn reset(&mut self) {
         *self = Self::default();
     }
 }
 
-pub fn load_panel_layout() -> PanelLayout {
+pub fn load_workbench_layout() -> WorkbenchLayout {
     let Some(path) = config_path() else {
-        return PanelLayout::default();
+        return WorkbenchLayout::default();
     };
     fs::read_to_string(path)
         .ok()
@@ -52,7 +52,7 @@ pub fn load_panel_layout() -> PanelLayout {
         .unwrap_or_default()
 }
 
-pub fn save_panel_layout(layout: &PanelLayout) -> Result<(), String> {
+pub fn save_workbench_layout(layout: &WorkbenchLayout) -> Result<(), String> {
     let path = config_path().ok_or_else(|| "could not resolve config directory".to_string())?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;

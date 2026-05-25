@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use floem::prelude::*;
 
+use crate::ui::components::ui_button;
 use crate::ui::theme;
 
 pub fn workbench_view(
@@ -14,7 +15,7 @@ pub fn workbench_view(
         move |state| {
             explorer.reset_for_root(state.project_root.clone());
             let mut panes = Vec::new();
-            if state.panel_layout.left_visible {
+            if state.workbench_layout.project_tree_visible {
                 panes.push(
                     crate::ui::project_tree::project_tree_view(
                         state.clone(),
@@ -22,7 +23,7 @@ pub fn workbench_view(
                         Rc::clone(&dispatch),
                     )
                     .style(move |s| {
-                        s.width(state.panel_layout.left_width)
+                        s.width(state.workbench_layout.project_tree_width)
                             .height_full()
                             .border_right(theme::BORDER_WIDTH)
                             .border_color(theme::color(theme::BORDER))
@@ -42,11 +43,11 @@ pub fn workbench_view(
                     .into_any(),
             );
 
-            if state.panel_layout.right_visible {
+            if state.workbench_layout.inspector_visible {
                 panes.push(
-                    right_pane(state.clone(), Rc::clone(&dispatch))
+                    inspector_pane(state.clone(), Rc::clone(&dispatch))
                         .style(move |s| {
-                            s.width(state.panel_layout.right_width)
+                            s.width(state.workbench_layout.inspector_width)
                                 .height_full()
                                 .border_left(theme::BORDER_WIDTH)
                                 .border_color(theme::color(theme::BORDER))
@@ -63,22 +64,24 @@ pub fn workbench_view(
     .style(|s| s.width_full().flex_grow(1.0).min_height(0.0))
 }
 
-fn right_pane(
+fn inspector_pane(
     state: crate::app_model::AppSnapshot,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
-    use crate::layout_persistence::RightPaneTab;
+    use crate::layout_persistence::InspectorTab;
 
     let diagnostics = Rc::clone(&dispatch);
     let preview = Rc::clone(&dispatch);
-    let active = state.panel_layout.active_right_tab;
+    let active = state.workbench_layout.active_inspector_tab;
 
     let body = match active {
-        RightPaneTab::Diagnostics => {
-            crate::ui::diagnostics::diagnostics_view(state.clone(), Rc::clone(&dispatch)).into_any()
+        InspectorTab::Diagnostics => {
+            crate::ui::inspector::diagnostics::diagnostics_view(state.clone(), Rc::clone(&dispatch))
+                .into_any()
         }
-        RightPaneTab::Preview => {
-            crate::ui::preview::preview_view(state.clone(), Rc::clone(&dispatch)).into_any()
+        InspectorTab::Preview => {
+            crate::ui::inspector::preview::preview_view(state.clone(), Rc::clone(&dispatch))
+                .into_any()
         }
     };
 
@@ -86,11 +89,11 @@ fn right_pane(
         h_stack((
             tab_button(
                 "Diagnostics",
-                active == RightPaneTab::Diagnostics,
-                move || diagnostics(AppAction::SetRightPaneTab(RightPaneTab::Diagnostics)),
+                active == InspectorTab::Diagnostics,
+                move || diagnostics(AppAction::SetInspectorTab(InspectorTab::Diagnostics)),
             ),
-            tab_button("Preview", active == RightPaneTab::Preview, move || {
-                preview(AppAction::SetRightPaneTab(RightPaneTab::Preview))
+            tab_button("Preview", active == InspectorTab::Preview, move || {
+                preview(AppAction::SetInspectorTab(InspectorTab::Preview))
             }),
         ))
         .style(|s| {
@@ -106,7 +109,7 @@ fn right_pane(
 }
 
 fn tab_button(label: &'static str, active: bool, action: impl Fn() + 'static) -> impl IntoView {
-    button(label).action(action).style(move |s| {
+    ui_button(label).action(action).style(move |s| {
         let bg = if active {
             theme::color(theme::SELECTED)
         } else {

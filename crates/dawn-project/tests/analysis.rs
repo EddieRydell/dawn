@@ -514,11 +514,11 @@ stage:
 }
 
 #[test]
-fn panel_files_do_not_reintroduce_geometry_helpers() {
+fn gui_editor_files_do_not_reintroduce_geometry_helpers() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let viewer_paths = [
-        root.join("apps/desktop/src/ui/layout_viewer.rs"),
-        root.join("apps/desktop/src/ui/fixture_viewer.rs"),
+        root.join("apps/desktop/src/ui/editor/gui/layout.rs"),
+        root.join("apps/desktop/src/ui/editor/gui/fixture.rs"),
     ];
     let forbidden = [
         "sample_polyline_points",

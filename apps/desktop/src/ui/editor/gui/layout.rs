@@ -4,6 +4,7 @@ use floem::prelude::*;
 
 use crate::actions::AppAction;
 use crate::app_model::AppSnapshot;
+use crate::ui::components::{ui_button, ui_label, ui_static_label};
 use crate::ui::theme;
 
 pub fn layout_viewer(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoView {
@@ -16,9 +17,9 @@ pub fn layout_viewer(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> imp
 
     h_stack((
         v_stack((
-            static_label("Layout").style(|s| s.font_bold()),
-            label(move || format!("{}  {:?}", document.name, document.units)),
-            label(move || {
+            ui_static_label("Layout").style(|s| s.font_bold()),
+            ui_label(move || format!("{}  {:?}", document.name, document.units)),
+            ui_label(move || {
                 format!(
                     "Bounds {:.1},{:.1} to {:.1},{:.1}",
                     bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y
@@ -40,53 +41,53 @@ pub fn layout_viewer(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> imp
                     let id_duplicate = id.clone();
                     let id_delete = id.clone();
                     v_stack((
-                        static_label(fixture.id.clone()).style(|s| s.font_bold()),
-                        static_label(format!(
+                        ui_static_label(fixture.id.clone()).style(|s| s.font_bold()),
+                        ui_static_label(format!(
                             "{}  {}",
                             fixture.resolved_fixture.name,
                             fixture.resolved_fixture.geometry_summary
                         )),
-                        static_label(format!(
+                        ui_static_label(format!(
                             "x {:.2}  y {:.2}  z {:.2}",
                             fixture.transform.position.x,
                             fixture.transform.position.y,
                             fixture.transform.position.z
                         )),
                         h_stack((
-                            button("Left").action(move || {
+                            ui_button("Left").action(move || {
                                 nudge_left(AppAction::NudgeLayoutFixture {
                                     id: id_left.clone(),
                                     dx: -theme::LAYOUT_NUDGE_STEP,
                                     dy: 0.0,
                                 })
                             }),
-                            button("Right").action(move || {
+                            ui_button("Right").action(move || {
                                 nudge_right(AppAction::NudgeLayoutFixture {
                                     id: id_right.clone(),
                                     dx: theme::LAYOUT_NUDGE_STEP,
                                     dy: 0.0,
                                 })
                             }),
-                            button("Up").action(move || {
+                            ui_button("Up").action(move || {
                                 nudge_up(AppAction::NudgeLayoutFixture {
                                     id: id_up.clone(),
                                     dx: 0.0,
                                     dy: theme::LAYOUT_NUDGE_STEP,
                                 })
                             }),
-                            button("Down").action(move || {
+                            ui_button("Down").action(move || {
                                 nudge_down(AppAction::NudgeLayoutFixture {
                                     id: id_down.clone(),
                                     dx: 0.0,
                                     dy: -theme::LAYOUT_NUDGE_STEP,
                                 })
                             }),
-                            button("Duplicate").action(move || {
+                            ui_button("Duplicate").action(move || {
                                 duplicate(AppAction::DuplicateLayoutFixture {
                                     id: id_duplicate.clone(),
                                 })
                             }),
-                            button("Delete").action(move || {
+                            ui_button("Delete").action(move || {
                                 delete(AppAction::DeleteLayoutFixture {
                                     id: id_delete.clone(),
                                 })
@@ -106,9 +107,9 @@ pub fn layout_viewer(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> imp
         ))
         .style(|s| s.flex_grow(1.0).min_width(0.0).gap(theme::SPACE_8)),
         v_stack((
-            static_label("Groups").style(|s| s.font_bold()),
+            ui_static_label("Groups").style(|s| s.font_bold()),
             v_stack_from_iter(groups.into_iter().map(|group| {
-                static_label(format!("{}  {}", group.name, group.members.join(", ")))
+                ui_static_label(format!("{}  {}", group.name, group.members.join(", ")))
             })),
         ))
         .style(|s| {

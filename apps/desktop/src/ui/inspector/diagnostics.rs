@@ -5,12 +5,13 @@ use floem::prelude::*;
 
 use crate::actions::AppAction;
 use crate::app_model::AppSnapshot;
+use crate::ui::components::{ui_button, ui_static_label};
 use crate::ui::theme;
 
 pub fn diagnostics_view(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoView {
     let rows = state.diagnostics.clone();
     let body = if rows.is_empty() {
-        static_label("No diagnostics").into_any()
+        ui_static_label("No diagnostics").into_any()
     } else {
         scroll(
             v_stack_from_iter(rows.into_iter().map(move |diagnostic| {
@@ -25,7 +26,7 @@ pub fn diagnostics_view(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> 
                     diagnostic.severity,
                     diagnostic.message
                 );
-                button(summary)
+                ui_button(summary)
                     .action(move || {
                         dispatch(AppAction::OpenFile(path.clone()));
                     })
@@ -43,7 +44,7 @@ pub fn diagnostics_view(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> 
     };
 
     v_stack((
-        static_label("Diagnostics").style(|s| s.font_bold()),
+        ui_static_label("Diagnostics").style(|s| s.font_bold()),
         body.style(|s| s.flex_grow(1.0).min_height(0.0)),
     ))
     .style(|s| s.height_full().padding(theme::SPACE_10).gap(theme::SPACE_8))

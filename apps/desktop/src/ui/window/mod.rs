@@ -12,6 +12,7 @@ use floem::{action, views::drag_window_area, Application};
 use crate::actions::AppAction;
 use crate::app_model::AppModel;
 use crate::editor_session::EditorViewMode;
+use crate::ui::components::{ui_button, ui_label, ui_static_label};
 use crate::ui::theme;
 
 pub fn run() {
@@ -20,7 +21,8 @@ pub fn run() {
         .size(Size::new(theme::WINDOW_WIDTH, theme::WINDOW_HEIGHT))
         .resizable(true)
         .undecorated(true)
-        .undecorated_shadow(true);
+        .undecorated_shadow(true)
+        .apply_default_theme(false);
     Application::new().window(app_view, Some(config)).run();
 }
 
@@ -44,14 +46,7 @@ fn app_view(window_id: WindowId) -> impl IntoView {
         crate::ui::workbench::workbench_view(snapshot, Rc::clone(&dispatch)),
         status_bar(snapshot),
     ))
-    .style(move |s| {
-        s.size_full()
-            .background(theme::color(theme::BACKGROUND))
-            .font_family(theme::APP_FONT.to_string())
-            .font_size(theme::FONT_UI)
-            .line_height(theme::LINE_HEIGHT_UI as f32)
-            .color(theme::color(theme::TEXT))
-    })
+    .style(theme::app_root_style)
 }
 
 fn title_bar(
@@ -63,7 +58,7 @@ fn title_bar(
 
     h_stack((
         h_stack((
-            static_label("Dawn").style(|s| {
+            ui_static_label("Dawn").style(|s| {
                 s.font_size(theme::FONT_SMALL)
                     .font_bold()
                     .margin_right(theme::SPACE_10)
@@ -105,7 +100,7 @@ fn title_bar(
 }
 
 fn menu_tab(label_text: &'static str, menu: impl Fn() -> Menu + 'static) -> impl IntoView {
-    container(static_label(label_text).style(|s| s.font_size(theme::FONT_SMALL)))
+    container(ui_static_label(label_text).style(|s| s.font_size(theme::FONT_SMALL)))
         .style(|s| {
             s.height(theme::MENU_TAB_HEIGHT)
                 .items_center()
@@ -117,7 +112,7 @@ fn menu_tab(label_text: &'static str, menu: impl Fn() -> Menu + 'static) -> impl
 }
 
 fn title_button(label: &'static str) -> floem::views::Button {
-    button(label).style(|s| {
+    ui_button(label).style(|s| {
         s.width(theme::TITLE_BUTTON_WIDTH)
             .height(theme::TITLE_BAR_HEIGHT)
             .border_radius(theme::SQUARE_RADIUS)
@@ -181,8 +176,8 @@ fn view_menu(
     move || {
         let gui = Rc::clone(&dispatch);
         let text = Rc::clone(&dispatch);
-        let toggle_left = Rc::clone(&dispatch);
-        let toggle_right = Rc::clone(&dispatch);
+        let toggle_project_tree = Rc::clone(&dispatch);
+        let toggle_inspector = Rc::clone(&dispatch);
         let reset_layout = Rc::clone(&dispatch);
 
         Menu::new("View")
@@ -203,11 +198,11 @@ fn view_menu(
                 }
             }))
             .separator()
-            .entry(MenuItem::new("Toggle Left Pane").action(move || {
-                toggle_left(AppAction::ToggleLeftPane);
+            .entry(MenuItem::new("Toggle Project Tree").action(move || {
+                toggle_project_tree(AppAction::ToggleProjectTree);
             }))
-            .entry(MenuItem::new("Toggle Right Pane").action(move || {
-                toggle_right(AppAction::ToggleRightPane);
+            .entry(MenuItem::new("Toggle Inspector").action(move || {
+                toggle_inspector(AppAction::ToggleInspector);
             }))
             .entry(MenuItem::new("Reset Layout").action(move || {
                 reset_layout(AppAction::ResetLayout);
@@ -245,8 +240,8 @@ fn help_menu(dispatch: crate::ui::UiDispatch) -> impl Fn() -> Menu {
 
 fn status_bar(snapshot: crate::ui::UiSnapshot) -> impl IntoView {
     h_stack((
-        label(move || snapshot.get().status),
-        label(move || {
+        ui_label(move || snapshot.get().status),
+        ui_label(move || {
             let snapshot = snapshot.get();
             match snapshot.analysis {
                 Some(analysis) => format!(

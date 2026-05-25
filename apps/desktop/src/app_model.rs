@@ -1,6 +1,6 @@
 use crate::actions::AppAction;
 use crate::editor_session::{EditorBuffer, EditorSession};
-use crate::layout_persistence::{load_panel_layout, save_panel_layout, PanelLayout};
+use crate::layout_persistence::{load_workbench_layout, save_workbench_layout, WorkbenchLayout};
 use crate::ui::theme;
 use crate::workspace::WorkspaceService;
 use dawn_project::analysis::{ProjectAnalysis, ProjectDiagnostic};
@@ -29,7 +29,7 @@ impl Default for PlaybackState {
 pub struct AppModel {
     pub workspace: WorkspaceService,
     pub editors: EditorSession,
-    pub panel_layout: PanelLayout,
+    pub workbench_layout: WorkbenchLayout,
     pub playback: PlaybackState,
     pub project_root: Option<String>,
     pub project_entries: Vec<ProjectFsEntry>,
@@ -44,7 +44,7 @@ pub struct AppSnapshot {
     pub project_entries: Vec<ProjectFsEntry>,
     pub analysis: Option<ProjectAnalysis>,
     pub diagnostics: Vec<ProjectDiagnostic>,
-    pub panel_layout: PanelLayout,
+    pub workbench_layout: WorkbenchLayout,
     pub playback: PlaybackState,
     pub tabs: Vec<EditorBuffer>,
     pub active_file: Option<ProjectPath>,
@@ -60,7 +60,7 @@ impl Default for AppModel {
         Self {
             workspace: WorkspaceService::default(),
             editors: EditorSession::default(),
-            panel_layout: load_panel_layout(),
+            workbench_layout: load_workbench_layout(),
             playback: PlaybackState::default(),
             project_root: None,
             project_entries: Vec::new(),
@@ -111,7 +111,7 @@ impl AppModel {
             project_entries: self.project_entries.clone(),
             analysis: self.analysis.clone(),
             diagnostics: self.diagnostics.clone(),
-            panel_layout: self.panel_layout.clone(),
+            workbench_layout: self.workbench_layout.clone(),
             playback: self.playback.clone(),
             tabs: self.editors.tabs(),
             active_file,
@@ -298,21 +298,22 @@ impl AppModel {
             AppAction::Seek(time) => {
                 self.playback.time = time.clamp(0.0, theme::PREVIEW_DURATION_SECONDS);
             }
-            AppAction::ToggleLeftPane => {
-                self.panel_layout.left_visible = !self.panel_layout.left_visible;
-                save_panel_layout(&self.panel_layout)?;
+            AppAction::ToggleProjectTree => {
+                self.workbench_layout.project_tree_visible =
+                    !self.workbench_layout.project_tree_visible;
+                save_workbench_layout(&self.workbench_layout)?;
             }
-            AppAction::ToggleRightPane => {
-                self.panel_layout.right_visible = !self.panel_layout.right_visible;
-                save_panel_layout(&self.panel_layout)?;
+            AppAction::ToggleInspector => {
+                self.workbench_layout.inspector_visible = !self.workbench_layout.inspector_visible;
+                save_workbench_layout(&self.workbench_layout)?;
             }
-            AppAction::SetRightPaneTab(tab) => {
-                self.panel_layout.active_right_tab = tab;
-                save_panel_layout(&self.panel_layout)?;
+            AppAction::SetInspectorTab(tab) => {
+                self.workbench_layout.active_inspector_tab = tab;
+                save_workbench_layout(&self.workbench_layout)?;
             }
             AppAction::ResetLayout => {
-                self.panel_layout.reset();
-                save_panel_layout(&self.panel_layout)?;
+                self.workbench_layout.reset();
+                save_workbench_layout(&self.workbench_layout)?;
             }
         }
         Ok(())
