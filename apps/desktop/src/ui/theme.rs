@@ -2,7 +2,7 @@ use floem::peniko::{Brush, Color};
 use floem::style::{CursorStyle, Foreground, Selectable, Style};
 use floem::views::{scroll, ButtonClass, LabelClass, PlaceholderTextClass, TextInputClass};
 
-use crate::ui::dropdown_menu::DropdownMenuStyle;
+use crate::ui::components::dropdown_menu::DropdownMenuStyle;
 
 pub const BACKGROUND: &str = "#111111";
 pub const SURFACE: &str = "#232323";
@@ -47,6 +47,7 @@ pub const MENU_ITEM_HEIGHT: f64 = 26.0;
 pub const MENU_SEPARATOR_HEIGHT: f64 = 1.0;
 pub const DROPDOWN_MENU_Z_INDEX: i32 = 999;
 pub const TITLE_BUTTON_WIDTH: f64 = 42.0;
+pub const TITLE_BUTTON_ICON_SIZE: f64 = 13.0;
 pub const TAB_STRIP_HEIGHT: f64 = 34.0;
 pub const TAB_HEIGHT: f64 = 32.0;
 pub const TOOLBAR_HEIGHT: f64 = 32.0;

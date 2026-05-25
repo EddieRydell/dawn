@@ -1,13 +1,18 @@
 use std::rc::Rc;
 
-use dawn_project::document::DocumentViewId;
 use dawn_project::path::ProjectPath;
+use floem::event::{Event, EventListener};
+use floem::peniko::Brush;
 use floem::prelude::*;
+use floem::style::{CursorStyle, Foreground};
+use floem::text::FamilyOwned;
+use floem::views::editor::text::SimpleStyling;
+use lucide_floem::{Icon, StrokeWidth};
 
 use crate::actions::AppAction;
 use crate::app_model::AppSnapshot;
 use crate::editor_session::EditorViewMode;
-use crate::ui::components::{ui_button, ui_label, ui_static_label, ui_text_editor};
+use crate::ui::components::{ui_static_label, ui_text_editor};
 use crate::ui::theme;
 
 pub mod gui;
@@ -15,7 +20,6 @@ pub mod gui;
 pub fn editor_view(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoView {
     v_stack((
         tab_strip(state.clone(), Rc::clone(&dispatch)),
-        mode_strip(state.clone(), Rc::clone(&dispatch)),
         editor_body(state, dispatch).style(|s| s.flex_grow(1.0).min_height(0.0)),
     ))
     .style(|s| s.height_full().background(theme::color(theme::SURFACE)))
@@ -23,7 +27,7 @@ pub fn editor_view(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl 
 
 fn tab_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoView {
     if state.tabs.is_empty() {
-        h_stack((ui_static_label("No open editors"),))
+        h_stack((ui_static_label("No open files"),))
             .style(|s| {
                 s.height(theme::TAB_STRIP_HEIGHT)
                     .items_center()
@@ -34,37 +38,19 @@ fn tab_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoVi
             })
             .into_any()
     } else {
+        let active_file = state.active_file.clone();
         h_stack_from_iter(state.tabs.into_iter().map(move |tab| {
-            let activate = Rc::clone(&dispatch);
-            let close = Rc::clone(&dispatch);
-            let path = tab.path.clone();
-            let close_path = tab.path.clone();
-            let active = state.active_file.as_ref() == Some(&tab.path);
+            let active = active_file.as_ref() == Some(&tab.path);
             let dirty = if tab.is_dirty() { "*" } else { "" };
             let title = format!(
                 "{}{}",
-                path.file_name()
+                tab.path
+                    .file_name()
                     .map(|name| name.to_string_lossy().to_string())
-                    .unwrap_or_else(|| path.to_slash_string()),
+                    .unwrap_or_else(|| tab.path.to_slash_string()),
                 dirty
             );
-            h_stack((
-                ui_button(title).action(move || activate(AppAction::SetActiveFile(path.clone()))),
-                ui_button("x").action(move || close(AppAction::CloseFile(close_path.clone()))),
-            ))
-            .style(move |s| {
-                let bg = if active {
-                    theme::color(theme::SURFACE)
-                } else {
-                    theme::color(theme::PANEL_DARK)
-                };
-                s.height(theme::TAB_HEIGHT)
-                    .items_center()
-                    .padding_horiz(theme::SPACE_4)
-                    .border_right(theme::BORDER_WIDTH)
-                    .border_color(theme::color(theme::BORDER))
-                    .background(bg)
-            })
+            editor_tab(title, tab.path, active, Rc::clone(&dispatch))
         }))
         .style(|s| {
             s.height(theme::TAB_STRIP_HEIGHT)
@@ -77,86 +63,90 @@ fn tab_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoVi
     }
 }
 
-fn mode_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoView {
-    let Some(buffer) = state.active_buffer.clone() else {
-        return empty().into_any();
-    };
-    let text_dispatch = Rc::clone(&dispatch);
-    let gui_dispatch = Rc::clone(&dispatch);
-    let save = Rc::clone(&dispatch);
-    let path = buffer.path.clone();
-    let gui_path = buffer.path.clone();
-    let is_dawn = is_dawn_path(&buffer.path);
-    let has_gui = state.active_descriptor.as_ref().is_some_and(|descriptor| {
-        descriptor.available_views.contains(&DocumentViewId::Layout)
-            || descriptor
-                .available_views
-                .contains(&DocumentViewId::Fixture)
-    });
+fn editor_tab(
+    title: String,
+    path: ProjectPath,
+    active: bool,
+    dispatch: crate::ui::UiDispatch,
+) -> impl IntoView {
+    let activate = Rc::clone(&dispatch);
+    let close = Rc::clone(&dispatch);
+    let activate_path = path.clone();
+    let close_path = path;
 
-    let mut controls = Vec::new();
-    controls.push(
-        ui_button("Text")
-            .action(move || {
-                text_dispatch(AppAction::SetEditorViewMode {
-                    path: path.clone(),
-                    mode: EditorViewMode::Text,
-                })
+    h_stack((
+        ui_static_label(title).style(move |s| {
+            let text_color = if active {
+                theme::color(theme::TEXT)
+            } else {
+                theme::color(theme::MUTED)
+            };
+            s.flex_grow(1.0)
+                .min_width(0.0)
+                .padding_left(theme::SPACE_10)
+                .font_size(theme::FONT_SMALL)
+                .color(text_color)
+                .set(Foreground, Brush::Solid(text_color))
+                .text_ellipsis()
+        }),
+        close_tab_button(move || close(AppAction::CloseFile(close_path.clone()))),
+    ))
+    .on_event_stop(EventListener::PointerDown, move |event| {
+        if let Event::PointerDown(event) = event {
+            if event.button.is_primary() {
+                activate(AppAction::SetActiveFile(activate_path.clone()));
+            }
+        }
+    })
+    .style(move |s| {
+        let bg = if active {
+            theme::color(theme::SURFACE)
+        } else {
+            theme::color(theme::PANEL_DARK)
+        };
+        s.width(176.0)
+            .height(theme::TAB_HEIGHT)
+            .items_center()
+            .gap(theme::SPACE_6)
+            .padding_right(theme::SPACE_6)
+            .border_right(theme::BORDER_WIDTH)
+            .border_color(theme::color(theme::BORDER))
+            .background(bg)
+            .cursor(CursorStyle::Pointer)
+            .hover(move |s| {
+                if active {
+                    s
+                } else {
+                    s.background(theme::color(theme::PANEL))
+                }
             })
-            .into_any(),
-    );
-    if is_dawn {
-        controls.push(
-            ui_button("GUI")
-                .action(move || {
-                    if has_gui {
-                        gui_dispatch(AppAction::SetEditorViewMode {
-                            path: gui_path.clone(),
-                            mode: EditorViewMode::Gui,
-                        })
-                    }
-                })
-                .into_any(),
-        );
-    }
-    controls.push(
-        ui_button("Save")
-            .action(move || save(AppAction::SaveActiveFile))
-            .into_any(),
-    );
-    controls.push(
-        ui_label(move || {
-            state
-                .active_descriptor
-                .as_ref()
-                .map(|descriptor| {
-                    descriptor
-                        .objects
-                        .iter()
-                        .map(|object| object.kind.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_else(|| "Text file".to_string())
-        })
-        .style(|s| {
-            s.margin_left(theme::SPACE_8)
-                .color(theme::color(theme::MUTED))
-        })
-        .into_any(),
-    );
+    })
+}
 
-    h_stack_from_iter(controls)
-        .style(|s| {
-            s.height(theme::TOOLBAR_HEIGHT)
-                .items_center()
-                .gap(theme::SPACE_6)
-                .padding_horiz(theme::SPACE_10)
-                .border_bottom(theme::BORDER_WIDTH)
-                .border_color(theme::color(theme::BORDER))
-                .background(theme::color(theme::PANEL))
-        })
-        .into_any()
+fn close_tab_button(action: impl Fn() + 'static) -> impl IntoView {
+    container(Icon::X.style(|s| {
+        s.size(13.0, 13.0)
+            .set(StrokeWidth, 1.8)
+            .set(Foreground, Brush::Solid(theme::color(theme::MUTED)))
+    }))
+    .on_event_stop(EventListener::PointerDown, move |event| {
+        if let Event::PointerDown(event) = event {
+            if event.button.is_primary() {
+                action();
+            }
+        }
+    })
+    .style(|s| {
+        s.size(20.0, 20.0)
+            .items_center()
+            .justify_center()
+            .border_radius(theme::CONTROL_RADIUS)
+            .cursor(CursorStyle::Pointer)
+            .hover(|s| {
+                s.background(theme::color(theme::SURFACE_CONTROL_HOVER))
+                    .set(Foreground, Brush::Solid(theme::color(theme::TEXT)))
+            })
+    })
 }
 
 fn editor_body(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoView {
@@ -188,6 +178,13 @@ fn source_editor(
 ) -> impl IntoView {
     let dispatch_updates = Rc::clone(&dispatch);
     ui_text_editor(text)
+        .with_editor(|editor| {
+            let mut styling = SimpleStyling::builder();
+            styling
+                .font_family(vec![FamilyOwned::Name(theme::MONO_FONT.to_string())])
+                .font_size(theme::FONT_EDITOR as usize);
+            editor.update_doc(editor.doc(), Some(Rc::new(styling.build())));
+        })
         .placeholder("File contents")
         .update(move |event| {
             let Some(editor) = event.editor else {
@@ -200,8 +197,6 @@ fn source_editor(
         .style(|s| {
             s.width_full()
                 .height_full()
-                .font_family(theme::MONO_FONT.to_string())
-                .font_size(theme::FONT_EDITOR)
                 .background(theme::color(theme::SURFACE))
         })
 }

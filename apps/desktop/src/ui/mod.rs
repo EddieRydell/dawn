@@ -1,6 +1,6 @@
 pub mod components;
-pub mod dropdown_menu;
 pub mod editor;
+pub mod fonts;
 pub mod inspector;
 pub mod project_tree;
 pub mod theme;

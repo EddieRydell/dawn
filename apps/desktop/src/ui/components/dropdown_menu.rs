@@ -9,7 +9,7 @@ use floem::reactive::create_effect;
 use floem::style::{CursorStyle, Foreground, Selectable};
 use floem::ViewId;
 
-use crate::ui::components::ui_static_label;
+use super::ui_static_label;
 
 #[derive(Clone)]
 pub struct DropdownMenuController {

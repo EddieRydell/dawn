@@ -10,8 +10,8 @@ use lucide_floem::Icon;
 
 use crate::actions::AppAction;
 use crate::app_model::AppSnapshot;
+use crate::ui::components::dropdown_menu::{DropdownMenuController, DropdownMenuEntry};
 use crate::ui::components::{ui_label, ui_static_label, ui_text_input};
-use crate::ui::dropdown_menu::{DropdownMenuController, DropdownMenuEntry};
 
 #[derive(Clone)]
 pub struct ExplorerUiState {

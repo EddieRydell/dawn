@@ -884,6 +884,7 @@ dependencies = [
  "dawn-project",
  "dirs",
  "floem",
+ "fontdb 0.16.2",
  "lucide-floem",
  "serde",
  "serde_json",

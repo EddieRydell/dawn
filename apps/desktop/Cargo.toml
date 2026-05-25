@@ -10,6 +10,7 @@ default-run = "dawn-desktop"
 [dependencies]
 dawn-project = { path = "../../crates/dawn-project" }
 dirs.workspace = true
+fontdb = "0.16.2"
 floem.workspace = true
 lucide-floem = "0.2.0"
 serde.workspace = true

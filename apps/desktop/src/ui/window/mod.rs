@@ -1,22 +1,31 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use floem::event::{Event, EventListener};
+use dawn_project::document::DocumentViewId;
+use floem::event::{Event, EventListener, EventPropagation};
 use floem::file::FileDialogOptions;
 use floem::file_action::open_file;
+use floem::keyboard::Key;
 use floem::kurbo::Size;
+use floem::peniko::Brush;
 use floem::prelude::*;
+use floem::style::Foreground;
 use floem::window::{close_window, WindowConfig, WindowId};
 use floem::{action, views::drag_window_area, Application};
+use lucide_floem::{Icon, StrokeWidth};
 
 use crate::actions::AppAction;
 use crate::app_model::AppModel;
 use crate::editor_session::EditorViewMode;
+use crate::ui::components::dropdown_menu::{
+    dropdown_menu_layer, DropdownMenuController, DropdownMenuEntry,
+};
 use crate::ui::components::{ui_button, ui_label, ui_static_label};
-use crate::ui::dropdown_menu::{dropdown_menu_layer, DropdownMenuController, DropdownMenuEntry};
-use crate::ui::theme;
+use crate::ui::{fonts, theme};
 
 pub fn run() {
+    fonts::assert_required_fonts_available();
+
     let config = WindowConfig::default()
         .title("Dawn")
         .size(Size::new(theme::WINDOW_WIDTH, theme::WINDOW_HEIGHT))
@@ -43,6 +52,8 @@ fn app_view(window_id: WindowId) -> impl IntoView {
         }) as crate::ui::UiDispatch
     };
 
+    let save_shortcut = Rc::clone(&dispatch);
+
     stack((
         v_stack((
             title_bar(
@@ -61,6 +72,20 @@ fn app_view(window_id: WindowId) -> impl IntoView {
         .style(|s| s.size_full()),
         dropdown_menu_layer(dropdown_menu.clone()),
     ))
+    .on_event(EventListener::KeyDown, move |event| {
+        if let Event::KeyDown(event) = event {
+            if event.modifiers.control()
+                && !event.modifiers.shift()
+                && !event.modifiers.alt()
+                && !event.modifiers.meta()
+                && matches!(&event.key.logical_key, Key::Character(key) if key.eq_ignore_ascii_case("s"))
+            {
+                save_shortcut(AppAction::SaveActiveFile);
+                return EventPropagation::Stop;
+            }
+        }
+        EventPropagation::Continue
+    })
     .on_resize(move |rect| dropdown_menu.set_window_size(rect.size()))
     .style(theme::app_root_style)
 }
@@ -102,9 +127,9 @@ fn title_bar(
         .style(|s| s.height_full().items_center().gap(theme::SPACE_2)),
         drag_window_area(empty()).style(|s| s.flex_grow(1.0).height_full().min_width(0.0)),
         h_stack((
-            title_button("_").action(action::minimize_window),
-            title_button("[]").action(action::toggle_window_maximized),
-            title_button("X")
+            title_button(Icon::Minus).action(action::minimize_window),
+            title_button(Icon::Square).action(action::toggle_window_maximized),
+            title_button(Icon::X)
                 .action(move || {
                     close_dispatch(AppAction::CloseProject);
                     close_window(window_id);
@@ -113,6 +138,7 @@ fn title_bar(
                     s.hover(|s| {
                         s.background(theme::color(theme::DANGER))
                             .color(theme::color(theme::TEXT_INVERTED))
+                            .set(Foreground, Brush::Solid(theme::color(theme::TEXT_INVERTED)))
                     })
                 }),
         ))
@@ -151,13 +177,31 @@ fn menu_tab(
     })
 }
 
-fn title_button(label: &'static str) -> floem::views::Button {
-    ui_button(label).style(|s| {
+fn title_button(icon: Icon) -> floem::views::Button {
+    ui_button(icon.style(|s| {
+        s.size(theme::TITLE_BUTTON_ICON_SIZE, theme::TITLE_BUTTON_ICON_SIZE)
+            .set(StrokeWidth, 1.8)
+    }))
+    .style(|s| {
         s.width(theme::TITLE_BUTTON_WIDTH)
             .height(theme::TITLE_BAR_HEIGHT)
+            .padding_horiz(0.0)
+            .padding_vert(0.0)
+            .border(0.0)
             .border_radius(theme::SQUARE_RADIUS)
             .background(theme::color(theme::PANEL_DARK))
-            .hover(|s| s.background(theme::color(theme::SELECTED)))
+            .color(theme::color(theme::MUTED))
+            .set(Foreground, Brush::Solid(theme::color(theme::MUTED)))
+            .hover(|s| {
+                s.background(theme::color(theme::SURFACE_CONTROL_HOVER))
+                    .color(theme::color(theme::TEXT))
+                    .set(Foreground, Brush::Solid(theme::color(theme::TEXT)))
+            })
+            .active(|s| {
+                s.background(theme::color(theme::SURFACE_CONTROL_ACTIVE))
+                    .color(theme::color(theme::TEXT_INVERTED))
+                    .set(Foreground, Brush::Solid(theme::color(theme::TEXT_INVERTED)))
+            })
     })
 }
 
@@ -215,29 +259,48 @@ fn view_menu(
     dispatch: crate::ui::UiDispatch,
 ) -> impl Fn() -> Vec<DropdownMenuEntry> {
     move || {
-        let gui = Rc::clone(&dispatch);
         let text = Rc::clone(&dispatch);
+        let gui = Rc::clone(&dispatch);
         let toggle_project_tree = Rc::clone(&dispatch);
         let toggle_inspector = Rc::clone(&dispatch);
         let reset_layout = Rc::clone(&dispatch);
+        let state = snapshot.get();
+        let active_path = state.active_file.clone();
+        let active_mode = state.active_buffer.as_ref().map(|buffer| buffer.view_mode);
+        let has_gui = state.active_descriptor.as_ref().is_some_and(|descriptor| {
+            descriptor.available_views.contains(&DocumentViewId::Layout)
+                || descriptor
+                    .available_views
+                    .contains(&DocumentViewId::Fixture)
+        });
+        let text_path = active_path.clone();
+        let gui_path = active_path.clone();
 
         vec![
-            DropdownMenuEntry::item("GUI", true, move || {
-                if let Some(path) = snapshot.get().active_file {
-                    gui(AppAction::SetEditorViewMode {
-                        path,
-                        mode: EditorViewMode::Gui,
-                    });
-                }
-            }),
-            DropdownMenuEntry::item("Text", true, move || {
-                if let Some(path) = snapshot.get().active_file {
-                    text(AppAction::SetEditorViewMode {
-                        path,
-                        mode: EditorViewMode::Text,
-                    });
-                }
-            }),
+            DropdownMenuEntry::item(
+                "Text Editor",
+                active_mode.is_some_and(|mode| mode != EditorViewMode::Text),
+                move || {
+                    if let Some(path) = text_path.clone() {
+                        text(AppAction::SetEditorViewMode {
+                            path,
+                            mode: EditorViewMode::Text,
+                        });
+                    }
+                },
+            ),
+            DropdownMenuEntry::item(
+                "GUI Editor",
+                has_gui && active_mode.is_some_and(|mode| mode != EditorViewMode::Gui),
+                move || {
+                    if let Some(path) = gui_path.clone() {
+                        gui(AppAction::SetEditorViewMode {
+                            path,
+                            mode: EditorViewMode::Gui,
+                        });
+                    }
+                },
+            ),
             DropdownMenuEntry::separator(),
             DropdownMenuEntry::item("Toggle Project Tree", true, move || {
                 toggle_project_tree(AppAction::ToggleProjectTree);

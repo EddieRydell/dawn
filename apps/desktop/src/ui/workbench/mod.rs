@@ -1,13 +1,16 @@
 use std::rc::Rc;
 
+use floem::event::{Event, EventListener};
+use floem::peniko::Brush;
 use floem::prelude::*;
+use floem::style::{CursorStyle, Foreground};
 
-use crate::ui::components::ui_button;
+use crate::ui::components::ui_static_label;
 use crate::ui::theme;
 
 pub fn workbench_view(
     snapshot: crate::ui::UiSnapshot,
-    dropdown_menu: crate::ui::dropdown_menu::DropdownMenuController,
+    dropdown_menu: crate::ui::components::dropdown_menu::DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     let explorer = crate::ui::project_tree::ExplorerUiState::new();
@@ -89,20 +92,20 @@ fn inspector_pane(
 
     v_stack((
         h_stack((
-            tab_button(
+            inspector_tab(
                 "Diagnostics",
                 active == InspectorTab::Diagnostics,
                 move || diagnostics(AppAction::SetInspectorTab(InspectorTab::Diagnostics)),
             ),
-            tab_button("Preview", active == InspectorTab::Preview, move || {
+            inspector_tab("Preview", active == InspectorTab::Preview, move || {
                 preview(AppAction::SetInspectorTab(InspectorTab::Preview))
             }),
         ))
         .style(|s| {
-            s.height(theme::TOOLBAR_HEIGHT)
+            s.height(theme::TAB_STRIP_HEIGHT)
                 .items_center()
-                .gap(theme::SPACE_4)
-                .padding_horiz(theme::SPACE_8)
+                .border_bottom(theme::BORDER_WIDTH)
+                .border_color(theme::color(theme::BORDER))
                 .background(theme::color(theme::PANEL))
         }),
         body.style(|s| s.flex_grow(1.0).min_height(0.0)),
@@ -110,16 +113,44 @@ fn inspector_pane(
     .style(|s| s.height_full().background(theme::color(theme::SURFACE)))
 }
 
-fn tab_button(label: &'static str, active: bool, action: impl Fn() + 'static) -> impl IntoView {
-    ui_button(label).action(action).style(move |s| {
-        let bg = if active {
-            theme::color(theme::SELECTED)
+fn inspector_tab(label: &'static str, active: bool, action: impl Fn() + 'static) -> impl IntoView {
+    container(ui_static_label(label).style(move |s| {
+        let text_color = if active {
+            theme::color(theme::TEXT)
         } else {
-            theme::color(theme::PANEL)
+            theme::color(theme::MUTED)
         };
-        s.height(theme::ROW_HEIGHT)
-            .padding_horiz(theme::SPACE_8)
+        s.font_size(theme::FONT_SMALL)
+            .color(text_color)
+            .set(Foreground, Brush::Solid(text_color))
+    }))
+    .on_event_stop(EventListener::PointerDown, move |event| {
+        if let Event::PointerDown(event) = event {
+            if event.button.is_primary() {
+                action();
+            }
+        }
+    })
+    .style(move |s| {
+        let bg = if active {
+            theme::color(theme::SURFACE)
+        } else {
+            theme::color(theme::PANEL_DARK)
+        };
+        s.height(theme::TAB_HEIGHT)
+            .items_center()
+            .padding_horiz(theme::SPACE_10)
+            .border_right(theme::BORDER_WIDTH)
+            .border_color(theme::color(theme::BORDER))
             .background(bg)
+            .cursor(CursorStyle::Pointer)
+            .hover(move |s| {
+                if active {
+                    s
+                } else {
+                    s.background(theme::color(theme::PANEL))
+                }
+            })
     })
 }
 
