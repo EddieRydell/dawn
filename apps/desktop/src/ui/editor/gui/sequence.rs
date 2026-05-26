@@ -37,6 +37,7 @@ struct SequenceTimelineStateData {
     lane_height: f64,
     scroll_x: f64,
     scroll_y: f64,
+    keyboard_focused: bool,
     gesture: Option<TimelineGesture>,
     raster_cache: HashMap<String, Vec<RasterCell>>,
 }
@@ -49,10 +50,19 @@ impl SequenceTimelineState {
                 lane_height: 44.0,
                 scroll_x: 0.0,
                 scroll_y: 0.0,
+                keyboard_focused: false,
                 gesture: None,
                 raster_cache: HashMap::new(),
             })),
         }
+    }
+
+    fn keyboard_focused(&self) -> bool {
+        self.data.borrow().keyboard_focused
+    }
+
+    fn set_keyboard_focused(&self, focused: bool) {
+        self.data.borrow_mut().keyboard_focused = focused;
     }
 }
 
@@ -342,6 +352,7 @@ impl SequenceTimeline {
         let id = ViewId::new();
         let update_document = document.clone();
         let update_analysis = analysis.clone();
+        let focus_state = state.clone();
         create_effect(move |_| {
             id.update_state(SequenceTimelineUpdate {
                 document: update_document.clone(),
@@ -349,6 +360,11 @@ impl SequenceTimeline {
                 selected_effect,
                 playhead_ms,
             });
+        });
+        create_effect(move |_| {
+            if focus_state.keyboard_focused() {
+                id.request_focus();
+            }
         });
         Self {
             id,
@@ -397,6 +413,7 @@ impl View for SequenceTimeline {
             }
             Event::PointerDown(event) => {
                 if event.button.is_primary() {
+                    self.state.set_keyboard_focused(true);
                     cx.update_active(self.id);
                     self.id.request_active();
                     self.id.request_focus();
@@ -416,7 +433,15 @@ impl View for SequenceTimeline {
                     EventPropagation::Continue
                 }
             }
-            Event::PointerLeave | Event::FocusLost => {
+            Event::PointerLeave => {
+                self.state.data.borrow_mut().gesture = None;
+                self.hovered_effect = None;
+                self.id.clear_active();
+                self.id.request_paint();
+                EventPropagation::Continue
+            }
+            Event::FocusLost => {
+                self.state.set_keyboard_focused(false);
                 self.state.data.borrow_mut().gesture = None;
                 self.hovered_effect = None;
                 self.id.clear_active();
