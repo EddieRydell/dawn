@@ -37,6 +37,7 @@ struct SequenceTimelineStateData {
     lane_height: f64,
     scroll_x: f64,
     scroll_y: f64,
+    gesture: Option<TimelineGesture>,
     raster_cache: HashMap<String, Vec<RasterCell>>,
 }
 
@@ -48,6 +49,7 @@ impl SequenceTimelineState {
                 lane_height: 44.0,
                 scroll_x: 0.0,
                 scroll_y: 0.0,
+                gesture: None,
                 raster_cache: HashMap::new(),
             })),
         }
@@ -322,7 +324,6 @@ struct SequenceTimeline {
     playhead_ms: u64,
     state: SequenceTimelineState,
     viewport: TimelineViewport,
-    gesture: Option<TimelineGesture>,
     hovered_effect: Option<usize>,
     dropdown_menu: DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
@@ -357,7 +358,6 @@ impl SequenceTimeline {
             playhead_ms,
             state,
             viewport: TimelineViewport::default(),
-            gesture: None,
             hovered_effect: None,
             dropdown_menu,
             dispatch,
@@ -416,7 +416,7 @@ impl View for SequenceTimeline {
                 }
             }
             Event::PointerLeave | Event::FocusLost => {
-                self.gesture = None;
+                self.state.data.borrow_mut().gesture = None;
                 self.hovered_effect = None;
                 self.id.clear_active();
                 self.id.request_paint();
@@ -438,6 +438,7 @@ impl View for SequenceTimeline {
         self.paint_ruler(cx);
         self.paint_lanes(cx);
         self.paint_clips(cx);
+        self.paint_drag_preview(cx);
         self.paint_playhead(cx);
     }
 }
@@ -481,21 +482,23 @@ impl SequenceTimeline {
             (self.dispatch)(AppAction::SelectSequenceEffect {
                 id: Some(hit.effect.id),
             });
-            self.gesture = Some(TimelineGesture {
+            self.state.data.borrow_mut().gesture = Some(TimelineGesture {
                 effect: hit.effect,
                 kind: hit.kind,
                 start_screen: position,
+                current_screen: position,
             });
         } else {
             (self.dispatch)(AppAction::SelectSequenceEffect { id: None });
-            self.gesture = None;
+            self.state.data.borrow_mut().gesture = None;
         }
         self.id.request_paint();
         EventPropagation::Stop
     }
 
     fn handle_pointer_move(&mut self, position: Point) -> EventPropagation {
-        if self.gesture.is_some() {
+        if let Some(gesture) = &mut self.state.data.borrow_mut().gesture {
+            gesture.current_screen = position;
             self.id.request_paint();
             return EventPropagation::Stop;
         }
@@ -508,7 +511,7 @@ impl SequenceTimeline {
     }
 
     fn handle_pointer_up(&mut self, position: Point) -> EventPropagation {
-        let Some(gesture) = self.gesture.take() else {
+        let Some(gesture) = self.state.data.borrow_mut().gesture.take() else {
             return EventPropagation::Continue;
         };
         let delta_ms = ((position.x - gesture.start_screen.x)
@@ -588,57 +591,14 @@ impl SequenceTimeline {
     }
 
     fn handle_key_down(&mut self, key: &Key, modifiers: Modifiers) -> EventPropagation {
-        let Some(id) = self.selected_effect else {
-            return EventPropagation::Continue;
-        };
-        let Some(effect) = self.document.effects.iter().find(|effect| effect.id == id) else {
-            return EventPropagation::Continue;
-        };
-        match key {
-            Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) => {
-                (self.dispatch)(AppAction::DeleteSequenceEffect { id });
-            }
-            Key::Character(value) if modifiers.control() && value.eq_ignore_ascii_case("d") => {
-                (self.dispatch)(AppAction::DuplicateSequenceEffect { id });
-            }
-            Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowRight) => {
-                let delta = if modifiers.shift() { 100 } else { 1 };
-                let start_ms = if matches!(key, Key::Named(NamedKey::ArrowLeft)) {
-                    effect.start_ms.saturating_sub(delta)
-                } else {
-                    effect.start_ms.saturating_add(delta)
-                };
-                (self.dispatch)(AppAction::MoveSequenceEffect {
-                    id,
-                    start_ms,
-                    target: None,
-                });
-            }
-            Key::Named(NamedKey::ArrowUp) | Key::Named(NamedKey::ArrowDown) => {
-                let Some(current) = self
-                    .document
-                    .lanes
-                    .iter()
-                    .position(|lane| lane.target == effect.target)
-                else {
-                    return EventPropagation::Continue;
-                };
-                let step = if modifiers.shift() { 5 } else { 1 };
-                let next = if matches!(key, Key::Named(NamedKey::ArrowUp)) {
-                    current.saturating_sub(step)
-                } else {
-                    (current + step).min(self.document.lanes.len().saturating_sub(1))
-                };
-                if let Some(lane) = self.document.lanes.get(next) {
-                    (self.dispatch)(AppAction::RetargetSequenceEffect {
-                        id,
-                        target: lane.target.clone(),
-                    });
-                }
-            }
-            _ => return EventPropagation::Continue,
+        if let Some(action) =
+            sequence_key_action(&self.document, self.selected_effect, key, modifiers)
+        {
+            (self.dispatch)(action);
+            EventPropagation::Stop
+        } else {
+            EventPropagation::Continue
         }
-        EventPropagation::Stop
     }
 
     fn lane_at_position(&self, position: Point) -> Option<SequenceLaneDocument> {
@@ -741,16 +701,25 @@ impl SequenceTimeline {
             else {
                 continue;
             };
-            let border_color = if self.selected_effect == Some(effect.id) {
-                theme::color(theme::BORDER_FOCUS)
+            let selected = self.selected_effect == Some(effect.id);
+            let border_color = if selected {
+                SELECTED_CLIP_BORDER
             } else if self.hovered_effect == Some(effect.index) {
                 HOVERED_CLIP_BORDER
             } else {
                 theme::color(theme::BORDER)
             };
+            let border_width = if selected { 2.0 } else { 1.0 };
             cx.fill(&layout.rect, &Brush::Solid(clip_color(effect.index)), 0.0);
             self.paint_clip_raster(cx, effect, layout.rect);
-            cx.stroke(&layout.rect, &Brush::Solid(border_color), &Stroke::new(1.0));
+            if selected {
+                cx.fill(&layout.rect, &Brush::Solid(SELECTED_CLIP_HIGHLIGHT), 0.0);
+            }
+            cx.stroke(
+                &stroke_rect(layout.rect, border_width),
+                &Brush::Solid(border_color),
+                &Stroke::new(border_width),
+            );
             draw_text(
                 cx,
                 &effect.id.to_string(),
@@ -810,6 +779,91 @@ impl SequenceTimeline {
         }
     }
 
+    fn paint_drag_preview(&self, cx: &mut PaintCx) {
+        let Some(preview) = self.drag_preview_rect() else {
+            return;
+        };
+        if preview.rect.y1 < RULER_HEIGHT || preview.rect.y0 > self.viewport.size.height {
+            return;
+        }
+        if preview.rect.x1 < LANE_LABEL_WIDTH || preview.rect.x0 > self.viewport.size.width {
+            return;
+        }
+
+        cx.fill(
+            &preview.rect,
+            &Brush::Solid(Color::rgba8(170, 178, 188, 126)),
+            0.0,
+        );
+        cx.stroke(
+            &stroke_rect(preview.rect, 1.5),
+            &Brush::Solid(Color::rgba8(230, 238, 246, 210)),
+            &Stroke::new(1.5),
+        );
+        draw_text(
+            cx,
+            &preview.effect_id.to_string(),
+            preview.rect.x0 + 6.0,
+            preview.rect.y0 + 5.0,
+            Color::rgba8(255, 255, 255, 220),
+        );
+    }
+
+    fn drag_preview_rect(&self) -> Option<DragPreview> {
+        let gesture = self.state.data.borrow().gesture.clone()?;
+        let pixels_per_ms = self.state.data.borrow().pixels_per_ms;
+        let delta_ms =
+            ((gesture.current_screen.x - gesture.start_screen.x) / pixels_per_ms).round() as i64;
+        let original_start = gesture.effect.start_ms as i64;
+        let original_duration = gesture.effect.duration_ms as i64;
+
+        let preview_effect = match gesture.kind {
+            HitKind::Body => {
+                let max_start =
+                    self.document
+                        .duration_ms
+                        .saturating_sub(gesture.effect.duration_ms) as i64;
+                let start_ms = (original_start + delta_ms).clamp(0, max_start) as u64;
+                let target = self
+                    .lane_at_position(gesture.current_screen)
+                    .map(|lane| lane.target)
+                    .unwrap_or_else(|| gesture.effect.target.clone());
+                let mut effect = gesture.effect.clone();
+                effect.start_ms = start_ms;
+                effect.target = target;
+                effect
+            }
+            HitKind::LeftEdge => {
+                let end = original_start + original_duration;
+                let start_ms = (original_start + delta_ms).clamp(0, end - 1) as u64;
+                let mut effect = gesture.effect.clone();
+                effect.start_ms = start_ms;
+                effect.duration_ms = (end as u64).saturating_sub(start_ms).max(1);
+                effect
+            }
+            HitKind::RightEdge => {
+                let duration_ms = (original_duration + delta_ms)
+                    .clamp(1, self.document.duration_ms as i64 - original_start)
+                    as u64;
+                let mut effect = gesture.effect.clone();
+                effect.duration_ms = duration_ms;
+                effect
+            }
+        };
+
+        let lane_index = self
+            .document
+            .lanes
+            .iter()
+            .position(|lane| lane.target == preview_effect.target)?;
+        let state = self.state.data.borrow();
+        let rect = clip_rect(&preview_effect, lane_index, 0, 1, &state);
+        Some(DragPreview {
+            effect_id: preview_effect.id,
+            rect,
+        })
+    }
+
     fn paint_playhead(&self, cx: &mut PaintCx) {
         let state = self.state.data.borrow();
         let x = LANE_LABEL_WIDTH + self.playhead_ms as f64 * state.pixels_per_ms - state.scroll_x;
@@ -851,6 +905,68 @@ impl SequenceTimeline {
     }
 }
 
+pub fn sequence_key_action(
+    document: &SequenceDocument,
+    selected_effect: Option<u32>,
+    key: &Key,
+    modifiers: Modifiers,
+) -> Option<AppAction> {
+    let id = selected_effect?;
+    let effect = document.effects.iter().find(|effect| effect.id == id)?;
+
+    match key {
+        Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace)
+            if !modifiers.control() && !modifiers.alt() && !modifiers.meta() =>
+        {
+            Some(AppAction::DeleteSequenceEffect { id })
+        }
+        Key::Character(value)
+            if modifiers.control()
+                && !modifiers.shift()
+                && !modifiers.alt()
+                && !modifiers.meta()
+                && value.eq_ignore_ascii_case("d") =>
+        {
+            Some(AppAction::DuplicateSequenceEffect { id })
+        }
+        Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowRight)
+            if !modifiers.control() && !modifiers.alt() && !modifiers.meta() =>
+        {
+            let delta = if modifiers.shift() { 100 } else { 1 };
+            let start_ms = if matches!(key, Key::Named(NamedKey::ArrowLeft)) {
+                effect.start_ms.saturating_sub(delta)
+            } else {
+                effect.start_ms.saturating_add(delta)
+            };
+            Some(AppAction::MoveSequenceEffect {
+                id,
+                start_ms,
+                target: None,
+            })
+        }
+        Key::Named(NamedKey::ArrowUp) | Key::Named(NamedKey::ArrowDown)
+            if !modifiers.control() && !modifiers.alt() && !modifiers.meta() =>
+        {
+            let current = document
+                .lanes
+                .iter()
+                .position(|lane| lane.target == effect.target)?;
+            let step = if modifiers.shift() { 5 } else { 1 };
+            let next = if matches!(key, Key::Named(NamedKey::ArrowUp)) {
+                current.saturating_sub(step)
+            } else {
+                (current + step).min(document.lanes.len().saturating_sub(1))
+            };
+            let lane = document.lanes.get(next)?;
+            Some(AppAction::RetargetSequenceEffect {
+                id,
+                target: lane.target.clone(),
+            })
+        }
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ClipLayout {
     effect_index: usize,
@@ -876,6 +992,7 @@ struct TimelineGesture {
     effect: SequenceEffectDocument,
     kind: HitKind,
     start_screen: Point,
+    current_screen: Point,
 }
 
 #[derive(Debug, Clone)]
@@ -891,6 +1008,12 @@ struct RasterCell {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct DragPreview {
+    effect_id: u32,
+    rect: Rect,
+}
+
+#[derive(Debug, Clone, Copy)]
 enum HitKind {
     Body,
     LeftEdge,
@@ -903,6 +1026,8 @@ const CLIP_VERTICAL_INSET: f64 = 1.0;
 const MIN_CLIP_WIDTH: f64 = 6.0;
 const EDGE_HIT_WIDTH: f64 = 6.0;
 const HOVERED_CLIP_BORDER: Color = Color::rgb8(112, 112, 112);
+const SELECTED_CLIP_BORDER: Color = Color::rgb8(232, 236, 240);
+const SELECTED_CLIP_HIGHLIGHT: Color = Color::rgba8(255, 255, 255, 28);
 fn clamp_timeline_state(state: &SequenceTimelineState, document: &SequenceDocument, size: Size) {
     let mut state = state.data.borrow_mut();
     let content_width = document.duration_ms as f64 * state.pixels_per_ms;
@@ -993,6 +1118,10 @@ fn clip_rect(
     let x0 = LANE_LABEL_WIDTH + effect.start_ms as f64 * state.pixels_per_ms - state.scroll_x;
     let width = (effect.duration_ms as f64 * state.pixels_per_ms).max(MIN_CLIP_WIDTH);
     Rect::new(x0, y0, x0 + width, y1)
+}
+
+fn stroke_rect(rect: Rect, width: f64) -> Rect {
+    rect.inflate(-width / 2.0, -width / 2.0)
 }
 
 fn raster_row_bins(pixel_count: usize, height: f64) -> usize {

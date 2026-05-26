@@ -54,6 +54,7 @@ fn app_view(window_id: WindowId) -> impl IntoView {
     };
 
     let save_shortcut = Rc::clone(&dispatch);
+    let sequence_shortcut = Rc::clone(&dispatch);
     stack((
         v_stack((
             title_bar(
@@ -84,6 +85,18 @@ fn app_view(window_id: WindowId) -> impl IntoView {
             {
                 save_shortcut(AppAction::SaveActiveFile);
                 return EventPropagation::Stop;
+            }
+            let state = snapshot.get();
+            if let Some(document) = state.active_sequence_document.as_ref() {
+                if let Some(action) = crate::ui::editor::gui::sequence::sequence_key_action(
+                    document,
+                    state.selected_sequence_effect,
+                    &event.key.logical_key,
+                    event.modifiers,
+                ) {
+                    sequence_shortcut(action);
+                    return EventPropagation::Stop;
+                }
             }
         }
         EventPropagation::Continue
