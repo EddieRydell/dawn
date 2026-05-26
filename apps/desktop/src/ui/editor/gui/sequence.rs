@@ -807,13 +807,6 @@ impl SequenceTimeline {
             if selected || hovered_kind.is_some() || dragged_kind.is_some() {
                 paint_resize_grips(cx, layout.rect, hovered_kind.or(dragged_kind));
             }
-            draw_text(
-                cx,
-                &effect.id.to_string(),
-                layout.rect.x0 + 6.0,
-                layout.rect.y0 + 5.0,
-                theme::color(theme::TEXT_INVERTED),
-            );
         }
     }
 
