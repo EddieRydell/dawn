@@ -35,12 +35,13 @@ impl CompiledEffect {
 
     pub fn sample(
         &self,
-        t: f64,
+        progress: f64,
+        seconds: f64,
         fixture: FixtureContext,
         pixel: PixelContext,
         params: &BTreeMap<String, RuntimeValue>,
     ) -> Result<Color, RuntimeError> {
-        Vm::new(self, t, fixture, pixel, params).run()
+        Vm::new(self, progress, seconds, fixture, pixel, params).run()
     }
 }
 
@@ -58,6 +59,7 @@ pub struct PixelContext {
 pub struct EffectParamSchema {
     pub name: String,
     pub value_type: ScriptType,
+    pub options: Vec<String>,
     pub default: Option<ParamDefault>,
 }
 
@@ -493,21 +495,49 @@ impl Parser<'_> {
         self.keyword("param")?;
         let value_type = self.type_name()?;
         let name = self.identifier("parameter name")?;
+        let options = if matches!(value_type, ScriptType::Enum | ScriptType::Flags) {
+            self.option_list()?
+        } else {
+            Vec::new()
+        };
         let default = if self.consume_symbol('=') {
             if self.at_keyword("import") {
                 return Err(self.error_here("effect parameter defaults cannot import files"));
             } else {
-                Some(ParamDefault::Value(self.param_default_value(value_type)?))
+                Some(ParamDefault::Value(
+                    self.param_default_value(value_type, &options)?,
+                ))
             }
         } else {
             None
         };
+        if matches!(value_type, ScriptType::Enum | ScriptType::Flags) && options.is_empty() {
+            return Err(self.error_here("enum and flags parameters must declare options"));
+        }
         self.symbol(';')?;
         Ok(EffectParamSchema {
             name,
             value_type,
+            options,
             default,
         })
+    }
+
+    fn option_list(&mut self) -> Result<Vec<String>, ScriptDiagnostic> {
+        self.symbol('{')?;
+        let mut options = Vec::new();
+        while !self.at_symbol('}') && !self.at_eof() {
+            let option = self.identifier("option")?;
+            if options.contains(&option) {
+                return Err(self.error_here(&format!("duplicate option `{option}`")));
+            }
+            options.push(option);
+            if !self.consume_symbol(',') {
+                break;
+            }
+        }
+        self.symbol('}')?;
+        Ok(options)
     }
 
     fn sample(&mut self) -> Result<Vec<Stmt>, ScriptDiagnostic> {
@@ -520,7 +550,9 @@ impl Parser<'_> {
             return Err(self.error_here("only sample entrypoint functions are supported"));
         }
         self.symbol('(')?;
-        self.expect_arg("float", "t")?;
+        self.expect_arg("float", "progress")?;
+        self.symbol(',')?;
+        self.expect_arg("float", "seconds")?;
         self.symbol(',')?;
         self.expect_arg("Fixture", "fixture")?;
         self.symbol(',')?;
@@ -654,7 +686,28 @@ impl Parser<'_> {
     fn param_default_value(
         &mut self,
         value_type: ScriptType,
+        options: &[String],
     ) -> Result<RuntimeValue, ScriptDiagnostic> {
+        if value_type == ScriptType::Enum {
+            let value = self.identifier("enum default")?;
+            if !options.contains(&value) {
+                return Err(self.error_here(&format!(
+                    "enum default `{value}` is not declared in the option list"
+                )));
+            }
+            return Ok(RuntimeValue::Enum(value));
+        }
+        if value_type == ScriptType::Flags {
+            let values = self.flags_default_value()?;
+            for value in &values {
+                if !options.contains(value) {
+                    return Err(self.error_here(&format!(
+                        "flags default `{value}` is not declared in the option list"
+                    )));
+                }
+            }
+            return Ok(RuntimeValue::Flags(Flags { values }));
+        }
         let expr = self.expr()?;
         let value = Vm::eval_constant(&expr)?;
         if value.value_type() == value_type {
@@ -665,6 +718,23 @@ impl Parser<'_> {
                 value.value_type()
             )))
         }
+    }
+
+    fn flags_default_value(&mut self) -> Result<Vec<String>, ScriptDiagnostic> {
+        self.symbol('{')?;
+        let mut values = Vec::new();
+        while !self.at_symbol('}') && !self.at_eof() {
+            let value = self.identifier("flag default")?;
+            if values.contains(&value) {
+                return Err(self.error_here(&format!("duplicate flag default `{value}`")));
+            }
+            values.push(value);
+            if !self.consume_symbol(',') {
+                break;
+            }
+        }
+        self.symbol('}')?;
+        Ok(values)
     }
 
     fn expect_arg(&mut self, type_name: &str, name: &str) -> Result<(), ScriptDiagnostic> {
@@ -809,7 +879,8 @@ struct TypeChecker<'a> {
 impl<'a> TypeChecker<'a> {
     fn new(effect: &'a EffectAst) -> Self {
         let mut scopes = HashMap::from([
-            ("t".to_string(), ScriptType::Float),
+            ("progress".to_string(), ScriptType::Float),
+            ("seconds".to_string(), ScriptType::Float),
             ("fixture".to_string(), ScriptType::Fixture),
             ("pixel".to_string(), ScriptType::Pixel),
             ("PI".to_string(), ScriptType::Float),
@@ -965,13 +1036,15 @@ struct Vm<'a> {
 impl<'a> Vm<'a> {
     fn new(
         effect: &'a CompiledEffect,
-        t: f64,
+        progress: f64,
+        seconds: f64,
         fixture: FixtureContext,
         pixel: PixelContext,
         params: &BTreeMap<String, RuntimeValue>,
     ) -> Self {
         let mut env = HashMap::from([
-            ("t".to_string(), RuntimeValue::Float(t)),
+            ("progress".to_string(), RuntimeValue::Float(progress)),
+            ("seconds".to_string(), RuntimeValue::Float(seconds)),
             ("fixture".to_string(), RuntimeValue::Fixture(fixture)),
             ("pixel".to_string(), RuntimeValue::Pixel(pixel)),
             ("PI".to_string(), RuntimeValue::Float(std::f64::consts::PI)),

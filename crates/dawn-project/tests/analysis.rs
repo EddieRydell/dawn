@@ -10,15 +10,21 @@ use dawn_project::analysis::{
 use dawn_project::document::{
     apply_fixture_document_edit as core_apply_fixture_document_edit,
     apply_layout_document_edit as core_apply_layout_document_edit,
+    apply_sequence_document_edit as core_apply_sequence_document_edit,
     get_fixture_document as core_get_fixture_document,
-    get_layout_document as core_get_layout_document, DocumentEditResult, FixtureDefinitionDocument,
-    FixtureDocument, LayoutDocument, LayoutFixturePlacement, LayoutFixtureRef,
-    ResolvedLayoutFixture,
+    get_layout_document as core_get_layout_document,
+    get_sequence_document as core_get_sequence_document, DocumentEditResult,
+    FixtureDefinitionDocument, FixtureDocument, LayoutDocument, LayoutFixturePlacement,
+    LayoutFixtureRef, LayoutTargetDocument, ResolvedLayoutFixture, SequenceDocument,
+    SequenceDocumentEdit,
 };
-use dawn_project::effect_script::{compile as compile_effect_script, FixtureContext, PixelContext};
+use dawn_project::effect_script::{
+    compile as compile_effect_script, FixtureContext, PixelContext, RuntimeValue,
+};
 use dawn_project::fs::WorkspaceFs;
 use dawn_project::model::{
-    Color, ColorModel, Curve, CurveValue, CurveValueType, FixtureId, Geometry, Point3, Transform,
+    Color, ColorModel, Curve, CurveValue, CurveValueType, FixtureId, Geometry, LayoutTargetKind,
+    Point3, Transform,
 };
 use dawn_project::path::{utf8_path, PathStringExt, Utf8PathBuf};
 use dawn_project::render::{GeometryRenderBounds, GeometryRenderGuide, GeometryRenderPlan};
@@ -115,6 +121,23 @@ fn get_fixture_document(
     )
 }
 
+fn get_sequence_document(
+    path: impl AsRef<Path>,
+    object_key: &str,
+    project_path: impl AsRef<Path>,
+    overlays: Vec<ProjectOverlay>,
+) -> Result<SequenceDocument, String> {
+    let (fs, project_path, root) = project_context(project_path);
+    let path = relative_project_path(&root, path.as_ref());
+    core_get_sequence_document(
+        &fs,
+        path,
+        object_key,
+        project_path,
+        normalize_overlays(&root, overlays),
+    )
+}
+
 fn apply_layout_document_edit(
     path: impl AsRef<Path>,
     object_key: &str,
@@ -156,6 +179,27 @@ fn apply_fixture_document_edit(
         normalize_overlays(&root, overlays),
         project_path,
         allow_breaking_references,
+    )
+}
+
+fn apply_sequence_document_edit(
+    path: impl AsRef<Path>,
+    object_key: &str,
+    edit: SequenceDocumentEdit,
+    base_content: String,
+    overlays: Vec<ProjectOverlay>,
+    project_path: impl AsRef<Path>,
+) -> Result<DocumentEditResult<SequenceDocument>, String> {
+    let (fs, project_path, root) = project_context(project_path);
+    let path = relative_project_path(&root, path.as_ref());
+    core_apply_sequence_document_edit(
+        &fs,
+        path,
+        object_key,
+        edit,
+        base_content,
+        normalize_overlays(&root, overlays),
+        project_path,
     )
 }
 
@@ -242,8 +286,8 @@ effect Pulse {
   param color accent = #ffffff;
   param float speed = 1.0;
 
-  color sample(float t, Fixture fixture, Pixel pixel) {
-    float phase = (sin(t * speed) + 1.0) / 2.0;
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    float phase = (sin(seconds * speed) + 1.0) / 2.0;
     return mix(base, accent, phase);
   }
 }
@@ -255,6 +299,7 @@ effect Pulse {
     let color = script
         .sample(
             0.0,
+            0.0,
             FixtureContext { index: 0 },
             PixelContext { index: 0 },
             &Default::default(),
@@ -263,7 +308,7 @@ effect Pulse {
     assert_eq!(color, Color::new(128, 128, 128));
 
     let error = compile_effect_script(
-        "effect Bad { color nope(float t, Fixture fixture, Pixel pixel) { return #ffffff; } }",
+        "effect Bad { color nope(float progress, float seconds, Fixture fixture, Pixel pixel) { return #ffffff; } }",
     )
     .unwrap_err();
     assert!(error[0].range.is_some());
@@ -272,7 +317,7 @@ effect Pulse {
         r#"
 effect Bad {
   param curve<float> fade = import "../curves/fade-in.curve.dawn::fade_in";
-  color sample(float t, Fixture fixture, Pixel pixel) {
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
     return #ffffff;
   }
 }
@@ -313,7 +358,7 @@ effect Pulse {
   param color base = #000000;
   param float speed;
 
-  color sample(float t, Fixture fixture, Pixel pixel) {
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
     return base;
   }
 }
@@ -334,6 +379,11 @@ club:
     layout:
       name: stage
       units: meters
+      target_order:
+        - type: group
+          name: all
+        - type: fixture
+          name: Pixel
       fixtures:
         - id: 1
           name: Pixel
@@ -353,7 +403,7 @@ club:
       frame_rate: 60
       audio:
       effects:
-        - id: fx
+        - id: 1
           start: 0s
           duration: 1s
           target:
@@ -393,6 +443,347 @@ club:
 }
 
 #[test]
+fn effect_script_enum_and_flags_options_parse_defaults_and_validate_values() {
+    let script = compile_effect_script(
+        r##"
+effect Options {
+  param enum mode { normal, flash } = flash;
+  param enum fallback { first, second };
+  param flags mask { red, green, blue } = { red, blue };
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    return #ffffff;
+  }
+}
+"##,
+    )
+    .unwrap();
+
+    assert_eq!(script.params[0].options, vec!["normal", "flash"]);
+    assert_eq!(
+        script.params[0].default,
+        Some(dawn_project::effect_script::ParamDefault::Value(
+            RuntimeValue::Enum("flash".to_string())
+        ))
+    );
+    assert_eq!(script.params[1].default, None);
+    assert_eq!(
+        script.params[2].default,
+        Some(dawn_project::effect_script::ParamDefault::Value(
+            RuntimeValue::Flags(dawn_project::model::Flags {
+                values: vec!["red".to_string(), "blue".to_string()]
+            })
+        ))
+    );
+
+    let invalid_default = compile_effect_script(
+        r##"
+effect Bad {
+  param enum mode { normal } = flash;
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) { return #ffffff; }
+}
+"##,
+    )
+    .unwrap_err();
+    assert!(invalid_default[0]
+        .message
+        .contains("is not declared in the option list"));
+}
+
+#[test]
+fn sequence_numeric_effect_ids_and_automation_targets_are_validated() {
+    let duplicate_dir = temp_dir("duplicate-sequence-effect-id");
+    fs::write(
+        duplicate_dir.join("project.dawn"),
+        project_with_inline_sequence(
+            r##"
+        - id: 1
+          start: 0s
+          duration: 1s
+          target: { type: group, name: all }
+          params: {}
+          script: |
+            effect One { color sample(float progress, float seconds, Fixture fixture, Pixel pixel) { return #ffffff; } }
+        - id: 1
+          start: 0s
+          duration: 1s
+          target: { type: group, name: all }
+          params: {}
+          script: |
+            effect Two { color sample(float progress, float seconds, Fixture fixture, Pixel pixel) { return #ffffff; } }
+"##,
+        ),
+    )
+    .unwrap();
+    let duplicate = analyze_project(duplicate_dir.join("project.dawn"), "club");
+    assert!(duplicate
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("duplicate sequence effect `1`")));
+
+    let unknown_dir = temp_dir("unknown-sequence-effect-target");
+    fs::write(
+        unknown_dir.join("project.dawn"),
+        format!(
+            "{}{}",
+            project_with_inline_sequence(
+                r##"
+        - id: 1
+          start: 0s
+          duration: 1s
+          target: { type: group, name: all }
+          params: {}
+          script: |
+            effect One { color sample(float progress, float seconds, Fixture fixture, Pixel pixel) { return #ffffff; } }
+"##
+            )
+            .trim_end(),
+            r#"
+      automation_clips:
+        - id: 2
+          start: 0s
+          duration: 1s
+          curve:
+            value_type: float
+            points:
+              - time: 0.0
+                value: 0.0
+          targets: [99]
+"#
+        ),
+    )
+    .unwrap();
+    let unknown = analyze_project(unknown_dir.join("project.dawn"), "club");
+    assert!(unknown
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.message.contains("unknown sequence effect `99`")));
+}
+
+#[test]
+fn sequence_param_analysis_rejects_undeclared_enum_and_flag_values() {
+    let dir = temp_dir("enum-flags-authored-values");
+    fs::create_dir_all(dir.join("effects")).unwrap();
+    fs::write(
+        dir.join("effects/options.effect.dawn"),
+        r##"
+effect Options {
+  param enum mode { normal, flash };
+  param flags mask { red, green, blue };
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) { return #ffffff; }
+}
+"##,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("project.dawn"),
+        project_with_inline_sequence(
+            r##"
+        - id: 1
+          start: 0s
+          duration: 1s
+          target: { type: group, name: all }
+          params:
+            mode:
+              type: enum
+              value: missing
+            mask:
+              type: flags
+              value: [red, missing]
+          script:
+            import: effects/options.effect.dawn
+"##,
+        ),
+    )
+    .unwrap();
+
+    let analysis = analyze_project(dir.join("project.dawn"), "club");
+
+    assert!(analysis.resolved.is_none());
+    assert!(analysis.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("value `missing` is not declared")));
+    assert!(analysis.diagnostics.iter().any(|diagnostic| diagnostic
+        .message
+        .contains("flag `missing` is not declared")));
+}
+
+#[test]
+fn sequence_document_edit_adds_duplicates_moves_retargets_sorts_and_cleans_targets() {
+    let dir = temp_dir("sequence-document-edit-ops");
+    fs::create_dir_all(dir.join("effects")).unwrap();
+    fs::create_dir_all(dir.join("sequences")).unwrap();
+    fs::write(
+        dir.join("effects/options.effect.dawn"),
+        r##"
+effect Options {
+  param float amount;
+  param int count;
+  param bool enabled;
+  param color tint;
+  param curve<float> fade;
+  param curve<color> wash;
+  param enum mode { normal, flash };
+  param flags mask { red, green, blue };
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) { return tint; }
+}
+"##,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("project.dawn"),
+        r#"
+club:
+  type: project
+  name: club
+  display:
+    import: display.dawn::main
+  sequences:
+    - import: sequences/opening.sequence.dawn::opening
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("display.dawn"),
+        r#"
+main:
+  type: display
+  name: main
+  controllers: []
+  patch:
+    routes: []
+  layout:
+    name: stage
+    units: meters
+    target_order:
+      - type: group
+        name: all
+      - type: fixture
+        name: Pixel
+    fixtures:
+      - id: 1
+        name: Pixel
+        fixture:
+          name: Pixel
+          color_model: rgb
+          geometry:
+            type: points
+            points: []
+        transform:
+          position: { x: 0.0, y: 0.0, z: 0.0 }
+    groups:
+      - name: all
+        members: [1]
+"#,
+    )
+    .unwrap();
+    let sequence_path = dir.join("sequences/opening.sequence.dawn");
+    fs::write(
+        &sequence_path,
+        r#"
+opening:
+  type: sequence
+  duration: 2s
+  frame_rate: 60
+  audio:
+  effects: []
+  automation_clips:
+    - id: 50
+      start: 0s
+      duration: 1s
+      curve:
+        value_type: float
+        points:
+          - time: 0.0
+            value: 0.0
+      targets: [1]
+"#,
+    )
+    .unwrap();
+    let project_path = dir.join("project.dawn");
+    let document = get_sequence_document(&sequence_path, "opening", &project_path, Vec::new())
+        .expect("sequence document should load");
+    let script = document.effect_scripts[0].clone();
+    let base = fs::read_to_string(&sequence_path).unwrap();
+    let added = apply_sequence_document_edit(
+        &sequence_path,
+        "opening",
+        SequenceDocumentEdit::AddEffect {
+            script_path: script.path,
+            target: LayoutTargetDocument {
+                kind: LayoutTargetKind::Group,
+                name: "all".to_string(),
+            },
+            start_ms: 1_500,
+        },
+        base,
+        Vec::new(),
+        &project_path,
+    )
+    .unwrap();
+    let DocumentEditResult::Applied(added) = added else {
+        panic!("add should apply");
+    };
+    assert!(added.serialized_content.contains("id: 1"));
+    assert!(added.serialized_content.contains("value: 0.0"));
+    assert!(added.serialized_content.contains("value: false"));
+    assert!(added.serialized_content.contains("#ffffff"));
+    assert!(added.serialized_content.contains("value: normal"));
+    assert!(added.serialized_content.contains("value: []"));
+
+    let duplicated = apply_sequence_document_edit(
+        &sequence_path,
+        "opening",
+        SequenceDocumentEdit::DuplicateEffect { id: 1 },
+        added.serialized_content,
+        Vec::new(),
+        &project_path,
+    )
+    .unwrap();
+    let DocumentEditResult::Applied(duplicated) = duplicated else {
+        panic!("duplicate should apply");
+    };
+    assert_eq!(duplicated.refreshed_document.effects.len(), 2);
+
+    let moved = apply_sequence_document_edit(
+        &sequence_path,
+        "opening",
+        SequenceDocumentEdit::MoveEffect {
+            id: 2,
+            start_ms: 0,
+            target: Some(LayoutTargetDocument {
+                kind: LayoutTargetKind::Fixture,
+                name: "Pixel".to_string(),
+            }),
+        },
+        duplicated.serialized_content,
+        Vec::new(),
+        &project_path,
+    )
+    .unwrap();
+    let DocumentEditResult::Applied(moved) = moved else {
+        panic!("move should apply");
+    };
+    assert_eq!(moved.refreshed_document.effects[0].id, 2);
+    assert_eq!(moved.refreshed_document.effects[0].target.name, "Pixel");
+
+    let deleted = apply_sequence_document_edit(
+        &sequence_path,
+        "opening",
+        SequenceDocumentEdit::DeleteEffect { id: 1 },
+        moved.serialized_content,
+        Vec::new(),
+        &project_path,
+    )
+    .unwrap();
+    let DocumentEditResult::Applied(deleted) = deleted else {
+        panic!("delete should apply");
+    };
+    assert!(deleted.serialized_content.contains("automation_clips:"));
+    assert!(deleted.serialized_content.contains("targets: []"));
+}
+
+#[test]
 fn reports_semantic_diagnostics_without_resolved_project() {
     let dir = temp_dir("semantic");
     let project_path = dir.join("project.dawn");
@@ -410,6 +801,9 @@ club:
     layout:
       name: stage
       units: meters
+      target_order:
+        - type: fixture
+          name: Bar 01
       fixtures:
         - id: 1
           name: Bar 01
@@ -428,7 +822,7 @@ club:
       frame_rate: 60
       audio:
       effects:
-        - id: fx
+        - id: 1
           start: 0s
           duration: 1s
           target:
@@ -476,6 +870,11 @@ club:
     layout:
       name: stage
       units: meters
+      target_order:
+        - type: group
+          name: WallBars
+        - type: fixture
+          name: Front Bar 1
       fixtures:
         - id: 1
           name: Front Bar 1
@@ -496,7 +895,7 @@ club:
       frame_rate: 60
       audio:
       effects:
-        - id: group_fx
+        - id: 1
           start: 0s
           duration: 1s
           target:
@@ -505,11 +904,11 @@ club:
           params: {}
           script: |
             effect InlineGroup {
-              color sample(float t, Fixture fixture, Pixel pixel) {
+              color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
                 return #ffffff;
               }
             }
-        - id: fixture_fx
+        - id: 2
           start: 0s
           duration: 1s
           target:
@@ -518,7 +917,7 @@ club:
           params: {}
           script: |
             effect InlineFixture {
-              color sample(float t, Fixture fixture, Pixel pixel) {
+              color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
                 return #ffffff;
               }
             }
@@ -686,6 +1085,11 @@ stage:
   type: layout
   name: stage
   units: meters
+  target_order:
+    - type: fixture
+      name: Imported
+    - type: fixture
+      name: Inline
   fixtures:
     - id: 1
       name: Imported
@@ -749,6 +1153,9 @@ stage:
   type: layout
   name: stage
   units: meters
+  target_order:
+    - type: fixture
+      name: Imported
   fixtures:
     - id: 1
       name: Imported
@@ -875,6 +1282,9 @@ stage:
   type: layout
   name: stage
   units: meters
+  target_order:
+    - type: fixture
+      name: Pixel
   fixtures:
     - id: 1
       name: Pixel
@@ -946,6 +1356,9 @@ stage:
   type: layout
   name: stage
   units: meters
+  target_order:
+    - type: fixture
+      name: Missing
   fixtures:
     - id: 1
       name: Missing
@@ -985,6 +1398,7 @@ stage:
   type: layout
   name: stage
   units: meters
+  target_order: []
   fixtures: []
   groups: []
 
@@ -1032,6 +1446,10 @@ pixel:
             scale: Default::default(),
         },
     });
+    document.target_order.push(LayoutTargetDocument {
+        kind: LayoutTargetKind::Fixture,
+        name: "Pixel 01".to_string(),
+    });
 
     let result = apply_layout_document_edit(
         &layout_path,
@@ -1072,6 +1490,13 @@ stage:
   type: layout
   name: stage
   units: meters
+  target_order:
+    - type: group
+      name: all
+    - type: fixture
+      name: Old
+    - type: fixture
+      name: Removed
   fixtures:
     - id: 1
       name: Old
@@ -1106,6 +1531,9 @@ stage:
         get_layout_document(&layout_path, "stage", &project_path, Vec::new()).unwrap();
     document.fixtures[0].id = FixtureId(3);
     document.fixtures.pop();
+    document
+        .target_order
+        .retain(|target| target.name != "Removed");
 
     let result = apply_layout_document_edit(
         &layout_path,
@@ -1143,6 +1571,9 @@ stage:
   type: layout
   name: stage
   units: meters
+  target_order:
+    - type: fixture
+      name: Imported
   fixtures:
     - id: 1
       name: Imported
@@ -1683,6 +2114,37 @@ fn minimal_project(key: &str) -> String {
       units: meters
       fixtures: []
       groups: []
+"#
+    )
+}
+
+fn project_with_inline_sequence(effects: &str) -> String {
+    format!(
+        r#"
+club:
+  type: project
+  name: club
+  display:
+    name: main
+    controllers: []
+    patch:
+      routes: []
+    layout:
+      name: stage
+      units: meters
+      target_order:
+        - type: group
+          name: all
+      fixtures: []
+      groups:
+        - name: all
+          members: []
+  sequences:
+    - duration: 1s
+      frame_rate: 60
+      audio:
+      effects:
+{effects}
 "#
     )
 }

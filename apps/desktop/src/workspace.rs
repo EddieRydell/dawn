@@ -5,9 +5,12 @@ use dawn_project::analysis::{analyze_project_with_overlays, ProjectAnalysis, Pro
 use dawn_project::document::{
     apply_fixture_document_edit as edit_fixture_document,
     apply_layout_document_edit as edit_layout_document,
+    apply_sequence_document_edit as edit_sequence_document,
     get_fixture_document as inspect_fixture_document,
-    get_layout_document as inspect_layout_document, inspect_document as inspect_dawn_document,
-    DocumentDescriptor, DocumentEditResult, FixtureDocument, LayoutDocument,
+    get_layout_document as inspect_layout_document,
+    get_sequence_document as inspect_sequence_document, inspect_document as inspect_dawn_document,
+    DocumentDescriptor, DocumentEditResult, FixtureDocument, LayoutDocument, SequenceDocument,
+    SequenceDocumentEdit,
 };
 use dawn_project::fs::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFs};
 use dawn_project::path::{serialized_import_path, utf8_path, PathStringExt, Utf8PathBuf};
@@ -108,6 +111,21 @@ impl WorkspaceService {
         inspect_fixture_document(self.project_fs()?, path, selected_object_key, overlays)
     }
 
+    pub fn sequence_document(
+        &self,
+        path: Utf8PathBuf,
+        object_key: &str,
+        overlays: Vec<ProjectOverlay>,
+    ) -> Result<SequenceDocument, String> {
+        inspect_sequence_document(
+            self.project_fs()?,
+            path,
+            object_key,
+            self.current_project_file()?,
+            overlays,
+        )
+    }
+
     pub fn inspect_fixture_file(
         &self,
         selected_file: &Path,
@@ -171,6 +189,25 @@ impl WorkspaceService {
             overlays,
             self.current_project_file()?,
             allow_breaking_references,
+        )
+    }
+
+    pub fn apply_sequence_edit(
+        &self,
+        path: Utf8PathBuf,
+        object_key: &str,
+        edit: SequenceDocumentEdit,
+        base_content: String,
+        overlays: Vec<ProjectOverlay>,
+    ) -> Result<DocumentEditResult<SequenceDocument>, String> {
+        edit_sequence_document(
+            self.project_fs()?,
+            path,
+            object_key,
+            edit,
+            base_content,
+            overlays,
+            self.current_project_file()?,
         )
     }
 

@@ -395,6 +395,7 @@ impl EffectPreview {
         analysis
             .sample_effect_script(
                 script_path,
+                (time / theme::PREVIEW_DURATION_SECONDS).clamp(0.0, 1.0),
                 time,
                 FixtureContext {
                     index: fixture_index,

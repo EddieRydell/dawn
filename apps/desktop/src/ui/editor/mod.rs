@@ -94,6 +94,9 @@ fn editor_mode_toggle(
             || descriptor
                 .available_views
                 .contains(&DocumentViewId::Fixture)
+            || descriptor
+                .available_views
+                .contains(&DocumentViewId::Sequence)
     });
     if !has_gui {
         return empty().into_any();
@@ -306,6 +309,14 @@ fn editor_body(
             } else if state.active_fixture_document.is_some() {
                 crate::ui::editor::gui::fixture::fixture_viewer(state, gui_state, dispatch)
                     .into_any()
+            } else if state.active_sequence_document.is_some() {
+                crate::ui::editor::gui::sequence::sequence_viewer(
+                    state,
+                    gui_state,
+                    dropdown_menu,
+                    dispatch,
+                )
+                .into_any()
             } else {
                 center_message("No GUI editor for this document").into_any()
             }

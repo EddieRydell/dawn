@@ -10,10 +10,12 @@ use dawn_project::analysis::{ProjectAnalysis, ProjectDiagnostic};
 use dawn_project::document::{
     DocumentDescriptor, DocumentEditResult, DocumentViewId, FixtureDefinitionDocument,
     FixtureDocument, LayoutDocument, LayoutFixturePlacement, LayoutFixtureRef,
-    ResolvedLayoutFixture,
+    LayoutTargetDocument, ResolvedLayoutFixture, SequenceDocument, SequenceDocumentEdit,
 };
 use dawn_project::fs::WorkspaceEntry;
-use dawn_project::model::{ColorModel, FixtureId, Geometry, Point3, Rotation3, Scale3, Transform};
+use dawn_project::model::{
+    ColorModel, FixtureId, Geometry, LayoutTargetKind, Point3, Rotation3, Scale3, Transform,
+};
 use dawn_project::path::Utf8PathBuf;
 use dawn_project::render::{GeometryRenderBounds, GeometryRenderPlan, GeometryRenderPoint};
 
@@ -65,6 +67,8 @@ pub struct AppModel {
     pub pending_layout_fixture_name: Option<PendingLayoutFixtureName>,
     pub selected_fixture_definitions: HashMap<Utf8PathBuf, String>,
     pub selected_preview_fixture: Option<FixtureId>,
+    pub selected_sequence_effect: Option<u32>,
+    pub sequence_playheads: HashMap<Utf8PathBuf, u64>,
     pub preview_rig: PreviewRigKind,
     pub status: String,
 }
@@ -83,9 +87,12 @@ pub struct AppSnapshot {
     pub active_descriptor: Option<DocumentDescriptor>,
     pub active_layout_document: Option<LayoutDocument>,
     pub active_fixture_document: Option<FixtureDocument>,
+    pub active_sequence_document: Option<SequenceDocument>,
     pub pending_layout_fixture_import: Option<PendingLayoutFixtureImport>,
     pub pending_layout_fixture_name: Option<PendingLayoutFixtureName>,
     pub selected_preview_fixture: Option<FixtureId>,
+    pub selected_sequence_effect: Option<u32>,
+    pub sequence_playhead_ms: u64,
     pub preview_rig: PreviewRigKind,
     pub status: String,
 }
@@ -138,6 +145,8 @@ impl Default for AppModel {
             pending_layout_fixture_name: None,
             selected_fixture_definitions: HashMap::new(),
             selected_preview_fixture: None,
+            selected_sequence_effect: None,
+            sequence_playheads: HashMap::new(),
             preview_rig: PreviewRigKind::Strand,
             status: "No project open".to_string(),
         };
@@ -196,6 +205,19 @@ impl AppModel {
                 .fixture_document(path.clone(), object_key, self.editors.dirty_overlays())
                 .ok()
         });
+        let active_sequence_document = active_file.as_ref().and_then(|path| {
+            let descriptor = active_descriptor.as_ref()?;
+            let object_key = descriptor
+                .default_object_keys
+                .get(&DocumentViewId::Sequence)?;
+            self.workspace
+                .sequence_document(path.clone(), object_key, self.editors.dirty_overlays())
+                .ok()
+        });
+        let sequence_playhead_ms = active_file
+            .as_ref()
+            .and_then(|path| self.sequence_playheads.get(path).copied())
+            .unwrap_or_default();
         AppSnapshot {
             project_root: self.project_root.clone(),
             project_entries: self.project_entries.clone(),
@@ -209,9 +231,12 @@ impl AppModel {
             active_descriptor,
             active_layout_document,
             active_fixture_document,
+            active_sequence_document,
             pending_layout_fixture_import: self.pending_layout_fixture_import.clone(),
             pending_layout_fixture_name: self.pending_layout_fixture_name.clone(),
             selected_preview_fixture: self.selected_preview_fixture,
+            selected_sequence_effect: self.selected_sequence_effect,
+            sequence_playhead_ms,
             preview_rig: self.preview_rig,
             status: self.status.clone(),
         }
@@ -238,6 +263,8 @@ impl AppModel {
                 self.editors.clear();
                 self.selected_fixture_definitions.clear();
                 self.selected_preview_fixture = None;
+                self.selected_sequence_effect = None;
+                self.sequence_playheads.clear();
                 self.preview_rig = PreviewRigKind::Strand;
                 self.pending_layout_fixture_import = None;
                 self.pending_layout_fixture_name = None;
@@ -259,6 +286,7 @@ impl AppModel {
             AppAction::OpenFile(path) => {
                 self.pending_layout_fixture_import = None;
                 self.pending_layout_fixture_name = None;
+                self.selected_sequence_effect = None;
                 let text = self.workspace.read_file(path.clone())?;
                 self.editors.open_file(path, text);
                 self.refresh_analysis()?;
@@ -267,6 +295,7 @@ impl AppModel {
             AppAction::CloseFile(path) => {
                 self.pending_layout_fixture_import = None;
                 self.pending_layout_fixture_name = None;
+                self.selected_sequence_effect = None;
                 self.editors.close_file(&path);
                 self.refresh_analysis()?;
                 self.persist_workbench_layout()?;
@@ -277,6 +306,7 @@ impl AppModel {
                 let active_changed = self.editors.active_file() != Some(&path);
                 self.editors.set_active_file(path);
                 if active_changed {
+                    self.selected_sequence_effect = None;
                     self.persist_workbench_layout()?;
                 }
             }
@@ -382,13 +412,26 @@ impl AppModel {
                         );
                         duplicate.transform.position.x += theme::LAYOUT_DUPLICATE_OFFSET;
                         duplicate.transform.position.y += theme::LAYOUT_DUPLICATE_OFFSET;
+                        document
+                            .target_order
+                            .push(layout_fixture_target(&duplicate.name));
                         document.fixtures.push(duplicate);
                     }
                 })?;
             }
             AppAction::DeleteLayoutFixture { fixture_id } => {
                 self.edit_active_layout(|document| {
+                    let removed = document
+                        .fixtures
+                        .iter()
+                        .find(|fixture| fixture.id == fixture_id)
+                        .map(|fixture| fixture.name.clone());
                     document.fixtures.retain(|fixture| fixture.id != fixture_id);
+                    if let Some(name) = removed {
+                        document.target_order.retain(|target| {
+                            !(target.kind == LayoutTargetKind::Fixture && target.name == name)
+                        });
+                    }
                     for group in &mut document.groups {
                         group.members.retain(|member| *member != fixture_id);
                     }
@@ -445,9 +488,13 @@ impl AppModel {
                     PendingLayoutFixtureNameRequest::Inline { x, y } => {
                         self.edit_active_layout(|document| {
                             if let Some(id) = next_fixture_id(document) {
-                                document
-                                    .fixtures
-                                    .push(inline_layout_fixture(id, name, x, y));
+                                document.fixtures.push(inline_layout_fixture(
+                                    id,
+                                    name.clone(),
+                                    x,
+                                    y,
+                                ));
+                                document.target_order.push(layout_fixture_target(&name));
                             }
                         })?;
                     }
@@ -631,6 +678,69 @@ impl AppModel {
                         .retain(|fixture| fixture.object_key != object_key);
                 })?;
             }
+            AppAction::SelectSequenceEffect { id } => {
+                self.selected_sequence_effect = id;
+                self.status = id
+                    .map(|id| format!("Selected sequence effect {id}"))
+                    .unwrap_or_else(|| "Sequence selection cleared".to_string());
+            }
+            AppAction::AddSequenceEffect {
+                script_path,
+                target,
+                start_ms,
+            } => {
+                self.edit_active_sequence(SequenceDocumentEdit::AddEffect {
+                    script_path,
+                    target,
+                    start_ms,
+                })?;
+            }
+            AppAction::DuplicateSequenceEffect { id } => {
+                self.edit_active_sequence(SequenceDocumentEdit::DuplicateEffect { id })?;
+            }
+            AppAction::DeleteSequenceEffect { id } => {
+                self.edit_active_sequence(SequenceDocumentEdit::DeleteEffect { id })?;
+                if self.selected_sequence_effect == Some(id) {
+                    self.selected_sequence_effect = None;
+                }
+            }
+            AppAction::MoveSequenceEffect {
+                id,
+                start_ms,
+                target,
+            } => {
+                self.edit_active_sequence(SequenceDocumentEdit::MoveEffect {
+                    id,
+                    start_ms,
+                    target,
+                })?;
+            }
+            AppAction::ResizeSequenceEffect {
+                id,
+                start_ms,
+                duration_ms,
+            } => {
+                self.edit_active_sequence(SequenceDocumentEdit::ResizeEffect {
+                    id,
+                    start_ms,
+                    duration_ms,
+                })?;
+            }
+            AppAction::RetargetSequenceEffect { id, target } => {
+                self.edit_active_sequence(SequenceDocumentEdit::RetargetEffect { id, target })?;
+            }
+            AppAction::SetSequencePlayhead { time_ms } => {
+                if let Some(path) = self.editors.active_file().cloned() {
+                    let duration_ms = self
+                        .snapshot()
+                        .active_sequence_document
+                        .map(|document| document.duration_ms)
+                        .unwrap_or(time_ms);
+                    self.sequence_playheads
+                        .insert(path, time_ms.min(duration_ms));
+                    self.status = "Sequence playhead moved".to_string();
+                }
+            }
             AppAction::OpenSequence(path) => self.workspace.open_sequence(path)?,
             AppAction::SelectPreviewFixture(fixture_id) => {
                 self.selected_preview_fixture = fixture_id;
@@ -707,6 +817,8 @@ impl AppModel {
         self.editors.clear();
         self.selected_fixture_definitions.clear();
         self.selected_preview_fixture = None;
+        self.selected_sequence_effect = None;
+        self.sequence_playheads.clear();
         self.preview_rig = PreviewRigKind::Strand;
         self.pending_layout_fixture_import = None;
         self.pending_layout_fixture_name = None;
@@ -799,7 +911,8 @@ impl AppModel {
             if let Some(id) = next_fixture_id(document) {
                 document
                     .fixtures
-                    .push(imported_layout_fixture(id, name, import, x, y));
+                    .push(imported_layout_fixture(id, name.clone(), import, x, y));
+                document.target_order.push(layout_fixture_target(&name));
             }
         })?;
         if is_absolute {
@@ -836,6 +949,38 @@ impl AppModel {
                 self.diagnostics = analysis.diagnostics.clone();
                 self.analysis = Some(analysis);
                 self.status = "Fixture edit applied".to_string();
+            }
+            DocumentEditResult::Blocked(blocked) => {
+                self.diagnostics = blocked.diagnostics;
+                self.status = blocked.message;
+            }
+        }
+        Ok(())
+    }
+
+    fn edit_active_sequence(&mut self, edit: SequenceDocumentEdit) -> Result<(), String> {
+        let snapshot = self.snapshot();
+        let Some(buffer) = snapshot.active_buffer else {
+            return Ok(());
+        };
+        let Some(document) = snapshot.active_sequence_document else {
+            return Err("active editor is not a sequence document".to_string());
+        };
+        let object_key = document.object_key.clone();
+        match self.workspace.apply_sequence_edit(
+            buffer.path,
+            &object_key,
+            edit,
+            buffer.text,
+            self.editors.dirty_overlays(),
+        )? {
+            DocumentEditResult::Applied(outcome) => {
+                self.editors.update_active_text(outcome.serialized_content);
+                self.save_active_file()?;
+                let analysis = outcome.analysis;
+                self.diagnostics = analysis.diagnostics.clone();
+                self.analysis = Some(analysis);
+                self.status = "Sequence edit applied".to_string();
             }
             DocumentEditResult::Blocked(blocked) => {
                 self.diagnostics = blocked.diagnostics;
@@ -904,6 +1049,13 @@ fn unique_display_name<'a>(base: &str, existing: impl Iterator<Item = &'a str>) 
         }
     }
     unreachable!("unbounded iterator should find a unique name")
+}
+
+fn layout_fixture_target(name: &str) -> LayoutTargetDocument {
+    LayoutTargetDocument {
+        kind: LayoutTargetKind::Fixture,
+        name: name.to_string(),
+    }
 }
 
 fn nudge_fixture_geometry_handles(geometry: &mut Geometry, handles: &[usize], dx: f64, dy: f64) {

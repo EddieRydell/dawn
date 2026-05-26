@@ -53,7 +53,7 @@ impl ModelMode for Authored {
     type SequenceEffectScript = InlineOrImport<String>;
     type EffectParamCurve = InlineOrImport<Curve>;
     type AutomationClipCurve = InlineOrImport<Curve>;
-    type AutomationClipTarget = SequenceEffectRef;
+    type AutomationClipTarget = u32;
 }
 
 impl ModelMode for Resolved {
@@ -263,7 +263,6 @@ macro_rules! string_ref {
 string_ref!(ObjectName);
 string_ref!(GroupRef);
 string_ref!(ControllerRef);
-string_ref!(SequenceEffectRef);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportRef {
@@ -413,6 +412,8 @@ pub struct Universe {
 pub struct Layout<M: ModelMode = Authored> {
     pub name: String,
     pub units: DistanceUnit,
+    #[serde(default)]
+    pub target_order: Vec<LayoutTargetRef>,
     #[serde(default)]
     pub fixtures: Vec<M::LayoutFixture>,
     #[serde(default)]
@@ -590,6 +591,21 @@ pub struct Group<M: ModelMode = Authored> {
     pub members: Vec<M::GroupMember>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LayoutTargetKind {
+    Group,
+    Fixture,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayoutTargetRef {
+    #[serde(rename = "type")]
+    pub kind: LayoutTargetKind,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[serde(bound(
@@ -648,7 +664,7 @@ pub enum EffectTarget<M: ModelMode = Authored> {
     deserialize = "EffectTarget<M>: Deserialize<'de>, M::SequenceEffectScript: Deserialize<'de>, EffectParam<M>: Deserialize<'de>"
 ))]
 pub struct SequenceEffect<M: ModelMode = Authored> {
-    pub id: String,
+    pub id: u32,
     pub start: Time,
     pub duration: Time,
     pub target: EffectTarget<M>,
@@ -933,7 +949,7 @@ pub enum EffectParam<M: ModelMode = Authored> {
     deserialize = "M::AutomationClipCurve: Deserialize<'de>, M::AutomationClipTarget: Deserialize<'de>"
 ))]
 pub struct AutomationClip<M: ModelMode = Authored> {
-    pub id: String,
+    pub id: u32,
     pub start: Time,
     pub duration: Time,
     pub curve: M::AutomationClipCurve,

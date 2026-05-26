@@ -55,16 +55,38 @@ impl ProjectAnalysis {
     pub fn sample_effect_script(
         &self,
         script_path: &Utf8PathBuf,
-        t: f64,
+        progress: f64,
+        seconds: f64,
+        fixture: crate::effect_script::FixtureContext,
+        pixel: crate::effect_script::PixelContext,
+        params: BTreeMap<String, RuntimeValue>,
+    ) -> Result<Color, String> {
+        self.sample_effect_script_key(
+            &script_path.to_slash_string(),
+            progress,
+            seconds,
+            fixture,
+            pixel,
+            params,
+        )
+    }
+
+    pub fn sample_effect_script_key(
+        &self,
+        script_key: &str,
+        progress: f64,
+        seconds: f64,
         fixture: crate::effect_script::FixtureContext,
         pixel: crate::effect_script::PixelContext,
         params: BTreeMap<String, RuntimeValue>,
     ) -> Result<Color, String> {
         let script = self
-            .compiled_script_for_path(script_path)
-            .ok_or_else(|| format!("compiled script `{}` was not found", script_path))?;
+            .scripts
+            .get(script_key)
+            .and_then(|script| script.result.as_ref().ok())
+            .ok_or_else(|| format!("compiled script `{script_key}` was not found"))?;
         script
-            .sample(t, fixture, pixel, &params)
+            .sample(progress, seconds, fixture, pixel, &params)
             .map_err(|error| error.to_string())
     }
 
@@ -434,9 +456,12 @@ impl AnalysisSession {
             LowerError::UnknownController { name } => Some(name.clone()),
             LowerError::DuplicateGroupName { name } => Some(name.clone()),
             LowerError::UnknownGroup { name } => Some(name.clone()),
-            LowerError::DuplicateSequenceEffectId { id } => Some(id.clone()),
-            LowerError::UnknownSequenceEffect { id } => Some(id.clone()),
-            LowerError::AutomationCurveType { id, .. } => Some(id.clone()),
+            LowerError::DuplicateLayoutTargetOrderEntry { name, .. } => Some(name.clone()),
+            LowerError::MissingLayoutTargetOrderEntry { name, .. } => Some(name.clone()),
+            LowerError::UnknownLayoutTargetOrderEntry { name, .. } => Some(name.clone()),
+            LowerError::DuplicateSequenceEffectId { id } => Some(id.to_string()),
+            LowerError::UnknownSequenceEffect { id } => Some(id.to_string()),
+            LowerError::AutomationCurveType { id, .. } => Some(id.to_string()),
         };
 
         if let Some(token) = token {
@@ -511,7 +536,7 @@ impl AnalysisSession {
     fn validate_effect_params(
         &mut self,
         root_path: &Utf8PathBuf,
-        effect_id: &str,
+        effect_id: &u32,
         script: &CompiledEffect,
         params: &IndexMap<String, EffectParam<Resolved>>,
     ) {
@@ -531,7 +556,9 @@ impl AnalysisSession {
         }
         for schema in &script.params {
             match params.get(&schema.name) {
-                Some(param) if schema.value_type.matches_param(param) => {}
+                Some(param) if schema.value_type.matches_param(param) => {
+                    self.validate_effect_param_options(root_path, effect_id, script, schema, param);
+                }
                 Some(_) => self.diagnostics.push(ProjectDiagnostic {
                     path: root_path.clone(),
                     range: None,
@@ -554,6 +581,47 @@ impl AnalysisSession {
                     ),
                 }),
             }
+        }
+    }
+
+    fn validate_effect_param_options(
+        &mut self,
+        root_path: &Utf8PathBuf,
+        effect_id: &u32,
+        script: &CompiledEffect,
+        schema: &crate::effect_script::EffectParamSchema,
+        param: &EffectParam<Resolved>,
+    ) {
+        match param {
+            EffectParam::Enum { value } if !schema.options.contains(value) => {
+                self.diagnostics.push(ProjectDiagnostic {
+                    path: root_path.clone(),
+                    range: None,
+                    severity: DiagnosticSeverity::Error,
+                    code: DiagnosticCode::Script,
+                    message: format!(
+                        "effect `{effect_id}` parameter `{}` value `{value}` is not declared by script `{}`",
+                        schema.name, script.name
+                    ),
+                });
+            }
+            EffectParam::Flags { value } => {
+                for flag in &value.values {
+                    if !schema.options.contains(flag) {
+                        self.diagnostics.push(ProjectDiagnostic {
+                            path: root_path.clone(),
+                            range: None,
+                            severity: DiagnosticSeverity::Error,
+                            code: DiagnosticCode::Script,
+                            message: format!(
+                                "effect `{effect_id}` parameter `{}` flag `{flag}` is not declared by script `{}`",
+                                schema.name, script.name
+                            ),
+                        });
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use dawn_project::document::LayoutTargetDocument;
 use dawn_project::model::FixtureId;
 use dawn_project::path::Utf8PathBuf;
 
@@ -89,6 +90,37 @@ pub enum AppAction {
     },
     DeleteFixtureDefinition {
         object_key: String,
+    },
+    SelectSequenceEffect {
+        id: Option<u32>,
+    },
+    AddSequenceEffect {
+        script_path: String,
+        target: LayoutTargetDocument,
+        start_ms: u64,
+    },
+    DuplicateSequenceEffect {
+        id: u32,
+    },
+    DeleteSequenceEffect {
+        id: u32,
+    },
+    MoveSequenceEffect {
+        id: u32,
+        start_ms: u64,
+        target: Option<LayoutTargetDocument>,
+    },
+    ResizeSequenceEffect {
+        id: u32,
+        start_ms: u64,
+        duration_ms: u64,
+    },
+    RetargetSequenceEffect {
+        id: u32,
+        target: LayoutTargetDocument,
+    },
+    SetSequencePlayhead {
+        time_ms: u64,
     },
     OpenSequence(Utf8PathBuf),
     SelectPreviewFixture(Option<FixtureId>),

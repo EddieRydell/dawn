@@ -2,6 +2,45 @@ stage:
   type: layout
   name: stage
   units: meters
+  target_order:
+  - type: group
+    name: WallBars
+  - type: group
+    name: Movers
+  - type: fixture
+    name: Bar 01
+  - type: fixture
+    name: Bar 02
+  - type: fixture
+    name: Bar 03
+  - type: fixture
+    name: Bar 04
+  - type: fixture
+    name: Spot 01
+  - type: fixture
+    name: Spot 02
+  - type: fixture
+    name: Spot 03
+  - type: fixture
+    name: Spot 04
+  - type: fixture
+    name: Pixelbar
+  - type: fixture
+    name: Spot
+  - type: fixture
+    name: Pixelbar 2
+  - type: fixture
+    name: Spot 2
+  - type: fixture
+    name: Bar 02 Copy
+  - type: fixture
+    name: Fixture
+  - type: fixture
+    name: Fixture 2
+  - type: fixture
+    name: Fixture 3
+  - type: fixture
+    name: Fixture 4
   fixtures:
   - id: 1
     name: Bar 01

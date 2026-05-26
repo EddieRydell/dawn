@@ -54,14 +54,26 @@ pub enum LowerError {
     UnknownGroup {
         name: String,
     },
+    DuplicateLayoutTargetOrderEntry {
+        kind: LayoutTargetKind,
+        name: String,
+    },
+    MissingLayoutTargetOrderEntry {
+        kind: LayoutTargetKind,
+        name: String,
+    },
+    UnknownLayoutTargetOrderEntry {
+        kind: LayoutTargetKind,
+        name: String,
+    },
     DuplicateSequenceEffectId {
-        id: String,
+        id: u32,
     },
     UnknownSequenceEffect {
-        id: String,
+        id: u32,
     },
     AutomationCurveType {
-        id: String,
+        id: u32,
         actual: CurveValueType,
     },
 }
@@ -103,6 +115,27 @@ impl fmt::Display for LowerError {
             Self::UnknownController { name } => write!(formatter, "unknown controller `{name}`"),
             Self::DuplicateGroupName { name } => write!(formatter, "duplicate group `{name}`"),
             Self::UnknownGroup { name } => write!(formatter, "unknown group `{name}`"),
+            Self::DuplicateLayoutTargetOrderEntry { kind, name } => {
+                write!(
+                    formatter,
+                    "duplicate layout target order entry `{:?}:{name}`",
+                    kind
+                )
+            }
+            Self::MissingLayoutTargetOrderEntry { kind, name } => {
+                write!(
+                    formatter,
+                    "missing layout target order entry `{:?}:{name}`",
+                    kind
+                )
+            }
+            Self::UnknownLayoutTargetOrderEntry { kind, name } => {
+                write!(
+                    formatter,
+                    "unknown layout target order entry `{:?}:{name}`",
+                    kind
+                )
+            }
             Self::DuplicateSequenceEffectId { id } => {
                 write!(formatter, "duplicate sequence effect `{id}`")
             }
@@ -262,9 +295,56 @@ pub(crate) fn lower_layout(
     Ok(Layout {
         name: layout.name.clone(),
         units: layout.units,
+        target_order: validate_layout_target_order(layout, &fixtures, &groups)?,
         fixtures,
         groups,
     })
+}
+
+fn validate_layout_target_order(
+    layout: &Layout<Authored>,
+    fixtures: &[FixturePlacement<Resolved>],
+    groups: &[Group<Resolved>],
+) -> Result<Vec<LayoutTargetRef>, LowerError> {
+    let expected = groups
+        .iter()
+        .map(|group| LayoutTargetRef {
+            kind: LayoutTargetKind::Group,
+            name: group.name.clone(),
+        })
+        .chain(fixtures.iter().map(|fixture| LayoutTargetRef {
+            kind: LayoutTargetKind::Fixture,
+            name: fixture.name.clone(),
+        }))
+        .collect::<Vec<_>>();
+    let expected_set = expected
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+    let mut seen = std::collections::HashSet::with_capacity(layout.target_order.len());
+    for target in &layout.target_order {
+        if !seen.insert(target.clone()) {
+            return Err(LowerError::DuplicateLayoutTargetOrderEntry {
+                kind: target.kind,
+                name: target.name.clone(),
+            });
+        }
+        if !expected_set.contains(target) {
+            return Err(LowerError::UnknownLayoutTargetOrderEntry {
+                kind: target.kind,
+                name: target.name.clone(),
+            });
+        }
+    }
+    for target in expected {
+        if !seen.contains(&target) {
+            return Err(LowerError::MissingLayoutTargetOrderEntry {
+                kind: target.kind,
+                name: target.name,
+            });
+        }
+    }
+    Ok(layout.target_order.clone())
 }
 
 fn lower_patch(
@@ -334,9 +414,8 @@ fn lower_sequence(
     for clip in &sequence.automation_clips {
         let mut targets = Vec::with_capacity(clip.targets.len());
         for target in &clip.targets {
-            let id = target.as_str();
-            let Some(index) = effect_indices.get(id).copied() else {
-                return Err(LowerError::UnknownSequenceEffect { id: id.to_string() });
+            let Some(index) = effect_indices.get(target).copied() else {
+                return Err(LowerError::UnknownSequenceEffect { id: *target });
             };
             targets.push(index);
         }

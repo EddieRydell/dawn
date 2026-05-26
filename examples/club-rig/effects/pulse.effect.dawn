@@ -4,8 +4,8 @@ effect Pulse {
   param float speed = 0.75;
   param curve<float> fade;
 
-  color sample(float t, Fixture fixture, Pixel pixel) {
-    float phase = (sin(t * speed) + 1.0) / 2.0;
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    float phase = (sin(seconds * speed) + 1.0) / 2.0;
     return mix(base, accent, fade(phase));
   }
 }
