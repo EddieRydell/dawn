@@ -103,6 +103,30 @@ impl ScriptType {
     }
 }
 
+fn is_float_compatible(value_type: ScriptType) -> bool {
+    matches!(value_type, ScriptType::Float | ScriptType::Int)
+}
+
+fn is_assignable(expected: ScriptType, actual: ScriptType) -> bool {
+    expected == actual || (expected == ScriptType::Float && actual == ScriptType::Int)
+}
+
+fn binary_result_type(left: ScriptType, op: BinaryOp, right: ScriptType) -> Option<ScriptType> {
+    match (left, op, right) {
+        (ScriptType::Float, _, ScriptType::Float)
+        | (ScriptType::Float, _, ScriptType::Int)
+        | (ScriptType::Int, _, ScriptType::Float) => Some(ScriptType::Float),
+        (ScriptType::Int, _, ScriptType::Int) => Some(ScriptType::Int),
+        (ScriptType::Color, BinaryOp::Multiply, factor)
+        | (factor, BinaryOp::Multiply, ScriptType::Color)
+            if is_float_compatible(factor) =>
+        {
+            Some(ScriptType::Color)
+        }
+        _ => None,
+    }
+}
+
 impl fmt::Display for ScriptType {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -710,8 +734,11 @@ impl Parser<'_> {
         }
         let expr = self.expr()?;
         let value = Vm::eval_constant(&expr)?;
-        if value.value_type() == value_type {
-            Ok(value)
+        if is_assignable(value_type, value.value_type()) {
+            Vm::coerce_value(value, value_type).map_err(|error| ScriptDiagnostic {
+                range: None,
+                message: error.message,
+            })
         } else {
             Err(self.error_here(&format!(
                 "default value must be {value_type}, but found {}",
@@ -906,7 +933,7 @@ impl<'a> TypeChecker<'a> {
                     expr,
                 } => {
                     let actual = self.expr_type(expr);
-                    if actual != *value_type {
+                    if !is_assignable(*value_type, actual) {
                         self.errors.push(ScriptDiagnostic {
                             range: None,
                             message: format!(
@@ -953,14 +980,9 @@ impl<'a> TypeChecker<'a> {
             Expr::Binary { left, op, right } => {
                 let left = self.expr_type(left);
                 let right = self.expr_type(right);
-                match (left, op, right) {
-                    (ScriptType::Float, _, ScriptType::Float)
-                    | (ScriptType::Int, _, ScriptType::Int) => left,
-                    (ScriptType::Color, BinaryOp::Multiply, ScriptType::Float)
-                    | (ScriptType::Float, BinaryOp::Multiply, ScriptType::Color) => {
-                        ScriptType::Color
-                    }
-                    _ => {
+                match binary_result_type(left, *op, right) {
+                    Some(value_type) => value_type,
+                    None => {
                         self.errors.push(ScriptDiagnostic {
                             range: None,
                             message: format!("cannot apply binary operator to {left} and {right}"),
@@ -982,15 +1004,21 @@ impl<'a> TypeChecker<'a> {
                 });
                 return ScriptType::Void;
             };
-            if self.expr_type(arg) != ScriptType::Float {
-                self.errors.push(ScriptDiagnostic {
-                    range: None,
-                    message: format!("curve parameter `{name}` expects a float argument"),
-                });
-            }
             return match param_type {
-                ScriptType::CurveFloat => ScriptType::Float,
-                ScriptType::CurveColor => ScriptType::Color,
+                ScriptType::CurveFloat | ScriptType::CurveColor => {
+                    let arg_type = self.expr_type(arg);
+                    if !is_float_compatible(arg_type) {
+                        self.errors.push(ScriptDiagnostic {
+                            range: None,
+                            message: format!("curve parameter `{name}` expects a float argument"),
+                        });
+                    }
+                    match param_type {
+                        ScriptType::CurveFloat => ScriptType::Float,
+                        ScriptType::CurveColor => ScriptType::Color,
+                        _ => unreachable!(),
+                    }
+                }
                 _ => {
                     self.errors.push(ScriptDiagnostic {
                         range: None,
@@ -1006,15 +1034,29 @@ impl<'a> TypeChecker<'a> {
             .map(|arg| self.expr_type(arg))
             .collect::<Vec<_>>();
         match (name, arg_types.as_slice()) {
-            ("sin" | "cos" | "abs", [ScriptType::Float])
-            | ("min" | "max", [ScriptType::Float, ScriptType::Float])
-            | ("clamp", [ScriptType::Float, ScriptType::Float, ScriptType::Float])
-            | ("smoothstep", [ScriptType::Float, ScriptType::Float, ScriptType::Float])
-            | ("mix", [ScriptType::Float, ScriptType::Float, ScriptType::Float]) => {
+            ("sin" | "cos" | "abs", [value]) if is_float_compatible(*value) => ScriptType::Float,
+            ("min" | "max", [left, right])
+                if is_float_compatible(*left) && is_float_compatible(*right) =>
+            {
                 ScriptType::Float
             }
-            ("rgb" | "hsv", [ScriptType::Float, ScriptType::Float, ScriptType::Float])
-            | ("mix", [ScriptType::Color, ScriptType::Color, ScriptType::Float]) => {
+            ("clamp" | "smoothstep", [first, second, third]) | ("mix", [first, second, third])
+                if is_float_compatible(*first)
+                    && is_float_compatible(*second)
+                    && is_float_compatible(*third) =>
+            {
+                ScriptType::Float
+            }
+            ("rgb" | "hsv", [first, second, third])
+                if is_float_compatible(*first)
+                    && is_float_compatible(*second)
+                    && is_float_compatible(*third) =>
+            {
+                ScriptType::Color
+            }
+            ("mix", [ScriptType::Color, ScriptType::Color, amount])
+                if is_float_compatible(*amount) =>
+            {
                 ScriptType::Color
             }
             _ => {
@@ -1066,9 +1108,14 @@ impl<'a> Vm<'a> {
     fn run(&mut self) -> Result<Color, RuntimeError> {
         for statement in &self.effect.sample {
             match statement {
-                Stmt::Let { name, expr, .. } => {
+                Stmt::Let {
+                    name,
+                    value_type,
+                    expr,
+                } => {
                     let value = self.eval(expr)?;
-                    self.env.insert(name.clone(), value);
+                    self.env
+                        .insert(name.clone(), Self::coerce_value(value, *value_type)?);
                 }
                 Stmt::Return(expr) => {
                     let RuntimeValue::Color(color) = self.eval(expr)? else {
@@ -1107,7 +1154,10 @@ impl<'a> Vm<'a> {
                 .ok_or_else(|| self.error(&format!("unknown identifier `{name}`"))),
             Expr::Unary { op, expr } => match (op, self.eval(expr)?) {
                 (UnaryOp::Negate, RuntimeValue::Float(value)) => Ok(RuntimeValue::Float(-value)),
-                (UnaryOp::Negate, RuntimeValue::Int(value)) => Ok(RuntimeValue::Int(-value)),
+                (UnaryOp::Negate, RuntimeValue::Int(value)) => value
+                    .checked_neg()
+                    .map(RuntimeValue::Int)
+                    .ok_or_else(|| self.error("integer overflow")),
                 _ => Err(self.error("invalid unary expression")),
             },
             Expr::Binary { left, op, right } => self.eval_binary(left, *op, right),
@@ -1127,18 +1177,65 @@ impl<'a> Vm<'a> {
             (RuntimeValue::Float(left), BinaryOp::Add, RuntimeValue::Float(right)) => {
                 Ok(RuntimeValue::Float(left + right))
             }
+            (RuntimeValue::Float(left), BinaryOp::Add, RuntimeValue::Int(right)) => {
+                Ok(RuntimeValue::Float(left + right as f64))
+            }
+            (RuntimeValue::Int(left), BinaryOp::Add, RuntimeValue::Float(right)) => {
+                Ok(RuntimeValue::Float(left as f64 + right))
+            }
+            (RuntimeValue::Int(left), BinaryOp::Add, RuntimeValue::Int(right)) => left
+                .checked_add(right)
+                .map(RuntimeValue::Int)
+                .ok_or_else(|| self.error("integer overflow")),
             (RuntimeValue::Float(left), BinaryOp::Subtract, RuntimeValue::Float(right)) => {
                 Ok(RuntimeValue::Float(left - right))
             }
+            (RuntimeValue::Float(left), BinaryOp::Subtract, RuntimeValue::Int(right)) => {
+                Ok(RuntimeValue::Float(left - right as f64))
+            }
+            (RuntimeValue::Int(left), BinaryOp::Subtract, RuntimeValue::Float(right)) => {
+                Ok(RuntimeValue::Float(left as f64 - right))
+            }
+            (RuntimeValue::Int(left), BinaryOp::Subtract, RuntimeValue::Int(right)) => left
+                .checked_sub(right)
+                .map(RuntimeValue::Int)
+                .ok_or_else(|| self.error("integer overflow")),
             (RuntimeValue::Float(left), BinaryOp::Multiply, RuntimeValue::Float(right)) => {
                 Ok(RuntimeValue::Float(left * right))
             }
+            (RuntimeValue::Float(left), BinaryOp::Multiply, RuntimeValue::Int(right)) => {
+                Ok(RuntimeValue::Float(left * right as f64))
+            }
+            (RuntimeValue::Int(left), BinaryOp::Multiply, RuntimeValue::Float(right)) => {
+                Ok(RuntimeValue::Float(left as f64 * right))
+            }
+            (RuntimeValue::Int(left), BinaryOp::Multiply, RuntimeValue::Int(right)) => left
+                .checked_mul(right)
+                .map(RuntimeValue::Int)
+                .ok_or_else(|| self.error("integer overflow")),
             (RuntimeValue::Float(left), BinaryOp::Divide, RuntimeValue::Float(right)) => {
                 Ok(RuntimeValue::Float(left / right))
             }
+            (RuntimeValue::Float(left), BinaryOp::Divide, RuntimeValue::Int(right)) => {
+                Ok(RuntimeValue::Float(left / right as f64))
+            }
+            (RuntimeValue::Int(left), BinaryOp::Divide, RuntimeValue::Float(right)) => {
+                Ok(RuntimeValue::Float(left as f64 / right))
+            }
+            (RuntimeValue::Int(_), BinaryOp::Divide, RuntimeValue::Int(0)) => {
+                Err(self.error("integer divide by zero"))
+            }
+            (RuntimeValue::Int(left), BinaryOp::Divide, RuntimeValue::Int(right)) => left
+                .checked_div(right)
+                .map(RuntimeValue::Int)
+                .ok_or_else(|| self.error("integer overflow")),
             (RuntimeValue::Color(color), BinaryOp::Multiply, RuntimeValue::Float(factor))
             | (RuntimeValue::Float(factor), BinaryOp::Multiply, RuntimeValue::Color(color)) => {
                 Ok(RuntimeValue::Color(color.scale(factor)))
+            }
+            (RuntimeValue::Color(color), BinaryOp::Multiply, RuntimeValue::Int(factor))
+            | (RuntimeValue::Int(factor), BinaryOp::Multiply, RuntimeValue::Color(color)) => {
+                Ok(RuntimeValue::Color(color.scale(factor as f64)))
             }
             _ => Err(self.error("invalid binary expression")),
         }
@@ -1160,46 +1257,49 @@ impl<'a> Vm<'a> {
             .map(|arg| self.eval(arg))
             .collect::<Result<Vec<_>, _>>()?;
         match (name, values.as_slice()) {
-            ("sin", [RuntimeValue::Float(value)]) => Ok(RuntimeValue::Float(value.sin())),
-            ("cos", [RuntimeValue::Float(value)]) => Ok(RuntimeValue::Float(value.cos())),
-            ("abs", [RuntimeValue::Float(value)]) => Ok(RuntimeValue::Float(value.abs())),
-            ("min", [RuntimeValue::Float(left), RuntimeValue::Float(right)]) => {
-                Ok(RuntimeValue::Float(left.min(*right)))
-            }
-            ("max", [RuntimeValue::Float(left), RuntimeValue::Float(right)]) => {
-                Ok(RuntimeValue::Float(left.max(*right)))
-            }
-            (
-                "clamp",
-                [RuntimeValue::Float(value), RuntimeValue::Float(min), RuntimeValue::Float(max)],
-            ) => Ok(RuntimeValue::Float(value.clamp(*min, *max))),
-            (
-                "smoothstep",
-                [RuntimeValue::Float(edge0), RuntimeValue::Float(edge1), RuntimeValue::Float(value)],
-            ) => {
+            ("sin", [value]) => Ok(RuntimeValue::Float(self.expect_float(value.clone())?.sin())),
+            ("cos", [value]) => Ok(RuntimeValue::Float(self.expect_float(value.clone())?.cos())),
+            ("abs", [value]) => Ok(RuntimeValue::Float(self.expect_float(value.clone())?.abs())),
+            ("min", [left, right]) => Ok(RuntimeValue::Float(
+                self.expect_float(left.clone())?
+                    .min(self.expect_float(right.clone())?),
+            )),
+            ("max", [left, right]) => Ok(RuntimeValue::Float(
+                self.expect_float(left.clone())?
+                    .max(self.expect_float(right.clone())?),
+            )),
+            ("clamp", [value, min, max]) => Ok(RuntimeValue::Float(
+                self.expect_float(value.clone())?.clamp(
+                    self.expect_float(min.clone())?,
+                    self.expect_float(max.clone())?,
+                ),
+            )),
+            ("smoothstep", [edge0, edge1, value]) => {
+                let edge0 = self.expect_float(edge0.clone())?;
+                let edge1 = self.expect_float(edge1.clone())?;
+                let value = self.expect_float(value.clone())?;
                 let x = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
                 Ok(RuntimeValue::Float(x * x * (3.0 - 2.0 * x)))
             }
-            (
-                "mix",
-                [RuntimeValue::Float(left), RuntimeValue::Float(right), RuntimeValue::Float(amount)],
-            ) => Ok(RuntimeValue::Float(left + (right - left) * amount)),
-            (
-                "mix",
-                [RuntimeValue::Color(left), RuntimeValue::Color(right), RuntimeValue::Float(amount)],
-            ) => Ok(RuntimeValue::Color(left.mix(*right, *amount))),
-            (
-                "rgb",
-                [RuntimeValue::Float(red), RuntimeValue::Float(green), RuntimeValue::Float(blue)],
-            ) => Ok(RuntimeValue::Color(Color::new(
-                (*red).round().clamp(0.0, 255.0) as u8,
-                (*green).round().clamp(0.0, 255.0) as u8,
-                (*blue).round().clamp(0.0, 255.0) as u8,
+            ("mix", [RuntimeValue::Color(left), RuntimeValue::Color(right), amount]) => Ok(
+                RuntimeValue::Color(left.mix(*right, self.expect_float(amount.clone())?)),
+            ),
+            ("mix", [left, right, amount]) => {
+                let left = self.expect_float(left.clone())?;
+                let right = self.expect_float(right.clone())?;
+                let amount = self.expect_float(amount.clone())?;
+                Ok(RuntimeValue::Float(left + (right - left) * amount))
+            }
+            ("rgb", [red, green, blue]) => Ok(RuntimeValue::Color(Color::new(
+                self.expect_float(red.clone())?.round().clamp(0.0, 255.0) as u8,
+                self.expect_float(green.clone())?.round().clamp(0.0, 255.0) as u8,
+                self.expect_float(blue.clone())?.round().clamp(0.0, 255.0) as u8,
             ))),
-            (
-                "hsv",
-                [RuntimeValue::Float(hue), RuntimeValue::Float(saturation), RuntimeValue::Float(value)],
-            ) => Ok(RuntimeValue::Color(hsv_to_rgb(*hue, *saturation, *value))),
+            ("hsv", [hue, saturation, value]) => Ok(RuntimeValue::Color(hsv_to_rgb(
+                self.expect_float(hue.clone())?,
+                self.expect_float(saturation.clone())?,
+                self.expect_float(value.clone())?,
+            ))),
             _ => Err(self.error(&format!("invalid call `{name}`"))),
         }
     }
@@ -1207,7 +1307,24 @@ impl<'a> Vm<'a> {
     fn expect_float(&self, value: RuntimeValue) -> Result<f64, RuntimeError> {
         match value {
             RuntimeValue::Float(value) => Ok(value),
+            RuntimeValue::Int(value) => Ok(value as f64),
             _ => Err(self.error("expected float value")),
+        }
+    }
+
+    fn coerce_value(
+        value: RuntimeValue,
+        expected: ScriptType,
+    ) -> Result<RuntimeValue, RuntimeError> {
+        match (expected, value) {
+            (ScriptType::Float, RuntimeValue::Int(value)) => Ok(RuntimeValue::Float(value as f64)),
+            (expected, value) if value.value_type() == expected => Ok(value),
+            (expected, value) => Err(RuntimeError {
+                message: format!(
+                    "expected {expected} value, but found {}",
+                    value.value_type()
+                ),
+            }),
         }
     }
 
@@ -1241,4 +1358,187 @@ fn hsv_to_rgb(hue: f64, saturation: f64, value: f64) -> Color {
         ((green + m) * 255.0).round().clamp(0.0, 255.0) as u8,
         ((blue + m) * 255.0).round().clamp(0.0, 255.0) as u8,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{CurvePoint, CurveValueType};
+
+    fn fixture() -> FixtureContext {
+        FixtureContext { index: 0 }
+    }
+
+    fn pixel() -> PixelContext {
+        PixelContext { index: 0 }
+    }
+
+    fn empty_params() -> BTreeMap<String, RuntimeValue> {
+        BTreeMap::new()
+    }
+
+    fn fade_curve() -> RuntimeValue {
+        RuntimeValue::Curve(Curve {
+            value_type: CurveValueType::Float,
+            points: vec![
+                CurvePoint {
+                    time: 0.0,
+                    value: CurveValue::Float(0.0),
+                },
+                CurvePoint {
+                    time: 1.0,
+                    value: CurveValue::Float(1.0),
+                },
+            ],
+        })
+    }
+
+    fn sample(script: &CompiledEffect) -> Result<Color, RuntimeError> {
+        script.sample(0.25, 0.0, fixture(), pixel(), &empty_params())
+    }
+
+    #[test]
+    fn int_literals_promote_in_float_binary_contexts() {
+        for expr in [
+            "progress * speed * 9",
+            "9 * progress * speed",
+            "progress * 9.0",
+        ] {
+            let script = compile(&format!(
+                r##"
+effect Pulse {{
+  param float speed = 0.75;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {{
+    float phase = (sin({expr}) + 1.0) / 2.0;
+    return rgb(phase * 255.0, 0, 0);
+  }}
+}}
+"##
+            ))
+            .unwrap();
+
+            sample(&script).unwrap();
+        }
+    }
+
+    #[test]
+    fn int_literals_promote_in_float_call_contexts() {
+        let script = compile(
+            r##"
+effect Calls {
+  param color base = #000000;
+  param color accent = #ffffff;
+  param curve<float> fade;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    float wave = sin(9);
+    color rgb_color = rgb(255, 0, 0);
+    color mixed = mix(base, accent, 1);
+    float faded = fade(1);
+    return mix(rgb_color, mixed, abs(wave) * 0.0 + faded);
+  }
+}
+"##,
+        )
+        .unwrap();
+        let mut params = BTreeMap::new();
+        params.insert("fade".to_string(), fade_curve());
+
+        let color = script
+            .sample(0.0, 0.0, fixture(), pixel(), &params)
+            .unwrap();
+        assert_eq!(color, Color::new(255, 255, 255));
+    }
+
+    #[test]
+    fn int_can_initialize_float_local() {
+        let script = compile(
+            r##"
+effect Local {
+  param float defaulted = 1;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    float x = 1;
+    return rgb(x + defaulted, x + defaulted, x + defaulted);
+  }
+}
+"##,
+        )
+        .unwrap();
+
+        assert_eq!(sample(&script).unwrap(), Color::new(2, 2, 2));
+    }
+
+    #[test]
+    fn int_division_truncates_toward_zero() {
+        let script = compile(
+            r##"
+effect Divide {
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    int x = 5 / 2;
+    return rgb(x, x, x);
+  }
+}
+"##,
+        )
+        .unwrap();
+
+        assert_eq!(sample(&script).unwrap(), Color::new(2, 2, 2));
+    }
+
+    #[test]
+    fn float_cannot_initialize_int_local() {
+        let errors = compile(
+            r##"
+effect Bad {
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    int x = 1.5;
+    return rgb(x, x, x);
+  }
+}
+"##,
+        )
+        .unwrap_err();
+
+        assert!(errors
+            .iter()
+            .any(|error| error.message.contains("declared as int")));
+    }
+
+    #[test]
+    fn int_divide_by_zero_returns_runtime_error() {
+        let script = compile(
+            r##"
+effect Divide {
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    int x = 1 / 0;
+    return rgb(x, x, x);
+  }
+}
+"##,
+        )
+        .unwrap();
+
+        let error = sample(&script).unwrap_err();
+        assert!(error.message.contains("divide by zero"));
+    }
+
+    #[test]
+    fn int_factor_scales_color() {
+        let script = compile(
+            r##"
+effect Scale {
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    color left = #010203 * 2;
+    color right = 2 * #010203;
+    return mix(left, right, 0.5);
+  }
+}
+"##,
+        )
+        .unwrap();
+
+        assert_eq!(sample(&script).unwrap(), Color::new(2, 4, 6));
+    }
 }

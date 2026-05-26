@@ -810,7 +810,7 @@ fn sequence_to_document(
         duration_ms: sequence.duration.milliseconds,
         frame_rate: sequence.frame_rate,
         lanes,
-        effect_scripts: sequence_effect_script_catalog(fs, path, analysis, overlays),
+        effect_scripts: sequence_effect_script_catalog(fs, path, overlays),
         effects,
         degraded: layout.is_none(),
     }
@@ -819,28 +819,9 @@ fn sequence_to_document(
 fn sequence_effect_script_catalog(
     fs: &WorkspaceFs,
     sequence_path: &Utf8PathBuf,
-    analysis: Option<&ProjectAnalysis>,
     overlays: &[ProjectOverlay],
 ) -> Vec<SequenceEffectScriptDocument> {
     let mut by_path = BTreeMap::new();
-    if let Some(analysis) = analysis {
-        for (path, script) in &analysis.scripts {
-            if !path.ends_with(".effect.dawn") {
-                continue;
-            }
-            let path = Utf8PathBuf::from(path.clone());
-            if let Ok(compiled) = &script.result {
-                by_path.insert(
-                    path.clone(),
-                    SequenceEffectScriptDocument {
-                        name: compiled.name.clone(),
-                        path: path.to_slash_string(),
-                        import: serialized_import_path(sequence_path, &path),
-                    },
-                );
-            }
-        }
-    }
     if let Ok(entries) = fs.list_entries() {
         for entry in entries {
             if !entry
