@@ -5,11 +5,11 @@ opening:
   audio: opening.wav
   effects:
   - id: 4
-    start: 21946ms
-    duration: 8000ms
+    start: 0ms
+    duration: 45000ms
     target:
       type: fixture
-      id: 4
+      id: 8
     params:
       base:
         type: color
@@ -27,11 +27,11 @@ opening:
     script:
       import: ../effects/pulse.effect.dawn
   - id: 1
-    start: 30440ms
-    duration: 8000ms
+    start: 6390ms
+    duration: 15550ms
     target:
       type: fixture
-      id: 12
+      id: 4
     params:
       base:
         type: color

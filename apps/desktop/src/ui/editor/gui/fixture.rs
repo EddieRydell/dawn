@@ -81,8 +81,16 @@ fn fixture_body(
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     let drag_dispatch = Rc::clone(&dispatch);
+    let drag_begin_dispatch = Rc::clone(&dispatch);
+    let drag_end_dispatch = Rc::clone(&dispatch);
     h_stack((
         canvas_with_state(canvas_state, scene)
+            .on_edit_drag_begin(move || {
+                drag_begin_dispatch(AppAction::BeginDeferredPersistenceHold);
+            })
+            .on_edit_drag_end(move || {
+                drag_end_dispatch(AppAction::EndDeferredPersistenceHold);
+            })
             .on_drag_end(move |ids, dx, dy| {
                 drag_dispatch(AppAction::NudgeFixtureGeometryHandles {
                     object_key: object_key.clone(),

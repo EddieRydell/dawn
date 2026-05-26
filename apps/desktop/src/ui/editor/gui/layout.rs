@@ -86,11 +86,19 @@ fn layout_body(
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     let drag_dispatch = Rc::clone(&dispatch);
+    let drag_begin_dispatch = Rc::clone(&dispatch);
+    let drag_end_dispatch = Rc::clone(&dispatch);
     let menu_dispatch = Rc::clone(&dispatch);
     let canvas = canvas_with_state(canvas_state, scene);
     let canvas_id = canvas.id();
     h_stack((
         canvas
+            .on_edit_drag_begin(move || {
+                drag_begin_dispatch(AppAction::BeginDeferredPersistenceHold);
+            })
+            .on_edit_drag_end(move || {
+                drag_end_dispatch(AppAction::EndDeferredPersistenceHold);
+            })
             .on_drag_end(move |ids, dx, dy| {
                 drag_dispatch(AppAction::NudgeLayoutFixtures {
                     fixture_ids: ids,

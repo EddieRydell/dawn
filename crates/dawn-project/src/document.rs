@@ -447,9 +447,18 @@ pub fn apply_fixture_document_edit(
     base_content: String,
     _overlays: Vec<ProjectOverlay>,
 ) -> Result<DocumentEditOutcome<FixtureDocument>, String> {
-    let _path = canonicalize_path(&fs.resolve(&path));
+    let path = canonicalize_path(&fs.resolve(&path));
     validate_fixture_document(&document)?;
-    let refreshed_document = document.clone();
+    let edited_fixtures = document
+        .fixtures
+        .iter()
+        .map(|fixture| (fixture.object_key.clone(), document_to_fixture(fixture)))
+        .collect::<Vec<_>>();
+    let refreshed_document = refresh_fixture_document(
+        &path,
+        document.selected_object_key.as_deref(),
+        &edited_fixtures,
+    );
     let file: DawnFile = serde_yaml::from_str(&base_content).map_err(|error| error.to_string())?;
     let mut replacements = BTreeMap::new();
     for (key, object) in &file {
@@ -457,12 +466,12 @@ pub fn apply_fixture_document_edit(
             replacements.insert(key.clone(), None);
         }
     }
-    for fixture in &document.fixtures {
+    for (object_key, fixture) in &edited_fixtures {
         replacements.insert(
-            fixture.object_key.clone(),
+            object_key.clone(),
             Some(serialize_top_level_object(
-                &fixture.object_key,
-                &DawnObject::Fixture(document_to_fixture(fixture)),
+                object_key,
+                &DawnObject::Fixture(fixture.clone()),
             )?),
         );
     }
@@ -471,6 +480,27 @@ pub fn apply_fixture_document_edit(
         serialized_content: serialized,
         refreshed_document,
     })
+}
+
+fn refresh_fixture_document(
+    path: &Utf8PathBuf,
+    selected_object_key: Option<&str>,
+    fixtures: &[(String, Fixture)],
+) -> FixtureDocument {
+    let fixtures = fixtures
+        .iter()
+        .map(|(object_key, fixture)| fixture_to_document(object_key, fixture))
+        .collect::<Vec<_>>();
+    let selected_object_key = selected_object_key
+        .filter(|key| fixtures.iter().any(|fixture| fixture.object_key == *key))
+        .map(str::to_string)
+        .or_else(|| fixtures.first().map(|fixture| fixture.object_key.clone()));
+
+    FixtureDocument {
+        path: path.to_slash_string(),
+        selected_object_key,
+        fixtures,
+    }
 }
 
 pub fn apply_sequence_document_edit(

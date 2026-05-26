@@ -154,6 +154,8 @@ impl Default for CanvasConfig {
 #[derive(Default)]
 pub struct CanvasCallbacks {
     pub on_select: Option<Box<dyn Fn(FixtureId)>>,
+    pub on_edit_drag_begin: Option<Box<dyn Fn()>>,
+    pub on_edit_drag_end: Option<Box<dyn Fn()>>,
     pub on_drag_end: Option<Box<dyn Fn(Vec<FixtureId>, f64, f64)>>,
     pub on_delete: Option<Box<dyn Fn(Vec<FixtureId>)>>,
     pub on_drop_add: Option<Box<dyn Fn(f64, f64)>>,
@@ -211,6 +213,16 @@ impl Canvas {
 
     pub fn on_drag_end(mut self, callback: impl Fn(Vec<FixtureId>, f64, f64) + 'static) -> Self {
         self.callbacks.on_drag_end = Some(Box::new(callback));
+        self
+    }
+
+    pub fn on_edit_drag_begin(mut self, callback: impl Fn() + 'static) -> Self {
+        self.callbacks.on_edit_drag_begin = Some(Box::new(callback));
+        self
+    }
+
+    pub fn on_edit_drag_end(mut self, callback: impl Fn() + 'static) -> Self {
+        self.callbacks.on_edit_drag_end = Some(Box::new(callback));
         self
     }
 
@@ -272,7 +284,7 @@ impl View for Canvas {
                     self.handle_pointer_down(event.pos, event.modifiers)
                 } else if event.button.is_secondary() && self.callbacks.on_secondary_click.is_some()
                 {
-                    self.gesture = None;
+                    self.clear_gesture();
                     EventPropagation::Stop
                 } else {
                     EventPropagation::Continue
@@ -295,7 +307,7 @@ impl View for Canvas {
                 EventPropagation::Continue
             }
             Event::FocusLost => {
-                self.gesture = None;
+                self.clear_gesture();
                 self.state.set_hovered_target(None);
                 self.id.clear_active();
                 self.id.request_paint();
@@ -349,7 +361,7 @@ impl Canvas {
         let additive = additive_selection(modifiers);
 
         let Some(hit) = self.hit_test(position) else {
-            self.gesture = if additive {
+            self.replace_gesture(if additive {
                 Some(CanvasGesture::SelectBox {
                     start_screen: position,
                     current_screen: position,
@@ -363,7 +375,7 @@ impl Canvas {
                     start_camera: self.viewport.camera(),
                     active: false,
                 })
-            };
+            });
             self.id.request_paint();
             return EventPropagation::Stop;
         };
@@ -386,7 +398,7 @@ impl Canvas {
         }
 
         let selected_targets = self.state.selected_targets();
-        self.gesture = hit.draggable.then_some(CanvasGesture::EditDrag {
+        self.replace_gesture(hit.draggable.then_some(CanvasGesture::EditDrag {
             target_ids: if selected_targets.contains(&hit.fixture_id) {
                 selected_targets
             } else {
@@ -395,7 +407,7 @@ impl Canvas {
             start_screen: position,
             current_screen: position,
             active: false,
-        });
+        }));
         self.id.request_paint();
         EventPropagation::Stop
     }
@@ -504,6 +516,7 @@ impl Canvas {
                         }
                     }
                 }
+                self.end_edit_drag_hold();
                 self.id.request_paint();
                 EventPropagation::Stop
             }
@@ -531,13 +544,15 @@ impl Canvas {
     }
 
     fn handle_secondary_click(&mut self, position: Point) -> EventPropagation {
-        let Some(callback) = &self.callbacks.on_secondary_click else {
+        if self.callbacks.on_secondary_click.is_none() {
             return EventPropagation::Continue;
-        };
-        self.gesture = None;
+        }
+        self.clear_gesture();
         self.state.set_hovered_target(None);
         let world = self.viewport.screen_to_world(position);
-        callback(position, world.x, world.y);
+        if let Some(callback) = &self.callbacks.on_secondary_click {
+            callback(position, world.x, world.y);
+        }
         self.id.request_paint();
         EventPropagation::Stop
     }
@@ -546,6 +561,33 @@ impl Canvas {
         self.state.set_camera(camera);
         self.viewport = CanvasViewport::from_camera(self.viewport.size, self.scene.bounds, camera);
         self.id.request_paint();
+    }
+
+    fn replace_gesture(&mut self, gesture: Option<CanvasGesture>) {
+        self.clear_gesture();
+        if matches!(gesture, Some(CanvasGesture::EditDrag { .. })) {
+            self.begin_edit_drag_hold();
+        }
+        self.gesture = gesture;
+    }
+
+    fn clear_gesture(&mut self) {
+        if matches!(self.gesture, Some(CanvasGesture::EditDrag { .. })) {
+            self.end_edit_drag_hold();
+        }
+        self.gesture = None;
+    }
+
+    fn begin_edit_drag_hold(&self) {
+        if let Some(callback) = &self.callbacks.on_edit_drag_begin {
+            callback();
+        }
+    }
+
+    fn end_edit_drag_hold(&self) {
+        if let Some(callback) = &self.callbacks.on_edit_drag_end {
+            callback();
+        }
     }
 
     fn paint_grid(&self, cx: &mut PaintCx) {

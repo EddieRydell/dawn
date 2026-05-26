@@ -6,11 +6,11 @@ pixel_bar_50:
   geometry:
     type: lines
     points:
-    - x: -0.5
-      y: 0.0
+    - x: -0.0027004919729856844
+      y: -0.0033068612321977345
       z: 0.0
-    - x: 2.1597978338900745
-      y: 0.009292354507796752
+    - x: 0.2668973612210619
+      y: -0.5760780953968638
       z: 0.0
     pixels: 50
 
@@ -25,3 +25,19 @@ spot_rgb:
     - x: 0.0
       y: 0.0
       z: 0.0
+
+pixel_bar_50_copy_1:
+  type: fixture
+  name: PixelBar Copy
+  color_model: rgb
+  bulb_size: 0.5
+  geometry:
+    type: lines
+    points:
+    - x: 1.4939326608987447
+      y: 1.500960881975596
+      z: 0.0
+    - x: 0.00006896633554343001
+      y: -0.004024654473253064
+      z: 0.0
+    pixels: 50

@@ -46,27 +46,7 @@ fn app_view(window_id: WindowId) -> impl IntoView {
     let dispatch = {
         let model = Rc::clone(&model);
         Rc::new(move |action: AppAction| {
-            let before_revision = model.borrow().pending_persistence_revision();
-            let result = model.borrow_mut().dispatch(action);
-            if let Err(error) = result {
-                model.borrow_mut().status = error;
-            }
-            let after_revision = model.borrow().pending_persistence_revision();
-            snapshot.set(model.borrow().snapshot());
-            if after_revision.is_some() && after_revision != before_revision {
-                let timer_model = Rc::clone(&model);
-                let timer_snapshot = snapshot;
-                let revision = after_revision.expect("revision was checked");
-                action::exec_after(Duration::from_millis(1500), move |_| {
-                    let result = timer_model
-                        .borrow_mut()
-                        .dispatch(AppAction::FlushDeferredPersistence { revision });
-                    if let Err(error) = result {
-                        timer_model.borrow_mut().status = error;
-                    }
-                    timer_snapshot.set(timer_model.borrow().snapshot());
-                });
-            }
+            dispatch_model_action(Rc::clone(&model), snapshot, action);
         }) as crate::ui::UiDispatch
     };
 
@@ -107,6 +87,46 @@ fn app_view(window_id: WindowId) -> impl IntoView {
     })
     .on_resize(move |rect| dropdown_menu.set_window_size(rect.size()))
     .style(theme::app_root_style)
+}
+
+fn dispatch_model_action(
+    model: Rc<RefCell<AppModel>>,
+    snapshot: crate::ui::UiSnapshot,
+    action: AppAction,
+) {
+    let before_revision = model.borrow().pending_persistence_revision();
+    let snapshot_changed = match model.borrow_mut().dispatch(action) {
+        Ok(outcome) => outcome.snapshot_changed(),
+        Err(error) => {
+            model.borrow_mut().status = error;
+            true
+        }
+    };
+    let after_revision = model.borrow().pending_persistence_revision();
+    if snapshot_changed {
+        snapshot.set(model.borrow().snapshot());
+    }
+    if after_revision.is_some() && after_revision != before_revision {
+        schedule_deferred_persistence(
+            model,
+            snapshot,
+            after_revision.expect("revision was checked"),
+        );
+    }
+}
+
+fn schedule_deferred_persistence(
+    model: Rc<RefCell<AppModel>>,
+    snapshot: crate::ui::UiSnapshot,
+    revision: u64,
+) {
+    action::exec_after(Duration::from_millis(1500), move |_| {
+        dispatch_model_action(
+            Rc::clone(&model),
+            snapshot,
+            AppAction::FlushDeferredPersistence { revision },
+        );
+    });
 }
 
 fn title_bar(

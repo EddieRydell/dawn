@@ -20,6 +20,8 @@ pub enum AppAction {
     SetActiveFile(Utf8PathBuf),
     UpdateActiveText(String),
     SaveActiveFile,
+    BeginDeferredPersistenceHold,
+    EndDeferredPersistenceHold,
     FlushDeferredPersistence {
         revision: u64,
     },

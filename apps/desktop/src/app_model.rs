@@ -33,6 +33,18 @@ pub enum PreviewRigKind {
     Grid,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchOutcome {
+    SnapshotChanged,
+    NoSnapshotChange,
+}
+
+impl DispatchOutcome {
+    pub fn snapshot_changed(self) -> bool {
+        matches!(self, Self::SnapshotChanged)
+    }
+}
+
 impl PreviewRigKind {
     pub fn label(self) -> &'static str {
         match self {
@@ -69,6 +81,7 @@ pub struct AppModel {
     pub active_sequence_document: Option<SequenceDocument>,
     pub persistence_revision: u64,
     pub pending_persistence_revision: Option<u64>,
+    active_deferred_persistence_holds: u32,
     pub pending_layout_fixture_import: Option<PendingLayoutFixtureImport>,
     pub pending_layout_fixture_name: Option<PendingLayoutFixtureName>,
     pub selected_fixture_definitions: HashMap<Utf8PathBuf, String>,
@@ -153,6 +166,7 @@ impl Default for AppModel {
             active_sequence_document: None,
             persistence_revision: 0,
             pending_persistence_revision: None,
+            active_deferred_persistence_holds: 0,
             pending_layout_fixture_import: None,
             pending_layout_fixture_name: None,
             selected_fixture_definitions: HashMap::new(),
@@ -208,7 +222,7 @@ impl AppModel {
         }
     }
 
-    pub fn dispatch(&mut self, action: AppAction) -> Result<(), String> {
+    pub fn dispatch(&mut self, action: AppAction) -> Result<DispatchOutcome, String> {
         match action {
             AppAction::OpenProject(path) => {
                 self.flush_autosave()?;
@@ -286,8 +300,22 @@ impl AppModel {
                 self.save_active_file()?;
             }
             AppAction::SaveActiveFile => self.save_active_file()?,
+            AppAction::BeginDeferredPersistenceHold => {
+                self.active_deferred_persistence_holds =
+                    self.active_deferred_persistence_holds.saturating_add(1);
+                self.retime_deferred_persistence();
+                return Ok(DispatchOutcome::NoSnapshotChange);
+            }
+            AppAction::EndDeferredPersistenceHold => {
+                self.active_deferred_persistence_holds =
+                    self.active_deferred_persistence_holds.saturating_sub(1);
+                if self.active_deferred_persistence_holds == 0 {
+                    self.retime_deferred_persistence();
+                }
+                return Ok(DispatchOutcome::NoSnapshotChange);
+            }
             AppAction::FlushDeferredPersistence { revision } => {
-                self.flush_deferred_persistence(revision)?;
+                return self.flush_deferred_persistence(revision);
             }
             AppAction::SetEditorViewMode { path, mode } => {
                 self.editors.set_view_mode(&path, mode);
@@ -364,11 +392,11 @@ impl AppModel {
             AppAction::DuplicateLayoutFixture { fixture_id } => {
                 let Some(document) = self.snapshot().active_layout_document else {
                     self.status = "active editor is not a layout document".to_string();
-                    return Ok(());
+                    return Ok(DispatchOutcome::SnapshotChanged);
                 };
                 if next_fixture_id(&document).is_none() {
                     self.status = "No numeric fixture IDs are available".to_string();
-                    return Ok(());
+                    return Ok(DispatchOutcome::SnapshotChanged);
                 }
                 self.edit_active_layout(|document| {
                     if let Some(fixture) = document
@@ -420,7 +448,7 @@ impl AppModel {
                 self.pending_layout_fixture_import = None;
                 let Some(document) = self.snapshot().active_layout_document else {
                     self.status = "active editor is not a layout document".to_string();
-                    return Ok(());
+                    return Ok(DispatchOutcome::SnapshotChanged);
                 };
                 self.pending_layout_fixture_name = Some(PendingLayoutFixtureName {
                     suggested_name: unique_display_name(
@@ -437,18 +465,18 @@ impl AppModel {
             }
             AppAction::ConfirmLayoutFixtureName { name } => {
                 let Some(pending) = self.pending_layout_fixture_name.take() else {
-                    return Ok(());
+                    return Ok(DispatchOutcome::SnapshotChanged);
                 };
                 let name = name.trim().to_string();
                 if name.is_empty() {
                     self.status = "Fixture name cannot be empty".to_string();
                     self.pending_layout_fixture_name = Some(pending);
-                    return Ok(());
+                    return Ok(DispatchOutcome::SnapshotChanged);
                 }
                 let Some(document) = self.snapshot().active_layout_document else {
                     self.status =
                         "Fixture creation canceled because the active layout changed".to_string();
-                    return Ok(());
+                    return Ok(DispatchOutcome::SnapshotChanged);
                 };
                 if document
                     .fixtures
@@ -457,11 +485,11 @@ impl AppModel {
                 {
                     self.status = format!("Fixture name `{name}` already exists");
                     self.pending_layout_fixture_name = Some(pending);
-                    return Ok(());
+                    return Ok(DispatchOutcome::SnapshotChanged);
                 }
                 if next_fixture_id(&document).is_none() {
                     self.status = "No numeric fixture IDs are available".to_string();
-                    return Ok(());
+                    return Ok(DispatchOutcome::SnapshotChanged);
                 }
                 match pending.request {
                     PendingLayoutFixtureNameRequest::Inline { x, y } => {
@@ -497,13 +525,13 @@ impl AppModel {
                 let snapshot = self.snapshot();
                 let Some(layout) = snapshot.active_layout_document else {
                     self.status = "active editor is not a layout document".to_string();
-                    return Ok(());
+                    return Ok(DispatchOutcome::SnapshotChanged);
                 };
                 let fixture_document = match self.workspace.inspect_fixture_file(&selected_file) {
                     Ok((_path, document)) => document,
                     Err(error) => {
                         self.status = format!("Selected file could not be imported: {error}");
-                        return Ok(());
+                        return Ok(DispatchOutcome::SnapshotChanged);
                     }
                 };
                 match fixture_document.fixtures.as_slice() {
@@ -544,20 +572,20 @@ impl AppModel {
             }
             AppAction::ConfirmImportLayoutFixture { object_key } => {
                 let Some(pending) = self.pending_layout_fixture_import.take() else {
-                    return Ok(());
+                    return Ok(DispatchOutcome::SnapshotChanged);
                 };
                 let snapshot = self.snapshot();
                 let Some(active_layout) = snapshot.active_layout_document else {
                     self.status =
                         "Fixture import canceled because the active layout changed".to_string();
-                    return Ok(());
+                    return Ok(DispatchOutcome::SnapshotChanged);
                 };
                 if snapshot.active_file.as_ref() != Some(&pending.layout_path)
                     || active_layout.object_key != pending.layout_object_key
                 {
                     self.status =
                         "Fixture import canceled because the active layout changed".to_string();
-                    return Ok(());
+                    return Ok(DispatchOutcome::SnapshotChanged);
                 }
                 let Some(fixture) = pending
                     .fixtures
@@ -566,7 +594,7 @@ impl AppModel {
                 else {
                     self.status =
                         "Fixture import canceled because the fixture was not found".to_string();
-                    return Ok(());
+                    return Ok(DispatchOutcome::SnapshotChanged);
                 };
                 self.pending_layout_fixture_name = Some(PendingLayoutFixtureName {
                     suggested_name: unique_display_name(
@@ -764,7 +792,7 @@ impl AppModel {
                 save_workbench_layout(&self.workbench_layout)?;
             }
         }
-        Ok(())
+        Ok(DispatchOutcome::SnapshotChanged)
     }
 
     fn reconcile_selected_fixture_paths(&mut self, moves: &[(Utf8PathBuf, Utf8PathBuf)]) {
@@ -903,6 +931,13 @@ impl AppModel {
         self.persistence_revision = self.persistence_revision.saturating_add(1);
         self.pending_persistence_revision = Some(self.persistence_revision);
         self.status = "Autosave pending".to_string();
+    }
+
+    fn retime_deferred_persistence(&mut self) {
+        if self.pending_persistence_revision.is_some() {
+            self.persistence_revision = self.persistence_revision.saturating_add(1);
+            self.pending_persistence_revision = Some(self.persistence_revision);
+        }
     }
 
     fn edit_active_layout(&mut self, edit: impl FnOnce(&mut LayoutDocument)) -> Result<(), String> {
@@ -1065,13 +1100,17 @@ impl AppModel {
         self.pending_persistence_revision
     }
 
-    fn flush_deferred_persistence(&mut self, revision: u64) -> Result<(), String> {
+    fn flush_deferred_persistence(&mut self, revision: u64) -> Result<DispatchOutcome, String> {
         if self.pending_persistence_revision != Some(revision) {
-            return Ok(());
+            return Ok(DispatchOutcome::NoSnapshotChange);
+        }
+        if self.active_deferred_persistence_holds > 0 {
+            self.retime_deferred_persistence();
+            return Ok(DispatchOutcome::NoSnapshotChange);
         }
         self.flush_autosave()?;
         self.status = "Autosaved".to_string();
-        Ok(())
+        Ok(DispatchOutcome::SnapshotChanged)
     }
 }
 

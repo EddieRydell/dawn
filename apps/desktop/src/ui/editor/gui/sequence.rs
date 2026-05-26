@@ -334,7 +334,7 @@ struct SequenceTimeline {
     playhead_ms: u64,
     state: SequenceTimelineState,
     viewport: TimelineViewport,
-    hovered_effect: Option<usize>,
+    hovered_clip: Option<TimelineHover>,
     dropdown_menu: DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
 }
@@ -374,7 +374,7 @@ impl SequenceTimeline {
             playhead_ms,
             state,
             viewport: TimelineViewport::default(),
-            hovered_effect: None,
+            hovered_clip: None,
             dropdown_menu,
             dispatch,
         }
@@ -434,16 +434,14 @@ impl View for SequenceTimeline {
                 }
             }
             Event::PointerLeave => {
-                self.state.data.borrow_mut().gesture = None;
-                self.hovered_effect = None;
-                self.id.clear_active();
+                self.hovered_clip = None;
                 self.id.request_paint();
                 EventPropagation::Continue
             }
             Event::FocusLost => {
                 self.state.set_keyboard_focused(false);
-                self.state.data.borrow_mut().gesture = None;
-                self.hovered_effect = None;
+                self.clear_gesture();
+                self.hovered_clip = None;
                 self.id.clear_active();
                 self.id.request_paint();
                 EventPropagation::Continue
@@ -497,6 +495,9 @@ impl SequenceTimeline {
     }
 
     fn handle_pointer_down(&mut self, position: Point) -> EventPropagation {
+        if self.state.data.borrow().gesture.is_some() {
+            self.clear_gesture();
+        }
         if position.y < RULER_HEIGHT && position.x >= LANE_LABEL_WIDTH {
             let time_ms = self.viewport.screen_to_time_ms(position.x, &self.state);
             (self.dispatch)(AppAction::SetSequencePlayhead {
@@ -508,15 +509,19 @@ impl SequenceTimeline {
             (self.dispatch)(AppAction::SelectSequenceEffect {
                 id: Some(hit.effect.id),
             });
-            self.state.data.borrow_mut().gesture = Some(TimelineGesture {
+            self.hovered_clip = Some(TimelineHover {
+                effect_index: hit.effect.index,
+                kind: hit.kind,
+            });
+            self.replace_gesture(Some(TimelineGesture {
                 effect: hit.effect,
                 kind: hit.kind,
                 start_screen: position,
                 current_screen: position,
-            });
+            }));
         } else {
             (self.dispatch)(AppAction::SelectSequenceEffect { id: None });
-            self.state.data.borrow_mut().gesture = None;
+            self.clear_gesture();
         }
         self.id.request_paint();
         EventPropagation::Stop
@@ -528,9 +533,12 @@ impl SequenceTimeline {
             self.id.request_paint();
             return EventPropagation::Stop;
         }
-        let hovered_effect = self.hit_test(position).map(|hit| hit.effect.index);
-        if self.hovered_effect != hovered_effect {
-            self.hovered_effect = hovered_effect;
+        let hovered_clip = self.hit_test(position).map(|hit| TimelineHover {
+            effect_index: hit.effect.index,
+            kind: hit.kind,
+        });
+        if self.hovered_clip != hovered_clip {
+            self.hovered_clip = hovered_clip;
             self.id.request_paint();
         }
         EventPropagation::Continue
@@ -582,11 +590,27 @@ impl SequenceTimeline {
                 });
             }
         }
+        (self.dispatch)(AppAction::EndDeferredPersistenceHold);
         self.id.request_paint();
         EventPropagation::Stop
     }
 
+    fn replace_gesture(&mut self, gesture: Option<TimelineGesture>) {
+        self.clear_gesture();
+        if let Some(gesture) = gesture {
+            self.state.data.borrow_mut().gesture = Some(gesture);
+            (self.dispatch)(AppAction::BeginDeferredPersistenceHold);
+        }
+    }
+
+    fn clear_gesture(&mut self) {
+        if self.state.data.borrow_mut().gesture.take().is_some() {
+            (self.dispatch)(AppAction::EndDeferredPersistenceHold);
+        }
+    }
+
     fn handle_secondary_click(&mut self, position: Point) -> EventPropagation {
+        self.clear_gesture();
         let entries = if let Some(hit) = self.hit_test(position) {
             (self.dispatch)(AppAction::SelectSequenceEffect {
                 id: Some(hit.effect.id),
@@ -728,9 +752,21 @@ impl SequenceTimeline {
                 continue;
             };
             let selected = self.selected_effect == Some(effect.id);
+            let hovered_kind = self
+                .hovered_clip
+                .filter(|hover| hover.effect_index == effect.index)
+                .map(|hover| hover.kind);
+            let dragged_kind = self
+                .state
+                .data
+                .borrow()
+                .gesture
+                .as_ref()
+                .filter(|gesture| gesture.effect.id == effect.id)
+                .map(|gesture| gesture.kind);
             let border_color = if selected {
                 SELECTED_CLIP_BORDER
-            } else if self.hovered_effect == Some(effect.index) {
+            } else if hovered_kind.is_some() {
                 HOVERED_CLIP_BORDER
             } else {
                 theme::color(theme::BORDER)
@@ -746,6 +782,9 @@ impl SequenceTimeline {
                 &Brush::Solid(border_color),
                 &Stroke::new(border_width),
             );
+            if selected || hovered_kind.is_some() || dragged_kind.is_some() {
+                paint_resize_grips(cx, layout.rect, hovered_kind.or(dragged_kind));
+            }
             draw_text(
                 cx,
                 &effect.id.to_string(),
@@ -826,6 +865,9 @@ impl SequenceTimeline {
             &Brush::Solid(Color::rgba8(230, 238, 246, 210)),
             &Stroke::new(1.5),
         );
+        if matches!(preview.kind, HitKind::LeftEdge | HitKind::RightEdge) {
+            paint_resize_grips(cx, preview.rect, Some(preview.kind));
+        }
         draw_text(
             cx,
             &preview.effect_id.to_string(),
@@ -887,6 +929,7 @@ impl SequenceTimeline {
         Some(DragPreview {
             effect_id: preview_effect.id,
             rect,
+            kind: gesture.kind,
         })
     }
 
@@ -916,13 +959,7 @@ impl SequenceTimeline {
                     .effects
                     .iter()
                     .find(|effect| effect.index == layout.effect_index)?;
-                let kind = if position.x - layout.rect.x0 <= EDGE_HIT_WIDTH {
-                    HitKind::LeftEdge
-                } else if layout.rect.x1 - position.x <= EDGE_HIT_WIDTH {
-                    HitKind::RightEdge
-                } else {
-                    HitKind::Body
-                };
+                let kind = hit_kind_for_clip_x(layout.rect, position.x);
                 Some(TimelineHit {
                     effect: effect.clone(),
                     kind,
@@ -1027,6 +1064,12 @@ struct TimelineHit {
     kind: HitKind,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TimelineHover {
+    effect_index: usize,
+    kind: HitKind,
+}
+
 #[derive(Debug, Clone)]
 struct RasterCell {
     rect: Rect,
@@ -1037,9 +1080,10 @@ struct RasterCell {
 struct DragPreview {
     effect_id: u32,
     rect: Rect,
+    kind: HitKind,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HitKind {
     Body,
     LeftEdge,
@@ -1050,10 +1094,13 @@ const LANE_LABEL_WIDTH: f64 = 168.0;
 const RULER_HEIGHT: f64 = 32.0;
 const CLIP_VERTICAL_INSET: f64 = 1.0;
 const MIN_CLIP_WIDTH: f64 = 6.0;
-const EDGE_HIT_WIDTH: f64 = 6.0;
+const EDGE_HIT_WIDTH: f64 = 8.0;
+const RESIZE_GRIP_WIDTH: f64 = 4.0;
 const HOVERED_CLIP_BORDER: Color = Color::rgb8(112, 112, 112);
 const SELECTED_CLIP_BORDER: Color = Color::rgb8(232, 236, 240);
 const SELECTED_CLIP_HIGHLIGHT: Color = Color::rgba8(255, 255, 255, 28);
+const RESIZE_GRIP: Color = Color::rgba8(248, 250, 252, 150);
+const ACTIVE_RESIZE_GRIP: Color = Color::rgba8(255, 255, 255, 230);
 fn clamp_timeline_state(state: &SequenceTimelineState, document: &SequenceDocument, size: Size) {
     let mut state = state.data.borrow_mut();
     let content_width = document.duration_ms as f64 * state.pixels_per_ms;
@@ -1148,6 +1195,49 @@ fn clip_rect(
 
 fn stroke_rect(rect: Rect, width: f64) -> Rect {
     rect.inflate(-width / 2.0, -width / 2.0)
+}
+
+fn hit_kind_for_clip_x(rect: Rect, x: f64) -> HitKind {
+    let midpoint = rect.x0 + rect.width() / 2.0;
+    if rect.width() <= EDGE_HIT_WIDTH * 2.0 {
+        return if x < midpoint {
+            HitKind::LeftEdge
+        } else {
+            HitKind::RightEdge
+        };
+    }
+
+    if x <= rect.x0 + EDGE_HIT_WIDTH {
+        HitKind::LeftEdge
+    } else if x >= rect.x1 - EDGE_HIT_WIDTH {
+        HitKind::RightEdge
+    } else {
+        HitKind::Body
+    }
+}
+
+fn paint_resize_grips(cx: &mut PaintCx, rect: Rect, active_kind: Option<HitKind>) {
+    let grip_width = RESIZE_GRIP_WIDTH.min((rect.width() / 2.0).max(1.0));
+    let grip_y0 = rect.y0 + 3.0;
+    let grip_y1 = rect.y1 - 3.0;
+    if grip_y1 <= grip_y0 {
+        return;
+    }
+
+    let left_color = if active_kind == Some(HitKind::LeftEdge) {
+        ACTIVE_RESIZE_GRIP
+    } else {
+        RESIZE_GRIP
+    };
+    let right_color = if active_kind == Some(HitKind::RightEdge) {
+        ACTIVE_RESIZE_GRIP
+    } else {
+        RESIZE_GRIP
+    };
+    let left = Rect::new(rect.x0, grip_y0, rect.x0 + grip_width, grip_y1);
+    let right = Rect::new(rect.x1 - grip_width, grip_y0, rect.x1, grip_y1);
+    cx.fill(&left, &Brush::Solid(left_color), 0.0);
+    cx.fill(&right, &Brush::Solid(right_color), 0.0);
 }
 
 fn raster_row_bins(pixel_count: usize, height: f64) -> usize {
