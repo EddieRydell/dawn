@@ -11,6 +11,7 @@ use crate::ui::theme;
 
 pub fn workbench_view(
     snapshot: crate::ui::UiSnapshot,
+    playback_clock: crate::ui::UiPlaybackClock,
     dropdown_menu: crate::ui::components::dropdown_menu::DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
@@ -23,13 +24,19 @@ pub fn workbench_view(
             dropdown_menu.clone(),
             Rc::clone(&dispatch),
         ),
-        crate::ui::editor::editor_view(snapshot, editor_gui, dropdown_menu, Rc::clone(&dispatch))
-            .style(|s| {
-                s.flex_grow(1.0)
-                    .flex_basis(0.0)
-                    .min_width(theme::MIN_EDITOR_WIDTH)
-                    .height_full()
-            }),
+        crate::ui::editor::editor_view(
+            snapshot,
+            playback_clock,
+            editor_gui,
+            dropdown_menu,
+            Rc::clone(&dispatch),
+        )
+        .style(|s| {
+            s.flex_grow(1.0)
+                .flex_basis(0.0)
+                .min_width(theme::MIN_EDITOR_WIDTH)
+                .height_full()
+        }),
         inspector_slot(snapshot, dispatch),
     ))
     .style(|s| s.width_full().height_full().min_height(0.0))
@@ -95,7 +102,6 @@ fn inspector_pane(
     use crate::layout_persistence::InspectorTab;
 
     let diagnostics = Rc::clone(&dispatch);
-    let preview = Rc::clone(&dispatch);
     let close = Rc::clone(&dispatch);
     let active = state.workbench_layout.active_inspector_tab;
 
@@ -105,20 +111,15 @@ fn inspector_pane(
                 .into_any()
         }
         InspectorTab::Preview => {
-            crate::ui::inspector::preview::preview_view(state.clone(), Rc::clone(&dispatch))
+            crate::ui::inspector::diagnostics::diagnostics_view(state.clone(), Rc::clone(&dispatch))
                 .into_any()
         }
     };
 
     v_stack((
         h_stack((
-            inspector_tab(
-                "Diagnostics",
-                active == InspectorTab::Diagnostics,
-                move || diagnostics(AppAction::SetInspectorTab(InspectorTab::Diagnostics)),
-            ),
-            inspector_tab("Preview", active == InspectorTab::Preview, move || {
-                preview(AppAction::SetInspectorTab(InspectorTab::Preview))
+            inspector_tab("Diagnostics", true, move || {
+                diagnostics(AppAction::SetInspectorTab(InspectorTab::Diagnostics))
             }),
             empty().style(|s| s.flex_grow(1.0).min_width(0.0)),
             close_pane_button(move || close(AppAction::ToggleInspector))

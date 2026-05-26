@@ -19,6 +19,8 @@ pub struct WorkbenchLayout {
     pub last_project_root: Option<PathBuf>,
     #[serde(default)]
     pub editor_session: EditorSessionState,
+    #[serde(default)]
+    pub preview_window: PreviewWindowLayout,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -27,6 +29,26 @@ pub enum InspectorTab {
     #[default]
     Diagnostics,
     Preview,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewWindowLayout {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl Default for PreviewWindowLayout {
+    fn default() -> Self {
+        Self {
+            x: 80.0,
+            y: 80.0,
+            width: 720.0,
+            height: 480.0,
+        }
+    }
 }
 
 impl Default for WorkbenchLayout {
@@ -39,6 +61,7 @@ impl Default for WorkbenchLayout {
             active_inspector_tab: InspectorTab::Diagnostics,
             last_project_root: None,
             editor_session: EditorSessionState::default(),
+            preview_window: PreviewWindowLayout::default(),
         }
     }
 }
@@ -50,6 +73,7 @@ impl WorkbenchLayout {
         *self = Self {
             last_project_root,
             editor_session,
+            preview_window: self.preview_window.clone(),
             ..Self::default()
         };
     }

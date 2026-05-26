@@ -4,6 +4,7 @@ pub mod actions;
 pub mod app_model;
 pub mod editor_session;
 pub mod layout_persistence;
+pub mod output_runtime;
 pub mod ui;
 pub mod workspace;
 

@@ -6,12 +6,12 @@ use floem::event::{Event, EventListener, EventPropagation};
 use floem::file::FileDialogOptions;
 use floem::file_action::open_file;
 use floem::keyboard::Key;
-use floem::kurbo::Size;
+use floem::kurbo::{Point, Size};
 use floem::peniko::Brush;
 use floem::prelude::*;
 use floem::style::Foreground;
-use floem::window::{close_window, WindowConfig, WindowId};
-use floem::{action, views::drag_window_area, Application};
+use floem::window::{close_window, new_window, WindowConfig, WindowId};
+use floem::{action, views::drag_window_area, Application, Urgency, WindowIdExt};
 use lucide_floem::{Icon, StrokeWidth};
 
 use crate::actions::AppAction;
@@ -40,12 +40,31 @@ pub fn run() {
 fn app_view(window_id: WindowId) -> impl IntoView {
     let model = Rc::new(RefCell::new(AppModel::default()));
     let snapshot = RwSignal::new(model.borrow().snapshot());
+    let playback_clock = RwSignal::new(model.borrow().playback_clock());
     let dropdown_menu = DropdownMenuController::new(theme::dropdown_menu_style());
+    let preview_window_id = Rc::new(RefCell::new(None::<WindowId>));
+    let playback_tick_scheduled = Rc::new(RefCell::new(false));
 
     let dispatch = {
         let model = Rc::clone(&model);
+        let preview_window_id = Rc::clone(&preview_window_id);
+        let playback_tick_scheduled = Rc::clone(&playback_tick_scheduled);
         Rc::new(move |action: AppAction| {
-            dispatch_model_action(Rc::clone(&model), snapshot, action);
+            if matches!(action, AppAction::OpenPreviewWindow) {
+                open_or_focus_preview_window(
+                    Rc::clone(&model),
+                    snapshot,
+                    playback_clock,
+                    Rc::clone(&preview_window_id),
+                );
+            }
+            dispatch_model_action(Rc::clone(&model), snapshot, playback_clock, action);
+            schedule_playback_tick_if_needed(
+                Rc::clone(&model),
+                snapshot,
+                playback_clock,
+                Rc::clone(&playback_tick_scheduled),
+            );
         }) as crate::ui::UiDispatch
     };
 
@@ -60,6 +79,7 @@ fn app_view(window_id: WindowId) -> impl IntoView {
             ),
             crate::ui::workbench::workbench_view(
                 snapshot,
+                playback_clock,
                 dropdown_menu.clone(),
                 Rc::clone(&dispatch),
             ),
@@ -91,8 +111,10 @@ fn app_view(window_id: WindowId) -> impl IntoView {
 fn dispatch_model_action(
     model: Rc<RefCell<AppModel>>,
     snapshot: crate::ui::UiSnapshot,
+    playback_clock: crate::ui::UiPlaybackClock,
     action: AppAction,
 ) {
+    let playback_tick = matches!(action, AppAction::TickPlayback { .. });
     let before_revision = model.borrow().pending_persistence_revision();
     let dispatch_result = {
         let mut model = model.borrow_mut();
@@ -107,28 +129,97 @@ fn dispatch_model_action(
     };
     let after_revision = model.borrow().pending_persistence_revision();
     if snapshot_changed {
-        snapshot.set(model.borrow().snapshot());
+        if playback_tick {
+            playback_clock.set(model.borrow().playback_clock());
+        } else {
+            let model = model.borrow();
+            snapshot.set(model.snapshot());
+            playback_clock.set(model.playback_clock());
+        }
     }
     if after_revision.is_some() && after_revision != before_revision {
         schedule_deferred_persistence(
             model,
             snapshot,
+            playback_clock,
             after_revision.expect("revision was checked"),
         );
     }
 }
 
+fn open_or_focus_preview_window(
+    model: Rc<RefCell<AppModel>>,
+    snapshot: crate::ui::UiSnapshot,
+    playback_clock: crate::ui::UiPlaybackClock,
+    preview_window_id: Rc<RefCell<Option<WindowId>>>,
+) {
+    if let Some(window_id) = *preview_window_id.borrow() {
+        window_id.set_visible(true);
+        window_id.minimized(false);
+        window_id.request_attention(Urgency::Informational);
+        return;
+    }
+
+    let layout = snapshot.get_untracked().workbench_layout.preview_window;
+    let config = WindowConfig::default()
+        .title("Dawn Preview")
+        .size(Size::new(layout.width, layout.height))
+        .position(Point::new(layout.x, layout.y))
+        .resizable(true)
+        .apply_default_theme(false);
+    let preview_model = Rc::clone(&model);
+    let preview_dispatch = Rc::new(move |action: AppAction| {
+        dispatch_model_action(Rc::clone(&preview_model), snapshot, playback_clock, action);
+    }) as crate::ui::UiDispatch;
+    new_window(
+        move |window_id| {
+            crate::ui::preview_window::preview_window_view(
+                window_id,
+                snapshot,
+                playback_clock,
+                Rc::clone(&preview_dispatch),
+                Rc::clone(&preview_window_id),
+            )
+        },
+        Some(config),
+    );
+}
+
 fn schedule_deferred_persistence(
     model: Rc<RefCell<AppModel>>,
     snapshot: crate::ui::UiSnapshot,
+    playback_clock: crate::ui::UiPlaybackClock,
     revision: u64,
 ) {
     action::exec_after(Duration::from_millis(1500), move |_| {
         dispatch_model_action(
             Rc::clone(&model),
             snapshot,
+            playback_clock,
             AppAction::FlushDeferredPersistence { revision },
         );
+    });
+}
+
+fn schedule_playback_tick_if_needed(
+    model: Rc<RefCell<AppModel>>,
+    snapshot: crate::ui::UiSnapshot,
+    playback_clock: crate::ui::UiPlaybackClock,
+    scheduled: Rc<RefCell<bool>>,
+) {
+    if !playback_clock.get_untracked().is_playing || *scheduled.borrow() {
+        return;
+    }
+    *scheduled.borrow_mut() = true;
+    action::exec_after(Duration::from_millis(33), move |_| {
+        *scheduled.borrow_mut() = false;
+        dispatch_model_action(
+            Rc::clone(&model),
+            snapshot,
+            playback_clock,
+            AppAction::TickPlayback { delta_ms: 33 },
+        );
+        schedule_playback_tick_if_needed(model, snapshot, playback_clock, scheduled);
     });
 }
 
@@ -356,8 +447,13 @@ fn run_menu(dispatch: crate::ui::UiDispatch) -> impl Fn() -> Vec<DropdownMenuEnt
         let play = Rc::clone(&dispatch);
         let pause = Rc::clone(&dispatch);
         let stop = Rc::clone(&dispatch);
+        let open_preview = Rc::clone(&dispatch);
 
         vec![
+            DropdownMenuEntry::item("Open Preview", true, move || {
+                open_preview(AppAction::OpenPreviewWindow);
+            }),
+            DropdownMenuEntry::separator(),
             DropdownMenuEntry::item("Play", true, move || {
                 play(AppAction::Play);
             }),

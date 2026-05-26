@@ -138,6 +138,7 @@ pub struct CanvasConfig {
     pub show_axes: bool,
     pub fit_padding: f64,
     pub min_point_radius: f64,
+    pub background: Color,
 }
 
 impl Default for CanvasConfig {
@@ -147,6 +148,7 @@ impl Default for CanvasConfig {
             show_axes: true,
             fit_padding: 24.0,
             min_point_radius: 3.0,
+            background: theme::color(theme::PANEL_DARK),
         }
     }
 }
@@ -324,7 +326,7 @@ impl View for Canvas {
         }
 
         let panel = size.to_rect();
-        cx.fill(&panel, &Brush::Solid(theme::color(theme::PANEL_DARK)), 0.0);
+        cx.fill(&panel, &Brush::Solid(self.config.background), 0.0);
         cx.clip(&panel);
 
         if self.config.show_grid {

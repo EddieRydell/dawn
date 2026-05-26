@@ -13,7 +13,7 @@ use floem::views::editor::text::SimpleStyling;
 use lucide_floem::{Icon, StrokeWidth};
 
 use crate::actions::AppAction;
-use crate::app_model::AppSnapshot;
+use crate::app_model::{AppSnapshot, PreviewRigKind};
 use crate::editor_session::EditorViewMode;
 use crate::ui::components::{ui_static_label, ui_text_editor};
 use crate::ui::editor::gui::EditorGuiUiState;
@@ -23,6 +23,7 @@ pub mod gui;
 
 pub fn editor_view(
     snapshot: crate::ui::UiSnapshot,
+    playback_clock: crate::ui::UiPlaybackClock,
     gui_state: EditorGuiUiState,
     dropdown_menu: crate::ui::components::dropdown_menu::DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
@@ -32,7 +33,7 @@ pub fn editor_view(
             let dispatch = Rc::clone(&dispatch);
             move |state| tab_strip(state, Rc::clone(&dispatch)).into_any()
         }),
-        editor_body(snapshot, gui_state, dropdown_menu, dispatch)
+        editor_body(snapshot, playback_clock, gui_state, dropdown_menu, dispatch)
             .style(|s| s.flex_grow(1.0).min_height(0.0)),
     ))
     .style(|s| s.height_full().background(theme::color(theme::SURFACE)))
@@ -261,6 +262,7 @@ fn close_tab_button(action: impl Fn() + 'static) -> impl IntoView {
 
 fn editor_body(
     snapshot: crate::ui::UiSnapshot,
+    playback_clock: crate::ui::UiPlaybackClock,
     gui_state: EditorGuiUiState,
     dropdown_menu: crate::ui::components::dropdown_menu::DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
@@ -271,6 +273,7 @@ fn editor_body(
         move |route| {
             editor_body_for_key(
                 snapshot,
+                playback_clock,
                 route,
                 gui_state.clone(),
                 dropdown_menu.clone(),
@@ -282,6 +285,7 @@ fn editor_body(
 
 fn editor_body_for_key(
     snapshot: crate::ui::UiSnapshot,
+    playback_clock: crate::ui::UiPlaybackClock,
     route: EditorBodyRoute,
     gui_state: EditorGuiUiState,
     dropdown_menu: crate::ui::components::dropdown_menu::DropdownMenuController,
@@ -319,6 +323,7 @@ fn editor_body_for_key(
                 crate::ui::editor::gui::sequence::sequence_viewer(
                     document,
                     snapshot,
+                    playback_clock,
                     gui_state,
                     dropdown_menu,
                     dispatch,
@@ -547,6 +552,7 @@ fn effect_script_editor(
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     let header_path = path.clone();
+    let header_dispatch = Rc::clone(&dispatch);
     v_stack((
         dyn_container(
             move || {
@@ -554,7 +560,8 @@ fn effect_script_editor(
                 (state.analysis, state.diagnostics, header_path.clone())
             },
             move |(analysis, diagnostics, path)| {
-                effect_script_header(path, analysis, diagnostics).into_any()
+                effect_script_header(path, analysis, diagnostics, Rc::clone(&header_dispatch))
+                    .into_any()
             },
         ),
         source_editor(path, text, dispatch).style(|s| s.flex_grow(1.0).min_height(0.0)),
@@ -566,6 +573,7 @@ fn effect_script_header(
     path: Utf8PathBuf,
     analysis: Option<ProjectAnalysis>,
     diagnostics: Vec<ProjectDiagnostic>,
+    dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     let script = analysis
         .as_ref()
@@ -606,6 +614,7 @@ fn effect_script_header(
         count => format!("{count} script diagnostics"),
     };
 
+    let open_preview = Rc::clone(&dispatch);
     v_stack((
         h_stack((
             ui_static_label(status).style(move |s| {
@@ -624,6 +633,14 @@ fn effect_script_header(
                     .font_bold()
                     .color(theme::color(theme::TEXT))
                     .set(Foreground, Brush::Solid(theme::color(theme::TEXT)))
+            }),
+            empty().style(|s| s.flex_grow(1.0).min_width(0.0)),
+            effect_rig_button(PreviewRigKind::Strand, Rc::clone(&dispatch)),
+            effect_rig_button(PreviewRigKind::VerticalStrand, Rc::clone(&dispatch)),
+            effect_rig_button(PreviewRigKind::Circle, Rc::clone(&dispatch)),
+            effect_rig_button(PreviewRigKind::Grid, Rc::clone(&dispatch)),
+            crate::ui::components::ui_button("Open Preview").action(move || {
+                open_preview(AppAction::OpenPreviewWindow);
             }),
         ))
         .style(|s| s.items_center().gap(theme::SPACE_8)),
@@ -650,6 +667,12 @@ fn effect_script_header(
             .border_bottom(theme::BORDER_WIDTH)
             .border_color(theme::color(theme::BORDER))
             .background(theme::color(theme::PANEL))
+    })
+}
+
+fn effect_rig_button(rig: PreviewRigKind, dispatch: crate::ui::UiDispatch) -> impl IntoView {
+    crate::ui::components::ui_button(rig.label()).action(move || {
+        dispatch(AppAction::SelectPreviewRig(rig));
     })
 }
 

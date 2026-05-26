@@ -4,8 +4,52 @@ opening:
   frame_rate: 60
   audio: opening.wav
   effects:
+  - id: 16
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: group
+      name: WallBars
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
   - id: 3
-    start: 7250ms
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: group
+      name: Movers
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
+  - id: 17
+    start: 0ms
     duration: 12950ms
     target:
       type: fixture
@@ -26,8 +70,360 @@ opening:
           import: ../curves/fade-in.curve.dawn::fade_in
     script:
       import: ../effects/pulse.effect.dawn
+  - id: 21
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: fixture
+      id: 2
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
+  - id: 20
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: fixture
+      id: 3
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
+  - id: 18
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: fixture
+      id: 4
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
+  - id: 19
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: fixture
+      id: 5
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
+  - id: 14
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: fixture
+      id: 6
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
+  - id: 10
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: fixture
+      id: 7
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
+  - id: 11
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: fixture
+      id: 8
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
+  - id: 9
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: fixture
+      id: 9
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
+  - id: 15
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: fixture
+      id: 10
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
+  - id: 12
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: fixture
+      id: 11
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
+  - id: 13
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: fixture
+      id: 12
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
+  - id: 4
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: fixture
+      id: 13
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
+  - id: 8
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: fixture
+      id: 14
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
+  - id: 7
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: fixture
+      id: 15
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
+  - id: 6
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: fixture
+      id: 16
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
+  - id: 5
+    start: 0ms
+    duration: 12950ms
+    target:
+      type: fixture
+      id: 17
+    params:
+      base:
+        type: color
+        value: '#180a2a'
+      accent:
+        type: color
+        value: '#ff4fd8'
+      speed:
+        type: float
+        value: 1.25
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
   - id: 1
-    start: 21140ms
+    start: 14040ms
     duration: 8250ms
     target:
       type: fixture

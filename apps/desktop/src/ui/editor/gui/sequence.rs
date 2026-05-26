@@ -74,6 +74,7 @@ impl Default for SequenceTimelineState {
 pub fn sequence_viewer(
     document: SequenceDocument,
     snapshot: crate::ui::UiSnapshot,
+    playback_clock: crate::ui::UiPlaybackClock,
     gui_state: EditorGuiUiState,
     dropdown_menu: DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
@@ -82,7 +83,7 @@ pub fn sequence_viewer(
     let state = snapshot.get_untracked();
     let selected_effect = state.selected_sequence_effect;
     v_stack((
-        sequence_header(&document),
+        sequence_header(&document, snapshot, playback_clock, Rc::clone(&dispatch)),
         h_stack((
             SequenceTimeline::new(
                 document.clone(),
@@ -91,6 +92,7 @@ pub fn sequence_viewer(
                 selected_effect,
                 state.sequence_playhead_ms,
                 snapshot,
+                playback_clock,
                 dropdown_menu,
                 Rc::clone(&dispatch),
             )
@@ -141,12 +143,23 @@ pub fn sequence_viewer(
     .into_any()
 }
 
-fn sequence_header(document: &SequenceDocument) -> impl IntoView {
+fn sequence_header(
+    document: &SequenceDocument,
+    snapshot: crate::ui::UiSnapshot,
+    playback_clock: crate::ui::UiPlaybackClock,
+    dispatch: crate::ui::UiDispatch,
+) -> impl IntoView {
     let degraded = if document.degraded {
         "Fallback lanes"
     } else {
         "Layout lanes"
     };
+    let open_preview = Rc::clone(&dispatch);
+    let play = Rc::clone(&dispatch);
+    let pause = Rc::clone(&dispatch);
+    let stop = Rc::clone(&dispatch);
+    let solo = Rc::clone(&dispatch);
+    let sequence_duration_ms = document.duration_ms;
     h_stack((
         ui_static_label("Sequence").style(|s| s.font_bold()),
         ui_static_label(format!(
@@ -160,6 +173,72 @@ fn sequence_header(document: &SequenceDocument) -> impl IntoView {
                 .set(Foreground, Brush::Solid(theme::color(theme::MUTED)))
         }),
         empty().style(|s| s.flex_grow(1.0).min_width(0.0)),
+        dyn_container(
+            move || {
+                let state = snapshot.get_untracked();
+                let clock = playback_clock.get();
+                (
+                    clock.is_playing,
+                    clock.sequence_playhead_ms,
+                    state.solo_selected_clip,
+                    state.selected_sequence_effect,
+                )
+            },
+            move |(is_playing, playhead_ms, solo_selected_clip, selected_effect)| {
+                h_stack((
+                    ui_static_label(format!(
+                        "{} / {}",
+                        format_time(playhead_ms),
+                        format_time(sequence_duration_ms)
+                    ))
+                    .style(|s| {
+                        s.font_size(theme::FONT_SMALL)
+                            .color(theme::color(theme::MUTED))
+                            .set(Foreground, Brush::Solid(theme::color(theme::MUTED)))
+                    }),
+                    ui_button("Open Preview").action({
+                        let open_preview = Rc::clone(&open_preview);
+                        move || open_preview(AppAction::OpenPreviewWindow)
+                    }),
+                    ui_button(if is_playing { "Pause" } else { "Play" }).action({
+                        let play = Rc::clone(&play);
+                        let pause = Rc::clone(&pause);
+                        move || {
+                            if is_playing {
+                                pause(AppAction::Pause);
+                            } else {
+                                play(AppAction::Play);
+                            }
+                        }
+                    }),
+                    ui_button("Stop").action({
+                        let stop = Rc::clone(&stop);
+                        move || stop(AppAction::Stop)
+                    }),
+                    ui_button("Solo Selected")
+                        .action({
+                            let solo = Rc::clone(&solo);
+                            move || {
+                                if selected_effect.is_some() {
+                                    solo(AppAction::ToggleSoloSelected);
+                                }
+                            }
+                        })
+                        .style(move |s| {
+                            if solo_selected_clip {
+                                s.background(theme::color(theme::SURFACE_CONTROL_ACTIVE))
+                            } else if selected_effect.is_none() {
+                                s.background(theme::color(theme::SURFACE_CONTROL_DISABLED))
+                                    .color(theme::color(theme::TEXT_DISABLED))
+                            } else {
+                                s
+                            }
+                        }),
+                ))
+                .style(|s| s.items_center().gap(theme::SPACE_6))
+                .into_any()
+            },
+        ),
     ))
     .style(|s| {
         s.width_full()
@@ -336,12 +415,48 @@ fn add_effect_menu_entries(
         .collect()
 }
 
-#[derive(Clone)]
-struct SequenceTimelineUpdate {
-    document: SequenceDocument,
-    analysis: Option<ProjectAnalysis>,
-    selected_effect: Option<u32>,
-    playhead_ms: u64,
+enum SequenceTimelineUpdate {
+    Content {
+        document: SequenceDocument,
+        analysis: Option<ProjectAnalysis>,
+        selected_effect: Option<u32>,
+    },
+    Playhead(u64),
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct SequenceTimelineCacheKey {
+    document_signature: String,
+    analysis_available: bool,
+}
+
+impl SequenceTimelineCacheKey {
+    fn new(document: &SequenceDocument, analysis: &Option<ProjectAnalysis>) -> Self {
+        let mut document_signature = format!(
+            "{}:{}:{}:",
+            document.object_key,
+            document.lanes.len(),
+            document.effects.len()
+        );
+        for effect in &document.effects {
+            document_signature.push_str(&format!(
+                "{}:{}:{}:{:?}:{}:",
+                effect.id, effect.start_ms, effect.duration_ms, effect.target, effect.script
+            ));
+            if let Some(render) = &effect.render {
+                document_signature.push_str(&format!(
+                    "{}:{:?}:{}:",
+                    render.script_key,
+                    render.params,
+                    render.target_pixels.len()
+                ));
+            }
+        }
+        Self {
+            document_signature,
+            analysis_available: analysis.is_some(),
+        }
+    }
 }
 
 struct SequenceTimeline {
@@ -350,6 +465,7 @@ struct SequenceTimeline {
     analysis: Option<ProjectAnalysis>,
     selected_effect: Option<u32>,
     playhead_ms: u64,
+    cache_key: SequenceTimelineCacheKey,
     state: SequenceTimelineState,
     viewport: TimelineViewport,
     hovered_clip: Option<TimelineHover>,
@@ -365,6 +481,7 @@ impl SequenceTimeline {
         selected_effect: Option<u32>,
         playhead_ms: u64,
         snapshot: crate::ui::UiSnapshot,
+        playback_clock: crate::ui::UiPlaybackClock,
         dropdown_menu: DropdownMenuController,
         dispatch: crate::ui::UiDispatch,
     ) -> Self {
@@ -373,27 +490,33 @@ impl SequenceTimeline {
         let focus_state = state.clone();
         create_effect(move |_| {
             let snapshot = snapshot.get();
-            id.update_state(SequenceTimelineUpdate {
+            id.update_state(SequenceTimelineUpdate::Content {
                 document: snapshot
                     .active_sequence_document
                     .clone()
                     .unwrap_or_else(|| update_document.clone()),
                 analysis: snapshot.analysis.clone(),
                 selected_effect: snapshot.selected_sequence_effect,
-                playhead_ms: snapshot.sequence_playhead_ms,
             });
+        });
+        create_effect(move |_| {
+            id.update_state(SequenceTimelineUpdate::Playhead(
+                playback_clock.get().sequence_playhead_ms,
+            ));
         });
         create_effect(move |_| {
             if focus_state.keyboard_focused() {
                 id.request_focus();
             }
         });
+        let cache_key = SequenceTimelineCacheKey::new(&document, &analysis);
         Self {
             id,
             document,
             analysis,
             selected_effect,
             playhead_ms,
+            cache_key,
             state,
             viewport: TimelineViewport::default(),
             hovered_clip: None,
@@ -411,12 +534,26 @@ impl View for SequenceTimeline {
 
     fn update(&mut self, _cx: &mut UpdateCx, state: Box<dyn std::any::Any>) {
         if let Ok(update) = state.downcast::<SequenceTimelineUpdate>() {
-            self.document = update.document;
-            self.analysis = update.analysis;
-            self.selected_effect = update.selected_effect;
-            self.playhead_ms = update.playhead_ms;
-            self.state.data.borrow_mut().raster_cache.clear();
-            self.id.request_layout();
+            match *update {
+                SequenceTimelineUpdate::Content {
+                    document,
+                    analysis,
+                    selected_effect,
+                } => {
+                    let next_cache_key = SequenceTimelineCacheKey::new(&document, &analysis);
+                    if self.cache_key != next_cache_key {
+                        self.state.data.borrow_mut().raster_cache.clear();
+                        self.cache_key = next_cache_key;
+                    }
+                    self.document = document;
+                    self.analysis = analysis;
+                    self.selected_effect = selected_effect;
+                    self.id.request_layout();
+                }
+                SequenceTimelineUpdate::Playhead(playhead_ms) => {
+                    self.playhead_ms = playhead_ms;
+                }
+            }
             self.id.request_paint();
         }
     }
