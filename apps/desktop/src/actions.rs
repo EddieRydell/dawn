@@ -20,6 +20,9 @@ pub enum AppAction {
     SetActiveFile(Utf8PathBuf),
     UpdateActiveText(String),
     SaveActiveFile,
+    FlushDeferredPersistence {
+        revision: u64,
+    },
     SetEditorViewMode {
         path: Utf8PathBuf,
         mode: crate::editor_session::EditorViewMode,

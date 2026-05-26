@@ -9,7 +9,7 @@ use dawn_project::document::{
     get_fixture_document as inspect_fixture_document,
     get_layout_document as inspect_layout_document,
     get_sequence_document as inspect_sequence_document, inspect_document as inspect_dawn_document,
-    DocumentDescriptor, DocumentEditResult, FixtureDocument, LayoutDocument, SequenceDocument,
+    DocumentDescriptor, DocumentEditOutcome, FixtureDocument, LayoutDocument, SequenceDocument,
     SequenceDocumentEdit,
 };
 use dawn_project::fs::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFs};
@@ -159,8 +159,7 @@ impl WorkspaceService {
         document: LayoutDocument,
         base_content: String,
         overlays: Vec<ProjectOverlay>,
-        allow_breaking_references: bool,
-    ) -> Result<DocumentEditResult<LayoutDocument>, String> {
+    ) -> Result<DocumentEditOutcome<LayoutDocument>, String> {
         edit_layout_document(
             self.project_fs()?,
             path,
@@ -168,8 +167,6 @@ impl WorkspaceService {
             document,
             base_content,
             overlays,
-            self.current_project_file()?,
-            allow_breaking_references,
         )
     }
 
@@ -179,17 +176,8 @@ impl WorkspaceService {
         document: FixtureDocument,
         base_content: String,
         overlays: Vec<ProjectOverlay>,
-        allow_breaking_references: bool,
-    ) -> Result<DocumentEditResult<FixtureDocument>, String> {
-        edit_fixture_document(
-            self.project_fs()?,
-            path,
-            document,
-            base_content,
-            overlays,
-            self.current_project_file()?,
-            allow_breaking_references,
-        )
+    ) -> Result<DocumentEditOutcome<FixtureDocument>, String> {
+        edit_fixture_document(self.project_fs()?, path, document, base_content, overlays)
     }
 
     pub fn apply_sequence_edit(
@@ -199,7 +187,8 @@ impl WorkspaceService {
         edit: SequenceDocumentEdit,
         base_content: String,
         overlays: Vec<ProjectOverlay>,
-    ) -> Result<DocumentEditResult<SequenceDocument>, String> {
+        analysis: &ProjectAnalysis,
+    ) -> Result<DocumentEditOutcome<SequenceDocument>, String> {
         edit_sequence_document(
             self.project_fs()?,
             path,
@@ -207,7 +196,7 @@ impl WorkspaceService {
             edit,
             base_content,
             overlays,
-            self.current_project_file()?,
+            analysis,
         )
     }
 

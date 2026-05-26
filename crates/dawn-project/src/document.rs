@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::analysis::{
     analyze_project_with_overlays, AnalysisImportResolver, DiagnosticCode, DiagnosticSeverity,
-    ProjectAnalysis, ProjectDiagnostic, ProjectOverlay,
+    ProjectAnalysis, ProjectOverlay,
 };
 use crate::effect_script::{
     compile as compile_effect_script, CompiledEffect, ParamDefault, RuntimeValue, ScriptType,
@@ -247,20 +247,7 @@ pub struct SequenceEffectPixelDocument {
 #[derive(Debug, Clone)]
 pub struct DocumentEditOutcome<T> {
     pub serialized_content: String,
-    pub analysis: ProjectAnalysis,
     pub refreshed_document: T,
-}
-
-#[derive(Debug, Clone)]
-pub struct BlockedDocumentEdit {
-    pub diagnostics: Vec<ProjectDiagnostic>,
-    pub message: String,
-}
-
-#[derive(Debug, Clone)]
-pub enum DocumentEditResult<T> {
-    Applied(DocumentEditOutcome<T>),
-    Blocked(BlockedDocumentEdit),
 }
 
 pub fn inspect_document(
@@ -434,54 +421,23 @@ pub fn apply_layout_document_edit(
     object_key: &str,
     document: LayoutDocument,
     base_content: String,
-    overlays: Vec<ProjectOverlay>,
-    project_path: Utf8PathBuf,
-    allow_breaking_references: bool,
-) -> Result<DocumentEditResult<LayoutDocument>, String> {
-    let path = canonicalize_path(&fs.resolve(&path));
-    let project_path = canonicalize_path(&fs.resolve(&project_path));
+    _overlays: Vec<ProjectOverlay>,
+) -> Result<DocumentEditOutcome<LayoutDocument>, String> {
+    let _path = canonicalize_path(&fs.resolve(&path));
     let file: DawnFile = serde_yaml::from_str(&base_content).map_err(|error| error.to_string())?;
     let Some(DawnObject::Layout(current_layout)) = file.get(object_key) else {
         return Err(format!("layout object `{object_key}` was not found"));
     };
+    let refreshed_document = document.clone();
     let mut layout = document_to_layout(document)?;
     repair_layout_group_members(current_layout, &mut layout);
     validate_layout_identifiers(&layout)?;
     let object = DawnObject::Layout(layout);
     let serialized = replace_top_level_object(&base_content, object_key, &object)?;
-    let next_overlays = overlay_after_save(path.clone(), serialized.clone(), overlays.clone());
-    let analysis = analyze_project_with_overlays(fs, project_path.clone(), None, next_overlays);
-    let introduced_errors = introduced_error_diagnostics(
-        &analyze_project_with_overlays(
-            fs,
-            project_path.clone(),
-            None,
-            overlay_after_save(path.clone(), base_content, overlays),
-        ),
-        &analysis,
-    );
-    if !allow_breaking_references && !introduced_errors.is_empty() {
-        return Ok(DocumentEditResult::Blocked(BlockedDocumentEdit {
-            diagnostics: introduced_errors,
-            message: "This edit introduces project reference errors.".to_string(),
-        }));
-    }
-
-    let refreshed_document = get_layout_document(
-        fs,
-        path.clone(),
-        object_key,
-        analysis.root_path.clone(),
-        vec![ProjectOverlay {
-            path: path.clone(),
-            content: serialized.clone(),
-        }],
-    )?;
-    Ok(DocumentEditResult::Applied(DocumentEditOutcome {
+    Ok(DocumentEditOutcome {
         serialized_content: serialized,
-        analysis,
         refreshed_document,
-    }))
+    })
 }
 
 pub fn apply_fixture_document_edit(
@@ -489,13 +445,11 @@ pub fn apply_fixture_document_edit(
     path: Utf8PathBuf,
     document: FixtureDocument,
     base_content: String,
-    overlays: Vec<ProjectOverlay>,
-    project_path: Utf8PathBuf,
-    allow_breaking_references: bool,
-) -> Result<DocumentEditResult<FixtureDocument>, String> {
-    let path = canonicalize_path(&fs.resolve(&path));
-    let project_path = canonicalize_path(&fs.resolve(&project_path));
+    _overlays: Vec<ProjectOverlay>,
+) -> Result<DocumentEditOutcome<FixtureDocument>, String> {
+    let _path = canonicalize_path(&fs.resolve(&path));
     validate_fixture_document(&document)?;
+    let refreshed_document = document.clone();
     let file: DawnFile = serde_yaml::from_str(&base_content).map_err(|error| error.to_string())?;
     let mut replacements = BTreeMap::new();
     for (key, object) in &file {
@@ -513,38 +467,10 @@ pub fn apply_fixture_document_edit(
         );
     }
     let serialized = replace_top_level_objects(&base_content, replacements)?;
-    let next_overlays = overlay_after_save(path.clone(), serialized.clone(), overlays.clone());
-    let analysis = analyze_project_with_overlays(fs, project_path.clone(), None, next_overlays);
-    let introduced_errors = introduced_error_diagnostics(
-        &analyze_project_with_overlays(
-            fs,
-            project_path,
-            None,
-            overlay_after_save(path.clone(), base_content, overlays),
-        ),
-        &analysis,
-    );
-    if !allow_breaking_references && !introduced_errors.is_empty() {
-        return Ok(DocumentEditResult::Blocked(BlockedDocumentEdit {
-            diagnostics: introduced_errors,
-            message: "This edit introduces project reference errors.".to_string(),
-        }));
-    }
-
-    let refreshed_document = get_fixture_document(
-        fs,
-        path.clone(),
-        document.selected_object_key.as_deref(),
-        vec![ProjectOverlay {
-            path: path.clone(),
-            content: serialized.clone(),
-        }],
-    )?;
-    Ok(DocumentEditResult::Applied(DocumentEditOutcome {
+    Ok(DocumentEditOutcome {
         serialized_content: serialized,
-        analysis,
         refreshed_document,
-    }))
+    })
 }
 
 pub fn apply_sequence_document_edit(
@@ -554,25 +480,18 @@ pub fn apply_sequence_document_edit(
     edit: SequenceDocumentEdit,
     base_content: String,
     overlays: Vec<ProjectOverlay>,
-    project_path: Utf8PathBuf,
-) -> Result<DocumentEditResult<SequenceDocument>, String> {
+    analysis: &ProjectAnalysis,
+) -> Result<DocumentEditOutcome<SequenceDocument>, String> {
     let path = canonicalize_path(&fs.resolve(&path));
-    let project_path = canonicalize_path(&fs.resolve(&project_path));
     let file: DawnFile = serde_yaml::from_str(&base_content).map_err(|error| error.to_string())?;
     let Some(DawnObject::Sequence(current_sequence)) = file.get(object_key) else {
         return Err(format!("sequence object `{object_key}` was not found"));
     };
     let mut sequence = current_sequence.clone();
-    let base_analysis = analyze_project_with_overlays(
-        fs,
-        project_path.clone(),
-        None,
-        overlay_after_save(path.clone(), base_content.clone(), overlays.clone()),
-    );
-    apply_sequence_edit_operation(fs, &path, &base_analysis, &overlays, &mut sequence, edit)?;
+    apply_sequence_edit_operation(fs, &path, analysis, &overlays, &mut sequence, edit)?;
     sort_sequence_effects(
         &mut sequence,
-        base_analysis
+        analysis
             .resolved
             .as_ref()
             .map(|project| &project.display.layout),
@@ -580,23 +499,32 @@ pub fn apply_sequence_document_edit(
 
     let object = DawnObject::Sequence(sequence);
     let serialized = replace_top_level_object(&base_content, object_key, &object)?;
-    let next_overlays = overlay_after_save(path.clone(), serialized.clone(), overlays);
-    let analysis = analyze_project_with_overlays(fs, project_path, None, next_overlays);
-    let refreshed_document = get_sequence_document(
+    let next_text: DawnFile =
+        serde_yaml::from_str(&serialized).map_err(|error| error.to_string())?;
+    let Some(DawnObject::Sequence(sequence)) = next_text.get(object_key) else {
+        return Err(format!(
+            "sequence object `{object_key}` was not found after edit"
+        ));
+    };
+    let refreshed_document = sequence_to_document(
         fs,
-        path.clone(),
+        &path,
         object_key,
-        analysis.root_path.clone(),
-        vec![ProjectOverlay {
+        sequence,
+        analysis
+            .resolved
+            .as_ref()
+            .map(|project| &project.display.layout),
+        Some(analysis),
+        &[ProjectOverlay {
             path: path.clone(),
             content: serialized.clone(),
         }],
-    )?;
-    Ok(DocumentEditResult::Applied(DocumentEditOutcome {
+    );
+    Ok(DocumentEditOutcome {
         serialized_content: serialized,
-        analysis,
         refreshed_document,
-    }))
+    })
 }
 
 fn apply_sequence_edit_operation(
@@ -1660,35 +1588,4 @@ fn top_level_key(line: &str) -> Option<String> {
         return None;
     }
     Some(key.to_string())
-}
-
-fn introduced_error_diagnostics(
-    before: &ProjectAnalysis,
-    after: &ProjectAnalysis,
-) -> Vec<ProjectDiagnostic> {
-    after
-        .diagnostics
-        .iter()
-        .filter(|diagnostic| {
-            diagnostic.severity == DiagnosticSeverity::Error
-                && !before.diagnostics.contains(diagnostic)
-        })
-        .cloned()
-        .collect()
-}
-
-fn overlay_after_save(
-    saved_path: Utf8PathBuf,
-    content: String,
-    overlays: Vec<ProjectOverlay>,
-) -> Vec<ProjectOverlay> {
-    let mut next = overlays
-        .into_iter()
-        .filter(|overlay| overlay.path != saved_path)
-        .collect::<Vec<_>>();
-    next.push(ProjectOverlay {
-        path: saved_path,
-        content,
-    });
-    next
 }

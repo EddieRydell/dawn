@@ -399,6 +399,7 @@ impl View for SequenceTimeline {
                 if event.button.is_primary() {
                     cx.update_active(self.id);
                     self.id.request_active();
+                    self.id.request_focus();
                     self.handle_pointer_down(event.pos)
                 } else if event.button.is_secondary() {
                     self.handle_secondary_click(event.pos)

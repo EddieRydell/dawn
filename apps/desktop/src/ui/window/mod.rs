@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use dawn_project::document::DocumentViewId;
 use floem::event::{Event, EventListener, EventPropagation};
@@ -45,16 +46,31 @@ fn app_view(window_id: WindowId) -> impl IntoView {
     let dispatch = {
         let model = Rc::clone(&model);
         Rc::new(move |action: AppAction| {
+            let before_revision = model.borrow().pending_persistence_revision();
             let result = model.borrow_mut().dispatch(action);
             if let Err(error) = result {
                 model.borrow_mut().status = error;
             }
+            let after_revision = model.borrow().pending_persistence_revision();
             snapshot.set(model.borrow().snapshot());
+            if after_revision.is_some() && after_revision != before_revision {
+                let timer_model = Rc::clone(&model);
+                let timer_snapshot = snapshot;
+                let revision = after_revision.expect("revision was checked");
+                action::exec_after(Duration::from_millis(1500), move |_| {
+                    let result = timer_model
+                        .borrow_mut()
+                        .dispatch(AppAction::FlushDeferredPersistence { revision });
+                    if let Err(error) = result {
+                        timer_model.borrow_mut().status = error;
+                    }
+                    timer_snapshot.set(timer_model.borrow().snapshot());
+                });
+            }
         }) as crate::ui::UiDispatch
     };
 
     let save_shortcut = Rc::clone(&dispatch);
-    let sequence_shortcut = Rc::clone(&dispatch);
     stack((
         v_stack((
             title_bar(
@@ -85,18 +101,6 @@ fn app_view(window_id: WindowId) -> impl IntoView {
             {
                 save_shortcut(AppAction::SaveActiveFile);
                 return EventPropagation::Stop;
-            }
-            let state = snapshot.get();
-            if let Some(document) = state.active_sequence_document.as_ref() {
-                if let Some(action) = crate::ui::editor::gui::sequence::sequence_key_action(
-                    document,
-                    state.selected_sequence_effect,
-                    &event.key.logical_key,
-                    event.modifiers,
-                ) {
-                    sequence_shortcut(action);
-                    return EventPropagation::Stop;
-                }
             }
         }
         EventPropagation::Continue

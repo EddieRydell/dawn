@@ -8,9 +8,9 @@ use crate::ui::theme;
 use crate::workspace::WorkspaceService;
 use dawn_project::analysis::{ProjectAnalysis, ProjectDiagnostic};
 use dawn_project::document::{
-    DocumentDescriptor, DocumentEditResult, DocumentViewId, FixtureDefinitionDocument,
-    FixtureDocument, LayoutDocument, LayoutFixturePlacement, LayoutFixtureRef,
-    LayoutTargetDocument, ResolvedLayoutFixture, SequenceDocument, SequenceDocumentEdit,
+    DocumentDescriptor, DocumentViewId, FixtureDefinitionDocument, FixtureDocument, LayoutDocument,
+    LayoutFixturePlacement, LayoutFixtureRef, LayoutTargetDocument, ResolvedLayoutFixture,
+    SequenceDocument, SequenceDocumentEdit,
 };
 use dawn_project::fs::WorkspaceEntry;
 use dawn_project::model::{
@@ -63,6 +63,12 @@ pub struct AppModel {
     pub project_entries: Vec<WorkspaceEntry>,
     pub analysis: Option<ProjectAnalysis>,
     pub diagnostics: Vec<ProjectDiagnostic>,
+    pub active_descriptor: Option<DocumentDescriptor>,
+    pub active_layout_document: Option<LayoutDocument>,
+    pub active_fixture_document: Option<FixtureDocument>,
+    pub active_sequence_document: Option<SequenceDocument>,
+    pub persistence_revision: u64,
+    pub pending_persistence_revision: Option<u64>,
     pub pending_layout_fixture_import: Option<PendingLayoutFixtureImport>,
     pub pending_layout_fixture_name: Option<PendingLayoutFixtureName>,
     pub selected_fixture_definitions: HashMap<Utf8PathBuf, String>,
@@ -141,6 +147,12 @@ impl Default for AppModel {
             project_entries: Vec::new(),
             analysis: None,
             diagnostics: Vec::new(),
+            active_descriptor: None,
+            active_layout_document: None,
+            active_fixture_document: None,
+            active_sequence_document: None,
+            persistence_revision: 0,
+            pending_persistence_revision: None,
             pending_layout_fixture_import: None,
             pending_layout_fixture_name: None,
             selected_fixture_definitions: HashMap::new(),
@@ -168,52 +180,6 @@ impl AppModel {
     pub fn snapshot(&self) -> AppSnapshot {
         let active_file = self.editors.active_file().cloned();
         let active_buffer = self.editors.active_buffer().cloned();
-        let active_dawn_file = active_file.as_ref().filter(|path| is_dawn_path(path));
-        let active_descriptor = active_dawn_file.and_then(|path| {
-            self.workspace
-                .inspect_document(path.clone(), self.editors.dirty_overlays())
-                .ok()
-        });
-        let active_layout_document = active_file.as_ref().and_then(|path| {
-            let descriptor = active_descriptor.as_ref()?;
-            let object_key = descriptor
-                .default_object_keys
-                .get(&DocumentViewId::Layout)?;
-            self.workspace
-                .layout_document(path.clone(), object_key, self.editors.dirty_overlays())
-                .ok()
-        });
-        let active_fixture_document = active_file.as_ref().and_then(|path| {
-            let descriptor = active_descriptor.as_ref()?;
-            if !descriptor
-                .available_views
-                .contains(&DocumentViewId::Fixture)
-            {
-                return None;
-            }
-            let object_key = self
-                .selected_fixture_definitions
-                .get(path)
-                .map(String::as_str)
-                .or_else(|| {
-                    descriptor
-                        .default_object_keys
-                        .get(&DocumentViewId::Fixture)
-                        .map(String::as_str)
-                });
-            self.workspace
-                .fixture_document(path.clone(), object_key, self.editors.dirty_overlays())
-                .ok()
-        });
-        let active_sequence_document = active_file.as_ref().and_then(|path| {
-            let descriptor = active_descriptor.as_ref()?;
-            let object_key = descriptor
-                .default_object_keys
-                .get(&DocumentViewId::Sequence)?;
-            self.workspace
-                .sequence_document(path.clone(), object_key, self.editors.dirty_overlays())
-                .ok()
-        });
         let sequence_playhead_ms = active_file
             .as_ref()
             .and_then(|path| self.sequence_playheads.get(path).copied())
@@ -228,10 +194,10 @@ impl AppModel {
             tabs: self.editors.tabs(),
             active_file,
             active_buffer,
-            active_descriptor,
-            active_layout_document,
-            active_fixture_document,
-            active_sequence_document,
+            active_descriptor: self.active_descriptor.clone(),
+            active_layout_document: self.active_layout_document.clone(),
+            active_fixture_document: self.active_fixture_document.clone(),
+            active_sequence_document: self.active_sequence_document.clone(),
             pending_layout_fixture_import: self.pending_layout_fixture_import.clone(),
             pending_layout_fixture_name: self.pending_layout_fixture_name.clone(),
             selected_preview_fixture: self.selected_preview_fixture,
@@ -260,6 +226,7 @@ impl AppModel {
                 self.project_entries.clear();
                 self.analysis = None;
                 self.diagnostics.clear();
+                self.clear_active_documents();
                 self.editors.clear();
                 self.selected_fixture_definitions.clear();
                 self.selected_preview_fixture = None;
@@ -279,6 +246,7 @@ impl AppModel {
                 self.status = "Settings are not implemented yet".to_string();
             }
             AppAction::Reload | AppAction::Check => {
+                self.flush_autosave()?;
                 self.refresh_project_entries()?;
                 self.refresh_analysis()?;
                 self.status = "Project checked".to_string();
@@ -290,6 +258,7 @@ impl AppModel {
                 let text = self.workspace.read_file(path.clone())?;
                 self.editors.open_file(path, text);
                 self.refresh_analysis()?;
+                self.refresh_active_documents()?;
                 self.persist_workbench_layout()?;
             }
             AppAction::CloseFile(path) => {
@@ -298,6 +267,7 @@ impl AppModel {
                 self.selected_sequence_effect = None;
                 self.editors.close_file(&path);
                 self.refresh_analysis()?;
+                self.refresh_active_documents()?;
                 self.persist_workbench_layout()?;
             }
             AppAction::SetActiveFile(path) => {
@@ -307,6 +277,7 @@ impl AppModel {
                 self.editors.set_active_file(path);
                 if active_changed {
                     self.selected_sequence_effect = None;
+                    self.refresh_active_documents()?;
                     self.persist_workbench_layout()?;
                 }
             }
@@ -315,6 +286,9 @@ impl AppModel {
                 self.save_active_file()?;
             }
             AppAction::SaveActiveFile => self.save_active_file()?,
+            AppAction::FlushDeferredPersistence { revision } => {
+                self.flush_deferred_persistence(revision)?;
+            }
             AppAction::SetEditorViewMode { path, mode } => {
                 self.editors.set_view_mode(&path, mode);
                 self.persist_workbench_layout()?;
@@ -330,6 +304,7 @@ impl AppModel {
                 self.editors.reconcile_moved_paths(&moves);
                 self.reconcile_selected_fixture_paths(&moves);
                 self.refresh_analysis()?;
+                self.refresh_active_documents()?;
                 self.persist_workbench_layout()?;
             }
             AppAction::CreateFile { parent, name } => {
@@ -339,6 +314,7 @@ impl AppModel {
                 let text = self.workspace.read_file(path.clone())?;
                 self.editors.open_file(path, text);
                 self.refresh_analysis()?;
+                self.refresh_active_documents()?;
                 self.persist_workbench_layout()?;
             }
             AppAction::CreateDirectory { parent, name } => {
@@ -346,6 +322,7 @@ impl AppModel {
                 self.workspace.create_directory(parent, &name)?;
                 self.refresh_project_entries()?;
                 self.refresh_analysis()?;
+                self.refresh_active_documents()?;
             }
             AppAction::DeletePath(path) => {
                 self.flush_autosave()?;
@@ -357,6 +334,7 @@ impl AppModel {
                         selected_path != &path && !selected_path.starts_with(&path)
                     });
                 self.refresh_analysis()?;
+                self.refresh_active_documents()?;
                 self.persist_workbench_layout()?;
             }
             AppAction::MovePaths { paths, new_parent } => {
@@ -366,6 +344,7 @@ impl AppModel {
                 self.editors.reconcile_moved_paths(&moves);
                 self.reconcile_selected_fixture_paths(&moves);
                 self.refresh_analysis()?;
+                self.refresh_active_documents()?;
                 self.persist_workbench_layout()?;
             }
             AppAction::NudgeLayoutFixtures {
@@ -631,6 +610,7 @@ impl AppModel {
                 if let Some(path) = self.editors.active_file().cloned() {
                     self.selected_fixture_definitions
                         .insert(path, object_key.clone());
+                    self.refresh_active_documents()?;
                     self.status = format!("Selected fixture `{object_key}`");
                 }
             }
@@ -826,6 +806,7 @@ impl AppModel {
             self.restore_editor_session();
         }
         self.refresh_analysis()?;
+        self.refresh_active_documents()?;
         if remember {
             self.workbench_layout.last_project_root = Some(path);
             self.persist_workbench_layout()?;
@@ -858,6 +839,72 @@ impl AppModel {
         save_workbench_layout(&self.workbench_layout)
     }
 
+    fn clear_active_documents(&mut self) {
+        self.active_descriptor = None;
+        self.active_layout_document = None;
+        self.active_fixture_document = None;
+        self.active_sequence_document = None;
+    }
+
+    fn refresh_active_documents(&mut self) -> Result<(), String> {
+        self.clear_active_documents();
+        let Some(path) = self.editors.active_file().cloned() else {
+            return Ok(());
+        };
+        if !is_dawn_path(&path) {
+            return Ok(());
+        }
+
+        let overlays = self.editors.dirty_overlays();
+        let descriptor = self
+            .workspace
+            .inspect_document(path.clone(), overlays.clone())?;
+        self.active_layout_document = descriptor
+            .default_object_keys
+            .get(&DocumentViewId::Layout)
+            .and_then(|object_key| {
+                self.workspace
+                    .layout_document(path.clone(), object_key, overlays.clone())
+                    .ok()
+            });
+        self.active_fixture_document = if descriptor
+            .available_views
+            .contains(&DocumentViewId::Fixture)
+        {
+            let object_key = self
+                .selected_fixture_definitions
+                .get(&path)
+                .map(String::as_str)
+                .or_else(|| {
+                    descriptor
+                        .default_object_keys
+                        .get(&DocumentViewId::Fixture)
+                        .map(String::as_str)
+                });
+            self.workspace
+                .fixture_document(path.clone(), object_key, overlays.clone())
+                .ok()
+        } else {
+            None
+        };
+        self.active_sequence_document = descriptor
+            .default_object_keys
+            .get(&DocumentViewId::Sequence)
+            .and_then(|object_key| {
+                self.workspace
+                    .sequence_document(path.clone(), object_key, overlays)
+                    .ok()
+            });
+        self.active_descriptor = Some(descriptor);
+        Ok(())
+    }
+
+    fn defer_persistence(&mut self) {
+        self.persistence_revision = self.persistence_revision.saturating_add(1);
+        self.pending_persistence_revision = Some(self.persistence_revision);
+        self.status = "Autosave pending".to_string();
+    }
+
     fn edit_active_layout(&mut self, edit: impl FnOnce(&mut LayoutDocument)) -> Result<(), String> {
         let snapshot = self.snapshot();
         let Some(buffer) = snapshot.active_buffer else {
@@ -874,19 +921,11 @@ impl AppModel {
             document,
             buffer.text,
             self.editors.dirty_overlays(),
-            false,
         )? {
-            DocumentEditResult::Applied(outcome) => {
+            outcome => {
                 self.editors.update_active_text(outcome.serialized_content);
-                self.save_active_file()?;
-                let analysis = outcome.analysis;
-                self.diagnostics = analysis.diagnostics.clone();
-                self.analysis = Some(analysis);
-                self.status = "Layout edit applied".to_string();
-            }
-            DocumentEditResult::Blocked(blocked) => {
-                self.diagnostics = blocked.diagnostics;
-                self.status = blocked.message;
+                self.active_layout_document = Some(outcome.refreshed_document);
+                self.defer_persistence();
             }
         }
         Ok(())
@@ -940,19 +979,11 @@ impl AppModel {
             document,
             buffer.text,
             self.editors.dirty_overlays(),
-            false,
         )? {
-            DocumentEditResult::Applied(outcome) => {
+            outcome => {
                 self.editors.update_active_text(outcome.serialized_content);
-                self.save_active_file()?;
-                let analysis = outcome.analysis;
-                self.diagnostics = analysis.diagnostics.clone();
-                self.analysis = Some(analysis);
-                self.status = "Fixture edit applied".to_string();
-            }
-            DocumentEditResult::Blocked(blocked) => {
-                self.diagnostics = blocked.diagnostics;
-                self.status = blocked.message;
+                self.active_fixture_document = Some(outcome.refreshed_document);
+                self.defer_persistence();
             }
         }
         Ok(())
@@ -967,24 +998,21 @@ impl AppModel {
             return Err("active editor is not a sequence document".to_string());
         };
         let object_key = document.object_key.clone();
+        let Some(analysis) = self.analysis.as_ref() else {
+            return Err("project analysis is not available".to_string());
+        };
         match self.workspace.apply_sequence_edit(
             buffer.path,
             &object_key,
             edit,
             buffer.text,
             self.editors.dirty_overlays(),
+            analysis,
         )? {
-            DocumentEditResult::Applied(outcome) => {
+            outcome => {
                 self.editors.update_active_text(outcome.serialized_content);
-                self.save_active_file()?;
-                let analysis = outcome.analysis;
-                self.diagnostics = analysis.diagnostics.clone();
-                self.analysis = Some(analysis);
-                self.status = "Sequence edit applied".to_string();
-            }
-            DocumentEditResult::Blocked(blocked) => {
-                self.diagnostics = blocked.diagnostics;
-                self.status = blocked.message;
+                self.active_sequence_document = Some(outcome.refreshed_document);
+                self.defer_persistence();
             }
         }
         Ok(())
@@ -1013,15 +1041,36 @@ impl AppModel {
         self.workspace
             .write_file(buffer.path.clone(), buffer.text.as_bytes())?;
         self.editors.mark_saved(&buffer.path, buffer.text);
-        self.refresh_analysis()
+        self.pending_persistence_revision = None;
+        self.refresh_analysis()?;
+        self.refresh_active_documents()
     }
 
     pub fn flush_autosave(&mut self) -> Result<(), String> {
+        let had_dirty_buffers = !self.editors.dirty_buffers().is_empty();
         for buffer in self.editors.dirty_buffers() {
             self.workspace
                 .write_file(buffer.path.clone(), buffer.text.as_bytes())?;
             self.editors.mark_saved(&buffer.path, buffer.text);
         }
+        self.pending_persistence_revision = None;
+        if had_dirty_buffers {
+            self.refresh_analysis()?;
+            self.refresh_active_documents()?;
+        }
+        Ok(())
+    }
+
+    pub fn pending_persistence_revision(&self) -> Option<u64> {
+        self.pending_persistence_revision
+    }
+
+    fn flush_deferred_persistence(&mut self, revision: u64) -> Result<(), String> {
+        if self.pending_persistence_revision != Some(revision) {
+            return Ok(());
+        }
+        self.flush_autosave()?;
+        self.status = "Autosaved".to_string();
         Ok(())
     }
 }
