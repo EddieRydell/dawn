@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use dawn_project::document::DocumentViewId;
 use floem::event::{Event, EventListener, EventPropagation};
 use floem::file::FileDialogOptions;
 use floem::file_action::open_file;
@@ -95,7 +94,11 @@ fn dispatch_model_action(
     action: AppAction,
 ) {
     let before_revision = model.borrow().pending_persistence_revision();
-    let snapshot_changed = match model.borrow_mut().dispatch(action) {
+    let dispatch_result = {
+        let mut model = model.borrow_mut();
+        model.dispatch(action)
+    };
+    let snapshot_changed = match dispatch_result {
         Ok(outcome) => outcome.snapshot_changed(),
         Err(error) => {
             model.borrow_mut().status = error;
@@ -306,12 +309,6 @@ fn view_menu(
         let state = snapshot.get();
         let active_path = state.active_file.clone();
         let active_mode = state.active_buffer.as_ref().map(|buffer| buffer.view_mode);
-        let has_gui = state.active_descriptor.as_ref().is_some_and(|descriptor| {
-            descriptor.available_views.contains(&DocumentViewId::Layout)
-                || descriptor
-                    .available_views
-                    .contains(&DocumentViewId::Fixture)
-        });
         let text_path = active_path.clone();
         let gui_path = active_path.clone();
 
@@ -330,7 +327,7 @@ fn view_menu(
             ),
             DropdownMenuEntry::item(
                 "GUI Editor",
-                has_gui && active_mode.is_some_and(|mode| mode != EditorViewMode::Gui),
+                active_mode.is_some_and(|mode| mode != EditorViewMode::Gui),
                 move || {
                     if let Some(path) = gui_path.clone() {
                         gui(AppAction::SetEditorViewMode {

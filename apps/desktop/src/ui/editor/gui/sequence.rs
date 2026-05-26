@@ -20,7 +20,6 @@ use floem::{View, ViewId};
 use floem_renderer::Renderer;
 
 use crate::actions::AppAction;
-use crate::app_model::AppSnapshot;
 use crate::ui::components::dropdown_menu::{DropdownMenuController, DropdownMenuEntry};
 use crate::ui::components::{ui_button, ui_static_label, ui_text_input};
 use crate::ui::editor::gui::EditorGuiUiState;
@@ -73,15 +72,14 @@ impl Default for SequenceTimelineState {
 }
 
 pub fn sequence_viewer(
-    state: AppSnapshot,
+    document: SequenceDocument,
+    snapshot: crate::ui::UiSnapshot,
     gui_state: EditorGuiUiState,
     dropdown_menu: DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
-    let Some(document) = state.active_sequence_document.clone() else {
-        return empty().into_any();
-    };
     let timeline_state = gui_state.sequence_timeline(&document.path, &document.object_key);
+    let state = snapshot.get_untracked();
     let selected_effect = state.selected_sequence_effect;
     v_stack((
         sequence_header(&document),
@@ -92,11 +90,13 @@ pub fn sequence_viewer(
                 timeline_state,
                 selected_effect,
                 state.sequence_playhead_ms,
+                snapshot,
                 dropdown_menu,
                 Rc::clone(&dispatch),
             )
             .style(|s| {
                 s.flex_grow(1.0)
+                    .flex_basis(0.0)
                     .height_full()
                     .min_width(0.0)
                     .min_height(0.0)
@@ -104,10 +104,27 @@ pub fn sequence_viewer(
                     .border_color(theme::color(theme::BORDER))
                     .border_radius(theme::CONTROL_RADIUS)
             }),
-            sequence_inspector(document, selected_effect, dispatch),
+            dyn_container(
+                move || {
+                    let state = snapshot.get();
+                    (
+                        state.active_sequence_document,
+                        state.selected_sequence_effect,
+                    )
+                },
+                move |(document, selected_effect)| {
+                    if let Some(document) = document {
+                        sequence_inspector(document, selected_effect, Rc::clone(&dispatch))
+                            .into_any()
+                    } else {
+                        empty().into_any()
+                    }
+                },
+            ),
         ))
         .style(|s| {
-            s.flex_grow(1.0)
+            s.width_full()
+                .flex_grow(1.0)
                 .height_full()
                 .min_width(0.0)
                 .min_height(0.0)
@@ -115,7 +132,8 @@ pub fn sequence_viewer(
         }),
     ))
     .style(|s| {
-        s.height_full()
+        s.width_full()
+            .height_full()
             .padding(theme::SPACE_12)
             .gap(theme::SPACE_8)
             .background(theme::color(theme::SURFACE))
@@ -346,19 +364,23 @@ impl SequenceTimeline {
         state: SequenceTimelineState,
         selected_effect: Option<u32>,
         playhead_ms: u64,
+        snapshot: crate::ui::UiSnapshot,
         dropdown_menu: DropdownMenuController,
         dispatch: crate::ui::UiDispatch,
     ) -> Self {
         let id = ViewId::new();
         let update_document = document.clone();
-        let update_analysis = analysis.clone();
         let focus_state = state.clone();
         create_effect(move |_| {
+            let snapshot = snapshot.get();
             id.update_state(SequenceTimelineUpdate {
-                document: update_document.clone(),
-                analysis: update_analysis.clone(),
-                selected_effect,
-                playhead_ms,
+                document: snapshot
+                    .active_sequence_document
+                    .clone()
+                    .unwrap_or_else(|| update_document.clone()),
+                analysis: snapshot.analysis.clone(),
+                selected_effect: snapshot.selected_sequence_effect,
+                playhead_ms: snapshot.sequence_playhead_ms,
             });
         });
         create_effect(move |_| {

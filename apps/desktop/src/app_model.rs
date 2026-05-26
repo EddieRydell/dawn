@@ -297,7 +297,7 @@ impl AppModel {
             }
             AppAction::UpdateActiveText(text) => {
                 self.editors.update_active_text(text);
-                self.save_active_file()?;
+                self.save_active_file_after_text_edit()?;
             }
             AppAction::SaveActiveFile => self.save_active_file()?,
             AppAction::BeginDeferredPersistenceHold => {
@@ -1079,6 +1079,26 @@ impl AppModel {
         self.pending_persistence_revision = None;
         self.refresh_analysis()?;
         self.refresh_active_documents()
+    }
+
+    fn save_active_file_after_text_edit(&mut self) -> Result<(), String> {
+        let Some(buffer) = self.editors.active_buffer().cloned() else {
+            return Ok(());
+        };
+        self.workspace
+            .write_file(buffer.path.clone(), buffer.text.as_bytes())?;
+        self.editors.mark_saved(&buffer.path, buffer.text);
+        self.pending_persistence_revision = None;
+        match self
+            .refresh_analysis()
+            .and_then(|()| self.refresh_active_documents())
+        {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.status = error;
+                Ok(())
+            }
+        }
     }
 
     pub fn flush_autosave(&mut self) -> Result<(), String> {

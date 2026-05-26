@@ -10,7 +10,6 @@ use floem::file_action::open_file;
 use floem::prelude::*;
 
 use crate::actions::AppAction;
-use crate::app_model::AppSnapshot;
 use crate::ui::components::canvas::{
     canvas_with_state, CanvasItem, CanvasItemInteraction, CanvasItemKind, CanvasLayer, CanvasScene,
     CanvasState,
@@ -21,14 +20,12 @@ use crate::ui::editor::gui::EditorGuiUiState;
 use crate::ui::theme;
 
 pub fn layout_viewer(
-    state: AppSnapshot,
+    document: LayoutDocument,
+    snapshot: crate::ui::UiSnapshot,
     gui_state: EditorGuiUiState,
     dropdown_menu: DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
-    let Some(document) = state.active_layout_document.clone() else {
-        return empty().into_any();
-    };
     let canvas_state = gui_state.layout_canvas(&document.path, &document.object_key);
     let fixtures = document.fixtures.clone();
     let groups = document.groups.clone();
@@ -40,7 +37,14 @@ pub fn layout_viewer(
     v_stack((
         layout_header(name, units, bounds),
         layout_body(
-            move || layout_canvas_scene(&scene_document),
+            move || {
+                snapshot
+                    .get()
+                    .active_layout_document
+                    .as_ref()
+                    .map(layout_canvas_scene)
+                    .unwrap_or_else(|| layout_canvas_scene(&scene_document))
+            },
             canvas_state,
             fixtures,
             groups,
@@ -49,7 +53,8 @@ pub fn layout_viewer(
         ),
     ))
     .style(|s| {
-        s.height_full()
+        s.width_full()
+            .height_full()
             .padding(theme::SPACE_12)
             .gap(theme::SPACE_8)
             .background(theme::color(theme::SURFACE))
@@ -125,7 +130,8 @@ fn layout_body(
         layout_right_rail(fixtures, groups, dispatch),
     ))
     .style(|s| {
-        s.flex_grow(1.0)
+        s.width_full()
+            .flex_grow(1.0)
             .height_full()
             .min_width(0.0)
             .min_height(0.0)

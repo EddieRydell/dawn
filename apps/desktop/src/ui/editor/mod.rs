@@ -1,11 +1,12 @@
 use std::rc::Rc;
 
 use dawn_project::analysis::{DiagnosticCode, ProjectAnalysis, ProjectDiagnostic};
-use dawn_project::document::{DocumentDescriptor, DocumentViewId};
+use dawn_project::document::{DocumentViewId, FixtureDocument, LayoutDocument, SequenceDocument};
 use dawn_project::path::{PathStringExt, Utf8PathBuf};
 use floem::event::{Event, EventListener};
 use floem::peniko::Brush;
 use floem::prelude::*;
+use floem::reactive::create_memo;
 use floem::style::{CursorStyle, Foreground};
 use floem::text::FamilyOwned;
 use floem::views::editor::text::SimpleStyling;
@@ -21,14 +22,17 @@ use crate::ui::theme;
 pub mod gui;
 
 pub fn editor_view(
-    state: AppSnapshot,
+    snapshot: crate::ui::UiSnapshot,
     gui_state: EditorGuiUiState,
     dropdown_menu: crate::ui::components::dropdown_menu::DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     v_stack((
-        tab_strip(state.clone(), Rc::clone(&dispatch)),
-        editor_body(state, gui_state, dropdown_menu, dispatch)
+        dyn_container(move || snapshot.get(), {
+            let dispatch = Rc::clone(&dispatch);
+            move |state| tab_strip(state, Rc::clone(&dispatch)).into_any()
+        }),
+        editor_body(snapshot, gui_state, dropdown_menu, dispatch)
             .style(|s| s.flex_grow(1.0).min_height(0.0)),
     ))
     .style(|s| s.height_full().background(theme::color(theme::SURFACE)))
@@ -49,7 +53,6 @@ fn tab_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoVi
     } else {
         let active_file = state.active_file.clone();
         let active_buffer = state.active_buffer.clone();
-        let active_descriptor = state.active_descriptor.clone();
         let tab_dispatch = Rc::clone(&dispatch);
         let tabs = h_stack_from_iter(state.tabs.into_iter().map(move |tab| {
             let active = active_file.as_ref() == Some(&tab.path);
@@ -67,7 +70,7 @@ fn tab_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoVi
         h_stack((
             tabs.style(|s| s.height_full().min_width(0.0)),
             empty().style(|s| s.flex_grow(1.0).min_width(0.0)),
-            editor_mode_toggle(active_buffer, active_descriptor, dispatch),
+            editor_mode_toggle(active_buffer, dispatch),
         ))
         .style(|s| {
             s.width_full()
@@ -83,24 +86,11 @@ fn tab_strip(state: AppSnapshot, dispatch: crate::ui::UiDispatch) -> impl IntoVi
 
 fn editor_mode_toggle(
     active_buffer: Option<crate::editor_session::EditorBuffer>,
-    active_descriptor: Option<DocumentDescriptor>,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     let Some(buffer) = active_buffer else {
         return empty().into_any();
     };
-    let has_gui = active_descriptor.as_ref().is_some_and(|descriptor| {
-        descriptor.available_views.contains(&DocumentViewId::Layout)
-            || descriptor
-                .available_views
-                .contains(&DocumentViewId::Fixture)
-            || descriptor
-                .available_views
-                .contains(&DocumentViewId::Sequence)
-    });
-    if !has_gui {
-        return empty().into_any();
-    }
 
     let text_path = buffer.path.clone();
     let gui_path = buffer.path.clone();
@@ -270,62 +260,255 @@ fn close_tab_button(action: impl Fn() + 'static) -> impl IntoView {
 }
 
 fn editor_body(
-    state: AppSnapshot,
+    snapshot: crate::ui::UiSnapshot,
     gui_state: EditorGuiUiState,
     dropdown_menu: crate::ui::components::dropdown_menu::DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
-    let Some(buffer) = state.active_buffer.clone() else {
+    let body_route = create_memo(move |_| EditorBodyRoute::from_snapshot(&snapshot.get()));
+    dyn_container(
+        move || body_route.get(),
+        move |route| {
+            editor_body_for_key(
+                snapshot,
+                route,
+                gui_state.clone(),
+                dropdown_menu.clone(),
+                Rc::clone(&dispatch),
+            )
+        },
+    )
+}
+
+fn editor_body_for_key(
+    snapshot: crate::ui::UiSnapshot,
+    route: EditorBodyRoute,
+    gui_state: EditorGuiUiState,
+    dropdown_menu: crate::ui::components::dropdown_menu::DropdownMenuController,
+    dispatch: crate::ui::UiDispatch,
+) -> floem::AnyView {
+    let Some(active) = route.active else {
         return center_message("Open a file from the project explorer").into_any();
     };
 
-    match buffer.view_mode {
-        EditorViewMode::Text => {
-            if is_effect_script_path(&buffer.path) {
-                effect_script_editor(
-                    buffer.path,
-                    buffer.text,
-                    state.analysis,
-                    state.diagnostics,
-                    dispatch,
-                )
-                .into_any()
+    match active {
+        ActiveEditorRoute::Text { path, text } => {
+            if is_effect_script_path(&path) {
+                effect_script_editor(snapshot, path, text, dispatch).into_any()
             } else {
-                source_editor(buffer.path, buffer.text, dispatch).into_any()
+                source_editor(path, text, dispatch).into_any()
             }
         }
-        EditorViewMode::Gui => {
-            if !is_dawn_path(&buffer.path) {
-                return source_editor(buffer.path, buffer.text, dispatch).into_any();
-            }
-            if state.active_layout_document.is_some() {
-                crate::ui::editor::gui::layout::layout_viewer(
-                    state,
-                    gui_state,
-                    dropdown_menu,
-                    dispatch,
-                )
-                .into_any()
-            } else if state.active_fixture_document.is_some() {
-                crate::ui::editor::gui::fixture::fixture_viewer(state, gui_state, dispatch)
-                    .into_any()
-            } else if state.active_sequence_document.is_some() {
+        ActiveEditorRoute::GuiFallback { path, text } => {
+            source_editor(path, text, dispatch).into_any()
+        }
+        ActiveEditorRoute::Gui { view } => match view {
+            GuiEditorRoute::Layout(document) => crate::ui::editor::gui::layout::layout_viewer(
+                document,
+                snapshot,
+                gui_state,
+                dropdown_menu,
+                dispatch,
+            )
+            .into_any(),
+            GuiEditorRoute::Fixture(document) => crate::ui::editor::gui::fixture::fixture_viewer(
+                document, snapshot, gui_state, dispatch,
+            )
+            .into_any(),
+            GuiEditorRoute::Sequence(document) => {
                 crate::ui::editor::gui::sequence::sequence_viewer(
-                    state,
+                    document,
+                    snapshot,
                     gui_state,
                     dropdown_menu,
                     dispatch,
                 )
                 .into_any()
-            } else {
-                center_message("No GUI editor for this document").into_any()
             }
+            GuiEditorRoute::Missing => center_message("No GUI editor for this document").into_any(),
+        },
+    }
+}
+
+#[derive(Debug, Clone)]
+struct EditorBodyRoute {
+    key: EditorBodyKey,
+    active: Option<ActiveEditorRoute>,
+}
+
+impl PartialEq for EditorBodyRoute {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+    }
+}
+
+impl EditorBodyRoute {
+    fn from_snapshot(state: &AppSnapshot) -> Self {
+        let key = EditorBodyKey::from_snapshot(state);
+        let active = state.active_buffer.as_ref().map(|buffer| match key.mode {
+            EditorViewMode::Text => ActiveEditorRoute::Text {
+                path: buffer.path.clone(),
+                text: buffer.text.clone(),
+            },
+            EditorViewMode::Gui => {
+                if !is_dawn_path(&buffer.path) {
+                    ActiveEditorRoute::GuiFallback {
+                        path: buffer.path.clone(),
+                        text: buffer.text.clone(),
+                    }
+                } else {
+                    ActiveEditorRoute::Gui {
+                        view: GuiEditorRoute::from_snapshot(state),
+                    }
+                }
+            }
+        });
+        Self { key, active }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct EditorBodyKey {
+    path: Option<Utf8PathBuf>,
+    mode: EditorViewMode,
+    gui_kind: EditorGuiKind,
+    gui_object_key: Option<String>,
+    gui_document_ready: bool,
+}
+
+impl EditorBodyKey {
+    fn from_snapshot(state: &AppSnapshot) -> Self {
+        let mode = state
+            .active_buffer
+            .as_ref()
+            .map(|buffer| buffer.view_mode)
+            .unwrap_or(EditorViewMode::Text);
+        let (gui_kind, gui_object_key) = if mode == EditorViewMode::Gui {
+            (
+                EditorGuiKind::from_snapshot(state),
+                active_gui_object_key(state),
+            )
+        } else {
+            (EditorGuiKind::None, None)
+        };
+        Self {
+            path: state.active_file.clone(),
+            mode,
+            gui_kind,
+            gui_object_key,
+            gui_document_ready: mode == EditorViewMode::Gui && active_gui_document_ready(state),
         }
     }
 }
 
+#[derive(Debug, Clone)]
+enum ActiveEditorRoute {
+    Text { path: Utf8PathBuf, text: String },
+    GuiFallback { path: Utf8PathBuf, text: String },
+    Gui { view: GuiEditorRoute },
+}
+
+#[derive(Debug, Clone)]
+enum GuiEditorRoute {
+    Layout(LayoutDocument),
+    Fixture(FixtureDocument),
+    Sequence(SequenceDocument),
+    Missing,
+}
+
+impl GuiEditorRoute {
+    fn from_snapshot(state: &AppSnapshot) -> Self {
+        match EditorGuiKind::from_snapshot(state) {
+            EditorGuiKind::Layout => state
+                .active_layout_document
+                .clone()
+                .map(Self::Layout)
+                .unwrap_or(Self::Missing),
+            EditorGuiKind::Fixture => state
+                .active_fixture_document
+                .clone()
+                .map(Self::Fixture)
+                .unwrap_or(Self::Missing),
+            EditorGuiKind::Sequence => state
+                .active_sequence_document
+                .clone()
+                .map(Self::Sequence)
+                .unwrap_or(Self::Missing),
+            EditorGuiKind::None => Self::Missing,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditorGuiKind {
+    Layout,
+    Fixture,
+    Sequence,
+    None,
+}
+
+impl EditorGuiKind {
+    fn from_snapshot(state: &AppSnapshot) -> Self {
+        let Some(descriptor) = state.active_descriptor.as_ref() else {
+            return Self::None;
+        };
+        if descriptor
+            .available_views
+            .contains(&DocumentViewId::Sequence)
+        {
+            Self::Sequence
+        } else if descriptor
+            .available_views
+            .contains(&DocumentViewId::Fixture)
+        {
+            Self::Fixture
+        } else if descriptor.available_views.contains(&DocumentViewId::Layout) {
+            Self::Layout
+        } else {
+            Self::None
+        }
+    }
+}
+
+fn active_gui_object_key(state: &AppSnapshot) -> Option<String> {
+    match EditorGuiKind::from_snapshot(state) {
+        EditorGuiKind::Layout => state
+            .active_layout_document
+            .as_ref()
+            .map(|document| document.object_key.clone())
+            .or_else(|| default_object_key(state, DocumentViewId::Layout)),
+        EditorGuiKind::Fixture => state
+            .active_fixture_document
+            .as_ref()
+            .and_then(|document| document.selected_object_key.clone())
+            .or_else(|| default_object_key(state, DocumentViewId::Fixture)),
+        EditorGuiKind::Sequence => state
+            .active_sequence_document
+            .as_ref()
+            .map(|document| document.object_key.clone())
+            .or_else(|| default_object_key(state, DocumentViewId::Sequence)),
+        EditorGuiKind::None => None,
+    }
+}
+
+fn active_gui_document_ready(state: &AppSnapshot) -> bool {
+    match EditorGuiKind::from_snapshot(state) {
+        EditorGuiKind::Layout => state.active_layout_document.is_some(),
+        EditorGuiKind::Fixture => state.active_fixture_document.is_some(),
+        EditorGuiKind::Sequence => state.active_sequence_document.is_some(),
+        EditorGuiKind::None => false,
+    }
+}
+
+fn default_object_key(state: &AppSnapshot, view: DocumentViewId) -> Option<String> {
+    state
+        .active_descriptor
+        .as_ref()
+        .and_then(|descriptor| descriptor.default_object_keys.get(&view).cloned())
+}
+
 fn source_editor(
-    path: Utf8PathBuf,
+    _path: Utf8PathBuf,
     text: String,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
@@ -338,13 +521,16 @@ fn source_editor(
                 .font_size(theme::FONT_EDITOR as usize);
             editor.update_doc(editor.doc(), Some(Rc::new(styling.build())));
         })
+        .editor_style(|s| {
+            s.cursor_color(theme::color(theme::TEXT_INVERTED))
+                .current_line_color(theme::color(theme::SURFACE_CONTROL_HOVER))
+        })
         .placeholder("File contents")
         .update(move |event| {
             let Some(editor) = event.editor else {
                 return;
             };
             let next_text = editor.rope_text().text.to_string();
-            dispatch_updates(AppAction::SetActiveFile(path.clone()));
             dispatch_updates(AppAction::UpdateActiveText(next_text));
         })
         .style(|s| {
@@ -355,14 +541,22 @@ fn source_editor(
 }
 
 fn effect_script_editor(
+    snapshot: crate::ui::UiSnapshot,
     path: Utf8PathBuf,
     text: String,
-    analysis: Option<ProjectAnalysis>,
-    diagnostics: Vec<ProjectDiagnostic>,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
+    let header_path = path.clone();
     v_stack((
-        effect_script_header(path.clone(), analysis, diagnostics),
+        dyn_container(
+            move || {
+                let state = snapshot.get();
+                (state.analysis, state.diagnostics, header_path.clone())
+            },
+            move |(analysis, diagnostics, path)| {
+                effect_script_header(path, analysis, diagnostics).into_any()
+            },
+        ),
         source_editor(path, text, dispatch).style(|s| s.flex_grow(1.0).min_height(0.0)),
     ))
     .style(|s| s.width_full().height_full())

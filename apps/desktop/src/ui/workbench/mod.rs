@@ -16,64 +16,76 @@ pub fn workbench_view(
 ) -> impl IntoView {
     let explorer = crate::ui::project_tree::ExplorerUiState::new();
     let editor_gui = crate::ui::editor::gui::EditorGuiUiState::new();
+    h_stack((
+        project_tree_slot(
+            snapshot,
+            explorer,
+            dropdown_menu.clone(),
+            Rc::clone(&dispatch),
+        ),
+        crate::ui::editor::editor_view(snapshot, editor_gui, dropdown_menu, Rc::clone(&dispatch))
+            .style(|s| {
+                s.flex_grow(1.0)
+                    .flex_basis(0.0)
+                    .min_width(theme::MIN_EDITOR_WIDTH)
+                    .height_full()
+            }),
+        inspector_slot(snapshot, dispatch),
+    ))
+    .style(|s| s.width_full().height_full().min_height(0.0))
+    .style(|s| s.width_full().flex_grow(1.0).min_height(0.0))
+}
+
+fn project_tree_slot(
+    snapshot: crate::ui::UiSnapshot,
+    explorer: crate::ui::project_tree::ExplorerUiState,
+    dropdown_menu: crate::ui::components::dropdown_menu::DropdownMenuController,
+    dispatch: crate::ui::UiDispatch,
+) -> impl IntoView {
     dyn_container(
         move || snapshot.get(),
         move |state| {
+            if !state.workbench_layout.project_tree_visible {
+                return empty().into_any();
+            }
             explorer.reset_for_root(state.project_root.clone());
-            let mut panes = Vec::new();
-            if state.workbench_layout.project_tree_visible {
-                panes.push(
-                    crate::ui::project_tree::project_tree_view(
-                        state.clone(),
-                        explorer.clone(),
-                        dropdown_menu.clone(),
-                        Rc::clone(&dispatch),
-                    )
-                    .style(move |s| {
-                        s.width(state.workbench_layout.project_tree_width)
-                            .height_full()
-                            .border_right(theme::BORDER_WIDTH)
-                            .border_color(theme::color(theme::BORDER))
-                    })
-                    .into_any(),
-                );
-            }
+            crate::ui::project_tree::project_tree_view(
+                state.clone(),
+                explorer.clone(),
+                dropdown_menu.clone(),
+                Rc::clone(&dispatch),
+            )
+            .style(move |s| {
+                s.width(state.workbench_layout.project_tree_width)
+                    .height_full()
+                    .border_right(theme::BORDER_WIDTH)
+                    .border_color(theme::color(theme::BORDER))
+            })
+            .into_any()
+        },
+    )
+}
 
-            panes.push(
-                crate::ui::editor::editor_view(
-                    state.clone(),
-                    editor_gui.clone(),
-                    dropdown_menu.clone(),
-                    Rc::clone(&dispatch),
-                )
-                .style(|s| {
-                    s.flex_grow(1.0)
-                        .flex_basis(0.0)
-                        .min_width(theme::MIN_EDITOR_WIDTH)
+fn inspector_slot(
+    snapshot: crate::ui::UiSnapshot,
+    dispatch: crate::ui::UiDispatch,
+) -> impl IntoView {
+    dyn_container(
+        move || snapshot.get(),
+        move |state| {
+            if !state.workbench_layout.inspector_visible {
+                return empty().into_any();
+            }
+            inspector_pane(state.clone(), Rc::clone(&dispatch))
+                .style(move |s| {
+                    s.width(state.workbench_layout.inspector_width)
                         .height_full()
+                        .border_left(theme::BORDER_WIDTH)
+                        .border_color(theme::color(theme::BORDER))
                 })
-                .into_any(),
-            );
-
-            if state.workbench_layout.inspector_visible {
-                panes.push(
-                    inspector_pane(state.clone(), Rc::clone(&dispatch))
-                        .style(move |s| {
-                            s.width(state.workbench_layout.inspector_width)
-                                .height_full()
-                                .border_left(theme::BORDER_WIDTH)
-                                .border_color(theme::color(theme::BORDER))
-                        })
-                        .into_any(),
-                );
-            }
-
-            h_stack_from_iter(panes)
-                .style(|s| s.width_full().height_full().min_height(0.0))
                 .into_any()
         },
     )
-    .style(|s| s.width_full().flex_grow(1.0).min_height(0.0))
 }
 
 fn inspector_pane(

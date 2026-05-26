@@ -6,7 +6,6 @@ use dawn_project::render::{GeometryRenderGuide, GeometryRenderPoint};
 use floem::prelude::*;
 
 use crate::actions::AppAction;
-use crate::app_model::AppSnapshot;
 use crate::ui::components::canvas::{
     canvas_with_state, CanvasItem, CanvasItemInteraction, CanvasItemKind, CanvasLayer, CanvasScene,
     CanvasState,
@@ -16,13 +15,11 @@ use crate::ui::editor::gui::EditorGuiUiState;
 use crate::ui::theme;
 
 pub fn fixture_viewer(
-    state: AppSnapshot,
+    document: FixtureDocument,
+    snapshot: crate::ui::UiSnapshot,
     gui_state: EditorGuiUiState,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
-    let Some(document) = state.active_fixture_document.clone() else {
-        return empty().into_any();
-    };
     let Some(active_fixture) = selected_fixture(&document).cloned() else {
         return empty_fixture_document().into_any();
     };
@@ -35,7 +32,15 @@ pub fn fixture_viewer(
     v_stack((
         fixture_header(&active_fixture),
         fixture_body(
-            move || fixture_canvas_scene(&scene_fixture),
+            move || {
+                snapshot
+                    .get()
+                    .active_fixture_document
+                    .as_ref()
+                    .and_then(selected_fixture)
+                    .map(fixture_canvas_scene)
+                    .unwrap_or_else(|| fixture_canvas_scene(&scene_fixture))
+            },
             canvas_state,
             active_fixture.object_key.clone(),
             fixtures,
@@ -44,7 +49,8 @@ pub fn fixture_viewer(
         ),
     ))
     .style(|s| {
-        s.height_full()
+        s.width_full()
+            .height_full()
             .padding(theme::SPACE_12)
             .gap(theme::SPACE_8)
             .background(theme::color(theme::SURFACE))
@@ -111,7 +117,8 @@ fn fixture_body(
         fixture_right_rail(fixtures, selected_object_key, dispatch),
     ))
     .style(|s| {
-        s.flex_grow(1.0)
+        s.width_full()
+            .flex_grow(1.0)
             .height_full()
             .min_width(0.0)
             .min_height(0.0)

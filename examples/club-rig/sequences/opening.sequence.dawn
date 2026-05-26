@@ -4,12 +4,12 @@ opening:
   frame_rate: 60
   audio: opening.wav
   effects:
-  - id: 4
-    start: 0ms
-    duration: 45000ms
+  - id: 3
+    start: 7250ms
+    duration: 12950ms
     target:
       type: fixture
-      id: 7
+      id: 1
     params:
       base:
         type: color
@@ -27,8 +27,8 @@ opening:
     script:
       import: ../effects/pulse.effect.dawn
   - id: 1
-    start: 6390ms
-    duration: 15550ms
+    start: 21140ms
+    duration: 8250ms
     target:
       type: fixture
       id: 4
@@ -48,6 +48,33 @@ opening:
           import: ../curves/fade-in.curve.dawn::fade_in
     script:
       import: ../effects/pulse.effect.dawn
+  - id: 2
+    start: 27500ms
+    duration: 9800ms
+    target:
+      type: fixture
+      id: 11
+    params:
+      base:
+        type: color
+        value: '#2244ff'
+      accent:
+        type: color
+        value: '#ffcc66'
+      speed:
+        type: float
+        value: 0.75
+      fade:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script:
+      import: //?/C:/Users/eddie/dawn/examples/club-rig/effects/pulse.effect.dawn
   automation_clips:
   - id: 101
     start: 0ms
