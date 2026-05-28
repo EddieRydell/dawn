@@ -28,7 +28,7 @@ use floem_renderer::Renderer;
 
 use crate::actions::AppAction;
 use crate::ui::components::dropdown_menu::{DropdownMenuController, DropdownMenuEntry};
-use crate::ui::components::{ui_button, ui_static_label, ui_text_input};
+use crate::ui::components::{ui_button, ui_label, ui_static_label, ui_text_input};
 use crate::ui::editor::gui::EditorGuiUiState;
 use crate::ui::theme;
 
@@ -108,6 +108,7 @@ pub fn sequence_viewer(
                 playback_clock,
                 dropdown_menu,
                 Rc::clone(&dispatch),
+                state.sequence_playhead_home_ms,
             )
             .style(|s| {
                 s.flex_grow(1.0)
@@ -173,6 +174,7 @@ fn sequence_header(
     let stop = Rc::clone(&dispatch);
     let solo = Rc::clone(&dispatch);
     let sequence_duration_ms = document.duration_ms;
+    let solo_snapshot = snapshot;
     h_stack((
         ui_static_label("Sequence").style(|s| s.font_bold()),
         ui_static_label(format!(
@@ -186,70 +188,71 @@ fn sequence_header(
                 .set(Foreground, Brush::Solid(theme::color(theme::MUTED)))
         }),
         empty().style(|s| s.flex_grow(1.0).min_width(0.0)),
+        ui_label(move || {
+            let clock = playback_clock.get();
+            format!(
+                "{} / {}",
+                format_time(clock.sequence_playhead_ms),
+                format_time(sequence_duration_ms)
+            )
+        })
+        .style(|s| {
+            s.font_size(theme::FONT_SMALL)
+                .color(theme::color(theme::MUTED))
+                .set(Foreground, Brush::Solid(theme::color(theme::MUTED)))
+        }),
+        ui_button("Open Preview").action({
+            let open_preview = Rc::clone(&open_preview);
+            move || open_preview(AppAction::OpenPreviewWindow)
+        }),
+        ui_button(ui_label(move || {
+            if playback_clock.get().is_playing {
+                "Pause"
+            } else {
+                "Play"
+            }
+        }))
+        .action({
+            let play = Rc::clone(&play);
+            let pause = Rc::clone(&pause);
+            move || {
+                if playback_clock.get_untracked().is_playing {
+                    pause(AppAction::Pause);
+                } else {
+                    play(AppAction::Play);
+                }
+            }
+        }),
+        ui_button("Stop").action({
+            let stop = Rc::clone(&stop);
+            move || stop(AppAction::Stop)
+        }),
         dyn_container(
             move || {
-                let state = snapshot.get_untracked();
-                let clock = playback_clock.get();
-                (
-                    clock.is_playing,
-                    clock.sequence_playhead_ms,
-                    state.solo_selected_clip,
-                    state.selected_sequence_effect,
-                )
+                let state = solo_snapshot.get();
+                (state.solo_selected_clip, state.selected_sequence_effect)
             },
-            move |(is_playing, playhead_ms, solo_selected_clip, selected_effect)| {
-                h_stack((
-                    ui_static_label(format!(
-                        "{} / {}",
-                        format_time(playhead_ms),
-                        format_time(sequence_duration_ms)
-                    ))
-                    .style(|s| {
-                        s.font_size(theme::FONT_SMALL)
-                            .color(theme::color(theme::MUTED))
-                            .set(Foreground, Brush::Solid(theme::color(theme::MUTED)))
-                    }),
-                    ui_button("Open Preview").action({
-                        let open_preview = Rc::clone(&open_preview);
-                        move || open_preview(AppAction::OpenPreviewWindow)
-                    }),
-                    ui_button(if is_playing { "Pause" } else { "Play" }).action({
-                        let play = Rc::clone(&play);
-                        let pause = Rc::clone(&pause);
+            move |(solo_selected_clip, selected_effect)| {
+                ui_button("Solo Selected")
+                    .action({
+                        let solo = Rc::clone(&solo);
                         move || {
-                            if is_playing {
-                                pause(AppAction::Pause);
-                            } else {
-                                play(AppAction::Play);
+                            if selected_effect.is_some() {
+                                solo(AppAction::ToggleSoloSelected);
                             }
                         }
-                    }),
-                    ui_button("Stop").action({
-                        let stop = Rc::clone(&stop);
-                        move || stop(AppAction::Stop)
-                    }),
-                    ui_button("Solo Selected")
-                        .action({
-                            let solo = Rc::clone(&solo);
-                            move || {
-                                if selected_effect.is_some() {
-                                    solo(AppAction::ToggleSoloSelected);
-                                }
-                            }
-                        })
-                        .style(move |s| {
-                            if solo_selected_clip {
-                                s.background(theme::color(theme::SURFACE_CONTROL_ACTIVE))
-                            } else if selected_effect.is_none() {
-                                s.background(theme::color(theme::SURFACE_CONTROL_DISABLED))
-                                    .color(theme::color(theme::TEXT_DISABLED))
-                            } else {
-                                s
-                            }
-                        }),
-                ))
-                .style(|s| s.items_center().gap(theme::SPACE_6))
-                .into_any()
+                    })
+                    .style(move |s| {
+                        if solo_selected_clip {
+                            s.background(theme::color(theme::SURFACE_CONTROL_ACTIVE))
+                        } else if selected_effect.is_none() {
+                            s.background(theme::color(theme::SURFACE_CONTROL_DISABLED))
+                                .color(theme::color(theme::TEXT_DISABLED))
+                        } else {
+                            s
+                        }
+                    })
+                    .into_any()
             },
         ),
     ))
@@ -435,6 +438,7 @@ enum SequenceTimelineUpdate {
         selected_effect: Option<u32>,
     },
     Playhead(u64),
+    PlayheadHome(u64),
     RasterBatch(Vec<RasterImageResult>),
 }
 
@@ -461,6 +465,7 @@ struct SequenceTimeline {
     analysis: Option<ProjectAnalysis>,
     selected_effect: Option<u32>,
     playhead_ms: u64,
+    playhead_home_ms: u64,
     cache_key: SequenceTimelineCacheKey,
     state: SequenceTimelineState,
     viewport: TimelineViewport,
@@ -480,6 +485,7 @@ impl SequenceTimeline {
         playback_clock: crate::ui::UiPlaybackClock,
         dropdown_menu: DropdownMenuController,
         dispatch: crate::ui::UiDispatch,
+        playhead_home_ms: u64,
     ) -> Self {
         let id = ViewId::new();
         let update_document = document.clone();
@@ -501,6 +507,11 @@ impl SequenceTimeline {
             ));
         });
         create_effect(move |_| {
+            id.update_state(SequenceTimelineUpdate::PlayheadHome(
+                playback_clock.get().sequence_playhead_home_ms,
+            ));
+        });
+        create_effect(move |_| {
             if focus_state.keyboard_focused() {
                 id.request_focus();
             }
@@ -513,6 +524,7 @@ impl SequenceTimeline {
             analysis,
             selected_effect,
             playhead_ms,
+            playhead_home_ms,
             cache_key,
             state,
             viewport: TimelineViewport::default(),
@@ -577,6 +589,9 @@ impl View for SequenceTimeline {
                 }
                 SequenceTimelineUpdate::Playhead(playhead_ms) => {
                     self.playhead_ms = playhead_ms;
+                }
+                SequenceTimelineUpdate::PlayheadHome(playhead_home_ms) => {
+                    self.playhead_home_ms = playhead_home_ms;
                 }
                 SequenceTimelineUpdate::RasterBatch(results) => {
                     let mut installed = false;
@@ -682,6 +697,7 @@ impl View for SequenceTimeline {
         self.paint_ruler(cx);
         self.paint_lanes(cx);
         self.paint_clips(cx);
+        self.paint_playhead_home(cx);
         self.paint_drag_preview(cx);
         self.paint_playhead(cx);
     }
@@ -1312,7 +1328,29 @@ impl SequenceTimeline {
         }
         cx.stroke(
             &floem::kurbo::Line::new(Point::new(x, 0.0), Point::new(x, self.viewport.size.height)),
-            &Brush::Solid(Color::rgb8(255, 202, 97)),
+            &Brush::Solid(PLAYHEAD_MARKER),
+            &Stroke::new(2.0),
+        );
+    }
+
+    fn paint_playhead_home(&self, cx: &mut PaintCx) {
+        let state = self.state.data.borrow();
+        let x =
+            LANE_LABEL_WIDTH + self.playhead_home_ms as f64 * state.pixels_per_ms - state.scroll_x;
+        if x < LANE_LABEL_WIDTH || x > self.viewport.size.width {
+            return;
+        }
+        cx.stroke(
+            &floem::kurbo::Line::new(
+                Point::new(x, RULER_HEIGHT),
+                Point::new(x, self.viewport.size.height),
+            ),
+            &Brush::Solid(PLAYHEAD_HOME_MARKER),
+            &Stroke::new(4.0),
+        );
+        cx.stroke(
+            &floem::kurbo::Line::new(Point::new(x, 0.0), Point::new(x, RULER_HEIGHT)),
+            &Brush::Solid(PLAYHEAD_HOME_MARKER),
             &Stroke::new(2.0),
         );
     }
@@ -1518,6 +1556,8 @@ const SELECTED_CLIP_HIGHLIGHT: Color = Color::rgba8(255, 255, 255, 28);
 const RESIZE_GRIP: Color = Color::rgba8(248, 250, 252, 150);
 const ACTIVE_RESIZE_GRIP: Color = Color::rgba8(255, 255, 255, 230);
 const CLIP_FALLBACK_FILL: Color = Color::rgb8(50, 54, 60);
+const PLAYHEAD_HOME_MARKER: Color = Color::rgba8(255, 202, 97, 95);
+const PLAYHEAD_MARKER: Color = Color::rgb8(255, 202, 97);
 const MAX_RASTER_IMAGE_WIDTH: usize = 50;
 
 fn timeline_profile_enabled() -> bool {

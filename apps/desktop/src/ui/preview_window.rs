@@ -206,6 +206,7 @@ impl PreviewCanvas {
                 snapshot.playback.is_playing = clock.is_playing;
                 snapshot.playback.time_ms = clock.time_ms;
                 snapshot.sequence_playhead_ms = clock.sequence_playhead_ms;
+                snapshot.sequence_playhead_home_ms = clock.sequence_playhead_home_ms;
             }
             id.update_state(PreviewCanvasUpdate::Frame(preview_frame(
                 &snapshot_for_clock.borrow(),

@@ -30,6 +30,7 @@ pub struct PlaybackClock {
     pub is_playing: bool,
     pub time_ms: u64,
     pub sequence_playhead_ms: u64,
+    pub sequence_playhead_home_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +97,7 @@ pub struct AppModel {
     pub selected_sequence_effect: Option<u32>,
     pub solo_selected_clip: bool,
     pub sequence_playheads: HashMap<Utf8PathBuf, u64>,
+    pub sequence_playhead_homes: HashMap<Utf8PathBuf, u64>,
     pub preview_rig: PreviewRigKind,
     pub status: String,
 }
@@ -121,6 +123,7 @@ pub struct AppSnapshot {
     pub selected_sequence_effect: Option<u32>,
     pub solo_selected_clip: bool,
     pub sequence_playhead_ms: u64,
+    pub sequence_playhead_home_ms: u64,
     pub preview_rig: PreviewRigKind,
     pub status: String,
 }
@@ -183,6 +186,7 @@ impl Default for AppModel {
             selected_sequence_effect: None,
             solo_selected_clip: false,
             sequence_playheads: HashMap::new(),
+            sequence_playhead_homes: HashMap::new(),
             preview_rig: PreviewRigKind::Strand,
             status: "No project open".to_string(),
         };
@@ -208,6 +212,10 @@ impl AppModel {
             .as_ref()
             .and_then(|path| self.sequence_playheads.get(path).copied())
             .unwrap_or_default();
+        let sequence_playhead_home_ms = active_file
+            .as_ref()
+            .and_then(|path| self.sequence_playhead_homes.get(path).copied())
+            .unwrap_or_default();
         AppSnapshot {
             project_root: self.project_root.clone(),
             project_entries: self.project_entries.clone(),
@@ -228,6 +236,7 @@ impl AppModel {
             selected_sequence_effect: self.selected_sequence_effect,
             solo_selected_clip: self.solo_selected_clip,
             sequence_playhead_ms,
+            sequence_playhead_home_ms,
             preview_rig: self.preview_rig,
             status: self.status.clone(),
         }
@@ -238,6 +247,7 @@ impl AppModel {
             is_playing: self.playback.is_playing,
             time_ms: self.playback.time_ms,
             sequence_playhead_ms: self.current_sequence_playhead_ms(),
+            sequence_playhead_home_ms: self.current_sequence_playhead_home_ms(),
         }
     }
 
@@ -266,6 +276,7 @@ impl AppModel {
                 self.selected_sequence_effect = None;
                 self.solo_selected_clip = false;
                 self.sequence_playheads.clear();
+                self.sequence_playhead_homes.clear();
                 self.playback = PlaybackState::default();
                 self.preview_rig = PreviewRigKind::Strand;
                 self.pending_layout_fixture_import = None;
@@ -766,14 +777,10 @@ impl AppModel {
                 self.edit_active_sequence(SequenceDocumentEdit::RetargetEffect { id, target })?;
             }
             AppAction::SetSequencePlayhead { time_ms } => {
-                if let Some(path) = self.editors.active_file().cloned() {
-                    let duration_ms = self
-                        .snapshot()
-                        .active_sequence_document
-                        .map(|document| document.duration_ms)
-                        .unwrap_or(time_ms);
-                    self.sequence_playheads
-                        .insert(path, time_ms.min(duration_ms));
+                if self.active_sequence_document.is_some() {
+                    let playhead_ms = self.set_current_sequence_playhead_ms(time_ms);
+                    self.set_current_sequence_playhead_home_ms(playhead_ms);
+                    self.playback.time_ms = self.current_playback_time_for_source();
                     self.status = "Sequence playhead moved".to_string();
                 }
             }
@@ -826,8 +833,13 @@ impl AppModel {
             AppAction::Pause => self.playback.is_playing = false,
             AppAction::Stop => {
                 self.playback.is_playing = false;
-                self.playback.time_ms = 0;
-                self.set_current_sequence_playhead_ms(0);
+                if self.active_sequence_document.is_some() {
+                    let home_ms = self.current_sequence_playhead_home_ms();
+                    self.set_current_sequence_playhead_ms(home_ms);
+                    self.playback.time_ms = self.current_playback_time_for_source();
+                } else {
+                    self.playback.time_ms = 0;
+                }
             }
             AppAction::TickPlayback { delta_ms } => {
                 if !self.playback.is_playing {
@@ -897,6 +909,7 @@ impl AppModel {
         self.selected_sequence_effect = None;
         self.solo_selected_clip = false;
         self.sequence_playheads.clear();
+        self.sequence_playhead_homes.clear();
         self.playback = PlaybackState::default();
         self.preview_rig = PreviewRigKind::Strand;
         self.pending_layout_fixture_import = None;
@@ -1211,6 +1224,13 @@ impl AppModel {
             .unwrap_or(self.playback.time_ms)
     }
 
+    fn current_sequence_playhead_home_ms(&self) -> u64 {
+        self.editors
+            .active_file()
+            .and_then(|path| self.sequence_playhead_homes.get(path).copied())
+            .unwrap_or_default()
+    }
+
     fn current_playback_time_for_source(&self) -> u64 {
         if !self.solo_selected_clip {
             return self.current_sequence_playhead_ms();
@@ -1232,7 +1252,25 @@ impl AppModel {
             .unwrap_or(playhead_ms)
     }
 
-    fn set_current_sequence_playhead_ms(&mut self, time_ms: u64) {
+    fn set_current_sequence_playhead_ms(&mut self, time_ms: u64) -> u64 {
+        let Some(path) = self.editors.active_file().cloned() else {
+            return time_ms;
+        };
+        if self.active_sequence_document.is_some() {
+            let duration_ms = self
+                .active_sequence_document
+                .as_ref()
+                .map(|document| document.duration_ms)
+                .unwrap_or(time_ms);
+            let playhead_ms = time_ms.min(duration_ms);
+            self.sequence_playheads.insert(path, playhead_ms);
+            playhead_ms
+        } else {
+            time_ms
+        }
+    }
+
+    fn set_current_sequence_playhead_home_ms(&mut self, time_ms: u64) {
         let Some(path) = self.editors.active_file().cloned() else {
             return;
         };
@@ -1242,7 +1280,7 @@ impl AppModel {
                 .as_ref()
                 .map(|document| document.duration_ms)
                 .unwrap_or(time_ms);
-            self.sequence_playheads
+            self.sequence_playhead_homes
                 .insert(path, time_ms.min(duration_ms));
         }
     }
