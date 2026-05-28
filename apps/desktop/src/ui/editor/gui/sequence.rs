@@ -14,17 +14,18 @@ use dawn_project::document::{
 use dawn_project::effect_script::{FixtureContext, PixelContext, RuntimeValue};
 use dawn_project::model::{EffectParam, Resolved};
 use floem::context::{ComputeLayoutCx, EventCx, PaintCx, UpdateCx};
-use floem::event::{Event, EventPropagation};
+use floem::event::{Event, EventListener, EventPropagation};
 use floem::ext_event::create_ext_action;
 use floem::keyboard::{Key, Modifiers, NamedKey};
 use floem::kurbo::{Point, Rect, Size, Stroke};
 use floem::peniko::{Blob, Brush, Color, Format, Image};
 use floem::prelude::*;
 use floem::reactive::{create_effect, Scope};
-use floem::style::Foreground;
+use floem::style::{Foreground, Style};
 use floem::text::{Attrs, AttrsList, FamilyOwned, TextLayout};
 use floem::{View, ViewId};
 use floem_renderer::Renderer;
+use lucide_floem::{Icon, StrokeWidth};
 
 use crate::actions::AppAction;
 use crate::ui::components::dropdown_menu::{DropdownMenuController, DropdownMenuEntry};
@@ -95,8 +96,9 @@ pub fn sequence_viewer(
     let timeline_state = gui_state.sequence_timeline(&document.path, &document.object_key);
     let state = snapshot.get_untracked();
     let selected_effect = state.selected_sequence_effect;
+    let key_dispatch = Rc::clone(&dispatch);
     v_stack((
-        sequence_header(&document, snapshot, playback_clock, Rc::clone(&dispatch)),
+        sequence_header(&document, playback_clock, Rc::clone(&dispatch)),
         h_stack((
             SequenceTimeline::new(
                 document.clone(),
@@ -154,12 +156,22 @@ pub fn sequence_viewer(
             .gap(theme::SPACE_8)
             .background(theme::color(theme::SURFACE))
     })
+    .on_event(EventListener::KeyDown, move |event| {
+        if let Event::KeyDown(event) = event {
+            if let Some(action) =
+                sequence_transport_key_action(&event.key.logical_key, event.modifiers)
+            {
+                key_dispatch(action);
+                return EventPropagation::Stop;
+            }
+        }
+        EventPropagation::Continue
+    })
     .into_any()
 }
 
 fn sequence_header(
     document: &SequenceDocument,
-    snapshot: crate::ui::UiSnapshot,
     playback_clock: crate::ui::UiPlaybackClock,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
@@ -168,26 +180,93 @@ fn sequence_header(
     } else {
         "Layout lanes"
     };
-    let open_preview = Rc::clone(&dispatch);
+    let beginning = Rc::clone(&dispatch);
     let play = Rc::clone(&dispatch);
     let pause = Rc::clone(&dispatch);
     let stop = Rc::clone(&dispatch);
-    let solo = Rc::clone(&dispatch);
     let sequence_duration_ms = document.duration_ms;
-    let solo_snapshot = snapshot;
     h_stack((
-        ui_static_label("Sequence").style(|s| s.font_bold()),
-        ui_static_label(format!(
-            "{}  {}  {} fps",
-            document.object_key,
-            format_time(document.duration_ms),
-            document.frame_rate
-        )),
-        ui_static_label(degraded).style(|s| {
-            s.color(theme::color(theme::MUTED))
-                .set(Foreground, Brush::Solid(theme::color(theme::MUTED)))
+        transport_icon_button(Icon::SkipBack)
+            .on_click_stop({
+                let beginning = Rc::clone(&beginning);
+                move |event| {
+                    beginning(transport_button_click_action(
+                        event,
+                        AppAction::GoToSequenceBeginning,
+                    ))
+                }
+            })
+            .on_event_stop(EventListener::KeyDown, {
+                let beginning = Rc::clone(&beginning);
+                move |event| {
+                    if let Event::KeyDown(event) = event {
+                        if let Some(action) = sequence_non_space_transport_key_action(
+                            &event.key.logical_key,
+                            event.modifiers,
+                        ) {
+                            beginning(action);
+                        }
+                    }
+                }
+            })
+            .tooltip(|| tooltip_label("Go to beginning")),
+        ui_button(dyn_container(
+            move || playback_clock.get().is_playing,
+            move |is_playing| {
+                transport_icon(if is_playing { Icon::Pause } else { Icon::Play }).into_any()
+            },
+        ))
+        .action({
+            let play = Rc::clone(&play);
+            let pause = Rc::clone(&pause);
+            move || {
+                if playback_clock.get_untracked().is_playing {
+                    pause(AppAction::Pause);
+                } else {
+                    play(AppAction::Play);
+                }
+            }
+        })
+        .style(transport_button_style)
+        .on_event_stop(EventListener::KeyDown, {
+            let play = Rc::clone(&play);
+            move |event| {
+                if let Event::KeyDown(event) = event {
+                    if let Some(action) = sequence_non_space_transport_key_action(
+                        &event.key.logical_key,
+                        event.modifiers,
+                    ) {
+                        play(action);
+                    }
+                }
+            }
+        })
+        .tooltip(move || {
+            tooltip_label(if playback_clock.get().is_playing {
+                "Pause"
+            } else {
+                "Play"
+            })
         }),
-        empty().style(|s| s.flex_grow(1.0).min_width(0.0)),
+        transport_icon_button(Icon::CircleStop)
+            .on_click_stop({
+                let stop = Rc::clone(&stop);
+                move |event| stop(transport_button_click_action(event, AppAction::Stop))
+            })
+            .on_event_stop(EventListener::KeyDown, {
+                let stop = Rc::clone(&stop);
+                move |event| {
+                    if let Event::KeyDown(event) = event {
+                        if let Some(action) = sequence_non_space_transport_key_action(
+                            &event.key.logical_key,
+                            event.modifiers,
+                        ) {
+                            stop(action);
+                        }
+                    }
+                }
+            })
+            .tooltip(|| tooltip_label("Stop")),
         ui_label(move || {
             let clock = playback_clock.get();
             format!(
@@ -201,60 +280,18 @@ fn sequence_header(
                 .color(theme::color(theme::MUTED))
                 .set(Foreground, Brush::Solid(theme::color(theme::MUTED)))
         }),
-        ui_button("Open Preview").action({
-            let open_preview = Rc::clone(&open_preview);
-            move || open_preview(AppAction::OpenPreviewWindow)
+        ui_static_label("Sequence").style(|s| s.font_bold()),
+        ui_static_label(format!(
+            "{}  {}  {} fps",
+            document.object_key,
+            format_time(document.duration_ms),
+            document.frame_rate
+        )),
+        ui_static_label(degraded).style(|s| {
+            s.color(theme::color(theme::MUTED))
+                .set(Foreground, Brush::Solid(theme::color(theme::MUTED)))
         }),
-        ui_button(ui_label(move || {
-            if playback_clock.get().is_playing {
-                "Pause"
-            } else {
-                "Play"
-            }
-        }))
-        .action({
-            let play = Rc::clone(&play);
-            let pause = Rc::clone(&pause);
-            move || {
-                if playback_clock.get_untracked().is_playing {
-                    pause(AppAction::Pause);
-                } else {
-                    play(AppAction::Play);
-                }
-            }
-        }),
-        ui_button("Stop").action({
-            let stop = Rc::clone(&stop);
-            move || stop(AppAction::Stop)
-        }),
-        dyn_container(
-            move || {
-                let state = solo_snapshot.get();
-                (state.solo_selected_clip, state.selected_sequence_effect)
-            },
-            move |(solo_selected_clip, selected_effect)| {
-                ui_button("Solo Selected")
-                    .action({
-                        let solo = Rc::clone(&solo);
-                        move || {
-                            if selected_effect.is_some() {
-                                solo(AppAction::ToggleSoloSelected);
-                            }
-                        }
-                    })
-                    .style(move |s| {
-                        if solo_selected_clip {
-                            s.background(theme::color(theme::SURFACE_CONTROL_ACTIVE))
-                        } else if selected_effect.is_none() {
-                            s.background(theme::color(theme::SURFACE_CONTROL_DISABLED))
-                                .color(theme::color(theme::TEXT_DISABLED))
-                        } else {
-                            s
-                        }
-                    })
-                    .into_any()
-            },
-        ),
+        empty().style(|s| s.flex_grow(1.0).min_width(0.0)),
     ))
     .style(|s| {
         s.width_full()
@@ -263,6 +300,34 @@ fn sequence_header(
             .padding_bottom(theme::SPACE_4)
             .border_bottom(theme::BORDER_WIDTH)
             .border_color(theme::color(theme::BORDER))
+    })
+}
+
+fn transport_icon_button(icon: Icon) -> floem::views::Button {
+    ui_button(transport_icon(icon)).style(transport_button_style)
+}
+
+fn transport_icon(icon: Icon) -> impl IntoView {
+    icon.style(|s| {
+        s.size(15.0, 15.0)
+            .set(StrokeWidth, 2.0)
+            .color(theme::color(theme::TEXT))
+            .set(Foreground, Brush::Solid(theme::color(theme::TEXT)))
+    })
+}
+
+fn transport_button_style(s: Style) -> Style {
+    s.size(30.0, 30.0).padding_horiz(0.0).padding_vert(0.0)
+}
+
+fn tooltip_label(text: &'static str) -> impl IntoView {
+    ui_static_label(text).style(|s| {
+        s.padding_horiz(theme::SPACE_8)
+            .padding_vert(theme::SPACE_4)
+            .border_radius(theme::CONTROL_RADIUS)
+            .background(theme::color(theme::PANEL_DARK))
+            .color(theme::color(theme::TEXT))
+            .set(Foreground, Brush::Solid(theme::color(theme::TEXT)))
     })
 }
 
@@ -1383,6 +1448,10 @@ pub fn sequence_key_action(
     key: &Key,
     modifiers: Modifiers,
 ) -> Option<AppAction> {
+    if let Some(action) = sequence_transport_key_action(key, modifiers) {
+        return Some(action);
+    }
+
     let id = selected_effect?;
     let effect = document.effects.iter().find(|effect| effect.id == id)?;
 
@@ -1437,6 +1506,43 @@ pub fn sequence_key_action(
         }
         _ => None,
     }
+}
+
+fn sequence_transport_key_action(key: &Key, modifiers: Modifiers) -> Option<AppAction> {
+    if modifiers.control() || modifiers.shift() || modifiers.alt() || modifiers.meta() {
+        return None;
+    }
+
+    match key {
+        Key::Named(NamedKey::Space) => Some(AppAction::TogglePlayback),
+        Key::Named(NamedKey::Escape) => Some(AppAction::Stop),
+        Key::Named(NamedKey::Home) => Some(AppAction::GoToSequenceBeginning),
+        _ => None,
+    }
+}
+
+fn sequence_non_space_transport_key_action(key: &Key, modifiers: Modifiers) -> Option<AppAction> {
+    if modifiers.control() || modifiers.shift() || modifiers.alt() || modifiers.meta() {
+        return None;
+    }
+
+    match key {
+        Key::Named(NamedKey::Escape) => Some(AppAction::Stop),
+        Key::Named(NamedKey::Home) => Some(AppAction::GoToSequenceBeginning),
+        _ => None,
+    }
+}
+
+fn transport_button_click_action(event: &Event, fallback: AppAction) -> AppAction {
+    if let Event::KeyDown(event) = event {
+        if event.modifiers.is_empty()
+            && matches!(event.key.logical_key, Key::Named(NamedKey::Space))
+        {
+            return AppAction::TogglePlayback;
+        }
+    }
+
+    fallback
 }
 
 #[derive(Debug, Clone, Copy)]

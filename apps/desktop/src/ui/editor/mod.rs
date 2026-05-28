@@ -614,7 +614,6 @@ fn effect_script_header(
         count => format!("{count} script diagnostics"),
     };
 
-    let open_preview = Rc::clone(&dispatch);
     v_stack((
         h_stack((
             ui_static_label(status).style(move |s| {
@@ -639,9 +638,6 @@ fn effect_script_header(
             effect_rig_button(PreviewRigKind::VerticalStrand, Rc::clone(&dispatch)),
             effect_rig_button(PreviewRigKind::Circle, Rc::clone(&dispatch)),
             effect_rig_button(PreviewRigKind::Grid, Rc::clone(&dispatch)),
-            crate::ui::components::ui_button("Open Preview").action(move || {
-                open_preview(AppAction::OpenPreviewWindow);
-            }),
         ))
         .style(|s| s.items_center().gap(theme::SPACE_8)),
         ui_static_label(params).style(|s| {

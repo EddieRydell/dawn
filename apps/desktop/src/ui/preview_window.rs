@@ -120,13 +120,6 @@ fn preview_content(
 
 fn preview_label(snapshot: &crate::app_model::AppSnapshot) -> String {
     if let Some(document) = snapshot.active_sequence_document.as_ref() {
-        if snapshot.solo_selected_clip {
-            return snapshot
-                .selected_sequence_effect
-                .and_then(|id| document.effects.iter().find(|effect| effect.id == id))
-                .map(|effect| format!("Solo clip {}  {}", effect.id, effect.script))
-                .unwrap_or_else(|| "Solo selected clip".to_string());
-        }
         return format!("Sequence {}", document.object_key);
     }
     if let Some(path) = snapshot.active_file.as_ref().filter(|path| {
@@ -156,11 +149,7 @@ fn preview_header_status(
         .map(|document| document.duration_ms)
         .unwrap_or(crate::output_runtime::EFFECT_PREVIEW_LOOP_MS);
     let mode = if snapshot.active_sequence_document.is_some() {
-        if snapshot.solo_selected_clip {
-            "Solo"
-        } else {
-            "Sequence"
-        }
+        "Sequence"
     } else if snapshot
         .active_file
         .as_ref()

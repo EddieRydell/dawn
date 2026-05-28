@@ -38,7 +38,6 @@ pub struct OutputSourceMetadata {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputSourceKind {
     Sequence,
-    SoloClip,
     EffectScript,
     Empty,
 }
@@ -68,7 +67,6 @@ pub struct OutputPixelFrame {
 pub enum OutputPreviewSource {
     Sequence {
         document: SequenceDocument,
-        solo_effect_id: Option<u32>,
     },
     EffectScript {
         path: Utf8PathBuf,
@@ -105,13 +103,9 @@ impl InProcessOutputRuntime {
         };
 
         match source {
-            OutputPreviewSource::Sequence {
-                document,
-                solo_effect_id,
-            } => evaluate_sequence_frame(
+            OutputPreviewSource::Sequence { document } => evaluate_sequence_frame(
                 analysis,
                 &document,
-                solo_effect_id,
                 snapshot.sequence_playhead_ms,
                 self.generation,
             ),
@@ -129,13 +123,7 @@ impl InProcessOutputRuntime {
 impl OutputPreviewSource {
     pub fn from_snapshot(snapshot: &AppSnapshot) -> Option<Self> {
         if let Some(document) = snapshot.active_sequence_document.clone() {
-            return Some(Self::Sequence {
-                document,
-                solo_effect_id: snapshot
-                    .solo_selected_clip
-                    .then_some(snapshot.selected_sequence_effect)
-                    .flatten(),
-            });
+            return Some(Self::Sequence { document });
         }
         active_effect_script_path(snapshot).map(|path| Self::EffectScript {
             path,
@@ -147,7 +135,6 @@ impl OutputPreviewSource {
 fn evaluate_sequence_frame(
     analysis: &ProjectAnalysis,
     document: &SequenceDocument,
-    solo_effect_id: Option<u32>,
     time_ms: u64,
     generation: u64,
 ) -> OutputFrame {
@@ -179,21 +166,10 @@ fn evaluate_sequence_frame(
 
     let mut status = OutputFrameStatus::Live;
     for effect in &document.effects {
-        if let Some(solo_effect_id) = solo_effect_id {
-            if effect.id != solo_effect_id {
-                continue;
-            }
-        }
         let Some(render) = &effect.render else {
             continue;
         };
-        let local_ms = if solo_effect_id == Some(effect.id) {
-            if effect.duration_ms == 0 {
-                0
-            } else {
-                time_ms.saturating_sub(effect.start_ms) % effect.duration_ms
-            }
-        } else if time_ms < effect.start_ms
+        let local_ms = if time_ms < effect.start_ms
             || time_ms >= effect.start_ms.saturating_add(effect.duration_ms)
         {
             continue;
@@ -231,33 +207,11 @@ fn evaluate_sequence_frame(
         }
     }
 
-    let (kind, label, duration_ms) = if let Some(effect_id) = solo_effect_id {
-        let label = document
-            .effects
-            .iter()
-            .find(|effect| effect.id == effect_id)
-            .map(|effect| format!("Solo clip {}  {}", effect.id, effect.script))
-            .unwrap_or_else(|| "Solo selected clip".to_string());
-        let duration_ms = document
-            .effects
-            .iter()
-            .find(|effect| effect.id == effect_id)
-            .map(|effect| effect.duration_ms)
-            .unwrap_or(document.duration_ms);
-        (OutputSourceKind::SoloClip, label, duration_ms)
-    } else {
-        (
-            OutputSourceKind::Sequence,
-            format!("Sequence {}", document.object_key),
-            document.duration_ms,
-        )
-    };
-
     OutputFrame {
         source: OutputSourceMetadata {
-            label,
-            kind,
-            duration_ms,
+            label: format!("Sequence {}", document.object_key),
+            kind: OutputSourceKind::Sequence,
+            duration_ms: document.duration_ms,
             fps: document.frame_rate,
         },
         time_ms,

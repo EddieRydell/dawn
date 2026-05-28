@@ -95,7 +95,6 @@ pub struct AppModel {
     pub selected_fixture_definitions: HashMap<Utf8PathBuf, String>,
     pub selected_preview_fixture: Option<FixtureId>,
     pub selected_sequence_effect: Option<u32>,
-    pub solo_selected_clip: bool,
     pub sequence_playheads: HashMap<Utf8PathBuf, u64>,
     pub sequence_playhead_homes: HashMap<Utf8PathBuf, u64>,
     pub preview_rig: PreviewRigKind,
@@ -121,7 +120,6 @@ pub struct AppSnapshot {
     pub pending_layout_fixture_name: Option<PendingLayoutFixtureName>,
     pub selected_preview_fixture: Option<FixtureId>,
     pub selected_sequence_effect: Option<u32>,
-    pub solo_selected_clip: bool,
     pub sequence_playhead_ms: u64,
     pub sequence_playhead_home_ms: u64,
     pub preview_rig: PreviewRigKind,
@@ -184,7 +182,6 @@ impl Default for AppModel {
             selected_fixture_definitions: HashMap::new(),
             selected_preview_fixture: None,
             selected_sequence_effect: None,
-            solo_selected_clip: false,
             sequence_playheads: HashMap::new(),
             sequence_playhead_homes: HashMap::new(),
             preview_rig: PreviewRigKind::Strand,
@@ -234,7 +231,6 @@ impl AppModel {
             pending_layout_fixture_name: self.pending_layout_fixture_name.clone(),
             selected_preview_fixture: self.selected_preview_fixture,
             selected_sequence_effect: self.selected_sequence_effect,
-            solo_selected_clip: self.solo_selected_clip,
             sequence_playhead_ms,
             sequence_playhead_home_ms,
             preview_rig: self.preview_rig,
@@ -274,7 +270,6 @@ impl AppModel {
                 self.selected_fixture_definitions.clear();
                 self.selected_preview_fixture = None;
                 self.selected_sequence_effect = None;
-                self.solo_selected_clip = false;
                 self.sequence_playheads.clear();
                 self.sequence_playhead_homes.clear();
                 self.playback = PlaybackState::default();
@@ -301,7 +296,6 @@ impl AppModel {
                 self.pending_layout_fixture_import = None;
                 self.pending_layout_fixture_name = None;
                 self.selected_sequence_effect = None;
-                self.solo_selected_clip = false;
                 let text = self.workspace.read_file(path.clone())?;
                 self.editors.open_file(path, text);
                 self.refresh_analysis()?;
@@ -312,7 +306,6 @@ impl AppModel {
                 self.pending_layout_fixture_import = None;
                 self.pending_layout_fixture_name = None;
                 self.selected_sequence_effect = None;
-                self.solo_selected_clip = false;
                 self.editors.close_file(&path);
                 self.refresh_analysis()?;
                 self.refresh_active_documents()?;
@@ -325,7 +318,6 @@ impl AppModel {
                 self.editors.set_active_file(path);
                 if active_changed {
                     self.selected_sequence_effect = None;
-                    self.solo_selected_clip = false;
                     self.refresh_active_documents()?;
                     self.persist_workbench_layout()?;
                 }
@@ -723,9 +715,6 @@ impl AppModel {
             }
             AppAction::SelectSequenceEffect { id } => {
                 self.selected_sequence_effect = id;
-                if id.is_none() {
-                    self.solo_selected_clip = false;
-                }
                 self.status = id
                     .map(|id| format!("Selected sequence effect {id}"))
                     .unwrap_or_else(|| "Sequence selection cleared".to_string());
@@ -748,7 +737,6 @@ impl AppModel {
                 self.edit_active_sequence(SequenceDocumentEdit::DeleteEffect { id })?;
                 if self.selected_sequence_effect == Some(id) {
                     self.selected_sequence_effect = None;
-                    self.solo_selected_clip = false;
                 }
             }
             AppAction::MoveSequenceEffect {
@@ -780,7 +768,7 @@ impl AppModel {
                 if self.active_sequence_document.is_some() {
                     let playhead_ms = self.set_current_sequence_playhead_ms(time_ms);
                     self.set_current_sequence_playhead_home_ms(playhead_ms);
-                    self.playback.time_ms = self.current_playback_time_for_source();
+                    self.playback.time_ms = self.current_sequence_playhead_ms();
                     self.status = "Sequence playhead moved".to_string();
                 }
             }
@@ -816,18 +804,25 @@ impl AppModel {
                 save_workbench_layout(&self.workbench_layout)?;
                 return Ok(DispatchOutcome::NoSnapshotChange);
             }
-            AppAction::ToggleSoloSelected => {
-                self.solo_selected_clip =
-                    !self.solo_selected_clip && self.selected_sequence_effect.is_some();
-                self.playback.time_ms = self.current_playback_time_for_source();
-                self.status = if self.solo_selected_clip {
-                    "Solo selected clip enabled".to_string()
+            AppAction::GoToSequenceBeginning => {
+                if self.active_sequence_document.is_some() {
+                    self.playback.is_playing = false;
+                    self.set_current_sequence_playhead_ms(0);
+                    self.set_current_sequence_playhead_home_ms(0);
+                    self.playback.time_ms = 0;
+                    self.status = "Sequence returned to beginning".to_string();
+                }
+            }
+            AppAction::TogglePlayback => {
+                if self.playback.is_playing {
+                    self.playback.is_playing = false;
                 } else {
-                    "Full sequence preview enabled".to_string()
-                };
+                    self.playback.time_ms = self.current_sequence_playhead_ms();
+                    self.playback.is_playing = true;
+                }
             }
             AppAction::Play => {
-                self.playback.time_ms = self.current_playback_time_for_source();
+                self.playback.time_ms = self.current_sequence_playhead_ms();
                 self.playback.is_playing = true;
             }
             AppAction::Pause => self.playback.is_playing = false,
@@ -836,7 +831,7 @@ impl AppModel {
                 if self.active_sequence_document.is_some() {
                     let home_ms = self.current_sequence_playhead_home_ms();
                     self.set_current_sequence_playhead_ms(home_ms);
-                    self.playback.time_ms = self.current_playback_time_for_source();
+                    self.playback.time_ms = self.current_sequence_playhead_ms();
                 } else {
                     self.playback.time_ms = 0;
                 }
@@ -907,7 +902,6 @@ impl AppModel {
         self.selected_fixture_definitions.clear();
         self.selected_preview_fixture = None;
         self.selected_sequence_effect = None;
-        self.solo_selected_clip = false;
         self.sequence_playheads.clear();
         self.sequence_playhead_homes.clear();
         self.playback = PlaybackState::default();
@@ -1231,27 +1225,6 @@ impl AppModel {
             .unwrap_or_default()
     }
 
-    fn current_playback_time_for_source(&self) -> u64 {
-        if !self.solo_selected_clip {
-            return self.current_sequence_playhead_ms();
-        }
-        let playhead_ms = self.current_sequence_playhead_ms();
-        self.selected_sequence_effect
-            .and_then(|id| {
-                self.active_sequence_document
-                    .as_ref()?
-                    .effects
-                    .iter()
-                    .find(|effect| effect.id == id)
-            })
-            .map(|effect| {
-                playhead_ms
-                    .saturating_sub(effect.start_ms)
-                    .min(effect.duration_ms)
-            })
-            .unwrap_or(playhead_ms)
-    }
-
     fn set_current_sequence_playhead_ms(&mut self, time_ms: u64) -> u64 {
         let Some(path) = self.editors.active_file().cloned() else {
             return time_ms;
@@ -1288,19 +1261,7 @@ impl AppModel {
     fn tick_playback(&mut self, delta_ms: u64) {
         let next_time_ms = self.playback.time_ms.saturating_add(delta_ms);
         if let Some(document) = self.active_sequence_document.as_ref() {
-            if self.solo_selected_clip {
-                let selected_effect = self
-                    .selected_sequence_effect
-                    .and_then(|id| document.effects.iter().find(|effect| effect.id == id));
-                let loop_ms = selected_effect
-                    .map(|effect| effect.duration_ms.max(1))
-                    .unwrap_or(document.duration_ms.max(1));
-                self.playback.time_ms = next_time_ms % loop_ms;
-                let playhead_ms = selected_effect
-                    .map(|effect| effect.start_ms.saturating_add(self.playback.time_ms))
-                    .unwrap_or(self.playback.time_ms);
-                self.set_current_sequence_playhead_ms(playhead_ms);
-            } else if next_time_ms >= document.duration_ms {
+            if next_time_ms >= document.duration_ms {
                 self.playback.time_ms = document.duration_ms;
                 self.set_current_sequence_playhead_ms(document.duration_ms);
                 self.playback.is_playing = false;

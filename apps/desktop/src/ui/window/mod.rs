@@ -394,6 +394,7 @@ fn view_menu(
     move || {
         let text = Rc::clone(&dispatch);
         let gui = Rc::clone(&dispatch);
+        let open_preview = Rc::clone(&dispatch);
         let toggle_project_tree = Rc::clone(&dispatch);
         let toggle_inspector = Rc::clone(&dispatch);
         let reset_layout = Rc::clone(&dispatch);
@@ -429,6 +430,10 @@ fn view_menu(
                 },
             ),
             DropdownMenuEntry::separator(),
+            DropdownMenuEntry::item("Open Preview", true, move || {
+                open_preview(AppAction::OpenPreviewWindow);
+            }),
+            DropdownMenuEntry::separator(),
             DropdownMenuEntry::item("Toggle Project Tree", true, move || {
                 toggle_project_tree(AppAction::ToggleProjectTree);
             }),
@@ -447,13 +452,8 @@ fn run_menu(dispatch: crate::ui::UiDispatch) -> impl Fn() -> Vec<DropdownMenuEnt
         let play = Rc::clone(&dispatch);
         let pause = Rc::clone(&dispatch);
         let stop = Rc::clone(&dispatch);
-        let open_preview = Rc::clone(&dispatch);
 
         vec![
-            DropdownMenuEntry::item("Open Preview", true, move || {
-                open_preview(AppAction::OpenPreviewWindow);
-            }),
-            DropdownMenuEntry::separator(),
             DropdownMenuEntry::item("Play", true, move || {
                 play(AppAction::Play);
             }),
