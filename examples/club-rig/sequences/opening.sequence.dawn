@@ -423,11 +423,11 @@ opening:
     script:
       import: ../effects/pulse.effect.dawn
   - id: 1
-    start: 14040ms
+    start: 15891ms
     duration: 8250ms
     target:
       type: fixture
-      id: 4
+      id: 14
     params:
       base:
         type: color
@@ -445,11 +445,11 @@ opening:
     script:
       import: ../effects/pulse.effect.dawn
   - id: 2
-    start: 27500ms
+    start: 17839ms
     duration: 9800ms
     target:
       type: fixture
-      id: 11
+      id: 5
     params:
       base:
         type: color

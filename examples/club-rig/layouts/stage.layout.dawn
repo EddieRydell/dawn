@@ -65,8 +65,8 @@ stage:
       import: ../fixtures/main.fixture.dawn::pixel_bar_50
     transform:
       position:
-        x: -18.28593261660086
-        y: 14.694879809737952
+        x: -6.976275421656197
+        y: 4.145535703529063
         z: 0.0
       rotation:
         x: 0.0
@@ -116,8 +116,8 @@ stage:
       import: ../fixtures/main.fixture.dawn::spot_rgb
     transform:
       position:
-        x: 13.946777611942665
-        y: 1.5320503403316816
+        x: 1.1955679683679925
+        y: 8.409975542017413
         z: 3.0
       rotation:
         x: 0.0
@@ -133,8 +133,8 @@ stage:
       import: ../fixtures/main.fixture.dawn::spot_rgb
     transform:
       position:
-        x: -0.06385474354028697
-        y: 2.74985818862915
+        x: -2.5460131818400855
+        y: 1.257421152942563
         z: 0.0
       rotation:
         x: 0.0
@@ -184,8 +184,8 @@ stage:
       import: ../fixtures/main.fixture.dawn::pixel_bar_50
     transform:
       position:
-        x: -4.877520952052677
-        y: 3.8753305454400824
+        x: 5.133071237756845
+        y: 2.8775971045952793
         z: 0.0
       rotation:
         x: 0.0
@@ -201,8 +201,8 @@ stage:
       import: ../fixtures/main.fixture.dawn::spot_rgb
     transform:
       position:
-        x: 14.785045267985836
-        y: 2.5046123732696848
+        x: 1.9951955951882105
+        y: 3.8570133960730586
         z: 0.0
       rotation:
         x: 0.0
@@ -218,8 +218,8 @@ stage:
       import: ../fixtures/main.fixture.dawn::pixel_bar_50
     transform:
       position:
-        x: 15.577408908623656
-        y: -15.092281204892933
+        x: -2.4800269488510196
+        y: 6.2915244158007635
         z: 0.0
       rotation:
         x: 60.0
@@ -252,8 +252,8 @@ stage:
       import: ../fixtures/main.fixture.dawn::pixel_bar_50
     transform:
       position:
-        x: -12.98626551696331
-        y: -8.414884272042354
+        x: -8.994621801100488
+        y: -1.5720664734203726
         z: 0.0
       rotation:
         x: 0.0
@@ -344,8 +344,8 @@ stage:
       import: ../fixtures/main.fixture.dawn::pixel_bar_50
     transform:
       position:
-        x: 26.321789711404126
-        y: 10.61217353951147
+        x: 4.557827546342541
+        y: 6.335412415372732
         z: 0.0
       rotation:
         x: 0.0

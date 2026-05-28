@@ -1,4 +1,10 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::Rc,
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
 
 use dawn_project::analysis::ProjectAnalysis;
 use dawn_project::document::{
@@ -11,7 +17,7 @@ use floem::context::{ComputeLayoutCx, EventCx, PaintCx, UpdateCx};
 use floem::event::{Event, EventPropagation};
 use floem::keyboard::{Key, Modifiers, NamedKey};
 use floem::kurbo::{Point, Rect, Size, Stroke};
-use floem::peniko::{Brush, Color};
+use floem::peniko::{Blob, Brush, Color, Format, Image};
 use floem::prelude::*;
 use floem::reactive::create_effect;
 use floem::style::Foreground;
@@ -38,7 +44,7 @@ struct SequenceTimelineStateData {
     scroll_y: f64,
     keyboard_focused: bool,
     gesture: Option<TimelineGesture>,
-    raster_cache: HashMap<String, Vec<RasterCell>>,
+    raster_cache: HashMap<String, RasterImage>,
 }
 
 impl SequenceTimelineState {
@@ -633,23 +639,66 @@ impl SequenceTimeline {
         delta_y: f64,
         modifiers: Modifiers,
     ) -> EventPropagation {
-        {
+        let profile = timeline_profile_enabled();
+        let profile_start = Instant::now();
+        let mode = if modifiers.control() && modifiers.shift() {
+            "lane_height"
+        } else if modifiers.control() {
+            "zoom"
+        } else if modifiers.shift() {
+            "scroll_x"
+        } else {
+            "scroll"
+        };
+        let (changed, needs_layout) = {
             let mut state = self.state.data.borrow_mut();
             if modifiers.control() && modifiers.shift() {
+                let previous = state.lane_height;
                 let factor = (-delta_y * 0.0025).exp();
                 state.lane_height = (state.lane_height * factor).clamp(28.0, 96.0);
+                let changed = state.lane_height != previous;
+                (changed, changed)
             } else if modifiers.control() {
+                let previous = state.pixels_per_ms;
                 let factor = (-delta_y * 0.0025).exp();
                 state.pixels_per_ms = (state.pixels_per_ms * factor).clamp(0.002, 1.0);
+                let changed = state.pixels_per_ms != previous;
+                (changed, changed)
             } else if modifiers.shift() {
+                let previous_scroll_x = state.scroll_x;
                 state.scroll_x += delta_y + delta_x;
+                (state.scroll_x != previous_scroll_x, false)
             } else {
+                let previous_scroll_x = state.scroll_x;
+                let previous_scroll_y = state.scroll_y;
                 state.scroll_y += delta_y;
                 state.scroll_x += delta_x;
+                (
+                    state.scroll_x != previous_scroll_x || state.scroll_y != previous_scroll_y,
+                    false,
+                )
             }
+        };
+
+        if changed {
+            clamp_timeline_state(&self.state, &self.document, self.viewport.size);
+            self.state.data.borrow_mut().raster_cache.clear();
+            if needs_layout {
+                self.id.request_layout();
+            }
+            self.id.request_paint();
         }
-        clamp_timeline_state(&self.state, &self.document, self.viewport.size);
-        self.id.request_paint();
+        if profile {
+            let state = self.state.data.borrow();
+            eprintln!(
+                "[timeline-profile] wheel mode={mode} changed={changed} needs_layout={needs_layout} dx={delta_x:.2} dy={delta_y:.2} pixels_per_ms={:.5} lane_height={:.1} scroll=({:.1},{:.1}) elapsed_ms={:.3}",
+                state.pixels_per_ms,
+                state.lane_height,
+                state.scroll_x,
+                state.scroll_y,
+                elapsed_ms(profile_start.elapsed()),
+            );
+        }
         EventPropagation::Stop
     }
 
@@ -895,13 +944,22 @@ impl SequenceTimeline {
     }
 
     fn paint_clips(&self, cx: &mut PaintCx) {
-        for layout in clip_layouts(&self.document, &self.state) {
+        let profile = timeline_profile_enabled();
+        let paint_start = Instant::now();
+        let layout_start = Instant::now();
+        let layouts = clip_layouts(&self.document, &self.state);
+        let layout_time = layout_start.elapsed();
+        let mut visible_clips = 0usize;
+        let mut raster_stats = RasterPaintStats::default();
+
+        for layout in layouts.iter().copied() {
             if layout.rect.y1 < RULER_HEIGHT || layout.rect.y0 > self.viewport.size.height {
                 continue;
             }
             if layout.rect.x1 < LANE_LABEL_WIDTH || layout.rect.x0 > self.viewport.size.width {
                 continue;
             }
+            visible_clips += 1;
             let Some(effect) = self
                 .document
                 .effects
@@ -932,7 +990,16 @@ impl SequenceTimeline {
             };
             let border_width = if selected { 2.0 } else { 1.0 };
             cx.fill(&layout.rect, &Brush::Solid(clip_color(effect.index)), 0.0);
-            self.paint_clip_raster(cx, effect, layout.rect);
+            self.paint_clip_raster(
+                cx,
+                effect,
+                layout.rect,
+                if profile {
+                    Some(&mut raster_stats)
+                } else {
+                    None
+                },
+            );
             if selected {
                 cx.fill(&layout.rect, &Brush::Solid(SELECTED_CLIP_HIGHLIGHT), 0.0);
             }
@@ -945,9 +1012,33 @@ impl SequenceTimeline {
                 paint_resize_grips(cx, layout.rect, hovered_kind.or(dragged_kind));
             }
         }
+
+        if profile {
+            let cache_len = self.state.data.borrow().raster_cache.len();
+            eprintln!(
+                "[timeline-profile] paint_clips total_ms={:.3} layout_ms={:.3} layouts={} visible={} raster_visible={} hits={} misses={} build_ms={:.3} samples={} image_bytes={} cache_len={}",
+                elapsed_ms(paint_start.elapsed()),
+                elapsed_ms(layout_time),
+                layouts.len(),
+                visible_clips,
+                raster_stats.visible_raster_clips,
+                raster_stats.cache_hits,
+                raster_stats.cache_misses,
+                elapsed_ms(raster_stats.build_time),
+                raster_stats.samples,
+                raster_stats.image_bytes,
+                cache_len,
+            );
+        }
     }
 
-    fn paint_clip_raster(&self, cx: &mut PaintCx, effect: &SequenceEffectDocument, rect: Rect) {
+    fn paint_clip_raster(
+        &self,
+        cx: &mut PaintCx,
+        effect: &SequenceEffectDocument,
+        rect: Rect,
+        mut stats: Option<&mut RasterPaintStats>,
+    ) {
         let Some(render) = &effect.render else {
             return;
         };
@@ -958,42 +1049,69 @@ impl SequenceTimeline {
             return;
         }
 
-        let (pixels_per_ms, visible_x0, visible_x1) = {
+        let (pixels_per_ms, visible_rect) = {
             let state = self.state.data.borrow();
-            (
-                state.pixels_per_ms,
-                rect.x0.max(LANE_LABEL_WIDTH).floor() as i64,
-                rect.x1.min(self.viewport.size.width).ceil() as i64,
-            )
+            let viewport_rect = Rect::new(
+                LANE_LABEL_WIDTH,
+                RULER_HEIGHT,
+                self.viewport.size.width,
+                self.viewport.size.height,
+            );
+            let visible_rect = intersect_rect(rect, viewport_rect);
+            (state.pixels_per_ms, visible_rect)
         };
-        if visible_x1 <= visible_x0 {
+        let Some(visible_rect) = visible_rect else {
             return;
-        }
+        };
 
         let row_bins = raster_row_bins(render.target_pixels.len(), rect.height());
-        let key = raster_cache_key(effect, visible_x0, visible_x1, row_bins);
-        let cells = {
+        if row_bins == 0 {
+            return;
+        }
+        let sample_width = (visible_rect.width().ceil() as usize).clamp(1, MAX_RASTER_IMAGE_WIDTH);
+        let key = raster_cache_key(effect, visible_rect, sample_width, pixels_per_ms, row_bins);
+        if let Some(stats) = stats.as_mut() {
+            stats.visible_raster_clips += 1;
+        }
+        let raster = {
             let mut state = self.state.data.borrow_mut();
-            if let Some(cells) = state.raster_cache.get(&key) {
-                cells.clone()
+            if let Some(raster) = state.raster_cache.get(&key) {
+                if let Some(stats) = stats.as_mut() {
+                    stats.cache_hits += 1;
+                }
+                raster.clone()
             } else {
-                let cells = build_raster_cells(
+                if let Some(stats) = stats.as_mut() {
+                    stats.cache_misses += 1;
+                    stats.samples += sample_width * row_bins;
+                    stats.image_bytes += sample_width * row_bins * 4;
+                }
+                let build_start = Instant::now();
+                let raster = build_raster_image(
                     analysis,
                     effect,
-                    visible_x0,
-                    visible_x1,
+                    visible_rect,
                     row_bins,
                     pixels_per_ms,
                     rect,
+                    sample_width,
+                    key.as_bytes().to_vec(),
                 );
-                state.raster_cache.insert(key, cells.clone());
-                cells
+                if let Some(stats) = stats.as_mut() {
+                    stats.build_time += build_start.elapsed();
+                }
+                state.raster_cache.insert(key, raster.clone());
+                raster
             }
         };
 
-        for cell in cells {
-            cx.fill(&cell.rect, &Brush::Solid(cell.color), 0.0);
-        }
+        cx.draw_img(
+            floem_renderer::Img {
+                img: raster.image,
+                hash: &raster.hash,
+            },
+            visible_rect,
+        );
     }
 
     fn paint_drag_preview(&self, cx: &mut PaintCx) {
@@ -1223,9 +1341,19 @@ struct TimelineHover {
 }
 
 #[derive(Debug, Clone)]
-struct RasterCell {
-    rect: Rect,
-    color: Color,
+struct RasterImage {
+    image: Image,
+    hash: Vec<u8>,
+}
+
+#[derive(Debug, Default)]
+struct RasterPaintStats {
+    visible_raster_clips: usize,
+    cache_hits: usize,
+    cache_misses: usize,
+    samples: usize,
+    image_bytes: usize,
+    build_time: Duration,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1253,6 +1381,17 @@ const SELECTED_CLIP_BORDER: Color = Color::rgb8(232, 236, 240);
 const SELECTED_CLIP_HIGHLIGHT: Color = Color::rgba8(255, 255, 255, 28);
 const RESIZE_GRIP: Color = Color::rgba8(248, 250, 252, 150);
 const ACTIVE_RESIZE_GRIP: Color = Color::rgba8(255, 255, 255, 230);
+const MAX_RASTER_IMAGE_WIDTH: usize = 50;
+
+fn timeline_profile_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("DAWN_TIMELINE_PROFILE").is_some())
+}
+
+fn elapsed_ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1_000.0
+}
+
 fn clamp_timeline_state(state: &SequenceTimelineState, document: &SequenceDocument, size: Size) {
     let mut state = state.data.borrow_mut();
     let content_width = document.duration_ms as f64 * state.pixels_per_ms;
@@ -1349,6 +1488,20 @@ fn stroke_rect(rect: Rect, width: f64) -> Rect {
     rect.inflate(-width / 2.0, -width / 2.0)
 }
 
+fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
+    let rect = Rect::new(
+        a.x0.max(b.x0),
+        a.y0.max(b.y0),
+        a.x1.min(b.x1),
+        a.y1.min(b.y1),
+    );
+    if rect.width() > 0.0 && rect.height() > 0.0 {
+        Some(rect)
+    } else {
+        None
+    }
+}
+
 fn hit_kind_for_clip_x(rect: Rect, x: f64) -> HitKind {
     let midpoint = rect.x0 + rect.width() / 2.0;
     if rect.width() <= EDGE_HIT_WIDTH * 2.0 {
@@ -1405,18 +1558,21 @@ fn raster_row_bins(pixel_count: usize, height: f64) -> usize {
 
 fn raster_cache_key(
     effect: &SequenceEffectDocument,
-    visible_x0: i64,
-    visible_x1: i64,
+    visible_rect: Rect,
+    sample_width: usize,
+    pixels_per_ms: f64,
     row_bins: usize,
 ) -> String {
     let render = effect.render.as_ref().expect("render metadata is present");
     format!(
-        "{}:{}:{}:{}:{}:{}:{}:{:?}:{:?}:{:?}",
+        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{:?}:{:?}:{:?}",
         effect.index,
         effect.start_ms,
         effect.duration_ms,
-        visible_x0,
-        visible_x1,
+        visible_rect.x0.to_bits(),
+        visible_rect.width().to_bits(),
+        sample_width,
+        pixels_per_ms.to_bits(),
         row_bins,
         render.script_key,
         render.script_source,
@@ -1425,33 +1581,28 @@ fn raster_cache_key(
     )
 }
 
-fn build_raster_cells(
+fn build_raster_image(
     analysis: &ProjectAnalysis,
     effect: &SequenceEffectDocument,
-    visible_x0: i64,
-    visible_x1: i64,
+    visible_rect: Rect,
     row_bins: usize,
     pixels_per_ms: f64,
     rect: Rect,
-) -> Vec<RasterCell> {
-    let Some(render) = &effect.render else {
-        return Vec::new();
-    };
+    sample_width: usize,
+    hash: Vec<u8>,
+) -> RasterImage {
+    let render = effect.render.as_ref().expect("render metadata is present");
     let params = runtime_params_from_document(&render.params);
-    let row_height = rect.height() / row_bins.max(1) as f64;
-    let mut cells = Vec::with_capacity((visible_x1 - visible_x0).max(0) as usize * row_bins.max(1));
-    for column in visible_x0..visible_x1 {
-        let x0 = (column as f64).max(rect.x0);
-        let x1 = ((column + 1) as f64).min(rect.x1);
-        if x1 <= x0 {
-            continue;
-        }
-        let local_ms =
-            ((column as f64 + 0.5 - rect.x0) / pixels_per_ms).clamp(0.0, effect.duration_ms as f64);
-        let progress = (local_ms / effect.duration_ms as f64).clamp(0.0, 1.0);
-        let seconds = local_ms / 1_000.0;
-        for row in 0..row_bins {
-            let pixel = sampled_pixel(&render.target_pixels, row, row_bins);
+    let mut bytes = Vec::with_capacity(sample_width * row_bins * 4);
+    for row in 0..row_bins {
+        let pixel = sampled_pixel(&render.target_pixels, row, row_bins);
+        for column in 0..sample_width {
+            let sample_x = visible_rect.x0
+                + ((column as f64 + 0.5) / sample_width as f64) * visible_rect.width();
+            let local_ms =
+                ((sample_x - rect.x0) / pixels_per_ms).clamp(0.0, effect.duration_ms as f64);
+            let progress = (local_ms / effect.duration_ms as f64).clamp(0.0, 1.0);
+            let seconds = local_ms / 1_000.0;
             let color = analysis
                 .sample_effect_script_key(
                     &render.script_key,
@@ -1467,19 +1618,18 @@ fn build_raster_cells(
                 )
                 .map(color_to_peniko)
                 .unwrap_or_else(|_| sample_error_color());
-            let y0 = rect.y0 + row as f64 * row_height;
-            let y1 = if row + 1 == row_bins {
-                rect.y1
-            } else {
-                rect.y0 + (row + 1) as f64 * row_height
-            };
-            cells.push(RasterCell {
-                rect: Rect::new(x0, y0, x1, y1),
-                color,
-            });
+            bytes.extend_from_slice(&[color.r, color.g, color.b, 255]);
         }
     }
-    cells
+    RasterImage {
+        image: Image::new(
+            Blob::from(bytes),
+            Format::Rgba8,
+            sample_width as u32,
+            row_bins as u32,
+        ),
+        hash,
+    }
 }
 
 fn sampled_pixel(
