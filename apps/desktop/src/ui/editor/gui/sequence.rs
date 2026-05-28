@@ -9,17 +9,18 @@ use std::{
 use dawn_project::analysis::ProjectAnalysis;
 use dawn_project::document::{
     SequenceDocument, SequenceEffectDocument, SequenceEffectPixelDocument,
-    SequenceEffectScriptDocument, SequenceLaneDocument,
+    SequenceEffectRenderDocument, SequenceEffectScriptDocument, SequenceLaneDocument,
 };
 use dawn_project::effect_script::{FixtureContext, PixelContext, RuntimeValue};
 use dawn_project::model::{EffectParam, Resolved};
 use floem::context::{ComputeLayoutCx, EventCx, PaintCx, UpdateCx};
 use floem::event::{Event, EventPropagation};
+use floem::ext_event::create_ext_action;
 use floem::keyboard::{Key, Modifiers, NamedKey};
 use floem::kurbo::{Point, Rect, Size, Stroke};
 use floem::peniko::{Blob, Brush, Color, Format, Image};
 use floem::prelude::*;
-use floem::reactive::create_effect;
+use floem::reactive::{create_effect, Scope};
 use floem::style::Foreground;
 use floem::text::{Attrs, AttrsList, FamilyOwned, TextLayout};
 use floem::{View, ViewId};
@@ -45,6 +46,9 @@ struct SequenceTimelineStateData {
     keyboard_focused: bool,
     gesture: Option<TimelineGesture>,
     raster_cache: HashMap<String, RasterImage>,
+    raster_pending: HashMap<String, RasterPending>,
+    raster_effect_signatures: HashMap<u32, String>,
+    raster_generation: u64,
 }
 
 impl SequenceTimelineState {
@@ -58,6 +62,9 @@ impl SequenceTimelineState {
                 keyboard_focused: false,
                 gesture: None,
                 raster_cache: HashMap::new(),
+                raster_pending: HashMap::new(),
+                raster_effect_signatures: HashMap::new(),
+                raster_generation: 0,
             })),
         }
     }
@@ -428,39 +435,22 @@ enum SequenceTimelineUpdate {
         selected_effect: Option<u32>,
     },
     Playhead(u64),
+    RasterBatch(Vec<RasterImageResult>),
 }
 
 #[derive(Clone, PartialEq, Eq)]
 struct SequenceTimelineCacheKey {
-    document_signature: String,
-    analysis_available: bool,
+    document_path: String,
+    object_key: String,
+    can_render: bool,
 }
 
 impl SequenceTimelineCacheKey {
     fn new(document: &SequenceDocument, analysis: &Option<ProjectAnalysis>) -> Self {
-        let mut document_signature = format!(
-            "{}:{}:{}:",
-            document.object_key,
-            document.lanes.len(),
-            document.effects.len()
-        );
-        for effect in &document.effects {
-            document_signature.push_str(&format!(
-                "{}:{}:{}:{:?}:{}:",
-                effect.id, effect.start_ms, effect.duration_ms, effect.target, effect.script
-            ));
-            if let Some(render) = &effect.render {
-                document_signature.push_str(&format!(
-                    "{}:{:?}:{}:",
-                    render.script_key,
-                    render.params,
-                    render.target_pixels.len()
-                ));
-            }
-        }
         Self {
-            document_signature,
-            analysis_available: analysis.is_some(),
+            document_path: document.path.clone(),
+            object_key: document.object_key.clone(),
+            can_render: analysis.is_some(),
         }
     }
 }
@@ -516,6 +506,7 @@ impl SequenceTimeline {
             }
         });
         let cache_key = SequenceTimelineCacheKey::new(&document, &analysis);
+        state.data.borrow_mut().raster_effect_signatures = effect_raster_signatures(&document);
         Self {
             id,
             document,
@@ -547,10 +538,38 @@ impl View for SequenceTimeline {
                     selected_effect,
                 } => {
                     let next_cache_key = SequenceTimelineCacheKey::new(&document, &analysis);
+                    let next_effect_signatures = effect_raster_signatures(&document);
+                    let mut state = self.state.data.borrow_mut();
                     if self.cache_key != next_cache_key {
-                        self.state.data.borrow_mut().raster_cache.clear();
+                        state.raster_cache.clear();
+                        state.raster_pending.clear();
+                        state.raster_generation = state.raster_generation.wrapping_add(1);
                         self.cache_key = next_cache_key;
+                    } else {
+                        let mut changed_effects = Vec::new();
+                        for (effect_id, signature) in &state.raster_effect_signatures {
+                            if next_effect_signatures.get(effect_id) != Some(signature) {
+                                changed_effects.push(*effect_id);
+                            }
+                        }
+                        for (effect_id, signature) in &next_effect_signatures {
+                            if state.raster_effect_signatures.get(effect_id) != Some(signature) {
+                                changed_effects.push(*effect_id);
+                            }
+                        }
+                        if !changed_effects.is_empty() {
+                            state.raster_cache.retain(|_, raster| {
+                                next_effect_signatures.get(&raster.effect_id)
+                                    == Some(&raster.effect_signature)
+                            });
+                            state.raster_pending.retain(|_, pending| {
+                                next_effect_signatures.get(&pending.effect_id)
+                                    == Some(&pending.effect_signature)
+                            });
+                        }
                     }
+                    state.raster_effect_signatures = next_effect_signatures;
+                    drop(state);
                     self.document = document;
                     self.analysis = analysis;
                     self.selected_effect = selected_effect;
@@ -558,6 +577,42 @@ impl View for SequenceTimeline {
                 }
                 SequenceTimelineUpdate::Playhead(playhead_ms) => {
                     self.playhead_ms = playhead_ms;
+                }
+                SequenceTimelineUpdate::RasterBatch(results) => {
+                    let mut installed = false;
+                    let mut state = self.state.data.borrow_mut();
+                    let generation = state.raster_generation;
+                    for result in results {
+                        state.raster_pending.remove(&result.key);
+                        if result.generation != generation {
+                            continue;
+                        }
+                        if state.raster_effect_signatures.get(&result.effect_id)
+                            != Some(&result.effect_signature)
+                        {
+                            continue;
+                        }
+                        let image = Image::new(
+                            Blob::from(result.bytes),
+                            Format::Rgba8,
+                            result.width,
+                            result.height,
+                        );
+                        state.raster_cache.insert(
+                            result.key,
+                            RasterImage {
+                                effect_id: result.effect_id,
+                                effect_signature: result.effect_signature,
+                                image,
+                                hash: result.hash,
+                            },
+                        );
+                        installed = true;
+                    }
+                    if installed {
+                        drop(state);
+                        self.id.request_paint();
+                    }
                 }
             }
             self.id.request_paint();
@@ -682,7 +737,10 @@ impl SequenceTimeline {
 
         if changed {
             clamp_timeline_state(&self.state, &self.document, self.viewport.size);
-            self.state.data.borrow_mut().raster_cache.clear();
+            if needs_layout {
+                let mut state = self.state.data.borrow_mut();
+                state.raster_generation = state.raster_generation.wrapping_add(1);
+            }
             if needs_layout {
                 self.id.request_layout();
             }
@@ -951,6 +1009,7 @@ impl SequenceTimeline {
         let layout_time = layout_start.elapsed();
         let mut visible_clips = 0usize;
         let mut raster_stats = RasterPaintStats::default();
+        let mut raster_requests = Vec::new();
 
         for layout in layouts.iter().copied() {
             if layout.rect.y1 < RULER_HEIGHT || layout.rect.y0 > self.viewport.size.height {
@@ -989,8 +1048,8 @@ impl SequenceTimeline {
                 theme::color(theme::BORDER)
             };
             let border_width = if selected { 2.0 } else { 1.0 };
-            cx.fill(&layout.rect, &Brush::Solid(clip_color(effect.index)), 0.0);
-            self.paint_clip_raster(
+            cx.fill(&layout.rect, &Brush::Solid(CLIP_FALLBACK_FILL), 0.0);
+            if let Some(request) = self.paint_clip_raster(
                 cx,
                 effect,
                 layout.rect,
@@ -999,7 +1058,9 @@ impl SequenceTimeline {
                 } else {
                     None
                 },
-            );
+            ) {
+                raster_requests.push(request);
+            }
             if selected {
                 cx.fill(&layout.rect, &Brush::Solid(SELECTED_CLIP_HIGHLIGHT), 0.0);
             }
@@ -1013,10 +1074,16 @@ impl SequenceTimeline {
             }
         }
 
+        if !raster_requests.is_empty() {
+            if let Some(analysis) = self.analysis.clone() {
+                self.spawn_raster_batch(analysis, raster_requests);
+            }
+        }
+
         if profile {
             let cache_len = self.state.data.borrow().raster_cache.len();
             eprintln!(
-                "[timeline-profile] paint_clips total_ms={:.3} layout_ms={:.3} layouts={} visible={} raster_visible={} hits={} misses={} build_ms={:.3} samples={} image_bytes={} cache_len={}",
+                "[timeline-profile] paint_clips total_ms={:.3} layout_ms={:.3} layouts={} visible={} raster_visible={} hits={} misses={} queued={} build_ms={:.3} samples={} image_bytes={} cache_len={}",
                 elapsed_ms(paint_start.elapsed()),
                 elapsed_ms(layout_time),
                 layouts.len(),
@@ -1024,6 +1091,7 @@ impl SequenceTimeline {
                 raster_stats.visible_raster_clips,
                 raster_stats.cache_hits,
                 raster_stats.cache_misses,
+                raster_stats.queued,
                 elapsed_ms(raster_stats.build_time),
                 raster_stats.samples,
                 raster_stats.image_bytes,
@@ -1038,18 +1106,18 @@ impl SequenceTimeline {
         effect: &SequenceEffectDocument,
         rect: Rect,
         mut stats: Option<&mut RasterPaintStats>,
-    ) {
+    ) -> Option<RasterImageRequest> {
         let Some(render) = &effect.render else {
-            return;
+            return None;
         };
-        let Some(analysis) = &self.analysis else {
-            return;
-        };
+        if self.analysis.is_none() {
+            return None;
+        }
         if render.target_pixels.is_empty() || effect.duration_ms == 0 {
-            return;
+            return None;
         }
 
-        let (pixels_per_ms, visible_rect) = {
+        let (pixels_per_ms, generation, visible_rect) = {
             let state = self.state.data.borrow();
             let viewport_rect = Rect::new(
                 LANE_LABEL_WIDTH,
@@ -1058,60 +1126,93 @@ impl SequenceTimeline {
                 self.viewport.size.height,
             );
             let visible_rect = intersect_rect(rect, viewport_rect);
-            (state.pixels_per_ms, visible_rect)
+            (state.pixels_per_ms, state.raster_generation, visible_rect)
         };
         let Some(visible_rect) = visible_rect else {
-            return;
+            return None;
         };
 
         let row_bins = raster_row_bins(render.target_pixels.len(), rect.height());
         if row_bins == 0 {
-            return;
+            return None;
         }
-        let sample_width = (visible_rect.width().ceil() as usize).clamp(1, MAX_RASTER_IMAGE_WIDTH);
-        let key = raster_cache_key(effect, visible_rect, sample_width, pixels_per_ms, row_bins);
+        let sample_width = (rect.width().ceil() as usize).clamp(1, MAX_RASTER_IMAGE_WIDTH);
+        let effect_signature = effect_raster_signature(effect)?;
+        let key = raster_cache_key(
+            effect.id,
+            &effect_signature,
+            sample_width,
+            pixels_per_ms,
+            row_bins,
+        );
         if let Some(stats) = stats.as_mut() {
             stats.visible_raster_clips += 1;
         }
-        let raster = {
+        {
             let mut state = self.state.data.borrow_mut();
             if let Some(raster) = state.raster_cache.get(&key) {
                 if let Some(stats) = stats.as_mut() {
                     stats.cache_hits += 1;
                 }
-                raster.clone()
+                cx.save();
+                cx.clip(&visible_rect);
+                cx.draw_img(
+                    floem_renderer::Img {
+                        img: raster.image.clone(),
+                        hash: &raster.hash,
+                    },
+                    rect,
+                );
+                cx.restore();
+                return None;
             } else {
                 if let Some(stats) = stats.as_mut() {
                     stats.cache_misses += 1;
+                }
+                if state.raster_pending.contains_key(&key) {
+                    return None;
+                }
+                state.raster_pending.insert(
+                    key.clone(),
+                    RasterPending {
+                        effect_id: effect.id,
+                        effect_signature: effect_signature.clone(),
+                    },
+                );
+                if let Some(stats) = stats.as_mut() {
+                    stats.queued += 1;
                     stats.samples += sample_width * row_bins;
                     stats.image_bytes += sample_width * row_bins * 4;
                 }
-                let build_start = Instant::now();
-                let raster = build_raster_image(
-                    analysis,
-                    effect,
-                    visible_rect,
-                    row_bins,
-                    pixels_per_ms,
-                    rect,
-                    sample_width,
-                    key.as_bytes().to_vec(),
-                );
-                if let Some(stats) = stats.as_mut() {
-                    stats.build_time += build_start.elapsed();
-                }
-                state.raster_cache.insert(key, raster.clone());
-                raster
             }
-        };
+        }
 
-        cx.draw_img(
-            floem_renderer::Img {
-                img: raster.image,
-                hash: &raster.hash,
-            },
-            visible_rect,
-        );
+        Some(RasterImageRequest {
+            effect_id: effect.id,
+            effect_signature,
+            render: render.clone(),
+            duration_ms: effect.duration_ms,
+            rect,
+            row_bins,
+            pixels_per_ms,
+            sample_width,
+            key,
+            generation,
+        })
+    }
+
+    fn spawn_raster_batch(&self, analysis: ProjectAnalysis, requests: Vec<RasterImageRequest>) {
+        let id = self.id;
+        let send = create_ext_action(Scope::new(), move |results| {
+            id.update_state(SequenceTimelineUpdate::RasterBatch(results));
+        });
+        std::thread::spawn(move || {
+            let results = requests
+                .into_iter()
+                .map(|request| build_raster_image_result(&analysis, request))
+                .collect::<Vec<_>>();
+            send(results);
+        });
     }
 
     fn paint_drag_preview(&self, cx: &mut PaintCx) {
@@ -1342,8 +1443,42 @@ struct TimelineHover {
 
 #[derive(Debug, Clone)]
 struct RasterImage {
+    effect_id: u32,
+    effect_signature: String,
     image: Image,
     hash: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+struct RasterPending {
+    effect_id: u32,
+    effect_signature: String,
+}
+
+#[derive(Debug, Clone)]
+struct RasterImageRequest {
+    effect_id: u32,
+    effect_signature: String,
+    render: SequenceEffectRenderDocument,
+    duration_ms: u64,
+    rect: Rect,
+    row_bins: usize,
+    pixels_per_ms: f64,
+    sample_width: usize,
+    key: String,
+    generation: u64,
+}
+
+#[derive(Debug)]
+struct RasterImageResult {
+    effect_id: u32,
+    effect_signature: String,
+    key: String,
+    hash: Vec<u8>,
+    width: u32,
+    height: u32,
+    bytes: Vec<u8>,
+    generation: u64,
 }
 
 #[derive(Debug, Default)]
@@ -1351,6 +1486,7 @@ struct RasterPaintStats {
     visible_raster_clips: usize,
     cache_hits: usize,
     cache_misses: usize,
+    queued: usize,
     samples: usize,
     image_bytes: usize,
     build_time: Duration,
@@ -1381,6 +1517,7 @@ const SELECTED_CLIP_BORDER: Color = Color::rgb8(232, 236, 240);
 const SELECTED_CLIP_HIGHLIGHT: Color = Color::rgba8(255, 255, 255, 28);
 const RESIZE_GRIP: Color = Color::rgba8(248, 250, 252, 150);
 const ACTIVE_RESIZE_GRIP: Color = Color::rgba8(255, 255, 255, 230);
+const CLIP_FALLBACK_FILL: Color = Color::rgb8(50, 54, 60);
 const MAX_RASTER_IMAGE_WIDTH: usize = 50;
 
 fn timeline_profile_enabled() -> bool {
@@ -1557,55 +1694,61 @@ fn raster_row_bins(pixel_count: usize, height: f64) -> usize {
 }
 
 fn raster_cache_key(
-    effect: &SequenceEffectDocument,
-    visible_rect: Rect,
+    effect_id: u32,
+    effect_signature: &str,
     sample_width: usize,
     pixels_per_ms: f64,
     row_bins: usize,
 ) -> String {
-    let render = effect.render.as_ref().expect("render metadata is present");
     format!(
-        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{:?}:{:?}:{:?}",
-        effect.index,
-        effect.start_ms,
-        effect.duration_ms,
-        visible_rect.x0.to_bits(),
-        visible_rect.width().to_bits(),
+        "{}:{}:{}:{}:{}",
+        effect_id,
+        effect_signature,
         sample_width,
         pixels_per_ms.to_bits(),
         row_bins,
+    )
+}
+
+fn effect_raster_signatures(document: &SequenceDocument) -> HashMap<u32, String> {
+    document
+        .effects
+        .iter()
+        .filter_map(|effect| {
+            effect_raster_signature(effect).map(|signature| (effect.id, signature))
+        })
+        .collect()
+}
+
+fn effect_raster_signature(effect: &SequenceEffectDocument) -> Option<String> {
+    let render = effect.render.as_ref()?;
+    Some(format!(
+        "{}:{}:{:?}:{:?}:{:?}",
+        effect.duration_ms,
         render.script_key,
         render.script_source,
         render.params,
         render.target_pixels,
-    )
+    ))
 }
 
-fn build_raster_image(
+fn build_raster_image_result(
     analysis: &ProjectAnalysis,
-    effect: &SequenceEffectDocument,
-    visible_rect: Rect,
-    row_bins: usize,
-    pixels_per_ms: f64,
-    rect: Rect,
-    sample_width: usize,
-    hash: Vec<u8>,
-) -> RasterImage {
-    let render = effect.render.as_ref().expect("render metadata is present");
-    let params = runtime_params_from_document(&render.params);
-    let mut bytes = Vec::with_capacity(sample_width * row_bins * 4);
-    for row in 0..row_bins {
-        let pixel = sampled_pixel(&render.target_pixels, row, row_bins);
-        for column in 0..sample_width {
-            let sample_x = visible_rect.x0
-                + ((column as f64 + 0.5) / sample_width as f64) * visible_rect.width();
-            let local_ms =
-                ((sample_x - rect.x0) / pixels_per_ms).clamp(0.0, effect.duration_ms as f64);
-            let progress = (local_ms / effect.duration_ms as f64).clamp(0.0, 1.0);
+    request: RasterImageRequest,
+) -> RasterImageResult {
+    let params = runtime_params_from_document(&request.render.params);
+    let mut bytes = Vec::with_capacity(request.sample_width * request.row_bins * 4);
+    for row in 0..request.row_bins {
+        let pixel = sampled_pixel(&request.render.target_pixels, row, request.row_bins);
+        for column in 0..request.sample_width {
+            let local_x =
+                ((column as f64 + 0.5) / request.sample_width as f64) * request.rect.width();
+            let local_ms = (local_x / request.pixels_per_ms).clamp(0.0, request.duration_ms as f64);
+            let progress = (local_ms / request.duration_ms as f64).clamp(0.0, 1.0);
             let seconds = local_ms / 1_000.0;
             let color = analysis
                 .sample_effect_script_key(
-                    &render.script_key,
+                    &request.render.script_key,
                     progress,
                     seconds,
                     FixtureContext {
@@ -1621,14 +1764,15 @@ fn build_raster_image(
             bytes.extend_from_slice(&[color.r, color.g, color.b, 255]);
         }
     }
-    RasterImage {
-        image: Image::new(
-            Blob::from(bytes),
-            Format::Rgba8,
-            sample_width as u32,
-            row_bins as u32,
-        ),
-        hash,
+    RasterImageResult {
+        effect_id: request.effect_id,
+        effect_signature: request.effect_signature,
+        hash: request.key.as_bytes().to_vec(),
+        key: request.key,
+        width: request.sample_width as u32,
+        height: request.row_bins as u32,
+        bytes,
+        generation: request.generation,
     }
 }
 
@@ -1691,19 +1835,6 @@ fn format_time(ms: u64) -> String {
     } else {
         format!("{:.2}s", ms as f64 / 1_000.0)
     }
-}
-
-fn clip_color(index: usize) -> Color {
-    const PALETTE: [(u8, u8, u8); 6] = [
-        (74, 144, 226),
-        (80, 190, 135),
-        (220, 125, 90),
-        (180, 128, 220),
-        (70, 185, 190),
-        (210, 170, 70),
-    ];
-    let (r, g, b) = PALETTE[index % PALETTE.len()];
-    Color::rgb8(r, g, b)
 }
 
 fn draw_text(cx: &mut PaintCx, text: &str, x: f64, y: f64, color: Color) {
