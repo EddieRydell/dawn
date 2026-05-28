@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "scripts": {
+    "generate-bindings": "cargo run -p dawn-desktop --bin generate-bindings",
+    "typecheck": "pnpm --dir apps/desktop/frontend typecheck",
+    "build": "pnpm generate-bindings && pnpm --dir apps/desktop/frontend build",
+    "tauri": "pnpm generate-bindings && pnpm --dir apps/desktop exec tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

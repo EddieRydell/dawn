@@ -9,15 +9,23 @@ default-run = "dawn-desktop"
 
 [dependencies]
 camino.workspace = true
+dawn-app-core = { path = "../../crates/dawn-app-core" }
 dawn-project = { path = "../../crates/dawn-project" }
-dirs.workspace = true
-fontdb = "0.16.2"
-floem.workspace = true
-floem_renderer = "0.2.0"
-lucide-floem = "0.2.0"
+rfd = "0.15"
 serde.workspace = true
 serde_json.workspace = true
+specta = { version = "2.0.0-rc.25", features = ["derive"] }
+specta-typescript = "0.0.12"
+tauri = { version = "2", features = [] }
+tauri-specta = { version = "2.0.0-rc.25", features = ["typescript"] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
 
 [[bin]]
 name = "dawn-desktop"
 path = "src/main.rs"
+
+[[bin]]
+name = "generate-bindings"
+path = "src/bin/generate_bindings.rs"

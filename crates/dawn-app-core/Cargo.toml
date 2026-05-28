@@ -1,0 +1,12 @@
+[package]
+name = "dawn-app-core"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+camino.workspace = true
+dawn-project = { path = "../dawn-project" }
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+specta = { version = "2.0.0-rc.25", features = ["derive"] }

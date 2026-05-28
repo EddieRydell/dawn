@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "apps/desktop",
+  "crates/dawn-app-core",
   "crates/dawn-project",
 ]
 resolver = "2"
@@ -12,7 +13,6 @@ version = "0.1.0"
 [workspace.dependencies]
 camino = { version = "1", features = ["serde1"] }
 dirs = "6"
-floem = { version = "=0.2.0", features = ["rfd-async-std"] }
 indexmap = { version = "2", features = ["serde"] }
 pathdiff = "0.2"
 serde = { version = "1", features = ["derive"] }
