@@ -3,19 +3,8 @@ use std::collections::BTreeMap;
 use dawn_project::analysis::ProjectAnalysis;
 use dawn_project::document::{SequenceDocument, SequenceEffectParamDocument};
 use dawn_project::effect_script::{FixtureContext, PixelContext, RuntimeValue};
-use dawn_project::model::{
-    Color, ColorModel, EffectParam, Fixture, FixtureId, Geometry, Point3, Resolved, Rotation3,
-    Scale3, Transform,
-};
-use dawn_project::path::{PathStringExt, Utf8PathBuf};
-use dawn_project::render::{
-    geometry_render_plan, layout_render_plan, transform_geometry_render_plan, GeometryRenderBounds,
-    GeometryRenderPoint,
-};
-
-use crate::app_model::{AppSnapshot, PreviewRigKind};
-
-pub const EFFECT_PREVIEW_LOOP_MS: u64 = 8_000;
+use dawn_project::model::{Color, EffectParam, FixtureId, Resolved};
+use dawn_project::render::{layout_render_plan, GeometryRenderBounds, GeometryRenderPoint};
 
 #[derive(Debug, Clone)]
 pub struct OutputFrame {
@@ -38,7 +27,6 @@ pub struct OutputSourceMetadata {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputSourceKind {
     Sequence,
-    EffectScript,
     Empty,
 }
 
@@ -63,76 +51,11 @@ pub struct OutputPixelFrame {
     pub color: Color,
 }
 
-#[derive(Debug, Clone)]
-pub enum OutputPreviewSource {
-    Sequence {
-        document: SequenceDocument,
-    },
-    EffectScript {
-        path: Utf8PathBuf,
-        rig: PreviewRigKind,
-    },
-}
-
 pub trait OutputSink {
     fn write_frame(&self, frame: OutputFrame);
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct InProcessOutputRuntime {
-    generation: u64,
-}
-
-impl InProcessOutputRuntime {
-    pub fn evaluate_snapshot(&mut self, snapshot: &AppSnapshot) -> OutputFrame {
-        self.generation = self.generation.saturating_add(1);
-        match OutputPreviewSource::from_snapshot(snapshot) {
-            Some(source) => self.evaluate_source(snapshot, source),
-            None => empty_frame(self.generation, "Open a sequence or .effect.dawn file"),
-        }
-    }
-
-    pub fn evaluate_source(
-        &mut self,
-        snapshot: &AppSnapshot,
-        source: OutputPreviewSource,
-    ) -> OutputFrame {
-        self.generation = self.generation.saturating_add(1);
-        let Some(analysis) = snapshot.analysis.as_ref() else {
-            return empty_frame(self.generation, "No project analysis");
-        };
-
-        match source {
-            OutputPreviewSource::Sequence { document } => evaluate_sequence_frame(
-                analysis,
-                &document,
-                snapshot.sequence_playhead_ms,
-                self.generation,
-            ),
-            OutputPreviewSource::EffectScript { path, rig } => evaluate_effect_frame(
-                analysis,
-                path,
-                rig,
-                snapshot.playback.time_ms,
-                self.generation,
-            ),
-        }
-    }
-}
-
-impl OutputPreviewSource {
-    pub fn from_snapshot(snapshot: &AppSnapshot) -> Option<Self> {
-        if let Some(document) = snapshot.active_sequence_document.clone() {
-            return Some(Self::Sequence { document });
-        }
-        active_effect_script_path(snapshot).map(|path| Self::EffectScript {
-            path,
-            rig: snapshot.preview_rig,
-        })
-    }
-}
-
-fn evaluate_sequence_frame(
+pub fn evaluate_sequence_frame(
     analysis: &ProjectAnalysis,
     document: &SequenceDocument,
     time_ms: u64,
@@ -222,81 +145,6 @@ fn evaluate_sequence_frame(
     }
 }
 
-fn evaluate_effect_frame(
-    analysis: &ProjectAnalysis,
-    path: Utf8PathBuf,
-    rig: PreviewRigKind,
-    time_ms: u64,
-    generation: u64,
-) -> OutputFrame {
-    let fixtures = synthetic_rig(rig);
-    let bounds = synthetic_bounds(rig);
-    let mut status = OutputFrameStatus::Live;
-    let params = analysis.default_runtime_params_for_script(&path);
-    let script_name = analysis
-        .compiled_script_for_path(&path)
-        .map(|script| script.name.clone())
-        .unwrap_or_else(|| "Effect script".to_string());
-    let loop_ms = time_ms % EFFECT_PREVIEW_LOOP_MS;
-    let progress = (loop_ms as f64 / EFFECT_PREVIEW_LOOP_MS as f64).clamp(0.0, 1.0);
-
-    let output_fixtures = fixtures
-        .into_iter()
-        .map(|fixture| {
-            let plan = transform_geometry_render_plan(
-                &geometry_render_plan(&fixture.fixture.geometry, fixture.fixture.bulb_size),
-                &fixture.transform,
-            );
-            let pixels = plan
-                .emitters
-                .iter()
-                .enumerate()
-                .map(|(pixel_index, position)| {
-                    let color = analysis
-                        .sample_effect_script(
-                            &path,
-                            progress,
-                            loop_ms as f64 / 1_000.0,
-                            FixtureContext {
-                                index: fixture.index,
-                            },
-                            PixelContext { index: pixel_index },
-                            params.clone(),
-                        )
-                        .unwrap_or_else(|error| {
-                            status = OutputFrameStatus::Error(error);
-                            Color::new(255, 64, 64)
-                        });
-                    OutputPixelFrame {
-                        position: *position,
-                        color,
-                    }
-                })
-                .collect();
-            OutputFixtureFrame {
-                id: fixture.id,
-                name: fixture.name,
-                bulb_radius: plan.bulb_radius,
-                pixels,
-            }
-        })
-        .collect();
-
-    OutputFrame {
-        source: OutputSourceMetadata {
-            label: format!("{script_name} on {}", rig.label()),
-            kind: OutputSourceKind::EffectScript,
-            duration_ms: EFFECT_PREVIEW_LOOP_MS,
-            fps: 60,
-        },
-        time_ms: loop_ms,
-        generation,
-        status,
-        bounds,
-        fixtures: output_fixtures,
-    }
-}
-
 fn add_clamped(target: &mut Color, color: Color) {
     target.red = target.red.saturating_add(color.red);
     target.green = target.green.saturating_add(color.green);
@@ -326,135 +174,7 @@ fn runtime_value_from_param(param: &EffectParam<Resolved>) -> Option<RuntimeValu
     }
 }
 
-fn active_effect_script_path(state: &AppSnapshot) -> Option<Utf8PathBuf> {
-    state
-        .active_file
-        .as_ref()
-        .filter(|path| {
-            path.file_name()
-                .is_some_and(|name| name.ends_with(".effect.dawn"))
-        })
-        .and_then(|active| {
-            state.analysis.as_ref()?.scripts.keys().find_map(|path| {
-                path.ends_with(&active.to_slash_string())
-                    .then(|| Utf8PathBuf::from(path.as_str()))
-            })
-        })
-}
-
-#[derive(Debug, Clone)]
-struct SyntheticFixture {
-    index: usize,
-    id: FixtureId,
-    name: String,
-    transform: Transform,
-    fixture: Fixture,
-}
-
-fn synthetic_rig(kind: PreviewRigKind) -> Vec<SyntheticFixture> {
-    vec![SyntheticFixture {
-        index: 0,
-        id: FixtureId(1),
-        name: kind.label().to_string(),
-        transform: Transform {
-            position: Point3::default(),
-            rotation: Rotation3::default(),
-            scale: Scale3::default(),
-        },
-        fixture: Fixture {
-            name: kind.label().to_string(),
-            color_model: ColorModel::Rgb,
-            bulb_size: 1.6,
-            geometry: synthetic_geometry(kind),
-        },
-    }]
-}
-
-fn synthetic_geometry(kind: PreviewRigKind) -> Geometry {
-    match kind {
-        PreviewRigKind::Strand => Geometry::Lines {
-            points: vec![
-                Point3 {
-                    x: -4.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-                Point3 {
-                    x: 4.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-            ],
-            pixels: 48,
-        },
-        PreviewRigKind::VerticalStrand => Geometry::Lines {
-            points: vec![
-                Point3 {
-                    x: 0.0,
-                    y: -3.5,
-                    z: 0.0,
-                },
-                Point3 {
-                    x: 0.0,
-                    y: 3.5,
-                    z: 0.0,
-                },
-            ],
-            pixels: 48,
-        },
-        PreviewRigKind::Circle => Geometry::Arc {
-            center: Point3::default(),
-            radius: 2.8,
-            start_degrees: 0.0,
-            end_degrees: 360.0,
-            pixels: 64,
-        },
-        PreviewRigKind::Grid => {
-            let mut points = Vec::new();
-            for row in 0..8 {
-                for column in 0..8 {
-                    points.push(Point3 {
-                        x: (column as f64 - 3.5) * 0.75,
-                        y: (3.5 - row as f64) * 0.75,
-                        z: 0.0,
-                    });
-                }
-            }
-            Geometry::Points { points }
-        }
-    }
-}
-
-fn synthetic_bounds(kind: PreviewRigKind) -> GeometryRenderBounds {
-    match kind {
-        PreviewRigKind::Strand => GeometryRenderBounds {
-            min_x: -4.5,
-            min_y: -1.0,
-            max_x: 4.5,
-            max_y: 1.0,
-        },
-        PreviewRigKind::VerticalStrand => GeometryRenderBounds {
-            min_x: -1.0,
-            min_y: -4.0,
-            max_x: 1.0,
-            max_y: 4.0,
-        },
-        PreviewRigKind::Circle => GeometryRenderBounds {
-            min_x: -3.4,
-            min_y: -3.4,
-            max_x: 3.4,
-            max_y: 3.4,
-        },
-        PreviewRigKind::Grid => GeometryRenderBounds {
-            min_x: -3.2,
-            min_y: -3.2,
-            max_x: 3.2,
-            max_y: 3.2,
-        },
-    }
-}
-
-fn empty_frame(generation: u64, message: impl Into<String>) -> OutputFrame {
+pub fn empty_frame(generation: u64, message: impl Into<String>) -> OutputFrame {
     OutputFrame {
         source: OutputSourceMetadata {
             label: "No preview source".to_string(),

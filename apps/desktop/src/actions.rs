@@ -4,8 +4,6 @@ use dawn_project::document::LayoutTargetDocument;
 use dawn_project::model::FixtureId;
 use dawn_project::path::Utf8PathBuf;
 
-use crate::app_model::PreviewRigKind;
-
 #[derive(Debug, Clone)]
 pub enum AppAction {
     OpenProject(PathBuf),
@@ -128,8 +126,6 @@ pub enum AppAction {
         time_ms: u64,
     },
     OpenSequence(Utf8PathBuf),
-    SelectPreviewFixture(Option<FixtureId>),
-    SelectPreviewRig(PreviewRigKind),
     OpenPreviewWindow,
     PreviewWindowClosed,
     SetPreviewWindowBounds {
@@ -143,9 +139,7 @@ pub enum AppAction {
     Play,
     Pause,
     Stop,
-    TickPlayback {
-        delta_ms: u64,
-    },
+    TickPreview,
     About,
     Seek(f64),
     ToggleProjectTree,

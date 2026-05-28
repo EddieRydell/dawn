@@ -13,8 +13,9 @@ use std::rc::Rc;
 use floem::reactive::RwSignal;
 
 use crate::actions::AppAction;
-use crate::app_model::{AppSnapshot, PlaybackClock};
+use crate::app_model::AppSnapshot;
+use crate::preview_session::PreviewSnapshot;
 
 pub type UiSnapshot = RwSignal<AppSnapshot>;
-pub type UiPlaybackClock = RwSignal<PlaybackClock>;
+pub type UiPreviewSnapshot = RwSignal<PreviewSnapshot>;
 pub type UiDispatch = Rc<dyn Fn(AppAction)>;

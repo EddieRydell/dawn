@@ -40,30 +40,30 @@ pub fn run() {
 fn app_view(window_id: WindowId) -> impl IntoView {
     let model = Rc::new(RefCell::new(AppModel::default()));
     let snapshot = RwSignal::new(model.borrow().snapshot());
-    let playback_clock = RwSignal::new(model.borrow().playback_clock());
+    let preview_snapshot = RwSignal::new(model.borrow().preview.snapshot());
     let dropdown_menu = DropdownMenuController::new(theme::dropdown_menu_style());
     let preview_window_id = Rc::new(RefCell::new(None::<WindowId>));
-    let playback_tick_scheduled = Rc::new(RefCell::new(false));
+    let preview_tick_scheduled = Rc::new(RefCell::new(false));
 
     let dispatch = {
         let model = Rc::clone(&model);
         let preview_window_id = Rc::clone(&preview_window_id);
-        let playback_tick_scheduled = Rc::clone(&playback_tick_scheduled);
+        let preview_tick_scheduled = Rc::clone(&preview_tick_scheduled);
         Rc::new(move |action: AppAction| {
             if matches!(action, AppAction::OpenPreviewWindow) {
                 open_or_focus_preview_window(
                     Rc::clone(&model),
                     snapshot,
-                    playback_clock,
+                    preview_snapshot,
                     Rc::clone(&preview_window_id),
                 );
             }
-            dispatch_model_action(Rc::clone(&model), snapshot, playback_clock, action);
-            schedule_playback_tick_if_needed(
+            dispatch_model_action(Rc::clone(&model), snapshot, preview_snapshot, action);
+            schedule_preview_tick_if_needed(
                 Rc::clone(&model),
                 snapshot,
-                playback_clock,
-                Rc::clone(&playback_tick_scheduled),
+                preview_snapshot,
+                Rc::clone(&preview_tick_scheduled),
             );
         }) as crate::ui::UiDispatch
     };
@@ -79,7 +79,7 @@ fn app_view(window_id: WindowId) -> impl IntoView {
             ),
             crate::ui::workbench::workbench_view(
                 snapshot,
-                playback_clock,
+                preview_snapshot,
                 dropdown_menu.clone(),
                 Rc::clone(&dispatch),
             ),
@@ -111,10 +111,10 @@ fn app_view(window_id: WindowId) -> impl IntoView {
 fn dispatch_model_action(
     model: Rc<RefCell<AppModel>>,
     snapshot: crate::ui::UiSnapshot,
-    playback_clock: crate::ui::UiPlaybackClock,
+    preview_snapshot: crate::ui::UiPreviewSnapshot,
     action: AppAction,
 ) {
-    let playback_tick = matches!(action, AppAction::TickPlayback { .. });
+    let preview_tick = matches!(action, AppAction::TickPreview);
     let before_revision = model.borrow().pending_persistence_revision();
     let dispatch_result = {
         let mut model = model.borrow_mut();
@@ -129,19 +129,19 @@ fn dispatch_model_action(
     };
     let after_revision = model.borrow().pending_persistence_revision();
     if snapshot_changed {
-        if playback_tick {
-            playback_clock.set(model.borrow().playback_clock());
+        if preview_tick {
+            preview_snapshot.set(model.borrow().preview.snapshot());
         } else {
             let model = model.borrow();
             snapshot.set(model.snapshot());
-            playback_clock.set(model.playback_clock());
+            preview_snapshot.set(model.preview.snapshot());
         }
     }
     if after_revision.is_some() && after_revision != before_revision {
         schedule_deferred_persistence(
             model,
             snapshot,
-            playback_clock,
+            preview_snapshot,
             after_revision.expect("revision was checked"),
         );
     }
@@ -150,7 +150,7 @@ fn dispatch_model_action(
 fn open_or_focus_preview_window(
     model: Rc<RefCell<AppModel>>,
     snapshot: crate::ui::UiSnapshot,
-    playback_clock: crate::ui::UiPlaybackClock,
+    preview_snapshot: crate::ui::UiPreviewSnapshot,
     preview_window_id: Rc<RefCell<Option<WindowId>>>,
 ) {
     if let Some(window_id) = *preview_window_id.borrow() {
@@ -169,14 +169,19 @@ fn open_or_focus_preview_window(
         .apply_default_theme(false);
     let preview_model = Rc::clone(&model);
     let preview_dispatch = Rc::new(move |action: AppAction| {
-        dispatch_model_action(Rc::clone(&preview_model), snapshot, playback_clock, action);
+        dispatch_model_action(
+            Rc::clone(&preview_model),
+            snapshot,
+            preview_snapshot,
+            action,
+        );
     }) as crate::ui::UiDispatch;
     new_window(
         move |window_id| {
             crate::ui::preview_window::preview_window_view(
                 window_id,
                 snapshot,
-                playback_clock,
+                preview_snapshot,
                 Rc::clone(&preview_dispatch),
                 Rc::clone(&preview_window_id),
             )
@@ -188,26 +193,26 @@ fn open_or_focus_preview_window(
 fn schedule_deferred_persistence(
     model: Rc<RefCell<AppModel>>,
     snapshot: crate::ui::UiSnapshot,
-    playback_clock: crate::ui::UiPlaybackClock,
+    preview_snapshot: crate::ui::UiPreviewSnapshot,
     revision: u64,
 ) {
     action::exec_after(Duration::from_millis(1500), move |_| {
         dispatch_model_action(
             Rc::clone(&model),
             snapshot,
-            playback_clock,
+            preview_snapshot,
             AppAction::FlushDeferredPersistence { revision },
         );
     });
 }
 
-fn schedule_playback_tick_if_needed(
+fn schedule_preview_tick_if_needed(
     model: Rc<RefCell<AppModel>>,
     snapshot: crate::ui::UiSnapshot,
-    playback_clock: crate::ui::UiPlaybackClock,
+    preview_snapshot: crate::ui::UiPreviewSnapshot,
     scheduled: Rc<RefCell<bool>>,
 ) {
-    if !playback_clock.get_untracked().is_playing || *scheduled.borrow() {
+    if !preview_snapshot.get_untracked().is_playing || *scheduled.borrow() {
         return;
     }
     *scheduled.borrow_mut() = true;
@@ -216,10 +221,10 @@ fn schedule_playback_tick_if_needed(
         dispatch_model_action(
             Rc::clone(&model),
             snapshot,
-            playback_clock,
-            AppAction::TickPlayback { delta_ms: 33 },
+            preview_snapshot,
+            AppAction::TickPreview,
         );
-        schedule_playback_tick_if_needed(model, snapshot, playback_clock, scheduled);
+        schedule_preview_tick_if_needed(model, snapshot, preview_snapshot, scheduled);
     });
 }
 

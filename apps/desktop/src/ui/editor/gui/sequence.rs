@@ -88,7 +88,7 @@ impl Default for SequenceTimelineState {
 pub fn sequence_viewer(
     document: SequenceDocument,
     snapshot: crate::ui::UiSnapshot,
-    playback_clock: crate::ui::UiPlaybackClock,
+    playback_clock: crate::ui::UiPreviewSnapshot,
     gui_state: EditorGuiUiState,
     dropdown_menu: DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
@@ -105,12 +105,12 @@ pub fn sequence_viewer(
                 state.analysis.clone(),
                 timeline_state,
                 selected_effect,
-                state.sequence_playhead_ms,
+                state.preview.position_ms,
                 snapshot,
                 playback_clock,
                 dropdown_menu,
                 Rc::clone(&dispatch),
-                state.sequence_playhead_home_ms,
+                state.preview.home_ms,
             )
             .style(|s| {
                 s.flex_grow(1.0)
@@ -172,7 +172,7 @@ pub fn sequence_viewer(
 
 fn sequence_header(
     document: &SequenceDocument,
-    playback_clock: crate::ui::UiPlaybackClock,
+    playback_clock: crate::ui::UiPreviewSnapshot,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {
     let degraded = if document.degraded {
@@ -271,7 +271,7 @@ fn sequence_header(
             let clock = playback_clock.get();
             format!(
                 "{} / {}",
-                format_time(clock.sequence_playhead_ms),
+                format_time(clock.position_ms),
                 format_time(sequence_duration_ms)
             )
         })
@@ -547,7 +547,7 @@ impl SequenceTimeline {
         selected_effect: Option<u32>,
         playhead_ms: u64,
         snapshot: crate::ui::UiSnapshot,
-        playback_clock: crate::ui::UiPlaybackClock,
+        playback_clock: crate::ui::UiPreviewSnapshot,
         dropdown_menu: DropdownMenuController,
         dispatch: crate::ui::UiDispatch,
         playhead_home_ms: u64,
@@ -568,12 +568,12 @@ impl SequenceTimeline {
         });
         create_effect(move |_| {
             id.update_state(SequenceTimelineUpdate::Playhead(
-                playback_clock.get().sequence_playhead_ms,
+                playback_clock.get().position_ms,
             ));
         });
         create_effect(move |_| {
             id.update_state(SequenceTimelineUpdate::PlayheadHome(
-                playback_clock.get().sequence_playhead_home_ms,
+                playback_clock.get().home_ms,
             ));
         });
         create_effect(move |_| {

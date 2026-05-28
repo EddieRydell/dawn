@@ -11,7 +11,7 @@ use crate::ui::theme;
 
 pub fn workbench_view(
     snapshot: crate::ui::UiSnapshot,
-    playback_clock: crate::ui::UiPlaybackClock,
+    playback_clock: crate::ui::UiPreviewSnapshot,
     dropdown_menu: crate::ui::components::dropdown_menu::DropdownMenuController,
     dispatch: crate::ui::UiDispatch,
 ) -> impl IntoView {

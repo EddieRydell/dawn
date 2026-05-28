@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::actions::AppAction;
 use crate::editor_session::{EditorBuffer, EditorSession};
 use crate::layout_persistence::{load_workbench_layout, save_workbench_layout, WorkbenchLayout};
+use crate::preview_session::{PreviewSession, PreviewSnapshot, SequenceKey};
 use crate::ui::theme;
 use crate::workspace::WorkspaceService;
 use dawn_project::analysis::{ProjectAnalysis, ProjectDiagnostic};
@@ -19,28 +20,6 @@ use dawn_project::model::{
 use dawn_project::path::Utf8PathBuf;
 use dawn_project::render::{GeometryRenderBounds, GeometryRenderPlan, GeometryRenderPoint};
 
-#[derive(Debug, Clone)]
-pub struct PlaybackState {
-    pub is_playing: bool,
-    pub time_ms: u64,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct PlaybackClock {
-    pub is_playing: bool,
-    pub time_ms: u64,
-    pub sequence_playhead_ms: u64,
-    pub sequence_playhead_home_ms: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PreviewRigKind {
-    Strand,
-    VerticalStrand,
-    Circle,
-    Grid,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DispatchOutcome {
     SnapshotChanged,
@@ -53,32 +32,12 @@ impl DispatchOutcome {
     }
 }
 
-impl PreviewRigKind {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Strand => "Strand",
-            Self::VerticalStrand => "Vertical",
-            Self::Circle => "Circle",
-            Self::Grid => "Grid",
-        }
-    }
-}
-
-impl Default for PlaybackState {
-    fn default() -> Self {
-        Self {
-            is_playing: false,
-            time_ms: 0,
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct AppModel {
     pub workspace: WorkspaceService,
     pub editors: EditorSession,
     pub workbench_layout: WorkbenchLayout,
-    pub playback: PlaybackState,
+    pub preview: PreviewSession,
     pub project_root: Option<String>,
     pub project_entries: Vec<WorkspaceEntry>,
     pub analysis: Option<ProjectAnalysis>,
@@ -93,11 +52,7 @@ pub struct AppModel {
     pub pending_layout_fixture_import: Option<PendingLayoutFixtureImport>,
     pub pending_layout_fixture_name: Option<PendingLayoutFixtureName>,
     pub selected_fixture_definitions: HashMap<Utf8PathBuf, String>,
-    pub selected_preview_fixture: Option<FixtureId>,
     pub selected_sequence_effect: Option<u32>,
-    pub sequence_playheads: HashMap<Utf8PathBuf, u64>,
-    pub sequence_playhead_homes: HashMap<Utf8PathBuf, u64>,
-    pub preview_rig: PreviewRigKind,
     pub status: String,
 }
 
@@ -108,7 +63,7 @@ pub struct AppSnapshot {
     pub analysis: Option<ProjectAnalysis>,
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub workbench_layout: WorkbenchLayout,
-    pub playback: PlaybackState,
+    pub preview: PreviewSnapshot,
     pub tabs: Vec<EditorBuffer>,
     pub active_file: Option<Utf8PathBuf>,
     pub active_buffer: Option<EditorBuffer>,
@@ -118,11 +73,7 @@ pub struct AppSnapshot {
     pub active_sequence_document: Option<SequenceDocument>,
     pub pending_layout_fixture_import: Option<PendingLayoutFixtureImport>,
     pub pending_layout_fixture_name: Option<PendingLayoutFixtureName>,
-    pub selected_preview_fixture: Option<FixtureId>,
     pub selected_sequence_effect: Option<u32>,
-    pub sequence_playhead_ms: u64,
-    pub sequence_playhead_home_ms: u64,
-    pub preview_rig: PreviewRigKind,
     pub status: String,
 }
 
@@ -165,7 +116,7 @@ impl Default for AppModel {
             workspace: WorkspaceService::default(),
             editors: EditorSession::default(),
             workbench_layout,
-            playback: PlaybackState::default(),
+            preview: PreviewSession::default(),
             project_root: None,
             project_entries: Vec::new(),
             analysis: None,
@@ -180,11 +131,7 @@ impl Default for AppModel {
             pending_layout_fixture_import: None,
             pending_layout_fixture_name: None,
             selected_fixture_definitions: HashMap::new(),
-            selected_preview_fixture: None,
             selected_sequence_effect: None,
-            sequence_playheads: HashMap::new(),
-            sequence_playhead_homes: HashMap::new(),
-            preview_rig: PreviewRigKind::Strand,
             status: "No project open".to_string(),
         };
         if let Some(path) = last_project_root {
@@ -205,21 +152,13 @@ impl AppModel {
     pub fn snapshot(&self) -> AppSnapshot {
         let active_file = self.editors.active_file().cloned();
         let active_buffer = self.editors.active_buffer().cloned();
-        let sequence_playhead_ms = active_file
-            .as_ref()
-            .and_then(|path| self.sequence_playheads.get(path).copied())
-            .unwrap_or_default();
-        let sequence_playhead_home_ms = active_file
-            .as_ref()
-            .and_then(|path| self.sequence_playhead_homes.get(path).copied())
-            .unwrap_or_default();
         AppSnapshot {
             project_root: self.project_root.clone(),
             project_entries: self.project_entries.clone(),
             analysis: self.analysis.clone(),
             diagnostics: self.diagnostics.clone(),
             workbench_layout: self.workbench_layout.clone(),
-            playback: self.playback.clone(),
+            preview: self.preview.snapshot(),
             tabs: self.editors.tabs(),
             active_file,
             active_buffer,
@@ -229,21 +168,8 @@ impl AppModel {
             active_sequence_document: self.active_sequence_document.clone(),
             pending_layout_fixture_import: self.pending_layout_fixture_import.clone(),
             pending_layout_fixture_name: self.pending_layout_fixture_name.clone(),
-            selected_preview_fixture: self.selected_preview_fixture,
             selected_sequence_effect: self.selected_sequence_effect,
-            sequence_playhead_ms,
-            sequence_playhead_home_ms,
-            preview_rig: self.preview_rig,
             status: self.status.clone(),
-        }
-    }
-
-    pub fn playback_clock(&self) -> PlaybackClock {
-        PlaybackClock {
-            is_playing: self.playback.is_playing,
-            time_ms: self.playback.time_ms,
-            sequence_playhead_ms: self.current_sequence_playhead_ms(),
-            sequence_playhead_home_ms: self.current_sequence_playhead_home_ms(),
         }
     }
 
@@ -268,12 +194,8 @@ impl AppModel {
                 self.clear_active_documents();
                 self.editors.clear();
                 self.selected_fixture_definitions.clear();
-                self.selected_preview_fixture = None;
                 self.selected_sequence_effect = None;
-                self.sequence_playheads.clear();
-                self.sequence_playhead_homes.clear();
-                self.playback = PlaybackState::default();
-                self.preview_rig = PreviewRigKind::Strand;
+                self.preview.reset();
                 self.pending_layout_fixture_import = None;
                 self.pending_layout_fixture_name = None;
                 self.workbench_layout.editor_session = self.editors.state();
@@ -290,6 +212,7 @@ impl AppModel {
                 self.flush_autosave()?;
                 self.refresh_project_entries()?;
                 self.refresh_analysis()?;
+                self.sync_preview_source();
                 self.status = "Project checked".to_string();
             }
             AppAction::OpenFile(path) => {
@@ -300,6 +223,7 @@ impl AppModel {
                 self.editors.open_file(path, text);
                 self.refresh_analysis()?;
                 self.refresh_active_documents()?;
+                self.sync_preview_source();
                 self.persist_workbench_layout()?;
             }
             AppAction::CloseFile(path) => {
@@ -309,6 +233,7 @@ impl AppModel {
                 self.editors.close_file(&path);
                 self.refresh_analysis()?;
                 self.refresh_active_documents()?;
+                self.sync_preview_source();
                 self.persist_workbench_layout()?;
             }
             AppAction::SetActiveFile(path) => {
@@ -317,8 +242,10 @@ impl AppModel {
                 let active_changed = self.editors.active_file() != Some(&path);
                 self.editors.set_active_file(path);
                 if active_changed {
+                    self.preview.pause(self.analysis.as_ref());
                     self.selected_sequence_effect = None;
                     self.refresh_active_documents()?;
+                    self.sync_preview_source();
                     self.persist_workbench_layout()?;
                 }
             }
@@ -349,7 +276,10 @@ impl AppModel {
                 self.persist_workbench_layout()?;
             }
             AppAction::CycleTabs { reverse } => {
+                self.preview.pause(self.analysis.as_ref());
                 self.editors.cycle_tabs(reverse);
+                self.refresh_active_documents()?;
+                self.sync_preview_source();
                 self.persist_workbench_layout()?;
             }
             AppAction::RenamePath { path, new_name } => {
@@ -360,6 +290,7 @@ impl AppModel {
                 self.reconcile_selected_fixture_paths(&moves);
                 self.refresh_analysis()?;
                 self.refresh_active_documents()?;
+                self.sync_preview_source();
                 self.persist_workbench_layout()?;
             }
             AppAction::CreateFile { parent, name } => {
@@ -370,6 +301,7 @@ impl AppModel {
                 self.editors.open_file(path, text);
                 self.refresh_analysis()?;
                 self.refresh_active_documents()?;
+                self.sync_preview_source();
                 self.persist_workbench_layout()?;
             }
             AppAction::CreateDirectory { parent, name } => {
@@ -378,6 +310,7 @@ impl AppModel {
                 self.refresh_project_entries()?;
                 self.refresh_analysis()?;
                 self.refresh_active_documents()?;
+                self.sync_preview_source();
             }
             AppAction::DeletePath(path) => {
                 self.flush_autosave()?;
@@ -390,6 +323,7 @@ impl AppModel {
                     });
                 self.refresh_analysis()?;
                 self.refresh_active_documents()?;
+                self.sync_preview_source();
                 self.persist_workbench_layout()?;
             }
             AppAction::MovePaths { paths, new_parent } => {
@@ -400,6 +334,7 @@ impl AppModel {
                 self.reconcile_selected_fixture_paths(&moves);
                 self.refresh_analysis()?;
                 self.refresh_active_documents()?;
+                self.sync_preview_source();
                 self.persist_workbench_layout()?;
             }
             AppAction::NudgeLayoutFixtures {
@@ -766,25 +701,13 @@ impl AppModel {
             }
             AppAction::SetSequencePlayhead { time_ms } => {
                 if self.active_sequence_document.is_some() {
-                    let playhead_ms = self.set_current_sequence_playhead_ms(time_ms);
-                    self.set_current_sequence_playhead_home_ms(playhead_ms);
-                    self.playback.time_ms = self.current_sequence_playhead_ms();
+                    self.sync_preview_source();
+                    self.preview
+                        .set_sequence_playhead(time_ms, self.analysis.as_ref());
                     self.status = "Sequence playhead moved".to_string();
                 }
             }
             AppAction::OpenSequence(path) => self.workspace.open_sequence(path)?,
-            AppAction::SelectPreviewFixture(fixture_id) => {
-                self.selected_preview_fixture = fixture_id;
-                self.status = match fixture_id {
-                    Some(id) => format!("Preview target fixture `{id}`"),
-                    None => "Preview target all fixtures".to_string(),
-                };
-            }
-            AppAction::SelectPreviewRig(rig) => {
-                self.preview_rig = rig;
-                self.selected_preview_fixture = None;
-                self.status = format!("Preview rig `{}`", rig.label());
-            }
             AppAction::OpenPreviewWindow => {
                 self.status = "Preview window opened".to_string();
             }
@@ -806,49 +729,42 @@ impl AppModel {
             }
             AppAction::GoToSequenceBeginning => {
                 if self.active_sequence_document.is_some() {
-                    self.playback.is_playing = false;
-                    self.set_current_sequence_playhead_ms(0);
-                    self.set_current_sequence_playhead_home_ms(0);
-                    self.playback.time_ms = 0;
+                    self.sync_preview_source();
+                    self.preview
+                        .go_to_sequence_beginning(self.analysis.as_ref());
                     self.status = "Sequence returned to beginning".to_string();
                 }
             }
             AppAction::TogglePlayback => {
-                if self.playback.is_playing {
-                    self.playback.is_playing = false;
+                if self.preview.is_playing() {
+                    self.preview.pause(self.analysis.as_ref());
                 } else {
-                    self.playback.time_ms = self.current_sequence_playhead_ms();
-                    self.playback.is_playing = true;
+                    self.sync_preview_source();
+                    self.preview.play(self.analysis.as_ref());
                 }
             }
             AppAction::Play => {
-                self.playback.time_ms = self.current_sequence_playhead_ms();
-                self.playback.is_playing = true;
+                self.sync_preview_source();
+                self.preview.play(self.analysis.as_ref());
             }
-            AppAction::Pause => self.playback.is_playing = false,
+            AppAction::Pause => self.preview.pause(self.analysis.as_ref()),
             AppAction::Stop => {
-                self.playback.is_playing = false;
-                if self.active_sequence_document.is_some() {
-                    let home_ms = self.current_sequence_playhead_home_ms();
-                    self.set_current_sequence_playhead_ms(home_ms);
-                    self.playback.time_ms = self.current_sequence_playhead_ms();
-                } else {
-                    self.playback.time_ms = 0;
-                }
+                self.preview.stop(self.analysis.as_ref());
             }
-            AppAction::TickPlayback { delta_ms } => {
-                if !self.playback.is_playing {
+            AppAction::TickPreview => {
+                if !self.preview.is_playing() {
                     return Ok(DispatchOutcome::NoSnapshotChange);
                 }
-                self.tick_playback(delta_ms);
+                self.preview.tick(self.analysis.as_ref());
             }
             AppAction::About => {
                 self.status = "Dawn desktop IDE".to_string();
             }
             AppAction::Seek(time) => {
                 let time_ms = (time.max(0.0) * 1_000.0).round() as u64;
-                self.playback.time_ms = time_ms;
-                self.set_current_sequence_playhead_ms(time_ms);
+                self.sync_preview_source();
+                self.preview
+                    .set_sequence_playhead(time_ms, self.analysis.as_ref());
             }
             AppAction::ToggleProjectTree => {
                 self.workbench_layout.project_tree_visible =
@@ -900,12 +816,8 @@ impl AppModel {
         self.refresh_project_entries()?;
         self.editors.clear();
         self.selected_fixture_definitions.clear();
-        self.selected_preview_fixture = None;
         self.selected_sequence_effect = None;
-        self.sequence_playheads.clear();
-        self.sequence_playhead_homes.clear();
-        self.playback = PlaybackState::default();
-        self.preview_rig = PreviewRigKind::Strand;
+        self.preview.reset();
         self.pending_layout_fixture_import = None;
         self.pending_layout_fixture_name = None;
         if restore_editor_session {
@@ -913,6 +825,7 @@ impl AppModel {
         }
         self.refresh_analysis()?;
         self.refresh_active_documents()?;
+        self.sync_preview_source();
         if remember {
             self.workbench_layout.last_project_root = Some(path);
             self.persist_workbench_layout()?;
@@ -1125,6 +1038,7 @@ impl AppModel {
             outcome => {
                 self.editors.update_active_text(outcome.serialized_content);
                 self.active_sequence_document = Some(outcome.refreshed_document);
+                self.sync_preview_source();
                 self.defer_persistence();
             }
         }
@@ -1156,7 +1070,9 @@ impl AppModel {
         self.editors.mark_saved(&buffer.path, buffer.text);
         self.pending_persistence_revision = None;
         self.refresh_analysis()?;
-        self.refresh_active_documents()
+        self.refresh_active_documents()?;
+        self.sync_preview_source();
+        Ok(())
     }
 
     fn save_active_file_after_text_edit(&mut self) -> Result<(), String> {
@@ -1171,9 +1087,13 @@ impl AppModel {
             .refresh_analysis()
             .and_then(|()| self.refresh_active_documents())
         {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                self.sync_preview_source();
+                Ok(())
+            }
             Err(error) => {
                 self.status = error;
+                self.sync_preview_source();
                 Ok(())
             }
         }
@@ -1190,6 +1110,7 @@ impl AppModel {
         if had_dirty_buffers {
             self.refresh_analysis()?;
             self.refresh_active_documents()?;
+            self.sync_preview_source();
         }
         Ok(())
     }
@@ -1211,69 +1132,19 @@ impl AppModel {
         Ok(DispatchOutcome::SnapshotChanged)
     }
 
-    fn current_sequence_playhead_ms(&self) -> u64 {
-        self.editors
-            .active_file()
-            .and_then(|path| self.sequence_playheads.get(path).copied())
-            .unwrap_or(self.playback.time_ms)
+    fn sync_preview_source(&mut self) {
+        let source = self.active_sequence_source();
+        self.preview.sync_source(source, self.analysis.as_ref());
     }
 
-    fn current_sequence_playhead_home_ms(&self) -> u64 {
-        self.editors
-            .active_file()
-            .and_then(|path| self.sequence_playhead_homes.get(path).copied())
-            .unwrap_or_default()
-    }
-
-    fn set_current_sequence_playhead_ms(&mut self, time_ms: u64) -> u64 {
-        let Some(path) = self.editors.active_file().cloned() else {
-            return time_ms;
+    fn active_sequence_source(&self) -> Option<(SequenceKey, SequenceDocument)> {
+        let path = self.editors.active_file()?.clone();
+        let document = self.active_sequence_document.clone()?;
+        let key = SequenceKey {
+            path,
+            object_key: document.object_key.clone(),
         };
-        if self.active_sequence_document.is_some() {
-            let duration_ms = self
-                .active_sequence_document
-                .as_ref()
-                .map(|document| document.duration_ms)
-                .unwrap_or(time_ms);
-            let playhead_ms = time_ms.min(duration_ms);
-            self.sequence_playheads.insert(path, playhead_ms);
-            playhead_ms
-        } else {
-            time_ms
-        }
-    }
-
-    fn set_current_sequence_playhead_home_ms(&mut self, time_ms: u64) {
-        let Some(path) = self.editors.active_file().cloned() else {
-            return;
-        };
-        if self.active_sequence_document.is_some() {
-            let duration_ms = self
-                .active_sequence_document
-                .as_ref()
-                .map(|document| document.duration_ms)
-                .unwrap_or(time_ms);
-            self.sequence_playhead_homes
-                .insert(path, time_ms.min(duration_ms));
-        }
-    }
-
-    fn tick_playback(&mut self, delta_ms: u64) {
-        let next_time_ms = self.playback.time_ms.saturating_add(delta_ms);
-        if let Some(document) = self.active_sequence_document.as_ref() {
-            if next_time_ms >= document.duration_ms {
-                self.playback.time_ms = document.duration_ms;
-                self.set_current_sequence_playhead_ms(document.duration_ms);
-                self.playback.is_playing = false;
-                self.status = "Sequence playback complete".to_string();
-            } else {
-                self.playback.time_ms = next_time_ms;
-                self.set_current_sequence_playhead_ms(next_time_ms);
-            }
-        } else {
-            self.playback.time_ms =
-                next_time_ms % crate::output_runtime::EFFECT_PREVIEW_LOOP_MS.max(1);
-        }
+        Some((key, document))
     }
 }
 
