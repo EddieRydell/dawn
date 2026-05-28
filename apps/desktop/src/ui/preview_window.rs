@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use floem::context::{ComputeLayoutCx, EventCx, PaintCx, UpdateCx};
 use floem::event::{Event, EventListener};
@@ -9,7 +10,7 @@ use floem::prelude::*;
 use floem::reactive::create_effect;
 use floem::style::Foreground;
 use floem::window::WindowId;
-use floem::{View, ViewId};
+use floem::{action, View, ViewId, WindowIdExt};
 use floem_renderer::Renderer;
 
 use crate::actions::AppAction;
@@ -35,6 +36,8 @@ pub fn preview_window_view(
     let resize_dispatch = Rc::clone(&dispatch);
     let close_dispatch = Rc::clone(&dispatch);
     let close_window_id = Rc::clone(&preview_window_id);
+    let repaint_active = Rc::new(RefCell::new(true));
+    schedule_preview_window_repaint_pulse(window_id, preview_snapshot, Rc::clone(&repaint_active));
 
     v_stack((preview_content(preview_snapshot).style(|s| s.size_full()),))
         .on_event_stop(EventListener::WindowMoved, move |event| {
@@ -43,6 +46,7 @@ pub fn preview_window_view(
                 bounds.x = point.x;
                 bounds.y = point.y;
                 move_dispatch(bounds_action(&bounds));
+                force_preview_window_repaint_burst(window_id);
             }
         })
         .on_event_stop(EventListener::WindowResized, move |event| {
@@ -51,13 +55,57 @@ pub fn preview_window_view(
                 bounds.width = size.width;
                 bounds.height = size.height;
                 resize_dispatch(bounds_action(&bounds));
+                force_preview_window_repaint_burst(window_id);
             }
+        })
+        .on_event_stop(EventListener::WindowMaximizeChanged, move |_| {
+            force_preview_window_repaint_burst(window_id);
         })
         .on_event_stop(EventListener::WindowClosed, move |_| {
             *close_window_id.borrow_mut() = None;
+            *repaint_active.borrow_mut() = false;
             close_dispatch(AppAction::PreviewWindowClosed);
         })
         .style(theme::app_root_style)
+}
+
+fn force_preview_window_repaint_burst(window_id: WindowId) {
+    refresh_preview_window(window_id);
+    schedule_preview_window_repaint_burst(window_id, 8);
+}
+
+fn schedule_preview_window_repaint_burst(window_id: WindowId, remaining: u8) {
+    if remaining == 0 {
+        return;
+    }
+    action::exec_after(Duration::from_millis(33), move |_| {
+        refresh_preview_window(window_id);
+        schedule_preview_window_repaint_burst(window_id, remaining - 1);
+    });
+}
+
+fn schedule_preview_window_repaint_pulse(
+    window_id: WindowId,
+    preview_snapshot: crate::ui::UiPreviewSnapshot,
+    active: Rc<RefCell<bool>>,
+) {
+    action::exec_after(Duration::from_millis(33), move |_| {
+        if !*active.borrow() {
+            return;
+        }
+        if preview_snapshot.get_untracked().is_playing {
+            refresh_preview_window(window_id);
+        }
+        schedule_preview_window_repaint_pulse(window_id, preview_snapshot, active);
+    });
+}
+
+fn refresh_preview_window(window_id: WindowId) {
+    if let Some(root) = window_id.root_view() {
+        root.request_layout();
+        root.request_paint();
+    }
+    window_id.force_repaint();
 }
 
 fn preview_content(preview_snapshot: crate::ui::UiPreviewSnapshot) -> impl IntoView {

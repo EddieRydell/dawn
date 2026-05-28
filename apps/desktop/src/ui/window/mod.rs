@@ -10,7 +10,7 @@ use floem::kurbo::{Point, Size};
 use floem::peniko::Brush;
 use floem::prelude::*;
 use floem::style::Foreground;
-use floem::window::{close_window, new_window, WindowConfig, WindowId};
+use floem::window::{close_window, new_window, WindowConfig, WindowId, WindowLevel};
 use floem::{action, views::drag_window_area, Application, Urgency, WindowIdExt};
 use lucide_floem::{Icon, StrokeWidth};
 
@@ -59,11 +59,15 @@ fn app_view(window_id: WindowId) -> impl IntoView {
                 );
             }
             dispatch_model_action(Rc::clone(&model), snapshot, preview_snapshot, action);
+            if let Some(window_id) = *preview_window_id.borrow() {
+                refresh_window(window_id);
+            }
             schedule_preview_tick_if_needed(
                 Rc::clone(&model),
                 snapshot,
                 preview_snapshot,
                 Rc::clone(&preview_tick_scheduled),
+                Rc::clone(&preview_window_id),
             );
         }) as crate::ui::UiDispatch
     };
@@ -166,6 +170,7 @@ fn open_or_focus_preview_window(
         .size(Size::new(layout.width, layout.height))
         .position(Point::new(layout.x, layout.y))
         .resizable(true)
+        .window_level(WindowLevel::AlwaysOnTop)
         .apply_default_theme(false);
     let preview_model = Rc::clone(&model);
     let preview_dispatch = Rc::new(move |action: AppAction| {
@@ -211,6 +216,7 @@ fn schedule_preview_tick_if_needed(
     snapshot: crate::ui::UiSnapshot,
     preview_snapshot: crate::ui::UiPreviewSnapshot,
     scheduled: Rc<RefCell<bool>>,
+    preview_window_id: Rc<RefCell<Option<WindowId>>>,
 ) {
     if !preview_snapshot.get_untracked().is_playing || *scheduled.borrow() {
         return;
@@ -224,8 +230,25 @@ fn schedule_preview_tick_if_needed(
             preview_snapshot,
             AppAction::TickPreview,
         );
-        schedule_preview_tick_if_needed(model, snapshot, preview_snapshot, scheduled);
+        if let Some(window_id) = *preview_window_id.borrow() {
+            refresh_window(window_id);
+        }
+        schedule_preview_tick_if_needed(
+            model,
+            snapshot,
+            preview_snapshot,
+            scheduled,
+            preview_window_id,
+        );
     });
+}
+
+fn refresh_window(window_id: WindowId) {
+    if let Some(root) = window_id.root_view() {
+        root.request_layout();
+        root.request_paint();
+    }
+    window_id.force_repaint();
 }
 
 fn title_bar(

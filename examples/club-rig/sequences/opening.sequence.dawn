@@ -6,7 +6,7 @@ opening:
   effects:
   - id: 16
     start: 0ms
-    duration: 12950ms
+    duration: 4050ms
     target:
       type: group
       name: WallBars
@@ -28,7 +28,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 3
     start: 0ms
-    duration: 12950ms
+    duration: 3150ms
     target:
       type: group
       name: Movers
@@ -50,7 +50,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 17
     start: 0ms
-    duration: 12950ms
+    duration: 2750ms
     target:
       type: fixture
       id: 1
@@ -72,7 +72,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 21
     start: 0ms
-    duration: 12950ms
+    duration: 3900ms
     target:
       type: fixture
       id: 2
@@ -94,7 +94,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 20
     start: 0ms
-    duration: 12950ms
+    duration: 3000ms
     target:
       type: fixture
       id: 3
@@ -116,7 +116,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 18
     start: 0ms
-    duration: 12950ms
+    duration: 3250ms
     target:
       type: fixture
       id: 4
@@ -138,7 +138,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 19
     start: 0ms
-    duration: 12950ms
+    duration: 3700ms
     target:
       type: fixture
       id: 5
@@ -160,7 +160,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 14
     start: 0ms
-    duration: 12950ms
+    duration: 4200ms
     target:
       type: fixture
       id: 6
@@ -182,7 +182,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 10
     start: 0ms
-    duration: 12950ms
+    duration: 2250ms
     target:
       type: fixture
       id: 7
@@ -204,7 +204,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 11
     start: 0ms
-    duration: 12950ms
+    duration: 2550ms
     target:
       type: fixture
       id: 8
@@ -226,7 +226,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 9
     start: 0ms
-    duration: 12950ms
+    duration: 1300ms
     target:
       type: fixture
       id: 9
@@ -248,7 +248,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 15
     start: 0ms
-    duration: 12950ms
+    duration: 1800ms
     target:
       type: fixture
       id: 10
@@ -270,7 +270,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 12
     start: 0ms
-    duration: 12950ms
+    duration: 3200ms
     target:
       type: fixture
       id: 11
@@ -292,7 +292,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 13
     start: 0ms
-    duration: 12950ms
+    duration: 2300ms
     target:
       type: fixture
       id: 12
@@ -314,7 +314,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 4
     start: 0ms
-    duration: 12950ms
+    duration: 3750ms
     target:
       type: fixture
       id: 13
@@ -336,7 +336,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 8
     start: 0ms
-    duration: 12950ms
+    duration: 2450ms
     target:
       type: fixture
       id: 14
@@ -358,7 +358,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 7
     start: 0ms
-    duration: 12950ms
+    duration: 1800ms
     target:
       type: fixture
       id: 15
@@ -380,7 +380,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 6
     start: 0ms
-    duration: 12950ms
+    duration: 2750ms
     target:
       type: fixture
       id: 16
@@ -402,7 +402,7 @@ opening:
       import: ../effects/pulse.effect.dawn
   - id: 5
     start: 0ms
-    duration: 12950ms
+    duration: 2250ms
     target:
       type: fixture
       id: 17
@@ -422,8 +422,52 @@ opening:
           import: ../curves/fade-in.curve.dawn::fade_in
     script:
       import: ../effects/pulse.effect.dawn
+  - id: 23
+    start: 1417ms
+    duration: 8250ms
+    target:
+      type: fixture
+      id: 1
+    params:
+      base:
+        type: color
+        value: '#ff1827'
+      accent:
+        type: color
+        value: '#66e3ff'
+      speed:
+        type: float
+        value: 0.5
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
+  - id: 1
+    start: 4283ms
+    duration: 8250ms
+    target:
+      type: fixture
+      id: 11
+    params:
+      base:
+        type: color
+        value: '#ff1827'
+      accent:
+        type: color
+        value: '#66e3ff'
+      speed:
+        type: float
+        value: 0.5
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
   - id: 2
-    start: 14325ms
+    start: 5032ms
     duration: 9800ms
     target:
       type: fixture
@@ -449,12 +493,12 @@ opening:
             value: 0.0
     script:
       import: //?/C:/Users/eddie/dawn/examples/club-rig/effects/pulse.effect.dawn
-  - id: 1
-    start: 15159ms
+  - id: 22
+    start: 5035ms
     duration: 8250ms
     target:
       type: fixture
-      id: 11
+      id: 8
     params:
       base:
         type: color
