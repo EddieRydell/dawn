@@ -279,9 +279,11 @@ export type WorkspaceEntryKindDto = "directory" | "file";
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {
     try {
         return { status: "ok", data: await result };
-    } catch (e) {
-        if (e instanceof Error) throw e;
-        return { status: "error", error: e as any };
+    } catch (error: unknown) {
+        if (error instanceof Error) throw error;
+        return { status: "error", error: error as E };
     }
 }
+
+void (typedError satisfies <T, E>(result: Promise<T>) => Promise<{ status: "ok"; data: T } | { status: "error"; error: E }>);
 

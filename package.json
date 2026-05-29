@@ -2,7 +2,13 @@
   "private": true,
   "scripts": {
     "generate-bindings": "cargo run -p dawn-desktop --bin generate-bindings",
+    "bindings:check": "cargo run -p dawn-desktop --bin generate-bindings -- --check",
     "typecheck": "pnpm --dir apps/desktop/frontend typecheck",
+    "lint": "pnpm --dir apps/desktop/frontend lint",
+    "knip": "pnpm --dir apps/desktop/frontend knip",
+    "rust:check": "cargo check --workspace --all-targets",
+    "rust:clippy": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+    "check": "pnpm bindings:check && pnpm typecheck && pnpm lint && pnpm knip && pnpm rust:check && pnpm rust:clippy",
     "build": "pnpm generate-bindings && pnpm --dir apps/desktop/frontend build",
     "tauri": "pnpm generate-bindings && pnpm --dir apps/desktop exec tauri"
   },
