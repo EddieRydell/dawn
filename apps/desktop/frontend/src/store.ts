@@ -36,9 +36,12 @@ export const useAppStore = create<AppStore>((set) => ({
 }));
 
 export async function subscribeToSnapshots() {
-  return listen<AppSnapshotDto>("app_snapshot_changed", (event) => {
+  const disposeSnapshots = await listen<AppSnapshotDto>("app_snapshot_changed", (event) => {
     useAppStore.getState().setSnapshot(event.payload);
   });
+  return () => {
+    disposeSnapshots();
+  };
 }
 
 export async function runSnapshotCommand(command: () => Promise<AppSnapshotDto>) {

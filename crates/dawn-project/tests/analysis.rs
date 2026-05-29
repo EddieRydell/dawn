@@ -189,7 +189,8 @@ fn apply_sequence_document_edit(
     let (fs, project_path, root) = project_context(project_path);
     let path = relative_project_path(&root, path.as_ref());
     let overlays = normalize_overlays(&root, overlays);
-    let analysis = core_analyze_project_with_overlays(&fs, project_path.clone(), None, overlays.clone());
+    let analysis =
+        core_analyze_project_with_overlays(&fs, project_path.clone(), None, overlays.clone());
     core_apply_sequence_document_edit(
         &fs,
         path,

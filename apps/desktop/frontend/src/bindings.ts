@@ -25,9 +25,15 @@ export const commands = {
 	deletePath: (path: string) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("delete_path", { path })),
 	reloadProject: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("reload_project")),
 	toggleProjectTree: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("toggle_project_tree")),
+	openPreviewWindow: () => typedError<null, string>(__TAURI_INVOKE("open_preview_window")),
 	previewPlay: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_play")),
 	previewPause: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_pause")),
 	previewStop: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_stop")),
+	previewSeek: (positionMs: number) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_seek", { positionMs })),
+	getPreviewScene: () => typedError<PreviewSceneDto, string>(__TAURI_INVOKE("get_preview_scene")),
+	initPreviewTransport: () => typedError<null, string>(__TAURI_INVOKE("init_preview_transport")),
+	disposePreviewTransport: () => typedError<null, string>(__TAURI_INVOKE("dispose_preview_transport")),
+	getPreviewTransportMode: () => typedError<PreviewTransportMode, string>(__TAURI_INVOKE("get_preview_transport_mode")),
 };
 
 /* Types */
@@ -163,6 +169,22 @@ export type Point3Dto = {
 	z: number | null,
 };
 
+export type PreviewSceneDto = {
+	generation: number,
+	sourceLabel: string,
+	bounds: GeometryRenderBoundsDto,
+	pixelCount: number,
+	fixtures: PreviewSceneFixtureDto[],
+};
+
+export type PreviewSceneFixtureDto = {
+	id: number,
+	name: string,
+	bulbRadius: number | null,
+	firstPixelIndex: number,
+	pixels: GeometryRenderPointDto[],
+};
+
 export type PreviewSnapshotDto = {
 	sourceLabel: string,
 	isPlaying: boolean,
@@ -170,6 +192,8 @@ export type PreviewSnapshotDto = {
 	durationMs: number,
 	status: string,
 };
+
+export type PreviewTransportMode = "webview2_shared" | "unsupported";
 
 export type ProjectDiagnosticDto = {
 	path: string,

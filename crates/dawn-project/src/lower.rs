@@ -397,9 +397,7 @@ fn lower_sequence(
             .insert(effect.id, SequenceEffectIndex(effect_index))
             .is_some()
         {
-            return Err(LowerError::DuplicateSequenceEffectId {
-                id: effect.id,
-            });
+            return Err(LowerError::DuplicateSequenceEffectId { id: effect.id });
         }
         effects.push(lower_sequence_effect(
             effect,
@@ -519,9 +517,7 @@ fn lower_effect_param(
         EffectParam::Flags { value } => EffectParam::Flags {
             value: value.clone(),
         },
-        EffectParam::Color { value } => EffectParam::Color {
-            value: *value,
-        },
+        EffectParam::Color { value } => EffectParam::Color { value: *value },
         EffectParam::Curve { curve } => EffectParam::Curve {
             curve: resolve_curve(curve, source_path, resolver)?,
         },

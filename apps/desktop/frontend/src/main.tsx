@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "./styles.css";
 import { App } from "./ui/App";
+import { PreviewWindow } from "./ui/PreviewWindow";
 
 const root = document.getElementById("root");
 if (root === null) {
@@ -10,6 +11,6 @@ if (root === null) {
 
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
-    <App />
+    {new URLSearchParams(window.location.search).get("view") === "preview" ? <PreviewWindow /> : <App />}
   </React.StrictMode>
 );

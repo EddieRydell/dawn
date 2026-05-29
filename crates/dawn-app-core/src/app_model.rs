@@ -13,7 +13,9 @@ use crate::actions::AppAction;
 use crate::dto::AppSnapshotDto;
 use crate::dto::{FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto};
 use crate::editor_session::{EditorBuffer, EditorSession, EditorViewMode};
-use crate::layout_persistence::{load_workbench_layout, save_workbench_layout, WorkbenchLayout};
+use crate::layout_persistence::{
+    load_workbench_layout, save_workbench_layout, PreviewWindowLayout, WorkbenchLayout,
+};
 use crate::preview_session::{PreviewSession, PreviewSnapshot, SequenceKey};
 use crate::workspace::WorkspaceService;
 
@@ -238,8 +240,45 @@ impl AppModel {
                     !self.workbench_layout.project_tree_visible;
                 save_workbench_layout(&self.workbench_layout)?;
             }
+            AppAction::PreviewPlay => {
+                self.preview.play(self.analysis.as_ref());
+                self.status = "Preview playing".to_string();
+            }
+            AppAction::PreviewPause => {
+                self.preview.pause(self.analysis.as_ref());
+                self.status = "Preview paused".to_string();
+            }
+            AppAction::PreviewStop => {
+                self.preview.stop(self.analysis.as_ref());
+                self.status = "Preview stopped".to_string();
+            }
+            AppAction::PreviewSeek(position_ms) => {
+                self.preview.seek(position_ms, self.analysis.as_ref());
+                self.status = "Preview seeked".to_string();
+            }
         }
         Ok(DispatchOutcome::SnapshotChanged)
+    }
+
+    pub fn tick_preview(&mut self) {
+        self.preview.tick(self.analysis.as_ref());
+    }
+
+    pub fn tick_preview_clock(&mut self) {
+        self.preview.tick_clock();
+    }
+
+    pub fn render_preview_frame(&mut self) {
+        self.preview.render_current_frame(self.analysis.as_ref());
+    }
+
+    pub fn preview_target_fps(&self) -> u32 {
+        self.preview.target_fps()
+    }
+
+    pub fn set_preview_window_layout(&mut self, layout: PreviewWindowLayout) -> Result<(), String> {
+        self.workbench_layout.preview_window = layout;
+        save_workbench_layout(&self.workbench_layout)
     }
 
     fn open_project(

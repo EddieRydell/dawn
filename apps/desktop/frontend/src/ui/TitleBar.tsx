@@ -15,7 +15,7 @@ export function TitleBar() {
       <nav className="menu-row">
         <Menu label="File" commands={["file.openProject", "file.save"]} />
         <Menu label="Edit" commands={["file.save"]} />
-        <Menu label="View" commands={["view.toggleProjectTree", "project.reload"]} />
+        <Menu label="View" commands={["view.toggleProjectTree", "view.openPreviewWindow", "project.reload"]} />
       </nav>
       <div className="window-controls">
         <button onClick={() => void appWindow.minimize()} aria-label="Minimize">

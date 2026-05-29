@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { Pause, Play, SkipBack, Square } from "lucide-react";
 import { commands } from "../api";
 import type {
   ActiveGuiDocumentDto,
@@ -30,6 +32,7 @@ type SequencePreview = { id: number; startMs: number; durationMs: number; laneIn
 type DragState =
   | null
   | { kind: "sequence"; id: number; startX: number; originalStartMs: number; laneIndex: number; resize: "none" | "left" | "right" }
+  | { kind: "sequenceScrub" }
   | { kind: "layout"; id: number; startX: number; startY: number; original: Transform; preview: Transform }
   | { kind: "fixturePoint"; objectKey: string; pointIndex: number; preview: Point3 };
 
@@ -44,16 +47,22 @@ export function GuiEditor({ snapshot }: { snapshot: AppSnapshotDto }) {
   }
 
   const editorKey = guiEditorKey(snapshot.activeFile, gui);
-  return <GuiEditorInner key={editorKey} gui={gui} />;
+  return <GuiEditorInner key={editorKey} gui={gui} snapshot={snapshot} />;
 }
 
-function GuiEditorInner({ gui }: { gui: ReadyGuiDocumentDto }) {
+function GuiEditorInner({ gui, snapshot }: { gui: ReadyGuiDocumentDto; snapshot: AppSnapshotDto }) {
   const [selected, setSelected] = useState<string | null>(null);
 
   return (
     <div className="gui-editor-shell">
       {gui.type === "sequence" && (
-        <SequenceCanvas key={`${gui.document.path}:${gui.document.objectKey}`} document={gui.document} selected={selected} setSelected={setSelected} />
+        <SequenceEditor
+          key={`${gui.document.path}:${gui.document.objectKey}`}
+          document={gui.document}
+          preview={snapshot.preview}
+          selected={selected}
+          setSelected={setSelected}
+        />
       )}
       {gui.type === "layout" && <LayoutCanvas document={gui.document} selected={selected} setSelected={setSelected} />}
       {gui.type === "fixture" && (
@@ -62,6 +71,78 @@ function GuiEditorInner({ gui }: { gui: ReadyGuiDocumentDto }) {
       <GuiInspector gui={gui} selected={selected} />
     </div>
   );
+}
+
+function SequenceEditor({
+  document,
+  preview,
+  selected,
+  setSelected
+}: {
+  document: SequenceDocumentDto;
+  preview: AppSnapshotDto["preview"];
+  selected: string | null;
+  setSelected: (id: string | null) => void;
+}) {
+  const livePreview = useSequencePreview(preview);
+  const unsupported = document.durationMs <= 0;
+  return (
+    <div className="sequence-editor">
+      <div className="sequence-toolbar">
+        <button
+          type="button"
+          title={livePreview.isPlaying ? "Pause" : "Play"}
+          disabled={unsupported}
+          onClick={() => void runSnapshotCommand(livePreview.isPlaying ? commands.previewPause : commands.previewPlay)}
+        >
+          {livePreview.isPlaying ? <Pause size={15} /> : <Play size={15} />}
+        </button>
+        <button type="button" title="Stop" disabled={unsupported} onClick={() => void runSnapshotCommand(commands.previewStop)}>
+          <Square size={14} />
+        </button>
+        <button type="button" title="Beginning" disabled={unsupported} onClick={() => void runSnapshotCommand(() => commands.previewSeek(0))}>
+          <SkipBack size={15} />
+        </button>
+        <input
+          type="range"
+          min={0}
+          max={Math.max(0, livePreview.durationMs || document.durationMs)}
+          step={10}
+          value={Math.min(livePreview.positionMs, livePreview.durationMs || document.durationMs)}
+          disabled={unsupported}
+          onChange={(event) => {
+            void runSnapshotCommand(() => commands.previewSeek(Number(event.currentTarget.value)));
+          }}
+        />
+        <span>
+          {formatMs(livePreview.positionMs)} / {formatMs(livePreview.durationMs || document.durationMs)}
+        </span>
+      </div>
+      <SequenceCanvas document={document} previewPositionMs={livePreview.positionMs} selected={selected} setSelected={setSelected} />
+    </div>
+  );
+}
+
+function useSequencePreview(preview: AppSnapshotDto["preview"]) {
+  const [eventPreview, setEventPreview] = useState<AppSnapshotDto["preview"] | null>(null);
+
+  useEffect(() => {
+    let dispose: (() => void) | undefined;
+    let disposed = false;
+    void (async () => {
+      dispose = await listen<AppSnapshotDto["preview"]>("preview_state_changed", (event) => {
+        if (!disposed) {
+          setEventPreview(event.payload);
+        }
+      });
+    })();
+    return () => {
+      disposed = true;
+      dispose?.();
+    };
+  }, []);
+
+  return eventPreview ?? preview;
 }
 
 function guiEditorKey(activeFile: string | null, gui: ReadyGuiDocumentDto) {
@@ -100,10 +181,12 @@ function BlockedGui({
 
 function SequenceCanvas({
   document,
+  previewPositionMs,
   selected,
   setSelected
 }: {
   document: SequenceDocumentDto;
+  previewPositionMs: number;
   selected: string | null;
   setSelected: (id: string | null) => void;
 }) {
@@ -347,13 +430,30 @@ function SequenceCanvas({
     }
     ctx.restore();
 
+    const playheadX = left + (clamp(previewPositionMs, 0, document.durationMs) - scrollXMs) * viewport.pxPerMs;
+    if (playheadX >= left && playheadX <= rect.width) {
+      ctx.strokeStyle = "#f0c46b";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(playheadX + 0.5, top);
+      ctx.lineTo(playheadX + 0.5, rect.height);
+      ctx.stroke();
+    }
+
     ctx.strokeStyle = "#d6a35a";
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(left + 0.5, top);
     ctx.lineTo(left, rect.height);
     ctx.stroke();
-  }, [document, effectPreviewSignatures, left, top, viewport, visibleClips, selected, previewImages]);
+  }, [document, effectPreviewSignatures, left, top, viewport, visibleClips, selected, previewImages, previewPositionMs]);
+
+  const seekFromCanvas = (event: MouseEvent<HTMLCanvasElement>) => {
+    const x = event.nativeEvent.offsetX;
+    if (x < left) return;
+    const positionMs = clamp(Math.round((viewport.scrollXMs + (x - left) / viewport.pxPerMs) / 10) * 10, 0, document.durationMs);
+    void runSnapshotCommand(() => commands.previewSeek(positionMs));
+  };
 
   return (
     <canvas
@@ -363,6 +463,10 @@ function SequenceCanvas({
         const hit = hitSequence(visibleClips, event.nativeEvent.offsetX, event.nativeEvent.offsetY);
         if (!hit) {
           setSelected(null);
+          if (event.nativeEvent.offsetX >= left) {
+            drag.current = { kind: "sequenceScrub" };
+            seekFromCanvas(event);
+          }
           return;
         }
         setSelected(`effect:${hit.effect.id}`);
@@ -383,6 +487,10 @@ function SequenceCanvas({
       }}
       onMouseMove={(event) => {
         const current = drag.current;
+        if (current?.kind === "sequenceScrub") {
+          seekFromCanvas(event);
+          return;
+        }
         if (!current || current.kind !== "sequence") return;
         const effect = document.effects.find((candidate) => candidate.id === current.id);
         if (effect === undefined) return;

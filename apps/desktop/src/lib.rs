@@ -1,5 +1,5 @@
 #![deny(clippy::disallowed_methods)]
-#![deny(unsafe_code)]
+#![cfg_attr(not(windows), deny(unsafe_code))]
 #![cfg_attr(
     not(test),
     deny(
@@ -14,23 +14,34 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use dawn_app_core::actions::AppAction;
 use dawn_app_core::app_model::{AppModel, DispatchOutcome};
 use dawn_app_core::dto::{
-    AppSnapshotDto, EditorViewModeDto, FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto,
+    AppSnapshotDto, EditorViewModeDto, FixtureGuiEditDto, GeometryRenderBoundsDto,
+    GeometryRenderPointDto, LayoutGuiEditDto, SequenceGuiEditDto,
 };
+use dawn_app_core::layout_persistence::PreviewWindowLayout;
 use dawn_app_core::output_runtime::runtime_params_from_document;
+use dawn_app_core::output_runtime::OutputFrame;
+use dawn_app_core::preview_session::PreviewSnapshot;
 use dawn_project::document::{SequenceEffectDocument, SequenceEffectPixelDocument};
 use dawn_project::effect_script::{FixtureContext, PixelContext};
 use dawn_project::path::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+
+mod preview_transport;
+
+use preview_transport::{PreviewTransportMode, PreviewTransportRuntime};
 
 pub struct AppState {
     model: Mutex<AppModel>,
     effect_preview_cache: Mutex<HashMap<EffectPreviewCacheKey, SequenceEffectPreviewDto>>,
+    preview_transport: Mutex<PreviewTransportRuntime>,
 }
 
 impl Default for AppState {
@@ -38,6 +49,7 @@ impl Default for AppState {
         Self {
             model: Mutex::new(AppModel::default()),
             effect_preview_cache: Mutex::new(HashMap::new()),
+            preview_transport: Mutex::new(PreviewTransportRuntime::default()),
         }
     }
 }
@@ -45,6 +57,7 @@ impl Default for AppState {
 type CommandResult<T> = Result<T, String>;
 const PREVIEW_MAX_COLUMNS: usize = 360;
 const PREVIEW_MAX_ROWS: usize = 50;
+const PREVIEW_STATE_EVENT_INTERVAL: Duration = Duration::from_millis(33);
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -62,6 +75,36 @@ pub struct SequenceEffectPreviewDto {
     pub columns: u32,
     pub rows: u32,
     pub colors: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewStateEventDto {
+    pub source_label: String,
+    pub is_playing: bool,
+    pub position_ms: u32,
+    pub duration_ms: u32,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewSceneDto {
+    pub generation: u32,
+    pub source_label: String,
+    pub bounds: GeometryRenderBoundsDto,
+    pub pixel_count: u32,
+    pub fixtures: Vec<PreviewSceneFixtureDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewSceneFixtureDto {
+    pub id: u32,
+    pub name: String,
+    pub bulb_radius: f64,
+    pub first_pixel_index: u32,
+    pub pixels: Vec<GeometryRenderPointDto>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -335,20 +378,97 @@ fn toggle_project_tree(
 
 #[specta::specta]
 #[tauri::command]
-fn preview_play(state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
-    Ok(lock_model(&state)?.snapshot_dto())
+async fn open_preview_window(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
+    if let Some(window) = app.get_webview_window("preview") {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    let layout = lock_model(&state)?.workbench_layout.preview_window.clone();
+    let window =
+        WebviewWindowBuilder::new(&app, "preview", WebviewUrl::App("/?view=preview".into()))
+            .title("Dawn Preview")
+            .position(layout.x, layout.y)
+            .inner_size(layout.width, layout.height)
+            .build()
+            .map_err(|error| error.to_string())?;
+    let app_for_event = app.clone();
+    window.on_window_event(move |event| {
+        if matches!(
+            event,
+            WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed
+        ) {
+            persist_preview_window_layout(&app_for_event);
+        }
+    });
+    window.set_focus().map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[specta::specta]
 #[tauri::command]
-fn preview_pause(state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
-    Ok(lock_model(&state)?.snapshot_dto())
+fn preview_play(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
+    dispatch(&app, &state, AppAction::PreviewPlay)
 }
 
 #[specta::specta]
 #[tauri::command]
-fn preview_stop(state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
-    Ok(lock_model(&state)?.snapshot_dto())
+fn preview_pause(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
+    dispatch(&app, &state, AppAction::PreviewPause)
+}
+
+#[specta::specta]
+#[tauri::command]
+fn preview_stop(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
+    dispatch(&app, &state, AppAction::PreviewStop)
+}
+
+#[specta::specta]
+#[tauri::command]
+fn preview_seek(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    position_ms: u32,
+) -> CommandResult<AppSnapshotDto> {
+    dispatch(&app, &state, AppAction::PreviewSeek(position_ms.into()))
+}
+
+#[specta::specta]
+#[tauri::command]
+fn get_preview_scene(state: State<'_, AppState>) -> CommandResult<PreviewSceneDto> {
+    let snapshot = lock_model(&state)?.preview.snapshot();
+    Ok(preview_scene_from_frame(
+        &snapshot.frame,
+        snapshot.source_label,
+    ))
+}
+
+#[specta::specta]
+#[tauri::command]
+fn get_preview_transport_mode() -> CommandResult<PreviewTransportMode> {
+    Ok(PreviewTransportRuntime::mode())
+}
+
+#[specta::specta]
+#[tauri::command]
+fn init_preview_transport(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
+    let Some(window) = app.get_webview_window("preview") else {
+        return Err("preview window is not open".to_string());
+    };
+    let pixel_count = preview_pixel_count(&lock_model(&state)?.preview.snapshot().frame);
+    lock_preview_transport(&state)?.init_window(&window, pixel_count)
+}
+
+#[specta::specta]
+#[tauri::command]
+fn dispose_preview_transport(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
+    let label = app
+        .get_webview_window("preview")
+        .map(|window| window.label().to_string())
+        .unwrap_or_else(|| "preview".to_string());
+    lock_preview_transport(&state)?.dispose_window(&label);
+    Ok(())
 }
 
 const BINDINGS_PATH: &str = "apps/desktop/frontend/src/bindings.ts";
@@ -386,9 +506,15 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             delete_path,
             reload_project,
             toggle_project_tree,
+            open_preview_window,
             preview_play,
             preview_pause,
-            preview_stop
+            preview_stop,
+            preview_seek,
+            get_preview_scene,
+            init_preview_transport,
+            dispose_preview_transport,
+            get_preview_transport_mode
         ])
 }
 
@@ -435,9 +561,131 @@ pub fn run() -> Result<(), tauri::Error> {
         .invoke_handler(builder.invoke_handler())
         .setup(|app| {
             let _ = app.get_webview_window("main");
+            start_preview_worker(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())
+}
+
+fn start_preview_worker(app: AppHandle) {
+    thread::spawn(move || {
+        let mut last_published_generation: Option<u64> = None;
+        let mut had_sink = false;
+        let mut last_event_at = Instant::now() - PREVIEW_STATE_EVENT_INTERVAL;
+        let mut last_event_identity: Option<PreviewEventIdentity> = None;
+        loop {
+            let state = app.state::<AppState>();
+            let started = Instant::now();
+            let has_sink = lock_preview_transport(&state)
+                .map(|runtime| runtime.has_sinks())
+                .unwrap_or(false);
+            if has_sink && !had_sink {
+                last_published_generation = None;
+            }
+            had_sink = has_sink;
+
+            let (snapshot, target_fps) = match lock_model(&state) {
+                Ok(mut model) => {
+                    model.tick_preview_clock();
+                    let mut snapshot = model.preview.snapshot();
+                    let should_render_frame = has_sink
+                        && (snapshot.is_playing
+                            || last_published_generation != Some(snapshot.frame.generation));
+                    if should_render_frame {
+                        model.render_preview_frame();
+                        snapshot = model.preview.snapshot();
+                    }
+                    (snapshot, model.preview_target_fps())
+                }
+                Err(_) => {
+                    thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
+            };
+            let backend_ms = started.elapsed().as_secs_f32() * 1000.0;
+            let frame_generation = snapshot.frame.generation;
+            let should_publish_frame = has_sink
+                && (snapshot.is_playing || last_published_generation != Some(frame_generation));
+            if should_publish_frame {
+                if let Ok(mut runtime) = lock_preview_transport(&state) {
+                    runtime.publish_frame(&snapshot.frame, snapshot.is_playing, backend_ms);
+                    last_published_generation = Some(frame_generation);
+                }
+            }
+
+            let event_identity = PreviewEventIdentity::from(&snapshot);
+            let should_emit_event = if snapshot.is_playing {
+                last_event_identity.as_ref() != Some(&event_identity)
+                    || last_event_at.elapsed() >= PREVIEW_STATE_EVENT_INTERVAL
+            } else {
+                last_event_identity.as_ref() != Some(&event_identity)
+            };
+            if should_emit_event {
+                emit_preview_state_snapshot(&app, &snapshot);
+                last_event_at = Instant::now();
+                last_event_identity = Some(event_identity);
+            }
+
+            let fps = if has_sink {
+                target_fps.max(1)
+            } else if snapshot.is_playing {
+                target_fps.clamp(1, 30)
+            } else {
+                10
+            };
+            let target = Duration::from_millis((1000 / fps as u64).max(1));
+            let elapsed = started.elapsed();
+            if elapsed < target {
+                thread::sleep(target - elapsed);
+            }
+        }
+    });
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PreviewEventIdentity {
+    source_label: String,
+    is_playing: bool,
+    position_ms: u64,
+    duration_ms: u64,
+    status: String,
+}
+
+impl From<&PreviewSnapshot> for PreviewEventIdentity {
+    fn from(snapshot: &PreviewSnapshot) -> Self {
+        Self {
+            source_label: snapshot.source_label.clone(),
+            is_playing: snapshot.is_playing,
+            position_ms: if snapshot.is_playing {
+                0
+            } else {
+                snapshot.position_ms
+            },
+            duration_ms: snapshot.duration_ms,
+            status: snapshot.status.clone(),
+        }
+    }
+}
+
+fn persist_preview_window_layout(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("preview") else {
+        return;
+    };
+    let Ok(position) = window.outer_position() else {
+        return;
+    };
+    let Ok(size) = window.inner_size() else {
+        return;
+    };
+    let state = app.state::<AppState>();
+    if let Ok(mut model) = lock_model(&state) {
+        let _ = model.set_preview_window_layout(PreviewWindowLayout {
+            x: position.x.into(),
+            y: position.y.into(),
+            width: size.width.into(),
+            height: size.height.into(),
+        });
+    };
 }
 
 fn dispatch(
@@ -451,8 +699,36 @@ fn dispatch(
     if outcome == DispatchOutcome::SnapshotChanged {
         app.emit("app_snapshot_changed", &snapshot)
             .map_err(|error| error.to_string())?;
+        emit_preview_state_dto(app, &snapshot)?;
     }
     Ok(snapshot)
+}
+
+fn emit_preview_state_dto(app: &AppHandle, snapshot: &AppSnapshotDto) -> CommandResult<()> {
+    app.emit(
+        "preview_state_changed",
+        PreviewStateEventDto {
+            source_label: snapshot.preview.source_label.clone(),
+            is_playing: snapshot.preview.is_playing,
+            position_ms: snapshot.preview.position_ms,
+            duration_ms: snapshot.preview.duration_ms,
+            status: snapshot.preview.status.clone(),
+        },
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn emit_preview_state_snapshot(app: &AppHandle, snapshot: &PreviewSnapshot) {
+    let _ = app.emit(
+        "preview_state_changed",
+        PreviewStateEventDto {
+            source_label: snapshot.source_label.clone(),
+            is_playing: snapshot.is_playing,
+            position_ms: snapshot.position_ms.min(u32::MAX as u64) as u32,
+            duration_ms: snapshot.duration_ms.min(u32::MAX as u64) as u32,
+            status: snapshot.status.clone(),
+        },
+    );
 }
 
 fn lock_model<'a>(
@@ -477,6 +753,54 @@ fn lock_effect_preview_cache<'a>(
         .effect_preview_cache
         .lock()
         .map_err(|_| "effect preview cache lock is poisoned".to_string())
+}
+
+fn lock_preview_transport<'a>(
+    state: &'a State<'_, AppState>,
+) -> CommandResult<std::sync::MutexGuard<'a, PreviewTransportRuntime>> {
+    state
+        .preview_transport
+        .lock()
+        .map_err(|_| "preview transport lock is poisoned".to_string())
+}
+
+fn preview_pixel_count(frame: &OutputFrame) -> usize {
+    frame
+        .fixtures
+        .iter()
+        .map(|fixture| fixture.pixels.len())
+        .sum()
+}
+
+fn preview_scene_from_frame(frame: &OutputFrame, source_label: String) -> PreviewSceneDto {
+    let mut first_pixel_index = 0usize;
+    let fixtures = frame
+        .fixtures
+        .iter()
+        .map(|fixture| {
+            let pixels = fixture
+                .pixels
+                .iter()
+                .map(|pixel| pixel.position.into())
+                .collect::<Vec<_>>();
+            let dto = PreviewSceneFixtureDto {
+                id: fixture.id.0,
+                name: fixture.name.clone(),
+                bulb_radius: fixture.bulb_radius,
+                first_pixel_index: first_pixel_index.min(u32::MAX as usize) as u32,
+                pixels,
+            };
+            first_pixel_index = first_pixel_index.saturating_add(fixture.pixels.len());
+            dto
+        })
+        .collect::<Vec<_>>();
+    PreviewSceneDto {
+        generation: frame.generation.min(u32::MAX as u64) as u32,
+        source_label,
+        bounds: frame.bounds.into(),
+        pixel_count: first_pixel_index.min(u32::MAX as usize) as u32,
+        fixtures,
+    }
 }
 
 fn preview_for_effect(

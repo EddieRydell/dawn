@@ -39,7 +39,10 @@ export const commands = {
   deletePath: (path: string) => unwrap(generatedCommands.deletePath(path)),
   reloadProject: () => unwrap(generatedCommands.reloadProject()),
   toggleProjectTree: () => unwrap(generatedCommands.toggleProjectTree()),
+  openPreviewWindow: () => unwrap(generatedCommands.openPreviewWindow()),
   previewPlay: () => unwrap(generatedCommands.previewPlay()),
   previewPause: () => unwrap(generatedCommands.previewPause()),
-  previewStop: () => unwrap(generatedCommands.previewStop())
+  previewStop: () => unwrap(generatedCommands.previewStop()),
+  previewSeek: (positionMs: number) => unwrap(generatedCommands.previewSeek(positionMs)),
+  getPreviewScene: () => unwrap(generatedCommands.getPreviewScene())
 };

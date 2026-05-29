@@ -431,7 +431,7 @@ opening:
     params:
       base:
         type: color
-        value: '#fed7da'
+        value: '#1b3b4b'
       accent:
         type: color
         value: '#990000'
@@ -467,11 +467,11 @@ opening:
     script:
       import: ../effects/pulse.effect.dawn
   - id: 2
-    start: 3732ms
+    start: 4182ms
     duration: 9800ms
     target:
       type: fixture
-      id: 8
+      id: 7
     params:
       base:
         type: color

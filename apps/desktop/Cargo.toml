@@ -19,6 +19,10 @@ specta-typescript = "0.0.12"
 tauri = { version = "2", features = [] }
 tauri-specta = { version = "2.0.0-rc.25", features = ["typescript"] }
 
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38.2"
+windows-core = "0.61.2"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

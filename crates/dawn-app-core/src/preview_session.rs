@@ -147,6 +147,23 @@ impl PreviewSession {
         self.render(analysis, "Stopped");
     }
 
+    pub fn seek(&mut self, position_ms: u64, analysis: Option<&ProjectAnalysis>) {
+        let Some((key, duration_ms)) = self.sequence_source_meta() else {
+            self.render(analysis, "No active sequence");
+            return;
+        };
+        let position_ms = position_ms.min(duration_ms);
+        let state = self.sequence_states.entry(key).or_default();
+        state.position_ms = position_ms;
+        if self.is_playing() {
+            self.transport = PreviewTransport::Playing {
+                started_at: Instant::now(),
+                started_position_ms: position_ms,
+            };
+        }
+        self.render(analysis, "Ready");
+    }
+
     pub fn set_sequence_playhead(&mut self, time_ms: u64, analysis: Option<&ProjectAnalysis>) {
         let Some((key, duration_ms)) = self.sequence_source_meta() else {
             self.render(analysis, "No active sequence");
@@ -178,8 +195,14 @@ impl PreviewSession {
     }
 
     pub fn tick(&mut self, analysis: Option<&ProjectAnalysis>) {
+        if self.tick_clock() {
+            self.render(analysis, self.snapshot.status.clone());
+        }
+    }
+
+    pub fn tick_clock(&mut self) -> bool {
         if !self.is_playing() {
-            return;
+            return false;
         }
         if let Some((key, duration_ms)) = self.sequence_source_meta() {
             let position_ms = self.playing_position_ms().min(duration_ms);
@@ -187,15 +210,29 @@ impl PreviewSession {
             state.position_ms = position_ms;
             if position_ms >= duration_ms {
                 self.transport = PreviewTransport::Stopped;
-                self.render(analysis, "Sequence playback complete");
+                self.refresh_snapshot_metadata("Sequence playback complete");
             } else {
-                self.render(analysis, "Playing");
+                self.refresh_snapshot_metadata("Playing");
             }
+            return true;
         }
+        false
+    }
+
+    pub fn render_current_frame(&mut self, analysis: Option<&ProjectAnalysis>) {
+        let status = self.snapshot.status.clone();
+        self.render(analysis, status);
     }
 
     pub fn is_playing(&self) -> bool {
         matches!(self.transport, PreviewTransport::Playing { .. })
+    }
+
+    pub fn target_fps(&self) -> u32 {
+        match &self.source {
+            PreviewSource::Sequence { document, .. } => document.frame_rate.clamp(1, 60),
+            PreviewSource::None => 30,
+        }
     }
 
     fn pause_current(&mut self, analysis: Option<&ProjectAnalysis>) {
@@ -264,6 +301,35 @@ impl PreviewSession {
             frame,
             status: frame_status,
         };
+    }
+
+    fn refresh_snapshot_metadata(&mut self, status: impl Into<String>) {
+        let status = status.into();
+        match &self.source {
+            PreviewSource::None => {
+                self.snapshot.source_label = "No preview source".to_string();
+                self.snapshot.source_key = None;
+                self.snapshot.is_playing = false;
+                self.snapshot.position_ms = 0;
+                self.snapshot.home_ms = 0;
+                self.snapshot.duration_ms = 0;
+                self.snapshot.status = status;
+            }
+            PreviewSource::Sequence { key, document } => {
+                let duration_ms = document.duration_ms;
+                self.snapshot.source_label = format!("Sequence {}", document.object_key);
+                self.snapshot.source_key = Some(key.clone());
+                self.snapshot.is_playing = self.is_playing();
+                self.snapshot.position_ms = self.current_position_ms(key, duration_ms);
+                self.snapshot.home_ms = self
+                    .sequence_states
+                    .get(key)
+                    .map(|state| state.home_ms.min(duration_ms))
+                    .unwrap_or_default();
+                self.snapshot.duration_ms = duration_ms;
+                self.snapshot.status = status;
+            }
+        }
     }
 
     fn current_position_ms(&self, key: &SequenceKey, duration_ms: u64) -> u64 {

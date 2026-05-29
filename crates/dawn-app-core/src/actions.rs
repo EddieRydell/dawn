@@ -23,4 +23,8 @@ pub enum AppAction {
     RenamePath { path: Utf8PathBuf, new_name: String },
     DeletePath(Utf8PathBuf),
     ToggleProjectTree,
+    PreviewPlay,
+    PreviewPause,
+    PreviewStop,
+    PreviewSeek(u64),
 }

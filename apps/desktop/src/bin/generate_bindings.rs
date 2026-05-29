@@ -1,5 +1,7 @@
 fn main() {
-    let check = std::env::args().skip(1).any(|argument| argument == "--check");
+    let check = std::env::args()
+        .skip(1)
+        .any(|argument| argument == "--check");
     let result = if check {
         dawn_desktop::check_bindings()
     } else {
