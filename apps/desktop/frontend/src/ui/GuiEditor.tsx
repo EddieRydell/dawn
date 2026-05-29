@@ -1,12 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { commands } from "../api";
 import type {
+  ActiveGuiDocumentDto,
   AppSnapshotDto,
   ColorCurvePointDto,
+  FixtureDocumentDto,
   FloatCurvePointDto,
+  GeometryRenderBoundsDto,
+  GeometryRenderPointDto,
+  LayoutDocumentDto,
+  LayoutFixturePlacementDto,
+  LayoutTargetDto,
+  Point3Dto,
+  SequenceDocumentDto,
+  SequenceEffectDto,
   SequenceEffectParamDto,
   SequenceEffectParamValueDto,
-  SequenceEffectPreviewDto
+  SequenceEffectPreviewDto,
+  TransformDto
 } from "../bindings";
 import { runSnapshotCommand } from "../store";
 
@@ -14,6 +25,8 @@ type Point3 = { x: number; y: number; z: number };
 type Transform = { position: Point3; rotation: Point3; scale: Point3 };
 type EditedFloatCurvePoint = { time: number; value: number };
 type EditedColorCurvePoint = { time: number; value: string };
+type ReadyGuiDocumentDto = Exclude<ActiveGuiDocumentDto, { type: "blocked" }>;
+type SequencePreview = { id: number; startMs: number; durationMs: number; laneIndex: number };
 type DragState =
   | null
   | { kind: "sequence"; id: number; startX: number; originalStartMs: number; laneIndex: number; resize: "none" | "left" | "right" }
@@ -22,11 +35,6 @@ type DragState =
 
 export function GuiEditor({ snapshot }: { snapshot: AppSnapshotDto }) {
   const gui = snapshot.activeGuiDocument;
-  const [selected, setSelected] = useState<string | null>(null);
-
-  useEffect(() => {
-    setSelected(null);
-  }, [snapshot.activeFile, gui?.type]);
 
   if (!gui) {
     return <BlockedGui reason="GUI data is not available for this document." diagnostics={[]} />;
@@ -35,10 +43,17 @@ export function GuiEditor({ snapshot }: { snapshot: AppSnapshotDto }) {
     return <BlockedGui reason={gui.reason} diagnostics={gui.diagnostics} />;
   }
 
+  const editorKey = guiEditorKey(snapshot.activeFile, gui);
+  return <GuiEditorInner key={editorKey} gui={gui} />;
+}
+
+function GuiEditorInner({ gui }: { gui: ReadyGuiDocumentDto }) {
+  const [selected, setSelected] = useState<string | null>(null);
+
   return (
     <div className="gui-editor-shell">
       {gui.type === "sequence" && (
-        <SequenceCanvas document={gui.document} selected={selected} setSelected={setSelected} />
+        <SequenceCanvas key={`${gui.document.path}:${gui.document.objectKey}`} document={gui.document} selected={selected} setSelected={setSelected} />
       )}
       {gui.type === "layout" && <LayoutCanvas document={gui.document} selected={selected} setSelected={setSelected} />}
       {gui.type === "fixture" && (
@@ -47,6 +62,16 @@ export function GuiEditor({ snapshot }: { snapshot: AppSnapshotDto }) {
       <GuiInspector gui={gui} selected={selected} />
     </div>
   );
+}
+
+function guiEditorKey(activeFile: string | null, gui: ReadyGuiDocumentDto) {
+  switch (gui.type) {
+    case "sequence":
+    case "layout":
+      return `${activeFile ?? ""}:${gui.type}:${gui.document.path}:${gui.document.objectKey}`;
+    case "fixture":
+      return `${activeFile ?? ""}:${gui.type}:${gui.document.path}:${gui.document.selectedObjectKey ?? ""}`;
+  }
 }
 
 function BlockedGui({
@@ -78,13 +103,13 @@ function SequenceCanvas({
   selected,
   setSelected
 }: {
-  document: any;
+  document: SequenceDocumentDto;
   selected: string | null;
   setSelected: (id: string | null) => void;
 }) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const drag = useRef<DragState>(null);
-  const [preview, setPreview] = useState<{ id: number; startMs: number; durationMs: number; laneIndex: number } | null>(null);
+  const [preview, setPreview] = useState<SequencePreview | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [viewport, setViewport] = useState({ pxPerMs: 0.08, laneHeight: 42, scrollXMs: 0, scrollY: 0 });
   const [previewImages, setPreviewImages] = useState<Map<number, SequencePreviewImage>>(() => new Map());
@@ -106,49 +131,31 @@ function SequenceCanvas({
   }, [effectPreviewSignatures]);
 
   useEffect(() => {
-    inFlightPreviewSignatures.current.clear();
-    setPreviewImages(new Map());
-  }, [document.path, document.objectKey]);
-
-  useEffect(() => {
-    setPreviewImages((current) => {
-      let changed = false;
-      const next = new Map(current);
-      for (const [effectId, image] of next) {
-        if (effectPreviewSignatures.get(effectId) !== image.signature) {
-          next.delete(effectId);
-          changed = true;
-        }
-      }
-      return changed ? next : current;
-    });
-  }, [effectPreviewSignatures]);
-
-  useEffect(() => {
     const target = canvas.current;
     if (!target) return;
     const updateSize = () => {
       const rect = target.getBoundingClientRect();
       setCanvasSize({ width: rect.width, height: rect.height });
+      const timelineWidth = Math.max(1, rect.width - left);
+      const key = `${document.durationMs}:${document.lanes.length}`;
+      if (rect.width > 0 && initializedViewportKey.current !== key) {
+        initializedViewportKey.current = key;
+        setViewport({
+          pxPerMs: clamp(timelineWidth / Math.max(1, document.durationMs), 0.02, 0.6),
+          laneHeight: 42,
+          scrollXMs: 0,
+          scrollY: 0
+        });
+      }
     };
-    updateSize();
+    const frame = window.requestAnimationFrame(updateSize);
     const observer = new ResizeObserver(updateSize);
     observer.observe(target);
-    return () => { observer.disconnect(); };
-  }, []);
-
-  useEffect(() => {
-    const timelineWidth = Math.max(1, canvasSize.width - left);
-    const key = `${document.durationMs}:${document.lanes.length}`;
-    if (canvasSize.width <= 0 || initializedViewportKey.current === key) return;
-    initializedViewportKey.current = key;
-    setViewport({
-      pxPerMs: clamp(timelineWidth / Math.max(1, document.durationMs), 0.02, 0.6),
-      laneHeight: 42,
-      scrollXMs: 0,
-      scrollY: 0
-    });
-  }, [canvasSize.width, document.durationMs, document.lanes.length, left]);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [document.durationMs, document.lanes.length, left]);
 
   const visibleClips = useMemo(
     () => buildSequenceClipLayout(document, preview, viewport, left, top),
@@ -178,7 +185,7 @@ function SequenceCanvas({
     const missingEffects = visibleEffectIds
       .map((id) => ({ id, signature: effectPreviewSignatures.get(id) }))
       .filter((effect): effect is { id: number; signature: string } => {
-        if (!effect.signature) return false;
+        if (effect.signature === undefined) return false;
         if (previewImagesRef.current.get(effect.id)?.signature === effect.signature) return false;
         return !inFlightPreviewSignatures.current.has(effect.signature);
       });
@@ -206,7 +213,7 @@ function SequenceCanvas({
           }
           for (const raster of batch.previews) {
             const signature = requestedSignatures.get(raster.effectId);
-            if (!signature) continue;
+            if (signature === undefined) continue;
             if (effectPreviewSignaturesRef.current.get(raster.effectId) !== signature) continue;
             next.set(raster.effectId, {
               signature,
@@ -274,7 +281,7 @@ function SequenceCanvas({
     ctx.beginPath();
     ctx.rect(0, top, rect.width, rect.height - top);
     ctx.clip();
-    document.lanes.forEach((lane: any, index: number) => {
+      document.lanes.forEach((lane, index) => {
       const y = top + index * viewport.laneHeight - scrollY;
       if (y > rect.height || y + viewport.laneHeight < top) return;
       ctx.fillStyle = index % 2 === 0 ? "#111214" : "#15171a";
@@ -321,7 +328,7 @@ function SequenceCanvas({
       }
       ctx.fillStyle = "#696b70";
       ctx.fillRect(clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height);
-      const previewImage = previewImages.get(clip.effect.id);
+      const previewImage = validPreviewImage(previewImages.get(clip.effect.id), effectPreviewSignatures.get(clip.effect.id));
       if (previewImage?.status === "ready") {
         ctx.save();
         ctx.imageSmoothingEnabled = false;
@@ -346,7 +353,7 @@ function SequenceCanvas({
     ctx.moveTo(left + 0.5, top);
     ctx.lineTo(left, rect.height);
     ctx.stroke();
-  }, [document, left, top, viewport, visibleClips, selected, previewImages]);
+  }, [document, effectPreviewSignatures, left, top, viewport, visibleClips, selected, previewImages]);
 
   return (
     <canvas
@@ -377,8 +384,8 @@ function SequenceCanvas({
       onMouseMove={(event) => {
         const current = drag.current;
         if (!current || current.kind !== "sequence") return;
-        const effect = document.effects.find((candidate: any) => candidate.id === current.id);
-        if (!effect) return;
+        const effect = document.effects.find((candidate) => candidate.id === current.id);
+        if (effect === undefined) return;
         const deltaMs = Math.round((event.nativeEvent.offsetX - current.startX) / viewport.pxPerMs / 50) * 50;
         const laneIndex = clamp(Math.floor((event.nativeEvent.offsetY - top + viewport.scrollY) / viewport.laneHeight), 0, document.lanes.length - 1);
         if (current.resize === "left") {
@@ -471,19 +478,19 @@ function LayoutCanvas({
   selected,
   setSelected
 }: {
-  document: any;
+  document: LayoutDocumentDto;
   selected: string | null;
   setSelected: (id: string | null) => void;
 }) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const drag = useRef<DragState>(null);
   const [revision, render] = useState(0);
-  const viewport = useMemo(() => fitViewport(document.renderBounds), [document.renderBounds]);
+  const viewport = useMemo(() => normalizeBounds(document.renderBounds), [document.renderBounds]);
 
   useEffect(() => {
-    drawSpatialCanvas(canvas.current, document.renderBounds, (ctx, project) => {
+    drawSpatialCanvas(canvas.current, viewport, (ctx, project) => {
       for (const fixture of document.fixtures) {
-        const transform = (drag.current?.kind === "layout" && drag.current.id === fixture.id ? drag.current.preview : fixture.transform) as Transform;
+        const transform = drag.current?.kind === "layout" && drag.current.id === fixture.id ? drag.current.preview : normalizeTransform(fixture.transform);
         const center = project(transform.position);
         ctx.fillStyle = selected === `placement:${fixture.id}` ? "#6abf8a" : "#d6a35a";
         ctx.beginPath();
@@ -492,10 +499,11 @@ function LayoutCanvas({
         ctx.fillStyle = "#ebe7df";
         ctx.fillText(fixture.name, center.x + 10, center.y - 8);
         for (const emitter of fixture.resolvedFixture.renderPlan.emitters) {
+          const point3 = normalizePoint(emitter);
           const point = project({
-            x: transform.position.x + emitter.x * transform.scale.x,
-            y: transform.position.y + emitter.y * transform.scale.y,
-            z: transform.position.z + emitter.z * transform.scale.z
+            x: transform.position.x + point3.x * transform.scale.x,
+            y: transform.position.y + point3.y * transform.scale.y,
+            z: transform.position.z + point3.z * transform.scale.z
           });
           ctx.fillStyle = "#8ecae6";
           ctx.fillRect(point.x - 2, point.y - 2, 4, 4);
@@ -509,9 +517,9 @@ function LayoutCanvas({
       ref={canvas}
       className="gui-canvas"
       onMouseDown={(event) => {
-        const world = unproject(event.nativeEvent.offsetX, event.nativeEvent.offsetY, canvas.current, document.renderBounds);
+        const world = unproject(event.nativeEvent.offsetX, event.nativeEvent.offsetY, canvas.current, viewport);
         const hit = nearestPlacement(document, world);
-        if (!hit) {
+        if (hit === null) {
           setSelected(null);
           return;
         }
@@ -521,14 +529,14 @@ function LayoutCanvas({
           id: hit.id,
           startX: world.x,
           startY: world.y,
-          original: hit.transform,
-          preview: hit.transform
+          original: normalizeTransform(hit.transform),
+          preview: normalizeTransform(hit.transform)
         };
       }}
       onMouseMove={(event) => {
         const current = drag.current;
         if (!current || current.kind !== "layout") return;
-        const world = unproject(event.nativeEvent.offsetX, event.nativeEvent.offsetY, canvas.current, document.renderBounds);
+        const world = unproject(event.nativeEvent.offsetX, event.nativeEvent.offsetY, canvas.current, viewport);
         current.preview = {
           ...current.original,
           position: {
@@ -560,40 +568,41 @@ function FixtureCanvas({
   selected,
   setSelected
 }: {
-  document: any;
+  document: FixtureDocumentDto;
   selected: string | null;
   setSelected: (id: string | null) => void;
 }) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const drag = useRef<DragState>(null);
   const [revision, render] = useState(0);
-  const fixture = document.fixtures.find((candidate: any) => candidate.objectKey === document.selectedObjectKey) ?? document.fixtures[0];
+  const fixture = document.fixtures.find((candidate) => candidate.objectKey === document.selectedObjectKey) ?? document.fixtures[0];
+  const renderBounds = useMemo(() => fixture === undefined ? null : normalizeBounds(fixture.renderPlan.bounds), [fixture]);
 
   useEffect(() => {
-    if (!fixture) return;
-    drawSpatialCanvas(canvas.current, fixture.renderPlan.bounds, (ctx, project) => {
+    if (fixture === undefined || renderBounds === null) return;
+    drawSpatialCanvas(canvas.current, renderBounds, (ctx, project) => {
       for (const guide of fixture.renderPlan.guides) {
         if (guide.type !== "line") continue;
-        const from = project(guide.from);
-        const to = project(guide.to);
+        const from = project(normalizePoint(guide.from));
+        const to = project(normalizePoint(guide.to));
         ctx.strokeStyle = "#456a83";
         ctx.beginPath();
         ctx.moveTo(from.x, from.y);
         ctx.lineTo(to.x, to.y);
         ctx.stroke();
       }
-      fixture.renderPlan.emitters.forEach((point: Point3, index: number) => {
-        const preview = drag.current?.kind === "fixturePoint" && drag.current.pointIndex === index ? drag.current.preview : point;
-        const projected = project(preview);
+      fixture.renderPlan.emitters.forEach((point, index) => {
+        const normalizedPoint = normalizePoint(point);
+        const projected = project(drag.current?.kind === "fixturePoint" && drag.current.pointIndex === index ? drag.current.preview : normalizedPoint);
         ctx.fillStyle = selected === `point:${index}` ? "#6abf8a" : "#d6a35a";
         ctx.beginPath();
         ctx.arc(projected.x, projected.y, 6, 0, Math.PI * 2);
         ctx.fill();
       });
     });
-  }, [fixture, selected, revision]);
+  }, [fixture, renderBounds, selected, revision]);
 
-  if (!fixture) return <BlockedGui reason="No fixture definition is available." diagnostics={[]} />;
+  if (fixture === undefined || renderBounds === null) return <BlockedGui reason="No fixture definition is available." diagnostics={[]} />;
 
   return (
     <canvas
@@ -601,19 +610,22 @@ function FixtureCanvas({
       className="gui-canvas"
       onMouseDown={(event) => {
         if (fixture.geometry.type !== "points") return;
-        const world = unproject(event.nativeEvent.offsetX, event.nativeEvent.offsetY, canvas.current, fixture.renderPlan.bounds);
-        const index = nearestPoint(fixture.geometry.points, world);
+        const world = unproject(event.nativeEvent.offsetX, event.nativeEvent.offsetY, canvas.current, renderBounds);
+        const points = fixture.geometry.points.map(normalizePoint);
+        const index = nearestPoint(points, world);
         if (index === null) {
           setSelected(null);
           return;
         }
+        const point = points[index];
+        if (point === undefined) return;
         setSelected(`point:${index}`);
-        drag.current = { kind: "fixturePoint", objectKey: fixture.objectKey, pointIndex: index, preview: fixture.geometry.points[index] };
+        drag.current = { kind: "fixturePoint", objectKey: fixture.objectKey, pointIndex: index, preview: point };
       }}
       onMouseMove={(event) => {
         const current = drag.current;
         if (!current || current.kind !== "fixturePoint") return;
-        const world = unproject(event.nativeEvent.offsetX, event.nativeEvent.offsetY, canvas.current, fixture.renderPlan.bounds);
+        const world = unproject(event.nativeEvent.offsetX, event.nativeEvent.offsetY, canvas.current, renderBounds);
         current.preview = { x: round2(world.x), y: round2(world.y), z: current.preview.z };
         render((value) => value + 1);
       }}
@@ -634,14 +646,14 @@ function FixtureCanvas({
   );
 }
 
-function GuiInspector({ gui, selected }: { gui: any; selected: string | null }) {
+function GuiInspector({ gui, selected }: { gui: ReadyGuiDocumentDto; selected: string | null }) {
   if (gui.type === "sequence") {
-    const id = selected?.startsWith("effect:") ? Number(selected.split(":")[1]) : null;
-    const effect = gui.document.effects.find((candidate: any) => candidate.id === id);
+    const id = selected !== null && selected.startsWith("effect:") ? Number(selected.split(":")[1]) : null;
+    const effect = gui.document.effects.find((candidate) => candidate.id === id);
     return (
       <aside className="gui-inspector">
         <h2>Sequence</h2>
-        {effect ? (
+        {effect !== undefined ? (
           <>
             <label>Effect<input readOnly value={effect.script} /></label>
             <label>Start<input readOnly value={`${effect.startMs} ms`} /></label>
@@ -650,7 +662,7 @@ function GuiInspector({ gui, selected }: { gui: any; selected: string | null }) 
             {effect.params.length > 0 && (
               <div className="effect-param-section">
                 <h3>Parameters</h3>
-                {effect.params.map((param: SequenceEffectParamDto) => (
+                {effect.params.map((param) => (
                   <EffectParamInput key={`${effect.id}:${param.name}`} effectId={effect.id} param={param} />
                 ))}
               </div>
@@ -664,16 +676,17 @@ function GuiInspector({ gui, selected }: { gui: any; selected: string | null }) 
     );
   }
   if (gui.type === "layout") {
-    const id = selected?.startsWith("placement:") ? Number(selected.split(":")[1]) : null;
-    const placement = gui.document.fixtures.find((candidate: any) => candidate.id === id);
+    const id = selected !== null && selected.startsWith("placement:") ? Number(selected.split(":")[1]) : null;
+    const placement = gui.document.fixtures.find((candidate) => candidate.id === id);
+    const transform = placement === undefined ? null : normalizeTransform(placement.transform);
     return (
       <aside className="gui-inspector">
         <h2>Layout</h2>
-        {placement ? (
+        {placement !== undefined && transform !== null ? (
           <>
             <label>Placement<input readOnly value={placement.name} /></label>
-            <label>X<input readOnly value={placement.transform.position.x} /></label>
-            <label>Y<input readOnly value={placement.transform.position.y} /></label>
+            <label>X<input readOnly value={transform.position.x} /></label>
+            <label>Y<input readOnly value={transform.position.y} /></label>
             <label>Fixture<input readOnly value={placement.resolvedFixture.name} /></label>
           </>
         ) : (
@@ -682,11 +695,11 @@ function GuiInspector({ gui, selected }: { gui: any; selected: string | null }) 
       </aside>
     );
   }
-  const fixture = gui.document.fixtures.find((candidate: any) => candidate.objectKey === gui.document.selectedObjectKey) ?? gui.document.fixtures[0];
+  const fixture = gui.document.fixtures.find((candidate) => candidate.objectKey === gui.document.selectedObjectKey) ?? gui.document.fixtures[0];
   return (
     <aside className="gui-inspector">
       <h2>Fixture</h2>
-      {fixture ? (
+      {fixture !== undefined ? (
         <>
           <label>Name<input readOnly value={fixture.name} /></label>
           <label>
@@ -695,7 +708,7 @@ function GuiInspector({ gui, selected }: { gui: any; selected: string | null }) 
               type="number"
               min={0.05}
               step={0.05}
-              defaultValue={fixture.bulbSize}
+              defaultValue={fixture.bulbSize ?? ""}
               onBlur={(event) =>
                 void runSnapshotCommand(() =>
                   commands.applyFixtureGuiEdit({
@@ -708,7 +721,7 @@ function GuiInspector({ gui, selected }: { gui: any; selected: string | null }) 
             />
           </label>
           <label>Geometry<input readOnly value={fixture.geometrySummary} /></label>
-          <p>{selected?.startsWith("point:") ? `Point ${Number(selected.split(":")[1]) + 1}` : "Select a point."}</p>
+          <p>{selected !== null && selected.startsWith("point:") ? `Point ${Number(selected.split(":")[1]) + 1}` : "Select a point."}</p>
         </>
       ) : (
         <p>No fixture.</p>
@@ -734,9 +747,9 @@ function EffectParamInput({ effectId, param }: { effectId: number; param: Sequen
 
   switch (param.value.type) {
     case "int":
-      return <NumberParam param={param} value={param.value.value} step={1} commit={(value) => commit({ type: "int", value: Math.max(0, Math.round(value)) })} />;
+      return <NumberParam key={`${param.name}:${param.value.value}`} param={param} value={param.value.value} step={1} commit={(value) => commit({ type: "int", value: Math.max(0, Math.round(value)) })} />;
     case "float":
-      return <NumberParam param={param} value={param.value.value ?? 0} step={0.05} commit={(value) => commit({ type: "float", value })} />;
+      return <NumberParam key={`${param.name}:${param.value.value ?? 0}`} param={param} value={param.value.value ?? 0} step={0.05} commit={(value) => commit({ type: "float", value })} />;
     case "bool":
       return (
         <label className="effect-param-check">
@@ -749,7 +762,7 @@ function EffectParamInput({ effectId, param }: { effectId: number; param: Sequen
         </label>
       );
     case "color":
-      return <ColorParam name={param.name} value={param.value.value} commit={(value) => commit({ type: "color", value })} />;
+      return <ColorParam key={`${param.name}:${param.value.value.toLowerCase()}`} name={param.name} value={param.value.value} commit={(value) => commit({ type: "color", value })} />;
     case "enum":
       return (
         <label>
@@ -784,9 +797,9 @@ function EffectParamInput({ effectId, param }: { effectId: number; param: Sequen
       );
     }
     case "floatCurve":
-      return <FloatCurveParam name={param.name} points={normalizeFloatCurvePoints(param.value.points)} commit={(points) => commit({ type: "floatCurve", points })} />;
+      return <FloatCurveParamShell name={param.name} points={normalizeFloatCurvePoints(param.value.points)} commit={(points) => commit({ type: "floatCurve", points })} />;
     case "colorCurve":
-      return <ColorCurveParam name={param.name} points={normalizeColorCurvePoints(param.value.points)} commit={(points) => commit({ type: "colorCurve", points })} />;
+      return <ColorCurveParamShell name={param.name} points={normalizeColorCurvePoints(param.value.points)} commit={(points) => commit({ type: "colorCurve", points })} />;
   }
 }
 
@@ -803,10 +816,6 @@ function NumberParam({
 }) {
   const [text, setText] = useState(String(value));
   const lastCommitted = useRef(value);
-  useEffect(() => { setText(String(value)); }, [value]);
-  useEffect(() => {
-    lastCommitted.current = value;
-  }, [value]);
   const commitText = () => {
     const next = Number(text);
     if (!Number.isFinite(next)) {
@@ -842,10 +851,6 @@ function ColorParam({ name, value, commit }: { name: string; value: string; comm
   const committedValue = value.toLowerCase();
   const [draft, setDraft] = useState(committedValue);
   const lastCommitted = useRef(committedValue);
-  useEffect(() => {
-    lastCommitted.current = committedValue;
-    setDraft(committedValue);
-  }, [committedValue]);
   const commitDraft = (candidate = draft) => {
     if (!isHexColor(candidate)) {
       setDraft(committedValue);
@@ -894,6 +899,22 @@ function ColorParam({ name, value, commit }: { name: string; value: string; comm
   );
 }
 
+function FloatCurveParamShell(props: {
+  name: string;
+  points: EditedFloatCurvePoint[];
+  commit: (points: EditedFloatCurvePoint[]) => Promise<void>;
+}) {
+  return <FloatCurveParam key={`${props.name}:${curvePointsSignature(props.points)}`} {...props} />;
+}
+
+function ColorCurveParamShell(props: {
+  name: string;
+  points: EditedColorCurvePoint[];
+  commit: (points: EditedColorCurvePoint[]) => Promise<void>;
+}) {
+  return <ColorCurveParam key={`${props.name}:${curvePointsSignature(props.points)}`} {...props} />;
+}
+
 function FloatCurveParam({
   name,
   points,
@@ -906,10 +927,6 @@ function FloatCurveParam({
   const [drafts, setDrafts] = useState(points);
   const pointsSignature = curvePointsSignature(points);
   const lastCommittedSignature = useRef(pointsSignature);
-  useEffect(() => {
-    lastCommittedSignature.current = pointsSignature;
-    setDrafts(points);
-  }, [pointsSignature]);
   const update = (next: EditedFloatCurvePoint[]) => {
     if (next.length > 0 && next.every((point) => Number.isFinite(point.time) && Number.isFinite(point.value))) {
       const sorted = sortCurvePoints(next);
@@ -981,12 +998,7 @@ function ColorCurveParam({
 }) {
   const [drafts, setDrafts] = useState(points);
   const colorCommitTimers = useRef<Map<number, number>>(new Map());
-  const pointsSignature = curvePointsSignature(points);
   const lastCommittedValues = useRef(points.map((point) => point.value.toLowerCase()));
-  useEffect(() => {
-    lastCommittedValues.current = points.map((point) => point.value.toLowerCase());
-    setDrafts(points);
-  }, [pointsSignature]);
   useEffect(
     () => () => {
       for (const timer of colorCommitTimers.current.values()) {
@@ -1008,7 +1020,7 @@ function ColorCurveParam({
   };
   const commitDraftValue = (index: number, candidate = drafts[index]?.value) => {
     const draft = candidate ?? points[index]?.value;
-    if (!draft) return;
+    if (draft === undefined || draft === "") return;
     if (!isHexColor(draft)) {
       const fallback = points[index];
       if (fallback !== undefined) {
@@ -1089,9 +1101,22 @@ type SequenceViewport = {
 };
 
 type SequenceClipLayout = {
-  effect: any;
+  effect: SequenceEffectDto;
   laneIndex: number;
   rect: { x: number; y: number; width: number; height: number };
+};
+
+type SequenceClip = {
+  effect: SequenceEffectDto;
+  laneIndex: number;
+};
+
+type SequenceClipWithSlot = SequenceClip & { slot: number };
+
+type SequenceHit = {
+  effect: SequenceEffectDto;
+  laneIndex: number;
+  resize: "left" | "right" | "none";
 };
 
 type SequencePreviewImage = {
@@ -1099,33 +1124,34 @@ type SequencePreviewImage = {
 } & ({ status: "ready"; canvas: HTMLCanvasElement } | { status: "unavailable" });
 
 function buildSequenceClipLayout(
-  document: any,
-  preview: { id: number; startMs: number; durationMs: number; laneIndex: number } | null,
+  document: SequenceDocumentDto,
+  preview: SequencePreview | null,
   viewport: SequenceViewport,
   left: number,
   top: number
 ): SequenceClipLayout[] {
-  const clips = document.effects.map((effect: any) => {
+  const clips = document.effects.map((effect): SequenceClip => {
     const activePreview = preview?.id === effect.id ? preview : null;
-    if (!activePreview) {
+    if (activePreview === null) {
       return {
         effect,
-        laneIndex: Math.max(0, document.lanes.findIndex((lane: any) => targetsEqual(lane.target, effect.target)))
+        laneIndex: Math.max(0, document.lanes.findIndex((lane) => targetsEqual(lane.target, effect.target)))
       };
     }
+    const previewLane = document.lanes[activePreview.laneIndex];
     return {
       effect: {
         ...effect,
         startMs: activePreview.startMs,
         durationMs: activePreview.durationMs,
-        target: document.lanes[activePreview.laneIndex]?.target ?? effect.target,
-        targetLabel: document.lanes[activePreview.laneIndex]?.label ?? effect.targetLabel
+        target: previewLane?.target ?? effect.target,
+        targetLabel: previewLane?.label ?? effect.targetLabel
       },
       laneIndex: activePreview.laneIndex
     };
   });
 
-  const byLane = new Map<number, { effect: any; laneIndex: number }[]>();
+  const byLane = new Map<number, SequenceClip[]>();
   for (const clip of clips) {
     if (clip.laneIndex < 0) continue;
     const laneClips = byLane.get(clip.laneIndex) ?? [];
@@ -1161,10 +1187,10 @@ function buildSequenceClipLayout(
   return layouts;
 }
 
-function groupOverlappingClips(clips: { effect: any; laneIndex: number }[]) {
+function groupOverlappingClips(clips: SequenceClip[]) {
   const sorted = [...clips].sort(compareClipsByTime);
-  const groups: { effect: any; laneIndex: number }[][] = [];
-  let current: { effect: any; laneIndex: number }[] = [];
+  const groups: SequenceClip[][] = [];
+  let current: SequenceClip[] = [];
   let currentEnd = -Infinity;
   for (const clip of sorted) {
     const start = clip.effect.startMs;
@@ -1182,7 +1208,7 @@ function groupOverlappingClips(clips: { effect: any; laneIndex: number }[]) {
   return groups;
 }
 
-function assignOverlapSlots(group: { effect: any; laneIndex: number }[]) {
+function assignOverlapSlots(group: SequenceClip[]): SequenceClipWithSlot[] {
   const sorted = [...group].sort(compareClipsByTime);
   const slotEnds: number[] = [];
   return sorted.map((clip) => {
@@ -1195,7 +1221,7 @@ function assignOverlapSlots(group: { effect: any; laneIndex: number }[]) {
   });
 }
 
-function compareClipsByTime(left: { effect: any }, right: { effect: any }) {
+function compareClipsByTime(left: { effect: SequenceEffectDto }, right: { effect: SequenceEffectDto }) {
   return (
     left.effect.startMs - right.effect.startMs ||
     left.effect.startMs + left.effect.durationMs - (right.effect.startMs + right.effect.durationMs) ||
@@ -1203,7 +1229,7 @@ function compareClipsByTime(left: { effect: any }, right: { effect: any }) {
   );
 }
 
-function hitSequence(clips: SequenceClipLayout[], x: number, y: number) {
+function hitSequence(clips: SequenceClipLayout[], x: number, y: number): SequenceHit | null {
   for (const clip of [...clips].reverse()) {
     const { rect } = clip;
     if (x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height) {
@@ -1255,13 +1281,13 @@ function formatMs(ms: number) {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
-function targetsEqual(left: any, right: any) {
-  return left?.kind === right?.kind && left?.name === right?.name;
+function targetsEqual(left: LayoutTargetDto, right: LayoutTargetDto) {
+  return left.kind === right.kind && left.name === right.name;
 }
 
-function sequencePreviewSignatures(document: any) {
+function sequencePreviewSignatures(document: SequenceDocumentDto) {
   return new Map<number, string>(
-    document.effects.map((effect: any) => [
+    document.effects.map((effect) => [
       effect.id,
       JSON.stringify({
         path: document.path,
@@ -1331,9 +1357,50 @@ function previewCanvasFromRaster(raster: SequenceEffectPreviewDto) {
   return canvas;
 }
 
+function validPreviewImage(image: SequencePreviewImage | undefined, signature: string | undefined) {
+  if (image === undefined || signature === undefined) return undefined;
+  return image.signature === signature ? image : undefined;
+}
+
+function normalizePoint(point: Point3Dto | GeometryRenderPointDto): Point3 {
+  return {
+    x: point.x ?? 0,
+    y: point.y ?? 0,
+    z: point.z ?? 0
+  };
+}
+
+function normalizeTransform(transform: TransformDto): Transform {
+  return {
+    position: normalizePoint(transform.position),
+    rotation: normalizePoint(transform.rotation),
+    scale: {
+      x: transform.scale.x ?? 1,
+      y: transform.scale.y ?? 1,
+      z: transform.scale.z ?? 1
+    }
+  };
+}
+
+type RenderBounds = {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+};
+
+function normalizeBounds(bounds: GeometryRenderBoundsDto): RenderBounds {
+  return {
+    minX: bounds.minX ?? 0,
+    minY: bounds.minY ?? 0,
+    maxX: bounds.maxX ?? 0,
+    maxY: bounds.maxY ?? 0
+  };
+}
+
 function drawSpatialCanvas(
   canvas: HTMLCanvasElement | null,
-  bounds: any,
+  bounds: RenderBounds,
   draw: (ctx: CanvasRenderingContext2D, project: (point: Point3) => { x: number; y: number }) => void
 ) {
   if (!canvas) return;
@@ -1370,11 +1437,7 @@ function drawGrid(ctx: CanvasRenderingContext2D, width: number, height: number) 
   }
 }
 
-function fitViewport(bounds: any) {
-  return bounds;
-}
-
-function projectPoint(point: Point3, width: number, height: number, bounds: any) {
+function projectPoint(point: Point3, width: number, height: number, bounds: RenderBounds) {
   const padding = 42;
   const spanX = Math.max(1, bounds.maxX - bounds.minX);
   const spanY = Math.max(1, bounds.maxY - bounds.minY);
@@ -1385,7 +1448,7 @@ function projectPoint(point: Point3, width: number, height: number, bounds: any)
   };
 }
 
-function unproject(x: number, y: number, canvas: HTMLCanvasElement | null, bounds: any): Point3 {
+function unproject(x: number, y: number, canvas: HTMLCanvasElement | null, bounds: RenderBounds): Point3 {
   const rect = canvas?.getBoundingClientRect();
   const width = rect?.width ?? 1;
   const height = rect?.height ?? 1;
@@ -1400,11 +1463,12 @@ function unproject(x: number, y: number, canvas: HTMLCanvasElement | null, bound
   };
 }
 
-function nearestPlacement(document: any, point: Point3) {
-  let best: any = null;
+function nearestPlacement(document: LayoutDocumentDto, point: Point3): LayoutFixturePlacementDto | null {
+  let best: LayoutFixturePlacementDto | null = null;
   let bestDistance = Infinity;
   for (const placement of document.fixtures) {
-    const distance = Math.hypot(placement.transform.position.x - point.x, placement.transform.position.y - point.y);
+    const transform = normalizeTransform(placement.transform);
+    const distance = Math.hypot(transform.position.x - point.x, transform.position.y - point.y);
     if (distance < bestDistance && distance < 1.2) {
       best = placement;
       bestDistance = distance;
@@ -1416,13 +1480,15 @@ function nearestPlacement(document: any, point: Point3) {
 function nearestPoint(points: Point3[], point: Point3) {
   let best: number | null = null;
   let bestDistance = Infinity;
-  points.forEach((candidate, index) => {
+  for (let index = 0; index < points.length; index += 1) {
+    const candidate = points[index];
+    if (candidate === undefined) continue;
     const distance = Math.hypot(candidate.x - point.x, candidate.y - point.y);
     if (distance < bestDistance && distance < 0.8) {
       best = index;
       bestDistance = distance;
     }
-  });
+  }
   return best;
 }
 
