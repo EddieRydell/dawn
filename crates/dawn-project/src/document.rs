@@ -181,6 +181,8 @@ pub struct SequenceEffectDocument {
     pub target: LayoutTargetDocument,
     pub target_label: String,
     pub script: String,
+    pub script_source: Option<String>,
+    pub params: Vec<SequenceEffectParamDocument>,
     pub render: Option<SequenceEffectRenderDocument>,
 }
 
@@ -219,6 +221,35 @@ pub enum SequenceDocumentEdit {
         id: u32,
         target: LayoutTargetDocument,
     },
+    UpdateEffectParam {
+        id: u32,
+        name: String,
+        value: SequenceEffectParamEditValue,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum SequenceEffectParamEditValue {
+    Integer(u64),
+    Float(f64),
+    Boolean(bool),
+    Color(String),
+    Enum(String),
+    Flags(Vec<String>),
+    FloatCurve(Vec<SequenceEffectParamCurvePointEditValue>),
+    ColorCurve(Vec<SequenceEffectParamCurvePointEditValue>),
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceEffectParamCurvePointEditValue {
+    pub time: f64,
+    pub value: SequenceEffectParamCurveValueEditValue,
+}
+
+#[derive(Debug, Clone)]
+pub enum SequenceEffectParamCurveValueEditValue {
+    Float(f64),
+    Color(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -687,8 +718,230 @@ fn apply_sequence_edit_operation(
             };
             effect.target = next_target;
         }
+        SequenceDocumentEdit::UpdateEffectParam { id, name, value } => {
+            let effect_index = sequence
+                .effects
+                .iter()
+                .position(|effect| effect.id == id)
+                .ok_or_else(|| format!("sequence effect `{id}` was not found"))?;
+            let script = compiled_effect_for_sequence_effect(
+                fs,
+                path,
+                analysis,
+                overlays,
+                &sequence.effects[effect_index],
+            )?;
+            let schema = script
+                .param(&name)
+                .ok_or_else(|| format!("effect parameter `{name}` was not found"))?;
+            let edited_param = param_edit_value_to_authored(schema, value)?;
+            let mut params = IndexMap::with_capacity(script.params.len());
+            for schema in &script.params {
+                let next = if schema.name == name {
+                    edited_param.clone()
+                } else {
+                    sequence.effects[effect_index]
+                        .params
+                        .get(&schema.name)
+                        .filter(|param| {
+                            authored_param_matches_schema(schema, param, path, analysis)
+                        })
+                        .cloned()
+                        .unwrap_or_else(|| default_param_for_schema(schema))
+                };
+                params.insert(schema.name.clone(), next);
+            }
+            sequence.effects[effect_index].params = params;
+        }
     }
     Ok(())
+}
+
+fn compiled_effect_for_sequence_effect(
+    fs: &WorkspaceFs,
+    path: &Utf8PathBuf,
+    analysis: &ProjectAnalysis,
+    overlays: &[ProjectOverlay],
+    effect: &SequenceEffect<Authored>,
+) -> Result<CompiledEffect, String> {
+    match &effect.script {
+        InlineOrImport::Inline(source) => compile_effect_script(source)
+            .map_err(|diagnostics| script_diagnostics_message(&diagnostics)),
+        InlineOrImport::Import { import } => {
+            let script_path = resolve_import_path(path, import.path());
+            let script_key = script_path.to_slash_string();
+            if let Some(script) = analysis
+                .scripts
+                .get(&script_key)
+                .and_then(|script| script.result.as_ref().ok())
+            {
+                return Ok(script.clone());
+            }
+            let source = read_text_with_overlays(fs, &script_path, overlays)?;
+            compile_effect_script(&source)
+                .map_err(|diagnostics| script_diagnostics_message(&diagnostics))
+        }
+    }
+}
+
+fn default_param_for_schema(
+    schema: &crate::effect_script::EffectParamSchema,
+) -> EffectParam<Authored> {
+    match &schema.default {
+        Some(ParamDefault::Value(value)) => runtime_value_to_authored_param(value),
+        None => type_default_param(schema.value_type, &schema.options),
+    }
+}
+
+fn authored_param_matches_schema(
+    schema: &crate::effect_script::EffectParamSchema,
+    param: &EffectParam<Authored>,
+    source_path: &Utf8PathBuf,
+    analysis: &ProjectAnalysis,
+) -> bool {
+    let resolved = match param {
+        EffectParam::Curve {
+            curve: InlineOrImport::Import { .. },
+        } => {
+            let mut resolver = AnalysisImportResolver {
+                files: &analysis.files,
+            };
+            lower_effect_param_document(source_path, param, &mut resolver).ok()
+        }
+        _ => authored_param_to_resolved(param),
+    };
+    resolved.as_ref().is_some_and(|param| {
+        schema.value_type.matches_param(param) && param_options_match(schema, param)
+    })
+}
+
+fn authored_param_to_resolved(param: &EffectParam<Authored>) -> Option<EffectParam<Resolved>> {
+    Some(match param {
+        EffectParam::Integer { value } => EffectParam::Integer { value: *value },
+        EffectParam::Float { value } if value.is_finite() => EffectParam::Float { value: *value },
+        EffectParam::Float { .. } => return None,
+        EffectParam::Boolean { value } => EffectParam::Boolean { value: *value },
+        EffectParam::Enum { value } => EffectParam::Enum {
+            value: value.clone(),
+        },
+        EffectParam::Flags { value } => EffectParam::Flags {
+            value: value.clone(),
+        },
+        EffectParam::Color { value } => EffectParam::Color { value: *value },
+        EffectParam::Curve {
+            curve: InlineOrImport::Inline(curve),
+        } if curve.points.iter().all(|point| point.time.is_finite()) => EffectParam::Curve {
+            curve: curve.clone(),
+        },
+        EffectParam::Curve { .. } => return None,
+    })
+}
+
+fn param_options_match(
+    schema: &crate::effect_script::EffectParamSchema,
+    param: &EffectParam<Resolved>,
+) -> bool {
+    match param {
+        EffectParam::Enum { value } => schema.options.contains(value),
+        EffectParam::Flags { value } => value
+            .values
+            .iter()
+            .all(|candidate| schema.options.contains(candidate)),
+        _ => true,
+    }
+}
+
+fn param_edit_value_to_authored(
+    schema: &crate::effect_script::EffectParamSchema,
+    value: SequenceEffectParamEditValue,
+) -> Result<EffectParam<Authored>, String> {
+    match (schema.value_type, value) {
+        (ScriptType::Int, SequenceEffectParamEditValue::Integer(value)) => {
+            Ok(EffectParam::Integer { value })
+        }
+        (ScriptType::Float, SequenceEffectParamEditValue::Float(value)) if value.is_finite() => {
+            Ok(EffectParam::Float { value })
+        }
+        (ScriptType::Bool, SequenceEffectParamEditValue::Boolean(value)) => {
+            Ok(EffectParam::Boolean { value })
+        }
+        (ScriptType::Color, SequenceEffectParamEditValue::Color(value)) => Ok(EffectParam::Color {
+            value: Color::parse(&value)?,
+        }),
+        (ScriptType::Enum, SequenceEffectParamEditValue::Enum(value)) => {
+            if !schema.options.contains(&value) {
+                return Err(format!(
+                    "`{value}` is not a valid option for `{}`",
+                    schema.name
+                ));
+            }
+            Ok(EffectParam::Enum { value })
+        }
+        (ScriptType::Flags, SequenceEffectParamEditValue::Flags(values)) => {
+            for value in &values {
+                if !schema.options.contains(value) {
+                    return Err(format!(
+                        "`{value}` is not a valid flag for `{}`",
+                        schema.name
+                    ));
+                }
+            }
+            Ok(EffectParam::Flags {
+                value: Flags { values },
+            })
+        }
+        (ScriptType::CurveFloat, SequenceEffectParamEditValue::FloatCurve(points)) => {
+            Ok(EffectParam::Curve {
+                curve: InlineOrImport::Inline(edit_points_to_curve(CurveValueType::Float, points)?),
+            })
+        }
+        (ScriptType::CurveColor, SequenceEffectParamEditValue::ColorCurve(points)) => {
+            Ok(EffectParam::Curve {
+                curve: InlineOrImport::Inline(edit_points_to_curve(CurveValueType::Color, points)?),
+            })
+        }
+        _ => Err(format!(
+            "`{}` expects a {} parameter value",
+            schema.name, schema.value_type
+        )),
+    }
+}
+
+fn edit_points_to_curve(
+    value_type: CurveValueType,
+    points: Vec<SequenceEffectParamCurvePointEditValue>,
+) -> Result<Curve, String> {
+    if points.is_empty() {
+        return Err("curve parameters require at least one point".to_string());
+    }
+    let mut points = points
+        .into_iter()
+        .map(|point| {
+            if !point.time.is_finite() {
+                return Err("curve point time must be finite".to_string());
+            }
+            let value = match (value_type, point.value) {
+                (CurveValueType::Float, SequenceEffectParamCurveValueEditValue::Float(value))
+                    if value.is_finite() =>
+                {
+                    CurveValue::Float(value)
+                }
+                (CurveValueType::Float, SequenceEffectParamCurveValueEditValue::Float(_)) => {
+                    return Err("curve point value must be finite".to_string())
+                }
+                (CurveValueType::Color, SequenceEffectParamCurveValueEditValue::Color(value)) => {
+                    CurveValue::Color(Color::parse(&value)?)
+                }
+                _ => return Err("curve point value type does not match the curve type".to_string()),
+            };
+            Ok(CurvePoint {
+                time: point.time.clamp(0.0, 1.0),
+                value,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    points.sort_by(|left, right| left.time.total_cmp(&right.time));
+    Ok(Curve { value_type, points })
 }
 
 fn read_text_with_overlays(
@@ -787,6 +1040,11 @@ fn sequence_to_document(
         .map(|(index, effect)| {
             let target = effect_target_document(&effect.target, &fixture_names_by_id);
             let target_label = target_label(target.kind, &target.name);
+            let script_source =
+                sequence_effect_script_details(path, effect, analysis).map(|(_, source)| source);
+            let params = analysis
+                .and_then(|analysis| sequence_effect_param_documents(path, effect, analysis))
+                .unwrap_or_default();
             let render = layout.and_then(|layout| {
                 analysis.and_then(|analysis| {
                     sequence_effect_render_document(path, effect, layout, analysis)
@@ -800,6 +1058,8 @@ fn sequence_to_document(
                 target,
                 target_label,
                 script: sequence_effect_script_label(&effect.script),
+                script_source,
+                params,
                 render,
             }
         })
@@ -1058,26 +1318,8 @@ fn sequence_effect_render_document(
     if target_pixels.is_empty() {
         return None;
     }
-    let (script_key, script_source) = match &effect.script {
-        InlineOrImport::Inline(source) => (
-            format!(
-                "inline:{}:{}",
-                analysis.root_path.to_slash_string(),
-                effect.id
-            ),
-            source.clone(),
-        ),
-        InlineOrImport::Import { import } => {
-            let path = resolve_import_path(sequence_path, import.path());
-            let key = path.to_slash_string();
-            let source = analysis
-                .files
-                .get(&path)
-                .and_then(|file| file.text.clone())
-                .unwrap_or_else(|| key.clone());
-            (key, source)
-        }
-    };
+    let (script_key, script_source) =
+        sequence_effect_script_details(sequence_path, effect, Some(analysis))?;
     if !analysis
         .scripts
         .get(&script_key)
@@ -1085,11 +1327,51 @@ fn sequence_effect_render_document(
     {
         return None;
     }
+    let params = sequence_effect_param_documents(sequence_path, effect, analysis)?;
 
+    Some(SequenceEffectRenderDocument {
+        script_key,
+        script_source,
+        params,
+        target_pixels,
+    })
+}
+
+fn sequence_effect_script_details(
+    sequence_path: &Utf8PathBuf,
+    effect: &SequenceEffect<Authored>,
+    analysis: Option<&ProjectAnalysis>,
+) -> Option<(String, String)> {
+    match &effect.script {
+        InlineOrImport::Inline(source) => Some((
+            format!(
+                "inline:{}:{}",
+                analysis?.root_path.to_slash_string(),
+                effect.id
+            ),
+            source.clone(),
+        )),
+        InlineOrImport::Import { import } => {
+            let path = resolve_import_path(sequence_path, import.path());
+            let key = path.to_slash_string();
+            let source = analysis
+                .and_then(|analysis| analysis.files.get(&path))
+                .and_then(|file| file.text.clone())
+                .unwrap_or_else(|| key.clone());
+            Some((key, source))
+        }
+    }
+}
+
+fn sequence_effect_param_documents(
+    sequence_path: &Utf8PathBuf,
+    effect: &SequenceEffect<Authored>,
+    analysis: &ProjectAnalysis,
+) -> Option<Vec<SequenceEffectParamDocument>> {
     let mut resolver = AnalysisImportResolver {
         files: &analysis.files,
     };
-    let params = effect
+    effect
         .params
         .iter()
         .map(|(name, param)| {
@@ -1101,14 +1383,7 @@ fn sequence_effect_render_document(
             })
         })
         .collect::<Result<Vec<_>, _>>()
-        .ok()?;
-
-    Some(SequenceEffectRenderDocument {
-        script_key,
-        script_source,
-        params,
-        target_pixels,
-    })
+        .ok()
 }
 
 fn target_pixels_for_effect(

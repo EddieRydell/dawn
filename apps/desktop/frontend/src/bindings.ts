@@ -15,6 +15,7 @@ export const commands = {
 	undoActiveEdit: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("undo_active_edit")),
 	redoActiveEdit: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("redo_active_edit")),
 	applySequenceGuiEdit: (edit: SequenceGuiEditDto) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("apply_sequence_gui_edit", { edit })),
+	getSequenceEffectPreviews: (path: string, objectKey: string, effectIds: number[]) => typedError<SequenceEffectPreviewBatchDto, string>(__TAURI_INVOKE("get_sequence_effect_previews", { path, objectKey, effectIds })),
 	applyLayoutGuiEdit: (edit: LayoutGuiEditDto) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("apply_layout_gui_edit", { edit })),
 	applyFixtureGuiEdit: (edit: FixtureGuiEditDto) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("apply_fixture_gui_edit", { edit })),
 	flushAutosave: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("flush_autosave")),
@@ -44,6 +45,11 @@ export type AppSnapshotDto = {
 	diagnostics: ProjectDiagnosticDto[],
 	status: string,
 	preview: PreviewSnapshotDto,
+};
+
+export type ColorCurvePointDto = {
+	time: number | null,
+	value: string,
 };
 
 export type DiagnosticSeverityDto = "error" | "warning";
@@ -94,6 +100,11 @@ export type FixtureDocumentDto = {
 };
 
 export type FixtureGuiEditDto = { type: "updateBulbSize"; objectKey: string; bulbSize: number | null } | { type: "movePoint"; objectKey: string; pointIndex: number; point: Point3Dto };
+
+export type FloatCurvePointDto = {
+	time: number | null,
+	value: number | null,
+};
 
 export type GeometryDto = { type: "points"; points: Point3Dto[] } | { type: "lines"; points: Point3Dto[]; pixels: number } | { type: "arc"; center: Point3Dto; radius: number | null; startDegrees: number | null; endDegrees: number | null; pixels: number };
 
@@ -197,6 +208,33 @@ export type SequenceEffectDto = {
 	target: LayoutTargetDto,
 	targetLabel: string,
 	script: string,
+	params: SequenceEffectParamDto[],
+};
+
+export type SequenceEffectParamDto = {
+	name: string,
+	kind: SequenceEffectParamKindDto,
+	options: string[],
+	editable: boolean,
+	value: SequenceEffectParamValueDto,
+};
+
+export type SequenceEffectParamKindDto = "int" | "float" | "bool" | "color" | "enum" | "flags" | "floatCurve" | "colorCurve";
+
+export type SequenceEffectParamValueDto = { type: "int"; value: number } | { type: "float"; value: number | null } | { type: "bool"; value: boolean } | { type: "color"; value: string } | { type: "enum"; value: string } | { type: "flags"; value: string[] } | { type: "floatCurve"; points: FloatCurvePointDto[] } | { type: "colorCurve"; points: ColorCurvePointDto[] };
+
+export type SequenceEffectPreviewBatchDto = {
+	previews: SequenceEffectPreviewDto[],
+};
+
+export type SequenceEffectPreviewDto = {
+	effectId: number,
+	durationMs: number,
+	sourcePixelCount: number,
+	sampledPixelIndices: number[],
+	columns: number,
+	rows: number,
+	colors: number[],
 };
 
 export type SequenceEffectScriptDto = {
@@ -205,7 +243,7 @@ export type SequenceEffectScriptDto = {
 	import: string,
 };
 
-export type SequenceGuiEditDto = { type: "addEffect"; scriptPath: string; target: LayoutTargetDto; startMs: number } | { type: "moveEffect"; id: number; startMs: number; target: LayoutTargetDto | null } | { type: "resizeEffect"; id: number; startMs: number; durationMs: number } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTargetDto };
+export type SequenceGuiEditDto = { type: "addEffect"; scriptPath: string; target: LayoutTargetDto; startMs: number } | { type: "moveEffect"; id: number; startMs: number; target: LayoutTargetDto | null } | { type: "resizeEffect"; id: number; startMs: number; durationMs: number } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTargetDto } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValueDto };
 
 export type SequenceLaneDto = {
 	target: LayoutTargetDto,

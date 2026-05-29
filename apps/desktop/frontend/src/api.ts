@@ -23,6 +23,11 @@ export const commands = {
   redoActiveEdit: () => unwrap(generatedCommands.redoActiveEdit()),
   applySequenceGuiEdit: (edit: Parameters<typeof generatedCommands.applySequenceGuiEdit>[0]) =>
     unwrap(generatedCommands.applySequenceGuiEdit(edit)),
+  getSequenceEffectPreviews: (
+    path: string,
+    objectKey: string,
+    effectIds: number[]
+  ) => unwrap(generatedCommands.getSequenceEffectPreviews(path, objectKey, effectIds)),
   applyLayoutGuiEdit: (edit: Parameters<typeof generatedCommands.applyLayoutGuiEdit>[0]) =>
     unwrap(generatedCommands.applyLayoutGuiEdit(edit)),
   applyFixtureGuiEdit: (edit: Parameters<typeof generatedCommands.applyFixtureGuiEdit>[0]) =>

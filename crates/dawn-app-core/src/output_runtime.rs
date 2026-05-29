@@ -151,7 +151,7 @@ fn add_clamped(target: &mut Color, color: Color) {
     target.blue = target.blue.saturating_add(color.blue);
 }
 
-fn runtime_params_from_document(
+pub fn runtime_params_from_document(
     params: &[SequenceEffectParamDocument],
 ) -> BTreeMap<String, RuntimeValue> {
     params
@@ -162,7 +162,7 @@ fn runtime_params_from_document(
         .collect()
 }
 
-fn runtime_value_from_param(param: &EffectParam<Resolved>) -> Option<RuntimeValue> {
+pub fn runtime_value_from_param(param: &EffectParam<Resolved>) -> Option<RuntimeValue> {
     match param {
         EffectParam::Integer { value } => Some(RuntimeValue::Int(*value as i64)),
         EffectParam::Float { value } => Some(RuntimeValue::Float(*value)),

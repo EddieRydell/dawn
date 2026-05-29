@@ -300,7 +300,8 @@ button:focus-visible,
   color: #a8a29a;
 }
 
-.gui-inspector input {
+.gui-inspector input,
+.gui-inspector select {
   width: 100%;
   border: 1px solid #373b42;
   border-radius: 4px;
@@ -309,12 +310,73 @@ button:focus-visible,
   padding: 5px 7px;
 }
 
+.gui-inspector input[type="checkbox"],
+.gui-inspector input[type="color"] {
+  width: auto;
+  padding: 0;
+}
+
 .gui-inspector button {
   border: 1px solid #7d3b3b;
   border-radius: 5px;
   background: #2c1f21;
   padding: 6px 9px;
   color: #ffd7d7;
+}
+
+.effect-param-section {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.effect-param-section h3 {
+  margin: 0;
+  color: #fffaf0;
+  font-size: 12px;
+}
+
+.effect-param-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.effect-param-group {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.effect-param-name {
+  color: #a8a29a;
+}
+
+.effect-param-color,
+.curve-point-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+}
+
+.curve-point-row {
+  grid-template-columns: minmax(0, 0.75fr) minmax(0, 1fr) auto;
+}
+
+.color-curve-point-row {
+  grid-template-columns: minmax(0, 0.7fr) auto minmax(0, 1fr) auto;
+}
+
+.effect-param-group button {
+  border-color: #454a53;
+  background: #17181b;
+  color: #ebe7df;
+}
+
+.effect-param-group button:disabled {
+  color: #696b70;
 }
 
 .gui-inspector p {

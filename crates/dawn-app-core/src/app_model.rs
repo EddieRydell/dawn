@@ -471,6 +471,13 @@ impl AppModel {
                     target: target.into(),
                 }
             }
+            SequenceGuiEditDto::UpdateEffectParam { id, name, value } => {
+                SequenceDocumentEdit::UpdateEffectParam {
+                    id,
+                    name,
+                    value: value.into(),
+                }
+            }
         };
         let analysis = self
             .analysis

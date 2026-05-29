@@ -422,8 +422,30 @@ opening:
           import: ../curves/fade-in.curve.dawn::fade_in
     script:
       import: ../effects/pulse.effect.dawn
+  - id: 22
+    start: 885ms
+    duration: 8250ms
+    target:
+      type: fixture
+      id: 4
+    params:
+      base:
+        type: color
+        value: '#fed7da'
+      accent:
+        type: color
+        value: '#990000'
+      speed:
+        type: float
+        value: 5.0
+      fade:
+        type: curve
+        curve:
+          import: ../curves/fade-in.curve.dawn::fade_in
+    script:
+      import: ../effects/pulse.effect.dawn
   - id: 23
-    start: 1417ms
+    start: 967ms
     duration: 8250ms
     target:
       type: fixture
@@ -444,41 +466,19 @@ opening:
           import: ../curves/fade-in.curve.dawn::fade_in
     script:
       import: ../effects/pulse.effect.dawn
-  - id: 1
-    start: 4283ms
-    duration: 8250ms
-    target:
-      type: fixture
-      id: 11
-    params:
-      base:
-        type: color
-        value: '#ff1827'
-      accent:
-        type: color
-        value: '#66e3ff'
-      speed:
-        type: float
-        value: 0.5
-      fade:
-        type: curve
-        curve:
-          import: ../curves/fade-in.curve.dawn::fade_in
-    script:
-      import: ../effects/pulse.effect.dawn
   - id: 2
-    start: 5032ms
+    start: 3732ms
     duration: 9800ms
     target:
       type: fixture
-      id: 3
+      id: 8
     params:
       base:
         type: color
-        value: '#2244ff'
+        value: '#0011ff'
       accent:
         type: color
-        value: '#ffcc66'
+        value: '#ff0000'
       speed:
         type: float
         value: 0.75
@@ -493,12 +493,12 @@ opening:
             value: 0.0
     script:
       import: //?/C:/Users/eddie/dawn/examples/club-rig/effects/pulse.effect.dawn
-  - id: 22
-    start: 5035ms
+  - id: 1
+    start: 4283ms
     duration: 8250ms
     target:
       type: fixture
-      id: 8
+      id: 11
     params:
       base:
         type: color
