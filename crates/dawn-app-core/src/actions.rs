@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::dto::{EditorViewModeDto, FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto};
 use dawn_project::path::Utf8PathBuf;
 
 #[derive(Debug, Clone)]
@@ -9,7 +10,13 @@ pub enum AppAction {
     OpenFile(Utf8PathBuf),
     CloseFile(Utf8PathBuf),
     SetActiveFile(Utf8PathBuf),
+    SetActiveViewMode(EditorViewModeDto),
     UpdateActiveText(String),
+    UndoActiveEdit,
+    RedoActiveEdit,
+    ApplySequenceGuiEdit(SequenceGuiEditDto),
+    ApplyLayoutGuiEdit(LayoutGuiEditDto),
+    ApplyFixtureGuiEdit(FixtureGuiEditDto),
     FlushAutosave,
     CreateFile { parent: Utf8PathBuf, name: String },
     CreateDirectory { parent: Utf8PathBuf, name: String },

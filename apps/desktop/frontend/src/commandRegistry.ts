@@ -4,6 +4,8 @@ import { runSnapshotCommand, useAppStore } from "./store";
 export type CommandId =
   | "file.openProject"
   | "file.save"
+  | "edit.undo"
+  | "edit.redo"
   | "view.toggleProjectTree"
   | "project.reload";
 
@@ -31,6 +33,24 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
       await runSnapshotCommand(commands.flushAutosave);
     }
   },
+  "edit.undo": {
+    id: "edit.undo",
+    label: "Undo",
+    shortcut: "Ctrl+Z",
+    run: async () => {
+      const text = useAppStore.getState().localText;
+      await runSnapshotCommand(commands.updateActiveText.bind(null, text));
+      await runSnapshotCommand(commands.undoActiveEdit);
+    }
+  },
+  "edit.redo": {
+    id: "edit.redo",
+    label: "Redo",
+    shortcut: "Ctrl+Shift+Z",
+    run: async () => {
+      await runSnapshotCommand(commands.redoActiveEdit);
+    }
+  },
   "view.toggleProjectTree": {
     id: "view.toggleProjectTree",
     label: "Project Tree",
@@ -56,6 +76,11 @@ export function installGlobalShortcuts() {
     const active = useAppStore.getState().snapshot;
     if (!active) return;
     const key = event.key.toLowerCase();
+    if (key === "z") {
+      event.preventDefault();
+      void (event.shiftKey ? commandRegistry["edit.redo"] : commandRegistry["edit.undo"]).run();
+      return;
+    }
     const command =
       key === "o"
         ? commandRegistry["file.openProject"]

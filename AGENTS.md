@@ -29,3 +29,4 @@ The goal is fast development, not support. Minimize clutter and favor having a s
 Do not use git or commands associated with it unless the user specifically requests it.
 Do not use .env files to store information.
 Do not jump to editing if the conversation is about diagnosing an issue or discussing architecture/design decisions.
+Do not start or leave a frontend dev server running when finishing work. The user needs `pnpm tauri dev` to own the frontend port.

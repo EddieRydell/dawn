@@ -11,6 +11,12 @@ export const commands = {
 	closeFile: (path: string) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("close_file", { path })),
 	setActiveFile: (path: string) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("set_active_file", { path })),
 	updateActiveText: (text: string) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("update_active_text", { text })),
+	setActiveViewMode: (mode: EditorViewModeDto) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("set_active_view_mode", { mode })),
+	undoActiveEdit: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("undo_active_edit")),
+	redoActiveEdit: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("redo_active_edit")),
+	applySequenceGuiEdit: (edit: SequenceGuiEditDto) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("apply_sequence_gui_edit", { edit })),
+	applyLayoutGuiEdit: (edit: LayoutGuiEditDto) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("apply_layout_gui_edit", { edit })),
+	applyFixtureGuiEdit: (edit: FixtureGuiEditDto) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("apply_fixture_gui_edit", { edit })),
 	flushAutosave: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("flush_autosave")),
 	createFile: (parent: string, name: string) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("create_file", { parent, name })),
 	createDirectory: (parent: string, name: string) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("create_directory", { parent, name })),
@@ -24,6 +30,8 @@ export const commands = {
 };
 
 /* Types */
+export type ActiveGuiDocumentDto = { type: "sequence"; document: SequenceDocumentDto } | { type: "layout"; document: LayoutDocumentDto } | { type: "fixture"; document: FixtureDocumentDto } | { type: "blocked"; reason: string; diagnostics: ProjectDiagnosticDto[] };
+
 export type AppSnapshotDto = {
 	projectRoot: string | null,
 	projectTreeVisible: boolean,
@@ -31,12 +39,33 @@ export type AppSnapshotDto = {
 	tabs: EditorBufferDto[],
 	activeFile: string | null,
 	activeBuffer: EditorBufferDto | null,
+	activeDocumentDescriptor: DocumentDescriptorDto | null,
+	activeGuiDocument: ActiveGuiDocumentDto | null,
 	diagnostics: ProjectDiagnosticDto[],
 	status: string,
 	preview: PreviewSnapshotDto,
 };
 
 export type DiagnosticSeverityDto = "error" | "warning";
+
+export type DocumentDefaultObjectKeyDto = {
+	view: DocumentViewIdDto,
+	objectKey: string,
+};
+
+export type DocumentDescriptorDto = {
+	path: string,
+	objects: DocumentObjectDescriptorDto[],
+	availableViews: DocumentViewIdDto[],
+	defaultObjectKeys: DocumentDefaultObjectKeyDto[],
+};
+
+export type DocumentObjectDescriptorDto = {
+	key: string,
+	kind: ObjectKindDto,
+};
+
+export type DocumentViewIdDto = "text" | "layout" | "fixture" | "sequence";
 
 export type EditorBufferDto = {
 	path: string,
@@ -47,6 +76,81 @@ export type EditorBufferDto = {
 };
 
 export type EditorViewModeDto = "text" | "gui";
+
+export type FixtureDefinitionDto = {
+	objectKey: string,
+	name: string,
+	colorModel: string,
+	bulbSize: number | null,
+	geometry: GeometryDto,
+	geometrySummary: string,
+	renderPlan: GeometryRenderPlanDto,
+};
+
+export type FixtureDocumentDto = {
+	path: string,
+	selectedObjectKey: string | null,
+	fixtures: FixtureDefinitionDto[],
+};
+
+export type FixtureGuiEditDto = { type: "updateBulbSize"; objectKey: string; bulbSize: number | null } | { type: "movePoint"; objectKey: string; pointIndex: number; point: Point3Dto };
+
+export type GeometryDto = { type: "points"; points: Point3Dto[] } | { type: "lines"; points: Point3Dto[]; pixels: number } | { type: "arc"; center: Point3Dto; radius: number | null; startDegrees: number | null; endDegrees: number | null; pixels: number };
+
+export type GeometryRenderBoundsDto = {
+	minX: number | null,
+	minY: number | null,
+	maxX: number | null,
+	maxY: number | null,
+};
+
+export type GeometryRenderGuideDto = { type: "line"; from: GeometryRenderPointDto; to: GeometryRenderPointDto } | { type: "arc"; start: GeometryRenderPointDto; end: GeometryRenderPointDto; radiusX: number | null; radiusY: number | null; rotation: number | null; largeArc: boolean; sweepPositive: boolean };
+
+export type GeometryRenderPlanDto = {
+	emitters: GeometryRenderPointDto[],
+	guides: GeometryRenderGuideDto[],
+	bounds: GeometryRenderBoundsDto,
+	bulbRadius: number | null,
+};
+
+export type GeometryRenderPointDto = {
+	x: number | null,
+	y: number | null,
+	z: number | null,
+};
+
+export type LayoutDocumentDto = {
+	path: string,
+	objectKey: string,
+	name: string,
+	units: string,
+	renderBounds: GeometryRenderBoundsDto,
+	fixtures: LayoutFixturePlacementDto[],
+};
+
+export type LayoutFixturePlacementDto = {
+	id: number,
+	name: string,
+	transform: TransformDto,
+	resolvedFixture: ResolvedLayoutFixtureDto,
+};
+
+export type LayoutGuiEditDto = { type: "updatePlacementTransform"; id: number; transform: TransformDto };
+
+export type LayoutTargetDto = {
+	kind: LayoutTargetKindDto,
+	name: string,
+};
+
+export type LayoutTargetKindDto = "group" | "fixture";
+
+export type ObjectKindDto = "project" | "display" | "controller" | "layout" | "fixture" | "patch" | "sequence" | "curve";
+
+export type Point3Dto = {
+	x: number | null,
+	y: number | null,
+	z: number | null,
+};
 
 export type PreviewSnapshotDto = {
 	sourceLabel: string,
@@ -64,6 +168,50 @@ export type ProjectDiagnosticDto = {
 	message: string,
 };
 
+export type ResolvedLayoutFixtureDto = {
+	name: string,
+	colorModel: string,
+	bulbSize: number | null,
+	geometrySummary: string,
+	renderPlan: GeometryRenderPlanDto,
+	sourcePath: string,
+	objectKey: string | null,
+};
+
+export type SequenceDocumentDto = {
+	path: string,
+	objectKey: string,
+	durationMs: number,
+	frameRate: number,
+	lanes: SequenceLaneDto[],
+	effectScripts: SequenceEffectScriptDto[],
+	effects: SequenceEffectDto[],
+	degraded: boolean,
+};
+
+export type SequenceEffectDto = {
+	index: number,
+	id: number,
+	startMs: number,
+	durationMs: number,
+	target: LayoutTargetDto,
+	targetLabel: string,
+	script: string,
+};
+
+export type SequenceEffectScriptDto = {
+	name: string,
+	path: string,
+	import: string,
+};
+
+export type SequenceGuiEditDto = { type: "addEffect"; scriptPath: string; target: LayoutTargetDto; startMs: number } | { type: "moveEffect"; id: number; startMs: number; target: LayoutTargetDto | null } | { type: "resizeEffect"; id: number; startMs: number; durationMs: number } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTargetDto };
+
+export type SequenceLaneDto = {
+	target: LayoutTargetDto,
+	label: string,
+};
+
 export type TextPositionDto = {
 	line: number,
 	character: number,
@@ -72,6 +220,12 @@ export type TextPositionDto = {
 export type TextRangeDto = {
 	start: TextPositionDto,
 	end: TextPositionDto,
+};
+
+export type TransformDto = {
+	position: Point3Dto,
+	rotation: Point3Dto,
+	scale: Point3Dto,
 };
 
 export type WorkspaceEntryDto = {

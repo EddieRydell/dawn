@@ -1,5 +1,5 @@
 import { keymap } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap } from "@codemirror/commands";
 import { yaml } from "@codemirror/lang-yaml";
 import { EditorState } from "@codemirror/state";
 import { EditorView, ViewUpdate } from "@codemirror/view";
@@ -9,6 +9,7 @@ import { commands } from "../api";
 import { AppSnapshotDto } from "../bindings";
 import { commandRegistry } from "../commandRegistry";
 import { runSnapshotCommand, useAppStore } from "../store";
+import { GuiEditor } from "./GuiEditor";
 
 export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
   const { localText, setLocalText } = useAppStore();
@@ -16,8 +17,14 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
   const view = useRef<EditorView | null>(null);
   const applyingExternalText = useRef(false);
   const activePath = snapshot.activeBuffer?.path ?? null;
+  const viewMode = snapshot.activeBuffer?.viewMode ?? "text";
 
   useEffect(() => {
+    if (viewMode !== "text") {
+      view.current?.destroy();
+      view.current = null;
+      return;
+    }
     if (!editorHost.current || view.current) return;
     view.current = new EditorView({
       parent: editorHost.current,
@@ -27,16 +34,25 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
         const text = update.state.doc.toString();
         setLocalText(text);
         scheduleAutosave(text);
+      }, async (text, redo) => {
+        window.clearTimeout(autosaveTimer);
+        if (!redo) {
+          await runSnapshotCommand(() => commands.updateActiveText(text));
+          await runSnapshotCommand(commands.undoActiveEdit);
+        } else {
+          await runSnapshotCommand(commands.redoActiveEdit);
+        }
       })
     });
     return () => {
       view.current?.destroy();
       view.current = null;
     };
-  }, [localText, setLocalText]);
+  }, [localText, setLocalText, viewMode]);
 
   useEffect(() => {
     if (!view.current) return;
+    if (viewMode !== "text") return;
     const current = view.current.state.doc.toString();
     if (current !== localText) {
       applyingExternalText.current = true;
@@ -45,7 +61,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
       });
       applyingExternalText.current = false;
     }
-  }, [activePath, localText]);
+  }, [activePath, localText, viewMode]);
 
   if (snapshot.tabs.length === 0) {
     return (
@@ -76,7 +92,23 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
           </button>
         ))}
       </div>
-      <div ref={editorHost} className="editor-host" />
+      <div className="editor-toolbar">
+        <div className="segmented-control">
+          <button
+            className={viewMode === "text" ? "active" : ""}
+            onClick={() => void runSnapshotCommand(() => commands.setActiveViewMode("text"))}
+          >
+            Text
+          </button>
+          <button
+            className={viewMode === "gui" ? "active" : ""}
+            onClick={() => void runSnapshotCommand(() => commands.setActiveViewMode("gui"))}
+          >
+            GUI
+          </button>
+        </div>
+      </div>
+      {viewMode === "gui" ? <GuiEditor snapshot={snapshot} /> : <div ref={editorHost} className="editor-host" />}
     </section>
   );
 }
@@ -90,11 +122,14 @@ function scheduleAutosave(text: string) {
   }, 450);
 }
 
-function createState(text: string, onUpdate: (update: ViewUpdate) => void) {
+function createState(
+  text: string,
+  onUpdate: (update: ViewUpdate) => void,
+  onHistoryCommand: (text: string, redo: boolean) => Promise<void>
+) {
   return EditorState.create({
     doc: text,
     extensions: [
-      history(),
       yaml(),
       keymap.of([
         {
@@ -104,8 +139,21 @@ function createState(text: string, onUpdate: (update: ViewUpdate) => void) {
             return true;
           }
         },
+        {
+          key: "Mod-z",
+          run: (view) => {
+            void onHistoryCommand(view.state.doc.toString(), false);
+            return true;
+          }
+        },
+        {
+          key: "Mod-Shift-z",
+          run: () => {
+            void onHistoryCommand("", true);
+            return true;
+          }
+        },
         ...defaultKeymap,
-        ...historyKeymap
       ]),
       EditorView.updateListener.of(onUpdate),
       EditorView.theme({

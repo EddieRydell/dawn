@@ -33,6 +33,8 @@ pub struct EditorBuffer {
     pub text: String,
     pub saved_text: String,
     pub view_mode: EditorViewMode,
+    undo_stack: Vec<String>,
+    redo_stack: Vec<String>,
 }
 
 impl EditorBuffer {
@@ -58,6 +60,8 @@ impl EditorSession {
                     saved_text: text.clone(),
                     text,
                     view_mode: EditorViewMode::Text,
+                    undo_stack: Vec::new(),
+                    redo_stack: Vec::new(),
                 },
             );
             self.tab_order.push(path.clone());
@@ -96,8 +100,46 @@ impl EditorSession {
 
     pub fn update_active_text(&mut self, text: String) {
         if let Some(buffer) = self.active_buffer_mut() {
+            if buffer.text == text {
+                return;
+            }
+            buffer.record_snapshot();
             buffer.text = text;
         }
+    }
+
+    pub fn replace_active_text_from_edit(&mut self, text: String) {
+        if let Some(buffer) = self.active_buffer_mut() {
+            if buffer.text == text {
+                return;
+            }
+            buffer.record_snapshot();
+            buffer.text = text;
+        }
+    }
+
+    pub fn undo_active_text_edit(&mut self) -> bool {
+        let Some(buffer) = self.active_buffer_mut() else {
+            return false;
+        };
+        let Some(previous) = buffer.undo_stack.pop() else {
+            return false;
+        };
+        buffer.redo_stack.push(buffer.text.clone());
+        buffer.text = previous;
+        true
+    }
+
+    pub fn redo_active_text_edit(&mut self) -> bool {
+        let Some(buffer) = self.active_buffer_mut() else {
+            return false;
+        };
+        let Some(next) = buffer.redo_stack.pop() else {
+            return false;
+        };
+        buffer.undo_stack.push(buffer.text.clone());
+        buffer.text = next;
+        true
     }
 
     pub fn set_view_mode(&mut self, path: &Utf8PathBuf, mode: EditorViewMode) {
@@ -167,6 +209,8 @@ impl EditorSession {
                     saved_text: text.clone(),
                     text,
                     view_mode,
+                    undo_stack: Vec::new(),
+                    redo_stack: Vec::new(),
                 },
             );
             self.tab_order.push(path);
@@ -255,6 +299,16 @@ impl EditorSession {
         self.open_editors.clear();
         self.tab_order.clear();
         self.active_file = None;
+    }
+}
+
+impl EditorBuffer {
+    fn record_snapshot(&mut self) {
+        if self.undo_stack.last() == Some(&self.text) {
+            return;
+        }
+        self.undo_stack.push(self.text.clone());
+        self.redo_stack.clear();
     }
 }
 

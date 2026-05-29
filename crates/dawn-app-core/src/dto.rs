@@ -1,10 +1,21 @@
 use dawn_project::analysis::{DiagnosticSeverity, ProjectDiagnostic, TextRange};
+use dawn_project::document::{
+    DocumentDescriptor, DocumentObjectDescriptor, DocumentViewId, FixtureDefinitionDocument,
+    FixtureDocument, LayoutDocument, LayoutFixturePlacement, ResolvedLayoutFixture,
+    SequenceDocument, SequenceEffectDocument, SequenceEffectScriptDocument, SequenceLaneDocument,
+};
 use dawn_project::fs::{WorkspaceEntry, WorkspaceEntryKind};
+use dawn_project::model::{
+    ColorModel, Geometry, LayoutTargetKind, ObjectKind, Point3, Rotation3, Scale3, Transform,
+};
 use dawn_project::path::PathStringExt;
+use dawn_project::render::{
+    GeometryRenderBounds, GeometryRenderGuide, GeometryRenderPlan, GeometryRenderPoint,
+};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::app_model::AppSnapshot;
+use crate::app_model::{ActiveGuiDocument, AppSnapshot};
 use crate::editor_session::{EditorBuffer, EditorViewMode};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -16,6 +27,8 @@ pub struct AppSnapshotDto {
     pub tabs: Vec<EditorBufferDto>,
     pub active_file: Option<String>,
     pub active_buffer: Option<EditorBufferDto>,
+    pub active_document_descriptor: Option<DocumentDescriptorDto>,
+    pub active_gui_document: Option<ActiveGuiDocumentDto>,
     pub diagnostics: Vec<ProjectDiagnosticDto>,
     pub status: String,
     pub preview: PreviewSnapshotDto,
@@ -52,6 +65,325 @@ pub struct EditorBufferDto {
 pub enum EditorViewModeDto {
     Text,
     Gui,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentDescriptorDto {
+    pub path: String,
+    pub objects: Vec<DocumentObjectDescriptorDto>,
+    pub available_views: Vec<DocumentViewIdDto>,
+    pub default_object_keys: Vec<DocumentDefaultObjectKeyDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentDefaultObjectKeyDto {
+    pub view: DocumentViewIdDto,
+    pub object_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentObjectDescriptorDto {
+    pub key: String,
+    pub kind: ObjectKindDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum DocumentViewIdDto {
+    Text,
+    Layout,
+    Fixture,
+    Sequence,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ObjectKindDto {
+    Project,
+    Display,
+    Controller,
+    Layout,
+    Fixture,
+    Patch,
+    Sequence,
+    Curve,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ActiveGuiDocumentDto {
+    Sequence {
+        document: SequenceDocumentDto,
+    },
+    Layout {
+        document: LayoutDocumentDto,
+    },
+    Fixture {
+        document: FixtureDocumentDto,
+    },
+    Blocked {
+        reason: String,
+        diagnostics: Vec<ProjectDiagnosticDto>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SequenceGuiEditDto {
+    AddEffect {
+        script_path: String,
+        target: LayoutTargetDto,
+        start_ms: u32,
+    },
+    MoveEffect {
+        id: u32,
+        start_ms: u32,
+        target: Option<LayoutTargetDto>,
+    },
+    ResizeEffect {
+        id: u32,
+        start_ms: u32,
+        duration_ms: u32,
+    },
+    DeleteEffect {
+        id: u32,
+    },
+    RetargetEffect {
+        id: u32,
+        target: LayoutTargetDto,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum LayoutGuiEditDto {
+    UpdatePlacementTransform { id: u32, transform: TransformDto },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum FixtureGuiEditDto {
+    UpdateBulbSize {
+        object_key: String,
+        bulb_size: f64,
+    },
+    MovePoint {
+        object_key: String,
+        point_index: u32,
+        point: Point3Dto,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutTargetDto {
+    pub kind: LayoutTargetKindDto,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum LayoutTargetKindDto {
+    Group,
+    Fixture,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformDto {
+    pub position: Point3Dto,
+    pub rotation: Point3Dto,
+    pub scale: Point3Dto,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Point3Dto {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceDocumentDto {
+    pub path: String,
+    pub object_key: String,
+    pub duration_ms: u32,
+    pub frame_rate: u32,
+    pub lanes: Vec<SequenceLaneDto>,
+    pub effect_scripts: Vec<SequenceEffectScriptDto>,
+    pub effects: Vec<SequenceEffectDto>,
+    pub degraded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceLaneDto {
+    pub target: LayoutTargetDto,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceEffectDto {
+    pub index: u32,
+    pub id: u32,
+    pub start_ms: u32,
+    pub duration_ms: u32,
+    pub target: LayoutTargetDto,
+    pub target_label: String,
+    pub script: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceEffectScriptDto {
+    pub name: String,
+    pub path: String,
+    pub import: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutDocumentDto {
+    pub path: String,
+    pub object_key: String,
+    pub name: String,
+    pub units: String,
+    pub render_bounds: GeometryRenderBoundsDto,
+    pub fixtures: Vec<LayoutFixturePlacementDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutFixturePlacementDto {
+    pub id: u32,
+    pub name: String,
+    pub transform: TransformDto,
+    pub resolved_fixture: ResolvedLayoutFixtureDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedLayoutFixtureDto {
+    pub name: String,
+    pub color_model: String,
+    pub bulb_size: f64,
+    pub geometry_summary: String,
+    pub render_plan: GeometryRenderPlanDto,
+    pub source_path: String,
+    pub object_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FixtureDocumentDto {
+    pub path: String,
+    pub selected_object_key: Option<String>,
+    pub fixtures: Vec<FixtureDefinitionDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FixtureDefinitionDto {
+    pub object_key: String,
+    pub name: String,
+    pub color_model: String,
+    pub bulb_size: f64,
+    pub geometry: GeometryDto,
+    pub geometry_summary: String,
+    pub render_plan: GeometryRenderPlanDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum GeometryDto {
+    Points {
+        points: Vec<Point3Dto>,
+    },
+    Lines {
+        points: Vec<Point3Dto>,
+        pixels: u32,
+    },
+    Arc {
+        center: Point3Dto,
+        radius: f64,
+        start_degrees: f64,
+        end_degrees: f64,
+        pixels: u32,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GeometryRenderPlanDto {
+    pub emitters: Vec<GeometryRenderPointDto>,
+    pub guides: Vec<GeometryRenderGuideDto>,
+    pub bounds: GeometryRenderBoundsDto,
+    pub bulb_radius: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GeometryRenderPointDto {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GeometryRenderBoundsDto {
+    pub min_x: f64,
+    pub min_y: f64,
+    pub max_x: f64,
+    pub max_y: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum GeometryRenderGuideDto {
+    Line {
+        from: GeometryRenderPointDto,
+        to: GeometryRenderPointDto,
+    },
+    Arc {
+        start: GeometryRenderPointDto,
+        end: GeometryRenderPointDto,
+        radius_x: f64,
+        radius_y: f64,
+        rotation: f64,
+        large_arc: bool,
+        sweep_positive: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -112,6 +444,10 @@ impl From<AppSnapshot> for AppSnapshotDto {
                 .collect(),
             active_file: snapshot.active_file.map(|path| path.to_slash_string()),
             active_buffer: snapshot.active_buffer.map(EditorBufferDto::from),
+            active_document_descriptor: snapshot
+                .active_document_descriptor
+                .map(DocumentDescriptorDto::from),
+            active_gui_document: snapshot.active_gui_document.map(ActiveGuiDocumentDto::from),
             diagnostics: snapshot
                 .diagnostics
                 .into_iter()
@@ -125,6 +461,415 @@ impl From<AppSnapshot> for AppSnapshotDto {
                 duration_ms: snapshot.preview.duration_ms.min(u32::MAX as u64) as u32,
                 status: snapshot.preview.status,
             },
+        }
+    }
+}
+
+impl From<EditorViewModeDto> for EditorViewMode {
+    fn from(mode: EditorViewModeDto) -> Self {
+        match mode {
+            EditorViewModeDto::Text => Self::Text,
+            EditorViewModeDto::Gui => Self::Gui,
+        }
+    }
+}
+
+impl From<DocumentDescriptor> for DocumentDescriptorDto {
+    fn from(descriptor: DocumentDescriptor) -> Self {
+        Self {
+            path: descriptor.path,
+            objects: descriptor
+                .objects
+                .into_iter()
+                .map(DocumentObjectDescriptorDto::from)
+                .collect(),
+            available_views: descriptor
+                .available_views
+                .into_iter()
+                .map(DocumentViewIdDto::from)
+                .collect(),
+            default_object_keys: descriptor
+                .default_object_keys
+                .into_iter()
+                .map(|(view, object_key)| DocumentDefaultObjectKeyDto {
+                    view: DocumentViewIdDto::from(view),
+                    object_key,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<DocumentObjectDescriptor> for DocumentObjectDescriptorDto {
+    fn from(object: DocumentObjectDescriptor) -> Self {
+        Self {
+            key: object.key,
+            kind: ObjectKindDto::from(object.kind),
+        }
+    }
+}
+
+impl From<DocumentViewId> for DocumentViewIdDto {
+    fn from(view: DocumentViewId) -> Self {
+        match view {
+            DocumentViewId::Text => Self::Text,
+            DocumentViewId::Layout => Self::Layout,
+            DocumentViewId::Fixture => Self::Fixture,
+            DocumentViewId::Sequence => Self::Sequence,
+        }
+    }
+}
+
+impl From<ObjectKind> for ObjectKindDto {
+    fn from(kind: ObjectKind) -> Self {
+        match kind {
+            ObjectKind::Project => Self::Project,
+            ObjectKind::Display => Self::Display,
+            ObjectKind::Controller => Self::Controller,
+            ObjectKind::Layout => Self::Layout,
+            ObjectKind::Fixture => Self::Fixture,
+            ObjectKind::Patch => Self::Patch,
+            ObjectKind::Sequence => Self::Sequence,
+            ObjectKind::Curve => Self::Curve,
+        }
+    }
+}
+
+impl From<ActiveGuiDocument> for ActiveGuiDocumentDto {
+    fn from(document: ActiveGuiDocument) -> Self {
+        match document {
+            ActiveGuiDocument::Sequence(document) => Self::Sequence {
+                document: document.into(),
+            },
+            ActiveGuiDocument::Layout(document) => Self::Layout {
+                document: document.into(),
+            },
+            ActiveGuiDocument::Fixture(document) => Self::Fixture {
+                document: document.into(),
+            },
+            ActiveGuiDocument::Blocked {
+                reason,
+                diagnostics,
+            } => Self::Blocked {
+                reason,
+                diagnostics: diagnostics
+                    .into_iter()
+                    .map(ProjectDiagnosticDto::from)
+                    .collect(),
+            },
+        }
+    }
+}
+
+impl From<LayoutTargetDto> for dawn_project::document::LayoutTargetDocument {
+    fn from(target: LayoutTargetDto) -> Self {
+        Self {
+            kind: match target.kind {
+                LayoutTargetKindDto::Group => LayoutTargetKind::Group,
+                LayoutTargetKindDto::Fixture => LayoutTargetKind::Fixture,
+            },
+            name: target.name,
+        }
+    }
+}
+
+impl From<dawn_project::document::LayoutTargetDocument> for LayoutTargetDto {
+    fn from(target: dawn_project::document::LayoutTargetDocument) -> Self {
+        Self {
+            kind: match target.kind {
+                LayoutTargetKind::Group => LayoutTargetKindDto::Group,
+                LayoutTargetKind::Fixture => LayoutTargetKindDto::Fixture,
+            },
+            name: target.name,
+        }
+    }
+}
+
+impl From<SequenceDocument> for SequenceDocumentDto {
+    fn from(document: SequenceDocument) -> Self {
+        Self {
+            path: document.path,
+            object_key: document.object_key,
+            duration_ms: u32_ms(document.duration_ms),
+            frame_rate: document.frame_rate,
+            lanes: document
+                .lanes
+                .into_iter()
+                .map(SequenceLaneDto::from)
+                .collect(),
+            effect_scripts: document
+                .effect_scripts
+                .into_iter()
+                .map(SequenceEffectScriptDto::from)
+                .collect(),
+            effects: document
+                .effects
+                .into_iter()
+                .map(SequenceEffectDto::from)
+                .collect(),
+            degraded: document.degraded,
+        }
+    }
+}
+
+impl From<SequenceLaneDocument> for SequenceLaneDto {
+    fn from(lane: SequenceLaneDocument) -> Self {
+        Self {
+            target: lane.target.into(),
+            label: lane.label,
+        }
+    }
+}
+
+impl From<SequenceEffectScriptDocument> for SequenceEffectScriptDto {
+    fn from(script: SequenceEffectScriptDocument) -> Self {
+        Self {
+            name: script.name,
+            path: script.path,
+            import: script.import,
+        }
+    }
+}
+
+impl From<SequenceEffectDocument> for SequenceEffectDto {
+    fn from(effect: SequenceEffectDocument) -> Self {
+        Self {
+            index: effect.index.min(u32::MAX as usize) as u32,
+            id: effect.id,
+            start_ms: u32_ms(effect.start_ms),
+            duration_ms: u32_ms(effect.duration_ms),
+            target: effect.target.into(),
+            target_label: effect.target_label,
+            script: effect.script,
+        }
+    }
+}
+
+impl From<LayoutDocument> for LayoutDocumentDto {
+    fn from(document: LayoutDocument) -> Self {
+        Self {
+            path: document.path,
+            object_key: document.object_key,
+            name: document.name,
+            units: format!("{:?}", document.units).to_ascii_lowercase(),
+            render_bounds: document.render_bounds.into(),
+            fixtures: document
+                .fixtures
+                .into_iter()
+                .map(LayoutFixturePlacementDto::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<LayoutFixturePlacement> for LayoutFixturePlacementDto {
+    fn from(placement: LayoutFixturePlacement) -> Self {
+        Self {
+            id: placement.id.0,
+            name: placement.name,
+            transform: placement.transform.into(),
+            resolved_fixture: placement.resolved_fixture.into(),
+        }
+    }
+}
+
+impl From<ResolvedLayoutFixture> for ResolvedLayoutFixtureDto {
+    fn from(fixture: ResolvedLayoutFixture) -> Self {
+        Self {
+            name: fixture.name,
+            color_model: color_model_name(fixture.color_model),
+            bulb_size: fixture.bulb_size,
+            geometry_summary: fixture.geometry_summary,
+            render_plan: fixture.render_plan.into(),
+            source_path: fixture.source_path,
+            object_key: fixture.object_key,
+        }
+    }
+}
+
+impl From<FixtureDocument> for FixtureDocumentDto {
+    fn from(document: FixtureDocument) -> Self {
+        Self {
+            path: document.path,
+            selected_object_key: document.selected_object_key,
+            fixtures: document
+                .fixtures
+                .into_iter()
+                .map(FixtureDefinitionDto::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<FixtureDefinitionDocument> for FixtureDefinitionDto {
+    fn from(fixture: FixtureDefinitionDocument) -> Self {
+        Self {
+            object_key: fixture.object_key,
+            name: fixture.name,
+            color_model: color_model_name(fixture.color_model),
+            bulb_size: fixture.bulb_size,
+            geometry: fixture.geometry.into(),
+            geometry_summary: fixture.geometry_summary,
+            render_plan: fixture.render_plan.into(),
+        }
+    }
+}
+
+impl From<Transform> for TransformDto {
+    fn from(transform: Transform) -> Self {
+        Self {
+            position: transform.position.into(),
+            rotation: Point3Dto {
+                x: transform.rotation.x,
+                y: transform.rotation.y,
+                z: transform.rotation.z,
+            },
+            scale: Point3Dto {
+                x: transform.scale.x,
+                y: transform.scale.y,
+                z: transform.scale.z,
+            },
+        }
+    }
+}
+
+impl From<Point3> for Point3Dto {
+    fn from(point: Point3) -> Self {
+        Self {
+            x: point.x,
+            y: point.y,
+            z: point.z,
+        }
+    }
+}
+
+impl From<Geometry> for GeometryDto {
+    fn from(geometry: Geometry) -> Self {
+        match geometry {
+            Geometry::Points { points } => Self::Points {
+                points: points.into_iter().map(Point3Dto::from).collect(),
+            },
+            Geometry::Lines { points, pixels } => Self::Lines {
+                points: points.into_iter().map(Point3Dto::from).collect(),
+                pixels,
+            },
+            Geometry::Arc {
+                center,
+                radius,
+                start_degrees,
+                end_degrees,
+                pixels,
+            } => Self::Arc {
+                center: center.into(),
+                radius,
+                start_degrees,
+                end_degrees,
+                pixels,
+            },
+        }
+    }
+}
+
+impl From<GeometryRenderPlan> for GeometryRenderPlanDto {
+    fn from(plan: GeometryRenderPlan) -> Self {
+        Self {
+            emitters: plan
+                .emitters
+                .into_iter()
+                .map(GeometryRenderPointDto::from)
+                .collect(),
+            guides: plan
+                .guides
+                .into_iter()
+                .map(GeometryRenderGuideDto::from)
+                .collect(),
+            bounds: plan.bounds.into(),
+            bulb_radius: plan.bulb_radius,
+        }
+    }
+}
+
+impl From<GeometryRenderPoint> for GeometryRenderPointDto {
+    fn from(point: GeometryRenderPoint) -> Self {
+        Self {
+            x: point.x,
+            y: point.y,
+            z: point.z,
+        }
+    }
+}
+
+impl From<GeometryRenderBounds> for GeometryRenderBoundsDto {
+    fn from(bounds: GeometryRenderBounds) -> Self {
+        Self {
+            min_x: bounds.min_x,
+            min_y: bounds.min_y,
+            max_x: bounds.max_x,
+            max_y: bounds.max_y,
+        }
+    }
+}
+
+impl From<GeometryRenderGuide> for GeometryRenderGuideDto {
+    fn from(guide: GeometryRenderGuide) -> Self {
+        match guide {
+            GeometryRenderGuide::Line { from, to } => Self::Line {
+                from: from.into(),
+                to: to.into(),
+            },
+            GeometryRenderGuide::Arc {
+                start,
+                end,
+                radius_x,
+                radius_y,
+                rotation,
+                large_arc,
+                sweep_positive,
+            } => Self::Arc {
+                start: start.into(),
+                end: end.into(),
+                radius_x,
+                radius_y,
+                rotation,
+                large_arc,
+                sweep_positive,
+            },
+        }
+    }
+}
+
+fn color_model_name(color_model: ColorModel) -> String {
+    format!("{color_model:?}").to_ascii_lowercase()
+}
+
+fn u32_ms(value: u64) -> u32 {
+    value.min(u32::MAX as u64) as u32
+}
+
+impl From<TransformDto> for Transform {
+    fn from(transform: TransformDto) -> Self {
+        Self {
+            position: Point3::from(transform.position),
+            rotation: Rotation3 {
+                x: transform.rotation.x,
+                y: transform.rotation.y,
+                z: transform.rotation.z,
+            },
+            scale: Scale3 {
+                x: transform.scale.x,
+                y: transform.scale.y,
+                z: transform.scale.z,
+            },
+        }
+    }
+}
+
+impl From<Point3Dto> for Point3 {
+    fn from(point: Point3Dto) -> Self {
+        Self {
+            x: point.x,
+            y: point.y,
+            z: point.z,
         }
     }
 }

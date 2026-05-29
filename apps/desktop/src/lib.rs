@@ -5,7 +5,9 @@ use std::sync::Mutex;
 
 use dawn_app_core::actions::AppAction;
 use dawn_app_core::app_model::{AppModel, DispatchOutcome};
-use dawn_app_core::dto::AppSnapshotDto;
+use dawn_app_core::dto::{
+    AppSnapshotDto, EditorViewModeDto, FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto,
+};
 use dawn_project::path::Utf8PathBuf;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -92,6 +94,58 @@ fn update_active_text(
     text: String,
 ) -> CommandResult<AppSnapshotDto> {
     dispatch(&app, &state, AppAction::UpdateActiveText(text))
+}
+
+#[specta::specta]
+#[tauri::command]
+fn set_active_view_mode(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    mode: EditorViewModeDto,
+) -> CommandResult<AppSnapshotDto> {
+    dispatch(&app, &state, AppAction::SetActiveViewMode(mode))
+}
+
+#[specta::specta]
+#[tauri::command]
+fn undo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
+    dispatch(&app, &state, AppAction::UndoActiveEdit)
+}
+
+#[specta::specta]
+#[tauri::command]
+fn redo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
+    dispatch(&app, &state, AppAction::RedoActiveEdit)
+}
+
+#[specta::specta]
+#[tauri::command]
+fn apply_sequence_gui_edit(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    edit: SequenceGuiEditDto,
+) -> CommandResult<AppSnapshotDto> {
+    dispatch(&app, &state, AppAction::ApplySequenceGuiEdit(edit))
+}
+
+#[specta::specta]
+#[tauri::command]
+fn apply_layout_gui_edit(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    edit: LayoutGuiEditDto,
+) -> CommandResult<AppSnapshotDto> {
+    dispatch(&app, &state, AppAction::ApplyLayoutGuiEdit(edit))
+}
+
+#[specta::specta]
+#[tauri::command]
+fn apply_fixture_gui_edit(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    edit: FixtureGuiEditDto,
+) -> CommandResult<AppSnapshotDto> {
+    dispatch(&app, &state, AppAction::ApplyFixtureGuiEdit(edit))
 }
 
 #[specta::specta]
@@ -206,6 +260,12 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         close_file,
         set_active_file,
         update_active_text,
+        set_active_view_mode,
+        undo_active_edit,
+        redo_active_edit,
+        apply_sequence_gui_edit,
+        apply_layout_gui_edit,
+        apply_fixture_gui_edit,
         flush_autosave,
         create_file,
         create_directory,

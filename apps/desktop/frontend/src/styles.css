@@ -169,7 +169,7 @@ button:focus-visible,
 
 .editor-shell {
   display: grid;
-  grid-template-rows: 34px 1fr;
+  grid-template-rows: 34px 32px 1fr;
   min-width: 0;
   flex: 1;
   background: #17181b;
@@ -227,6 +227,113 @@ button:focus-visible,
 .editor-host {
   min-height: 0;
   overflow: hidden;
+}
+
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  border-bottom: 1px solid #373b42;
+  background: #1d1f23;
+  padding: 0 8px;
+}
+
+.segmented-control {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid #373b42;
+  border-radius: 5px;
+}
+
+.segmented-control button {
+  min-width: 56px;
+  height: 24px;
+  border: 0;
+  border-right: 1px solid #373b42;
+  background: #202226;
+  color: #c7c0b6;
+  font-size: 12px;
+}
+
+.segmented-control button:last-child {
+  border-right: 0;
+}
+
+.segmented-control button.active {
+  background: #31543f;
+  color: #fffaf0;
+}
+
+.gui-editor-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  min-height: 0;
+}
+
+.gui-canvas {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  cursor: crosshair;
+}
+
+.gui-inspector {
+  min-width: 0;
+  border-left: 1px solid #373b42;
+  background: #202226;
+  padding: 12px;
+  color: #d8d2c9;
+  font-size: 12px;
+}
+
+.gui-inspector h2 {
+  margin: 0 0 12px;
+  color: #fffaf0;
+  font-size: 13px;
+}
+
+.gui-inspector label {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+  color: #a8a29a;
+}
+
+.gui-inspector input {
+  width: 100%;
+  border: 1px solid #373b42;
+  border-radius: 4px;
+  background: #17181b;
+  color: #ebe7df;
+  padding: 5px 7px;
+}
+
+.gui-inspector button {
+  border: 1px solid #7d3b3b;
+  border-radius: 5px;
+  background: #2c1f21;
+  padding: 6px 9px;
+  color: #ffd7d7;
+}
+
+.gui-inspector p {
+  color: #a8a29a;
+}
+
+.gui-blocked {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 18px;
+  color: #e4d6c3;
+}
+
+.gui-diagnostics {
+  display: grid;
+  gap: 6px;
+  color: #ffb9b9;
+  font-size: 12px;
 }
 
 .cm-editor {

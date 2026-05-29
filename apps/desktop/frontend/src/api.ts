@@ -18,6 +18,15 @@ export const commands = {
   closeFile: (path: string) => unwrap(generatedCommands.closeFile(path)),
   setActiveFile: (path: string) => unwrap(generatedCommands.setActiveFile(path)),
   updateActiveText: (text: string) => unwrap(generatedCommands.updateActiveText(text)),
+  setActiveViewMode: (mode: "text" | "gui") => unwrap(generatedCommands.setActiveViewMode(mode)),
+  undoActiveEdit: () => unwrap(generatedCommands.undoActiveEdit()),
+  redoActiveEdit: () => unwrap(generatedCommands.redoActiveEdit()),
+  applySequenceGuiEdit: (edit: Parameters<typeof generatedCommands.applySequenceGuiEdit>[0]) =>
+    unwrap(generatedCommands.applySequenceGuiEdit(edit)),
+  applyLayoutGuiEdit: (edit: Parameters<typeof generatedCommands.applyLayoutGuiEdit>[0]) =>
+    unwrap(generatedCommands.applyLayoutGuiEdit(edit)),
+  applyFixtureGuiEdit: (edit: Parameters<typeof generatedCommands.applyFixtureGuiEdit>[0]) =>
+    unwrap(generatedCommands.applyFixtureGuiEdit(edit)),
   flushAutosave: () => unwrap(generatedCommands.flushAutosave()),
   createFile: (parent: string, name: string) => unwrap(generatedCommands.createFile(parent, name)),
   createDirectory: (parent: string, name: string) => unwrap(generatedCommands.createDirectory(parent, name)),
