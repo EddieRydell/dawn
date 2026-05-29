@@ -489,6 +489,7 @@ pub struct PreviewSnapshotDto {
     pub source_label: String,
     pub is_playing: bool,
     pub position_ms: u32,
+    pub home_ms: u32,
     pub duration_ms: u32,
     pub status: String,
 }
@@ -524,6 +525,7 @@ impl From<AppSnapshot> for AppSnapshotDto {
                 source_label: snapshot.preview.source_label,
                 is_playing: snapshot.preview.is_playing,
                 position_ms: snapshot.preview.position_ms.min(u32::MAX as u64) as u32,
+                home_ms: snapshot.preview.home_ms.min(u32::MAX as u64) as u32,
                 duration_ms: snapshot.preview.duration_ms.min(u32::MAX as u64) as u32,
                 status: snapshot.preview.status,
             },

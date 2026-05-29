@@ -232,7 +232,8 @@ button:focus-visible,
 .editor-toolbar {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
+  gap: 10px;
   border-bottom: 1px solid #373b42;
   background: #1d1f23;
   padding: 0 8px;
@@ -272,46 +273,68 @@ button:focus-visible,
 
 .sequence-editor {
   display: grid;
-  grid-template-rows: 34px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
 }
 
 .sequence-toolbar {
   display: grid;
-  grid-template-columns: repeat(4, 30px) minmax(120px, 1fr) auto;
+  grid-template-columns: repeat(5, 32px) minmax(0, 1fr);
   align-items: center;
-  gap: 6px;
-  border-bottom: 1px solid #373b42;
-  background: #1d1f23;
-  padding: 0 8px;
+  gap: 0;
+  min-width: min(520px, 100%);
+  height: 32px;
+  margin-right: auto;
+  border-right: 1px solid #373b42;
+  background: transparent;
+  padding: 0;
   color: #c7c0b6;
   font-size: 12px;
 }
 
 .sequence-toolbar button {
   display: grid;
-  width: 28px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
   place-items: center;
-  border: 1px solid #373b42;
-  border-radius: 5px;
-  background: #202226;
+  border: 0;
+  border-right: 1px solid #373b42;
+  border-radius: 0;
+  background: transparent;
   color: #ebe7df;
 }
 
-.sequence-toolbar button:hover:not(:disabled) {
+.sequence-toolbar button:hover:not(:disabled),
+.sequence-toolbar button:active:not(:disabled) {
   background: #2c3036;
 }
 
-.sequence-toolbar button:disabled,
-.sequence-toolbar input:disabled {
+.sequence-toolbar button:disabled {
   opacity: 0.45;
 }
 
-.sequence-toolbar input[type="range"] {
-  width: 100%;
+.sequence-time-readout {
   min-width: 0;
+  overflow: hidden;
+  border-left: 1px solid #373b42;
+  padding: 0 10px;
+  color: #c7c0b6;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sequence-toolbar:focus,
+.gui-canvas:focus {
+  outline: none;
+}
+
+.gui-canvas:focus-visible {
+  box-shadow: inset 0 0 0 1px #6abf8a;
+}
+
+.sequence-toolbar svg {
+  pointer-events: none;
 }
 
 .gui-canvas {

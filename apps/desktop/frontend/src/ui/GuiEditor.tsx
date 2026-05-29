@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import { Pause, Play, SkipBack, Square } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { ChevronLeft, ChevronRight, Pause, Play, SkipBack, Square } from "lucide-react";
 import { commands } from "../api";
 import type {
   ActiveGuiDocumentDto,
@@ -86,39 +86,89 @@ function SequenceEditor({
 }) {
   const livePreview = useSequencePreview(preview);
   const unsupported = document.durationMs <= 0;
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (unsupported || isEditableShortcutTarget(event.target)) return;
+    if (event.key === " ") {
+      event.preventDefault();
+      void runSnapshotCommand(livePreview.isPlaying ? commands.previewPause : commands.previewPlay);
+    } else if (event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      void runSnapshotCommand(commands.previewStop);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      void runSnapshotCommand(commands.previewRewindToZero);
+    } else if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      stepSequenceFrame(document, livePreview.positionMs, livePreview.durationMs, -1);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      stepSequenceFrame(document, livePreview.positionMs, livePreview.durationMs, 1);
+    }
+  };
   return (
-    <div className="sequence-editor">
-      <div className="sequence-toolbar">
-        <button
-          type="button"
-          title={livePreview.isPlaying ? "Pause" : "Play"}
-          disabled={unsupported}
-          onClick={() => void runSnapshotCommand(livePreview.isPlaying ? commands.previewPause : commands.previewPlay)}
-        >
-          {livePreview.isPlaying ? <Pause size={15} /> : <Play size={15} />}
-        </button>
-        <button type="button" title="Stop" disabled={unsupported} onClick={() => void runSnapshotCommand(commands.previewStop)}>
-          <Square size={14} />
-        </button>
-        <button type="button" title="Beginning" disabled={unsupported} onClick={() => void runSnapshotCommand(() => commands.previewSeek(0))}>
-          <SkipBack size={15} />
-        </button>
-        <input
-          type="range"
-          min={0}
-          max={Math.max(0, livePreview.durationMs || document.durationMs)}
-          step={10}
-          value={Math.min(livePreview.positionMs, livePreview.durationMs || document.durationMs)}
-          disabled={unsupported}
-          onChange={(event) => {
-            void runSnapshotCommand(() => commands.previewSeek(Number(event.currentTarget.value)));
-          }}
-        />
-        <span>
-          {formatMs(livePreview.positionMs)} / {formatMs(livePreview.durationMs || document.durationMs)}
-        </span>
-      </div>
-      <SequenceCanvas document={document} previewPositionMs={livePreview.positionMs} selected={selected} setSelected={setSelected} />
+    <div className="sequence-editor" tabIndex={-1} onKeyDown={handleKeyDown}>
+      <SequenceCanvas
+        document={document}
+        previewPositionMs={livePreview.positionMs}
+        previewHomeMs={livePreview.homeMs}
+        selected={selected}
+        setSelected={setSelected}
+      />
+    </div>
+  );
+}
+
+export function SequenceTransportControls({
+  document,
+  preview
+}: {
+  document: SequenceDocumentDto;
+  preview: AppSnapshotDto["preview"];
+}) {
+  const livePreview = useSequencePreview(preview);
+  const unsupported = document.durationMs <= 0;
+  const stepFrame = (direction: -1 | 1) => {
+    stepSequenceFrame(document, livePreview.positionMs, livePreview.durationMs, direction);
+  };
+  return (
+    <div className="sequence-toolbar" aria-label="Sequence transport">
+      <button
+        type="button"
+        title={livePreview.isPlaying ? "Pause" : "Play"}
+        disabled={unsupported}
+        onClick={() => void runSnapshotCommand(livePreview.isPlaying ? commands.previewPause : commands.previewPlay)}
+      >
+        {livePreview.isPlaying ? <Pause size={15} /> : <Play size={15} />}
+      </button>
+      <button type="button" title="Stop" disabled={unsupported} onClick={() => void runSnapshotCommand(commands.previewStop)}>
+        <Square size={14} />
+      </button>
+      <button type="button" title="Rewind to zero" disabled={unsupported} onClick={() => void runSnapshotCommand(commands.previewRewindToZero)}>
+        <SkipBack size={15} />
+      </button>
+      <button
+        type="button"
+        title="Step backward"
+        disabled={unsupported}
+        onClick={() => {
+          stepFrame(-1);
+        }}
+      >
+        <ChevronLeft size={16} />
+      </button>
+      <button
+        type="button"
+        title="Step forward"
+        disabled={unsupported}
+        onClick={() => {
+          stepFrame(1);
+        }}
+      >
+        <ChevronRight size={16} />
+      </button>
+      <span className="sequence-time-readout">
+        {formatMs(livePreview.positionMs)} / {formatMs(livePreview.durationMs || document.durationMs)} | Home {formatMs(livePreview.homeMs)}
+      </span>
     </div>
   );
 }
@@ -182,11 +232,13 @@ function BlockedGui({
 function SequenceCanvas({
   document,
   previewPositionMs,
+  previewHomeMs,
   selected,
   setSelected
 }: {
   document: SequenceDocumentDto;
   previewPositionMs: number;
+  previewHomeMs: number;
   selected: string | null;
   setSelected: (id: string | null) => void;
 }) {
@@ -395,11 +447,7 @@ function SequenceCanvas({
     ctx.lineTo(rect.width, top + 0.5);
     ctx.stroke();
 
-    ctx.fillStyle = "#a8a29a";
-    ctx.fillText(formatMs(scrollXMs), left + 6, 18);
-    ctx.fillText(formatMs(Math.min(document.durationMs, scrollXMs + timelineWidth / viewport.pxPerMs)), rect.width - 52, 18);
-
-    drawTimelineGrid(ctx, left, top, rect.width, rect.height, viewport.pxPerMs, scrollXMs);
+    drawTimelineGrid(ctx, left, top, rect.width, rect.height, viewport.pxPerMs, scrollXMs, document.frameRate);
 
     ctx.save();
     ctx.beginPath();
@@ -431,6 +479,19 @@ function SequenceCanvas({
     ctx.restore();
 
     const playheadX = left + (clamp(previewPositionMs, 0, document.durationMs) - scrollXMs) * viewport.pxPerMs;
+    const homeX = left + (clamp(previewHomeMs, 0, document.durationMs) - scrollXMs) * viewport.pxPerMs;
+    if (homeX >= left && homeX <= rect.width) {
+      ctx.strokeStyle = "#6abf8a";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(homeX + 0.5, top);
+      ctx.lineTo(homeX + 0.5, rect.height);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#6abf8a";
+      ctx.fillRect(homeX - 3, top, 7, 4);
+    }
     if (playheadX >= left && playheadX <= rect.width) {
       ctx.strokeStyle = "#f0c46b";
       ctx.lineWidth = 1;
@@ -446,7 +507,7 @@ function SequenceCanvas({
     ctx.moveTo(left + 0.5, top);
     ctx.lineTo(left, rect.height);
     ctx.stroke();
-  }, [document, effectPreviewSignatures, left, top, viewport, visibleClips, selected, previewImages, previewPositionMs]);
+  }, [document, effectPreviewSignatures, left, top, viewport, visibleClips, selected, previewImages, previewPositionMs, previewHomeMs]);
 
   const seekFromCanvas = (event: MouseEvent<HTMLCanvasElement>) => {
     const x = event.nativeEvent.offsetX;
@@ -459,7 +520,9 @@ function SequenceCanvas({
     <canvas
       ref={canvas}
       className="gui-canvas"
+      tabIndex={0}
       onMouseDown={(event) => {
+        event.currentTarget.focus();
         const hit = hitSequence(visibleClips, event.nativeEvent.offsetX, event.nativeEvent.offsetY);
         if (!hit) {
           setSelected(null);
@@ -557,7 +620,7 @@ function SequenceCanvas({
           if (event.ctrlKey) {
             const anchorX = clamp(offsetX - left, 0, timelineWidth);
             const anchorTime = current.scrollXMs + anchorX / current.pxPerMs;
-            const nextPxPerMs = clamp(current.pxPerMs * Math.exp(-event.deltaY * 0.002), 0.02, 2);
+            const nextPxPerMs = clamp(current.pxPerMs * Math.exp(-event.deltaY * 0.002), 0.02, 12);
             const nextScrollXMs = anchorTime - anchorX / nextPxPerMs;
             return {
               ...current,
@@ -1360,26 +1423,54 @@ function drawTimelineGrid(
   width: number,
   height: number,
   pxPerMs: number,
-  scrollXMs: number
+  scrollXMs: number,
+  frameRate: number
 ) {
-  const intervalMs = chooseTimeInterval(pxPerMs);
-  const firstTick = Math.floor(scrollXMs / intervalMs) * intervalMs;
-  ctx.strokeStyle = "#1f2227";
+  const tick = chooseTimelineTick(pxPerMs, frameRate);
+  const firstMinor = Math.floor(scrollXMs / tick.minorMs) * tick.minorMs;
   ctx.lineWidth = 1;
-  for (let time = firstTick; ; time += intervalMs) {
+  for (let time = firstMinor; ; time += tick.minorMs) {
     const x = left + (time - scrollXMs) * pxPerMs;
     if (x > width) break;
     if (x < left) continue;
+    const labeled = isMultipleOf(time, tick.labelMs);
+    ctx.strokeStyle = labeled ? "#343941" : "#1f2227";
     ctx.beginPath();
-    ctx.moveTo(x + 0.5, top);
+    ctx.moveTo(x + 0.5, labeled ? 0 : top);
     ctx.lineTo(x + 0.5, height);
     ctx.stroke();
+    if (labeled) {
+      ctx.fillStyle = "#a8a29a";
+      ctx.fillText(formatTimelineMs(time, tick.labelMs), x + 5, 18);
+    }
   }
 }
 
-function chooseTimeInterval(pxPerMs: number) {
-  const candidates = [100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000];
-  return candidates.find((candidate) => candidate * pxPerMs >= 56) ?? 60000;
+function chooseTimelineTick(pxPerMs: number, frameRate: number) {
+  const frameMs = Math.max(1, Math.round(1000 / Math.max(1, frameRate)));
+  const minorCandidates = Array.from(new Set([
+    frameMs,
+    frameMs * 2,
+    frameMs * 5,
+    frameMs * 10,
+    50,
+    100,
+    250,
+    500,
+    1000,
+    2500,
+    5000,
+    10000,
+    30000,
+    60000
+  ])).sort((left, right) => left - right);
+  const minorMs = minorCandidates.find((candidate) => candidate * pxPerMs >= 24) ?? 60000;
+  const labelMs = minorCandidates.find((candidate) => candidate >= minorMs && candidate * pxPerMs >= 110) ?? minorMs * 5;
+  return { minorMs, labelMs };
+}
+
+function isMultipleOf(value: number, interval: number) {
+  return Math.abs(value / interval - Math.round(value / interval)) < 0.0001;
 }
 
 function formatMs(ms: number) {
@@ -1387,6 +1478,30 @@ function formatMs(ms: number) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatTimelineMs(ms: number, intervalMs: number) {
+  if (intervalMs < 1000) {
+    const totalMs = Math.max(0, Math.round(ms));
+    const minutes = Math.floor(totalMs / 60000);
+    const seconds = Math.floor((totalMs % 60000) / 1000);
+    const millis = totalMs % 1000;
+    return `${minutes}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
+  }
+  return formatMs(ms);
+}
+
+function isEditableShortcutTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  if (target.closest(".cm-editor")) return true;
+  return target.closest("input, textarea, select") !== null;
+}
+
+function stepSequenceFrame(document: SequenceDocumentDto, positionMs: number, previewDurationMs: number, direction: -1 | 1) {
+  const frameMs = Math.max(1, Math.round(1000 / Math.max(1, document.frameRate)));
+  const nextPositionMs = clamp(positionMs + direction * frameMs, 0, previewDurationMs || document.durationMs);
+  void runSnapshotCommand(() => commands.previewSeek(nextPositionMs));
 }
 
 function targetsEqual(left: LayoutTargetDto, right: LayoutTargetDto) {

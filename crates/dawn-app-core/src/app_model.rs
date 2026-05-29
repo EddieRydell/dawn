@@ -252,6 +252,11 @@ impl AppModel {
                 self.preview.stop(self.analysis.as_ref());
                 self.status = "Preview stopped".to_string();
             }
+            AppAction::PreviewRewindToZero => {
+                self.preview
+                    .go_to_sequence_beginning(self.analysis.as_ref());
+                self.status = "Preview rewound".to_string();
+            }
             AppAction::PreviewSeek(position_ms) => {
                 self.preview.seek(position_ms, self.analysis.as_ref());
                 self.status = "Preview seeked".to_string();

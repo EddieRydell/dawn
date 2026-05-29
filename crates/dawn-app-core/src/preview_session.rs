@@ -155,6 +155,7 @@ impl PreviewSession {
         let position_ms = position_ms.min(duration_ms);
         let state = self.sequence_states.entry(key).or_default();
         state.position_ms = position_ms;
+        state.home_ms = position_ms;
         if self.is_playing() {
             self.transport = PreviewTransport::Playing {
                 started_at: Instant::now(),

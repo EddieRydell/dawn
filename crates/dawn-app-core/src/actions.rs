@@ -26,5 +26,6 @@ pub enum AppAction {
     PreviewPlay,
     PreviewPause,
     PreviewStop,
+    PreviewRewindToZero,
     PreviewSeek(u64),
 }

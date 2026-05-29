@@ -29,6 +29,7 @@ export const commands = {
 	previewPlay: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_play")),
 	previewPause: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_pause")),
 	previewStop: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_stop")),
+	previewRewindToZero: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_rewind_to_zero")),
 	previewSeek: (positionMs: number) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_seek", { positionMs })),
 	getPreviewScene: () => typedError<PreviewSceneDto, string>(__TAURI_INVOKE("get_preview_scene")),
 	initPreviewTransport: () => typedError<null, string>(__TAURI_INVOKE("init_preview_transport")),
@@ -189,6 +190,7 @@ export type PreviewSnapshotDto = {
 	sourceLabel: string,
 	isPlaying: boolean,
 	positionMs: number,
+	homeMs: number,
 	durationMs: number,
 	status: string,
 };

@@ -9,7 +9,7 @@ import { commands } from "../api";
 import type { AppSnapshotDto } from "../bindings";
 import { commandRegistry } from "../commandRegistry";
 import { runSnapshotCommand, useAppStore } from "../store";
-import { GuiEditor } from "./GuiEditor";
+import { GuiEditor, SequenceTransportControls } from "./GuiEditor";
 
 export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
   const { localText, setLocalText } = useAppStore();
@@ -18,6 +18,8 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
   const applyingExternalText = useRef(false);
   const activePath = snapshot.activeBuffer?.path ?? null;
   const viewMode = snapshot.activeBuffer?.viewMode ?? "text";
+  const activeSequenceDocument =
+    viewMode === "gui" && snapshot.activeGuiDocument?.type === "sequence" ? snapshot.activeGuiDocument.document : null;
 
   useEffect(() => {
     if (viewMode !== "text") {
@@ -93,6 +95,9 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
         ))}
       </div>
       <div className="editor-toolbar">
+        {activeSequenceDocument !== null && (
+          <SequenceTransportControls document={activeSequenceDocument} preview={snapshot.preview} />
+        )}
         <div className="segmented-control">
           <button
             className={viewMode === "text" ? "active" : ""}

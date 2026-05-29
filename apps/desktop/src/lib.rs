@@ -83,6 +83,7 @@ pub struct PreviewStateEventDto {
     pub source_label: String,
     pub is_playing: bool,
     pub position_ms: u32,
+    pub home_ms: u32,
     pub duration_ms: u32,
     pub status: String,
 }
@@ -426,6 +427,15 @@ fn preview_stop(app: AppHandle, state: State<'_, AppState>) -> CommandResult<App
 
 #[specta::specta]
 #[tauri::command]
+fn preview_rewind_to_zero(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<AppSnapshotDto> {
+    dispatch(&app, &state, AppAction::PreviewRewindToZero)
+}
+
+#[specta::specta]
+#[tauri::command]
 fn preview_seek(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -510,6 +520,7 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             preview_play,
             preview_pause,
             preview_stop,
+            preview_rewind_to_zero,
             preview_seek,
             get_preview_scene,
             init_preview_transport,
@@ -647,6 +658,7 @@ struct PreviewEventIdentity {
     source_label: String,
     is_playing: bool,
     position_ms: u64,
+    home_ms: u64,
     duration_ms: u64,
     status: String,
 }
@@ -661,6 +673,7 @@ impl From<&PreviewSnapshot> for PreviewEventIdentity {
             } else {
                 snapshot.position_ms
             },
+            home_ms: snapshot.home_ms,
             duration_ms: snapshot.duration_ms,
             status: snapshot.status.clone(),
         }
@@ -711,6 +724,7 @@ fn emit_preview_state_dto(app: &AppHandle, snapshot: &AppSnapshotDto) -> Command
             source_label: snapshot.preview.source_label.clone(),
             is_playing: snapshot.preview.is_playing,
             position_ms: snapshot.preview.position_ms,
+            home_ms: snapshot.preview.home_ms,
             duration_ms: snapshot.preview.duration_ms,
             status: snapshot.preview.status.clone(),
         },
@@ -725,6 +739,7 @@ fn emit_preview_state_snapshot(app: &AppHandle, snapshot: &PreviewSnapshot) {
             source_label: snapshot.source_label.clone(),
             is_playing: snapshot.is_playing,
             position_ms: snapshot.position_ms.min(u32::MAX as u64) as u32,
+            home_ms: snapshot.home_ms.min(u32::MAX as u64) as u32,
             duration_ms: snapshot.duration_ms.min(u32::MAX as u64) as u32,
             status: snapshot.status.clone(),
         },
