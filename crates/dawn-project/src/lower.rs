@@ -259,7 +259,7 @@ pub(crate) fn lower_layout(
     for placement in &layout.fixtures {
         let (fixture, _) = resolve_fixture(&placement.fixture, source_path, resolver)?;
         fixtures.push(FixturePlacement {
-            id: placement.id.clone(),
+            id: placement.id,
             name: placement.name.clone(),
             fixture,
             transform: placement.transform,
@@ -357,7 +357,7 @@ fn lower_patch(
         let fixture = fixtures
             .get(&route.fixture)
             .copied()
-            .ok_or_else(|| LowerError::UnknownFixture { id: route.fixture })?;
+            .ok_or(LowerError::UnknownFixture { id: route.fixture })?;
         let controller = controllers
             .get(route.controller.as_str())
             .copied()
@@ -394,11 +394,11 @@ fn lower_sequence(
     let mut effects = Vec::with_capacity(sequence.effects.len());
     for (effect_index, effect) in sequence.effects.iter().enumerate() {
         if effect_indices
-            .insert(effect.id.clone(), SequenceEffectIndex(effect_index))
+            .insert(effect.id, SequenceEffectIndex(effect_index))
             .is_some()
         {
             return Err(LowerError::DuplicateSequenceEffectId {
-                id: effect.id.clone(),
+                id: effect.id,
             });
         }
         effects.push(lower_sequence_effect(
@@ -422,12 +422,12 @@ fn lower_sequence(
         let curve = resolve_curve(&clip.curve, sequence_source_path, resolver)?;
         if curve.value_type != CurveValueType::Float {
             return Err(LowerError::AutomationCurveType {
-                id: clip.id.clone(),
+                id: clip.id,
                 actual: curve.value_type,
             });
         }
         automation_clips.push(AutomationClip {
-            id: clip.id.clone(),
+            id: clip.id,
             start: clip.start.clone(),
             duration: clip.duration.clone(),
             curve,
@@ -486,7 +486,7 @@ fn lower_sequence_effect(
     }
 
     Ok(SequenceEffect {
-        id: effect.id.clone(),
+        id: effect.id,
         start: effect.start.clone(),
         duration: effect.duration.clone(),
         target,
@@ -520,7 +520,7 @@ fn lower_effect_param(
             value: value.clone(),
         },
         EffectParam::Color { value } => EffectParam::Color {
-            value: value.clone(),
+            value: *value,
         },
         EffectParam::Curve { curve } => EffectParam::Curve {
             curve: resolve_curve(curve, source_path, resolver)?,
@@ -629,11 +629,9 @@ pub(crate) fn select_imported_object(
     }
 
     if file.len() == 1 {
-        return Ok(file
-            .values()
-            .next()
-            .expect("file length was checked")
-            .clone());
+        if let Some(object) = file.values().next() {
+            return Ok(object.clone());
+        }
     }
 
     Err(LowerError::Import {

@@ -103,9 +103,11 @@ impl ProjectAnalysis {
         script
             .params
             .iter()
-            .filter_map(|param| match &param.default {
-                Some(ParamDefault::Value(value)) => Some((param.name.clone(), value.clone())),
-                None => None,
+            .filter_map(|param| {
+                param
+                    .default
+                    .as_ref()
+                    .map(|ParamDefault::Value(value)| (param.name.clone(), value.clone()))
             })
             .collect()
     }
@@ -248,13 +250,10 @@ pub fn analyze_project_with_overlays(
 }
 
 fn infer_project_key(root_path: &Utf8PathBuf, session: &mut AnalysisSession) -> Option<String> {
-    let Some(root_file) = session
+    let root_file = session
         .files
         .get(root_path)
-        .and_then(|analyzed| analyzed.file.as_ref())
-    else {
-        return None;
-    };
+        .and_then(|analyzed| analyzed.file.as_ref())?;
 
     let project_keys = root_file
         .iter()

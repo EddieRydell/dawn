@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
-import { AppSnapshotDto } from "../bindings";
+import type { AppSnapshotDto } from "../bindings";
 
 export function StatusBar({ snapshot }: { snapshot: AppSnapshotDto }) {
   const errors = snapshot.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
@@ -8,8 +8,8 @@ export function StatusBar({ snapshot }: { snapshot: AppSnapshotDto }) {
     <footer className="status-bar">
       <span>{snapshot.status}</span>
       <span>{snapshot.projectRoot ?? "No project"}</span>
-      <span className={errors ? "status-problem" : "status-ok"}>
-        {errors ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
+      <span className={errors > 0 ? "status-problem" : "status-ok"}>
+        {errors > 0 ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
         {errors} errors
       </span>
       <span>{warnings} warnings</span>

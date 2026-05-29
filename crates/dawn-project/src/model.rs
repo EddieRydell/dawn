@@ -438,17 +438,12 @@ impl Display<Resolved> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DistanceUnit {
+    #[default]
     Meters,
     Feet,
-}
-
-impl Default for DistanceUnit {
-    fn default() -> Self {
-        Self::Meters
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

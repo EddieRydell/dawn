@@ -353,7 +353,9 @@ impl<'a> Lexer<'a> {
             .peek()
             .is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
         {
-            value.push(self.bump().expect("peek checked"));
+            if let Some(character) = self.bump() {
+                value.push(character);
+            }
         }
         self.tokens.push(Token {
             kind: TokenKind::Ident(value),
@@ -371,15 +373,21 @@ impl<'a> Lexer<'a> {
             .peek()
             .is_some_and(|character| character.is_ascii_digit())
         {
-            value.push(self.bump().expect("peek checked"));
+            if let Some(character) = self.bump() {
+                value.push(character);
+            }
         }
         if self.peek() == Some('.') {
-            value.push(self.bump().expect("peek checked"));
+            if let Some(character) = self.bump() {
+                value.push(character);
+            }
             while self
                 .peek()
                 .is_some_and(|character| character.is_ascii_digit())
             {
-                value.push(self.bump().expect("peek checked"));
+                if let Some(character) = self.bump() {
+                    value.push(character);
+                }
             }
         }
         self.tokens.push(Token {
@@ -394,12 +402,16 @@ impl<'a> Lexer<'a> {
     fn color(&mut self) {
         let start = self.position();
         let mut value = String::new();
-        value.push(self.bump().expect("peek checked"));
+        if let Some(character) = self.bump() {
+            value.push(character);
+        }
         while self
             .peek()
             .is_some_and(|character| character.is_ascii_hexdigit())
         {
-            value.push(self.bump().expect("peek checked"));
+            if let Some(character) = self.bump() {
+                value.push(character);
+            }
         }
         self.tokens.push(Token {
             kind: TokenKind::Color(value),
@@ -426,7 +438,9 @@ impl<'a> Lexer<'a> {
                 });
                 return;
             }
-            value.push(self.bump().expect("peek checked"));
+            if let Some(character) = self.bump() {
+                value.push(character);
+            }
         }
         self.errors.push(ScriptDiagnostic {
             range: Some(SourceRange {
@@ -471,6 +485,12 @@ impl<'a> Lexer<'a> {
 }
 
 pub fn parse(tokens: &[Token]) -> Result<EffectAst, Vec<ScriptDiagnostic>> {
+    if tokens.is_empty() {
+        return Err(vec![ScriptDiagnostic {
+            range: None,
+            message: "script did not produce tokens".to_string(),
+        }]);
+    }
     let mut parser = Parser {
         tokens,
         index: 0,
@@ -870,9 +890,11 @@ impl Parser<'_> {
     }
 
     fn peek(&self) -> &Token {
-        self.tokens
-            .get(self.index)
-            .unwrap_or_else(|| self.tokens.last().expect("lexer adds eof"))
+        if let Some(token) = self.tokens.get(self.index) {
+            token
+        } else {
+            &self.tokens[self.tokens.len() - 1]
+        }
     }
 
     fn error_here(&self, message: &str) -> ScriptDiagnostic {

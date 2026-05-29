@@ -428,7 +428,7 @@ fn normalize_bindings_assertion(
     Ok(())
 }
 
-pub fn run() {
+pub fn run() -> Result<(), tauri::Error> {
     let builder = specta_builder();
     tauri::Builder::default()
         .manage(AppState::default())
@@ -438,7 +438,6 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("failed to run Dawn desktop");
 }
 
 fn dispatch(

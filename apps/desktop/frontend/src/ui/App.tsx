@@ -30,13 +30,13 @@ export function App() {
   return (
     <div className="app-shell">
       <TitleBar />
-      {error && <div className="error-strip">{error}</div>}
+      {error !== null && error !== "" && <div className="error-strip">{error}</div>}
       <main className="workbench">
-        {snapshot.projectTreeVisible && <ProjectTree snapshot={snapshot} />}
+        {snapshot.projectTreeVisible ? <ProjectTree snapshot={snapshot} /> : null}
         <EditorPane snapshot={snapshot} />
       </main>
       <StatusBar snapshot={snapshot} />
-      {!snapshot.projectRoot && (
+      {snapshot.projectRoot === null && (
         <div className="empty-project">
           <button onClick={() => void runSnapshotCommand(commands.openProjectDialog)}>Open Project</button>
         </div>

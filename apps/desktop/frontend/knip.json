@@ -1,8 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["src/main.tsx", "vite.config.ts", "tailwind.config.ts", "postcss.config.js", "eslint.config.js"],
   "project": ["src/**/*.{ts,tsx}", "*.config.{js,ts}"],
-  "ignore": ["dist/**"],
   "ignoreIssues": {
     "src/bindings.ts": ["exports", "types"]
   },

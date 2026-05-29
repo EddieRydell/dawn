@@ -993,7 +993,7 @@ fn layout_to_document(
             .iter()
             .map(|group| LayoutGroupDocument {
                 name: group.name.clone(),
-                members: group.members.iter().copied().collect(),
+                members: group.members.to_vec(),
             })
             .collect(),
         fixture_catalog: catalog.to_vec(),
@@ -1052,7 +1052,7 @@ fn sequence_to_document(
             });
             SequenceEffectDocument {
                 index,
-                id: effect.id.clone(),
+                id: effect.id,
                 start_ms: effect.start.milliseconds,
                 duration_ms: effect.duration.milliseconds,
                 target,
@@ -1320,10 +1320,10 @@ fn sequence_effect_render_document(
     }
     let (script_key, script_source) =
         sequence_effect_script_details(sequence_path, effect, Some(analysis))?;
-    if !analysis
+    if analysis
         .scripts
         .get(&script_key)
-        .is_some_and(|script| script.result.is_ok())
+        .is_none_or(|script| script.result.is_err())
     {
         return None;
     }
@@ -1524,7 +1524,7 @@ fn placement_to_document(
     };
 
     LayoutFixturePlacement {
-        id: placement.id.clone(),
+        id: placement.id,
         name: placement.name.clone(),
         fixture,
         resolved_fixture: ResolvedLayoutFixture {

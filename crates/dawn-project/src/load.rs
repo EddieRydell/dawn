@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::error::Error;
 use std::fmt;
 
@@ -102,14 +103,13 @@ impl FsImportLoader {
     }
 
     fn load_cached(&mut self, path: &Utf8PathBuf) -> Result<&DawnFile, LoadProjectError> {
-        if !self.files.contains_key(path) {
-            let file = load_dawn_file(&self.fs, path)?;
-            self.files.insert(path.clone(), file);
+        match self.files.entry(path.clone()) {
+            Entry::Occupied(entry) => Ok(entry.into_mut()),
+            Entry::Vacant(entry) => {
+                let file = load_dawn_file(&self.fs, path)?;
+                Ok(entry.insert(file))
+            }
         }
-        Ok(self
-            .files
-            .get(path)
-            .expect("file was inserted before lookup"))
     }
 }
 pub fn load_dawn_file(fs: &WorkspaceFs, path: &Utf8PathBuf) -> Result<DawnFile, LoadProjectError> {

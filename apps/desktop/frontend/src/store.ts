@@ -1,7 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { commands } from "./api";
-import { AppSnapshotDto } from "./bindings";
+import type { AppSnapshotDto } from "./bindings";
 
 type AppStore = {
   snapshot: AppSnapshotDto | null;
@@ -17,13 +17,18 @@ export const useAppStore = create<AppStore>((set) => ({
   snapshot: null,
   error: null,
   localText: "",
-  setSnapshot: (snapshot) =>
+  setSnapshot: (snapshot) => {
     set({
       snapshot,
       localText: snapshot.activeBuffer?.text ?? ""
-    }),
-  setError: (error) => set({ error }),
-  setLocalText: (localText) => set({ localText }),
+    });
+  },
+  setError: (error) => {
+    set({ error });
+  },
+  setLocalText: (localText) => {
+    set({ localText });
+  },
   hydrate: async () => {
     const snapshot = await commands.getSnapshot();
     set({ snapshot, localText: snapshot.activeBuffer?.text ?? "", error: null });

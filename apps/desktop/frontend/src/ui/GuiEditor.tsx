@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { commands } from "../api";
-import {
+import type {
   AppSnapshotDto,
   ColorCurvePointDto,
   FloatCurvePointDto,
@@ -134,7 +134,7 @@ function SequenceCanvas({
     updateSize();
     const observer = new ResizeObserver(updateSize);
     observer.observe(target);
-    return () => observer.disconnect();
+    return () => { observer.disconnect(); };
   }, []);
 
   useEffect(() => {
@@ -803,7 +803,7 @@ function NumberParam({
 }) {
   const [text, setText] = useState(String(value));
   const lastCommitted = useRef(value);
-  useEffect(() => setText(String(value)), [value]);
+  useEffect(() => { setText(String(value)); }, [value]);
   useEffect(() => {
     lastCommitted.current = value;
   }, [value]);
@@ -825,7 +825,7 @@ function NumberParam({
         type="number"
         step={step}
         value={text}
-        onChange={(event) => setText(event.currentTarget.value)}
+        onChange={(event) => { setText(event.currentTarget.value); }}
         onBlur={commitText}
         onKeyDown={(event) => {
           if (event.key === "Enter") {
@@ -860,10 +860,10 @@ function ColorParam({ name, value, commit }: { name: string; value: string; comm
   };
   const scheduleCommit = (candidate: string) => {
     window.clearTimeout(colorCommitTimer.current);
-    colorCommitTimer.current = window.setTimeout(() => commitDraft(candidate), 200);
+    colorCommitTimer.current = window.setTimeout(() => { commitDraft(candidate); }, 200);
   };
   const colorCommitTimer = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(colorCommitTimer.current), []);
+  useEffect(() => () => { window.clearTimeout(colorCommitTimer.current); }, []);
   return (
     <label>
       {name}
@@ -876,12 +876,12 @@ function ColorParam({ name, value, commit }: { name: string; value: string; comm
             setDraft(next);
             scheduleCommit(next);
           }}
-          onBlur={() => commitDraft()}
+          onBlur={() => { commitDraft(); }}
         />
         <input
           value={draft}
-          onChange={(event) => setDraft(event.currentTarget.value)}
-          onBlur={() => commitDraft()}
+          onChange={(event) => { setDraft(event.currentTarget.value); }}
+          onBlur={() => { commitDraft(); }}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               commitDraft();
@@ -940,8 +940,8 @@ function FloatCurveParam({
             max={1}
             step={0.01}
             value={point.time}
-            onChange={(event) => setDraftPoint(index, { ...point, time: Number(event.currentTarget.value) })}
-            onBlur={() => commitDraftPoint(index)}
+            onChange={(event) => { setDraftPoint(index, { ...point, time: Number(event.currentTarget.value) }); }}
+            onBlur={() => { commitDraftPoint(index); }}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 commitDraftPoint(index);
@@ -953,8 +953,8 @@ function FloatCurveParam({
             type="number"
             step={0.05}
             value={point.value}
-            onChange={(event) => setDraftPoint(index, { ...point, value: Number(event.currentTarget.value) })}
-            onBlur={() => commitDraftPoint(index)}
+            onChange={(event) => { setDraftPoint(index, { ...point, value: Number(event.currentTarget.value) }); }}
+            onBlur={() => { commitDraftPoint(index); }}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 commitDraftPoint(index);
@@ -962,10 +962,10 @@ function FloatCurveParam({
               }
             }}
           />
-          <button type="button" disabled={drafts.length <= 1} onClick={() => update(drafts.filter((_, pointIndex) => pointIndex !== index))}>-</button>
+          <button type="button" disabled={drafts.length <= 1} onClick={() => { update(drafts.filter((_, pointIndex) => pointIndex !== index)); }}>-</button>
         </div>
       ))}
-      <button type="button" onClick={() => update([...drafts, { time: 1, value: drafts[drafts.length - 1]?.value ?? 0 }])}>Add point</button>
+      <button type="button" onClick={() => { update([...drafts, { time: 1, value: drafts[drafts.length - 1]?.value ?? 0 }]); }}>Add point</button>
     </div>
   );
 }
@@ -1010,14 +1010,19 @@ function ColorCurveParam({
     const draft = candidate ?? points[index]?.value;
     if (!draft) return;
     if (!isHexColor(draft)) {
-      setDrafts((current) => replaceAt(current, index, points[index]));
+      const fallback = points[index];
+      if (fallback !== undefined) {
+        setDrafts((current) => replaceAt(current, index, fallback));
+      }
       return;
     }
     const next = draft.toLowerCase();
-    setDrafts((current) => replaceAt(current, index, { ...(current[index] ?? points[index]), value: next }));
+    const currentPoint = drafts[index] ?? points[index];
+    if (currentPoint === undefined) return;
+    setDrafts((current) => replaceAt(current, index, { ...(current[index] ?? currentPoint), value: next }));
     if (next !== lastCommittedValues.current[index]) {
       lastCommittedValues.current = replaceAt(lastCommittedValues.current, index, next);
-      update(replaceAt(drafts, index, { ...drafts[index], value: next }));
+      update(replaceAt(drafts, index, { ...currentPoint, value: next }));
     }
   };
   const scheduleColorCommit = (index: number, candidate: string) => {
@@ -1025,7 +1030,7 @@ function ColorCurveParam({
     if (existing !== undefined) {
       window.clearTimeout(existing);
     }
-    colorCommitTimers.current.set(index, window.setTimeout(() => commitDraftValue(index, candidate), 200));
+    colorCommitTimers.current.set(index, window.setTimeout(() => { commitDraftValue(index, candidate); }, 200));
   };
   return (
     <div className="effect-param-group">
@@ -1038,8 +1043,8 @@ function ColorCurveParam({
             max={1}
             step={0.01}
             value={point.time}
-            onChange={(event) => setDraftPoint(index, { ...point, time: Number(event.currentTarget.value) })}
-            onBlur={() => update(replaceAt(drafts, index, { ...point, time: clamp(point.time, 0, 1) }))}
+            onChange={(event) => { setDraftPoint(index, { ...point, time: Number(event.currentTarget.value) }); }}
+            onBlur={() => { update(replaceAt(drafts, index, { ...point, time: clamp(point.time, 0, 1) })); }}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 update(replaceAt(drafts, index, { ...point, time: clamp(point.time, 0, 1) }));
@@ -1055,12 +1060,12 @@ function ColorCurveParam({
               setDraftPoint(index, { ...point, value: next });
               scheduleColorCommit(index, next);
             }}
-            onBlur={() => commitDraftValue(index)}
+            onBlur={() => { commitDraftValue(index); }}
           />
           <input
             value={point.value}
-            onChange={(event) => setDraftPoint(index, { ...point, value: event.currentTarget.value })}
-            onBlur={() => commitDraftValue(index)}
+            onChange={(event) => { setDraftPoint(index, { ...point, value: event.currentTarget.value }); }}
+            onBlur={() => { commitDraftValue(index); }}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 commitDraftValue(index);
@@ -1068,10 +1073,10 @@ function ColorCurveParam({
               }
             }}
           />
-          <button type="button" disabled={drafts.length <= 1} onClick={() => update(drafts.filter((_, pointIndex) => pointIndex !== index))}>-</button>
+          <button type="button" disabled={drafts.length <= 1} onClick={() => { update(drafts.filter((_, pointIndex) => pointIndex !== index)); }}>-</button>
         </div>
       ))}
-      <button type="button" onClick={() => update([...drafts, { time: 1, value: drafts[drafts.length - 1]?.value ?? "#ffffff" }])}>Add point</button>
+      <button type="button" onClick={() => { update([...drafts, { time: 1, value: drafts[drafts.length - 1]?.value ?? "#ffffff" }]); }}>Add point</button>
     </div>
   );
 }
@@ -1240,7 +1245,7 @@ function drawTimelineGrid(
 
 function chooseTimeInterval(pxPerMs: number) {
   const candidates = [100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000];
-  return candidates.find((candidate) => candidate * pxPerMs >= 56) ?? candidates[candidates.length - 1];
+  return candidates.find((candidate) => candidate * pxPerMs >= 56) ?? 60000;
 }
 
 function formatMs(ms: number) {

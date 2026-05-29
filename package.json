@@ -9,6 +9,7 @@
     "rust:check": "cargo check --workspace --all-targets",
     "rust:clippy": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
     "check": "pnpm bindings:check && pnpm typecheck && pnpm lint && pnpm knip && pnpm rust:check && pnpm rust:clippy",
+    "ci": "pnpm check",
     "build": "pnpm generate-bindings && pnpm --dir apps/desktop/frontend build",
     "tauri": "pnpm generate-bindings && pnpm --dir apps/desktop exec tauri"
   },

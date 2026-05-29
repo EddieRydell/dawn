@@ -6,7 +6,7 @@ import { EditorView, ViewUpdate } from "@codemirror/view";
 import { X } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { commands } from "../api";
-import { AppSnapshotDto } from "../bindings";
+import type { AppSnapshotDto } from "../bindings";
 import { commandRegistry } from "../commandRegistry";
 import { runSnapshotCommand, useAppStore } from "../store";
 import { GuiEditor } from "./GuiEditor";
@@ -66,7 +66,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
   if (snapshot.tabs.length === 0) {
     return (
       <section className="editor-shell empty-editor">
-        <span>{snapshot.projectRoot ? "Open a Dawn file from the project tree." : "Open a project to start."}</span>
+        <span>{snapshot.projectRoot !== null ? "Open a Dawn file from the project tree." : "Open a project to start."}</span>
       </section>
     );
   }
@@ -153,7 +153,7 @@ function createState(
             return true;
           }
         },
-        ...defaultKeymap,
+        ...defaultKeymap
       ]),
       EditorView.updateListener.of(onUpdate),
       EditorView.theme({

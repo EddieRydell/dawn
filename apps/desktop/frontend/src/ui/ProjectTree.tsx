@@ -2,9 +2,10 @@ import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { File, Folder, FolderPlus, Pencil, Plus, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { NodeApi, Tree } from "react-arborist";
+import type { NodeApi } from "react-arborist";
+import { Tree } from "react-arborist";
 import { commands } from "../api";
-import { AppSnapshotDto, WorkspaceEntryDto } from "../bindings";
+import type { AppSnapshotDto, WorkspaceEntryDto } from "../bindings";
 import { runSnapshotCommand } from "../store";
 
 type TreeNode = {
@@ -23,10 +24,10 @@ export function ProjectTree({ snapshot }: { snapshot: AppSnapshotDto }) {
       <div className="panel-header">
         <span>Project</span>
         <div className="panel-actions">
-          <button aria-label="New file" onClick={() => createFile("")}>
+          <button aria-label="New file" onClick={() => { createFile(""); }}>
             <Plus size={15} />
           </button>
-          <button aria-label="New folder" onClick={() => createDirectory("")}>
+          <button aria-label="New folder" onClick={() => { createDirectory(""); }}>
             <FolderPlus size={15} />
           </button>
         </div>
@@ -46,7 +47,7 @@ export function ProjectTree({ snapshot }: { snapshot: AppSnapshotDto }) {
       >
         {(props) => <TreeRow {...props} requestDelete={setPendingDelete} />}
       </Tree>
-      <AlertDialog.Root open={!!pendingDelete} onOpenChange={(open) => !open && setPendingDelete(null)}>
+      <AlertDialog.Root open={pendingDelete !== null} onOpenChange={(open) => { if (!open) setPendingDelete(null); }}>
         <AlertDialog.Portal>
           <AlertDialog.Overlay className="dialog-overlay" />
           <AlertDialog.Content className="dialog-content">
@@ -88,7 +89,11 @@ function TreeRow({
           ref={dragHandle}
           className={`tree-row ${node.isSelected ? "selected" : ""}`}
           style={style}
-          onDoubleClick={() => node.data.kind === "directory" && node.toggle()}
+          onDoubleClick={() => {
+            if (node.data.kind === "directory") {
+              node.toggle();
+            }
+          }}
         >
           <Icon size={15} />
           <span>{node.data.name}</span>
@@ -98,18 +103,18 @@ function TreeRow({
         <ContextMenu.Content className="menu-content">
           {node.data.kind === "directory" && (
             <>
-              <ContextMenu.Item className="menu-item" onSelect={() => createFile(node.data.id)}>
+              <ContextMenu.Item className="menu-item" onSelect={() => { createFile(node.data.id); }}>
                 <Plus size={14} /> New File
               </ContextMenu.Item>
-              <ContextMenu.Item className="menu-item" onSelect={() => createDirectory(node.data.id)}>
+              <ContextMenu.Item className="menu-item" onSelect={() => { createDirectory(node.data.id); }}>
                 <FolderPlus size={14} /> New Folder
               </ContextMenu.Item>
             </>
           )}
-          <ContextMenu.Item className="menu-item" onSelect={() => renameNode(node.data)}>
+          <ContextMenu.Item className="menu-item" onSelect={() => { renameNode(node.data); }}>
             <Pencil size={14} /> Rename
           </ContextMenu.Item>
-          <ContextMenu.Item className="menu-item danger" onSelect={() => requestDelete(node.data)}>
+          <ContextMenu.Item className="menu-item danger" onSelect={() => { requestDelete(node.data); }}>
             <Trash2 size={14} /> Delete
           </ContextMenu.Item>
         </ContextMenu.Content>
@@ -121,18 +126,23 @@ function TreeRow({
 function buildTree(entries: WorkspaceEntryDto[]): TreeNode[] {
   const nodes = new Map<string, TreeNode>();
   for (const entry of entries) {
-    nodes.set(entry.path, {
+    const node: TreeNode = {
       id: entry.path,
       name: entry.name,
-      kind: entry.kind,
-      children: entry.kind === "directory" ? [] : undefined
-    });
+      kind: entry.kind
+    };
+    if (entry.kind === "directory") {
+      node.children = [];
+    }
+    nodes.set(entry.path, node);
   }
   const roots: TreeNode[] = [];
   for (const entry of entries) {
-    const node = nodes.get(entry.path)!;
-    if (entry.parent && nodes.has(entry.parent)) {
-      nodes.get(entry.parent)!.children?.push(node);
+    const node = nodes.get(entry.path);
+    if (node === undefined) continue;
+    const parent = nodes.get(entry.parent);
+    if (entry.parent !== "" && parent !== undefined) {
+      parent.children?.push(node);
     } else {
       roots.push(node);
     }
@@ -142,15 +152,15 @@ function buildTree(entries: WorkspaceEntryDto[]): TreeNode[] {
 
 function createFile(parent: string) {
   const name = window.prompt("File name");
-  if (name) void runSnapshotCommand(() => commands.createFile(parent, name));
+  if (name !== null && name !== "") void runSnapshotCommand(() => commands.createFile(parent, name));
 }
 
 function createDirectory(parent: string) {
   const name = window.prompt("Folder name");
-  if (name) void runSnapshotCommand(() => commands.createDirectory(parent, name));
+  if (name !== null && name !== "") void runSnapshotCommand(() => commands.createDirectory(parent, name));
 }
 
 function renameNode(node: TreeNode) {
   const newName = window.prompt("New name", node.name);
-  if (newName && newName !== node.name) void runSnapshotCommand(() => commands.renamePath(node.id, newName));
+  if (newName !== null && newName !== "" && newName !== node.name) void runSnapshotCommand(() => commands.renamePath(node.id, newName));
 }

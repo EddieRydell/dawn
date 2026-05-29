@@ -505,7 +505,7 @@ opening:
         value: '#ff1827'
       accent:
         type: color
-        value: '#66e3ff'
+        value: '#11ff00'
       speed:
         type: float
         value: 0.5

@@ -13,7 +13,7 @@ use dawn_project::document::{
     apply_sequence_document_edit as core_apply_sequence_document_edit,
     get_fixture_document as core_get_fixture_document,
     get_layout_document as core_get_layout_document,
-    get_sequence_document as core_get_sequence_document, DocumentEditResult,
+    get_sequence_document as core_get_sequence_document, DocumentEditOutcome,
     FixtureDefinitionDocument, FixtureDocument, LayoutDocument, LayoutFixturePlacement,
     LayoutFixtureRef, LayoutTargetDocument, ResolvedLayoutFixture, SequenceDocument,
     SequenceDocumentEdit,
@@ -145,9 +145,9 @@ fn apply_layout_document_edit(
     base_content: String,
     overlays: Vec<ProjectOverlay>,
     project_path: impl AsRef<Path>,
-    allow_breaking_references: bool,
-) -> Result<DocumentEditResult<LayoutDocument>, String> {
-    let (fs, project_path, root) = project_context(project_path);
+    _allow_breaking_references: bool,
+) -> Result<DocumentEditOutcome<LayoutDocument>, String> {
+    let (fs, _project_path, root) = project_context(project_path);
     let path = relative_project_path(&root, path.as_ref());
     core_apply_layout_document_edit(
         &fs,
@@ -156,8 +156,6 @@ fn apply_layout_document_edit(
         document,
         base_content,
         normalize_overlays(&root, overlays),
-        project_path,
-        allow_breaking_references,
     )
 }
 
@@ -167,9 +165,9 @@ fn apply_fixture_document_edit(
     base_content: String,
     overlays: Vec<ProjectOverlay>,
     project_path: impl AsRef<Path>,
-    allow_breaking_references: bool,
-) -> Result<DocumentEditResult<FixtureDocument>, String> {
-    let (fs, project_path, root) = project_context(project_path);
+    _allow_breaking_references: bool,
+) -> Result<DocumentEditOutcome<FixtureDocument>, String> {
+    let (fs, _project_path, root) = project_context(project_path);
     let path = relative_project_path(&root, path.as_ref());
     core_apply_fixture_document_edit(
         &fs,
@@ -177,8 +175,6 @@ fn apply_fixture_document_edit(
         document,
         base_content,
         normalize_overlays(&root, overlays),
-        project_path,
-        allow_breaking_references,
     )
 }
 
@@ -189,17 +185,19 @@ fn apply_sequence_document_edit(
     base_content: String,
     overlays: Vec<ProjectOverlay>,
     project_path: impl AsRef<Path>,
-) -> Result<DocumentEditResult<SequenceDocument>, String> {
+) -> Result<DocumentEditOutcome<SequenceDocument>, String> {
     let (fs, project_path, root) = project_context(project_path);
     let path = relative_project_path(&root, path.as_ref());
+    let overlays = normalize_overlays(&root, overlays);
+    let analysis = core_analyze_project_with_overlays(&fs, project_path.clone(), None, overlays.clone());
     core_apply_sequence_document_edit(
         &fs,
         path,
         object_key,
         edit,
         base_content,
-        normalize_overlays(&root, overlays),
-        project_path,
+        overlays,
+        &analysis,
     )
 }
 
@@ -721,9 +719,6 @@ opening:
         &project_path,
     )
     .unwrap();
-    let DocumentEditResult::Applied(added) = added else {
-        panic!("add should apply");
-    };
     assert!(added.serialized_content.contains("id: 1"));
     assert!(added.serialized_content.contains("value: 0.0"));
     assert!(added.serialized_content.contains("value: false"));
@@ -740,9 +735,6 @@ opening:
         &project_path,
     )
     .unwrap();
-    let DocumentEditResult::Applied(duplicated) = duplicated else {
-        panic!("duplicate should apply");
-    };
     assert_eq!(duplicated.refreshed_document.effects.len(), 2);
 
     let moved = apply_sequence_document_edit(
@@ -761,9 +753,6 @@ opening:
         &project_path,
     )
     .unwrap();
-    let DocumentEditResult::Applied(moved) = moved else {
-        panic!("move should apply");
-    };
     assert_eq!(moved.refreshed_document.effects[0].id, 2);
     assert_eq!(moved.refreshed_document.effects[0].target.name, "Pixel");
 
@@ -776,9 +765,6 @@ opening:
         &project_path,
     )
     .unwrap();
-    let DocumentEditResult::Applied(deleted) = deleted else {
-        panic!("delete should apply");
-    };
     assert!(deleted.serialized_content.contains("automation_clips:"));
     assert!(deleted.serialized_content.contains("targets: []"));
 }
@@ -1462,9 +1448,7 @@ pixel:
     )
     .unwrap();
 
-    let DocumentEditResult::Applied(outcome) = result else {
-        panic!("layout edit should apply");
-    };
+    let outcome = result;
     assert!(outcome.serialized_content.contains("# leading comment"));
     assert!(outcome
         .serialized_content
@@ -1546,9 +1530,7 @@ stage:
     )
     .unwrap();
 
-    let DocumentEditResult::Applied(outcome) = result else {
-        panic!("layout edit should apply");
-    };
+    let outcome = result;
     assert!(outcome.serialized_content.contains("- 3"));
     assert!(!outcome.serialized_content.contains("removed"));
 }
@@ -1620,18 +1602,7 @@ pixel:
         }],
     };
 
-    let blocked = apply_fixture_document_edit(
-        &fixture_path,
-        document.clone(),
-        base_content.clone(),
-        Vec::new(),
-        &project_path,
-        false,
-    )
-    .unwrap();
-    assert!(matches!(blocked, DocumentEditResult::Blocked(_)));
-
-    let applied = apply_fixture_document_edit(
+    let outcome = apply_fixture_document_edit(
         &fixture_path,
         document,
         base_content,
@@ -1640,9 +1611,6 @@ pixel:
         true,
     )
     .unwrap();
-    let DocumentEditResult::Applied(outcome) = applied else {
-        panic!("fixture edit should apply with override");
-    };
     assert!(outcome.serialized_content.contains("# keep me"));
     assert!(outcome.serialized_content.contains("bulb_size: 1.0"));
     assert!(outcome.serialized_content.contains("type: arc"));
@@ -1738,9 +1706,7 @@ pixel_bar:
     )
     .unwrap();
 
-    let DocumentEditResult::Applied(outcome) = result else {
-        panic!("fixture edit should apply");
-    };
+    let outcome = result;
     assert!(outcome.serialized_content.contains("type: lines"));
     assert!(outcome.serialized_content.contains("points:"));
     assert!(outcome.serialized_content.contains("pixels: 50"));

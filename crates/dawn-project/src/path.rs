@@ -57,12 +57,7 @@ pub fn utf8_path(path: impl AsRef<Path>) -> Result<Utf8PathBuf, String> {
 
 pub fn lexical_normalize(path: &Utf8Path) -> Utf8PathBuf {
     let normalized = lexical_normalize_std(path.as_std_path());
-    Utf8PathBuf::from_path_buf(normalized).unwrap_or_else(|path| {
-        panic!(
-            "normalizing a UTF-8 path produced non-UTF-8 path `{}`",
-            path.display()
-        )
-    })
+    Utf8PathBuf::from_path_buf(normalized).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn lexical_absolute(path: &Utf8Path) -> Utf8PathBuf {

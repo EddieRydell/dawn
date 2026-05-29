@@ -70,5 +70,11 @@ export default tseslint.config(
     rules: {
       "@typescript-eslint/no-unnecessary-type-parameters": "off"
     }
+  },
+  {
+    files: ["**/*.d.ts"],
+    rules: {
+      "@typescript-eslint/no-unnecessary-type-parameters": "off"
+    }
   }
 );
