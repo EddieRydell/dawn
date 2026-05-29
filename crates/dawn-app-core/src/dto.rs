@@ -2,9 +2,9 @@ use dawn_project::analysis::{DiagnosticSeverity, ProjectDiagnostic, TextRange};
 use dawn_project::document::{
     DocumentDescriptor, DocumentObjectDescriptor, DocumentViewId, FixtureDefinitionDocument,
     FixtureDocument, LayoutDocument, LayoutFixturePlacement, ResolvedLayoutFixture,
-    SequenceDocument, SequenceEffectDocument, SequenceEffectParamCurvePointEditValue,
-    SequenceEffectParamCurveValueEditValue, SequenceEffectParamEditValue,
-    SequenceEffectScriptDocument, SequenceLaneDocument,
+    SequenceAudioDocument, SequenceDocument, SequenceEffectDocument,
+    SequenceEffectParamCurvePointEditValue, SequenceEffectParamCurveValueEditValue,
+    SequenceEffectParamEditValue, SequenceEffectScriptDocument, SequenceLaneDocument,
 };
 use dawn_project::effect_script::{
     compile as compile_effect_script, ParamDefault, RuntimeValue, ScriptType,
@@ -147,6 +147,9 @@ pub enum ActiveGuiDocumentDto {
     rename_all_fields = "camelCase"
 )]
 pub enum SequenceGuiEditDto {
+    SetAudio {
+        import: Option<String>,
+    },
     AddEffect {
         script_path: String,
         target: LayoutTargetDto,
@@ -241,10 +244,20 @@ pub struct SequenceDocumentDto {
     pub object_key: String,
     pub duration_ms: u32,
     pub frame_rate: u32,
+    pub audio: Option<SequenceAudioDto>,
     pub lanes: Vec<SequenceLaneDto>,
     pub effect_scripts: Vec<SequenceEffectScriptDto>,
     pub effects: Vec<SequenceEffectDto>,
     pub degraded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceAudioDto {
+    pub import: String,
+    pub resolved_path: String,
+    pub file_name: String,
+    pub exists: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -491,6 +504,7 @@ pub struct PreviewSnapshotDto {
     pub position_ms: u32,
     pub home_ms: u32,
     pub duration_ms: u32,
+    pub audio: Option<SequenceAudioDto>,
     pub status: String,
 }
 
@@ -527,6 +541,7 @@ impl From<AppSnapshot> for AppSnapshotDto {
                 position_ms: snapshot.preview.position_ms.min(u32::MAX as u64) as u32,
                 home_ms: snapshot.preview.home_ms.min(u32::MAX as u64) as u32,
                 duration_ms: snapshot.preview.duration_ms.min(u32::MAX as u64) as u32,
+                audio: snapshot.preview.audio.map(SequenceAudioDto::from),
                 status: snapshot.preview.status,
             },
         }
@@ -660,6 +675,7 @@ impl From<SequenceDocument> for SequenceDocumentDto {
             object_key: document.object_key,
             duration_ms: u32_ms(document.duration_ms),
             frame_rate: document.frame_rate,
+            audio: document.audio.map(SequenceAudioDto::from),
             lanes: document
                 .lanes
                 .into_iter()
@@ -676,6 +692,17 @@ impl From<SequenceDocument> for SequenceDocumentDto {
                 .map(SequenceEffectDto::from)
                 .collect(),
             degraded: document.degraded,
+        }
+    }
+}
+
+impl From<SequenceAudioDocument> for SequenceAudioDto {
+    fn from(audio: SequenceAudioDocument) -> Self {
+        Self {
+            import: audio.import,
+            resolved_path: audio.resolved_path,
+            file_name: audio.file_name,
+            exists: audio.exists,
         }
     }
 }

@@ -2,7 +2,7 @@ opening:
   type: sequence
   duration: 45000ms
   frame_rate: 60
-  audio: opening.wav
+  audio: ../audio/song.mp3
   effects:
   - id: 16
     start: 0ms

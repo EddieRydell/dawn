@@ -481,6 +481,7 @@ impl AppModel {
             .ok_or_else(|| "active document is not a sequence".to_string())?
             .clone();
         let edit = match edit {
+            SequenceGuiEditDto::SetAudio { import } => SequenceDocumentEdit::SetAudio { import },
             SequenceGuiEditDto::AddEffect {
                 script_path,
                 target,

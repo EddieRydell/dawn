@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use dawn_project::analysis::ProjectAnalysis;
-use dawn_project::document::SequenceDocument;
+use dawn_project::document::{SequenceAudioDocument, SequenceDocument};
 use dawn_project::path::Utf8PathBuf;
 
 use crate::output_runtime::{empty_frame, evaluate_sequence_frame, OutputFrame, OutputFrameStatus};
@@ -24,7 +24,7 @@ pub enum PreviewSource {
     None,
     Sequence {
         key: SequenceKey,
-        document: SequenceDocument,
+        document: Box<SequenceDocument>,
     },
 }
 
@@ -46,6 +46,7 @@ pub struct PreviewSnapshot {
     pub position_ms: u64,
     pub home_ms: u64,
     pub duration_ms: u64,
+    pub audio: Option<SequenceAudioDocument>,
     pub frame: OutputFrame,
     pub status: String,
 }
@@ -74,6 +75,7 @@ impl Default for PreviewSession {
                 position_ms: 0,
                 home_ms: 0,
                 duration_ms: 0,
+                audio: None,
                 frame,
                 status: "No sequence preview source".to_string(),
             },
@@ -104,7 +106,10 @@ impl PreviewSession {
         match source {
             Some((key, document)) => {
                 self.sequence_states.entry(key.clone()).or_default();
-                self.source = PreviewSource::Sequence { key, document };
+                self.source = PreviewSource::Sequence {
+                    key,
+                    document: Box::new(document),
+                };
             }
             None => {
                 self.source = PreviewSource::None;
@@ -255,7 +260,7 @@ impl PreviewSession {
     fn render(&mut self, analysis: Option<&ProjectAnalysis>, status: impl Into<String>) {
         self.generation = self.generation.saturating_add(1);
         let status = status.into();
-        let (source_label, source_key, position_ms, home_ms, duration_ms, frame) = match self
+        let (source_label, source_key, position_ms, home_ms, duration_ms, audio, frame) = match self
             .source
             .clone()
         {
@@ -265,6 +270,7 @@ impl PreviewSession {
                 0,
                 0,
                 0,
+                None,
                 empty_frame(self.generation, status.clone()),
             ),
             PreviewSource::Sequence { key, document } => {
@@ -287,6 +293,7 @@ impl PreviewSession {
                     position_ms,
                     home_ms,
                     duration_ms,
+                    document.audio,
                     frame,
                 )
             }
@@ -299,6 +306,7 @@ impl PreviewSession {
             position_ms,
             home_ms,
             duration_ms,
+            audio,
             frame,
             status: frame_status,
         };
@@ -314,6 +322,7 @@ impl PreviewSession {
                 self.snapshot.position_ms = 0;
                 self.snapshot.home_ms = 0;
                 self.snapshot.duration_ms = 0;
+                self.snapshot.audio = None;
                 self.snapshot.status = status;
             }
             PreviewSource::Sequence { key, document } => {
@@ -328,6 +337,7 @@ impl PreviewSession {
                     .map(|state| state.home_ms.min(duration_ms))
                     .unwrap_or_default();
                 self.snapshot.duration_ms = duration_ms;
+                self.snapshot.audio = document.audio.clone();
                 self.snapshot.status = status;
             }
         }

@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
-import { ChevronLeft, ChevronRight, Pause, Play, SkipBack, Square } from "lucide-react";
+import { ChevronLeft, ChevronRight, Music, Pause, Play, SkipBack, Square, X } from "lucide-react";
 import { commands } from "../api";
 import type {
   ActiveGuiDocumentDto,
@@ -14,6 +15,7 @@ import type {
   LayoutFixturePlacementDto,
   LayoutTargetDto,
   Point3Dto,
+  SequenceAudioDto,
   SequenceDocumentDto,
   SequenceEffectDto,
   SequenceEffectParamDto,
@@ -166,8 +168,24 @@ export function SequenceTransportControls({
       >
         <ChevronRight size={16} />
       </button>
+      <button
+        type="button"
+        title="Choose audio"
+        onClick={() => void runSnapshotCommand(commands.chooseSequenceAudio)}
+      >
+        <Music size={15} />
+      </button>
+      <button
+        type="button"
+        title="Clear audio"
+        disabled={document.audio === null}
+        onClick={() => void runSnapshotCommand(commands.clearSequenceAudio)}
+      >
+        <X size={15} />
+      </button>
       <span className="sequence-time-readout">
         {formatMs(livePreview.positionMs)} / {formatMs(livePreview.durationMs || document.durationMs)} | Home {formatMs(livePreview.homeMs)}
+        {document.audio ? ` | ${document.audio.exists ? document.audio.fileName : "Missing audio"}` : ""}
       </span>
     </div>
   );
@@ -253,7 +271,10 @@ function SequenceCanvas({
   const inFlightPreviewSignatures = useRef<Set<string>>(new Set());
   const initializedViewportKey = useRef<string | null>(null);
   const left = 128;
-  const top = 28;
+  const top = 66;
+  const audioStripTop = 28;
+  const audioStripHeight = top - audioStripTop;
+  const waveform = useSequenceWaveform(document.audio);
   const effectPreviewSignatures = useMemo(() => sequencePreviewSignatures(document), [document]);
   const effectPreviewSignaturesRef = useRef(effectPreviewSignatures);
 
@@ -441,12 +462,27 @@ function SequenceCanvas({
 
     ctx.fillStyle = "#17181b";
     ctx.fillRect(0, 0, rect.width, top);
+    ctx.fillStyle = "#111214";
+    ctx.fillRect(left, audioStripTop, timelineWidth, audioStripHeight);
+    ctx.fillStyle = "#c7c0b6";
+    ctx.fillText(document.audio?.fileName ?? "Audio", 12, audioStripTop + audioStripHeight / 2 + 4);
     ctx.strokeStyle = "#2c3036";
     ctx.beginPath();
     ctx.moveTo(0, top + 0.5);
     ctx.lineTo(rect.width, top + 0.5);
     ctx.stroke();
 
+    drawWaveformStrip(
+      ctx,
+      waveform.audio,
+      left,
+      audioStripTop,
+      timelineWidth,
+      audioStripHeight,
+      document.durationMs,
+      viewport.pxPerMs,
+      scrollXMs
+    );
     drawTimelineGrid(ctx, left, top, rect.width, rect.height, viewport.pxPerMs, scrollXMs, document.frameRate);
 
     ctx.save();
@@ -507,7 +543,7 @@ function SequenceCanvas({
     ctx.moveTo(left + 0.5, top);
     ctx.lineTo(left, rect.height);
     ctx.stroke();
-  }, [document, effectPreviewSignatures, left, top, viewport, visibleClips, selected, previewImages, previewPositionMs, previewHomeMs]);
+  }, [document, effectPreviewSignatures, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, selected, previewImages, previewPositionMs, previewHomeMs, waveform.audio]);
 
   const seekFromCanvas = (event: MouseEvent<HTMLCanvasElement>) => {
     const x = event.nativeEvent.offsetX;
@@ -1294,6 +1330,105 @@ type SequencePreviewImage = {
   signature: string;
 } & ({ status: "ready"; canvas: HTMLCanvasElement } | { status: "unavailable" });
 
+type WaveformAudio = { durationMs: number; sampleRate: number; levels: WaveformLevel[] };
+type WaveformLevel = { samplesPerPeak: number; mins: Float32Array; maxes: Float32Array };
+type WaveformState = { key: string | null; audio: WaveformAudio | null };
+
+const waveformCache = new Map<string, Promise<WaveformAudio | null>>();
+
+function useSequenceWaveform(audio: SequenceAudioDto | null): WaveformState {
+  const key = audio?.exists === true ? audio.resolvedPath : null;
+  const [state, setState] = useState<WaveformState>({ key, audio: null });
+
+  useEffect(() => {
+    if (key === null) return;
+    let cancelled = false;
+    let request = waveformCache.get(key);
+    if (request === undefined) {
+      request = decodeWaveformPeaks(key);
+      waveformCache.set(key, request);
+    }
+    void request.then((waveformAudio) => {
+      if (!cancelled) {
+        setState({ key, audio: waveformAudio });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [key]);
+
+  return state.key === key ? state : { key, audio: null };
+}
+
+async function decodeWaveformPeaks(path: string): Promise<WaveformAudio | null> {
+  try {
+    const response = await fetch(convertFileSrc(path));
+    if (!response.ok) return null;
+    const arrayBuffer = await response.arrayBuffer();
+    const context = new AudioContext();
+    try {
+      const audioBuffer = await context.decodeAudioData(arrayBuffer);
+      const waveform = buildWaveformAudio(audioBuffer);
+      await context.close();
+      return waveform;
+    } catch {
+      await context.close();
+      return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+function buildWaveformAudio(buffer: AudioBuffer): WaveformAudio {
+  const baseSamplesPerPeak = 32;
+  const channels = Array.from({ length: buffer.numberOfChannels }, (_, index) => buffer.getChannelData(index));
+  const bucketCount = Math.max(1, Math.ceil(buffer.length / baseSamplesPerPeak));
+  const mins = new Float32Array(bucketCount);
+  const maxes = new Float32Array(bucketCount);
+  for (let bucket = 0; bucket < bucketCount; bucket += 1) {
+    const start = bucket * baseSamplesPerPeak;
+    const end = Math.min(buffer.length, start + baseSamplesPerPeak);
+    let min = 0;
+    let max = 0;
+    for (const channel of channels) {
+      for (let index = start; index < end; index += 1) {
+        const sample = channel[index] ?? 0;
+        min = Math.min(min, sample);
+        max = Math.max(max, sample);
+      }
+    }
+    mins[bucket] = min;
+    maxes[bucket] = max;
+  }
+
+  const levels: WaveformLevel[] = [{ samplesPerPeak: baseSamplesPerPeak, mins, maxes }];
+  while ((levels[levels.length - 1]?.mins.length ?? 0) > 1) {
+    const previous = levels[levels.length - 1];
+    if (previous === undefined) break;
+    levels.push(coarsenWaveformLevel(previous));
+  }
+  return { durationMs: buffer.duration * 1000, sampleRate: buffer.sampleRate, levels };
+}
+
+function coarsenWaveformLevel(level: WaveformLevel): WaveformLevel {
+  const bucketCount = Math.ceil(level.mins.length / 2);
+  const mins = new Float32Array(bucketCount);
+  const maxes = new Float32Array(bucketCount);
+  for (let bucket = 0; bucket < bucketCount; bucket += 1) {
+    const left = bucket * 2;
+    const right = left + 1;
+    mins[bucket] = Math.min(level.mins[left] ?? 0, level.mins[right] ?? level.mins[left] ?? 0);
+    maxes[bucket] = Math.max(level.maxes[left] ?? 0, level.maxes[right] ?? level.maxes[left] ?? 0);
+  }
+  return {
+    samplesPerPeak: level.samplesPerPeak * 2,
+    mins,
+    maxes
+  };
+}
+
 function buildSequenceClipLayout(
   document: SequenceDocumentDto,
   preview: SequencePreview | null,
@@ -1414,6 +1549,66 @@ function hitSequence(clips: SequenceClipLayout[], x: number, y: number): Sequenc
     }
   }
   return null;
+}
+
+function drawWaveformStrip(
+  ctx: CanvasRenderingContext2D,
+  audio: WaveformAudio | null,
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+  durationMs: number,
+  pxPerMs: number,
+  scrollXMs: number
+) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(left, top, width, height);
+  ctx.clip();
+  ctx.strokeStyle = "#24272c";
+  ctx.beginPath();
+  ctx.moveTo(left, top + height / 2 + 0.5);
+  ctx.lineTo(left + width, top + height / 2 + 0.5);
+  ctx.stroke();
+  if (audio !== null && audio.durationMs > 0 && audio.levels.length > 0) {
+    const samplesPerMs = audio.sampleRate / 1000;
+    const samplesPerPixel = samplesPerMs / pxPerMs;
+    const level = waveformLevelForZoom(audio.levels, samplesPerPixel);
+    const xPerPeak = (level.samplesPerPeak / samplesPerMs) * pxPerMs;
+    const clipEndMs = Math.min(durationMs, audio.durationMs);
+    const visibleStartMs = Math.max(0, scrollXMs);
+    const visibleEndMs = Math.min(clipEndMs, scrollXMs + width / pxPerMs);
+    const firstIndex = Math.max(0, Math.floor((visibleStartMs * samplesPerMs) / level.samplesPerPeak));
+    const lastIndex = Math.min(
+      level.mins.length - 1,
+      Math.ceil((visibleEndMs * samplesPerMs) / level.samplesPerPeak)
+    );
+    const centerY = top + height / 2;
+    const maxAmplitude = Math.max(1, height / 2 - 4);
+    ctx.fillStyle = "#6abf8a";
+    for (let index = firstIndex; index <= lastIndex; index += 1) {
+      const timeMs = (index * level.samplesPerPeak) / samplesPerMs;
+      if (timeMs > clipEndMs) break;
+      const x = left + (timeMs - scrollXMs) * pxPerMs;
+      if (x > left + width) break;
+      if (x + xPerPeak < left) continue;
+      const min = level.mins[index] ?? 0;
+      const max = level.maxes[index] ?? 0;
+      const y1 = centerY - max * maxAmplitude;
+      const y2 = centerY - min * maxAmplitude;
+      ctx.fillRect(x, y1, Math.max(1, xPerPeak), Math.max(1, y2 - y1));
+    }
+  }
+  ctx.restore();
+}
+
+function waveformLevelForZoom(levels: WaveformLevel[], samplesPerPixel: number): WaveformLevel {
+  return levels.find((level) => level.samplesPerPeak >= samplesPerPixel) ?? levels[levels.length - 1] ?? {
+    samplesPerPeak: 1,
+    mins: new Float32Array([0]),
+    maxes: new Float32Array([0])
+  };
 }
 
 function drawTimelineGrid(

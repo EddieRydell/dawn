@@ -280,7 +280,7 @@ button:focus-visible,
 
 .sequence-toolbar {
   display: grid;
-  grid-template-columns: repeat(5, 32px) minmax(0, 1fr);
+  grid-template-columns: repeat(7, 32px) minmax(0, 1fr);
   align-items: center;
   gap: 0;
   min-width: min(520px, 100%);

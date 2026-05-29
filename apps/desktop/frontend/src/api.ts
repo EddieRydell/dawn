@@ -23,6 +23,8 @@ export const commands = {
   redoActiveEdit: () => unwrap(generatedCommands.redoActiveEdit()),
   applySequenceGuiEdit: (edit: Parameters<typeof generatedCommands.applySequenceGuiEdit>[0]) =>
     unwrap(generatedCommands.applySequenceGuiEdit(edit)),
+  chooseSequenceAudio: () => unwrap(generatedCommands.chooseSequenceAudio()),
+  clearSequenceAudio: () => unwrap(generatedCommands.clearSequenceAudio()),
   getSequenceEffectPreviews: (
     path: string,
     objectKey: string,

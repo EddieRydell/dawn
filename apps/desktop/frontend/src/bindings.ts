@@ -15,6 +15,8 @@ export const commands = {
 	undoActiveEdit: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("undo_active_edit")),
 	redoActiveEdit: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("redo_active_edit")),
 	applySequenceGuiEdit: (edit: SequenceGuiEditDto) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("apply_sequence_gui_edit", { edit })),
+	chooseSequenceAudio: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("choose_sequence_audio")),
+	clearSequenceAudio: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("clear_sequence_audio")),
 	getSequenceEffectPreviews: (path: string, objectKey: string, effectIds: number[]) => typedError<SequenceEffectPreviewBatchDto, string>(__TAURI_INVOKE("get_sequence_effect_previews", { path, objectKey, effectIds })),
 	applyLayoutGuiEdit: (edit: LayoutGuiEditDto) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("apply_layout_gui_edit", { edit })),
 	applyFixtureGuiEdit: (edit: FixtureGuiEditDto) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("apply_fixture_gui_edit", { edit })),
@@ -192,6 +194,7 @@ export type PreviewSnapshotDto = {
 	positionMs: number,
 	homeMs: number,
 	durationMs: number,
+	audio: SequenceAudioDto | null,
 	status: string,
 };
 
@@ -215,11 +218,19 @@ export type ResolvedLayoutFixtureDto = {
 	objectKey: string | null,
 };
 
+export type SequenceAudioDto = {
+	import: string,
+	resolvedPath: string,
+	fileName: string,
+	exists: boolean,
+};
+
 export type SequenceDocumentDto = {
 	path: string,
 	objectKey: string,
 	durationMs: number,
 	frameRate: number,
+	audio: SequenceAudioDto | null,
 	lanes: SequenceLaneDto[],
 	effectScripts: SequenceEffectScriptDto[],
 	effects: SequenceEffectDto[],
@@ -269,7 +280,7 @@ export type SequenceEffectScriptDto = {
 	import: string,
 };
 
-export type SequenceGuiEditDto = { type: "addEffect"; scriptPath: string; target: LayoutTargetDto; startMs: number } | { type: "moveEffect"; id: number; startMs: number; target: LayoutTargetDto | null } | { type: "resizeEffect"; id: number; startMs: number; durationMs: number } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTargetDto } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValueDto };
+export type SequenceGuiEditDto = { type: "setAudio"; import: string | null } | { type: "addEffect"; scriptPath: string; target: LayoutTargetDto; startMs: number } | { type: "moveEffect"; id: number; startMs: number; target: LayoutTargetDto | null } | { type: "resizeEffect"; id: number; startMs: number; durationMs: number } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTargetDto } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValueDto };
 
 export type SequenceLaneDto = {
 	target: LayoutTargetDto,

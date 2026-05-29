@@ -30,3 +30,7 @@ declare module "react-window" {
     props: P;
   }
 }
+
+interface Window {
+  webkitAudioContext?: typeof AudioContext;
+}

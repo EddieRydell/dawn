@@ -29,7 +29,7 @@ use dawn_app_core::output_runtime::OutputFrame;
 use dawn_app_core::preview_session::PreviewSnapshot;
 use dawn_project::document::{SequenceEffectDocument, SequenceEffectPixelDocument};
 use dawn_project::effect_script::{FixtureContext, PixelContext};
-use dawn_project::path::Utf8PathBuf;
+use dawn_project::path::{serialized_import_path, utf8_path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
@@ -85,6 +85,7 @@ pub struct PreviewStateEventDto {
     pub position_ms: u32,
     pub home_ms: u32,
     pub duration_ms: u32,
+    pub audio: Option<dawn_app_core::dto::SequenceAudioDto>,
     pub status: String,
 }
 
@@ -225,6 +226,71 @@ fn apply_sequence_gui_edit(
     edit: SequenceGuiEditDto,
 ) -> CommandResult<AppSnapshotDto> {
     dispatch(&app, &state, AppAction::ApplySequenceGuiEdit(edit))
+}
+
+#[specta::specta]
+#[tauri::command]
+fn choose_sequence_audio(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<AppSnapshotDto> {
+    let (project_root, sequence_path) = {
+        let model = lock_model(&state)?;
+        let snapshot = model.snapshot();
+        let Some(sequence_path) = snapshot.active_file else {
+            return Err("no active sequence file is selected".to_string());
+        };
+        if !matches!(
+            snapshot.active_gui_document,
+            Some(dawn_app_core::app_model::ActiveGuiDocument::Sequence(_))
+        ) {
+            return Err("active document is not a sequence".to_string());
+        }
+        (model.project_root.clone(), sequence_path)
+    };
+
+    let Some(project_root) = project_root else {
+        return Err("no project is open".to_string());
+    };
+    let project_root = Utf8PathBuf::from(project_root);
+    let sequence_path = if sequence_path.is_absolute() {
+        sequence_path
+    } else {
+        project_root.join(sequence_path)
+    };
+
+    let mut dialog = rfd::FileDialog::new()
+        .set_title("Choose Sequence Audio")
+        .add_filter("Audio", &["mp3", "wav", "flac", "m4a", "aac", "ogg"]);
+    let audio_dir = project_root.join("audio");
+    if audio_dir.is_dir() {
+        dialog = dialog.set_directory(audio_dir.as_std_path());
+    }
+
+    let Some(path) = dialog.pick_file() else {
+        return get_snapshot(state);
+    };
+    let import = serialized_import_path(&sequence_path, &utf8_path(path)?);
+    dispatch(
+        &app,
+        &state,
+        AppAction::ApplySequenceGuiEdit(SequenceGuiEditDto::SetAudio {
+            import: Some(import),
+        }),
+    )
+}
+
+#[specta::specta]
+#[tauri::command]
+fn clear_sequence_audio(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<AppSnapshotDto> {
+    dispatch(
+        &app,
+        &state,
+        AppAction::ApplySequenceGuiEdit(SequenceGuiEditDto::SetAudio { import: None }),
+    )
 }
 
 #[specta::specta]
@@ -506,6 +572,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             undo_active_edit,
             redo_active_edit,
             apply_sequence_gui_edit,
+            choose_sequence_audio,
+            clear_sequence_audio,
             get_sequence_effect_previews,
             apply_layout_gui_edit,
             apply_fixture_gui_edit,
@@ -660,6 +728,8 @@ struct PreviewEventIdentity {
     position_ms: u64,
     home_ms: u64,
     duration_ms: u64,
+    audio_path: Option<String>,
+    audio_exists: bool,
     status: String,
 }
 
@@ -675,6 +745,11 @@ impl From<&PreviewSnapshot> for PreviewEventIdentity {
             },
             home_ms: snapshot.home_ms,
             duration_ms: snapshot.duration_ms,
+            audio_path: snapshot
+                .audio
+                .as_ref()
+                .map(|audio| audio.resolved_path.clone()),
+            audio_exists: snapshot.audio.as_ref().is_some_and(|audio| audio.exists),
             status: snapshot.status.clone(),
         }
     }
@@ -726,6 +801,7 @@ fn emit_preview_state_dto(app: &AppHandle, snapshot: &AppSnapshotDto) -> Command
             position_ms: snapshot.preview.position_ms,
             home_ms: snapshot.preview.home_ms,
             duration_ms: snapshot.preview.duration_ms,
+            audio: snapshot.preview.audio.clone(),
             status: snapshot.preview.status.clone(),
         },
     )
@@ -741,6 +817,7 @@ fn emit_preview_state_snapshot(app: &AppHandle, snapshot: &PreviewSnapshot) {
             position_ms: snapshot.position_ms.min(u32::MAX as u64) as u32,
             home_ms: snapshot.home_ms.min(u32::MAX as u64) as u32,
             duration_ms: snapshot.duration_ms.min(u32::MAX as u64) as u32,
+            audio: snapshot.audio.clone().map(Into::into),
             status: snapshot.status.clone(),
         },
     );

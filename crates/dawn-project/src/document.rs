@@ -158,10 +158,20 @@ pub struct SequenceDocument {
     pub object_key: String,
     pub duration_ms: u64,
     pub frame_rate: u32,
+    pub audio: Option<SequenceAudioDocument>,
     pub lanes: Vec<SequenceLaneDocument>,
     pub effect_scripts: Vec<SequenceEffectScriptDocument>,
     pub effects: Vec<SequenceEffectDocument>,
     pub degraded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceAudioDocument {
+    pub import: String,
+    pub resolved_path: String,
+    pub file_name: String,
+    pub exists: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -196,6 +206,9 @@ pub struct SequenceEffectScriptDocument {
 
 #[derive(Debug, Clone)]
 pub enum SequenceDocumentEdit {
+    SetAudio {
+        import: Option<String>,
+    },
     AddEffect {
         script_path: String,
         target: LayoutTargetDocument,
@@ -597,6 +610,12 @@ fn apply_sequence_edit_operation(
     edit: SequenceDocumentEdit,
 ) -> Result<(), String> {
     match edit {
+        SequenceDocumentEdit::SetAudio { import } => {
+            sequence.audio = import
+                .map(|import| ImportRef::new(import).map(Some))
+                .transpose()?
+                .flatten();
+        }
         SequenceDocumentEdit::AddEffect {
             script_path,
             target,
@@ -1069,11 +1088,31 @@ fn sequence_to_document(
         object_key: object_key.to_string(),
         duration_ms: sequence.duration.milliseconds,
         frame_rate: sequence.frame_rate,
+        audio: sequence_audio_document(fs, path, sequence.audio.as_ref()),
         lanes,
         effect_scripts: sequence_effect_script_catalog(fs, path, overlays),
         effects,
         degraded: layout.is_none(),
     }
+}
+
+fn sequence_audio_document(
+    fs: &WorkspaceFs,
+    sequence_path: &Utf8PathBuf,
+    audio: Option<&ImportRef>,
+) -> Option<SequenceAudioDocument> {
+    let audio = audio?;
+    let resolved_path = resolve_import_path(sequence_path, audio.path());
+    let file_name = resolved_path
+        .file_name()
+        .map(str::to_string)
+        .unwrap_or_else(|| audio.raw().to_string());
+    Some(SequenceAudioDocument {
+        import: audio.raw().to_string(),
+        resolved_path: resolved_path.to_slash_string(),
+        file_name,
+        exists: fs.exists(&resolved_path),
+    })
 }
 
 fn sequence_effect_script_catalog(
