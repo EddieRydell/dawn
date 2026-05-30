@@ -24,14 +24,14 @@ use dawn_app_core::dto::{
     GeometryRenderPointDto, LayoutGuiEditDto, PreviewSnapshotDto, SequenceGuiEditDto,
 };
 use dawn_app_core::layout_persistence::PreviewWindowLayout;
-use dawn_app_core::output_runtime::runtime_params_from_document;
 use dawn_app_core::output_runtime::OutputFrame;
+use dawn_app_core::output_runtime::{pixel_context_for_effect, runtime_params_from_document};
 use dawn_app_core::preview_session::PreviewSnapshot;
 use dawn_project::document::{
     SequenceAudioDocument, SequenceEffectDocument, SequenceEffectParamDocument,
-    SequenceEffectPixelDocument, SequenceMarkCollectionDocument,
+    SequenceMarkCollectionDocument,
 };
-use dawn_project::effect_script::{FixtureContext, PixelContext};
+use dawn_project::effect_script::FixtureContext;
 use dawn_project::model::{EffectParam, Resolved};
 use dawn_project::path::{serialized_import_path, utf8_path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
@@ -126,6 +126,7 @@ struct EffectPreviewCacheKey {
     effect_id: u32,
     duration_ms: u64,
     frame_rate: u32,
+    scope: dawn_project::model::SequenceEffectScope,
     script_key: String,
     script_source: String,
     params_json: String,
@@ -1167,6 +1168,7 @@ fn preview_for_effect(
         effect_id: effect.id,
         duration_ms: effect.duration_ms,
         frame_rate,
+        scope: effect.scope,
         script_key: render.script_key.clone(),
         script_source: render.script_source.clone(),
         params_json: serde_json::to_string(&render.params).map_err(|error| error.to_string())?,
@@ -1190,20 +1192,29 @@ fn preview_for_effect(
     let params = runtime_params_from_document(&render.params, mark_collections, effect.start_ms);
     let mut colors = Vec::with_capacity(sampled_frame_indices.len() * sampled_pixel_indices.len());
 
-    for pixel_index in &sampled_pixel_indices {
-        let Some(pixel) = render.target_pixels.get(*pixel_index) else {
+    for target_pixel_index in &sampled_pixel_indices {
+        let Some(pixel) = render.target_pixels.get(*target_pixel_index) else {
             return Ok(None);
         };
         for frame_index in &sampled_frame_indices {
             let local_ms = local_ms_for_frame(*frame_index, frame_rate, effect.duration_ms);
             let progress = (local_ms as f64 / effect.duration_ms as f64).clamp(0.0, 1.0);
-            let color = match sample_preview_pixel(
-                analysis,
+            let pixel_context = pixel_context_for_effect(
+                effect.scope,
+                *target_pixel_index,
+                source_pixel_count,
+                pixel.pixel_index,
+                pixel.pixel_count,
+            );
+            let color = match analysis.sample_effect_script_key(
                 &render.script_key,
-                pixel,
                 progress,
                 local_ms as f64 / 1_000.0,
-                &params,
+                FixtureContext {
+                    index: pixel.fixture_index,
+                },
+                pixel_context,
+                params.clone(),
             ) {
                 Ok(color) => color,
                 Err(_) => return Ok(None),
@@ -1271,29 +1282,6 @@ fn relevant_mark_collections_json(
         collections,
     })
     .map_err(|error| error.to_string())
-}
-
-fn sample_preview_pixel(
-    analysis: &dawn_project::analysis::ProjectAnalysis,
-    script_key: &str,
-    pixel: &SequenceEffectPixelDocument,
-    progress: f64,
-    seconds: f64,
-    params: &std::collections::BTreeMap<String, dawn_project::effect_script::RuntimeValue>,
-) -> Result<dawn_project::model::Color, String> {
-    analysis.sample_effect_script_key(
-        script_key,
-        progress,
-        seconds,
-        FixtureContext {
-            index: pixel.fixture_index,
-        },
-        PixelContext {
-            index: pixel.pixel_index,
-            count: pixel.pixel_count,
-        },
-        params.clone(),
-    )
 }
 
 fn total_preview_frames(duration_ms: u64, frame_rate: u32) -> usize {

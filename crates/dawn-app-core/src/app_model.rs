@@ -485,11 +485,13 @@ impl AppModel {
             SequenceGuiEditDto::AddEffect {
                 script_path,
                 target,
+                scope,
                 start_ms,
                 mark_collection_key,
             } => SequenceDocumentEdit::AddEffect {
                 script_path,
                 target: target.into(),
+                scope: scope.into(),
                 start_ms: start_ms.into(),
                 mark_collection_key,
             },
@@ -516,6 +518,12 @@ impl AppModel {
                 SequenceDocumentEdit::RetargetEffect {
                     id,
                     target: target.into(),
+                }
+            }
+            SequenceGuiEditDto::SetEffectScope { id, scope } => {
+                SequenceDocumentEdit::SetEffectScope {
+                    id,
+                    scope: scope.into(),
                 }
             }
             SequenceGuiEditDto::UpdateEffectParam { id, name, value } => {

@@ -1,6 +1,6 @@
 opening:
   type: sequence
-  duration: 100000ms
+  duration: 200000ms
   frame_rate: 60
   audio: ../audio/song.mp3
   mark_collections:
@@ -12,7 +12,7 @@ opening:
     - 13620ms
     - 15167ms
     - 16459ms
-    - 40033ms
+    - 40022ms
     - 40137ms
     - 40336ms
     - 40538ms
@@ -22,6 +22,27 @@ opening:
     - 41134ms
     - 41334ms
     - 41435ms
+    - 42711ms
+    - 42769ms
+    - 42825ms
+    - 42936ms
+    - 43134ms
+    - 43336ms
+    - 43434ms
+    - 43633ms
+    - 43736ms
+    - 129633ms
+    - 129766ms
+    - 129902ms
+    - 130034ms
+    - 130165ms
+    - 130302ms
+    - 130431ms
+    - 130567ms
+    - 130701ms
+    - 130833ms
+    - 130970ms
+    - 131100ms
   effects:
   - id: 23
     start: 1517ms
@@ -29,6 +50,7 @@ opening:
     target:
       type: fixture
       id: 1
+    scope: per_fixture
     params:
       base:
         type: color
@@ -51,6 +73,7 @@ opening:
     target:
       type: fixture
       id: 11
+    scope: per_fixture
     params:
       base:
         type: color
@@ -73,6 +96,7 @@ opening:
     target:
       type: fixture
       id: 4
+    scope: per_fixture
     params:
       beats:
         type: marks
@@ -87,10 +111,48 @@ opening:
       import: //?/C:/Users/eddie/dawn/examples/club-rig/effects/mark-pulse.effect.dawn
   - id: 25
     start: 39868ms
+    duration: 4350ms
+    target:
+      type: group
+      name: WallBars
+    scope: whole_target
+    params:
+      beats:
+        type: marks
+        key: marks
+      base:
+        type: color
+        value: '#000000'
+      accent:
+        type: color
+        value: '#ffaa00'
+      offset_ms:
+        type: float
+        value: -70.0
+      decay_ms:
+        type: float
+        value: 200.0
+      section_width_pixels:
+        type: integer
+        value: 15
+      section_edge_fade_pixels:
+        type: float
+        value: 1.0
+      sections_per_mark:
+        type: integer
+        value: 8
+      seed:
+        type: float
+        value: 0.0
+    script:
+      import: //?/C:/Users/eddie/dawn/examples/club-rig/effects/mark-pulse.effect.dawn
+  - id: 2
+    start: 129488ms
     duration: 1800ms
     target:
       type: group
       name: WallBars
+    scope: whole_target
     params:
       beats:
         type: marks
@@ -109,10 +171,13 @@ opening:
         value: 180.0
       section_width_pixels:
         type: integer
-        value: 15
+        value: 20
+      section_edge_fade_pixels:
+        type: float
+        value: 0.0
       sections_per_mark:
         type: integer
-        value: 1
+        value: 7
       seed:
         type: float
         value: 0.0

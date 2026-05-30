@@ -19,6 +19,7 @@ import type {
   SequenceAudioDto,
   SequenceDocumentDto,
   SequenceEffectDto,
+  SequenceEffectScopeDto,
   SequenceMarkCollectionDto,
   SequenceEffectParamDto,
   SequenceEffectParamValueDto,
@@ -778,11 +779,13 @@ function SequenceCanvas({
     }
     const target = document.lanes[menu.laneIndex]?.target ?? document.lanes[0]?.target;
     if (target === undefined) return;
+    const scope: SequenceEffectScopeDto = target.kind === "group" ? "wholeTarget" : "perFixture";
     await runSnapshotCommand(() =>
       commands.applySequenceGuiEdit({
         type: "addEffect",
         scriptPath: script.path,
         target,
+        scope,
         startMs: menu.startMs,
         markCollectionKey
       })
@@ -1565,6 +1568,24 @@ function GuiInspector({
             <label>Start<input readOnly value={`${effect.startMs} ms`} /></label>
             <label>Duration<input readOnly value={`${effect.durationMs} ms`} /></label>
             <label>Target<input readOnly value={effect.targetLabel} /></label>
+            <label>
+              Scope
+              <select
+                value={effect.scope}
+                onChange={(event) =>
+                  void runSnapshotCommand(() =>
+                    commands.applySequenceGuiEdit({
+                      type: "setEffectScope",
+                      id: effect.id,
+                      scope: event.currentTarget.value as SequenceEffectScopeDto
+                    })
+                  )
+                }
+              >
+                <option value="perFixture">Per fixture</option>
+                <option value="wholeTarget">Whole target</option>
+              </select>
+            </label>
             {effect.params.length > 0 && (
               <div className="effect-param-section">
                 <h3>Parameters</h3>
@@ -2605,6 +2626,7 @@ function sequencePreviewSignatures(document: SequenceDocumentDto) {
         id: effect.id,
         durationMs: effect.durationMs,
         target: effect.target,
+        scope: effect.scope,
         script: effect.script,
         params: effect.params,
         markCollections: relevantMarkCollections(effect, document.markCollections)

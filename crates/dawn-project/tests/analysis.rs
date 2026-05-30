@@ -216,7 +216,7 @@ fn analyzes_club_rig_to_resolved_project() {
     let project = analysis.resolved.expect("club rig should resolve");
     assert!(project.display.layout.fixtures.len() >= 8);
     assert_eq!(project.display.patch.routes.len(), 8);
-    assert_eq!(project.sequences[0].effects.len(), 2);
+    assert_eq!(project.sequences[0].effects.len(), 4);
 }
 
 #[test]
@@ -408,6 +408,7 @@ club:
           target:
             type: group
             name: all
+          scope: per_fixture
           params:
             base:
               type: float
@@ -500,6 +501,7 @@ fn sequence_numeric_effect_ids_and_automation_targets_are_validated() {
           start: 0s
           duration: 1s
           target: { type: group, name: all }
+          scope: per_fixture
           params: {}
           script: |
             effect One { color sample(float progress, float seconds, Fixture fixture, Pixel pixel) { return #ffffff; } }
@@ -507,6 +509,7 @@ fn sequence_numeric_effect_ids_and_automation_targets_are_validated() {
           start: 0s
           duration: 1s
           target: { type: group, name: all }
+          scope: per_fixture
           params: {}
           script: |
             effect Two { color sample(float progress, float seconds, Fixture fixture, Pixel pixel) { return #ffffff; } }
@@ -531,6 +534,7 @@ fn sequence_numeric_effect_ids_and_automation_targets_are_validated() {
           start: 0s
           duration: 1s
           target: { type: group, name: all }
+          scope: per_fixture
           params: {}
           script: |
             effect One { color sample(float progress, float seconds, Fixture fixture, Pixel pixel) { return #ffffff; } }
@@ -582,6 +586,7 @@ effect Options {
           start: 0s
           duration: 1s
           target: { type: group, name: all }
+          scope: per_fixture
           params:
             mode:
               type: enum
@@ -713,6 +718,7 @@ opening:
                 kind: LayoutTargetKind::Group,
                 name: "all".to_string(),
             },
+            scope: dawn_project::model::SequenceEffectScope::WholeTarget,
             start_ms: 1_500,
             mark_collection_key: None,
         },
@@ -738,6 +744,14 @@ opening:
     )
     .unwrap();
     assert_eq!(duplicated.refreshed_document.effects.len(), 2);
+    assert_eq!(
+        duplicated.refreshed_document.effects[0].scope,
+        dawn_project::model::SequenceEffectScope::WholeTarget
+    );
+    assert_eq!(
+        duplicated.refreshed_document.effects[1].scope,
+        dawn_project::model::SequenceEffectScope::WholeTarget
+    );
 
     let moved = apply_sequence_document_edit(
         &sequence_path,
@@ -747,7 +761,7 @@ opening:
             start_ms: 0,
             target: Some(LayoutTargetDocument {
                 kind: LayoutTargetKind::Fixture,
-                name: "Pixel".to_string(),
+                name: "1".to_string(),
             }),
         },
         duplicated.serialized_content,
@@ -756,7 +770,11 @@ opening:
     )
     .unwrap();
     assert_eq!(moved.refreshed_document.effects[0].id, 2);
-    assert_eq!(moved.refreshed_document.effects[0].target.name, "Pixel");
+    assert_eq!(moved.refreshed_document.effects[0].target.name, "1");
+    assert_eq!(
+        moved.refreshed_document.effects[0].scope,
+        dawn_project::model::SequenceEffectScope::WholeTarget
+    );
 
     let deleted = apply_sequence_document_edit(
         &sequence_path,
@@ -816,6 +834,7 @@ club:
           target:
             type: group
             name: MissingGroup
+          scope: per_fixture
           params: {}
           script: "inline effect"
 "##,
@@ -889,6 +908,7 @@ club:
           target:
             type: group
             name: WallBars
+          scope: per_fixture
           params: {}
           script: |
             effect InlineGroup {
@@ -902,6 +922,7 @@ club:
           target:
             type: fixture
             id: 1
+          scope: per_fixture
           params: {}
           script: |
             effect InlineFixture {
@@ -1303,8 +1324,8 @@ stage:
 fn gui_editor_files_do_not_reintroduce_geometry_helpers() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let viewer_paths = [
-        root.join("apps/desktop/src/ui/editor/gui/layout.rs"),
-        root.join("apps/desktop/src/ui/editor/gui/fixture.rs"),
+        root.join("apps/desktop/frontend/src/ui/GuiEditor.tsx"),
+        root.join("apps/desktop/frontend/src/ui/PreviewWindow.tsx"),
     ];
     let forbidden = [
         "sample_polyline_points",

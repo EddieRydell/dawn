@@ -247,6 +247,7 @@ export type SequenceEffectDto = {
 	durationMs: number,
 	target: LayoutTargetDto,
 	targetLabel: string,
+	scope: SequenceEffectScopeDto,
 	script: string,
 	params: SequenceEffectParamDto[],
 };
@@ -277,6 +278,8 @@ export type SequenceEffectPreviewDto = {
 	colors: number[],
 };
 
+export type SequenceEffectScopeDto = "perFixture" | "wholeTarget";
+
 export type SequenceEffectScriptDto = {
 	name: string,
 	path: string,
@@ -289,7 +292,7 @@ export type SequenceEffectScriptParamDto = {
 	kind: SequenceEffectParamKindDto,
 };
 
-export type SequenceGuiEditDto = { type: "setAudio"; import: string | null } | { type: "addEffect"; scriptPath: string; target: LayoutTargetDto; startMs: number; markCollectionKey: string | null } | { type: "moveEffect"; id: number; startMs: number; target: LayoutTargetDto | null } | { type: "resizeEffect"; id: number; startMs: number; durationMs: number } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTargetDto } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValueDto } | { type: "createMarkCollection"; key: string; name: string; color: string } | { type: "renameMarkCollection"; key: string; name: string } | { type: "deleteMarkCollection"; key: string } | { type: "setMarkCollectionColor"; key: string; color: string } | { type: "addMark"; collectionKey: string; timeMs: number } | { type: "moveMark"; collectionKey: string; index: number; timeMs: number } | { type: "deleteMark"; collectionKey: string; index: number };
+export type SequenceGuiEditDto = { type: "setAudio"; import: string | null } | { type: "addEffect"; scriptPath: string; target: LayoutTargetDto; scope: SequenceEffectScopeDto; startMs: number; markCollectionKey: string | null } | { type: "moveEffect"; id: number; startMs: number; target: LayoutTargetDto | null } | { type: "resizeEffect"; id: number; startMs: number; durationMs: number } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTargetDto } | { type: "setEffectScope"; id: number; scope: SequenceEffectScopeDto } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValueDto } | { type: "createMarkCollection"; key: string; name: string; color: string } | { type: "renameMarkCollection"; key: string; name: string } | { type: "deleteMarkCollection"; key: string } | { type: "setMarkCollectionColor"; key: string; color: string } | { type: "addMark"; collectionKey: string; timeMs: number } | { type: "moveMark"; collectionKey: string; index: number; timeMs: number } | { type: "deleteMark"; collectionKey: string; index: number };
 
 export type SequenceLaneDto = {
 	target: LayoutTargetDto,

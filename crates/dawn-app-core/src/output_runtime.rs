@@ -5,7 +5,7 @@ use dawn_project::document::{
     SequenceDocument, SequenceEffectParamDocument, SequenceMarkCollectionDocument,
 };
 use dawn_project::effect_script::{FixtureContext, PixelContext, RuntimeValue};
-use dawn_project::model::{Color, EffectParam, FixtureId, Resolved};
+use dawn_project::model::{Color, EffectParam, FixtureId, Resolved, SequenceEffectScope};
 use dawn_project::render::{layout_render_plan, GeometryRenderBounds, GeometryRenderPoint};
 
 #[derive(Debug, Clone)]
@@ -111,13 +111,21 @@ pub fn evaluate_sequence_frame(
             &document.mark_collections,
             effect.start_ms,
         );
-        for pixel in &render.target_pixels {
+        let target_pixel_count = render.target_pixels.len();
+        for (target_pixel_index, pixel) in render.target_pixels.iter().enumerate() {
             let Some(fixture) = fixtures.get_mut(pixel.fixture_index) else {
                 continue;
             };
             let Some(output_pixel) = fixture.pixels.get_mut(pixel.pixel_index) else {
                 continue;
             };
+            let pixel_context = pixel_context_for_effect(
+                effect.scope,
+                target_pixel_index,
+                target_pixel_count,
+                pixel.pixel_index,
+                pixel.pixel_count,
+            );
             match analysis.sample_effect_script_key(
                 &render.script_key,
                 progress,
@@ -125,10 +133,7 @@ pub fn evaluate_sequence_frame(
                 FixtureContext {
                     index: pixel.fixture_index,
                 },
-                PixelContext {
-                    index: pixel.pixel_index,
-                    count: pixel.pixel_count,
-                },
+                pixel_context,
                 params.clone(),
             ) {
                 Ok(color) => add_clamped(&mut output_pixel.color, color),
@@ -149,6 +154,25 @@ pub fn evaluate_sequence_frame(
         status,
         bounds: render_plan.bounds,
         fixtures,
+    }
+}
+
+pub fn pixel_context_for_effect(
+    scope: SequenceEffectScope,
+    target_pixel_index: usize,
+    target_pixel_count: usize,
+    fixture_pixel_index: usize,
+    fixture_pixel_count: usize,
+) -> PixelContext {
+    match scope {
+        SequenceEffectScope::PerFixture => PixelContext {
+            index: fixture_pixel_index,
+            count: fixture_pixel_count,
+        },
+        SequenceEffectScope::WholeTarget => PixelContext {
+            index: target_pixel_index,
+            count: target_pixel_count,
+        },
     }
 }
 
@@ -217,5 +241,55 @@ pub fn empty_frame(generation: u64, message: impl Into<String>) -> OutputFrame {
             max_y: 4.0,
         },
         fixtures: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dawn_project::model::SequenceEffectScope;
+
+    use super::pixel_context_for_effect;
+
+    #[test]
+    fn per_fixture_scope_repeats_pixel_context_for_group_members() {
+        let contexts = [
+            pixel_context_for_effect(SequenceEffectScope::PerFixture, 0, 5, 0, 2),
+            pixel_context_for_effect(SequenceEffectScope::PerFixture, 1, 5, 1, 2),
+            pixel_context_for_effect(SequenceEffectScope::PerFixture, 2, 5, 0, 3),
+            pixel_context_for_effect(SequenceEffectScope::PerFixture, 3, 5, 1, 3),
+            pixel_context_for_effect(SequenceEffectScope::PerFixture, 4, 5, 2, 3),
+        ];
+
+        assert_eq!(
+            contexts.map(|context| (context.index, context.count)),
+            [(0, 2), (1, 2), (0, 3), (1, 3), (2, 3)]
+        );
+    }
+
+    #[test]
+    fn whole_target_scope_uses_continuous_group_pixel_context() {
+        let contexts = [
+            pixel_context_for_effect(SequenceEffectScope::WholeTarget, 0, 5, 0, 2),
+            pixel_context_for_effect(SequenceEffectScope::WholeTarget, 1, 5, 1, 2),
+            pixel_context_for_effect(SequenceEffectScope::WholeTarget, 2, 5, 0, 3),
+            pixel_context_for_effect(SequenceEffectScope::WholeTarget, 3, 5, 1, 3),
+            pixel_context_for_effect(SequenceEffectScope::WholeTarget, 4, 5, 2, 3),
+        ];
+
+        assert_eq!(
+            contexts.map(|context| (context.index, context.count)),
+            [(0, 5), (1, 5), (2, 5), (3, 5), (4, 5)]
+        );
+    }
+
+    #[test]
+    fn fixture_target_context_matches_for_both_scopes() {
+        let per_fixture = pixel_context_for_effect(SequenceEffectScope::PerFixture, 1, 3, 1, 3);
+        let whole_target = pixel_context_for_effect(SequenceEffectScope::WholeTarget, 1, 3, 1, 3);
+
+        assert_eq!(
+            (per_fixture.index, per_fixture.count),
+            (whole_target.index, whole_target.count)
+        );
     }
 }

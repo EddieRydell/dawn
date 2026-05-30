@@ -5,6 +5,7 @@ effect MarkPulse {
   param float offset_ms = 0.0;
   param float decay_ms = 180.0;
   param int section_width_pixels = 5;
+  param float section_edge_fade_pixels = 0.0;
   param int sections_per_mark = 3;
   param float seed = 0.0;
 
@@ -12,14 +13,26 @@ effect MarkPulse {
     float query_time = seconds - offset_ms / 1000.0;
     float previous = mark_prev(beats, query_time, -999.0);
     float elapsed = mark_elapsed(beats, query_time, 999.0);
-    float section = pixel_index(pixel) / max(1.0, section_width_pixels);
-    float section_count = max(1.0, pixel_count(pixel) / max(1.0, section_width_pixels));
+    float width = max(1.0, section_width_pixels);
+    float pixel_position = pixel_index(pixel);
+    float section = floor(pixel_position / width);
+    float section_count = max(1.0, pixel_count(pixel) / width);
+    float edge_fade = max(0.0, section_edge_fade_pixels);
     float active = 0.0;
     srand(seed + previous * 1000.0);
 
     for (int i = 0; i < sections_per_mark; i = i + 1) {
       float choice = floor(rand() * section_count);
-      float hit = 1.0 - clamp(abs(section - choice), 0.0, 1.0);
+      float hit = 0.0;
+      if (section == choice) {
+        hit = 1.0;
+        if (edge_fade > 0.0) {
+          float section_start = choice * width;
+          float section_end = min(section_start + width - 1.0, pixel_count(pixel) - 1.0);
+          float edge_distance = min(pixel_position - section_start, section_end - pixel_position);
+          hit = clamp(edge_distance / edge_fade, 0.0, 1.0);
+        }
+      }
       active = max(active, hit);
     }
 

@@ -13,7 +13,7 @@ use dawn_project::effect_script::{
 use dawn_project::fs::{WorkspaceEntry, WorkspaceEntryKind};
 use dawn_project::model::{
     ColorModel, Curve, CurveValue, EffectParam, Geometry, LayoutTargetKind, ObjectKind, Point3,
-    Rotation3, Scale3, Transform,
+    Rotation3, Scale3, SequenceEffectScope, Transform,
 };
 use dawn_project::path::PathStringExt;
 use dawn_project::render::{
@@ -154,6 +154,7 @@ pub enum SequenceGuiEditDto {
     AddEffect {
         script_path: String,
         target: LayoutTargetDto,
+        scope: SequenceEffectScopeDto,
         start_ms: u32,
         mark_collection_key: Option<String>,
     },
@@ -173,6 +174,10 @@ pub enum SequenceGuiEditDto {
     RetargetEffect {
         id: u32,
         target: LayoutTargetDto,
+    },
+    SetEffectScope {
+        id: u32,
+        scope: SequenceEffectScopeDto,
     },
     UpdateEffectParam {
         id: u32,
@@ -317,8 +322,16 @@ pub struct SequenceEffectDto {
     pub duration_ms: u32,
     pub target: LayoutTargetDto,
     pub target_label: String,
+    pub scope: SequenceEffectScopeDto,
     pub script: String,
     pub params: Vec<SequenceEffectParamDto>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SequenceEffectScopeDto {
+    PerFixture,
+    WholeTarget,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -723,6 +736,24 @@ impl From<dawn_project::document::LayoutTargetDocument> for LayoutTargetDto {
     }
 }
 
+impl From<SequenceEffectScopeDto> for SequenceEffectScope {
+    fn from(scope: SequenceEffectScopeDto) -> Self {
+        match scope {
+            SequenceEffectScopeDto::PerFixture => Self::PerFixture,
+            SequenceEffectScopeDto::WholeTarget => Self::WholeTarget,
+        }
+    }
+}
+
+impl From<SequenceEffectScope> for SequenceEffectScopeDto {
+    fn from(scope: SequenceEffectScope) -> Self {
+        match scope {
+            SequenceEffectScope::PerFixture => Self::PerFixture,
+            SequenceEffectScope::WholeTarget => Self::WholeTarget,
+        }
+    }
+}
+
 impl From<SequenceDocument> for SequenceDocumentDto {
     fn from(document: SequenceDocument) -> Self {
         Self {
@@ -825,6 +856,7 @@ impl From<SequenceEffectDocument> for SequenceEffectDto {
             duration_ms: u32_ms(effect.duration_ms),
             target: effect.target.into(),
             target_label: effect.target_label,
+            scope: effect.scope.into(),
             script: effect.script,
             params,
         }

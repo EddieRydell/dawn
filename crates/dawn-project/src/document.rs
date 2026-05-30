@@ -200,6 +200,7 @@ pub struct SequenceEffectDocument {
     pub duration_ms: u64,
     pub target: LayoutTargetDocument,
     pub target_label: String,
+    pub scope: SequenceEffectScope,
     pub script: String,
     pub script_source: Option<String>,
     pub params: Vec<SequenceEffectParamDocument>,
@@ -230,6 +231,7 @@ pub enum SequenceDocumentEdit {
     AddEffect {
         script_path: String,
         target: LayoutTargetDocument,
+        scope: SequenceEffectScope,
         start_ms: u64,
         mark_collection_key: Option<String>,
     },
@@ -252,6 +254,10 @@ pub enum SequenceDocumentEdit {
     RetargetEffect {
         id: u32,
         target: LayoutTargetDocument,
+    },
+    SetEffectScope {
+        id: u32,
+        scope: SequenceEffectScope,
     },
     UpdateEffectParam {
         id: u32,
@@ -670,6 +676,7 @@ fn apply_sequence_edit_operation(
         SequenceDocumentEdit::AddEffect {
             script_path,
             target,
+            scope,
             start_ms,
             mark_collection_key,
         } => {
@@ -704,6 +711,7 @@ fn apply_sequence_edit_operation(
                     milliseconds: duration_ms,
                 },
                 target: authored_target_from_document(&target, analysis)?,
+                scope,
                 params: materialized_effect_params(script, mark_collection_key.as_deref()),
                 script: InlineOrImport::Import {
                     import: ImportRef::new(serialized_import_path(
@@ -788,6 +796,12 @@ fn apply_sequence_edit_operation(
                 return Err(format!("sequence effect `{id}` was not found"));
             };
             effect.target = next_target;
+        }
+        SequenceDocumentEdit::SetEffectScope { id, scope } => {
+            let Some(effect) = sequence.effects.iter_mut().find(|effect| effect.id == id) else {
+                return Err(format!("sequence effect `{id}` was not found"));
+            };
+            effect.scope = scope;
         }
         SequenceDocumentEdit::UpdateEffectParam { id, name, value } => {
             let effect_index = sequence
@@ -1235,6 +1249,7 @@ fn sequence_to_document(
                 duration_ms: effect.duration.milliseconds,
                 target,
                 target_label,
+                scope: effect.scope,
                 script: sequence_effect_script_label(&effect.script),
                 script_source,
                 params,

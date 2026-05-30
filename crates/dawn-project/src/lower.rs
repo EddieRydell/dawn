@@ -489,6 +489,7 @@ fn lower_sequence_effect(
         start: effect.start.clone(),
         duration: effect.duration.clone(),
         target,
+        scope: effect.scope,
         params,
         script: match &effect.script {
             InlineOrImport::Inline(script) => ScriptSource::Inline(script.clone()),

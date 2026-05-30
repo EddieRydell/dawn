@@ -389,7 +389,7 @@ pub struct Controller {
     pub universes: Vec<Universe>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Protocol {
     Artnet,
@@ -477,7 +477,7 @@ pub const DEFAULT_BULB_SIZE: f64 = 1.0;
 pub const MIN_BULB_SIZE: f64 = 0.05;
 pub const BULB_SIZE_UNIT_RADIUS: f64 = 0.035;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ColorModel {
     Rgb,
@@ -664,6 +664,13 @@ pub enum EffectTarget<M: ModelMode = Authored> {
     Fixture { id: M::EffectTargetFixture },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SequenceEffectScope {
+    PerFixture,
+    WholeTarget,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[serde(bound(
@@ -675,6 +682,7 @@ pub struct SequenceEffect<M: ModelMode = Authored> {
     pub start: Time,
     pub duration: Time,
     pub target: EffectTarget<M>,
+    pub scope: SequenceEffectScope,
     #[serde(default)]
     pub params: IndexMap<String, EffectParam<M>>,
     pub script: M::SequenceEffectScript,
