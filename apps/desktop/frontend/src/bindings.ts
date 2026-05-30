@@ -195,6 +195,8 @@ export type PreviewSnapshotDto = {
 	homeMs: number,
 	durationMs: number,
 	audio: SequenceAudioDto | null,
+	clockSource: string,
+	audioPlaybackStatus: string,
 	status: string,
 };
 

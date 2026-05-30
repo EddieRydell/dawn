@@ -314,6 +314,10 @@ button:focus-visible,
   opacity: 0.45;
 }
 
+.sequence-loading-icon {
+  animation: sequence-loading-spin 900ms linear infinite;
+}
+
 .sequence-time-readout {
   min-width: 0;
   overflow: hidden;
@@ -322,6 +326,33 @@ button:focus-visible,
   color: #c7c0b6;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sequence-audio-status {
+  margin-left: 8px;
+  font-weight: 600;
+}
+
+.sequence-audio-status-loading {
+  color: #f0c46b;
+}
+
+.sequence-audio-status-ready {
+  color: #6abf8a;
+}
+
+.sequence-audio-status-error {
+  color: #ef7d7d;
+}
+
+@keyframes sequence-loading-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .sequence-toolbar:focus,

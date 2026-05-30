@@ -32,6 +32,7 @@ pub enum PreviewSource {
 pub enum PreviewTransport {
     Stopped,
     Paused,
+    NativeAudioPlaying,
     Playing {
         started_at: Instant,
         started_position_ms: u64,
@@ -47,6 +48,8 @@ pub struct PreviewSnapshot {
     pub home_ms: u64,
     pub duration_ms: u64,
     pub audio: Option<SequenceAudioDocument>,
+    pub clock_source: String,
+    pub audio_playback_status: String,
     pub frame: OutputFrame,
     pub status: String,
 }
@@ -76,6 +79,8 @@ impl Default for PreviewSession {
                 home_ms: 0,
                 duration_ms: 0,
                 audio: None,
+                clock_source: "silent".to_string(),
+                audio_playback_status: "noAudio".to_string(),
                 frame,
                 status: "No sequence preview source".to_string(),
             },
@@ -137,13 +142,49 @@ impl PreviewSession {
         self.render(analysis, "Playing");
     }
 
+    pub fn play_from_native_audio_clock(
+        &mut self,
+        position_ms: u64,
+        analysis: Option<&ProjectAnalysis>,
+    ) {
+        let Some((key, duration_ms)) = self.sequence_source_meta() else {
+            self.transport = PreviewTransport::Stopped;
+            self.render(analysis, "No sequence preview source");
+            return;
+        };
+        let state = self.sequence_states.entry(key).or_default();
+        state.position_ms = position_ms.min(duration_ms);
+        self.transport = PreviewTransport::NativeAudioPlaying;
+        self.render(analysis, "Playing");
+    }
+
     pub fn pause(&mut self, analysis: Option<&ProjectAnalysis>) {
         self.pause_current(analysis);
         self.render(analysis, "Paused");
     }
 
+    pub fn pause_at(&mut self, position_ms: u64, analysis: Option<&ProjectAnalysis>) {
+        let Some((key, duration_ms)) = self.sequence_source_meta() else {
+            self.render(analysis, "No active sequence");
+            return;
+        };
+        let state = self.sequence_states.entry(key).or_default();
+        state.position_ms = position_ms.min(duration_ms);
+        self.transport = PreviewTransport::Paused;
+        self.render(analysis, "Paused");
+    }
+
     pub fn stop(&mut self, analysis: Option<&ProjectAnalysis>) {
         self.capture_position();
+        self.transport = PreviewTransport::Stopped;
+        if let Some((key, duration_ms)) = self.sequence_source_meta() {
+            let state = self.sequence_states.entry(key).or_default();
+            state.position_ms = state.home_ms.min(duration_ms);
+        }
+        self.render(analysis, "Stopped");
+    }
+
+    pub fn stop_native_audio(&mut self, analysis: Option<&ProjectAnalysis>) {
         self.transport = PreviewTransport::Stopped;
         if let Some((key, duration_ms)) = self.sequence_source_meta() {
             let state = self.sequence_states.entry(key).or_default();
@@ -167,6 +208,28 @@ impl PreviewSession {
                 started_position_ms: position_ms,
             };
         }
+        self.render(analysis, "Ready");
+    }
+
+    pub fn seek_native_audio(
+        &mut self,
+        position_ms: u64,
+        playing: bool,
+        analysis: Option<&ProjectAnalysis>,
+    ) {
+        let Some((key, duration_ms)) = self.sequence_source_meta() else {
+            self.render(analysis, "No active sequence");
+            return;
+        };
+        let position_ms = position_ms.min(duration_ms);
+        let state = self.sequence_states.entry(key).or_default();
+        state.position_ms = position_ms;
+        state.home_ms = position_ms;
+        self.transport = if playing {
+            PreviewTransport::NativeAudioPlaying
+        } else {
+            PreviewTransport::Paused
+        };
         self.render(analysis, "Ready");
     }
 
@@ -200,6 +263,18 @@ impl PreviewSession {
         self.render(analysis, "Sequence returned to beginning");
     }
 
+    pub fn go_to_sequence_beginning_native_audio(&mut self, analysis: Option<&ProjectAnalysis>) {
+        let Some((key, _)) = self.sequence_source_meta() else {
+            self.render(analysis, "No active sequence");
+            return;
+        };
+        let state = self.sequence_states.entry(key).or_default();
+        state.position_ms = 0;
+        state.home_ms = 0;
+        self.transport = PreviewTransport::Paused;
+        self.render(analysis, "Sequence returned to beginning");
+    }
+
     pub fn tick(&mut self, analysis: Option<&ProjectAnalysis>) {
         if self.tick_clock() {
             self.render(analysis, self.snapshot.status.clone());
@@ -207,7 +282,7 @@ impl PreviewSession {
     }
 
     pub fn tick_clock(&mut self) -> bool {
-        if !self.is_playing() {
+        if !self.is_playing() || matches!(self.transport, PreviewTransport::NativeAudioPlaying) {
             return false;
         }
         if let Some((key, duration_ms)) = self.sequence_source_meta() {
@@ -230,8 +305,43 @@ impl PreviewSession {
         self.render(analysis, status);
     }
 
+    pub fn render_at_native_audio_clock(
+        &mut self,
+        position_ms: u64,
+        ended: bool,
+        analysis: Option<&ProjectAnalysis>,
+    ) {
+        let Some((key, duration_ms)) = self.sequence_source_meta() else {
+            self.render(analysis, "No active sequence");
+            return;
+        };
+        let position_ms = position_ms.min(duration_ms);
+        self.sequence_states.entry(key).or_default().position_ms = position_ms;
+        if ended || position_ms >= duration_ms {
+            self.transport = PreviewTransport::Stopped;
+            self.render(analysis, "Sequence playback complete");
+        } else {
+            self.transport = PreviewTransport::NativeAudioPlaying;
+            self.render(analysis, "Playing");
+        }
+    }
+
+    pub fn set_timing_status(
+        &mut self,
+        clock_source: impl Into<String>,
+        audio_playback_status: impl Into<String>,
+    ) {
+        let clock_source = clock_source.into();
+        let audio_playback_status = audio_playback_status.into();
+        self.snapshot.clock_source = clock_source;
+        self.snapshot.audio_playback_status = audio_playback_status;
+    }
+
     pub fn is_playing(&self) -> bool {
-        matches!(self.transport, PreviewTransport::Playing { .. })
+        matches!(
+            self.transport,
+            PreviewTransport::Playing { .. } | PreviewTransport::NativeAudioPlaying
+        )
     }
 
     pub fn target_fps(&self) -> u32 {
@@ -299,6 +409,8 @@ impl PreviewSession {
             }
         };
         let frame_status = status_from_frame(&frame.status).unwrap_or(status);
+        let (clock_source, audio_playback_status) =
+            timing_status_for(audio.as_ref(), self.is_playing());
         self.snapshot = PreviewSnapshot {
             source_label,
             source_key,
@@ -307,6 +419,8 @@ impl PreviewSession {
             home_ms,
             duration_ms,
             audio,
+            clock_source,
+            audio_playback_status,
             frame,
             status: frame_status,
         };
@@ -323,6 +437,8 @@ impl PreviewSession {
                 self.snapshot.home_ms = 0;
                 self.snapshot.duration_ms = 0;
                 self.snapshot.audio = None;
+                self.snapshot.clock_source = "silent".to_string();
+                self.snapshot.audio_playback_status = "noAudio".to_string();
                 self.snapshot.status = status;
             }
             PreviewSource::Sequence { key, document } => {
@@ -338,6 +454,10 @@ impl PreviewSession {
                     .unwrap_or_default();
                 self.snapshot.duration_ms = duration_ms;
                 self.snapshot.audio = document.audio.clone();
+                let (clock_source, audio_playback_status) =
+                    timing_status_for(self.snapshot.audio.as_ref(), self.is_playing());
+                self.snapshot.clock_source = clock_source;
+                self.snapshot.audio_playback_status = audio_playback_status;
                 self.snapshot.status = status;
             }
         }
@@ -356,6 +476,14 @@ impl PreviewSession {
 
     fn playing_position_ms(&self) -> u64 {
         match self.transport {
+            PreviewTransport::NativeAudioPlaying => self
+                .current_key()
+                .and_then(|key| {
+                    self.sequence_states
+                        .get(&key)
+                        .map(|state| state.position_ms)
+                })
+                .unwrap_or_default(),
             PreviewTransport::Playing {
                 started_at,
                 started_position_ms,
@@ -399,5 +527,16 @@ fn status_from_frame(status: &OutputFrameStatus) -> Option<String> {
         OutputFrameStatus::Idle(message) | OutputFrameStatus::Error(message) => {
             Some(message.clone())
         }
+    }
+}
+
+fn timing_status_for(audio: Option<&SequenceAudioDocument>, is_playing: bool) -> (String, String) {
+    match audio {
+        Some(audio) if audio.exists => (
+            "nativeAudio".to_string(),
+            if is_playing { "playing" } else { "ready" }.to_string(),
+        ),
+        Some(_) => ("silent".to_string(), "missingAudio".to_string()),
+        None => ("silent".to_string(), "noAudio".to_string()),
     }
 }

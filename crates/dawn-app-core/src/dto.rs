@@ -505,6 +505,8 @@ pub struct PreviewSnapshotDto {
     pub home_ms: u32,
     pub duration_ms: u32,
     pub audio: Option<SequenceAudioDto>,
+    pub clock_source: String,
+    pub audio_playback_status: String,
     pub status: String,
 }
 
@@ -542,6 +544,8 @@ impl From<AppSnapshot> for AppSnapshotDto {
                 home_ms: snapshot.preview.home_ms.min(u32::MAX as u64) as u32,
                 duration_ms: snapshot.preview.duration_ms.min(u32::MAX as u64) as u32,
                 audio: snapshot.preview.audio.map(SequenceAudioDto::from),
+                clock_source: snapshot.preview.clock_source,
+                audio_playback_status: snapshot.preview.audio_playback_status,
                 status: snapshot.preview.status,
             },
         }

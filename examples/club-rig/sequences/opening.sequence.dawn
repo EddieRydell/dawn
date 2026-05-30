@@ -1,6 +1,6 @@
 opening:
   type: sequence
-  duration: 45000ms
+  duration: 100s
   frame_rate: 60
   audio: ../audio/song.mp3
   effects:
@@ -145,10 +145,10 @@ opening:
     params:
       base:
         type: color
-        value: '#180a2a'
+        value: '#0a0f29'
       accent:
         type: color
-        value: '#ff4fd8'
+        value: '#4dff4f'
       speed:
         type: float
         value: 1.25
@@ -192,7 +192,7 @@ opening:
         value: '#180a2a'
       accent:
         type: color
-        value: '#ff4fd8'
+        value: '#4deaff'
       speed:
         type: float
         value: 1.25
@@ -214,7 +214,7 @@ opening:
         value: '#180a2a'
       accent:
         type: color
-        value: '#ff4fd8'
+        value: '#ffa34d'
       speed:
         type: float
         value: 1.25
@@ -445,7 +445,7 @@ opening:
     script:
       import: ../effects/pulse.effect.dawn
   - id: 23
-    start: 967ms
+    start: 1517ms
     duration: 8250ms
     target:
       type: fixture

@@ -21,25 +21,30 @@ use dawn_app_core::actions::AppAction;
 use dawn_app_core::app_model::{AppModel, DispatchOutcome};
 use dawn_app_core::dto::{
     AppSnapshotDto, EditorViewModeDto, FixtureGuiEditDto, GeometryRenderBoundsDto,
-    GeometryRenderPointDto, LayoutGuiEditDto, SequenceGuiEditDto,
+    GeometryRenderPointDto, LayoutGuiEditDto, PreviewSnapshotDto, SequenceGuiEditDto,
 };
 use dawn_app_core::layout_persistence::PreviewWindowLayout;
 use dawn_app_core::output_runtime::runtime_params_from_document;
 use dawn_app_core::output_runtime::OutputFrame;
 use dawn_app_core::preview_session::PreviewSnapshot;
-use dawn_project::document::{SequenceEffectDocument, SequenceEffectPixelDocument};
+use dawn_project::document::{
+    SequenceAudioDocument, SequenceEffectDocument, SequenceEffectPixelDocument,
+};
 use dawn_project::effect_script::{FixtureContext, PixelContext};
 use dawn_project::path::{serialized_import_path, utf8_path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
+mod audio_runtime;
 mod preview_transport;
 
+use audio_runtime::{AudioClock, AudioRuntime};
 use preview_transport::{PreviewTransportMode, PreviewTransportRuntime};
 
 pub struct AppState {
     model: Mutex<AppModel>,
+    audio_runtime: Mutex<AudioRuntime>,
     effect_preview_cache: Mutex<HashMap<EffectPreviewCacheKey, SequenceEffectPreviewDto>>,
     preview_transport: Mutex<PreviewTransportRuntime>,
 }
@@ -48,6 +53,7 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             model: Mutex::new(AppModel::default()),
+            audio_runtime: Mutex::new(AudioRuntime::default()),
             effect_preview_cache: Mutex::new(HashMap::new()),
             preview_transport: Mutex::new(PreviewTransportRuntime::default()),
         }
@@ -86,6 +92,8 @@ pub struct PreviewStateEventDto {
     pub home_ms: u32,
     pub duration_ms: u32,
     pub audio: Option<dawn_app_core::dto::SequenceAudioDto>,
+    pub clock_source: String,
+    pub audio_playback_status: String,
     pub status: String,
 }
 
@@ -128,7 +136,9 @@ struct EffectPreviewCacheKey {
 #[specta::specta]
 #[tauri::command]
 fn get_snapshot(state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
-    Ok(lock_model(&state)?.snapshot_dto())
+    let snapshot = lock_model(&state)?.snapshot_dto();
+    let _ = sync_active_audio_load(&state, &snapshot.preview);
+    Ok(snapshot)
 }
 
 #[specta::specta]
@@ -476,19 +486,55 @@ async fn open_preview_window(app: AppHandle, state: State<'_, AppState>) -> Comm
 #[specta::specta]
 #[tauri::command]
 fn preview_play(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
-    dispatch(&app, &state, AppAction::PreviewPlay)
+    let (audio, position_ms) = {
+        let model = lock_model(&state)?;
+        let snapshot = model.preview.snapshot();
+        (valid_sequence_audio(&snapshot), snapshot.position_ms)
+    };
+    let Some(audio) = audio else {
+        return dispatch(&app, &state, AppAction::PreviewPlay);
+    };
+    let clock = lock_audio_runtime(&state)?.play(&audio, position_ms)?;
+    update_preview_from_audio_status(&app, &state, clock)
 }
 
 #[specta::specta]
 #[tauri::command]
 fn preview_pause(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
-    dispatch(&app, &state, AppAction::PreviewPause)
+    let has_audio = {
+        let model = lock_model(&state)?;
+        valid_sequence_audio(&model.preview.snapshot()).is_some()
+    };
+    if !has_audio {
+        return dispatch(&app, &state, AppAction::PreviewPause);
+    }
+    let clock = lock_audio_runtime(&state)?.pause()?;
+    let mut model = lock_model(&state)?;
+    let analysis = model.analysis.clone();
+    model.preview.pause_at(clock.position_ms, analysis.as_ref());
+    model.preview.set_timing_status("nativeAudio", clock.status);
+    model.status = "Preview paused".to_string();
+    emit_model_snapshot(&app, &model)
 }
 
 #[specta::specta]
 #[tauri::command]
 fn preview_stop(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
-    dispatch(&app, &state, AppAction::PreviewStop)
+    let (has_audio, home_ms) = {
+        let model = lock_model(&state)?;
+        let snapshot = model.preview.snapshot();
+        (valid_sequence_audio(&snapshot).is_some(), snapshot.home_ms)
+    };
+    if !has_audio {
+        return dispatch(&app, &state, AppAction::PreviewStop);
+    }
+    let clock = lock_audio_runtime(&state)?.stop(home_ms)?;
+    let mut model = lock_model(&state)?;
+    let analysis = model.analysis.clone();
+    model.preview.stop_native_audio(analysis.as_ref());
+    model.preview.set_timing_status("nativeAudio", clock.status);
+    model.status = "Preview stopped".to_string();
+    emit_model_snapshot(&app, &model)
 }
 
 #[specta::specta]
@@ -497,7 +543,22 @@ fn preview_rewind_to_zero(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<AppSnapshotDto> {
-    dispatch(&app, &state, AppAction::PreviewRewindToZero)
+    let has_audio = {
+        let model = lock_model(&state)?;
+        valid_sequence_audio(&model.preview.snapshot()).is_some()
+    };
+    if !has_audio {
+        return dispatch(&app, &state, AppAction::PreviewRewindToZero);
+    }
+    let clock = lock_audio_runtime(&state)?.stop(0)?;
+    let mut model = lock_model(&state)?;
+    let analysis = model.analysis.clone();
+    model
+        .preview
+        .go_to_sequence_beginning_native_audio(analysis.as_ref());
+    model.preview.set_timing_status("nativeAudio", clock.status);
+    model.status = "Preview rewound".to_string();
+    emit_model_snapshot(&app, &model)
 }
 
 #[specta::specta]
@@ -507,7 +568,23 @@ fn preview_seek(
     state: State<'_, AppState>,
     position_ms: u32,
 ) -> CommandResult<AppSnapshotDto> {
-    dispatch(&app, &state, AppAction::PreviewSeek(position_ms.into()))
+    let (audio, playing) = {
+        let model = lock_model(&state)?;
+        let snapshot = model.preview.snapshot();
+        (valid_sequence_audio(&snapshot), snapshot.is_playing)
+    };
+    let Some(audio) = audio else {
+        return dispatch(&app, &state, AppAction::PreviewSeek(position_ms.into()));
+    };
+    let clock = lock_audio_runtime(&state)?.seek(&audio, position_ms.into(), playing)?;
+    let mut model = lock_model(&state)?;
+    let analysis = model.analysis.clone();
+    model
+        .preview
+        .seek_native_audio(clock.position_ms, playing, analysis.as_ref());
+    model.preview.set_timing_status("nativeAudio", clock.status);
+    model.status = "Preview seeked".to_string();
+    emit_model_snapshot(&app, &model)
 }
 
 #[specta::specta]
@@ -665,7 +742,20 @@ fn start_preview_worker(app: AppHandle) {
 
             let (snapshot, target_fps) = match lock_model(&state) {
                 Ok(mut model) => {
-                    model.tick_preview_clock();
+                    let preview_snapshot = model.preview.snapshot();
+                    let audio_clock = if valid_sequence_audio(&preview_snapshot).is_some() {
+                        lock_audio_runtime(&state)
+                            .ok()
+                            .and_then(|runtime| runtime.clock().ok())
+                    } else {
+                        None
+                    };
+                    if let Some(clock) = audio_clock {
+                        let analysis = model.analysis.clone();
+                        apply_audio_clock_to_model(&mut model, &clock, analysis.as_ref());
+                    } else {
+                        model.tick_preview_clock();
+                    }
                     let mut snapshot = model.preview.snapshot();
                     let should_render_frame = has_sink
                         && (snapshot.is_playing
@@ -730,6 +820,8 @@ struct PreviewEventIdentity {
     duration_ms: u64,
     audio_path: Option<String>,
     audio_exists: bool,
+    clock_source: String,
+    audio_playback_status: String,
     status: String,
 }
 
@@ -750,6 +842,8 @@ impl From<&PreviewSnapshot> for PreviewEventIdentity {
                 .as_ref()
                 .map(|audio| audio.resolved_path.clone()),
             audio_exists: snapshot.audio.as_ref().is_some_and(|audio| audio.exists),
+            clock_source: snapshot.clock_source.clone(),
+            audio_playback_status: snapshot.audio_playback_status.clone(),
             status: snapshot.status.clone(),
         }
     }
@@ -781,14 +875,143 @@ fn dispatch(
     state: &State<'_, AppState>,
     action: AppAction,
 ) -> CommandResult<AppSnapshotDto> {
+    let clear_audio_runtime = should_clear_audio_runtime_for_action(&action);
     let mut model = lock_model(state)?;
     let outcome = model.dispatch(action)?;
     let snapshot = model.snapshot_dto();
     if outcome == DispatchOutcome::SnapshotChanged {
+        if clear_audio_runtime {
+            if let Ok(runtime) = lock_audio_runtime(state) {
+                runtime.clear();
+            }
+        }
+        if let Some(clock) = sync_active_audio_load(state, &snapshot.preview) {
+            let analysis = model.analysis.clone();
+            apply_audio_clock_to_model(&mut model, &clock, analysis.as_ref());
+            let snapshot = model.snapshot_dto();
+            app.emit("app_snapshot_changed", &snapshot)
+                .map_err(|error| error.to_string())?;
+            emit_preview_state_dto(app, &snapshot)?;
+            return Ok(snapshot);
+        }
         app.emit("app_snapshot_changed", &snapshot)
             .map_err(|error| error.to_string())?;
         emit_preview_state_dto(app, &snapshot)?;
     }
+    Ok(snapshot)
+}
+
+fn should_clear_audio_runtime_for_action(action: &AppAction) -> bool {
+    matches!(
+        action,
+        AppAction::OpenProject(_)
+            | AppAction::ReloadProject
+            | AppAction::CloseFile(_)
+            | AppAction::RenamePath { .. }
+            | AppAction::DeletePath(_)
+    )
+}
+
+fn update_preview_from_audio_status(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    clock: AudioClock,
+) -> CommandResult<AppSnapshotDto> {
+    let mut model = lock_model(state)?;
+    let analysis = model.analysis.clone();
+    apply_audio_clock_to_model(&mut model, &clock, analysis.as_ref());
+    emit_model_snapshot(app, &model)
+}
+
+fn apply_audio_clock_to_model(
+    model: &mut AppModel,
+    clock: &AudioClock,
+    analysis: Option<&dawn_project::analysis::ProjectAnalysis>,
+) {
+    if let Some(error) = &clock.error {
+        model.preview.pause_at(clock.position_ms, analysis);
+        model.preview.set_timing_status("nativeAudio", "error");
+        model.status = format!("Audio error: {error}");
+        return;
+    }
+    if clock.ended {
+        model
+            .preview
+            .render_at_native_audio_clock(clock.position_ms, true, analysis);
+        model.preview.set_timing_status("nativeAudio", "ended");
+        model.status = "Preview complete".to_string();
+        return;
+    }
+    match clock.status.as_str() {
+        "loading" => {
+            model.preview.pause_at(clock.position_ms, analysis);
+            model.preview.set_timing_status("nativeAudio", "loading");
+            model.status = "Loading audio".to_string();
+        }
+        "playing" => {
+            model
+                .preview
+                .play_from_native_audio_clock(clock.position_ms, analysis);
+            model.preview.set_timing_status("nativeAudio", "playing");
+            model.status = "Preview playing".to_string();
+        }
+        "ended" => {
+            model
+                .preview
+                .render_at_native_audio_clock(clock.position_ms, true, analysis);
+            model.preview.set_timing_status("nativeAudio", "ended");
+            model.status = "Preview complete".to_string();
+        }
+        status => {
+            model.preview.pause_at(clock.position_ms, analysis);
+            model.preview.set_timing_status("nativeAudio", status);
+            model.status = "Preview ready".to_string();
+        }
+    }
+}
+
+fn sync_active_audio_load(
+    state: &State<'_, AppState>,
+    preview: &PreviewSnapshotDto,
+) -> Option<AudioClock> {
+    let Some(audio) = preview.audio.as_ref() else {
+        if preview.source_label != "No preview source" {
+            if let Ok(runtime) = lock_audio_runtime(state) {
+                runtime.clear();
+            }
+        }
+        return None;
+    };
+    if !audio.exists {
+        if let Ok(runtime) = lock_audio_runtime(state) {
+            runtime.clear();
+        }
+        return None;
+    }
+    let audio = SequenceAudioDocument {
+        import: audio.import.clone(),
+        resolved_path: audio.resolved_path.clone(),
+        file_name: audio.file_name.clone(),
+        exists: audio.exists,
+    };
+    if !preview.is_playing
+        && !matches!(
+            preview.audio_playback_status.as_str(),
+            "loading" | "playing"
+        )
+    {
+        if let Ok(runtime) = lock_audio_runtime(state) {
+            return runtime.load_active(&audio).ok();
+        }
+    }
+    None
+}
+
+fn emit_model_snapshot(app: &AppHandle, model: &AppModel) -> CommandResult<AppSnapshotDto> {
+    let snapshot = model.snapshot_dto();
+    app.emit("app_snapshot_changed", &snapshot)
+        .map_err(|error| error.to_string())?;
+    emit_preview_state_dto(app, &snapshot)?;
     Ok(snapshot)
 }
 
@@ -802,6 +1025,8 @@ fn emit_preview_state_dto(app: &AppHandle, snapshot: &AppSnapshotDto) -> Command
             home_ms: snapshot.preview.home_ms,
             duration_ms: snapshot.preview.duration_ms,
             audio: snapshot.preview.audio.clone(),
+            clock_source: snapshot.preview.clock_source.clone(),
+            audio_playback_status: snapshot.preview.audio_playback_status.clone(),
             status: snapshot.preview.status.clone(),
         },
     )
@@ -818,6 +1043,8 @@ fn emit_preview_state_snapshot(app: &AppHandle, snapshot: &PreviewSnapshot) {
             home_ms: snapshot.home_ms.min(u32::MAX as u64) as u32,
             duration_ms: snapshot.duration_ms.min(u32::MAX as u64) as u32,
             audio: snapshot.audio.clone().map(Into::into),
+            clock_source: snapshot.clock_source.clone(),
+            audio_playback_status: snapshot.audio_playback_status.clone(),
             status: snapshot.status.clone(),
         },
     );
@@ -830,6 +1057,23 @@ fn lock_model<'a>(
         .model
         .lock()
         .map_err(|_| "application state lock is poisoned".to_string())
+}
+
+fn lock_audio_runtime<'a>(
+    state: &'a State<'_, AppState>,
+) -> CommandResult<std::sync::MutexGuard<'a, AudioRuntime>> {
+    state
+        .audio_runtime
+        .lock()
+        .map_err(|_| "audio runtime lock is poisoned".to_string())
+}
+
+fn valid_sequence_audio(snapshot: &PreviewSnapshot) -> Option<SequenceAudioDocument> {
+    snapshot
+        .audio
+        .as_ref()
+        .filter(|audio| audio.exists)
+        .cloned()
 }
 
 fn project_path(path: String) -> Utf8PathBuf {

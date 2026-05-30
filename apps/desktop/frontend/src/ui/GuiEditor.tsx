@@ -1,7 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
-import { ChevronLeft, ChevronRight, Music, Pause, Play, SkipBack, Square, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, LoaderCircle, Music, Pause, Play, SkipBack, Square, X } from "lucide-react";
 import { commands } from "../api";
 import type {
   ActiveGuiDocumentDto,
@@ -88,10 +88,12 @@ function SequenceEditor({
 }) {
   const livePreview = useSequencePreview(preview);
   const unsupported = document.durationMs <= 0;
+  const audioLoading = livePreview.audioPlaybackStatus === "loading";
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (unsupported || isEditableShortcutTarget(event.target)) return;
     if (event.key === " ") {
       event.preventDefault();
+      if (audioLoading) return;
       void runSnapshotCommand(livePreview.isPlaying ? commands.previewPause : commands.previewPlay);
     } else if (event.key.toLowerCase() === "s") {
       event.preventDefault();
@@ -129,6 +131,8 @@ export function SequenceTransportControls({
 }) {
   const livePreview = useSequencePreview(preview);
   const unsupported = document.durationMs <= 0;
+  const audioStatus = useSequenceAudioStatus(livePreview);
+  const audioLoading = livePreview.audioPlaybackStatus === "loading";
   const stepFrame = (direction: -1 | 1) => {
     stepSequenceFrame(document, livePreview.positionMs, livePreview.durationMs, direction);
   };
@@ -136,11 +140,11 @@ export function SequenceTransportControls({
     <div className="sequence-toolbar" aria-label="Sequence transport">
       <button
         type="button"
-        title={livePreview.isPlaying ? "Pause" : "Play"}
-        disabled={unsupported}
+        title={audioLoading ? "Loading audio" : livePreview.isPlaying ? "Pause" : "Play"}
+        disabled={unsupported || audioLoading}
         onClick={() => void runSnapshotCommand(livePreview.isPlaying ? commands.previewPause : commands.previewPlay)}
       >
-        {livePreview.isPlaying ? <Pause size={15} /> : <Play size={15} />}
+        {audioLoading ? <LoaderCircle className="sequence-loading-icon" size={15} /> : livePreview.isPlaying ? <Pause size={15} /> : <Play size={15} />}
       </button>
       <button type="button" title="Stop" disabled={unsupported} onClick={() => void runSnapshotCommand(commands.previewStop)}>
         <Square size={14} />
@@ -186,6 +190,7 @@ export function SequenceTransportControls({
       <span className="sequence-time-readout">
         {formatMs(livePreview.positionMs)} / {formatMs(livePreview.durationMs || document.durationMs)} | Home {formatMs(livePreview.homeMs)}
         {document.audio ? ` | ${document.audio.exists ? document.audio.fileName : "Missing audio"}` : ""}
+        {audioStatus !== null && <span className={`sequence-audio-status sequence-audio-status-${audioStatus.tone}`}>{audioStatus.label}</span>}
       </span>
     </div>
   );
@@ -211,6 +216,44 @@ function useSequencePreview(preview: AppSnapshotDto["preview"]) {
   }, []);
 
   return eventPreview ?? preview;
+}
+
+function useSequenceAudioStatus(preview: AppSnapshotDto["preview"]) {
+  const [loadedNoticeVisible, setLoadedNoticeVisible] = useState(false);
+  const previousStatus = useRef(preview.audioPlaybackStatus);
+
+  useEffect(() => {
+    if (isAudioLoadingStatus(previousStatus.current) && !isAudioLoadingStatus(preview.audioPlaybackStatus)) {
+      setLoadedNoticeVisible(true);
+    }
+    previousStatus.current = preview.audioPlaybackStatus;
+  }, [preview.audioPlaybackStatus]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setLoadedNoticeVisible(false);
+    }, 2500);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [loadedNoticeVisible]);
+
+  switch (preview.audioPlaybackStatus) {
+    case "loading":
+      return { label: "Loading audio...", tone: "loading" };
+    case "playing":
+      return { label: "Audio loaded - playing", tone: "ready" };
+    case "ready":
+      return preview.audio !== null ? { label: "Audio ready", tone: "ready" } : null;
+    case "error":
+      return { label: "Audio error", tone: "error" };
+    default:
+      return loadedNoticeVisible ? { label: "Audio loaded", tone: "ready" } : null;
+  }
+}
+
+function isAudioLoadingStatus(status: string) {
+  return status === "loading";
 }
 
 function guiEditorKey(activeFile: string | null, gui: ReadyGuiDocumentDto) {
