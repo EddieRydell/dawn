@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::path::{PathStringExt, Utf8PathBuf};
+use crate::path::Utf8PathBuf;
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub enum Authored {}
@@ -14,7 +14,106 @@ pub enum Resolved {}
 
 pub type AuthoredProject = Project<Authored>;
 pub type ResolvedProject = Project<Resolved>;
-pub type DawnFile = IndexMap<String, DawnObject<Authored>>;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DawnImport {
+    pub from: Utf8PathBuf,
+    #[serde(rename = "as")]
+    pub alias: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DawnFile {
+    pub imports: Vec<DawnImport>,
+    pub objects: IndexMap<String, DawnObject<Authored>>,
+}
+
+impl DawnFile {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.objects.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.objects.is_empty()
+    }
+
+    pub fn get(&self, key: &str) -> Option<&DawnObject<Authored>> {
+        self.objects.get(key)
+    }
+
+    pub fn insert(
+        &mut self,
+        key: String,
+        value: DawnObject<Authored>,
+    ) -> Option<DawnObject<Authored>> {
+        self.objects.insert(key, value)
+    }
+
+    pub fn iter(&self) -> indexmap::map::Iter<'_, String, DawnObject<Authored>> {
+        self.objects.iter()
+    }
+
+    pub fn values(&self) -> indexmap::map::Values<'_, String, DawnObject<Authored>> {
+        self.objects.values()
+    }
+}
+
+impl<'a> IntoIterator for &'a DawnFile {
+    type Item = (&'a String, &'a DawnObject<Authored>);
+    type IntoIter = indexmap::map::Iter<'a, String, DawnObject<Authored>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.objects.iter()
+    }
+}
+
+impl<'de> Deserialize<'de> for DawnFile {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut raw = IndexMap::<String, serde_yaml::Value>::deserialize(deserializer)?;
+        let imports = match raw.shift_remove("imports") {
+            Some(value) => serde_yaml::from_value::<Vec<DawnImport>>(value)
+                .map_err(|error| de::Error::custom(error.to_string()))?,
+            None => Vec::new(),
+        };
+        let mut objects = IndexMap::with_capacity(raw.len());
+        for (key, value) in raw {
+            let object = serde_yaml::from_value::<DawnObject<Authored>>(value)
+                .map_err(|error| de::Error::custom(format!("{key}: {error}")))?;
+            objects.insert(key, object);
+        }
+        Ok(Self { imports, objects })
+    }
+}
+
+impl Serialize for DawnFile {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut raw = IndexMap::<String, serde_yaml::Value>::new();
+        if !self.imports.is_empty() {
+            raw.insert(
+                "imports".to_string(),
+                serde_yaml::to_value(&self.imports).map_err(serde::ser::Error::custom)?,
+            );
+        }
+        for (key, object) in &self.objects {
+            raw.insert(
+                key.clone(),
+                serde_yaml::to_value(object).map_err(serde::ser::Error::custom)?,
+            );
+        }
+        raw.serialize(serializer)
+    }
+}
 
 pub trait ModelMode {
     type ProjectDisplay: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
@@ -37,22 +136,22 @@ pub trait ModelMode {
 }
 
 impl ModelMode for Authored {
-    type ProjectDisplay = InlineOrImport<Display<Authored>>;
-    type ProjectSequence = InlineOrImport<Sequence<Authored>>;
-    type DisplayController = InlineOrImport<Controller>;
-    type DisplayPatch = InlineOrImport<Patch<Authored>>;
-    type DisplayLayout = InlineOrImport<Layout<Authored>>;
+    type ProjectDisplay = InlineOrRef<Display<Authored>>;
+    type ProjectSequence = InlineOrRef<Sequence<Authored>>;
+    type DisplayController = InlineOrRef<Controller>;
+    type DisplayPatch = InlineOrRef<Patch<Authored>>;
+    type DisplayLayout = InlineOrRef<Layout<Authored>>;
     type LayoutFixture = FixturePlacement<Authored>;
-    type FixturePlacementFixture = InlineOrImport<Fixture>;
+    type FixturePlacementFixture = InlineOrRef<Fixture>;
     type GroupMember = FixtureId;
     type RouteFixture = FixtureId;
     type RouteController = ControllerRef;
-    type SequenceAudio = Option<ImportRef>;
+    type SequenceAudio = Option<AssetPath>;
     type EffectTargetGroup = GroupRef;
     type EffectTargetFixture = FixtureId;
-    type SequenceEffectScript = InlineOrImport<String>;
-    type EffectParamCurve = InlineOrImport<Curve>;
-    type AutomationClipCurve = InlineOrImport<Curve>;
+    type SequenceEffectScript = InlineScriptOrRef;
+    type EffectParamCurve = InlineOrRef<Curve>;
+    type AutomationClipCurve = InlineOrRef<Curve>;
     type AutomationClipTarget = u32;
 }
 
@@ -264,14 +363,147 @@ string_ref!(ObjectName);
 string_ref!(GroupRef);
 string_ref!(ControllerRef);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportRef {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SymbolRef {
     raw: String,
-    path: Utf8PathBuf,
-    object: Option<ObjectName>,
+    alias: Option<String>,
+    name: ObjectName,
 }
 
-impl ImportRef {
+impl SymbolRef {
+    pub fn new(raw: impl Into<String>) -> Result<Self, String> {
+        serde_yaml::from_value(serde_yaml::Value::String(raw.into()))
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn raw(&self) -> &str {
+        &self.raw
+    }
+
+    pub fn alias(&self) -> Option<&str> {
+        self.alias.as_deref()
+    }
+
+    pub fn name(&self) -> &ObjectName {
+        &self.name
+    }
+}
+
+impl<'de> Deserialize<'de> for SymbolRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        let (alias, name) = match raw.split_once('.') {
+            Some((alias, name)) => {
+                validate_identifier(alias, "reference alias").map_err(de::Error::custom)?;
+                validate_identifier(name, "reference name").map_err(de::Error::custom)?;
+                (Some(alias.to_string()), name.to_string())
+            }
+            None => {
+                validate_identifier(&raw, "reference name").map_err(de::Error::custom)?;
+                (None, raw.clone())
+            }
+        };
+        Ok(Self {
+            raw: raw.clone(),
+            alias,
+            name: ObjectName(name),
+        })
+    }
+}
+
+impl Serialize for SymbolRef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.raw)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum InlineOrRef<T> {
+    Ref(SymbolRef),
+    Inline(T),
+}
+
+impl<T> InlineOrRef<T> {
+    pub fn symbol_ref(&self) -> Option<&SymbolRef> {
+        match self {
+            Self::Ref(reference) => Some(reference),
+            Self::Inline(_) => None,
+        }
+    }
+
+    pub fn inline(&self) -> Option<&T> {
+        match self {
+            Self::Inline(value) => Some(value),
+            Self::Ref(_) => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InlineScriptOrRef {
+    Inline { inline: String },
+    Ref(SymbolRef),
+}
+
+impl<'de> Deserialize<'de> for InlineScriptOrRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_yaml::Value::deserialize(deserializer)?;
+        match value {
+            serde_yaml::Value::String(raw) => match SymbolRef::new(raw.clone()) {
+                Ok(reference) => Ok(Self::Ref(reference)),
+                Err(_) => Ok(Self::Inline { inline: raw }),
+            },
+            other => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Inline {
+                    inline: String,
+                }
+                let inline = Inline::deserialize(other)
+                    .map_err(|error| de::Error::custom(error.to_string()))?;
+                Ok(Self::Inline {
+                    inline: inline.inline,
+                })
+            }
+        }
+    }
+}
+
+impl Serialize for InlineScriptOrRef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Inline { inline } => {
+                #[derive(Serialize)]
+                struct Inline<'a> {
+                    inline: &'a str,
+                }
+                Inline { inline }.serialize(serializer)
+            }
+            Self::Ref(reference) => reference.serialize(serializer),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetPath {
+    raw: String,
+    path: Utf8PathBuf,
+}
+
+impl AssetPath {
     pub fn new(raw: impl Into<String>) -> Result<Self, String> {
         serde_yaml::from_value(serde_yaml::Value::String(raw.into()))
             .map_err(|error| error.to_string())
@@ -284,39 +516,25 @@ impl ImportRef {
     pub fn path(&self) -> &Utf8PathBuf {
         &self.path
     }
-
-    pub fn object(&self) -> Option<&ObjectName> {
-        self.object.as_ref()
-    }
 }
 
-impl<'de> Deserialize<'de> for ImportRef {
+impl<'de> Deserialize<'de> for AssetPath {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         let raw = String::deserialize(deserializer)?;
-        let (path, object) = match raw.split_once("::") {
-            Some((path, object)) => {
-                if object.is_empty() {
-                    return Err(de::Error::custom("import object name must not be empty"));
-                }
-                (path, Some(ObjectName(object.to_string())))
-            }
-            None => (raw.as_str(), None),
-        };
-        if path.is_empty() {
-            return Err(de::Error::custom("import path must not be empty"));
+        if raw.trim().is_empty() {
+            return Err(de::Error::custom("asset path must not be empty"));
         }
         Ok(Self {
-            raw: raw.clone(),
-            path: Utf8PathBuf::from(path),
-            object,
+            path: Utf8PathBuf::from(raw.as_str()),
+            raw,
         })
     }
 }
 
-impl Serialize for ImportRef {
+impl Serialize for AssetPath {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -325,32 +543,20 @@ impl Serialize for ImportRef {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum InlineOrImport<T> {
-    Inline(T),
-    Import { import: ImportRef },
-}
-
-impl<T> InlineOrImport<T> {
-    pub fn import_ref(&self) -> Option<&ImportRef> {
-        match self {
-            Self::Inline(_) => None,
-            Self::Import { import } => Some(import),
-        }
+pub fn validate_identifier(value: &str, label: &str) -> Result<(), String> {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return Err(format!("{label} cannot be empty"));
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return Err(format!("{label} must start with a letter or underscore"));
     }
-
-    pub fn import_path(&self) -> Option<String> {
-        self.import_ref()
-            .map(|import| import.path().to_slash_string())
+    if chars.any(|character| !(character.is_ascii_alphanumeric() || character == '_')) {
+        return Err(format!(
+            "{label} may only contain letters, numbers, and underscores"
+        ));
     }
-
-    pub fn inline(&self) -> Option<&T> {
-        match self {
-            Self::Inline(value) => Some(value),
-            Self::Import { .. } => None,
-        }
-    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -2,23 +2,24 @@ import { defaultKeymap } from "@codemirror/commands";
 import { cpp } from "@codemirror/lang-cpp";
 import { yaml } from "@codemirror/lang-yaml";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { lintGutter, lintKeymap, linter, openLintPanel, setDiagnostics, type Diagnostic } from "@codemirror/lint";
+import { linter, setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import { EditorState, type Extension } from "@codemirror/state";
-import { EditorView, keymap, ViewPlugin, ViewUpdate } from "@codemirror/view";
+import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { X } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent } from "react";
 import { commands } from "../api";
 import type { AppSnapshotDto, ProjectDiagnosticDto, TextRangeDto } from "../bindings";
 import { commandRegistry } from "../commandRegistry";
 import { runSnapshotCommand, useAppStore } from "../store";
-import { OPEN_ACTIVE_EDITOR_DIAGNOSTICS_EVENT } from "../uiEvents";
 import { GuiEditor, SequenceTransportControls } from "./GuiEditor";
 
 export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
   const { localText, setLocalText } = useAppStore();
   const editorHost = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
+  const [editorView, setEditorView] = useState<EditorView | null>(null);
+  const [editorSignal, setEditorSignal] = useState(0);
   const latestLocalText = useRef(localText);
   const applyingExternalText = useRef(false);
   const activePath = snapshot.activeBuffer?.path ?? null;
@@ -31,34 +32,26 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
   }, [localText]);
 
   useEffect(() => {
-    const onOpenDiagnostics = () => {
-      if (view.current === null || viewMode !== "text") return;
-      openLintPanel(view.current);
-    };
-    window.addEventListener(OPEN_ACTIVE_EDITOR_DIAGNOSTICS_EVENT, onOpenDiagnostics);
-    return () => {
-      window.removeEventListener(OPEN_ACTIVE_EDITOR_DIAGNOSTICS_EVENT, onOpenDiagnostics);
-    };
-  }, [viewMode]);
-
-  useEffect(() => {
     if (viewMode !== "text") {
       view.current?.destroy();
       view.current = null;
       return;
     }
     if (!editorHost.current || view.current) return;
-    view.current = new EditorView({
+    const nextView = new EditorView({
       parent: editorHost.current,
       state: createState(
         latestLocalText.current,
         activePath,
         (update) => {
-          if (!update.docChanged) return;
-          if (applyingExternalText.current) return;
-          const text = update.state.doc.toString();
-          setLocalText(text);
-          scheduleAutosave(text);
+          if (update.docChanged || update.viewportChanged || update.geometryChanged) {
+            setEditorSignal((signal) => signal + 1);
+          }
+          if (update.docChanged && !applyingExternalText.current) {
+            const text = update.state.doc.toString();
+            setLocalText(text);
+            scheduleAutosave(text);
+          }
         },
         async (text, redo) => {
           window.clearTimeout(autosaveTimer);
@@ -71,9 +64,20 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
         }
       )
     });
+    view.current = nextView;
+    let disposed = false;
+    window.requestAnimationFrame(() => {
+      if (disposed) return;
+      setEditorView(nextView);
+      setEditorSignal((signal) => signal + 1);
+    });
     return () => {
+      disposed = true;
       view.current?.destroy();
       view.current = null;
+      window.requestAnimationFrame(() => {
+        setEditorView(null);
+      });
     };
   }, [activePath, setLocalText, viewMode]);
 
@@ -145,8 +149,200 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
           </button>
         </div>
       </div>
-      {viewMode === "gui" ? <GuiEditor snapshot={snapshot} /> : <div ref={editorHost} className="editor-host" />}
+      {viewMode === "gui" ? (
+        <GuiEditor snapshot={snapshot} />
+      ) : (
+        <div className="editor-scrollbar-shell">
+          <div ref={editorHost} className="editor-host" />
+          <EditorScrollbar
+            activePath={activePath}
+            diagnostics={snapshot.diagnostics}
+            editorSignal={editorSignal}
+            projectRoot={snapshot.projectRoot}
+            view={editorView}
+          />
+        </div>
+      )}
     </section>
+  );
+}
+
+type ScrollbarMetrics = {
+  scrollTop: number;
+  clientHeight: number;
+  scrollHeight: number;
+  railHeight: number;
+  thumbTop: number;
+  thumbHeight: number;
+  scrollable: boolean;
+};
+
+type ScrollbarMarker = {
+  id: string;
+  severity: "error" | "warning";
+  from: number;
+  line: number;
+  column: number;
+  message: string;
+  code: string;
+  topPercent: number;
+};
+
+function EditorScrollbar({
+  activePath,
+  diagnostics,
+  editorSignal,
+  projectRoot,
+  view
+}: {
+  activePath: string | null;
+  diagnostics: ProjectDiagnosticDto[];
+  editorSignal: number;
+  projectRoot: string | null;
+  view: EditorView | null;
+}) {
+  const railRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ pointerId: number; startY: number; startScrollTop: number } | null>(null);
+  const frameRef = useRef<number | null>(null);
+  const [metrics, setMetrics] = useState<ScrollbarMetrics>(() => emptyScrollbarMetrics());
+
+  const measure = useCallback(() => {
+    if (frameRef.current !== null) return;
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = null;
+      setMetrics(readScrollbarMetrics(view, railRef.current));
+    });
+  }, [view]);
+
+  useEffect(() => {
+    measure();
+  }, [activePath, diagnostics, editorSignal, measure, projectRoot]);
+
+  useEffect(() => {
+    if (view === null) {
+      return;
+    }
+    const scrollDOM = view.scrollDOM;
+    const observer = new ResizeObserver(measure);
+    scrollDOM.addEventListener("scroll", measure, { passive: true });
+    observer.observe(scrollDOM);
+    if (railRef.current !== null) observer.observe(railRef.current);
+    measure();
+    return () => {
+      scrollDOM.removeEventListener("scroll", measure);
+      observer.disconnect();
+      if (frameRef.current !== null) {
+        window.cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
+    };
+  }, [editorSignal, measure, view]);
+
+  const markers = editorDiagnosticMarkers(diagnostics, activePath, projectRoot, view);
+
+  const scrollToRatio = useCallback(
+    (ratio: number) => {
+      if (view === null) return;
+      const scrollDOM = view.scrollDOM;
+      const maxScrollTop = Math.max(0, scrollDOM.scrollHeight - scrollDOM.clientHeight);
+      setScrollTop(scrollDOM, clamp(ratio, 0, 1) * maxScrollTop);
+      measure();
+    },
+    [measure, view]
+  );
+
+  const handleTrackPointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0 || view === null || railRef.current === null) return;
+      const rect = railRef.current.getBoundingClientRect();
+      scrollToRatio((event.clientY - rect.top) / Math.max(1, rect.height));
+    },
+    [scrollToRatio, view]
+  );
+
+  const handleThumbPointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0 || view === null || !metrics.scrollable) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      dragRef.current = {
+        pointerId: event.pointerId,
+        startY: event.clientY,
+        startScrollTop: view.scrollDOM.scrollTop
+      };
+    },
+    [metrics.scrollable, view]
+  );
+
+  const handleThumbPointerMove = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (view === null || dragRef.current === null || dragRef.current.pointerId !== event.pointerId) return;
+      const maxScrollTop = Math.max(0, metrics.scrollHeight - metrics.clientHeight);
+      const maxThumbTop = Math.max(1, metrics.railHeight - metrics.thumbHeight);
+      const deltaScroll = ((event.clientY - dragRef.current.startY) / maxThumbTop) * maxScrollTop;
+      setScrollTop(view.scrollDOM, clamp(dragRef.current.startScrollTop + deltaScroll, 0, maxScrollTop));
+      measure();
+    },
+    [measure, metrics.clientHeight, metrics.railHeight, metrics.scrollHeight, metrics.thumbHeight, view]
+  );
+
+  const endDrag = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current === null || dragRef.current.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  }, []);
+
+  const jumpToMarker = useCallback(
+    (marker: ScrollbarMarker) => {
+      if (view === null) return;
+      view.dispatch({
+        selection: { anchor: marker.from },
+        effects: EditorView.scrollIntoView(marker.from, { y: "center" })
+      });
+      view.focus();
+      measure();
+    },
+    [measure, view]
+  );
+
+  return (
+    <div className="editor-scrollbar" aria-hidden={view === null}>
+      <div ref={railRef} className="editor-scrollbar-rail" onPointerDown={handleTrackPointerDown}>
+        {markers.map((marker) => (
+          <button
+            key={marker.id}
+            type="button"
+            className={`editor-scrollbar-marker ${marker.severity}`}
+            style={{ top: `${marker.topPercent}%` }}
+            onClick={(event) => {
+              event.stopPropagation();
+              jumpToMarker(marker);
+            }}
+            onPointerDown={(event) => {
+              event.stopPropagation();
+            }}
+            aria-label={`${marker.severity} at ${marker.line}:${marker.column}: ${marker.message}`}
+          >
+            <span className="editor-scrollbar-tooltip">
+              <span className="editor-scrollbar-tooltip-location">
+                {marker.line}:{marker.column}
+              </span>
+              <span className="editor-scrollbar-tooltip-message">{marker.message}</span>
+              {marker.code.length > 0 && <span className="editor-scrollbar-tooltip-code">{marker.code}</span>}
+            </span>
+          </button>
+        ))}
+        <div
+          className={`editor-scrollbar-thumb ${metrics.scrollable ? "" : "disabled"}`}
+          style={{ height: `${metrics.thumbHeight}px`, transform: `translateY(${metrics.thumbTop}px)` }}
+          onPointerDown={handleThumbPointerDown}
+          onPointerMove={handleThumbPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -164,10 +360,6 @@ function squiggleDataUri(color: string): string {
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
 
-const minLintPanelHeight = 96;
-const maxLintPanelHeight = 420;
-let lintPanelHeight = 260;
-
 function createState(
   text: string,
   path: string | null,
@@ -180,8 +372,6 @@ function createState(
       languageForPath(path),
       syntaxHighlighting(dawnHighlightStyle),
       linter(null, { autoPanel: false }),
-      lintGutter(),
-      resizableLintPanel(),
       keymap.of([
         {
           key: "Mod-s",
@@ -204,13 +394,17 @@ function createState(
             return true;
           }
         },
-        ...defaultKeymap,
-        ...lintKeymap
+        ...defaultKeymap
       ]),
       EditorView.updateListener.of(onUpdate),
       EditorView.theme({
         "&": { height: "100%", backgroundColor: "#17181b", color: "#ebe7df" },
-        ".cm-scroller": { fontFamily: "Consolas, 'SFMono-Regular', monospace", fontSize: "13px" },
+        ".cm-scroller": {
+          fontFamily: "Consolas, 'SFMono-Regular', monospace",
+          fontSize: "13px",
+          scrollbarWidth: "none"
+        },
+        ".cm-scroller::-webkit-scrollbar": { display: "none" },
         ".cm-content": { caretColor: "#6abf8a" },
         ".cm-cursor": { borderLeftColor: "#6abf8a" },
         ".cm-selectionBackground": { backgroundColor: "#31543f !important" },
@@ -227,212 +421,34 @@ function createState(
         ".cm-tooltip.cm-tooltip-lint": {
           border: "1px solid #454a53",
           borderRadius: "5px",
-          backgroundColor: "#151619",
+          backgroundColor: "#202226",
           boxShadow: "0 10px 26px rgb(0 0 0 / 38%)",
-          color: "#ebe7df"
+          color: "#ebe7df",
+          overflow: "hidden"
         },
         ".cm-tooltip-lint .cm-diagnostic": {
           maxWidth: "420px",
           borderLeft: "0",
+          backgroundColor: "#202226",
           padding: "7px 9px",
           color: "#ebe7df",
           fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
           fontSize: "12px",
           lineHeight: "1.35"
         },
-        ".cm-tooltip-lint .cm-diagnostic-location, .cm-tooltip-lint .cm-diagnostic-code": { display: "none" },
-        ".cm-gutter-lint": { width: "18px" },
-        ".cm-gutter-lint .cm-gutterElement": {
-          display: "grid",
-          placeItems: "center",
-          padding: "0"
-        },
-        ".cm-lint-marker": {
-          width: "3px",
-          height: "14px",
-          borderRadius: "999px",
-          backgroundImage: "none !important",
-          content: '"" !important',
-          boxShadow: "0 0 0 1px #17181b"
-        },
-        ".cm-lint-marker-error": { backgroundColor: "#df6b6b" },
-        ".cm-lint-marker-warning": { backgroundColor: "#e3a84f" },
-        ".cm-panel.cm-panel-lint": {
-          position: "relative",
-          borderTop: "1px solid #373b42",
-          backgroundColor: "#181a1e",
-          color: "#d8d2c9",
-          fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
-          fontSize: "12px",
-          paddingTop: "9px"
-        },
-        ".cm-panel.cm-panel-lint::before": {
-          content: '""',
-          position: "absolute",
-          top: "0",
-          left: "0",
-          right: "0",
-          height: "9px",
-          borderBottom: "1px solid #242830",
-          background:
-            "linear-gradient(to bottom, #22262d, #1a1d22), linear-gradient(to right, transparent, #575d68, transparent)",
-          backgroundSize: "100% 100%, 120px 1px",
-          backgroundPosition: "0 0, center 4px",
-          backgroundRepeat: "no-repeat",
-          cursor: "ns-resize"
-        },
-        ".cm-panel.cm-panel-lint ul": {
-          height: `${lintPanelHeight}px`,
-          minHeight: `${minLintPanelHeight}px`,
-          maxHeight: `${maxLintPanelHeight}px`,
-          margin: "0",
-          padding: "6px 0",
-          overflowY: "auto"
-        },
-        ".cm-panel.cm-panel-lint .cm-diagnostic": {
-          display: "grid",
-          gridTemplateColumns: "72px 112px minmax(0, 1fr) auto",
-          alignItems: "start",
-          gap: "10px",
-          minHeight: "30px",
-          margin: "0",
-          borderLeftWidth: "3px",
-          borderLeftStyle: "solid",
-          padding: "7px 38px 7px 10px",
-          color: "#d8d2c9",
-          whiteSpace: "normal"
-        },
-        ".cm-panel.cm-panel-lint .cm-diagnostic-error": { borderLeftColor: "#df6b6b" },
-        ".cm-panel.cm-panel-lint .cm-diagnostic-warning": { borderLeftColor: "#e3a84f" },
-        ".cm-panel.cm-panel-lint .cm-diagnostic-info": { borderLeftColor: "#8f9298" },
-        ".cm-panel.cm-panel-lint .cm-diagnostic[aria-selected]": {
-          backgroundColor: "#252931",
-          color: "#fffaf0"
-        },
-        ".cm-panel.cm-panel-lint .cm-diagnosticText": {
-          display: "contents"
-        },
-        ".cm-panel.cm-panel-lint .cm-diagnosticText::before": {
-          fontWeight: "700",
-          textTransform: "uppercase",
-          letterSpacing: "0",
-          color: "#a8a29a"
-        },
-        ".cm-panel.cm-panel-lint .cm-diagnostic-error .cm-diagnosticText::before": {
-          content: '"Error"',
-          color: "#ff9a9a"
-        },
-        ".cm-panel.cm-panel-lint .cm-diagnostic-warning .cm-diagnosticText::before": {
-          content: '"Warning"',
-          color: "#f0c46b"
-        },
-        ".cm-panel.cm-panel-lint .cm-diagnostic-info .cm-diagnosticText::before": {
-          content: '"Info"'
-        },
-        ".cm-panel.cm-panel-lint .cm-diagnostic-message": {
-          minWidth: "0",
-          overflowWrap: "anywhere",
-          lineHeight: "1.35",
-          color: "inherit"
-        },
-        ".cm-panel.cm-panel-lint .cm-diagnostic-location": {
-          color: "#8f9298",
-          fontVariantNumeric: "tabular-nums"
-        },
-        ".cm-panel.cm-panel-lint .cm-diagnostic-code": {
-          justifySelf: "end",
-          maxWidth: "180px",
-          overflow: "hidden",
-          color: "#8f9298",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap"
-        },
-        ".cm-panel.cm-panel-lint .cm-diagnostic-info .cm-diagnosticText": {
-          display: "block",
-          gridColumn: "1 / -1",
-          color: "#8f9298"
-        },
-        ".cm-panel.cm-panel-lint [name=close]": {
-          position: "absolute",
-          top: "6px",
-          right: "8px",
-          width: "22px",
-          height: "22px",
-          border: "0",
-          borderRadius: "4px",
-          background: "transparent",
-          color: "#a8a29a",
-          font: "inherit",
-          lineHeight: "1",
-          cursor: "pointer"
-        },
-        ".cm-panel.cm-panel-lint [name=close]:hover": {
-          backgroundColor: "#2c3036",
+        ".cm-tooltip-lint .cm-diagnostic-error": { backgroundColor: "#261b1e" },
+        ".cm-tooltip-lint .cm-diagnostic-warning": { backgroundColor: "#292319" },
+        ".cm-tooltip-lint .cm-diagnosticText": {
           color: "#ebe7df"
-        }
+        },
+        ".cm-tooltip-lint .cm-diagnostic-message": {
+          color: "#ebe7df",
+          overflowWrap: "anywhere"
+        },
+        ".cm-tooltip-lint .cm-diagnostic-location, .cm-tooltip-lint .cm-diagnostic-code": { display: "none" }
       })
     ]
   });
-}
-
-function resizableLintPanel(): Extension {
-  return [
-    lintPanelHeightSync,
-    EditorView.domEventHandlers({
-      mousedown(event, view) {
-        const panel = lintPanelFromTarget(event.target);
-        if (panel === null) return false;
-        const rect = panel.getBoundingClientRect();
-        if (event.clientY - rect.top > 9) return false;
-        const list = panel.querySelector("ul");
-        if (list === null) return false;
-
-        event.preventDefault();
-        const startY = event.clientY;
-        const startHeight = list.getBoundingClientRect().height;
-
-        const onMouseMove = (moveEvent: MouseEvent) => {
-          lintPanelHeight = clampPanelHeight(startHeight + startY - moveEvent.clientY);
-          applyLintPanelHeight(view);
-        };
-        const onMouseUp = () => {
-          window.removeEventListener("mousemove", onMouseMove);
-          window.removeEventListener("mouseup", onMouseUp);
-        };
-
-        window.addEventListener("mousemove", onMouseMove);
-        window.addEventListener("mouseup", onMouseUp);
-        return true;
-      }
-    })
-  ];
-}
-
-const lintPanelHeightSync = ViewPlugin.fromClass(
-  class {
-    constructor(private readonly view: EditorView) {
-      applyLintPanelHeight(view);
-    }
-
-    update() {
-      applyLintPanelHeight(this.view);
-    }
-  }
-);
-
-function lintPanelFromTarget(target: EventTarget | null): HTMLElement | null {
-  if (!(target instanceof Element)) return null;
-  return target.closest(".cm-panel-lint");
-}
-
-function applyLintPanelHeight(view: EditorView) {
-  const list = view.dom.querySelector<HTMLElement>(".cm-panel-lint ul");
-  if (list === null) return;
-  list.style.height = `${lintPanelHeight}px`;
-}
-
-function clampPanelHeight(height: number): number {
-  return Math.max(minLintPanelHeight, Math.min(maxLintPanelHeight, height));
 }
 
 function editorDiagnostics(
@@ -473,6 +489,35 @@ function textSpan(className: string, text: string): HTMLSpanElement {
   span.className = className;
   span.textContent = text;
   return span;
+}
+
+function editorDiagnosticMarkers(
+  diagnostics: ProjectDiagnosticDto[],
+  activePath: string | null,
+  projectRoot: string | null,
+  view: EditorView | null
+): ScrollbarMarker[] {
+  if (activePath === null || view === null) return [];
+  const contentHeight = Math.max(1, view.contentHeight);
+  return diagnostics.flatMap((diagnostic, index) => {
+    if (!samePath(diagnostic.path, activePath, projectRoot)) return [];
+    const range = diagnostic.range !== null ? rangeToOffsets(diagnostic.range, view) : pointDiagnosticRange(view);
+    if (range === null) return [];
+    const line = view.state.doc.lineAt(range.from);
+    const block = view.lineBlockAt(range.from);
+    return [
+      {
+        id: `${diagnostic.path}:${index}:${range.from}:${diagnostic.code}`,
+        severity: diagnostic.severity,
+        from: range.from,
+        line: line.number,
+        column: range.from - line.from + 1,
+        message: diagnostic.message,
+        code: diagnostic.code.trim(),
+        topPercent: clamp((block.top / contentHeight) * 100, 0, 100)
+      }
+    ];
+  });
 }
 
 function diagnosticLocation(from: number, view: EditorView): string {
@@ -524,6 +569,48 @@ function positionToOffset(line: number, character: number, view: EditorView): nu
   const docLine = doc.line(lineNumber);
   const offset = Math.min(Math.floor(character), docLine.length);
   return docLine.from + offset;
+}
+
+function emptyScrollbarMetrics(): ScrollbarMetrics {
+  return {
+    scrollTop: 0,
+    clientHeight: 0,
+    scrollHeight: 0,
+    railHeight: 0,
+    thumbTop: 0,
+    thumbHeight: 0,
+    scrollable: false
+  };
+}
+
+function readScrollbarMetrics(view: EditorView | null, rail: HTMLElement | null): ScrollbarMetrics {
+  if (view === null || rail === null) return emptyScrollbarMetrics();
+  const scrollDOM = view.scrollDOM;
+  const railHeight = rail.clientHeight;
+  const scrollTop = scrollDOM.scrollTop;
+  const clientHeight = scrollDOM.clientHeight;
+  const scrollHeight = scrollDOM.scrollHeight;
+  const scrollable = scrollHeight > clientHeight + 1;
+  const thumbHeight = scrollable ? Math.max(28, (clientHeight / scrollHeight) * railHeight) : railHeight;
+  const maxScrollTop = Math.max(1, scrollHeight - clientHeight);
+  const maxThumbTop = Math.max(0, railHeight - thumbHeight);
+  return {
+    scrollTop,
+    clientHeight,
+    scrollHeight,
+    railHeight,
+    thumbTop: scrollable ? (scrollTop / maxScrollTop) * maxThumbTop : 0,
+    thumbHeight,
+    scrollable
+  };
+}
+
+function setScrollTop(scrollDOM: HTMLElement, scrollTop: number): void {
+  scrollDOM.scrollTop = scrollTop;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
 
 function languageForPath(path: string | null): Extension {

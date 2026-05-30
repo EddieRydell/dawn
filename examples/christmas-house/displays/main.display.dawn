@@ -1,10 +1,14 @@
+imports:
+  - from: ../layouts/house.layout.dawn
+    as: layouts
+  - from: ../patches/main.patch.dawn
+    as: patches
+
 main:
   type: display
   name: Christmas House
-  layout:
-    import: ../layouts/house.layout.dawn::house
-  patch:
-    import: ../patches/main.patch.dawn::main
+  layout: layouts.house
+  patch: patches.main
   controllers:
     - name: HouseController
       protocol: artnet

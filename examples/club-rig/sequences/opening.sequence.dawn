@@ -1,3 +1,9 @@
+imports:
+  - from: ../effects
+    as: effects
+  - from: ../curves
+    as: curves
+
 opening:
   type: sequence
   duration: 200000ms
@@ -63,10 +69,8 @@ opening:
         value: 0.5
       fade:
         type: curve
-        curve:
-          import: ../curves/fade-in.curve.dawn::fade_in
-    script:
-      import: ../effects/pulse.effect.dawn
+        curve: curves.fade_in
+    script: effects.Pulse
   - id: 1
     start: 4283ms
     duration: 8250ms
@@ -86,10 +90,8 @@ opening:
         value: 0.5
       fade:
         type: curve
-        curve:
-          import: ../curves/fade-in.curve.dawn::fade_in
-    script:
-      import: ../effects/pulse.effect.dawn
+        curve: curves.fade_in
+    script: effects.Pulse
   - id: 24
     start: 11700ms
     duration: 5400ms
@@ -107,8 +109,7 @@ opening:
       accent:
         type: color
         value: '#ffaa00'
-    script:
-      import: //?/C:/Users/eddie/dawn/examples/club-rig/effects/mark-pulse.effect.dawn
+    script: effects.MarkPulse
   - id: 25
     start: 39868ms
     duration: 4350ms
@@ -144,8 +145,7 @@ opening:
       seed:
         type: float
         value: 0.0
-    script:
-      import: //?/C:/Users/eddie/dawn/examples/club-rig/effects/mark-pulse.effect.dawn
+    script: effects.MarkPulse
   - id: 2
     start: 129488ms
     duration: 1800ms
@@ -181,13 +181,11 @@ opening:
       seed:
         type: float
         value: 0.0
-    script:
-      import: //?/C:/Users/eddie/dawn/examples/club-rig/effects/mark-pulse.effect.dawn
+    script: effects.MarkPulse
   automation_clips:
   - id: 101
     start: 0ms
     duration: 8000ms
-    curve:
-      import: ../curves/fade-in.curve.dawn::fade_in
+    curve: curves.fade_in
     targets:
     - 1

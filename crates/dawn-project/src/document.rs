@@ -11,8 +11,9 @@ use crate::effect_script::{
     compile as compile_effect_script, CompiledEffect, ParamDefault, RuntimeValue, ScriptType,
 };
 use crate::fs::WorkspaceFs;
-use crate::lower::lower_layout;
+use crate::lower::{lower_layout, SymbolResolver};
 use crate::model::*;
+use crate::parse::parse_dawn_file_with_source_map;
 use crate::path::{
     canonicalize_path, resolve_import_path, serialized_import_path, PathStringExt, Utf8PathBuf,
 };
@@ -20,6 +21,12 @@ use crate::render::{
     geometry_render_plan, geometry_summary, layout_render_bounds, GeometryRenderBounds,
     GeometryRenderPlan,
 };
+
+fn parse_dawn_file(text: &str) -> Result<DawnFile, String> {
+    parse_dawn_file_with_source_map(text)
+        .map(|parsed| parsed.file)
+        .map_err(|error| error.to_string())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -365,7 +372,7 @@ pub fn inspect_document(
         });
     }
     let text = read_text_with_overlays(fs, &path, &overlays)?;
-    let file: DawnFile = serde_yaml::from_str(&text).map_err(|error| error.to_string())?;
+    let file: DawnFile = parse_dawn_file(&text)?;
     let objects = file
         .iter()
         .map(|(key, object)| DocumentObjectDescriptor {
@@ -418,7 +425,7 @@ pub fn get_fixture_document(
 ) -> Result<FixtureDocument, String> {
     let path = canonicalize_path(&fs.resolve(&path));
     let text = read_text_with_overlays(fs, &path, &overlays)?;
-    let file: DawnFile = serde_yaml::from_str(&text).map_err(|error| error.to_string())?;
+    let file: DawnFile = parse_dawn_file(&text)?;
     let fixtures = file
         .iter()
         .filter_map(|(key, object)| {
@@ -462,7 +469,7 @@ pub fn get_layout_document(
     }
 
     let text = read_text_with_overlays(fs, &path, &overlays)?;
-    let file: DawnFile = serde_yaml::from_str(&text).map_err(|error| error.to_string())?;
+    let file: DawnFile = parse_dawn_file(&text)?;
     let object = file
         .get(object_key)
         .ok_or_else(|| format!("layout object `{object_key}` was not found"))?;
@@ -472,11 +479,10 @@ pub fn get_layout_document(
     let catalog = fixture_catalog_from_analysis(&analysis, &path);
     let mut resolver = AnalysisImportResolver {
         files: &analysis.files,
+        scripts: &analysis.scripts,
     };
-    let resolved_layout = lower_layout(layout, &path, &mut |source_path, import, expected| {
-        resolver.resolve(source_path, import, expected)
-    })
-    .map_err(|error| format!("could not load layout `{object_key}`: {error}"))?;
+    let resolved_layout = lower_layout(layout, &path, &mut resolver)
+        .map_err(|error| format!("could not load layout `{object_key}`: {error}"))?;
 
     layout_to_document(&path, object_key, layout, &resolved_layout, &catalog)
 }
@@ -491,7 +497,7 @@ pub fn get_sequence_document(
     let path = canonicalize_path(&fs.resolve(&path));
     let project_path = canonicalize_path(&fs.resolve(&project_path));
     let text = read_text_with_overlays(fs, &path, &overlays)?;
-    let file: DawnFile = serde_yaml::from_str(&text).map_err(|error| error.to_string())?;
+    let file: DawnFile = parse_dawn_file(&text)?;
     let object = file
         .get(object_key)
         .ok_or_else(|| format!("sequence object `{object_key}` was not found"))?;
@@ -524,7 +530,7 @@ pub fn apply_layout_document_edit(
     _overlays: Vec<ProjectOverlay>,
 ) -> Result<DocumentEditOutcome<LayoutDocument>, String> {
     let _path = canonicalize_path(&fs.resolve(&path));
-    let file: DawnFile = serde_yaml::from_str(&base_content).map_err(|error| error.to_string())?;
+    let file: DawnFile = parse_dawn_file(&base_content)?;
     let Some(DawnObject::Layout(current_layout)) = file.get(object_key) else {
         return Err(format!("layout object `{object_key}` was not found"));
     };
@@ -559,7 +565,7 @@ pub fn apply_fixture_document_edit(
         document.selected_object_key.as_deref(),
         &edited_fixtures,
     );
-    let file: DawnFile = serde_yaml::from_str(&base_content).map_err(|error| error.to_string())?;
+    let file: DawnFile = parse_dawn_file(&base_content)?;
     let mut replacements = BTreeMap::new();
     for (key, object) in &file {
         if matches!(object, DawnObject::Fixture(_)) {
@@ -613,12 +619,20 @@ pub fn apply_sequence_document_edit(
     analysis: &ProjectAnalysis,
 ) -> Result<DocumentEditOutcome<SequenceDocument>, String> {
     let path = canonicalize_path(&fs.resolve(&path));
-    let file: DawnFile = serde_yaml::from_str(&base_content).map_err(|error| error.to_string())?;
+    let file: DawnFile = parse_dawn_file(&base_content)?;
     let Some(DawnObject::Sequence(current_sequence)) = file.get(object_key) else {
         return Err(format!("sequence object `{object_key}` was not found"));
     };
     let mut sequence = current_sequence.clone();
-    apply_sequence_edit_operation(fs, &path, analysis, &overlays, &mut sequence, edit)?;
+    let import_to_add = apply_sequence_edit_operation(
+        fs,
+        &path,
+        &file.imports,
+        analysis,
+        &overlays,
+        &mut sequence,
+        edit,
+    )?;
     sort_sequence_mark_collections(&mut sequence);
     sort_sequence_effects(
         &mut sequence,
@@ -629,9 +643,11 @@ pub fn apply_sequence_document_edit(
     );
 
     let object = DawnObject::Sequence(sequence);
-    let serialized = replace_top_level_object(&base_content, object_key, &object)?;
-    let next_text: DawnFile =
-        serde_yaml::from_str(&serialized).map_err(|error| error.to_string())?;
+    let mut serialized = replace_top_level_object(&base_content, object_key, &object)?;
+    if let Some(import) = import_to_add {
+        serialized = ensure_top_level_import(&serialized, import)?;
+    }
+    let next_text: DawnFile = parse_dawn_file(&serialized)?;
     let Some(DawnObject::Sequence(sequence)) = next_text.get(object_key) else {
         return Err(format!(
             "sequence object `{object_key}` was not found after edit"
@@ -661,15 +677,17 @@ pub fn apply_sequence_document_edit(
 fn apply_sequence_edit_operation(
     fs: &WorkspaceFs,
     path: &Utf8PathBuf,
+    imports: &[DawnImport],
     analysis: &ProjectAnalysis,
     overlays: &[ProjectOverlay],
     sequence: &mut Sequence<Authored>,
     edit: SequenceDocumentEdit,
-) -> Result<(), String> {
+) -> Result<Option<DawnImport>, String> {
+    let mut import_to_add = None;
     match edit {
         SequenceDocumentEdit::SetAudio { import } => {
             sequence.audio = import
-                .map(|import| ImportRef::new(import).map(Some))
+                .map(|import| AssetPath::new(import).map(Some))
                 .transpose()?
                 .flatten();
         }
@@ -702,6 +720,8 @@ fn apply_sequence_edit_operation(
             let duration_ms = 1_000
                 .min(sequence.duration.milliseconds.saturating_sub(start_ms))
                 .max(1);
+            let script_path = Utf8PathBuf::from(script_path);
+            let (alias, import) = module_import_for_path(path, &script_path, imports);
             sequence.effects.push(SequenceEffect {
                 id,
                 start: Time {
@@ -713,13 +733,12 @@ fn apply_sequence_edit_operation(
                 target: authored_target_from_document(&target, analysis)?,
                 scope,
                 params: materialized_effect_params(script, mark_collection_key.as_deref()),
-                script: InlineOrImport::Import {
-                    import: ImportRef::new(serialized_import_path(
-                        path,
-                        &Utf8PathBuf::from(script_path),
-                    ))?,
-                },
+                script: InlineScriptOrRef::Ref(SymbolRef::new(format!(
+                    "{}.{}",
+                    alias, script.name
+                ))?),
             });
+            import_to_add = import;
         }
         SequenceDocumentEdit::DuplicateEffect { id } => {
             let Some(source) = sequence
@@ -902,7 +921,7 @@ fn apply_sequence_edit_operation(
             collection.marks.remove(original_index);
         }
     }
-    Ok(())
+    Ok(import_to_add)
 }
 
 fn mark_collection_mut<'a>(
@@ -952,10 +971,17 @@ fn compiled_effect_for_sequence_effect(
     effect: &SequenceEffect<Authored>,
 ) -> Result<CompiledEffect, String> {
     match &effect.script {
-        InlineOrImport::Inline(source) => compile_effect_script(source)
+        InlineScriptOrRef::Inline { inline } => compile_effect_script(inline)
             .map_err(|diagnostics| script_diagnostics_message(&diagnostics)),
-        InlineOrImport::Import { import } => {
-            let script_path = resolve_import_path(path, import.path());
+        InlineScriptOrRef::Ref(reference) => {
+            let mut resolver = AnalysisImportResolver {
+                files: &analysis.files,
+                scripts: &analysis.scripts,
+            };
+            let script_path = resolver
+                .resolve_effect(path, reference)
+                .map_err(|error| error.to_string())?
+                .source_path;
             let script_key = script_path.to_slash_string();
             if let Some(script) = analysis
                 .scripts
@@ -988,10 +1014,11 @@ fn authored_param_matches_schema(
 ) -> bool {
     let resolved = match param {
         EffectParam::Curve {
-            curve: InlineOrImport::Import { .. },
+            curve: InlineOrRef::Ref(_),
         } => {
             let mut resolver = AnalysisImportResolver {
                 files: &analysis.files,
+                scripts: &analysis.scripts,
             };
             lower_effect_param_document(source_path, param, &mut resolver).ok()
         }
@@ -1016,7 +1043,7 @@ fn authored_param_to_resolved(param: &EffectParam<Authored>) -> Option<EffectPar
         },
         EffectParam::Color { value } => EffectParam::Color { value: *value },
         EffectParam::Curve {
-            curve: InlineOrImport::Inline(curve),
+            curve: InlineOrRef::Inline(curve),
         } if curve.points.iter().all(|point| point.time.is_finite()) => EffectParam::Curve {
             curve: curve.clone(),
         },
@@ -1080,12 +1107,12 @@ fn param_edit_value_to_authored(
         }
         (ScriptType::CurveFloat, SequenceEffectParamEditValue::FloatCurve(points)) => {
             Ok(EffectParam::Curve {
-                curve: InlineOrImport::Inline(edit_points_to_curve(CurveValueType::Float, points)?),
+                curve: InlineOrRef::Inline(edit_points_to_curve(CurveValueType::Float, points)?),
             })
         }
         (ScriptType::CurveColor, SequenceEffectParamEditValue::ColorCurve(points)) => {
             Ok(EffectParam::Curve {
-                curve: InlineOrImport::Inline(edit_points_to_curve(CurveValueType::Color, points)?),
+                curve: InlineOrRef::Inline(edit_points_to_curve(CurveValueType::Color, points)?),
             })
         }
         (ScriptType::Marks, SequenceEffectParamEditValue::Marks(key)) => {
@@ -1297,7 +1324,7 @@ fn sequence_mark_collection_documents(
 fn sequence_audio_document(
     fs: &WorkspaceFs,
     sequence_path: &Utf8PathBuf,
-    audio: Option<&ImportRef>,
+    audio: Option<&AssetPath>,
 ) -> Option<SequenceAudioDocument> {
     let audio = audio?;
     let resolved_path = resolve_import_path(sequence_path, audio.path());
@@ -1372,6 +1399,80 @@ fn script_diagnostics_message(diagnostics: &[crate::effect_script::ScriptDiagnos
         .unwrap_or_else(|| "effect script did not compile".to_string())
 }
 
+fn alias_for_import_path(path: &Utf8PathBuf) -> String {
+    path.parent()
+        .and_then(|parent| parent.file_name())
+        .or_else(|| path.file_stem())
+        .map(sanitize_alias)
+        .filter(|alias| !alias.is_empty())
+        .unwrap_or_else(|| "module".to_string())
+}
+
+fn module_import_for_path(
+    source_path: &Utf8PathBuf,
+    target_path: &Utf8PathBuf,
+    imports: &[DawnImport],
+) -> (String, Option<DawnImport>) {
+    let target_dir = target_path
+        .parent()
+        .map(Utf8PathBuf::from)
+        .unwrap_or_else(|| target_path.clone());
+    let import_from = Utf8PathBuf::from(serialized_import_path(source_path, &target_dir));
+    if let Some(existing) = imports.iter().find(|import| {
+        resolve_import_path(source_path, &import.from)
+            == resolve_import_path(source_path, &import_from)
+    }) {
+        return (existing.alias.clone(), None);
+    }
+
+    let base_alias = alias_for_import_path(target_path);
+    let mut alias = base_alias.clone();
+    let mut suffix = 2u32;
+    while imports.iter().any(|import| import.alias == alias) {
+        alias = format!("{base_alias}{suffix}");
+        suffix += 1;
+    }
+    (
+        alias.clone(),
+        Some(DawnImport {
+            from: import_from,
+            alias,
+        }),
+    )
+}
+
+fn ensure_top_level_import(text: &str, import: DawnImport) -> Result<String, String> {
+    let mut file: DawnFile = parse_dawn_file(text)?;
+    if file
+        .imports
+        .iter()
+        .any(|existing| existing.alias == import.alias && existing.from == import.from)
+    {
+        return Ok(text.to_string());
+    }
+    file.imports.push(import);
+    serde_yaml::to_string(&file).map_err(|error| error.to_string())
+}
+
+fn sanitize_alias(value: &str) -> String {
+    let mut alias = String::new();
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() || character == '_' {
+            alias.push(character);
+        } else if character == '-' {
+            alias.push('_');
+        }
+    }
+    if alias
+        .chars()
+        .next()
+        .is_none_or(|character| !(character.is_ascii_alphabetic() || character == '_'))
+    {
+        alias.insert(0, '_');
+    }
+    alias
+}
+
 fn next_sequence_effect_id(sequence: &Sequence<Authored>) -> Option<u32> {
     let existing = sequence
         .effects
@@ -1414,7 +1515,7 @@ fn runtime_value_to_authored_param(value: &RuntimeValue) -> EffectParam<Authored
         RuntimeValue::Bool(value) => EffectParam::Boolean { value: *value },
         RuntimeValue::Color(value) => EffectParam::Color { value: *value },
         RuntimeValue::Curve(curve) => EffectParam::Curve {
-            curve: InlineOrImport::Inline(curve.clone()),
+            curve: InlineOrRef::Inline(curve.clone()),
         },
         RuntimeValue::Enum(value) => EffectParam::Enum {
             value: value.clone(),
@@ -1438,7 +1539,7 @@ fn type_default_param(value_type: ScriptType, options: &[String]) -> EffectParam
             value: Color::new(255, 255, 255),
         },
         ScriptType::CurveFloat => EffectParam::Curve {
-            curve: InlineOrImport::Inline(Curve {
+            curve: InlineOrRef::Inline(Curve {
                 value_type: CurveValueType::Float,
                 points: vec![
                     CurvePoint {
@@ -1453,7 +1554,7 @@ fn type_default_param(value_type: ScriptType, options: &[String]) -> EffectParam
             }),
         },
         ScriptType::CurveColor => EffectParam::Curve {
-            curve: InlineOrImport::Inline(Curve {
+            curve: InlineOrRef::Inline(Curve {
                 value_type: CurveValueType::Color,
                 points: vec![CurvePoint {
                     time: 0.0,
@@ -1607,19 +1708,28 @@ fn sequence_effect_script_details(
     analysis: Option<&ProjectAnalysis>,
 ) -> Option<(String, String)> {
     match &effect.script {
-        InlineOrImport::Inline(source) => Some((
+        InlineScriptOrRef::Inline { inline } => Some((
             format!(
                 "inline:{}:{}",
                 analysis?.root_path.to_slash_string(),
                 effect.id
             ),
-            source.clone(),
+            inline.clone(),
         )),
-        InlineOrImport::Import { import } => {
-            let path = resolve_import_path(sequence_path, import.path());
+        InlineScriptOrRef::Ref(reference) => {
+            let analysis = analysis?;
+            let mut resolver = AnalysisImportResolver {
+                files: &analysis.files,
+                scripts: &analysis.scripts,
+            };
+            let path = resolver
+                .resolve_effect(sequence_path, reference)
+                .ok()?
+                .source_path;
             let key = path.to_slash_string();
             let source = analysis
-                .and_then(|analysis| analysis.files.get(&path))
+                .files
+                .get(&path)
                 .and_then(|file| file.text.clone())
                 .unwrap_or_else(|| key.clone());
             Some((key, source))
@@ -1634,6 +1744,7 @@ fn sequence_effect_param_documents(
 ) -> Option<Vec<SequenceEffectParamDocument>> {
     let mut resolver = AnalysisImportResolver {
         files: &analysis.files,
+        scripts: &analysis.scripts,
     };
     effect
         .params
@@ -1710,13 +1821,13 @@ fn lower_effect_param_document(
         EffectParam::Color { value } => EffectParam::Color { value: *value },
         EffectParam::Curve { curve } => EffectParam::Curve {
             curve: match curve {
-                InlineOrImport::Inline(curve) => curve.clone(),
-                InlineOrImport::Import { import } => {
+                InlineOrRef::Inline(curve) => curve.clone(),
+                InlineOrRef::Ref(reference) => {
                     let resolved = resolver
-                        .resolve(source_path, import, ObjectKind::Curve)
+                        .resolve_object(source_path, reference, ObjectKind::Curve)
                         .map_err(|error| error.to_string())?;
                     let DawnObject::Curve(curve) = resolved.object else {
-                        return Err(format!("import `{}` is not a curve", import.raw()));
+                        return Err(format!("reference `{}` is not a curve", reference.raw()));
                     };
                     curve
                 }
@@ -1752,10 +1863,12 @@ fn target_label(kind: LayoutTargetKind, name: &str) -> String {
     }
 }
 
-fn sequence_effect_script_label(script: &InlineOrImport<String>) -> String {
+fn sequence_effect_script_label(script: &InlineScriptOrRef) -> String {
     match script {
-        InlineOrImport::Inline(script) => script.lines().next().unwrap_or("Inline").to_string(),
-        InlineOrImport::Import { import } => import.raw().to_string(),
+        InlineScriptOrRef::Inline { inline } => {
+            inline.lines().next().unwrap_or("Inline").to_string()
+        }
+        InlineScriptOrRef::Ref(reference) => reference.raw().to_string(),
     }
 }
 
@@ -1765,7 +1878,7 @@ fn placement_to_document(
     source_path: &Utf8PathBuf,
 ) -> LayoutFixturePlacement {
     let (fixture, resolved_source_path, resolved_object_key) = match &placement.fixture {
-        InlineOrImport::Inline(fixture) => (
+        InlineOrRef::Inline(fixture) => (
             LayoutFixtureRef::Inline {
                 name: fixture.name.clone(),
                 color_model: fixture.color_model,
@@ -1775,18 +1888,15 @@ fn placement_to_document(
             source_path.to_slash_string(),
             None,
         ),
-        InlineOrImport::Import { import } => {
-            let resolved_path = resolve_import_path(source_path, import.path()).to_slash_string();
-            (
-                LayoutFixtureRef::Import {
-                    import: import.raw().to_string(),
-                    object_key: import.object().map(|object| object.as_str().to_string()),
-                    source_path: Some(resolved_path.clone()),
-                },
-                resolved_path,
-                import.object().map(|object| object.as_str().to_string()),
-            )
-        }
+        InlineOrRef::Ref(reference) => (
+            LayoutFixtureRef::Import {
+                import: reference.raw().to_string(),
+                object_key: Some(reference.name().as_str().to_string()),
+                source_path: None,
+            },
+            source_path.to_slash_string(),
+            Some(reference.name().as_str().to_string()),
+        ),
     };
 
     LayoutFixturePlacement {
@@ -1815,6 +1925,12 @@ fn fixture_catalog_from_analysis(
     importing_source_path: &Utf8PathBuf,
 ) -> Vec<FixtureCatalogItem> {
     let mut catalog = Vec::new();
+    let visible_imports = analysis
+        .files
+        .get(importing_source_path)
+        .and_then(|analyzed| analyzed.file.as_ref())
+        .map(|file| file.imports.as_slice())
+        .unwrap_or(&[]);
     for (path, analyzed) in &analysis.files {
         let Some(file) = analyzed.file.as_ref() else {
             continue;
@@ -1824,11 +1940,24 @@ fn fixture_catalog_from_analysis(
                 continue;
             };
             let source_path = path.to_slash_string();
-            let import_path = serialized_import_path(importing_source_path, path);
+            let import_string = visible_imports
+                .iter()
+                .find_map(|import| {
+                    let resolved = resolve_import_path(importing_source_path, &import.from);
+                    if &resolved == path || path.parent() == Some(resolved.as_path()) {
+                        Some(format!("{}.{}", import.alias, key))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| {
+                    let import_path = serialized_import_path(importing_source_path, path);
+                    format!("{import_path}::{key}")
+                });
             catalog.push(FixtureCatalogItem {
                 object_key: key.clone(),
                 source_path: source_path.clone(),
-                import_string: format!("{import_path}::{key}"),
+                import_string,
                 display_name: fixture.name.clone(),
                 color_model: fixture.color_model,
                 bulb_size: fixture.bulb_size,
@@ -1878,15 +2007,13 @@ fn document_to_placement(
     placement: LayoutFixturePlacement,
 ) -> Result<FixturePlacement<Authored>, String> {
     let fixture = match placement.fixture {
-        LayoutFixtureRef::Import { import, .. } => InlineOrImport::Import {
-            import: ImportRef::new(import)?,
-        },
+        LayoutFixtureRef::Import { import, .. } => InlineOrRef::Ref(SymbolRef::new(import)?),
         LayoutFixtureRef::Inline {
             name,
             color_model,
             bulb_size,
             geometry,
-        } => InlineOrImport::Inline(Fixture {
+        } => InlineOrRef::Inline(Fixture {
             name,
             color_model,
             bulb_size,

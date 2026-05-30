@@ -216,7 +216,7 @@ fn analyzes_club_rig_to_resolved_project() {
     let project = analysis.resolved.expect("club rig should resolve");
     assert!(project.display.layout.fixtures.len() >= 8);
     assert_eq!(project.display.patch.routes.len(), 8);
-    assert_eq!(project.sequences[0].effects.len(), 4);
+    assert_eq!(project.sequences[0].effects.len(), 5);
 }
 
 #[test]
@@ -367,6 +367,10 @@ effect Pulse {
     fs::write(
         dir.join("project.dawn"),
         r##"
+imports:
+  - from: effects
+    as: effects
+
 club:
   type: project
   name: club
@@ -416,8 +420,7 @@ club:
             extra:
               type: color
               value: "#ffffff"
-          script:
-            import: effects/pulse.effect.dawn
+          script: effects.Pulse
 "##,
     )
     .unwrap();
@@ -564,6 +567,145 @@ fn sequence_numeric_effect_ids_and_automation_targets_are_validated() {
 }
 
 #[test]
+fn yaml_type_diagnostics_use_source_mapped_scalar_range() {
+    let dir = temp_dir("yaml-source-mapped-scalar");
+    let content = r#"
+bad_fixture:
+  type: fixture
+  name: Bad
+  color_model: rgb
+  bulb_size: 0.32qr
+  geometry:
+    type: points
+    points: []
+"#;
+    fs::write(dir.join("project.dawn"), content).unwrap();
+
+    let analysis = analyze_project(dir.join("project.dawn"), "club");
+    let diagnostic = analysis
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == DiagnosticCode::Yaml)
+        .expect("invalid scalar should produce a YAML diagnostic");
+    let range = diagnostic
+        .range
+        .expect("invalid scalar diagnostic should have a source range");
+
+    assert_eq!(range.start.line, line_index(content, "  bulb_size: 0.32qr"));
+    assert_eq!(range.start.character, 13);
+}
+
+#[test]
+fn duplicate_fixture_id_diagnostic_points_to_duplicate_field() {
+    let dir = temp_dir("duplicate-fixture-source-map");
+    let content = r#"
+club:
+  type: project
+  name: club
+  display:
+    name: main
+    controllers: []
+    patch:
+      routes: []
+    layout:
+      name: stage
+      units: meters
+      target_order:
+        - type: fixture
+          name: first
+        - type: fixture
+          name: second
+      fixtures:
+        - id: 7
+          name: first
+          fixture:
+            name: Pixel
+            color_model: rgb
+            geometry:
+              type: points
+              points: []
+          transform:
+            position: { x: 0.0, y: 0.0, z: 0.0 }
+        - id: 7
+          name: second
+          fixture:
+            name: Pixel
+            color_model: rgb
+            geometry:
+              type: points
+              points: []
+          transform:
+            position: { x: 1.0, y: 0.0, z: 0.0 }
+      groups: []
+"#;
+    fs::write(dir.join("project.dawn"), content).unwrap();
+
+    let analysis = analyze_project(dir.join("project.dawn"), "club");
+    let diagnostic = analysis
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.message.contains("duplicate fixture id `7`"))
+        .expect("duplicate fixture id should be diagnosed");
+    let range = diagnostic
+        .range
+        .expect("duplicate fixture id should point at duplicate id");
+
+    assert_eq!(
+        range.start.line,
+        last_line_index(content, "        - id: 7")
+    );
+    assert_eq!(range.start.character, 14);
+}
+
+#[test]
+fn import_alias_diagnostics_use_import_alias_path() {
+    let dir = temp_dir("invalid-import-alias-source-map");
+    let content = r#"
+imports:
+  - from: missing.dawn
+    as: 1bad
+
+club:
+  type: project
+  name: club
+  display:
+    name: main
+    controllers: []
+    patch:
+      routes: []
+    layout:
+      name: stage
+      units: meters
+      target_order: []
+      fixtures: []
+      groups: []
+"#;
+    fs::write(dir.join("project.dawn"), content).unwrap();
+
+    let analysis = analyze_project(dir.join("project.dawn"), "club");
+    let diagnostic = analysis
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.message.contains("import alias must start"))
+        .expect("invalid alias should be diagnosed");
+    let range = diagnostic
+        .range
+        .expect("invalid alias should point at imports[0].as");
+
+    assert_eq!(range.start.line, line_index(content, "    as: 1bad"));
+    assert_eq!(range.start.character, 8);
+}
+
+#[test]
+fn analysis_diagnostics_do_not_use_removed_text_search_helpers() {
+    let analysis_source =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/analysis.rs")).unwrap();
+
+    assert!(!analysis_source.contains("find_text_range"));
+    assert!(!analysis_source.contains("yaml_invalid_scalar_range"));
+}
+
+#[test]
 fn sequence_param_analysis_rejects_undeclared_enum_and_flag_values() {
     let dir = temp_dir("enum-flags-authored-values");
     fs::create_dir_all(dir.join("effects")).unwrap();
@@ -580,8 +722,10 @@ effect Options {
     .unwrap();
     fs::write(
         dir.join("project.dawn"),
-        project_with_inline_sequence(
-            r##"
+        format!(
+            "imports:\n  - from: effects\n    as: effects\n\n{}",
+            project_with_inline_sequence(
+                r##"
         - id: 1
           start: 0s
           duration: 1s
@@ -594,9 +738,9 @@ effect Options {
             mask:
               type: flags
               value: [red, missing]
-          script:
-            import: effects/options.effect.dawn
+          script: effects.Options
 "##,
+            )
         ),
     )
     .unwrap();
@@ -640,10 +784,14 @@ effect Options {
 club:
   type: project
   name: club
-  display:
-    import: display.dawn::main
+  display: displays.main
   sequences:
-    - import: sequences/opening.sequence.dawn::opening
+    - sequences.opening
+imports:
+  - from: display.dawn
+    as: displays
+  - from: sequences/opening.sequence.dawn
+    as: sequences
 "#,
     )
     .unwrap();
@@ -1026,11 +1174,14 @@ fn reports_import_diagnostics_and_keeps_parsed_files() {
     fs::write(
         &project_path,
         r#"
+imports:
+  - from: missing.display.dawn
+    as: displays
+
 club:
   type: project
   name: missing-import
-  display:
-    import: missing.display.dawn::main
+  display: displays.main
 "#,
     )
     .unwrap();
@@ -1090,6 +1241,10 @@ fn layout_document_resolves_imported_fixture_geometry_like_inline_geometry() {
     fs::write(
         &layout_path,
         r#"
+imports:
+  - from: fixtures.dawn
+    as: fixtures
+
 stage:
   type: layout
   name: stage
@@ -1102,8 +1257,7 @@ stage:
   fixtures:
     - id: 1
       name: Imported
-      fixture:
-        import: fixtures.dawn::pixel_bar
+      fixture: fixtures.pixel_bar
       transform:
         position: { x: 0.0, y: 0.0, z: 0.0 }
     - id: 2
@@ -1138,7 +1292,7 @@ stage:
     assert_eq!(imported.object_key.as_deref(), Some("pixel_bar"));
     assert_eq!(
         document.fixture_catalog[0].import_string,
-        "fixtures.dawn::pixel_bar"
+        "fixtures.pixel_bar"
     );
 }
 
@@ -1158,6 +1312,10 @@ fn layout_document_uses_overlay_analysis_resolver_for_imports() {
     fs::write(
         &layout_path,
         r#"
+imports:
+  - from: fixtures.dawn
+    as: fixtures
+
 stage:
   type: layout
   name: stage
@@ -1168,8 +1326,7 @@ stage:
   fixtures:
     - id: 1
       name: Imported
-      fixture:
-        import: fixtures.dawn::pixel_bar
+      fixture: fixtures.pixel_bar
       transform:
         position: { x: 0.0, y: 0.0, z: 0.0 }
   groups: []
@@ -1287,6 +1444,10 @@ fn layout_documents_include_transformed_render_bounds() {
     fs::write(
         &layout_path,
         r#"
+imports:
+  - from: missing.dawn
+    as: fixtures
+
 stage:
   type: layout
   name: stage
@@ -1361,6 +1522,10 @@ fn layout_document_reports_unresolved_fixture_import() {
     fs::write(
         &layout_path,
         r#"
+imports:
+  - from: fixtures.dawn
+    as: fixtures
+
 stage:
   type: layout
   name: stage
@@ -1371,8 +1536,7 @@ stage:
   fixtures:
     - id: 1
       name: Missing
-      fixture:
-        import: missing.dawn::pixel_bar
+      fixture: fixtures.pixel_bar
       transform:
         position: { x: 0.0, y: 0.0, z: 0.0 }
   groups: []
@@ -1385,7 +1549,7 @@ stage:
 
     assert!(error.contains("could not load layout `stage`"), "{error}");
     assert!(
-        error.contains("failed to resolve import `missing.dawn::pixel_bar`"),
+        error.contains("failed to resolve reference `fixtures.pixel_bar`"),
         "{error}"
     );
 }
@@ -1431,7 +1595,7 @@ pixel:
         id: FixtureId(1),
         name: "Pixel 01".to_string(),
         fixture: LayoutFixtureRef::Import {
-            import: "layout.dawn::pixel".to_string(),
+            import: "fixtures.pixel".to_string(),
             object_key: Some("pixel".to_string()),
             source_path: Some(Utf8PathBuf::from("layout.dawn").to_slash_string()),
         },
@@ -1582,8 +1746,7 @@ stage:
   fixtures:
     - id: 1
       name: Imported
-      fixture:
-        import: fixtures.dawn::pixel
+      fixture: fixtures.pixel
       transform:
         position: { x: 0.0, y: 0.0, z: 0.0 }
   groups: []
@@ -1895,25 +2058,31 @@ fn source_relative_imports_resolve_inside_nested_directories() {
     fs::write(
         dir.join("project.dawn"),
         r#"
+imports:
+  - from: shows/display.dawn
+    as: displays
+
 club:
   type: project
   name: club
-  display:
-    import: shows/display.dawn::main
+  display: displays.main
 "#,
     )
     .unwrap();
     fs::write(
         dir.join("shows/display.dawn"),
         r#"
+imports:
+  - from: layout.dawn
+    as: layouts
+
 main:
   type: display
   name: main
   controllers: []
   patch:
     routes: []
-  layout:
-    import: layout.dawn::stage
+  layout: layouts.stage
 "#,
     )
     .unwrap();
@@ -1968,11 +2137,14 @@ main:
         dir.join("project.dawn"),
         format!(
             r#"
+imports:
+  - from: "{}"
+    as: displays
+
 club:
   type: project
   name: club
-  display:
-    import: "{}::main"
+  display: displays.main
 "#,
             display_path.to_string_lossy().replace('\\', "/")
         ),
@@ -2017,11 +2189,14 @@ main:
         dir.join("project.dawn"),
         format!(
             r#"
+imports:
+  - from: ../{}
+    as: displays
+
 club:
   type: project
   name: club
-  display:
-    import: ../{}::main
+  display: displays.main
 "#,
             outside_display.file_name().unwrap().to_string_lossy()
         ),
@@ -2139,8 +2314,15 @@ club:
 }
 
 fn project_with_layout_import(import: &str) -> String {
+    let (from, name) = import
+        .split_once("::")
+        .unwrap_or((import, import.rsplit('/').next().unwrap_or(import)));
     format!(
         r#"
+imports:
+  - from: {from}
+    as: layouts
+
 club:
   type: project
   name: club
@@ -2149,8 +2331,7 @@ club:
     controllers: []
     patch:
       routes: []
-    layout:
-      import: {import}
+    layout: layouts.{name}
 "#
     )
 }
@@ -2178,6 +2359,20 @@ fn temp_dir(label: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("dawn-project-{label}-{nanos}"));
     fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn line_index(text: &str, needle: &str) -> u32 {
+    text.lines()
+        .position(|line| line == needle)
+        .expect("test fixture should contain line") as u32
+}
+
+fn last_line_index(text: &str, needle: &str) -> u32 {
+    text.lines()
+        .enumerate()
+        .filter_map(|(index, line)| (line == needle).then_some(index))
+        .last()
+        .expect("test fixture should contain line") as u32
 }
 
 fn empty_render_plan() -> GeometryRenderPlan {

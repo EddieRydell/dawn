@@ -1,22 +1,26 @@
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { File, Folder, FolderPlus, Pencil, Plus, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import type { NodeApi } from "react-arborist";
 import { Tree } from "react-arborist";
 import { commands } from "../api";
-import type { AppSnapshotDto, WorkspaceEntryDto } from "../bindings";
+import type { AppSnapshotDto, ProjectDiagnosticDto, WorkspaceEntryDto } from "../bindings";
 import { runSnapshotCommand } from "../store";
 
 type TreeNode = {
   id: string;
   name: string;
   kind: WorkspaceEntryDto["kind"];
+  hasError: boolean;
   children?: TreeNode[];
 };
 
 export function ProjectTree({ snapshot }: { snapshot: AppSnapshotDto }) {
-  const treeData = useMemo(() => buildTree(snapshot.projectEntries), [snapshot.projectEntries]);
+  const treeData = useMemo(
+    () => buildTree(snapshot.projectEntries, snapshot.diagnostics, snapshot.projectRoot),
+    [snapshot.diagnostics, snapshot.projectEntries, snapshot.projectRoot]
+  );
   const [pendingDelete, setPendingDelete] = useState<TreeNode | null>(null);
 
   return (
@@ -77,7 +81,7 @@ function TreeRow({
   requestDelete
 }: {
   node: NodeApi<TreeNode>;
-  style: React.CSSProperties;
+  style: CSSProperties;
   dragHandle?: (el: HTMLDivElement | null) => void;
   requestDelete: (node: TreeNode) => void;
 }) {
@@ -87,7 +91,7 @@ function TreeRow({
       <ContextMenu.Trigger asChild>
         <div
           ref={dragHandle}
-          className={`tree-row ${node.isSelected ? "selected" : ""}`}
+          className={treeRowClassName(node)}
           style={style}
           onDoubleClick={() => {
             if (node.data.kind === "directory") {
@@ -123,13 +127,25 @@ function TreeRow({
   );
 }
 
-function buildTree(entries: WorkspaceEntryDto[]): TreeNode[] {
+function treeRowClassName(node: NodeApi<TreeNode>): string {
+  const classes = ["tree-row"];
+  if (node.isSelected) classes.push("selected");
+  if (node.data.kind === "file" && node.data.hasError) classes.push("file-error");
+  return classes.join(" ");
+}
+
+function buildTree(
+  entries: WorkspaceEntryDto[],
+  diagnostics: ProjectDiagnosticDto[],
+  projectRoot: string | null
+): TreeNode[] {
   const nodes = new Map<string, TreeNode>();
   for (const entry of entries) {
     const node: TreeNode = {
       id: entry.path,
       name: entry.name,
-      kind: entry.kind
+      kind: entry.kind,
+      hasError: entry.kind === "file" && hasErrorDiagnostic(entry.path, diagnostics, projectRoot)
     };
     if (entry.kind === "directory") {
       node.children = [];
@@ -148,6 +164,31 @@ function buildTree(entries: WorkspaceEntryDto[]): TreeNode[] {
     }
   }
   return roots;
+}
+
+function hasErrorDiagnostic(
+  path: string,
+  diagnostics: ProjectDiagnosticDto[],
+  projectRoot: string | null
+): boolean {
+  return diagnostics.some((diagnostic) => diagnostic.severity === "error" && samePath(diagnostic.path, path, projectRoot));
+}
+
+function samePath(left: string, right: string, projectRoot: string | null): boolean {
+  const normalizedLeft = normalizePath(left);
+  const normalizedRight = normalizePath(right);
+  if (normalizedLeft === normalizedRight) return true;
+  if (projectRoot === null || isAbsolutePath(right)) return false;
+  return normalizedLeft === normalizePath(`${projectRoot}/${right}`);
+}
+
+function normalizePath(path: string): string {
+  return path.replace(/^\/\/\?\//, "").replace(/\\/g, "/").toLowerCase();
+}
+
+function isAbsolutePath(path: string): boolean {
+  const normalized = normalizePath(path);
+  return /^[a-z]:\//.test(normalized) || normalized.startsWith("/");
 }
 
 function createFile(parent: string) {

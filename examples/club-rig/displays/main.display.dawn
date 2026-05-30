@@ -1,10 +1,14 @@
+imports:
+  - from: ../layouts/stage.layout.dawn
+    as: layouts
+  - from: ../patches/house.patch.dawn
+    as: patches
+
 main:
   type: display
   name: main
-  layout:
-    import: ../layouts/stage.layout.dawn::stage
-  patch:
-    import: ../patches/house.patch.dawn::house
+  layout: layouts.stage
+  patch: patches.house
   controllers:
     - name: WallController
       protocol: artnet

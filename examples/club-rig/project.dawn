@@ -1,7 +1,12 @@
+imports:
+  - from: displays/main.display.dawn
+    as: displays
+  - from: sequences/opening.sequence.dawn
+    as: sequences
+
 club_rig:
   type: project
   name: club-rig
-  display:
-    import: displays/main.display.dawn::main
+  display: displays.main
   sequences:
-    - import: sequences/opening.sequence.dawn::opening
+    - sequences.opening

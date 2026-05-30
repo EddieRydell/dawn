@@ -1,3 +1,7 @@
+imports:
+  - from: ../effects
+    as: effects
+
 christmas:
   type: sequence
   duration: 45000ms
@@ -25,8 +29,7 @@ christmas:
       speed:
         type: float
         value: 1.0
-    script:
-      import: ../effects/candy-cane.effect.dawn
+    script: effects.CandyCane
   - id: 2
     start: 0ms
     duration: 45000ms
@@ -44,8 +47,7 @@ christmas:
       speed:
         type: float
         value: 0.3
-    script:
-      import: ../effects/warm-glow.effect.dawn
+    script: effects.WarmGlow
   - id: 3
     start: 0ms
     duration: 45000ms
@@ -69,8 +71,7 @@ christmas:
       seed:
         type: float
         value: 12.0
-    script:
-      import: ../effects/twinkle.effect.dawn
+    script: effects.Twinkle
   - id: 4
     start: 0ms
     duration: 45000ms
@@ -88,6 +89,5 @@ christmas:
       speed:
         type: float
         value: 0.9
-    script:
-      import: ../effects/warm-glow.effect.dawn
+    script: effects.WarmGlow
   automation_clips: []

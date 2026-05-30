@@ -14,6 +14,26 @@ pub struct ResolvedImport {
 }
 
 #[derive(Debug, Clone)]
+pub struct ResolvedEffectImport {
+    pub source_path: Utf8PathBuf,
+}
+
+pub trait SymbolResolver {
+    fn resolve_object(
+        &mut self,
+        source_path: &Utf8PathBuf,
+        reference: &SymbolRef,
+        expected: ObjectKind,
+    ) -> Result<ResolvedImport, LowerError>;
+
+    fn resolve_effect(
+        &mut self,
+        source_path: &Utf8PathBuf,
+        reference: &SymbolRef,
+    ) -> Result<ResolvedEffectImport, LowerError>;
+}
+
+#[derive(Debug, Clone)]
 pub enum LowerError {
     MissingProject {
         key: String,
@@ -24,12 +44,12 @@ pub enum LowerError {
         actual: ObjectKind,
     },
     WrongImportedObjectKind {
-        import: String,
+        reference: String,
         expected: ObjectKind,
         actual: ObjectKind,
     },
     Import {
-        import: String,
+        reference: String,
         message: String,
     },
     DuplicateFixtureId {
@@ -93,15 +113,18 @@ impl fmt::Display for LowerError {
                 "object `{key}` must be a {expected}, but found a {actual}"
             ),
             Self::WrongImportedObjectKind {
-                import,
+                reference,
                 expected,
                 actual,
             } => write!(
                 formatter,
-                "import `{import}` must resolve to a {expected}, but found a {actual}"
+                "reference `{reference}` must resolve to a {expected}, but found a {actual}"
             ),
-            Self::Import { import, message } => {
-                write!(formatter, "failed to resolve import `{import}`: {message}")
+            Self::Import { reference, message } => {
+                write!(
+                    formatter,
+                    "failed to resolve reference `{reference}`: {message}"
+                )
             }
             Self::DuplicateFixtureId { id } => write!(formatter, "duplicate fixture id `{id}`"),
             Self::EmptyFixtureName => write!(formatter, "fixture name cannot be empty"),
@@ -159,7 +182,7 @@ pub fn lower_project(
     file: &DawnFile,
     project_key: &str,
     source_path: &Utf8PathBuf,
-    mut resolver: impl FnMut(&Utf8PathBuf, &ImportRef, ObjectKind) -> Result<ResolvedImport, LowerError>,
+    resolver: &mut impl SymbolResolver,
 ) -> Result<ResolvedProject, LowerError> {
     let object = file
         .get(project_key)
@@ -173,17 +196,13 @@ pub fn lower_project(
             actual: object.kind(),
         });
     };
-    lower_project_object(project, source_path, &mut resolver)
+    lower_project_object(project, source_path, resolver)
 }
 
 fn lower_project_object(
     project: &Project<Authored>,
     source_path: &Utf8PathBuf,
-    resolver: &mut impl FnMut(
-        &Utf8PathBuf,
-        &ImportRef,
-        ObjectKind,
-    ) -> Result<ResolvedImport, LowerError>,
+    resolver: &mut impl SymbolResolver,
 ) -> Result<Project<Resolved>, LowerError> {
     let (display, display_source) =
         resolve_display(&project.display, source_path, ObjectKind::Display, resolver)?;
@@ -217,11 +236,7 @@ fn lower_project_object(
 fn lower_display(
     display: &Display<Authored>,
     source_path: &Utf8PathBuf,
-    resolver: &mut impl FnMut(
-        &Utf8PathBuf,
-        &ImportRef,
-        ObjectKind,
-    ) -> Result<ResolvedImport, LowerError>,
+    resolver: &mut impl SymbolResolver,
 ) -> Result<Display<Resolved>, LowerError> {
     let mut controllers = Vec::with_capacity(display.controllers.len());
     for controller in &display.controllers {
@@ -249,11 +264,7 @@ fn lower_display(
 pub(crate) fn lower_layout(
     layout: &Layout<Authored>,
     source_path: &Utf8PathBuf,
-    resolver: &mut impl FnMut(
-        &Utf8PathBuf,
-        &ImportRef,
-        ObjectKind,
-    ) -> Result<ResolvedImport, LowerError>,
+    resolver: &mut impl SymbolResolver,
 ) -> Result<Layout<Resolved>, LowerError> {
     let mut fixtures = Vec::with_capacity(layout.fixtures.len());
     for placement in &layout.fixtures {
@@ -380,11 +391,7 @@ fn lower_sequence(
     sequence_source_path: &Utf8PathBuf,
     layout: &Layout<Authored>,
     layout_source_path: &Utf8PathBuf,
-    resolver: &mut impl FnMut(
-        &Utf8PathBuf,
-        &ImportRef,
-        ObjectKind,
-    ) -> Result<ResolvedImport, LowerError>,
+    resolver: &mut impl SymbolResolver,
 ) -> Result<Sequence<Resolved>, LowerError> {
     let resolved_layout = lower_layout(layout, layout_source_path, resolver)?;
     let fixtures = fixture_indices(&resolved_layout.fixtures)?;
@@ -452,11 +459,7 @@ fn lower_sequence_effect(
     fixtures: &HashMap<FixtureId, FixtureIndex>,
     groups: &HashMap<String, GroupIndex>,
     source_path: &Utf8PathBuf,
-    resolver: &mut impl FnMut(
-        &Utf8PathBuf,
-        &ImportRef,
-        ObjectKind,
-    ) -> Result<ResolvedImport, LowerError>,
+    resolver: &mut impl SymbolResolver,
 ) -> Result<SequenceEffect<Resolved>, LowerError> {
     let target = match &effect.target {
         EffectTarget::Group { name: group } => {
@@ -492,9 +495,9 @@ fn lower_sequence_effect(
         scope: effect.scope,
         params,
         script: match &effect.script {
-            InlineOrImport::Inline(script) => ScriptSource::Inline(script.clone()),
-            InlineOrImport::Import { import } => {
-                ScriptSource::External(resolve_path(source_path, import.path(), import.raw())?)
+            InlineScriptOrRef::Inline { inline } => ScriptSource::Inline(inline.clone()),
+            InlineScriptOrRef::Ref(reference) => {
+                ScriptSource::External(resolver.resolve_effect(source_path, reference)?.source_path)
             }
         },
     })
@@ -503,11 +506,7 @@ fn lower_sequence_effect(
 fn lower_effect_param(
     param: &EffectParam<Authored>,
     source_path: &Utf8PathBuf,
-    resolver: &mut impl FnMut(
-        &Utf8PathBuf,
-        &ImportRef,
-        ObjectKind,
-    ) -> Result<ResolvedImport, LowerError>,
+    resolver: &mut impl SymbolResolver,
 ) -> Result<EffectParam<Resolved>, LowerError> {
     Ok(match param {
         EffectParam::Integer { value } => EffectParam::Integer { value: *value },
@@ -595,64 +594,41 @@ fn resolve_path(
 
 fn resolve_import(
     source_path: &Utf8PathBuf,
-    import: &ImportRef,
+    reference: &SymbolRef,
     expected: ObjectKind,
-    resolver: &mut impl FnMut(
-        &Utf8PathBuf,
-        &ImportRef,
-        ObjectKind,
-    ) -> Result<ResolvedImport, LowerError>,
+    resolver: &mut impl SymbolResolver,
 ) -> Result<ResolvedImport, LowerError> {
-    let resolved = resolver(source_path, import, expected)?;
+    let resolved = resolver.resolve_object(source_path, reference, expected)?;
     if resolved.object.kind() != expected {
         return Err(LowerError::WrongImportedObjectKind {
-            import: import.raw().to_string(),
+            reference: reference.raw().to_string(),
             expected,
             actual: resolved.object.kind(),
         });
     }
     Ok(resolved)
 }
-pub(crate) fn select_imported_object(
+pub(crate) fn select_referenced_object(
     file: &DawnFile,
-    import: &ImportRef,
+    reference: &SymbolRef,
 ) -> Result<DawnObject<Authored>, LowerError> {
-    if let Some(object) = import.object() {
-        return file
-            .get(object.as_str())
-            .cloned()
-            .ok_or_else(|| LowerError::Import {
-                import: import.raw().to_string(),
-                message: format!("object `{}` was not found", object.as_str()),
-            });
-    }
-
-    if file.len() == 1 {
-        if let Some(object) = file.values().next() {
-            return Ok(object.clone());
-        }
-    }
-
-    Err(LowerError::Import {
-        import: import.raw().to_string(),
-        message: "import must name an object when the target file has zero or multiple objects"
-            .to_string(),
-    })
+    file.get(reference.name().as_str())
+        .cloned()
+        .ok_or_else(|| LowerError::Import {
+            reference: reference.raw().to_string(),
+            message: format!("object `{}` was not found", reference.name().as_str()),
+        })
 }
 fn resolve_display(
-    value: &InlineOrImport<Display<Authored>>,
+    value: &InlineOrRef<Display<Authored>>,
     source_path: &Utf8PathBuf,
     expected: ObjectKind,
-    resolver: &mut impl FnMut(
-        &Utf8PathBuf,
-        &ImportRef,
-        ObjectKind,
-    ) -> Result<ResolvedImport, LowerError>,
+    resolver: &mut impl SymbolResolver,
 ) -> Result<(Display<Authored>, Utf8PathBuf), LowerError> {
     match value {
-        InlineOrImport::Inline(display) => Ok((display.clone(), source_path.clone())),
-        InlineOrImport::Import { import } => {
-            let resolved = resolve_import(source_path, import, expected, resolver)?;
+        InlineOrRef::Inline(display) => Ok((display.clone(), source_path.clone())),
+        InlineOrRef::Ref(reference) => {
+            let resolved = resolve_import(source_path, reference, expected, resolver)?;
             let DawnObject::Display(display) = resolved.object else {
                 unreachable!("resolved import kind was checked");
             };
@@ -662,18 +638,15 @@ fn resolve_display(
 }
 
 fn resolve_controller(
-    value: &InlineOrImport<Controller>,
+    value: &InlineOrRef<Controller>,
     source_path: &Utf8PathBuf,
-    resolver: &mut impl FnMut(
-        &Utf8PathBuf,
-        &ImportRef,
-        ObjectKind,
-    ) -> Result<ResolvedImport, LowerError>,
+    resolver: &mut impl SymbolResolver,
 ) -> Result<(Controller, Utf8PathBuf), LowerError> {
     match value {
-        InlineOrImport::Inline(controller) => Ok((controller.clone(), source_path.clone())),
-        InlineOrImport::Import { import } => {
-            let resolved = resolve_import(source_path, import, ObjectKind::Controller, resolver)?;
+        InlineOrRef::Inline(controller) => Ok((controller.clone(), source_path.clone())),
+        InlineOrRef::Ref(reference) => {
+            let resolved =
+                resolve_import(source_path, reference, ObjectKind::Controller, resolver)?;
             let DawnObject::Controller(controller) = resolved.object else {
                 unreachable!("resolved import kind was checked");
             };
@@ -683,19 +656,15 @@ fn resolve_controller(
 }
 
 fn resolve_layout(
-    value: &InlineOrImport<Layout<Authored>>,
+    value: &InlineOrRef<Layout<Authored>>,
     source_path: &Utf8PathBuf,
     expected: ObjectKind,
-    resolver: &mut impl FnMut(
-        &Utf8PathBuf,
-        &ImportRef,
-        ObjectKind,
-    ) -> Result<ResolvedImport, LowerError>,
+    resolver: &mut impl SymbolResolver,
 ) -> Result<(Layout<Authored>, Utf8PathBuf), LowerError> {
     match value {
-        InlineOrImport::Inline(layout) => Ok((layout.clone(), source_path.clone())),
-        InlineOrImport::Import { import } => {
-            let resolved = resolve_import(source_path, import, expected, resolver)?;
+        InlineOrRef::Inline(layout) => Ok((layout.clone(), source_path.clone())),
+        InlineOrRef::Ref(reference) => {
+            let resolved = resolve_import(source_path, reference, expected, resolver)?;
             let DawnObject::Layout(layout) = resolved.object else {
                 unreachable!("resolved import kind was checked");
             };
@@ -705,18 +674,14 @@ fn resolve_layout(
 }
 
 fn resolve_fixture(
-    value: &InlineOrImport<Fixture>,
+    value: &InlineOrRef<Fixture>,
     source_path: &Utf8PathBuf,
-    resolver: &mut impl FnMut(
-        &Utf8PathBuf,
-        &ImportRef,
-        ObjectKind,
-    ) -> Result<ResolvedImport, LowerError>,
+    resolver: &mut impl SymbolResolver,
 ) -> Result<(Fixture, Utf8PathBuf), LowerError> {
     match value {
-        InlineOrImport::Inline(fixture) => Ok((fixture.clone(), source_path.clone())),
-        InlineOrImport::Import { import } => {
-            let resolved = resolve_import(source_path, import, ObjectKind::Fixture, resolver)?;
+        InlineOrRef::Inline(fixture) => Ok((fixture.clone(), source_path.clone())),
+        InlineOrRef::Ref(reference) => {
+            let resolved = resolve_import(source_path, reference, ObjectKind::Fixture, resolver)?;
             let DawnObject::Fixture(fixture) = resolved.object else {
                 unreachable!("resolved import kind was checked");
             };
@@ -726,19 +691,15 @@ fn resolve_fixture(
 }
 
 fn resolve_patch(
-    value: &InlineOrImport<Patch<Authored>>,
+    value: &InlineOrRef<Patch<Authored>>,
     source_path: &Utf8PathBuf,
     expected: ObjectKind,
-    resolver: &mut impl FnMut(
-        &Utf8PathBuf,
-        &ImportRef,
-        ObjectKind,
-    ) -> Result<ResolvedImport, LowerError>,
+    resolver: &mut impl SymbolResolver,
 ) -> Result<(Patch<Authored>, Utf8PathBuf), LowerError> {
     match value {
-        InlineOrImport::Inline(patch) => Ok((patch.clone(), source_path.clone())),
-        InlineOrImport::Import { import } => {
-            let resolved = resolve_import(source_path, import, expected, resolver)?;
+        InlineOrRef::Inline(patch) => Ok((patch.clone(), source_path.clone())),
+        InlineOrRef::Ref(reference) => {
+            let resolved = resolve_import(source_path, reference, expected, resolver)?;
             let DawnObject::Patch(patch) = resolved.object else {
                 unreachable!("resolved import kind was checked");
             };
@@ -748,19 +709,15 @@ fn resolve_patch(
 }
 
 fn resolve_sequence(
-    value: &InlineOrImport<Sequence<Authored>>,
+    value: &InlineOrRef<Sequence<Authored>>,
     source_path: &Utf8PathBuf,
     expected: ObjectKind,
-    resolver: &mut impl FnMut(
-        &Utf8PathBuf,
-        &ImportRef,
-        ObjectKind,
-    ) -> Result<ResolvedImport, LowerError>,
+    resolver: &mut impl SymbolResolver,
 ) -> Result<(Sequence<Authored>, Utf8PathBuf), LowerError> {
     match value {
-        InlineOrImport::Inline(sequence) => Ok((sequence.clone(), source_path.clone())),
-        InlineOrImport::Import { import } => {
-            let resolved = resolve_import(source_path, import, expected, resolver)?;
+        InlineOrRef::Inline(sequence) => Ok((sequence.clone(), source_path.clone())),
+        InlineOrRef::Ref(reference) => {
+            let resolved = resolve_import(source_path, reference, expected, resolver)?;
             let DawnObject::Sequence(sequence) = resolved.object else {
                 unreachable!("resolved import kind was checked");
             };
@@ -770,18 +727,14 @@ fn resolve_sequence(
 }
 
 fn resolve_curve(
-    value: &InlineOrImport<Curve>,
+    value: &InlineOrRef<Curve>,
     source_path: &Utf8PathBuf,
-    resolver: &mut impl FnMut(
-        &Utf8PathBuf,
-        &ImportRef,
-        ObjectKind,
-    ) -> Result<ResolvedImport, LowerError>,
+    resolver: &mut impl SymbolResolver,
 ) -> Result<Curve, LowerError> {
     match value {
-        InlineOrImport::Inline(curve) => Ok(curve.clone()),
-        InlineOrImport::Import { import } => {
-            let resolved = resolve_import(source_path, import, ObjectKind::Curve, resolver)?;
+        InlineOrRef::Inline(curve) => Ok(curve.clone()),
+        InlineOrRef::Ref(reference) => {
+            let resolved = resolve_import(source_path, reference, ObjectKind::Curve, resolver)?;
             let DawnObject::Curve(curve) = resolved.object else {
                 unreachable!("resolved import kind was checked");
             };

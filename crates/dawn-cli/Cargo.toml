@@ -1,0 +1,16 @@
+[package]
+name = "dawn-cli"
+edition.workspace = true
+version.workspace = true
+default-run = "dawn"
+
+[dependencies]
+camino.workspace = true
+clap.workspace = true
+dawn-project = { path = "../dawn-project" }
+serde.workspace = true
+serde_json.workspace = true
+
+[[bin]]
+name = "dawn"
+path = "src/main.rs"

@@ -17,5 +17,6 @@ pub mod fs;
 pub mod load;
 pub mod lower;
 pub mod model;
+pub mod parse;
 pub mod path;
 pub mod render;

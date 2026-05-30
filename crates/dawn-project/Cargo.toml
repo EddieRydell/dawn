@@ -8,4 +8,6 @@ camino.workspace = true
 indexmap.workspace = true
 pathdiff.workspace = true
 serde.workspace = true
+serde_path_to_error = "0.1"
 serde_yaml.workspace = true
+yaml-rust2 = "0.11"
