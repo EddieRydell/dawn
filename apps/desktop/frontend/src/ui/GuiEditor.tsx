@@ -1044,7 +1044,10 @@ function SequenceCanvas({
         const effect = document.effects.find((candidate) => candidate.id === current.id);
         if (effect === undefined) return;
         const deltaMs = Math.round((event.nativeEvent.offsetX - current.startX) / viewport.pxPerMs / 50) * 50;
-        const laneIndex = clamp(Math.floor((event.nativeEvent.offsetY - top + viewport.scrollY) / viewport.laneHeight), 0, document.lanes.length - 1);
+        const laneIndex =
+          current.resize === "none"
+            ? clamp(Math.floor((event.nativeEvent.offsetY - top + viewport.scrollY) / viewport.laneHeight), 0, document.lanes.length - 1)
+            : current.laneIndex;
         if (current.resize === "left") {
           const startMs = clamp(current.originalStartMs + deltaMs, 0, effect.startMs + effect.durationMs - 50);
           setPreview({ id: effect.id, startMs, durationMs: effect.startMs + effect.durationMs - startMs, laneIndex });

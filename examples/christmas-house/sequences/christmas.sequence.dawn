@@ -109,8 +109,8 @@ christmas:
         value: 0.9
     script: effects.WarmGlow
   - id: 5
-    start: 6200ms
-    duration: 26600ms
+    start: 8500ms
+    duration: 24300ms
     target:
       type: fixture
       id: 5
@@ -132,9 +132,9 @@ christmas:
           points:
           - time: 0.0
             value: '#ffffff'
-          - time: 0.294
-            value: '#ff0000'
-          - time: 0.801
+          - time: 0.231
+            value: '#ff7a7a'
+          - time: 0.448
             value: '#ff0000'
       spatial_offset:
         type: float
