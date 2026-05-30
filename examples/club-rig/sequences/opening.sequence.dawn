@@ -1,8 +1,17 @@
 opening:
   type: sequence
-  duration: 100s
+  duration: 100000ms
   frame_rate: 60
   audio: ../audio/song.mp3
+  mark_collections:
+  - key: marks
+    name: Group 1
+    color: '#38bdf8'
+    marks:
+    - 12622ms
+    - 16137ms
+    - 17177ms
+    - 18788ms
   effects:
   - id: 16
     start: 0ms

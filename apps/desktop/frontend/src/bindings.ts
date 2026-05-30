@@ -233,6 +233,7 @@ export type SequenceDocumentDto = {
 	durationMs: number,
 	frameRate: number,
 	audio: SequenceAudioDto | null,
+	markCollections: SequenceMarkCollectionDto[],
 	lanes: SequenceLaneDto[],
 	effectScripts: SequenceEffectScriptDto[],
 	effects: SequenceEffectDto[],
@@ -282,11 +283,18 @@ export type SequenceEffectScriptDto = {
 	import: string,
 };
 
-export type SequenceGuiEditDto = { type: "setAudio"; import: string | null } | { type: "addEffect"; scriptPath: string; target: LayoutTargetDto; startMs: number } | { type: "moveEffect"; id: number; startMs: number; target: LayoutTargetDto | null } | { type: "resizeEffect"; id: number; startMs: number; durationMs: number } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTargetDto } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValueDto };
+export type SequenceGuiEditDto = { type: "setAudio"; import: string | null } | { type: "addEffect"; scriptPath: string; target: LayoutTargetDto; startMs: number } | { type: "moveEffect"; id: number; startMs: number; target: LayoutTargetDto | null } | { type: "resizeEffect"; id: number; startMs: number; durationMs: number } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTargetDto } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValueDto } | { type: "createMarkCollection"; key: string; name: string; color: string } | { type: "renameMarkCollection"; key: string; name: string } | { type: "deleteMarkCollection"; key: string } | { type: "setMarkCollectionColor"; key: string; color: string } | { type: "addMark"; collectionKey: string; timeMs: number } | { type: "moveMark"; collectionKey: string; index: number; timeMs: number } | { type: "deleteMark"; collectionKey: string; index: number };
 
 export type SequenceLaneDto = {
 	target: LayoutTargetDto,
 	label: string,
+};
+
+export type SequenceMarkCollectionDto = {
+	key: string,
+	name: string,
+	color: string,
+	marksMs: number[],
 };
 
 export type TextPositionDto = {

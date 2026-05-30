@@ -523,6 +523,41 @@ impl AppModel {
                     value: value.into(),
                 }
             }
+            SequenceGuiEditDto::CreateMarkCollection { key, name, color } => {
+                SequenceDocumentEdit::CreateMarkCollection { key, name, color }
+            }
+            SequenceGuiEditDto::RenameMarkCollection { key, name } => {
+                SequenceDocumentEdit::RenameMarkCollection { key, name }
+            }
+            SequenceGuiEditDto::DeleteMarkCollection { key } => {
+                SequenceDocumentEdit::DeleteMarkCollection { key }
+            }
+            SequenceGuiEditDto::SetMarkCollectionColor { key, color } => {
+                SequenceDocumentEdit::SetMarkCollectionColor { key, color }
+            }
+            SequenceGuiEditDto::AddMark {
+                collection_key,
+                time_ms,
+            } => SequenceDocumentEdit::AddMark {
+                collection_key,
+                time_ms: time_ms.into(),
+            },
+            SequenceGuiEditDto::MoveMark {
+                collection_key,
+                index,
+                time_ms,
+            } => SequenceDocumentEdit::MoveMark {
+                collection_key,
+                index: index as usize,
+                time_ms: time_ms.into(),
+            },
+            SequenceGuiEditDto::DeleteMark {
+                collection_key,
+                index,
+            } => SequenceDocumentEdit::DeleteMark {
+                collection_key,
+                index: index as usize,
+            },
         };
         let analysis = self
             .analysis

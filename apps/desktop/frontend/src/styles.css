@@ -280,7 +280,7 @@ button:focus-visible,
 
 .sequence-toolbar {
   display: grid;
-  grid-template-columns: repeat(7, 32px) minmax(0, 1fr);
+  grid-template-columns: repeat(7, 32px) auto minmax(0, 1fr);
   align-items: center;
   gap: 0;
   min-width: min(520px, 100%);
@@ -326,6 +326,17 @@ button:focus-visible,
   color: #c7c0b6;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mark-display-select {
+  width: 78px;
+  height: 24px;
+  margin: 0 8px;
+  border: 1px solid #373b42;
+  border-radius: 4px;
+  background: #17181b;
+  color: #ebe7df;
+  font-size: 12px;
 }
 
 .sequence-audio-status {
@@ -420,6 +431,39 @@ button:focus-visible,
   background: #2c1f21;
   padding: 6px 9px;
   color: #ffd7d7;
+}
+
+.gui-inspector .neutral-button,
+.effect-param-group button,
+.selected-mark-row button {
+  border-color: #454a53;
+  background: #17181b;
+  color: #ebe7df;
+}
+
+.mark-section {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #373b42;
+}
+
+.mark-section h3 {
+  margin: 0;
+  color: #fffaf0;
+  font-size: 12px;
+}
+
+.mark-visibility-list {
+  display: grid;
+  gap: 4px;
+}
+
+.selected-mark-row {
+  display: grid;
+  gap: 6px;
+  color: #c7c0b6;
 }
 
 .effect-param-section {

@@ -628,17 +628,29 @@ pub struct Route<M: ModelMode = Authored> {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[serde(bound(
-    serialize = "M::SequenceAudio: Serialize, SequenceEffect<M>: Serialize, AutomationClip<M>: Serialize",
-    deserialize = "M::SequenceAudio: Deserialize<'de>, SequenceEffect<M>: Deserialize<'de>, AutomationClip<M>: Deserialize<'de>"
+    serialize = "M::SequenceAudio: Serialize, SequenceMarkCollection: Serialize, SequenceEffect<M>: Serialize, AutomationClip<M>: Serialize",
+    deserialize = "M::SequenceAudio: Deserialize<'de>, SequenceMarkCollection: Deserialize<'de>, SequenceEffect<M>: Deserialize<'de>, AutomationClip<M>: Deserialize<'de>"
 ))]
 pub struct Sequence<M: ModelMode = Authored> {
     pub duration: Time,
     pub frame_rate: u32,
     pub audio: M::SequenceAudio,
     #[serde(default)]
+    pub mark_collections: Vec<SequenceMarkCollection>,
+    #[serde(default)]
     pub effects: Vec<SequenceEffect<M>>,
     #[serde(default)]
     pub automation_clips: Vec<AutomationClip<M>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SequenceMarkCollection {
+    pub key: String,
+    pub name: String,
+    pub color: String,
+    #[serde(default)]
+    pub marks: Vec<Time>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

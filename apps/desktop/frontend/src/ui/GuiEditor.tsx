@@ -18,6 +18,7 @@ import type {
   SequenceAudioDto,
   SequenceDocumentDto,
   SequenceEffectDto,
+  SequenceMarkCollectionDto,
   SequenceEffectParamDto,
   SequenceEffectParamValueDto,
   SequenceEffectPreviewDto,
@@ -31,12 +32,18 @@ type EditedFloatCurvePoint = { time: number; value: number };
 type EditedColorCurvePoint = { time: number; value: string };
 type ReadyGuiDocumentDto = Exclude<ActiveGuiDocumentDto, { type: "blocked" }>;
 type SequencePreview = { id: number; startMs: number; durationMs: number; laneIndex: number };
+type MarkPreview = { collectionKey: string; index: number; timeMs: number };
+type MarkDisplayMode = "overlay" | "strip" | "hidden";
 type DragState =
   | null
   | { kind: "sequence"; id: number; startX: number; originalStartMs: number; laneIndex: number; resize: "none" | "left" | "right" }
+  | { kind: "mark"; collectionKey: string; index: number; startX: number; originalTimeMs: number }
   | { kind: "sequenceScrub" }
   | { kind: "layout"; id: number; startX: number; startY: number; original: Transform; preview: Transform }
   | { kind: "fixturePoint"; objectKey: string; pointIndex: number; preview: Point3 };
+
+const DEFAULT_MARK_COLORS = ["#38bdf8", "#f97316", "#22c55e", "#e879f9", "#facc15", "#ef4444"];
+let markDisplayMode: MarkDisplayMode = "overlay";
 
 export function GuiEditor({ snapshot }: { snapshot: AppSnapshotDto }) {
   const gui = snapshot.activeGuiDocument;
@@ -54,13 +61,19 @@ export function GuiEditor({ snapshot }: { snapshot: AppSnapshotDto }) {
 
 function GuiEditorInner({ gui, snapshot }: { gui: ReadyGuiDocumentDto; snapshot: AppSnapshotDto }) {
   const [selected, setSelected] = useState<string | null>(null);
+  const [activeMarkCollectionKey, setActiveMarkCollectionKey] = useState<string | null>(() =>
+    gui.type === "sequence" ? gui.document.markCollections[0]?.key ?? null : null
+  );
+  const [visibleMarkCollectionKeys, setVisibleMarkCollectionKeys] = useState<Set<string>>(() =>
+    new Set(gui.type === "sequence" ? gui.document.markCollections.map((collection) => collection.key) : [])
+  );
   const livePreview = useSequencePreview(snapshot.preview);
 
   return (
     <div
       className="gui-editor-shell"
       onKeyDownCapture={(event) => {
-        if (gui.type === "sequence") {
+        if (gui.type === "sequence" && !markSelectionConsumesKey(selected, event.key)) {
           handleSequencePlaybackShortcut(event, gui.document, livePreview, gui.document.durationMs <= 0);
         }
       }}
@@ -72,13 +85,25 @@ function GuiEditorInner({ gui, snapshot }: { gui: ReadyGuiDocumentDto; snapshot:
           preview={livePreview}
           selected={selected}
           setSelected={setSelected}
+          activeMarkCollectionKey={activeMarkCollectionKey}
+          setActiveMarkCollectionKey={setActiveMarkCollectionKey}
+          visibleMarkCollectionKeys={visibleMarkCollectionKeys}
+          setVisibleMarkCollectionKeys={setVisibleMarkCollectionKeys}
         />
       )}
       {gui.type === "layout" && <LayoutCanvas document={gui.document} selected={selected} setSelected={setSelected} />}
       {gui.type === "fixture" && (
         <FixtureCanvas document={gui.document} selected={selected} setSelected={setSelected} />
       )}
-      <GuiInspector gui={gui} selected={selected} />
+      <GuiInspector
+        gui={gui}
+        selected={selected}
+        setSelected={setSelected}
+        activeMarkCollectionKey={activeMarkCollectionKey}
+        setActiveMarkCollectionKey={setActiveMarkCollectionKey}
+        visibleMarkCollectionKeys={visibleMarkCollectionKeys}
+        setVisibleMarkCollectionKeys={setVisibleMarkCollectionKeys}
+      />
     </div>
   );
 }
@@ -87,12 +112,20 @@ function SequenceEditor({
   document,
   preview,
   selected,
-  setSelected
+  setSelected,
+  activeMarkCollectionKey,
+  setActiveMarkCollectionKey,
+  visibleMarkCollectionKeys,
+  setVisibleMarkCollectionKeys
 }: {
   document: SequenceDocumentDto;
   preview: AppSnapshotDto["preview"];
   selected: string | null;
   setSelected: (id: string | null) => void;
+  activeMarkCollectionKey: string | null;
+  setActiveMarkCollectionKey: (key: string | null) => void;
+  visibleMarkCollectionKeys: Set<string>;
+  setVisibleMarkCollectionKeys: (keys: Set<string>) => void;
 }) {
   const livePreview = preview;
   const unsupported = document.durationMs <= 0;
@@ -107,6 +140,10 @@ function SequenceEditor({
         previewHomeMs={livePreview.homeMs}
         selected={selected}
         setSelected={setSelected}
+        activeMarkCollectionKey={activeMarkCollectionKey}
+        setActiveMarkCollectionKey={setActiveMarkCollectionKey}
+        visibleMarkCollectionKeys={visibleMarkCollectionKeys}
+        setVisibleMarkCollectionKeys={setVisibleMarkCollectionKeys}
       />
     </div>
   );
@@ -123,8 +160,14 @@ export function SequenceTransportControls({
   const unsupported = document.durationMs <= 0;
   const audioStatus = useSequenceAudioStatus(livePreview);
   const audioLoading = livePreview.audioPlaybackStatus === "loading";
+  const [mode, setMode] = useMarkDisplayMode();
   const stepFrame = (direction: -1 | 1) => {
     stepSequenceFrame(document, livePreview.positionMs, livePreview.durationMs, direction);
+  };
+  const setMarkMode = (nextMode: MarkDisplayMode) => {
+    markDisplayMode = nextMode;
+    window.dispatchEvent(new CustomEvent<MarkDisplayMode>("dawn-mark-display-mode", { detail: nextMode }));
+    setMode(nextMode);
   };
   return (
     <div
@@ -183,6 +226,18 @@ export function SequenceTransportControls({
       >
         <X size={15} />
       </button>
+      <select
+        className="mark-display-select"
+        title="Mark display"
+        value={mode}
+        onChange={(event) => {
+          setMarkMode(event.currentTarget.value as MarkDisplayMode);
+        }}
+      >
+        <option value="overlay">Marks</option>
+        <option value="strip">Strip</option>
+        <option value="hidden">Hidden</option>
+      </select>
       <span className="sequence-time-readout">
         {formatMs(livePreview.positionMs)} / {formatMs(livePreview.durationMs || document.durationMs)} | Home {formatMs(livePreview.homeMs)}
         {document.audio ? ` | ${document.audio.exists ? document.audio.fileName : "Missing audio"}` : ""}
@@ -262,6 +317,22 @@ function useSequencePreview(preview: AppSnapshotDto["preview"]) {
     : livePreview;
 }
 
+function useMarkDisplayMode() {
+  const [mode, setMode] = useState<MarkDisplayMode>(markDisplayMode);
+
+  useEffect(() => {
+    const listener = (event: Event) => {
+      setMode((event as CustomEvent<MarkDisplayMode>).detail);
+    };
+    window.addEventListener("dawn-mark-display-mode", listener);
+    return () => {
+      window.removeEventListener("dawn-mark-display-mode", listener);
+    };
+  }, []);
+
+  return [mode, setMode] as const;
+}
+
 function useSequenceAudioStatus(preview: AppSnapshotDto["preview"]) {
   const [loadedNoticeVisible, setLoadedNoticeVisible] = useState(false);
   const previousStatus = useRef(preview.audioPlaybackStatus);
@@ -339,17 +410,26 @@ function SequenceCanvas({
   previewPositionMs,
   previewHomeMs,
   selected,
-  setSelected
+  setSelected,
+  activeMarkCollectionKey,
+  setActiveMarkCollectionKey,
+  visibleMarkCollectionKeys,
+  setVisibleMarkCollectionKeys
 }: {
   document: SequenceDocumentDto;
   previewPositionMs: number;
   previewHomeMs: number;
   selected: string | null;
   setSelected: (id: string | null) => void;
+  activeMarkCollectionKey: string | null;
+  setActiveMarkCollectionKey: (key: string | null) => void;
+  visibleMarkCollectionKeys: Set<string>;
+  setVisibleMarkCollectionKeys: (keys: Set<string>) => void;
 }) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const drag = useRef<DragState>(null);
   const [preview, setPreview] = useState<SequencePreview | null>(null);
+  const [markPreview, setMarkPreview] = useState<MarkPreview | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [viewport, setViewport] = useState({ pxPerMs: 0.08, laneHeight: 42, scrollXMs: 0, scrollY: 0 });
   const [previewImages, setPreviewImages] = useState<Map<number, SequencePreviewImage>>(() => new Map());
@@ -362,8 +442,13 @@ function SequenceCanvas({
   const audioStripTop = 28;
   const audioStripHeight = top - audioStripTop;
   const waveform = useSequenceWaveform(document.audio);
+  const [mode] = useMarkDisplayMode();
   const effectPreviewSignatures = useMemo(() => sequencePreviewSignatures(document), [document]);
   const effectPreviewSignaturesRef = useRef(effectPreviewSignatures);
+  const visibleMarkCollections = useMemo(
+    () => document.markCollections.filter((collection) => visibleMarkCollectionKeys.has(collection.key)),
+    [document.markCollections, visibleMarkCollectionKeys]
+  );
 
   useEffect(() => {
     previewImagesRef.current = previewImages;
@@ -571,6 +656,21 @@ function SequenceCanvas({
       scrollXMs
     );
     drawTimelineGrid(ctx, left, top, rect.width, rect.height, viewport.pxPerMs, scrollXMs, document.frameRate);
+    drawSequenceMarks(
+      ctx,
+      visibleMarkCollections,
+      selected,
+      mode,
+      left,
+      top,
+      audioStripTop,
+      audioStripHeight,
+      timelineWidth,
+      rect.height,
+      viewport.pxPerMs,
+      scrollXMs,
+      markPreview
+    );
 
     ctx.save();
     ctx.beginPath();
@@ -630,7 +730,7 @@ function SequenceCanvas({
     ctx.moveTo(left + 0.5, top);
     ctx.lineTo(left, rect.height);
     ctx.stroke();
-  }, [document, effectPreviewSignatures, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, selected, previewImages, previewPositionMs, previewHomeMs, waveform.audio]);
+  }, [document, effectPreviewSignatures, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, selected, previewImages, previewPositionMs, previewHomeMs, waveform.audio, visibleMarkCollections, mode, markPreview]);
 
   const seekFromCanvas = (event: MouseEvent<HTMLCanvasElement>) => {
     const x = event.nativeEvent.offsetX;
@@ -638,14 +738,107 @@ function SequenceCanvas({
     const positionMs = clamp(Math.round((viewport.scrollXMs + (x - left) / viewport.pxPerMs) / 10) * 10, 0, document.durationMs);
     void runSnapshotCommand(() => commands.previewSeek(positionMs));
   };
+  const timeFromCanvasX = (x: number) => clamp(Math.round(viewport.scrollXMs + (x - left) / viewport.pxPerMs), 0, document.durationMs);
 
   return (
     <canvas
       ref={canvas}
       className="gui-canvas"
       tabIndex={0}
+      onKeyDown={(event) => {
+        const selectedMark = parseSelectedMark(selected);
+        if (
+          selectedMark !== null &&
+          (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
+          !isTextEntryElement(event.target)
+        ) {
+          const collection = document.markCollections.find((candidate) => candidate.key === selectedMark.collectionKey);
+          const timeMs = collection?.marksMs[selectedMark.index];
+          if (collection === undefined || timeMs === undefined) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const deltaMs = (event.key === "ArrowLeft" ? -1 : 1) * (event.shiftKey ? 10 : 1);
+          const nextTimeMs = clamp(timeMs + deltaMs, 0, document.durationMs);
+          const nextIndex = markIndexAfterMove(collection, selectedMark.index, nextTimeMs);
+          setMarkPreview({ collectionKey: selectedMark.collectionKey, index: selectedMark.index, timeMs: nextTimeMs });
+          void runSnapshotCommand(() =>
+            commands.applySequenceGuiEdit({
+              type: "moveMark",
+              collectionKey: selectedMark.collectionKey,
+              index: selectedMark.index,
+              timeMs: nextTimeMs
+            })
+          ).then(() => {
+            setSelected(`mark:${selectedMark.collectionKey}:${nextIndex}`);
+            setMarkPreview(null);
+          });
+          return;
+        }
+        if ((event.key !== "Delete" && event.key !== "Backspace") || isTextEntryElement(event.target)) return;
+        if (selectedMark === null) return;
+        event.preventDefault();
+        void runSnapshotCommand(() =>
+          commands.applySequenceGuiEdit({
+            type: "deleteMark",
+            collectionKey: selectedMark.collectionKey,
+            index: selectedMark.index
+          })
+        ).then(() => {
+          setSelected(null);
+        });
+      }}
       onMouseDown={(event) => {
         event.currentTarget.focus();
+        const x = event.nativeEvent.offsetX;
+        const y = event.nativeEvent.offsetY;
+        setMarkPreview(null);
+        if (event.altKey && x >= left) {
+          const timeMs = timeFromCanvasX(x);
+          let collectionKey = activeMarkCollectionKey ?? document.markCollections[0]?.key ?? null;
+          void (async () => {
+            if (collectionKey === null) {
+              const newCollectionKey = nextCollectionKey("Marks", document.markCollections);
+              await runSnapshotCommand(() =>
+                commands.applySequenceGuiEdit({
+                  type: "createMarkCollection",
+                  key: newCollectionKey,
+                  name: "Marks",
+                  color: defaultMarkColor(document.markCollections.length)
+                })
+              );
+              collectionKey = newCollectionKey;
+              setActiveMarkCollectionKey(newCollectionKey);
+              setVisibleMarkCollectionKeys(new Set([...visibleMarkCollectionKeys, newCollectionKey]));
+            }
+            const targetCollectionKey = collectionKey;
+            await runSnapshotCommand(() =>
+              commands.applySequenceGuiEdit({
+                type: "addMark",
+                collectionKey: targetCollectionKey,
+                timeMs
+              })
+            );
+            const nextIndex = [...(document.markCollections.find((collection) => collection.key === targetCollectionKey)?.marksMs ?? []), timeMs]
+              .map((markTimeMs, index) => ({ markTimeMs, index }))
+              .sort((leftMark, rightMark) => leftMark.markTimeMs - rightMark.markTimeMs || leftMark.index - rightMark.index)
+              .findIndex((mark) => mark.index === (document.markCollections.find((collection) => collection.key === targetCollectionKey)?.marksMs.length ?? 0));
+            setSelected(`mark:${targetCollectionKey}:${Math.max(0, nextIndex)}`);
+          })();
+          return;
+        }
+        const markHit = hitSequenceMark(visibleMarkCollections, mode, x, y, left, top, audioStripTop, audioStripHeight, canvasSize.height, viewport);
+        if (markHit !== null) {
+          setSelected(`mark:${markHit.collectionKey}:${markHit.index}`);
+          setActiveMarkCollectionKey(markHit.collectionKey);
+          drag.current = {
+            kind: "mark",
+            collectionKey: markHit.collectionKey,
+            index: markHit.index,
+            startX: x,
+            originalTimeMs: markHit.timeMs
+          };
+          return;
+        }
         const hit = hitSequence(visibleClips, event.nativeEvent.offsetX, event.nativeEvent.offsetY);
         if (!hit) {
           setSelected(null);
@@ -677,6 +870,14 @@ function SequenceCanvas({
           seekFromCanvas(event);
           return;
         }
+        if (current?.kind === "mark") {
+          const deltaMs = Math.round((event.nativeEvent.offsetX - current.startX) / viewport.pxPerMs);
+          const timeMs = clamp(current.originalTimeMs + deltaMs, 0, document.durationMs);
+          setSelected(`mark:${current.collectionKey}:${current.index}`);
+          setMarkPreview({ collectionKey: current.collectionKey, index: current.index, timeMs });
+          setPreview(null);
+          return;
+        }
         if (!current || current.kind !== "sequence") return;
         const effect = document.effects.find((candidate) => candidate.id === current.id);
         if (effect === undefined) return;
@@ -691,9 +892,27 @@ function SequenceCanvas({
           setPreview({ id: effect.id, startMs: clamp(current.originalStartMs + deltaMs, 0, document.durationMs), durationMs: effect.durationMs, laneIndex });
         }
       }}
-      onMouseUp={() => {
+      onMouseUp={(event) => {
         const current = drag.current;
         drag.current = null;
+        if (current?.kind === "mark") {
+          const deltaMs = Math.round((event.nativeEvent.offsetX - current.startX) / viewport.pxPerMs);
+          const timeMs = clamp(current.originalTimeMs + deltaMs, 0, document.durationMs);
+          const collection = document.markCollections.find((candidate) => candidate.key === current.collectionKey);
+          const nextIndex = collection === undefined ? current.index : markIndexAfterMove(collection, current.index, timeMs);
+          void runSnapshotCommand(() =>
+            commands.applySequenceGuiEdit({
+              type: "moveMark",
+              collectionKey: current.collectionKey,
+              index: current.index,
+              timeMs
+            })
+          ).then(() => {
+            setSelected(`mark:${current.collectionKey}:${nextIndex}`);
+            setMarkPreview(null);
+          });
+          return;
+        }
         if (!current || current.kind !== "sequence" || !preview) return;
         if (current.resize === "none") {
           void runSnapshotCommand(() =>
@@ -940,13 +1159,158 @@ function FixtureCanvas({
   );
 }
 
-function GuiInspector({ gui, selected }: { gui: ReadyGuiDocumentDto; selected: string | null }) {
+function GuiInspector({
+  gui,
+  selected,
+  setSelected,
+  activeMarkCollectionKey,
+  setActiveMarkCollectionKey,
+  visibleMarkCollectionKeys,
+  setVisibleMarkCollectionKeys
+}: {
+  gui: ReadyGuiDocumentDto;
+  selected: string | null;
+  setSelected: (id: string | null) => void;
+  activeMarkCollectionKey: string | null;
+  setActiveMarkCollectionKey: (key: string | null) => void;
+  visibleMarkCollectionKeys: Set<string>;
+  setVisibleMarkCollectionKeys: (keys: Set<string>) => void;
+}) {
   if (gui.type === "sequence") {
     const id = selected !== null && selected.startsWith("effect:") ? Number(selected.split(":")[1]) : null;
     const effect = gui.document.effects.find((candidate) => candidate.id === id);
+    const selectedMark = parseSelectedMark(selected);
+    const selectedMarkCollection = selectedMark === null ? null : gui.document.markCollections.find((collection) => collection.key === selectedMark.collectionKey) ?? null;
+    const activeCollection = gui.document.markCollections.find((collection) => collection.key === activeMarkCollectionKey) ?? gui.document.markCollections[0] ?? null;
+    const selectedMarkTime = selectedMarkCollection?.marksMs[selectedMark?.index ?? -1];
+    const createCollection = () => {
+      const name = "Marks";
+      const key = nextCollectionKey(name, gui.document.markCollections);
+      void runSnapshotCommand(() =>
+        commands.applySequenceGuiEdit({
+          type: "createMarkCollection",
+          key,
+          name,
+          color: defaultMarkColor(gui.document.markCollections.length)
+        })
+      ).then(() => {
+        setActiveMarkCollectionKey(key);
+        setVisibleMarkCollectionKeys(new Set([...visibleMarkCollectionKeys, key]));
+      });
+    };
+    const deleteActiveCollection = () => {
+      if (activeCollection === null) return;
+      if (activeCollection.marksMs.length > 0 && !window.confirm(`Delete ${activeCollection.name} and ${activeCollection.marksMs.length} marks?`)) return;
+      void runSnapshotCommand(() =>
+        commands.applySequenceGuiEdit({
+          type: "deleteMarkCollection",
+          key: activeCollection.key
+        })
+      ).then(() => {
+        setSelected(null);
+        setActiveMarkCollectionKey(null);
+      });
+    };
     return (
       <aside className="gui-inspector">
         <h2>Sequence</h2>
+        <div className="mark-section">
+          <h3>Marks</h3>
+          <button type="button" className="neutral-button" onClick={createCollection}>Add collection</button>
+          {gui.document.markCollections.length > 0 && (
+            <>
+              <label>
+                Active
+                <select
+                  value={activeCollection?.key ?? ""}
+                  onChange={(event) => {
+                    setActiveMarkCollectionKey(event.currentTarget.value || null);
+                  }}
+                >
+                  {gui.document.markCollections.map((collection) => (
+                    <option key={collection.key} value={collection.key}>{collection.name}</option>
+                  ))}
+                </select>
+              </label>
+              {activeCollection !== null && (
+                <>
+                  <label>
+                    Name
+                    <input
+                      key={`${activeCollection.key}:name`}
+                      defaultValue={activeCollection.name}
+                      onBlur={(event) => {
+                        const name = event.currentTarget.value.trim() || activeCollection.name;
+                        if (name === activeCollection.name) return;
+                        void runSnapshotCommand(() =>
+                          commands.applySequenceGuiEdit({ type: "renameMarkCollection", key: activeCollection.key, name })
+                        );
+                      }}
+                    />
+                  </label>
+                  <label className="effect-param-color">
+                    Color
+                    <input
+                      type="color"
+                      value={activeCollection.color}
+                      onChange={(event) =>
+                        void runSnapshotCommand(() =>
+                          commands.applySequenceGuiEdit({
+                            type: "setMarkCollectionColor",
+                            key: activeCollection.key,
+                            color: event.currentTarget.value
+                          })
+                        )
+                      }
+                    />
+                  </label>
+                </>
+              )}
+              <div className="mark-visibility-list">
+                {gui.document.markCollections.map((collection) => (
+                  <label key={collection.key} className="effect-param-check">
+                    <input
+                      type="checkbox"
+                      checked={visibleMarkCollectionKeys.has(collection.key)}
+                      onChange={(event) => {
+                        const next = new Set(visibleMarkCollectionKeys);
+                        if (event.currentTarget.checked) {
+                          next.add(collection.key);
+                        } else {
+                          next.delete(collection.key);
+                        }
+                        setVisibleMarkCollectionKeys(next);
+                      }}
+                    />
+                    <span style={{ color: collection.color }}>{collection.name}</span>
+                  </label>
+                ))}
+              </div>
+              {selectedMark !== null && selectedMarkCollection !== null && selectedMarkTime !== undefined && (
+                <div className="selected-mark-row">
+                  <span>{selectedMarkCollection.name} {selectedMarkTime} ms</span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void runSnapshotCommand(() =>
+                        commands.applySequenceGuiEdit({
+                          type: "deleteMark",
+                          collectionKey: selectedMark.collectionKey,
+                          index: selectedMark.index
+                        })
+                      ).then(() => {
+                        setSelected(null);
+                      })
+                    }
+                  >
+                    Delete mark
+                  </button>
+                </div>
+              )}
+              {activeCollection !== null && <button type="button" onClick={deleteActiveCollection}>Delete collection</button>}
+            </>
+          )}
+        </div>
         {effect !== undefined ? (
           <>
             <label>Effect<input readOnly value={effect.script} /></label>
@@ -1413,6 +1777,12 @@ type SequenceHit = {
   resize: "left" | "right" | "none";
 };
 
+type SequenceMarkHit = {
+  collectionKey: string;
+  index: number;
+  timeMs: number;
+};
+
 type SequencePreviewImage = {
   signature: string;
 } & ({ status: "ready"; canvas: HTMLCanvasElement } | { status: "unavailable" });
@@ -1638,6 +2008,133 @@ function hitSequence(clips: SequenceClipLayout[], x: number, y: number): Sequenc
   return null;
 }
 
+function hitSequenceMark(
+  collections: SequenceMarkCollectionDto[],
+  mode: MarkDisplayMode,
+  x: number,
+  y: number,
+  left: number,
+  top: number,
+  audioStripTop: number,
+  audioStripHeight: number,
+  canvasHeight: number,
+  viewport: SequenceViewport
+): SequenceMarkHit | null {
+  if (mode === "hidden" || x < left) return null;
+  if (mode === "strip" && (y < audioStripTop || y > audioStripTop + audioStripHeight)) return null;
+  if (mode === "overlay" && (y < top || y > canvasHeight)) return null;
+  for (const collection of [...collections].reverse()) {
+    for (let index = collection.marksMs.length - 1; index >= 0; index -= 1) {
+      const timeMs = collection.marksMs[index] ?? 0;
+      const markX = left + (timeMs - viewport.scrollXMs) * viewport.pxPerMs;
+      if (Math.abs(x - markX) <= 5) {
+        return { collectionKey: collection.key, index, timeMs };
+      }
+    }
+  }
+  return null;
+}
+
+function drawSequenceMarks(
+  ctx: CanvasRenderingContext2D,
+  collections: SequenceMarkCollectionDto[],
+  selected: string | null,
+  mode: MarkDisplayMode,
+  left: number,
+  top: number,
+  audioStripTop: number,
+  audioStripHeight: number,
+  width: number,
+  height: number,
+  pxPerMs: number,
+  scrollXMs: number,
+  preview: MarkPreview | null
+) {
+  if (mode === "hidden") return;
+  const y1 = mode === "strip" ? audioStripTop : top;
+  const y2 = mode === "strip" ? audioStripTop + audioStripHeight : height;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(left, y1, width, y2 - y1);
+  ctx.clip();
+  for (const collection of collections) {
+    for (const [index, timeMs] of collection.marksMs.entries()) {
+      const isPreviewed = preview?.collectionKey === collection.key && preview.index === index;
+      const drawnTimeMs = isPreviewed ? preview.timeMs : timeMs;
+      const x = left + (drawnTimeMs - scrollXMs) * pxPerMs;
+      if (x < left - 6 || x > left + width + 6) continue;
+      const isSelected = selected === `mark:${collection.key}:${index}`;
+      ctx.strokeStyle = collection.color;
+      ctx.lineWidth = isSelected ? 2 : 1;
+      ctx.globalAlpha = mode === "strip" ? 0.95 : 0.75;
+      ctx.beginPath();
+      ctx.moveTo(x + 0.5, y1);
+      ctx.lineTo(x + 0.5, y2);
+      ctx.stroke();
+      if (isSelected) {
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = "#fffaf0";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x - 4, y1 + 0.5);
+        ctx.lineTo(x + 4, y1 + 0.5);
+        ctx.stroke();
+      }
+    }
+  }
+  ctx.restore();
+}
+
+function parseSelectedMark(selected: string | null): { collectionKey: string; index: number } | null {
+  if (selected === null || !selected.startsWith("mark:")) return null;
+  const [, collectionKey, rawIndex] = selected.split(":");
+  const index = Number(rawIndex);
+  if (collectionKey === undefined || collectionKey.length === 0 || !Number.isInteger(index) || index < 0) return null;
+  return { collectionKey, index };
+}
+
+function markSelectionConsumesKey(selected: string | null, key: string) {
+  return parseSelectedMark(selected) !== null && (key === "ArrowLeft" || key === "ArrowRight");
+}
+
+function markIndexAfterMove(collection: SequenceMarkCollectionDto, index: number, timeMs: number) {
+  const sorted = collection.marksMs
+    .map((markTimeMs, markIndex) => ({
+      markIndex,
+      timeMs: markIndex === index ? timeMs : markTimeMs
+    }))
+    .sort((left, right) => left.timeMs - right.timeMs || left.markIndex - right.markIndex);
+  return Math.max(0, sorted.findIndex((mark) => mark.markIndex === index));
+}
+
+function nextCollectionKey(name: string, collections: SequenceMarkCollectionDto[]) {
+  const used = new Set(collections.map((collection) => collection.key));
+  const base = snakeCaseKey(name);
+  if (!used.has(base)) return base;
+  for (let suffix = 2; ; suffix += 1) {
+    const key = `${base}_${suffix}`;
+    if (!used.has(key)) return key;
+  }
+}
+
+function defaultMarkColor(index: number) {
+  return DEFAULT_MARK_COLORS[index % DEFAULT_MARK_COLORS.length] ?? "#38bdf8";
+}
+
+function snakeCaseKey(value: string) {
+  const key = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return /^[a-z]/.test(key) ? key : key.length > 0 ? `marks_${key}` : "marks";
+}
+
+function isTextEntryElement(target: EventTarget | null) {
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
+}
+
 function drawWaveformStrip(
   ctx: CanvasRenderingContext2D,
   audio: WaveformAudio | null,
@@ -1791,7 +2288,7 @@ function handleSequencePlaybackShortcut(
     event.preventDefault();
     event.stopPropagation();
     if (preview.audioPlaybackStatus === "loading") return;
-    void runSnapshotCommand(preview.isPlaying ? commands.previewPause : commands.previewPlay);
+    void runSnapshotCommand(preview.isPlaying ? commands.previewStop : commands.previewPlay);
   } else if (event.key.toLowerCase() === "s") {
     event.preventDefault();
     event.stopPropagation();

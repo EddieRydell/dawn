@@ -441,6 +441,7 @@ fn lower_sequence(
             .as_ref()
             .map(|audio| resolve_path(sequence_source_path, audio.path(), audio.raw()))
             .transpose()?,
+        mark_collections: sequence.mark_collections.clone(),
         effects,
         automation_clips,
     })

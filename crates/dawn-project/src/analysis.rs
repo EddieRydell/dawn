@@ -150,6 +150,7 @@ pub enum DiagnosticCode {
     Import,
     Lower,
     ProjectKey,
+    Sequence,
     Script,
 }
 
@@ -396,6 +397,9 @@ impl AnalysisSession {
             .as_ref()
             .map(collect_file_imports)
             .unwrap_or_else(Vec::new);
+        if let Some(file) = file.as_ref() {
+            validate_sequence_marks(&path, file, &mut self.diagnostics);
+        }
         self.files.insert(
             path.clone(),
             AnalyzedFile {
@@ -724,6 +728,65 @@ fn script_diagnostics(
             message: diagnostic.message.clone(),
         })
         .collect()
+}
+
+fn validate_sequence_marks(
+    path: &Utf8PathBuf,
+    file: &DawnFile,
+    diagnostics: &mut Vec<ProjectDiagnostic>,
+) {
+    for (object_key, object) in file {
+        let DawnObject::Sequence(sequence) = object else {
+            continue;
+        };
+        let mut keys = HashSet::new();
+        for collection in &sequence.mark_collections {
+            if !is_mark_collection_key(&collection.key) {
+                diagnostics.push(ProjectDiagnostic {
+                    path: path.clone(),
+                    range: None,
+                    severity: DiagnosticSeverity::Error,
+                    code: DiagnosticCode::Sequence,
+                    message: format!(
+                        "sequence `{object_key}` mark collection key `{}` must match [a-z][a-z0-9_]*",
+                        collection.key
+                    ),
+                });
+            }
+            if !keys.insert(collection.key.as_str()) {
+                diagnostics.push(ProjectDiagnostic {
+                    path: path.clone(),
+                    range: None,
+                    severity: DiagnosticSeverity::Error,
+                    code: DiagnosticCode::Sequence,
+                    message: format!(
+                        "sequence `{object_key}` has duplicate mark collection key `{}`",
+                        collection.key
+                    ),
+                });
+            }
+            if let Err(error) = Color::parse(&collection.color) {
+                diagnostics.push(ProjectDiagnostic {
+                    path: path.clone(),
+                    range: None,
+                    severity: DiagnosticSeverity::Error,
+                    code: DiagnosticCode::Sequence,
+                    message: format!(
+                        "sequence `{object_key}` mark collection `{}` color is invalid: {error}",
+                        collection.key
+                    ),
+                });
+            }
+        }
+    }
+}
+
+fn is_mark_collection_key(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some(first) if first.is_ascii_lowercase())
+        && chars.all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
+        })
 }
 
 fn is_effect_script_path(path: &Utf8PathBuf) -> bool {

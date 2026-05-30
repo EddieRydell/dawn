@@ -177,6 +177,35 @@ pub enum SequenceGuiEditDto {
         name: String,
         value: SequenceEffectParamValueDto,
     },
+    CreateMarkCollection {
+        key: String,
+        name: String,
+        color: String,
+    },
+    RenameMarkCollection {
+        key: String,
+        name: String,
+    },
+    DeleteMarkCollection {
+        key: String,
+    },
+    SetMarkCollectionColor {
+        key: String,
+        color: String,
+    },
+    AddMark {
+        collection_key: String,
+        time_ms: u32,
+    },
+    MoveMark {
+        collection_key: String,
+        index: u32,
+        time_ms: u32,
+    },
+    DeleteMark {
+        collection_key: String,
+        index: u32,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -245,10 +274,20 @@ pub struct SequenceDocumentDto {
     pub duration_ms: u32,
     pub frame_rate: u32,
     pub audio: Option<SequenceAudioDto>,
+    pub mark_collections: Vec<SequenceMarkCollectionDto>,
     pub lanes: Vec<SequenceLaneDto>,
     pub effect_scripts: Vec<SequenceEffectScriptDto>,
     pub effects: Vec<SequenceEffectDto>,
     pub degraded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceMarkCollectionDto {
+    pub key: String,
+    pub name: String,
+    pub color: String,
+    pub marks_ms: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -680,6 +719,11 @@ impl From<SequenceDocument> for SequenceDocumentDto {
             duration_ms: u32_ms(document.duration_ms),
             frame_rate: document.frame_rate,
             audio: document.audio.map(SequenceAudioDto::from),
+            mark_collections: document
+                .mark_collections
+                .into_iter()
+                .map(SequenceMarkCollectionDto::from)
+                .collect(),
             lanes: document
                 .lanes
                 .into_iter()
@@ -696,6 +740,17 @@ impl From<SequenceDocument> for SequenceDocumentDto {
                 .map(SequenceEffectDto::from)
                 .collect(),
             degraded: document.degraded,
+        }
+    }
+}
+
+impl From<dawn_project::document::SequenceMarkCollectionDocument> for SequenceMarkCollectionDto {
+    fn from(collection: dawn_project::document::SequenceMarkCollectionDocument) -> Self {
+        Self {
+            key: collection.key,
+            name: collection.name,
+            color: collection.color,
+            marks_ms: collection.marks_ms.into_iter().map(u32_ms).collect(),
         }
     }
 }

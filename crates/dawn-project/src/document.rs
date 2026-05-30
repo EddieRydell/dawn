@@ -159,10 +159,20 @@ pub struct SequenceDocument {
     pub duration_ms: u64,
     pub frame_rate: u32,
     pub audio: Option<SequenceAudioDocument>,
+    pub mark_collections: Vec<SequenceMarkCollectionDocument>,
     pub lanes: Vec<SequenceLaneDocument>,
     pub effect_scripts: Vec<SequenceEffectScriptDocument>,
     pub effects: Vec<SequenceEffectDocument>,
     pub degraded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceMarkCollectionDocument {
+    pub key: String,
+    pub name: String,
+    pub color: String,
+    pub marks_ms: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,6 +248,35 @@ pub enum SequenceDocumentEdit {
         id: u32,
         name: String,
         value: SequenceEffectParamEditValue,
+    },
+    CreateMarkCollection {
+        key: String,
+        name: String,
+        color: String,
+    },
+    RenameMarkCollection {
+        key: String,
+        name: String,
+    },
+    DeleteMarkCollection {
+        key: String,
+    },
+    SetMarkCollectionColor {
+        key: String,
+        color: String,
+    },
+    AddMark {
+        collection_key: String,
+        time_ms: u64,
+    },
+    MoveMark {
+        collection_key: String,
+        index: usize,
+        time_ms: u64,
+    },
+    DeleteMark {
+        collection_key: String,
+        index: usize,
     },
 }
 
@@ -563,6 +602,7 @@ pub fn apply_sequence_document_edit(
     };
     let mut sequence = current_sequence.clone();
     apply_sequence_edit_operation(fs, &path, analysis, &overlays, &mut sequence, edit)?;
+    sort_sequence_mark_collections(&mut sequence);
     sort_sequence_effects(
         &mut sequence,
         analysis
@@ -772,8 +812,110 @@ fn apply_sequence_edit_operation(
             }
             sequence.effects[effect_index].params = params;
         }
+        SequenceDocumentEdit::CreateMarkCollection { key, name, color } => {
+            validate_mark_collection_key(&key)?;
+            Color::parse(&color)?;
+            if sequence
+                .mark_collections
+                .iter()
+                .any(|collection| collection.key == key)
+            {
+                return Err(format!("mark collection `{key}` already exists"));
+            }
+            sequence.mark_collections.push(SequenceMarkCollection {
+                key,
+                name,
+                color,
+                marks: Vec::new(),
+            });
+        }
+        SequenceDocumentEdit::RenameMarkCollection { key, name } => {
+            let collection = mark_collection_mut(sequence, &key)?;
+            collection.name = name;
+        }
+        SequenceDocumentEdit::DeleteMarkCollection { key } => {
+            let original_len = sequence.mark_collections.len();
+            sequence
+                .mark_collections
+                .retain(|collection| collection.key != key);
+            if sequence.mark_collections.len() == original_len {
+                return Err(format!("mark collection `{key}` was not found"));
+            }
+        }
+        SequenceDocumentEdit::SetMarkCollectionColor { key, color } => {
+            Color::parse(&color)?;
+            let collection = mark_collection_mut(sequence, &key)?;
+            collection.color = color;
+        }
+        SequenceDocumentEdit::AddMark {
+            collection_key,
+            time_ms,
+        } => {
+            let duration_ms = sequence.duration.milliseconds;
+            let collection = mark_collection_mut(sequence, &collection_key)?;
+            collection.marks.push(Time {
+                milliseconds: time_ms.min(duration_ms),
+            });
+        }
+        SequenceDocumentEdit::MoveMark {
+            collection_key,
+            index,
+            time_ms,
+        } => {
+            let duration_ms = sequence.duration.milliseconds;
+            let collection = mark_collection_mut(sequence, &collection_key)?;
+            let mark = mark_at_sorted_index_mut(collection, index)?;
+            mark.milliseconds = time_ms.min(duration_ms);
+        }
+        SequenceDocumentEdit::DeleteMark {
+            collection_key,
+            index,
+        } => {
+            let collection = mark_collection_mut(sequence, &collection_key)?;
+            let original_index = sorted_mark_original_index(collection, index)?;
+            collection.marks.remove(original_index);
+        }
     }
     Ok(())
+}
+
+fn mark_collection_mut<'a>(
+    sequence: &'a mut Sequence<Authored>,
+    key: &str,
+) -> Result<&'a mut SequenceMarkCollection, String> {
+    sequence
+        .mark_collections
+        .iter_mut()
+        .find(|collection| collection.key == key)
+        .ok_or_else(|| format!("mark collection `{key}` was not found"))
+}
+
+fn mark_at_sorted_index_mut(
+    collection: &mut SequenceMarkCollection,
+    sorted_index: usize,
+) -> Result<&mut Time, String> {
+    let original_index = sorted_mark_original_index(collection, sorted_index)?;
+    collection
+        .marks
+        .get_mut(original_index)
+        .ok_or_else(|| format!("mark `{sorted_index}` was not found"))
+}
+
+fn sorted_mark_original_index(
+    collection: &SequenceMarkCollection,
+    sorted_index: usize,
+) -> Result<usize, String> {
+    let mut indexed_marks = collection
+        .marks
+        .iter()
+        .enumerate()
+        .map(|(index, mark)| (index, mark.milliseconds))
+        .collect::<Vec<_>>();
+    indexed_marks.sort_by_key(|(index, time_ms)| (*time_ms, *index));
+    indexed_marks
+        .get(sorted_index)
+        .map(|(index, _)| *index)
+        .ok_or_else(|| format!("mark `{sorted_index}` was not found"))
 }
 
 fn compiled_effect_for_sequence_effect(
@@ -1089,11 +1231,35 @@ fn sequence_to_document(
         duration_ms: sequence.duration.milliseconds,
         frame_rate: sequence.frame_rate,
         audio: sequence_audio_document(fs, path, sequence.audio.as_ref()),
+        mark_collections: sequence_mark_collection_documents(sequence),
         lanes,
         effect_scripts: sequence_effect_script_catalog(fs, path, overlays),
         effects,
         degraded: layout.is_none(),
     }
+}
+
+fn sequence_mark_collection_documents(
+    sequence: &Sequence<Authored>,
+) -> Vec<SequenceMarkCollectionDocument> {
+    sequence
+        .mark_collections
+        .iter()
+        .map(|collection| {
+            let mut marks_ms = collection
+                .marks
+                .iter()
+                .map(|mark| mark.milliseconds)
+                .collect::<Vec<_>>();
+            marks_ms.sort();
+            SequenceMarkCollectionDocument {
+                key: collection.key.clone(),
+                name: collection.name.clone(),
+                color: collection.color.clone(),
+                marks_ms,
+            }
+        })
+        .collect()
 }
 
 fn sequence_audio_document(
@@ -1306,6 +1472,12 @@ fn sort_sequence_effects(sequence: &mut Sequence<Authored>, layout: Option<&Layo
             effect.id,
         )
     });
+}
+
+fn sort_sequence_mark_collections(sequence: &mut Sequence<Authored>) {
+    for collection in &mut sequence.mark_collections {
+        collection.marks.sort_by_key(|mark| mark.milliseconds);
+    }
 }
 
 fn authored_target_sort_key(
@@ -1769,6 +1941,25 @@ fn validate_simple_identifier(value: &str, label: &str) -> Result<(), String> {
         return Err(format!(
             "{label} may only contain letters, numbers, and underscores"
         ));
+    }
+    Ok(())
+}
+
+fn validate_mark_collection_key(value: &str) -> Result<(), String> {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return Err("mark collection key cannot be empty".to_string());
+    };
+    if !first.is_ascii_lowercase() {
+        return Err("mark collection key must start with a lowercase ASCII letter".to_string());
+    }
+    if chars.any(|character| {
+        !(character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_')
+    }) {
+        return Err(
+            "mark collection key may only contain lowercase ASCII letters, numbers, and underscores"
+                .to_string(),
+        );
     }
     Ok(())
 }
