@@ -194,6 +194,12 @@ export function SequenceTransportControls({
 
 function useSequencePreview(preview: AppSnapshotDto["preview"]) {
   const [eventPreview, setEventPreview] = useState<AppSnapshotDto["preview"] | null>(null);
+  const [animatedPositionMs, setAnimatedPositionMs] = useState(preview.positionMs);
+  const anchor = useRef({
+    preview,
+    positionMs: preview.positionMs,
+    anchoredAt: 0
+  });
 
   useEffect(() => {
     let dispose: (() => void) | undefined;
@@ -201,6 +207,12 @@ function useSequencePreview(preview: AppSnapshotDto["preview"]) {
     void (async () => {
       dispose = await listen<AppSnapshotDto["preview"]>("preview_state_changed", (event) => {
         if (!disposed) {
+          anchor.current = {
+            preview: event.payload,
+            positionMs: event.payload.positionMs,
+            anchoredAt: performance.now()
+          };
+          setAnimatedPositionMs(event.payload.positionMs);
           setEventPreview(event.payload);
         }
       });
@@ -211,7 +223,43 @@ function useSequencePreview(preview: AppSnapshotDto["preview"]) {
     };
   }, []);
 
-  return eventPreview ?? preview;
+  const livePreview = eventPreview ?? preview;
+  const livePreviewRef = useRef(livePreview);
+
+  useEffect(() => {
+    livePreviewRef.current = livePreview;
+    anchor.current = {
+      preview: livePreview,
+      positionMs: livePreview.positionMs,
+      anchoredAt: performance.now()
+    };
+  }, [livePreview]);
+
+  useEffect(() => {
+    let frame = 0;
+    const tick = () => {
+      const latest = livePreviewRef.current;
+      const current = anchor.current;
+      if (!latest.isPlaying || !current.preview.isPlaying) {
+        setAnimatedPositionMs(latest.positionMs);
+        return;
+      }
+      const elapsedMs = current.anchoredAt > 0 ? performance.now() - current.anchoredAt : 0;
+      setAnimatedPositionMs(clamp(current.positionMs + elapsedMs, 0, current.preview.durationMs));
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [livePreview.isPlaying, livePreview.positionMs]);
+
+  return livePreview.isPlaying
+    ? {
+        ...livePreview,
+        positionMs: animatedPositionMs
+      }
+    : livePreview;
 }
 
 function useSequenceAudioStatus(preview: AppSnapshotDto["preview"]) {
