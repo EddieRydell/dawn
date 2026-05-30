@@ -17,15 +17,15 @@ christmas:
     name: Marks2
     color: '#f97316'
     marks:
-    - 23562ms
     - 30500ms
+    - 34712ms
   - key: marks_3
     name: Marks3
     color: '#22c55e'
     marks:
     - 9579ms
     - 17176ms
-    - 22308ms
+    - 21470ms
   effects:
   - id: 1
     start: 0ms
@@ -109,11 +109,11 @@ christmas:
         value: 0.9
     script: effects.WarmGlow
   - id: 5
-    start: 5950ms
-    duration: 18300ms
+    start: 6200ms
+    duration: 26600ms
     target:
       type: fixture
-      id: 4
+      id: 5
     scope: per_fixture
     params:
       intensity:
@@ -132,7 +132,9 @@ christmas:
           points:
           - time: 0.0
             value: '#ffffff'
-          - time: 1.0
+          - time: 0.294
+            value: '#ff0000'
+          - time: 0.801
             value: '#ff0000'
       spatial_offset:
         type: float

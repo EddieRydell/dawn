@@ -35,12 +35,15 @@ type EditedFloatCurvePoint = { time: number; value: number };
 type EditedColorCurvePoint = { time: number; value: string };
 type ReadyGuiDocumentDto = Exclude<ActiveGuiDocumentDto, { type: "blocked" }>;
 type SequencePreview = { id: number; startMs: number; durationMs: number; laneIndex: number };
-type MarkPreview = { collectionKey: string; index: number; timeMs: number };
+type MarkPreview = { collectionKey: string; index: number; timeMs: number; committedIndex?: number };
 type SequenceContextMenu =
   | { kind: "blank"; laneIndex: number; startMs: number }
   | { kind: "effect"; laneIndex: number; startMs: number; effectId: number }
   | { kind: "mark"; laneIndex: number; startMs: number; collectionKey: string; index: number };
-type SequenceHover = { effectId: number; resize: "left" | "right" | "none" } | null;
+type SequenceHover =
+  | null
+  | { kind: "effect"; effectId: number; resize: "left" | "right" | "none" }
+  | { kind: "mark"; collectionKey: string; index: number };
 type MarkDisplayMode = "overlay" | "strip" | "hidden";
 type DragState =
   | null
@@ -460,7 +463,8 @@ function SequenceCanvas({
     () => document.markCollections.filter((collection) => visibleMarkCollectionKeys.has(collection.key)),
     [document.markCollections, visibleMarkCollectionKeys]
   );
-  const canvasCursor = dragCursor ?? (hover === null ? undefined : hover.resize === "none" ? "grab" : "ew-resize");
+  const canvasCursor =
+    dragCursor ?? (hover === null ? undefined : hover.kind === "mark" ? "pointer" : hover.resize === "none" ? "grab" : "ew-resize");
 
   useEffect(() => {
     previewImagesRef.current = previewImages;
@@ -680,7 +684,7 @@ function SequenceCanvas({
       rect.height,
       viewport.pxPerMs,
       scrollXMs,
-      markPreview
+      committedMarkPreview(visibleMarkCollections, markPreview)
     );
 
     ctx.save();
@@ -691,7 +695,7 @@ function SequenceCanvas({
       if (clip.rect.x + clip.rect.width < left || clip.rect.x > rect.width || clip.rect.y + clip.rect.height < top || clip.rect.y > rect.height) {
         continue;
       }
-      const hoverResize = hover?.effectId === clip.effect.id ? hover.resize : null;
+      const hoverResize = hover?.kind === "effect" && hover.effectId === clip.effect.id ? hover.resize : null;
       ctx.fillStyle = "#696b70";
       ctx.fillRect(clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height);
       const previewImage = validPreviewImage(previewImages.get(clip.effect.id), effectPreviewSignatures.get(clip.effect.id));
@@ -865,7 +869,7 @@ function SequenceCanvas({
           const deltaMs = (event.key === "ArrowLeft" ? -1 : 1) * (event.shiftKey ? 10 : 1);
           const nextTimeMs = clamp(timeMs + deltaMs, 0, document.durationMs);
           const nextIndex = markIndexAfterMove(collection, selectedMark.index, nextTimeMs);
-          setMarkPreview({ collectionKey: selectedMark.collectionKey, index: selectedMark.index, timeMs: nextTimeMs });
+          setMarkPreview({ collectionKey: selectedMark.collectionKey, index: selectedMark.index, timeMs: nextTimeMs, committedIndex: nextIndex });
           void runSnapshotCommand(() =>
             commands.applySequenceGuiEdit({
               type: "moveMark",
@@ -906,17 +910,17 @@ function SequenceCanvas({
         }
         const laneIndex = clamp(Math.floor((y - top + viewport.scrollY) / viewport.laneHeight), 0, document.lanes.length - 1);
         const startMs = timeFromCanvasX(x);
+        const hit = hitSequence(visibleClips, x, y);
+        if (hit !== null) {
+          setSelected(`effect:${hit.effect.id}`);
+          setSequenceContextMenu({ kind: "effect", laneIndex: hit.laneIndex, startMs, effectId: hit.effect.id });
+          return;
+        }
         const markHit = hitSequenceMark(visibleMarkCollections, mode, x, y, left, audioStripTop, audioStripHeight, canvasSize.height, viewport);
         if (markHit !== null) {
           setSelected(`mark:${markHit.collectionKey}:${markHit.index}`);
           setActiveMarkCollectionKey(markHit.collectionKey);
           setSequenceContextMenu({ kind: "mark", laneIndex, startMs, collectionKey: markHit.collectionKey, index: markHit.index });
-          return;
-        }
-        const hit = hitSequence(visibleClips, x, y);
-        if (hit !== null) {
-          setSelected(`effect:${hit.effect.id}`);
-          setSequenceContextMenu({ kind: "effect", laneIndex: hit.laneIndex, startMs, effectId: hit.effect.id });
           return;
         }
         setSelected(null);
@@ -962,6 +966,26 @@ function SequenceCanvas({
           })();
           return;
         }
+        const hit = hitSequence(visibleClips, event.nativeEvent.offsetX, event.nativeEvent.offsetY);
+        if (hit !== null) {
+          setSelected(`effect:${hit.effect.id}`);
+          setDragCursor("grabbing");
+          drag.current = {
+            kind: "sequence",
+            id: hit.effect.id,
+            startX: event.nativeEvent.offsetX,
+            originalStartMs: hit.effect.startMs,
+            laneIndex: hit.laneIndex,
+            resize: hit.resize
+          };
+          setPreview({
+            id: hit.effect.id,
+            startMs: hit.effect.startMs,
+            durationMs: hit.effect.durationMs,
+            laneIndex: hit.laneIndex
+          });
+          return;
+        }
         const markHit = hitSequenceMark(visibleMarkCollections, mode, x, y, left, audioStripTop, audioStripHeight, canvasSize.height, viewport);
         if (markHit !== null) {
           setSelected(`mark:${markHit.collectionKey}:${markHit.index}`);
@@ -975,31 +999,11 @@ function SequenceCanvas({
           };
           return;
         }
-        const hit = hitSequence(visibleClips, event.nativeEvent.offsetX, event.nativeEvent.offsetY);
-        if (!hit) {
-          setSelected(null);
-          if (event.nativeEvent.offsetX >= left) {
-            drag.current = { kind: "sequenceScrub" };
-            seekFromCanvas(event);
-          }
-          return;
+        setSelected(null);
+        if (event.nativeEvent.offsetX >= left) {
+          drag.current = { kind: "sequenceScrub" };
+          seekFromCanvas(event);
         }
-        setSelected(`effect:${hit.effect.id}`);
-        setDragCursor("grabbing");
-        drag.current = {
-          kind: "sequence",
-          id: hit.effect.id,
-          startX: event.nativeEvent.offsetX,
-          originalStartMs: hit.effect.startMs,
-          laneIndex: hit.laneIndex,
-          resize: hit.resize
-        };
-        setPreview({
-          id: hit.effect.id,
-          startMs: hit.effect.startMs,
-          durationMs: hit.effect.durationMs,
-          laneIndex: hit.laneIndex
-        });
       }}
       onMouseMove={(event) => {
         const current = drag.current;
@@ -1011,15 +1015,28 @@ function SequenceCanvas({
           const deltaMs = Math.round((event.nativeEvent.offsetX - current.startX) / viewport.pxPerMs);
           const timeMs = clamp(current.originalTimeMs + deltaMs, 0, document.durationMs);
           setSelected(`mark:${current.collectionKey}:${current.index}`);
-          setMarkPreview({ collectionKey: current.collectionKey, index: current.index, timeMs });
+          const collection = document.markCollections.find((candidate) => candidate.key === current.collectionKey);
+          const committedIndex = collection === undefined ? current.index : markIndexAfterMove(collection, current.index, timeMs);
+          setMarkPreview({ collectionKey: current.collectionKey, index: current.index, timeMs, committedIndex });
           setPreview(null);
           return;
         }
         if (!current) {
-          const hit = hitSequence(visibleClips, event.nativeEvent.offsetX, event.nativeEvent.offsetY);
-          const nextHover = hit === null ? null : { effectId: hit.effect.id, resize: hit.resize };
+          const x = event.nativeEvent.offsetX;
+          const y = event.nativeEvent.offsetY;
+          const hit = hitSequence(visibleClips, x, y);
+          const markHit =
+            hit === null
+              ? hitSequenceMark(visibleMarkCollections, mode, x, y, left, audioStripTop, audioStripHeight, canvasSize.height, viewport)
+              : null;
+          const nextHover: SequenceHover =
+            hit !== null
+              ? { kind: "effect", effectId: hit.effect.id, resize: hit.resize }
+              : markHit !== null
+                ? { kind: "mark", collectionKey: markHit.collectionKey, index: markHit.index }
+                : null;
           setHover((previous) =>
-            previous?.effectId === nextHover?.effectId && previous?.resize === nextHover?.resize ? previous : nextHover
+            sequenceHoverEqual(previous, nextHover) ? previous : nextHover
           );
           return;
         }
@@ -1060,26 +1077,24 @@ function SequenceCanvas({
           return;
         }
         if (!current || current.kind !== "sequence" || !preview) return;
-        if (current.resize === "none") {
-          void runSnapshotCommand(() =>
-            commands.applySequenceGuiEdit({
-              type: "moveEffect",
-              id: preview.id,
-              startMs: preview.startMs,
-              target: document.lanes[preview.laneIndex]?.target ?? null
-            })
-          );
-        } else {
-          void runSnapshotCommand(() =>
-            commands.applySequenceGuiEdit({
-              type: "resizeEffect",
-              id: preview.id,
-              startMs: preview.startMs,
-              durationMs: preview.durationMs
-            })
-          );
-        }
-        setPreview(null);
+        const committedPreview = preview;
+        const edit = () =>
+          current.resize === "none"
+            ? commands.applySequenceGuiEdit({
+                type: "moveEffect",
+                id: committedPreview.id,
+                startMs: committedPreview.startMs,
+                target: document.lanes[committedPreview.laneIndex]?.target ?? null
+              })
+            : commands.applySequenceGuiEdit({
+                type: "resizeEffect",
+                id: committedPreview.id,
+                startMs: committedPreview.startMs,
+                durationMs: committedPreview.durationMs
+              });
+        void runSnapshotCommand(edit).finally(() => {
+          setPreview((currentPreview) => (currentPreview === committedPreview ? null : currentPreview));
+        });
       }}
       onMouseLeave={() => {
         if (drag.current === null) setHover(null);
@@ -1856,6 +1871,11 @@ function selectedEffectScriptPath(effect: SequenceEffectDto, scripts: SequenceEf
   return scripts.find((script) => script.name === currentName)?.path ?? "";
 }
 
+function openColorPicker(input: HTMLInputElement | null | undefined) {
+  if (input === null || input === undefined) return;
+  input.showPicker();
+}
+
 function EffectParamInput({
   effectId,
   param,
@@ -2051,7 +2071,7 @@ function ColorCurveParamShell(props: {
   points: EditedColorCurvePoint[];
   commit: (points: EditedColorCurvePoint[]) => Promise<void>;
 }) {
-  return <ColorCurveParam key={`${props.name}:${curvePointsSignature(props.points)}`} {...props} />;
+  return <ColorCurveParam {...props} />;
 }
 
 function FloatCurveParam({
@@ -2071,11 +2091,17 @@ function FloatCurveParam({
   const draggingPoint = useRef<number | null>(null);
   const pointsSignature = curvePointsSignature(points);
   const lastCommittedSignature = useRef(pointsSignature);
+  const pendingSignature = useRef<string | null>(null);
   useEffect(() => {
     draftsRef.current = drafts;
   }, [drafts]);
   useEffect(() => {
-    if (pointsSignature === curvePointsSignature(draftsRef.current)) return;
+    const draftSignature = curvePointsSignature(draftsRef.current);
+    if (pointsSignature === draftSignature) {
+      pendingSignature.current = null;
+      return;
+    }
+    if (pendingSignature.current === draftSignature) return;
     setDrafts(points);
     draftsRef.current = points;
     lastCommittedSignature.current = pointsSignature;
@@ -2090,7 +2116,10 @@ function FloatCurveParam({
       setSelectedIndex((index) => Math.min(index, sorted.length - 1));
       if (signature !== lastCommittedSignature.current) {
         lastCommittedSignature.current = signature;
-        void commit(sorted);
+        pendingSignature.current = signature;
+        void commit(sorted).catch(() => {
+          pendingSignature.current = null;
+        });
       }
     }
   };
@@ -2170,7 +2199,7 @@ function FloatCurveParam({
           const y = 120 - ((point.value - valueRange.min) / (valueRange.max - valueRange.min)) * 120;
           return (
             <circle
-              key={`${index}:${point.time}:${point.value}`}
+              key={index}
               className={`float-curve-point ${index === selectedIndex ? "selected" : ""}`}
               cx={x}
               cy={y}
@@ -2287,14 +2316,21 @@ function ColorCurveParam({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [pointsCollapsed, setPointsCollapsed] = useState(false);
   const gradientRef = useRef<HTMLDivElement | null>(null);
-  const draggingPoint = useRef<number | null>(null);
+  const colorInputRefs = useRef<Array<HTMLInputElement | null>>([]);
+  const draggingPoint = useRef<{ index: number; moved: boolean } | null>(null);
   const lastCommittedValues = useRef(points.map((point) => point.value.toLowerCase()));
   const pointsSignature = curvePointsSignature(points);
+  const pendingSignature = useRef<string | null>(null);
   useEffect(() => {
     draftsRef.current = drafts;
   }, [drafts]);
   useEffect(() => {
-    if (pointsSignature === curvePointsSignature(draftsRef.current)) return;
+    const draftSignature = curvePointsSignature(draftsRef.current);
+    if (pointsSignature === draftSignature) {
+      pendingSignature.current = null;
+      return;
+    }
+    if (pendingSignature.current === draftSignature) return;
     setDrafts(points);
     draftsRef.current = points;
     lastCommittedValues.current = points.map((point) => point.value.toLowerCase());
@@ -2303,10 +2339,14 @@ function ColorCurveParam({
   const update = (next: EditedColorCurvePoint[]) => {
     if (next.length > 0 && next.every((point) => Number.isFinite(point.time) && isHexColor(point.value))) {
       const sorted = sortCurvePoints(next).map((point) => ({ ...point, value: point.value.toLowerCase() }));
+      const signature = curvePointsSignature(sorted);
       setDrafts(sorted);
       draftsRef.current = sorted;
       lastCommittedValues.current = sorted.map((point) => point.value);
-      void commit(sorted);
+      pendingSignature.current = signature;
+      void commit(sorted).catch(() => {
+        pendingSignature.current = null;
+      });
     }
   };
   const setPoint = (index: number, point: EditedColorCurvePoint, commitChange: boolean) => {
@@ -2378,38 +2418,49 @@ function ColorCurveParam({
           setSelectedIndex(nearestColorPointIndex(draftsRef.current, point));
         }}
         onPointerMove={(event) => {
-          const index = draggingPoint.current;
-          if (index === null) return;
-          const point = draftsRef.current[index];
+          const drag = draggingPoint.current;
+          if (drag === null) return;
+          const point = draftsRef.current[drag.index];
           if (point === undefined) return;
-          draggingPoint.current = setPoint(index, pointFromPointer(event, point.value), false);
+          const nextIndex = setPoint(drag.index, pointFromPointer(event, point.value), false);
+          draggingPoint.current = { index: nextIndex, moved: true };
         }}
         onPointerUp={(event) => {
           if (draggingPoint.current === null) return;
           event.currentTarget.releasePointerCapture(event.pointerId);
+          const moved = draggingPoint.current.moved;
           draggingPoint.current = null;
-          update(draftsRef.current);
+          if (moved) {
+            update(draftsRef.current);
+          }
         }}
         onPointerCancel={(event) => {
           if (draggingPoint.current === null) return;
           event.currentTarget.releasePointerCapture(event.pointerId);
+          const moved = draggingPoint.current.moved;
           draggingPoint.current = null;
-          update(draftsRef.current);
+          if (moved) {
+            update(draftsRef.current);
+          }
         }}
       >
         {drafts.map((point, index) => {
           const displayedColor = isHexColor(point.value) ? point.value : (points[index]?.value ?? "#ffffff");
           return (
-            <button
-              key={`${index}:${point.time}:${point.value}`}
-              type="button"
+            <span
+              key={index}
               className={`color-curve-stop ${index === selectedIndex ? "selected" : ""}`}
-              style={{ left: `${point.time * 100}%`, background: displayedColor }}
+              style={{ left: `${point.time * 100}%` }}
               onPointerDown={(event) => {
                 event.stopPropagation();
                 event.currentTarget.parentElement?.setPointerCapture(event.pointerId);
-                draggingPoint.current = index;
+                draggingPoint.current = { index, moved: false };
                 setSelectedIndex(index);
+              }}
+              onDoubleClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                openColorPicker(colorInputRefs.current[index]);
               }}
               onContextMenu={(event) => {
                 event.preventDefault();
@@ -2417,8 +2468,22 @@ function ColorCurveParam({
                 deletePoint(index);
               }}
               onFocus={() => { setSelectedIndex(index); }}
-              aria-label={`Gradient stop ${index + 1}`}
-            />
+            >
+              <span className="color-curve-stop-line" />
+              <label className="color-curve-stop-picker" title={`Gradient stop ${index + 1}`}>
+                <input
+                  ref={(input) => {
+                    colorInputRefs.current[index] = input;
+                  }}
+                  type="color"
+                  value={displayedColor}
+                  onChange={(event) => {
+                    setPoint(index, { ...point, value: event.currentTarget.value }, false);
+                  }}
+                  onBlur={() => { commitDraftValue(index); }}
+                />
+              </label>
+            </span>
           );
         })}
       </div>
@@ -2438,7 +2503,7 @@ function ColorCurveParam({
               const displayedColor = isHexColor(point.value) ? point.value : (points[index]?.value ?? "#ffffff");
               return (
                 <div
-                  key={`${index}:${point.time}:${point.value}`}
+                  key={index}
                   className={`color-curve-point-row-compact ${index === selectedIndex ? "selected" : ""}`}
                   onPointerDown={() => { setSelectedIndex(index); }}
                 >
@@ -2463,15 +2528,18 @@ function ColorCurveParam({
                       }}
                     />
                   </label>
-                  <span className="color-swatch" style={{ background: displayedColor }} />
-                  <input
-                    type="color"
-                    value={displayedColor}
-                    onChange={(event) => {
-                      setPoint(index, { ...point, value: event.currentTarget.value }, false);
-                    }}
-                    onBlur={() => { commitDraftValue(index); }}
-                  />
+                  <label className="color-swatch-picker">
+                    <span className="color-swatch" style={{ background: displayedColor }} />
+                    <input
+                      type="color"
+                      value={displayedColor}
+                      onFocus={() => { setSelectedIndex(index); }}
+                      onChange={(event) => {
+                        setPoint(index, { ...point, value: event.currentTarget.value }, false);
+                      }}
+                      onBlur={() => { commitDraftValue(index); }}
+                    />
+                  </label>
                   <input
                     value={point.value}
                     onFocus={() => { setSelectedIndex(index); }}
@@ -2785,6 +2853,16 @@ function hitSequenceMark(
   return null;
 }
 
+function sequenceHoverEqual(left: SequenceHover, right: SequenceHover) {
+  if (left === right) return true;
+  if (left === null || right === null || left.kind !== right.kind) return false;
+  if (left.kind === "effect" && right.kind === "effect") {
+    return left.effectId === right.effectId && left.resize === right.resize;
+  }
+  if (left.kind !== "mark" || right.kind !== "mark") return false;
+  return left.collectionKey === right.collectionKey && left.index === right.index;
+}
+
 function drawSequenceMarks(
   ctx: CanvasRenderingContext2D,
   collections: SequenceMarkCollectionDto[],
@@ -2832,6 +2910,12 @@ function drawSequenceMarks(
     }
   }
   ctx.restore();
+}
+
+function committedMarkPreview(collections: SequenceMarkCollectionDto[], preview: MarkPreview | null) {
+  if (preview === null || preview.committedIndex === undefined) return preview;
+  const collection = collections.find((candidate) => candidate.key === preview.collectionKey);
+  return collection?.marksMs[preview.committedIndex] === preview.timeMs ? null : preview;
 }
 
 function parseSelectedMark(selected: string | null): { collectionKey: string; index: number } | null {

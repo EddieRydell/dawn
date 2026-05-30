@@ -869,29 +869,55 @@ button:focus-visible,
 
 .color-curve-stop {
   position: absolute;
-  bottom: 6px;
-  width: 14px;
-  height: 28px;
+  top: 4px;
+  bottom: 4px;
+  width: 18px;
   transform: translateX(-50%);
-  border: 2px solid #111214;
-  background: #ffffff;
+  border: 0;
+  background: transparent;
   padding: 0;
   cursor: grab;
 }
 
 .color-curve-stop.selected {
-  border-color: #fffaf0;
-  box-shadow: 0 0 0 2px #f0c46b;
+  filter: drop-shadow(0 0 3px #f0c46b);
 }
 
-.color-curve-stop:focus-visible {
-  outline: none;
-  border-color: #fffaf0;
+.color-curve-stop-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 0;
+  transform: translateX(-50%);
+  border-left: 2px solid #111214;
+  box-shadow: 0.75px 0 0 #fffaf0, -0.75px 0 0 #fffaf0;
+  pointer-events: none;
+}
+
+.color-curve-stop-picker {
+  position: absolute;
+  inset: 0;
+  display: block;
+  margin: 0;
+  pointer-events: none;
+}
+
+.color-curve-stop-picker input {
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: grab;
+  pointer-events: none;
+}
+
+.color-curve-stop:focus-within {
+  filter: drop-shadow(0 0 3px #fffaf0);
 }
 
 .color-curve-point-row-compact {
   display: grid;
-  grid-template-columns: minmax(0, 0.8fr) auto auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 0.8fr) auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 6px;
   min-height: 28px;
@@ -930,6 +956,21 @@ button:focus-visible,
   background: #17181b;
   box-shadow: inset 0 -1px 0 #6abf8a;
   outline: none;
+}
+
+.color-swatch-picker {
+  position: relative;
+  display: grid;
+  margin: 0;
+}
+
+.color-swatch-picker input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .curve-point-row.selected input {
