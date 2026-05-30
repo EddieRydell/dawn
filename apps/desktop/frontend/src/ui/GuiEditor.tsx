@@ -54,14 +54,22 @@ export function GuiEditor({ snapshot }: { snapshot: AppSnapshotDto }) {
 
 function GuiEditorInner({ gui, snapshot }: { gui: ReadyGuiDocumentDto; snapshot: AppSnapshotDto }) {
   const [selected, setSelected] = useState<string | null>(null);
+  const livePreview = useSequencePreview(snapshot.preview);
 
   return (
-    <div className="gui-editor-shell">
+    <div
+      className="gui-editor-shell"
+      onKeyDownCapture={(event) => {
+        if (gui.type === "sequence") {
+          handleSequencePlaybackShortcut(event, gui.document, livePreview, gui.document.durationMs <= 0);
+        }
+      }}
+    >
       {gui.type === "sequence" && (
         <SequenceEditor
           key={`${gui.document.path}:${gui.document.objectKey}`}
           document={gui.document}
-          preview={snapshot.preview}
+          preview={livePreview}
           selected={selected}
           setSelected={setSelected}
         />
@@ -86,28 +94,10 @@ function SequenceEditor({
   selected: string | null;
   setSelected: (id: string | null) => void;
 }) {
-  const livePreview = useSequencePreview(preview);
+  const livePreview = preview;
   const unsupported = document.durationMs <= 0;
-  const audioLoading = livePreview.audioPlaybackStatus === "loading";
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (unsupported || isEditableShortcutTarget(event.target)) return;
-    if (event.key === " ") {
-      event.preventDefault();
-      if (audioLoading) return;
-      void runSnapshotCommand(livePreview.isPlaying ? commands.previewPause : commands.previewPlay);
-    } else if (event.key.toLowerCase() === "s") {
-      event.preventDefault();
-      void runSnapshotCommand(commands.previewStop);
-    } else if (event.key === "Home") {
-      event.preventDefault();
-      void runSnapshotCommand(commands.previewRewindToZero);
-    } else if (event.key === "ArrowLeft") {
-      event.preventDefault();
-      stepSequenceFrame(document, livePreview.positionMs, livePreview.durationMs, -1);
-    } else if (event.key === "ArrowRight") {
-      event.preventDefault();
-      stepSequenceFrame(document, livePreview.positionMs, livePreview.durationMs, 1);
-    }
+    handleSequencePlaybackShortcut(event, document, livePreview, unsupported);
   };
   return (
     <div className="sequence-editor" tabIndex={-1} onKeyDown={handleKeyDown}>
@@ -137,7 +127,13 @@ export function SequenceTransportControls({
     stepSequenceFrame(document, livePreview.positionMs, livePreview.durationMs, direction);
   };
   return (
-    <div className="sequence-toolbar" aria-label="Sequence transport">
+    <div
+      className="sequence-toolbar"
+      aria-label="Sequence transport"
+      onKeyDownCapture={(event) => {
+        handleSequencePlaybackShortcut(event, document, livePreview, unsupported);
+      }}
+    >
       <button
         type="button"
         title={audioLoading ? "Loading audio" : livePreview.isPlaying ? "Pause" : "Play"}
@@ -1734,6 +1730,37 @@ function isEditableShortcutTarget(target: EventTarget | null) {
   if (target.isContentEditable) return true;
   if (target.closest(".cm-editor")) return true;
   return target.closest("input, textarea, select") !== null;
+}
+
+function handleSequencePlaybackShortcut(
+  event: KeyboardEvent<HTMLElement>,
+  document: SequenceDocumentDto,
+  preview: AppSnapshotDto["preview"],
+  unsupported: boolean
+) {
+  if (unsupported || isEditableShortcutTarget(event.target)) return;
+  if (event.key === " ") {
+    event.preventDefault();
+    event.stopPropagation();
+    if (preview.audioPlaybackStatus === "loading") return;
+    void runSnapshotCommand(preview.isPlaying ? commands.previewPause : commands.previewPlay);
+  } else if (event.key.toLowerCase() === "s") {
+    event.preventDefault();
+    event.stopPropagation();
+    void runSnapshotCommand(commands.previewStop);
+  } else if (event.key === "Home") {
+    event.preventDefault();
+    event.stopPropagation();
+    void runSnapshotCommand(commands.previewRewindToZero);
+  } else if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    event.stopPropagation();
+    stepSequenceFrame(document, preview.positionMs, preview.durationMs, -1);
+  } else if (event.key === "ArrowRight") {
+    event.preventDefault();
+    event.stopPropagation();
+    stepSequenceFrame(document, preview.positionMs, preview.durationMs, 1);
+  }
 }
 
 function stepSequenceFrame(document: SequenceDocumentDto, positionMs: number, previewDurationMs: number, direction: -1 | 1) {
