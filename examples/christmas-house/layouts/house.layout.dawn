@@ -60,7 +60,7 @@ house:
     transform:
       position:
         x: 0.0
-        y: 2.3
+        y: 2.3w
         z: 0.0
       rotation:
         x: 0.0

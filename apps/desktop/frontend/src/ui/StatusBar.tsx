@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 import type { AppSnapshotDto } from "../bindings";
+import { openActiveEditorDiagnostics } from "../uiEvents";
 
 export function StatusBar({ snapshot }: { snapshot: AppSnapshotDto }) {
   const errors = snapshot.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
@@ -8,11 +9,17 @@ export function StatusBar({ snapshot }: { snapshot: AppSnapshotDto }) {
     <footer className="status-bar">
       <span>{snapshot.status}</span>
       <span>{snapshot.projectRoot ?? "No project"}</span>
-      <span className={errors > 0 ? "status-problem" : "status-ok"}>
+      <button
+        type="button"
+        className={`status-diagnostics-button ${errors > 0 ? "status-problem" : "status-ok"}`}
+        onClick={openActiveEditorDiagnostics}
+      >
         {errors > 0 ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
         {errors} errors
-      </span>
-      <span>{warnings} warnings</span>
+      </button>
+      <button type="button" className="status-diagnostics-button status-warning" onClick={openActiveEditorDiagnostics}>
+        {warnings} warnings
+      </button>
     </footer>
   );
 }

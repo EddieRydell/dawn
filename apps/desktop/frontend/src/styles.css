@@ -571,14 +571,33 @@ button:focus-visible,
 }
 
 .status-ok,
-.status-problem {
+.status-problem,
+.status-diagnostics-button {
   display: inline-flex;
   align-items: center;
   gap: 5px;
 }
 
+.status-diagnostics-button {
+  height: 22px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  padding: 0 5px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.status-diagnostics-button:hover {
+  background: #333840;
+}
+
 .status-ok {
   color: #6abf8a;
+}
+
+.status-warning {
+  color: #f0c46b;
 }
 
 .status-problem,

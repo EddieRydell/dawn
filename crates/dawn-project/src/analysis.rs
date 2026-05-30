@@ -398,7 +398,7 @@ impl AnalysisSession {
             .map(collect_file_imports)
             .unwrap_or_else(Vec::new);
         if let Some(file) = file.as_ref() {
-            validate_sequence_marks(&path, file, &mut self.diagnostics);
+            validate_sequence_marks(&path, &text, file, &mut self.diagnostics);
         }
         self.files.insert(
             path.clone(),
@@ -515,7 +515,9 @@ impl AnalysisSession {
                     ScriptSource::Inline(text) => {
                         let key = format!("inline:{}:{}", root_path.to_slash_string(), effect.id);
                         let result = compile_effect_script(text);
-                        for diagnostic in script_diagnostics(root_path, &result) {
+                        for diagnostic in
+                            self.inline_script_diagnostics(root_path, effect.id, &result)
+                        {
                             self.diagnostics.push(diagnostic);
                         }
                         let script = result.as_ref().ok().cloned();
@@ -552,9 +554,13 @@ impl AnalysisSession {
     ) {
         for name in params.keys() {
             if script.param(name).is_none() {
+                let (path, range) = self
+                    .locate_effect_param(*effect_id, name)
+                    .map(|(path, range)| (path, Some(range)))
+                    .unwrap_or_else(|| (root_path.clone(), None));
                 self.diagnostics.push(ProjectDiagnostic {
-                    path: root_path.clone(),
-                    range: None,
+                    path,
+                    range,
                     severity: DiagnosticSeverity::Error,
                     code: DiagnosticCode::Script,
                     message: format!(
@@ -576,27 +582,39 @@ impl AnalysisSession {
                         mark_collections,
                     );
                 }
-                Some(_) => self.diagnostics.push(ProjectDiagnostic {
-                    path: root_path.clone(),
-                    range: None,
-                    severity: DiagnosticSeverity::Error,
-                    code: DiagnosticCode::Script,
-                    message: format!(
-                        "effect `{effect_id}` parameter `{}` must be {}",
-                        schema.name, schema.value_type
-                    ),
-                }),
+                Some(_) => {
+                    let (path, range) = self
+                        .locate_effect_param_type(*effect_id, &schema.name)
+                        .map(|(path, range)| (path, Some(range)))
+                        .unwrap_or_else(|| (root_path.clone(), None));
+                    self.diagnostics.push(ProjectDiagnostic {
+                        path,
+                        range,
+                        severity: DiagnosticSeverity::Error,
+                        code: DiagnosticCode::Script,
+                        message: format!(
+                            "effect `{effect_id}` parameter `{}` must be {}",
+                            schema.name, schema.value_type
+                        ),
+                    });
+                }
                 None if schema.default.is_some() => {}
-                None => self.diagnostics.push(ProjectDiagnostic {
-                    path: root_path.clone(),
-                    range: None,
-                    severity: DiagnosticSeverity::Error,
-                    code: DiagnosticCode::Script,
-                    message: format!(
-                        "effect `{effect_id}` is missing required parameter `{}`",
-                        schema.name
-                    ),
-                }),
+                None => {
+                    let (path, range) = self
+                        .locate_effect_params_block(*effect_id)
+                        .map(|(path, range)| (path, Some(range)))
+                        .unwrap_or_else(|| (root_path.clone(), None));
+                    self.diagnostics.push(ProjectDiagnostic {
+                        path,
+                        range,
+                        severity: DiagnosticSeverity::Error,
+                        code: DiagnosticCode::Script,
+                        message: format!(
+                            "effect `{effect_id}` is missing required parameter `{}`",
+                            schema.name
+                        ),
+                    });
+                }
             }
         }
     }
@@ -612,9 +630,13 @@ impl AnalysisSession {
     ) {
         match param {
             EffectParam::Enum { value } if !schema.options.contains(value) => {
+                let (path, range) = self
+                    .locate_effect_param_value(*effect_id, &schema.name, value)
+                    .map(|(path, range)| (path, Some(range)))
+                    .unwrap_or_else(|| (root_path.clone(), None));
                 self.diagnostics.push(ProjectDiagnostic {
-                    path: root_path.clone(),
-                    range: None,
+                    path,
+                    range,
                     severity: DiagnosticSeverity::Error,
                     code: DiagnosticCode::Script,
                     message: format!(
@@ -626,9 +648,13 @@ impl AnalysisSession {
             EffectParam::Flags { value } => {
                 for flag in &value.values {
                     if !schema.options.contains(flag) {
+                        let (path, range) = self
+                            .locate_effect_param_value(*effect_id, &schema.name, flag)
+                            .map(|(path, range)| (path, Some(range)))
+                            .unwrap_or_else(|| (root_path.clone(), None));
                         self.diagnostics.push(ProjectDiagnostic {
-                            path: root_path.clone(),
-                            range: None,
+                            path,
+                            range,
                             severity: DiagnosticSeverity::Error,
                             code: DiagnosticCode::Script,
                             message: format!(
@@ -644,9 +670,13 @@ impl AnalysisSession {
                     .iter()
                     .any(|collection| collection.key == *key) =>
             {
+                let (path, range) = self
+                    .locate_effect_param_value(*effect_id, &schema.name, key)
+                    .map(|(path, range)| (path, Some(range)))
+                    .unwrap_or_else(|| (root_path.clone(), None));
                 self.diagnostics.push(ProjectDiagnostic {
-                    path: root_path.clone(),
-                    range: None,
+                    path,
+                    range,
                     severity: DiagnosticSeverity::Error,
                     code: DiagnosticCode::Script,
                     message: format!(
@@ -657,6 +687,97 @@ impl AnalysisSession {
             }
             _ => {}
         }
+    }
+
+    fn inline_script_diagnostics(
+        &self,
+        fallback_path: &Utf8PathBuf,
+        effect_id: u32,
+        result: &Result<CompiledEffect, Vec<ScriptDiagnostic>>,
+    ) -> Vec<ProjectDiagnostic> {
+        result
+            .as_ref()
+            .err()
+            .into_iter()
+            .flatten()
+            .map(|diagnostic| {
+                let located = diagnostic
+                    .range
+                    .and_then(|range| self.locate_inline_script_range(effect_id, range));
+                ProjectDiagnostic {
+                    path: located
+                        .as_ref()
+                        .map(|(path, _)| path.clone())
+                        .unwrap_or_else(|| fallback_path.clone()),
+                    range: located.map(|(_, range)| range),
+                    severity: DiagnosticSeverity::Error,
+                    code: DiagnosticCode::Script,
+                    message: diagnostic.message.clone(),
+                }
+            })
+            .collect()
+    }
+
+    fn locate_effect_param(
+        &self,
+        effect_id: u32,
+        param_name: &str,
+    ) -> Option<(Utf8PathBuf, TextRange)> {
+        self.locate_in_yaml_files(|text| locate_effect_param(text, effect_id, param_name))
+    }
+
+    fn locate_effect_param_type(
+        &self,
+        effect_id: u32,
+        param_name: &str,
+    ) -> Option<(Utf8PathBuf, TextRange)> {
+        self.locate_in_yaml_files(|text| {
+            locate_effect_param_field(text, effect_id, param_name, "type", None)
+        })
+        .or_else(|| self.locate_effect_param(effect_id, param_name))
+    }
+
+    fn locate_effect_param_value(
+        &self,
+        effect_id: u32,
+        param_name: &str,
+        value: &str,
+    ) -> Option<(Utf8PathBuf, TextRange)> {
+        self.locate_in_yaml_files(|text| {
+            locate_effect_param_value(text, effect_id, param_name, value)
+        })
+        .or_else(|| self.locate_effect_param(effect_id, param_name))
+    }
+
+    fn locate_effect_params_block(&self, effect_id: u32) -> Option<(Utf8PathBuf, TextRange)> {
+        self.locate_in_yaml_files(|text| locate_effect_params_block(text, effect_id))
+            .or_else(|| self.locate_in_yaml_files(|text| locate_effect_id(text, effect_id)))
+    }
+
+    fn locate_inline_script_range(
+        &self,
+        effect_id: u32,
+        range: crate::effect_script::SourceRange,
+    ) -> Option<(Utf8PathBuf, TextRange)> {
+        self.locate_in_yaml_files(|text| locate_inline_script_range(text, effect_id, range))
+    }
+
+    fn locate_in_yaml_files(
+        &self,
+        locate: impl Fn(&str) -> Option<TextRange>,
+    ) -> Option<(Utf8PathBuf, TextRange)> {
+        for (path, file) in &self.files {
+            if is_effect_script_path(path) {
+                continue;
+            }
+            let Some(text) = file.text.as_deref() else {
+                continue;
+            };
+            if let Some(range) = locate(text) {
+                return Some((path.clone(), range));
+            }
+        }
+        None
     }
 }
 
@@ -761,8 +882,341 @@ fn script_diagnostics(
         .collect()
 }
 
+fn locate_effect_id(text: &str, effect_id: u32) -> Option<TextRange> {
+    let (start, _) = find_effect_block(text, effect_id)?;
+    line_value_range(text, start, "id", Some(&effect_id.to_string()))
+}
+
+fn locate_effect_params_block(text: &str, effect_id: u32) -> Option<TextRange> {
+    let (start, end) = find_effect_block(text, effect_id)?;
+    let lines = text.lines().collect::<Vec<_>>();
+    for line_index in start..end {
+        if field_name(lines[line_index]) == Some("params") {
+            return line_value_range(text, line_index, "params", None);
+        }
+    }
+    locate_effect_id(text, effect_id)
+}
+
+fn locate_effect_param(text: &str, effect_id: u32, param_name: &str) -> Option<TextRange> {
+    let (line_index, _) = find_effect_param_block(text, effect_id, param_name)?;
+    line_value_range(text, line_index, param_name, None)
+}
+
+fn locate_effect_param_field(
+    text: &str,
+    effect_id: u32,
+    param_name: &str,
+    field: &str,
+    value: Option<&str>,
+) -> Option<TextRange> {
+    let (start, end) = find_effect_param_block(text, effect_id, param_name)?;
+    let lines = text.lines().collect::<Vec<_>>();
+    for line_index in start..end {
+        if field_name(lines[line_index]) == Some(field) {
+            return line_value_range(text, line_index, field, value);
+        }
+    }
+    locate_effect_param(text, effect_id, param_name)
+}
+
+fn locate_effect_param_value(
+    text: &str,
+    effect_id: u32,
+    param_name: &str,
+    value: &str,
+) -> Option<TextRange> {
+    let (start, end) = find_effect_param_block(text, effect_id, param_name)?;
+    let lines = text.lines().collect::<Vec<_>>();
+    for (line_index, line) in lines.iter().enumerate().take(end).skip(start) {
+        if let Some(column) = line.find(value) {
+            return Some(TextRange {
+                start: TextPosition {
+                    line: line_index as u32,
+                    character: column as u32,
+                },
+                end: TextPosition {
+                    line: line_index as u32,
+                    character: column.saturating_add(value.len()) as u32,
+                },
+            });
+        }
+    }
+    locate_effect_param(text, effect_id, param_name)
+}
+
+fn locate_mark_collection_field(
+    text: &str,
+    object_key: &str,
+    collection_index: usize,
+    field: &str,
+    value: Option<&str>,
+) -> Option<TextRange> {
+    let (object_start, object_end) = find_object_block(text, object_key)?;
+    let lines = text.lines().collect::<Vec<_>>();
+    let mut in_mark_collections = false;
+    let mut mark_indent = 0usize;
+    let mut current_collection = None;
+
+    for line_index in object_start..object_end {
+        let line = lines[line_index];
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !in_mark_collections {
+            if field_name(line) == Some("mark_collections") {
+                in_mark_collections = true;
+                mark_indent = line_indent(line);
+            }
+            continue;
+        }
+
+        let indent = line_indent(line);
+        if indent <= mark_indent && !trimmed.starts_with("- ") {
+            break;
+        }
+
+        if field_name(line) == Some("key") && trimmed.starts_with("- ") {
+            current_collection = Some(current_collection.map_or(0, |index| index + 1));
+        }
+
+        if current_collection == Some(collection_index) && field_name(line) == Some(field) {
+            return line_value_range(text, line_index, field, value);
+        }
+    }
+
+    None
+}
+
+fn locate_inline_script_range(
+    text: &str,
+    effect_id: u32,
+    source_range: crate::effect_script::SourceRange,
+) -> Option<TextRange> {
+    let (start, end) = find_effect_block(text, effect_id)?;
+    let lines = text.lines().collect::<Vec<_>>();
+    for line_index in start..end {
+        let line = lines[line_index];
+        if field_name(line) != Some("script") {
+            continue;
+        }
+        let script_indent = line_indent(line);
+        let after_colon = line.split_once(':')?.1.trim_start();
+        if after_colon.starts_with('|') || after_colon.starts_with('>') {
+            let mut content_start = None;
+            let mut content_end = line_index + 1;
+            let mut content_indent = usize::MAX;
+            for (candidate_index, candidate) in
+                lines.iter().enumerate().take(end).skip(line_index + 1)
+            {
+                let trimmed = candidate.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let indent = line_indent(candidate);
+                if indent <= script_indent {
+                    break;
+                }
+                content_start.get_or_insert(candidate_index);
+                content_end = candidate_index;
+                content_indent = content_indent.min(indent);
+            }
+            let content_start = content_start?;
+            let content_indent = content_indent.min(usize::MAX - 1);
+            return Some(TextRange {
+                start: yaml_position_for_script_position(
+                    source_range.start,
+                    content_start,
+                    content_end,
+                    content_indent,
+                ),
+                end: yaml_position_for_script_position(
+                    source_range.end,
+                    content_start,
+                    content_end,
+                    content_indent,
+                ),
+            });
+        }
+
+        if !after_colon.is_empty() {
+            return line_value_range(text, line_index, "script", None);
+        }
+    }
+    None
+}
+
+fn yaml_position_for_script_position(
+    position: crate::effect_script::SourcePosition,
+    content_start: usize,
+    content_end: usize,
+    content_indent: usize,
+) -> TextPosition {
+    let line = content_start
+        .saturating_add(position.line as usize)
+        .min(content_end);
+    TextPosition {
+        line: line as u32,
+        character: content_indent.saturating_add(position.character as usize) as u32,
+    }
+}
+
+fn find_effect_param_block(text: &str, effect_id: u32, param_name: &str) -> Option<(usize, usize)> {
+    let (start, end) = find_effect_block(text, effect_id)?;
+    let lines = text.lines().collect::<Vec<_>>();
+    let mut params_start = None;
+    let mut params_indent = 0usize;
+    for (line_index, line) in lines.iter().enumerate().take(end).skip(start) {
+        if field_name(line) == Some("params") {
+            params_start = Some(line_index + 1);
+            params_indent = line_indent(line);
+            break;
+        }
+    }
+    for line_index in params_start?..end {
+        let trimmed = lines[line_index].trim_start();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if line_indent(lines[line_index]) <= params_indent {
+            break;
+        }
+        if field_name(lines[line_index]) != Some(param_name) {
+            continue;
+        }
+        let indent = line_indent(lines[line_index]);
+        let mut block_end = end;
+        for (candidate_index, candidate) in lines.iter().enumerate().take(end).skip(line_index + 1)
+        {
+            let trimmed = candidate.trim_start();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if line_indent(candidate) <= indent {
+                block_end = candidate_index;
+                break;
+            }
+        }
+        return Some((line_index, block_end));
+    }
+    None
+}
+
+fn find_effect_block(text: &str, effect_id: u32) -> Option<(usize, usize)> {
+    let lines = text.lines().collect::<Vec<_>>();
+    for (line_index, line) in lines.iter().enumerate() {
+        if !is_effect_id_line(line, effect_id) {
+            continue;
+        }
+        let indent = line_indent(line);
+        let mut end = lines.len();
+        for (candidate_index, candidate) in lines.iter().enumerate().skip(line_index + 1) {
+            let trimmed = candidate.trim_start();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if line_indent(candidate) <= indent {
+                end = candidate_index;
+                break;
+            }
+        }
+        if lines[line_index..end]
+            .iter()
+            .any(|candidate| field_name(candidate) == Some("script"))
+        {
+            return Some((line_index, end));
+        }
+    }
+    None
+}
+
+fn find_object_block(text: &str, object_key: &str) -> Option<(usize, usize)> {
+    let lines = text.lines().collect::<Vec<_>>();
+    for (line_index, line) in lines.iter().enumerate() {
+        if field_name(line) != Some(object_key) {
+            continue;
+        }
+        let indent = line_indent(line);
+        let mut end = lines.len();
+        for (candidate_index, candidate) in lines.iter().enumerate().skip(line_index + 1) {
+            let trimmed = candidate.trim_start();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if line_indent(candidate) <= indent {
+                end = candidate_index;
+                break;
+            }
+        }
+        return Some((line_index, end));
+    }
+    None
+}
+
+fn is_effect_id_line(line: &str, effect_id: u32) -> bool {
+    let trimmed = line.trim_start();
+    let field = trimmed.strip_prefix("- ").unwrap_or(trimmed);
+    field
+        .strip_prefix("id:")
+        .is_some_and(|value| value.trim() == effect_id.to_string())
+}
+
+fn field_name(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let field = trimmed.strip_prefix("- ").unwrap_or(trimmed);
+    let (name, _) = field.split_once(':')?;
+    Some(name.trim())
+}
+
+fn line_value_range(
+    text: &str,
+    line_index: usize,
+    field: &str,
+    value: Option<&str>,
+) -> Option<TextRange> {
+    let line = text.lines().nth(line_index)?;
+    let field_column = line.find(field)?;
+    let value_column = value
+        .and_then(|value| line.find(value).map(|column| (column, value.len())))
+        .or_else(|| {
+            line.find(':').map(|colon| {
+                let start = colon.saturating_add(1).saturating_add(
+                    line[colon.saturating_add(1)..].len()
+                        - line[colon.saturating_add(1)..].trim_start().len(),
+                );
+                if start < line.len() {
+                    (start, line[start..].trim_end().len())
+                } else {
+                    (field_column, field.len())
+                }
+            })
+        })
+        .unwrap_or((field_column, field.len()));
+    let (start_column, len) = if value_column.1 == 0 {
+        (field_column, field.len())
+    } else {
+        value_column
+    };
+    Some(TextRange {
+        start: TextPosition {
+            line: line_index as u32,
+            character: start_column as u32,
+        },
+        end: TextPosition {
+            line: line_index as u32,
+            character: start_column.saturating_add(len) as u32,
+        },
+    })
+}
+
+fn line_indent(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
 fn validate_sequence_marks(
     path: &Utf8PathBuf,
+    text: &str,
     file: &DawnFile,
     diagnostics: &mut Vec<ProjectDiagnostic>,
 ) {
@@ -771,11 +1225,17 @@ fn validate_sequence_marks(
             continue;
         };
         let mut keys = HashSet::new();
-        for collection in &sequence.mark_collections {
+        for (collection_index, collection) in sequence.mark_collections.iter().enumerate() {
             if !is_mark_collection_key(&collection.key) {
                 diagnostics.push(ProjectDiagnostic {
                     path: path.clone(),
-                    range: None,
+                    range: locate_mark_collection_field(
+                        text,
+                        object_key,
+                        collection_index,
+                        "key",
+                        Some(&collection.key),
+                    ),
                     severity: DiagnosticSeverity::Error,
                     code: DiagnosticCode::Sequence,
                     message: format!(
@@ -787,7 +1247,13 @@ fn validate_sequence_marks(
             if !keys.insert(collection.key.as_str()) {
                 diagnostics.push(ProjectDiagnostic {
                     path: path.clone(),
-                    range: None,
+                    range: locate_mark_collection_field(
+                        text,
+                        object_key,
+                        collection_index,
+                        "key",
+                        Some(&collection.key),
+                    ),
                     severity: DiagnosticSeverity::Error,
                     code: DiagnosticCode::Sequence,
                     message: format!(
@@ -799,7 +1265,13 @@ fn validate_sequence_marks(
             if let Err(error) = Color::parse(&collection.color) {
                 diagnostics.push(ProjectDiagnostic {
                     path: path.clone(),
-                    range: None,
+                    range: locate_mark_collection_field(
+                        text,
+                        object_key,
+                        collection_index,
+                        "color",
+                        Some(&collection.color),
+                    ),
                     severity: DiagnosticSeverity::Error,
                     code: DiagnosticCode::Sequence,
                     message: format!(
