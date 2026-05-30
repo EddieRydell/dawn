@@ -29,6 +29,11 @@ pub(super) enum Stmt {
         update: Box<Stmt>,
         body: Vec<Stmt>,
     },
+    If {
+        condition: Expr,
+        then_body: Vec<Stmt>,
+        else_body: Vec<Stmt>,
+    },
     Return(Expr),
 }
 
@@ -57,6 +62,7 @@ pub(super) enum Expr {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum UnaryOp {
     Negate,
+    Not,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,4 +75,8 @@ pub(super) enum BinaryOp {
     LessEqual,
     Greater,
     GreaterEqual,
+    Equal,
+    NotEqual,
+    LogicalAnd,
+    LogicalOr,
 }

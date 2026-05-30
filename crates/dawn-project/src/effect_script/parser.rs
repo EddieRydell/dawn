@@ -150,6 +150,9 @@ impl Parser<'_> {
         if self.consume_keyword("for") {
             return self.for_statement();
         }
+        if self.consume_keyword("if") {
+            return self.if_statement();
+        }
         if self.peek_type_name() {
             return self.let_statement(true);
         }
@@ -181,6 +184,7 @@ impl Parser<'_> {
     }
 
     fn for_statement(&mut self) -> Result<Stmt, ScriptDiagnostic> {
+        self.symbol('(')?;
         let Stmt::Let {
             name,
             value_type,
@@ -193,6 +197,7 @@ impl Parser<'_> {
         let condition = self.expr()?;
         self.symbol(';')?;
         let update = self.assignment_without_semicolon()?;
+        self.symbol(')')?;
         self.symbol('{')?;
         let body = self.block_statements()?;
         self.symbol('}')?;
@@ -206,6 +211,34 @@ impl Parser<'_> {
         })
     }
 
+    fn if_statement(&mut self) -> Result<Stmt, ScriptDiagnostic> {
+        self.symbol('(')?;
+        let condition = self.expr()?;
+        self.symbol(')')?;
+        let then_body = self.braced_block()?;
+        let else_body = if self.consume_keyword("else") {
+            if self.consume_keyword("if") {
+                vec![self.if_statement()?]
+            } else {
+                self.braced_block()?
+            }
+        } else {
+            Vec::new()
+        };
+        Ok(Stmt::If {
+            condition,
+            then_body,
+            else_body,
+        })
+    }
+
+    fn braced_block(&mut self) -> Result<Vec<Stmt>, ScriptDiagnostic> {
+        self.symbol('{')?;
+        let statements = self.block_statements()?;
+        self.symbol('}')?;
+        Ok(statements)
+    }
+
     fn assignment_without_semicolon(&mut self) -> Result<Stmt, ScriptDiagnostic> {
         let name = self.identifier("local name")?;
         self.symbol('=')?;
@@ -214,7 +247,50 @@ impl Parser<'_> {
     }
 
     fn expr(&mut self) -> Result<Expr, ScriptDiagnostic> {
-        self.comparison()
+        self.logical_or()
+    }
+
+    fn logical_or(&mut self) -> Result<Expr, ScriptDiagnostic> {
+        let mut expr = self.logical_and()?;
+        while self.consume_symbol_pair('|', '|') {
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                op: BinaryOp::LogicalOr,
+                right: Box::new(self.logical_and()?),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn logical_and(&mut self) -> Result<Expr, ScriptDiagnostic> {
+        let mut expr = self.equality()?;
+        while self.consume_symbol_pair('&', '&') {
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                op: BinaryOp::LogicalAnd,
+                right: Box::new(self.equality()?),
+            };
+        }
+        Ok(expr)
+    }
+
+    fn equality(&mut self) -> Result<Expr, ScriptDiagnostic> {
+        let mut expr = self.comparison()?;
+        loop {
+            let op = if self.consume_symbol_pair('=', '=') {
+                BinaryOp::Equal
+            } else if self.consume_symbol_pair('!', '=') {
+                BinaryOp::NotEqual
+            } else {
+                break;
+            };
+            expr = Expr::Binary {
+                left: Box::new(expr),
+                op,
+                right: Box::new(self.comparison()?),
+            };
+        }
+        Ok(expr)
     }
 
     fn comparison(&mut self) -> Result<Expr, ScriptDiagnostic> {
@@ -282,6 +358,11 @@ impl Parser<'_> {
         if self.consume_symbol('-') {
             Ok(Expr::Unary {
                 op: UnaryOp::Negate,
+                expr: Box::new(self.unary()?),
+            })
+        } else if self.consume_symbol('!') {
+            Ok(Expr::Unary {
+                op: UnaryOp::Not,
                 expr: Box::new(self.unary()?),
             })
         } else {
@@ -530,6 +611,11 @@ impl Parser<'_> {
         };
         self.token_at(self.index + 1)
             .filter(|token| matches!(token.kind, TokenKind::Symbol('=')))
+            .filter(|_| {
+                !self
+                    .token_at(self.index + 2)
+                    .is_some_and(|token| matches!(token.kind, TokenKind::Symbol('=')))
+            })
             .map(|_| name.clone())
     }
 

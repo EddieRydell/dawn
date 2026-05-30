@@ -61,7 +61,7 @@ impl<'a> Lexer<'a> {
                 self.color();
             } else if character == '"' {
                 self.string();
-            } else if "{}();,<>+-*/=".contains(character) {
+            } else if "{}();,<>+-*/=!&|".contains(character) {
                 let start = self.position();
                 self.bump();
                 self.tokens.push(Token {

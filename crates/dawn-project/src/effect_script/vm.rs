@@ -108,6 +108,20 @@ impl<'a> Vm<'a> {
                 self.pop_scope();
                 flow
             }
+            Stmt::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                let RuntimeValue::Bool(condition) = self.eval(condition)? else {
+                    return Err(self.error("if condition returned a non-bool value"));
+                };
+                let body = if condition { then_body } else { else_body };
+                self.push_scope();
+                let flow = self.run_statements(body);
+                self.pop_scope();
+                flow
+            }
             Stmt::Return(expr) => {
                 let RuntimeValue::Color(color) = self.eval(expr)? else {
                     return Err(self.error("sample returned a non-color value"));
@@ -174,6 +188,7 @@ impl<'a> Vm<'a> {
                     .checked_neg()
                     .map(RuntimeValue::Int)
                     .ok_or_else(|| self.error("integer overflow")),
+                (UnaryOp::Not, RuntimeValue::Bool(value)) => Ok(RuntimeValue::Bool(!value)),
                 _ => Err(self.error("invalid unary expression")),
             },
             Expr::Binary { left, op, right } => self.eval_binary(left, *op, right),
@@ -187,6 +202,22 @@ impl<'a> Vm<'a> {
         op: BinaryOp,
         right: &Expr,
     ) -> Result<RuntimeValue, RuntimeError> {
+        if matches!(op, BinaryOp::LogicalAnd | BinaryOp::LogicalOr) {
+            let RuntimeValue::Bool(left) = self.eval(left)? else {
+                return Err(self.error("logical expression left side was not bool"));
+            };
+            if op == BinaryOp::LogicalAnd && !left {
+                return Ok(RuntimeValue::Bool(false));
+            }
+            if op == BinaryOp::LogicalOr && left {
+                return Ok(RuntimeValue::Bool(true));
+            }
+            let RuntimeValue::Bool(right) = self.eval(right)? else {
+                return Err(self.error("logical expression right side was not bool"));
+            };
+            return Ok(RuntimeValue::Bool(right));
+        }
+
         let left = self.eval(left)?;
         let right = self.eval(right)?;
         match (left, op, right) {
@@ -292,6 +323,36 @@ impl<'a> Vm<'a> {
             }
             (RuntimeValue::Int(left), BinaryOp::GreaterEqual, RuntimeValue::Int(right)) => {
                 Ok(RuntimeValue::Bool(left >= right))
+            }
+            (RuntimeValue::Float(left), BinaryOp::Equal, RuntimeValue::Float(right)) => {
+                Ok(RuntimeValue::Bool(left == right))
+            }
+            (RuntimeValue::Float(left), BinaryOp::Equal, RuntimeValue::Int(right)) => {
+                Ok(RuntimeValue::Bool(left == right as f64))
+            }
+            (RuntimeValue::Int(left), BinaryOp::Equal, RuntimeValue::Float(right)) => {
+                Ok(RuntimeValue::Bool(left as f64 == right))
+            }
+            (RuntimeValue::Int(left), BinaryOp::Equal, RuntimeValue::Int(right)) => {
+                Ok(RuntimeValue::Bool(left == right))
+            }
+            (RuntimeValue::Bool(left), BinaryOp::Equal, RuntimeValue::Bool(right)) => {
+                Ok(RuntimeValue::Bool(left == right))
+            }
+            (RuntimeValue::Float(left), BinaryOp::NotEqual, RuntimeValue::Float(right)) => {
+                Ok(RuntimeValue::Bool(left != right))
+            }
+            (RuntimeValue::Float(left), BinaryOp::NotEqual, RuntimeValue::Int(right)) => {
+                Ok(RuntimeValue::Bool(left != right as f64))
+            }
+            (RuntimeValue::Int(left), BinaryOp::NotEqual, RuntimeValue::Float(right)) => {
+                Ok(RuntimeValue::Bool(left as f64 != right))
+            }
+            (RuntimeValue::Int(left), BinaryOp::NotEqual, RuntimeValue::Int(right)) => {
+                Ok(RuntimeValue::Bool(left != right))
+            }
+            (RuntimeValue::Bool(left), BinaryOp::NotEqual, RuntimeValue::Bool(right)) => {
+                Ok(RuntimeValue::Bool(left != right))
             }
             (RuntimeValue::Color(color), BinaryOp::Multiply, RuntimeValue::Float(factor))
             | (RuntimeValue::Float(factor), BinaryOp::Multiply, RuntimeValue::Color(color)) => {

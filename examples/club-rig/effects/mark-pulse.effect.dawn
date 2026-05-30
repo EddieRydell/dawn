@@ -17,7 +17,7 @@ effect MarkPulse {
     float active = 0.0;
     srand(seed + previous * 1000.0);
 
-    for int i = 0; i < sections_per_mark; i = i + 1 {
+    for (int i = 0; i < sections_per_mark; i = i + 1) {
       float choice = floor(rand() * section_count);
       float hit = 1.0 - clamp(abs(section - choice), 0.0, 1.0);
       active = max(active, hit);

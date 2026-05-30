@@ -1,4 +1,4 @@
-﻿use std::collections::BTreeMap;
+use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -135,6 +135,16 @@ fn is_assignable(expected: ScriptType, actual: ScriptType) -> bool {
 }
 
 fn binary_result_type(left: ScriptType, op: BinaryOp, right: ScriptType) -> Option<ScriptType> {
+    if matches!(op, BinaryOp::LogicalAnd | BinaryOp::LogicalOr) {
+        return (left == ScriptType::Bool && right == ScriptType::Bool).then_some(ScriptType::Bool);
+    }
+
+    if matches!(op, BinaryOp::Equal | BinaryOp::NotEqual) {
+        return ((is_float_compatible(left) && is_float_compatible(right))
+            || (left == ScriptType::Bool && right == ScriptType::Bool))
+            .then_some(ScriptType::Bool);
+    }
+
     if matches!(
         op,
         BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual
@@ -144,10 +154,26 @@ fn binary_result_type(left: ScriptType, op: BinaryOp, right: ScriptType) -> Opti
     }
 
     match (left, op, right) {
-        (ScriptType::Float, _, ScriptType::Float)
-        | (ScriptType::Float, _, ScriptType::Int)
-        | (ScriptType::Int, _, ScriptType::Float) => Some(ScriptType::Float),
-        (ScriptType::Int, _, ScriptType::Int) => Some(ScriptType::Int),
+        (
+            ScriptType::Float,
+            BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide,
+            ScriptType::Float,
+        )
+        | (
+            ScriptType::Float,
+            BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide,
+            ScriptType::Int,
+        )
+        | (
+            ScriptType::Int,
+            BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide,
+            ScriptType::Float,
+        ) => Some(ScriptType::Float),
+        (
+            ScriptType::Int,
+            BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide,
+            ScriptType::Int,
+        ) => Some(ScriptType::Int),
         (ScriptType::Color, BinaryOp::Multiply, factor)
         | (factor, BinaryOp::Multiply, ScriptType::Color)
             if is_float_compatible(factor) =>

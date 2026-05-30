@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::ast::{EffectAst, Expr, Stmt};
+use super::ast::{EffectAst, Expr, Stmt, UnaryOp};
 use super::{binary_result_type, is_assignable, is_float_compatible, ScriptDiagnostic, ScriptType};
 pub fn type_check(effect: &EffectAst) -> Result<(), Vec<ScriptDiagnostic>> {
     let mut checker = TypeChecker::new(effect);
@@ -97,6 +97,25 @@ impl<'a> TypeChecker<'a> {
                 self.pop_scope();
                 self.pop_scope();
             }
+            Stmt::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                let condition_type = self.expr_type(condition);
+                if condition_type != ScriptType::Bool {
+                    self.errors.push(ScriptDiagnostic {
+                        range: None,
+                        message: format!("if condition must be bool, but found {condition_type}"),
+                    });
+                }
+                self.push_scope();
+                self.check_statements(then_body, saw_return);
+                self.pop_scope();
+                self.push_scope();
+                self.check_statements(else_body, saw_return);
+                self.pop_scope();
+            }
             Stmt::Return(expr) => {
                 *saw_return = true;
                 let actual = self.expr_type(expr);
@@ -174,7 +193,27 @@ impl<'a> TypeChecker<'a> {
                     });
                     ScriptType::Void
                 }),
-            Expr::Unary { expr, .. } => self.expr_type(expr),
+            Expr::Unary { op, expr } => {
+                let inner = self.expr_type(expr);
+                match op {
+                    UnaryOp::Negate if is_float_compatible(inner) => inner,
+                    UnaryOp::Negate => {
+                        self.errors.push(ScriptDiagnostic {
+                            range: None,
+                            message: format!("cannot negate {inner}"),
+                        });
+                        ScriptType::Void
+                    }
+                    UnaryOp::Not if inner == ScriptType::Bool => ScriptType::Bool,
+                    UnaryOp::Not => {
+                        self.errors.push(ScriptDiagnostic {
+                            range: None,
+                            message: format!("cannot apply ! to {inner}"),
+                        });
+                        ScriptType::Void
+                    }
+                }
+            }
             Expr::Binary { left, op, right } => {
                 let left = self.expr_type(left);
                 let right = self.expr_type(right);
