@@ -300,7 +300,7 @@ effect Pulse {
             0.0,
             0.0,
             FixtureContext { index: 0 },
-            PixelContext { index: 0 },
+            PixelContext { index: 0, count: 1 },
             &Default::default(),
         )
         .unwrap();
@@ -714,6 +714,7 @@ opening:
                 name: "all".to_string(),
             },
             start_ms: 1_500,
+            mark_collection_key: None,
         },
         base,
         Vec::new(),

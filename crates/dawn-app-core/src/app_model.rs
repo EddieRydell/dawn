@@ -486,10 +486,12 @@ impl AppModel {
                 script_path,
                 target,
                 start_ms,
+                mark_collection_key,
             } => SequenceDocumentEdit::AddEffect {
                 script_path,
                 target: target.into(),
                 start_ms: start_ms.into(),
+                mark_collection_key,
             },
             SequenceGuiEditDto::MoveEffect {
                 id,

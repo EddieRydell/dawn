@@ -21,6 +21,7 @@ import type {
   SequenceMarkCollectionDto,
   SequenceEffectParamDto,
   SequenceEffectParamValueDto,
+  SequenceEffectScriptDto,
   SequenceEffectPreviewDto,
   TransformDto
 } from "../bindings";
@@ -33,6 +34,7 @@ type EditedColorCurvePoint = { time: number; value: string };
 type ReadyGuiDocumentDto = Exclude<ActiveGuiDocumentDto, { type: "blocked" }>;
 type SequencePreview = { id: number; startMs: number; durationMs: number; laneIndex: number };
 type MarkPreview = { collectionKey: string; index: number; timeMs: number };
+type EffectContextMenu = { x: number; y: number; laneIndex: number; startMs: number };
 type MarkDisplayMode = "overlay" | "strip" | "hidden";
 type DragState =
   | null
@@ -430,6 +432,7 @@ function SequenceCanvas({
   const drag = useRef<DragState>(null);
   const [preview, setPreview] = useState<SequencePreview | null>(null);
   const [markPreview, setMarkPreview] = useState<MarkPreview | null>(null);
+  const [effectContextMenu, setEffectContextMenu] = useState<EffectContextMenu | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [viewport, setViewport] = useState({ pxPerMs: 0.08, laneHeight: 42, scrollXMs: 0, scrollY: 0 });
   const [previewImages, setPreviewImages] = useState<Map<number, SequencePreviewImage>>(() => new Map());
@@ -662,7 +665,6 @@ function SequenceCanvas({
       selected,
       mode,
       left,
-      top,
       audioStripTop,
       audioStripHeight,
       timelineWidth,
@@ -739,12 +741,43 @@ function SequenceCanvas({
     void runSnapshotCommand(() => commands.previewSeek(positionMs));
   };
   const timeFromCanvasX = (x: number) => clamp(Math.round(viewport.scrollXMs + (x - left) / viewport.pxPerMs), 0, document.durationMs);
+  const addEffectFromContextMenu = async (script: SequenceEffectScriptDto, menu: EffectContextMenu) => {
+    const hasMarksParams = script.params.some((param) => param.kind === "marks");
+    let markCollectionKey = hasMarksParams ? activeMarkCollectionKey ?? document.markCollections[0]?.key ?? null : null;
+    if (hasMarksParams && markCollectionKey === null) {
+      const newCollectionKey = nextCollectionKey("Marks", document.markCollections);
+      await runSnapshotCommand(() =>
+        commands.applySequenceGuiEdit({
+          type: "createMarkCollection",
+          key: newCollectionKey,
+          name: "Marks",
+          color: defaultMarkColor(document.markCollections.length)
+        })
+      );
+      markCollectionKey = newCollectionKey;
+      setActiveMarkCollectionKey(newCollectionKey);
+      setVisibleMarkCollectionKeys(new Set([...visibleMarkCollectionKeys, newCollectionKey]));
+    }
+    const target = document.lanes[menu.laneIndex]?.target ?? document.lanes[0]?.target;
+    if (target === undefined) return;
+    await runSnapshotCommand(() =>
+      commands.applySequenceGuiEdit({
+        type: "addEffect",
+        scriptPath: script.path,
+        target,
+        startMs: menu.startMs,
+        markCollectionKey
+      })
+    );
+    setEffectContextMenu(null);
+  };
 
   return (
-    <canvas
-      ref={canvas}
-      className="gui-canvas"
-      tabIndex={0}
+    <div className="sequence-canvas-shell">
+      <canvas
+        ref={canvas}
+        className="gui-canvas"
+        tabIndex={0}
       onKeyDown={(event) => {
         const selectedMark = parseSelectedMark(selected);
         if (
@@ -787,7 +820,24 @@ function SequenceCanvas({
           setSelected(null);
         });
       }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        const x = event.nativeEvent.offsetX;
+        const y = event.nativeEvent.offsetY;
+        if (x < left || y < top || document.lanes.length === 0) {
+          setEffectContextMenu(null);
+          return;
+        }
+        const laneIndex = clamp(Math.floor((y - top + viewport.scrollY) / viewport.laneHeight), 0, document.lanes.length - 1);
+        setEffectContextMenu({
+          x: event.clientX,
+          y: event.clientY,
+          laneIndex,
+          startMs: timeFromCanvasX(x)
+        });
+      }}
       onMouseDown={(event) => {
+        setEffectContextMenu(null);
         event.currentTarget.focus();
         const x = event.nativeEvent.offsetX;
         const y = event.nativeEvent.offsetY;
@@ -826,7 +876,7 @@ function SequenceCanvas({
           })();
           return;
         }
-        const markHit = hitSequenceMark(visibleMarkCollections, mode, x, y, left, top, audioStripTop, audioStripHeight, canvasSize.height, viewport);
+        const markHit = hitSequenceMark(visibleMarkCollections, mode, x, y, left, audioStripTop, audioStripHeight, canvasSize.height, viewport);
         if (markHit !== null) {
           setSelected(`mark:${markHit.collectionKey}:${markHit.index}`);
           setActiveMarkCollectionKey(markHit.collectionKey);
@@ -982,7 +1032,32 @@ function SequenceCanvas({
           };
         });
       }}
-    />
+      />
+      {effectContextMenu !== null && (
+        <div
+          className="sequence-context-menu"
+          style={{ left: effectContextMenu.x, top: effectContextMenu.y }}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        >
+          {document.effectScripts.length === 0 ? (
+            <div className="sequence-context-menu-empty">No effect scripts</div>
+          ) : (
+            document.effectScripts.map((script) => (
+              <button
+                key={script.path}
+                type="button"
+                onClick={() => void addEffectFromContextMenu(script, effectContextMenu)}
+              >
+                {script.name}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1321,7 +1396,12 @@ function GuiInspector({
               <div className="effect-param-section">
                 <h3>Parameters</h3>
                 {effect.params.map((param) => (
-                  <EffectParamInput key={`${effect.id}:${param.name}`} effectId={effect.id} param={param} />
+                  <EffectParamInput
+                    key={`${effect.id}:${param.name}`}
+                    effectId={effect.id}
+                    param={param}
+                    markCollections={gui.document.markCollections}
+                  />
                 ))}
               </div>
             )}
@@ -1388,7 +1468,15 @@ function GuiInspector({
   );
 }
 
-function EffectParamInput({ effectId, param }: { effectId: number; param: SequenceEffectParamDto }) {
+function EffectParamInput({
+  effectId,
+  param,
+  markCollections
+}: {
+  effectId: number;
+  param: SequenceEffectParamDto;
+  markCollections: SequenceMarkCollectionDto[];
+}) {
   const commit = (value: SequenceEffectParamValueDto) =>
     runSnapshotCommand(() =>
       commands.applySequenceGuiEdit({
@@ -1458,6 +1546,17 @@ function EffectParamInput({ effectId, param }: { effectId: number; param: Sequen
       return <FloatCurveParamShell name={param.name} points={normalizeFloatCurvePoints(param.value.points)} commit={(points) => commit({ type: "floatCurve", points })} />;
     case "colorCurve":
       return <ColorCurveParamShell name={param.name} points={normalizeColorCurvePoints(param.value.points)} commit={(points) => commit({ type: "colorCurve", points })} />;
+    case "marks":
+      return (
+        <label>
+          {param.name}
+          <select value={param.value.key} onChange={(event) => void commit({ type: "marks", key: event.currentTarget.value })}>
+            {markCollections.map((collection) => (
+              <option key={collection.key} value={collection.key}>{collection.name}</option>
+            ))}
+          </select>
+        </label>
+      );
   }
 }
 
@@ -2014,7 +2113,6 @@ function hitSequenceMark(
   x: number,
   y: number,
   left: number,
-  top: number,
   audioStripTop: number,
   audioStripHeight: number,
   canvasHeight: number,
@@ -2022,7 +2120,7 @@ function hitSequenceMark(
 ): SequenceMarkHit | null {
   if (mode === "hidden" || x < left) return null;
   if (mode === "strip" && (y < audioStripTop || y > audioStripTop + audioStripHeight)) return null;
-  if (mode === "overlay" && (y < top || y > canvasHeight)) return null;
+  if (mode === "overlay" && (y < audioStripTop || y > canvasHeight)) return null;
   for (const collection of [...collections].reverse()) {
     for (let index = collection.marksMs.length - 1; index >= 0; index -= 1) {
       const timeMs = collection.marksMs[index] ?? 0;
@@ -2041,7 +2139,6 @@ function drawSequenceMarks(
   selected: string | null,
   mode: MarkDisplayMode,
   left: number,
-  top: number,
   audioStripTop: number,
   audioStripHeight: number,
   width: number,
@@ -2051,7 +2148,7 @@ function drawSequenceMarks(
   preview: MarkPreview | null
 ) {
   if (mode === "hidden") return;
-  const y1 = mode === "strip" ? audioStripTop : top;
+  const y1 = audioStripTop;
   const y2 = mode === "strip" ? audioStripTop + audioStripHeight : height;
   ctx.save();
   ctx.beginPath();
@@ -2330,10 +2427,23 @@ function sequencePreviewSignatures(document: SequenceDocumentDto) {
         durationMs: effect.durationMs,
         target: effect.target,
         script: effect.script,
-        params: effect.params
+        params: effect.params,
+        markCollections: relevantMarkCollections(effect, document.markCollections)
       })
     ])
   );
+}
+
+function relevantMarkCollections(effect: SequenceEffectDto, markCollections: SequenceMarkCollectionDto[]) {
+  const keys = effect.params
+    .flatMap((param) => (param.value.type === "marks" ? [param.value.key] : []));
+  if (keys.length === 0) return [];
+  return {
+    effectStartMs: effect.startMs,
+    collections: markCollections
+      .filter((collection) => keys.includes(collection.key))
+      .map((collection) => ({ key: collection.key, marksMs: collection.marksMs }))
+  };
 }
 
 function replaceAt<T>(items: T[], index: number, value: T) {

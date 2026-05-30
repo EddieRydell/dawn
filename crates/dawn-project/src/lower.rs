@@ -522,6 +522,7 @@ fn lower_effect_param(
         EffectParam::Curve { curve } => EffectParam::Curve {
             curve: resolve_curve(curve, source_path, resolver)?,
         },
+        EffectParam::Marks { key } => EffectParam::Marks { key: key.clone() },
     })
 }
 

@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use dawn_project::analysis::ProjectAnalysis;
-use dawn_project::document::{SequenceDocument, SequenceEffectParamDocument};
+use dawn_project::document::{
+    SequenceDocument, SequenceEffectParamDocument, SequenceMarkCollectionDocument,
+};
 use dawn_project::effect_script::{FixtureContext, PixelContext, RuntimeValue};
 use dawn_project::model::{Color, EffectParam, FixtureId, Resolved};
 use dawn_project::render::{layout_render_plan, GeometryRenderBounds, GeometryRenderPoint};
@@ -104,7 +106,11 @@ pub fn evaluate_sequence_frame(
         } else {
             (local_ms as f64 / effect.duration_ms as f64).clamp(0.0, 1.0)
         };
-        let params = runtime_params_from_document(&render.params);
+        let params = runtime_params_from_document(
+            &render.params,
+            &document.mark_collections,
+            effect.start_ms,
+        );
         for pixel in &render.target_pixels {
             let Some(fixture) = fixtures.get_mut(pixel.fixture_index) else {
                 continue;
@@ -121,6 +127,7 @@ pub fn evaluate_sequence_frame(
                 },
                 PixelContext {
                     index: pixel.pixel_index,
+                    count: pixel.pixel_count,
                 },
                 params.clone(),
             ) {
@@ -153,16 +160,23 @@ fn add_clamped(target: &mut Color, color: Color) {
 
 pub fn runtime_params_from_document(
     params: &[SequenceEffectParamDocument],
+    mark_collections: &[SequenceMarkCollectionDocument],
+    effect_start_ms: u64,
 ) -> BTreeMap<String, RuntimeValue> {
     params
         .iter()
         .filter_map(|param| {
-            runtime_value_from_param(&param.value).map(|value| (param.name.clone(), value))
+            runtime_value_from_param(&param.value, mark_collections, effect_start_ms)
+                .map(|value| (param.name.clone(), value))
         })
         .collect()
 }
 
-pub fn runtime_value_from_param(param: &EffectParam<Resolved>) -> Option<RuntimeValue> {
+pub fn runtime_value_from_param(
+    param: &EffectParam<Resolved>,
+    mark_collections: &[SequenceMarkCollectionDocument],
+    effect_start_ms: u64,
+) -> Option<RuntimeValue> {
     match param {
         EffectParam::Integer { value } => Some(RuntimeValue::Int(*value as i64)),
         EffectParam::Float { value } => Some(RuntimeValue::Float(*value)),
@@ -171,6 +185,17 @@ pub fn runtime_value_from_param(param: &EffectParam<Resolved>) -> Option<Runtime
         EffectParam::Flags { value } => Some(RuntimeValue::Flags(value.clone())),
         EffectParam::Color { value } => Some(RuntimeValue::Color(*value)),
         EffectParam::Curve { curve } => Some(RuntimeValue::Curve(curve.clone())),
+        EffectParam::Marks { key } => {
+            let mut marks = mark_collections
+                .iter()
+                .find(|collection| collection.key == *key)?
+                .marks_ms
+                .iter()
+                .map(|mark_ms| (*mark_ms as i128 - effect_start_ms as i128) as f64 / 1_000.0)
+                .collect::<Vec<_>>();
+            marks.sort_by(f64::total_cmp);
+            Some(RuntimeValue::Marks(marks))
+        }
     }
 }
 

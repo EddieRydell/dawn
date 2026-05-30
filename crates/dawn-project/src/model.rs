@@ -947,6 +947,9 @@ pub enum EffectParam<M: ModelMode = Authored> {
     Curve {
         curve: M::EffectParamCurve,
     },
+    Marks {
+        key: String,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

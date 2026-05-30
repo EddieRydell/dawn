@@ -1,0 +1,37 @@
+effect MarkPulse {
+  param marks beats;
+  param color base = #101820;
+  param color accent = #ffcc66;
+  param float offset_ms = 0.0;
+  param float decay_ms = 180.0;
+  param int section_width_pixels = 5;
+  param int sections_per_mark = 3;
+  param float seed = 0.0;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    float query_time = seconds - offset_ms / 1000.0;
+    float previous = mark_prev(beats, query_time, -999.0);
+    float elapsed = mark_elapsed(beats, query_time, 999.0);
+    float section = pixel_index(pixel) / max(1.0, section_width_pixels);
+    float section_count = max(1.0, pixel_count(pixel) / max(1.0, section_width_pixels));
+    float reset = srand(seed + previous * 1000.0);
+
+    float choice_1 = floor(rand() * section_count);
+    float choice_2 = floor(rand() * section_count);
+    float choice_3 = floor(rand() * section_count);
+    float choice_4 = floor(rand() * section_count);
+    float choice_5 = floor(rand() * section_count);
+    float choice_6 = floor(rand() * section_count);
+
+    float hit_1 = 1.0 - clamp(abs(section - choice_1), 0.0, 1.0);
+    float hit_2 = 1.0 - clamp(abs(section - choice_2), 0.0, 1.0);
+    float hit_3 = 1.0 - clamp(abs(section - choice_3), 0.0, 1.0);
+    float hit_4 = 1.0 - clamp(abs(section - choice_4), 0.0, 1.0);
+    float hit_5 = 1.0 - clamp(abs(section - choice_5), 0.0, 1.0);
+    float hit_6 = 1.0 - clamp(abs(section - choice_6), 0.0, 1.0);
+
+    float active = max(hit_1, max(hit_2 * clamp(sections_per_mark - 1, 0, 1), max(hit_3 * clamp(sections_per_mark - 2, 0, 1), max(hit_4 * clamp(sections_per_mark - 3, 0, 1), max(hit_5 * clamp(sections_per_mark - 4, 0, 1), hit_6 * clamp(sections_per_mark - 5, 0, 1))))));
+    float pulse = 1.0 - clamp(elapsed / max(1.0, decay_ms) * 1000.0, 0.0, 1.0);
+    return mix(base, accent, active * pulse + reset * 0.0);
+  }
+}

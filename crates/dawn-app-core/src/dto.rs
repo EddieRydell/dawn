@@ -4,7 +4,8 @@ use dawn_project::document::{
     FixtureDocument, LayoutDocument, LayoutFixturePlacement, ResolvedLayoutFixture,
     SequenceAudioDocument, SequenceDocument, SequenceEffectDocument,
     SequenceEffectParamCurvePointEditValue, SequenceEffectParamCurveValueEditValue,
-    SequenceEffectParamEditValue, SequenceEffectScriptDocument, SequenceLaneDocument,
+    SequenceEffectParamEditValue, SequenceEffectScriptDocument, SequenceEffectScriptParamDocument,
+    SequenceLaneDocument,
 };
 use dawn_project::effect_script::{
     compile as compile_effect_script, ParamDefault, RuntimeValue, ScriptType,
@@ -154,6 +155,7 @@ pub enum SequenceGuiEditDto {
         script_path: String,
         target: LayoutTargetDto,
         start_ms: u32,
+        mark_collection_key: Option<String>,
     },
     MoveEffect {
         id: u32,
@@ -340,6 +342,7 @@ pub enum SequenceEffectParamKindDto {
     Flags,
     FloatCurve,
     ColorCurve,
+    Marks,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -357,6 +360,7 @@ pub enum SequenceEffectParamValueDto {
     Flags { value: Vec<String> },
     FloatCurve { points: Vec<FloatCurvePointDto> },
     ColorCurve { points: Vec<ColorCurvePointDto> },
+    Marks { key: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -379,6 +383,14 @@ pub struct SequenceEffectScriptDto {
     pub name: String,
     pub path: String,
     pub import: String,
+    pub params: Vec<SequenceEffectScriptParamDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceEffectScriptParamDto {
+    pub name: String,
+    pub kind: SequenceEffectParamKindDto,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -781,7 +793,21 @@ impl From<SequenceEffectScriptDocument> for SequenceEffectScriptDto {
             name: script.name,
             path: script.path,
             import: script.import,
+            params: script
+                .params
+                .into_iter()
+                .filter_map(SequenceEffectScriptParamDto::try_from_document)
+                .collect(),
         }
+    }
+}
+
+impl SequenceEffectScriptParamDto {
+    fn try_from_document(param: SequenceEffectScriptParamDocument) -> Option<Self> {
+        Some(Self {
+            name: param.name,
+            kind: param_kind_from_script_type(param.value_type)?,
+        })
     }
 }
 
@@ -844,6 +870,7 @@ fn param_kind_from_script_type(value_type: ScriptType) -> Option<SequenceEffectP
         ScriptType::Flags => Some(SequenceEffectParamKindDto::Flags),
         ScriptType::CurveFloat => Some(SequenceEffectParamKindDto::FloatCurve),
         ScriptType::CurveColor => Some(SequenceEffectParamKindDto::ColorCurve),
+        ScriptType::Marks => Some(SequenceEffectParamKindDto::Marks),
         ScriptType::Fixture | ScriptType::Pixel | ScriptType::Void => None,
     }
 }
@@ -882,6 +909,7 @@ fn default_param_value(
                     value: "#ffffff".to_string(),
                 }],
             }),
+            ScriptType::Marks => None,
             ScriptType::Fixture | ScriptType::Pixel | ScriptType::Void => None,
         },
     }
@@ -904,6 +932,7 @@ fn runtime_value_to_param_value(value: &RuntimeValue) -> Option<SequenceEffectPa
         RuntimeValue::Flags(value) => Some(SequenceEffectParamValueDto::Flags {
             value: value.values.clone(),
         }),
+        RuntimeValue::Marks(_) => None,
         RuntimeValue::Fixture(_) | RuntimeValue::Pixel(_) => None,
     }
 }
@@ -948,6 +977,9 @@ fn param_value_from_resolved(
             if curve.value_type == dawn_project::model::CurveValueType::Color =>
         {
             curve_to_param_value(curve)
+        }
+        (ScriptType::Marks, EffectParam::Marks { key }) => {
+            Some(SequenceEffectParamValueDto::Marks { key: key.clone() })
         }
         _ => None,
     }
@@ -1029,6 +1061,7 @@ impl From<SequenceEffectParamValueDto> for SequenceEffectParamEditValue {
                     })
                     .collect(),
             ),
+            SequenceEffectParamValueDto::Marks { key } => Self::Marks(key),
         }
     }
 }

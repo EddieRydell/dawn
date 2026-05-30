@@ -530,7 +530,13 @@ impl AnalysisSession {
                     }
                 };
                 if let Some(script) = script {
-                    self.validate_effect_params(root_path, &effect.id, &script, &effect.params);
+                    self.validate_effect_params(
+                        root_path,
+                        &effect.id,
+                        &script,
+                        &effect.params,
+                        &sequence.mark_collections,
+                    );
                 }
             }
         }
@@ -542,6 +548,7 @@ impl AnalysisSession {
         effect_id: &u32,
         script: &CompiledEffect,
         params: &IndexMap<String, EffectParam<Resolved>>,
+        mark_collections: &[SequenceMarkCollection],
     ) {
         for name in params.keys() {
             if script.param(name).is_none() {
@@ -560,7 +567,14 @@ impl AnalysisSession {
         for schema in &script.params {
             match params.get(&schema.name) {
                 Some(param) if schema.value_type.matches_param(param) => {
-                    self.validate_effect_param_options(root_path, effect_id, script, schema, param);
+                    self.validate_effect_param_options(
+                        root_path,
+                        effect_id,
+                        script,
+                        schema,
+                        param,
+                        mark_collections,
+                    );
                 }
                 Some(_) => self.diagnostics.push(ProjectDiagnostic {
                     path: root_path.clone(),
@@ -594,6 +608,7 @@ impl AnalysisSession {
         script: &CompiledEffect,
         schema: &crate::effect_script::EffectParamSchema,
         param: &EffectParam<Resolved>,
+        mark_collections: &[SequenceMarkCollection],
     ) {
         match param {
             EffectParam::Enum { value } if !schema.options.contains(value) => {
@@ -623,6 +638,22 @@ impl AnalysisSession {
                         });
                     }
                 }
+            }
+            EffectParam::Marks { key }
+                if !mark_collections
+                    .iter()
+                    .any(|collection| collection.key == *key) =>
+            {
+                self.diagnostics.push(ProjectDiagnostic {
+                    path: root_path.clone(),
+                    range: None,
+                    severity: DiagnosticSeverity::Error,
+                    code: DiagnosticCode::Script,
+                    message: format!(
+                        "effect `{effect_id}` parameter `{}` references unknown mark collection `{key}` for script `{}`",
+                        schema.name, script.name
+                    ),
+                });
             }
             _ => {}
         }

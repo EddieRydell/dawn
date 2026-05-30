@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::model::{Color, Curve, CurveValue, EffectParam, Flags};
 
 #[derive(Debug, Clone)]
@@ -53,6 +55,7 @@ pub struct FixtureContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PixelContext {
     pub index: usize,
+    pub count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,12 +71,14 @@ pub enum ParamDefault {
     Value(RuntimeValue),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ScriptType {
     Float,
     Int,
     Bool,
     Color,
+    Marks,
     CurveFloat,
     CurveColor,
     Enum,
@@ -90,6 +95,7 @@ impl ScriptType {
             (Self::Int, EffectParam::Integer { .. }) => true,
             (Self::Bool, EffectParam::Boolean { .. }) => true,
             (Self::Color, EffectParam::Color { .. }) => true,
+            (Self::Marks, EffectParam::Marks { .. }) => true,
             (Self::Enum, EffectParam::Enum { .. }) => true,
             (Self::Flags, EffectParam::Flags { .. }) => true,
             (Self::CurveFloat, EffectParam::Curve { curve }) => {
@@ -134,6 +140,7 @@ impl fmt::Display for ScriptType {
             Self::Int => "int",
             Self::Bool => "bool",
             Self::Color => "color",
+            Self::Marks => "marks",
             Self::CurveFloat => "curve<float>",
             Self::CurveColor => "curve<color>",
             Self::Enum => "enum",
@@ -151,6 +158,7 @@ pub enum RuntimeValue {
     Int(i64),
     Bool(bool),
     Color(Color),
+    Marks(Vec<f64>),
     Curve(Curve),
     Enum(String),
     Flags(Flags),
@@ -165,6 +173,7 @@ impl RuntimeValue {
             Self::Int(_) => ScriptType::Int,
             Self::Bool(_) => ScriptType::Bool,
             Self::Color(_) => ScriptType::Color,
+            Self::Marks(_) => ScriptType::Marks,
             Self::Curve(curve) => match curve.value_type {
                 crate::model::CurveValueType::Float => ScriptType::CurveFloat,
                 crate::model::CurveValueType::Color => ScriptType::CurveColor,
@@ -545,6 +554,9 @@ impl Parser<'_> {
             Vec::new()
         };
         let default = if self.consume_symbol('=') {
+            if value_type == ScriptType::Marks {
+                return Err(self.error_here("marks parameters cannot declare defaults"));
+            }
             if self.at_keyword("import") {
                 return Err(self.error_here("effect parameter defaults cannot import files"));
             } else {
@@ -809,6 +821,7 @@ impl Parser<'_> {
             "int" => Ok(ScriptType::Int),
             "bool" => Ok(ScriptType::Bool),
             "color" => Ok(ScriptType::Color),
+            "marks" => Ok(ScriptType::Marks),
             "enum" => Ok(ScriptType::Enum),
             "flags" => Ok(ScriptType::Flags),
             "Fixture" => Ok(ScriptType::Fixture),
@@ -1057,6 +1070,20 @@ impl<'a> TypeChecker<'a> {
             .collect::<Vec<_>>();
         match (name, arg_types.as_slice()) {
             ("sin" | "cos" | "abs", [value]) if is_float_compatible(*value) => ScriptType::Float,
+            ("floor", [value]) if is_float_compatible(*value) => ScriptType::Float,
+            ("srand", [value]) if is_float_compatible(*value) => ScriptType::Float,
+            ("rand", []) => ScriptType::Float,
+            ("pixel_index" | "pixel_count", [ScriptType::Pixel]) => ScriptType::Int,
+            ("mark_count", [ScriptType::Marks]) => ScriptType::Int,
+            ("mark_at", [ScriptType::Marks, ScriptType::Int, fallback])
+                if is_float_compatible(*fallback) =>
+            {
+                ScriptType::Float
+            }
+            (
+                "mark_prev" | "mark_next" | "mark_nearest" | "mark_phase" | "mark_elapsed",
+                [ScriptType::Marks, time, fallback],
+            ) if is_float_compatible(*time) && is_float_compatible(*fallback) => ScriptType::Float,
             ("min" | "max", [left, right])
                 if is_float_compatible(*left) && is_float_compatible(*right) =>
             {
@@ -1095,6 +1122,7 @@ impl<'a> TypeChecker<'a> {
 struct Vm<'a> {
     effect: &'a CompiledEffect,
     env: HashMap<String, RuntimeValue>,
+    rng: u64,
 }
 
 impl<'a> Vm<'a> {
@@ -1124,7 +1152,11 @@ impl<'a> Vm<'a> {
                 env.insert(param.name.clone(), value.clone());
             }
         }
-        Self { effect, env }
+        Self {
+            effect,
+            env,
+            rng: 0x9e37_79b9_7f4a_7c15,
+        }
     }
 
     fn run(&mut self) -> Result<Color, RuntimeError> {
@@ -1282,6 +1314,74 @@ impl<'a> Vm<'a> {
             ("sin", [value]) => Ok(RuntimeValue::Float(self.expect_float(value.clone())?.sin())),
             ("cos", [value]) => Ok(RuntimeValue::Float(self.expect_float(value.clone())?.cos())),
             ("abs", [value]) => Ok(RuntimeValue::Float(self.expect_float(value.clone())?.abs())),
+            ("floor", [value]) => Ok(RuntimeValue::Float(
+                self.expect_float(value.clone())?.floor(),
+            )),
+            ("srand", [value]) => {
+                self.rng = seed_from_float(self.expect_float(value.clone())?);
+                Ok(RuntimeValue::Float(0.0))
+            }
+            ("rand", []) => Ok(RuntimeValue::Float(self.rand())),
+            ("pixel_index", [RuntimeValue::Pixel(pixel)]) => {
+                Ok(RuntimeValue::Int(pixel.index as i64))
+            }
+            ("pixel_count", [RuntimeValue::Pixel(pixel)]) => {
+                Ok(RuntimeValue::Int(pixel.count as i64))
+            }
+            ("mark_count", [marks]) => Ok(RuntimeValue::Int(
+                self.expect_marks(marks.clone())?.len() as i64,
+            )),
+            ("mark_at", [marks, index, fallback]) => {
+                let marks = self.expect_marks(marks.clone())?;
+                let index = self.expect_int(index.clone())?;
+                let fallback = self.expect_float(fallback.clone())?;
+                let value = usize::try_from(index)
+                    .ok()
+                    .and_then(|index| marks.get(index))
+                    .copied()
+                    .unwrap_or(fallback);
+                Ok(RuntimeValue::Float(value))
+            }
+            ("mark_prev", [marks, time, fallback]) => {
+                let marks = self.expect_marks(marks.clone())?;
+                let time = self.expect_float(time.clone())?;
+                let fallback = self.expect_float(fallback.clone())?;
+                Ok(RuntimeValue::Float(
+                    mark_prev(&marks, time).unwrap_or(fallback),
+                ))
+            }
+            ("mark_next", [marks, time, fallback]) => {
+                let marks = self.expect_marks(marks.clone())?;
+                let time = self.expect_float(time.clone())?;
+                let fallback = self.expect_float(fallback.clone())?;
+                Ok(RuntimeValue::Float(
+                    mark_next(&marks, time).unwrap_or(fallback),
+                ))
+            }
+            ("mark_nearest", [marks, time, fallback]) => {
+                let marks = self.expect_marks(marks.clone())?;
+                let time = self.expect_float(time.clone())?;
+                let fallback = self.expect_float(fallback.clone())?;
+                Ok(RuntimeValue::Float(
+                    mark_nearest(&marks, time).unwrap_or(fallback),
+                ))
+            }
+            ("mark_phase", [marks, time, fallback]) => {
+                let marks = self.expect_marks(marks.clone())?;
+                let time = self.expect_float(time.clone())?;
+                let fallback = self.expect_float(fallback.clone())?;
+                Ok(RuntimeValue::Float(
+                    mark_phase(&marks, time).unwrap_or(fallback),
+                ))
+            }
+            ("mark_elapsed", [marks, time, fallback]) => {
+                let marks = self.expect_marks(marks.clone())?;
+                let time = self.expect_float(time.clone())?;
+                let fallback = self.expect_float(fallback.clone())?;
+                Ok(RuntimeValue::Float(
+                    mark_elapsed(&marks, time).unwrap_or(fallback),
+                ))
+            }
             ("min", [left, right]) => Ok(RuntimeValue::Float(
                 self.expect_float(left.clone())?
                     .min(self.expect_float(right.clone())?),
@@ -1334,6 +1434,20 @@ impl<'a> Vm<'a> {
         }
     }
 
+    fn expect_int(&self, value: RuntimeValue) -> Result<i64, RuntimeError> {
+        match value {
+            RuntimeValue::Int(value) => Ok(value),
+            _ => Err(self.error("expected int value")),
+        }
+    }
+
+    fn expect_marks(&self, value: RuntimeValue) -> Result<Vec<f64>, RuntimeError> {
+        match value {
+            RuntimeValue::Marks(value) => Ok(value),
+            _ => Err(self.error("expected marks value")),
+        }
+    }
+
     fn coerce_value(
         value: RuntimeValue,
         expected: ScriptType,
@@ -1355,6 +1469,23 @@ impl<'a> Vm<'a> {
             message: message.to_string(),
         }
     }
+
+    fn rand(&mut self) -> f64 {
+        self.rng = self
+            .rng
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        ((self.rng >> 11) as f64) / ((1u64 << 53) as f64)
+    }
+}
+
+fn seed_from_float(value: f64) -> u64 {
+    let mut seed = value.to_bits();
+    seed ^= seed >> 30;
+    seed = seed.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    seed ^= seed >> 27;
+    seed = seed.wrapping_mul(0x94d0_49bb_1331_11eb);
+    seed ^ (seed >> 31)
 }
 
 fn hsv_to_rgb(hue: f64, saturation: f64, value: f64) -> Color {
@@ -1382,6 +1513,43 @@ fn hsv_to_rgb(hue: f64, saturation: f64, value: f64) -> Color {
     )
 }
 
+fn mark_prev(marks: &[f64], time: f64) -> Option<f64> {
+    marks.iter().rev().copied().find(|mark| *mark <= time)
+}
+
+fn mark_next(marks: &[f64], time: f64) -> Option<f64> {
+    marks.iter().copied().find(|mark| *mark > time)
+}
+
+fn mark_nearest(marks: &[f64], time: f64) -> Option<f64> {
+    let previous = mark_prev(marks, time);
+    let next = mark_next(marks, time);
+    match (previous, next) {
+        (Some(previous), Some(next)) if (time - previous) <= (next - time) => Some(previous),
+        (Some(_), Some(next)) => Some(next),
+        (Some(previous), None) => Some(previous),
+        (None, Some(next)) => Some(next),
+        (None, None) => None,
+    }
+}
+
+fn mark_phase(marks: &[f64], time: f64) -> Option<f64> {
+    let previous = mark_prev(marks, time)?;
+    if (time - previous).abs() < f64::EPSILON {
+        return Some(0.0);
+    }
+    let next = mark_next(marks, time)?;
+    let span = next - previous;
+    if span <= f64::EPSILON {
+        return None;
+    }
+    Some(((time - previous) / span).clamp(0.0, 1.0))
+}
+
+fn mark_elapsed(marks: &[f64], time: f64) -> Option<f64> {
+    mark_prev(marks, time).map(|previous| time - previous)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1392,7 +1560,7 @@ mod tests {
     }
 
     fn pixel() -> PixelContext {
-        PixelContext { index: 0 }
+        PixelContext { index: 0, count: 1 }
     }
 
     fn empty_params() -> BTreeMap<String, RuntimeValue> {

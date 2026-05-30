@@ -28,9 +28,11 @@ use dawn_app_core::output_runtime::runtime_params_from_document;
 use dawn_app_core::output_runtime::OutputFrame;
 use dawn_app_core::preview_session::PreviewSnapshot;
 use dawn_project::document::{
-    SequenceAudioDocument, SequenceEffectDocument, SequenceEffectPixelDocument,
+    SequenceAudioDocument, SequenceEffectDocument, SequenceEffectParamDocument,
+    SequenceEffectPixelDocument, SequenceMarkCollectionDocument,
 };
 use dawn_project::effect_script::{FixtureContext, PixelContext};
+use dawn_project::model::{EffectParam, Resolved};
 use dawn_project::path::{serialized_import_path, utf8_path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -127,6 +129,7 @@ struct EffectPreviewCacheKey {
     script_key: String,
     script_source: String,
     params_json: String,
+    mark_collections_json: String,
     target_pixels_json: String,
     sampled_pixel_indices: Vec<usize>,
     max_columns: usize,
@@ -339,6 +342,7 @@ fn get_sequence_effect_previews(
             &document.path,
             &document.object_key,
             document.frame_rate,
+            &document.mark_collections,
             effect,
         )? {
             previews.push(preview);
@@ -1145,6 +1149,7 @@ fn preview_for_effect(
     sequence_path: &str,
     object_key: &str,
     frame_rate: u32,
+    mark_collections: &[SequenceMarkCollectionDocument],
     effect: &SequenceEffectDocument,
 ) -> CommandResult<Option<SequenceEffectPreviewDto>> {
     let Some(render) = &effect.render else {
@@ -1165,6 +1170,11 @@ fn preview_for_effect(
         script_key: render.script_key.clone(),
         script_source: render.script_source.clone(),
         params_json: serde_json::to_string(&render.params).map_err(|error| error.to_string())?,
+        mark_collections_json: relevant_mark_collections_json(
+            &render.params,
+            mark_collections,
+            effect.start_ms,
+        )?,
         target_pixels_json: serde_json::to_string(&render.target_pixels)
             .map_err(|error| error.to_string())?,
         sampled_pixel_indices: sampled_pixel_indices.clone(),
@@ -1177,7 +1187,7 @@ fn preview_for_effect(
 
     let total_frames = total_preview_frames(effect.duration_ms, frame_rate);
     let sampled_frame_indices = evenly_sample_indices(total_frames, PREVIEW_MAX_COLUMNS);
-    let params = runtime_params_from_document(&render.params);
+    let params = runtime_params_from_document(&render.params, mark_collections, effect.start_ms);
     let mut colors = Vec::with_capacity(sampled_frame_indices.len() * sampled_pixel_indices.len());
 
     for pixel_index in &sampled_pixel_indices {
@@ -1218,6 +1228,51 @@ fn preview_for_effect(
     Ok(Some(preview))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkCollectionCacheSignature<'a> {
+    key: &'a str,
+    marks_ms: &'a [u64],
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkCacheSignature<'a> {
+    effect_start_ms: u64,
+    collections: Vec<MarkCollectionCacheSignature<'a>>,
+}
+
+fn relevant_mark_collections_json(
+    params: &[SequenceEffectParamDocument],
+    mark_collections: &[SequenceMarkCollectionDocument],
+    effect_start_ms: u64,
+) -> Result<String, String> {
+    let keys = params
+        .iter()
+        .filter_map(|param| match &param.value {
+            EffectParam::<Resolved>::Marks { key } => Some(key.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if keys.is_empty() {
+        return Ok("[]".to_string());
+    }
+
+    let collections = mark_collections
+        .iter()
+        .filter(|collection| keys.contains(&collection.key.as_str()))
+        .map(|collection| MarkCollectionCacheSignature {
+            key: &collection.key,
+            marks_ms: &collection.marks_ms,
+        })
+        .collect();
+    serde_json::to_string(&MarkCacheSignature {
+        effect_start_ms,
+        collections,
+    })
+    .map_err(|error| error.to_string())
+}
+
 fn sample_preview_pixel(
     analysis: &dawn_project::analysis::ProjectAnalysis,
     script_key: &str,
@@ -1235,6 +1290,7 @@ fn sample_preview_pixel(
         },
         PixelContext {
             index: pixel.pixel_index,
+            count: pixel.pixel_count,
         },
         params.clone(),
     )

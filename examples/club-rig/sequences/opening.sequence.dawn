@@ -8,10 +8,20 @@ opening:
     name: Group 1
     color: '#38bdf8'
     marks:
-    - 12622ms
-    - 16137ms
-    - 17177ms
-    - 18788ms
+    - 12549ms
+    - 13620ms
+    - 15167ms
+    - 16459ms
+    - 40033ms
+    - 40137ms
+    - 40336ms
+    - 40538ms
+    - 40635ms
+    - 40832ms
+    - 40943ms
+    - 41134ms
+    - 41334ms
+    - 41435ms
   effects:
   - id: 16
     start: 0ms
@@ -524,6 +534,57 @@ opening:
           import: ../curves/fade-in.curve.dawn::fade_in
     script:
       import: ../effects/pulse.effect.dawn
+  - id: 24
+    start: 11700ms
+    duration: 5400ms
+    target:
+      type: fixture
+      id: 4
+    params:
+      beats:
+        type: marks
+        key: marks
+      base:
+        type: color
+        value: '#000000'
+      accent:
+        type: color
+        value: '#ffaa00'
+    script:
+      import: //?/C:/Users/eddie/dawn/examples/club-rig/effects/mark-pulse.effect.dawn
+  - id: 25
+    start: 39868ms
+    duration: 1800ms
+    target:
+      type: group
+      name: WallBars
+    params:
+      beats:
+        type: marks
+        key: marks
+      base:
+        type: color
+        value: '#000000'
+      accent:
+        type: color
+        value: '#ffcc66'
+      offset_ms:
+        type: float
+        value: -70.0
+      decay_ms:
+        type: float
+        value: 180.0
+      section_width_pixels:
+        type: integer
+        value: 15
+      sections_per_mark:
+        type: integer
+        value: 1
+      seed:
+        type: float
+        value: 0.0
+    script:
+      import: //?/C:/Users/eddie/dawn/examples/club-rig/effects/mark-pulse.effect.dawn
   automation_clips:
   - id: 101
     start: 0ms

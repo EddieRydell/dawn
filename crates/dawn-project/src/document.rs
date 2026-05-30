@@ -212,6 +212,14 @@ pub struct SequenceEffectScriptDocument {
     pub name: String,
     pub path: String,
     pub import: String,
+    pub params: Vec<SequenceEffectScriptParamDocument>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceEffectScriptParamDocument {
+    pub name: String,
+    pub value_type: ScriptType,
 }
 
 #[derive(Debug, Clone)]
@@ -223,6 +231,7 @@ pub enum SequenceDocumentEdit {
         script_path: String,
         target: LayoutTargetDocument,
         start_ms: u64,
+        mark_collection_key: Option<String>,
     },
     DuplicateEffect {
         id: u32,
@@ -290,6 +299,7 @@ pub enum SequenceEffectParamEditValue {
     Flags(Vec<String>),
     FloatCurve(Vec<SequenceEffectParamCurvePointEditValue>),
     ColorCurve(Vec<SequenceEffectParamCurvePointEditValue>),
+    Marks(String),
 }
 
 #[derive(Debug, Clone)]
@@ -325,6 +335,7 @@ pub struct SequenceEffectParamDocument {
 pub struct SequenceEffectPixelDocument {
     pub fixture_index: usize,
     pub pixel_index: usize,
+    pub pixel_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -660,6 +671,7 @@ fn apply_sequence_edit_operation(
             script_path,
             target,
             start_ms,
+            mark_collection_key,
         } => {
             let id = next_sequence_effect_id(sequence)
                 .ok_or_else(|| "no sequence effect IDs are available".to_string())?;
@@ -692,7 +704,7 @@ fn apply_sequence_edit_operation(
                     milliseconds: duration_ms,
                 },
                 target: authored_target_from_document(&target, analysis)?,
-                params: materialized_effect_params(script),
+                params: materialized_effect_params(script, mark_collection_key.as_deref()),
                 script: InlineOrImport::Import {
                     import: ImportRef::new(serialized_import_path(
                         path,
@@ -995,6 +1007,7 @@ fn authored_param_to_resolved(param: &EffectParam<Authored>) -> Option<EffectPar
             curve: curve.clone(),
         },
         EffectParam::Curve { .. } => return None,
+        EffectParam::Marks { key } => EffectParam::Marks { key: key.clone() },
     })
 }
 
@@ -1060,6 +1073,10 @@ fn param_edit_value_to_authored(
             Ok(EffectParam::Curve {
                 curve: InlineOrImport::Inline(edit_points_to_curve(CurveValueType::Color, points)?),
             })
+        }
+        (ScriptType::Marks, SequenceEffectParamEditValue::Marks(key)) => {
+            validate_mark_collection_key(&key)?;
+            Ok(EffectParam::Marks { key })
         }
         _ => Err(format!(
             "`{}` expects a {} parameter value",
@@ -1312,6 +1329,14 @@ fn sequence_effect_script_catalog(
                     name: compiled.name,
                     path: path.to_slash_string(),
                     import: serialized_import_path(sequence_path, &path),
+                    params: compiled
+                        .params
+                        .into_iter()
+                        .map(|param| SequenceEffectScriptParamDocument {
+                            name: param.name,
+                            value_type: param.value_type,
+                        })
+                        .collect(),
                 },
             );
         }
@@ -1342,14 +1367,23 @@ fn next_sequence_effect_id(sequence: &Sequence<Authored>) -> Option<u32> {
     (1..=u32::MAX).find(|id| !existing.contains(id))
 }
 
-fn materialized_effect_params(script: &CompiledEffect) -> IndexMap<String, EffectParam<Authored>> {
+fn materialized_effect_params(
+    script: &CompiledEffect,
+    mark_collection_key: Option<&str>,
+) -> IndexMap<String, EffectParam<Authored>> {
     script
         .params
         .iter()
         .map(|schema| {
-            let param = match &schema.default {
-                Some(ParamDefault::Value(value)) => runtime_value_to_authored_param(value),
-                None => type_default_param(schema.value_type, &schema.options),
+            let param = if schema.value_type == ScriptType::Marks {
+                EffectParam::Marks {
+                    key: mark_collection_key.unwrap_or("marks").to_string(),
+                }
+            } else {
+                match &schema.default {
+                    Some(ParamDefault::Value(value)) => runtime_value_to_authored_param(value),
+                    None => type_default_param(schema.value_type, &schema.options),
+                }
             };
             (schema.name.clone(), param)
         })
@@ -1373,6 +1407,7 @@ fn runtime_value_to_authored_param(value: &RuntimeValue) -> EffectParam<Authored
         RuntimeValue::Flags(value) => EffectParam::Flags {
             value: value.clone(),
         },
+        RuntimeValue::Marks(_) => unreachable!("marks params cannot declare defaults"),
         RuntimeValue::Fixture(_) | RuntimeValue::Pixel(_) => {
             unreachable!("params cannot default to context values")
         }
@@ -1416,6 +1451,9 @@ fn type_default_param(value_type: ScriptType, options: &[String]) -> EffectParam
         },
         ScriptType::Flags => EffectParam::Flags {
             value: Flags { values: Vec::new() },
+        },
+        ScriptType::Marks => EffectParam::Marks {
+            key: "marks".to_string(),
         },
         ScriptType::Fixture | ScriptType::Pixel | ScriptType::Void => {
             unreachable!("context and void types are not params")
@@ -1632,6 +1670,7 @@ fn target_pixels_for_effect(
                 (0..emitter_count).map(move |pixel_index| SequenceEffectPixelDocument {
                     fixture_index: fixture_index.0,
                     pixel_index,
+                    pixel_count: emitter_count,
                 })
             })
             .collect(),
@@ -1668,6 +1707,7 @@ fn lower_effect_param_document(
                 }
             },
         },
+        EffectParam::Marks { key } => EffectParam::Marks { key: key.clone() },
     })
 }
 
