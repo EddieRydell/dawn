@@ -258,6 +258,10 @@ pub enum SequenceDocumentEdit {
         start_ms: u64,
         duration_ms: u64,
     },
+    ChangeEffectScript {
+        id: u32,
+        script_path: String,
+    },
     RetargetEffect {
         id: u32,
         target: LayoutTargetDocument,
@@ -809,6 +813,49 @@ fn apply_sequence_edit_operation(
                 ),
             };
         }
+        SequenceDocumentEdit::ChangeEffectScript { id, script_path } => {
+            let script_key = Utf8PathBuf::from(script_path.clone()).to_slash_string();
+            let compiled_script;
+            let script = match analysis
+                .scripts
+                .get(&script_key)
+                .and_then(|script| script.result.as_ref().ok())
+            {
+                Some(script) => script,
+                None => {
+                    let script_path = Utf8PathBuf::from(script_path.clone());
+                    let source = read_text_with_overlays(fs, &script_path, overlays)?;
+                    compiled_script = compile_effect_script(&source)
+                        .map_err(|diagnostics| script_diagnostics_message(&diagnostics))?;
+                    &compiled_script
+                }
+            };
+            let script_path = Utf8PathBuf::from(script_path);
+            let (alias, import) = module_import_for_path(path, &script_path, imports);
+            let mark_collection_key = sequence
+                .mark_collections
+                .first()
+                .map(|collection| collection.key.as_str());
+            let Some(effect) = sequence.effects.iter_mut().find(|effect| effect.id == id) else {
+                return Err(format!("sequence effect `{id}` was not found"));
+            };
+            let mut params = IndexMap::with_capacity(script.params.len());
+            for schema in &script.params {
+                let next = effect
+                    .params
+                    .get(&schema.name)
+                    .filter(|param| authored_param_matches_schema(schema, param, path, analysis))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        default_param_for_schema_with_marks(schema, mark_collection_key)
+                    });
+                params.insert(schema.name.clone(), next);
+            }
+            effect.script =
+                InlineScriptOrRef::Ref(SymbolRef::new(format!("{}.{}", alias, script.name))?);
+            effect.params = params;
+            import_to_add = import;
+        }
         SequenceDocumentEdit::RetargetEffect { id, target } => {
             let next_target = authored_target_from_document(&target, analysis)?;
             let Some(effect) = sequence.effects.iter_mut().find(|effect| effect.id == id) else {
@@ -1000,6 +1047,18 @@ fn compiled_effect_for_sequence_effect(
 fn default_param_for_schema(
     schema: &crate::effect_script::EffectParamSchema,
 ) -> EffectParam<Authored> {
+    default_param_for_schema_with_marks(schema, None)
+}
+
+fn default_param_for_schema_with_marks(
+    schema: &crate::effect_script::EffectParamSchema,
+    mark_collection_key: Option<&str>,
+) -> EffectParam<Authored> {
+    if schema.value_type == ScriptType::Marks {
+        return EffectParam::Marks {
+            key: mark_collection_key.unwrap_or("marks").to_string(),
+        };
+    }
     match &schema.default {
         Some(ParamDefault::Value(value)) => runtime_value_to_authored_param(value),
         None => type_default_param(schema.value_type, &schema.options),

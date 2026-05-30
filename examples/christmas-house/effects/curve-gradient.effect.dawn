@@ -1,0 +1,16 @@
+effect CurveGradient {
+  param curve<float> intensity;
+  param curve<color> gradient;
+  param float spatial_offset = 0.0;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    float position = 0.0;
+    if (pixel_count(pixel) > 1.0) {
+      position = pixel_index(pixel) / (pixel_count(pixel) - 1.0);
+    }
+
+    float gradient_position = clamp(progress + position * spatial_offset, 0.0, 1.0);
+    float level = clamp(intensity(progress), 0.0, 1.0);
+    return gradient(gradient_position) * level;
+  }
+}

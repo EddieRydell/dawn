@@ -168,6 +168,10 @@ pub enum SequenceGuiEditDto {
         start_ms: u32,
         duration_ms: u32,
     },
+    ChangeEffectScript {
+        id: u32,
+        script_path: String,
+    },
     DeleteEffect {
         id: u32,
     },

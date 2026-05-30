@@ -513,6 +513,9 @@ impl AppModel {
                 start_ms: start_ms.into(),
                 duration_ms: duration_ms.into(),
             },
+            SequenceGuiEditDto::ChangeEffectScript { id, script_path } => {
+                SequenceDocumentEdit::ChangeEffectScript { id, script_path }
+            }
             SequenceGuiEditDto::DeleteEffect { id } => SequenceDocumentEdit::DeleteEffect { id },
             SequenceGuiEditDto::RetargetEffect { id, target } => {
                 SequenceDocumentEdit::RetargetEffect {

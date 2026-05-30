@@ -7,7 +7,25 @@ christmas:
   duration: 45000ms
   frame_rate: 60
   audio: null
-  mark_collections: []
+  mark_collections:
+  - key: marks
+    name: Marks1
+    color: '#00b3ff'
+    marks:
+    - 12844ms
+  - key: marks_2
+    name: Marks2
+    color: '#f97316'
+    marks:
+    - 23562ms
+    - 30500ms
+  - key: marks_3
+    name: Marks3
+    color: '#22c55e'
+    marks:
+    - 9579ms
+    - 17176ms
+    - 22308ms
   effects:
   - id: 1
     start: 0ms
@@ -15,7 +33,7 @@ christmas:
     target:
       type: group
       name: House Lines
-    scope: whole_target
+    scope: per_fixture
     params:
       first:
         type: color
@@ -36,7 +54,7 @@ christmas:
     target:
       type: group
       name: Windows
-    scope: per_fixture
+    scope: whole_target
     params:
       low:
         type: color
@@ -82,7 +100,7 @@ christmas:
     params:
       low:
         type: color
-        value: '#206010'
+        value: '#4aa234'
       high:
         type: color
         value: '#ffdf70'
@@ -90,4 +108,34 @@ christmas:
         type: float
         value: 0.9
     script: effects.WarmGlow
+  - id: 5
+    start: 5950ms
+    duration: 18300ms
+    target:
+      type: fixture
+      id: 4
+    scope: per_fixture
+    params:
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      gradient:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 1.0
+            value: '#ff0000'
+      spatial_offset:
+        type: float
+        value: 0.0
+    script: effects.CurveGradient
   automation_clips: []

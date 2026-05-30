@@ -1,7 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import * as ContextMenu from "@radix-ui/react-context-menu";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight, LoaderCircle, Music, Pause, Play, SkipBack, Square, Trash2, X } from "lucide-react";
 import { commands } from "../api";
 import type {
@@ -1428,7 +1428,7 @@ function GuiInspector({
   setVisibleMarkCollectionKeys: (keys: Set<string>) => void;
 }) {
   if (gui.type === "sequence") {
-    const id = selected !== null && selected.startsWith("effect:") ? Number(selected.split(":")[1]) : null;
+    const id = parseSelectedEffectId(selected);
     const effect = gui.document.effects.find((candidate) => candidate.id === id);
     const selectedMark = parseSelectedMark(selected);
     const selectedMarkCollection = selectedMark === null ? null : gui.document.markCollections.find((collection) => collection.key === selectedMark.collectionKey) ?? null;
@@ -1462,8 +1462,142 @@ function GuiInspector({
         setActiveMarkCollectionKey(null);
       });
     };
+    if (selectedMark !== null && selectedMarkCollection !== null && selectedMarkTime !== undefined) {
+      return (
+        <InspectorScrollArea>
+          <h2>Mark</h2>
+          <div className="inspector-readout-grid">
+            <Readout label="Collection" value={selectedMarkCollection.name} />
+            <Readout label="Time" value={`${selectedMarkTime} ms`} />
+            <Readout label="Color" value={selectedMarkCollection.color} swatch={selectedMarkCollection.color} />
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              void runSnapshotCommand(() =>
+                commands.applySequenceGuiEdit({
+                  type: "deleteMark",
+                  collectionKey: selectedMark.collectionKey,
+                  index: selectedMark.index
+                })
+              ).then(() => {
+                setSelected(null);
+              })
+            }
+          >
+            Delete mark
+          </button>
+        </InspectorScrollArea>
+      );
+    }
+    if (effect !== undefined) {
+      const currentScriptPath = selectedEffectScriptPath(effect, gui.document.effectScripts);
+      const resizeEffect = (startMs: number, durationMs: number) =>
+        runSnapshotCommand(() =>
+          commands.applySequenceGuiEdit({
+            type: "resizeEffect",
+            id: effect.id,
+            startMs: Math.max(0, Math.round(startMs)),
+            durationMs: Math.max(1, Math.round(durationMs))
+          })
+        );
+      return (
+        <InspectorScrollArea>
+          <h2>Effect</h2>
+          <div className="inspector-readout-grid">
+            <div className="inspector-inline-row">
+              <label>
+                Start
+                <input
+                  key={`${effect.id}:start:${effect.startMs}`}
+                  type="number"
+                  min={0}
+                  step={1}
+                  defaultValue={effect.startMs}
+                  onBlur={(event) => {
+                    const nextStartMs = Number(event.currentTarget.value);
+                    if (!Number.isFinite(nextStartMs) || Math.round(nextStartMs) === effect.startMs) return;
+                    void resizeEffect(nextStartMs, effect.durationMs);
+                  }}
+                />
+              </label>
+              <label>
+                Duration
+                <input
+                  key={`${effect.id}:duration:${effect.durationMs}`}
+                  type="number"
+                  min={1}
+                  step={1}
+                  defaultValue={effect.durationMs}
+                  onBlur={(event) => {
+                    const nextDurationMs = Number(event.currentTarget.value);
+                    if (!Number.isFinite(nextDurationMs) || Math.round(nextDurationMs) === effect.durationMs) return;
+                    void resizeEffect(effect.startMs, nextDurationMs);
+                  }}
+                />
+              </label>
+            </div>
+          </div>
+          <label>
+            Effect type
+            <select
+              value={currentScriptPath}
+              disabled={gui.document.effectScripts.length === 0}
+              onChange={(event) =>
+                void runSnapshotCommand(() =>
+                  commands.applySequenceGuiEdit({
+                    type: "changeEffectScript",
+                    id: effect.id,
+                    scriptPath: event.currentTarget.value
+                  })
+                )
+              }
+            >
+              {currentScriptPath === "" && <option value="">{effect.script}</option>}
+              {gui.document.effectScripts.map((script) => (
+                <option key={script.path} value={script.path}>
+                  {script.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Scope
+            <select
+              value={effect.scope}
+              onChange={(event) =>
+                void runSnapshotCommand(() =>
+                  commands.applySequenceGuiEdit({
+                    type: "setEffectScope",
+                    id: effect.id,
+                    scope: event.currentTarget.value as SequenceEffectScopeDto
+                  })
+                )
+              }
+            >
+              <option value="perFixture">Per fixture</option>
+              <option value="wholeTarget">Whole target</option>
+            </select>
+          </label>
+          {effect.params.length > 0 && (
+            <div className="effect-param-section">
+              <h3>Parameters</h3>
+              {effect.params.map((param) => (
+                <EffectParamInput
+                  key={`${effect.id}:${param.name}`}
+                  effectId={effect.id}
+                  param={param}
+                  markCollections={gui.document.markCollections}
+                />
+              ))}
+            </div>
+          )}
+          <button onClick={() => void runSnapshotCommand(() => commands.applySequenceGuiEdit({ type: "deleteEffect", id: effect.id }))}>Delete</button>
+        </InspectorScrollArea>
+      );
+    }
     return (
-      <aside className="gui-inspector">
+      <InspectorScrollArea>
         <h2>Sequence</h2>
         <div className="mark-section">
           <h3>Marks</h3>
@@ -1499,27 +1633,27 @@ function GuiInspector({
                       }}
                     />
                   </label>
-                  <label className="effect-param-color">
-                    Color
-                    <input
-                      type="color"
-                      value={activeCollection.color}
-                      onChange={(event) =>
-                        void runSnapshotCommand(() =>
-                          commands.applySequenceGuiEdit({
-                            type: "setMarkCollectionColor",
-                            key: activeCollection.key,
-                            color: event.currentTarget.value
-                          })
-                        )
-                      }
-                    />
-                  </label>
+                  <ColorField
+                    key={`${activeCollection.key}:color:${activeCollection.color.toLowerCase()}`}
+                    label="Color"
+                    value={activeCollection.color}
+                    commit={(color) =>
+                      runSnapshotCommand(() =>
+                        commands.applySequenceGuiEdit({
+                          type: "setMarkCollectionColor",
+                          key: activeCollection.key,
+                          color
+                        })
+                      ).then(() => undefined)
+                    }
+                  />
                 </>
               )}
               <div className="mark-visibility-list">
                 {gui.document.markCollections.map((collection) => (
-                  <label key={collection.key} className="effect-param-check">
+                  <label key={collection.key} className="mark-collection-row">
+                    <span className="color-swatch" style={{ background: collection.color }} />
+                    <span>{collection.name}</span>
                     <input
                       type="checkbox"
                       checked={visibleMarkCollectionKeys.has(collection.key)}
@@ -1533,78 +1667,15 @@ function GuiInspector({
                         setVisibleMarkCollectionKeys(next);
                       }}
                     />
-                    <span style={{ color: collection.color }}>{collection.name}</span>
                   </label>
                 ))}
               </div>
-              {selectedMark !== null && selectedMarkCollection !== null && selectedMarkTime !== undefined && (
-                <div className="selected-mark-row">
-                  <span>{selectedMarkCollection.name} {selectedMarkTime} ms</span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void runSnapshotCommand(() =>
-                        commands.applySequenceGuiEdit({
-                          type: "deleteMark",
-                          collectionKey: selectedMark.collectionKey,
-                          index: selectedMark.index
-                        })
-                      ).then(() => {
-                        setSelected(null);
-                      })
-                    }
-                  >
-                    Delete mark
-                  </button>
-                </div>
-              )}
               {activeCollection !== null && <button type="button" onClick={deleteActiveCollection}>Delete collection</button>}
             </>
           )}
         </div>
-        {effect !== undefined ? (
-          <>
-            <label>Effect<input readOnly value={effect.script} /></label>
-            <label>Start<input readOnly value={`${effect.startMs} ms`} /></label>
-            <label>Duration<input readOnly value={`${effect.durationMs} ms`} /></label>
-            <label>Target<input readOnly value={effect.targetLabel} /></label>
-            <label>
-              Scope
-              <select
-                value={effect.scope}
-                onChange={(event) =>
-                  void runSnapshotCommand(() =>
-                    commands.applySequenceGuiEdit({
-                      type: "setEffectScope",
-                      id: effect.id,
-                      scope: event.currentTarget.value as SequenceEffectScopeDto
-                    })
-                  )
-                }
-              >
-                <option value="perFixture">Per fixture</option>
-                <option value="wholeTarget">Whole target</option>
-              </select>
-            </label>
-            {effect.params.length > 0 && (
-              <div className="effect-param-section">
-                <h3>Parameters</h3>
-                {effect.params.map((param) => (
-                  <EffectParamInput
-                    key={`${effect.id}:${param.name}`}
-                    effectId={effect.id}
-                    param={param}
-                    markCollections={gui.document.markCollections}
-                  />
-                ))}
-              </div>
-            )}
-            <button onClick={() => void runSnapshotCommand(() => commands.applySequenceGuiEdit({ type: "deleteEffect", id: effect.id }))}>Delete</button>
-          </>
-        ) : (
-          <p>Select an effect.</p>
-        )}
-      </aside>
+        <p>Select a mark or effect.</p>
+      </InspectorScrollArea>
     );
   }
   if (gui.type === "layout") {
@@ -1612,7 +1683,7 @@ function GuiInspector({
     const placement = gui.document.fixtures.find((candidate) => candidate.id === id);
     const transform = placement === undefined ? null : normalizeTransform(placement.transform);
     return (
-      <aside className="gui-inspector">
+      <InspectorScrollArea>
         <h2>Layout</h2>
         {placement !== undefined && transform !== null ? (
           <>
@@ -1624,12 +1695,12 @@ function GuiInspector({
         ) : (
           <p>Select a placement.</p>
         )}
-      </aside>
+      </InspectorScrollArea>
     );
   }
   const fixture = gui.document.fixtures.find((candidate) => candidate.objectKey === gui.document.selectedObjectKey) ?? gui.document.fixtures[0];
   return (
-    <aside className="gui-inspector">
+    <InspectorScrollArea>
       <h2>Fixture</h2>
       {fixture !== undefined ? (
         <>
@@ -1658,8 +1729,131 @@ function GuiInspector({
       ) : (
         <p>No fixture.</p>
       )}
+    </InspectorScrollArea>
+  );
+}
+
+function InspectorScrollArea({ children }: { children: ReactNode }) {
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const railRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ pointerId: number; startY: number; startScrollTop: number } | null>(null);
+  const [metrics, setMetrics] = useState({ top: 0, height: 0, scrollable: false });
+
+  const updateMetrics = useCallback(() => {
+    const content = contentRef.current;
+    if (content === null) return;
+    const scrollable = content.scrollHeight > content.clientHeight + 1;
+    const railHeight = Math.max(1, content.clientHeight);
+    const height = scrollable ? Math.max(28, (content.clientHeight / content.scrollHeight) * railHeight) : railHeight;
+    const maxTop = Math.max(0, railHeight - height);
+    const top = scrollable ? (content.scrollTop / Math.max(1, content.scrollHeight - content.clientHeight)) * maxTop : 0;
+    setMetrics({ top, height, scrollable });
+  }, []);
+
+  useEffect(() => {
+    const content = contentRef.current;
+    if (content === null) return;
+    updateMetrics();
+    const resizeObserver = new ResizeObserver(updateMetrics);
+    resizeObserver.observe(content);
+    const mutationObserver = new MutationObserver(updateMetrics);
+    mutationObserver.observe(content, { childList: true, subtree: true, characterData: true });
+    content.addEventListener("scroll", updateMetrics, { passive: true });
+    return () => {
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+      content.removeEventListener("scroll", updateMetrics);
+    };
+  }, [updateMetrics]);
+
+  const scrollToPointer = useCallback((clientY: number) => {
+    const content = contentRef.current;
+    const rail = railRef.current;
+    if (content === null || rail === null || !metrics.scrollable) return;
+    const railRect = rail.getBoundingClientRect();
+    const maxTop = Math.max(1, railRect.height - metrics.height);
+    const top = clamp(clientY - railRect.top - metrics.height / 2, 0, maxTop);
+    content.scrollTop = (top / maxTop) * Math.max(1, content.scrollHeight - content.clientHeight);
+  }, [metrics.height, metrics.scrollable]);
+
+  return (
+    <aside className="gui-inspector-shell">
+      <div ref={contentRef} className="gui-inspector">
+        <div onKeyDownCapture={commitInspectorFieldOnEnter}>{children}</div>
+      </div>
+      <div className="editor-scrollbar" aria-hidden={!metrics.scrollable}>
+        <div
+          ref={railRef}
+          className="editor-scrollbar-rail"
+          onPointerDown={(event) => {
+            if (!metrics.scrollable) return;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            scrollToPointer(event.clientY);
+          }}
+        >
+          <div
+            className={`editor-scrollbar-thumb ${metrics.scrollable ? "" : "disabled"}`}
+            style={{ top: `${metrics.top}px`, height: `${metrics.height}px` }}
+            onPointerDown={(event) => {
+              if (!metrics.scrollable) return;
+              event.stopPropagation();
+              event.currentTarget.setPointerCapture(event.pointerId);
+              dragRef.current = {
+                pointerId: event.pointerId,
+                startY: event.clientY,
+                startScrollTop: contentRef.current?.scrollTop ?? 0
+              };
+            }}
+            onPointerMove={(event) => {
+              const drag = dragRef.current;
+              const content = contentRef.current;
+              const rail = railRef.current;
+              if (drag === null || content === null || rail === null || drag.pointerId !== event.pointerId) return;
+              const maxTop = Math.max(1, rail.clientHeight - metrics.height);
+              const scrollMax = Math.max(1, content.scrollHeight - content.clientHeight);
+              content.scrollTop = drag.startScrollTop + ((event.clientY - drag.startY) / maxTop) * scrollMax;
+            }}
+            onPointerUp={(event) => {
+              if (dragRef.current?.pointerId === event.pointerId) {
+                dragRef.current = null;
+              }
+            }}
+            onPointerCancel={(event) => {
+              if (dragRef.current?.pointerId === event.pointerId) {
+                dragRef.current = null;
+              }
+            }}
+          />
+        </div>
+      </div>
     </aside>
   );
+}
+
+function Readout({ label, value, swatch }: { label: string; value: string | number; swatch?: string }) {
+  return (
+    <div className="inspector-readout">
+      <span>{label}</span>
+      <strong>
+        {swatch !== undefined && <i style={{ background: swatch }} />}
+        {value}
+      </strong>
+    </div>
+  );
+}
+
+function commitInspectorFieldOnEnter(event: KeyboardEvent<HTMLDivElement>) {
+  if (event.key !== "Enter") return;
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  target.blur();
+}
+
+function selectedEffectScriptPath(effect: SequenceEffectDto, scripts: SequenceEffectScriptDto[]) {
+  const currentName = effect.script.includes(".") ? effect.script.split(".").pop() ?? effect.script : effect.script;
+  return scripts.find((script) => script.name === currentName)?.path ?? "";
 }
 
 function EffectParamInput({
@@ -1682,7 +1876,7 @@ function EffectParamInput({
     ).then(() => undefined);
 
   if (!param.editable) {
-    return <label>{param.name}<input readOnly value="Unavailable" /></label>;
+    return <Readout label={param.name} value="Unavailable" />;
   }
 
   switch (param.value.type) {
@@ -1702,7 +1896,7 @@ function EffectParamInput({
         </label>
       );
     case "color":
-      return <ColorParam key={`${param.name}:${param.value.value.toLowerCase()}`} name={param.name} value={param.value.value} commit={(value) => commit({ type: "color", value })} />;
+      return <ColorField key={`${param.name}:${param.value.value.toLowerCase()}`} label={param.name} value={param.value.value} commit={(value) => commit({ type: "color", value })} />;
     case "enum":
       return (
         <label>
@@ -1798,7 +1992,7 @@ function NumberParam({
   );
 }
 
-function ColorParam({ name, value, commit }: { name: string; value: string; commit: (value: string) => Promise<void> }) {
+function ColorField({ label, value, commit }: { label: string; value: string; commit: (value: string) => Promise<void> }) {
   const committedValue = value.toLowerCase();
   const [draft, setDraft] = useState(committedValue);
   const lastCommitted = useRef(committedValue);
@@ -1814,23 +2008,17 @@ function ColorParam({ name, value, commit }: { name: string; value: string; comm
       void commit(next);
     }
   };
-  const scheduleCommit = (candidate: string) => {
-    window.clearTimeout(colorCommitTimer.current);
-    colorCommitTimer.current = window.setTimeout(() => { commitDraft(candidate); }, 200);
-  };
-  const colorCommitTimer = useRef<number | undefined>(undefined);
-  useEffect(() => () => { window.clearTimeout(colorCommitTimer.current); }, []);
+  const displayedColor = isHexColor(draft) ? draft : committedValue;
   return (
     <label>
-      {name}
+      {label}
       <div className="effect-param-color">
+        <span className="color-swatch" style={{ background: displayedColor }} />
         <input
           type="color"
-          value={isHexColor(draft) ? draft : committedValue}
+          value={displayedColor}
           onChange={(event) => {
-            const next = event.currentTarget.value;
-            setDraft(next);
-            scheduleCommit(next);
+            setDraft(event.currentTarget.value);
           }}
           onBlur={() => { commitDraft(); }}
         />
@@ -1948,16 +2136,7 @@ function ColorCurveParam({
   commit: (points: EditedColorCurvePoint[]) => Promise<void>;
 }) {
   const [drafts, setDrafts] = useState(points);
-  const colorCommitTimers = useRef<Map<number, number>>(new Map());
   const lastCommittedValues = useRef(points.map((point) => point.value.toLowerCase()));
-  useEffect(
-    () => () => {
-      for (const timer of colorCommitTimers.current.values()) {
-        window.clearTimeout(timer);
-      }
-    },
-    []
-  );
   const update = (next: EditedColorCurvePoint[]) => {
     if (next.length > 0 && next.every((point) => Number.isFinite(point.time) && isHexColor(point.value))) {
       const sorted = sortCurvePoints(next).map((point) => ({ ...point, value: point.value.toLowerCase() }));
@@ -1988,57 +2167,52 @@ function ColorCurveParam({
       update(replaceAt(drafts, index, { ...currentPoint, value: next }));
     }
   };
-  const scheduleColorCommit = (index: number, candidate: string) => {
-    const existing = colorCommitTimers.current.get(index);
-    if (existing !== undefined) {
-      window.clearTimeout(existing);
-    }
-    colorCommitTimers.current.set(index, window.setTimeout(() => { commitDraftValue(index, candidate); }, 200));
-  };
   return (
     <div className="effect-param-group">
       <div className="effect-param-name">{name}</div>
-      {drafts.map((point, index) => (
-        <div key={index} className="curve-point-row color-curve-point-row">
-          <input
-            type="number"
-            min={0}
-            max={1}
-            step={0.01}
-            value={point.time}
-            onChange={(event) => { setDraftPoint(index, { ...point, time: Number(event.currentTarget.value) }); }}
-            onBlur={() => { update(replaceAt(drafts, index, { ...point, time: clamp(point.time, 0, 1) })); }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                update(replaceAt(drafts, index, { ...point, time: clamp(point.time, 0, 1) }));
-                event.currentTarget.blur();
-              }
-            }}
-          />
-          <input
-            type="color"
-            value={isHexColor(point.value) ? point.value : (points[index]?.value ?? "#ffffff")}
-            onChange={(event) => {
-              const next = event.currentTarget.value;
-              setDraftPoint(index, { ...point, value: next });
-              scheduleColorCommit(index, next);
-            }}
-            onBlur={() => { commitDraftValue(index); }}
-          />
-          <input
-            value={point.value}
-            onChange={(event) => { setDraftPoint(index, { ...point, value: event.currentTarget.value }); }}
-            onBlur={() => { commitDraftValue(index); }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                commitDraftValue(index);
-                event.currentTarget.blur();
-              }
-            }}
-          />
-          <button type="button" disabled={drafts.length <= 1} onClick={() => { update(drafts.filter((_, pointIndex) => pointIndex !== index)); }}>-</button>
-        </div>
-      ))}
+      {drafts.map((point, index) => {
+        const displayedColor = isHexColor(point.value) ? point.value : (points[index]?.value ?? "#ffffff");
+        return (
+          <div key={index} className="curve-point-row color-curve-point-row">
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              value={point.time}
+              onChange={(event) => { setDraftPoint(index, { ...point, time: Number(event.currentTarget.value) }); }}
+              onBlur={() => { update(replaceAt(drafts, index, { ...point, time: clamp(point.time, 0, 1) })); }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  update(replaceAt(drafts, index, { ...point, time: clamp(point.time, 0, 1) }));
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+            <span className="color-swatch" style={{ background: displayedColor }} />
+            <input
+              type="color"
+              value={displayedColor}
+              onChange={(event) => {
+                setDraftPoint(index, { ...point, value: event.currentTarget.value });
+              }}
+              onBlur={() => { commitDraftValue(index); }}
+            />
+            <input
+              value={point.value}
+              onChange={(event) => { setDraftPoint(index, { ...point, value: event.currentTarget.value }); }}
+              onBlur={() => { commitDraftValue(index); }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  commitDraftValue(index);
+                  event.currentTarget.blur();
+                }
+              }}
+            />
+            <button type="button" disabled={drafts.length <= 1} onClick={() => { update(drafts.filter((_, pointIndex) => pointIndex !== index)); }}>-</button>
+          </div>
+        );
+      })}
       <button type="button" onClick={() => { update([...drafts, { time: 1, value: drafts[drafts.length - 1]?.value ?? "#ffffff" }]); }}>Add point</button>
     </div>
   );
