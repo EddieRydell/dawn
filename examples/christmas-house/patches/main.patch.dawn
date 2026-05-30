@@ -1,0 +1,9 @@
+main:
+  type: patch
+  routes:
+    - { fixture: 1, controller: HouseController, universe: 1, start: 1 }
+    - { fixture: 2, controller: HouseController, universe: 1, start: 181 }
+    - { fixture: 3, controller: HouseController, universe: 1, start: 361 }
+    - { fixture: 4, controller: HouseController, universe: 2, start: 1 }
+    - { fixture: 5, controller: HouseController, universe: 2, start: 157 }
+    - { fixture: 6, controller: HouseController, universe: 2, start: 313 }

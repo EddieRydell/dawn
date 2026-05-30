@@ -1,0 +1,18 @@
+effect Twinkle {
+  param color base = #003311;
+  param color sparkle = #ffffff;
+  param float density = 0.32;
+  param float speed = 1.4;
+  param float seed = 0.0;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    float bucket = floor(seconds * speed + pixel_index(pixel) * 0.37);
+    srand(seed + pixel_index(pixel) * 17.0 + bucket * 23.0);
+    float on = rand();
+    float shimmer = (sin(seconds * 9.0 + pixel_index(pixel)) + 1.0) / 2.0;
+    if (on < density) {
+      return mix(base, sparkle, shimmer);
+    }
+    return base;
+  }
+}

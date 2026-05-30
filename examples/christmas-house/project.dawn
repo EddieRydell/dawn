@@ -1,0 +1,7 @@
+christmas_house:
+  type: project
+  name: christmas-house
+  display:
+    import: displays/main.display.dawn::main
+  sequences:
+    - import: sequences/christmas.sequence.dawn::christmas

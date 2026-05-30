@@ -1,0 +1,15 @@
+main:
+  type: display
+  name: Christmas House
+  layout:
+    import: ../layouts/house.layout.dawn::house
+  patch:
+    import: ../patches/main.patch.dawn::main
+  controllers:
+    - name: HouseController
+      protocol: artnet
+      universes:
+        - id: 1
+          range: "1..510"
+        - id: 2
+          range: "1..510"

@@ -1,8 +1,10 @@
-import { keymap } from "@codemirror/view";
 import { defaultKeymap } from "@codemirror/commands";
+import { cpp } from "@codemirror/lang-cpp";
 import { yaml } from "@codemirror/lang-yaml";
-import { EditorState } from "@codemirror/state";
-import { EditorView, ViewUpdate } from "@codemirror/view";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { EditorState, type Extension } from "@codemirror/state";
+import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
+import { tags } from "@lezer/highlight";
 import { X } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { commands } from "../api";
@@ -30,7 +32,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
     if (!editorHost.current || view.current) return;
     view.current = new EditorView({
       parent: editorHost.current,
-      state: createState(localText, (update) => {
+      state: createState(localText, activePath, (update) => {
         if (!update.docChanged) return;
         if (applyingExternalText.current) return;
         const text = update.state.doc.toString();
@@ -50,7 +52,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
       view.current?.destroy();
       view.current = null;
     };
-  }, [localText, setLocalText, viewMode]);
+  }, [activePath, localText, setLocalText, viewMode]);
 
   useEffect(() => {
     if (!view.current) return;
@@ -129,13 +131,15 @@ function scheduleAutosave(text: string) {
 
 function createState(
   text: string,
+  path: string | null,
   onUpdate: (update: ViewUpdate) => void,
   onHistoryCommand: (text: string, redo: boolean) => Promise<void>
 ) {
   return EditorState.create({
     doc: text,
     extensions: [
-      yaml(),
+      languageForPath(path),
+      syntaxHighlighting(dawnHighlightStyle),
       keymap.of([
         {
           key: "Mod-s",
@@ -172,3 +176,23 @@ function createState(
     ]
   });
 }
+
+function languageForPath(path: string | null): Extension {
+  if (path !== null && path.endsWith(".effect.dawn")) {
+    return cpp();
+  }
+  return yaml();
+}
+
+const dawnHighlightStyle = HighlightStyle.define([
+  { tag: tags.keyword, color: "#d99adf" },
+  { tag: [tags.name, tags.propertyName, tags.attributeName], color: "#87c7ff" },
+  { tag: [tags.variableName, tags.definition(tags.variableName)], color: "#ebe7df" },
+  { tag: [tags.function(tags.variableName), tags.function(tags.definition(tags.variableName))], color: "#8fd6b5" },
+  { tag: [tags.string, tags.special(tags.string)], color: "#e8bf7a" },
+  { tag: [tags.number, tags.bool, tags.null], color: "#f09a86" },
+  { tag: [tags.operator, tags.punctuation, tags.separator], color: "#a8a29a" },
+  { tag: tags.comment, color: "#77736d", fontStyle: "italic" },
+  { tag: [tags.typeName, tags.className], color: "#a6d189" },
+  { tag: tags.invalid, color: "#ff8f8f" }
+]);

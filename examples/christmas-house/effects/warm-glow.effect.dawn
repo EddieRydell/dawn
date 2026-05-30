@@ -1,0 +1,10 @@
+effect WarmGlow {
+  param color low = #184400;
+  param color high = #ffcc66;
+  param float speed = 0.5;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    float wave = (sin(seconds * speed * 6.283 + pixel_index(pixel) * 0.08) + 1.0) / 2.0;
+    return mix(low, high, wave);
+  }
+}

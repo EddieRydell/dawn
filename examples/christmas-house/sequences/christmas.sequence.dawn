@@ -1,0 +1,93 @@
+christmas:
+  type: sequence
+  duration: 45000ms
+  frame_rate: 60
+  audio: null
+  mark_collections: []
+  effects:
+  - id: 1
+    start: 0ms
+    duration: 45000ms
+    target:
+      type: group
+      name: House Lines
+    scope: whole_target
+    params:
+      first:
+        type: color
+        value: '#ff2020'
+      second:
+        type: color
+        value: '#fff7d6'
+      stripe_pixels:
+        type: integer
+        value: 8
+      speed:
+        type: float
+        value: 1.0
+    script:
+      import: ../effects/candy-cane.effect.dawn
+  - id: 2
+    start: 0ms
+    duration: 45000ms
+    target:
+      type: group
+      name: Windows
+    scope: per_fixture
+    params:
+      low:
+        type: color
+        value: '#1c2c10'
+      high:
+        type: color
+        value: '#ffd27a'
+      speed:
+        type: float
+        value: 0.3
+    script:
+      import: ../effects/warm-glow.effect.dawn
+  - id: 3
+    start: 0ms
+    duration: 45000ms
+    target:
+      type: group
+      name: Yard
+    scope: whole_target
+    params:
+      base:
+        type: color
+        value: '#0b3d16'
+      sparkle:
+        type: color
+        value: '#f8fff0'
+      density:
+        type: float
+        value: 0.42
+      speed:
+        type: float
+        value: 2.0
+      seed:
+        type: float
+        value: 12.0
+    script:
+      import: ../effects/twinkle.effect.dawn
+  - id: 4
+    start: 0ms
+    duration: 45000ms
+    target:
+      type: group
+      name: Accents
+    scope: per_fixture
+    params:
+      low:
+        type: color
+        value: '#206010'
+      high:
+        type: color
+        value: '#ffdf70'
+      speed:
+        type: float
+        value: 0.9
+    script:
+      import: ../effects/warm-glow.effect.dawn
+  automation_clips: []
