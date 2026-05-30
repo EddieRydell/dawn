@@ -700,6 +700,164 @@ button:focus-visible,
   color: #a8a29a;
 }
 
+.float-curve-editor {
+  gap: 8px;
+}
+
+.float-curve-graph {
+  width: 100%;
+  aspect-ratio: 2 / 1;
+  overflow: visible;
+  border: 1px solid #373b42;
+  border-radius: 5px;
+  background: #17181b;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.float-curve-graph-bg {
+  fill: #17181b;
+}
+
+.float-curve-grid-line {
+  stroke: #2c3036;
+  stroke-width: 1;
+}
+
+.float-curve-line {
+  fill: none;
+  stroke: #6abf8a;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
+}
+
+.float-curve-point {
+  fill: #ebe7df;
+  stroke: #111214;
+  stroke-width: 2;
+  cursor: grab;
+}
+
+.float-curve-point.selected {
+  fill: #f0c46b;
+  stroke: #fffaf0;
+}
+
+.float-curve-point:focus-visible {
+  outline: none;
+  stroke: #fffaf0;
+  stroke-width: 3;
+}
+
+.float-curve-points-panel {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid #30343a;
+  background: #1d1f23;
+}
+
+.float-curve-points-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 7px;
+  color: #ebe7df;
+  text-align: left;
+}
+
+.float-curve-points-toggle svg {
+  color: #a8a29a;
+  transition: transform 120ms ease;
+}
+
+.float-curve-points-toggle svg.expanded {
+  transform: rotate(90deg);
+}
+
+.float-curve-points-toggle strong {
+  color: #a8a29a;
+  font-weight: 500;
+}
+
+.float-curve-point-list {
+  display: grid;
+  border-top: 1px solid #30343a;
+}
+
+.float-curve-point-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 3px 5px;
+  cursor: default;
+}
+
+.float-curve-point-row + .float-curve-point-row {
+  border-top: 1px solid #2c3036;
+}
+
+.float-curve-point-row.selected {
+  background: #24332b;
+}
+
+.float-curve-point-row label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  color: #8f9298;
+}
+
+.float-curve-point-row input {
+  height: 22px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 2px;
+  color: #ebe7df;
+  font-variant-numeric: tabular-nums;
+}
+
+.float-curve-point-row input:focus {
+  background: #17181b;
+  box-shadow: inset 0 -1px 0 #6abf8a;
+  outline: none;
+}
+
+.float-curve-point-delete {
+  display: inline-grid;
+  width: auto;
+  height: auto;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 2px;
+  color: #a8a29a;
+  line-height: 0;
+}
+
+.float-curve-point-delete:not(:disabled):hover {
+  color: #ebe7df;
+}
+
+.float-curve-point-delete:disabled {
+  color: #55585f;
+}
+
+.curve-point-row.selected input {
+  border-color: #6abf8a;
+}
+
 .effect-param-color,
 .curve-point-row {
   display: grid;
@@ -732,6 +890,23 @@ button:focus-visible,
 
 .effect-param-group button:disabled {
   color: #696b70;
+}
+
+.effect-param-group .float-curve-point-delete,
+.effect-param-group .float-curve-point-delete:disabled {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 2px;
+}
+
+.effect-param-group .float-curve-point-delete:not(:disabled) {
+  color: #a8a29a;
+}
+
+.effect-param-group .float-curve-point-delete:not(:disabled):hover {
+  background: transparent;
+  color: #ebe7df;
 }
 
 .gui-inspector p {

@@ -1,8 +1,8 @@
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import * as ContextMenu from "@radix-ui/react-context-menu";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, LoaderCircle, Music, Pause, Play, SkipBack, Square, Trash2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from "react";
+import { ChevronLeft, ChevronRight, LoaderCircle, Minus, Music, Pause, Play, SkipBack, Square, Trash2, X } from "lucide-react";
 import { commands } from "../api";
 import type {
   ActiveGuiDocumentDto,
@@ -2043,7 +2043,7 @@ function FloatCurveParamShell(props: {
   points: EditedFloatCurvePoint[];
   commit: (points: EditedFloatCurvePoint[]) => Promise<void>;
 }) {
-  return <FloatCurveParam key={`${props.name}:${curvePointsSignature(props.points)}`} {...props} />;
+  return <FloatCurveParam {...props} />;
 }
 
 function ColorCurveParamShell(props: {
@@ -2064,64 +2064,211 @@ function FloatCurveParam({
   commit: (points: EditedFloatCurvePoint[]) => Promise<void>;
 }) {
   const [drafts, setDrafts] = useState(points);
+  const draftsRef = useRef(points);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [pointsCollapsed, setPointsCollapsed] = useState(false);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const draggingPoint = useRef<number | null>(null);
   const pointsSignature = curvePointsSignature(points);
   const lastCommittedSignature = useRef(pointsSignature);
+  useEffect(() => {
+    draftsRef.current = drafts;
+  }, [drafts]);
+  useEffect(() => {
+    if (pointsSignature === curvePointsSignature(draftsRef.current)) return;
+    setDrafts(points);
+    draftsRef.current = points;
+    lastCommittedSignature.current = pointsSignature;
+    setSelectedIndex((index) => Math.min(index, points.length - 1));
+  }, [points, pointsSignature]);
   const update = (next: EditedFloatCurvePoint[]) => {
     if (next.length > 0 && next.every((point) => Number.isFinite(point.time) && Number.isFinite(point.value))) {
       const sorted = sortCurvePoints(next);
       const signature = curvePointsSignature(sorted);
       setDrafts(sorted);
+      draftsRef.current = sorted;
+      setSelectedIndex((index) => Math.min(index, sorted.length - 1));
       if (signature !== lastCommittedSignature.current) {
         lastCommittedSignature.current = signature;
         void commit(sorted);
       }
     }
   };
-  const setDraftPoint = (index: number, point: EditedFloatCurvePoint) => {
-    setDrafts((current) => replaceAt(current, index, point));
+  const setPoint = (index: number, point: EditedFloatCurvePoint, commitChange: boolean) => {
+    const next = sortCurvePoints(replaceAt(draftsRef.current, index, point));
+    const nextIndex = nearestFloatPointIndex(next, point);
+    setDrafts(next);
+    draftsRef.current = next;
+    setSelectedIndex(nextIndex);
+    if (commitChange) {
+      update(next);
+    }
+    return nextIndex;
+  };
+  const deletePoint = (index: number) => {
+    if (draftsRef.current.length <= 1) return;
+    const next = draftsRef.current.filter((_, pointIndex) => pointIndex !== index);
+    update(next);
+    setSelectedIndex(Math.min(index, next.length - 1));
   };
   const commitDraftPoint = (index: number) => {
-    const point = drafts[index];
+    const point = draftsRef.current[index];
     if (!point) return;
-    update(replaceAt(drafts, index, { time: clamp(point.time, 0, 1), value: point.value }));
+    update(replaceAt(draftsRef.current, index, { time: clamp(point.time, 0, 1), value: point.value }));
+  };
+  const valueRange = floatCurveValueRange(drafts);
+  const path = floatCurveSvgPath(drafts, valueRange);
+  const pointFromPointer = (event: PointerEvent<SVGSVGElement>): EditedFloatCurvePoint => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (rect === undefined) return { time: 0, value: 0 };
+    const x = clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+    const y = clamp((event.clientY - rect.top) / Math.max(1, rect.height), 0, 1);
+    return {
+      time: roundCurveValue(x),
+      value: roundCurveValue(valueRange.max - y * (valueRange.max - valueRange.min))
+    };
   };
   return (
-    <div className="effect-param-group">
+    <div className="effect-param-group float-curve-editor">
       <div className="effect-param-name">{name}</div>
-      {drafts.map((point, index) => (
-        <div key={index} className="curve-point-row">
-          <input
-            type="number"
-            min={0}
-            max={1}
-            step={0.01}
-            value={point.time}
-            onChange={(event) => { setDraftPoint(index, { ...point, time: Number(event.currentTarget.value) }); }}
-            onBlur={() => { commitDraftPoint(index); }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                commitDraftPoint(index);
-                event.currentTarget.blur();
-              }
-            }}
-          />
-          <input
-            type="number"
-            step={0.05}
-            value={point.value}
-            onChange={(event) => { setDraftPoint(index, { ...point, value: Number(event.currentTarget.value) }); }}
-            onBlur={() => { commitDraftPoint(index); }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                commitDraftPoint(index);
-                event.currentTarget.blur();
-              }
-            }}
-          />
-          <button type="button" disabled={drafts.length <= 1} onClick={() => { update(drafts.filter((_, pointIndex) => pointIndex !== index)); }}>-</button>
-        </div>
-      ))}
-      <button type="button" onClick={() => { update([...drafts, { time: 1, value: drafts[drafts.length - 1]?.value ?? 0 }]); }}>Add point</button>
+      <svg
+        ref={svgRef}
+        className="float-curve-graph"
+        viewBox="0 0 240 120"
+        role="img"
+        aria-label={`${name} curve`}
+        onPointerDown={(event) => {
+          if (event.target instanceof SVGCircleElement) return;
+          const point = pointFromPointer(event);
+          update([...draftsRef.current, point]);
+          setSelectedIndex(nearestFloatPointIndex(draftsRef.current, point));
+        }}
+        onPointerMove={(event) => {
+          const index = draggingPoint.current;
+          if (index === null) return;
+          draggingPoint.current = setPoint(index, pointFromPointer(event), false);
+        }}
+        onPointerUp={(event) => {
+          if (draggingPoint.current === null) return;
+          event.currentTarget.releasePointerCapture(event.pointerId);
+          draggingPoint.current = null;
+          update(draftsRef.current);
+        }}
+        onPointerCancel={(event) => {
+          if (draggingPoint.current === null) return;
+          event.currentTarget.releasePointerCapture(event.pointerId);
+          draggingPoint.current = null;
+          update(draftsRef.current);
+        }}
+      >
+        <rect className="float-curve-graph-bg" x="0" y="0" width="240" height="120" />
+        <path className="float-curve-grid-line" d="M0 60H240" />
+        <path className="float-curve-grid-line" d="M120 0V120" />
+        <path className="float-curve-line" d={path} />
+        {drafts.map((point, index) => {
+          const x = point.time * 240;
+          const y = 120 - ((point.value - valueRange.min) / (valueRange.max - valueRange.min)) * 120;
+          return (
+            <circle
+              key={`${index}:${point.time}:${point.value}`}
+              className={`float-curve-point ${index === selectedIndex ? "selected" : ""}`}
+              cx={x}
+              cy={y}
+              r={index === selectedIndex ? 5 : 4}
+              tabIndex={0}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                event.currentTarget.ownerSVGElement?.setPointerCapture(event.pointerId);
+                draggingPoint.current = index;
+                setSelectedIndex(index);
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                deletePoint(index);
+              }}
+              onFocus={() => { setSelectedIndex(index); }}
+            />
+          );
+        })}
+      </svg>
+      <div className="float-curve-points-panel">
+        <button
+          type="button"
+          className="float-curve-points-toggle"
+          onClick={() => { setPointsCollapsed((collapsed) => !collapsed); }}
+        >
+          {pointsCollapsed ? <ChevronRight size={13} /> : <ChevronRight className="expanded" size={13} />}
+          <span>Points</span>
+          <strong>{drafts.length}</strong>
+        </button>
+        {!pointsCollapsed && (
+          <div className="float-curve-point-list">
+            {drafts.map((point, index) => (
+              <div
+                key={`${index}:${point.time}:${point.value}`}
+                className={`float-curve-point-row ${index === selectedIndex ? "selected" : ""}`}
+                onPointerDown={() => { setSelectedIndex(index); }}
+              >
+                <label>
+                  <span>t</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={point.time}
+                    onFocus={() => { setSelectedIndex(index); }}
+                    onChange={(event) => {
+                      setPoint(index, { ...point, time: Number(event.currentTarget.value) }, false);
+                    }}
+                    onBlur={() => { commitDraftPoint(index); }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        commitDraftPoint(index);
+                        event.currentTarget.blur();
+                      }
+                    }}
+                  />
+                </label>
+                <label>
+                  <span>v</span>
+                  <input
+                    type="number"
+                    step={0.05}
+                    value={point.value}
+                    onFocus={() => { setSelectedIndex(index); }}
+                    onChange={(event) => {
+                      setPoint(index, { ...point, value: Number(event.currentTarget.value) }, false);
+                    }}
+                    onBlur={() => { commitDraftPoint(index); }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        commitDraftPoint(index);
+                        event.currentTarget.blur();
+                      }
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="float-curve-point-delete"
+                  title="Delete point"
+                  disabled={drafts.length <= 1}
+                  onClick={() => { deletePoint(index); }}
+                >
+                  <Minus size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <button type="button" onClick={() => {
+        const nextPoint = { time: 1, value: drafts[drafts.length - 1]?.value ?? 0 };
+        update([...drafts, nextPoint]);
+        setSelectedIndex(drafts.length);
+      }}>Add point</button>
     </div>
   );
 }
@@ -2827,6 +2974,43 @@ function replaceAt<T>(items: T[], index: number, value: T) {
 
 function sortCurvePoints<T extends { time: number }>(points: T[]) {
   return [...points].sort((left, right) => left.time - right.time);
+}
+
+function floatCurveValueRange(points: EditedFloatCurvePoint[]) {
+  const values = points.map((point) => point.value).filter(Number.isFinite);
+  const min = Math.min(0, ...values);
+  const max = Math.max(1, ...values);
+  if (Math.abs(max - min) < 0.0001) return { min: min - 0.5, max: max + 0.5 };
+  return { min, max };
+}
+
+function floatCurveSvgPath(points: EditedFloatCurvePoint[], range: { min: number; max: number }) {
+  const sorted = sortCurvePoints(points);
+  if (sorted.length === 0) return "";
+  return sorted
+    .map((point, index) => {
+      const x = point.time * 240;
+      const y = 120 - ((point.value - range.min) / (range.max - range.min)) * 120;
+      return `${index === 0 ? "M" : "L"}${x.toFixed(2)} ${y.toFixed(2)}`;
+    })
+    .join(" ");
+}
+
+function nearestFloatPointIndex(points: EditedFloatCurvePoint[], point: EditedFloatCurvePoint) {
+  let bestIndex = 0;
+  let bestDistance = Infinity;
+  points.forEach((candidate, index) => {
+    const distance = Math.abs(candidate.time - point.time) + Math.abs(candidate.value - point.value);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
+    }
+  });
+  return bestIndex;
+}
+
+function roundCurveValue(value: number) {
+  return Math.round(value * 1000) / 1000;
 }
 
 function curvePointsSignature(points: Array<{ time: number; value: number | string }>) {
