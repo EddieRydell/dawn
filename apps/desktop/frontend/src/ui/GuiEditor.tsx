@@ -2283,17 +2283,42 @@ function ColorCurveParam({
   commit: (points: EditedColorCurvePoint[]) => Promise<void>;
 }) {
   const [drafts, setDrafts] = useState(points);
+  const draftsRef = useRef(points);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [pointsCollapsed, setPointsCollapsed] = useState(false);
+  const gradientRef = useRef<HTMLDivElement | null>(null);
+  const draggingPoint = useRef<number | null>(null);
   const lastCommittedValues = useRef(points.map((point) => point.value.toLowerCase()));
+  const pointsSignature = curvePointsSignature(points);
+  useEffect(() => {
+    draftsRef.current = drafts;
+  }, [drafts]);
+  useEffect(() => {
+    if (pointsSignature === curvePointsSignature(draftsRef.current)) return;
+    setDrafts(points);
+    draftsRef.current = points;
+    lastCommittedValues.current = points.map((point) => point.value.toLowerCase());
+    setSelectedIndex((index) => Math.min(index, points.length - 1));
+  }, [points, pointsSignature]);
   const update = (next: EditedColorCurvePoint[]) => {
     if (next.length > 0 && next.every((point) => Number.isFinite(point.time) && isHexColor(point.value))) {
       const sorted = sortCurvePoints(next).map((point) => ({ ...point, value: point.value.toLowerCase() }));
       setDrafts(sorted);
+      draftsRef.current = sorted;
       lastCommittedValues.current = sorted.map((point) => point.value);
       void commit(sorted);
     }
   };
-  const setDraftPoint = (index: number, point: EditedColorCurvePoint) => {
-    setDrafts((current) => replaceAt(current, index, point));
+  const setPoint = (index: number, point: EditedColorCurvePoint, commitChange: boolean) => {
+    const next = sortCurvePoints(replaceAt(draftsRef.current, index, point));
+    const nextIndex = nearestColorPointIndex(next, point);
+    setDrafts(next);
+    draftsRef.current = next;
+    setSelectedIndex(nextIndex);
+    if (commitChange) {
+      update(next);
+    }
+    return nextIndex;
   };
   const commitDraftValue = (index: number, candidate = drafts[index]?.value) => {
     const draft = candidate ?? points[index]?.value;
@@ -2314,53 +2339,165 @@ function ColorCurveParam({
       update(replaceAt(drafts, index, { ...currentPoint, value: next }));
     }
   };
+  const commitDraftPoint = (index: number) => {
+    const point = draftsRef.current[index];
+    if (!point) return;
+    if (!isHexColor(point.value)) {
+      commitDraftValue(index);
+      return;
+    }
+    update(replaceAt(draftsRef.current, index, { time: clamp(point.time, 0, 1), value: point.value.toLowerCase() }));
+  };
+  const deletePoint = (index: number) => {
+    if (draftsRef.current.length <= 1) return;
+    const next = draftsRef.current.filter((_, pointIndex) => pointIndex !== index);
+    update(next);
+    setSelectedIndex(Math.min(index, next.length - 1));
+  };
+  const pointFromPointer = (event: PointerEvent<HTMLElement>, color: string): EditedColorCurvePoint => {
+    const rect = gradientRef.current?.getBoundingClientRect();
+    if (rect === undefined) return { time: 0, value: color };
+    return {
+      time: roundCurveValue(clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1)),
+      value: color
+    };
+  };
+  const gradient = colorCurveGradient(drafts);
   return (
-    <div className="effect-param-group">
+    <div className="effect-param-group color-curve-editor">
       <div className="effect-param-name">{name}</div>
-      {drafts.map((point, index) => {
-        const displayedColor = isHexColor(point.value) ? point.value : (points[index]?.value ?? "#ffffff");
-        return (
-          <div key={index} className="curve-point-row color-curve-point-row">
-            <input
-              type="number"
-              min={0}
-              max={1}
-              step={0.01}
-              value={point.time}
-              onChange={(event) => { setDraftPoint(index, { ...point, time: Number(event.currentTarget.value) }); }}
-              onBlur={() => { update(replaceAt(drafts, index, { ...point, time: clamp(point.time, 0, 1) })); }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  update(replaceAt(drafts, index, { ...point, time: clamp(point.time, 0, 1) }));
-                  event.currentTarget.blur();
-                }
+      <div
+        ref={gradientRef}
+        className="color-curve-gradient"
+        style={{ background: gradient }}
+        onPointerDown={(event) => {
+          if (event.target !== event.currentTarget) return;
+          const previous = draftsRef.current[draftsRef.current.length - 1]?.value ?? "#ffffff";
+          const point = pointFromPointer(event, previous);
+          update([...draftsRef.current, point]);
+          setSelectedIndex(nearestColorPointIndex(draftsRef.current, point));
+        }}
+        onPointerMove={(event) => {
+          const index = draggingPoint.current;
+          if (index === null) return;
+          const point = draftsRef.current[index];
+          if (point === undefined) return;
+          draggingPoint.current = setPoint(index, pointFromPointer(event, point.value), false);
+        }}
+        onPointerUp={(event) => {
+          if (draggingPoint.current === null) return;
+          event.currentTarget.releasePointerCapture(event.pointerId);
+          draggingPoint.current = null;
+          update(draftsRef.current);
+        }}
+        onPointerCancel={(event) => {
+          if (draggingPoint.current === null) return;
+          event.currentTarget.releasePointerCapture(event.pointerId);
+          draggingPoint.current = null;
+          update(draftsRef.current);
+        }}
+      >
+        {drafts.map((point, index) => {
+          const displayedColor = isHexColor(point.value) ? point.value : (points[index]?.value ?? "#ffffff");
+          return (
+            <button
+              key={`${index}:${point.time}:${point.value}`}
+              type="button"
+              className={`color-curve-stop ${index === selectedIndex ? "selected" : ""}`}
+              style={{ left: `${point.time * 100}%`, background: displayedColor }}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                event.currentTarget.parentElement?.setPointerCapture(event.pointerId);
+                draggingPoint.current = index;
+                setSelectedIndex(index);
               }}
-            />
-            <span className="color-swatch" style={{ background: displayedColor }} />
-            <input
-              type="color"
-              value={displayedColor}
-              onChange={(event) => {
-                setDraftPoint(index, { ...point, value: event.currentTarget.value });
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                deletePoint(index);
               }}
-              onBlur={() => { commitDraftValue(index); }}
+              onFocus={() => { setSelectedIndex(index); }}
+              aria-label={`Gradient stop ${index + 1}`}
             />
-            <input
-              value={point.value}
-              onChange={(event) => { setDraftPoint(index, { ...point, value: event.currentTarget.value }); }}
-              onBlur={() => { commitDraftValue(index); }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  commitDraftValue(index);
-                  event.currentTarget.blur();
-                }
-              }}
-            />
-            <button type="button" disabled={drafts.length <= 1} onClick={() => { update(drafts.filter((_, pointIndex) => pointIndex !== index)); }}>-</button>
+          );
+        })}
+      </div>
+      <div className="float-curve-points-panel">
+        <button
+          type="button"
+          className="float-curve-points-toggle"
+          onClick={() => { setPointsCollapsed((collapsed) => !collapsed); }}
+        >
+          {pointsCollapsed ? <ChevronRight size={13} /> : <ChevronRight className="expanded" size={13} />}
+          <span>Stops</span>
+          <strong>{drafts.length}</strong>
+        </button>
+        {!pointsCollapsed && (
+          <div className="float-curve-point-list">
+            {drafts.map((point, index) => {
+              const displayedColor = isHexColor(point.value) ? point.value : (points[index]?.value ?? "#ffffff");
+              return (
+                <div
+                  key={`${index}:${point.time}:${point.value}`}
+                  className={`color-curve-point-row-compact ${index === selectedIndex ? "selected" : ""}`}
+                  onPointerDown={() => { setSelectedIndex(index); }}
+                >
+                  <label>
+                    <span>t</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={point.time}
+                      onFocus={() => { setSelectedIndex(index); }}
+                      onChange={(event) => {
+                        setPoint(index, { ...point, time: Number(event.currentTarget.value) }, false);
+                      }}
+                      onBlur={() => { commitDraftPoint(index); }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          commitDraftPoint(index);
+                          event.currentTarget.blur();
+                        }
+                      }}
+                    />
+                  </label>
+                  <span className="color-swatch" style={{ background: displayedColor }} />
+                  <input
+                    type="color"
+                    value={displayedColor}
+                    onChange={(event) => {
+                      setPoint(index, { ...point, value: event.currentTarget.value }, false);
+                    }}
+                    onBlur={() => { commitDraftValue(index); }}
+                  />
+                  <input
+                    value={point.value}
+                    onFocus={() => { setSelectedIndex(index); }}
+                    onChange={(event) => { setPoint(index, { ...point, value: event.currentTarget.value }, false); }}
+                    onBlur={() => { commitDraftValue(index); }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        commitDraftValue(index);
+                        event.currentTarget.blur();
+                      }
+                    }}
+                  />
+                  <button type="button" className="float-curve-point-delete" disabled={drafts.length <= 1} onClick={() => { deletePoint(index); }}>
+                    <Minus size={14} />
+                  </button>
+                </div>
+              );
+            })}
           </div>
-        );
-      })}
-      <button type="button" onClick={() => { update([...drafts, { time: 1, value: drafts[drafts.length - 1]?.value ?? "#ffffff" }]); }}>Add point</button>
+        )}
+      </div>
+      <button type="button" onClick={() => {
+        const nextPoint = { time: 1, value: drafts[drafts.length - 1]?.value ?? "#ffffff" };
+        update([...drafts, nextPoint]);
+        setSelectedIndex(drafts.length);
+      }}>Add stop</button>
     </div>
   );
 }
@@ -3007,6 +3144,28 @@ function nearestFloatPointIndex(points: EditedFloatCurvePoint[], point: EditedFl
     }
   });
   return bestIndex;
+}
+
+function nearestColorPointIndex(points: EditedColorCurvePoint[], point: EditedColorCurvePoint) {
+  let bestIndex = 0;
+  let bestDistance = Infinity;
+  points.forEach((candidate, index) => {
+    const distance = Math.abs(candidate.time - point.time) + (candidate.value === point.value ? 0 : 0.001);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
+    }
+  });
+  return bestIndex;
+}
+
+function colorCurveGradient(points: EditedColorCurvePoint[]) {
+  const stops = sortCurvePoints(points)
+    .filter((point) => isHexColor(point.value))
+    .map((point) => `${point.value} ${clamp(point.time, 0, 1) * 100}%`);
+  if (stops.length === 0) return "#17181b";
+  if (stops.length === 1) return stops[0]?.split(" ")[0] ?? "#17181b";
+  return `linear-gradient(90deg, ${stops.join(", ")})`;
 }
 
 function roundCurveValue(value: number) {

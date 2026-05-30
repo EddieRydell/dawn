@@ -704,6 +704,10 @@ button:focus-visible,
   gap: 8px;
 }
 
+.color-curve-editor {
+  gap: 8px;
+}
+
 .float-curve-graph {
   width: 100%;
   aspect-ratio: 2 / 1;
@@ -852,6 +856,80 @@ button:focus-visible,
 
 .float-curve-point-delete:disabled {
   color: #55585f;
+}
+
+.color-curve-gradient {
+  position: relative;
+  height: 54px;
+  border: 1px solid #373b42;
+  background: #17181b;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.color-curve-stop {
+  position: absolute;
+  bottom: 6px;
+  width: 14px;
+  height: 28px;
+  transform: translateX(-50%);
+  border: 2px solid #111214;
+  background: #ffffff;
+  padding: 0;
+  cursor: grab;
+}
+
+.color-curve-stop.selected {
+  border-color: #fffaf0;
+  box-shadow: 0 0 0 2px #f0c46b;
+}
+
+.color-curve-stop:focus-visible {
+  outline: none;
+  border-color: #fffaf0;
+}
+
+.color-curve-point-row-compact {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 3px 5px;
+  cursor: default;
+}
+
+.color-curve-point-row-compact + .color-curve-point-row-compact {
+  border-top: 1px solid #2c3036;
+}
+
+.color-curve-point-row-compact.selected {
+  background: #24332b;
+}
+
+.color-curve-point-row-compact label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  color: #8f9298;
+}
+
+.color-curve-point-row-compact input {
+  height: 22px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 2px;
+  color: #ebe7df;
+  font-variant-numeric: tabular-nums;
+}
+
+.color-curve-point-row-compact input:focus {
+  background: #17181b;
+  box-shadow: inset 0 -1px 0 #6abf8a;
+  outline: none;
 }
 
 .curve-point-row.selected input {
