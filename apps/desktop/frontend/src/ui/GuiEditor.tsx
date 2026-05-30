@@ -1,7 +1,8 @@
 import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import * as ContextMenu from "@radix-ui/react-context-menu";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
-import { ChevronLeft, ChevronRight, LoaderCircle, Music, Pause, Play, SkipBack, Square, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, LoaderCircle, Music, Pause, Play, SkipBack, Square, Trash2, X } from "lucide-react";
 import { commands } from "../api";
 import type {
   ActiveGuiDocumentDto,
@@ -34,7 +35,11 @@ type EditedColorCurvePoint = { time: number; value: string };
 type ReadyGuiDocumentDto = Exclude<ActiveGuiDocumentDto, { type: "blocked" }>;
 type SequencePreview = { id: number; startMs: number; durationMs: number; laneIndex: number };
 type MarkPreview = { collectionKey: string; index: number; timeMs: number };
-type EffectContextMenu = { x: number; y: number; laneIndex: number; startMs: number };
+type SequenceContextMenu =
+  | { kind: "blank"; laneIndex: number; startMs: number }
+  | { kind: "effect"; laneIndex: number; startMs: number; effectId: number }
+  | { kind: "mark"; laneIndex: number; startMs: number; collectionKey: string; index: number };
+type SequenceHover = { effectId: number; resize: "left" | "right" | "none" } | null;
 type MarkDisplayMode = "overlay" | "strip" | "hidden";
 type DragState =
   | null
@@ -432,7 +437,9 @@ function SequenceCanvas({
   const drag = useRef<DragState>(null);
   const [preview, setPreview] = useState<SequencePreview | null>(null);
   const [markPreview, setMarkPreview] = useState<MarkPreview | null>(null);
-  const [effectContextMenu, setEffectContextMenu] = useState<EffectContextMenu | null>(null);
+  const [sequenceContextMenu, setSequenceContextMenu] = useState<SequenceContextMenu | null>(null);
+  const [hover, setHover] = useState<SequenceHover>(null);
+  const [dragCursor, setDragCursor] = useState<"grabbing" | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [viewport, setViewport] = useState({ pxPerMs: 0.08, laneHeight: 42, scrollXMs: 0, scrollY: 0 });
   const [previewImages, setPreviewImages] = useState<Map<number, SequencePreviewImage>>(() => new Map());
@@ -452,6 +459,7 @@ function SequenceCanvas({
     () => document.markCollections.filter((collection) => visibleMarkCollectionKeys.has(collection.key)),
     [document.markCollections, visibleMarkCollectionKeys]
   );
+  const canvasCursor = dragCursor ?? (hover === null ? undefined : hover.resize === "none" ? "grab" : "ew-resize");
 
   useEffect(() => {
     previewImagesRef.current = previewImages;
@@ -682,6 +690,7 @@ function SequenceCanvas({
       if (clip.rect.x + clip.rect.width < left || clip.rect.x > rect.width || clip.rect.y + clip.rect.height < top || clip.rect.y > rect.height) {
         continue;
       }
+      const hoverResize = hover?.effectId === clip.effect.id ? hover.resize : null;
       ctx.fillStyle = "#696b70";
       ctx.fillRect(clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height);
       const previewImage = validPreviewImage(previewImages.get(clip.effect.id), effectPreviewSignatures.get(clip.effect.id));
@@ -697,9 +706,18 @@ function SequenceCanvas({
         );
         ctx.restore();
       }
-      ctx.strokeStyle = selected === `effect:${clip.effect.id}` ? "#f0f0f0" : "#8a8d93";
-      ctx.lineWidth = selected === `effect:${clip.effect.id}` ? 2 : 1;
+      if (hoverResize !== null) {
+        ctx.fillStyle = "rgb(255 250 240 / 10%)";
+        ctx.fillRect(clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height);
+      }
+      ctx.strokeStyle = selected === `effect:${clip.effect.id}` ? "#f0f0f0" : hoverResize !== null ? "#d8d2c9" : "#8a8d93";
+      ctx.lineWidth = selected === `effect:${clip.effect.id}` || hoverResize !== null ? 2 : 1;
       ctx.strokeRect(clip.rect.x + 0.5, clip.rect.y + 0.5, Math.max(0, clip.rect.width - 1), Math.max(0, clip.rect.height - 1));
+      if (hoverResize === "left" || hoverResize === "right") {
+        const handleX = hoverResize === "left" ? clip.rect.x : clip.rect.x + clip.rect.width;
+        ctx.fillStyle = "#f0c46b";
+        ctx.fillRect(handleX - 2, clip.rect.y + 4, 4, Math.max(4, clip.rect.height - 8));
+      }
     }
     ctx.restore();
 
@@ -732,7 +750,7 @@ function SequenceCanvas({
     ctx.moveTo(left + 0.5, top);
     ctx.lineTo(left, rect.height);
     ctx.stroke();
-  }, [document, effectPreviewSignatures, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, selected, previewImages, previewPositionMs, previewHomeMs, waveform.audio, visibleMarkCollections, mode, markPreview]);
+  }, [document, effectPreviewSignatures, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, selected, previewImages, previewPositionMs, previewHomeMs, waveform.audio, visibleMarkCollections, mode, markPreview, hover]);
 
   const seekFromCanvas = (event: MouseEvent<HTMLCanvasElement>) => {
     const x = event.nativeEvent.offsetX;
@@ -741,7 +759,7 @@ function SequenceCanvas({
     void runSnapshotCommand(() => commands.previewSeek(positionMs));
   };
   const timeFromCanvasX = (x: number) => clamp(Math.round(viewport.scrollXMs + (x - left) / viewport.pxPerMs), 0, document.durationMs);
-  const addEffectFromContextMenu = async (script: SequenceEffectScriptDto, menu: EffectContextMenu) => {
+  const addEffectFromContextMenu = async (script: SequenceEffectScriptDto, menu: SequenceContextMenu) => {
     const hasMarksParams = script.params.some((param) => param.kind === "marks");
     let markCollectionKey = hasMarksParams ? activeMarkCollectionKey ?? document.markCollections[0]?.key ?? null : null;
     if (hasMarksParams && markCollectionKey === null) {
@@ -769,17 +787,68 @@ function SequenceCanvas({
         markCollectionKey
       })
     );
-    setEffectContextMenu(null);
+  };
+  const addMarkFromContextMenu = async (collectionKey: string | null, menu: SequenceContextMenu) => {
+    let targetCollectionKey = collectionKey;
+    if (targetCollectionKey === null) {
+      const newCollectionKey = nextCollectionKey("Marks", document.markCollections);
+      await runSnapshotCommand(() =>
+        commands.applySequenceGuiEdit({
+          type: "createMarkCollection",
+          key: newCollectionKey,
+          name: "Marks",
+          color: defaultMarkColor(document.markCollections.length)
+        })
+      );
+      targetCollectionKey = newCollectionKey;
+      setActiveMarkCollectionKey(targetCollectionKey);
+      setVisibleMarkCollectionKeys(new Set([...visibleMarkCollectionKeys, targetCollectionKey]));
+    }
+    await runSnapshotCommand(() =>
+      commands.applySequenceGuiEdit({
+        type: "addMark",
+        collectionKey: targetCollectionKey,
+        timeMs: menu.startMs
+      })
+    );
+  };
+  const deleteSelectedEffect = async (effectId: number) => {
+    await runSnapshotCommand(() => commands.applySequenceGuiEdit({ type: "deleteEffect", id: effectId }));
+    setSelected(null);
+  };
+  const deleteContextMark = async (menu: Extract<SequenceContextMenu, { kind: "mark" }>) => {
+    await runSnapshotCommand(() =>
+      commands.applySequenceGuiEdit({
+        type: "deleteMark",
+        collectionKey: menu.collectionKey,
+        index: menu.index
+      })
+    );
+    setSelected(null);
+  };
+  const retargetContextEffect = async (effectId: number, target: LayoutTargetDto) => {
+    await runSnapshotCommand(() => commands.applySequenceGuiEdit({ type: "retargetEffect", id: effectId, target }));
+  };
+  const markCollectionsForMenu = () => {
+    if (activeMarkCollectionKey === null) return document.markCollections;
+    return [
+      ...document.markCollections.filter((collection) => collection.key === activeMarkCollectionKey),
+      ...document.markCollections.filter((collection) => collection.key !== activeMarkCollectionKey)
+    ];
   };
 
   return (
     <div className="sequence-canvas-shell">
-      <canvas
-        ref={canvas}
-        className="gui-canvas"
-        tabIndex={0}
+      <ContextMenu.Root onOpenChange={(open) => { if (!open) setSequenceContextMenu(null); }}>
+        <ContextMenu.Trigger asChild>
+          <canvas
+            ref={canvas}
+            className="gui-canvas"
+            style={canvasCursor === undefined ? undefined : { cursor: canvasCursor }}
+            tabIndex={0}
       onKeyDown={(event) => {
         const selectedMark = parseSelectedMark(selected);
+        const selectedEffectId = parseSelectedEffectId(selected);
         if (
           selectedMark !== null &&
           (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
@@ -808,8 +877,12 @@ function SequenceCanvas({
           return;
         }
         if ((event.key !== "Delete" && event.key !== "Backspace") || isTextEntryElement(event.target)) return;
-        if (selectedMark === null) return;
         event.preventDefault();
+        if (selectedEffectId !== null) {
+          void deleteSelectedEffect(selectedEffectId);
+          return;
+        }
+        if (selectedMark === null) return;
         void runSnapshotCommand(() =>
           commands.applySequenceGuiEdit({
             type: "deleteMark",
@@ -821,23 +894,33 @@ function SequenceCanvas({
         });
       }}
       onContextMenu={(event) => {
-        event.preventDefault();
         const x = event.nativeEvent.offsetX;
         const y = event.nativeEvent.offsetY;
         if (x < left || y < top || document.lanes.length === 0) {
-          setEffectContextMenu(null);
+          event.preventDefault();
+          setSequenceContextMenu(null);
           return;
         }
         const laneIndex = clamp(Math.floor((y - top + viewport.scrollY) / viewport.laneHeight), 0, document.lanes.length - 1);
-        setEffectContextMenu({
-          x: event.clientX,
-          y: event.clientY,
-          laneIndex,
-          startMs: timeFromCanvasX(x)
-        });
+        const startMs = timeFromCanvasX(x);
+        const markHit = hitSequenceMark(visibleMarkCollections, mode, x, y, left, audioStripTop, audioStripHeight, canvasSize.height, viewport);
+        if (markHit !== null) {
+          setSelected(`mark:${markHit.collectionKey}:${markHit.index}`);
+          setActiveMarkCollectionKey(markHit.collectionKey);
+          setSequenceContextMenu({ kind: "mark", laneIndex, startMs, collectionKey: markHit.collectionKey, index: markHit.index });
+          return;
+        }
+        const hit = hitSequence(visibleClips, x, y);
+        if (hit !== null) {
+          setSelected(`effect:${hit.effect.id}`);
+          setSequenceContextMenu({ kind: "effect", laneIndex: hit.laneIndex, startMs, effectId: hit.effect.id });
+          return;
+        }
+        setSelected(null);
+        setSequenceContextMenu({ kind: "blank", laneIndex, startMs });
       }}
       onMouseDown={(event) => {
-        setEffectContextMenu(null);
+        if (event.button !== 0) return;
         event.currentTarget.focus();
         const x = event.nativeEvent.offsetX;
         const y = event.nativeEvent.offsetY;
@@ -899,6 +982,7 @@ function SequenceCanvas({
           return;
         }
         setSelected(`effect:${hit.effect.id}`);
+        setDragCursor("grabbing");
         drag.current = {
           kind: "sequence",
           id: hit.effect.id,
@@ -928,7 +1012,15 @@ function SequenceCanvas({
           setPreview(null);
           return;
         }
-        if (!current || current.kind !== "sequence") return;
+        if (!current) {
+          const hit = hitSequence(visibleClips, event.nativeEvent.offsetX, event.nativeEvent.offsetY);
+          const nextHover = hit === null ? null : { effectId: hit.effect.id, resize: hit.resize };
+          setHover((previous) =>
+            previous?.effectId === nextHover?.effectId && previous?.resize === nextHover?.resize ? previous : nextHover
+          );
+          return;
+        }
+        if (current.kind !== "sequence") return;
         const effect = document.effects.find((candidate) => candidate.id === current.id);
         if (effect === undefined) return;
         const deltaMs = Math.round((event.nativeEvent.offsetX - current.startX) / viewport.pxPerMs / 50) * 50;
@@ -945,6 +1037,7 @@ function SequenceCanvas({
       onMouseUp={(event) => {
         const current = drag.current;
         drag.current = null;
+        setDragCursor(null);
         if (current?.kind === "mark") {
           const deltaMs = Math.round((event.nativeEvent.offsetX - current.startX) / viewport.pxPerMs);
           const timeMs = clamp(current.originalTimeMs + deltaMs, 0, document.durationMs);
@@ -984,6 +1077,9 @@ function SequenceCanvas({
           );
         }
         setPreview(null);
+      }}
+      onMouseLeave={() => {
+        if (drag.current === null) setHover(null);
       }}
       onWheel={(event) => {
         const rect = event.currentTarget.getBoundingClientRect();
@@ -1032,31 +1128,108 @@ function SequenceCanvas({
           };
         });
       }}
-      />
-      {effectContextMenu !== null && (
-        <div
-          className="sequence-context-menu"
-          style={{ left: effectContextMenu.x, top: effectContextMenu.y }}
-          onMouseDown={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-          }}
-        >
-          {document.effectScripts.length === 0 ? (
-            <div className="sequence-context-menu-empty">No effect scripts</div>
-          ) : (
-            document.effectScripts.map((script) => (
-              <button
-                key={script.path}
-                type="button"
-                onClick={() => void addEffectFromContextMenu(script, effectContextMenu)}
+          />
+        </ContextMenu.Trigger>
+        {sequenceContextMenu !== null && (
+          <ContextMenu.Portal>
+            <ContextMenu.Content className="menu-content">
+              <ContextMenu.Sub>
+                <ContextMenu.SubTrigger className="menu-item">
+                  Add Effect <span className="shortcut">›</span>
+                </ContextMenu.SubTrigger>
+                <ContextMenu.Portal>
+                  <ContextMenu.SubContent className="menu-content">
+                    {document.effectScripts.length === 0 ? (
+                      <ContextMenu.Item className="menu-item" disabled>
+                        No effect scripts
+                      </ContextMenu.Item>
+                    ) : (
+                      document.effectScripts.map((script) => (
+                        <ContextMenu.Item
+                          key={script.path}
+                          className="menu-item"
+                          onSelect={() => void addEffectFromContextMenu(script, sequenceContextMenu)}
+                        >
+                          {script.name}
+                        </ContextMenu.Item>
+                      ))
+                    )}
+                  </ContextMenu.SubContent>
+                </ContextMenu.Portal>
+              </ContextMenu.Sub>
+              <ContextMenu.Item
+                className="menu-item"
+                onSelect={() => {
+                  void runSnapshotCommand(() => commands.previewSeek(sequenceContextMenu.startMs));
+                }}
               >
-                {script.name}
-              </button>
-            ))
-          )}
-        </div>
-      )}
+                Set Playhead Here
+              </ContextMenu.Item>
+              <ContextMenu.Sub>
+                <ContextMenu.SubTrigger className="menu-item">
+                  Add Mark <span className="shortcut">›</span>
+                </ContextMenu.SubTrigger>
+                <ContextMenu.Portal>
+                  <ContextMenu.SubContent className="menu-content">
+                    {document.markCollections.length === 0 ? (
+                      <ContextMenu.Item className="menu-item" onSelect={() => void addMarkFromContextMenu(null, sequenceContextMenu)}>
+                        Marks
+                      </ContextMenu.Item>
+                    ) : (
+                      markCollectionsForMenu().map((collection) => (
+                        <ContextMenu.Item
+                          key={collection.key}
+                          className="menu-item"
+                          onSelect={() => void addMarkFromContextMenu(collection.key, sequenceContextMenu)}
+                        >
+                          <span style={{ color: collection.color }}>{collection.name}</span>
+                        </ContextMenu.Item>
+                      ))
+                    )}
+                  </ContextMenu.SubContent>
+                </ContextMenu.Portal>
+              </ContextMenu.Sub>
+              <ContextMenu.Item className="menu-item" disabled>
+                Add Automation Clip
+              </ContextMenu.Item>
+              {sequenceContextMenu.kind === "effect" && (
+                <>
+                  <ContextMenu.Separator className="menu-separator" />
+                  <ContextMenu.Sub>
+                    <ContextMenu.SubTrigger className="menu-item">
+                      Retarget Effect <span className="shortcut">›</span>
+                    </ContextMenu.SubTrigger>
+                    <ContextMenu.Portal>
+                      <ContextMenu.SubContent className="menu-content">
+                        {document.lanes.map((lane) => (
+                          <ContextMenu.Item
+                            key={`${lane.target.kind}:${lane.target.name}`}
+                            className="menu-item"
+                            onSelect={() => void retargetContextEffect(sequenceContextMenu.effectId, lane.target)}
+                          >
+                            {lane.label}
+                          </ContextMenu.Item>
+                        ))}
+                      </ContextMenu.SubContent>
+                    </ContextMenu.Portal>
+                  </ContextMenu.Sub>
+                  <ContextMenu.Item className="menu-item danger" onSelect={() => void deleteSelectedEffect(sequenceContextMenu.effectId)}>
+                    <Trash2 size={14} /> Delete Effect
+                  </ContextMenu.Item>
+                </>
+              )}
+              {sequenceContextMenu.kind === "mark" && (
+                <>
+                  <ContextMenu.Separator className="menu-separator" />
+                  <ContextMenu.Item className="menu-item danger" onSelect={() => void deleteContextMark(sequenceContextMenu)}>
+                    <Trash2 size={14} /> Delete Mark
+                  </ContextMenu.Item>
+                </>
+              )}
+            </ContextMenu.Content>
+          </ContextMenu.Portal>
+        )}
+      </ContextMenu.Root>
     </div>
   );
 }
@@ -2188,6 +2361,12 @@ function parseSelectedMark(selected: string | null): { collectionKey: string; in
   const index = Number(rawIndex);
   if (collectionKey === undefined || collectionKey.length === 0 || !Number.isInteger(index) || index < 0) return null;
   return { collectionKey, index };
+}
+
+function parseSelectedEffectId(selected: string | null): number | null {
+  if (selected === null || !selected.startsWith("effect:")) return null;
+  const id = Number(selected.split(":")[1]);
+  return Number.isInteger(id) ? id : null;
 }
 
 function markSelectionConsumesKey(selected: string | null, key: string) {
