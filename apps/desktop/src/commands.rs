@@ -11,10 +11,11 @@ use crate::app_runtime::{
     dispatch, emit_model_snapshot, sync_active_audio_load, update_preview_from_audio_status,
     valid_sequence_audio,
 };
-use crate::effect_previews::preview_for_effect;
-use crate::preview_scene::{preview_pixel_count, preview_scene_from_frame};
+use crate::effect_previews::{preview_for_effect, SequenceEffectPreviewBatchDto};
+use crate::preview::{
+    open_or_focus_preview_window, preview_pixel_count, preview_scene_from_frame, PreviewSceneDto,
+};
 use crate::preview_transport::{PreviewTransportMode, PreviewTransportRuntime};
-use crate::preview_types::{PreviewSceneDto, SequenceEffectPreviewBatchDto};
 use crate::state::{
     lock_audio_runtime, lock_model, lock_preview_transport, project_path, AppState, CommandResult,
 };
@@ -343,7 +344,7 @@ fn toggle_project_tree(
 #[specta::specta]
 #[tauri::command]
 async fn open_preview_window(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
-    crate::preview_window::open_or_focus_preview_window(app, state)
+    open_or_focus_preview_window(app, state)
 }
 
 #[specta::specta]

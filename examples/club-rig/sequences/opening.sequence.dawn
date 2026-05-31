@@ -171,7 +171,7 @@ opening:
         value: 0.18
       section_width_pixels:
         type: integer
-        value: 20
+        value: 17
       section_edge_fade_pixels:
         type: float
         value: 0.0

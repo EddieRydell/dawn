@@ -6,7 +6,7 @@ use dawn_project::document::SequenceAudioDocument;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::audio_runtime::AudioClock;
-use crate::preview_types::{PreviewStateEventDto, PreviewTimingDto};
+use crate::preview::{PreviewStateEventDto, PreviewTimingDto};
 use crate::state::{lock_audio_runtime, lock_model, AppState, CommandResult};
 
 pub(crate) fn dispatch(

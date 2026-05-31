@@ -6,9 +6,8 @@ use dawn_project::path::Utf8PathBuf;
 use tauri::State;
 
 use crate::audio_runtime::AudioRuntime;
-use crate::effect_previews::EffectPreviewCacheKey;
+use crate::effect_previews::{EffectPreviewCacheKey, SequenceEffectPreviewDto};
 use crate::preview_transport::PreviewTransportRuntime;
-use crate::preview_types::SequenceEffectPreviewDto;
 
 pub(crate) struct AppState {
     pub(crate) model: Mutex<AppModel>,

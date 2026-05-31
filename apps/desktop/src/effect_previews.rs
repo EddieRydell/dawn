@@ -5,14 +5,32 @@ use dawn_project::document::{
 use dawn_project::effect_script::FixtureContext;
 use dawn_project::frame::{frame_count, frame_start};
 use dawn_project::model::{EffectParam, Resolved, TimeSpan};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use specta::Type;
 use tauri::State;
 
-use crate::preview_types::SequenceEffectPreviewDto;
 use crate::state::{lock_effect_preview_cache, AppState, CommandResult};
 
 const PREVIEW_MAX_COLUMNS: usize = 360;
 const PREVIEW_MAX_ROWS: usize = 50;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceEffectPreviewBatchDto {
+    pub previews: Vec<SequenceEffectPreviewDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceEffectPreviewDto {
+    pub effect_id: u32,
+    pub duration_seconds: f64,
+    pub source_pixel_count: u32,
+    pub sampled_pixel_indices: Vec<u32>,
+    pub columns: u32,
+    pub rows: u32,
+    pub colors: Vec<u32>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct EffectPreviewCacheKey {

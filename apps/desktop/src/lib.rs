@@ -16,17 +16,14 @@ mod audio_runtime;
 mod bindings;
 mod commands;
 mod effect_previews;
-mod preview_scene;
+mod preview;
 mod preview_transport;
-mod preview_types;
-mod preview_window;
-mod preview_worker;
 mod state;
 
 pub use bindings::{check_bindings, export_bindings, specta_builder};
-pub use preview_types::{
+pub use effect_previews::{SequenceEffectPreviewBatchDto, SequenceEffectPreviewDto};
+pub use preview::{
     PreviewSceneDto, PreviewSceneFixtureDto, PreviewStateEventDto, PreviewTimingDto,
-    SequenceEffectPreviewBatchDto, SequenceEffectPreviewDto,
 };
 use tauri::Manager;
 
@@ -37,7 +34,7 @@ pub fn run() -> Result<(), tauri::Error> {
         .invoke_handler(builder.invoke_handler())
         .setup(|app| {
             let _ = app.get_webview_window("main");
-            preview_worker::start_preview_worker(app.handle().clone());
+            preview::start_preview_worker(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())
