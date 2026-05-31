@@ -136,7 +136,7 @@ pub fn evaluate_sequence_frame(
                     index: pixel.fixture_index,
                 },
                 pixel_context,
-                params.clone(),
+                &params,
             ) {
                 Ok(color) => add_clamped(&mut output_pixel.color, color),
                 Err(error) => status = OutputFrameStatus::Error(error),

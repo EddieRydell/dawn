@@ -31,6 +31,31 @@ import { runSnapshotCommand } from "../store";
 
 type Point3 = { x: number; y: number; z: number };
 type Transform = { position: Point3; rotation: Point3; scale: Point3 };
+type PreviewTiming = {
+  backendSeconds: number;
+  targetFps: number;
+  activeFps: number;
+  targetFrameMs: number;
+  sleepPlannedMs: number;
+  loopIntervalMs: number;
+  audioPositionSeconds: number | null;
+  snapshotPositionSeconds: number;
+  framePositionSeconds: number;
+  snapshotMinusAudioMs: number | null;
+  frameMinusAudioMs: number | null;
+  loopElapsedMs: number;
+  audioPollMs: number;
+  audioApplyMs: number;
+  modelUpdateMs: number;
+  renderMs: number;
+  publishMs: number;
+  eventIntervalMs: number;
+  hasSink: boolean;
+  publishedFrame: boolean;
+  renderedFrame: boolean;
+};
+type PreviewStateEvent = AppSnapshotDto["preview"] & { timing: PreviewTiming };
+type LivePreview = AppSnapshotDto["preview"] & { timing?: PreviewTiming };
 type EditedFloatCurvePoint = { time: number; value: number };
 type EditedColorCurvePoint = { time: number; value: string };
 type ReadyGuiDocumentDto = Exclude<ActiveGuiDocumentDto, { type: "blocked" }>;
@@ -130,7 +155,7 @@ function SequenceEditor({
   setVisibleMarkCollectionKeys
 }: {
   document: SequenceDocumentDto;
-  preview: AppSnapshotDto["preview"];
+  preview: LivePreview;
   selected: string | null;
   setSelected: (id: string | null) => void;
   activeMarkCollectionKey: string | null;
@@ -170,6 +195,7 @@ export function SequenceTransportControls({
   const livePreview = useSequencePreview(preview);
   const unsupported = document.durationSeconds <= 0;
   const audioStatus = useSequenceAudioStatus(livePreview);
+  const timingSummary = previewTimingSummary(livePreview.timing);
   const audioLoading = livePreview.audioPlaybackStatus === "loading";
   const [mode, setMode] = useMarkDisplayMode();
   const stepFrame = (direction: -1 | 1) => {
@@ -253,13 +279,14 @@ export function SequenceTransportControls({
         {formatSeconds(livePreview.positionSeconds)} / {formatSeconds(livePreview.durationSeconds || document.durationSeconds)} | Home {formatSeconds(livePreview.homeSeconds)}
         {document.audio ? ` | ${document.audio.exists ? document.audio.fileName : "Missing audio"}` : ""}
         {audioStatus !== null && <span className={`sequence-audio-status sequence-audio-status-${audioStatus.tone}`}>{audioStatus.label}</span>}
+        {timingSummary !== null && <span className="sequence-timing-status">{timingSummary}</span>}
       </span>
     </div>
   );
 }
 
-function useSequencePreview(preview: AppSnapshotDto["preview"]) {
-  const [eventPreview, setEventPreview] = useState<AppSnapshotDto["preview"] | null>(null);
+function useSequencePreview(preview: AppSnapshotDto["preview"]): LivePreview {
+  const [eventPreview, setEventPreview] = useState<PreviewStateEvent | null>(null);
   const [animatedPositionSeconds, setAnimatedPositionSeconds] = useState(preview.positionSeconds);
   const anchor = useRef({
     preview,
@@ -271,7 +298,7 @@ function useSequencePreview(preview: AppSnapshotDto["preview"]) {
     let dispose: (() => void) | undefined;
     let disposed = false;
     void (async () => {
-      dispose = await listen<AppSnapshotDto["preview"]>("preview_state_changed", (event) => {
+      dispose = await listen<PreviewStateEvent>("preview_state_changed", (event) => {
         if (!disposed) {
           anchor.current = {
             preview: event.payload,
@@ -376,6 +403,28 @@ function useSequenceAudioStatus(preview: AppSnapshotDto["preview"]) {
     default:
       return loadedNoticeVisible ? { label: "Audio loaded", tone: "ready" } : null;
   }
+}
+
+function previewTimingSummary(timing: PreviewTiming | undefined) {
+  if (timing === undefined || timing.backendSeconds === 0) return null;
+  const frameAudio = timing.frameMinusAudioMs;
+  const snapshotAudio = timing.snapshotMinusAudioMs;
+  const parts = [
+    `fps ${timing.activeFps}/${timing.targetFps}`,
+    `target ${formatMs(timing.targetFrameMs)}`,
+    `sleep ${formatMs(timing.sleepPlannedMs)}`,
+    frameAudio === null ? null : `frame-audio ${formatSignedMs(frameAudio)}`,
+    snapshotAudio === null ? null : `playhead-audio ${formatSignedMs(snapshotAudio)}`,
+    `interval ${formatMs(timing.loopIntervalMs)}`,
+    `loop ${formatMs(timing.loopElapsedMs)}`,
+    `model ${formatMs(timing.modelUpdateMs)}`,
+    `audio ${formatMs(timing.audioPollMs)}`,
+    `apply ${formatMs(timing.audioApplyMs)}`,
+    `render ${formatMs(timing.renderMs)}`,
+    `publish ${formatMs(timing.publishMs)}`,
+    `event ${formatMs(timing.eventIntervalMs)}`
+  ].filter((part): part is string => part !== null);
+  return ` | ${parts.join(" | ")}`;
 }
 
 function isAudioLoadingStatus(status: string) {
@@ -3099,6 +3148,15 @@ function formatSeconds(value: number) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatMs(value: number) {
+  return `${value.toFixed(1)}ms`;
+}
+
+function formatSignedMs(value: number) {
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${formatMs(value)}`;
 }
 
 function formatTimelineSeconds(value: number, intervalSeconds: number) {

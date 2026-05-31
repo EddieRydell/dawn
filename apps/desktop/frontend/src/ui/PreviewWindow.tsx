@@ -16,6 +16,25 @@ type PreviewState = {
   positionSeconds: number;
   durationSeconds: number;
   status: string;
+  timing: PreviewTiming;
+};
+
+type PreviewTiming = {
+  backendSeconds: number;
+  targetFps: number;
+  activeFps: number;
+  targetFrameMs: number;
+  sleepPlannedMs: number;
+  loopElapsedMs: number;
+  loopIntervalMs: number;
+  audioPollMs: number;
+  audioApplyMs: number;
+  modelUpdateMs: number;
+  renderMs: number;
+  publishMs: number;
+  eventIntervalMs: number;
+  renderedFrame: boolean;
+  publishedFrame: boolean;
 };
 
 type Viewport = {
@@ -31,11 +50,19 @@ export function PreviewWindow() {
   const drawHandle = useRef(0);
   const lastHudUpdate = useRef(0);
   const requestDrawRef = useRef<() => void>(() => {});
+  const previousFrameTelemetry = useRef<{ receivedAt: number; backendSeconds: number; currentTimeSeconds: number } | null>(null);
   const [scene, setScene] = useState<PreviewSceneDto | null>(null);
   const [state, setState] = useState<PreviewState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ scale: 1, panX: 0, panY: 0 });
-  const [metrics, setMetrics] = useState({ fps: 0, backendSeconds: 0, renderMs: 0, currentTimeSeconds: 0 });
+  const [metrics, setMetrics] = useState({
+        fps: 0,
+        backendSeconds: 0,
+        currentTimeSeconds: 0,
+        frontendIntervalMs: 0,
+        backendIntervalMs: 0,
+    frameStepMs: 0
+  });
   const fpsSamples = useRef<number[]>([]);
 
   const pixelPositions = useMemo(() => {
@@ -54,7 +81,6 @@ export function PreviewWindow() {
     drawHandle.current = 0;
     const target = canvas.current;
     if (!target) return;
-    const started = performance.now();
     const rect = target.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     target.width = Math.max(1, Math.floor(rect.width * dpr));
@@ -93,11 +119,13 @@ export function PreviewWindow() {
       setMetrics({
         fps: fpsSamples.current.length,
         backendSeconds: frame?.backendSeconds ?? 0,
-        renderMs: now - started,
-        currentTimeSeconds: frame?.currentTimeSeconds ?? 0
+        currentTimeSeconds: frame?.currentTimeSeconds ?? 0,
+        frontendIntervalMs: metrics.frontendIntervalMs,
+        backendIntervalMs: metrics.backendIntervalMs,
+        frameStepMs: metrics.frameStepMs
       });
     }
-  }, [pixelPositions, scene, viewport]);
+  }, [metrics.backendIntervalMs, metrics.frameStepMs, metrics.frontendIntervalMs, pixelPositions, scene, viewport]);
 
   const requestDraw = useCallback(() => {
     if (drawHandle.current !== 0) return;
@@ -126,6 +154,20 @@ export function PreviewWindow() {
         disposeFrames = subscribePreviewFrames((message) => {
           latestFrame.current = message;
           const now = performance.now();
+          const previous = previousFrameTelemetry.current;
+          previousFrameTelemetry.current = {
+            receivedAt: now,
+            backendSeconds: message.backendSeconds,
+            currentTimeSeconds: message.currentTimeSeconds
+          };
+          if (previous !== null) {
+            setMetrics((current) => ({
+              ...current,
+              frontendIntervalMs: now - previous.receivedAt,
+              backendIntervalMs: (message.backendSeconds - previous.backendSeconds) * 1000,
+              frameStepMs: (message.currentTimeSeconds - previous.currentTimeSeconds) * 1000
+            }));
+          }
           fpsSamples.current = [...fpsSamples.current.filter((sample) => now - sample < 1000), now];
           requestDrawRef.current();
         });
@@ -191,7 +233,20 @@ export function PreviewWindow() {
       <div className="preview-hud">
         <div>{state?.sourceLabel ?? scene?.sourceLabel ?? "No preview source"}</div>
         <div>
-          {metrics.fps} fps | backend {formatNumber(metrics.backendSeconds)} s | render {formatNumber(metrics.renderMs)} ms
+          {metrics.fps} fps | backend {formatNumber(metrics.backendSeconds)} s | target {state?.timing.activeFps ?? 0}/{state?.timing.targetFps ?? 0} fps
+        </div>
+        <div>
+          frame step {formatNumber(metrics.frameStepMs)} ms | backend step {formatNumber(metrics.backendIntervalMs)} ms | receive step{" "}
+          {formatNumber(metrics.frontendIntervalMs)} ms
+        </div>
+        <div>
+          loop {formatNumber(state?.timing.loopElapsedMs ?? 0)} ms | interval {formatNumber(state?.timing.loopIntervalMs ?? 0)} ms | sleep{" "}
+          {formatNumber(state?.timing.sleepPlannedMs ?? 0)} ms | target frame {formatNumber(state?.timing.targetFrameMs ?? 0)} ms
+        </div>
+        <div>
+          model {formatNumber(state?.timing.modelUpdateMs ?? 0)} ms | audio {formatNumber(state?.timing.audioPollMs ?? 0)} ms | apply{" "}
+          {formatNumber(state?.timing.audioApplyMs ?? 0)} ms | render{" "}
+          {formatNumber(state?.timing.renderMs ?? 0)} ms | publish {formatNumber(state?.timing.publishMs ?? 0)} ms
         </div>
         <div>
           {formatSeconds(state?.positionSeconds ?? metrics.currentTimeSeconds)} | {state?.isPlaying === true ? "Playing" : "Stopped"} |{" "}

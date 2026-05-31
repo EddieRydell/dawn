@@ -71,7 +71,7 @@ impl ProjectAnalysis {
             seconds,
             fixture,
             pixel,
-            params,
+            &params,
         )
     }
 
@@ -82,7 +82,7 @@ impl ProjectAnalysis {
         seconds: f64,
         fixture: crate::effect_script::FixtureContext,
         pixel: crate::effect_script::PixelContext,
-        params: BTreeMap<String, RuntimeValue>,
+        params: &BTreeMap<String, RuntimeValue>,
     ) -> Result<Color, String> {
         let script = self
             .scripts
@@ -90,7 +90,7 @@ impl ProjectAnalysis {
             .and_then(|script| script.result.as_ref().ok())
             .ok_or_else(|| format!("compiled script `{script_key}` was not found"))?;
         script
-            .sample(progress, seconds, fixture, pixel, &params)
+            .sample(progress, seconds, fixture, pixel, params)
             .map_err(|error| error.to_string())
     }
 

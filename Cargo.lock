@@ -904,6 +904,7 @@ version = "0.1.0"
 dependencies = [
  "camino",
  "clap",
+ "dawn-app-core",
  "dawn-project",
  "serde",
  "serde_json",

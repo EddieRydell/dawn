@@ -469,6 +469,12 @@ button:focus-visible,
   color: #ef7d7d;
 }
 
+.sequence-timing-status {
+  margin-left: 8px;
+  color: #9ba4b0;
+  font-variant-numeric: tabular-nums;
+}
+
 @keyframes sequence-loading-spin {
   from {
     transform: rotate(0deg);

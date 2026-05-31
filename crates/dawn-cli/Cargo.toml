@@ -7,6 +7,7 @@ default-run = "dawn"
 [dependencies]
 camino.workspace = true
 clap.workspace = true
+dawn-app-core = { path = "../dawn-app-core" }
 dawn-project = { path = "../dawn-project" }
 serde.workspace = true
 serde_json.workspace = true
