@@ -15,7 +15,7 @@ import type {
   LayoutDocumentDto,
   LayoutFixturePlacementDto,
   LayoutTargetDto,
-  Point3Dto,
+  Point3MetersDto,
   SequenceAudioDto,
   SequenceDocumentDto,
   SequenceEffectDto,
@@ -34,12 +34,12 @@ type Transform = { position: Point3; rotation: Point3; scale: Point3 };
 type EditedFloatCurvePoint = { time: number; value: number };
 type EditedColorCurvePoint = { time: number; value: string };
 type ReadyGuiDocumentDto = Exclude<ActiveGuiDocumentDto, { type: "blocked" }>;
-type SequencePreview = { id: number; startMs: number; durationMs: number; laneIndex: number };
-type MarkPreview = { collectionKey: string; index: number; timeMs: number; committedIndex?: number };
+type SequencePreview = { id: number; startSeconds: number; durationSeconds: number; laneIndex: number };
+type MarkPreview = { collectionKey: string; index: number; timeSeconds: number; committedIndex?: number };
 type SequenceContextMenu =
-  | { kind: "blank"; laneIndex: number; startMs: number }
-  | { kind: "effect"; laneIndex: number; startMs: number; effectId: number }
-  | { kind: "mark"; laneIndex: number; startMs: number; collectionKey: string; index: number };
+  | { kind: "blank"; laneIndex: number; startSeconds: number }
+  | { kind: "effect"; laneIndex: number; startSeconds: number; effectId: number }
+  | { kind: "mark"; laneIndex: number; startSeconds: number; collectionKey: string; index: number };
 type SequenceHover =
   | null
   | { kind: "effect"; effectId: number; resize: "left" | "right" | "none" }
@@ -47,8 +47,8 @@ type SequenceHover =
 type MarkDisplayMode = "overlay" | "strip" | "hidden";
 type DragState =
   | null
-  | { kind: "sequence"; id: number; startX: number; originalStartMs: number; laneIndex: number; resize: "none" | "left" | "right" }
-  | { kind: "mark"; collectionKey: string; index: number; startX: number; originalTimeMs: number }
+  | { kind: "sequence"; id: number; startX: number; originalStartSeconds: number; laneIndex: number; resize: "none" | "left" | "right" }
+  | { kind: "mark"; collectionKey: string; index: number; startX: number; originalTimeSeconds: number }
   | { kind: "sequenceScrub" }
   | { kind: "layout"; id: number; startX: number; startY: number; original: Transform; preview: Transform }
   | { kind: "fixturePoint"; objectKey: string; pointIndex: number; preview: Point3 };
@@ -85,7 +85,7 @@ function GuiEditorInner({ gui, snapshot }: { gui: ReadyGuiDocumentDto; snapshot:
       className="gui-editor-shell"
       onKeyDownCapture={(event) => {
         if (gui.type === "sequence" && !markSelectionConsumesKey(selected, event.key)) {
-          handleSequencePlaybackShortcut(event, gui.document, livePreview, gui.document.durationMs <= 0);
+          handleSequencePlaybackShortcut(event, gui.document, livePreview, gui.document.durationSeconds <= 0);
         }
       }}
     >
@@ -139,7 +139,7 @@ function SequenceEditor({
   setVisibleMarkCollectionKeys: (keys: Set<string>) => void;
 }) {
   const livePreview = preview;
-  const unsupported = document.durationMs <= 0;
+  const unsupported = document.durationSeconds <= 0;
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     handleSequencePlaybackShortcut(event, document, livePreview, unsupported);
   };
@@ -147,8 +147,8 @@ function SequenceEditor({
     <div className="sequence-editor" tabIndex={-1} onKeyDown={handleKeyDown}>
       <SequenceCanvas
         document={document}
-        previewPositionMs={livePreview.positionMs}
-        previewHomeMs={livePreview.homeMs}
+        previewPositionSeconds={livePreview.positionSeconds}
+        previewHomeSeconds={livePreview.homeSeconds}
         selected={selected}
         setSelected={setSelected}
         activeMarkCollectionKey={activeMarkCollectionKey}
@@ -168,12 +168,12 @@ export function SequenceTransportControls({
   preview: AppSnapshotDto["preview"];
 }) {
   const livePreview = useSequencePreview(preview);
-  const unsupported = document.durationMs <= 0;
+  const unsupported = document.durationSeconds <= 0;
   const audioStatus = useSequenceAudioStatus(livePreview);
   const audioLoading = livePreview.audioPlaybackStatus === "loading";
   const [mode, setMode] = useMarkDisplayMode();
   const stepFrame = (direction: -1 | 1) => {
-    stepSequenceFrame(document, livePreview.positionMs, livePreview.durationMs, direction);
+    stepSequenceFrame(document, livePreview.positionSeconds, livePreview.durationSeconds, direction);
   };
   const setMarkMode = (nextMode: MarkDisplayMode) => {
     markDisplayMode = nextMode;
@@ -250,7 +250,7 @@ export function SequenceTransportControls({
         <option value="hidden">Hidden</option>
       </select>
       <span className="sequence-time-readout">
-        {formatMs(livePreview.positionMs)} / {formatMs(livePreview.durationMs || document.durationMs)} | Home {formatMs(livePreview.homeMs)}
+        {formatSeconds(livePreview.positionSeconds)} / {formatSeconds(livePreview.durationSeconds || document.durationSeconds)} | Home {formatSeconds(livePreview.homeSeconds)}
         {document.audio ? ` | ${document.audio.exists ? document.audio.fileName : "Missing audio"}` : ""}
         {audioStatus !== null && <span className={`sequence-audio-status sequence-audio-status-${audioStatus.tone}`}>{audioStatus.label}</span>}
       </span>
@@ -260,10 +260,10 @@ export function SequenceTransportControls({
 
 function useSequencePreview(preview: AppSnapshotDto["preview"]) {
   const [eventPreview, setEventPreview] = useState<AppSnapshotDto["preview"] | null>(null);
-  const [animatedPositionMs, setAnimatedPositionMs] = useState(preview.positionMs);
+  const [animatedPositionSeconds, setAnimatedPositionSeconds] = useState(preview.positionSeconds);
   const anchor = useRef({
     preview,
-    positionMs: preview.positionMs,
+    positionSeconds: preview.positionSeconds,
     anchoredAt: 0
   });
 
@@ -275,10 +275,10 @@ function useSequencePreview(preview: AppSnapshotDto["preview"]) {
         if (!disposed) {
           anchor.current = {
             preview: event.payload,
-            positionMs: event.payload.positionMs,
+            positionSeconds: event.payload.positionSeconds,
             anchoredAt: performance.now()
           };
-          setAnimatedPositionMs(event.payload.positionMs);
+          setAnimatedPositionSeconds(event.payload.positionSeconds);
           setEventPreview(event.payload);
         }
       });
@@ -296,7 +296,7 @@ function useSequencePreview(preview: AppSnapshotDto["preview"]) {
     livePreviewRef.current = livePreview;
     anchor.current = {
       preview: livePreview,
-      positionMs: livePreview.positionMs,
+      positionSeconds: livePreview.positionSeconds,
       anchoredAt: performance.now()
     };
   }, [livePreview]);
@@ -307,23 +307,23 @@ function useSequencePreview(preview: AppSnapshotDto["preview"]) {
       const latest = livePreviewRef.current;
       const current = anchor.current;
       if (!latest.isPlaying || !current.preview.isPlaying) {
-        setAnimatedPositionMs(latest.positionMs);
+        setAnimatedPositionSeconds(latest.positionSeconds);
         return;
       }
-      const elapsedMs = current.anchoredAt > 0 ? performance.now() - current.anchoredAt : 0;
-      setAnimatedPositionMs(clamp(current.positionMs + elapsedMs, 0, current.preview.durationMs));
+      const elapsedSeconds = current.anchoredAt > 0 ? (performance.now() - current.anchoredAt) / 1000 : 0;
+      setAnimatedPositionSeconds(clamp(current.positionSeconds + elapsedSeconds, 0, current.preview.durationSeconds));
       frame = window.requestAnimationFrame(tick);
     };
     frame = window.requestAnimationFrame(tick);
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [livePreview.isPlaying, livePreview.positionMs]);
+  }, [livePreview.isPlaying, livePreview.positionSeconds]);
 
   return livePreview.isPlaying
     ? {
         ...livePreview,
-        positionMs: animatedPositionMs
+        positionSeconds: animatedPositionSeconds
       }
     : livePreview;
 }
@@ -418,8 +418,8 @@ function BlockedGui({
 
 function SequenceCanvas({
   document,
-  previewPositionMs,
-  previewHomeMs,
+  previewPositionSeconds,
+  previewHomeSeconds,
   selected,
   setSelected,
   activeMarkCollectionKey,
@@ -428,8 +428,8 @@ function SequenceCanvas({
   setVisibleMarkCollectionKeys
 }: {
   document: SequenceDocumentDto;
-  previewPositionMs: number;
-  previewHomeMs: number;
+  previewPositionSeconds: number;
+  previewHomeSeconds: number;
   selected: string | null;
   setSelected: (id: string | null) => void;
   activeMarkCollectionKey: string | null;
@@ -445,7 +445,7 @@ function SequenceCanvas({
   const [hover, setHover] = useState<SequenceHover>(null);
   const [dragCursor, setDragCursor] = useState<"grabbing" | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
-  const [viewport, setViewport] = useState({ pxPerMs: 0.08, laneHeight: 42, scrollXMs: 0, scrollY: 0 });
+  const [viewport, setViewport] = useState({ pxPerSecond: 80, laneHeight: 42, scrollXSeconds: 0, scrollY: 0 });
   const [previewImages, setPreviewImages] = useState<Map<number, SequencePreviewImage>>(() => new Map());
   const [previewRequestTick, setPreviewRequestTick] = useState(0);
   const previewImagesRef = useRef(previewImages);
@@ -481,13 +481,13 @@ function SequenceCanvas({
       const rect = target.getBoundingClientRect();
       setCanvasSize({ width: rect.width, height: rect.height });
       const timelineWidth = Math.max(1, rect.width - left);
-      const key = `${document.durationMs}:${document.lanes.length}`;
+      const key = `${document.durationSeconds}:${document.lanes.length}`;
       if (rect.width > 0 && initializedViewportKey.current !== key) {
         initializedViewportKey.current = key;
         setViewport({
-          pxPerMs: clamp(timelineWidth / Math.max(1, document.durationMs), 0.02, 0.6),
+          pxPerSecond: clamp(timelineWidth / Math.max(1, document.durationSeconds), 20, 600),
           laneHeight: 42,
-          scrollXMs: 0,
+          scrollXSeconds: 0,
           scrollY: 0
         });
       }
@@ -499,7 +499,7 @@ function SequenceCanvas({
       window.cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [document.durationMs, document.lanes.length, left]);
+  }, [document.durationSeconds, document.lanes.length, left]);
 
   const visibleClips = useMemo(
     () => buildSequenceClipLayout(document, preview, viewport, left, top),
@@ -611,9 +611,9 @@ function SequenceCanvas({
     const timelineWidth = Math.max(1, rect.width - left);
     const laneCount = document.lanes.length;
     const totalLaneHeight = laneCount * viewport.laneHeight;
-    const maxScrollXMs = Math.max(0, document.durationMs - timelineWidth / viewport.pxPerMs);
+    const maxScrollXSeconds = Math.max(0, document.durationSeconds - timelineWidth / viewport.pxPerSecond);
     const maxScrollY = Math.max(0, totalLaneHeight - Math.max(1, rect.height - top));
-    const scrollXMs = clamp(viewport.scrollXMs, 0, maxScrollXMs);
+    const scrollXSeconds = clamp(viewport.scrollXSeconds, 0, maxScrollXSeconds);
     const scrollY = clamp(viewport.scrollY, 0, maxScrollY);
 
     ctx.fillStyle = "#17181b";
@@ -667,11 +667,11 @@ function SequenceCanvas({
       audioStripTop,
       timelineWidth,
       audioStripHeight,
-      document.durationMs,
-      viewport.pxPerMs,
-      scrollXMs
+      document.durationSeconds,
+      viewport.pxPerSecond,
+      scrollXSeconds
     );
-    drawTimelineGrid(ctx, left, top, rect.width, rect.height, viewport.pxPerMs, scrollXMs, document.frameRate);
+    drawTimelineGrid(ctx, left, top, rect.width, rect.height, viewport.pxPerSecond, scrollXSeconds, document.frameRate);
     drawSequenceMarks(
       ctx,
       visibleMarkCollections,
@@ -682,8 +682,8 @@ function SequenceCanvas({
       audioStripHeight,
       timelineWidth,
       rect.height,
-      viewport.pxPerMs,
-      scrollXMs,
+      viewport.pxPerSecond,
+      scrollXSeconds,
       committedMarkPreview(visibleMarkCollections, markPreview)
     );
 
@@ -726,8 +726,8 @@ function SequenceCanvas({
     }
     ctx.restore();
 
-    const playheadX = left + (clamp(previewPositionMs, 0, document.durationMs) - scrollXMs) * viewport.pxPerMs;
-    const homeX = left + (clamp(previewHomeMs, 0, document.durationMs) - scrollXMs) * viewport.pxPerMs;
+    const playheadX = left + (clamp(previewPositionSeconds, 0, document.durationSeconds) - scrollXSeconds) * viewport.pxPerSecond;
+    const homeX = left + (clamp(previewHomeSeconds, 0, document.durationSeconds) - scrollXSeconds) * viewport.pxPerSecond;
     if (homeX >= left && homeX <= rect.width) {
       ctx.strokeStyle = "#6abf8a";
       ctx.lineWidth = 1;
@@ -755,15 +755,15 @@ function SequenceCanvas({
     ctx.moveTo(left + 0.5, top);
     ctx.lineTo(left, rect.height);
     ctx.stroke();
-  }, [document, effectPreviewSignatures, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, selected, previewImages, previewPositionMs, previewHomeMs, waveform.audio, visibleMarkCollections, mode, markPreview, hover]);
+  }, [document, effectPreviewSignatures, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, selected, previewImages, previewPositionSeconds, previewHomeSeconds, waveform.audio, visibleMarkCollections, mode, markPreview, hover]);
 
   const seekFromCanvas = (event: MouseEvent<HTMLCanvasElement>) => {
     const x = event.nativeEvent.offsetX;
     if (x < left) return;
-    const positionMs = clamp(Math.round((viewport.scrollXMs + (x - left) / viewport.pxPerMs) / 10) * 10, 0, document.durationMs);
-    void runSnapshotCommand(() => commands.previewSeek(positionMs));
+    const positionSeconds = clamp(Math.round((viewport.scrollXSeconds + (x - left) / viewport.pxPerSecond) / 0.01) * 0.01, 0, document.durationSeconds);
+    void runSnapshotCommand(() => commands.previewSeek(positionSeconds));
   };
-  const timeFromCanvasX = (x: number) => clamp(Math.round(viewport.scrollXMs + (x - left) / viewport.pxPerMs), 0, document.durationMs);
+  const timeFromCanvasX = (x: number) => clamp(roundToNanosecond(viewport.scrollXSeconds + (x - left) / viewport.pxPerSecond), 0, document.durationSeconds);
   const addEffectFromContextMenu = async (script: SequenceEffectScriptDto, menu: SequenceContextMenu) => {
     const hasMarksParams = script.params.some((param) => param.kind === "marks");
     let markCollectionKey = hasMarksParams ? activeMarkCollectionKey ?? document.markCollections[0]?.key ?? null : null;
@@ -790,7 +790,7 @@ function SequenceCanvas({
         scriptPath: script.path,
         target,
         scope,
-        startMs: menu.startMs,
+        startSeconds: menu.startSeconds,
         markCollectionKey
       })
     );
@@ -815,7 +815,7 @@ function SequenceCanvas({
       commands.applySequenceGuiEdit({
         type: "addMark",
         collectionKey: targetCollectionKey,
-        timeMs: menu.startMs
+        timeSeconds: menu.startSeconds
       })
     );
   };
@@ -862,20 +862,20 @@ function SequenceCanvas({
           !isTextEntryElement(event.target)
         ) {
           const collection = document.markCollections.find((candidate) => candidate.key === selectedMark.collectionKey);
-          const timeMs = collection?.marksMs[selectedMark.index];
-          if (collection === undefined || timeMs === undefined) return;
+          const timeSeconds = collection?.marksSeconds[selectedMark.index];
+          if (collection === undefined || timeSeconds === undefined) return;
           event.preventDefault();
           event.stopPropagation();
-          const deltaMs = (event.key === "ArrowLeft" ? -1 : 1) * (event.shiftKey ? 10 : 1);
-          const nextTimeMs = clamp(timeMs + deltaMs, 0, document.durationMs);
-          const nextIndex = markIndexAfterMove(collection, selectedMark.index, nextTimeMs);
-          setMarkPreview({ collectionKey: selectedMark.collectionKey, index: selectedMark.index, timeMs: nextTimeMs, committedIndex: nextIndex });
+          const deltaSeconds = (event.key === "ArrowLeft" ? -1 : 1) * (event.shiftKey ? 0.01 : 0.001);
+          const nextTimeSeconds = clamp(timeSeconds + deltaSeconds, 0, document.durationSeconds);
+          const nextIndex = markIndexAfterMove(collection, selectedMark.index, nextTimeSeconds);
+          setMarkPreview({ collectionKey: selectedMark.collectionKey, index: selectedMark.index, timeSeconds: nextTimeSeconds, committedIndex: nextIndex });
           void runSnapshotCommand(() =>
             commands.applySequenceGuiEdit({
               type: "moveMark",
               collectionKey: selectedMark.collectionKey,
               index: selectedMark.index,
-              timeMs: nextTimeMs
+              timeSeconds: nextTimeSeconds
             })
           ).then(() => {
             setSelected(`mark:${selectedMark.collectionKey}:${nextIndex}`);
@@ -909,22 +909,22 @@ function SequenceCanvas({
           return;
         }
         const laneIndex = clamp(Math.floor((y - top + viewport.scrollY) / viewport.laneHeight), 0, document.lanes.length - 1);
-        const startMs = timeFromCanvasX(x);
+        const startSeconds = timeFromCanvasX(x);
         const hit = hitSequence(visibleClips, x, y);
         if (hit !== null) {
           setSelected(`effect:${hit.effect.id}`);
-          setSequenceContextMenu({ kind: "effect", laneIndex: hit.laneIndex, startMs, effectId: hit.effect.id });
+          setSequenceContextMenu({ kind: "effect", laneIndex: hit.laneIndex, startSeconds, effectId: hit.effect.id });
           return;
         }
         const markHit = hitSequenceMark(visibleMarkCollections, mode, x, y, left, audioStripTop, audioStripHeight, canvasSize.height, viewport);
         if (markHit !== null) {
           setSelected(`mark:${markHit.collectionKey}:${markHit.index}`);
           setActiveMarkCollectionKey(markHit.collectionKey);
-          setSequenceContextMenu({ kind: "mark", laneIndex, startMs, collectionKey: markHit.collectionKey, index: markHit.index });
+          setSequenceContextMenu({ kind: "mark", laneIndex, startSeconds, collectionKey: markHit.collectionKey, index: markHit.index });
           return;
         }
         setSelected(null);
-        setSequenceContextMenu({ kind: "blank", laneIndex, startMs });
+        setSequenceContextMenu({ kind: "blank", laneIndex, startSeconds });
       }}
       onMouseDown={(event) => {
         if (event.button !== 0) return;
@@ -933,7 +933,7 @@ function SequenceCanvas({
         const y = event.nativeEvent.offsetY;
         setMarkPreview(null);
         if (event.altKey && x >= left) {
-          const timeMs = timeFromCanvasX(x);
+          const timeSeconds = timeFromCanvasX(x);
           let collectionKey = activeMarkCollectionKey ?? document.markCollections[0]?.key ?? null;
           void (async () => {
             if (collectionKey === null) {
@@ -955,13 +955,13 @@ function SequenceCanvas({
               commands.applySequenceGuiEdit({
                 type: "addMark",
                 collectionKey: targetCollectionKey,
-                timeMs
+                timeSeconds
               })
             );
-            const nextIndex = [...(document.markCollections.find((collection) => collection.key === targetCollectionKey)?.marksMs ?? []), timeMs]
-              .map((markTimeMs, index) => ({ markTimeMs, index }))
-              .sort((leftMark, rightMark) => leftMark.markTimeMs - rightMark.markTimeMs || leftMark.index - rightMark.index)
-              .findIndex((mark) => mark.index === (document.markCollections.find((collection) => collection.key === targetCollectionKey)?.marksMs.length ?? 0));
+            const nextIndex = [...(document.markCollections.find((collection) => collection.key === targetCollectionKey)?.marksSeconds ?? []), timeSeconds]
+              .map((markTimeSeconds, index) => ({ markTimeSeconds, index }))
+              .sort((leftMark, rightMark) => leftMark.markTimeSeconds - rightMark.markTimeSeconds || leftMark.index - rightMark.index)
+              .findIndex((mark) => mark.index === (document.markCollections.find((collection) => collection.key === targetCollectionKey)?.marksSeconds.length ?? 0));
             setSelected(`mark:${targetCollectionKey}:${Math.max(0, nextIndex)}`);
           })();
           return;
@@ -974,14 +974,14 @@ function SequenceCanvas({
             kind: "sequence",
             id: hit.effect.id,
             startX: event.nativeEvent.offsetX,
-            originalStartMs: hit.effect.startMs,
+            originalStartSeconds: hit.effect.startSeconds,
             laneIndex: hit.laneIndex,
             resize: hit.resize
           };
           setPreview({
             id: hit.effect.id,
-            startMs: hit.effect.startMs,
-            durationMs: hit.effect.durationMs,
+            startSeconds: hit.effect.startSeconds,
+            durationSeconds: hit.effect.durationSeconds,
             laneIndex: hit.laneIndex
           });
           return;
@@ -995,7 +995,7 @@ function SequenceCanvas({
             collectionKey: markHit.collectionKey,
             index: markHit.index,
             startX: x,
-            originalTimeMs: markHit.timeMs
+            originalTimeSeconds: markHit.timeSeconds
           };
           return;
         }
@@ -1012,12 +1012,12 @@ function SequenceCanvas({
           return;
         }
         if (current?.kind === "mark") {
-          const deltaMs = Math.round((event.nativeEvent.offsetX - current.startX) / viewport.pxPerMs);
-          const timeMs = clamp(current.originalTimeMs + deltaMs, 0, document.durationMs);
+          const deltaSeconds = roundToNanosecond((event.nativeEvent.offsetX - current.startX) / viewport.pxPerSecond);
+          const timeSeconds = clamp(current.originalTimeSeconds + deltaSeconds, 0, document.durationSeconds);
           setSelected(`mark:${current.collectionKey}:${current.index}`);
           const collection = document.markCollections.find((candidate) => candidate.key === current.collectionKey);
-          const committedIndex = collection === undefined ? current.index : markIndexAfterMove(collection, current.index, timeMs);
-          setMarkPreview({ collectionKey: current.collectionKey, index: current.index, timeMs, committedIndex });
+          const committedIndex = collection === undefined ? current.index : markIndexAfterMove(collection, current.index, timeSeconds);
+          setMarkPreview({ collectionKey: current.collectionKey, index: current.index, timeSeconds, committedIndex });
           setPreview(null);
           return;
         }
@@ -1043,18 +1043,18 @@ function SequenceCanvas({
         if (current.kind !== "sequence") return;
         const effect = document.effects.find((candidate) => candidate.id === current.id);
         if (effect === undefined) return;
-        const deltaMs = Math.round((event.nativeEvent.offsetX - current.startX) / viewport.pxPerMs / 50) * 50;
+        const deltaSeconds = Math.round(((event.nativeEvent.offsetX - current.startX) / viewport.pxPerSecond) / 0.05) * 0.05;
         const laneIndex =
           current.resize === "none"
             ? clamp(Math.floor((event.nativeEvent.offsetY - top + viewport.scrollY) / viewport.laneHeight), 0, document.lanes.length - 1)
             : current.laneIndex;
         if (current.resize === "left") {
-          const startMs = clamp(current.originalStartMs + deltaMs, 0, effect.startMs + effect.durationMs - 50);
-          setPreview({ id: effect.id, startMs, durationMs: effect.startMs + effect.durationMs - startMs, laneIndex });
+          const startSeconds = clamp(current.originalStartSeconds + deltaSeconds, 0, effect.startSeconds + effect.durationSeconds - 0.05);
+          setPreview({ id: effect.id, startSeconds, durationSeconds: effect.startSeconds + effect.durationSeconds - startSeconds, laneIndex });
         } else if (current.resize === "right") {
-          setPreview({ id: effect.id, startMs: effect.startMs, durationMs: Math.max(50, effect.durationMs + deltaMs), laneIndex });
+          setPreview({ id: effect.id, startSeconds: effect.startSeconds, durationSeconds: Math.max(0.05, effect.durationSeconds + deltaSeconds), laneIndex });
         } else {
-          setPreview({ id: effect.id, startMs: clamp(current.originalStartMs + deltaMs, 0, document.durationMs), durationMs: effect.durationMs, laneIndex });
+          setPreview({ id: effect.id, startSeconds: clamp(current.originalStartSeconds + deltaSeconds, 0, document.durationSeconds), durationSeconds: effect.durationSeconds, laneIndex });
         }
       }}
       onMouseUp={(event) => {
@@ -1062,16 +1062,16 @@ function SequenceCanvas({
         drag.current = null;
         setDragCursor(null);
         if (current?.kind === "mark") {
-          const deltaMs = Math.round((event.nativeEvent.offsetX - current.startX) / viewport.pxPerMs);
-          const timeMs = clamp(current.originalTimeMs + deltaMs, 0, document.durationMs);
+          const deltaSeconds = roundToNanosecond((event.nativeEvent.offsetX - current.startX) / viewport.pxPerSecond);
+          const timeSeconds = clamp(current.originalTimeSeconds + deltaSeconds, 0, document.durationSeconds);
           const collection = document.markCollections.find((candidate) => candidate.key === current.collectionKey);
-          const nextIndex = collection === undefined ? current.index : markIndexAfterMove(collection, current.index, timeMs);
+          const nextIndex = collection === undefined ? current.index : markIndexAfterMove(collection, current.index, timeSeconds);
           void runSnapshotCommand(() =>
             commands.applySequenceGuiEdit({
               type: "moveMark",
               collectionKey: current.collectionKey,
               index: current.index,
-              timeMs
+              timeSeconds
             })
           ).then(() => {
             setSelected(`mark:${current.collectionKey}:${nextIndex}`);
@@ -1086,14 +1086,14 @@ function SequenceCanvas({
             ? commands.applySequenceGuiEdit({
                 type: "moveEffect",
                 id: committedPreview.id,
-                startMs: committedPreview.startMs,
+                startSeconds: committedPreview.startSeconds,
                 target: document.lanes[committedPreview.laneIndex]?.target ?? null
               })
             : commands.applySequenceGuiEdit({
                 type: "resizeEffect",
                 id: committedPreview.id,
-                startMs: committedPreview.startMs,
-                durationMs: committedPreview.durationMs
+                startSeconds: committedPreview.startSeconds,
+                durationSeconds: committedPreview.durationSeconds
               });
         void runSnapshotCommand(edit).finally(() => {
           setPreview((currentPreview) => (currentPreview === committedPreview ? null : currentPreview));
@@ -1112,7 +1112,7 @@ function SequenceCanvas({
 
         event.preventDefault();
         setViewport((current) => {
-          const maxScrollXMs = Math.max(0, document.durationMs - timelineWidth / current.pxPerMs);
+          const maxScrollXSeconds = Math.max(0, document.durationSeconds - timelineWidth / current.pxPerSecond);
           const maxScrollY = Math.max(0, laneCount * current.laneHeight - visibleHeight);
           if (event.ctrlKey && event.shiftKey) {
             const anchorY = clamp(offsetY - top, 0, visibleHeight);
@@ -1128,19 +1128,19 @@ function SequenceCanvas({
           }
           if (event.ctrlKey) {
             const anchorX = clamp(offsetX - left, 0, timelineWidth);
-            const anchorTime = current.scrollXMs + anchorX / current.pxPerMs;
-            const nextPxPerMs = clamp(current.pxPerMs * Math.exp(-event.deltaY * 0.002), 0.02, 12);
-            const nextScrollXMs = anchorTime - anchorX / nextPxPerMs;
+            const anchorTime = current.scrollXSeconds + anchorX / current.pxPerSecond;
+            const nextPxPerSecond = clamp(current.pxPerSecond * Math.exp(-event.deltaY * 0.002), 20, 12000);
+            const nextScrollXSeconds = anchorTime - anchorX / nextPxPerSecond;
             return {
               ...current,
-              pxPerMs: nextPxPerMs,
-              scrollXMs: clamp(nextScrollXMs, 0, Math.max(0, document.durationMs - timelineWidth / nextPxPerMs))
+              pxPerSecond: nextPxPerSecond,
+              scrollXSeconds: clamp(nextScrollXSeconds, 0, Math.max(0, document.durationSeconds - timelineWidth / nextPxPerSecond))
             };
           }
           if (event.shiftKey) {
             return {
               ...current,
-              scrollXMs: clamp(current.scrollXMs + event.deltaY / current.pxPerMs, 0, maxScrollXMs)
+              scrollXSeconds: clamp(current.scrollXSeconds + event.deltaY / current.pxPerSecond, 0, maxScrollXSeconds)
             };
           }
           return {
@@ -1181,7 +1181,7 @@ function SequenceCanvas({
               <ContextMenu.Item
                 className="menu-item"
                 onSelect={() => {
-                  void runSnapshotCommand(() => commands.previewSeek(sequenceContextMenu.startMs));
+                  void runSnapshotCommand(() => commands.previewSeek(sequenceContextMenu.startSeconds));
                 }}
               >
                 Set Playhead Here
@@ -1323,8 +1323,8 @@ function LayoutCanvas({
           ...current.original,
           position: {
             ...current.original.position,
-            x: round2(current.original.position.x + world.x - current.startX),
-            y: round2(current.original.position.y + world.y - current.startY)
+            x: round6(current.original.position.x + world.x - current.startX),
+            y: round6(current.original.position.y + world.y - current.startY)
           }
         };
         render((value) => value + 1);
@@ -1337,7 +1337,7 @@ function LayoutCanvas({
           commands.applyLayoutGuiEdit({
             type: "updatePlacementTransform",
             id: current.id,
-            transform: current.preview
+            transform: denormalizeTransform(current.preview)
           })
         );
       }}
@@ -1408,7 +1408,7 @@ function FixtureCanvas({
         const current = drag.current;
         if (!current || current.kind !== "fixturePoint") return;
         const world = unproject(event.nativeEvent.offsetX, event.nativeEvent.offsetY, canvas.current, renderBounds);
-        current.preview = { x: round2(world.x), y: round2(world.y), z: current.preview.z };
+        current.preview = { x: round6(world.x), y: round6(world.y), z: current.preview.z };
         render((value) => value + 1);
       }}
       onMouseUp={() => {
@@ -1420,7 +1420,7 @@ function FixtureCanvas({
             type: "movePoint",
             objectKey: current.objectKey,
             pointIndex: current.pointIndex,
-            point: current.preview
+            point: denormalizePoint(current.preview)
           })
         );
       }}
@@ -1451,7 +1451,7 @@ function GuiInspector({
     const selectedMark = parseSelectedMark(selected);
     const selectedMarkCollection = selectedMark === null ? null : gui.document.markCollections.find((collection) => collection.key === selectedMark.collectionKey) ?? null;
     const activeCollection = gui.document.markCollections.find((collection) => collection.key === activeMarkCollectionKey) ?? gui.document.markCollections[0] ?? null;
-    const selectedMarkTime = selectedMarkCollection?.marksMs[selectedMark?.index ?? -1];
+    const selectedMarkTime = selectedMarkCollection?.marksSeconds[selectedMark?.index ?? -1];
     const createCollection = () => {
       const name = "Marks";
       const key = nextCollectionKey(name, gui.document.markCollections);
@@ -1469,7 +1469,7 @@ function GuiInspector({
     };
     const deleteActiveCollection = () => {
       if (activeCollection === null) return;
-      if (activeCollection.marksMs.length > 0 && !window.confirm(`Delete ${activeCollection.name} and ${activeCollection.marksMs.length} marks?`)) return;
+      if (activeCollection.marksSeconds.length > 0 && !window.confirm(`Delete ${activeCollection.name} and ${activeCollection.marksSeconds.length} marks?`)) return;
       void runSnapshotCommand(() =>
         commands.applySequenceGuiEdit({
           type: "deleteMarkCollection",
@@ -1486,7 +1486,7 @@ function GuiInspector({
           <h2>Mark</h2>
           <div className="inspector-readout-grid">
             <Readout label="Collection" value={selectedMarkCollection.name} />
-            <Readout label="Time" value={`${selectedMarkTime} ms`} />
+            <Readout label="Time" value={formatSeconds(selectedMarkTime)} />
             <Readout label="Color" value={selectedMarkCollection.color} swatch={selectedMarkCollection.color} />
           </div>
           <button
@@ -1510,13 +1510,13 @@ function GuiInspector({
     }
     if (effect !== undefined) {
       const currentScriptPath = selectedEffectScriptPath(effect, gui.document.effectScripts);
-      const resizeEffect = (startMs: number, durationMs: number) =>
+      const resizeEffect = (startSeconds: number, durationSeconds: number) =>
         runSnapshotCommand(() =>
           commands.applySequenceGuiEdit({
             type: "resizeEffect",
             id: effect.id,
-            startMs: Math.max(0, Math.round(startMs)),
-            durationMs: Math.max(1, Math.round(durationMs))
+            startSeconds: Math.max(0, roundToNanosecond(startSeconds)),
+            durationSeconds: Math.max(0.000000001, roundToNanosecond(durationSeconds))
           })
         );
       return (
@@ -1527,30 +1527,30 @@ function GuiInspector({
               <label>
                 Start
                 <input
-                  key={`${effect.id}:start:${effect.startMs}`}
+                  key={`${effect.id}:start:${effect.startSeconds}`}
                   type="number"
                   min={0}
-                  step={1}
-                  defaultValue={effect.startMs}
+                  step="any"
+                  defaultValue={effect.startSeconds}
                   onBlur={(event) => {
-                    const nextStartMs = Number(event.currentTarget.value);
-                    if (!Number.isFinite(nextStartMs) || Math.round(nextStartMs) === effect.startMs) return;
-                    void resizeEffect(nextStartMs, effect.durationMs);
+                    const nextStartSeconds = Number(event.currentTarget.value);
+                    if (!Number.isFinite(nextStartSeconds) || roundToNanosecond(nextStartSeconds) === effect.startSeconds) return;
+                    void resizeEffect(nextStartSeconds, effect.durationSeconds);
                   }}
                 />
               </label>
               <label>
                 Duration
                 <input
-                  key={`${effect.id}:duration:${effect.durationMs}`}
+                  key={`${effect.id}:duration:${effect.durationSeconds}`}
                   type="number"
-                  min={1}
-                  step={1}
-                  defaultValue={effect.durationMs}
+                  min={0.000000001}
+                  step="any"
+                  defaultValue={effect.durationSeconds}
                   onBlur={(event) => {
-                    const nextDurationMs = Number(event.currentTarget.value);
-                    if (!Number.isFinite(nextDurationMs) || Math.round(nextDurationMs) === effect.durationMs) return;
-                    void resizeEffect(effect.startMs, nextDurationMs);
+                    const nextDurationSeconds = Number(event.currentTarget.value);
+                    if (!Number.isFinite(nextDurationSeconds) || roundToNanosecond(nextDurationSeconds) === effect.durationSeconds) return;
+                    void resizeEffect(effect.startSeconds, nextDurationSeconds);
                   }}
                 />
               </label>
@@ -1727,15 +1727,15 @@ function GuiInspector({
             Bulb
             <input
               type="number"
-              min={0.05}
-              step={0.05}
-              defaultValue={fixture.bulbSize ?? ""}
+              min={0.001}
+              step="any"
+              defaultValue={fixture.bulbDiameterMeters}
               onBlur={(event) =>
                 void runSnapshotCommand(() =>
                   commands.applyFixtureGuiEdit({
-                    type: "updateBulbSize",
+                    type: "updateBulbDiameter",
                     objectKey: fixture.objectKey,
-                    bulbSize: Number(event.currentTarget.value)
+                    bulbDiameterMeters: Number(event.currentTarget.value)
                   })
                 )
               }
@@ -1906,7 +1906,7 @@ function EffectParamInput({
     case "int":
       return <NumberParam key={`${param.name}:${param.value.value}`} param={param} value={param.value.value} step={1} commit={(value) => commit({ type: "int", value: Math.max(0, Math.round(value)) })} />;
     case "float":
-      return <NumberParam key={`${param.name}:${param.value.value ?? 0}`} param={param} value={param.value.value ?? 0} step={0.05} commit={(value) => commit({ type: "float", value })} />;
+      return <NumberParam key={`${param.name}:${param.value.value}`} param={param} value={param.value.value} step={0.05} commit={(value) => commit({ type: "float", value })} />;
     case "bool":
       return (
         <label className="effect-param-check">
@@ -2574,9 +2574,9 @@ function ColorCurveParam({
 }
 
 type SequenceViewport = {
-  pxPerMs: number;
+  pxPerSecond: number;
   laneHeight: number;
-  scrollXMs: number;
+  scrollXSeconds: number;
   scrollY: number;
 };
 
@@ -2602,14 +2602,14 @@ type SequenceHit = {
 type SequenceMarkHit = {
   collectionKey: string;
   index: number;
-  timeMs: number;
+  timeSeconds: number;
 };
 
 type SequencePreviewImage = {
   signature: string;
 } & ({ status: "ready"; canvas: HTMLCanvasElement } | { status: "unavailable" });
 
-type WaveformAudio = { durationMs: number; sampleRate: number; levels: WaveformLevel[] };
+type WaveformAudio = { durationSeconds: number; sampleRate: number; levels: WaveformLevel[] };
 type WaveformLevel = { samplesPerPeak: number; mins: Float32Array; maxes: Float32Array };
 type WaveformState = { key: string | null; audio: WaveformAudio | null };
 
@@ -2688,7 +2688,7 @@ function buildWaveformAudio(buffer: AudioBuffer): WaveformAudio {
     if (previous === undefined) break;
     levels.push(coarsenWaveformLevel(previous));
   }
-  return { durationMs: buffer.duration * 1000, sampleRate: buffer.sampleRate, levels };
+  return { durationSeconds: buffer.duration, sampleRate: buffer.sampleRate, levels };
 }
 
 function coarsenWaveformLevel(level: WaveformLevel): WaveformLevel {
@@ -2727,8 +2727,8 @@ function buildSequenceClipLayout(
     return {
       effect: {
         ...effect,
-        startMs: activePreview.startMs,
-        durationMs: activePreview.durationMs,
+        startSeconds: activePreview.startSeconds,
+        durationSeconds: activePreview.durationSeconds,
         target: previewLane?.target ?? effect.target,
         targetLabel: previewLane?.label ?? effect.targetLabel
       },
@@ -2752,10 +2752,10 @@ function buildSequenceClipLayout(
       const slotCount = Math.max(1, Math.max(...assigned.map((clip) => clip.slot)) + 1);
       const slotHeight = viewport.laneHeight / slotCount;
       for (const clip of assigned) {
-        const startMs = clip.effect.startMs;
-        const endMs = startMs + clip.effect.durationMs;
-        const x = left + (startMs - viewport.scrollXMs) * viewport.pxPerMs;
-        const width = Math.max(12, (endMs - startMs) * viewport.pxPerMs);
+        const startSeconds = clip.effect.startSeconds;
+        const endSeconds = startSeconds + clip.effect.durationSeconds;
+        const x = left + (startSeconds - viewport.scrollXSeconds) * viewport.pxPerSecond;
+        const width = Math.max(12, (endSeconds - startSeconds) * viewport.pxPerSecond);
         layouts.push({
           effect: clip.effect,
           laneIndex,
@@ -2778,8 +2778,8 @@ function groupOverlappingClips(clips: SequenceClip[]) {
   let current: SequenceClip[] = [];
   let currentEnd = -Infinity;
   for (const clip of sorted) {
-    const start = clip.effect.startMs;
-    const end = clip.effect.startMs + clip.effect.durationMs;
+    const start = clip.effect.startSeconds;
+    const end = clip.effect.startSeconds + clip.effect.durationSeconds;
     if (current.length === 0 || start < currentEnd) {
       current.push(clip);
       currentEnd = Math.max(currentEnd, end);
@@ -2797,8 +2797,8 @@ function assignOverlapSlots(group: SequenceClip[]): SequenceClipWithSlot[] {
   const sorted = [...group].sort(compareClipsByTime);
   const slotEnds: number[] = [];
   return sorted.map((clip) => {
-    const start = clip.effect.startMs;
-    const end = clip.effect.startMs + clip.effect.durationMs;
+    const start = clip.effect.startSeconds;
+    const end = clip.effect.startSeconds + clip.effect.durationSeconds;
     let slot = slotEnds.findIndex((slotEnd) => slotEnd <= start);
     if (slot === -1) slot = slotEnds.length;
     slotEnds[slot] = end;
@@ -2808,8 +2808,8 @@ function assignOverlapSlots(group: SequenceClip[]): SequenceClipWithSlot[] {
 
 function compareClipsByTime(left: { effect: SequenceEffectDto }, right: { effect: SequenceEffectDto }) {
   return (
-    left.effect.startMs - right.effect.startMs ||
-    left.effect.startMs + left.effect.durationMs - (right.effect.startMs + right.effect.durationMs) ||
+    left.effect.startSeconds - right.effect.startSeconds ||
+    left.effect.startSeconds + left.effect.durationSeconds - (right.effect.startSeconds + right.effect.durationSeconds) ||
     left.effect.id - right.effect.id
   );
 }
@@ -2845,11 +2845,11 @@ function hitSequenceMark(
   if (mode === "strip" && (y < audioStripTop || y > audioStripTop + audioStripHeight)) return null;
   if (mode === "overlay" && (y < audioStripTop || y > canvasHeight)) return null;
   for (const collection of [...collections].reverse()) {
-    for (let index = collection.marksMs.length - 1; index >= 0; index -= 1) {
-      const timeMs = collection.marksMs[index] ?? 0;
-      const markX = left + (timeMs - viewport.scrollXMs) * viewport.pxPerMs;
+    for (let index = collection.marksSeconds.length - 1; index >= 0; index -= 1) {
+      const timeSeconds = collection.marksSeconds[index] ?? 0;
+      const markX = left + (timeSeconds - viewport.scrollXSeconds) * viewport.pxPerSecond;
       if (Math.abs(x - markX) <= 5) {
-        return { collectionKey: collection.key, index, timeMs };
+        return { collectionKey: collection.key, index, timeSeconds };
       }
     }
   }
@@ -2876,8 +2876,8 @@ function drawSequenceMarks(
   audioStripHeight: number,
   width: number,
   height: number,
-  pxPerMs: number,
-  scrollXMs: number,
+  pxPerSecond: number,
+  scrollXSeconds: number,
   preview: MarkPreview | null
 ) {
   if (mode === "hidden") return;
@@ -2888,10 +2888,10 @@ function drawSequenceMarks(
   ctx.rect(left, y1, width, y2 - y1);
   ctx.clip();
   for (const collection of collections) {
-    for (const [index, timeMs] of collection.marksMs.entries()) {
+    for (const [index, timeSeconds] of collection.marksSeconds.entries()) {
       const isPreviewed = preview?.collectionKey === collection.key && preview.index === index;
-      const drawnTimeMs = isPreviewed ? preview.timeMs : timeMs;
-      const x = left + (drawnTimeMs - scrollXMs) * pxPerMs;
+      const drawnTimeSeconds = isPreviewed ? preview.timeSeconds : timeSeconds;
+      const x = left + (drawnTimeSeconds - scrollXSeconds) * pxPerSecond;
       if (x < left - 6 || x > left + width + 6) continue;
       const isSelected = selected === `mark:${collection.key}:${index}`;
       ctx.strokeStyle = collection.color;
@@ -2918,7 +2918,7 @@ function drawSequenceMarks(
 function committedMarkPreview(collections: SequenceMarkCollectionDto[], preview: MarkPreview | null) {
   if (preview === null || preview.committedIndex === undefined) return preview;
   const collection = collections.find((candidate) => candidate.key === preview.collectionKey);
-  return collection?.marksMs[preview.committedIndex] === preview.timeMs ? null : preview;
+  return collection?.marksSeconds[preview.committedIndex] === preview.timeSeconds ? null : preview;
 }
 
 function parseSelectedMark(selected: string | null): { collectionKey: string; index: number } | null {
@@ -2939,13 +2939,13 @@ function markSelectionConsumesKey(selected: string | null, key: string) {
   return parseSelectedMark(selected) !== null && (key === "ArrowLeft" || key === "ArrowRight");
 }
 
-function markIndexAfterMove(collection: SequenceMarkCollectionDto, index: number, timeMs: number) {
-  const sorted = collection.marksMs
-    .map((markTimeMs, markIndex) => ({
+function markIndexAfterMove(collection: SequenceMarkCollectionDto, index: number, timeSeconds: number) {
+  const sorted = collection.marksSeconds
+    .map((markTimeSeconds, markIndex) => ({
       markIndex,
-      timeMs: markIndex === index ? timeMs : markTimeMs
+      timeSeconds: markIndex === index ? timeSeconds : markTimeSeconds
     }))
-    .sort((left, right) => left.timeMs - right.timeMs || left.markIndex - right.markIndex);
+    .sort((left, right) => left.timeSeconds - right.timeSeconds || left.markIndex - right.markIndex);
   return Math.max(0, sorted.findIndex((mark) => mark.markIndex === index));
 }
 
@@ -2984,9 +2984,9 @@ function drawWaveformStrip(
   top: number,
   width: number,
   height: number,
-  durationMs: number,
-  pxPerMs: number,
-  scrollXMs: number
+  durationSeconds: number,
+  pxPerSecond: number,
+  scrollXSeconds: number
 ) {
   ctx.save();
   ctx.beginPath();
@@ -2997,26 +2997,26 @@ function drawWaveformStrip(
   ctx.moveTo(left, top + height / 2 + 0.5);
   ctx.lineTo(left + width, top + height / 2 + 0.5);
   ctx.stroke();
-  if (audio !== null && audio.durationMs > 0 && audio.levels.length > 0) {
-    const samplesPerMs = audio.sampleRate / 1000;
-    const samplesPerPixel = samplesPerMs / pxPerMs;
+  if (audio !== null && audio.durationSeconds > 0 && audio.levels.length > 0) {
+    const samplesPerSecond = audio.sampleRate;
+    const samplesPerPixel = samplesPerSecond / pxPerSecond;
     const level = waveformLevelForZoom(audio.levels, samplesPerPixel);
-    const xPerPeak = (level.samplesPerPeak / samplesPerMs) * pxPerMs;
-    const clipEndMs = Math.min(durationMs, audio.durationMs);
-    const visibleStartMs = Math.max(0, scrollXMs);
-    const visibleEndMs = Math.min(clipEndMs, scrollXMs + width / pxPerMs);
-    const firstIndex = Math.max(0, Math.floor((visibleStartMs * samplesPerMs) / level.samplesPerPeak));
+    const xPerPeak = (level.samplesPerPeak / samplesPerSecond) * pxPerSecond;
+    const clipEndSeconds = Math.min(durationSeconds, audio.durationSeconds);
+    const visibleStartSeconds = Math.max(0, scrollXSeconds);
+    const visibleEndSeconds = Math.min(clipEndSeconds, scrollXSeconds + width / pxPerSecond);
+    const firstIndex = Math.max(0, Math.floor((visibleStartSeconds * samplesPerSecond) / level.samplesPerPeak));
     const lastIndex = Math.min(
       level.mins.length - 1,
-      Math.ceil((visibleEndMs * samplesPerMs) / level.samplesPerPeak)
+      Math.ceil((visibleEndSeconds * samplesPerSecond) / level.samplesPerPeak)
     );
     const centerY = top + height / 2;
     const maxAmplitude = Math.max(1, height / 2 - 4);
     ctx.fillStyle = "#6abf8a";
     for (let index = firstIndex; index <= lastIndex; index += 1) {
-      const timeMs = (index * level.samplesPerPeak) / samplesPerMs;
-      if (timeMs > clipEndMs) break;
-      const x = left + (timeMs - scrollXMs) * pxPerMs;
+      const timeSeconds = (index * level.samplesPerPeak) / samplesPerSecond;
+      if (timeSeconds > clipEndSeconds) break;
+      const x = left + (timeSeconds - scrollXSeconds) * pxPerSecond;
       if (x > left + width) break;
       if (x + xPerPeak < left) continue;
       const min = level.mins[index] ?? 0;
@@ -3043,18 +3043,18 @@ function drawTimelineGrid(
   top: number,
   width: number,
   height: number,
-  pxPerMs: number,
-  scrollXMs: number,
+  pxPerSecond: number,
+  scrollXSeconds: number,
   frameRate: number
 ) {
-  const tick = chooseTimelineTick(pxPerMs, frameRate);
-  const firstMinor = Math.floor(scrollXMs / tick.minorMs) * tick.minorMs;
+  const tick = chooseTimelineTick(pxPerSecond, frameRate);
+  const firstMinor = Math.floor(scrollXSeconds / tick.minorSeconds) * tick.minorSeconds;
   ctx.lineWidth = 1;
-  for (let time = firstMinor; ; time += tick.minorMs) {
-    const x = left + (time - scrollXMs) * pxPerMs;
+  for (let time = firstMinor; ; time += tick.minorSeconds) {
+    const x = left + (time - scrollXSeconds) * pxPerSecond;
     if (x > width) break;
     if (x < left) continue;
-    const labeled = isMultipleOf(time, tick.labelMs);
+    const labeled = isMultipleOf(time, tick.labelSeconds);
     ctx.strokeStyle = labeled ? "#343941" : "#1f2227";
     ctx.beginPath();
     ctx.moveTo(x + 0.5, labeled ? 0 : top);
@@ -3062,54 +3062,54 @@ function drawTimelineGrid(
     ctx.stroke();
     if (labeled) {
       ctx.fillStyle = "#a8a29a";
-      ctx.fillText(formatTimelineMs(time, tick.labelMs), x + 5, 18);
+      ctx.fillText(formatTimelineSeconds(time, tick.labelSeconds), x + 5, 18);
     }
   }
 }
 
-function chooseTimelineTick(pxPerMs: number, frameRate: number) {
-  const frameMs = Math.max(1, Math.round(1000 / Math.max(1, frameRate)));
+function chooseTimelineTick(pxPerSecond: number, frameRate: number) {
+  const frameSeconds = 1 / Math.max(1, frameRate);
   const minorCandidates = Array.from(new Set([
-    frameMs,
-    frameMs * 2,
-    frameMs * 5,
-    frameMs * 10,
-    50,
-    100,
-    250,
-    500,
-    1000,
-    2500,
-    5000,
-    10000,
-    30000,
-    60000
+    frameSeconds,
+    frameSeconds * 2,
+    frameSeconds * 5,
+    frameSeconds * 10,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1,
+    2.5,
+    5,
+    10,
+    30,
+    60
   ])).sort((left, right) => left - right);
-  const minorMs = minorCandidates.find((candidate) => candidate * pxPerMs >= 24) ?? 60000;
-  const labelMs = minorCandidates.find((candidate) => candidate >= minorMs && candidate * pxPerMs >= 110) ?? minorMs * 5;
-  return { minorMs, labelMs };
+  const minorSeconds = minorCandidates.find((candidate) => candidate * pxPerSecond >= 24) ?? 60;
+  const labelSeconds = minorCandidates.find((candidate) => candidate >= minorSeconds && candidate * pxPerSecond >= 110) ?? minorSeconds * 5;
+  return { minorSeconds, labelSeconds };
 }
 
 function isMultipleOf(value: number, interval: number) {
   return Math.abs(value / interval - Math.round(value / interval)) < 0.0001;
 }
 
-function formatMs(ms: number) {
-  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+function formatSeconds(value: number) {
+  const totalSeconds = Math.max(0, Math.floor(value));
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
-function formatTimelineMs(ms: number, intervalMs: number) {
-  if (intervalMs < 1000) {
-    const totalMs = Math.max(0, Math.round(ms));
-    const minutes = Math.floor(totalMs / 60000);
-    const seconds = Math.floor((totalMs % 60000) / 1000);
-    const millis = totalMs % 1000;
-    return `${minutes}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
+function formatTimelineSeconds(value: number, intervalSeconds: number) {
+  if (intervalSeconds < 1) {
+    const totalMilliseconds = Math.max(0, Math.round(value * 1000));
+    const minutes = Math.floor(totalMilliseconds / 60000);
+    const seconds = Math.floor((totalMilliseconds % 60000) / 1000);
+    const milliseconds = totalMilliseconds % 1000;
+    return `${minutes}:${String(seconds).padStart(2, "0")}.${String(milliseconds).padStart(3, "0")}`;
   }
-  return formatMs(ms);
+  return formatSeconds(value);
 }
 
 function isEditableShortcutTarget(target: EventTarget | null) {
@@ -3142,18 +3142,18 @@ function handleSequencePlaybackShortcut(
   } else if (event.key === "ArrowLeft") {
     event.preventDefault();
     event.stopPropagation();
-    stepSequenceFrame(document, preview.positionMs, preview.durationMs, -1);
+    stepSequenceFrame(document, preview.positionSeconds, preview.durationSeconds, -1);
   } else if (event.key === "ArrowRight") {
     event.preventDefault();
     event.stopPropagation();
-    stepSequenceFrame(document, preview.positionMs, preview.durationMs, 1);
+    stepSequenceFrame(document, preview.positionSeconds, preview.durationSeconds, 1);
   }
 }
 
-function stepSequenceFrame(document: SequenceDocumentDto, positionMs: number, previewDurationMs: number, direction: -1 | 1) {
-  const frameMs = Math.max(1, Math.round(1000 / Math.max(1, document.frameRate)));
-  const nextPositionMs = clamp(positionMs + direction * frameMs, 0, previewDurationMs || document.durationMs);
-  void runSnapshotCommand(() => commands.previewSeek(nextPositionMs));
+function stepSequenceFrame(document: SequenceDocumentDto, positionSeconds: number, previewDurationSeconds: number, direction: -1 | 1) {
+  const frameSeconds = 1 / Math.max(1, document.frameRate);
+  const nextPositionSeconds = clamp(positionSeconds + direction * frameSeconds, 0, previewDurationSeconds || document.durationSeconds);
+  void runSnapshotCommand(() => commands.previewSeek(nextPositionSeconds));
 }
 
 function targetsEqual(left: LayoutTargetDto, right: LayoutTargetDto) {
@@ -3169,7 +3169,7 @@ function sequencePreviewSignatures(document: SequenceDocumentDto) {
         objectKey: document.objectKey,
         frameRate: document.frameRate,
         id: effect.id,
-        durationMs: effect.durationMs,
+        durationSeconds: effect.durationSeconds,
         target: effect.target,
         scope: effect.scope,
         script: effect.script,
@@ -3185,10 +3185,10 @@ function relevantMarkCollections(effect: SequenceEffectDto, markCollections: Seq
     .flatMap((param) => (param.value.type === "marks" ? [param.value.key] : []));
   if (keys.length === 0) return [];
   return {
-    effectStartMs: effect.startMs,
+    effectStartSeconds: effect.startSeconds,
     collections: markCollections
       .filter((collection) => keys.includes(collection.key))
-      .map((collection) => ({ key: collection.key, marksMs: collection.marksMs }))
+      .map((collection) => ({ key: collection.key, marksSeconds: collection.marksSeconds }))
   };
 }
 
@@ -3265,7 +3265,6 @@ function curvePointsSignature(points: Array<{ time: number; value: number | stri
 
 function normalizeFloatCurvePoints(points: FloatCurvePointDto[]): EditedFloatCurvePoint[] {
   const normalized = points
-    .filter((point): point is { time: number; value: number } => point.time !== null && point.value !== null)
     .filter((point) => Number.isFinite(point.time) && Number.isFinite(point.value))
     .map((point) => ({ time: clamp(point.time, 0, 1), value: point.value }));
   return normalized.length > 0 ? normalized : [{ time: 0, value: 0 }];
@@ -3273,14 +3272,14 @@ function normalizeFloatCurvePoints(points: FloatCurvePointDto[]): EditedFloatCur
 
 function normalizeColorCurvePoints(points: ColorCurvePointDto[]): EditedColorCurvePoint[] {
   const normalized = points
-    .filter((point): point is { time: number; value: string } => point.time !== null && isHexColor(point.value))
+    .filter((point) => isHexColor(point.value))
     .filter((point) => Number.isFinite(point.time))
     .map((point) => ({ time: clamp(point.time, 0, 1), value: point.value.toLowerCase() }));
   return normalized.length > 0 ? normalized : [{ time: 0, value: "#ffffff" }];
 }
 
-function isHexColor(value: string | null | undefined): value is string {
-  return /^#[0-9a-fA-F]{6}$/.test(value ?? "");
+function isHexColor(value: string): boolean {
+  return /^#[0-9a-fA-F]{6}$/.test(value);
 }
 
 function previewCanvasFromRaster(raster: SequenceEffectPreviewDto) {
@@ -3310,23 +3309,47 @@ function validPreviewImage(image: SequencePreviewImage | undefined, signature: s
   return image.signature === signature ? image : undefined;
 }
 
-function normalizePoint(point: Point3Dto | GeometryRenderPointDto): Point3 {
+function normalizePoint(point: Point3MetersDto | GeometryRenderPointDto): Point3 {
   return {
-    x: point.x ?? 0,
-    y: point.y ?? 0,
-    z: point.z ?? 0
+    x: point.xMeters,
+    y: point.yMeters,
+    z: point.zMeters
   };
 }
 
 function normalizeTransform(transform: TransformDto): Transform {
   return {
     position: normalizePoint(transform.position),
-    rotation: normalizePoint(transform.rotation),
+    rotation: {
+      x: transform.rotation.xDegrees,
+      y: transform.rotation.yDegrees,
+      z: transform.rotation.zDegrees
+    },
     scale: {
-      x: transform.scale.x ?? 1,
-      y: transform.scale.y ?? 1,
-      z: transform.scale.z ?? 1
+      x: transform.scale.x,
+      y: transform.scale.y,
+      z: transform.scale.z
     }
+  };
+}
+
+function denormalizePoint(point: Point3): Point3MetersDto {
+  return {
+    xMeters: point.x,
+    yMeters: point.y,
+    zMeters: point.z
+  };
+}
+
+function denormalizeTransform(transform: Transform): TransformDto {
+  return {
+    position: denormalizePoint(transform.position),
+    rotation: {
+      xDegrees: transform.rotation.x,
+      yDegrees: transform.rotation.y,
+      zDegrees: transform.rotation.z
+    },
+    scale: transform.scale
   };
 }
 
@@ -3339,10 +3362,10 @@ type RenderBounds = {
 
 function normalizeBounds(bounds: GeometryRenderBoundsDto): RenderBounds {
   return {
-    minX: bounds.minX ?? 0,
-    minY: bounds.minY ?? 0,
-    maxX: bounds.maxX ?? 0,
-    maxY: bounds.maxY ?? 0
+    minX: bounds.minXMeters,
+    minY: bounds.minYMeters,
+    maxX: bounds.maxXMeters,
+    maxY: bounds.maxYMeters
   };
 }
 
@@ -3440,10 +3463,14 @@ function nearestPoint(points: Point3[], point: Point3) {
   return best;
 }
 
-function round2(value: number) {
-  return Math.round(value * 100) / 100;
+function round6(value: number) {
+  return Math.round(value * 1_000_000) / 1_000_000;
 }
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
+}
+
+function roundToNanosecond(value: number) {
+  return Math.round(value * 1_000_000_000) / 1_000_000_000;
 }

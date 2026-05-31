@@ -13,8 +13,8 @@ import {
 type PreviewState = {
   sourceLabel: string;
   isPlaying: boolean;
-  positionMs: number;
-  durationMs: number;
+  positionSeconds: number;
+  durationSeconds: number;
   status: string;
 };
 
@@ -35,16 +35,16 @@ export function PreviewWindow() {
   const [state, setState] = useState<PreviewState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ scale: 1, panX: 0, panY: 0 });
-  const [metrics, setMetrics] = useState({ fps: 0, backendMs: 0, renderMs: 0, currentTimeMs: 0 });
+  const [metrics, setMetrics] = useState({ fps: 0, backendSeconds: 0, renderMs: 0, currentTimeSeconds: 0 });
   const fpsSamples = useRef<number[]>([]);
 
   const pixelPositions = useMemo(() => {
     if (!scene) return [];
     return scene.fixtures.flatMap((fixture) =>
       fixture.pixels.map((pixel) => ({
-        x: pixel.x ?? 0,
-        y: pixel.y ?? 0,
-        radius: fixture.bulbRadius ?? 0.1,
+        x: pixel.xMeters,
+        y: pixel.yMeters,
+        radius: fixture.bulbRadiusMeters,
         fixture: fixture.name
       }))
     );
@@ -92,9 +92,9 @@ export function PreviewWindow() {
       lastHudUpdate.current = now;
       setMetrics({
         fps: fpsSamples.current.length,
-        backendMs: frame?.backendMs ?? 0,
+        backendSeconds: frame?.backendSeconds ?? 0,
         renderMs: now - started,
-        currentTimeMs: frame?.currentTimeMs ?? 0
+        currentTimeSeconds: frame?.currentTimeSeconds ?? 0
       });
     }
   }, [pixelPositions, scene, viewport]);
@@ -191,10 +191,10 @@ export function PreviewWindow() {
       <div className="preview-hud">
         <div>{state?.sourceLabel ?? scene?.sourceLabel ?? "No preview source"}</div>
         <div>
-          {metrics.fps} fps | backend {formatNumber(metrics.backendMs)} ms | render {formatNumber(metrics.renderMs)} ms
+          {metrics.fps} fps | backend {formatNumber(metrics.backendSeconds)} s | render {formatNumber(metrics.renderMs)} ms
         </div>
         <div>
-          {formatMs(state?.positionMs ?? metrics.currentTimeMs)} | {state?.isPlaying === true ? "Playing" : "Stopped"} |{" "}
+          {formatSeconds(state?.positionSeconds ?? metrics.currentTimeSeconds)} | {state?.isPlaying === true ? "Playing" : "Stopped"} |{" "}
           {state?.status ?? error ?? "Ready"}
         </div>
       </div>
@@ -213,10 +213,10 @@ export function PreviewWindow() {
 
 function buildProjector(bounds: GeometryRenderBoundsDto, width: number, height: number, viewport: Viewport) {
   const padding = 56;
-  const minX = bounds.minX ?? 0;
-  const minY = bounds.minY ?? 0;
-  const maxX = bounds.maxX ?? 0;
-  const maxY = bounds.maxY ?? 0;
+  const minX = bounds.minXMeters;
+  const minY = bounds.minYMeters;
+  const maxX = bounds.maxXMeters;
+  const maxY = bounds.maxYMeters;
   const spanX = Math.max(1, maxX - minX);
   const spanY = Math.max(1, maxY - minY);
   const baseScale = Math.min((width - padding * 2) / spanX, (height - padding * 2) / spanY);
@@ -242,8 +242,8 @@ function formatNumber(value: number) {
   return value.toFixed(1);
 }
 
-function formatMs(ms: number) {
-  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+function formatSeconds(value: number) {
+  const totalSeconds = Math.max(0, Math.floor(value));
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;

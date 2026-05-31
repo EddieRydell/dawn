@@ -201,9 +201,120 @@ pub struct GroupIndex(pub usize);
 #[serde(transparent)]
 pub struct SequenceEffectIndex(pub usize);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Time {
-    pub milliseconds: u64,
+    nanoseconds: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct TimeSpan {
+    nanoseconds: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct Distance {
+    micrometers: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct DistanceSpan {
+    micrometers: u64,
+}
+
+impl Time {
+    pub const ZERO: Self = Self { nanoseconds: 0 };
+
+    pub fn from_nanoseconds(nanoseconds: u64) -> Self {
+        Self { nanoseconds }
+    }
+
+    pub fn try_from_seconds_f64_rounded(seconds: f64) -> Result<Self, &'static str> {
+        seconds_to_nanoseconds_rounded(seconds).map(Self::from_nanoseconds)
+    }
+
+    pub fn as_seconds_f64(self) -> f64 {
+        self.nanoseconds as f64 / NANOS_PER_SECOND as f64
+    }
+
+    pub fn as_nanoseconds(self) -> u64 {
+        self.nanoseconds
+    }
+}
+
+impl TimeSpan {
+    pub const ZERO: Self = Self { nanoseconds: 0 };
+
+    pub fn from_nanoseconds(nanoseconds: u64) -> Self {
+        Self { nanoseconds }
+    }
+
+    pub fn try_from_seconds_f64_rounded(seconds: f64) -> Result<Self, &'static str> {
+        seconds_to_nanoseconds_rounded(seconds).map(Self::from_nanoseconds)
+    }
+
+    pub fn as_seconds_f64(self) -> f64 {
+        self.nanoseconds as f64 / NANOS_PER_SECOND as f64
+    }
+
+    pub fn as_nanoseconds(self) -> u64 {
+        self.nanoseconds
+    }
+}
+
+impl Distance {
+    pub const ZERO: Self = Self { micrometers: 0 };
+
+    pub fn from_micrometers(micrometers: i64) -> Self {
+        Self { micrometers }
+    }
+
+    pub fn try_from_meters_f64_truncated(meters: f64) -> Result<Self, &'static str> {
+        meters_to_micrometers_truncated(meters).map(Self::from_micrometers)
+    }
+
+    pub fn try_from_meters_f64_rounded(meters: f64) -> Result<Self, &'static str> {
+        meters_to_micrometers_rounded(meters).map(Self::from_micrometers)
+    }
+
+    pub fn as_meters_f64(self) -> f64 {
+        self.micrometers as f64 / MICROMETERS_PER_METER as f64
+    }
+
+    pub fn as_micrometers(self) -> i64 {
+        self.micrometers
+    }
+}
+
+impl DistanceSpan {
+    pub const ZERO: Self = Self { micrometers: 0 };
+
+    pub fn from_micrometers(micrometers: u64) -> Self {
+        Self { micrometers }
+    }
+
+    pub fn try_from_meters_f64_truncated(meters: f64) -> Result<Self, &'static str> {
+        let micrometers = meters_to_micrometers_truncated(meters)?;
+        if micrometers < 0 {
+            return Err("distance span meters must be non-negative");
+        }
+        Ok(Self::from_micrometers(micrometers as u64))
+    }
+
+    pub fn try_from_meters_f64_rounded(meters: f64) -> Result<Self, &'static str> {
+        let micrometers = meters_to_micrometers_rounded(meters)?;
+        if micrometers < 0 {
+            return Err("distance span meters must be non-negative");
+        }
+        Ok(Self::from_micrometers(micrometers as u64))
+    }
+
+    pub fn as_meters_f64(self) -> f64 {
+        self.micrometers as f64 / MICROMETERS_PER_METER as f64
+    }
+
+    pub fn as_micrometers(self) -> u64 {
+        self.micrometers
+    }
 }
 
 impl Serialize for Time {
@@ -211,7 +322,34 @@ impl Serialize for Time {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&format!("{}ms", self.milliseconds))
+        serializer.serialize_str(&format_nanoseconds_as_seconds(self.nanoseconds))
+    }
+}
+
+impl Serialize for TimeSpan {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&format_nanoseconds_as_seconds(self.nanoseconds))
+    }
+}
+
+impl Serialize for Distance {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serialize_distance_meters(self.micrometers, serializer)
+    }
+}
+
+impl Serialize for DistanceSpan {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serialize_distance_meters(self.micrometers as i64, serializer)
     }
 }
 
@@ -220,36 +358,148 @@ impl<'de> Deserialize<'de> for Time {
     where
         D: Deserializer<'de>,
     {
-        struct TimeVisitor;
-        impl Visitor<'_> for TimeVisitor {
-            type Value = Time;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("a suffixed time like 1m10s, 12s500ms, or 120943ms")
-            }
-
-            fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                Err(E::custom("time must use an `ms`, `s`, or `m` suffix"))
-            }
-
-            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                parse_time_ms(value)
-                    .map(|milliseconds| Time { milliseconds })
-                    .map_err(E::custom)
-            }
-        }
-
-        deserializer.deserialize_any(TimeVisitor)
+        deserialize_time_like(deserializer, "time").map(Self::from_nanoseconds)
     }
 }
 
-fn parse_time_ms(value: &str) -> Result<u64, &'static str> {
+impl<'de> Deserialize<'de> for TimeSpan {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserialize_time_like(deserializer, "duration").map(Self::from_nanoseconds)
+    }
+}
+
+impl<'de> Deserialize<'de> for Distance {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserialize_distance_like(deserializer, "distance").map(Self::from_micrometers)
+    }
+}
+
+impl<'de> Deserialize<'de> for DistanceSpan {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let micrometers = deserialize_distance_like(deserializer, "distance span")?;
+        if micrometers < 0 {
+            return Err(de::Error::custom(
+                "distance span meters must be non-negative",
+            ));
+        }
+        Ok(Self::from_micrometers(micrometers as u64))
+    }
+}
+
+fn deserialize_time_like<'de, D>(deserializer: D, label: &'static str) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct TimeVisitor {
+        label: &'static str,
+    }
+
+    impl Visitor<'_> for TimeVisitor {
+        type Value = u64;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "a suffixed {} like 1m10s, 1.5s, 12ms, 25us, or 100ns",
+                self.label
+            )
+        }
+
+        fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Err(E::custom(format!(
+                "{} must use an `ns`, `us`, `ms`, `s`, or `m` suffix",
+                self.label
+            )))
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            parse_time_nanoseconds(value).map_err(E::custom)
+        }
+    }
+
+    deserializer.deserialize_any(TimeVisitor { label })
+}
+
+fn deserialize_distance_like<'de, D>(deserializer: D, label: &'static str) -> Result<i64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct DistanceVisitor {
+        label: &'static str,
+    }
+
+    impl Visitor<'_> for DistanceVisitor {
+        type Value = i64;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "a decimal meter number or a metric distance string using um, mm, cm, or m"
+            )
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            value
+                .checked_mul(MICROMETERS_PER_METER)
+                .ok_or_else(|| E::custom(format!("{} is too large", self.label)))
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            let micrometers = value
+                .checked_mul(MICROMETERS_PER_METER as u64)
+                .ok_or_else(|| E::custom(format!("{} is too large", self.label)))?;
+            i64::try_from(micrometers)
+                .map_err(|_| E::custom(format!("{} is too large", self.label)))
+        }
+
+        fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            meters_to_micrometers_truncated(value).map_err(E::custom)
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            parse_metric_distance_micrometers(value).map_err(E::custom)
+        }
+    }
+
+    deserializer.deserialize_any(DistanceVisitor { label })
+}
+
+const NANOS_PER_MICROSECOND: u64 = 1_000;
+const NANOS_PER_MILLISECOND: u64 = 1_000_000;
+pub const NANOS_PER_SECOND: u64 = 1_000_000_000;
+const NANOS_PER_MINUTE: u64 = 60 * NANOS_PER_SECOND;
+pub const MICROMETERS_PER_METER: i64 = 1_000_000;
+const MICROMETERS_PER_CENTIMETER: i64 = 10_000;
+const MICROMETERS_PER_MILLIMETER: i64 = 1_000;
+
+fn parse_time_nanoseconds(value: &str) -> Result<u64, &'static str> {
     if value.is_empty() {
         return Err("time must not be empty");
     }
@@ -257,34 +507,350 @@ fn parse_time_ms(value: &str) -> Result<u64, &'static str> {
     let mut rest = value;
     let mut total = 0u64;
     while !rest.is_empty() {
-        let digits = rest
-            .find(|character: char| !character.is_ascii_digit())
+        let amount_len = rest
+            .find(|character: char| !character.is_ascii_digit() && character != '.')
             .unwrap_or(rest.len());
-        if digits == 0 {
-            return Err("time segment must start with an integer");
+        if amount_len == 0 {
+            return Err("time segment must start with a number");
         }
 
-        let amount = rest[..digits]
-            .parse::<u64>()
-            .map_err(|_| "time amount must be an integer")?;
-        rest = &rest[digits..];
+        let amount = &rest[..amount_len];
+        rest = &rest[amount_len..];
 
-        let (multiplier, suffix_len) = if rest.starts_with("ms") {
+        let (multiplier, suffix_len) = if rest.starts_with("ns") {
             (1, 2)
+        } else if rest.starts_with("us") {
+            (NANOS_PER_MICROSECOND, 2)
+        } else if rest.starts_with("ms") {
+            (NANOS_PER_MILLISECOND, 2)
         } else if rest.starts_with('s') {
-            (1_000, 1)
+            (NANOS_PER_SECOND, 1)
         } else if rest.starts_with('m') {
-            (60_000, 1)
+            (NANOS_PER_MINUTE, 1)
         } else {
-            return Err("time segment must use `ms`, `s`, or `m`");
+            return Err("time segment must use `ns`, `us`, `ms`, `s`, or `m`");
         };
 
-        let segment = amount.checked_mul(multiplier).ok_or("time is too large")?;
+        let segment = parse_decimal_amount_as_nanoseconds(amount, multiplier)?;
         total = total.checked_add(segment).ok_or("time is too large")?;
         rest = &rest[suffix_len..];
     }
 
     Ok(total)
+}
+
+fn parse_metric_distance_micrometers(value: &str) -> Result<i64, &'static str> {
+    if value.is_empty() {
+        return Err("distance must not be empty");
+    }
+    let (amount, multiplier) = if let Some(amount) = value.strip_suffix("um") {
+        (amount, 1)
+    } else if let Some(amount) = value.strip_suffix("mm") {
+        (amount, MICROMETERS_PER_MILLIMETER)
+    } else if let Some(amount) = value.strip_suffix("cm") {
+        (amount, MICROMETERS_PER_CENTIMETER)
+    } else if let Some(amount) = value.strip_suffix('m') {
+        (amount, MICROMETERS_PER_METER)
+    } else {
+        (value, MICROMETERS_PER_METER)
+    };
+    parse_decimal_amount_as_micrometers(amount, multiplier)
+}
+
+fn parse_decimal_amount_as_nanoseconds(amount: &str, multiplier: u64) -> Result<u64, &'static str> {
+    let Some((whole, fractional)) = amount.split_once('.') else {
+        return amount
+            .parse::<u64>()
+            .map_err(|_| "time amount must be a number")?
+            .checked_mul(multiplier)
+            .ok_or("time is too large");
+    };
+
+    if whole.is_empty() || fractional.is_empty() || fractional.contains('.') {
+        return Err("time amount must be a number");
+    }
+    if !whole.chars().all(|character| character.is_ascii_digit())
+        || !fractional
+            .chars()
+            .all(|character| character.is_ascii_digit())
+    {
+        return Err("time amount must be a number");
+    }
+
+    let whole_nanoseconds = whole
+        .parse::<u64>()
+        .map_err(|_| "time amount must be a number")?
+        .checked_mul(multiplier)
+        .ok_or("time is too large")?;
+    let scale = 10u64
+        .checked_pow(fractional.len() as u32)
+        .ok_or("time precision is too fine")?;
+    let fractional_amount = fractional
+        .parse::<u64>()
+        .map_err(|_| "time amount must be a number")?;
+    let scaled = fractional_amount
+        .checked_mul(multiplier)
+        .ok_or("time is too large")?;
+    if scaled % scale != 0 {
+        return Err("time precision is finer than one nanosecond");
+    }
+    whole_nanoseconds
+        .checked_add(scaled / scale)
+        .ok_or("time is too large")
+}
+
+fn parse_decimal_amount_as_micrometers(
+    mut amount: &str,
+    multiplier: i64,
+) -> Result<i64, &'static str> {
+    let sign = if let Some(rest) = amount.strip_prefix('-') {
+        amount = rest;
+        -1
+    } else {
+        1
+    };
+
+    let Some((whole, fractional)) = amount.split_once('.') else {
+        let whole = amount
+            .parse::<i64>()
+            .map_err(|_| "distance amount must be a number")?;
+        return whole
+            .checked_mul(multiplier)
+            .and_then(|value| value.checked_mul(sign))
+            .ok_or("distance is too large");
+    };
+
+    if whole.is_empty() || fractional.is_empty() || fractional.contains('.') {
+        return Err("distance amount must be a number");
+    }
+    if !whole.chars().all(|character| character.is_ascii_digit())
+        || !fractional
+            .chars()
+            .all(|character| character.is_ascii_digit())
+    {
+        return Err("distance amount must be a number");
+    }
+
+    let whole_micrometers = whole
+        .parse::<i64>()
+        .map_err(|_| "distance amount must be a number")?
+        .checked_mul(multiplier)
+        .ok_or("distance is too large")?;
+    let scale = 10i64
+        .checked_pow(fractional.len() as u32)
+        .ok_or("distance precision is too fine")?;
+    let fractional_amount = fractional
+        .parse::<i64>()
+        .map_err(|_| "distance amount must be a number")?;
+    let fractional_micrometers = fractional_amount
+        .checked_mul(multiplier)
+        .ok_or("distance is too large")?
+        / scale;
+    whole_micrometers
+        .checked_add(fractional_micrometers)
+        .and_then(|value| value.checked_mul(sign))
+        .ok_or("distance is too large")
+}
+
+fn format_nanoseconds_as_seconds(nanoseconds: u64) -> String {
+    let seconds = nanoseconds / NANOS_PER_SECOND;
+    let fractional = nanoseconds % NANOS_PER_SECOND;
+    if fractional == 0 {
+        return format!("{seconds}s");
+    }
+    let mut fractional_text = format!("{fractional:09}");
+    while fractional_text.ends_with('0') {
+        fractional_text.pop();
+    }
+    format!("{seconds}.{fractional_text}s")
+}
+
+fn serialize_distance_meters<S>(micrometers: i64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    if micrometers % MICROMETERS_PER_METER == 0 {
+        serializer.serialize_i64(micrometers / MICROMETERS_PER_METER)
+    } else {
+        serializer.serialize_f64(micrometers as f64 / MICROMETERS_PER_METER as f64)
+    }
+}
+
+fn seconds_to_nanoseconds_rounded(seconds: f64) -> Result<u64, &'static str> {
+    if !seconds.is_finite() {
+        return Err("time seconds must be finite");
+    }
+    if seconds < 0.0 {
+        return Err("time seconds must be non-negative");
+    }
+    let nanoseconds = seconds * NANOS_PER_SECOND as f64;
+    if nanoseconds > u64::MAX as f64 {
+        return Err("time is too large");
+    }
+    Ok(nanoseconds.round() as u64)
+}
+
+fn meters_to_micrometers_truncated(meters: f64) -> Result<i64, &'static str> {
+    if !meters.is_finite() {
+        return Err("distance meters must be finite");
+    }
+    let micrometers = meters * MICROMETERS_PER_METER as f64;
+    if micrometers < i64::MIN as f64 || micrometers > i64::MAX as f64 {
+        return Err("distance is too large");
+    }
+    Ok(micrometers.trunc() as i64)
+}
+
+fn meters_to_micrometers_rounded(meters: f64) -> Result<i64, &'static str> {
+    if !meters.is_finite() {
+        return Err("distance meters must be finite");
+    }
+    let micrometers = meters * MICROMETERS_PER_METER as f64;
+    if micrometers < i64::MIN as f64 || micrometers > i64::MAX as f64 {
+        return Err("distance is too large");
+    }
+    Ok(micrometers.round() as i64)
+}
+
+#[cfg(test)]
+mod time_tests {
+    use super::{Distance, DistanceSpan, Time, TimeSpan, NANOS_PER_SECOND};
+
+    fn parse_time(value: &str) -> Result<Time, String> {
+        serde_yaml::from_str(value).map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn parses_exact_time_units() {
+        assert_eq!(parse_time("1ns").unwrap().nanoseconds, 1);
+        assert_eq!(parse_time("1us").unwrap().nanoseconds, 1_000);
+        assert_eq!(parse_time("1ms").unwrap().nanoseconds, 1_000_000);
+        assert_eq!(parse_time("1s").unwrap().nanoseconds, NANOS_PER_SECOND);
+        assert_eq!(parse_time("1m").unwrap().nanoseconds, 60 * NANOS_PER_SECOND);
+        assert_eq!(parse_time("1m1.5s").unwrap().nanoseconds, 61_500_000_000);
+    }
+
+    #[test]
+    fn parses_decimal_seconds_without_float_rounding() {
+        assert_eq!(parse_time("0.016666667s").unwrap().nanoseconds, 16_666_667);
+        assert_eq!(parse_time("1.5s").unwrap().nanoseconds, 1_500_000_000);
+        assert_eq!(parse_time("0.001ms").unwrap().nanoseconds, 1_000);
+    }
+
+    #[test]
+    fn serializes_canonical_decimal_seconds() {
+        assert_eq!(serde_yaml::to_string(&Time::ZERO).unwrap().trim(), "0s");
+        assert_eq!(
+            serde_yaml::to_string(&Time::from_nanoseconds(1_500_000_000))
+                .unwrap()
+                .trim(),
+            "1.5s"
+        );
+        assert_eq!(
+            serde_yaml::to_string(&TimeSpan::from_nanoseconds(16_666_667))
+                .unwrap()
+                .trim(),
+            "0.016666667s"
+        );
+    }
+
+    #[test]
+    fn rejects_sub_nanosecond_precision_and_overflow() {
+        assert!(parse_time("0.1ns").is_err());
+        assert!(parse_time("18446744073709551616ns").is_err());
+        assert!(parse_time("1xs").is_err());
+    }
+
+    #[test]
+    fn parses_metric_distances_and_spans() {
+        assert_eq!(
+            serde_yaml::from_str::<Distance>("1")
+                .unwrap()
+                .as_micrometers(),
+            1_000_000
+        );
+        assert_eq!(
+            serde_yaml::from_str::<Distance>("1.25m")
+                .unwrap()
+                .as_micrometers(),
+            1_250_000
+        );
+        assert_eq!(
+            serde_yaml::from_str::<Distance>("12.3cm")
+                .unwrap()
+                .as_micrometers(),
+            123_000
+        );
+        assert_eq!(
+            serde_yaml::from_str::<Distance>("2.5mm")
+                .unwrap()
+                .as_micrometers(),
+            2_500
+        );
+        assert_eq!(
+            serde_yaml::from_str::<Distance>("7um")
+                .unwrap()
+                .as_micrometers(),
+            7
+        );
+        assert_eq!(
+            serde_yaml::from_str::<DistanceSpan>("0.001")
+                .unwrap()
+                .as_micrometers(),
+            1_000
+        );
+    }
+
+    #[test]
+    fn serializes_canonical_decimal_meters() {
+        assert_eq!(
+            serde_yaml::to_string(&Distance::from_micrometers(1_000_000))
+                .unwrap()
+                .trim(),
+            "1"
+        );
+        assert_eq!(
+            serde_yaml::to_string(&Distance::from_micrometers(1_200_000))
+                .unwrap()
+                .trim(),
+            "1.2"
+        );
+        assert_eq!(
+            serde_yaml::to_string(&DistanceSpan::from_micrometers(1))
+                .unwrap()
+                .trim(),
+            "1e-6"
+        );
+    }
+
+    #[test]
+    fn signed_distances_allow_negatives_but_spans_reject_them() {
+        assert_eq!(
+            serde_yaml::from_str::<Distance>("-0.5")
+                .unwrap()
+                .as_micrometers(),
+            -500_000
+        );
+        assert!(serde_yaml::from_str::<DistanceSpan>("-0.5").is_err());
+    }
+
+    #[test]
+    fn distance_api_rejects_non_finite_and_truncates_sub_micrometer() {
+        assert!(Distance::try_from_meters_f64_truncated(f64::NAN).is_err());
+        assert!(DistanceSpan::try_from_meters_f64_truncated(f64::INFINITY).is_err());
+        assert_eq!(
+            Distance::try_from_meters_f64_truncated(0.0000009)
+                .unwrap()
+                .as_micrometers(),
+            0
+        );
+        assert_eq!(
+            Distance::try_from_meters_f64_truncated(-0.0000009)
+                .unwrap()
+                .as_micrometers(),
+            0
+        );
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -617,7 +1183,6 @@ pub struct Universe {
 ))]
 pub struct Layout<M: ModelMode = Authored> {
     pub name: String,
-    pub units: DistanceUnit,
     #[serde(default)]
     pub target_order: Vec<LayoutTargetRef>,
     #[serde(default)]
@@ -644,14 +1209,6 @@ impl Display<Resolved> {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DistanceUnit {
-    #[default]
-    Meters,
-    Feet,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[serde(bound(
@@ -670,18 +1227,19 @@ pub struct FixturePlacement<M: ModelMode = Authored> {
 pub struct Fixture {
     pub name: String,
     pub color_model: ColorModel,
-    #[serde(default = "default_bulb_size")]
-    pub bulb_size: f64,
+    #[serde(default = "default_bulb_diameter")]
+    pub bulb_diameter: DistanceSpan,
     pub geometry: Geometry,
 }
 
-fn default_bulb_size() -> f64 {
-    DEFAULT_BULB_SIZE
+fn default_bulb_diameter() -> DistanceSpan {
+    DEFAULT_BULB_DIAMETER
 }
 
-pub const DEFAULT_BULB_SIZE: f64 = 1.0;
-pub const MIN_BULB_SIZE: f64 = 0.05;
-pub const BULB_SIZE_UNIT_RADIUS: f64 = 0.035;
+pub const DEFAULT_BULB_DIAMETER: DistanceSpan = DistanceSpan {
+    micrometers: 10_000,
+};
+pub const MIN_BULB_DIAMETER: DistanceSpan = DistanceSpan { micrometers: 1_000 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -706,17 +1264,17 @@ pub struct Transform {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Point3 {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
+    pub x: Distance,
+    pub y: Distance,
+    pub z: Distance,
 }
 
 impl Default for Point3 {
     fn default() -> Self {
         Self {
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
+            x: Distance::ZERO,
+            y: Distance::ZERO,
+            z: Distance::ZERO,
         }
     }
 }
@@ -774,7 +1332,7 @@ pub enum Geometry {
     },
     Arc {
         center: Point3,
-        radius: f64,
+        radius: DistanceSpan,
         start_degrees: f64,
         end_degrees: f64,
         pixels: u32,
@@ -838,7 +1396,7 @@ pub struct Route<M: ModelMode = Authored> {
     deserialize = "M::SequenceAudio: Deserialize<'de>, SequenceMarkCollection: Deserialize<'de>, SequenceEffect<M>: Deserialize<'de>, AutomationClip<M>: Deserialize<'de>"
 ))]
 pub struct Sequence<M: ModelMode = Authored> {
-    pub duration: Time,
+    pub duration: TimeSpan,
     pub frame_rate: u32,
     pub audio: M::SequenceAudio,
     #[serde(default)]
@@ -886,7 +1444,7 @@ pub enum SequenceEffectScope {
 pub struct SequenceEffect<M: ModelMode = Authored> {
     pub id: u32,
     pub start: Time,
-    pub duration: Time,
+    pub duration: TimeSpan,
     pub target: EffectTarget<M>,
     pub scope: SequenceEffectScope,
     #[serde(default)]
@@ -1175,7 +1733,7 @@ pub enum EffectParam<M: ModelMode = Authored> {
 pub struct AutomationClip<M: ModelMode = Authored> {
     pub id: u32,
     pub start: Time,
-    pub duration: Time,
+    pub duration: TimeSpan,
     pub curve: M::AutomationClipCurve,
     #[serde(default)]
     pub targets: Vec<M::AutomationClipTarget>,

@@ -14,7 +14,7 @@ const FRAME_OFFSET_LATEST_SEQ: usize = 16;
 const FRAME_OFFSET_LATEST_SLOT: usize = 20;
 const FRAME_OFFSET_CURRENT_TIME: usize = 24;
 const FRAME_OFFSET_PLAYING: usize = 32;
-const FRAME_OFFSET_BACKEND_MS: usize = 36;
+const FRAME_OFFSET_BACKEND_SECONDS: usize = 36;
 const FRAME_OFFSET_SLOT_COUNT: usize = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -47,13 +47,13 @@ impl PreviewTransportRuntime {
         self.platform.has_sinks()
     }
 
-    pub fn publish_frame(&mut self, frame: &OutputFrame, playing: bool, backend_ms: f32) {
+    pub fn publish_frame(&mut self, frame: &OutputFrame, playing: bool, backend_seconds: f32) {
         if !self.has_sinks() {
             return;
         }
         self.seq = self.seq.wrapping_add(1).max(1);
         self.platform
-            .publish_frame(self.seq, frame, playing, backend_ms);
+            .publish_frame(self.seq, frame, playing, backend_seconds);
     }
 
     pub fn mode() -> PreviewTransportMode {
@@ -116,7 +116,13 @@ impl PlatformRuntime {
         false
     }
 
-    fn publish_frame(&mut self, _seq: u32, _frame: &OutputFrame, _playing: bool, _backend_ms: f32) {
+    fn publish_frame(
+        &mut self,
+        _seq: u32,
+        _frame: &OutputFrame,
+        _playing: bool,
+        _backend_seconds: f32,
+    ) {
     }
 
     fn mode() -> PreviewTransportMode {
@@ -134,7 +140,7 @@ mod windows_platform {
 
     use super::{
         frame_payload_bytes, write_frame_rgb, write_slice, OutputFrame, PreviewTransportMode,
-        FRAME_HEADER_LEN, FRAME_MAGIC, FRAME_OFFSET_BACKEND_MS, FRAME_OFFSET_CURRENT_TIME,
+        FRAME_HEADER_LEN, FRAME_MAGIC, FRAME_OFFSET_BACKEND_SECONDS, FRAME_OFFSET_CURRENT_TIME,
         FRAME_OFFSET_LATEST_SEQ, FRAME_OFFSET_LATEST_SLOT, FRAME_OFFSET_PAYLOAD_BYTES,
         FRAME_OFFSET_PIXEL_COUNT, FRAME_OFFSET_PLAYING, FRAME_OFFSET_SLOT_COUNT, FRAME_SLOT_COUNT,
         FRAME_VERSION,
@@ -182,7 +188,7 @@ mod windows_platform {
             seq: u32,
             frame: &OutputFrame,
             playing: bool,
-            backend_ms: f32,
+            backend_seconds: f32,
         ) {
             for sink in self.sinks.values_mut() {
                 let Some(payload_bytes) = frame_payload_bytes(sink.pixel_count) else {
@@ -208,10 +214,14 @@ mod windows_platform {
                 let _ = write_slice(
                     bytes,
                     FRAME_OFFSET_CURRENT_TIME,
-                    &(frame.time_ms as f64).to_le_bytes(),
+                    &(frame.time_seconds as f64).to_le_bytes(),
                 );
                 let _ = write_slice(bytes, FRAME_OFFSET_PLAYING, &[u8::from(playing)]);
-                let _ = write_slice(bytes, FRAME_OFFSET_BACKEND_MS, &backend_ms.to_le_bytes());
+                let _ = write_slice(
+                    bytes,
+                    FRAME_OFFSET_BACKEND_SECONDS,
+                    &backend_seconds.to_le_bytes(),
+                );
                 let _ = write_slice(bytes, FRAME_OFFSET_LATEST_SLOT, &slot_u32.to_le_bytes());
                 let _ = write_slice(bytes, FRAME_OFFSET_LATEST_SEQ, &seq.to_le_bytes());
             }

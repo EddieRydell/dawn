@@ -46,6 +46,6 @@ export const commands = {
   previewPause: () => unwrap(generatedCommands.previewPause()),
   previewStop: () => unwrap(generatedCommands.previewStop()),
   previewRewindToZero: () => unwrap(generatedCommands.previewRewindToZero()),
-  previewSeek: (positionMs: number) => unwrap(generatedCommands.previewSeek(positionMs)),
+  previewSeek: (positionSeconds: number) => unwrap(generatedCommands.previewSeek(positionSeconds)),
   getPreviewScene: () => unwrap(generatedCommands.getPreviewScene())
 };

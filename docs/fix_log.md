@@ -10,7 +10,7 @@ Root cause:
 `paint_clips` holds an immutable borrow of timeline state while `paint_clip_raster` tries to mutably borrow the same state for `raster_cache`.
 
 Fix:
-`paint_clips` now copies `pixels_per_ms`, `scroll_x`, `scroll_y`, and `lane_height` into local scalar values before iterating clips. The immutable timeline state borrow is dropped before `paint_clip_raster` runs, so raster cache lookup and insertion can use the existing mutable borrow without a nested `RefCell` panic.
+`paint_clips` now copies timeline scale, scroll positions, and lane height into local scalar values before iterating clips. The immutable timeline state borrow is dropped before `paint_clip_raster` runs, so raster cache lookup and insertion can use the existing mutable borrow without a nested `RefCell` panic.
 
 Regression coverage:
 No tests added per instruction. Existing workspace tests cover project analysis and desktop service behavior; this UI paint regression is covered by build verification plus manual desktop rendering.

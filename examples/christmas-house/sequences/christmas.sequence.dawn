@@ -4,7 +4,7 @@ imports:
 
 christmas:
   type: sequence
-  duration: 45000ms
+  duration: 45s
   frame_rate: 60
   audio: null
   mark_collections:
@@ -12,24 +12,24 @@ christmas:
     name: Marks1
     color: '#00b3ff'
     marks:
-    - 12844ms
+    - 12.844s
   - key: marks_2
     name: Marks2
     color: '#f97316'
     marks:
-    - 30500ms
-    - 34712ms
+    - 30.5s
+    - 34.712s
   - key: marks_3
     name: Marks3
     color: '#22c55e'
     marks:
-    - 9579ms
-    - 17176ms
-    - 21470ms
+    - 9.579s
+    - 17.176s
+    - 21.47s
   effects:
   - id: 1
-    start: 0ms
-    duration: 45000ms
+    start: 0s
+    duration: 45s
     target:
       type: group
       name: House Lines
@@ -49,8 +49,8 @@ christmas:
         value: 1.0
     script: effects.CandyCane
   - id: 2
-    start: 0ms
-    duration: 45000ms
+    start: 0s
+    duration: 45s
     target:
       type: group
       name: Windows
@@ -67,8 +67,8 @@ christmas:
         value: 0.3
     script: effects.WarmGlow
   - id: 3
-    start: 0ms
-    duration: 45000ms
+    start: 0s
+    duration: 45s
     target:
       type: group
       name: Yard
@@ -91,8 +91,8 @@ christmas:
         value: 12.0
     script: effects.Twinkle
   - id: 4
-    start: 0ms
-    duration: 45000ms
+    start: 0s
+    duration: 45s
     target:
       type: group
       name: Accents
@@ -109,8 +109,8 @@ christmas:
         value: 0.9
     script: effects.WarmGlow
   - id: 5
-    start: 8500ms
-    duration: 24300ms
+    start: 8.5s
+    duration: 24.3s
     target:
       type: fixture
       id: 5

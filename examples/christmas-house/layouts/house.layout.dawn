@@ -5,7 +5,6 @@ imports:
 house:
   type: layout
   name: Christmas House
-  units: meters
   target_order:
   - type: group
     name: House Lines

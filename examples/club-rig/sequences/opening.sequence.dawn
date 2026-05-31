@@ -6,7 +6,7 @@ imports:
 
 opening:
   type: sequence
-  duration: 200000ms
+  duration: 200s
   frame_rate: 60
   audio: ../audio/song.mp3
   mark_collections:
@@ -14,45 +14,45 @@ opening:
     name: Group 1
     color: '#38bdf8'
     marks:
-    - 12549ms
-    - 13620ms
-    - 15167ms
-    - 16459ms
-    - 40022ms
-    - 40137ms
-    - 40336ms
-    - 40538ms
-    - 40635ms
-    - 40832ms
-    - 40943ms
-    - 41134ms
-    - 41334ms
-    - 41435ms
-    - 42711ms
-    - 42769ms
-    - 42825ms
-    - 42936ms
-    - 43134ms
-    - 43336ms
-    - 43434ms
-    - 43633ms
-    - 43736ms
-    - 129633ms
-    - 129766ms
-    - 129902ms
-    - 130034ms
-    - 130165ms
-    - 130302ms
-    - 130431ms
-    - 130567ms
-    - 130701ms
-    - 130833ms
-    - 130970ms
-    - 131100ms
+    - 12.549s
+    - 13.62s
+    - 15.167s
+    - 16.459s
+    - 40.022s
+    - 40.137s
+    - 40.336s
+    - 40.538s
+    - 40.635s
+    - 40.832s
+    - 40.943s
+    - 41.134s
+    - 41.334s
+    - 41.435s
+    - 42.711s
+    - 42.769s
+    - 42.825s
+    - 42.936s
+    - 43.134s
+    - 43.336s
+    - 43.434s
+    - 43.633s
+    - 43.736s
+    - 129.633s
+    - 129.766s
+    - 129.902s
+    - 130.034s
+    - 130.165s
+    - 130.302s
+    - 130.431s
+    - 130.567s
+    - 130.701s
+    - 130.833s
+    - 130.97s
+    - 131.1s
   effects:
   - id: 23
-    start: 1517ms
-    duration: 8250ms
+    start: 1.517s
+    duration: 8.25s
     target:
       type: fixture
       id: 1
@@ -72,8 +72,8 @@ opening:
         curve: curves.fade_in
     script: effects.Pulse
   - id: 1
-    start: 4283ms
-    duration: 8250ms
+    start: 4.283s
+    duration: 8.25s
     target:
       type: fixture
       id: 11
@@ -93,8 +93,8 @@ opening:
         curve: curves.fade_in
     script: effects.Pulse
   - id: 24
-    start: 11700ms
-    duration: 5400ms
+    start: 11.7s
+    duration: 5.4s
     target:
       type: fixture
       id: 4
@@ -111,8 +111,8 @@ opening:
         value: '#ffaa00'
     script: effects.MarkPulse
   - id: 25
-    start: 39868ms
-    duration: 4350ms
+    start: 39.868s
+    duration: 4.35s
     target:
       type: group
       name: WallBars
@@ -126,13 +126,13 @@ opening:
         value: '#000000'
       accent:
         type: color
-        value: '#ffaa00'
-      offset_ms:
+        value: '#ffd480'
+      offset_seconds:
         type: float
-        value: -70.0
-      decay_ms:
+        value: -0.07
+      decay_seconds:
         type: float
-        value: 200.0
+        value: 0.2
       section_width_pixels:
         type: integer
         value: 15
@@ -147,8 +147,8 @@ opening:
         value: 0.0
     script: effects.MarkPulse
   - id: 2
-    start: 129488ms
-    duration: 1800ms
+    start: 129.488s
+    duration: 1.8s
     target:
       type: group
       name: WallBars
@@ -163,12 +163,12 @@ opening:
       accent:
         type: color
         value: '#ffcc66'
-      offset_ms:
+      offset_seconds:
         type: float
-        value: -70.0
-      decay_ms:
+        value: -0.07
+      decay_seconds:
         type: float
-        value: 180.0
+        value: 0.18
       section_width_pixels:
         type: integer
         value: 20
@@ -184,8 +184,8 @@ opening:
     script: effects.MarkPulse
   automation_clips:
   - id: 101
-    start: 0ms
-    duration: 8000ms
+    start: 0s
+    duration: 8s
     curve: curves.fade_in
     targets:
     - 1

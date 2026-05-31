@@ -12,8 +12,8 @@ use dawn_project::effect_script::{
 };
 use dawn_project::fs::{WorkspaceEntry, WorkspaceEntryKind};
 use dawn_project::model::{
-    ColorModel, Curve, CurveValue, EffectParam, Geometry, LayoutTargetKind, ObjectKind, Point3,
-    Rotation3, Scale3, SequenceEffectScope, Transform,
+    ColorModel, Curve, CurveValue, Distance, EffectParam, Geometry, LayoutTargetKind, ObjectKind,
+    Point3, Rotation3, Scale3, SequenceEffectScope, Transform,
 };
 use dawn_project::path::PathStringExt;
 use dawn_project::render::{
@@ -155,18 +155,18 @@ pub enum SequenceGuiEditDto {
         script_path: String,
         target: LayoutTargetDto,
         scope: SequenceEffectScopeDto,
-        start_ms: u32,
+        start_seconds: f64,
         mark_collection_key: Option<String>,
     },
     MoveEffect {
         id: u32,
-        start_ms: u32,
+        start_seconds: f64,
         target: Option<LayoutTargetDto>,
     },
     ResizeEffect {
         id: u32,
-        start_ms: u32,
-        duration_ms: u32,
+        start_seconds: f64,
+        duration_seconds: f64,
     },
     ChangeEffectScript {
         id: u32,
@@ -206,12 +206,12 @@ pub enum SequenceGuiEditDto {
     },
     AddMark {
         collection_key: String,
-        time_ms: u32,
+        time_seconds: f64,
     },
     MoveMark {
         collection_key: String,
         index: u32,
-        time_ms: u32,
+        time_seconds: f64,
     },
     DeleteMark {
         collection_key: String,
@@ -236,14 +236,14 @@ pub enum LayoutGuiEditDto {
     rename_all_fields = "camelCase"
 )]
 pub enum FixtureGuiEditDto {
-    UpdateBulbSize {
+    UpdateBulbDiameter {
         object_key: String,
-        bulb_size: f64,
+        bulb_diameter_meters: f64,
     },
     MovePoint {
         object_key: String,
         point_index: u32,
-        point: Point3Dto,
+        point: Point3MetersDto,
     },
 }
 
@@ -264,14 +264,30 @@ pub enum LayoutTargetKindDto {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct TransformDto {
-    pub position: Point3Dto,
-    pub rotation: Point3Dto,
-    pub scale: Point3Dto,
+    pub position: Point3MetersDto,
+    pub rotation: Rotation3DegreesDto,
+    pub scale: Scale3Dto,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct Point3Dto {
+pub struct Point3MetersDto {
+    pub x_meters: f64,
+    pub y_meters: f64,
+    pub z_meters: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Rotation3DegreesDto {
+    pub x_degrees: f64,
+    pub y_degrees: f64,
+    pub z_degrees: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Scale3Dto {
     pub x: f64,
     pub y: f64,
     pub z: f64,
@@ -282,7 +298,7 @@ pub struct Point3Dto {
 pub struct SequenceDocumentDto {
     pub path: String,
     pub object_key: String,
-    pub duration_ms: u32,
+    pub duration_seconds: f64,
     pub frame_rate: u32,
     pub audio: Option<SequenceAudioDto>,
     pub mark_collections: Vec<SequenceMarkCollectionDto>,
@@ -298,7 +314,7 @@ pub struct SequenceMarkCollectionDto {
     pub key: String,
     pub name: String,
     pub color: String,
-    pub marks_ms: Vec<u32>,
+    pub marks_seconds: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -322,8 +338,8 @@ pub struct SequenceLaneDto {
 pub struct SequenceEffectDto {
     pub index: u32,
     pub id: u32,
-    pub start_ms: u32,
-    pub duration_ms: u32,
+    pub start_seconds: f64,
+    pub duration_seconds: f64,
     pub target: LayoutTargetDto,
     pub target_label: String,
     pub scope: SequenceEffectScopeDto,
@@ -416,7 +432,6 @@ pub struct LayoutDocumentDto {
     pub path: String,
     pub object_key: String,
     pub name: String,
-    pub units: String,
     pub render_bounds: GeometryRenderBoundsDto,
     pub fixtures: Vec<LayoutFixturePlacementDto>,
 }
@@ -435,7 +450,7 @@ pub struct LayoutFixturePlacementDto {
 pub struct ResolvedLayoutFixtureDto {
     pub name: String,
     pub color_model: String,
-    pub bulb_size: f64,
+    pub bulb_diameter_meters: f64,
     pub geometry_summary: String,
     pub render_plan: GeometryRenderPlanDto,
     pub source_path: String,
@@ -456,7 +471,7 @@ pub struct FixtureDefinitionDto {
     pub object_key: String,
     pub name: String,
     pub color_model: String,
-    pub bulb_size: f64,
+    pub bulb_diameter_meters: f64,
     pub geometry: GeometryDto,
     pub geometry_summary: String,
     pub render_plan: GeometryRenderPlanDto,
@@ -470,15 +485,15 @@ pub struct FixtureDefinitionDto {
 )]
 pub enum GeometryDto {
     Points {
-        points: Vec<Point3Dto>,
+        points: Vec<Point3MetersDto>,
     },
     Lines {
-        points: Vec<Point3Dto>,
+        points: Vec<Point3MetersDto>,
         pixels: u32,
     },
     Arc {
-        center: Point3Dto,
-        radius: f64,
+        center: Point3MetersDto,
+        radius_meters: f64,
         start_degrees: f64,
         end_degrees: f64,
         pixels: u32,
@@ -491,24 +506,24 @@ pub struct GeometryRenderPlanDto {
     pub emitters: Vec<GeometryRenderPointDto>,
     pub guides: Vec<GeometryRenderGuideDto>,
     pub bounds: GeometryRenderBoundsDto,
-    pub bulb_radius: f64,
+    pub bulb_radius_meters: f64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct GeometryRenderPointDto {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
+    pub x_meters: f64,
+    pub y_meters: f64,
+    pub z_meters: f64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct GeometryRenderBoundsDto {
-    pub min_x: f64,
-    pub min_y: f64,
-    pub max_x: f64,
-    pub max_y: f64,
+    pub min_x_meters: f64,
+    pub min_y_meters: f64,
+    pub max_x_meters: f64,
+    pub max_y_meters: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -525,8 +540,8 @@ pub enum GeometryRenderGuideDto {
     Arc {
         start: GeometryRenderPointDto,
         end: GeometryRenderPointDto,
-        radius_x: f64,
-        radius_y: f64,
+        radius_x_meters: f64,
+        radius_y_meters: f64,
         rotation: f64,
         large_arc: bool,
         sweep_positive: bool,
@@ -569,9 +584,9 @@ pub struct TextPositionDto {
 pub struct PreviewSnapshotDto {
     pub source_label: String,
     pub is_playing: bool,
-    pub position_ms: u32,
-    pub home_ms: u32,
-    pub duration_ms: u32,
+    pub position_seconds: f64,
+    pub home_seconds: f64,
+    pub duration_seconds: f64,
     pub audio: Option<SequenceAudioDto>,
     pub clock_source: String,
     pub audio_playback_status: String,
@@ -608,9 +623,9 @@ impl From<AppSnapshot> for AppSnapshotDto {
             preview: PreviewSnapshotDto {
                 source_label: snapshot.preview.source_label,
                 is_playing: snapshot.preview.is_playing,
-                position_ms: snapshot.preview.position_ms.min(u32::MAX as u64) as u32,
-                home_ms: snapshot.preview.home_ms.min(u32::MAX as u64) as u32,
-                duration_ms: snapshot.preview.duration_ms.min(u32::MAX as u64) as u32,
+                position_seconds: snapshot.preview.position_seconds,
+                home_seconds: snapshot.preview.home_seconds,
+                duration_seconds: snapshot.preview.duration_seconds,
                 audio: snapshot.preview.audio.map(SequenceAudioDto::from),
                 clock_source: snapshot.preview.clock_source,
                 audio_playback_status: snapshot.preview.audio_playback_status,
@@ -763,7 +778,7 @@ impl From<SequenceDocument> for SequenceDocumentDto {
         Self {
             path: document.path,
             object_key: document.object_key,
-            duration_ms: u32_ms(document.duration_ms),
+            duration_seconds: document.duration_seconds,
             frame_rate: document.frame_rate,
             audio: document.audio.map(SequenceAudioDto::from),
             mark_collections: document
@@ -797,7 +812,7 @@ impl From<dawn_project::document::SequenceMarkCollectionDocument> for SequenceMa
             key: collection.key,
             name: collection.name,
             color: collection.color,
-            marks_ms: collection.marks_ms.into_iter().map(u32_ms).collect(),
+            marks_seconds: collection.marks_seconds,
         }
     }
 }
@@ -856,8 +871,8 @@ impl From<SequenceEffectDocument> for SequenceEffectDto {
         Self {
             index: effect.index.min(u32::MAX as usize) as u32,
             id: effect.id,
-            start_ms: u32_ms(effect.start_ms),
-            duration_ms: u32_ms(effect.duration_ms),
+            start_seconds: effect.start_seconds,
+            duration_seconds: effect.duration_seconds,
             target: effect.target.into(),
             target_label: effect.target_label,
             scope: effect.scope.into(),
@@ -1108,7 +1123,6 @@ impl From<LayoutDocument> for LayoutDocumentDto {
             path: document.path,
             object_key: document.object_key,
             name: document.name,
-            units: format!("{:?}", document.units).to_ascii_lowercase(),
             render_bounds: document.render_bounds.into(),
             fixtures: document
                 .fixtures
@@ -1135,7 +1149,7 @@ impl From<ResolvedLayoutFixture> for ResolvedLayoutFixtureDto {
         Self {
             name: fixture.name,
             color_model: color_model_name(fixture.color_model),
-            bulb_size: fixture.bulb_size,
+            bulb_diameter_meters: fixture.bulb_diameter.as_meters_f64(),
             geometry_summary: fixture.geometry_summary,
             render_plan: fixture.render_plan.into(),
             source_path: fixture.source_path,
@@ -1164,7 +1178,7 @@ impl From<FixtureDefinitionDocument> for FixtureDefinitionDto {
             object_key: fixture.object_key,
             name: fixture.name,
             color_model: color_model_name(fixture.color_model),
-            bulb_size: fixture.bulb_size,
+            bulb_diameter_meters: fixture.bulb_diameter.as_meters_f64(),
             geometry: fixture.geometry.into(),
             geometry_summary: fixture.geometry_summary,
             render_plan: fixture.render_plan.into(),
@@ -1176,12 +1190,12 @@ impl From<Transform> for TransformDto {
     fn from(transform: Transform) -> Self {
         Self {
             position: transform.position.into(),
-            rotation: Point3Dto {
-                x: transform.rotation.x,
-                y: transform.rotation.y,
-                z: transform.rotation.z,
+            rotation: Rotation3DegreesDto {
+                x_degrees: transform.rotation.x,
+                y_degrees: transform.rotation.y,
+                z_degrees: transform.rotation.z,
             },
-            scale: Point3Dto {
+            scale: Scale3Dto {
                 x: transform.scale.x,
                 y: transform.scale.y,
                 z: transform.scale.z,
@@ -1190,12 +1204,12 @@ impl From<Transform> for TransformDto {
     }
 }
 
-impl From<Point3> for Point3Dto {
+impl From<Point3> for Point3MetersDto {
     fn from(point: Point3) -> Self {
         Self {
-            x: point.x,
-            y: point.y,
-            z: point.z,
+            x_meters: point.x.as_meters_f64(),
+            y_meters: point.y.as_meters_f64(),
+            z_meters: point.z.as_meters_f64(),
         }
     }
 }
@@ -1204,10 +1218,10 @@ impl From<Geometry> for GeometryDto {
     fn from(geometry: Geometry) -> Self {
         match geometry {
             Geometry::Points { points } => Self::Points {
-                points: points.into_iter().map(Point3Dto::from).collect(),
+                points: points.into_iter().map(Point3MetersDto::from).collect(),
             },
             Geometry::Lines { points, pixels } => Self::Lines {
-                points: points.into_iter().map(Point3Dto::from).collect(),
+                points: points.into_iter().map(Point3MetersDto::from).collect(),
                 pixels,
             },
             Geometry::Arc {
@@ -1218,7 +1232,7 @@ impl From<Geometry> for GeometryDto {
                 pixels,
             } => Self::Arc {
                 center: center.into(),
-                radius,
+                radius_meters: radius.as_meters_f64(),
                 start_degrees,
                 end_degrees,
                 pixels,
@@ -1241,7 +1255,7 @@ impl From<GeometryRenderPlan> for GeometryRenderPlanDto {
                 .map(GeometryRenderGuideDto::from)
                 .collect(),
             bounds: plan.bounds.into(),
-            bulb_radius: plan.bulb_radius,
+            bulb_radius_meters: plan.bulb_radius.as_meters_f64(),
         }
     }
 }
@@ -1249,9 +1263,9 @@ impl From<GeometryRenderPlan> for GeometryRenderPlanDto {
 impl From<GeometryRenderPoint> for GeometryRenderPointDto {
     fn from(point: GeometryRenderPoint) -> Self {
         Self {
-            x: point.x,
-            y: point.y,
-            z: point.z,
+            x_meters: point.x.as_meters_f64(),
+            y_meters: point.y.as_meters_f64(),
+            z_meters: point.z.as_meters_f64(),
         }
     }
 }
@@ -1259,10 +1273,10 @@ impl From<GeometryRenderPoint> for GeometryRenderPointDto {
 impl From<GeometryRenderBounds> for GeometryRenderBoundsDto {
     fn from(bounds: GeometryRenderBounds) -> Self {
         Self {
-            min_x: bounds.min_x,
-            min_y: bounds.min_y,
-            max_x: bounds.max_x,
-            max_y: bounds.max_y,
+            min_x_meters: bounds.min_x.as_meters_f64(),
+            min_y_meters: bounds.min_y.as_meters_f64(),
+            max_x_meters: bounds.max_x.as_meters_f64(),
+            max_y_meters: bounds.max_y.as_meters_f64(),
         }
     }
 }
@@ -1285,8 +1299,8 @@ impl From<GeometryRenderGuide> for GeometryRenderGuideDto {
             } => Self::Arc {
                 start: start.into(),
                 end: end.into(),
-                radius_x,
-                radius_y,
+                radius_x_meters: radius_x.as_meters_f64(),
+                radius_y_meters: radius_y.as_meters_f64(),
                 rotation,
                 large_arc,
                 sweep_positive,
@@ -1299,35 +1313,49 @@ fn color_model_name(color_model: ColorModel) -> String {
     format!("{color_model:?}").to_ascii_lowercase()
 }
 
-fn u32_ms(value: u64) -> u32 {
-    value.min(u32::MAX as u64) as u32
-}
+impl TryFrom<TransformDto> for Transform {
+    type Error = &'static str;
 
-impl From<TransformDto> for Transform {
-    fn from(transform: TransformDto) -> Self {
-        Self {
-            position: Point3::from(transform.position),
+    fn try_from(transform: TransformDto) -> Result<Self, Self::Error> {
+        validate_finite(transform.rotation.x_degrees, "rotation x degrees")?;
+        validate_finite(transform.rotation.y_degrees, "rotation y degrees")?;
+        validate_finite(transform.rotation.z_degrees, "rotation z degrees")?;
+        validate_finite(transform.scale.x, "scale x")?;
+        validate_finite(transform.scale.y, "scale y")?;
+        validate_finite(transform.scale.z, "scale z")?;
+        Ok(Self {
+            position: Point3::try_from(transform.position)?,
             rotation: Rotation3 {
-                x: transform.rotation.x,
-                y: transform.rotation.y,
-                z: transform.rotation.z,
+                x: transform.rotation.x_degrees,
+                y: transform.rotation.y_degrees,
+                z: transform.rotation.z_degrees,
             },
             scale: Scale3 {
                 x: transform.scale.x,
                 y: transform.scale.y,
                 z: transform.scale.z,
             },
-        }
+        })
     }
 }
 
-impl From<Point3Dto> for Point3 {
-    fn from(point: Point3Dto) -> Self {
-        Self {
-            x: point.x,
-            y: point.y,
-            z: point.z,
-        }
+impl TryFrom<Point3MetersDto> for Point3 {
+    type Error = &'static str;
+
+    fn try_from(point: Point3MetersDto) -> Result<Self, Self::Error> {
+        Ok(Self {
+            x: Distance::try_from_meters_f64_truncated(point.x_meters)?,
+            y: Distance::try_from_meters_f64_truncated(point.y_meters)?,
+            z: Distance::try_from_meters_f64_truncated(point.z_meters)?,
+        })
+    }
+}
+
+fn validate_finite(value: f64, label: &'static str) -> Result<(), &'static str> {
+    if value.is_finite() {
+        Ok(())
+    } else {
+        Err(label)
     }
 }
 

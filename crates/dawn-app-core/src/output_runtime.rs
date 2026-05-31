@@ -5,13 +5,15 @@ use dawn_project::document::{
     SequenceDocument, SequenceEffectParamDocument, SequenceMarkCollectionDocument,
 };
 use dawn_project::effect_script::{FixtureContext, PixelContext, RuntimeValue};
-use dawn_project::model::{Color, EffectParam, FixtureId, Resolved, SequenceEffectScope};
+use dawn_project::model::{
+    Color, Distance, DistanceSpan, EffectParam, FixtureId, Resolved, SequenceEffectScope,
+};
 use dawn_project::render::{layout_render_plan, GeometryRenderBounds, GeometryRenderPoint};
 
 #[derive(Debug, Clone)]
 pub struct OutputFrame {
     pub source: OutputSourceMetadata,
-    pub time_ms: u64,
+    pub time_seconds: f64,
     pub generation: u64,
     pub status: OutputFrameStatus,
     pub bounds: GeometryRenderBounds,
@@ -22,7 +24,7 @@ pub struct OutputFrame {
 pub struct OutputSourceMetadata {
     pub label: String,
     pub kind: OutputSourceKind,
-    pub duration_ms: u64,
+    pub duration_seconds: f64,
     pub fps: u32,
 }
 
@@ -43,7 +45,7 @@ pub enum OutputFrameStatus {
 pub struct OutputFixtureFrame {
     pub id: FixtureId,
     pub name: String,
-    pub bulb_radius: f64,
+    pub bulb_radius: DistanceSpan,
     pub pixels: Vec<OutputPixelFrame>,
 }
 
@@ -60,7 +62,7 @@ pub trait OutputSink {
 pub fn evaluate_sequence_frame(
     analysis: &ProjectAnalysis,
     document: &SequenceDocument,
-    time_ms: u64,
+    time_seconds: f64,
     generation: u64,
 ) -> OutputFrame {
     let Some(project) = analysis.resolved.as_ref() else {
@@ -94,22 +96,22 @@ pub fn evaluate_sequence_frame(
         let Some(render) = &effect.render else {
             continue;
         };
-        let local_ms = if time_ms < effect.start_ms
-            || time_ms >= effect.start_ms.saturating_add(effect.duration_ms)
+        let local_seconds = if time_seconds < effect.start_seconds
+            || time_seconds >= effect.start_seconds + effect.duration_seconds
         {
             continue;
         } else {
-            time_ms.saturating_sub(effect.start_ms)
+            time_seconds - effect.start_seconds
         };
-        let progress = if effect.duration_ms == 0 {
+        let progress = if effect.duration_seconds == 0.0 {
             0.0
         } else {
-            (local_ms as f64 / effect.duration_ms as f64).clamp(0.0, 1.0)
+            (local_seconds / effect.duration_seconds).clamp(0.0, 1.0)
         };
         let params = runtime_params_from_document(
             &render.params,
             &document.mark_collections,
-            effect.start_ms,
+            effect.start_seconds,
         );
         let target_pixel_count = render.target_pixels.len();
         for (target_pixel_index, pixel) in render.target_pixels.iter().enumerate() {
@@ -129,7 +131,7 @@ pub fn evaluate_sequence_frame(
             match analysis.sample_effect_script_key(
                 &render.script_key,
                 progress,
-                local_ms as f64 / 1_000.0,
+                local_seconds,
                 FixtureContext {
                     index: pixel.fixture_index,
                 },
@@ -146,10 +148,10 @@ pub fn evaluate_sequence_frame(
         source: OutputSourceMetadata {
             label: format!("Sequence {}", document.object_key),
             kind: OutputSourceKind::Sequence,
-            duration_ms: document.duration_ms,
+            duration_seconds: document.duration_seconds,
             fps: document.frame_rate,
         },
-        time_ms,
+        time_seconds,
         generation,
         status,
         bounds: render_plan.bounds,
@@ -185,12 +187,12 @@ fn add_clamped(target: &mut Color, color: Color) {
 pub fn runtime_params_from_document(
     params: &[SequenceEffectParamDocument],
     mark_collections: &[SequenceMarkCollectionDocument],
-    effect_start_ms: u64,
+    effect_start_seconds: f64,
 ) -> BTreeMap<String, RuntimeValue> {
     params
         .iter()
         .filter_map(|param| {
-            runtime_value_from_param(&param.value, mark_collections, effect_start_ms)
+            runtime_value_from_param(&param.value, mark_collections, effect_start_seconds)
                 .map(|value| (param.name.clone(), value))
         })
         .collect()
@@ -199,7 +201,7 @@ pub fn runtime_params_from_document(
 pub fn runtime_value_from_param(
     param: &EffectParam<Resolved>,
     mark_collections: &[SequenceMarkCollectionDocument],
-    effect_start_ms: u64,
+    effect_start_seconds: f64,
 ) -> Option<RuntimeValue> {
     match param {
         EffectParam::Integer { value } => Some(RuntimeValue::Int(*value as i64)),
@@ -213,9 +215,9 @@ pub fn runtime_value_from_param(
             let mut marks = mark_collections
                 .iter()
                 .find(|collection| collection.key == *key)?
-                .marks_ms
+                .marks_seconds
                 .iter()
-                .map(|mark_ms| (*mark_ms as i128 - effect_start_ms as i128) as f64 / 1_000.0)
+                .map(|mark_seconds| *mark_seconds - effect_start_seconds)
                 .collect::<Vec<_>>();
             marks.sort_by(f64::total_cmp);
             Some(RuntimeValue::Marks(marks))
@@ -228,17 +230,17 @@ pub fn empty_frame(generation: u64, message: impl Into<String>) -> OutputFrame {
         source: OutputSourceMetadata {
             label: "No preview source".to_string(),
             kind: OutputSourceKind::Empty,
-            duration_ms: 0,
+            duration_seconds: 0.0,
             fps: 0,
         },
-        time_ms: 0,
+        time_seconds: 0.0,
         generation,
         status: OutputFrameStatus::Idle(message.into()),
         bounds: GeometryRenderBounds {
-            min_x: -5.0,
-            min_y: -4.0,
-            max_x: 5.0,
-            max_y: 4.0,
+            min_x: Distance::from_micrometers(-5_000_000),
+            min_y: Distance::from_micrometers(-4_000_000),
+            max_x: Distance::from_micrometers(5_000_000),
+            max_y: Distance::from_micrometers(4_000_000),
         },
         fixtures: Vec::new(),
     }

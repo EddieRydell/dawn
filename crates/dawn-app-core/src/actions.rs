@@ -27,5 +27,5 @@ pub enum AppAction {
     PreviewPause,
     PreviewStop,
     PreviewRewindToZero,
-    PreviewSeek(u64),
+    PreviewSeek(f64),
 }

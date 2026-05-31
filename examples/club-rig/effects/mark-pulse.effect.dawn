@@ -2,15 +2,15 @@ effect MarkPulse {
   param marks beats;
   param color base = #101820;
   param color accent = #ffcc66;
-  param float offset_ms = 0.0;
-  param float decay_ms = 180.0;
+  param float offset_seconds = 0.0;
+  param float decay_seconds = 0.18;
   param int section_width_pixels = 5;
   param float section_edge_fade_pixels = 0.0;
   param int sections_per_mark = 3;
   param float seed = 0.0;
 
   color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
-    float query_time = seconds - offset_ms / 1000.0;
+    float query_time = seconds - offset_seconds;
     float previous = mark_prev(beats, query_time, -999.0);
     float elapsed = mark_elapsed(beats, query_time, 999.0);
     float width = max(1.0, section_width_pixels);
@@ -36,7 +36,7 @@ effect MarkPulse {
       active = max(active, hit);
     }
 
-    float pulse = 1.0 - clamp(elapsed / max(1.0, decay_ms) * 1000.0, 0.0, 1.0);
+    float pulse = 1.0 - clamp(elapsed / max(0.000000001, decay_seconds), 0.0, 1.0);
     return mix(base, accent, active * pulse);
   }
 }

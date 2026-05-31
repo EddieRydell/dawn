@@ -6,15 +6,15 @@ const FRAME_OFFSET_LATEST_SEQ = 16;
 const FRAME_OFFSET_LATEST_SLOT = 20;
 const FRAME_OFFSET_CURRENT_TIME = 24;
 const FRAME_OFFSET_PLAYING = 32;
-const FRAME_OFFSET_BACKEND_MS = 36;
+const FRAME_OFFSET_BACKEND_SECONDS = 36;
 
 export type PreviewTransportMode = "webview2_shared" | "unsupported";
 
 export type SharedPreviewFrame = {
   frame: Uint8Array;
-  currentTimeMs: number;
+  currentTimeSeconds: number;
   playing: boolean;
-  backendMs: number;
+  backendSeconds: number;
 };
 
 interface SharedBufferReceivedEvent extends Event {
@@ -102,9 +102,9 @@ function startPolling(): void {
 
     const payloadBytes = frameView.getUint32(FRAME_OFFSET_PAYLOAD_BYTES, true);
     const slot = frameView.getUint32(FRAME_OFFSET_LATEST_SLOT, true);
-    const currentTimeMs = frameView.getFloat64(FRAME_OFFSET_CURRENT_TIME, true);
+    const currentTimeSeconds = frameView.getFloat64(FRAME_OFFSET_CURRENT_TIME, true);
     const playing = frameView.getUint8(FRAME_OFFSET_PLAYING) === 1;
-    const backendMs = frameView.getFloat32(FRAME_OFFSET_BACKEND_MS, true);
+    const backendSeconds = frameView.getFloat32(FRAME_OFFSET_BACKEND_SECONDS, true);
     const slotOffset = FRAME_HEADER_LEN + slot * payloadBytes;
     const slotEnd = slotOffset + payloadBytes;
     if (slotEnd > frameBytes.byteLength) return;
@@ -114,7 +114,7 @@ function startPolling(): void {
     if (seqAfter !== seqBefore) return;
 
     lastSeq = seqBefore;
-    publishFrame({ frame, currentTimeMs, playing, backendMs });
+    publishFrame({ frame, currentTimeSeconds, playing, backendSeconds });
   };
   rafPollHandle = requestAnimationFrame(tick);
 }

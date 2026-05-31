@@ -257,8 +257,8 @@ impl AppModel {
                     .go_to_sequence_beginning(self.analysis.as_ref());
                 self.status = "Preview rewound".to_string();
             }
-            AppAction::PreviewSeek(position_ms) => {
-                self.preview.seek(position_ms, self.analysis.as_ref());
+            AppAction::PreviewSeek(position_seconds) => {
+                self.preview.seek(position_seconds, self.analysis.as_ref());
                 self.status = "Preview seeked".to_string();
             }
         }
@@ -486,32 +486,32 @@ impl AppModel {
                 script_path,
                 target,
                 scope,
-                start_ms,
+                start_seconds,
                 mark_collection_key,
             } => SequenceDocumentEdit::AddEffect {
                 script_path,
                 target: target.into(),
                 scope: scope.into(),
-                start_ms: start_ms.into(),
+                start_seconds: start_seconds.into(),
                 mark_collection_key,
             },
             SequenceGuiEditDto::MoveEffect {
                 id,
-                start_ms,
+                start_seconds,
                 target,
             } => SequenceDocumentEdit::MoveEffect {
                 id,
-                start_ms: start_ms.into(),
+                start_seconds: start_seconds.into(),
                 target: target.map(Into::into),
             },
             SequenceGuiEditDto::ResizeEffect {
                 id,
-                start_ms,
-                duration_ms,
+                start_seconds,
+                duration_seconds,
             } => SequenceDocumentEdit::ResizeEffect {
                 id,
-                start_ms: start_ms.into(),
-                duration_ms: duration_ms.into(),
+                start_seconds: start_seconds.into(),
+                duration_seconds: duration_seconds.into(),
             },
             SequenceGuiEditDto::ChangeEffectScript { id, script_path } => {
                 SequenceDocumentEdit::ChangeEffectScript { id, script_path }
@@ -550,19 +550,19 @@ impl AppModel {
             }
             SequenceGuiEditDto::AddMark {
                 collection_key,
-                time_ms,
+                time_seconds,
             } => SequenceDocumentEdit::AddMark {
                 collection_key,
-                time_ms: time_ms.into(),
+                time_seconds: time_seconds.into(),
             },
             SequenceGuiEditDto::MoveMark {
                 collection_key,
                 index,
-                time_ms,
+                time_seconds,
             } => SequenceDocumentEdit::MoveMark {
                 collection_key,
                 index: index as usize,
-                time_ms: time_ms.into(),
+                time_seconds: time_seconds.into(),
             },
             SequenceGuiEditDto::DeleteMark {
                 collection_key,
@@ -611,7 +611,9 @@ impl AppModel {
                     .iter_mut()
                     .find(|fixture| fixture.id == id)
                     .ok_or_else(|| format!("fixture placement `{id}` was not found"))?;
-                placement.transform = transform.into();
+                placement.transform = transform
+                    .try_into()
+                    .map_err(|error: &'static str| error.to_string())?;
             }
         }
         let outcome = self.workspace.apply_layout_edit(
@@ -630,16 +632,20 @@ impl AppModel {
             self.workspace
                 .fixture_document(path.clone(), None, self.editors.dirty_overlays())?;
         match edit {
-            FixtureGuiEditDto::UpdateBulbSize {
+            FixtureGuiEditDto::UpdateBulbDiameter {
                 object_key,
-                bulb_size,
+                bulb_diameter_meters,
             } => {
                 let fixture = document
                     .fixtures
                     .iter_mut()
                     .find(|fixture| fixture.object_key == object_key)
                     .ok_or_else(|| format!("fixture `{object_key}` was not found"))?;
-                fixture.bulb_size = bulb_size.max(0.05);
+                fixture.bulb_diameter =
+                    dawn_project::model::DistanceSpan::try_from_meters_f64_truncated(
+                        bulb_diameter_meters,
+                    )
+                    .map_err(str::to_string)?;
             }
             FixtureGuiEditDto::MovePoint {
                 object_key,
@@ -657,7 +663,9 @@ impl AppModel {
                 let target = points
                     .get_mut(point_index as usize)
                     .ok_or_else(|| format!("point `{point_index}` was not found"))?;
-                *target = point.into();
+                *target = point
+                    .try_into()
+                    .map_err(|error: &'static str| error.to_string())?;
             }
         }
         let outcome = self.workspace.apply_fixture_edit(

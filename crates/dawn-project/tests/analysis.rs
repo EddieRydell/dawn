@@ -23,8 +23,8 @@ use dawn_project::effect_script::{
 };
 use dawn_project::fs::WorkspaceFs;
 use dawn_project::model::{
-    Color, ColorModel, Curve, CurveValue, CurveValueType, FixtureId, Geometry, LayoutTargetKind,
-    Point3, Transform,
+    Color, ColorModel, Curve, CurveValue, CurveValueType, Distance, DistanceSpan, FixtureId,
+    Geometry, LayoutTargetKind, Point3, Transform,
 };
 use dawn_project::path::{utf8_path, PathStringExt, Utf8PathBuf};
 use dawn_project::render::{GeometryRenderBounds, GeometryRenderGuide, GeometryRenderPlan};
@@ -381,7 +381,6 @@ club:
       routes: []
     layout:
       name: stage
-      units: meters
       target_order:
         - type: group
           name: all
@@ -574,7 +573,7 @@ bad_fixture:
   type: fixture
   name: Bad
   color_model: rgb
-  bulb_size: 0.32qr
+  bulb_diameter: 0.32qr
   geometry:
     type: points
     points: []
@@ -591,8 +590,11 @@ bad_fixture:
         .range
         .expect("invalid scalar diagnostic should have a source range");
 
-    assert_eq!(range.start.line, line_index(content, "  bulb_size: 0.32qr"));
-    assert_eq!(range.start.character, 13);
+    assert_eq!(
+        range.start.line,
+        line_index(content, "  bulb_diameter: 0.32qr")
+    );
+    assert_eq!(range.start.character, 17);
 }
 
 #[test]
@@ -609,7 +611,6 @@ club:
       routes: []
     layout:
       name: stage
-      units: meters
       target_order:
         - type: fixture
           name: first
@@ -675,7 +676,6 @@ club:
       routes: []
     layout:
       name: stage
-      units: meters
       target_order: []
       fixtures: []
       groups: []
@@ -806,7 +806,6 @@ main:
     routes: []
   layout:
     name: stage
-    units: meters
     target_order:
       - type: group
         name: all
@@ -867,7 +866,7 @@ opening:
                 name: "all".to_string(),
             },
             scope: dawn_project::model::SequenceEffectScope::WholeTarget,
-            start_ms: 1_500,
+            start_seconds: 1.5,
             mark_collection_key: None,
         },
         base,
@@ -906,7 +905,7 @@ opening:
         "opening",
         SequenceDocumentEdit::MoveEffect {
             id: 2,
-            start_ms: 0,
+            start_seconds: 0.0,
             target: Some(LayoutTargetDocument {
                 kind: LayoutTargetKind::Fixture,
                 name: "1".to_string(),
@@ -954,7 +953,6 @@ club:
       routes: []
     layout:
       name: stage
-      units: meters
       target_order:
         - type: fixture
           name: Bar 01
@@ -1024,7 +1022,6 @@ club:
           start: 1
     layout:
       name: stage
-      units: meters
       target_order:
         - type: group
           name: WallBars
@@ -1130,7 +1127,6 @@ club:
       routes: []
     layout:
       name: stage
-      units: meters
       fixtures:
         - id: 1
           name: First
@@ -1248,7 +1244,6 @@ imports:
 stage:
   type: layout
   name: stage
-  units: meters
   target_order:
     - type: fixture
       name: Imported
@@ -1319,7 +1314,6 @@ imports:
 stage:
   type: layout
   name: stage
-  units: meters
   target_order:
     - type: fixture
       name: Imported
@@ -1451,7 +1445,6 @@ imports:
 stage:
   type: layout
   name: stage
-  units: meters
   target_order:
     - type: fixture
       name: Pixel
@@ -1475,10 +1468,10 @@ stage:
 
     let document = get_layout_document(&layout_path, "stage", &project_path, Vec::new()).unwrap();
 
-    assert!(document.render_bounds.min_x < 12.0);
-    assert!(document.render_bounds.max_x > 12.0);
-    assert!(document.render_bounds.min_y < 26.0);
-    assert!(document.render_bounds.max_y > 26.0);
+    assert!(document.render_bounds.min_x.as_meters_f64() < 12.0);
+    assert!(document.render_bounds.max_x.as_meters_f64() > 12.0);
+    assert!(document.render_bounds.min_y.as_meters_f64() < 26.0);
+    assert!(document.render_bounds.max_y.as_meters_f64() > 26.0);
 }
 
 #[test]
@@ -1529,7 +1522,6 @@ imports:
 stage:
   type: layout
   name: stage
-  units: meters
   target_order:
     - type: fixture
       name: Missing
@@ -1570,7 +1562,6 @@ fn layout_document_edit_rewrites_only_layout_object_block() {
 stage:
   type: layout
   name: stage
-  units: meters
   target_order: []
   fixtures: []
   groups: []
@@ -1602,7 +1593,7 @@ pixel:
         resolved_fixture: ResolvedLayoutFixture {
             name: catalog_item.display_name,
             color_model: catalog_item.color_model,
-            bulb_size: catalog_item.bulb_size,
+            bulb_diameter: catalog_item.bulb_diameter,
             geometry: catalog_item.geometry,
             geometry_summary: catalog_item.geometry_summary,
             render_plan: catalog_item.render_plan,
@@ -1611,9 +1602,9 @@ pixel:
         },
         transform: Transform {
             position: Point3 {
-                x: 1.0,
-                y: 2.0,
-                z: 0.0,
+                x: meters(1.0),
+                y: meters(2.0),
+                z: meters(0.0),
             },
             rotation: Default::default(),
             scale: Default::default(),
@@ -1660,7 +1651,6 @@ fn layout_document_edit_repairs_group_members_on_rename_and_delete() {
 stage:
   type: layout
   name: stage
-  units: meters
   target_order:
     - type: group
       name: all
@@ -1739,7 +1729,6 @@ fn fixture_document_edit_supports_crud_and_blocks_new_reference_errors() {
 stage:
   type: layout
   name: stage
-  units: meters
   target_order:
     - type: fixture
       name: Imported
@@ -1775,10 +1764,10 @@ pixel:
             object_key: "arc".to_string(),
             name: "Arc".to_string(),
             color_model: ColorModel::Rgb,
-            bulb_size: 1.0,
+            bulb_diameter: meters_span(1.0),
             geometry: Geometry::Arc {
                 center: Point3::default(),
-                radius: 1.0,
+                radius: meters_span(1.0),
                 start_degrees: 0.0,
                 end_degrees: 180.0,
                 pixels: 8,
@@ -1798,7 +1787,7 @@ pixel:
     )
     .unwrap();
     assert!(outcome.serialized_content.contains("# keep me"));
-    assert!(outcome.serialized_content.contains("bulb_size: 1.0"));
+    assert!(outcome.serialized_content.contains("bulb_diameter: 1"));
     assert!(outcome.serialized_content.contains("type: arc"));
     assert_eq!(
         get_fixture_document(
@@ -1834,7 +1823,6 @@ club:
       routes: []
     layout:
       name: stage
-      units: meters
       fixtures: []
       groups: []
 "#,
@@ -1861,18 +1849,18 @@ pixel_bar:
             object_key: "pixel_bar".to_string(),
             name: "PixelBar".to_string(),
             color_model: ColorModel::Rgb,
-            bulb_size: 1.0,
+            bulb_diameter: meters_span(1.0),
             geometry: Geometry::Lines {
                 points: vec![
                     Point3 {
-                        x: -0.5,
-                        y: 0.0,
-                        z: 0.0,
+                        x: meters(-0.5),
+                        y: meters(0.0),
+                        z: meters(0.0),
                     },
                     Point3 {
-                        x: 0.5,
-                        y: 0.0,
-                        z: 0.0,
+                        x: meters(0.5),
+                        y: meters(0.0),
+                        z: meters(0.0),
                     },
                 ],
                 pixels: 50,
@@ -1919,7 +1907,6 @@ club:
       routes: []
     layout:
       name: stage
-      units: meters
       fixtures:
         - id: 1
           name: Bar
@@ -1962,7 +1949,6 @@ club:
       routes: []
     layout:
       name: stage
-      units: meters
       fixtures:
         - id: 1
           name: Bar
@@ -2092,7 +2078,6 @@ main:
 stage:
   type: layout
   name: stage
-  units: meters
   fixtures: []
   groups: []
 "#,
@@ -2127,7 +2112,6 @@ main:
     routes: []
   layout:
     name: stage
-    units: meters
     fixtures: []
     groups: []
 "#,
@@ -2179,7 +2163,6 @@ main:
     routes: []
   layout:
     name: stage
-    units: meters
     fixtures: []
     groups: []
 "#,
@@ -2229,7 +2212,6 @@ club:
       routes: []
     layout:
       name: stage
-      units: meters
       fixtures: []
       groups: []
   sequences:
@@ -2275,7 +2257,6 @@ fn minimal_project(key: &str) -> String {
       routes: []
     layout:
       name: stage
-      units: meters
       fixtures: []
       groups: []
 "#
@@ -2295,7 +2276,6 @@ club:
       routes: []
     layout:
       name: stage
-      units: meters
       target_order:
         - type: group
           name: all
@@ -2380,11 +2360,19 @@ fn empty_render_plan() -> GeometryRenderPlan {
         emitters: Vec::new(),
         guides: Vec::new(),
         bounds: GeometryRenderBounds {
-            min_x: -1.0,
-            min_y: -1.0,
-            max_x: 1.0,
-            max_y: 1.0,
+            min_x: meters(-1.0),
+            min_y: meters(-1.0),
+            max_x: meters(1.0),
+            max_y: meters(1.0),
         },
-        bulb_radius: 0.035,
+        bulb_radius: meters_span(0.005),
     }
+}
+
+fn meters(value: f64) -> Distance {
+    Distance::try_from_meters_f64_truncated(value).unwrap()
+}
+
+fn meters_span(value: f64) -> DistanceSpan {
+    DistanceSpan::try_from_meters_f64_truncated(value).unwrap()
 }

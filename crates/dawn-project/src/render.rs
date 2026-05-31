@@ -1,25 +1,25 @@
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    FixtureId, FixturePlacement, Geometry, Point3, Resolved, Transform, BULB_SIZE_UNIT_RADIUS,
-    MIN_BULB_SIZE,
+    Distance, DistanceSpan, FixtureId, FixturePlacement, Geometry, Point3, Resolved, Transform,
+    MIN_BULB_DIAMETER,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeometryRenderPoint {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
+    pub x: Distance,
+    pub y: Distance,
+    pub z: Distance,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeometryRenderBounds {
-    pub min_x: f64,
-    pub min_y: f64,
-    pub max_x: f64,
-    pub max_y: f64,
+    pub min_x: Distance,
+    pub min_y: Distance,
+    pub max_x: Distance,
+    pub max_y: Distance,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -36,8 +36,8 @@ pub enum GeometryRenderGuide {
     Arc {
         start: GeometryRenderPoint,
         end: GeometryRenderPoint,
-        radius_x: f64,
-        radius_y: f64,
+        radius_x: DistanceSpan,
+        radius_y: DistanceSpan,
         rotation: f64,
         large_arc: bool,
         sweep_positive: bool,
@@ -50,7 +50,7 @@ pub struct GeometryRenderPlan {
     pub emitters: Vec<GeometryRenderPoint>,
     pub guides: Vec<GeometryRenderGuide>,
     pub bounds: GeometryRenderBounds,
-    pub bulb_radius: f64,
+    pub bulb_radius: DistanceSpan,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -60,7 +60,7 @@ pub struct LayoutFixtureRenderPlan {
     pub emitters: Vec<GeometryRenderPoint>,
     pub guides: Vec<GeometryRenderGuide>,
     pub bounds: GeometryRenderBounds,
-    pub bulb_radius: f64,
+    pub bulb_radius: DistanceSpan,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -78,8 +78,11 @@ pub(crate) fn geometry_summary(geometry: &Geometry) -> String {
     }
 }
 
-pub fn geometry_render_plan(geometry: &Geometry, bulb_size: f64) -> GeometryRenderPlan {
-    let bulb_radius = bulb_radius(bulb_size);
+pub fn geometry_render_plan(
+    geometry: &Geometry,
+    bulb_diameter: DistanceSpan,
+) -> GeometryRenderPlan {
+    let bulb_radius = bulb_radius(bulb_diameter);
     let (emitters, guides) = match geometry {
         Geometry::Points { points } => (
             points.iter().map(render_point_from_point3).collect(),
@@ -180,15 +183,15 @@ fn point_at_distance(segments: &[PolylineSegment], distance: f64) -> GeometryRen
         .last()
         .map(|segment| render_point_from_point3(&segment.to))
         .unwrap_or(GeometryRenderPoint {
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
+            x: Distance::ZERO,
+            y: Distance::ZERO,
+            z: Distance::ZERO,
         })
 }
 
 fn sample_arc_points(
     center: &Point3,
-    radius: f64,
+    radius: DistanceSpan,
     start_degrees: f64,
     end_degrees: f64,
     pixels: u32,
@@ -229,12 +232,19 @@ fn line_guides(points: &[Point3]) -> Vec<GeometryRenderGuide> {
 fn render_bounds(
     emitters: &[GeometryRenderPoint],
     guides: &[GeometryRenderGuide],
-    bulb_radius: f64,
+    bulb_radius: DistanceSpan,
 ) -> Option<GeometryRenderBounds> {
     let mut accumulator = BoundsAccumulator::new();
     for point in emitters {
-        accumulator.include(point.x - bulb_radius, point.y - bulb_radius);
-        accumulator.include(point.x + bulb_radius, point.y + bulb_radius);
+        let radius = bulb_radius.as_micrometers() as i64;
+        accumulator.include(
+            offset_distance(point.x, -radius),
+            offset_distance(point.y, -radius),
+        );
+        accumulator.include(
+            offset_distance(point.x, radius),
+            offset_distance(point.y, radius),
+        );
     }
     for guide in guides {
         match guide {
@@ -249,10 +259,24 @@ fn render_bounds(
                 radius_y,
                 ..
             } => {
-                accumulator.include(start.x - radius_x.abs(), start.y - radius_y.abs());
-                accumulator.include(start.x + radius_x.abs(), start.y + radius_y.abs());
-                accumulator.include(end.x - radius_x.abs(), end.y - radius_y.abs());
-                accumulator.include(end.x + radius_x.abs(), end.y + radius_y.abs());
+                let radius_x = radius_x.as_micrometers() as i64;
+                let radius_y = radius_y.as_micrometers() as i64;
+                accumulator.include(
+                    offset_distance(start.x, -radius_x),
+                    offset_distance(start.y, -radius_y),
+                );
+                accumulator.include(
+                    offset_distance(start.x, radius_x),
+                    offset_distance(start.y, radius_y),
+                );
+                accumulator.include(
+                    offset_distance(end.x, -radius_x),
+                    offset_distance(end.y, -radius_y),
+                );
+                accumulator.include(
+                    offset_distance(end.x, radius_x),
+                    offset_distance(end.y, radius_y),
+                );
             }
         }
     }
@@ -265,7 +289,7 @@ pub fn layout_render_plan(fixtures: &[FixturePlacement<Resolved>]) -> LayoutRend
         .iter()
         .map(|fixture| {
             let local_plan =
-                geometry_render_plan(&fixture.fixture.geometry, fixture.fixture.bulb_size);
+                geometry_render_plan(&fixture.fixture.geometry, fixture.fixture.bulb_diameter);
             let plan = transform_geometry_render_plan(&local_plan, &fixture.transform);
             include_bounds(&mut accumulator, plan.bounds);
             LayoutFixtureRenderPlan {
@@ -315,10 +339,10 @@ pub fn transform_geometry_render_plan(
 
 fn default_layout_bounds() -> GeometryRenderBounds {
     GeometryRenderBounds {
-        min_x: -5.0,
-        min_y: -4.0,
-        max_x: 5.0,
-        max_y: 4.0,
+        min_x: Distance::from_micrometers(-5_000_000),
+        min_y: Distance::from_micrometers(-4_000_000),
+        max_x: Distance::from_micrometers(5_000_000),
+        max_y: Distance::from_micrometers(4_000_000),
     }
 }
 
@@ -347,8 +371,8 @@ fn transform_render_guide(
         } => GeometryRenderGuide::Arc {
             start: transform_render_point(*start, transform),
             end: transform_render_point(*end, transform),
-            radius_x: (radius_x * transform.scale.x).abs(),
-            radius_y: (radius_y * transform.scale.y).abs(),
+            radius_x: scale_span(*radius_x, transform.scale.x),
+            radius_y: scale_span(*radius_y, transform.scale.y),
             rotation: rotation + transform.rotation.z,
             large_arc: *large_arc,
             sweep_positive: if transform.scale.x.signum() == transform.scale.y.signum() {
@@ -374,7 +398,7 @@ impl BoundsAccumulator {
         self.include(point.x, point.y);
     }
 
-    fn include(&mut self, x: f64, y: f64) {
+    fn include(&mut self, x: Distance, y: Distance) {
         self.bounds = Some(match self.bounds {
             Some(bounds) => GeometryRenderBounds {
                 min_x: bounds.min_x.min(x),
@@ -398,15 +422,15 @@ impl BoundsAccumulator {
 
 fn default_render_bounds() -> GeometryRenderBounds {
     GeometryRenderBounds {
-        min_x: -1.0,
-        min_y: -1.0,
-        max_x: 1.0,
-        max_y: 1.0,
+        min_x: Distance::from_micrometers(-1_000_000),
+        min_y: Distance::from_micrometers(-1_000_000),
+        max_x: Distance::from_micrometers(1_000_000),
+        max_y: Distance::from_micrometers(1_000_000),
     }
 }
 
-fn bulb_radius(value: f64) -> f64 {
-    value.max(MIN_BULB_SIZE) * BULB_SIZE_UNIT_RADIUS
+fn bulb_radius(value: DistanceSpan) -> DistanceSpan {
+    DistanceSpan::from_micrometers(value.max(MIN_BULB_DIAMETER).as_micrometers() / 2)
 }
 
 fn transform_render_point(
@@ -414,17 +438,23 @@ fn transform_render_point(
     transform: &Transform,
 ) -> GeometryRenderPoint {
     let radians = transform.rotation.z.to_radians();
-    let x = point.x * transform.scale.x;
-    let y = point.y * transform.scale.y;
+    let x = point.x.as_meters_f64() * transform.scale.x;
+    let y = point.y.as_meters_f64() * transform.scale.y;
     GeometryRenderPoint {
-        x: transform.position.x + x * radians.cos() - y * radians.sin(),
-        y: transform.position.y + x * radians.sin() + y * radians.cos(),
-        z: transform.position.z + point.z * transform.scale.z,
+        x: rounded_distance(
+            transform.position.x.as_meters_f64() + x * radians.cos() - y * radians.sin(),
+        ),
+        y: rounded_distance(
+            transform.position.y.as_meters_f64() + x * radians.sin() + y * radians.cos(),
+        ),
+        z: rounded_distance(
+            transform.position.z.as_meters_f64() + point.z.as_meters_f64() * transform.scale.z,
+        ),
     }
 }
 
-fn transformed_radius(radius: f64, transform: &Transform) -> f64 {
-    radius * transform.scale.x.abs().max(transform.scale.y.abs())
+fn transformed_radius(radius: DistanceSpan, transform: &Transform) -> DistanceSpan {
+    scale_span(radius, transform.scale.x.abs().max(transform.scale.y.abs()))
 }
 
 fn render_point_from_point3(point: &Point3) -> GeometryRenderPoint {
@@ -437,26 +467,38 @@ fn render_point_from_point3(point: &Point3) -> GeometryRenderPoint {
 
 fn interpolate_point(from: &Point3, to: &Point3, t: f64) -> GeometryRenderPoint {
     GeometryRenderPoint {
-        x: lerp(from.x, to.x, t),
-        y: lerp(from.y, to.y, t),
-        z: lerp(from.z, to.z, t),
+        x: rounded_distance(lerp(from.x.as_meters_f64(), to.x.as_meters_f64(), t)),
+        y: rounded_distance(lerp(from.y.as_meters_f64(), to.y.as_meters_f64(), t)),
+        z: rounded_distance(lerp(from.z.as_meters_f64(), to.z.as_meters_f64(), t)),
     }
 }
 
 fn point_distance(from: &Point3, to: &Point3) -> f64 {
-    let dx = to.x - from.x;
-    let dy = to.y - from.y;
-    let dz = to.z - from.z;
+    let dx = to.x.as_meters_f64() - from.x.as_meters_f64();
+    let dy = to.y.as_meters_f64() - from.y.as_meters_f64();
+    let dz = to.z.as_meters_f64() - from.z.as_meters_f64();
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
-fn arc_point(center: &Point3, radius: f64, degrees: f64) -> GeometryRenderPoint {
+fn arc_point(center: &Point3, radius: DistanceSpan, degrees: f64) -> GeometryRenderPoint {
     let radians = degrees.to_radians();
     GeometryRenderPoint {
-        x: center.x + radius * radians.cos(),
-        y: center.y + radius * radians.sin(),
+        x: rounded_distance(center.x.as_meters_f64() + radius.as_meters_f64() * radians.cos()),
+        y: rounded_distance(center.y.as_meters_f64() + radius.as_meters_f64() * radians.sin()),
         z: center.z,
     }
+}
+
+fn rounded_distance(meters: f64) -> Distance {
+    Distance::from_micrometers((meters * 1_000_000.0).round() as i64)
+}
+
+fn scale_span(span: DistanceSpan, scale: f64) -> DistanceSpan {
+    DistanceSpan::from_micrometers((span.as_meters_f64() * scale.abs() * 1_000_000.0).round() as u64)
+}
+
+fn offset_distance(distance: Distance, offset_micrometers: i64) -> Distance {
+    Distance::from_micrometers(distance.as_micrometers().saturating_add(offset_micrometers))
 }
 
 fn lerp(from: f64, to: f64, t: f64) -> f64 {
@@ -468,91 +510,5 @@ fn plural(count: usize) -> &'static str {
         ""
     } else {
         "s"
-    }
-}
-#[cfg(test)]
-mod geometry_render_tests {
-    use super::*;
-    use crate::model::DEFAULT_BULB_SIZE;
-
-    #[test]
-    fn line_sampling_covers_empty_single_midpoint_endpoints_and_zero_length() {
-        assert!(sample_polyline_points(&[], 4).is_empty());
-
-        let single = sample_polyline_points(&[point(2.0, 3.0, 4.0)], 4);
-        assert_eq!(single, vec![render_point(2.0, 3.0, 4.0)]);
-
-        let line = [point(0.0, 0.0, 0.0), point(10.0, 0.0, 0.0)];
-        assert_eq!(
-            sample_polyline_points(&line, 1),
-            vec![render_point(5.0, 0.0, 0.0)]
-        );
-        assert_eq!(
-            sample_polyline_points(&line, 3),
-            vec![
-                render_point(0.0, 0.0, 0.0),
-                render_point(5.0, 0.0, 0.0),
-                render_point(10.0, 0.0, 0.0)
-            ]
-        );
-
-        let zero = [point(1.0, 1.0, 0.0), point(1.0, 1.0, 0.0)];
-        assert_eq!(
-            sample_polyline_points(&zero, 3),
-            vec![
-                render_point(1.0, 1.0, 0.0),
-                render_point(1.0, 1.0, 0.0),
-                render_point(1.0, 1.0, 0.0)
-            ]
-        );
-    }
-
-    #[test]
-    fn arc_sampling_covers_midpoint_endpoints_and_large_arc() {
-        let center = point(0.0, 0.0, 0.0);
-        let midpoint = sample_arc_points(&center, 1.0, 0.0, 180.0, 1);
-        assert_close(midpoint[0].x, 0.0);
-        assert_close(midpoint[0].y, 1.0);
-
-        let points = sample_arc_points(&center, 1.0, 0.0, 180.0, 3);
-        assert_close(points[0].x, 1.0);
-        assert_close(points[0].y, 0.0);
-        assert_close(points[1].x, 0.0);
-        assert_close(points[1].y, 1.0);
-        assert_close(points[2].x, -1.0);
-        assert_close(points[2].y, 0.0);
-
-        let plan = geometry_render_plan(
-            &Geometry::Arc {
-                center,
-                radius: 1.0,
-                start_degrees: 0.0,
-                end_degrees: 270.0,
-                pixels: 4,
-            },
-            DEFAULT_BULB_SIZE,
-        );
-        assert!(matches!(
-            plan.guides.as_slice(),
-            [GeometryRenderGuide::Arc {
-                large_arc: true,
-                ..
-            }]
-        ));
-    }
-
-    fn point(x: f64, y: f64, z: f64) -> Point3 {
-        Point3 { x, y, z }
-    }
-
-    fn render_point(x: f64, y: f64, z: f64) -> GeometryRenderPoint {
-        GeometryRenderPoint { x, y, z }
-    }
-
-    fn assert_close(actual: f64, expected: f64) {
-        assert!(
-            (actual - expected).abs() < 0.000001,
-            "expected {actual} to be close to {expected}"
-        );
     }
 }

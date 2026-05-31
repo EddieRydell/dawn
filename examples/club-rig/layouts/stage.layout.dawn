@@ -5,7 +5,6 @@ imports:
 stage:
   type: layout
   name: stage
-  units: meters
   target_order:
   - type: group
     name: WallBars
@@ -52,8 +51,8 @@ stage:
     transform:
       position:
         x: 1.57
-        y: 1.78
-        z: 0.0
+        y: 1.765254
+        z: 0
       rotation:
         x: 0.0
         y: 0.0
@@ -67,9 +66,9 @@ stage:
     fixture: fixtures.pixel_bar_50
     transform:
       position:
-        x: -6.976275421656197
-        y: 4.145535703529063
-        z: 0.0
+        x: -6.976275
+        y: 4.145533
+        z: 0
       rotation:
         x: 0.0
         y: 0.0
@@ -83,9 +82,9 @@ stage:
     fixture: fixtures.pixel_bar_50
     transform:
       position:
-        x: 0.13411044618426526
-        y: -4.717799140477485
-        z: 0.0
+        x: 0.13411
+        y: -4.717799
+        z: 0
       rotation:
         x: 0.0
         y: 0.0
@@ -99,9 +98,9 @@ stage:
     fixture: fixtures.pixel_bar_50
     transform:
       position:
-        x: 7.892818605117434
-        y: 0.14801213295441595
-        z: 0.0
+        x: 7.892818
+        y: 0.148012
+        z: 0
       rotation:
         x: 0.0
         y: 0.0
@@ -117,7 +116,7 @@ stage:
       position:
         x: 2.25
         y: 8.98
-        z: 3.0
+        z: 3
       rotation:
         x: 0.0
         y: 0.0
@@ -131,9 +130,9 @@ stage:
     fixture: fixtures.spot_rgb
     transform:
       position:
-        x: -2.5460131818400855
-        y: 1.257421152942563
-        z: 0.0
+        x: -2.546013
+        y: 1.257421
+        z: 0
       rotation:
         x: 0.0
         y: 0.0
@@ -147,9 +146,9 @@ stage:
     fixture: fixtures.spot_rgb
     transform:
       position:
-        x: -3.9047178328493484
-        y: 9.748986846765327
-        z: 0.0
+        x: -3.904717
+        y: 9.748986
+        z: 0
       rotation:
         x: 0.0
         y: 0.0
@@ -165,7 +164,7 @@ stage:
       position:
         x: 3.5
         y: -1.2
-        z: 3.0
+        z: 3
       rotation:
         x: 0.0
         y: 0.0
@@ -179,9 +178,9 @@ stage:
     fixture: fixtures.pixel_bar_50
     transform:
       position:
-        x: 5.133071237756845
-        y: 2.8775971045952793
-        z: 0.0
+        x: 5.133071
+        y: 2.877597
+        z: 0
       rotation:
         x: 0.0
         y: 0.0
@@ -195,9 +194,9 @@ stage:
     fixture: fixtures.spot_rgb
     transform:
       position:
-        x: 1.9951955951882105
-        y: 3.8570133960730586
-        z: 0.0
+        x: 1.995195
+        y: 3.857013
+        z: 0
       rotation:
         x: 0.0
         y: 0.0
@@ -213,7 +212,7 @@ stage:
       position:
         x: -2.48
         y: 6.14
-        z: 0.0
+        z: 0
       rotation:
         x: 60.0
         y: 60.0
@@ -227,9 +226,9 @@ stage:
     fixture: fixtures.spot_rgb
     transform:
       position:
-        x: -0.08153529473633547
-        y: -0.49109186037766417
-        z: 0.0
+        x: -0.081535
+        y: -0.491091
+        z: 0
       rotation:
         x: 0.0
         y: 0.0
@@ -243,9 +242,9 @@ stage:
     fixture: fixtures.pixel_bar_50
     transform:
       position:
-        x: -8.994621801100488
-        y: -1.5720664734203726
-        z: 0.0
+        x: -8.994621
+        y: -1.572066
+        z: 0
       rotation:
         x: 0.0
         y: 0.0
@@ -259,18 +258,18 @@ stage:
     fixture:
       name: Fixture
       color_model: rgb
-      bulb_size: 1.0
+      bulb_diameter: 0.01
       geometry:
         type: points
         points:
-        - x: 0.0
-          y: 0.0
-          z: 0.0
+        - x: 0
+          y: 0
+          z: 0
     transform:
       position:
-        x: 6.472132887907669
-        y: 12.06717589959929
-        z: 0.0
+        x: 6.472132
+        y: 12.067175
+        z: 0
       rotation:
         x: 0.0
         y: 0.0
@@ -284,18 +283,18 @@ stage:
     fixture:
       name: Fixture
       color_model: rgb
-      bulb_size: 1.0
+      bulb_diameter: 0.01
       geometry:
         type: points
         points:
-        - x: 0.0
-          y: 0.0
-          z: 0.0
+        - x: 0
+          y: 0
+          z: 0
     transform:
       position:
-        x: -13.26101648363089
-        y: 3.8874365050731914
-        z: 0.0
+        x: -13.261016
+        y: 3.887436
+        z: 0
       rotation:
         x: 0.0
         y: 0.0
@@ -309,18 +308,18 @@ stage:
     fixture:
       name: Fixture
       color_model: rgb
-      bulb_size: 1.0
+      bulb_diameter: 0.01
       geometry:
         type: points
         points:
-        - x: 0.0
-          y: 0.0
-          z: 0.0
+        - x: 0
+          y: 0
+          z: 0
     transform:
       position:
-        x: -5.667704157217617
-        y: -4.722340185951813
-        z: 0.0
+        x: -5.667704
+        y: -4.72234
+        z: 0
       rotation:
         x: 0.0
         y: 0.0
@@ -334,9 +333,9 @@ stage:
     fixture: fixtures.pixel_bar_50
     transform:
       position:
-        x: 4.557827546342541
-        y: 6.335412415372732
-        z: 0.0
+        x: 4.557827
+        y: 6.335412
+        z: 0
       rotation:
         x: 0.0
         y: 0.0

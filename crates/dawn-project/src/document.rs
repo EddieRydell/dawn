@@ -59,7 +59,6 @@ pub struct LayoutDocument {
     pub path: String,
     pub object_key: String,
     pub name: String,
-    pub units: DistanceUnit,
     pub target_order: Vec<LayoutTargetDocument>,
     pub render_bounds: GeometryRenderBounds,
     pub fixtures: Vec<LayoutFixturePlacement>,
@@ -99,7 +98,7 @@ pub enum LayoutFixtureRef {
     Inline {
         name: String,
         color_model: ColorModel,
-        bulb_size: f64,
+        bulb_diameter: DistanceSpan,
         geometry: Geometry,
     },
 }
@@ -116,7 +115,7 @@ pub struct LayoutGroupDocument {
 pub struct ResolvedLayoutFixture {
     pub name: String,
     pub color_model: ColorModel,
-    pub bulb_size: f64,
+    pub bulb_diameter: DistanceSpan,
     pub geometry: Geometry,
     pub geometry_summary: String,
     pub render_plan: GeometryRenderPlan,
@@ -132,7 +131,7 @@ pub struct FixtureCatalogItem {
     pub import_string: String,
     pub display_name: String,
     pub color_model: ColorModel,
-    pub bulb_size: f64,
+    pub bulb_diameter: DistanceSpan,
     pub geometry: Geometry,
     pub geometry_summary: String,
     pub render_plan: GeometryRenderPlan,
@@ -152,7 +151,7 @@ pub struct FixtureDefinitionDocument {
     pub object_key: String,
     pub name: String,
     pub color_model: ColorModel,
-    pub bulb_size: f64,
+    pub bulb_diameter: DistanceSpan,
     pub geometry: Geometry,
     pub geometry_summary: String,
     pub render_plan: GeometryRenderPlan,
@@ -163,7 +162,7 @@ pub struct FixtureDefinitionDocument {
 pub struct SequenceDocument {
     pub path: String,
     pub object_key: String,
-    pub duration_ms: u64,
+    pub duration_seconds: f64,
     pub frame_rate: u32,
     pub audio: Option<SequenceAudioDocument>,
     pub mark_collections: Vec<SequenceMarkCollectionDocument>,
@@ -179,7 +178,7 @@ pub struct SequenceMarkCollectionDocument {
     pub key: String,
     pub name: String,
     pub color: String,
-    pub marks_ms: Vec<u64>,
+    pub marks_seconds: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -203,8 +202,8 @@ pub struct SequenceLaneDocument {
 pub struct SequenceEffectDocument {
     pub index: usize,
     pub id: u32,
-    pub start_ms: u64,
-    pub duration_ms: u64,
+    pub start_seconds: f64,
+    pub duration_seconds: f64,
     pub target: LayoutTargetDocument,
     pub target_label: String,
     pub scope: SequenceEffectScope,
@@ -239,7 +238,7 @@ pub enum SequenceDocumentEdit {
         script_path: String,
         target: LayoutTargetDocument,
         scope: SequenceEffectScope,
-        start_ms: u64,
+        start_seconds: f64,
         mark_collection_key: Option<String>,
     },
     DuplicateEffect {
@@ -250,13 +249,13 @@ pub enum SequenceDocumentEdit {
     },
     MoveEffect {
         id: u32,
-        start_ms: u64,
+        start_seconds: f64,
         target: Option<LayoutTargetDocument>,
     },
     ResizeEffect {
         id: u32,
-        start_ms: u64,
-        duration_ms: u64,
+        start_seconds: f64,
+        duration_seconds: f64,
     },
     ChangeEffectScript {
         id: u32,
@@ -293,12 +292,12 @@ pub enum SequenceDocumentEdit {
     },
     AddMark {
         collection_key: String,
-        time_ms: u64,
+        time_seconds: f64,
     },
     MoveMark {
         collection_key: String,
         index: usize,
-        time_ms: u64,
+        time_seconds: f64,
     },
     DeleteMark {
         collection_key: String,
@@ -699,7 +698,7 @@ fn apply_sequence_edit_operation(
             script_path,
             target,
             scope,
-            start_ms,
+            start_seconds,
             mark_collection_key,
         } => {
             let id = next_sequence_effect_id(sequence)
@@ -720,20 +719,24 @@ fn apply_sequence_edit_operation(
                     &compiled_script
                 }
             };
-            let start_ms = start_ms.min(sequence.duration.milliseconds.saturating_sub(1));
-            let duration_ms = 1_000
-                .min(sequence.duration.milliseconds.saturating_sub(start_ms))
+            let start_nanoseconds = Time::try_from_seconds_f64_rounded(start_seconds)
+                .map_err(str::to_string)?
+                .as_nanoseconds()
+                .min(sequence.duration.as_nanoseconds().saturating_sub(1));
+            let duration_nanoseconds = NANOS_PER_SECOND
+                .min(
+                    sequence
+                        .duration
+                        .as_nanoseconds()
+                        .saturating_sub(start_nanoseconds),
+                )
                 .max(1);
             let script_path = Utf8PathBuf::from(script_path);
             let (alias, import) = module_import_for_path(path, &script_path, imports);
             sequence.effects.push(SequenceEffect {
                 id,
-                start: Time {
-                    milliseconds: start_ms,
-                },
-                duration: Time {
-                    milliseconds: duration_ms,
-                },
+                start: Time::from_nanoseconds(start_nanoseconds),
+                duration: TimeSpan::from_nanoseconds(duration_nanoseconds),
                 target: authored_target_from_document(&target, analysis)?,
                 scope,
                 params: materialized_effect_params(script, mark_collection_key.as_deref()),
@@ -767,16 +770,16 @@ fn apply_sequence_edit_operation(
         }
         SequenceDocumentEdit::MoveEffect {
             id,
-            start_ms,
+            start_seconds,
             target,
         } => {
             let duration = sequence
                 .effects
                 .iter()
                 .find(|effect| effect.id == id)
-                .map(|effect| effect.duration.milliseconds)
+                .map(|effect| effect.duration.as_nanoseconds())
                 .ok_or_else(|| format!("sequence effect `{id}` was not found"))?;
-            let max_start = sequence.duration.milliseconds.saturating_sub(duration);
+            let max_start = sequence.duration.as_nanoseconds().saturating_sub(duration);
             let next_target = target
                 .as_ref()
                 .map(|target| authored_target_from_document(target, analysis))
@@ -784,34 +787,39 @@ fn apply_sequence_edit_operation(
             let Some(effect) = sequence.effects.iter_mut().find(|effect| effect.id == id) else {
                 return Err(format!("sequence effect `{id}` was not found"));
             };
-            effect.start = Time {
-                milliseconds: start_ms.min(max_start),
-            };
+            let start_nanoseconds = Time::try_from_seconds_f64_rounded(start_seconds)
+                .map_err(str::to_string)?
+                .as_nanoseconds();
+            effect.start = Time::from_nanoseconds(start_nanoseconds.min(max_start));
             if let Some(target) = next_target {
                 effect.target = target;
             }
         }
         SequenceDocumentEdit::ResizeEffect {
             id,
-            start_ms,
-            duration_ms,
+            start_seconds,
+            duration_seconds,
         } => {
             let Some(effect) = sequence.effects.iter_mut().find(|effect| effect.id == id) else {
                 return Err(format!("sequence effect `{id}` was not found"));
             };
-            let start_ms = start_ms.min(sequence.duration.milliseconds.saturating_sub(1));
-            effect.start = Time {
-                milliseconds: start_ms,
-            };
-            effect.duration = Time {
-                milliseconds: duration_ms.max(1).min(
+            let start_nanoseconds = Time::try_from_seconds_f64_rounded(start_seconds)
+                .map_err(str::to_string)?
+                .as_nanoseconds()
+                .min(sequence.duration.as_nanoseconds().saturating_sub(1));
+            let duration_nanoseconds = TimeSpan::try_from_seconds_f64_rounded(duration_seconds)
+                .map_err(str::to_string)?
+                .as_nanoseconds();
+            effect.start = Time::from_nanoseconds(start_nanoseconds);
+            effect.duration = TimeSpan::from_nanoseconds(
+                duration_nanoseconds.max(1).min(
                     sequence
                         .duration
-                        .milliseconds
-                        .saturating_sub(start_ms)
+                        .as_nanoseconds()
+                        .saturating_sub(start_nanoseconds)
                         .max(1),
                 ),
-            };
+            );
         }
         SequenceDocumentEdit::ChangeEffectScript { id, script_path } => {
             let script_key = Utf8PathBuf::from(script_path.clone()).to_slash_string();
@@ -941,23 +949,29 @@ fn apply_sequence_edit_operation(
         }
         SequenceDocumentEdit::AddMark {
             collection_key,
-            time_ms,
+            time_seconds,
         } => {
-            let duration_ms = sequence.duration.milliseconds;
+            let duration_nanoseconds = sequence.duration.as_nanoseconds();
+            let time_nanoseconds = Time::try_from_seconds_f64_rounded(time_seconds)
+                .map_err(str::to_string)?
+                .as_nanoseconds();
             let collection = mark_collection_mut(sequence, &collection_key)?;
-            collection.marks.push(Time {
-                milliseconds: time_ms.min(duration_ms),
-            });
+            collection.marks.push(Time::from_nanoseconds(
+                time_nanoseconds.min(duration_nanoseconds),
+            ));
         }
         SequenceDocumentEdit::MoveMark {
             collection_key,
             index,
-            time_ms,
+            time_seconds,
         } => {
-            let duration_ms = sequence.duration.milliseconds;
+            let duration_nanoseconds = sequence.duration.as_nanoseconds();
+            let time_nanoseconds = Time::try_from_seconds_f64_rounded(time_seconds)
+                .map_err(str::to_string)?
+                .as_nanoseconds();
             let collection = mark_collection_mut(sequence, &collection_key)?;
             let mark = mark_at_sorted_index_mut(collection, index)?;
-            mark.milliseconds = time_ms.min(duration_ms);
+            *mark = Time::from_nanoseconds(time_nanoseconds.min(duration_nanoseconds));
         }
         SequenceDocumentEdit::DeleteMark {
             collection_key,
@@ -1001,9 +1015,9 @@ fn sorted_mark_original_index(
         .marks
         .iter()
         .enumerate()
-        .map(|(index, mark)| (index, mark.milliseconds))
+        .map(|(index, mark)| (index, mark.as_nanoseconds()))
         .collect::<Vec<_>>();
-    indexed_marks.sort_by_key(|(index, time_ms)| (*time_ms, *index));
+    indexed_marks.sort_by_key(|(index, time_seconds)| (*time_seconds, *index));
     indexed_marks
         .get(sorted_index)
         .map(|(index, _)| *index)
@@ -1250,7 +1264,6 @@ fn layout_to_document(
         path: path.to_slash_string(),
         object_key: object_key.to_string(),
         name: layout.name.clone(),
-        units: layout.units,
         target_order: layout
             .target_order
             .iter()
@@ -1331,8 +1344,8 @@ fn sequence_to_document(
             SequenceEffectDocument {
                 index,
                 id: effect.id,
-                start_ms: effect.start.milliseconds,
-                duration_ms: effect.duration.milliseconds,
+                start_seconds: effect.start.as_seconds_f64(),
+                duration_seconds: effect.duration.as_seconds_f64(),
                 target,
                 target_label,
                 scope: effect.scope,
@@ -1346,7 +1359,7 @@ fn sequence_to_document(
     SequenceDocument {
         path: path.to_slash_string(),
         object_key: object_key.to_string(),
-        duration_ms: sequence.duration.milliseconds,
+        duration_seconds: sequence.duration.as_seconds_f64(),
         frame_rate: sequence.frame_rate,
         audio: sequence_audio_document(fs, path, sequence.audio.as_ref()),
         mark_collections: sequence_mark_collection_documents(sequence),
@@ -1364,17 +1377,17 @@ fn sequence_mark_collection_documents(
         .mark_collections
         .iter()
         .map(|collection| {
-            let mut marks_ms = collection
+            let mut marks_seconds = collection
                 .marks
                 .iter()
-                .map(|mark| mark.milliseconds)
+                .map(|mark| mark.as_seconds_f64())
                 .collect::<Vec<_>>();
-            marks_ms.sort();
+            marks_seconds.sort_by(f64::total_cmp);
             SequenceMarkCollectionDocument {
                 key: collection.key.clone(),
                 name: collection.name.clone(),
                 color: collection.color.clone(),
-                marks_ms,
+                marks_seconds,
             }
         })
         .collect()
@@ -1510,7 +1523,7 @@ fn ensure_top_level_import(text: &str, import: DawnImport) -> Result<String, Str
         return Ok(text.to_string());
     }
     file.imports.push(import);
-    serde_yaml::to_string(&file).map_err(|error| error.to_string())
+    serialize_dawn_file(&file)
 }
 
 fn sanitize_alias(value: &str) -> String {
@@ -1677,7 +1690,7 @@ fn sort_sequence_effects(sequence: &mut Sequence<Authored>, layout: Option<&Layo
         .unwrap_or_default();
     sequence.effects.sort_by_key(|effect| {
         (
-            effect.start.milliseconds,
+            effect.start.as_nanoseconds(),
             lane_order
                 .get(&authored_target_sort_key(&effect.target, layout))
                 .copied()
@@ -1689,7 +1702,7 @@ fn sort_sequence_effects(sequence: &mut Sequence<Authored>, layout: Option<&Layo
 
 fn sort_sequence_mark_collections(sequence: &mut Sequence<Authored>) {
     for collection in &mut sequence.mark_collections {
-        collection.marks.sort_by_key(|mark| mark.milliseconds);
+        collection.marks.sort_by_key(|mark| mark.as_nanoseconds());
     }
 }
 
@@ -1847,9 +1860,12 @@ fn target_pixels_for_effect(
                 let emitter_count = layout
                     .fixture(fixture_index)
                     .map(|fixture| {
-                        geometry_render_plan(&fixture.fixture.geometry, fixture.fixture.bulb_size)
-                            .emitters
-                            .len()
+                        geometry_render_plan(
+                            &fixture.fixture.geometry,
+                            fixture.fixture.bulb_diameter,
+                        )
+                        .emitters
+                        .len()
                     })
                     .unwrap_or_default();
                 (0..emitter_count).map(move |pixel_index| SequenceEffectPixelDocument {
@@ -1941,7 +1957,7 @@ fn placement_to_document(
             LayoutFixtureRef::Inline {
                 name: fixture.name.clone(),
                 color_model: fixture.color_model,
-                bulb_size: fixture.bulb_size,
+                bulb_diameter: fixture.bulb_diameter,
                 geometry: fixture.geometry.clone(),
             },
             source_path.to_slash_string(),
@@ -1965,12 +1981,12 @@ fn placement_to_document(
         resolved_fixture: ResolvedLayoutFixture {
             name: resolved.fixture.name.clone(),
             color_model: resolved.fixture.color_model,
-            bulb_size: resolved.fixture.bulb_size,
+            bulb_diameter: resolved.fixture.bulb_diameter,
             geometry: resolved.fixture.geometry.clone(),
             geometry_summary: geometry_summary(&resolved.fixture.geometry),
             render_plan: geometry_render_plan(
                 &resolved.fixture.geometry,
-                resolved.fixture.bulb_size,
+                resolved.fixture.bulb_diameter,
             ),
             source_path: resolved_source_path,
             object_key: resolved_object_key,
@@ -2019,10 +2035,10 @@ fn fixture_catalog_from_analysis(
                 import_string,
                 display_name: fixture.name.clone(),
                 color_model: fixture.color_model,
-                bulb_size: fixture.bulb_size,
+                bulb_diameter: fixture.bulb_diameter,
                 geometry: fixture.geometry.clone(),
                 geometry_summary: geometry_summary(&fixture.geometry),
-                render_plan: geometry_render_plan(&fixture.geometry, fixture.bulb_size),
+                render_plan: geometry_render_plan(&fixture.geometry, fixture.bulb_diameter),
             });
         }
     }
@@ -2037,7 +2053,6 @@ fn fixture_catalog_from_analysis(
 fn document_to_layout(document: LayoutDocument) -> Result<Layout<Authored>, String> {
     Ok(Layout {
         name: document.name,
-        units: document.units,
         target_order: document
             .target_order
             .into_iter()
@@ -2070,12 +2085,12 @@ fn document_to_placement(
         LayoutFixtureRef::Inline {
             name,
             color_model,
-            bulb_size,
+            bulb_diameter,
             geometry,
         } => InlineOrRef::Inline(Fixture {
             name,
             color_model,
-            bulb_size,
+            bulb_diameter,
             geometry,
         }),
     };
@@ -2092,10 +2107,10 @@ fn fixture_to_document(object_key: &str, fixture: &Fixture) -> FixtureDefinition
         object_key: object_key.to_string(),
         name: fixture.name.clone(),
         color_model: fixture.color_model,
-        bulb_size: fixture.bulb_size,
+        bulb_diameter: fixture.bulb_diameter,
         geometry: fixture.geometry.clone(),
         geometry_summary: geometry_summary(&fixture.geometry),
-        render_plan: geometry_render_plan(&fixture.geometry, fixture.bulb_size),
+        render_plan: geometry_render_plan(&fixture.geometry, fixture.bulb_diameter),
     }
 }
 
@@ -2103,7 +2118,7 @@ fn document_to_fixture(document: &FixtureDefinitionDocument) -> Fixture {
     Fixture {
         name: document.name.clone(),
         color_model: document.color_model,
-        bulb_size: document.bulb_size,
+        bulb_diameter: document.bulb_diameter,
         geometry: document.geometry.clone(),
     }
 }
@@ -2224,7 +2239,49 @@ fn serialize_top_level_object(
 ) -> Result<String, String> {
     let mut file = DawnFile::new();
     file.insert(object_key.to_string(), object.clone());
-    serde_yaml::to_string(&file).map_err(|error| error.to_string())
+    serialize_dawn_file(&file)
+}
+
+fn serialize_dawn_file(file: &DawnFile) -> Result<String, String> {
+    serde_yaml::to_string(file)
+        .map(|serialized| canonicalize_scientific_decimal_meters(&serialized))
+        .map_err(|error| error.to_string())
+}
+
+fn canonicalize_scientific_decimal_meters(text: &str) -> String {
+    text.split_inclusive('\n')
+        .map(canonicalize_scientific_decimal_line)
+        .collect()
+}
+
+fn canonicalize_scientific_decimal_line(line: &str) -> String {
+    line.split_inclusive([' ', '\n'])
+        .map(|token| {
+            let trimmed = token.trim_end_matches([' ', '\n']);
+            if !trimmed.contains(['e', 'E']) {
+                return token.to_string();
+            }
+            let suffix = &token[trimmed.len()..];
+            let Ok(value) = trimmed.parse::<f64>() else {
+                return token.to_string();
+            };
+            if !value.is_finite() {
+                return token.to_string();
+            }
+            format!("{}{}", format_decimal_meters(value), suffix)
+        })
+        .collect()
+}
+
+fn format_decimal_meters(value: f64) -> String {
+    let mut text = format!("{value:.6}");
+    while text.contains('.') && text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.pop();
+    }
+    text
 }
 
 fn replace_top_level_objects(

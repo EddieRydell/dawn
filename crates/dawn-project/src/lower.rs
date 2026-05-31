@@ -305,7 +305,6 @@ pub(crate) fn lower_layout(
 
     Ok(Layout {
         name: layout.name.clone(),
-        units: layout.units,
         target_order: validate_layout_target_order(layout, &fixtures, &groups)?,
         fixtures,
         groups,

@@ -11,7 +11,7 @@ use kira::{AudioManager, AudioManagerSettings, DefaultBackend, Tween};
 
 #[derive(Debug, Clone)]
 pub struct AudioClock {
-    pub position_ms: u64,
+    pub position_seconds: f64,
     pub ended: bool,
     pub status: String,
     pub error: Option<String>,
@@ -20,7 +20,7 @@ pub struct AudioClock {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AudioKey {
     path: PathBuf,
-    modified_ms: u128,
+    modified_epoch_millis: u128,
     len: u64,
 }
 
@@ -43,7 +43,7 @@ struct AudioRuntimeInner {
     active_key: Option<AudioKey>,
     active_data: Option<StaticSoundData>,
     handle: Option<StaticSoundHandle>,
-    position_ms: u64,
+    position_seconds: f64,
     ended: bool,
     status: String,
     error: Option<String>,
@@ -63,7 +63,7 @@ impl Default for AudioRuntime {
                 active_key: None,
                 active_data: None,
                 handle: None,
-                position_ms: 0,
+                position_seconds: 0.0,
                 ended: false,
                 status: "noAudio".to_string(),
                 error: None,
@@ -76,7 +76,7 @@ impl Default for AudioRuntime {
                 active_key: None,
                 active_data: None,
                 handle: None,
-                position_ms: 0,
+                position_seconds: 0.0,
                 ended: false,
                 status: "error".to_string(),
                 error: Some(error),
@@ -99,13 +99,14 @@ impl AudioRuntime {
     pub fn play(
         &self,
         audio: &SequenceAudioDocument,
-        position_ms: u64,
+        position_seconds: f64,
     ) -> Result<AudioClock, String> {
+        validate_position_seconds(position_seconds)?;
         let mut inner = self.lock_inner()?;
         inner.poll_load_results();
-        inner.ensure_active(audio, position_ms)?;
+        inner.ensure_active(audio, position_seconds)?;
         if inner.active_data.is_some() {
-            inner.start(position_ms)?;
+            inner.start(position_seconds)?;
         }
         Ok(inner.clock())
     }
@@ -113,9 +114,9 @@ impl AudioRuntime {
     pub fn pause(&self) -> Result<AudioClock, String> {
         let mut inner = self.lock_inner()?;
         inner.poll_load_results();
-        let position_ms = inner.current_position_ms();
+        let position_seconds = inner.current_position_seconds();
         inner.stop_handle();
-        inner.position_ms = position_ms;
+        inner.position_seconds = position_seconds;
         inner.ended = false;
         inner.status = if inner.active_data.is_some() {
             "ready"
@@ -127,11 +128,12 @@ impl AudioRuntime {
         Ok(inner.clock())
     }
 
-    pub fn stop(&self, position_ms: u64) -> Result<AudioClock, String> {
+    pub fn stop(&self, position_seconds: f64) -> Result<AudioClock, String> {
+        validate_position_seconds(position_seconds)?;
         let mut inner = self.lock_inner()?;
         inner.poll_load_results();
         inner.stop_handle();
-        inner.position_ms = position_ms;
+        inner.position_seconds = position_seconds;
         inner.ended = false;
         inner.status = if inner.active_data.is_some() {
             "ready"
@@ -146,17 +148,18 @@ impl AudioRuntime {
     pub fn seek(
         &self,
         audio: &SequenceAudioDocument,
-        position_ms: u64,
+        position_seconds: f64,
         playing: bool,
     ) -> Result<AudioClock, String> {
+        validate_position_seconds(position_seconds)?;
         let mut inner = self.lock_inner()?;
         inner.poll_load_results();
-        inner.ensure_active(audio, position_ms)?;
+        inner.ensure_active(audio, position_seconds)?;
         if playing && inner.active_data.is_some() {
-            inner.start(position_ms)?;
+            inner.start(position_seconds)?;
         } else {
             inner.stop_handle();
-            inner.position_ms = position_ms;
+            inner.position_seconds = position_seconds;
             inner.ended = false;
             if inner.active_data.is_some() {
                 inner.status = "ready".to_string();
@@ -184,15 +187,23 @@ impl AudioRuntime {
     }
 }
 
+fn validate_position_seconds(position_seconds: f64) -> Result<(), String> {
+    if position_seconds.is_finite() && position_seconds >= 0.0 {
+        Ok(())
+    } else {
+        Err("audio position seconds must be finite and non-negative".to_string())
+    }
+}
+
 impl AudioRuntimeInner {
     fn load_active(&mut self, audio: &SequenceAudioDocument) -> Result<(), String> {
-        self.ensure_active(audio, 0)
+        self.ensure_active(audio, 0.0)
     }
 
     fn ensure_active(
         &mut self,
         audio: &SequenceAudioDocument,
-        position_ms: u64,
+        position_seconds: f64,
     ) -> Result<(), String> {
         if !audio.exists {
             self.clear();
@@ -214,7 +225,7 @@ impl AudioRuntimeInner {
         self.stop_handle();
         self.active_key = Some(key.clone());
         self.active_data = None;
-        self.position_ms = position_ms;
+        self.position_seconds = position_seconds;
         self.ended = false;
         self.status = "loading".to_string();
         self.error = None;
@@ -263,22 +274,21 @@ impl AudioRuntimeInner {
         }
     }
 
-    fn start(&mut self, position_ms: u64) -> Result<(), String> {
+    fn start(&mut self, position_seconds: f64) -> Result<(), String> {
         self.stop_handle();
         let Some(data) = self.active_data.clone() else {
-            self.position_ms = position_ms;
+            self.position_seconds = position_seconds;
             self.status = "loading".to_string();
             return Ok(());
         };
-        let seconds = position_ms as f64 / 1_000.0;
         let handle = self
             .manager
             .as_mut()
             .ok_or_else(|| "native audio is not available".to_string())?
-            .play(data.start_position(seconds))
+            .play(data.start_position(position_seconds))
             .map_err(|error| format!("failed to start native audio: {error:?}"))?;
         self.handle = Some(handle);
-        self.position_ms = position_ms;
+        self.position_seconds = position_seconds;
         self.ended = false;
         self.status = "playing".to_string();
         self.error = None;
@@ -291,35 +301,35 @@ impl AudioRuntimeInner {
         }
     }
 
-    fn current_position_ms(&self) -> u64 {
+    fn current_position_seconds(&self) -> f64 {
         self.handle
             .as_ref()
-            .map(|handle| seconds_to_ms(handle.position()))
-            .unwrap_or(self.position_ms)
+            .map(|handle| handle.position())
+            .unwrap_or(self.position_seconds)
     }
 
     fn clock(&mut self) -> AudioClock {
-        let position_ms = self.current_position_ms();
+        let position_seconds = self.current_position_seconds();
         if let Some(handle) = &self.handle {
             match handle.state() {
                 PlaybackState::Stopped => {
                     self.handle = None;
-                    self.position_ms = position_ms;
+                    self.position_seconds = position_seconds;
                     self.ended = true;
                     self.status = "ended".to_string();
                 }
                 state if state.is_advancing() => {
-                    self.position_ms = position_ms;
+                    self.position_seconds = position_seconds;
                     self.ended = false;
                     self.status = "playing".to_string();
                 }
                 _ => {
-                    self.position_ms = position_ms;
+                    self.position_seconds = position_seconds;
                 }
             }
         }
         AudioClock {
-            position_ms: self.position_ms,
+            position_seconds: self.position_seconds,
             ended: self.ended,
             status: self.status.clone(),
             error: self.error.clone(),
@@ -331,7 +341,7 @@ impl AudioRuntimeInner {
         self.stop_handle();
         self.active_key = None;
         self.active_data = None;
-        self.position_ms = 0;
+        self.position_seconds = 0.0;
         self.ended = false;
         self.status = "noAudio".to_string();
         self.error = None;
@@ -343,7 +353,7 @@ fn audio_key(path: &str) -> Result<AudioKey, String> {
     let path = PathBuf::from(path);
     let metadata = std::fs::metadata(&path)
         .map_err(|error| format!("failed to inspect audio file `{}`: {error}", path.display()))?;
-    let modified_ms = metadata
+    let modified_epoch_millis = metadata
         .modified()
         .ok()
         .and_then(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).ok())
@@ -351,15 +361,7 @@ fn audio_key(path: &str) -> Result<AudioKey, String> {
         .unwrap_or_default();
     Ok(AudioKey {
         path,
-        modified_ms,
+        modified_epoch_millis,
         len: metadata.len(),
     })
-}
-
-fn seconds_to_ms(seconds: f64) -> u64 {
-    if seconds.is_finite() && seconds > 0.0 {
-        (seconds * 1_000.0).round().min(u64::MAX as f64) as u64
-    } else {
-        0
-    }
 }

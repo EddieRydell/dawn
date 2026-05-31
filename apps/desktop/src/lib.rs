@@ -32,7 +32,8 @@ use dawn_project::document::{
     SequenceMarkCollectionDocument,
 };
 use dawn_project::effect_script::FixtureContext;
-use dawn_project::model::{EffectParam, Resolved};
+use dawn_project::frame::{frame_count, frame_start};
+use dawn_project::model::{EffectParam, Resolved, TimeSpan};
 use dawn_project::path::{serialized_import_path, utf8_path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -77,7 +78,7 @@ pub struct SequenceEffectPreviewBatchDto {
 #[serde(rename_all = "camelCase")]
 pub struct SequenceEffectPreviewDto {
     pub effect_id: u32,
-    pub duration_ms: u32,
+    pub duration_seconds: f64,
     pub source_pixel_count: u32,
     pub sampled_pixel_indices: Vec<u32>,
     pub columns: u32,
@@ -90,9 +91,9 @@ pub struct SequenceEffectPreviewDto {
 pub struct PreviewStateEventDto {
     pub source_label: String,
     pub is_playing: bool,
-    pub position_ms: u32,
-    pub home_ms: u32,
-    pub duration_ms: u32,
+    pub position_seconds: f64,
+    pub home_seconds: f64,
+    pub duration_seconds: f64,
     pub audio: Option<dawn_app_core::dto::SequenceAudioDto>,
     pub clock_source: String,
     pub audio_playback_status: String,
@@ -114,7 +115,7 @@ pub struct PreviewSceneDto {
 pub struct PreviewSceneFixtureDto {
     pub id: u32,
     pub name: String,
-    pub bulb_radius: f64,
+    pub bulb_radius_meters: f64,
     pub first_pixel_index: u32,
     pub pixels: Vec<GeometryRenderPointDto>,
 }
@@ -124,7 +125,7 @@ struct EffectPreviewCacheKey {
     sequence_path: String,
     object_key: String,
     effect_id: u32,
-    duration_ms: u64,
+    duration_nanoseconds: u64,
     frame_rate: u32,
     scope: dawn_project::model::SequenceEffectScope,
     script_key: String,
@@ -491,15 +492,15 @@ async fn open_preview_window(app: AppHandle, state: State<'_, AppState>) -> Comm
 #[specta::specta]
 #[tauri::command]
 fn preview_play(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
-    let (audio, position_ms) = {
+    let (audio, position_seconds) = {
         let model = lock_model(&state)?;
         let snapshot = model.preview.snapshot();
-        (valid_sequence_audio(&snapshot), snapshot.position_ms)
+        (valid_sequence_audio(&snapshot), snapshot.position_seconds)
     };
     let Some(audio) = audio else {
         return dispatch(&app, &state, AppAction::PreviewPlay);
     };
-    let clock = lock_audio_runtime(&state)?.play(&audio, position_ms)?;
+    let clock = lock_audio_runtime(&state)?.play(&audio, position_seconds)?;
     update_preview_from_audio_status(&app, &state, clock)
 }
 
@@ -516,7 +517,9 @@ fn preview_pause(app: AppHandle, state: State<'_, AppState>) -> CommandResult<Ap
     let clock = lock_audio_runtime(&state)?.pause()?;
     let mut model = lock_model(&state)?;
     let analysis = model.analysis.clone();
-    model.preview.pause_at(clock.position_ms, analysis.as_ref());
+    model
+        .preview
+        .pause_at(clock.position_seconds, analysis.as_ref());
     model.preview.set_timing_status("nativeAudio", clock.status);
     model.status = "Preview paused".to_string();
     emit_model_snapshot(&app, &model)
@@ -525,15 +528,18 @@ fn preview_pause(app: AppHandle, state: State<'_, AppState>) -> CommandResult<Ap
 #[specta::specta]
 #[tauri::command]
 fn preview_stop(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
-    let (has_audio, home_ms) = {
+    let (has_audio, home_seconds) = {
         let model = lock_model(&state)?;
         let snapshot = model.preview.snapshot();
-        (valid_sequence_audio(&snapshot).is_some(), snapshot.home_ms)
+        (
+            valid_sequence_audio(&snapshot).is_some(),
+            snapshot.home_seconds,
+        )
     };
     if !has_audio {
         return dispatch(&app, &state, AppAction::PreviewStop);
     }
-    let clock = lock_audio_runtime(&state)?.stop(home_ms)?;
+    let clock = lock_audio_runtime(&state)?.stop(home_seconds)?;
     let mut model = lock_model(&state)?;
     let analysis = model.analysis.clone();
     model.preview.stop_native_audio(analysis.as_ref());
@@ -555,7 +561,7 @@ fn preview_rewind_to_zero(
     if !has_audio {
         return dispatch(&app, &state, AppAction::PreviewRewindToZero);
     }
-    let clock = lock_audio_runtime(&state)?.stop(0)?;
+    let clock = lock_audio_runtime(&state)?.stop(0.0)?;
     let mut model = lock_model(&state)?;
     let analysis = model.analysis.clone();
     model
@@ -571,22 +577,29 @@ fn preview_rewind_to_zero(
 fn preview_seek(
     app: AppHandle,
     state: State<'_, AppState>,
-    position_ms: u32,
+    position_seconds: f64,
 ) -> CommandResult<AppSnapshotDto> {
+    if !position_seconds.is_finite() || position_seconds < 0.0 {
+        return Err("preview seek seconds must be finite and non-negative".to_string());
+    }
     let (audio, playing) = {
         let model = lock_model(&state)?;
         let snapshot = model.preview.snapshot();
         (valid_sequence_audio(&snapshot), snapshot.is_playing)
     };
     let Some(audio) = audio else {
-        return dispatch(&app, &state, AppAction::PreviewSeek(position_ms.into()));
+        return dispatch(
+            &app,
+            &state,
+            AppAction::PreviewSeek(position_seconds.into()),
+        );
     };
-    let clock = lock_audio_runtime(&state)?.seek(&audio, position_ms.into(), playing)?;
+    let clock = lock_audio_runtime(&state)?.seek(&audio, position_seconds.into(), playing)?;
     let mut model = lock_model(&state)?;
     let analysis = model.analysis.clone();
     model
         .preview
-        .seek_native_audio(clock.position_ms, playing, analysis.as_ref());
+        .seek_native_audio(clock.position_seconds, playing, analysis.as_ref());
     model.preview.set_timing_status("nativeAudio", clock.status);
     model.status = "Preview seeked".to_string();
     emit_model_snapshot(&app, &model)
@@ -705,10 +718,13 @@ fn normalize_bindings_assertion(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let path = path.as_ref();
     let source = std::fs::read_to_string(path)?;
-    let normalized = source.replace(
-        "const _assertTypedErrorFollowsContract: <T, E>(result: Promise<T>) => Promise<any> = typedError;",
-        "void (typedError satisfies <T, E>(result: Promise<T>) => Promise<{ status: \"ok\"; data: T } | { status: \"error\"; error: E }>);",
-    );
+    let normalized = source
+        .replace("number | null", "number")
+        .replace("(number)[]", "number[]")
+        .replace(
+            "const _assertTypedErrorFollowsContract: <T, E>(result: Promise<T>) => Promise<any> = typedError;",
+            "void (typedError satisfies <T, E>(result: Promise<T>) => Promise<{ status: \"ok\"; data: T } | { status: \"error\"; error: E }>);",
+        );
     if normalized != source {
         std::fs::write(path, normalized)?;
     }
@@ -776,13 +792,13 @@ fn start_preview_worker(app: AppHandle) {
                     continue;
                 }
             };
-            let backend_ms = started.elapsed().as_secs_f32() * 1000.0;
+            let backend_seconds = started.elapsed().as_secs_f32();
             let frame_generation = snapshot.frame.generation;
             let should_publish_frame = has_sink
                 && (snapshot.is_playing || last_published_generation != Some(frame_generation));
             if should_publish_frame {
                 if let Ok(mut runtime) = lock_preview_transport(&state) {
-                    runtime.publish_frame(&snapshot.frame, snapshot.is_playing, backend_ms);
+                    runtime.publish_frame(&snapshot.frame, snapshot.is_playing, backend_seconds);
                     last_published_generation = Some(frame_generation);
                 }
             }
@@ -816,13 +832,13 @@ fn start_preview_worker(app: AppHandle) {
     });
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct PreviewEventIdentity {
     source_label: String,
     is_playing: bool,
-    position_ms: u64,
-    home_ms: u64,
-    duration_ms: u64,
+    position_seconds: f64,
+    home_seconds: f64,
+    duration_seconds: f64,
     audio_path: Option<String>,
     audio_exists: bool,
     clock_source: String,
@@ -835,13 +851,13 @@ impl From<&PreviewSnapshot> for PreviewEventIdentity {
         Self {
             source_label: snapshot.source_label.clone(),
             is_playing: snapshot.is_playing,
-            position_ms: if snapshot.is_playing {
-                0
+            position_seconds: if snapshot.is_playing {
+                0.0
             } else {
-                snapshot.position_ms
+                snapshot.position_seconds
             },
-            home_ms: snapshot.home_ms,
-            duration_ms: snapshot.duration_ms,
+            home_seconds: snapshot.home_seconds,
+            duration_seconds: snapshot.duration_seconds,
             audio_path: snapshot
                 .audio
                 .as_ref()
@@ -934,7 +950,7 @@ fn apply_audio_clock_to_model(
     analysis: Option<&dawn_project::analysis::ProjectAnalysis>,
 ) {
     if let Some(error) = &clock.error {
-        model.preview.pause_at(clock.position_ms, analysis);
+        model.preview.pause_at(clock.position_seconds, analysis);
         model.preview.set_timing_status("nativeAudio", "error");
         model.status = format!("Audio error: {error}");
         return;
@@ -942,33 +958,33 @@ fn apply_audio_clock_to_model(
     if clock.ended {
         model
             .preview
-            .render_at_native_audio_clock(clock.position_ms, true, analysis);
+            .render_at_native_audio_clock(clock.position_seconds, true, analysis);
         model.preview.set_timing_status("nativeAudio", "ended");
         model.status = "Preview complete".to_string();
         return;
     }
     match clock.status.as_str() {
         "loading" => {
-            model.preview.pause_at(clock.position_ms, analysis);
+            model.preview.pause_at(clock.position_seconds, analysis);
             model.preview.set_timing_status("nativeAudio", "loading");
             model.status = "Loading audio".to_string();
         }
         "playing" => {
             model
                 .preview
-                .play_from_native_audio_clock(clock.position_ms, analysis);
+                .play_from_native_audio_clock(clock.position_seconds, analysis);
             model.preview.set_timing_status("nativeAudio", "playing");
             model.status = "Preview playing".to_string();
         }
         "ended" => {
             model
                 .preview
-                .render_at_native_audio_clock(clock.position_ms, true, analysis);
+                .render_at_native_audio_clock(clock.position_seconds, true, analysis);
             model.preview.set_timing_status("nativeAudio", "ended");
             model.status = "Preview complete".to_string();
         }
         status => {
-            model.preview.pause_at(clock.position_ms, analysis);
+            model.preview.pause_at(clock.position_seconds, analysis);
             model.preview.set_timing_status("nativeAudio", status);
             model.status = "Preview ready".to_string();
         }
@@ -1026,9 +1042,9 @@ fn emit_preview_state_dto(app: &AppHandle, snapshot: &AppSnapshotDto) -> Command
         PreviewStateEventDto {
             source_label: snapshot.preview.source_label.clone(),
             is_playing: snapshot.preview.is_playing,
-            position_ms: snapshot.preview.position_ms,
-            home_ms: snapshot.preview.home_ms,
-            duration_ms: snapshot.preview.duration_ms,
+            position_seconds: snapshot.preview.position_seconds,
+            home_seconds: snapshot.preview.home_seconds,
+            duration_seconds: snapshot.preview.duration_seconds,
             audio: snapshot.preview.audio.clone(),
             clock_source: snapshot.preview.clock_source.clone(),
             audio_playback_status: snapshot.preview.audio_playback_status.clone(),
@@ -1044,9 +1060,9 @@ fn emit_preview_state_snapshot(app: &AppHandle, snapshot: &PreviewSnapshot) {
         PreviewStateEventDto {
             source_label: snapshot.source_label.clone(),
             is_playing: snapshot.is_playing,
-            position_ms: snapshot.position_ms.min(u32::MAX as u64) as u32,
-            home_ms: snapshot.home_ms.min(u32::MAX as u64) as u32,
-            duration_ms: snapshot.duration_ms.min(u32::MAX as u64) as u32,
+            position_seconds: snapshot.position_seconds,
+            home_seconds: snapshot.home_seconds,
+            duration_seconds: snapshot.duration_seconds,
             audio: snapshot.audio.clone().map(Into::into),
             clock_source: snapshot.clock_source.clone(),
             audio_playback_status: snapshot.audio_playback_status.clone(),
@@ -1127,7 +1143,7 @@ fn preview_scene_from_frame(frame: &OutputFrame, source_label: String) -> Previe
             let dto = PreviewSceneFixtureDto {
                 id: fixture.id.0,
                 name: fixture.name.clone(),
-                bulb_radius: fixture.bulb_radius,
+                bulb_radius_meters: fixture.bulb_radius.as_meters_f64(),
                 first_pixel_index: first_pixel_index.min(u32::MAX as usize) as u32,
                 pixels,
             };
@@ -1156,7 +1172,13 @@ fn preview_for_effect(
     let Some(render) = &effect.render else {
         return Ok(None);
     };
-    if frame_rate == 0 || effect.duration_ms == 0 || render.target_pixels.is_empty() {
+    if frame_rate == 0 || effect.duration_seconds == 0.0 || render.target_pixels.is_empty() {
+        return Ok(None);
+    }
+
+    let duration =
+        TimeSpan::try_from_seconds_f64_rounded(effect.duration_seconds).map_err(str::to_string)?;
+    if duration == TimeSpan::ZERO {
         return Ok(None);
     }
 
@@ -1166,7 +1188,7 @@ fn preview_for_effect(
         sequence_path: sequence_path.to_string(),
         object_key: object_key.to_string(),
         effect_id: effect.id,
-        duration_ms: effect.duration_ms,
+        duration_nanoseconds: duration.as_nanoseconds(),
         frame_rate,
         scope: effect.scope,
         script_key: render.script_key.clone(),
@@ -1175,7 +1197,7 @@ fn preview_for_effect(
         mark_collections_json: relevant_mark_collections_json(
             &render.params,
             mark_collections,
-            effect.start_ms,
+            effect.start_seconds,
         )?,
         target_pixels_json: serde_json::to_string(&render.target_pixels)
             .map_err(|error| error.to_string())?,
@@ -1187,9 +1209,10 @@ fn preview_for_effect(
         return Ok(Some(preview));
     }
 
-    let total_frames = total_preview_frames(effect.duration_ms, frame_rate);
+    let total_frames = total_preview_frames(duration, frame_rate);
     let sampled_frame_indices = evenly_sample_indices(total_frames, PREVIEW_MAX_COLUMNS);
-    let params = runtime_params_from_document(&render.params, mark_collections, effect.start_ms);
+    let params =
+        runtime_params_from_document(&render.params, mark_collections, effect.start_seconds);
     let mut colors = Vec::with_capacity(sampled_frame_indices.len() * sampled_pixel_indices.len());
 
     for target_pixel_index in &sampled_pixel_indices {
@@ -1197,8 +1220,8 @@ fn preview_for_effect(
             return Ok(None);
         };
         for frame_index in &sampled_frame_indices {
-            let local_ms = local_ms_for_frame(*frame_index, frame_rate, effect.duration_ms);
-            let progress = (local_ms as f64 / effect.duration_ms as f64).clamp(0.0, 1.0);
+            let local_seconds = local_seconds_for_frame(*frame_index, frame_rate, duration);
+            let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
             let pixel_context = pixel_context_for_effect(
                 effect.scope,
                 *target_pixel_index,
@@ -1209,7 +1232,7 @@ fn preview_for_effect(
             let color = match analysis.sample_effect_script_key(
                 &render.script_key,
                 progress,
-                local_ms as f64 / 1_000.0,
+                local_seconds,
                 FixtureContext {
                     index: pixel.fixture_index,
                 },
@@ -1225,7 +1248,7 @@ fn preview_for_effect(
 
     let preview = SequenceEffectPreviewDto {
         effect_id: effect.id,
-        duration_ms: effect.duration_ms.min(u32::MAX as u64) as u32,
+        duration_seconds: effect.duration_seconds,
         source_pixel_count: source_pixel_count.min(u32::MAX as usize) as u32,
         sampled_pixel_indices: sampled_pixel_indices
             .iter()
@@ -1243,20 +1266,20 @@ fn preview_for_effect(
 #[serde(rename_all = "camelCase")]
 struct MarkCollectionCacheSignature<'a> {
     key: &'a str,
-    marks_ms: &'a [u64],
+    marks_seconds: &'a [f64],
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MarkCacheSignature<'a> {
-    effect_start_ms: u64,
+    effect_start_seconds: f64,
     collections: Vec<MarkCollectionCacheSignature<'a>>,
 }
 
 fn relevant_mark_collections_json(
     params: &[SequenceEffectParamDocument],
     mark_collections: &[SequenceMarkCollectionDocument],
-    effect_start_ms: u64,
+    effect_start_seconds: f64,
 ) -> Result<String, String> {
     let keys = params
         .iter()
@@ -1274,24 +1297,25 @@ fn relevant_mark_collections_json(
         .filter(|collection| keys.contains(&collection.key.as_str()))
         .map(|collection| MarkCollectionCacheSignature {
             key: &collection.key,
-            marks_ms: &collection.marks_ms,
+            marks_seconds: &collection.marks_seconds,
         })
         .collect();
     serde_json::to_string(&MarkCacheSignature {
-        effect_start_ms,
+        effect_start_seconds,
         collections,
     })
     .map_err(|error| error.to_string())
 }
 
-fn total_preview_frames(duration_ms: u64, frame_rate: u32) -> usize {
-    let frames = ((duration_ms as u128) * (frame_rate as u128)).div_ceil(1_000);
-    frames.max(1).min(usize::MAX as u128) as usize
+fn total_preview_frames(duration: TimeSpan, frame_rate: u32) -> usize {
+    frame_count(duration, frame_rate).max(1)
 }
 
-fn local_ms_for_frame(frame_index: usize, frame_rate: u32, duration_ms: u64) -> u64 {
-    let local_ms = ((frame_index as u128) * 1_000) / frame_rate as u128;
-    (local_ms as u64).min(duration_ms.saturating_sub(1))
+fn local_seconds_for_frame(frame_index: usize, frame_rate: u32, duration: TimeSpan) -> f64 {
+    let local_nanoseconds = frame_start(frame_index as u64, frame_rate)
+        .as_nanoseconds()
+        .min(duration.as_nanoseconds().saturating_sub(1));
+    local_nanoseconds as f64 / 1_000_000_000.0
 }
 
 fn evenly_sample_indices(source_count: usize, max_count: usize) -> Vec<usize> {

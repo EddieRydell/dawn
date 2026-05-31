@@ -32,7 +32,7 @@ export const commands = {
 	previewPause: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_pause")),
 	previewStop: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_stop")),
 	previewRewindToZero: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_rewind_to_zero")),
-	previewSeek: (positionMs: number) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_seek", { positionMs })),
+	previewSeek: (positionSeconds: number) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_seek", { positionSeconds })),
 	getPreviewScene: () => typedError<PreviewSceneDto, string>(__TAURI_INVOKE("get_preview_scene")),
 	initPreviewTransport: () => typedError<null, string>(__TAURI_INVOKE("init_preview_transport")),
 	disposePreviewTransport: () => typedError<null, string>(__TAURI_INVOKE("dispose_preview_transport")),
@@ -57,7 +57,7 @@ export type AppSnapshotDto = {
 };
 
 export type ColorCurvePointDto = {
-	time: number | null,
+	time: number,
 	value: string,
 };
 
@@ -96,7 +96,7 @@ export type FixtureDefinitionDto = {
 	objectKey: string,
 	name: string,
 	colorModel: string,
-	bulbSize: number | null,
+	bulbDiameterMeters: number,
 	geometry: GeometryDto,
 	geometrySummary: string,
 	renderPlan: GeometryRenderPlanDto,
@@ -108,42 +108,41 @@ export type FixtureDocumentDto = {
 	fixtures: FixtureDefinitionDto[],
 };
 
-export type FixtureGuiEditDto = { type: "updateBulbSize"; objectKey: string; bulbSize: number | null } | { type: "movePoint"; objectKey: string; pointIndex: number; point: Point3Dto };
+export type FixtureGuiEditDto = { type: "updateBulbDiameter"; objectKey: string; bulbDiameterMeters: number } | { type: "movePoint"; objectKey: string; pointIndex: number; point: Point3MetersDto };
 
 export type FloatCurvePointDto = {
-	time: number | null,
-	value: number | null,
+	time: number,
+	value: number,
 };
 
-export type GeometryDto = { type: "points"; points: Point3Dto[] } | { type: "lines"; points: Point3Dto[]; pixels: number } | { type: "arc"; center: Point3Dto; radius: number | null; startDegrees: number | null; endDegrees: number | null; pixels: number };
+export type GeometryDto = { type: "points"; points: Point3MetersDto[] } | { type: "lines"; points: Point3MetersDto[]; pixels: number } | { type: "arc"; center: Point3MetersDto; radiusMeters: number; startDegrees: number; endDegrees: number; pixels: number };
 
 export type GeometryRenderBoundsDto = {
-	minX: number | null,
-	minY: number | null,
-	maxX: number | null,
-	maxY: number | null,
+	minXMeters: number,
+	minYMeters: number,
+	maxXMeters: number,
+	maxYMeters: number,
 };
 
-export type GeometryRenderGuideDto = { type: "line"; from: GeometryRenderPointDto; to: GeometryRenderPointDto } | { type: "arc"; start: GeometryRenderPointDto; end: GeometryRenderPointDto; radiusX: number | null; radiusY: number | null; rotation: number | null; largeArc: boolean; sweepPositive: boolean };
+export type GeometryRenderGuideDto = { type: "line"; from: GeometryRenderPointDto; to: GeometryRenderPointDto } | { type: "arc"; start: GeometryRenderPointDto; end: GeometryRenderPointDto; radiusXMeters: number; radiusYMeters: number; rotation: number; largeArc: boolean; sweepPositive: boolean };
 
 export type GeometryRenderPlanDto = {
 	emitters: GeometryRenderPointDto[],
 	guides: GeometryRenderGuideDto[],
 	bounds: GeometryRenderBoundsDto,
-	bulbRadius: number | null,
+	bulbRadiusMeters: number,
 };
 
 export type GeometryRenderPointDto = {
-	x: number | null,
-	y: number | null,
-	z: number | null,
+	xMeters: number,
+	yMeters: number,
+	zMeters: number,
 };
 
 export type LayoutDocumentDto = {
 	path: string,
 	objectKey: string,
 	name: string,
-	units: string,
 	renderBounds: GeometryRenderBoundsDto,
 	fixtures: LayoutFixturePlacementDto[],
 };
@@ -166,10 +165,10 @@ export type LayoutTargetKindDto = "group" | "fixture";
 
 export type ObjectKindDto = "project" | "display" | "controller" | "layout" | "fixture" | "patch" | "sequence" | "curve";
 
-export type Point3Dto = {
-	x: number | null,
-	y: number | null,
-	z: number | null,
+export type Point3MetersDto = {
+	xMeters: number,
+	yMeters: number,
+	zMeters: number,
 };
 
 export type PreviewSceneDto = {
@@ -183,7 +182,7 @@ export type PreviewSceneDto = {
 export type PreviewSceneFixtureDto = {
 	id: number,
 	name: string,
-	bulbRadius: number | null,
+	bulbRadiusMeters: number,
 	firstPixelIndex: number,
 	pixels: GeometryRenderPointDto[],
 };
@@ -191,9 +190,9 @@ export type PreviewSceneFixtureDto = {
 export type PreviewSnapshotDto = {
 	sourceLabel: string,
 	isPlaying: boolean,
-	positionMs: number,
-	homeMs: number,
-	durationMs: number,
+	positionSeconds: number,
+	homeSeconds: number,
+	durationSeconds: number,
 	audio: SequenceAudioDto | null,
 	clockSource: string,
 	audioPlaybackStatus: string,
@@ -213,11 +212,23 @@ export type ProjectDiagnosticDto = {
 export type ResolvedLayoutFixtureDto = {
 	name: string,
 	colorModel: string,
-	bulbSize: number | null,
+	bulbDiameterMeters: number,
 	geometrySummary: string,
 	renderPlan: GeometryRenderPlanDto,
 	sourcePath: string,
 	objectKey: string | null,
+};
+
+export type Rotation3DegreesDto = {
+	xDegrees: number,
+	yDegrees: number,
+	zDegrees: number,
+};
+
+export type Scale3Dto = {
+	x: number,
+	y: number,
+	z: number,
 };
 
 export type SequenceAudioDto = {
@@ -230,7 +241,7 @@ export type SequenceAudioDto = {
 export type SequenceDocumentDto = {
 	path: string,
 	objectKey: string,
-	durationMs: number,
+	durationSeconds: number,
 	frameRate: number,
 	audio: SequenceAudioDto | null,
 	markCollections: SequenceMarkCollectionDto[],
@@ -243,8 +254,8 @@ export type SequenceDocumentDto = {
 export type SequenceEffectDto = {
 	index: number,
 	id: number,
-	startMs: number,
-	durationMs: number,
+	startSeconds: number,
+	durationSeconds: number,
 	target: LayoutTargetDto,
 	targetLabel: string,
 	scope: SequenceEffectScopeDto,
@@ -262,7 +273,7 @@ export type SequenceEffectParamDto = {
 
 export type SequenceEffectParamKindDto = "int" | "float" | "bool" | "color" | "enum" | "flags" | "floatCurve" | "colorCurve" | "marks";
 
-export type SequenceEffectParamValueDto = { type: "int"; value: number } | { type: "float"; value: number | null } | { type: "bool"; value: boolean } | { type: "color"; value: string } | { type: "enum"; value: string } | { type: "flags"; value: string[] } | { type: "floatCurve"; points: FloatCurvePointDto[] } | { type: "colorCurve"; points: ColorCurvePointDto[] } | { type: "marks"; key: string };
+export type SequenceEffectParamValueDto = { type: "int"; value: number } | { type: "float"; value: number } | { type: "bool"; value: boolean } | { type: "color"; value: string } | { type: "enum"; value: string } | { type: "flags"; value: string[] } | { type: "floatCurve"; points: FloatCurvePointDto[] } | { type: "colorCurve"; points: ColorCurvePointDto[] } | { type: "marks"; key: string };
 
 export type SequenceEffectPreviewBatchDto = {
 	previews: SequenceEffectPreviewDto[],
@@ -270,7 +281,7 @@ export type SequenceEffectPreviewBatchDto = {
 
 export type SequenceEffectPreviewDto = {
 	effectId: number,
-	durationMs: number,
+	durationSeconds: number,
 	sourcePixelCount: number,
 	sampledPixelIndices: number[],
 	columns: number,
@@ -292,7 +303,7 @@ export type SequenceEffectScriptParamDto = {
 	kind: SequenceEffectParamKindDto,
 };
 
-export type SequenceGuiEditDto = { type: "setAudio"; import: string | null } | { type: "addEffect"; scriptPath: string; target: LayoutTargetDto; scope: SequenceEffectScopeDto; startMs: number; markCollectionKey: string | null } | { type: "moveEffect"; id: number; startMs: number; target: LayoutTargetDto | null } | { type: "resizeEffect"; id: number; startMs: number; durationMs: number } | { type: "changeEffectScript"; id: number; scriptPath: string } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTargetDto } | { type: "setEffectScope"; id: number; scope: SequenceEffectScopeDto } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValueDto } | { type: "createMarkCollection"; key: string; name: string; color: string } | { type: "renameMarkCollection"; key: string; name: string } | { type: "deleteMarkCollection"; key: string } | { type: "setMarkCollectionColor"; key: string; color: string } | { type: "addMark"; collectionKey: string; timeMs: number } | { type: "moveMark"; collectionKey: string; index: number; timeMs: number } | { type: "deleteMark"; collectionKey: string; index: number };
+export type SequenceGuiEditDto = { type: "setAudio"; import: string | null } | { type: "addEffect"; scriptPath: string; target: LayoutTargetDto; scope: SequenceEffectScopeDto; startSeconds: number; markCollectionKey: string | null } | { type: "moveEffect"; id: number; startSeconds: number; target: LayoutTargetDto | null } | { type: "resizeEffect"; id: number; startSeconds: number; durationSeconds: number } | { type: "changeEffectScript"; id: number; scriptPath: string } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTargetDto } | { type: "setEffectScope"; id: number; scope: SequenceEffectScopeDto } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValueDto } | { type: "createMarkCollection"; key: string; name: string; color: string } | { type: "renameMarkCollection"; key: string; name: string } | { type: "deleteMarkCollection"; key: string } | { type: "setMarkCollectionColor"; key: string; color: string } | { type: "addMark"; collectionKey: string; timeSeconds: number } | { type: "moveMark"; collectionKey: string; index: number; timeSeconds: number } | { type: "deleteMark"; collectionKey: string; index: number };
 
 export type SequenceLaneDto = {
 	target: LayoutTargetDto,
@@ -303,7 +314,7 @@ export type SequenceMarkCollectionDto = {
 	key: string,
 	name: string,
 	color: string,
-	marksMs: number[],
+	marksSeconds: number[],
 };
 
 export type TextPositionDto = {
@@ -317,9 +328,9 @@ export type TextRangeDto = {
 };
 
 export type TransformDto = {
-	position: Point3Dto,
-	rotation: Point3Dto,
-	scale: Point3Dto,
+	position: Point3MetersDto,
+	rotation: Rotation3DegreesDto,
+	scale: Scale3Dto,
 };
 
 export type WorkspaceEntryDto = {
