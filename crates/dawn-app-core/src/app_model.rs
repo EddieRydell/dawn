@@ -14,7 +14,7 @@ use crate::dto::AppSnapshotDto;
 use crate::dto::{FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto};
 use crate::editor_session::{EditorBuffer, EditorSession, EditorViewMode};
 use crate::layout_persistence::{
-    load_workbench_layout, save_workbench_layout, PreviewWindowLayout, WorkbenchLayout,
+    load_workbench_layout, save_workbench_layout, WindowLayout, WorkbenchLayout,
 };
 use crate::preview_session::{PreviewSession, PreviewSnapshot, SequenceKey};
 use crate::workspace::WorkspaceService;
@@ -281,8 +281,18 @@ impl AppModel {
         self.preview.target_fps()
     }
 
-    pub fn set_preview_window_layout(&mut self, layout: PreviewWindowLayout) -> Result<(), String> {
+    pub fn set_main_window_layout(&mut self, layout: WindowLayout) -> Result<(), String> {
+        self.workbench_layout.main_window = layout;
+        save_workbench_layout(&self.workbench_layout)
+    }
+
+    pub fn set_preview_window_layout(&mut self, layout: WindowLayout) -> Result<(), String> {
         self.workbench_layout.preview_window = layout;
+        save_workbench_layout(&self.workbench_layout)
+    }
+
+    pub fn set_preview_window_open(&mut self, open: bool) -> Result<(), String> {
+        self.workbench_layout.preview_window_open = open;
         save_workbench_layout(&self.workbench_layout)
     }
 

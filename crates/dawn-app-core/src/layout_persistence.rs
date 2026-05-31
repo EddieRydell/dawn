@@ -8,6 +8,18 @@ use crate::editor_session::EditorSessionState;
 const DEFAULT_LEFT_PANE_WIDTH: f64 = 280.0;
 const DEFAULT_RIGHT_PANE_WIDTH: f64 = 360.0;
 
+fn default_preview_window_open() -> bool {
+    true
+}
+
+fn default_main_window_layout() -> WindowLayout {
+    WindowLayout::main_default()
+}
+
+fn default_preview_window_layout() -> WindowLayout {
+    WindowLayout::preview_default()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkbenchLayout {
@@ -21,8 +33,12 @@ pub struct WorkbenchLayout {
     pub last_project_root: Option<PathBuf>,
     #[serde(default)]
     pub editor_session: EditorSessionState,
-    #[serde(default)]
-    pub preview_window: PreviewWindowLayout,
+    #[serde(default = "default_preview_window_open")]
+    pub preview_window_open: bool,
+    #[serde(default = "default_main_window_layout")]
+    pub main_window: WindowLayout,
+    #[serde(default = "default_preview_window_layout")]
+    pub preview_window: WindowLayout,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -35,21 +51,40 @@ pub enum InspectorTab {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PreviewWindowLayout {
+pub struct WindowLayout {
     pub x: f64,
     pub y: f64,
     pub width: f64,
     pub height: f64,
+    #[serde(default)]
+    pub maximized: bool,
 }
 
-impl Default for PreviewWindowLayout {
-    fn default() -> Self {
+impl WindowLayout {
+    pub fn main_default() -> Self {
+        Self {
+            x: 40.0,
+            y: 40.0,
+            width: 1280.0,
+            height: 820.0,
+            maximized: false,
+        }
+    }
+
+    pub fn preview_default() -> Self {
         Self {
             x: 80.0,
             y: 80.0,
             width: 720.0,
             height: 480.0,
+            maximized: false,
         }
+    }
+}
+
+impl Default for WindowLayout {
+    fn default() -> Self {
+        Self::preview_default()
     }
 }
 
@@ -63,7 +98,9 @@ impl Default for WorkbenchLayout {
             active_inspector_tab: InspectorTab::Diagnostics,
             last_project_root: None,
             editor_session: EditorSessionState::default(),
-            preview_window: PreviewWindowLayout::default(),
+            preview_window_open: true,
+            main_window: WindowLayout::main_default(),
+            preview_window: WindowLayout::preview_default(),
         }
     }
 }
@@ -75,6 +112,8 @@ impl WorkbenchLayout {
         *self = Self {
             last_project_root,
             editor_session,
+            preview_window_open: self.preview_window_open,
+            main_window: self.main_window.clone(),
             preview_window: self.preview_window.clone(),
             ..Self::default()
         };

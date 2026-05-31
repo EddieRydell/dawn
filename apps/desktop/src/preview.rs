@@ -2,7 +2,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use dawn_app_core::dto::{GeometryRenderBoundsDto, GeometryRenderPointDto};
-use dawn_app_core::layout_persistence::PreviewWindowLayout;
 use dawn_app_core::output_runtime::OutputFrame;
 use dawn_app_core::preview_session::PreviewSnapshot;
 use serde::{Deserialize, Serialize};
@@ -15,6 +14,7 @@ use crate::app_runtime::{
 use crate::state::{
     lock_audio_runtime, lock_model, lock_preview_transport, AppState, CommandResult,
 };
+use crate::window_layout::{persist_window_layout, WorkbenchWindow};
 
 const PREVIEW_STATE_EVENT_INTERVAL: Duration = Duration::from_millis(33);
 
@@ -287,13 +287,38 @@ pub(crate) fn open_or_focus_preview_window(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
+    open_preview_window(app, state, true)
+}
+
+pub(crate) fn open_preview_window_on_startup(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let should_open = lock_model(&state)?.workbench_layout.preview_window_open;
+    if should_open {
+        open_preview_window(app, state, false)?;
+    }
+    Ok(())
+}
+
+fn open_preview_window(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    focus: bool,
+) -> CommandResult<()> {
     if let Some(window) = app.get_webview_window("preview") {
         window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
+        if focus {
+            window.set_focus().map_err(|error| error.to_string())?;
+        }
         return Ok(());
     }
 
-    let layout = lock_model(&state)?.workbench_layout.preview_window.clone();
+    let layout = {
+        let mut model = lock_model(&state)?;
+        model.set_preview_window_open(true)?;
+        model.workbench_layout.preview_window.clone()
+    };
     let window =
         WebviewWindowBuilder::new(&app, "preview", WebviewUrl::App("/?view=preview".into()))
             .title("Dawn Preview")
@@ -301,37 +326,36 @@ pub(crate) fn open_or_focus_preview_window(
             .inner_size(layout.width, layout.height)
             .build()
             .map_err(|error| error.to_string())?;
+    if layout.maximized {
+        window.maximize().map_err(|error| error.to_string())?;
+    }
     let app_for_event = app.clone();
-    window.on_window_event(move |event| {
-        if matches!(
-            event,
-            WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed
-        ) {
-            persist_preview_window_layout(&app_for_event);
+    window.on_window_event(move |event| match event {
+        WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+            persist_window_layout(&app_for_event, WorkbenchWindow::Preview);
         }
+        WindowEvent::CloseRequested { .. } => {
+            persist_window_layout(&app_for_event, WorkbenchWindow::Preview);
+            let state = app_for_event.state::<AppState>();
+            if !state.is_shutting_down() {
+                persist_preview_window_open(&app_for_event, false);
+            }
+        }
+        WindowEvent::Destroyed => {
+            persist_window_layout(&app_for_event, WorkbenchWindow::Preview);
+        }
+        _ => {}
     });
-    window.set_focus().map_err(|error| error.to_string())?;
+    if focus {
+        window.set_focus().map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
-fn persist_preview_window_layout(app: &AppHandle) {
-    let Some(window) = app.get_webview_window("preview") else {
-        return;
-    };
-    let Ok(position) = window.outer_position() else {
-        return;
-    };
-    let Ok(size) = window.inner_size() else {
-        return;
-    };
+fn persist_preview_window_open(app: &AppHandle, open: bool) {
     let state = app.state::<AppState>();
     if let Ok(mut model) = lock_model(&state) {
-        let _ = model.set_preview_window_layout(PreviewWindowLayout {
-            x: position.x.into(),
-            y: position.y.into(),
-            width: size.width.into(),
-            height: size.height.into(),
-        });
+        let _ = model.set_preview_window_open(open);
     };
 }
 

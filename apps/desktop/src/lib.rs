@@ -19,6 +19,7 @@ mod effect_previews;
 mod preview;
 mod preview_transport;
 mod state;
+mod window_layout;
 
 pub use bindings::{check_bindings, export_bindings, specta_builder};
 pub use effect_previews::{SequenceEffectPreviewBatchDto, SequenceEffectPreviewDto};
@@ -34,7 +35,14 @@ pub fn run() -> Result<(), tauri::Error> {
         .invoke_handler(builder.invoke_handler())
         .setup(|app| {
             let _ = app.get_webview_window("main");
+            window_layout::restore_main_window_layout(app.handle())
+                .map_err(std::io::Error::other)?;
+            window_layout::register_main_window_layout_events(app.handle())
+                .map_err(std::io::Error::other)?;
             preview::start_preview_worker(app.handle().clone());
+            let state = app.state::<state::AppState>();
+            preview::open_preview_window_on_startup(app.handle().clone(), state)
+                .map_err(std::io::Error::other)?;
             Ok(())
         })
         .run(tauri::generate_context!())

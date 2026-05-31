@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use dawn_app_core::app_model::AppModel;
@@ -14,6 +15,7 @@ pub(crate) struct AppState {
     audio_runtime: Mutex<AudioRuntime>,
     effect_preview_cache: Mutex<HashMap<EffectPreviewCacheKey, SequenceEffectPreviewDto>>,
     preview_transport: Mutex<PreviewTransportRuntime>,
+    shutting_down: AtomicBool,
 }
 
 impl Default for AppState {
@@ -23,7 +25,18 @@ impl Default for AppState {
             audio_runtime: Mutex::new(AudioRuntime::default()),
             effect_preview_cache: Mutex::new(HashMap::new()),
             preview_transport: Mutex::new(PreviewTransportRuntime::default()),
+            shutting_down: AtomicBool::new(false),
         }
+    }
+}
+
+impl AppState {
+    pub(crate) fn begin_shutdown(&self) {
+        self.shutting_down.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn is_shutting_down(&self) -> bool {
+        self.shutting_down.load(Ordering::Relaxed)
     }
 }
 
