@@ -2,8 +2,9 @@ use dawn_project::analysis::{DiagnosticSeverity, ProjectDiagnostic, TextRange};
 use dawn_project::document::{
     DocumentDescriptor, DocumentObjectDescriptor, DocumentViewId, FixtureDefinitionDocument,
     FixtureDocument, LayoutDocument, LayoutFixturePlacement, ResolvedLayoutFixture,
-    SequenceAudioDocument, SequenceDocument, SequenceEffectDocument,
-    SequenceEffectParamCurvePointEditValue, SequenceEffectParamCurveValueEditValue,
+    SequenceAudioDocument, SequenceCurveLibraryItemDocument, SequenceDocument,
+    SequenceEffectDocument, SequenceEffectParamCurvePointEditValue,
+    SequenceEffectParamCurveSourceDocument, SequenceEffectParamCurveValueEditValue,
     SequenceEffectParamEditValue, SequenceEffectScriptDocument, SequenceEffectScriptParamDocument,
     SequenceLaneDocument,
 };
@@ -12,8 +13,8 @@ use dawn_project::effect_script::{
 };
 use dawn_project::fs::{WorkspaceEntry, WorkspaceEntryKind};
 use dawn_project::model::{
-    ColorModel, Curve, CurveValue, Distance, EffectParam, Geometry, LayoutTargetKind, ObjectKind,
-    Point3, Rotation3, Scale3, SequenceEffectScope, Transform,
+    ColorModel, Curve, CurveValue, CurveValueType, Distance, EffectParam, Geometry,
+    LayoutTargetKind, ObjectKind, Point3, Rotation3, Scale3, SequenceEffectScope, Transform,
 };
 use dawn_project::path::PathStringExt;
 use dawn_project::render::{
@@ -189,6 +190,16 @@ pub enum SequenceGuiEditDto {
         id: u32,
         name: String,
         value: SequenceEffectParamValueDto,
+    },
+    LinkEffectCurveParam {
+        id: u32,
+        name: String,
+        curve_path: String,
+        object_key: String,
+    },
+    UnlinkEffectCurveParam {
+        id: u32,
+        name: String,
     },
     CreateMarkCollection {
         key: String,
@@ -382,6 +393,7 @@ pub struct SequenceDocumentDto {
     pub mark_collections: Vec<SequenceMarkCollectionDto>,
     pub lanes: Vec<SequenceLaneDto>,
     pub effect_scripts: Vec<SequenceEffectScriptDto>,
+    pub curve_library: Vec<SequenceCurveLibraryItemDto>,
     pub effects: Vec<SequenceEffectDto>,
     pub degraded: bool,
 }
@@ -440,6 +452,7 @@ pub struct SequenceEffectParamDto {
     pub options: Vec<String>,
     pub editable: bool,
     pub value: SequenceEffectParamValueDto,
+    pub curve_source: Option<SequenceEffectParamCurveSourceDto>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
@@ -486,6 +499,50 @@ pub struct FloatCurvePointDto {
 pub struct ColorCurvePointDto {
     pub time: f64,
     pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceCurveLibraryItemDto {
+    pub path: String,
+    pub object_key: String,
+    pub display_name: String,
+    pub value_type: SequenceCurveValueTypeDto,
+    pub points: SequenceCurveLibraryPointsDto,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SequenceCurveValueTypeDto {
+    Float,
+    Color,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SequenceCurveLibraryPointsDto {
+    Float { points: Vec<FloatCurvePointDto> },
+    Color { points: Vec<ColorCurvePointDto> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SequenceEffectParamCurveSourceDto {
+    Inline,
+    Library {
+        reference: String,
+        path: Option<String>,
+        object_key: Option<String>,
+        display_name: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -895,12 +952,67 @@ impl From<SequenceDocument> for SequenceDocumentDto {
                 .into_iter()
                 .map(SequenceEffectScriptDto::from)
                 .collect(),
+            curve_library: document
+                .curve_library
+                .into_iter()
+                .filter_map(SequenceCurveLibraryItemDto::try_from_document)
+                .collect(),
             effects: document
                 .effects
                 .into_iter()
                 .map(SequenceEffectDto::from)
                 .collect(),
             degraded: document.degraded,
+        }
+    }
+}
+
+impl SequenceCurveLibraryItemDto {
+    fn try_from_document(item: SequenceCurveLibraryItemDocument) -> Option<Self> {
+        Some(Self {
+            path: item.path,
+            object_key: item.object_key,
+            display_name: item.display_name,
+            value_type: SequenceCurveValueTypeDto::from(item.value_type),
+            points: SequenceCurveLibraryPointsDto::try_from_curve(&item.curve)?,
+        })
+    }
+}
+
+impl From<CurveValueType> for SequenceCurveValueTypeDto {
+    fn from(value_type: CurveValueType) -> Self {
+        match value_type {
+            CurveValueType::Float => Self::Float,
+            CurveValueType::Color => Self::Color,
+        }
+    }
+}
+
+impl SequenceCurveLibraryPointsDto {
+    fn try_from_curve(curve: &Curve) -> Option<Self> {
+        match curve_to_param_value(curve)? {
+            SequenceEffectParamValueDto::FloatCurve { points } => Some(Self::Float { points }),
+            SequenceEffectParamValueDto::ColorCurve { points } => Some(Self::Color { points }),
+            _ => None,
+        }
+    }
+}
+
+impl From<SequenceEffectParamCurveSourceDocument> for SequenceEffectParamCurveSourceDto {
+    fn from(source: SequenceEffectParamCurveSourceDocument) -> Self {
+        match source {
+            SequenceEffectParamCurveSourceDocument::Inline => Self::Inline,
+            SequenceEffectParamCurveSourceDocument::Library {
+                reference,
+                path,
+                object_key,
+                display_name,
+            } => Self::Library {
+                reference,
+                path,
+                object_key,
+                display_name,
+            },
         }
     }
 }
@@ -1005,6 +1117,11 @@ fn sequence_effect_params_from_source(
                 options: schema.options.clone(),
                 editable: value.is_some(),
                 value: value?,
+                curve_source: params
+                    .iter()
+                    .find(|param| param.name == schema.name)
+                    .and_then(|param| param.curve_source.clone())
+                    .map(SequenceEffectParamCurveSourceDto::from),
             })
         })
         .collect()

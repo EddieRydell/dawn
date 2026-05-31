@@ -2,7 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, LoaderCircle, Minus, Music, Pause, Play, RadioTower, SkipBack, Square, Trash2, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, FlipHorizontal2, FlipVertical2, Link2Off, LoaderCircle, Minus, Music, Pause, Play, RadioTower, SkipBack, Square, Trash2, X } from "lucide-react";
 import { commands } from "../api";
 import type {
   ActiveGuiDocumentDto,
@@ -26,6 +26,7 @@ import type {
   SequenceEffectParamValueDto,
   SequenceEffectScriptDto,
   SequenceEffectPreviewDto,
+  SequenceCurveLibraryItemDto,
   SequenceMarkRefDto,
   SequenceSelectionDto,
   TransformDto
@@ -1904,6 +1905,7 @@ function GuiInspector({
                   key={`${effect.id}:${param.name}`}
                   effectId={effect.id}
                   param={param}
+                  curveLibrary={gui.document.curveLibrary}
                   markCollections={gui.document.markCollections}
                 />
               ))}
@@ -2181,10 +2183,12 @@ function openColorPicker(input: HTMLInputElement | null | undefined) {
 function EffectParamInput({
   effectId,
   param,
+  curveLibrary,
   markCollections
 }: {
   effectId: number;
   param: SequenceEffectParamDto;
+  curveLibrary: SequenceCurveLibraryItemDto[];
   markCollections: SequenceMarkCollectionDto[];
 }) {
   const commit = (value: SequenceEffectParamValueDto) =>
@@ -2253,9 +2257,29 @@ function EffectParamInput({
       );
     }
     case "floatCurve":
-      return <FloatCurveParamShell name={param.name} points={normalizeFloatCurvePoints(param.value.points)} commit={(points) => commit({ type: "floatCurve", points })} />;
+      return (
+        <CurveParamSourceShell
+          effectId={effectId}
+          param={param}
+          valueType="float"
+          curveLibrary={curveLibrary}
+          points={normalizeFloatCurvePoints(param.value.points)}
+          commit={(points) => commit({ type: "floatCurve", points })}
+          render={(props) => <FloatCurveParamShell name={param.name} {...props} />}
+        />
+      );
     case "colorCurve":
-      return <ColorCurveParamShell name={param.name} points={normalizeColorCurvePoints(param.value.points)} commit={(points) => commit({ type: "colorCurve", points })} />;
+      return (
+        <CurveParamSourceShell
+          effectId={effectId}
+          param={param}
+          valueType="color"
+          curveLibrary={curveLibrary}
+          points={normalizeColorCurvePoints(param.value.points)}
+          commit={(points) => commit({ type: "colorCurve", points })}
+          render={(props) => <ColorCurveParamShell name={param.name} {...props} />}
+        />
+      );
     case "marks":
       return (
         <label>
@@ -2360,10 +2384,148 @@ function ColorField({ label, value, commit }: { label: string; value: string; co
   );
 }
 
+type EditedCurvePoint = EditedFloatCurvePoint | EditedColorCurvePoint;
+type CurveEditorProps<T extends EditedCurvePoint> = {
+  points: T[];
+  commit: (points: T[]) => Promise<void>;
+  readOnly?: boolean;
+  requestInlineEdit?: () => void;
+};
+
+function CurveParamSourceShell<T extends EditedCurvePoint>({
+  effectId,
+  param,
+  valueType,
+  curveLibrary,
+  points,
+  commit,
+  render
+}: {
+  effectId: number;
+  param: SequenceEffectParamDto;
+  valueType: "float" | "color";
+  curveLibrary: SequenceCurveLibraryItemDto[];
+  points: T[];
+  commit: (points: T[]) => Promise<void>;
+  render: (props: CurveEditorProps<T>) => ReactNode;
+}) {
+  const source = param.curveSource?.type === "library" ? param.curveSource : null;
+  const linked = source !== null;
+  const linkedLabel = source?.displayName ?? source?.reference ?? "";
+  const matchingCurves = curveLibrary.filter((item) => item.valueType === valueType);
+  const linkedValue = linked && source.path !== null && source.objectKey !== null
+    ? `${source.path}::${source.objectKey}`
+    : "";
+  const unlinkCopy = () =>
+    runSnapshotCommand(() =>
+      commands.applySequenceGuiEdit({
+        type: "unlinkEffectCurveParam",
+        id: effectId,
+        name: param.name
+      })
+    ).then(() => undefined);
+  const confirmUnlinkCopy = () => {
+    if (!linked) return true;
+    if (!window.confirm(`Unlink ${param.name} and edit a local copy?`)) return false;
+    void unlinkCopy();
+    return true;
+  };
+  const flipHorizontal = () => {
+    const next = sortCurvePoints(points.map((point) => ({ ...point, time: roundCurveValue(1 - point.time) }))) as T[];
+    if (!linked || window.confirm(`Unlink ${param.name} and flip a local copy?`)) {
+      void commit(next);
+    }
+  };
+  const flipVertical = () => {
+    if (valueType !== "float") return;
+    const next = points.map((point) => ({ ...point, value: roundCurveValue(1 - (point.value as number)) })) as T[];
+    if (!linked || window.confirm(`Unlink ${param.name} and flip a local copy?`)) {
+      void commit(next);
+    }
+  };
+  return (
+    <div className={`curve-source-shell ${linked ? "linked" : ""}`}>
+      <div className="curve-source-row">
+        <select
+          title={`${param.name} source`}
+          value={linked ? "library" : "inline"}
+          onChange={(event) => {
+            if (event.currentTarget.value === "inline") {
+              if (linked) void unlinkCopy();
+              return;
+            }
+            const first = matchingCurves[0];
+            if (first === undefined) return;
+            void runSnapshotCommand(() =>
+              commands.applySequenceGuiEdit({
+                type: "linkEffectCurveParam",
+                id: effectId,
+                name: param.name,
+                curvePath: first.path,
+                objectKey: first.objectKey
+              })
+            );
+          }}
+        >
+          <option value="inline">Inline</option>
+          <option value="library" disabled={matchingCurves.length === 0}>Library</option>
+        </select>
+        <select
+          title={`${param.name} library curve`}
+          disabled={matchingCurves.length === 0}
+          value={linkedValue}
+          onChange={(event) => {
+            const [curvePath, objectKey] = event.currentTarget.value.split("::");
+            if (curvePath === undefined || objectKey === undefined) return;
+            void runSnapshotCommand(() =>
+              commands.applySequenceGuiEdit({
+                type: "linkEffectCurveParam",
+                id: effectId,
+                name: param.name,
+                curvePath,
+                objectKey
+              })
+            );
+          }}
+        >
+          {!linked && <option value="">Choose curve</option>}
+          {linkedValue !== "" && !matchingCurves.some((item) => `${item.path}::${item.objectKey}` === linkedValue) && (
+            <option value={linkedValue}>{linkedLabel}</option>
+          )}
+          {matchingCurves.map((item) => (
+            <option key={`${item.path}::${item.objectKey}`} value={`${item.path}::${item.objectKey}`}>
+              {item.displayName}
+            </option>
+          ))}
+        </select>
+      </div>
+      {linked && <div className="curve-linked-label">{linkedLabel}</div>}
+      <div className="curve-action-row">
+        {linked && (
+          <button type="button" className="neutral-button" title="Unlink copy" onClick={() => void unlinkCopy()}>
+            <Link2Off size={14} />
+          </button>
+        )}
+        <button type="button" className="neutral-button" title="Flip horizontal" onClick={flipHorizontal}>
+          <FlipHorizontal2 size={14} />
+        </button>
+        {valueType === "float" && (
+          <button type="button" className="neutral-button" title="Flip vertical" onClick={flipVertical}>
+            <FlipVertical2 size={14} />
+          </button>
+        )}
+      </div>
+      {render({ points, commit, readOnly: linked, requestInlineEdit: confirmUnlinkCopy })}
+    </div>
+  );
+}
+
 function FloatCurveParamShell(props: {
   name: string;
   points: EditedFloatCurvePoint[];
   commit: (points: EditedFloatCurvePoint[]) => Promise<void>;
+  readOnly?: boolean;
+  requestInlineEdit?: () => void;
 }) {
   return <FloatCurveParam {...props} />;
 }
@@ -2372,6 +2534,8 @@ function ColorCurveParamShell(props: {
   name: string;
   points: EditedColorCurvePoint[];
   commit: (points: EditedColorCurvePoint[]) => Promise<void>;
+  readOnly?: boolean;
+  requestInlineEdit?: () => void;
 }) {
   return <ColorCurveParam {...props} />;
 }
@@ -2379,11 +2543,15 @@ function ColorCurveParamShell(props: {
 function FloatCurveParam({
   name,
   points,
-  commit
+  commit,
+  readOnly = false,
+  requestInlineEdit
 }: {
   name: string;
   points: EditedFloatCurvePoint[];
   commit: (points: EditedFloatCurvePoint[]) => Promise<void>;
+  readOnly?: boolean;
+  requestInlineEdit?: () => void;
 }) {
   const [drafts, setDrafts] = useState(points);
   const draftsRef = useRef(points);
@@ -2410,6 +2578,10 @@ function FloatCurveParam({
     setSelectedIndex((index) => Math.min(index, points.length - 1));
   }, [points, pointsSignature]);
   const update = (next: EditedFloatCurvePoint[]) => {
+    if (readOnly) {
+      requestInlineEdit?.();
+      return;
+    }
     if (next.length > 0 && next.every((point) => Number.isFinite(point.time) && Number.isFinite(point.value))) {
       const sorted = sortCurvePoints(next);
       const signature = curvePointsSignature(sorted);
@@ -2469,6 +2641,10 @@ function FloatCurveParam({
         role="img"
         aria-label={`${name} curve`}
         onPointerDown={(event) => {
+          if (readOnly) {
+            requestInlineEdit?.();
+            return;
+          }
           if (event.target instanceof SVGCircleElement) return;
           const point = pointFromPointer(event);
           update([...draftsRef.current, point]);
@@ -2509,6 +2685,10 @@ function FloatCurveParam({
               tabIndex={0}
               onPointerDown={(event) => {
                 event.stopPropagation();
+                if (readOnly) {
+                  requestInlineEdit?.();
+                  return;
+                }
                 event.currentTarget.ownerSVGElement?.setPointerCapture(event.pointerId);
                 draggingPoint.current = index;
                 setSelectedIndex(index);
@@ -2516,6 +2696,10 @@ function FloatCurveParam({
               onContextMenu={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
+                if (readOnly) {
+                  requestInlineEdit?.();
+                  return;
+                }
                 deletePoint(index);
               }}
               onFocus={() => { setSelectedIndex(index); }}
@@ -2549,8 +2733,10 @@ function FloatCurveParam({
                     max={1}
                     step={0.01}
                     value={point.time}
+                    readOnly={readOnly}
                     onFocus={() => { setSelectedIndex(index); }}
                     onChange={(event) => {
+                      if (readOnly) return;
                       setPoint(index, { ...point, time: Number(event.currentTarget.value) }, false);
                     }}
                     onBlur={() => { commitDraftPoint(index); }}
@@ -2568,8 +2754,10 @@ function FloatCurveParam({
                     type="number"
                     step={0.05}
                     value={point.value}
+                    readOnly={readOnly}
                     onFocus={() => { setSelectedIndex(index); }}
                     onChange={(event) => {
+                      if (readOnly) return;
                       setPoint(index, { ...point, value: Number(event.currentTarget.value) }, false);
                     }}
                     onBlur={() => { commitDraftPoint(index); }}
@@ -2585,7 +2773,7 @@ function FloatCurveParam({
                   type="button"
                   className="float-curve-point-delete"
                   title="Delete point"
-                  disabled={drafts.length <= 1}
+                  disabled={readOnly || drafts.length <= 1}
                   onClick={() => { deletePoint(index); }}
                 >
                   <Minus size={14} />
@@ -2595,7 +2783,7 @@ function FloatCurveParam({
           </div>
         )}
       </div>
-      <button type="button" onClick={() => {
+      <button type="button" disabled={readOnly} onClick={() => {
         const nextPoint = { time: 1, value: drafts[drafts.length - 1]?.value ?? 0 };
         update([...drafts, nextPoint]);
         setSelectedIndex(drafts.length);
@@ -2607,11 +2795,15 @@ function FloatCurveParam({
 function ColorCurveParam({
   name,
   points,
-  commit
+  commit,
+  readOnly = false,
+  requestInlineEdit
 }: {
   name: string;
   points: EditedColorCurvePoint[];
   commit: (points: EditedColorCurvePoint[]) => Promise<void>;
+  readOnly?: boolean;
+  requestInlineEdit?: () => void;
 }) {
   const [drafts, setDrafts] = useState(points);
   const draftsRef = useRef(points);
@@ -2639,6 +2831,10 @@ function ColorCurveParam({
     setSelectedIndex((index) => Math.min(index, points.length - 1));
   }, [points, pointsSignature]);
   const update = (next: EditedColorCurvePoint[]) => {
+    if (readOnly) {
+      requestInlineEdit?.();
+      return;
+    }
     if (next.length > 0 && next.every((point) => Number.isFinite(point.time) && isHexColor(point.value))) {
       const sorted = sortCurvePoints(next).map((point) => ({ ...point, value: point.value.toLowerCase() }));
       const signature = curvePointsSignature(sorted);
@@ -2713,6 +2909,10 @@ function ColorCurveParam({
         className="color-curve-gradient"
         style={{ background: gradient }}
         onPointerDown={(event) => {
+          if (readOnly) {
+            requestInlineEdit?.();
+            return;
+          }
           if (event.target !== event.currentTarget) return;
           const previous = draftsRef.current[draftsRef.current.length - 1]?.value ?? "#ffffff";
           const point = pointFromPointer(event, previous);
@@ -2755,6 +2955,10 @@ function ColorCurveParam({
               style={{ left: `${point.time * 100}%` }}
               onPointerDown={(event) => {
                 event.stopPropagation();
+                if (readOnly) {
+                  requestInlineEdit?.();
+                  return;
+                }
                 event.currentTarget.parentElement?.setPointerCapture(event.pointerId);
                 draggingPoint.current = { index, moved: false };
                 setSelectedIndex(index);
@@ -2762,11 +2966,19 @@ function ColorCurveParam({
               onDoubleClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
+                if (readOnly) {
+                  requestInlineEdit?.();
+                  return;
+                }
                 openColorPicker(colorInputRefs.current[index]);
               }}
               onContextMenu={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
+                if (readOnly) {
+                  requestInlineEdit?.();
+                  return;
+                }
                 deletePoint(index);
               }}
               onFocus={() => { setSelectedIndex(index); }}
@@ -2779,7 +2991,9 @@ function ColorCurveParam({
                   }}
                   type="color"
                   value={displayedColor}
+                  disabled={readOnly}
                   onChange={(event) => {
+                    if (readOnly) return;
                     setPoint(index, { ...point, value: event.currentTarget.value }, false);
                   }}
                   onBlur={() => { commitDraftValue(index); }}
@@ -2817,6 +3031,7 @@ function ColorCurveParam({
                       max={1}
                       step={0.01}
                       value={point.time}
+                      readOnly={readOnly}
                       onFocus={() => { setSelectedIndex(index); }}
                       onChange={(event) => {
                         setPoint(index, { ...point, time: Number(event.currentTarget.value) }, false);
@@ -2835,8 +3050,10 @@ function ColorCurveParam({
                     <input
                       type="color"
                       value={displayedColor}
+                      disabled={readOnly}
                       onFocus={() => { setSelectedIndex(index); }}
                       onChange={(event) => {
+                        if (readOnly) return;
                         setPoint(index, { ...point, value: event.currentTarget.value }, false);
                       }}
                       onBlur={() => { commitDraftValue(index); }}
@@ -2844,8 +3061,12 @@ function ColorCurveParam({
                   </label>
                   <input
                     value={point.value}
+                    readOnly={readOnly}
                     onFocus={() => { setSelectedIndex(index); }}
-                    onChange={(event) => { setPoint(index, { ...point, value: event.currentTarget.value }, false); }}
+                    onChange={(event) => {
+                      if (readOnly) return;
+                      setPoint(index, { ...point, value: event.currentTarget.value }, false);
+                    }}
                     onBlur={() => { commitDraftValue(index); }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter") {
@@ -2854,7 +3075,7 @@ function ColorCurveParam({
                       }
                     }}
                   />
-                  <button type="button" className="float-curve-point-delete" disabled={drafts.length <= 1} onClick={() => { deletePoint(index); }}>
+                  <button type="button" className="float-curve-point-delete" disabled={readOnly || drafts.length <= 1} onClick={() => { deletePoint(index); }}>
                     <Minus size={14} />
                   </button>
                 </div>
@@ -2863,7 +3084,7 @@ function ColorCurveParam({
           </div>
         )}
       </div>
-      <button type="button" onClick={() => {
+      <button type="button" disabled={readOnly} onClick={() => {
         const nextPoint = { time: 1, value: drafts[drafts.length - 1]?.value ?? "#ffffff" };
         update([...drafts, nextPoint]);
         setSelectedIndex(drafts.length);

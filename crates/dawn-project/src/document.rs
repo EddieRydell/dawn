@@ -168,6 +168,7 @@ pub struct SequenceDocument {
     pub mark_collections: Vec<SequenceMarkCollectionDocument>,
     pub lanes: Vec<SequenceLaneDocument>,
     pub effect_scripts: Vec<SequenceEffectScriptDocument>,
+    pub curve_library: Vec<SequenceCurveLibraryItemDocument>,
     pub effects: Vec<SequenceEffectDocument>,
     pub degraded: bool,
 }
@@ -229,6 +230,16 @@ pub struct SequenceEffectScriptParamDocument {
     pub value_type: ScriptType,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceCurveLibraryItemDocument {
+    pub path: String,
+    pub object_key: String,
+    pub display_name: String,
+    pub value_type: CurveValueType,
+    pub curve: Curve,
+}
+
 #[derive(Debug, Clone)]
 pub enum SequenceDocumentEdit {
     SetAudio {
@@ -273,6 +284,16 @@ pub enum SequenceDocumentEdit {
         id: u32,
         name: String,
         value: SequenceEffectParamEditValue,
+    },
+    LinkEffectCurveParam {
+        id: u32,
+        name: String,
+        curve_path: String,
+        object_key: String,
+    },
+    UnlinkEffectCurveParam {
+        id: u32,
+        name: String,
     },
     CreateMarkCollection {
         key: String,
@@ -401,6 +422,23 @@ pub struct SequenceEffectRenderDocument {
 pub struct SequenceEffectParamDocument {
     pub name: String,
     pub value: EffectParam<Resolved>,
+    pub curve_source: Option<SequenceEffectParamCurveSourceDocument>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SequenceEffectParamCurveSourceDocument {
+    Inline,
+    Library {
+        reference: String,
+        path: Option<String>,
+        object_key: Option<String>,
+        display_name: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -951,6 +989,122 @@ fn apply_sequence_edit_operation(
                 .param(&name)
                 .ok_or_else(|| format!("effect parameter `{name}` was not found"))?;
             let edited_param = param_edit_value_to_authored(schema, value)?;
+            let mut params = IndexMap::with_capacity(script.params.len());
+            for schema in &script.params {
+                let next = if schema.name == name {
+                    edited_param.clone()
+                } else {
+                    sequence.effects[effect_index]
+                        .params
+                        .get(&schema.name)
+                        .filter(|param| {
+                            authored_param_matches_schema(schema, param, path, analysis)
+                        })
+                        .cloned()
+                        .unwrap_or_else(|| default_param_for_schema(schema))
+                };
+                params.insert(schema.name.clone(), next);
+            }
+            sequence.effects[effect_index].params = params;
+        }
+        SequenceDocumentEdit::LinkEffectCurveParam {
+            id,
+            name,
+            curve_path,
+            object_key,
+        } => {
+            let effect_index = sequence
+                .effects
+                .iter()
+                .position(|effect| effect.id == id)
+                .ok_or_else(|| format!("sequence effect `{id}` was not found"))?;
+            let script = compiled_effect_for_sequence_effect(
+                fs,
+                path,
+                analysis,
+                overlays,
+                &sequence.effects[effect_index],
+            )?;
+            let schema = script
+                .param(&name)
+                .ok_or_else(|| format!("effect parameter `{name}` was not found"))?;
+            let expected_value_type = curve_value_type_for_script_type(schema.value_type)
+                .ok_or_else(|| format!("`{name}` is not a curve parameter"))?;
+            let curve_path = canonicalize_path(&fs.resolve(&Utf8PathBuf::from(curve_path)));
+            let Some(file) = analysis
+                .files
+                .get(&curve_path)
+                .and_then(|file| file.file.as_ref())
+            else {
+                return Err(format!("curve file `{curve_path}` was not found"));
+            };
+            let Some(DawnObject::Curve(curve)) = file.get(&object_key) else {
+                return Err(format!("curve object `{object_key}` was not found"));
+            };
+            if curve.value_type != expected_value_type {
+                return Err(format!(
+                    "`{name}` expects a {} curve",
+                    curve_value_type_label(expected_value_type)
+                ));
+            }
+            let (reference, import) =
+                curve_reference_for_path(path, &curve_path, &object_key, imports)?;
+            let edited_param = EffectParam::Curve {
+                curve: InlineOrRef::Ref(reference),
+            };
+            let mut params = IndexMap::with_capacity(script.params.len());
+            for schema in &script.params {
+                let next = if schema.name == name {
+                    edited_param.clone()
+                } else {
+                    sequence.effects[effect_index]
+                        .params
+                        .get(&schema.name)
+                        .filter(|param| {
+                            authored_param_matches_schema(schema, param, path, analysis)
+                        })
+                        .cloned()
+                        .unwrap_or_else(|| default_param_for_schema(schema))
+                };
+                params.insert(schema.name.clone(), next);
+            }
+            sequence.effects[effect_index].params = params;
+            import_to_add = import;
+        }
+        SequenceDocumentEdit::UnlinkEffectCurveParam { id, name } => {
+            let effect_index = sequence
+                .effects
+                .iter()
+                .position(|effect| effect.id == id)
+                .ok_or_else(|| format!("sequence effect `{id}` was not found"))?;
+            let script = compiled_effect_for_sequence_effect(
+                fs,
+                path,
+                analysis,
+                overlays,
+                &sequence.effects[effect_index],
+            )?;
+            let schema = script
+                .param(&name)
+                .ok_or_else(|| format!("effect parameter `{name}` was not found"))?;
+            curve_value_type_for_script_type(schema.value_type)
+                .ok_or_else(|| format!("`{name}` is not a curve parameter"))?;
+            let current_param = sequence.effects[effect_index]
+                .params
+                .get(&name)
+                .ok_or_else(|| format!("effect parameter `{name}` was not authored"))?;
+            let mut resolver = AnalysisImportResolver {
+                files: &analysis.files,
+                scripts: &analysis.scripts,
+            };
+            let EffectParam::Curve { curve } =
+                lower_effect_param_document(path, current_param, &mut resolver)?
+            else {
+                return Err(format!("`{name}` is not a curve parameter"));
+            };
+            let edited_param = EffectParam::Curve {
+                curve: InlineOrRef::Inline(curve),
+            };
             let mut params = IndexMap::with_capacity(script.params.len());
             for schema in &script.params {
                 let next = if schema.name == name {
@@ -1523,6 +1677,34 @@ fn edit_points_to_curve(
     Ok(Curve { value_type, points })
 }
 
+fn curve_value_type_for_script_type(value_type: ScriptType) -> Option<CurveValueType> {
+    match value_type {
+        ScriptType::CurveFloat => Some(CurveValueType::Float),
+        ScriptType::CurveColor => Some(CurveValueType::Color),
+        _ => None,
+    }
+}
+
+fn curve_value_type_label(value_type: CurveValueType) -> &'static str {
+    match value_type {
+        CurveValueType::Float => "float",
+        CurveValueType::Color => "color",
+    }
+}
+
+fn curve_reference_for_path(
+    source_path: &Utf8PathBuf,
+    curve_path: &Utf8PathBuf,
+    object_key: &str,
+    imports: &[DawnImport],
+) -> Result<(SymbolRef, Option<DawnImport>), String> {
+    if source_path == curve_path {
+        return Ok((SymbolRef::new(object_key.to_string())?, None));
+    }
+    let (alias, import) = module_import_for_path(source_path, curve_path, imports);
+    Ok((SymbolRef::new(format!("{alias}.{object_key}"))?, import))
+}
+
 fn read_text_with_overlays(
     fs: &WorkspaceFs,
     path: &Utf8PathBuf,
@@ -1652,9 +1834,53 @@ fn sequence_to_document(
         mark_collections: sequence_mark_collection_documents(sequence),
         lanes,
         effect_scripts: sequence_effect_script_catalog(fs, path, overlays),
+        curve_library: sequence_curve_library(analysis),
         effects,
         degraded: layout.is_none(),
     }
+}
+
+fn sequence_curve_library(
+    analysis: Option<&ProjectAnalysis>,
+) -> Vec<SequenceCurveLibraryItemDocument> {
+    let Some(analysis) = analysis else {
+        return Vec::new();
+    };
+    let mut curves = analysis
+        .files
+        .iter()
+        .flat_map(|(path, analyzed)| {
+            analyzed.file.iter().flat_map(move |file| {
+                file.iter().filter_map(move |(object_key, object)| {
+                    let DawnObject::Curve(curve) = object else {
+                        return None;
+                    };
+                    Some(SequenceCurveLibraryItemDocument {
+                        path: path.to_slash_string(),
+                        object_key: object_key.clone(),
+                        display_name: format!("{}.{}", curve_library_path_label(path), object_key),
+                        value_type: curve.value_type,
+                        curve: curve.clone(),
+                    })
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    curves.sort_by(|left, right| {
+        left.display_name
+            .cmp(&right.display_name)
+            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.object_key.cmp(&right.object_key))
+    });
+    curves
+}
+
+fn curve_library_path_label(path: &Utf8PathBuf) -> String {
+    path.parent()
+        .and_then(|parent| parent.file_name())
+        .or_else(|| path.file_stem())
+        .map(str::to_string)
+        .unwrap_or_else(|| path.to_slash_string())
 }
 
 fn sequence_mark_collection_documents(
@@ -2109,15 +2335,59 @@ fn sequence_effect_param_documents(
         .params
         .iter()
         .map(|(name, param)| {
+            let curve_source = sequence_effect_param_curve_source(sequence_path, param, analysis);
             lower_effect_param_document(sequence_path, param, &mut resolver).map(|value| {
                 SequenceEffectParamDocument {
                     name: name.clone(),
                     value,
+                    curve_source,
                 }
             })
         })
         .collect::<Result<Vec<_>, _>>()
         .ok()
+}
+
+fn sequence_effect_param_curve_source(
+    sequence_path: &Utf8PathBuf,
+    param: &EffectParam<Authored>,
+    analysis: &ProjectAnalysis,
+) -> Option<SequenceEffectParamCurveSourceDocument> {
+    let EffectParam::Curve { curve } = param else {
+        return None;
+    };
+    match curve {
+        InlineOrRef::Inline(_) => Some(SequenceEffectParamCurveSourceDocument::Inline),
+        InlineOrRef::Ref(reference) => {
+            let mut resolver = AnalysisImportResolver {
+                files: &analysis.files,
+                scripts: &analysis.scripts,
+            };
+            let resolved = resolver
+                .resolve_object(sequence_path, reference, ObjectKind::Curve)
+                .ok();
+            let path = resolved
+                .as_ref()
+                .map(|resolved| resolved.source_path.to_slash_string());
+            let object_key = Some(reference.name().as_str().to_string());
+            let display_name = path
+                .as_ref()
+                .map(|path| {
+                    format!(
+                        "{}.{}",
+                        curve_library_path_label(&Utf8PathBuf::from(path)),
+                        reference.name().as_str()
+                    )
+                })
+                .or_else(|| Some(reference.raw().to_string()));
+            Some(SequenceEffectParamCurveSourceDocument::Library {
+                reference: reference.raw().to_string(),
+                path,
+                object_key,
+                display_name,
+            })
+        }
+    }
 }
 
 fn target_pixels_for_effect(

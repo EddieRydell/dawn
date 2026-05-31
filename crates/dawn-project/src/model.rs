@@ -1161,8 +1161,7 @@ pub struct Controller {
     pub protocol: Protocol,
     #[serde(default)]
     pub destination: Option<ControllerDestination>,
-    #[serde(default)]
-    pub universes: Vec<Universe>,
+    pub output: ControllerOutput,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1209,6 +1208,21 @@ impl<'de> Deserialize<'de> for ControllerDestination {
 pub enum Protocol {
     Artnet,
     Sacn,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ControllerOutput {
+    PatchedDmx {
+        universes: Vec<Universe>,
+    },
+    LinearRgb {
+        group: String,
+        output_count: usize,
+        pixels_per_output: usize,
+        first_universe: u32,
+        slots_per_universe: usize,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

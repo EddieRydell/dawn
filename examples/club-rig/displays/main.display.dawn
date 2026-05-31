@@ -12,15 +12,19 @@ main:
   controllers:
     - name: WallController
       protocol: artnet
-      universes:
-        - id: 1
-          range: "1..510"
-        - id: 2
-          range: "1..510"
+      output:
+        type: patched_dmx
+        universes:
+          - id: 1
+            range: "1..510"
+          - id: 2
+            range: "1..510"
     - name: FloorController
       protocol: sacn
-      universes:
-        - id: 11
-          range: "1..510"
-        - id: 12
-          range: "1..510"
+      output:
+        type: patched_dmx
+        universes:
+          - id: 11
+            range: "1..510"
+          - id: 12
+            range: "1..510"

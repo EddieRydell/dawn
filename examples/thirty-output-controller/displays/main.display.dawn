@@ -13,22 +13,10 @@ main:
     - name: OutputController
       protocol: sacn
       destination: "192.168.7.2:5568"
-      universes:
-        - id: 1
-          range: "1..510"
-        - id: 2
-          range: "1..510"
-        - id: 3
-          range: "1..510"
-        - id: 4
-          range: "1..510"
-        - id: 5
-          range: "1..510"
-        - id: 6
-          range: "1..510"
-        - id: 7
-          range: "1..510"
-        - id: 8
-          range: "1..510"
-        - id: 9
-          range: "1..420"
+      output:
+        type: linear_rgb
+        group: All Outputs
+        output_count: 30
+        pixels_per_output: 50
+        first_universe: 1
+        slots_per_universe: 510

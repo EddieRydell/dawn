@@ -711,6 +711,42 @@ button:focus-visible,
   color: #a8a29a;
 }
 
+.curve-source-shell {
+  display: grid;
+  gap: 7px;
+}
+
+.curve-source-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.4fr);
+  gap: 6px;
+}
+
+.curve-linked-label {
+  overflow: hidden;
+  color: #a8a29a;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.curve-action-row {
+  display: flex;
+  gap: 6px;
+}
+
+.curve-action-row button {
+  display: inline-grid;
+  width: 30px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+}
+
+.curve-source-shell.linked .float-curve-graph,
+.curve-source-shell.linked .color-curve-gradient {
+  cursor: default;
+}
+
 .float-curve-editor {
   gap: 8px;
 }

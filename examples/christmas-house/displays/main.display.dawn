@@ -12,8 +12,10 @@ main:
   controllers:
     - name: HouseController
       protocol: artnet
-      universes:
-        - id: 1
-          range: "1..510"
-        - id: 2
-          range: "1..510"
+      output:
+        type: patched_dmx
+        universes:
+          - id: 1
+            range: "1..510"
+          - id: 2
+            range: "1..510"

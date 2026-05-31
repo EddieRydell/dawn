@@ -731,6 +731,20 @@ impl AppModel {
                     value: value.into(),
                 }
             }
+            SequenceGuiEditDto::LinkEffectCurveParam {
+                id,
+                name,
+                curve_path,
+                object_key,
+            } => SequenceDocumentEdit::LinkEffectCurveParam {
+                id,
+                name,
+                curve_path,
+                object_key,
+            },
+            SequenceGuiEditDto::UnlinkEffectCurveParam { id, name } => {
+                SequenceDocumentEdit::UnlinkEffectCurveParam { id, name }
+            }
             SequenceGuiEditDto::CreateMarkCollection { key, name, color } => {
                 SequenceDocumentEdit::CreateMarkCollection { key, name, color }
             }

@@ -250,6 +250,18 @@ export type SequenceAudioDto = {
 	exists: boolean,
 };
 
+export type SequenceCurveLibraryItemDto = {
+	path: string,
+	objectKey: string,
+	displayName: string,
+	valueType: SequenceCurveValueTypeDto,
+	points: SequenceCurveLibraryPointsDto,
+};
+
+export type SequenceCurveLibraryPointsDto = { type: "float"; points: FloatCurvePointDto[] } | { type: "color"; points: ColorCurvePointDto[] };
+
+export type SequenceCurveValueTypeDto = "float" | "color";
+
 export type SequenceDocumentDto = {
 	path: string,
 	objectKey: string,
@@ -259,6 +271,7 @@ export type SequenceDocumentDto = {
 	markCollections: SequenceMarkCollectionDto[],
 	lanes: SequenceLaneDto[],
 	effectScripts: SequenceEffectScriptDto[],
+	curveLibrary: SequenceCurveLibraryItemDto[],
 	effects: SequenceEffectDto[],
 	degraded: boolean,
 };
@@ -275,12 +288,15 @@ export type SequenceEffectDto = {
 	params: SequenceEffectParamDto[],
 };
 
+export type SequenceEffectParamCurveSourceDto = { type: "inline" } | { type: "library"; reference: string; path: string | null; objectKey: string | null; displayName: string | null };
+
 export type SequenceEffectParamDto = {
 	name: string,
 	kind: SequenceEffectParamKindDto,
 	options: string[],
 	editable: boolean,
 	value: SequenceEffectParamValueDto,
+	curveSource: SequenceEffectParamCurveSourceDto | null,
 };
 
 export type SequenceEffectParamKindDto = "int" | "float" | "bool" | "color" | "enum" | "flags" | "floatCurve" | "colorCurve" | "marks";
@@ -315,7 +331,7 @@ export type SequenceEffectScriptParamDto = {
 	kind: SequenceEffectParamKindDto,
 };
 
-export type SequenceGuiEditDto = { type: "setAudio"; import: string | null } | { type: "addEffect"; scriptPath: string; target: LayoutTargetDto; scope: SequenceEffectScopeDto; startSeconds: number; markCollectionKey: string | null } | { type: "moveEffect"; id: number; startSeconds: number; target: LayoutTargetDto | null } | { type: "resizeEffect"; id: number; startSeconds: number; durationSeconds: number } | { type: "changeEffectScript"; id: number; scriptPath: string } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTargetDto } | { type: "setEffectScope"; id: number; scope: SequenceEffectScopeDto } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValueDto } | { type: "createMarkCollection"; key: string; name: string; color: string } | { type: "renameMarkCollection"; key: string; name: string } | { type: "deleteMarkCollection"; key: string } | { type: "setMarkCollectionColor"; key: string; color: string } | { type: "addMark"; collectionKey: string; timeSeconds: number } | { type: "moveMark"; collectionKey: string; index: number; timeSeconds: number } | { type: "deleteMark"; collectionKey: string; index: number };
+export type SequenceGuiEditDto = { type: "setAudio"; import: string | null } | { type: "addEffect"; scriptPath: string; target: LayoutTargetDto; scope: SequenceEffectScopeDto; startSeconds: number; markCollectionKey: string | null } | { type: "moveEffect"; id: number; startSeconds: number; target: LayoutTargetDto | null } | { type: "resizeEffect"; id: number; startSeconds: number; durationSeconds: number } | { type: "changeEffectScript"; id: number; scriptPath: string } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTargetDto } | { type: "setEffectScope"; id: number; scope: SequenceEffectScopeDto } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValueDto } | { type: "linkEffectCurveParam"; id: number; name: string; curvePath: string; objectKey: string } | { type: "unlinkEffectCurveParam"; id: number; name: string } | { type: "createMarkCollection"; key: string; name: string; color: string } | { type: "renameMarkCollection"; key: string; name: string } | { type: "deleteMarkCollection"; key: string } | { type: "setMarkCollectionColor"; key: string; color: string } | { type: "addMark"; collectionKey: string; timeSeconds: number } | { type: "moveMark"; collectionKey: string; index: number; timeSeconds: number } | { type: "deleteMark"; collectionKey: string; index: number };
 
 export type SequenceLaneDto = {
 	target: LayoutTargetDto,
