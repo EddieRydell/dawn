@@ -19,8 +19,9 @@ pub use lexer::{lex, Token};
 pub use parser::parse;
 pub use type_check::type_check;
 
-use ast::{BinaryOp, Stmt};
-use vm::Vm;
+use ast::BinaryOp;
+use vm::{BytecodeProgram, Vm};
+pub use vm::{BytecodeStats, PreparedEffectParams};
 
 #[derive(Debug, Clone)]
 pub struct ScriptDiagnostic {
@@ -44,7 +45,7 @@ pub struct SourcePosition {
 pub struct CompiledEffect {
     pub name: String,
     pub params: Vec<EffectParamSchema>,
-    sample: Vec<Stmt>,
+    bytecode: BytecodeProgram,
 }
 
 impl CompiledEffect {
@@ -60,7 +61,36 @@ impl CompiledEffect {
         pixel: PixelContext,
         params: &BTreeMap<String, RuntimeValue>,
     ) -> Result<Color, RuntimeError> {
-        Vm::new(self, progress, seconds, fixture, pixel, params).run()
+        let prepared = self.prepare_params(params)?;
+        self.sample_prepared(progress, seconds, fixture, pixel, &prepared)
+    }
+
+    pub fn prepare_params(
+        &self,
+        params: &BTreeMap<String, RuntimeValue>,
+    ) -> Result<PreparedEffectParams, RuntimeError> {
+        Vm::prepare_params(&self.params, params)
+    }
+
+    pub fn sample_prepared(
+        &self,
+        progress: f64,
+        seconds: f64,
+        fixture: FixtureContext,
+        pixel: PixelContext,
+        params: &PreparedEffectParams,
+    ) -> Result<Color, RuntimeError> {
+        Vm::run(&self.bytecode, progress, seconds, fixture, pixel, params)
+    }
+
+    pub fn bytecode_stats(&self) -> BytecodeStats {
+        BytecodeStats {
+            instruction_count: self.bytecode.instructions.len(),
+            constant_count: self.bytecode.constants.len(),
+            param_slots: self.params.len(),
+            local_slots: self.bytecode.local_slots,
+            max_stack_depth: self.bytecode.max_stack_depth,
+        }
     }
 }
 
@@ -258,9 +288,10 @@ pub fn compile(text: &str) -> Result<CompiledEffect, Vec<ScriptDiagnostic>> {
 }
 
 pub fn compile_ast(effect: EffectAst) -> CompiledEffect {
+    let bytecode = Vm::compile(&effect);
     CompiledEffect {
         name: effect.name,
         params: effect.params,
-        sample: effect.sample,
+        bytecode,
     }
 }

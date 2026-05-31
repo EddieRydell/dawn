@@ -113,6 +113,20 @@ pub fn evaluate_sequence_frame(
             &document.mark_collections,
             effect.start_seconds,
         );
+        let Some(script) = analysis.compiled_script_for_key(&render.script_key) else {
+            status = OutputFrameStatus::Error(format!(
+                "compiled script `{}` was not found",
+                render.script_key
+            ));
+            continue;
+        };
+        let prepared_params = match script.prepare_params(&params) {
+            Ok(params) => params,
+            Err(error) => {
+                status = OutputFrameStatus::Error(error.to_string());
+                continue;
+            }
+        };
         let target_pixel_count = render.target_pixels.len();
         for (target_pixel_index, pixel) in render.target_pixels.iter().enumerate() {
             let Some(fixture) = fixtures.get_mut(pixel.fixture_index) else {
@@ -128,18 +142,17 @@ pub fn evaluate_sequence_frame(
                 pixel.pixel_index,
                 pixel.pixel_count,
             );
-            match analysis.sample_effect_script_key(
-                &render.script_key,
+            match script.sample_prepared(
                 progress,
                 local_seconds,
                 FixtureContext {
                     index: pixel.fixture_index,
                 },
                 pixel_context,
-                &params,
+                &prepared_params,
             ) {
                 Ok(color) => add_clamped(&mut output_pixel.color, color),
-                Err(error) => status = OutputFrameStatus::Error(error),
+                Err(error) => status = OutputFrameStatus::Error(error.to_string()),
             }
         }
     }

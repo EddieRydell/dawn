@@ -56,6 +56,10 @@ impl ProjectAnalysis {
             .ok()
     }
 
+    pub fn compiled_script_for_key(&self, script_key: &str) -> Option<&CompiledEffect> {
+        self.scripts.get(script_key)?.result.as_ref().ok()
+    }
+
     pub fn sample_effect_script(
         &self,
         script_path: &Utf8PathBuf,
@@ -85,9 +89,7 @@ impl ProjectAnalysis {
         params: &BTreeMap<String, RuntimeValue>,
     ) -> Result<Color, String> {
         let script = self
-            .scripts
-            .get(script_key)
-            .and_then(|script| script.result.as_ref().ok())
+            .compiled_script_for_key(script_key)
             .ok_or_else(|| format!("compiled script `{script_key}` was not found"))?;
         script
             .sample(progress, seconds, fixture, pixel, params)

@@ -392,6 +392,11 @@ struct EffectBenchItemReport {
     target_label: String,
     target_pixels: usize,
     params: usize,
+    instruction_count: usize,
+    constant_count: usize,
+    param_slots: usize,
+    local_slots: usize,
+    max_stack_depth: usize,
     effect: TimingStatsReport,
     per_sample: TimingStatsReport,
 }
@@ -416,6 +421,9 @@ impl EffectBenchItemReport {
             &document.mark_collections,
             effect.start_seconds,
         );
+        let script = analysis.compiled_script_for_key(&render.script_key)?;
+        let prepared_params = script.prepare_params(&params).ok()?;
+        let stats = script.bytecode_stats();
         let target_pixel_count = render.target_pixels.len();
         let mut effect_samples = Vec::with_capacity(iterations);
         let mut per_sample_samples = Vec::with_capacity(iterations);
@@ -430,15 +438,14 @@ impl EffectBenchItemReport {
                     pixel.pixel_index,
                     pixel.pixel_count,
                 );
-                let _ = black_box(analysis.sample_effect_script_key(
-                    &render.script_key,
+                let _ = black_box(script.sample_prepared(
                     progress,
                     local_seconds,
                     FixtureContext {
                         index: pixel.fixture_index,
                     },
                     pixel_context,
-                    &params,
+                    &prepared_params,
                 ));
             }
             let elapsed = start.elapsed();
@@ -455,6 +462,11 @@ impl EffectBenchItemReport {
             target_label: effect.target_label.clone(),
             target_pixels: target_pixel_count,
             params: params.len(),
+            instruction_count: stats.instruction_count,
+            constant_count: stats.constant_count,
+            param_slots: stats.param_slots,
+            local_slots: stats.local_slots,
+            max_stack_depth: stats.max_stack_depth,
             effect: TimingStatsReport::from_durations(effect_samples),
             per_sample: TimingStatsReport::from_durations(per_sample_samples),
         })
@@ -543,14 +555,19 @@ fn print_effect_bench_report(report: &EffectBenchReport) {
     println!("active effects={}", report.active_effect_count);
     for effect in &report.effects {
         println!(
-            "effect id={} index={} script={} target={} pixels={} params={} scope={}",
+            "effect id={} index={} script={} target={} pixels={} params={} scope={} bytecode=instructions:{} constants:{} param_slots:{} local_slots:{} max_stack:{}",
             effect.effect_id,
             effect.effect_index,
             effect.script,
             effect.target_label,
             effect.target_pixels,
             effect.params,
-            effect.scope
+            effect.scope,
+            effect.instruction_count,
+            effect.constant_count,
+            effect.param_slots,
+            effect.local_slots,
+            effect.max_stack_depth
         );
         print_timing_stats("  effect", &effect.effect);
         print_timing_stats("  per sample", &effect.per_sample);

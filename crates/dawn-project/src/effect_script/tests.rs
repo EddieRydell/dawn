@@ -30,7 +30,9 @@ fn fade_curve() -> RuntimeValue {
 }
 
 fn sample(script: &CompiledEffect) -> Result<Color, RuntimeError> {
-    script.sample(0.25, 0.0, fixture(), pixel(), &empty_params())
+    let params = empty_params();
+    let prepared = script.prepare_params(&params)?;
+    script.sample_prepared(0.25, 0.0, fixture(), pixel(), &prepared)
 }
 
 #[test]
