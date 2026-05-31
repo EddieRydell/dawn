@@ -7,6 +7,25 @@ use dawn_project::path::Utf8PathBuf;
 
 use crate::output_runtime::{empty_frame, evaluate_sequence_frame, OutputFrame, OutputFrameStatus};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioPlaybackStatus {
+    None,
+    Missing,
+    Loading,
+    LoadingToPlay,
+    Ready,
+    Playing,
+    Ended,
+    Error,
+}
+
+impl AudioPlaybackStatus {
+    pub fn is_loading(self) -> bool {
+        matches!(self, Self::Loading | Self::LoadingToPlay)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SequenceKey {
     pub path: Utf8PathBuf,
@@ -49,7 +68,7 @@ pub struct PreviewSnapshot {
     pub duration_seconds: f64,
     pub audio: Option<SequenceAudioDocument>,
     pub clock_source: String,
-    pub audio_playback_status: String,
+    pub audio_playback_status: AudioPlaybackStatus,
     pub frame: OutputFrame,
     pub status: String,
 }
@@ -80,7 +99,7 @@ impl Default for PreviewSession {
                 duration_seconds: 0.0,
                 audio: None,
                 clock_source: "silent".to_string(),
-                audio_playback_status: "noAudio".to_string(),
+                audio_playback_status: AudioPlaybackStatus::None,
                 frame,
                 status: "No sequence preview source".to_string(),
             },
@@ -333,10 +352,9 @@ impl PreviewSession {
     pub fn set_timing_status(
         &mut self,
         clock_source: impl Into<String>,
-        audio_playback_status: impl Into<String>,
+        audio_playback_status: AudioPlaybackStatus,
     ) {
         let clock_source = clock_source.into();
-        let audio_playback_status = audio_playback_status.into();
         self.snapshot.clock_source = clock_source;
         self.snapshot.audio_playback_status = audio_playback_status;
     }
@@ -454,7 +472,7 @@ impl PreviewSession {
                 self.snapshot.duration_seconds = 0.0;
                 self.snapshot.audio = None;
                 self.snapshot.clock_source = "silent".to_string();
-                self.snapshot.audio_playback_status = "noAudio".to_string();
+                self.snapshot.audio_playback_status = AudioPlaybackStatus::None;
                 self.snapshot.status = status;
             }
             PreviewSource::Sequence { key, document } => {
@@ -549,14 +567,21 @@ fn status_from_frame(status: &OutputFrameStatus) -> Option<String> {
     }
 }
 
-fn timing_status_for(audio: Option<&SequenceAudioDocument>, is_playing: bool) -> (String, String) {
+fn timing_status_for(
+    audio: Option<&SequenceAudioDocument>,
+    is_playing: bool,
+) -> (String, AudioPlaybackStatus) {
     match audio {
         Some(audio) if audio.exists => (
             "nativeAudio".to_string(),
-            if is_playing { "playing" } else { "ready" }.to_string(),
+            if is_playing {
+                AudioPlaybackStatus::Playing
+            } else {
+                AudioPlaybackStatus::Ready
+            },
         ),
-        Some(_) => ("silent".to_string(), "missingAudio".to_string()),
-        None => ("silent".to_string(), "noAudio".to_string()),
+        Some(_) => ("silent".to_string(), AudioPlaybackStatus::Missing),
+        None => ("silent".to_string(), AudioPlaybackStatus::None),
     }
 }
 

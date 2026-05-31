@@ -3,14 +3,12 @@ use std::time::{Duration, Instant};
 
 use dawn_app_core::dto::{GeometryRenderBoundsDto, GeometryRenderPointDto};
 use dawn_app_core::output_runtime::OutputFrame;
-use dawn_app_core::preview_session::PreviewSnapshot;
+use dawn_app_core::preview_session::{AudioPlaybackStatus, PreviewSnapshot};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-use crate::app_runtime::{
-    apply_audio_clock_to_model, emit_preview_state_snapshot, valid_sequence_audio,
-};
+use crate::app_runtime::{apply_audio_clock_to_model, emit_preview_state_snapshot};
 use crate::state::{
     lock_audio_runtime, lock_model, lock_preview_transport, AppState, CommandResult,
 };
@@ -28,7 +26,7 @@ pub struct PreviewStateEventDto {
     pub duration_seconds: f64,
     pub audio: Option<dawn_app_core::dto::SequenceAudioDto>,
     pub clock_source: String,
-    pub audio_playback_status: String,
+    pub audio_playback_status: AudioPlaybackStatus,
     pub status: String,
     pub timing: PreviewTimingDto,
 }
@@ -138,7 +136,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                     let model_started = Instant::now();
                     let preview_snapshot = model.preview.snapshot();
                     let audio_poll_started = Instant::now();
-                    let audio_clock = if valid_sequence_audio(&preview_snapshot).is_some() {
+                    let audio_clock = if preview_snapshot.audio.is_some() {
                         lock_audio_runtime(&state)
                             .ok()
                             .and_then(|runtime| runtime.clock().ok())
@@ -369,7 +367,7 @@ struct PreviewEventIdentity {
     audio_path: Option<String>,
     audio_exists: bool,
     clock_source: String,
-    audio_playback_status: String,
+    audio_playback_status: AudioPlaybackStatus,
     status: String,
 }
 

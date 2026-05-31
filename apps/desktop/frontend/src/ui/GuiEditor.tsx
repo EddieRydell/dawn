@@ -7,6 +7,7 @@ import { commands } from "../api";
 import type {
   ActiveGuiDocumentDto,
   AppSnapshotDto,
+  AudioPlaybackStatus,
   ColorCurvePointDto,
   FixtureDocumentDto,
   FloatCurvePointDto,
@@ -196,7 +197,9 @@ export function SequenceTransportControls({
   const unsupported = document.durationSeconds <= 0;
   const audioStatus = useSequenceAudioStatus(livePreview);
   const timingSummary = previewTimingSummary(livePreview.timing);
-  const audioLoading = livePreview.audioPlaybackStatus === "loading";
+  const audioLoading = isAudioLoadingStatus(livePreview.audioPlaybackStatus);
+  const audioQueued = livePreview.audioPlaybackStatus === "loading_to_play";
+  const playCommand = audioQueued || livePreview.isPlaying ? commands.previewPause : commands.previewPlay;
   const [mode, setMode] = useMarkDisplayMode();
   const stepFrame = (direction: -1 | 1) => {
     stepSequenceFrame(document, livePreview.positionSeconds, livePreview.durationSeconds, direction);
@@ -216,9 +219,9 @@ export function SequenceTransportControls({
     >
       <button
         type="button"
-        title={audioLoading ? "Loading audio" : livePreview.isPlaying ? "Pause" : "Play"}
-        disabled={unsupported || audioLoading}
-        onClick={() => void runSnapshotCommand(livePreview.isPlaying ? commands.previewPause : commands.previewPlay)}
+        title={audioQueued ? "Cancel queued playback" : audioLoading ? "Play when audio loads" : livePreview.isPlaying ? "Pause" : "Play"}
+        disabled={unsupported}
+        onClick={() => void runSnapshotCommand(playCommand)}
       >
         {audioLoading ? <LoaderCircle className="sequence-loading-icon" size={15} /> : livePreview.isPlaying ? <Pause size={15} /> : <Play size={15} />}
       </button>
@@ -394,10 +397,14 @@ function useSequenceAudioStatus(preview: AppSnapshotDto["preview"]) {
   switch (preview.audioPlaybackStatus) {
     case "loading":
       return { label: "Loading audio...", tone: "loading" };
+    case "loading_to_play":
+      return { label: "Loading audio - will play", tone: "loading" };
     case "playing":
-      return { label: "Audio loaded - playing", tone: "ready" };
+      return { label: "Audio playing", tone: "ready" };
     case "ready":
       return preview.audio !== null ? { label: "Audio ready", tone: "ready" } : null;
+    case "missing":
+      return { label: "Audio missing", tone: "error" };
     case "error":
       return { label: "Audio error", tone: "error" };
     default:
@@ -427,8 +434,8 @@ function previewTimingSummary(timing: PreviewTiming | undefined) {
   return ` | ${parts.join(" | ")}`;
 }
 
-function isAudioLoadingStatus(status: string) {
-  return status === "loading";
+function isAudioLoadingStatus(status: AudioPlaybackStatus) {
+  return status === "loading" || status === "loading_to_play";
 }
 
 function guiEditorKey(activeFile: string | null, gui: ReadyGuiDocumentDto) {
@@ -3187,8 +3194,7 @@ function handleSequencePlaybackShortcut(
   if (event.key === " ") {
     event.preventDefault();
     event.stopPropagation();
-    if (preview.audioPlaybackStatus === "loading") return;
-    void runSnapshotCommand(preview.isPlaying ? commands.previewStop : commands.previewPlay);
+    void runSnapshotCommand(preview.audioPlaybackStatus === "loading_to_play" ? commands.previewPause : preview.isPlaying ? commands.previewStop : commands.previewPlay);
   } else if (event.key.toLowerCase() === "s") {
     event.preventDefault();
     event.stopPropagation();

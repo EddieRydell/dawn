@@ -1,7 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { commands } from "../api";
-import type { GeometryRenderBoundsDto, PreviewSceneDto } from "../bindings";
+import type { AudioPlaybackStatus, GeometryRenderBoundsDto, PreviewSceneDto } from "../bindings";
 import {
   disposePreviewTransport,
   getPreviewTransportMode,
@@ -15,6 +15,7 @@ type PreviewState = {
   isPlaying: boolean;
   positionSeconds: number;
   durationSeconds: number;
+  audioPlaybackStatus: AudioPlaybackStatus;
   status: string;
   timing: PreviewTiming;
 };
@@ -250,7 +251,7 @@ export function PreviewWindow() {
         </div>
         <div>
           {formatSeconds(state?.positionSeconds ?? metrics.currentTimeSeconds)} | {state?.isPlaying === true ? "Playing" : "Stopped"} |{" "}
-          {state?.status ?? error ?? "Ready"}
+          {previewAudioStatusLabel(state?.audioPlaybackStatus) ?? state?.status ?? error ?? "Ready"}
         </div>
       </div>
       <button
@@ -302,4 +303,26 @@ function formatSeconds(value: number) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function previewAudioStatusLabel(status: AudioPlaybackStatus | undefined) {
+  switch (status) {
+    case "loading":
+      return "Loading audio...";
+    case "loading_to_play":
+      return "Loading audio - will play";
+    case "ready":
+      return "Audio ready";
+    case "playing":
+      return "Audio playing";
+    case "missing":
+      return "Audio missing";
+    case "error":
+      return "Audio error";
+    case "ended":
+      return "Audio ended";
+    case "none":
+    case undefined:
+      return null;
+  }
 }

@@ -1,7 +1,7 @@
 use dawn_app_core::actions::AppAction;
 use dawn_app_core::app_model::{AppModel, DispatchOutcome};
 use dawn_app_core::dto::{AppSnapshotDto, PreviewSnapshotDto};
-use dawn_app_core::preview_session::PreviewSnapshot;
+use dawn_app_core::preview_session::{AudioPlaybackStatus, PreviewSnapshot};
 use dawn_project::document::SequenceAudioDocument;
 use tauri::{AppHandle, Emitter, State};
 
@@ -41,14 +41,7 @@ pub(crate) fn dispatch(
 }
 
 fn should_clear_audio_runtime_for_action(action: &AppAction) -> bool {
-    matches!(
-        action,
-        AppAction::OpenProject(_)
-            | AppAction::ReloadProject
-            | AppAction::CloseFile(_)
-            | AppAction::RenamePath { .. }
-            | AppAction::DeletePath(_)
-    )
+    matches!(action, AppAction::OpenProject(_))
 }
 
 pub(crate) fn update_preview_from_audio_status(
@@ -69,7 +62,9 @@ pub(crate) fn apply_audio_clock_to_model(
 ) {
     if let Some(error) = &clock.error {
         model.preview.pause_at(clock.position_seconds, analysis);
-        model.preview.set_timing_status("nativeAudio", "error");
+        model
+            .preview
+            .set_timing_status("nativeAudio", AudioPlaybackStatus::Error);
         model.status = format!("Audio error: {error}");
         return;
     }
@@ -77,33 +72,62 @@ pub(crate) fn apply_audio_clock_to_model(
         model
             .preview
             .render_at_native_audio_clock(clock.position_seconds, true, analysis);
-        model.preview.set_timing_status("nativeAudio", "ended");
+        model
+            .preview
+            .set_timing_status("nativeAudio", AudioPlaybackStatus::Ended);
         model.status = "Preview complete".to_string();
         return;
     }
-    match clock.status.as_str() {
-        "loading" => {
+    match clock.status {
+        AudioPlaybackStatus::Loading => {
             model.preview.pause_at(clock.position_seconds, analysis);
-            model.preview.set_timing_status("nativeAudio", "loading");
+            model
+                .preview
+                .set_timing_status("nativeAudio", AudioPlaybackStatus::Loading);
             model.status = "Loading audio".to_string();
         }
-        "playing" => {
+        AudioPlaybackStatus::LoadingToPlay => {
+            model.preview.pause_at(clock.position_seconds, analysis);
+            model
+                .preview
+                .set_timing_status("nativeAudio", AudioPlaybackStatus::LoadingToPlay);
+            model.status = "Loading audio - will play".to_string();
+        }
+        AudioPlaybackStatus::Playing => {
             model
                 .preview
                 .play_from_native_audio_clock(clock.position_seconds, analysis);
-            model.preview.set_timing_status("nativeAudio", "playing");
+            model
+                .preview
+                .set_timing_status("nativeAudio", AudioPlaybackStatus::Playing);
             model.status = "Preview playing".to_string();
         }
-        "ended" => {
+        AudioPlaybackStatus::Ended => {
             model
                 .preview
                 .render_at_native_audio_clock(clock.position_seconds, true, analysis);
-            model.preview.set_timing_status("nativeAudio", "ended");
+            model
+                .preview
+                .set_timing_status("nativeAudio", AudioPlaybackStatus::Ended);
             model.status = "Preview complete".to_string();
         }
-        status => {
+        AudioPlaybackStatus::Missing => {
             model.preview.pause_at(clock.position_seconds, analysis);
-            model.preview.set_timing_status("nativeAudio", status);
+            model
+                .preview
+                .set_timing_status("silent", AudioPlaybackStatus::Missing);
+            model.status = "Audio missing".to_string();
+        }
+        AudioPlaybackStatus::None => {
+            model.preview.pause_at(clock.position_seconds, analysis);
+            model
+                .preview
+                .set_timing_status("silent", AudioPlaybackStatus::None);
+            model.status = "Preview ready".to_string();
+        }
+        AudioPlaybackStatus::Ready | AudioPlaybackStatus::Error => {
+            model.preview.pause_at(clock.position_seconds, analysis);
+            model.preview.set_timing_status("nativeAudio", clock.status);
             model.status = "Preview ready".to_string();
         }
     }
@@ -121,12 +145,6 @@ pub(crate) fn sync_active_audio_load(
         }
         return None;
     };
-    if !audio.exists {
-        if let Ok(runtime) = lock_audio_runtime(state) {
-            runtime.clear();
-        }
-        return None;
-    }
     let audio = SequenceAudioDocument {
         import: audio.import.clone(),
         resolved_path: audio.resolved_path.clone(),
@@ -135,12 +153,14 @@ pub(crate) fn sync_active_audio_load(
     };
     if !preview.is_playing
         && !matches!(
-            preview.audio_playback_status.as_str(),
-            "loading" | "playing"
+            preview.audio_playback_status,
+            AudioPlaybackStatus::Loading
+                | AudioPlaybackStatus::LoadingToPlay
+                | AudioPlaybackStatus::Playing
         )
     {
         if let Ok(runtime) = lock_audio_runtime(state) {
-            return runtime.load_active(&audio).ok();
+            return runtime.preload(&audio).ok();
         }
     }
     None

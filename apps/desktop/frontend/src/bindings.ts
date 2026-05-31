@@ -56,6 +56,8 @@ export type AppSnapshotDto = {
 	preview: PreviewSnapshotDto,
 };
 
+export type AudioPlaybackStatus = "none" | "missing" | "loading" | "loading_to_play" | "ready" | "playing" | "ended" | "error";
+
 export type ColorCurvePointDto = {
 	time: number,
 	value: string,
@@ -195,7 +197,7 @@ export type PreviewSnapshotDto = {
 	durationSeconds: number,
 	audio: SequenceAudioDto | null,
 	clockSource: string,
-	audioPlaybackStatus: string,
+	audioPlaybackStatus: AudioPlaybackStatus,
 	status: string,
 };
 

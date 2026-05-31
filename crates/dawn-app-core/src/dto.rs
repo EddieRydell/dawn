@@ -24,6 +24,7 @@ use specta::Type;
 
 use crate::app_model::{ActiveGuiDocument, AppSnapshot};
 use crate::editor_session::{EditorBuffer, EditorViewMode};
+use crate::preview_session::AudioPlaybackStatus;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -589,7 +590,7 @@ pub struct PreviewSnapshotDto {
     pub duration_seconds: f64,
     pub audio: Option<SequenceAudioDto>,
     pub clock_source: String,
-    pub audio_playback_status: String,
+    pub audio_playback_status: AudioPlaybackStatus,
     pub status: String,
 }
 
