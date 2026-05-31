@@ -393,7 +393,7 @@ button:focus-visible,
 
 .sequence-toolbar {
   display: grid;
-  grid-template-columns: repeat(7, 32px) auto minmax(0, 1fr);
+  grid-template-columns: repeat(8, 32px) auto minmax(0, 1fr);
   align-items: center;
   gap: 0;
   min-width: min(520px, 100%);
@@ -421,6 +421,11 @@ button:focus-visible,
 .sequence-toolbar button:hover:not(:disabled),
 .sequence-toolbar button:active:not(:disabled) {
   background: #2c3036;
+}
+
+.sequence-toolbar button.active {
+  background: #2f5f4a;
+  color: #f2fff8;
 }
 
 .sequence-toolbar button:disabled {

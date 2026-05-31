@@ -22,7 +22,7 @@ use dawn_project::render::{
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::app_model::{ActiveGuiDocument, AppSnapshot};
+use crate::app_model::{ActiveGuiDocument, AppSnapshot, LiveOutputSnapshot};
 use crate::editor_session::{EditorBuffer, EditorViewMode};
 use crate::preview_session::AudioPlaybackStatus;
 
@@ -40,6 +40,7 @@ pub struct AppSnapshotDto {
     pub diagnostics: Vec<ProjectDiagnosticDto>,
     pub status: String,
     pub preview: PreviewSnapshotDto,
+    pub live_output: LiveOutputSnapshotDto,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -218,6 +219,82 @@ pub enum SequenceGuiEditDto {
         collection_key: String,
         index: u32,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SequenceSelectionDto {
+    Effects { ids: Vec<u32> },
+    Marks { marks: Vec<SequenceMarkRefDto> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceMarkRefDto {
+    pub collection_key: String,
+    pub index: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequencePasteAnchorDto {
+    pub lane_index: Option<u32>,
+    pub time_seconds: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceSelectionEditResultDto {
+    pub snapshot: AppSnapshotDto,
+    pub selection: Option<SequenceSelectionDto>,
+    pub copied_count: u32,
+    pub skipped_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SequenceSelectionEditDto {
+    Copy {
+        selection: SequenceSelectionDto,
+    },
+    Cut {
+        selection: SequenceSelectionDto,
+    },
+    Delete {
+        selection: SequenceSelectionDto,
+    },
+    Paste {
+        anchor: SequencePasteAnchorDto,
+    },
+    MoveEffects {
+        ids: Vec<u32>,
+        time_delta_seconds: f64,
+        lane_delta: i32,
+    },
+    ResizeEffects {
+        ids: Vec<u32>,
+        edge: SequenceResizeEdgeDto,
+        time_delta_seconds: f64,
+    },
+    MoveMarks {
+        marks: Vec<SequenceMarkRefDto>,
+        time_delta_seconds: f64,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SequenceResizeEdgeDto {
+    Left,
+    Right,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -594,6 +671,15 @@ pub struct PreviewSnapshotDto {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveOutputSnapshotDto {
+    pub enabled: bool,
+    pub status: String,
+    pub active_universe_count: u32,
+    pub last_error: Option<String>,
+}
+
 impl From<AppSnapshot> for AppSnapshotDto {
     fn from(snapshot: AppSnapshot) -> Self {
         Self {
@@ -632,6 +718,18 @@ impl From<AppSnapshot> for AppSnapshotDto {
                 audio_playback_status: snapshot.preview.audio_playback_status,
                 status: snapshot.preview.status,
             },
+            live_output: snapshot.live_output.into(),
+        }
+    }
+}
+
+impl From<LiveOutputSnapshot> for LiveOutputSnapshotDto {
+    fn from(snapshot: LiveOutputSnapshot) -> Self {
+        Self {
+            enabled: snapshot.enabled,
+            status: snapshot.status.label().to_string(),
+            active_universe_count: snapshot.active_universe_count.min(u32::MAX as usize) as u32,
+            last_error: snapshot.last_error,
         }
     }
 }

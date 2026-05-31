@@ -23,6 +23,8 @@ export const commands = {
   redoActiveEdit: () => unwrap(generatedCommands.redoActiveEdit()),
   applySequenceGuiEdit: (edit: Parameters<typeof generatedCommands.applySequenceGuiEdit>[0]) =>
     unwrap(generatedCommands.applySequenceGuiEdit(edit)),
+  applySequenceSelectionEdit: (edit: Parameters<typeof generatedCommands.applySequenceSelectionEdit>[0]) =>
+    unwrap(generatedCommands.applySequenceSelectionEdit(edit)),
   chooseSequenceAudio: () => unwrap(generatedCommands.chooseSequenceAudio()),
   clearSequenceAudio: () => unwrap(generatedCommands.clearSequenceAudio()),
   getSequenceEffectPreviews: (
@@ -47,5 +49,6 @@ export const commands = {
   previewStop: () => unwrap(generatedCommands.previewStop()),
   previewRewindToZero: () => unwrap(generatedCommands.previewRewindToZero()),
   previewSeek: (positionSeconds: number) => unwrap(generatedCommands.previewSeek(positionSeconds)),
+  setLiveOutputEnabled: (enabled: boolean) => unwrap(generatedCommands.setLiveOutputEnabled(enabled)),
   getPreviewScene: () => unwrap(generatedCommands.getPreviewScene())
 };

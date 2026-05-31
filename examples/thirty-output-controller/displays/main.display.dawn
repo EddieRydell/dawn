@@ -1,0 +1,34 @@
+imports:
+  - from: ../layouts/outputs.layout.dawn
+    as: layouts
+  - from: ../patches/outputs.patch.dawn
+    as: patches
+
+main:
+  type: display
+  name: 30 Output Controller
+  layout: layouts.outputs
+  patch: patches.outputs
+  controllers:
+    - name: OutputController
+      protocol: sacn
+      destination: "192.168.7.2:5568"
+      universes:
+        - id: 1
+          range: "1..510"
+        - id: 2
+          range: "1..510"
+        - id: 3
+          range: "1..510"
+        - id: 4
+          range: "1..510"
+        - id: 5
+          range: "1..510"
+        - id: 6
+          range: "1..510"
+        - id: 7
+          range: "1..510"
+        - id: 8
+          range: "1..510"
+        - id: 9
+          range: "1..420"

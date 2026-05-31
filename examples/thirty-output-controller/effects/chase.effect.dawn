@@ -1,0 +1,45 @@
+effect Chase {
+  param curve<color> gradient;
+  param enum gradient_mode { through_effect, across_items, per_pulse } = through_effect;
+  param float pulse_overlap = 8.0;
+  param curve<float> chase_position;
+  param bool extend_to_start = false;
+  param bool extend_to_end = false;
+  param curve<float> pulse_shape;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    float pixel_position = 0.0;
+    if (pixel_count(pixel) > 1.0) {
+      pixel_position = pixel_index(pixel) / (pixel_count(pixel) - 1.0);
+    }
+
+    float pixel_step = 1.0 / max(1.0, pixel_count(pixel) - 1.0);
+    float pulse_radius = max(0.5, pulse_overlap) * pixel_step;
+    float travel_start = 0.0;
+    float travel_end = 1.0;
+    if (extend_to_start) {
+      travel_start = travel_start - pulse_radius;
+    }
+    if (extend_to_end) {
+      travel_end = travel_end + pulse_radius;
+    }
+
+    float chase = mix(travel_start, travel_end, clamp(chase_position(progress), 0.0, 1.0));
+    float distance = abs(pixel_position - chase);
+    float level = 0.0;
+    if (distance <= pulse_radius) {
+      float pulse_progress = clamp((pixel_position - chase + pulse_radius) / max(0.000000001, pulse_radius * 2.0), 0.0, 1.0);
+      level = clamp(pulse_shape(pulse_progress), 0.0, 1.0);
+    }
+
+    float gradient_position = progress;
+    if (gradient_mode == across_items) {
+      gradient_position = pixel_position;
+    }
+    if (gradient_mode == per_pulse) {
+      gradient_position = clamp((pixel_position - chase + pulse_radius) / max(0.000000001, pulse_radius * 2.0), 0.0, 1.0);
+    }
+
+    return gradient(clamp(gradient_position, 0.0, 1.0)) * level;
+  }
+}

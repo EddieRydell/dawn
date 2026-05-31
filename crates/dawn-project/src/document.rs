@@ -303,6 +303,63 @@ pub enum SequenceDocumentEdit {
         collection_key: String,
         index: usize,
     },
+    DeleteEffects {
+        ids: Vec<u32>,
+    },
+    MoveEffects {
+        edits: Vec<SequenceEffectMoveDocumentEdit>,
+    },
+    ResizeEffects {
+        edits: Vec<SequenceEffectResizeDocumentEdit>,
+    },
+    DeleteMarks {
+        marks: Vec<SequenceMarkRefDocumentEdit>,
+    },
+    MoveMarks {
+        edits: Vec<SequenceMarkMoveDocumentEdit>,
+    },
+    PasteEffects {
+        effects: Vec<SequenceEffect<Authored>>,
+        lane_index: Option<usize>,
+        time_seconds: Option<f64>,
+    },
+    PasteMarks {
+        marks: Vec<SequenceMarkPasteDocumentEdit>,
+        time_seconds: Option<f64>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceEffectMoveDocumentEdit {
+    pub id: u32,
+    pub start_seconds: f64,
+    pub target: Option<LayoutTargetDocument>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceEffectResizeDocumentEdit {
+    pub id: u32,
+    pub start_seconds: f64,
+    pub duration_seconds: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceMarkRefDocumentEdit {
+    pub collection_key: String,
+    pub index: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceMarkMoveDocumentEdit {
+    pub collection_key: String,
+    pub index: usize,
+    pub time_seconds: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceMarkPasteDocumentEdit {
+    pub collection_key: String,
+    pub time_seconds: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -981,8 +1038,238 @@ fn apply_sequence_edit_operation(
             let original_index = sorted_mark_original_index(collection, index)?;
             collection.marks.remove(original_index);
         }
+        SequenceDocumentEdit::DeleteEffects { ids } => {
+            let ids = ids.into_iter().collect::<HashSet<_>>();
+            sequence.effects.retain(|effect| !ids.contains(&effect.id));
+            for clip in &mut sequence.automation_clips {
+                clip.targets.retain(|target| !ids.contains(target));
+            }
+        }
+        SequenceDocumentEdit::MoveEffects { edits } => {
+            for edit in edits {
+                let duration = sequence
+                    .effects
+                    .iter()
+                    .find(|effect| effect.id == edit.id)
+                    .map(|effect| effect.duration.as_nanoseconds())
+                    .ok_or_else(|| format!("sequence effect `{}` was not found", edit.id))?;
+                let max_start = sequence.duration.as_nanoseconds().saturating_sub(duration);
+                let next_target = edit
+                    .target
+                    .as_ref()
+                    .map(|target| authored_target_from_document(target, analysis))
+                    .transpose()?;
+                let effect = sequence
+                    .effects
+                    .iter_mut()
+                    .find(|effect| effect.id == edit.id)
+                    .ok_or_else(|| format!("sequence effect `{}` was not found", edit.id))?;
+                let start_nanoseconds = Time::try_from_seconds_f64_rounded(edit.start_seconds)
+                    .map_err(str::to_string)?
+                    .as_nanoseconds();
+                effect.start = Time::from_nanoseconds(start_nanoseconds.min(max_start));
+                if let Some(target) = next_target {
+                    effect.target = target;
+                }
+            }
+        }
+        SequenceDocumentEdit::ResizeEffects { edits } => {
+            for edit in edits {
+                let effect = sequence
+                    .effects
+                    .iter_mut()
+                    .find(|effect| effect.id == edit.id)
+                    .ok_or_else(|| format!("sequence effect `{}` was not found", edit.id))?;
+                let start_nanoseconds = Time::try_from_seconds_f64_rounded(edit.start_seconds)
+                    .map_err(str::to_string)?
+                    .as_nanoseconds()
+                    .min(sequence.duration.as_nanoseconds().saturating_sub(1));
+                let duration_nanoseconds =
+                    TimeSpan::try_from_seconds_f64_rounded(edit.duration_seconds)
+                        .map_err(str::to_string)?
+                        .as_nanoseconds();
+                effect.start = Time::from_nanoseconds(start_nanoseconds);
+                effect.duration = TimeSpan::from_nanoseconds(
+                    duration_nanoseconds.max(1).min(
+                        sequence
+                            .duration
+                            .as_nanoseconds()
+                            .saturating_sub(start_nanoseconds)
+                            .max(1),
+                    ),
+                );
+            }
+        }
+        SequenceDocumentEdit::DeleteMarks { marks } => {
+            let mut by_collection: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+            for mark in marks {
+                by_collection
+                    .entry(mark.collection_key)
+                    .or_default()
+                    .push(mark.index);
+            }
+            for (collection_key, mut indexes) in by_collection {
+                indexes.sort_unstable_by(|left, right| right.cmp(left));
+                let collection = mark_collection_mut(sequence, &collection_key)?;
+                for index in indexes {
+                    let original_index = sorted_mark_original_index(collection, index)?;
+                    collection.marks.remove(original_index);
+                }
+            }
+        }
+        SequenceDocumentEdit::MoveMarks { edits } => {
+            let duration_nanoseconds = sequence.duration.as_nanoseconds();
+            let mut by_collection: BTreeMap<String, Vec<(usize, f64)>> = BTreeMap::new();
+            for edit in edits {
+                by_collection
+                    .entry(edit.collection_key)
+                    .or_default()
+                    .push((edit.index, edit.time_seconds));
+            }
+            for (collection_key, edits) in by_collection {
+                let collection = mark_collection_mut(sequence, &collection_key)?;
+                let resolved = edits
+                    .into_iter()
+                    .map(|(index, time_seconds)| {
+                        let original_index = sorted_mark_original_index(collection, index)?;
+                        Ok((original_index, time_seconds))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                for (original_index, time_seconds) in resolved {
+                    let time_nanoseconds = Time::try_from_seconds_f64_rounded(time_seconds)
+                        .map_err(str::to_string)?
+                        .as_nanoseconds();
+                    if let Some(mark) = collection.marks.get_mut(original_index) {
+                        *mark = Time::from_nanoseconds(time_nanoseconds.min(duration_nanoseconds));
+                    }
+                }
+            }
+        }
+        SequenceDocumentEdit::PasteEffects {
+            effects,
+            lane_index,
+            time_seconds,
+        } => {
+            let lanes = sequence_lanes_for_edit(sequence, analysis);
+            let min_start = effects
+                .iter()
+                .map(|effect| effect.start.as_nanoseconds())
+                .min()
+                .unwrap_or(0);
+            let min_lane = effects
+                .iter()
+                .filter_map(|effect| effect_lane_index_for_edit(&effect.target, &lanes))
+                .min()
+                .unwrap_or(0);
+            let anchor_start = time_seconds
+                .map(Time::try_from_seconds_f64_rounded)
+                .transpose()
+                .map_err(str::to_string)?
+                .map(|time| time.as_nanoseconds())
+                .unwrap_or(min_start);
+            let anchor_lane = lane_index.unwrap_or(min_lane);
+            let mut next_id = next_sequence_effect_id(sequence)
+                .ok_or_else(|| "no sequence effect IDs are available".to_string())?;
+            for source in effects {
+                let Some(id) = allocate_sequence_effect_id(sequence, &mut next_id) else {
+                    break;
+                };
+                let mut effect = source;
+                let lane_offset = effect_lane_index_for_edit(&effect.target, &lanes)
+                    .unwrap_or(min_lane) as isize
+                    - min_lane as isize;
+                let Some(target) = lanes.get((anchor_lane as isize + lane_offset) as usize) else {
+                    continue;
+                };
+                let start = anchor_start as i128 + effect.start.as_nanoseconds() as i128
+                    - min_start as i128;
+                if start < 0 {
+                    continue;
+                }
+                let start = start as u64;
+                if start.saturating_add(effect.duration.as_nanoseconds())
+                    > sequence.duration.as_nanoseconds()
+                {
+                    continue;
+                }
+                effect.id = id;
+                effect.start = Time::from_nanoseconds(start);
+                effect.target = authored_target_from_document(target, analysis)?;
+                sequence.effects.push(effect);
+            }
+        }
+        SequenceDocumentEdit::PasteMarks {
+            marks,
+            time_seconds,
+        } => {
+            let min_time = marks
+                .iter()
+                .map(|mark| mark.time_seconds)
+                .min_by(f64::total_cmp)
+                .unwrap_or(0.0);
+            let anchor = time_seconds.unwrap_or(min_time);
+            for mark in marks {
+                if !sequence
+                    .mark_collections
+                    .iter()
+                    .any(|collection| collection.key == mark.collection_key)
+                {
+                    continue;
+                }
+                let next_time = mark.time_seconds + anchor - min_time;
+                if !(0.0..=sequence.duration.as_seconds_f64()).contains(&next_time) {
+                    continue;
+                }
+                let collection = mark_collection_mut(sequence, &mark.collection_key)?;
+                collection
+                    .marks
+                    .push(Time::try_from_seconds_f64_rounded(next_time).map_err(str::to_string)?);
+            }
+        }
     }
     Ok(import_to_add)
+}
+
+fn sequence_lanes_for_edit(
+    sequence: &Sequence<Authored>,
+    analysis: &ProjectAnalysis,
+) -> Vec<LayoutTargetDocument> {
+    if let Some(layout) = analysis
+        .resolved
+        .as_ref()
+        .map(|project| &project.display.layout)
+    {
+        return layout
+            .target_order
+            .iter()
+            .map(|target| LayoutTargetDocument {
+                kind: target.kind,
+                name: target.name.clone(),
+            })
+            .collect();
+    }
+    sequence
+        .effects
+        .iter()
+        .map(|effect| effect_target_document(&effect.target, &HashMap::new()))
+        .collect()
+}
+
+fn effect_lane_index_for_edit(
+    target: &EffectTarget<Authored>,
+    lanes: &[LayoutTargetDocument],
+) -> Option<usize> {
+    let document = effect_target_document(target, &HashMap::new());
+    lanes.iter().position(|lane| *lane == document)
+}
+
+fn allocate_sequence_effect_id(sequence: &Sequence<Authored>, next_id: &mut u32) -> Option<u32> {
+    while sequence.effects.iter().any(|effect| effect.id == *next_id) {
+        *next_id = next_id.checked_add(1)?;
+    }
+    let id = *next_id;
+    *next_id = next_id.checked_add(1).unwrap_or(id);
+    Some(id)
 }
 
 fn mark_collection_mut<'a>(

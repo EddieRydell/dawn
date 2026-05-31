@@ -132,7 +132,11 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
       </div>
       <div className="editor-toolbar">
         {activeSequenceDocument !== null && (
-          <SequenceTransportControls document={activeSequenceDocument} preview={snapshot.preview} />
+          <SequenceTransportControls
+            document={activeSequenceDocument}
+            preview={snapshot.preview}
+            liveOutput={snapshot.liveOutput}
+          />
         )}
         <div className="segmented-control">
           <button

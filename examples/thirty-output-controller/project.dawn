@@ -1,0 +1,12 @@
+imports:
+  - from: displays/main.display.dawn
+    as: displays
+  - from: sequences/empty.sequence.dawn
+    as: sequences
+
+thirty_output_controller:
+  type: project
+  name: thirty-output-controller
+  display: displays.main
+  sequences:
+    - sequences.empty

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use dawn_app_core::actions::AppAction;
 use dawn_app_core::dto::{
     AppSnapshotDto, EditorViewModeDto, FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto,
+    SequenceSelectionEditDto, SequenceSelectionEditResultDto,
 };
 use dawn_project::path::{serialized_import_path, utf8_path, Utf8PathBuf};
 use tauri::{AppHandle, Manager, State};
@@ -17,13 +18,17 @@ use crate::preview::{
 };
 use crate::preview_transport::{PreviewTransportMode, PreviewTransportRuntime};
 use crate::state::{
-    lock_audio_runtime, lock_model, lock_preview_transport, project_path, AppState, CommandResult,
+    lock_audio_runtime, lock_live_output, lock_model, lock_preview_transport, project_path,
+    AppState, CommandResult,
 };
 
 #[specta::specta]
 #[tauri::command]
 fn get_snapshot(state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
-    let snapshot = lock_model(&state)?.snapshot_dto();
+    let live_output = lock_live_output(&state)?.snapshot();
+    let mut model = lock_model(&state)?;
+    model.set_live_output_snapshot(live_output);
+    let snapshot = model.snapshot_dto();
     let _ = sync_active_audio_load(&state, &snapshot.preview);
     Ok(snapshot)
 }
@@ -123,6 +128,19 @@ fn apply_sequence_gui_edit(
     edit: SequenceGuiEditDto,
 ) -> CommandResult<AppSnapshotDto> {
     dispatch(&app, &state, AppAction::ApplySequenceGuiEdit(edit))
+}
+
+#[specta::specta]
+#[tauri::command]
+fn apply_sequence_selection_edit(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    edit: SequenceSelectionEditDto,
+) -> CommandResult<SequenceSelectionEditResultDto> {
+    let mut model = lock_model(&state)?;
+    let result = model.apply_sequence_selection_edit(edit)?;
+    emit_model_snapshot(&app, &model)?;
+    Ok(result)
 }
 
 #[specta::specta]
@@ -465,6 +483,20 @@ fn preview_seek(
 
 #[specta::specta]
 #[tauri::command]
+fn set_live_output_enabled(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> CommandResult<AppSnapshotDto> {
+    let analysis = lock_model(&state)?.analysis.clone();
+    let snapshot = lock_live_output(&state)?.set_enabled(enabled, analysis.as_ref());
+    let mut model = lock_model(&state)?;
+    model.set_live_output_snapshot(snapshot);
+    emit_model_snapshot(&app, &model)
+}
+
+#[specta::specta]
+#[tauri::command]
 fn get_preview_scene(state: State<'_, AppState>) -> CommandResult<PreviewSceneDto> {
     let snapshot = lock_model(&state)?.preview.snapshot();
     Ok(preview_scene_from_frame(
@@ -515,6 +547,7 @@ pub(crate) fn register_commands(
         undo_active_edit,
         redo_active_edit,
         apply_sequence_gui_edit,
+        apply_sequence_selection_edit,
         choose_sequence_audio,
         clear_sequence_audio,
         get_sequence_effect_previews,
@@ -533,6 +566,7 @@ pub(crate) fn register_commands(
         preview_stop,
         preview_rewind_to_zero,
         preview_seek,
+        set_live_output_enabled,
         get_preview_scene,
         init_preview_transport,
         dispose_preview_transport,

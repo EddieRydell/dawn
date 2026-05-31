@@ -113,6 +113,8 @@ pub(super) enum BinaryInstruction {
     IntNotEqual,
     BoolEqual,
     BoolNotEqual,
+    EnumEqual,
+    EnumNotEqual,
     ColorMultiplyFloat,
     FloatMultiplyColor,
 }

@@ -1,0 +1,123 @@
+outputs:
+  type: patch
+  routes:
+    - fixture: 1
+      controller: OutputController
+      universe: 1
+      start: 1
+    - fixture: 2
+      controller: OutputController
+      universe: 1
+      start: 151
+    - fixture: 3
+      controller: OutputController
+      universe: 1
+      start: 301
+    - fixture: 4
+      controller: OutputController
+      universe: 1
+      start: 451
+    - fixture: 5
+      controller: OutputController
+      universe: 2
+      start: 91
+    - fixture: 6
+      controller: OutputController
+      universe: 2
+      start: 241
+    - fixture: 7
+      controller: OutputController
+      universe: 2
+      start: 391
+    - fixture: 8
+      controller: OutputController
+      universe: 3
+      start: 31
+    - fixture: 9
+      controller: OutputController
+      universe: 3
+      start: 181
+    - fixture: 10
+      controller: OutputController
+      universe: 3
+      start: 331
+    - fixture: 11
+      controller: OutputController
+      universe: 3
+      start: 481
+    - fixture: 12
+      controller: OutputController
+      universe: 4
+      start: 121
+    - fixture: 13
+      controller: OutputController
+      universe: 4
+      start: 271
+    - fixture: 14
+      controller: OutputController
+      universe: 4
+      start: 421
+    - fixture: 15
+      controller: OutputController
+      universe: 5
+      start: 61
+    - fixture: 16
+      controller: OutputController
+      universe: 5
+      start: 211
+    - fixture: 17
+      controller: OutputController
+      universe: 5
+      start: 361
+    - fixture: 18
+      controller: OutputController
+      universe: 6
+      start: 1
+    - fixture: 19
+      controller: OutputController
+      universe: 6
+      start: 151
+    - fixture: 20
+      controller: OutputController
+      universe: 6
+      start: 301
+    - fixture: 21
+      controller: OutputController
+      universe: 6
+      start: 451
+    - fixture: 22
+      controller: OutputController
+      universe: 7
+      start: 91
+    - fixture: 23
+      controller: OutputController
+      universe: 7
+      start: 241
+    - fixture: 24
+      controller: OutputController
+      universe: 7
+      start: 391
+    - fixture: 25
+      controller: OutputController
+      universe: 8
+      start: 31
+    - fixture: 26
+      controller: OutputController
+      universe: 8
+      start: 181
+    - fixture: 27
+      controller: OutputController
+      universe: 8
+      start: 331
+    - fixture: 28
+      controller: OutputController
+      universe: 8
+      start: 481
+    - fixture: 29
+      controller: OutputController
+      universe: 9
+      start: 121
+    - fixture: 30
+      controller: OutputController
+      universe: 9
+      start: 271

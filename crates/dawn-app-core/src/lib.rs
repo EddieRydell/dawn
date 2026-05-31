@@ -13,6 +13,7 @@
 
 pub mod actions;
 pub mod app_model;
+pub mod controller_output;
 pub mod dto;
 pub mod editor_session;
 pub mod layout_persistence;

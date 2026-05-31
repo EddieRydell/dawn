@@ -1,0 +1,11 @@
+vertical_50:
+  type: fixture
+  name: Vertical 50px Line
+  color_model: rgb
+  bulb_diameter: 0.05
+  geometry:
+    type: lines
+    points:
+      - { x: 0.0, y: 0.0, z: 0.0 }
+      - { x: 0.0, y: 4.9, z: 0.0 }
+    pixels: 50

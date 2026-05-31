@@ -38,6 +38,11 @@ impl<'a> TypeChecker<'a> {
         }
         for param in &effect.params {
             scopes.insert(param.name.clone(), readonly(param.value_type));
+            if param.value_type == ScriptType::Enum {
+                for option in &param.options {
+                    scopes.insert(option.clone(), readonly(ScriptType::Enum));
+                }
+            }
         }
         Self {
             effect,

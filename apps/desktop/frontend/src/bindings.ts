@@ -15,6 +15,7 @@ export const commands = {
 	undoActiveEdit: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("undo_active_edit")),
 	redoActiveEdit: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("redo_active_edit")),
 	applySequenceGuiEdit: (edit: SequenceGuiEditDto) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("apply_sequence_gui_edit", { edit })),
+	applySequenceSelectionEdit: (edit: SequenceSelectionEditDto) => typedError<SequenceSelectionEditResultDto, string>(__TAURI_INVOKE("apply_sequence_selection_edit", { edit })),
 	chooseSequenceAudio: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("choose_sequence_audio")),
 	clearSequenceAudio: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("clear_sequence_audio")),
 	getSequenceEffectPreviews: (path: string, objectKey: string, effectIds: number[]) => typedError<SequenceEffectPreviewBatchDto, string>(__TAURI_INVOKE("get_sequence_effect_previews", { path, objectKey, effectIds })),
@@ -33,6 +34,7 @@ export const commands = {
 	previewStop: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_stop")),
 	previewRewindToZero: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_rewind_to_zero")),
 	previewSeek: (positionSeconds: number) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_seek", { positionSeconds })),
+	setLiveOutputEnabled: (enabled: boolean) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("set_live_output_enabled", { enabled })),
 	getPreviewScene: () => typedError<PreviewSceneDto, string>(__TAURI_INVOKE("get_preview_scene")),
 	initPreviewTransport: () => typedError<null, string>(__TAURI_INVOKE("init_preview_transport")),
 	disposePreviewTransport: () => typedError<null, string>(__TAURI_INVOKE("dispose_preview_transport")),
@@ -54,6 +56,7 @@ export type AppSnapshotDto = {
 	diagnostics: ProjectDiagnosticDto[],
 	status: string,
 	preview: PreviewSnapshotDto,
+	liveOutput: LiveOutputSnapshotDto,
 };
 
 export type AudioPlaybackStatus = "none" | "missing" | "loading" | "loading_to_play" | "ready" | "playing" | "ended" | "error";
@@ -164,6 +167,13 @@ export type LayoutTargetDto = {
 };
 
 export type LayoutTargetKindDto = "group" | "fixture";
+
+export type LiveOutputSnapshotDto = {
+	enabled: boolean,
+	status: string,
+	activeUniverseCount: number,
+	lastError: string | null,
+};
 
 export type ObjectKindDto = "project" | "display" | "controller" | "layout" | "fixture" | "patch" | "sequence" | "curve";
 
@@ -317,6 +327,29 @@ export type SequenceMarkCollectionDto = {
 	name: string,
 	color: string,
 	marksSeconds: number[],
+};
+
+export type SequenceMarkRefDto = {
+	collectionKey: string,
+	index: number,
+};
+
+export type SequencePasteAnchorDto = {
+	laneIndex: number,
+	timeSeconds: number,
+};
+
+export type SequenceResizeEdgeDto = "left" | "right";
+
+export type SequenceSelectionDto = { type: "effects"; ids: number[] } | { type: "marks"; marks: SequenceMarkRefDto[] };
+
+export type SequenceSelectionEditDto = { type: "copy"; selection: SequenceSelectionDto } | { type: "cut"; selection: SequenceSelectionDto } | { type: "delete"; selection: SequenceSelectionDto } | { type: "paste"; anchor: SequencePasteAnchorDto } | { type: "moveEffects"; ids: number[]; timeDeltaSeconds: number; laneDelta: number } | { type: "resizeEffects"; ids: number[]; edge: SequenceResizeEdgeDto; timeDeltaSeconds: number } | { type: "moveMarks"; marks: SequenceMarkRefDto[]; timeDeltaSeconds: number };
+
+export type SequenceSelectionEditResultDto = {
+	snapshot: AppSnapshotDto,
+	selection: SequenceSelectionDto | null,
+	copiedCount: number,
+	skippedCount: number,
 };
 
 export type TextPositionDto = {

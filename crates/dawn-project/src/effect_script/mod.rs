@@ -197,7 +197,8 @@ fn binary_result_type(left: ScriptType, op: BinaryOp, right: ScriptType) -> Opti
 
     if matches!(op, BinaryOp::Equal | BinaryOp::NotEqual) {
         return ((is_float_compatible(left) && is_float_compatible(right))
-            || (left == ScriptType::Bool && right == ScriptType::Bool))
+            || (left == ScriptType::Bool && right == ScriptType::Bool)
+            || (left == ScriptType::Enum && right == ScriptType::Enum))
             .then_some(ScriptType::Bool);
     }
 

@@ -404,6 +404,12 @@ impl<'a> BytecodeVm<'a, '_> {
             BinaryInstruction::BoolNotEqual => {
                 self.write_bool_dest(dest, self.bool(left) != self.bool(right))
             }
+            BinaryInstruction::EnumEqual => {
+                self.write_bool_dest(dest, self.enum_value(left)? == self.enum_value(right)?)
+            }
+            BinaryInstruction::EnumNotEqual => {
+                self.write_bool_dest(dest, self.enum_value(left)? != self.enum_value(right)?)
+            }
             BinaryInstruction::ColorMultiplyFloat => {
                 self.write_color_dest(dest, self.color(left).scale(self.float(right)));
             }
@@ -455,6 +461,19 @@ impl<'a> BytecodeVm<'a, '_> {
         match value {
             RuntimeValue::Marks(value) => Ok(value),
             _ => Err(self.error("expected marks value")),
+        }
+    }
+
+    fn enum_value(&self, slot: ValueSlot) -> Result<&str, RuntimeError> {
+        let slot = slot.reference();
+        let value = match self.scratch.refs[slot.0] {
+            RefValue::Param(index) => &self.params.values[index],
+            RefValue::Constant(index) => &self.program.constants[index],
+            RefValue::Unset => return Err(self.error("expected enum value")),
+        };
+        match value {
+            RuntimeValue::Enum(value) => Ok(value),
+            _ => Err(self.error("expected enum value")),
         }
     }
 

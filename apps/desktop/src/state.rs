@@ -8,6 +8,7 @@ use tauri::State;
 
 use crate::audio_runtime::AudioRuntime;
 use crate::effect_previews::{EffectPreviewCacheKey, SequenceEffectPreviewDto};
+use crate::live_output::LiveOutputRuntime;
 use crate::preview_transport::PreviewTransportRuntime;
 
 pub(crate) struct AppState {
@@ -15,6 +16,7 @@ pub(crate) struct AppState {
     audio_runtime: Mutex<AudioRuntime>,
     effect_preview_cache: Mutex<HashMap<EffectPreviewCacheKey, SequenceEffectPreviewDto>>,
     preview_transport: Mutex<PreviewTransportRuntime>,
+    live_output: Mutex<LiveOutputRuntime>,
     shutting_down: AtomicBool,
 }
 
@@ -25,6 +27,7 @@ impl Default for AppState {
             audio_runtime: Mutex::new(AudioRuntime::default()),
             effect_preview_cache: Mutex::new(HashMap::new()),
             preview_transport: Mutex::new(PreviewTransportRuntime::default()),
+            live_output: Mutex::new(LiveOutputRuntime::default()),
             shutting_down: AtomicBool::new(false),
         }
     }
@@ -76,6 +79,15 @@ pub(crate) fn lock_preview_transport<'a>(
         .preview_transport
         .lock()
         .map_err(|_| "preview transport lock is poisoned".to_string())
+}
+
+pub(crate) fn lock_live_output<'a>(
+    state: &'a State<'_, AppState>,
+) -> CommandResult<MutexGuard<'a, LiveOutputRuntime>> {
+    state
+        .live_output
+        .lock()
+        .map_err(|_| "live output lock is poisoned".to_string())
 }
 
 pub(crate) fn project_path(path: String) -> Utf8PathBuf {

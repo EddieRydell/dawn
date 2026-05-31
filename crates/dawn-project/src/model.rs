@@ -1,4 +1,6 @@
 use std::fmt;
+use std::net::{IpAddr, SocketAddr};
+use std::str::FromStr;
 
 use indexmap::IndexMap;
 use serde::de::{self, Visitor};
@@ -1158,7 +1160,48 @@ pub struct Controller {
     pub name: String,
     pub protocol: Protocol,
     #[serde(default)]
+    pub destination: Option<ControllerDestination>,
+    #[serde(default)]
     pub universes: Vec<Universe>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ControllerDestination {
+    pub address: IpAddr,
+    pub port: u16,
+}
+
+impl ControllerDestination {
+    pub fn socket_addr(self) -> SocketAddr {
+        SocketAddr::new(self.address, self.port)
+    }
+}
+
+impl Serialize for ControllerDestination {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.socket_addr().to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for ControllerDestination {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        let socket_addr = SocketAddr::from_str(&raw).map_err(|_| {
+            de::Error::custom(
+                "controller destination must be an IP endpoint like `192.168.1.50:5568`",
+            )
+        })?;
+        Ok(Self {
+            address: socket_addr.ip(),
+            port: socket_addr.port(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]

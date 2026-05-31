@@ -71,6 +71,12 @@ impl<'a> Compiler<'a> {
                     value_type: param.value_type,
                 },
             );
+            if param.value_type == ScriptType::Enum {
+                for option in &param.options {
+                    let index = self.add_constant(RuntimeValue::Enum(option.clone()));
+                    self.define(option, Binding::Constant(index));
+                }
+            }
         }
     }
     fn compile_statement(&mut self, statement: &Stmt) {
@@ -353,6 +359,10 @@ impl<'a> Compiler<'a> {
             (ScriptType::Bool, BinaryOp::NotEqual, ScriptType::Bool) => {
                 BinaryInstruction::BoolNotEqual
             }
+            (ScriptType::Enum, BinaryOp::Equal, ScriptType::Enum) => BinaryInstruction::EnumEqual,
+            (ScriptType::Enum, BinaryOp::NotEqual, ScriptType::Enum) => {
+                BinaryInstruction::EnumNotEqual
+            }
             (ScriptType::Color, BinaryOp::Multiply, factor) if is_float_compatible(factor) => {
                 BinaryInstruction::ColorMultiplyFloat
             }
@@ -370,7 +380,7 @@ impl<'a> Compiler<'a> {
             Expr::Color(_) => ScriptType::Color,
             Expr::Ident(name) => match self.expect_binding(name) {
                 Binding::Context(context) => context.value_type(),
-                Binding::Constant(_) => ScriptType::Float,
+                Binding::Constant(index) => self.constants[index].value_type(),
                 Binding::Param { value_type, .. } => value_type,
                 Binding::Local(slot) => slot.value_type(),
             },

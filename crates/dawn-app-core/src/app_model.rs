@@ -3,21 +3,29 @@ use std::path::PathBuf;
 use dawn_project::analysis::{ProjectAnalysis, ProjectDiagnostic};
 use dawn_project::document::{
     DocumentDescriptor, DocumentViewId, FixtureDocument, LayoutDocument, SequenceDocument,
-    SequenceDocumentEdit,
+    SequenceDocumentEdit, SequenceEffectMoveDocumentEdit, SequenceEffectResizeDocumentEdit,
+    SequenceMarkMoveDocumentEdit, SequenceMarkPasteDocumentEdit, SequenceMarkRefDocumentEdit,
 };
 use dawn_project::fs::WorkspaceEntry;
-use dawn_project::model::Geometry;
+use dawn_project::model::{Authored, DawnObject, Geometry, SequenceEffect};
+use dawn_project::parse::parse_dawn_file_with_source_map;
 use dawn_project::path::Utf8PathBuf;
 
 use crate::actions::AppAction;
 use crate::dto::AppSnapshotDto;
-use crate::dto::{FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto};
+use crate::dto::{
+    FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto, SequenceMarkRefDto,
+    SequencePasteAnchorDto, SequenceResizeEdgeDto, SequenceSelectionDto, SequenceSelectionEditDto,
+    SequenceSelectionEditResultDto,
+};
 use crate::editor_session::{EditorBuffer, EditorSession, EditorViewMode};
 use crate::layout_persistence::{
     load_workbench_layout, save_workbench_layout, WindowLayout, WorkbenchLayout,
 };
 use crate::preview_session::{PreviewSession, PreviewSnapshot, SequenceKey};
 use crate::workspace::WorkspaceService;
+
+const MIN_EFFECT_DURATION_SECONDS: f64 = 0.000000001;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DispatchOutcome {
@@ -31,17 +39,148 @@ impl DispatchOutcome {
     }
 }
 
+fn sequence_delete_edit(selection: SequenceSelectionDto) -> SequenceDocumentEdit {
+    match selection {
+        SequenceSelectionDto::Effects { ids } => SequenceDocumentEdit::DeleteEffects { ids },
+        SequenceSelectionDto::Marks { marks } => SequenceDocumentEdit::DeleteMarks {
+            marks: marks
+                .into_iter()
+                .map(|mark| SequenceMarkRefDocumentEdit {
+                    collection_key: mark.collection_key,
+                    index: mark.index as usize,
+                })
+                .collect(),
+        },
+    }
+}
+
+fn selection_empty_like(selection: &SequenceSelectionDto) -> SequenceSelectionDto {
+    match selection {
+        SequenceSelectionDto::Effects { .. } => SequenceSelectionDto::Effects { ids: Vec::new() },
+        SequenceSelectionDto::Marks { .. } => SequenceSelectionDto::Marks { marks: Vec::new() },
+    }
+}
+
+fn selection_count(selection: &SequenceSelectionDto) -> u32 {
+    match selection {
+        SequenceSelectionDto::Effects { ids } => ids.len().min(u32::MAX as usize) as u32,
+        SequenceSelectionDto::Marks { marks } => marks.len().min(u32::MAX as usize) as u32,
+    }
+}
+
+fn effect_move_edits(
+    document: &SequenceDocument,
+    ids: Vec<u32>,
+    time_delta_seconds: f64,
+    lane_delta: i32,
+) -> Vec<SequenceEffectMoveDocumentEdit> {
+    ids.into_iter()
+        .filter_map(|id| {
+            let effect = document
+                .effects
+                .iter()
+                .find(|candidate| candidate.id == id)?;
+            let current_lane = document
+                .lanes
+                .iter()
+                .position(|lane| lane.target == effect.target)
+                .unwrap_or(0);
+            let lane_index = (current_lane as i32 + lane_delta)
+                .clamp(0, document.lanes.len().saturating_sub(1) as i32)
+                as usize;
+            Some(SequenceEffectMoveDocumentEdit {
+                id,
+                start_seconds: (effect.start_seconds + time_delta_seconds).clamp(
+                    0.0,
+                    (document.duration_seconds - effect.duration_seconds).max(0.0),
+                ),
+                target: document
+                    .lanes
+                    .get(lane_index)
+                    .map(|lane| lane.target.clone()),
+            })
+        })
+        .collect()
+}
+
+fn effect_resize_edits(
+    document: &SequenceDocument,
+    ids: Vec<u32>,
+    edge: SequenceResizeEdgeDto,
+    time_delta_seconds: f64,
+) -> Vec<SequenceEffectResizeDocumentEdit> {
+    ids.into_iter()
+        .filter_map(|id| {
+            let effect = document
+                .effects
+                .iter()
+                .find(|candidate| candidate.id == id)?;
+            let (start_seconds, duration_seconds) = match edge {
+                SequenceResizeEdgeDto::Left => {
+                    let end_seconds = effect.start_seconds + effect.duration_seconds;
+                    let start_seconds = (effect.start_seconds + time_delta_seconds)
+                        .clamp(0.0, end_seconds - MIN_EFFECT_DURATION_SECONDS);
+                    (start_seconds, end_seconds - start_seconds)
+                }
+                SequenceResizeEdgeDto::Right => {
+                    let duration_seconds = (effect.duration_seconds + time_delta_seconds).clamp(
+                        MIN_EFFECT_DURATION_SECONDS,
+                        document.duration_seconds - effect.start_seconds,
+                    );
+                    (effect.start_seconds, duration_seconds)
+                }
+            };
+            Some(SequenceEffectResizeDocumentEdit {
+                id,
+                start_seconds,
+                duration_seconds,
+            })
+        })
+        .collect()
+}
+
+fn mark_move_edits(
+    document: &SequenceDocument,
+    marks: Vec<SequenceMarkRefDto>,
+    time_delta_seconds: f64,
+) -> Vec<SequenceMarkMoveDocumentEdit> {
+    marks
+        .into_iter()
+        .filter_map(|mark| {
+            let collection = document
+                .mark_collections
+                .iter()
+                .find(|collection| collection.key == mark.collection_key)?;
+            let time_seconds = collection.marks_seconds.get(mark.index as usize)?;
+            Some(SequenceMarkMoveDocumentEdit {
+                collection_key: mark.collection_key,
+                index: mark.index as usize,
+                time_seconds: (time_seconds + time_delta_seconds)
+                    .clamp(0.0, document.duration_seconds),
+            })
+        })
+        .collect()
+}
+
 #[derive(Debug)]
 pub struct AppModel {
     pub workspace: WorkspaceService,
     pub editors: EditorSession,
     pub workbench_layout: WorkbenchLayout,
     pub preview: PreviewSession,
+    pub live_output: LiveOutputSnapshot,
     pub project_root: Option<String>,
     pub project_entries: Vec<WorkspaceEntry>,
     pub analysis: Option<ProjectAnalysis>,
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub status: String,
+    pub sequence_clipboard: Option<SequenceClipboard>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SequenceClipboard {
+    Effects(Vec<SequenceEffect<Authored>>),
+    Marks(Vec<SequenceMarkPasteDocumentEdit>),
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +191,7 @@ pub struct AppSnapshot {
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub workbench_layout: WorkbenchLayout,
     pub preview: PreviewSnapshot,
+    pub live_output: LiveOutputSnapshot,
     pub tabs: Vec<EditorBuffer>,
     pub active_file: Option<Utf8PathBuf>,
     pub active_buffer: Option<EditorBuffer>,
@@ -71,6 +211,44 @@ pub enum ActiveGuiDocument {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveOutputSnapshot {
+    pub enabled: bool,
+    pub status: LiveOutputStatus,
+    pub active_universe_count: usize,
+    pub last_error: Option<String>,
+}
+
+impl Default for LiveOutputSnapshot {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            status: LiveOutputStatus::Disabled,
+            active_universe_count: 0,
+            last_error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiveOutputStatus {
+    Disabled,
+    Ready,
+    Sending,
+    Error,
+}
+
+impl LiveOutputStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Disabled => "Disabled",
+            Self::Ready => "Ready",
+            Self::Sending => "Sending",
+            Self::Error => "Error",
+        }
+    }
+}
+
 impl Default for AppModel {
     fn default() -> Self {
         let workbench_layout = load_workbench_layout();
@@ -80,11 +258,13 @@ impl Default for AppModel {
             editors: EditorSession::default(),
             workbench_layout,
             preview: PreviewSession::default(),
+            live_output: LiveOutputSnapshot::default(),
             project_root: None,
             project_entries: Vec::new(),
             analysis: None,
             diagnostics: Vec::new(),
             status: "No project open".to_string(),
+            sequence_clipboard: None,
         };
         if let Some(path) = last_project_root {
             match model.open_project(path, false, true) {
@@ -107,6 +287,7 @@ impl AppModel {
             diagnostics: self.diagnostics.clone(),
             workbench_layout: self.workbench_layout.clone(),
             preview: self.preview.snapshot(),
+            live_output: self.live_output.clone(),
             tabs: self.editors.tabs(),
             active_file: self.editors.active_file().cloned(),
             active_buffer: self.editors.active_buffer().cloned(),
@@ -279,6 +460,10 @@ impl AppModel {
 
     pub fn preview_target_fps(&self) -> u32 {
         self.preview.target_fps()
+    }
+
+    pub fn set_live_output_snapshot(&mut self, snapshot: LiveOutputSnapshot) {
+        self.live_output = snapshot;
     }
 
     pub fn set_main_window_layout(&mut self, layout: WindowLayout) -> Result<(), String> {
@@ -596,6 +781,258 @@ impl AppModel {
             analysis,
         )?;
         self.commit_active_gui_text(outcome.serialized_content)
+    }
+
+    pub fn apply_sequence_selection_edit(
+        &mut self,
+        edit: SequenceSelectionEditDto,
+    ) -> Result<SequenceSelectionEditResultDto, String> {
+        let before = self.active_sequence_authored()?;
+        let before_document = self.active_sequence_document()?;
+        let resulting_selection;
+        let mut copied_count = 0;
+        let mut skipped_count = 0;
+
+        let document_edit = match edit {
+            SequenceSelectionEditDto::Copy { selection } => {
+                copied_count =
+                    self.copy_sequence_selection(&before, &before_document, &selection)?;
+                self.status = format!("Copied {copied_count}");
+                return Ok(SequenceSelectionEditResultDto {
+                    snapshot: self.snapshot_dto(),
+                    selection: Some(selection),
+                    copied_count,
+                    skipped_count,
+                });
+            }
+            SequenceSelectionEditDto::Cut { selection } => {
+                copied_count =
+                    self.copy_sequence_selection(&before, &before_document, &selection)?;
+                let edit = sequence_delete_edit(selection.clone());
+                self.status = format!("Cut {copied_count}");
+                resulting_selection = Some(selection_empty_like(&selection));
+                edit
+            }
+            SequenceSelectionEditDto::Delete { selection } => {
+                let edit = sequence_delete_edit(selection.clone());
+                self.status = "Deleted selection".to_string();
+                resulting_selection = Some(selection_empty_like(&selection));
+                edit
+            }
+            SequenceSelectionEditDto::Paste { anchor } => {
+                let (edit, selection, skipped) =
+                    self.sequence_paste_edit(&before_document, anchor)?;
+                skipped_count = skipped;
+                copied_count = selection_count(&selection);
+                self.status = if skipped_count == 0 {
+                    format!("Pasted {copied_count}")
+                } else {
+                    format!("Pasted {copied_count}, skipped {skipped_count}")
+                };
+                resulting_selection = Some(selection);
+                edit
+            }
+            SequenceSelectionEditDto::MoveEffects {
+                ids,
+                time_delta_seconds,
+                lane_delta,
+            } => {
+                let edits = effect_move_edits(
+                    &before_document,
+                    ids.clone(),
+                    time_delta_seconds,
+                    lane_delta,
+                );
+                resulting_selection = Some(SequenceSelectionDto::Effects { ids });
+                SequenceDocumentEdit::MoveEffects { edits }
+            }
+            SequenceSelectionEditDto::ResizeEffects {
+                ids,
+                edge,
+                time_delta_seconds,
+            } => {
+                let edits =
+                    effect_resize_edits(&before_document, ids.clone(), edge, time_delta_seconds);
+                resulting_selection = Some(SequenceSelectionDto::Effects { ids });
+                SequenceDocumentEdit::ResizeEffects { edits }
+            }
+            SequenceSelectionEditDto::MoveMarks {
+                marks,
+                time_delta_seconds,
+            } => {
+                let edits = mark_move_edits(&before_document, marks.clone(), time_delta_seconds);
+                resulting_selection = Some(SequenceSelectionDto::Marks { marks });
+                SequenceDocumentEdit::MoveMarks { edits }
+            }
+        };
+
+        self.apply_sequence_document_edit(document_edit)?;
+        let snapshot = self.snapshot_dto();
+        Ok(SequenceSelectionEditResultDto {
+            snapshot,
+            selection: resulting_selection,
+            copied_count,
+            skipped_count,
+        })
+    }
+
+    fn apply_sequence_document_edit(&mut self, edit: SequenceDocumentEdit) -> Result<(), String> {
+        let path = self.active_path_for_gui_edit()?;
+        let descriptor = self
+            .workspace
+            .inspect_document(path.clone(), self.editors.dirty_overlays())?;
+        let object_key = descriptor
+            .default_object_keys
+            .get(&DocumentViewId::Sequence)
+            .ok_or_else(|| "active document is not a sequence".to_string())?
+            .clone();
+        let analysis = self
+            .analysis
+            .as_ref()
+            .ok_or_else(|| "project analysis is not available".to_string())?;
+        let outcome = self.workspace.apply_sequence_edit(
+            path,
+            &object_key,
+            edit,
+            self.active_buffer_text()?,
+            self.editors.dirty_overlays(),
+            analysis,
+        )?;
+        self.commit_active_gui_text(outcome.serialized_content)
+    }
+
+    fn active_sequence_authored(&self) -> Result<dawn_project::model::Sequence<Authored>, String> {
+        let object_key = self.active_sequence_object_key()?;
+        let parsed = parse_dawn_file_with_source_map(&self.active_buffer_text()?)
+            .map_err(|error| error.to_string())?;
+        match parsed.file.get(&object_key) {
+            Some(DawnObject::Sequence(sequence)) => Ok(sequence.clone()),
+            _ => Err(format!("sequence object `{object_key}` was not found")),
+        }
+    }
+
+    fn active_sequence_document(&self) -> Result<SequenceDocument, String> {
+        let path = self.active_path_for_gui_edit()?;
+        let object_key = self.active_sequence_object_key()?;
+        self.workspace
+            .sequence_document(path, &object_key, self.editors.dirty_overlays())
+    }
+
+    fn active_sequence_object_key(&self) -> Result<String, String> {
+        let path = self.active_path_for_gui_edit()?;
+        let descriptor = self
+            .workspace
+            .inspect_document(path, self.editors.dirty_overlays())?;
+        descriptor
+            .default_object_keys
+            .get(&DocumentViewId::Sequence)
+            .cloned()
+            .ok_or_else(|| "active document is not a sequence".to_string())
+    }
+
+    fn copy_sequence_selection(
+        &mut self,
+        sequence: &dawn_project::model::Sequence<Authored>,
+        document: &SequenceDocument,
+        selection: &SequenceSelectionDto,
+    ) -> Result<u32, String> {
+        match selection {
+            SequenceSelectionDto::Effects { ids } => {
+                let effects = ids
+                    .iter()
+                    .filter_map(|id| {
+                        sequence
+                            .effects
+                            .iter()
+                            .find(|effect| effect.id == *id)
+                            .cloned()
+                    })
+                    .collect::<Vec<_>>();
+                let count = effects.len().min(u32::MAX as usize) as u32;
+                self.sequence_clipboard = Some(SequenceClipboard::Effects(effects));
+                Ok(count)
+            }
+            SequenceSelectionDto::Marks { marks } => {
+                let copied = marks
+                    .iter()
+                    .filter_map(|mark| {
+                        document
+                            .mark_collections
+                            .iter()
+                            .find(|collection| collection.key == mark.collection_key)
+                            .and_then(|collection| {
+                                collection.marks_seconds.get(mark.index as usize)
+                            })
+                            .map(|time_seconds| SequenceMarkPasteDocumentEdit {
+                                collection_key: mark.collection_key.clone(),
+                                time_seconds: *time_seconds,
+                            })
+                    })
+                    .collect::<Vec<_>>();
+                let count = copied.len().min(u32::MAX as usize) as u32;
+                self.sequence_clipboard = Some(SequenceClipboard::Marks(copied));
+                Ok(count)
+            }
+        }
+    }
+
+    fn sequence_paste_edit(
+        &self,
+        document: &SequenceDocument,
+        anchor: SequencePasteAnchorDto,
+    ) -> Result<(SequenceDocumentEdit, SequenceSelectionDto, u32), String> {
+        match self.sequence_clipboard.clone() {
+            Some(SequenceClipboard::Effects(effects)) => {
+                let first_id = document
+                    .effects
+                    .iter()
+                    .map(|effect| effect.id)
+                    .max()
+                    .unwrap_or(0)
+                    + 1;
+                let ids = (0..effects.len())
+                    .map(|offset| first_id + offset as u32)
+                    .collect::<Vec<_>>();
+                Ok((
+                    SequenceDocumentEdit::PasteEffects {
+                        effects,
+                        lane_index: anchor.lane_index.map(|value| value as usize),
+                        time_seconds: anchor.time_seconds,
+                    },
+                    SequenceSelectionDto::Effects { ids },
+                    0,
+                ))
+            }
+            Some(SequenceClipboard::Marks(marks)) => {
+                let existing = document
+                    .mark_collections
+                    .iter()
+                    .map(|collection| (collection.key.clone(), collection.marks_seconds.len()))
+                    .collect::<std::collections::HashMap<_, _>>();
+                let mut refs = Vec::new();
+                for mark in &marks {
+                    if let Some(index) = existing.get(&mark.collection_key) {
+                        refs.push(SequenceMarkRefDto {
+                            collection_key: mark.collection_key.clone(),
+                            index: *index as u32,
+                        });
+                    }
+                }
+                let skipped = marks
+                    .len()
+                    .saturating_sub(refs.len())
+                    .min(u32::MAX as usize) as u32;
+                Ok((
+                    SequenceDocumentEdit::PasteMarks {
+                        marks,
+                        time_seconds: anchor.time_seconds,
+                    },
+                    SequenceSelectionDto::Marks { marks: refs },
+                    skipped,
+                ))
+            }
+            None => Err("sequence clipboard is empty".to_string()),
+        }
     }
 
     fn apply_layout_gui_edit(&mut self, edit: LayoutGuiEditDto) -> Result<(), String> {

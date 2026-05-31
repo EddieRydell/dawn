@@ -16,6 +16,7 @@ mod audio_runtime;
 mod bindings;
 mod commands;
 mod effect_previews;
+mod live_output;
 mod preview;
 mod preview_transport;
 mod state;

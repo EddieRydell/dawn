@@ -4,13 +4,15 @@ use std::time::{Duration, Instant};
 use dawn_app_core::dto::{GeometryRenderBoundsDto, GeometryRenderPointDto};
 use dawn_app_core::output_runtime::OutputFrame;
 use dawn_app_core::preview_session::{AudioPlaybackStatus, PreviewSnapshot};
+use dawn_project::analysis::ProjectAnalysis;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use crate::app_runtime::{apply_audio_clock_to_model, emit_preview_state_snapshot};
 use crate::state::{
-    lock_audio_runtime, lock_model, lock_preview_transport, AppState, CommandResult,
+    lock_audio_runtime, lock_live_output, lock_model, lock_preview_transport, AppState,
+    CommandResult,
 };
 use crate::window_layout::{persist_window_layout, WorkbenchWindow};
 
@@ -123,6 +125,9 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             let has_sink = lock_preview_transport(&state)
                 .map(|runtime| runtime.has_sinks())
                 .unwrap_or(false);
+            let live_output_enabled = lock_live_output(&state)
+                .map(|runtime| runtime.enabled())
+                .unwrap_or(false);
             if has_sink && !had_sink {
                 last_published_generation = None;
             }
@@ -131,7 +136,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             let mut timing = PreviewTimingDto::empty(worker_started.elapsed().as_secs_f64());
             timing.has_sink = has_sink;
             timing.loop_interval_ms = loop_interval_ms;
-            let (snapshot, target_fps) = match lock_model(&state) {
+            let (snapshot, target_fps, analysis) = match lock_model(&state) {
                 Ok(mut model) => {
                     let model_started = Instant::now();
                     let preview_snapshot = model.preview.snapshot();
@@ -157,8 +162,9 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                         false
                     };
                     let mut snapshot = model.preview.snapshot();
-                    let should_render_frame = has_sink
+                    let should_render_frame = (has_sink || live_output_enabled)
                         && (snapshot.is_playing
+                            || live_output_enabled
                             || last_published_generation != Some(snapshot.frame.generation));
                     if should_render_frame && !rendered_during_clock_apply {
                         let render_started = Instant::now();
@@ -170,7 +176,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                         timing.rendered_frame = true;
                     }
                     timing.model_update_ms = model_started.elapsed().as_secs_f64() * 1000.0;
-                    (snapshot, model.preview_target_fps())
+                    (snapshot, model.preview_target_fps(), model.analysis.clone())
                 }
                 Err(_) => {
                     thread::sleep(Duration::from_millis(100));
@@ -199,6 +205,9 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                     last_published_generation = Some(frame_generation);
                 }
             }
+            if live_output_enabled {
+                publish_live_output_frame(&app, &state, analysis.as_ref(), &snapshot.frame);
+            }
 
             let event_identity = PreviewEventIdentity::from(&snapshot);
             let should_emit_event = if snapshot.is_playing {
@@ -207,7 +216,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             } else {
                 last_event_identity.as_ref() != Some(&event_identity)
             };
-            let fps = if has_sink {
+            let fps = if has_sink || live_output_enabled {
                 target_fps.max(1)
             } else if snapshot.is_playing {
                 target_fps.clamp(1, 30)
@@ -237,6 +246,26 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             }
         }
     });
+}
+
+fn publish_live_output_frame(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    analysis: Option<&ProjectAnalysis>,
+    frame: &OutputFrame,
+) {
+    let snapshot = match lock_live_output(state) {
+        Ok(mut runtime) => runtime.send_frame(analysis, frame),
+        Err(_) => return,
+    };
+    let Ok(mut model) = lock_model(state) else {
+        return;
+    };
+    if model.live_output != snapshot {
+        model.set_live_output_snapshot(snapshot);
+        let dto = model.snapshot_dto();
+        let _ = app.emit("app_snapshot_changed", &dto);
+    }
 }
 
 pub(crate) fn preview_pixel_count(frame: &OutputFrame) -> usize {
