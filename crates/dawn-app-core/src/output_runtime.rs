@@ -5,8 +5,8 @@ use dawn_project::document::{
     SequenceDocument, SequenceEffectParamDocument, SequenceMarkCollectionDocument,
 };
 use dawn_project::effect_script::{
-    BytecodeStats, CompiledEffect, FixtureContext, PixelContext, PreparedEffectParams,
-    RuntimeError, RuntimeValue,
+    BytecodeStats, CompiledEffect, EffectSampleScratch, FixtureContext, PixelContext,
+    PreparedEffectParams, RuntimeError, RuntimeValue,
 };
 use dawn_project::model::{
     Color, Distance, DistanceSpan, EffectParam, FixtureId, Resolved, SequenceEffectScope,
@@ -117,6 +117,7 @@ impl<'a> SequenceFrameEvaluator<'a> {
                                 &fixture_templates,
                             ),
                             prepared_params,
+                            scratch: EffectSampleScratch::new(script.bytecode_stats()),
                             _bytecode_stats: script.bytecode_stats(),
                         },
                         Err(error) => PreparedEffectRender::BadParams(error),
@@ -144,11 +145,11 @@ impl<'a> SequenceFrameEvaluator<'a> {
         })
     }
 
-    pub fn evaluate(&self, time_seconds: f64, generation: u64) -> OutputFrame {
+    pub fn evaluate(&mut self, time_seconds: f64, generation: u64) -> OutputFrame {
         let mut fixtures = self.fixture_templates.clone();
         let mut status = OutputFrameStatus::Live;
 
-        for effect in &self.effects {
+        for effect in &mut self.effects {
             let local_seconds = if time_seconds < effect.start_seconds
                 || time_seconds >= effect.start_seconds + effect.duration_seconds
             {
@@ -166,8 +167,9 @@ impl<'a> SequenceFrameEvaluator<'a> {
                 script,
                 target_pixels,
                 prepared_params,
+                scratch,
                 ..
-            } = &effect.render
+            } = &mut effect.render
             else {
                 status = effect.render.error_status();
                 continue;
@@ -175,12 +177,13 @@ impl<'a> SequenceFrameEvaluator<'a> {
 
             for pixel in target_pixels {
                 let output_pixel = &mut fixtures[pixel.fixture_index].pixels[pixel.pixel_index];
-                match script.sample_prepared(
+                match script.sample_prepared_with_scratch(
                     progress,
                     local_seconds,
                     pixel.fixture_context,
                     pixel.pixel_context,
                     prepared_params,
+                    scratch,
                 ) {
                     Ok(color) => add_clamped(&mut output_pixel.color, color),
                     Err(error) => status = OutputFrameStatus::Error(error.to_string()),
@@ -210,6 +213,7 @@ enum PreparedEffectRender<'a> {
         script: &'a CompiledEffect,
         target_pixels: Vec<PreparedEffectPixel>,
         prepared_params: PreparedEffectParams,
+        scratch: EffectSampleScratch,
         _bytecode_stats: BytecodeStats,
     },
     MissingScript(String),
@@ -274,7 +278,7 @@ pub fn evaluate_sequence_frame(
     generation: u64,
 ) -> OutputFrame {
     match SequenceFrameEvaluator::new(analysis, document) {
-        Ok(evaluator) => evaluator.evaluate(time_seconds, generation),
+        Ok(mut evaluator) => evaluator.evaluate(time_seconds, generation),
         Err(message) => empty_frame(generation, message),
     }
 }

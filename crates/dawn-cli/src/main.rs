@@ -13,7 +13,7 @@ use dawn_project::analysis::{
     ProjectDiagnostic, TextRange,
 };
 use dawn_project::document::{get_sequence_document, SequenceDocument, SequenceEffectDocument};
-use dawn_project::effect_script::FixtureContext;
+use dawn_project::effect_script::{EffectSampleScratch, FixtureContext};
 use dawn_project::fs::WorkspaceFs;
 use dawn_project::model::DawnObject;
 use dawn_project::path::{canonicalize_path, utf8_path, PathStringExt};
@@ -48,6 +48,8 @@ enum Command {
         json: bool,
         #[arg(long)]
         synthetic_active_effects: Option<usize>,
+        #[arg(long)]
+        no_effect_breakdown: bool,
     },
 }
 
@@ -75,6 +77,7 @@ fn run() -> Result<ExitCode, String> {
             warmup,
             json,
             synthetic_active_effects,
+            no_effect_breakdown,
         } => bench_effect(
             &project_path_or_directory,
             sequence.as_deref(),
@@ -83,6 +86,7 @@ fn run() -> Result<ExitCode, String> {
             warmup,
             json,
             synthetic_active_effects,
+            no_effect_breakdown,
         ),
     }
 }
@@ -116,6 +120,7 @@ fn bench_effect(
     warmup: usize,
     json: bool,
     synthetic_active_effects: Option<usize>,
+    no_effect_breakdown: bool,
 ) -> Result<ExitCode, String> {
     if !time_seconds.is_finite() {
         return Err("time must be finite".to_string());
@@ -155,6 +160,7 @@ fn bench_effect(
         iterations,
         warmup,
         synthetic_active_effects,
+        no_effect_breakdown,
     );
 
     if json {
@@ -336,6 +342,7 @@ struct EffectBenchReport {
     iterations: usize,
     warmup: usize,
     synthetic_active_effects: Option<usize>,
+    no_effect_breakdown: bool,
     total_effects: usize,
     active_effect_count: usize,
     target_pixel_samples_per_frame: usize,
@@ -353,8 +360,9 @@ impl EffectBenchReport {
         iterations: usize,
         warmup: usize,
         synthetic_active_effects: Option<usize>,
+        no_effect_breakdown: bool,
     ) -> Self {
-        let evaluator = SequenceFrameEvaluator::new(analysis, document)
+        let mut evaluator = SequenceFrameEvaluator::new(analysis, document)
             .expect("benchmark analysis must resolve before rendering");
         for generation in 0..warmup {
             black_box(evaluator.evaluate(time_seconds, generation as u64));
@@ -367,16 +375,28 @@ impl EffectBenchReport {
             whole_frame_samples.push(start.elapsed());
         }
 
-        let effects = document
+        let active_effects = document
             .effects
             .iter()
             .filter(|effect| effect_is_active(effect, time_seconds))
-            .filter_map(|effect| {
-                EffectBenchItemReport::run(analysis, document, effect, time_seconds, iterations)
-            })
             .collect::<Vec<_>>();
-        let target_pixel_samples_per_frame = effect_reports_target_pixel_samples(&effects);
-        let bytecode = BytecodeAggregateReport::from_effects(&effects);
+        let active_effect_count = active_effects.len();
+        let target_pixel_samples_per_frame = active_effects
+            .iter()
+            .filter_map(|effect| effect.render.as_ref())
+            .map(|render| render.target_pixels.len())
+            .sum::<usize>();
+        let bytecode = BytecodeAggregateReport::from_active_effects(analysis, &active_effects);
+        let effects = if no_effect_breakdown {
+            Vec::new()
+        } else {
+            active_effects
+                .iter()
+                .filter_map(|effect| {
+                    EffectBenchItemReport::run(analysis, document, effect, time_seconds, iterations)
+                })
+                .collect::<Vec<_>>()
+        };
 
         Self {
             project_path: display_path(&canonicalize_path(&input.project_path)),
@@ -386,8 +406,9 @@ impl EffectBenchReport {
             iterations,
             warmup,
             synthetic_active_effects,
+            no_effect_breakdown,
             total_effects: document.effects.len(),
-            active_effect_count: effects.len(),
+            active_effect_count,
             target_pixel_samples_per_frame,
             bytecode,
             whole_frame: TimingStatsReport::from_durations(whole_frame_samples),
@@ -402,22 +423,59 @@ struct BytecodeAggregateReport {
     instruction_count: usize,
     constant_count: usize,
     param_slots: usize,
-    local_slots: usize,
-    max_stack_depth: usize,
+    float_slots: usize,
+    int_slots: usize,
+    bool_slots: usize,
+    color_slots: usize,
+    ref_slots: usize,
+    fixture_slots: usize,
+    pixel_slots: usize,
+    total_slots: usize,
 }
 
 impl BytecodeAggregateReport {
-    fn from_effects(effects: &[EffectBenchItemReport]) -> Self {
+    fn from_active_effects(
+        analysis: &ProjectAnalysis,
+        effects: &[&SequenceEffectDocument],
+    ) -> Self {
+        effects
+            .iter()
+            .filter_map(|effect| {
+                let render = effect.render.as_ref()?;
+                analysis.compiled_script_for_key(&render.script_key)
+            })
+            .map(|script| script.bytecode_stats())
+            .fold(Self::default(), |mut aggregate, stats| {
+                aggregate.instruction_count += stats.instruction_count;
+                aggregate.constant_count += stats.constant_count;
+                aggregate.param_slots += stats.param_slots;
+                aggregate.float_slots += stats.float_slots;
+                aggregate.int_slots += stats.int_slots;
+                aggregate.bool_slots += stats.bool_slots;
+                aggregate.color_slots += stats.color_slots;
+                aggregate.ref_slots += stats.ref_slots;
+                aggregate.fixture_slots += stats.fixture_slots;
+                aggregate.pixel_slots += stats.pixel_slots;
+                aggregate.total_slots += stats.total_slots;
+                aggregate
+            })
+    }
+}
+
+impl Default for BytecodeAggregateReport {
+    fn default() -> Self {
         Self {
-            instruction_count: effects.iter().map(|effect| effect.instruction_count).sum(),
-            constant_count: effects.iter().map(|effect| effect.constant_count).sum(),
-            param_slots: effects.iter().map(|effect| effect.param_slots).sum(),
-            local_slots: effects.iter().map(|effect| effect.local_slots).sum(),
-            max_stack_depth: effects
-                .iter()
-                .map(|effect| effect.max_stack_depth)
-                .max()
-                .unwrap_or(0),
+            instruction_count: 0,
+            constant_count: 0,
+            param_slots: 0,
+            float_slots: 0,
+            int_slots: 0,
+            bool_slots: 0,
+            color_slots: 0,
+            ref_slots: 0,
+            fixture_slots: 0,
+            pixel_slots: 0,
+            total_slots: 0,
         }
     }
 }
@@ -436,8 +494,14 @@ struct EffectBenchItemReport {
     instruction_count: usize,
     constant_count: usize,
     param_slots: usize,
-    local_slots: usize,
-    max_stack_depth: usize,
+    float_slots: usize,
+    int_slots: usize,
+    bool_slots: usize,
+    color_slots: usize,
+    ref_slots: usize,
+    fixture_slots: usize,
+    pixel_slots: usize,
+    total_slots: usize,
     effect: TimingStatsReport,
     per_sample: TimingStatsReport,
 }
@@ -466,6 +530,7 @@ impl EffectBenchItemReport {
         )
         .ok()?;
         let stats = script.bytecode_stats();
+        let mut scratch = EffectSampleScratch::new(stats);
         let target_pixel_count = render.target_pixels.len();
         let mut effect_samples = Vec::with_capacity(iterations);
         let mut per_sample_samples = Vec::with_capacity(iterations);
@@ -480,7 +545,7 @@ impl EffectBenchItemReport {
                     pixel.pixel_index,
                     pixel.pixel_count,
                 );
-                let _ = black_box(script.sample_prepared(
+                let _ = black_box(script.sample_prepared_with_scratch(
                     progress,
                     local_seconds,
                     FixtureContext {
@@ -488,6 +553,7 @@ impl EffectBenchItemReport {
                     },
                     pixel_context,
                     &prepared_params,
+                    &mut scratch,
                 ));
             }
             let elapsed = start.elapsed();
@@ -507,8 +573,14 @@ impl EffectBenchItemReport {
             instruction_count: stats.instruction_count,
             constant_count: stats.constant_count,
             param_slots: stats.param_slots,
-            local_slots: stats.local_slots,
-            max_stack_depth: stats.max_stack_depth,
+            float_slots: stats.float_slots,
+            int_slots: stats.int_slots,
+            bool_slots: stats.bool_slots,
+            color_slots: stats.color_slots,
+            ref_slots: stats.ref_slots,
+            fixture_slots: stats.fixture_slots,
+            pixel_slots: stats.pixel_slots,
+            total_slots: stats.total_slots,
             effect: TimingStatsReport::from_durations(effect_samples),
             per_sample: TimingStatsReport::from_durations(per_sample_samples),
         })
@@ -584,13 +656,6 @@ fn synthetic_active_effect_document(
     Ok(synthetic)
 }
 
-fn effect_reports_target_pixel_samples(effects: &[EffectBenchItemReport]) -> usize {
-    effects
-        .iter()
-        .map(|effect| effect.target_pixels)
-        .sum::<usize>()
-}
-
 #[cfg(test)]
 fn active_target_pixel_samples(document: &SequenceDocument, time_seconds: f64) -> usize {
     document
@@ -634,7 +699,7 @@ fn hz_from_duration(duration: Duration) -> f64 {
 
 fn print_effect_bench_report(report: &EffectBenchReport) {
     println!(
-        "project={} sequence={} time={:.3}s iterations={} warmup={} synthetic_active_effects={}",
+        "project={} sequence={} time={:.3}s iterations={} warmup={} synthetic_active_effects={} effect_breakdown={}",
         report.project_path,
         report.sequence,
         report.time_seconds,
@@ -643,20 +708,35 @@ fn print_effect_bench_report(report: &EffectBenchReport) {
         report
             .synthetic_active_effects
             .map(|count| count.to_string())
-            .unwrap_or_else(|| "none".to_string())
+            .unwrap_or_else(|| "none".to_string()),
+        if report.no_effect_breakdown {
+            "disabled"
+        } else {
+            "enabled"
+        }
     );
     println!(
-        "total effects={} active effects={} target pixel samples/frame={} bytecode=instructions:{} constants:{} param_slots:{} local_slots:{} max_stack:{}",
+        "total effects={} active effects={} target pixel samples/frame={} bytecode=instructions:{} constants:{} param_slots:{} registers=float:{} int:{} bool:{} color:{} ref:{} fixture:{} pixel:{} total:{}",
         report.total_effects,
         report.active_effect_count,
         report.target_pixel_samples_per_frame,
         report.bytecode.instruction_count,
         report.bytecode.constant_count,
         report.bytecode.param_slots,
-        report.bytecode.local_slots,
-        report.bytecode.max_stack_depth
+        report.bytecode.float_slots,
+        report.bytecode.int_slots,
+        report.bytecode.bool_slots,
+        report.bytecode.color_slots,
+        report.bytecode.ref_slots,
+        report.bytecode.fixture_slots,
+        report.bytecode.pixel_slots,
+        report.bytecode.total_slots
     );
     print_timing_stats("whole frame", &report.whole_frame);
+    if report.no_effect_breakdown {
+        println!("per-effect timing=disabled");
+        return;
+    }
     if report.effects.is_empty() {
         println!("active effects=0");
         return;
@@ -670,7 +750,7 @@ fn print_effect_bench_report(report: &EffectBenchReport) {
     };
     for effect in displayed_effects {
         println!(
-            "effect id={} index={} script={} target={} pixels={} params={} scope={} bytecode=instructions:{} constants:{} param_slots:{} local_slots:{} max_stack:{}",
+            "effect id={} index={} script={} target={} pixels={} params={} scope={} bytecode=instructions:{} constants:{} param_slots:{} registers=float:{} int:{} bool:{} color:{} ref:{} fixture:{} pixel:{} total:{}",
             effect.effect_id,
             effect.effect_index,
             effect.script,
@@ -681,8 +761,14 @@ fn print_effect_bench_report(report: &EffectBenchReport) {
             effect.instruction_count,
             effect.constant_count,
             effect.param_slots,
-            effect.local_slots,
-            effect.max_stack_depth
+            effect.float_slots,
+            effect.int_slots,
+            effect.bool_slots,
+            effect.color_slots,
+            effect.ref_slots,
+            effect.fixture_slots,
+            effect.pixel_slots,
+            effect.total_slots
         );
         print_timing_stats("  effect", &effect.effect);
         print_timing_stats("  per sample", &effect.per_sample);

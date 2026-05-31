@@ -21,7 +21,7 @@ pub use type_check::type_check;
 
 use ast::BinaryOp;
 use vm::{BytecodeProgram, Vm};
-pub use vm::{BytecodeStats, PreparedEffectParams};
+pub use vm::{BytecodeStats, EffectSampleScratch, PreparedEffectParams};
 
 #[derive(Debug, Clone)]
 pub struct ScriptDiagnostic {
@@ -90,13 +90,39 @@ impl CompiledEffect {
         Vm::run(&self.bytecode, progress, seconds, fixture, pixel, params)
     }
 
+    pub fn sample_prepared_with_scratch(
+        &self,
+        progress: f64,
+        seconds: f64,
+        fixture: FixtureContext,
+        pixel: PixelContext,
+        params: &PreparedEffectParams,
+        scratch: &mut EffectSampleScratch,
+    ) -> Result<Color, RuntimeError> {
+        Vm::run_with_scratch(
+            &self.bytecode,
+            progress,
+            seconds,
+            fixture,
+            pixel,
+            params,
+            scratch,
+        )
+    }
+
     pub fn bytecode_stats(&self) -> BytecodeStats {
         BytecodeStats {
             instruction_count: self.bytecode.instructions.len(),
             constant_count: self.bytecode.constants.len(),
             param_slots: self.params.len(),
-            local_slots: self.bytecode.local_slots,
-            max_stack_depth: self.bytecode.max_stack_depth,
+            float_slots: self.bytecode.registers.floats,
+            int_slots: self.bytecode.registers.ints,
+            bool_slots: self.bytecode.registers.bools,
+            color_slots: self.bytecode.registers.colors,
+            ref_slots: self.bytecode.registers.refs,
+            fixture_slots: self.bytecode.registers.fixtures,
+            pixel_slots: self.bytecode.registers.pixels,
+            total_slots: self.bytecode.registers.total(),
         }
     }
 }

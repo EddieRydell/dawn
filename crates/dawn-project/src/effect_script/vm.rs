@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::model::{Color, Curve, CurveValue, Flags};
+use crate::model::{Color, CurveValue};
 
 use super::ast::{BinaryOp, EffectAst, Expr, Stmt, UnaryOp};
 use super::{
@@ -15,8 +15,7 @@ const INITIAL_RNG: u64 = 0x9e37_79b9_7f4a_7c15;
 pub(super) struct BytecodeProgram {
     pub(super) instructions: Vec<Instruction>,
     pub(super) constants: Vec<RuntimeValue>,
-    pub(super) local_slots: usize,
-    pub(super) max_stack_depth: usize,
+    pub(super) registers: RegisterCounts,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,8 +23,14 @@ pub struct BytecodeStats {
     pub instruction_count: usize,
     pub constant_count: usize,
     pub param_slots: usize,
-    pub local_slots: usize,
-    pub max_stack_depth: usize,
+    pub float_slots: usize,
+    pub int_slots: usize,
+    pub bool_slots: usize,
+    pub color_slots: usize,
+    pub ref_slots: usize,
+    pub fixture_slots: usize,
+    pub pixel_slots: usize,
+    pub total_slots: usize,
 }
 
 impl BytecodeStats {
@@ -41,12 +46,8 @@ impl BytecodeStats {
         self.param_slots
     }
 
-    pub fn local_slots(&self) -> usize {
-        self.local_slots
-    }
-
-    pub fn max_stack_depth(&self) -> usize {
-        self.max_stack_depth
+    pub fn total_slots(&self) -> usize {
+        self.total_slots
     }
 }
 
@@ -55,98 +56,97 @@ pub struct PreparedEffectParams {
     values: Vec<RuntimeValue>,
 }
 
+#[derive(Debug, Clone)]
+pub struct EffectSampleScratch {
+    floats: Vec<f64>,
+    ints: Vec<i64>,
+    bools: Vec<bool>,
+    colors: Vec<Color>,
+    refs: Vec<RefValue>,
+    fixtures: Vec<FixtureContext>,
+    pixels: Vec<PixelContext>,
+}
+
+impl EffectSampleScratch {
+    pub fn new(stats: BytecodeStats) -> Self {
+        Self {
+            floats: vec![0.0; stats.float_slots],
+            ints: vec![0; stats.int_slots],
+            bools: vec![false; stats.bool_slots],
+            colors: vec![Color::new(0, 0, 0); stats.color_slots],
+            refs: vec![RefValue::Unset; stats.ref_slots],
+            fixtures: vec![FixtureContext { index: 0 }; stats.fixture_slots],
+            pixels: vec![PixelContext { index: 0, count: 0 }; stats.pixel_slots],
+        }
+    }
+
+    fn resize_for(&mut self, counts: RegisterCounts) {
+        self.floats.resize(counts.floats, 0.0);
+        self.ints.resize(counts.ints, 0);
+        self.bools.resize(counts.bools, false);
+        self.colors.resize(counts.colors, Color::new(0, 0, 0));
+        self.refs.resize(counts.refs, RefValue::Unset);
+        self.fixtures
+            .resize(counts.fixtures, FixtureContext { index: 0 });
+        self.pixels
+            .resize(counts.pixels, PixelContext { index: 0, count: 0 });
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum VmValue<'a> {
-    Float(f64),
-    Int(i64),
-    Bool(bool),
-    Color(Color),
-    Marks(&'a [f64]),
-    Curve(&'a Curve),
-    Enum(&'a str),
-    Flags(&'a Flags),
-    Fixture(FixtureContext),
-    Pixel(PixelContext),
+enum RefValue {
+    Param(usize),
+    Constant(usize),
     Unset,
 }
 
-impl<'a> VmValue<'a> {
-    fn from_runtime(value: &'a RuntimeValue) -> Self {
-        match value {
-            RuntimeValue::Float(value) => Self::Float(*value),
-            RuntimeValue::Int(value) => Self::Int(*value),
-            RuntimeValue::Bool(value) => Self::Bool(*value),
-            RuntimeValue::Color(value) => Self::Color(*value),
-            RuntimeValue::Marks(value) => Self::Marks(value),
-            RuntimeValue::Curve(value) => Self::Curve(value),
-            RuntimeValue::Enum(value) => Self::Enum(value),
-            RuntimeValue::Flags(value) => Self::Flags(value),
-            RuntimeValue::Fixture(value) => Self::Fixture(*value),
-            RuntimeValue::Pixel(value) => Self::Pixel(*value),
-        }
-    }
-
-    fn value_type(self) -> Option<ScriptType> {
-        match self {
-            Self::Float(_) => Some(ScriptType::Float),
-            Self::Int(_) => Some(ScriptType::Int),
-            Self::Bool(_) => Some(ScriptType::Bool),
-            Self::Color(_) => Some(ScriptType::Color),
-            Self::Marks(_) => Some(ScriptType::Marks),
-            Self::Curve(curve) => Some(match curve.value_type {
-                crate::model::CurveValueType::Float => ScriptType::CurveFloat,
-                crate::model::CurveValueType::Color => ScriptType::CurveColor,
-            }),
-            Self::Enum(_) => Some(ScriptType::Enum),
-            Self::Flags(_) => Some(ScriptType::Flags),
-            Self::Fixture(_) => Some(ScriptType::Fixture),
-            Self::Pixel(_) => Some(ScriptType::Pixel),
-            Self::Unset => None,
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Instruction {
+    LoadConst(ValueSlot, usize),
+    LoadContext(ValueSlot, ContextSlot),
+    LoadParam(ValueSlot, usize),
+    Copy(ValueSlot, ValueSlot),
+    IntToFloat(FloatSlot, IntSlot),
+    FloatUnary(FloatSlot, UnaryFloatInstruction, FloatSlot),
+    IntNegate(IntSlot, IntSlot),
+    BoolNot(BoolSlot, BoolSlot),
+    Binary(ValueSlot, BinaryInstruction, ValueSlot, ValueSlot),
+    JumpIfFalse(BoolSlot, usize),
+    JumpIfTrue(BoolSlot, usize),
+    Jump(usize),
+    LoopTick,
+    Sin(FloatSlot, FloatSlot),
+    Cos(FloatSlot, FloatSlot),
+    Abs(FloatSlot, FloatSlot),
+    Floor(FloatSlot, FloatSlot),
+    Srand(FloatSlot, FloatSlot),
+    Rand(FloatSlot),
+    PixelIndex(IntSlot, PixelSlot),
+    PixelCount(IntSlot, PixelSlot),
+    MarkCount(IntSlot, RefSlot),
+    MarkAt(FloatSlot, RefSlot, IntSlot, FloatSlot),
+    MarkSearch(
+        FloatSlot,
+        MarkSearchInstruction,
+        RefSlot,
+        FloatSlot,
+        FloatSlot,
+    ),
+    Min(FloatSlot, FloatSlot, FloatSlot),
+    Max(FloatSlot, FloatSlot, FloatSlot),
+    Clamp(FloatSlot, FloatSlot, FloatSlot, FloatSlot),
+    Smoothstep(FloatSlot, FloatSlot, FloatSlot, FloatSlot),
+    MixFloat(FloatSlot, FloatSlot, FloatSlot, FloatSlot),
+    MixColor(ColorSlot, ColorSlot, ColorSlot, FloatSlot),
+    Rgb(ColorSlot, FloatSlot, FloatSlot, FloatSlot),
+    Hsv(ColorSlot, FloatSlot, FloatSlot, FloatSlot),
+    CallCurveParam(ValueSlot, usize, FloatSlot),
+    ReturnColor(ColorSlot),
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(super) enum Instruction {
-    LoadConst(usize),
-    LoadContext(ContextSlot),
-    LoadParam(usize),
-    LoadLocal(usize),
-    StoreLocal(usize, ScriptType),
-    Unary(UnaryOp),
-    IntToFloat,
-    Binary(BinaryInstruction),
-    JumpIfFalse(usize),
-    JumpIfTrue(usize),
-    JumpIfFalsePop(usize),
-    Jump(usize),
-    Pop,
-    LoopTick,
-    Sin,
-    Cos,
-    Abs,
-    Floor,
-    Srand,
-    Rand,
-    PixelIndex,
-    PixelCount,
-    MarkCount,
-    MarkAt,
-    MarkPrev,
-    MarkNext,
-    MarkNearest,
-    MarkPhase,
-    MarkElapsed,
-    Min,
-    Max,
-    Clamp,
-    Smoothstep,
-    MixFloat,
-    MixColor,
-    Rgb,
-    Hsv,
-    CallCurveParam(usize),
-    ReturnColor,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum UnaryFloatInstruction {
+    Negate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,11 +178,119 @@ pub(super) enum BinaryInstruction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MarkSearchInstruction {
+    Prev,
+    Next,
+    Nearest,
+    Phase,
+    Elapsed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ContextSlot {
     Progress,
     Seconds,
     Fixture,
     Pixel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ValueSlot {
+    Float(FloatSlot),
+    Int(IntSlot),
+    Bool(BoolSlot),
+    Color(ColorSlot),
+    Ref(RefSlot, ScriptType),
+    Fixture(FixtureSlot),
+    Pixel(PixelSlot),
+}
+
+impl ValueSlot {
+    fn value_type(self) -> ScriptType {
+        match self {
+            Self::Float(_) => ScriptType::Float,
+            Self::Int(_) => ScriptType::Int,
+            Self::Bool(_) => ScriptType::Bool,
+            Self::Color(_) => ScriptType::Color,
+            Self::Ref(_, value_type) => value_type,
+            Self::Fixture(_) => ScriptType::Fixture,
+            Self::Pixel(_) => ScriptType::Pixel,
+        }
+    }
+
+    fn float(self) -> FloatSlot {
+        match self {
+            Self::Float(slot) => slot,
+            _ => unreachable!("type checker validates float slot"),
+        }
+    }
+
+    fn int(self) -> IntSlot {
+        match self {
+            Self::Int(slot) => slot,
+            _ => unreachable!("type checker validates int slot"),
+        }
+    }
+
+    fn bool(self) -> BoolSlot {
+        match self {
+            Self::Bool(slot) => slot,
+            _ => unreachable!("type checker validates bool slot"),
+        }
+    }
+
+    fn color(self) -> ColorSlot {
+        match self {
+            Self::Color(slot) => slot,
+            _ => unreachable!("type checker validates color slot"),
+        }
+    }
+
+    fn reference(self) -> RefSlot {
+        match self {
+            Self::Ref(slot, _) => slot,
+            _ => unreachable!("type checker validates ref slot"),
+        }
+    }
+
+    fn pixel(self) -> PixelSlot {
+        match self {
+            Self::Pixel(slot) => slot,
+            _ => unreachable!("type checker validates pixel slot"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FloatSlot(usize);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct IntSlot(usize);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct BoolSlot(usize);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ColorSlot(usize);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RefSlot(usize);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct FixtureSlot(usize);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PixelSlot(usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) struct RegisterCounts {
+    pub(super) floats: usize,
+    pub(super) ints: usize,
+    pub(super) bools: usize,
+    pub(super) colors: usize,
+    pub(super) refs: usize,
+    pub(super) fixtures: usize,
+    pub(super) pixels: usize,
+}
+
+impl RegisterCounts {
+    pub(super) fn total(self) -> usize {
+        self.floats + self.ints + self.bools + self.colors + self.refs + self.fixtures + self.pixels
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -193,10 +301,7 @@ enum Binding {
         index: usize,
         value_type: ScriptType,
     },
-    Local {
-        slot: usize,
-        value_type: ScriptType,
-    },
+    Local(ValueSlot),
 }
 
 #[derive(Debug)]
@@ -243,6 +348,28 @@ impl Vm {
         pixel: PixelContext,
         params: &PreparedEffectParams,
     ) -> Result<Color, RuntimeError> {
+        let mut scratch = EffectSampleScratch::new(stats_for_program(program, params.values.len()));
+        Self::run_with_scratch(
+            program,
+            progress,
+            seconds,
+            fixture,
+            pixel,
+            params,
+            &mut scratch,
+        )
+    }
+
+    pub(super) fn run_with_scratch<'a>(
+        program: &'a BytecodeProgram,
+        progress: f64,
+        seconds: f64,
+        fixture: FixtureContext,
+        pixel: PixelContext,
+        params: &'a PreparedEffectParams,
+        scratch: &mut EffectSampleScratch,
+    ) -> Result<Color, RuntimeError> {
+        scratch.resize_for(program.registers);
         BytecodeVm {
             program,
             progress,
@@ -250,8 +377,7 @@ impl Vm {
             fixture,
             pixel,
             params,
-            stack: Vec::with_capacity(program.max_stack_depth),
-            locals: vec![VmValue::Unset; program.local_slots],
+            scratch,
             ip: 0,
             rng: INITIAL_RNG,
             loop_iterations: 0,
@@ -287,24 +413,21 @@ impl Vm {
             }),
         }
     }
+}
 
-    fn coerce_vm_value<'a>(
-        value: VmValue<'a>,
-        expected: ScriptType,
-    ) -> Result<VmValue<'a>, RuntimeError> {
-        match (expected, value) {
-            (ScriptType::Float, VmValue::Int(value)) => Ok(VmValue::Float(value as f64)),
-            (expected, value) if value.value_type() == Some(expected) => Ok(value),
-            (expected, value) => Err(RuntimeError {
-                message: format!(
-                    "expected {expected} value, but found {}",
-                    value
-                        .value_type()
-                        .map(|value_type| value_type.to_string())
-                        .unwrap_or_else(|| "unset".to_string())
-                ),
-            }),
-        }
+fn stats_for_program(program: &BytecodeProgram, param_slots: usize) -> BytecodeStats {
+    BytecodeStats {
+        instruction_count: program.instructions.len(),
+        constant_count: program.constants.len(),
+        param_slots,
+        float_slots: program.registers.floats,
+        int_slots: program.registers.ints,
+        bool_slots: program.registers.bools,
+        color_slots: program.registers.colors,
+        ref_slots: program.registers.refs,
+        fixture_slots: program.registers.fixtures,
+        pixel_slots: program.registers.pixels,
+        total_slots: program.registers.total(),
     }
 }
 
@@ -313,9 +436,7 @@ struct Compiler<'a> {
     instructions: Vec<Instruction>,
     constants: Vec<RuntimeValue>,
     scopes: Vec<HashMap<String, Binding>>,
-    local_slots: usize,
-    stack_depth: usize,
-    max_stack_depth: usize,
+    registers: RegisterCounts,
 }
 
 impl<'a> Compiler<'a> {
@@ -325,9 +446,7 @@ impl<'a> Compiler<'a> {
             instructions: Vec::new(),
             constants: Vec::new(),
             scopes: vec![HashMap::new()],
-            local_slots: 0,
-            stack_depth: 0,
-            max_stack_depth: 0,
+            registers: RegisterCounts::default(),
         };
         compiler.define_builtin_bindings();
         compiler
@@ -340,8 +459,7 @@ impl<'a> Compiler<'a> {
         BytecodeProgram {
             instructions: self.instructions,
             constants: self.constants,
-            local_slots: self.local_slots,
-            max_stack_depth: self.max_stack_depth,
+            registers: self.registers,
         }
     }
 
@@ -372,27 +490,20 @@ impl<'a> Compiler<'a> {
                 value_type,
                 expr,
             } => {
-                let slot = self.allocate_local();
-                self.compile_expr(expr);
-                self.emit(Instruction::StoreLocal(slot, *value_type), -1);
-                self.define(
-                    name,
-                    Binding::Local {
-                        slot,
-                        value_type: *value_type,
-                    },
-                );
+                let local = self.allocate_slot(*value_type);
+                let value = self.compile_expr(expr);
+                self.emit_assign(local, value);
+                self.define(name, Binding::Local(local));
             }
             Stmt::Assign { name, expr } => {
-                let Binding::Local { slot, value_type } = self.expect_binding(name) else {
+                let Binding::Local(local) = self.expect_binding(name) else {
                     unreachable!("type checker rejects assignment to non-local bindings");
                 };
-                self.compile_expr(expr);
-                self.emit(Instruction::StoreLocal(slot, value_type), -1);
+                let value = self.compile_expr(expr);
+                self.emit_assign(local, value);
             }
             Stmt::Expr(expr) => {
                 self.compile_expr(expr);
-                self.emit(Instruction::Pop, -1);
             }
             Stmt::For {
                 name,
@@ -403,27 +514,21 @@ impl<'a> Compiler<'a> {
                 body,
             } => {
                 self.push_scope();
-                let slot = self.allocate_local();
-                self.compile_expr(initializer);
-                self.emit(Instruction::StoreLocal(slot, *value_type), -1);
-                self.define(
-                    name,
-                    Binding::Local {
-                        slot,
-                        value_type: *value_type,
-                    },
-                );
+                let local = self.allocate_slot(*value_type);
+                let initializer = self.compile_expr(initializer);
+                self.emit_assign(local, initializer);
+                self.define(name, Binding::Local(local));
                 let loop_start = self.instructions.len();
-                self.compile_expr(condition);
-                let exit_jump = self.emit_jump_if_false_pop();
-                self.emit(Instruction::LoopTick, 0);
+                let condition = self.compile_expr(condition).bool();
+                let exit_jump = self.emit_jump_if_false(condition);
+                self.emit(Instruction::LoopTick);
                 self.push_scope();
                 for statement in body {
                     self.compile_statement(statement);
                 }
                 self.pop_scope();
                 self.compile_statement(update);
-                self.emit(Instruction::Jump(loop_start), 0);
+                self.emit(Instruction::Jump(loop_start));
                 self.patch_jump(exit_jump);
                 self.pop_scope();
             }
@@ -432,8 +537,8 @@ impl<'a> Compiler<'a> {
                 then_body,
                 else_body,
             } => {
-                self.compile_expr(condition);
-                let else_jump = self.emit_jump_if_false_pop();
+                let condition = self.compile_expr(condition).bool();
+                let else_jump = self.emit_jump_if_false(condition);
                 self.push_scope();
                 for statement in then_body {
                     self.compile_statement(statement);
@@ -449,79 +554,153 @@ impl<'a> Compiler<'a> {
                 self.patch_jump(end_jump);
             }
             Stmt::Return(expr) => {
-                self.compile_expr(expr);
-                self.emit(Instruction::ReturnColor, -1);
+                let value = self.compile_expr(expr).color();
+                self.emit(Instruction::ReturnColor(value));
             }
         }
     }
 
-    fn compile_expr(&mut self, expr: &Expr) {
+    fn compile_expr(&mut self, expr: &Expr) -> ValueSlot {
         match expr {
             Expr::Float(value) => self.load_constant(RuntimeValue::Float(*value)),
             Expr::Int(value) => self.load_constant(RuntimeValue::Int(*value)),
             Expr::Bool(value) => self.load_constant(RuntimeValue::Bool(*value)),
             Expr::Color(value) => self.load_constant(RuntimeValue::Color(*value)),
             Expr::Ident(name) => match self.expect_binding(name) {
-                Binding::Context(slot) => self.emit(Instruction::LoadContext(slot), 1),
-                Binding::Constant(index) => self.emit(Instruction::LoadConst(index), 1),
-                Binding::Param { index, .. } => self.emit(Instruction::LoadParam(index), 1),
-                Binding::Local { slot, .. } => self.emit(Instruction::LoadLocal(slot), 1),
+                Binding::Context(slot) => {
+                    let dest = self.allocate_slot(match slot {
+                        ContextSlot::Progress | ContextSlot::Seconds => ScriptType::Float,
+                        ContextSlot::Fixture => ScriptType::Fixture,
+                        ContextSlot::Pixel => ScriptType::Pixel,
+                    });
+                    self.emit(Instruction::LoadContext(dest, slot));
+                    dest
+                }
+                Binding::Constant(index) => {
+                    let value_type = self.constants[index].value_type();
+                    let dest = self.allocate_slot(value_type);
+                    self.emit(Instruction::LoadConst(dest, index));
+                    dest
+                }
+                Binding::Param { index, value_type } => {
+                    let dest = self.allocate_slot(value_type);
+                    self.emit(Instruction::LoadParam(dest, index));
+                    dest
+                }
+                Binding::Local(slot) => slot,
             },
             Expr::Unary { op, expr } => {
-                self.compile_expr(expr);
-                self.emit(Instruction::Unary(*op), 0);
+                let value = self.compile_expr(expr);
+                match (*op, value) {
+                    (UnaryOp::Negate, ValueSlot::Float(source)) => {
+                        let dest = self.allocate_float();
+                        self.emit(Instruction::FloatUnary(
+                            dest,
+                            UnaryFloatInstruction::Negate,
+                            source,
+                        ));
+                        ValueSlot::Float(dest)
+                    }
+                    (UnaryOp::Negate, ValueSlot::Int(source)) => {
+                        let dest = self.allocate_int();
+                        self.emit(Instruction::IntNegate(dest, source));
+                        ValueSlot::Int(dest)
+                    }
+                    (UnaryOp::Not, ValueSlot::Bool(source)) => {
+                        let dest = self.allocate_bool();
+                        self.emit(Instruction::BoolNot(dest, source));
+                        ValueSlot::Bool(dest)
+                    }
+                    _ => unreachable!("type checker validates unary expression"),
+                }
             }
             Expr::Binary { left, op, right } => self.compile_binary(left, *op, right),
             Expr::Call { name, args } => self.compile_call(name, args),
         }
     }
 
-    fn compile_binary(&mut self, left: &Expr, op: BinaryOp, right: &Expr) {
+    fn compile_binary(&mut self, left: &Expr, op: BinaryOp, right: &Expr) -> ValueSlot {
         match op {
             BinaryOp::LogicalAnd => {
-                self.compile_expr(left);
-                let false_jump = self.emit_jump_if_false();
-                self.compile_expr(right);
+                let dest = self.allocate_bool();
+                let left = self.compile_expr(left).bool();
+                self.emit(Instruction::Copy(
+                    ValueSlot::Bool(dest),
+                    ValueSlot::Bool(left),
+                ));
+                let false_jump = self.emit_jump_if_false(dest);
+                let right = self.compile_expr(right).bool();
+                self.emit(Instruction::Copy(
+                    ValueSlot::Bool(dest),
+                    ValueSlot::Bool(right),
+                ));
                 self.patch_jump(false_jump);
+                ValueSlot::Bool(dest)
             }
             BinaryOp::LogicalOr => {
-                self.compile_expr(left);
-                let true_jump = self.emit_jump_if_true();
-                self.compile_expr(right);
+                let dest = self.allocate_bool();
+                let left = self.compile_expr(left).bool();
+                self.emit(Instruction::Copy(
+                    ValueSlot::Bool(dest),
+                    ValueSlot::Bool(left),
+                ));
+                let true_jump = self.emit_jump_if_true(dest);
+                let right = self.compile_expr(right).bool();
+                self.emit(Instruction::Copy(
+                    ValueSlot::Bool(dest),
+                    ValueSlot::Bool(right),
+                ));
                 self.patch_jump(true_jump);
+                ValueSlot::Bool(dest)
             }
             _ => {
                 let left_type = self.expr_type(left);
                 let right_type = self.expr_type(right);
-                self.compile_expr(left);
-                if left_type == ScriptType::Int
-                    && right_type == ScriptType::Float
-                    && binary_result_type(left_type, op, right_type).is_some()
-                {
-                    self.emit(Instruction::IntToFloat, 0);
-                }
-                if matches!(
-                    (left_type, op, right_type),
-                    (ScriptType::Int, BinaryOp::Multiply, ScriptType::Color)
-                ) {
-                    self.emit(Instruction::IntToFloat, 0);
-                }
-                self.compile_expr(right);
-                if right_type == ScriptType::Int
-                    && left_type == ScriptType::Float
-                    && binary_result_type(left_type, op, right_type).is_some()
-                {
-                    self.emit(Instruction::IntToFloat, 0);
-                }
-                if matches!(
-                    (left_type, op, right_type),
-                    (ScriptType::Color, BinaryOp::Multiply, ScriptType::Int)
-                ) {
-                    self.emit(Instruction::IntToFloat, 0);
-                }
+                let left = self.compile_expr(left);
+                let right = self.compile_expr(right);
                 let instruction = self.binary_instruction(left_type, op, right_type);
-                self.emit(Instruction::Binary(instruction), -1);
+                let dest = self.allocate_slot(
+                    binary_result_type(left_type, op, right_type)
+                        .expect("type checker validates binary expression"),
+                );
+                let left = self.float_promote_if_needed(left, instruction, true);
+                let right = self.float_promote_if_needed(right, instruction, false);
+                self.emit(Instruction::Binary(dest, instruction, left, right));
+                dest
             }
+        }
+    }
+
+    fn float_promote_if_needed(
+        &mut self,
+        slot: ValueSlot,
+        instruction: BinaryInstruction,
+        is_left: bool,
+    ) -> ValueSlot {
+        let needs_float = match (instruction, is_left) {
+            (
+                BinaryInstruction::FloatAdd
+                | BinaryInstruction::FloatSubtract
+                | BinaryInstruction::FloatMultiply
+                | BinaryInstruction::FloatDivide
+                | BinaryInstruction::FloatLess
+                | BinaryInstruction::FloatLessEqual
+                | BinaryInstruction::FloatGreater
+                | BinaryInstruction::FloatGreaterEqual
+                | BinaryInstruction::FloatEqual
+                | BinaryInstruction::FloatNotEqual,
+                _,
+            ) => true,
+            (BinaryInstruction::ColorMultiplyFloat, false) => true,
+            (BinaryInstruction::FloatMultiplyColor, true) => true,
+            _ => false,
+        };
+        if needs_float && matches!(slot, ValueSlot::Int(_)) {
+            let dest = self.allocate_float();
+            self.emit(Instruction::IntToFloat(dest, slot.int()));
+            ValueSlot::Float(dest)
+        } else {
+            slot
         }
     }
 
@@ -613,7 +792,8 @@ impl<'a> Compiler<'a> {
                 | Binding::Constant(_) => ScriptType::Float,
                 Binding::Context(ContextSlot::Fixture) => ScriptType::Fixture,
                 Binding::Context(ContextSlot::Pixel) => ScriptType::Pixel,
-                Binding::Param { value_type, .. } | Binding::Local { value_type, .. } => value_type,
+                Binding::Param { value_type, .. } => value_type,
+                Binding::Local(slot) => slot.value_type(),
             },
             Expr::Unary { op, expr } => match op {
                 UnaryOp::Negate => self.expr_type(expr),
@@ -658,49 +838,183 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn compile_call(&mut self, name: &str, args: &[Expr]) {
+    fn compile_call(&mut self, name: &str, args: &[Expr]) -> ValueSlot {
         if let Some(Binding::Param { index, value_type }) = self.binding(name) {
             if matches!(value_type, ScriptType::CurveFloat | ScriptType::CurveColor) {
-                self.compile_expr(&args[0]);
-                self.emit(Instruction::CallCurveParam(index), 0);
-                return;
+                let amount = self.compile_float_arg(&args[0]);
+                let dest = self.allocate_slot(match value_type {
+                    ScriptType::CurveFloat => ScriptType::Float,
+                    ScriptType::CurveColor => ScriptType::Color,
+                    _ => unreachable!("checked above"),
+                });
+                self.emit(Instruction::CallCurveParam(dest, index, amount));
+                return dest;
             }
         }
-        for arg in args {
-            self.compile_expr(arg);
-        }
-        let instruction = match name {
-            "sin" => Instruction::Sin,
-            "cos" => Instruction::Cos,
-            "abs" => Instruction::Abs,
-            "floor" => Instruction::Floor,
-            "srand" => Instruction::Srand,
-            "rand" => Instruction::Rand,
-            "pixel_index" => Instruction::PixelIndex,
-            "pixel_count" => Instruction::PixelCount,
-            "mark_count" => Instruction::MarkCount,
-            "mark_at" => Instruction::MarkAt,
-            "mark_prev" => Instruction::MarkPrev,
-            "mark_next" => Instruction::MarkNext,
-            "mark_nearest" => Instruction::MarkNearest,
-            "mark_phase" => Instruction::MarkPhase,
-            "mark_elapsed" => Instruction::MarkElapsed,
-            "min" => Instruction::Min,
-            "max" => Instruction::Max,
-            "clamp" => Instruction::Clamp,
-            "smoothstep" => Instruction::Smoothstep,
-            "mix" if self.call_type(name, args) == ScriptType::Color => Instruction::MixColor,
-            "mix" => Instruction::MixFloat,
-            "rgb" => Instruction::Rgb,
-            "hsv" => Instruction::Hsv,
+
+        match name {
+            "sin" => {
+                let value = self.compile_float_arg(&args[0]);
+                let dest = self.allocate_float();
+                self.emit(Instruction::Sin(dest, value));
+                ValueSlot::Float(dest)
+            }
+            "cos" => {
+                let value = self.compile_float_arg(&args[0]);
+                let dest = self.allocate_float();
+                self.emit(Instruction::Cos(dest, value));
+                ValueSlot::Float(dest)
+            }
+            "abs" => {
+                let value = self.compile_float_arg(&args[0]);
+                let dest = self.allocate_float();
+                self.emit(Instruction::Abs(dest, value));
+                ValueSlot::Float(dest)
+            }
+            "floor" => {
+                let value = self.compile_float_arg(&args[0]);
+                let dest = self.allocate_float();
+                self.emit(Instruction::Floor(dest, value));
+                ValueSlot::Float(dest)
+            }
+            "srand" => {
+                let value = self.compile_float_arg(&args[0]);
+                let dest = self.allocate_float();
+                self.emit(Instruction::Srand(dest, value));
+                ValueSlot::Float(dest)
+            }
+            "rand" => {
+                let dest = self.allocate_float();
+                self.emit(Instruction::Rand(dest));
+                ValueSlot::Float(dest)
+            }
+            "pixel_index" => {
+                let pixel = self.compile_expr(&args[0]).pixel();
+                let dest = self.allocate_int();
+                self.emit(Instruction::PixelIndex(dest, pixel));
+                ValueSlot::Int(dest)
+            }
+            "pixel_count" => {
+                let pixel = self.compile_expr(&args[0]).pixel();
+                let dest = self.allocate_int();
+                self.emit(Instruction::PixelCount(dest, pixel));
+                ValueSlot::Int(dest)
+            }
+            "mark_count" => {
+                let marks = self.compile_expr(&args[0]).reference();
+                let dest = self.allocate_int();
+                self.emit(Instruction::MarkCount(dest, marks));
+                ValueSlot::Int(dest)
+            }
+            "mark_at" => {
+                let marks = self.compile_expr(&args[0]).reference();
+                let index = self.compile_expr(&args[1]).int();
+                let fallback = self.compile_float_arg(&args[2]);
+                let dest = self.allocate_float();
+                self.emit(Instruction::MarkAt(dest, marks, index, fallback));
+                ValueSlot::Float(dest)
+            }
+            "mark_prev" | "mark_next" | "mark_nearest" | "mark_phase" | "mark_elapsed" => {
+                let marks = self.compile_expr(&args[0]).reference();
+                let time = self.compile_float_arg(&args[1]);
+                let fallback = self.compile_float_arg(&args[2]);
+                let dest = self.allocate_float();
+                let search = match name {
+                    "mark_prev" => MarkSearchInstruction::Prev,
+                    "mark_next" => MarkSearchInstruction::Next,
+                    "mark_nearest" => MarkSearchInstruction::Nearest,
+                    "mark_phase" => MarkSearchInstruction::Phase,
+                    "mark_elapsed" => MarkSearchInstruction::Elapsed,
+                    _ => unreachable!("matched above"),
+                };
+                self.emit(Instruction::MarkSearch(dest, search, marks, time, fallback));
+                ValueSlot::Float(dest)
+            }
+            "min" => {
+                let left = self.compile_float_arg(&args[0]);
+                let right = self.compile_float_arg(&args[1]);
+                let dest = self.allocate_float();
+                self.emit(Instruction::Min(dest, left, right));
+                ValueSlot::Float(dest)
+            }
+            "max" => {
+                let left = self.compile_float_arg(&args[0]);
+                let right = self.compile_float_arg(&args[1]);
+                let dest = self.allocate_float();
+                self.emit(Instruction::Max(dest, left, right));
+                ValueSlot::Float(dest)
+            }
+            "clamp" => {
+                let value = self.compile_float_arg(&args[0]);
+                let min = self.compile_float_arg(&args[1]);
+                let max = self.compile_float_arg(&args[2]);
+                let dest = self.allocate_float();
+                self.emit(Instruction::Clamp(dest, value, min, max));
+                ValueSlot::Float(dest)
+            }
+            "smoothstep" => {
+                let edge0 = self.compile_float_arg(&args[0]);
+                let edge1 = self.compile_float_arg(&args[1]);
+                let value = self.compile_float_arg(&args[2]);
+                let dest = self.allocate_float();
+                self.emit(Instruction::Smoothstep(dest, edge0, edge1, value));
+                ValueSlot::Float(dest)
+            }
+            "mix" if self.call_type(name, args) == ScriptType::Color => {
+                let left = self.compile_expr(&args[0]).color();
+                let right = self.compile_expr(&args[1]).color();
+                let amount = self.compile_float_arg(&args[2]);
+                let dest = self.allocate_color();
+                self.emit(Instruction::MixColor(dest, left, right, amount));
+                ValueSlot::Color(dest)
+            }
+            "mix" => {
+                let left = self.compile_float_arg(&args[0]);
+                let right = self.compile_float_arg(&args[1]);
+                let amount = self.compile_float_arg(&args[2]);
+                let dest = self.allocate_float();
+                self.emit(Instruction::MixFloat(dest, left, right, amount));
+                ValueSlot::Float(dest)
+            }
+            "rgb" => {
+                let red = self.compile_float_arg(&args[0]);
+                let green = self.compile_float_arg(&args[1]);
+                let blue = self.compile_float_arg(&args[2]);
+                let dest = self.allocate_color();
+                self.emit(Instruction::Rgb(dest, red, green, blue));
+                ValueSlot::Color(dest)
+            }
+            "hsv" => {
+                let hue = self.compile_float_arg(&args[0]);
+                let saturation = self.compile_float_arg(&args[1]);
+                let value = self.compile_float_arg(&args[2]);
+                let dest = self.allocate_color();
+                self.emit(Instruction::Hsv(dest, hue, saturation, value));
+                ValueSlot::Color(dest)
+            }
             _ => unreachable!("type checker validates builtins"),
-        };
-        self.emit(instruction, 1 - args.len() as isize);
+        }
     }
 
-    fn load_constant(&mut self, value: RuntimeValue) {
+    fn compile_float_arg(&mut self, expr: &Expr) -> FloatSlot {
+        let value = self.compile_expr(expr);
+        match value {
+            ValueSlot::Float(slot) => slot,
+            ValueSlot::Int(slot) => {
+                let dest = self.allocate_float();
+                self.emit(Instruction::IntToFloat(dest, slot));
+                dest
+            }
+            _ => unreachable!("type checker validates float-compatible argument"),
+        }
+    }
+
+    fn load_constant(&mut self, value: RuntimeValue) -> ValueSlot {
+        let value_type = value.value_type();
         let index = self.add_constant(value);
-        self.emit(Instruction::LoadConst(index), 1);
+        let dest = self.allocate_slot(value_type);
+        self.emit(Instruction::LoadConst(dest, index));
+        dest
     }
 
     fn add_constant(&mut self, value: RuntimeValue) -> usize {
@@ -708,36 +1022,41 @@ impl<'a> Compiler<'a> {
         self.constants.len() - 1
     }
 
-    fn emit_jump_if_false(&mut self) -> usize {
+    fn emit_assign(&mut self, dest: ValueSlot, source: ValueSlot) {
+        match (dest, source) {
+            (ValueSlot::Float(dest), ValueSlot::Int(source)) => {
+                self.emit(Instruction::IntToFloat(dest, source));
+            }
+            (dest, source) if dest.value_type() == source.value_type() => {
+                self.emit(Instruction::Copy(dest, source));
+            }
+            _ => unreachable!("type checker validates assignment"),
+        }
+    }
+
+    fn emit_jump_if_false(&mut self, condition: BoolSlot) -> usize {
         let index = self.instructions.len();
-        self.emit(Instruction::JumpIfFalse(usize::MAX), 0);
+        self.emit(Instruction::JumpIfFalse(condition, usize::MAX));
         index
     }
 
-    fn emit_jump_if_true(&mut self) -> usize {
+    fn emit_jump_if_true(&mut self, condition: BoolSlot) -> usize {
         let index = self.instructions.len();
-        self.emit(Instruction::JumpIfTrue(usize::MAX), 0);
-        index
-    }
-
-    fn emit_jump_if_false_pop(&mut self) -> usize {
-        let index = self.instructions.len();
-        self.emit(Instruction::JumpIfFalsePop(usize::MAX), -1);
+        self.emit(Instruction::JumpIfTrue(condition, usize::MAX));
         index
     }
 
     fn emit_jump(&mut self) -> usize {
         let index = self.instructions.len();
-        self.emit(Instruction::Jump(usize::MAX), 0);
+        self.emit(Instruction::Jump(usize::MAX));
         index
     }
 
     fn patch_jump(&mut self, index: usize) {
         let target = self.instructions.len();
         match &mut self.instructions[index] {
-            Instruction::JumpIfFalse(slot)
-            | Instruction::JumpIfTrue(slot)
-            | Instruction::JumpIfFalsePop(slot)
+            Instruction::JumpIfFalse(_, slot)
+            | Instruction::JumpIfTrue(_, slot)
             | Instruction::Jump(slot) => {
                 *slot = target;
             }
@@ -745,19 +1064,60 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn emit(&mut self, instruction: Instruction, stack_delta: isize) {
+    fn emit(&mut self, instruction: Instruction) {
         self.instructions.push(instruction);
-        if stack_delta < 0 {
-            self.stack_depth -= stack_delta.unsigned_abs();
-        } else {
-            self.stack_depth += stack_delta as usize;
-            self.max_stack_depth = self.max_stack_depth.max(self.stack_depth);
+    }
+
+    fn allocate_slot(&mut self, value_type: ScriptType) -> ValueSlot {
+        match value_type {
+            ScriptType::Float => ValueSlot::Float(self.allocate_float()),
+            ScriptType::Int => ValueSlot::Int(self.allocate_int()),
+            ScriptType::Bool => ValueSlot::Bool(self.allocate_bool()),
+            ScriptType::Color => ValueSlot::Color(self.allocate_color()),
+            ScriptType::Marks
+            | ScriptType::CurveFloat
+            | ScriptType::CurveColor
+            | ScriptType::Enum
+            | ScriptType::Flags => {
+                let slot = RefSlot(self.registers.refs);
+                self.registers.refs += 1;
+                ValueSlot::Ref(slot, value_type)
+            }
+            ScriptType::Fixture => {
+                let slot = FixtureSlot(self.registers.fixtures);
+                self.registers.fixtures += 1;
+                ValueSlot::Fixture(slot)
+            }
+            ScriptType::Pixel => {
+                let slot = PixelSlot(self.registers.pixels);
+                self.registers.pixels += 1;
+                ValueSlot::Pixel(slot)
+            }
+            ScriptType::Void => unreachable!("void values are not stored"),
         }
     }
 
-    fn allocate_local(&mut self) -> usize {
-        let slot = self.local_slots;
-        self.local_slots += 1;
+    fn allocate_float(&mut self) -> FloatSlot {
+        let slot = FloatSlot(self.registers.floats);
+        self.registers.floats += 1;
+        slot
+    }
+
+    fn allocate_int(&mut self) -> IntSlot {
+        let slot = IntSlot(self.registers.ints);
+        self.registers.ints += 1;
+        slot
+    }
+
+    fn allocate_bool(&mut self) -> BoolSlot {
+        let slot = BoolSlot(self.registers.bools);
+        self.registers.bools += 1;
+        slot
+    }
+
+    fn allocate_color(&mut self) -> ColorSlot {
+        let slot = ColorSlot(self.registers.colors);
+        self.registers.colors += 1;
         slot
     }
 
@@ -795,412 +1155,411 @@ fn is_float_compare(left: ScriptType, right: ScriptType) -> bool {
         && (left == ScriptType::Float || right == ScriptType::Float)
 }
 
-struct BytecodeVm<'a> {
+struct BytecodeVm<'a, 'scratch> {
     program: &'a BytecodeProgram,
     progress: f64,
     seconds: f64,
     fixture: FixtureContext,
     pixel: PixelContext,
     params: &'a PreparedEffectParams,
-    stack: Vec<VmValue<'a>>,
-    locals: Vec<VmValue<'a>>,
+    scratch: &'scratch mut EffectSampleScratch,
     ip: usize,
     rng: u64,
     loop_iterations: usize,
 }
 
-impl<'a> BytecodeVm<'a> {
+impl<'a> BytecodeVm<'a, '_> {
     fn run(&mut self) -> Result<Color, RuntimeError> {
         while let Some(instruction) = self.program.instructions.get(self.ip) {
             self.ip += 1;
             match *instruction {
-                Instruction::LoadConst(index) => {
-                    self.stack
-                        .push(VmValue::from_runtime(&self.program.constants[index]));
-                }
-                Instruction::LoadContext(slot) => self.stack.push(match slot {
-                    ContextSlot::Progress => VmValue::Float(self.progress),
-                    ContextSlot::Seconds => VmValue::Float(self.seconds),
-                    ContextSlot::Fixture => VmValue::Fixture(self.fixture),
-                    ContextSlot::Pixel => VmValue::Pixel(self.pixel),
-                }),
-                Instruction::LoadParam(index) => {
-                    self.stack
-                        .push(VmValue::from_runtime(&self.params.values[index]));
-                }
-                Instruction::LoadLocal(index) => self.stack.push(self.locals[index]),
-                Instruction::StoreLocal(index, value_type) => {
-                    let value = Vm::coerce_vm_value(self.pop()?, value_type)?;
-                    self.locals[index] = value;
-                }
-                Instruction::Unary(op) => {
-                    let value = self.pop()?;
-                    self.stack.push(self.eval_unary(op, value)?);
-                }
-                Instruction::IntToFloat => {
-                    let value = self.pop_int()? as f64;
-                    self.stack.push(VmValue::Float(value));
-                }
-                Instruction::Binary(op) => {
-                    let right = self.pop()?;
-                    let left = self.pop()?;
-                    self.stack.push(self.eval_binary(left, op, right)?);
-                }
-                Instruction::JumpIfFalse(target) => {
-                    let value = self.peek_bool("logical branch condition was not bool")?;
-                    if !value {
-                        self.ip = target;
+                Instruction::LoadConst(dest, index) => {
+                    if matches!(dest, ValueSlot::Ref(_, _)) {
+                        self.write_ref_source(dest.reference(), RefValue::Constant(index));
                     } else {
-                        self.pop()?;
+                        self.write_runtime(dest, &self.program.constants[index])?;
                     }
                 }
-                Instruction::JumpIfTrue(target) => {
-                    let value = self.peek_bool("logical branch condition was not bool")?;
-                    if value {
-                        self.ip = target;
+                Instruction::LoadContext(dest, slot) => self.write_context(dest, slot),
+                Instruction::LoadParam(dest, index) => {
+                    if matches!(dest, ValueSlot::Ref(_, _)) {
+                        self.write_ref_source(dest.reference(), RefValue::Param(index));
                     } else {
-                        self.pop()?;
+                        self.write_runtime(dest, &self.params.values[index])?;
                     }
                 }
-                Instruction::JumpIfFalsePop(target) => {
-                    let value = self.pop_bool("branch condition was not bool")?;
-                    if !value {
+                Instruction::Copy(dest, source) => self.copy(dest, source),
+                Instruction::IntToFloat(dest, source) => {
+                    self.scratch.floats[dest.0] = self.scratch.ints[source.0] as f64;
+                }
+                Instruction::FloatUnary(dest, UnaryFloatInstruction::Negate, source) => {
+                    self.scratch.floats[dest.0] = -self.scratch.floats[source.0];
+                }
+                Instruction::IntNegate(dest, source) => {
+                    self.scratch.ints[dest.0] = self.scratch.ints[source.0]
+                        .checked_neg()
+                        .ok_or_else(|| self.error("integer overflow"))?;
+                }
+                Instruction::BoolNot(dest, source) => {
+                    self.scratch.bools[dest.0] = !self.scratch.bools[source.0];
+                }
+                Instruction::Binary(dest, op, left, right) => {
+                    self.eval_binary(dest, op, left, right)?
+                }
+                Instruction::JumpIfFalse(condition, target) => {
+                    if !self.scratch.bools[condition.0] {
+                        self.ip = target;
+                    }
+                }
+                Instruction::JumpIfTrue(condition, target) => {
+                    if self.scratch.bools[condition.0] {
                         self.ip = target;
                     }
                 }
                 Instruction::Jump(target) => self.ip = target,
-                Instruction::Pop => {
-                    self.pop()?;
-                }
                 Instruction::LoopTick => {
                     self.loop_iterations += 1;
                     if self.loop_iterations > MAX_LOOP_ITERATIONS {
                         return Err(self.error("effect exceeded the maximum loop iteration count"));
                     }
                 }
-                Instruction::Sin => {
-                    let value = self.pop()?;
-                    self.stack
-                        .push(VmValue::Float(self.expect_float(value)?.sin()));
+                Instruction::Sin(dest, source) => {
+                    self.scratch.floats[dest.0] = self.scratch.floats[source.0].sin();
                 }
-                Instruction::Cos => {
-                    let value = self.pop()?;
-                    self.stack
-                        .push(VmValue::Float(self.expect_float(value)?.cos()));
+                Instruction::Cos(dest, source) => {
+                    self.scratch.floats[dest.0] = self.scratch.floats[source.0].cos();
                 }
-                Instruction::Abs => {
-                    let value = self.pop()?;
-                    self.stack
-                        .push(VmValue::Float(self.expect_float(value)?.abs()));
+                Instruction::Abs(dest, source) => {
+                    self.scratch.floats[dest.0] = self.scratch.floats[source.0].abs();
                 }
-                Instruction::Floor => {
-                    let value = self.pop()?;
-                    self.stack
-                        .push(VmValue::Float(self.expect_float(value)?.floor()));
+                Instruction::Floor(dest, source) => {
+                    self.scratch.floats[dest.0] = self.scratch.floats[source.0].floor();
                 }
-                Instruction::Srand => {
-                    let value = self.pop()?;
-                    self.rng = seed_from_float(self.expect_float(value)?);
-                    self.stack.push(VmValue::Float(0.0));
+                Instruction::Srand(dest, source) => {
+                    self.rng = seed_from_float(self.scratch.floats[source.0]);
+                    self.scratch.floats[dest.0] = 0.0;
                 }
-                Instruction::Rand => {
-                    let value = self.rand();
-                    self.stack.push(VmValue::Float(value));
+                Instruction::Rand(dest) => {
+                    self.scratch.floats[dest.0] = self.rand();
                 }
-                Instruction::PixelIndex => match self.pop()? {
-                    VmValue::Pixel(pixel) => self.stack.push(VmValue::Int(pixel.index as i64)),
-                    _ => return Err(self.error("expected pixel value")),
-                },
-                Instruction::PixelCount => match self.pop()? {
-                    VmValue::Pixel(pixel) => self.stack.push(VmValue::Int(pixel.count as i64)),
-                    _ => return Err(self.error("expected pixel value")),
-                },
-                Instruction::MarkCount => {
-                    let marks = self.pop()?;
-                    self.stack
-                        .push(VmValue::Int(self.expect_marks(marks)?.len() as i64));
+                Instruction::PixelIndex(dest, source) => {
+                    self.scratch.ints[dest.0] = self.scratch.pixels[source.0].index as i64;
                 }
-                Instruction::MarkAt => {
-                    let fallback = self.pop_float()?;
-                    let index = self.pop_int()?;
-                    let marks = self.pop_marks()?;
-                    let value = usize::try_from(index)
+                Instruction::PixelCount(dest, source) => {
+                    self.scratch.ints[dest.0] = self.scratch.pixels[source.0].count as i64;
+                }
+                Instruction::MarkCount(dest, source) => {
+                    self.scratch.ints[dest.0] = self.marks(source)?.len() as i64;
+                }
+                Instruction::MarkAt(dest, marks, index, fallback) => {
+                    let marks = self.marks(marks)?;
+                    let fallback = self.scratch.floats[fallback.0];
+                    let value = usize::try_from(self.scratch.ints[index.0])
                         .ok()
                         .and_then(|index| marks.get(index))
                         .copied()
                         .unwrap_or(fallback);
-                    self.stack.push(VmValue::Float(value));
+                    self.scratch.floats[dest.0] = value;
                 }
-                Instruction::MarkPrev => self.push_mark_search(mark_prev)?,
-                Instruction::MarkNext => self.push_mark_search(mark_next)?,
-                Instruction::MarkNearest => self.push_mark_search(mark_nearest)?,
-                Instruction::MarkPhase => self.push_mark_search(mark_phase)?,
-                Instruction::MarkElapsed => self.push_mark_search(mark_elapsed)?,
-                Instruction::Min => {
-                    let right = self.pop_float()?;
-                    let left = self.pop_float()?;
-                    self.stack.push(VmValue::Float(left.min(right)));
+                Instruction::MarkSearch(dest, search, marks, time, fallback) => {
+                    let marks = self.marks(marks)?;
+                    let time = self.scratch.floats[time.0];
+                    let fallback = self.scratch.floats[fallback.0];
+                    let value = match search {
+                        MarkSearchInstruction::Prev => mark_prev(marks, time),
+                        MarkSearchInstruction::Next => mark_next(marks, time),
+                        MarkSearchInstruction::Nearest => mark_nearest(marks, time),
+                        MarkSearchInstruction::Phase => mark_phase(marks, time),
+                        MarkSearchInstruction::Elapsed => mark_elapsed(marks, time),
+                    }
+                    .unwrap_or(fallback);
+                    self.scratch.floats[dest.0] = value;
                 }
-                Instruction::Max => {
-                    let right = self.pop_float()?;
-                    let left = self.pop_float()?;
-                    self.stack.push(VmValue::Float(left.max(right)));
+                Instruction::Min(dest, left, right) => {
+                    self.scratch.floats[dest.0] =
+                        self.scratch.floats[left.0].min(self.scratch.floats[right.0]);
                 }
-                Instruction::Clamp => {
-                    let max = self.pop_float()?;
-                    let min = self.pop_float()?;
-                    let value = self.pop_float()?;
-                    self.stack.push(VmValue::Float(value.clamp(min, max)));
+                Instruction::Max(dest, left, right) => {
+                    self.scratch.floats[dest.0] =
+                        self.scratch.floats[left.0].max(self.scratch.floats[right.0]);
                 }
-                Instruction::Smoothstep => {
-                    let value = self.pop_float()?;
-                    let edge1 = self.pop_float()?;
-                    let edge0 = self.pop_float()?;
-                    let x = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-                    self.stack.push(VmValue::Float(x * x * (3.0 - 2.0 * x)));
+                Instruction::Clamp(dest, value, min, max) => {
+                    self.scratch.floats[dest.0] = self.scratch.floats[value.0]
+                        .clamp(self.scratch.floats[min.0], self.scratch.floats[max.0]);
                 }
-                Instruction::MixFloat => {
-                    let amount = self.pop_float()?;
-                    let right = self.pop_float()?;
-                    let left = self.pop_float()?;
-                    self.stack
-                        .push(VmValue::Float(left + (right - left) * amount));
+                Instruction::Smoothstep(dest, edge0, edge1, value) => {
+                    let x = ((self.scratch.floats[value.0] - self.scratch.floats[edge0.0])
+                        / (self.scratch.floats[edge1.0] - self.scratch.floats[edge0.0]))
+                        .clamp(0.0, 1.0);
+                    self.scratch.floats[dest.0] = x * x * (3.0 - 2.0 * x);
                 }
-                Instruction::MixColor => {
-                    let amount = self.pop_float()?;
-                    let VmValue::Color(right) = self.pop()? else {
-                        return Err(self.error("expected color value"));
-                    };
-                    let VmValue::Color(left) = self.pop()? else {
-                        return Err(self.error("expected color value"));
-                    };
-                    self.stack.push(VmValue::Color(left.mix(right, amount)));
+                Instruction::MixFloat(dest, left, right, amount) => {
+                    let left = self.scratch.floats[left.0];
+                    let right = self.scratch.floats[right.0];
+                    self.scratch.floats[dest.0] =
+                        left + (right - left) * self.scratch.floats[amount.0];
                 }
-                Instruction::Rgb => {
-                    let blue = self.pop_float()?;
-                    let green = self.pop_float()?;
-                    let red = self.pop_float()?;
-                    self.stack.push(VmValue::Color(Color::new(
-                        red.round().clamp(0.0, 255.0) as u8,
-                        green.round().clamp(0.0, 255.0) as u8,
-                        blue.round().clamp(0.0, 255.0) as u8,
-                    )));
+                Instruction::MixColor(dest, left, right, amount) => {
+                    self.scratch.colors[dest.0] = self.scratch.colors[left.0]
+                        .mix(self.scratch.colors[right.0], self.scratch.floats[amount.0]);
                 }
-                Instruction::Hsv => {
-                    let value = self.pop_float()?;
-                    let saturation = self.pop_float()?;
-                    let hue = self.pop_float()?;
-                    self.stack
-                        .push(VmValue::Color(hsv_to_rgb(hue, saturation, value)));
+                Instruction::Rgb(dest, red, green, blue) => {
+                    self.scratch.colors[dest.0] = Color::new(
+                        self.color_channel(red),
+                        self.color_channel(green),
+                        self.color_channel(blue),
+                    );
                 }
-                Instruction::CallCurveParam(index) => {
-                    let amount = self.pop_float()?;
+                Instruction::Hsv(dest, hue, saturation, value) => {
+                    self.scratch.colors[dest.0] = hsv_to_rgb(
+                        self.scratch.floats[hue.0],
+                        self.scratch.floats[saturation.0],
+                        self.scratch.floats[value.0],
+                    );
+                }
+                Instruction::CallCurveParam(dest, index, amount) => {
                     let RuntimeValue::Curve(curve) = &self.params.values[index] else {
                         return Err(self.error("expected curve parameter"));
                     };
-                    self.stack.push(match curve.evaluate(amount) {
-                        Some(CurveValue::Float(value)) => VmValue::Float(value),
-                        Some(CurveValue::Color(value)) => VmValue::Color(value),
+                    match curve.evaluate(self.scratch.floats[amount.0]) {
+                        Some(CurveValue::Float(value)) => self.write_float_dest(dest, value),
+                        Some(CurveValue::Color(value)) => self.write_color_dest(dest, value),
                         None => return Err(self.error("curve has no points")),
-                    });
+                    }
                 }
-                Instruction::ReturnColor => {
-                    let VmValue::Color(color) = self.pop()? else {
-                        return Err(self.error("sample returned a non-color value"));
-                    };
-                    return Ok(color);
-                }
+                Instruction::ReturnColor(source) => return Ok(self.scratch.colors[source.0]),
             }
         }
         Err(self.error("sample did not return"))
     }
 
-    fn eval_unary(&self, op: UnaryOp, value: VmValue<'a>) -> Result<VmValue<'a>, RuntimeError> {
-        match (op, value) {
-            (UnaryOp::Negate, VmValue::Float(value)) => Ok(VmValue::Float(-value)),
-            (UnaryOp::Negate, VmValue::Int(value)) => value
-                .checked_neg()
-                .map(VmValue::Int)
-                .ok_or_else(|| self.error("integer overflow")),
-            (UnaryOp::Not, VmValue::Bool(value)) => Ok(VmValue::Bool(!value)),
-            _ => Err(self.error("invalid unary expression")),
+    fn write_runtime(
+        &mut self,
+        dest: ValueSlot,
+        value: &'a RuntimeValue,
+    ) -> Result<(), RuntimeError> {
+        match (dest, value) {
+            (ValueSlot::Float(slot), RuntimeValue::Float(value)) => {
+                self.scratch.floats[slot.0] = *value
+            }
+            (ValueSlot::Float(slot), RuntimeValue::Int(value)) => {
+                self.scratch.floats[slot.0] = *value as f64
+            }
+            (ValueSlot::Int(slot), RuntimeValue::Int(value)) => self.scratch.ints[slot.0] = *value,
+            (ValueSlot::Bool(slot), RuntimeValue::Bool(value)) => {
+                self.scratch.bools[slot.0] = *value
+            }
+            (ValueSlot::Color(slot), RuntimeValue::Color(value)) => {
+                self.scratch.colors[slot.0] = *value
+            }
+            (ValueSlot::Fixture(slot), RuntimeValue::Fixture(value)) => {
+                self.scratch.fixtures[slot.0] = *value
+            }
+            (ValueSlot::Pixel(slot), RuntimeValue::Pixel(value)) => {
+                self.scratch.pixels[slot.0] = *value
+            }
+            _ => return Err(self.error("bytecode value type mismatch")),
+        }
+        Ok(())
+    }
+
+    fn write_ref_source(&mut self, slot: RefSlot, value: RefValue) {
+        self.scratch.refs[slot.0] = value;
+    }
+
+    fn write_context(&mut self, dest: ValueSlot, slot: ContextSlot) {
+        match (dest, slot) {
+            (ValueSlot::Float(dest), ContextSlot::Progress) => {
+                self.scratch.floats[dest.0] = self.progress
+            }
+            (ValueSlot::Float(dest), ContextSlot::Seconds) => {
+                self.scratch.floats[dest.0] = self.seconds
+            }
+            (ValueSlot::Fixture(dest), ContextSlot::Fixture) => {
+                self.scratch.fixtures[dest.0] = self.fixture
+            }
+            (ValueSlot::Pixel(dest), ContextSlot::Pixel) => {
+                self.scratch.pixels[dest.0] = self.pixel
+            }
+            _ => unreachable!("compiler emits matching context slots"),
+        }
+    }
+
+    fn copy(&mut self, dest: ValueSlot, source: ValueSlot) {
+        match (dest, source) {
+            (ValueSlot::Float(dest), ValueSlot::Float(source)) => {
+                self.scratch.floats[dest.0] = self.scratch.floats[source.0]
+            }
+            (ValueSlot::Int(dest), ValueSlot::Int(source)) => {
+                self.scratch.ints[dest.0] = self.scratch.ints[source.0]
+            }
+            (ValueSlot::Bool(dest), ValueSlot::Bool(source)) => {
+                self.scratch.bools[dest.0] = self.scratch.bools[source.0]
+            }
+            (ValueSlot::Color(dest), ValueSlot::Color(source)) => {
+                self.scratch.colors[dest.0] = self.scratch.colors[source.0]
+            }
+            (ValueSlot::Ref(dest, _), ValueSlot::Ref(source, _)) => {
+                self.scratch.refs[dest.0] = self.scratch.refs[source.0]
+            }
+            (ValueSlot::Fixture(dest), ValueSlot::Fixture(source)) => {
+                self.scratch.fixtures[dest.0] = self.scratch.fixtures[source.0]
+            }
+            (ValueSlot::Pixel(dest), ValueSlot::Pixel(source)) => {
+                self.scratch.pixels[dest.0] = self.scratch.pixels[source.0]
+            }
+            _ => unreachable!("compiler emits matching copy slots"),
         }
     }
 
     fn eval_binary(
-        &self,
-        left: VmValue<'a>,
+        &mut self,
+        dest: ValueSlot,
         op: BinaryInstruction,
-        right: VmValue<'a>,
-    ) -> Result<VmValue<'a>, RuntimeError> {
+        left: ValueSlot,
+        right: ValueSlot,
+    ) -> Result<(), RuntimeError> {
         match op {
-            BinaryInstruction::FloatAdd => Ok(VmValue::Float(
-                self.expect_float(left)? + self.expect_float(right)?,
-            )),
-            BinaryInstruction::FloatSubtract => Ok(VmValue::Float(
-                self.expect_float(left)? - self.expect_float(right)?,
-            )),
-            BinaryInstruction::FloatMultiply => Ok(VmValue::Float(
-                self.expect_float(left)? * self.expect_float(right)?,
-            )),
-            BinaryInstruction::FloatDivide => Ok(VmValue::Float(
-                self.expect_float(left)? / self.expect_float(right)?,
-            )),
-            BinaryInstruction::IntAdd => self
-                .expect_int(left)?
-                .checked_add(self.expect_int(right)?)
-                .map(VmValue::Int)
-                .ok_or_else(|| self.error("integer overflow")),
-            BinaryInstruction::IntSubtract => self
-                .expect_int(left)?
-                .checked_sub(self.expect_int(right)?)
-                .map(VmValue::Int)
-                .ok_or_else(|| self.error("integer overflow")),
-            BinaryInstruction::IntMultiply => self
-                .expect_int(left)?
-                .checked_mul(self.expect_int(right)?)
-                .map(VmValue::Int)
-                .ok_or_else(|| self.error("integer overflow")),
+            BinaryInstruction::FloatAdd => {
+                self.write_float_dest(dest, self.float(left) + self.float(right))
+            }
+            BinaryInstruction::FloatSubtract => {
+                self.write_float_dest(dest, self.float(left) - self.float(right))
+            }
+            BinaryInstruction::FloatMultiply => {
+                self.write_float_dest(dest, self.float(left) * self.float(right))
+            }
+            BinaryInstruction::FloatDivide => {
+                self.write_float_dest(dest, self.float(left) / self.float(right))
+            }
+            BinaryInstruction::IntAdd => self.write_int_dest(
+                dest,
+                self.int(left)
+                    .checked_add(self.int(right))
+                    .ok_or_else(|| self.error("integer overflow"))?,
+            ),
+            BinaryInstruction::IntSubtract => self.write_int_dest(
+                dest,
+                self.int(left)
+                    .checked_sub(self.int(right))
+                    .ok_or_else(|| self.error("integer overflow"))?,
+            ),
+            BinaryInstruction::IntMultiply => self.write_int_dest(
+                dest,
+                self.int(left)
+                    .checked_mul(self.int(right))
+                    .ok_or_else(|| self.error("integer overflow"))?,
+            ),
             BinaryInstruction::IntDivide => {
-                let right = self.expect_int(right)?;
+                let right = self.int(right);
                 if right == 0 {
                     return Err(self.error("integer divide by zero"));
                 }
-                self.expect_int(left)?
-                    .checked_div(right)
-                    .map(VmValue::Int)
-                    .ok_or_else(|| self.error("integer overflow"))
+                self.write_int_dest(
+                    dest,
+                    self.int(left)
+                        .checked_div(right)
+                        .ok_or_else(|| self.error("integer overflow"))?,
+                );
             }
-            BinaryInstruction::FloatLess => Ok(VmValue::Bool(
-                self.expect_float(left)? < self.expect_float(right)?,
-            )),
-            BinaryInstruction::FloatLessEqual => Ok(VmValue::Bool(
-                self.expect_float(left)? <= self.expect_float(right)?,
-            )),
-            BinaryInstruction::FloatGreater => Ok(VmValue::Bool(
-                self.expect_float(left)? > self.expect_float(right)?,
-            )),
-            BinaryInstruction::FloatGreaterEqual => Ok(VmValue::Bool(
-                self.expect_float(left)? >= self.expect_float(right)?,
-            )),
-            BinaryInstruction::IntLess => Ok(VmValue::Bool(
-                self.expect_int(left)? < self.expect_int(right)?,
-            )),
-            BinaryInstruction::IntLessEqual => Ok(VmValue::Bool(
-                self.expect_int(left)? <= self.expect_int(right)?,
-            )),
-            BinaryInstruction::IntGreater => Ok(VmValue::Bool(
-                self.expect_int(left)? > self.expect_int(right)?,
-            )),
-            BinaryInstruction::IntGreaterEqual => Ok(VmValue::Bool(
-                self.expect_int(left)? >= self.expect_int(right)?,
-            )),
-            BinaryInstruction::FloatEqual => Ok(VmValue::Bool(
-                self.expect_float(left)? == self.expect_float(right)?,
-            )),
-            BinaryInstruction::FloatNotEqual => Ok(VmValue::Bool(
-                self.expect_float(left)? != self.expect_float(right)?,
-            )),
-            BinaryInstruction::IntEqual => Ok(VmValue::Bool(
-                self.expect_int(left)? == self.expect_int(right)?,
-            )),
-            BinaryInstruction::IntNotEqual => Ok(VmValue::Bool(
-                self.expect_int(left)? != self.expect_int(right)?,
-            )),
+            BinaryInstruction::FloatLess => {
+                self.write_bool_dest(dest, self.float(left) < self.float(right))
+            }
+            BinaryInstruction::FloatLessEqual => {
+                self.write_bool_dest(dest, self.float(left) <= self.float(right))
+            }
+            BinaryInstruction::FloatGreater => {
+                self.write_bool_dest(dest, self.float(left) > self.float(right))
+            }
+            BinaryInstruction::FloatGreaterEqual => {
+                self.write_bool_dest(dest, self.float(left) >= self.float(right))
+            }
+            BinaryInstruction::IntLess => {
+                self.write_bool_dest(dest, self.int(left) < self.int(right))
+            }
+            BinaryInstruction::IntLessEqual => {
+                self.write_bool_dest(dest, self.int(left) <= self.int(right))
+            }
+            BinaryInstruction::IntGreater => {
+                self.write_bool_dest(dest, self.int(left) > self.int(right))
+            }
+            BinaryInstruction::IntGreaterEqual => {
+                self.write_bool_dest(dest, self.int(left) >= self.int(right))
+            }
+            BinaryInstruction::FloatEqual => {
+                self.write_bool_dest(dest, self.float(left) == self.float(right))
+            }
+            BinaryInstruction::FloatNotEqual => {
+                self.write_bool_dest(dest, self.float(left) != self.float(right))
+            }
+            BinaryInstruction::IntEqual => {
+                self.write_bool_dest(dest, self.int(left) == self.int(right))
+            }
+            BinaryInstruction::IntNotEqual => {
+                self.write_bool_dest(dest, self.int(left) != self.int(right))
+            }
             BinaryInstruction::BoolEqual => {
-                let (VmValue::Bool(left), VmValue::Bool(right)) = (left, right) else {
-                    return Err(self.error("expected bool value"));
-                };
-                Ok(VmValue::Bool(left == right))
+                self.write_bool_dest(dest, self.bool(left) == self.bool(right))
             }
             BinaryInstruction::BoolNotEqual => {
-                let (VmValue::Bool(left), VmValue::Bool(right)) = (left, right) else {
-                    return Err(self.error("expected bool value"));
-                };
-                Ok(VmValue::Bool(left != right))
+                self.write_bool_dest(dest, self.bool(left) != self.bool(right))
             }
             BinaryInstruction::ColorMultiplyFloat => {
-                let VmValue::Color(color) = left else {
-                    return Err(self.error("expected color value"));
-                };
-                Ok(VmValue::Color(color.scale(self.expect_float(right)?)))
+                self.write_color_dest(dest, self.color(left).scale(self.float(right)));
             }
             BinaryInstruction::FloatMultiplyColor => {
-                let VmValue::Color(color) = right else {
-                    return Err(self.error("expected color value"));
-                };
-                Ok(VmValue::Color(color.scale(self.expect_float(left)?)))
+                self.write_color_dest(dest, self.color(right).scale(self.float(left)));
             }
         }
-    }
-
-    fn push_mark_search(
-        &mut self,
-        search: fn(&[f64], f64) -> Option<f64>,
-    ) -> Result<(), RuntimeError> {
-        let fallback = self.pop_float()?;
-        let time = self.pop_float()?;
-        let marks = self.pop_marks()?;
-        let value = search(marks, time).unwrap_or(fallback);
-        self.stack.push(VmValue::Float(value));
         Ok(())
     }
 
-    fn expect_float(&self, value: VmValue<'a>) -> Result<f64, RuntimeError> {
-        match value {
-            VmValue::Float(value) => Ok(value),
-            VmValue::Int(value) => Ok(value as f64),
-            _ => Err(self.error("expected float value")),
-        }
+    fn write_float_dest(&mut self, dest: ValueSlot, value: f64) {
+        self.scratch.floats[dest.float().0] = value;
     }
 
-    fn expect_int(&self, value: VmValue<'a>) -> Result<i64, RuntimeError> {
-        match value {
-            VmValue::Int(value) => Ok(value),
-            _ => Err(self.error("expected int value")),
-        }
+    fn write_int_dest(&mut self, dest: ValueSlot, value: i64) {
+        self.scratch.ints[dest.int().0] = value;
     }
 
-    fn expect_marks(&self, value: VmValue<'a>) -> Result<&'a [f64], RuntimeError> {
+    fn write_bool_dest(&mut self, dest: ValueSlot, value: bool) {
+        self.scratch.bools[dest.bool().0] = value;
+    }
+
+    fn write_color_dest(&mut self, dest: ValueSlot, value: Color) {
+        self.scratch.colors[dest.color().0] = value;
+    }
+
+    fn float(&self, slot: ValueSlot) -> f64 {
+        self.scratch.floats[slot.float().0]
+    }
+
+    fn int(&self, slot: ValueSlot) -> i64 {
+        self.scratch.ints[slot.int().0]
+    }
+
+    fn bool(&self, slot: ValueSlot) -> bool {
+        self.scratch.bools[slot.bool().0]
+    }
+
+    fn color(&self, slot: ValueSlot) -> Color {
+        self.scratch.colors[slot.color().0]
+    }
+
+    fn marks(&self, slot: RefSlot) -> Result<&[f64], RuntimeError> {
+        let value = match self.scratch.refs[slot.0] {
+            RefValue::Param(index) => &self.params.values[index],
+            RefValue::Constant(index) => &self.program.constants[index],
+            RefValue::Unset => return Err(self.error("expected marks value")),
+        };
         match value {
-            VmValue::Marks(value) => Ok(value),
+            RuntimeValue::Marks(value) => Ok(value),
             _ => Err(self.error("expected marks value")),
         }
     }
 
-    fn peek_bool(&self, message: &str) -> Result<bool, RuntimeError> {
-        match self.stack.last() {
-            Some(VmValue::Bool(value)) => Ok(*value),
-            _ => Err(self.error(message)),
-        }
-    }
-
-    fn pop_bool(&mut self, message: &str) -> Result<bool, RuntimeError> {
-        match self.pop()? {
-            VmValue::Bool(value) => Ok(value),
-            _ => Err(self.error(message)),
-        }
-    }
-
-    fn pop(&mut self) -> Result<VmValue<'a>, RuntimeError> {
-        self.stack
-            .pop()
-            .ok_or_else(|| self.error("stack underflow"))
-    }
-
-    fn pop_float(&mut self) -> Result<f64, RuntimeError> {
-        let value = self.pop()?;
-        self.expect_float(value)
-    }
-
-    fn pop_int(&mut self) -> Result<i64, RuntimeError> {
-        let value = self.pop()?;
-        self.expect_int(value)
-    }
-
-    fn pop_marks(&mut self) -> Result<&[f64], RuntimeError> {
-        let value = self.pop()?;
-        self.expect_marks(value)
+    fn color_channel(&self, slot: FloatSlot) -> u8 {
+        self.scratch.floats[slot.0].round().clamp(0.0, 255.0) as u8
     }
 
     fn error(&self, message: &str) -> RuntimeError {
