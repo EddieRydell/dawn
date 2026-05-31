@@ -72,6 +72,13 @@ impl CompiledEffect {
         Vm::prepare_params(&self.params, params)
     }
 
+    pub fn prepare_params_with(
+        &self,
+        value_for: impl FnMut(&str) -> Option<RuntimeValue>,
+    ) -> Result<PreparedEffectParams, RuntimeError> {
+        Vm::prepare_params_with(&self.params, value_for)
+    }
+
     pub fn sample_prepared(
         &self,
         progress: f64,

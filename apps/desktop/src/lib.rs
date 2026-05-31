@@ -25,7 +25,7 @@ use dawn_app_core::dto::{
 };
 use dawn_app_core::layout_persistence::PreviewWindowLayout;
 use dawn_app_core::output_runtime::OutputFrame;
-use dawn_app_core::output_runtime::{pixel_context_for_effect, runtime_params_from_document};
+use dawn_app_core::output_runtime::{pixel_context_for_effect, prepare_params_from_document};
 use dawn_app_core::preview_session::PreviewSnapshot;
 use dawn_project::document::{
     SequenceAudioDocument, SequenceEffectDocument, SequenceEffectParamDocument,
@@ -1316,8 +1316,18 @@ fn preview_for_effect(
 
     let total_frames = total_preview_frames(duration, frame_rate);
     let sampled_frame_indices = evenly_sample_indices(total_frames, PREVIEW_MAX_COLUMNS);
-    let params =
-        runtime_params_from_document(&render.params, mark_collections, effect.start_seconds);
+    let Some(script) = analysis.compiled_script_for_key(&render.script_key) else {
+        return Ok(None);
+    };
+    let prepared_params = match prepare_params_from_document(
+        script,
+        &render.params,
+        mark_collections,
+        effect.start_seconds,
+    ) {
+        Ok(params) => params,
+        Err(_) => return Ok(None),
+    };
     let mut colors = Vec::with_capacity(sampled_frame_indices.len() * sampled_pixel_indices.len());
 
     for target_pixel_index in &sampled_pixel_indices {
@@ -1334,15 +1344,14 @@ fn preview_for_effect(
                 pixel.pixel_index,
                 pixel.pixel_count,
             );
-            let color = match analysis.sample_effect_script_key(
-                &render.script_key,
+            let color = match script.sample_prepared(
                 progress,
                 local_seconds,
                 FixtureContext {
                     index: pixel.fixture_index,
                 },
                 pixel_context,
-                &params,
+                &prepared_params,
             ) {
                 Ok(color) => color,
                 Err(_) => return Ok(None),

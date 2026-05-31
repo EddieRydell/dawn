@@ -4,7 +4,9 @@ use dawn_project::analysis::ProjectAnalysis;
 use dawn_project::document::{
     SequenceDocument, SequenceEffectParamDocument, SequenceMarkCollectionDocument,
 };
-use dawn_project::effect_script::{FixtureContext, PixelContext, RuntimeValue};
+use dawn_project::effect_script::{
+    CompiledEffect, FixtureContext, PixelContext, PreparedEffectParams, RuntimeError, RuntimeValue,
+};
 use dawn_project::model::{
     Color, Distance, DistanceSpan, EffectParam, FixtureId, Resolved, SequenceEffectScope,
 };
@@ -108,11 +110,6 @@ pub fn evaluate_sequence_frame(
         } else {
             (local_seconds / effect.duration_seconds).clamp(0.0, 1.0)
         };
-        let params = runtime_params_from_document(
-            &render.params,
-            &document.mark_collections,
-            effect.start_seconds,
-        );
         let Some(script) = analysis.compiled_script_for_key(&render.script_key) else {
             status = OutputFrameStatus::Error(format!(
                 "compiled script `{}` was not found",
@@ -120,7 +117,12 @@ pub fn evaluate_sequence_frame(
             ));
             continue;
         };
-        let prepared_params = match script.prepare_params(&params) {
+        let prepared_params = match prepare_params_from_document(
+            script,
+            &render.params,
+            &document.mark_collections,
+            effect.start_seconds,
+        ) {
             Ok(params) => params,
             Err(error) => {
                 status = OutputFrameStatus::Error(error.to_string());
@@ -209,6 +211,22 @@ pub fn runtime_params_from_document(
                 .map(|value| (param.name.clone(), value))
         })
         .collect()
+}
+
+pub fn prepare_params_from_document(
+    script: &CompiledEffect,
+    params: &[SequenceEffectParamDocument],
+    mark_collections: &[SequenceMarkCollectionDocument],
+    effect_start_seconds: f64,
+) -> Result<PreparedEffectParams, RuntimeError> {
+    script.prepare_params_with(|name| {
+        params
+            .iter()
+            .find(|param| param.name == name)
+            .and_then(|param| {
+                runtime_value_from_param(&param.value, mark_collections, effect_start_seconds)
+            })
+    })
 }
 
 pub fn runtime_value_from_param(

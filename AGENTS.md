@@ -32,3 +32,4 @@ Do not use git or commands associated with it unless the user specifically reque
 Do not use .env files to store information.
 Do not jump to editing if the conversation is about diagnosing an issue or discussing architecture/design decisions.
 Do not start or leave a frontend dev server running when finishing work. The user needs `pnpm tauri dev` to own the frontend port.
+When planning, don't hesitate to ask the user relevant questions.

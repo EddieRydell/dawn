@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
 use dawn_app_core::output_runtime::{
-    evaluate_sequence_frame, pixel_context_for_effect, runtime_params_from_document,
+    evaluate_sequence_frame, pixel_context_for_effect, prepare_params_from_document,
 };
 use dawn_project::analysis::{
     analyze_project_with_overlays, DiagnosticCode, DiagnosticSeverity, ProjectAnalysis,
@@ -46,6 +46,8 @@ enum Command {
         warmup: usize,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        synthetic_active_effects: Option<usize>,
     },
 }
 
@@ -72,6 +74,7 @@ fn run() -> Result<ExitCode, String> {
             iterations,
             warmup,
             json,
+            synthetic_active_effects,
         } => bench_effect(
             &project_path_or_directory,
             sequence.as_deref(),
@@ -79,6 +82,7 @@ fn run() -> Result<ExitCode, String> {
             iterations,
             warmup,
             json,
+            synthetic_active_effects,
         ),
     }
 }
@@ -111,6 +115,7 @@ fn bench_effect(
     iterations: usize,
     warmup: usize,
     json: bool,
+    synthetic_active_effects: Option<usize>,
 ) -> Result<ExitCode, String> {
     if !time_seconds.is_finite() {
         return Err("time must be finite".to_string());
@@ -136,6 +141,12 @@ fn bench_effect(
         Vec::new(),
     )?;
 
+    let document = if let Some(active_count) = synthetic_active_effects {
+        synthetic_active_effect_document(&document, time_seconds, active_count)?
+    } else {
+        document
+    };
+
     let report = EffectBenchReport::run(
         &input,
         &analysis,
@@ -143,6 +154,7 @@ fn bench_effect(
         time_seconds,
         iterations,
         warmup,
+        synthetic_active_effects,
     );
 
     if json {
@@ -323,7 +335,11 @@ struct EffectBenchReport {
     time_seconds: f64,
     iterations: usize,
     warmup: usize,
+    synthetic_active_effects: Option<usize>,
+    total_effects: usize,
     active_effect_count: usize,
+    target_pixel_samples_per_frame: usize,
+    bytecode: BytecodeAggregateReport,
     whole_frame: TimingStatsReport,
     effects: Vec<EffectBenchItemReport>,
 }
@@ -336,6 +352,7 @@ impl EffectBenchReport {
         time_seconds: f64,
         iterations: usize,
         warmup: usize,
+        synthetic_active_effects: Option<usize>,
     ) -> Self {
         for generation in 0..warmup {
             black_box(evaluate_sequence_frame(
@@ -366,6 +383,8 @@ impl EffectBenchReport {
                 EffectBenchItemReport::run(analysis, document, effect, time_seconds, iterations)
             })
             .collect::<Vec<_>>();
+        let target_pixel_samples_per_frame = effect_reports_target_pixel_samples(&effects);
+        let bytecode = BytecodeAggregateReport::from_effects(&effects);
 
         Self {
             project_path: display_path(&canonicalize_path(&input.project_path)),
@@ -374,9 +393,39 @@ impl EffectBenchReport {
             time_seconds,
             iterations,
             warmup,
+            synthetic_active_effects,
+            total_effects: document.effects.len(),
             active_effect_count: effects.len(),
+            target_pixel_samples_per_frame,
+            bytecode,
             whole_frame: TimingStatsReport::from_durations(whole_frame_samples),
             effects,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BytecodeAggregateReport {
+    instruction_count: usize,
+    constant_count: usize,
+    param_slots: usize,
+    local_slots: usize,
+    max_stack_depth: usize,
+}
+
+impl BytecodeAggregateReport {
+    fn from_effects(effects: &[EffectBenchItemReport]) -> Self {
+        Self {
+            instruction_count: effects.iter().map(|effect| effect.instruction_count).sum(),
+            constant_count: effects.iter().map(|effect| effect.constant_count).sum(),
+            param_slots: effects.iter().map(|effect| effect.param_slots).sum(),
+            local_slots: effects.iter().map(|effect| effect.local_slots).sum(),
+            max_stack_depth: effects
+                .iter()
+                .map(|effect| effect.max_stack_depth)
+                .max()
+                .unwrap_or(0),
         }
     }
 }
@@ -416,13 +465,14 @@ impl EffectBenchItemReport {
         } else {
             (local_seconds / effect.duration_seconds).clamp(0.0, 1.0)
         };
-        let params = runtime_params_from_document(
+        let script = analysis.compiled_script_for_key(&render.script_key)?;
+        let prepared_params = prepare_params_from_document(
+            script,
             &render.params,
             &document.mark_collections,
             effect.start_seconds,
-        );
-        let script = analysis.compiled_script_for_key(&render.script_key)?;
-        let prepared_params = script.prepare_params(&params).ok()?;
+        )
+        .ok()?;
         let stats = script.bytecode_stats();
         let target_pixel_count = render.target_pixels.len();
         let mut effect_samples = Vec::with_capacity(iterations);
@@ -461,7 +511,7 @@ impl EffectBenchItemReport {
             scope: format!("{:?}", effect.scope),
             target_label: effect.target_label.clone(),
             target_pixels: target_pixel_count,
-            params: params.len(),
+            params: render.params.len(),
             instruction_count: stats.instruction_count,
             constant_count: stats.constant_count,
             param_slots: stats.param_slots,
@@ -511,6 +561,55 @@ fn effect_is_active(effect: &SequenceEffectDocument, time_seconds: f64) -> bool 
         && time_seconds < effect.start_seconds + effect.duration_seconds
 }
 
+fn synthetic_active_effect_document(
+    document: &SequenceDocument,
+    time_seconds: f64,
+    active_effects: usize,
+) -> Result<SequenceDocument, String> {
+    let sources = document
+        .effects
+        .iter()
+        .filter(|effect| effect_is_active(effect, time_seconds))
+        .cloned()
+        .collect::<Vec<_>>();
+    if active_effects > 0 && sources.is_empty() {
+        return Err(
+            "cannot synthesize active effects because the benchmark time has no active effects"
+                .to_string(),
+        );
+    }
+
+    let mut synthetic = document.clone();
+    synthetic
+        .effects
+        .retain(|effect| !effect_is_active(effect, time_seconds));
+    synthetic.effects.reserve(active_effects);
+    for index in 0..active_effects {
+        let mut effect = sources[index % sources.len()].clone();
+        effect.index = synthetic.effects.len();
+        synthetic.effects.push(effect);
+    }
+    Ok(synthetic)
+}
+
+fn effect_reports_target_pixel_samples(effects: &[EffectBenchItemReport]) -> usize {
+    effects
+        .iter()
+        .map(|effect| effect.target_pixels)
+        .sum::<usize>()
+}
+
+#[cfg(test)]
+fn active_target_pixel_samples(document: &SequenceDocument, time_seconds: f64) -> usize {
+    document
+        .effects
+        .iter()
+        .filter(|effect| effect_is_active(effect, time_seconds))
+        .filter_map(|effect| effect.render.as_ref())
+        .map(|render| render.target_pixels.len())
+        .sum()
+}
+
 fn divide_duration(duration: Duration, divisor: usize) -> Duration {
     if divisor == 0 {
         return Duration::ZERO;
@@ -543,8 +642,27 @@ fn hz_from_duration(duration: Duration) -> f64 {
 
 fn print_effect_bench_report(report: &EffectBenchReport) {
     println!(
-        "project={} sequence={} time={:.3}s iterations={} warmup={}",
-        report.project_path, report.sequence, report.time_seconds, report.iterations, report.warmup
+        "project={} sequence={} time={:.3}s iterations={} warmup={} synthetic_active_effects={}",
+        report.project_path,
+        report.sequence,
+        report.time_seconds,
+        report.iterations,
+        report.warmup,
+        report
+            .synthetic_active_effects
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
+    println!(
+        "total effects={} active effects={} target pixel samples/frame={} bytecode=instructions:{} constants:{} param_slots:{} local_slots:{} max_stack:{}",
+        report.total_effects,
+        report.active_effect_count,
+        report.target_pixel_samples_per_frame,
+        report.bytecode.instruction_count,
+        report.bytecode.constant_count,
+        report.bytecode.param_slots,
+        report.bytecode.local_slots,
+        report.bytecode.max_stack_depth
     );
     print_timing_stats("whole frame", &report.whole_frame);
     if report.effects.is_empty() {
@@ -553,7 +671,12 @@ fn print_effect_bench_report(report: &EffectBenchReport) {
     }
 
     println!("active effects={}", report.active_effect_count);
-    for effect in &report.effects {
+    let displayed_effects = if report.synthetic_active_effects.is_some() {
+        report.effects.iter().take(5).collect::<Vec<_>>()
+    } else {
+        report.effects.iter().collect::<Vec<_>>()
+    };
+    for effect in displayed_effects {
         println!(
             "effect id={} index={} script={} target={} pixels={} params={} scope={} bytecode=instructions:{} constants:{} param_slots:{} local_slots:{} max_stack:{}",
             effect.effect_id,
@@ -571,6 +694,12 @@ fn print_effect_bench_report(report: &EffectBenchReport) {
         );
         print_timing_stats("  effect", &effect.effect);
         print_timing_stats("  per sample", &effect.per_sample);
+    }
+    if report.synthetic_active_effects.is_some() && report.effects.len() > 5 {
+        println!(
+            "omitted {} synthetic per-effect reports",
+            report.effects.len() - 5
+        );
     }
 }
 
@@ -688,4 +817,114 @@ impl TextRangeReport {
 struct TextPositionReport {
     line: u32,
     character: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dawn_project::document::{
+        LayoutTargetDocument, SequenceEffectPixelDocument, SequenceEffectRenderDocument,
+    };
+    use dawn_project::model::LayoutTargetKind;
+    use dawn_project::model::SequenceEffectScope;
+
+    fn active_effect(target_pixels: usize) -> SequenceEffectDocument {
+        SequenceEffectDocument {
+            index: 0,
+            id: 1,
+            start_seconds: 40.0,
+            duration_seconds: 10.0,
+            target: LayoutTargetDocument {
+                kind: LayoutTargetKind::Group,
+                name: "all".to_string(),
+            },
+            target_label: "Group all".to_string(),
+            scope: SequenceEffectScope::WholeTarget,
+            script: "pulse".to_string(),
+            script_source: Some("effects/pulse.effect.dawn".to_string()),
+            params: Vec::new(),
+            render: Some(SequenceEffectRenderDocument {
+                script_key: "effects/pulse.effect.dawn".to_string(),
+                script_source: "effects/pulse.effect.dawn".to_string(),
+                params: Vec::new(),
+                target_pixels: (0..target_pixels)
+                    .map(|pixel_index| SequenceEffectPixelDocument {
+                        fixture_index: 0,
+                        pixel_index,
+                        pixel_count: target_pixels,
+                    })
+                    .collect(),
+            }),
+        }
+    }
+
+    fn sequence_document(effect: SequenceEffectDocument) -> SequenceDocument {
+        SequenceDocument {
+            path: "sequences/opening.sequence.dawn".to_string(),
+            object_key: "opening".to_string(),
+            duration_seconds: 60.0,
+            frame_rate: 30,
+            audio: None,
+            mark_collections: Vec::new(),
+            lanes: Vec::new(),
+            effect_scripts: Vec::new(),
+            effects: vec![effect],
+            degraded: false,
+        }
+    }
+
+    #[test]
+    fn synthetic_active_effects_expand_one_source_to_requested_count() {
+        let document = sequence_document(active_effect(3));
+        let synthetic = synthetic_active_effect_document(&document, 42.0, 1_000).unwrap();
+
+        assert_eq!(
+            synthetic
+                .effects
+                .iter()
+                .filter(|effect| effect_is_active(effect, 42.0))
+                .count(),
+            1_000
+        );
+        assert_eq!(active_target_pixel_samples(&synthetic, 42.0), 3_000);
+    }
+
+    #[test]
+    fn synthetic_active_effects_render_small_cloned_load() {
+        let project_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("examples")
+            .join("club-rig");
+        let input = project_input(&project_path).unwrap();
+        let fs = WorkspaceFs::open(&input.root).unwrap();
+        let analysis =
+            analyze_project_with_overlays(&fs, input.project_file.clone(), None, Vec::new());
+        assert!(!analysis.has_errors());
+        let sequence_target = sequence_target(&analysis, None).unwrap();
+        let document = get_sequence_document(
+            &fs,
+            sequence_target.path,
+            &sequence_target.object_key,
+            input.project_file,
+            Vec::new(),
+        )
+        .unwrap();
+        let synthetic = synthetic_active_effect_document(&document, 42.0, 8).unwrap();
+
+        let frame = evaluate_sequence_frame(&analysis, &synthetic, 42.0, 0);
+
+        assert_eq!(
+            synthetic
+                .effects
+                .iter()
+                .filter(|effect| effect_is_active(effect, 42.0))
+                .count(),
+            8
+        );
+        assert!(matches!(
+            frame.status,
+            dawn_app_core::output_runtime::OutputFrameStatus::Live
+        ));
+    }
 }

@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use crate::model::{Color, CurveValue};
+use crate::model::{Color, Curve, CurveValue, Flags};
 
 use super::ast::{BinaryOp, EffectAst, Expr, Stmt, UnaryOp};
 use super::{
-    EffectParamSchema, FixtureContext, ParamDefault, PixelContext, RuntimeError, RuntimeValue,
-    ScriptDiagnostic, ScriptType,
+    binary_result_type, is_float_compatible, EffectParamSchema, FixtureContext, ParamDefault,
+    PixelContext, RuntimeError, RuntimeValue, ScriptDiagnostic, ScriptType,
 };
 
 const MAX_LOOP_ITERATIONS: usize = 4096;
@@ -55,6 +55,57 @@ pub struct PreparedEffectParams {
     values: Vec<RuntimeValue>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum VmValue<'a> {
+    Float(f64),
+    Int(i64),
+    Bool(bool),
+    Color(Color),
+    Marks(&'a [f64]),
+    Curve(&'a Curve),
+    Enum(&'a str),
+    Flags(&'a Flags),
+    Fixture(FixtureContext),
+    Pixel(PixelContext),
+    Unset,
+}
+
+impl<'a> VmValue<'a> {
+    fn from_runtime(value: &'a RuntimeValue) -> Self {
+        match value {
+            RuntimeValue::Float(value) => Self::Float(*value),
+            RuntimeValue::Int(value) => Self::Int(*value),
+            RuntimeValue::Bool(value) => Self::Bool(*value),
+            RuntimeValue::Color(value) => Self::Color(*value),
+            RuntimeValue::Marks(value) => Self::Marks(value),
+            RuntimeValue::Curve(value) => Self::Curve(value),
+            RuntimeValue::Enum(value) => Self::Enum(value),
+            RuntimeValue::Flags(value) => Self::Flags(value),
+            RuntimeValue::Fixture(value) => Self::Fixture(*value),
+            RuntimeValue::Pixel(value) => Self::Pixel(*value),
+        }
+    }
+
+    fn value_type(self) -> Option<ScriptType> {
+        match self {
+            Self::Float(_) => Some(ScriptType::Float),
+            Self::Int(_) => Some(ScriptType::Int),
+            Self::Bool(_) => Some(ScriptType::Bool),
+            Self::Color(_) => Some(ScriptType::Color),
+            Self::Marks(_) => Some(ScriptType::Marks),
+            Self::Curve(curve) => Some(match curve.value_type {
+                crate::model::CurveValueType::Float => ScriptType::CurveFloat,
+                crate::model::CurveValueType::Color => ScriptType::CurveColor,
+            }),
+            Self::Enum(_) => Some(ScriptType::Enum),
+            Self::Flags(_) => Some(ScriptType::Flags),
+            Self::Fixture(_) => Some(ScriptType::Fixture),
+            Self::Pixel(_) => Some(ScriptType::Pixel),
+            Self::Unset => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum Instruction {
     LoadConst(usize),
@@ -63,7 +114,8 @@ pub(super) enum Instruction {
     LoadLocal(usize),
     StoreLocal(usize, ScriptType),
     Unary(UnaryOp),
-    Binary(BinaryOp),
+    IntToFloat,
+    Binary(BinaryInstruction),
     JumpIfFalse(usize),
     JumpIfTrue(usize),
     JumpIfFalsePop(usize),
@@ -73,6 +125,34 @@ pub(super) enum Instruction {
     Call(BuiltinFn),
     CallCurveParam(usize),
     ReturnColor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BinaryInstruction {
+    FloatAdd,
+    FloatSubtract,
+    FloatMultiply,
+    FloatDivide,
+    IntAdd,
+    IntSubtract,
+    IntMultiply,
+    IntDivide,
+    FloatLess,
+    FloatLessEqual,
+    FloatGreater,
+    FloatGreaterEqual,
+    IntLess,
+    IntLessEqual,
+    IntGreater,
+    IntGreaterEqual,
+    FloatEqual,
+    FloatNotEqual,
+    IntEqual,
+    IntNotEqual,
+    BoolEqual,
+    BoolNotEqual,
+    ColorMultiplyFloat,
+    FloatMultiplyColor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,11 +245,16 @@ impl Vm {
         params: &[EffectParamSchema],
         values: &std::collections::BTreeMap<String, RuntimeValue>,
     ) -> Result<PreparedEffectParams, RuntimeError> {
+        Self::prepare_params_with(params, |name| values.get(name).cloned())
+    }
+
+    pub(super) fn prepare_params_with(
+        params: &[EffectParamSchema],
+        mut value_for: impl FnMut(&str) -> Option<RuntimeValue>,
+    ) -> Result<PreparedEffectParams, RuntimeError> {
         let mut prepared = Vec::with_capacity(params.len());
         for param in params {
-            let value = values
-                .get(&param.name)
-                .cloned()
+            let value = value_for(&param.name)
                 .or_else(|| {
                     param
                         .default
@@ -200,7 +285,7 @@ impl Vm {
             pixel,
             params,
             stack: Vec::with_capacity(program.max_stack_depth),
-            locals: vec![RuntimeValue::Bool(false); program.local_slots],
+            locals: vec![VmValue::Unset; program.local_slots],
             ip: 0,
             rng: INITIAL_RNG,
             loop_iterations: 0,
@@ -232,6 +317,25 @@ impl Vm {
                 message: format!(
                     "expected {expected} value, but found {}",
                     value.value_type()
+                ),
+            }),
+        }
+    }
+
+    fn coerce_vm_value<'a>(
+        value: VmValue<'a>,
+        expected: ScriptType,
+    ) -> Result<VmValue<'a>, RuntimeError> {
+        match (expected, value) {
+            (ScriptType::Float, VmValue::Int(value)) => Ok(VmValue::Float(value as f64)),
+            (expected, value) if value.value_type() == Some(expected) => Ok(value),
+            (expected, value) => Err(RuntimeError {
+                message: format!(
+                    "expected {expected} value, but found {}",
+                    value
+                        .value_type()
+                        .map(|value_type| value_type.to_string())
+                        .unwrap_or_else(|| "unset".to_string())
                 ),
             }),
         }
@@ -421,10 +525,170 @@ impl<'a> Compiler<'a> {
                 self.patch_jump(true_jump);
             }
             _ => {
+                let left_type = self.expr_type(left);
+                let right_type = self.expr_type(right);
                 self.compile_expr(left);
+                if left_type == ScriptType::Int
+                    && right_type == ScriptType::Float
+                    && binary_result_type(left_type, op, right_type).is_some()
+                {
+                    self.emit(Instruction::IntToFloat, 0);
+                }
+                if matches!(
+                    (left_type, op, right_type),
+                    (ScriptType::Int, BinaryOp::Multiply, ScriptType::Color)
+                ) {
+                    self.emit(Instruction::IntToFloat, 0);
+                }
                 self.compile_expr(right);
-                self.emit(Instruction::Binary(op), -1);
+                if right_type == ScriptType::Int
+                    && left_type == ScriptType::Float
+                    && binary_result_type(left_type, op, right_type).is_some()
+                {
+                    self.emit(Instruction::IntToFloat, 0);
+                }
+                if matches!(
+                    (left_type, op, right_type),
+                    (ScriptType::Color, BinaryOp::Multiply, ScriptType::Int)
+                ) {
+                    self.emit(Instruction::IntToFloat, 0);
+                }
+                let instruction = self.binary_instruction(left_type, op, right_type);
+                self.emit(Instruction::Binary(instruction), -1);
             }
+        }
+    }
+
+    fn binary_instruction(
+        &self,
+        left: ScriptType,
+        op: BinaryOp,
+        right: ScriptType,
+    ) -> BinaryInstruction {
+        match (left, op, right) {
+            (ScriptType::Float, BinaryOp::Add, ScriptType::Float)
+            | (ScriptType::Float, BinaryOp::Add, ScriptType::Int)
+            | (ScriptType::Int, BinaryOp::Add, ScriptType::Float) => BinaryInstruction::FloatAdd,
+            (ScriptType::Float, BinaryOp::Subtract, ScriptType::Float)
+            | (ScriptType::Float, BinaryOp::Subtract, ScriptType::Int)
+            | (ScriptType::Int, BinaryOp::Subtract, ScriptType::Float) => {
+                BinaryInstruction::FloatSubtract
+            }
+            (ScriptType::Float, BinaryOp::Multiply, ScriptType::Float)
+            | (ScriptType::Float, BinaryOp::Multiply, ScriptType::Int)
+            | (ScriptType::Int, BinaryOp::Multiply, ScriptType::Float) => {
+                BinaryInstruction::FloatMultiply
+            }
+            (ScriptType::Float, BinaryOp::Divide, ScriptType::Float)
+            | (ScriptType::Float, BinaryOp::Divide, ScriptType::Int)
+            | (ScriptType::Int, BinaryOp::Divide, ScriptType::Float) => {
+                BinaryInstruction::FloatDivide
+            }
+            (ScriptType::Int, BinaryOp::Add, ScriptType::Int) => BinaryInstruction::IntAdd,
+            (ScriptType::Int, BinaryOp::Subtract, ScriptType::Int) => {
+                BinaryInstruction::IntSubtract
+            }
+            (ScriptType::Int, BinaryOp::Multiply, ScriptType::Int) => {
+                BinaryInstruction::IntMultiply
+            }
+            (ScriptType::Int, BinaryOp::Divide, ScriptType::Int) => BinaryInstruction::IntDivide,
+            (left, BinaryOp::Less, right) if is_float_compare(left, right) => {
+                BinaryInstruction::FloatLess
+            }
+            (left, BinaryOp::LessEqual, right) if is_float_compare(left, right) => {
+                BinaryInstruction::FloatLessEqual
+            }
+            (left, BinaryOp::Greater, right) if is_float_compare(left, right) => {
+                BinaryInstruction::FloatGreater
+            }
+            (left, BinaryOp::GreaterEqual, right) if is_float_compare(left, right) => {
+                BinaryInstruction::FloatGreaterEqual
+            }
+            (ScriptType::Int, BinaryOp::Less, ScriptType::Int) => BinaryInstruction::IntLess,
+            (ScriptType::Int, BinaryOp::LessEqual, ScriptType::Int) => {
+                BinaryInstruction::IntLessEqual
+            }
+            (ScriptType::Int, BinaryOp::Greater, ScriptType::Int) => BinaryInstruction::IntGreater,
+            (ScriptType::Int, BinaryOp::GreaterEqual, ScriptType::Int) => {
+                BinaryInstruction::IntGreaterEqual
+            }
+            (left, BinaryOp::Equal, right) if is_float_compare(left, right) => {
+                BinaryInstruction::FloatEqual
+            }
+            (left, BinaryOp::NotEqual, right) if is_float_compare(left, right) => {
+                BinaryInstruction::FloatNotEqual
+            }
+            (ScriptType::Int, BinaryOp::Equal, ScriptType::Int) => BinaryInstruction::IntEqual,
+            (ScriptType::Int, BinaryOp::NotEqual, ScriptType::Int) => {
+                BinaryInstruction::IntNotEqual
+            }
+            (ScriptType::Bool, BinaryOp::Equal, ScriptType::Bool) => BinaryInstruction::BoolEqual,
+            (ScriptType::Bool, BinaryOp::NotEqual, ScriptType::Bool) => {
+                BinaryInstruction::BoolNotEqual
+            }
+            (ScriptType::Color, BinaryOp::Multiply, factor) if is_float_compatible(factor) => {
+                BinaryInstruction::ColorMultiplyFloat
+            }
+            (factor, BinaryOp::Multiply, ScriptType::Color) if is_float_compatible(factor) => {
+                BinaryInstruction::FloatMultiplyColor
+            }
+            _ => unreachable!("type checker validates binary expression"),
+        }
+    }
+
+    fn expr_type(&self, expr: &Expr) -> ScriptType {
+        match expr {
+            Expr::Float(_) => ScriptType::Float,
+            Expr::Int(_) => ScriptType::Int,
+            Expr::Bool(_) => ScriptType::Bool,
+            Expr::Color(_) => ScriptType::Color,
+            Expr::Ident(name) => match self.expect_binding(name) {
+                Binding::Context(ContextSlot::Progress | ContextSlot::Seconds)
+                | Binding::Constant(_) => ScriptType::Float,
+                Binding::Context(ContextSlot::Fixture) => ScriptType::Fixture,
+                Binding::Context(ContextSlot::Pixel) => ScriptType::Pixel,
+                Binding::Param { value_type, .. } | Binding::Local { value_type, .. } => value_type,
+            },
+            Expr::Unary { op, expr } => match op {
+                UnaryOp::Negate => self.expr_type(expr),
+                UnaryOp::Not => ScriptType::Bool,
+            },
+            Expr::Binary { left, op, right } => {
+                let left = self.expr_type(left);
+                let right = self.expr_type(right);
+                binary_result_type(left, *op, right)
+                    .expect("type checker validates binary expression")
+            }
+            Expr::Call { name, args } => self.call_type(name, args),
+        }
+    }
+
+    fn call_type(&self, name: &str, args: &[Expr]) -> ScriptType {
+        if let Some(Binding::Param { value_type, .. }) = self.binding(name) {
+            return match value_type {
+                ScriptType::CurveFloat => ScriptType::Float,
+                ScriptType::CurveColor => ScriptType::Color,
+                _ => unreachable!("type checker validates callable binding"),
+            };
+        }
+
+        match name {
+            "sin" | "cos" | "abs" | "floor" | "srand" | "rand" | "mark_at" | "mark_prev"
+            | "mark_next" | "mark_nearest" | "mark_phase" | "mark_elapsed" | "min" | "max"
+            | "clamp" | "smoothstep" => ScriptType::Float,
+            "pixel_index" | "pixel_count" | "mark_count" => ScriptType::Int,
+            "rgb" | "hsv" => ScriptType::Color,
+            "mix" => {
+                if matches!(
+                    args.first().map(|arg| self.expr_type(arg)),
+                    Some(ScriptType::Color)
+                ) {
+                    ScriptType::Color
+                } else {
+                    ScriptType::Float
+                }
+            }
+            _ => unreachable!("type checker validates builtins"),
         }
     }
 
@@ -534,6 +798,12 @@ impl<'a> Compiler<'a> {
     }
 }
 
+fn is_float_compare(left: ScriptType, right: ScriptType) -> bool {
+    is_float_compatible(left)
+        && is_float_compatible(right)
+        && (left == ScriptType::Float || right == ScriptType::Float)
+}
+
 struct BytecodeVm<'a> {
     program: &'a BytecodeProgram,
     progress: f64,
@@ -541,36 +811,44 @@ struct BytecodeVm<'a> {
     fixture: FixtureContext,
     pixel: PixelContext,
     params: &'a PreparedEffectParams,
-    stack: Vec<RuntimeValue>,
-    locals: Vec<RuntimeValue>,
+    stack: Vec<VmValue<'a>>,
+    locals: Vec<VmValue<'a>>,
     ip: usize,
     rng: u64,
     loop_iterations: usize,
 }
 
-impl BytecodeVm<'_> {
+impl<'a> BytecodeVm<'a> {
     fn run(&mut self) -> Result<Color, RuntimeError> {
         while let Some(instruction) = self.program.instructions.get(self.ip) {
             self.ip += 1;
             match *instruction {
                 Instruction::LoadConst(index) => {
-                    self.stack.push(self.program.constants[index].clone());
+                    self.stack
+                        .push(VmValue::from_runtime(&self.program.constants[index]));
                 }
                 Instruction::LoadContext(slot) => self.stack.push(match slot {
-                    ContextSlot::Progress => RuntimeValue::Float(self.progress),
-                    ContextSlot::Seconds => RuntimeValue::Float(self.seconds),
-                    ContextSlot::Fixture => RuntimeValue::Fixture(self.fixture),
-                    ContextSlot::Pixel => RuntimeValue::Pixel(self.pixel),
+                    ContextSlot::Progress => VmValue::Float(self.progress),
+                    ContextSlot::Seconds => VmValue::Float(self.seconds),
+                    ContextSlot::Fixture => VmValue::Fixture(self.fixture),
+                    ContextSlot::Pixel => VmValue::Pixel(self.pixel),
                 }),
-                Instruction::LoadParam(index) => self.stack.push(self.params.values[index].clone()),
-                Instruction::LoadLocal(index) => self.stack.push(self.locals[index].clone()),
+                Instruction::LoadParam(index) => {
+                    self.stack
+                        .push(VmValue::from_runtime(&self.params.values[index]));
+                }
+                Instruction::LoadLocal(index) => self.stack.push(self.locals[index]),
                 Instruction::StoreLocal(index, value_type) => {
-                    let value = Vm::coerce_value(self.pop()?, value_type)?;
+                    let value = Vm::coerce_vm_value(self.pop()?, value_type)?;
                     self.locals[index] = value;
                 }
                 Instruction::Unary(op) => {
                     let value = self.pop()?;
                     self.stack.push(self.eval_unary(op, value)?);
+                }
+                Instruction::IntToFloat => {
+                    let value = self.pop_int()? as f64;
+                    self.stack.push(VmValue::Float(value));
                 }
                 Instruction::Binary(op) => {
                     let right = self.pop()?;
@@ -619,13 +897,13 @@ impl BytecodeVm<'_> {
                         return Err(self.error("expected curve parameter"));
                     };
                     self.stack.push(match curve.evaluate(amount) {
-                        Some(CurveValue::Float(value)) => RuntimeValue::Float(value),
-                        Some(CurveValue::Color(value)) => RuntimeValue::Color(value),
+                        Some(CurveValue::Float(value)) => VmValue::Float(value),
+                        Some(CurveValue::Color(value)) => VmValue::Color(value),
                         None => return Err(self.error("curve has no points")),
                     });
                 }
                 Instruction::ReturnColor => {
-                    let RuntimeValue::Color(color) = self.pop()? else {
+                    let VmValue::Color(color) = self.pop()? else {
                         return Err(self.error("sample returned a non-color value"));
                     };
                     return Ok(color);
@@ -635,205 +913,160 @@ impl BytecodeVm<'_> {
         Err(self.error("sample did not return"))
     }
 
-    fn eval_unary(&self, op: UnaryOp, value: RuntimeValue) -> Result<RuntimeValue, RuntimeError> {
+    fn eval_unary(&self, op: UnaryOp, value: VmValue<'a>) -> Result<VmValue<'a>, RuntimeError> {
         match (op, value) {
-            (UnaryOp::Negate, RuntimeValue::Float(value)) => Ok(RuntimeValue::Float(-value)),
-            (UnaryOp::Negate, RuntimeValue::Int(value)) => value
+            (UnaryOp::Negate, VmValue::Float(value)) => Ok(VmValue::Float(-value)),
+            (UnaryOp::Negate, VmValue::Int(value)) => value
                 .checked_neg()
-                .map(RuntimeValue::Int)
+                .map(VmValue::Int)
                 .ok_or_else(|| self.error("integer overflow")),
-            (UnaryOp::Not, RuntimeValue::Bool(value)) => Ok(RuntimeValue::Bool(!value)),
+            (UnaryOp::Not, VmValue::Bool(value)) => Ok(VmValue::Bool(!value)),
             _ => Err(self.error("invalid unary expression")),
         }
     }
 
     fn eval_binary(
         &self,
-        left: RuntimeValue,
-        op: BinaryOp,
-        right: RuntimeValue,
-    ) -> Result<RuntimeValue, RuntimeError> {
-        match (left, op, right) {
-            (RuntimeValue::Float(left), BinaryOp::Add, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Float(left + right))
-            }
-            (RuntimeValue::Float(left), BinaryOp::Add, RuntimeValue::Int(right)) => {
-                Ok(RuntimeValue::Float(left + right as f64))
-            }
-            (RuntimeValue::Int(left), BinaryOp::Add, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Float(left as f64 + right))
-            }
-            (RuntimeValue::Int(left), BinaryOp::Add, RuntimeValue::Int(right)) => left
-                .checked_add(right)
-                .map(RuntimeValue::Int)
+        left: VmValue<'a>,
+        op: BinaryInstruction,
+        right: VmValue<'a>,
+    ) -> Result<VmValue<'a>, RuntimeError> {
+        match op {
+            BinaryInstruction::FloatAdd => Ok(VmValue::Float(
+                self.expect_float(left)? + self.expect_float(right)?,
+            )),
+            BinaryInstruction::FloatSubtract => Ok(VmValue::Float(
+                self.expect_float(left)? - self.expect_float(right)?,
+            )),
+            BinaryInstruction::FloatMultiply => Ok(VmValue::Float(
+                self.expect_float(left)? * self.expect_float(right)?,
+            )),
+            BinaryInstruction::FloatDivide => Ok(VmValue::Float(
+                self.expect_float(left)? / self.expect_float(right)?,
+            )),
+            BinaryInstruction::IntAdd => self
+                .expect_int(left)?
+                .checked_add(self.expect_int(right)?)
+                .map(VmValue::Int)
                 .ok_or_else(|| self.error("integer overflow")),
-            (RuntimeValue::Float(left), BinaryOp::Subtract, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Float(left - right))
-            }
-            (RuntimeValue::Float(left), BinaryOp::Subtract, RuntimeValue::Int(right)) => {
-                Ok(RuntimeValue::Float(left - right as f64))
-            }
-            (RuntimeValue::Int(left), BinaryOp::Subtract, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Float(left as f64 - right))
-            }
-            (RuntimeValue::Int(left), BinaryOp::Subtract, RuntimeValue::Int(right)) => left
-                .checked_sub(right)
-                .map(RuntimeValue::Int)
+            BinaryInstruction::IntSubtract => self
+                .expect_int(left)?
+                .checked_sub(self.expect_int(right)?)
+                .map(VmValue::Int)
                 .ok_or_else(|| self.error("integer overflow")),
-            (RuntimeValue::Float(left), BinaryOp::Multiply, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Float(left * right))
-            }
-            (RuntimeValue::Float(left), BinaryOp::Multiply, RuntimeValue::Int(right)) => {
-                Ok(RuntimeValue::Float(left * right as f64))
-            }
-            (RuntimeValue::Int(left), BinaryOp::Multiply, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Float(left as f64 * right))
-            }
-            (RuntimeValue::Int(left), BinaryOp::Multiply, RuntimeValue::Int(right)) => left
-                .checked_mul(right)
-                .map(RuntimeValue::Int)
+            BinaryInstruction::IntMultiply => self
+                .expect_int(left)?
+                .checked_mul(self.expect_int(right)?)
+                .map(VmValue::Int)
                 .ok_or_else(|| self.error("integer overflow")),
-            (RuntimeValue::Float(left), BinaryOp::Divide, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Float(left / right))
+            BinaryInstruction::IntDivide => {
+                let right = self.expect_int(right)?;
+                if right == 0 {
+                    return Err(self.error("integer divide by zero"));
+                }
+                self.expect_int(left)?
+                    .checked_div(right)
+                    .map(VmValue::Int)
+                    .ok_or_else(|| self.error("integer overflow"))
             }
-            (RuntimeValue::Float(left), BinaryOp::Divide, RuntimeValue::Int(right)) => {
-                Ok(RuntimeValue::Float(left / right as f64))
+            BinaryInstruction::FloatLess => Ok(VmValue::Bool(
+                self.expect_float(left)? < self.expect_float(right)?,
+            )),
+            BinaryInstruction::FloatLessEqual => Ok(VmValue::Bool(
+                self.expect_float(left)? <= self.expect_float(right)?,
+            )),
+            BinaryInstruction::FloatGreater => Ok(VmValue::Bool(
+                self.expect_float(left)? > self.expect_float(right)?,
+            )),
+            BinaryInstruction::FloatGreaterEqual => Ok(VmValue::Bool(
+                self.expect_float(left)? >= self.expect_float(right)?,
+            )),
+            BinaryInstruction::IntLess => Ok(VmValue::Bool(
+                self.expect_int(left)? < self.expect_int(right)?,
+            )),
+            BinaryInstruction::IntLessEqual => Ok(VmValue::Bool(
+                self.expect_int(left)? <= self.expect_int(right)?,
+            )),
+            BinaryInstruction::IntGreater => Ok(VmValue::Bool(
+                self.expect_int(left)? > self.expect_int(right)?,
+            )),
+            BinaryInstruction::IntGreaterEqual => Ok(VmValue::Bool(
+                self.expect_int(left)? >= self.expect_int(right)?,
+            )),
+            BinaryInstruction::FloatEqual => Ok(VmValue::Bool(
+                self.expect_float(left)? == self.expect_float(right)?,
+            )),
+            BinaryInstruction::FloatNotEqual => Ok(VmValue::Bool(
+                self.expect_float(left)? != self.expect_float(right)?,
+            )),
+            BinaryInstruction::IntEqual => Ok(VmValue::Bool(
+                self.expect_int(left)? == self.expect_int(right)?,
+            )),
+            BinaryInstruction::IntNotEqual => Ok(VmValue::Bool(
+                self.expect_int(left)? != self.expect_int(right)?,
+            )),
+            BinaryInstruction::BoolEqual => {
+                let (VmValue::Bool(left), VmValue::Bool(right)) = (left, right) else {
+                    return Err(self.error("expected bool value"));
+                };
+                Ok(VmValue::Bool(left == right))
             }
-            (RuntimeValue::Int(left), BinaryOp::Divide, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Float(left as f64 / right))
+            BinaryInstruction::BoolNotEqual => {
+                let (VmValue::Bool(left), VmValue::Bool(right)) = (left, right) else {
+                    return Err(self.error("expected bool value"));
+                };
+                Ok(VmValue::Bool(left != right))
             }
-            (RuntimeValue::Int(_), BinaryOp::Divide, RuntimeValue::Int(0)) => {
-                Err(self.error("integer divide by zero"))
+            BinaryInstruction::ColorMultiplyFloat => {
+                let VmValue::Color(color) = left else {
+                    return Err(self.error("expected color value"));
+                };
+                Ok(VmValue::Color(color.scale(self.expect_float(right)?)))
             }
-            (RuntimeValue::Int(left), BinaryOp::Divide, RuntimeValue::Int(right)) => left
-                .checked_div(right)
-                .map(RuntimeValue::Int)
-                .ok_or_else(|| self.error("integer overflow")),
-            (RuntimeValue::Float(left), BinaryOp::Less, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Bool(left < right))
+            BinaryInstruction::FloatMultiplyColor => {
+                let VmValue::Color(color) = right else {
+                    return Err(self.error("expected color value"));
+                };
+                Ok(VmValue::Color(color.scale(self.expect_float(left)?)))
             }
-            (RuntimeValue::Float(left), BinaryOp::Less, RuntimeValue::Int(right)) => {
-                Ok(RuntimeValue::Bool(left < right as f64))
-            }
-            (RuntimeValue::Int(left), BinaryOp::Less, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Bool((left as f64) < right))
-            }
-            (RuntimeValue::Int(left), BinaryOp::Less, RuntimeValue::Int(right)) => {
-                Ok(RuntimeValue::Bool(left < right))
-            }
-            (RuntimeValue::Float(left), BinaryOp::LessEqual, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Bool(left <= right))
-            }
-            (RuntimeValue::Float(left), BinaryOp::LessEqual, RuntimeValue::Int(right)) => {
-                Ok(RuntimeValue::Bool(left <= right as f64))
-            }
-            (RuntimeValue::Int(left), BinaryOp::LessEqual, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Bool((left as f64) <= right))
-            }
-            (RuntimeValue::Int(left), BinaryOp::LessEqual, RuntimeValue::Int(right)) => {
-                Ok(RuntimeValue::Bool(left <= right))
-            }
-            (RuntimeValue::Float(left), BinaryOp::Greater, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Bool(left > right))
-            }
-            (RuntimeValue::Float(left), BinaryOp::Greater, RuntimeValue::Int(right)) => {
-                Ok(RuntimeValue::Bool(left > right as f64))
-            }
-            (RuntimeValue::Int(left), BinaryOp::Greater, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Bool((left as f64) > right))
-            }
-            (RuntimeValue::Int(left), BinaryOp::Greater, RuntimeValue::Int(right)) => {
-                Ok(RuntimeValue::Bool(left > right))
-            }
-            (RuntimeValue::Float(left), BinaryOp::GreaterEqual, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Bool(left >= right))
-            }
-            (RuntimeValue::Float(left), BinaryOp::GreaterEqual, RuntimeValue::Int(right)) => {
-                Ok(RuntimeValue::Bool(left >= right as f64))
-            }
-            (RuntimeValue::Int(left), BinaryOp::GreaterEqual, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Bool((left as f64) >= right))
-            }
-            (RuntimeValue::Int(left), BinaryOp::GreaterEqual, RuntimeValue::Int(right)) => {
-                Ok(RuntimeValue::Bool(left >= right))
-            }
-            (RuntimeValue::Float(left), BinaryOp::Equal, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Bool(left == right))
-            }
-            (RuntimeValue::Float(left), BinaryOp::Equal, RuntimeValue::Int(right)) => {
-                Ok(RuntimeValue::Bool(left == right as f64))
-            }
-            (RuntimeValue::Int(left), BinaryOp::Equal, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Bool(left as f64 == right))
-            }
-            (RuntimeValue::Int(left), BinaryOp::Equal, RuntimeValue::Int(right)) => {
-                Ok(RuntimeValue::Bool(left == right))
-            }
-            (RuntimeValue::Bool(left), BinaryOp::Equal, RuntimeValue::Bool(right)) => {
-                Ok(RuntimeValue::Bool(left == right))
-            }
-            (RuntimeValue::Float(left), BinaryOp::NotEqual, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Bool(left != right))
-            }
-            (RuntimeValue::Float(left), BinaryOp::NotEqual, RuntimeValue::Int(right)) => {
-                Ok(RuntimeValue::Bool(left != right as f64))
-            }
-            (RuntimeValue::Int(left), BinaryOp::NotEqual, RuntimeValue::Float(right)) => {
-                Ok(RuntimeValue::Bool(left as f64 != right))
-            }
-            (RuntimeValue::Int(left), BinaryOp::NotEqual, RuntimeValue::Int(right)) => {
-                Ok(RuntimeValue::Bool(left != right))
-            }
-            (RuntimeValue::Bool(left), BinaryOp::NotEqual, RuntimeValue::Bool(right)) => {
-                Ok(RuntimeValue::Bool(left != right))
-            }
-            (RuntimeValue::Color(color), BinaryOp::Multiply, RuntimeValue::Float(factor))
-            | (RuntimeValue::Float(factor), BinaryOp::Multiply, RuntimeValue::Color(color)) => {
-                Ok(RuntimeValue::Color(color.scale(factor)))
-            }
-            (RuntimeValue::Color(color), BinaryOp::Multiply, RuntimeValue::Int(factor))
-            | (RuntimeValue::Int(factor), BinaryOp::Multiply, RuntimeValue::Color(color)) => {
-                Ok(RuntimeValue::Color(color.scale(factor as f64)))
-            }
-            _ => Err(self.error("invalid binary expression")),
         }
     }
 
-    fn eval_call(&mut self, function: BuiltinFn) -> Result<RuntimeValue, RuntimeError> {
+    fn eval_call(&mut self, function: BuiltinFn) -> Result<VmValue<'a>, RuntimeError> {
         match function {
             BuiltinFn::Sin => {
                 let value = self.pop()?;
-                Ok(RuntimeValue::Float(self.expect_float(value)?.sin()))
+                Ok(VmValue::Float(self.expect_float(value)?.sin()))
             }
             BuiltinFn::Cos => {
                 let value = self.pop()?;
-                Ok(RuntimeValue::Float(self.expect_float(value)?.cos()))
+                Ok(VmValue::Float(self.expect_float(value)?.cos()))
             }
             BuiltinFn::Abs => {
                 let value = self.pop()?;
-                Ok(RuntimeValue::Float(self.expect_float(value)?.abs()))
+                Ok(VmValue::Float(self.expect_float(value)?.abs()))
             }
             BuiltinFn::Floor => {
                 let value = self.pop()?;
-                Ok(RuntimeValue::Float(self.expect_float(value)?.floor()))
+                Ok(VmValue::Float(self.expect_float(value)?.floor()))
             }
             BuiltinFn::Srand => {
                 let value = self.pop()?;
                 self.rng = seed_from_float(self.expect_float(value)?);
-                Ok(RuntimeValue::Float(0.0))
+                Ok(VmValue::Float(0.0))
             }
-            BuiltinFn::Rand => Ok(RuntimeValue::Float(self.rand())),
+            BuiltinFn::Rand => Ok(VmValue::Float(self.rand())),
             BuiltinFn::PixelIndex => match self.pop()? {
-                RuntimeValue::Pixel(pixel) => Ok(RuntimeValue::Int(pixel.index as i64)),
+                VmValue::Pixel(pixel) => Ok(VmValue::Int(pixel.index as i64)),
                 _ => Err(self.error("expected pixel value")),
             },
             BuiltinFn::PixelCount => match self.pop()? {
-                RuntimeValue::Pixel(pixel) => Ok(RuntimeValue::Int(pixel.count as i64)),
+                VmValue::Pixel(pixel) => Ok(VmValue::Int(pixel.count as i64)),
                 _ => Err(self.error("expected pixel value")),
             },
             BuiltinFn::MarkCount => {
                 let marks = self.pop()?;
-                Ok(RuntimeValue::Int(self.expect_marks(marks)?.len() as i64))
+                Ok(VmValue::Int(self.expect_marks(marks)?.len() as i64))
             }
             BuiltinFn::MarkAt => {
                 let fallback = self.pop_float()?;
@@ -844,7 +1077,7 @@ impl BytecodeVm<'_> {
                     .and_then(|index| marks.get(index))
                     .copied()
                     .unwrap_or(fallback);
-                Ok(RuntimeValue::Float(value))
+                Ok(VmValue::Float(value))
             }
             BuiltinFn::MarkPrev => self.eval_mark_search(mark_prev),
             BuiltinFn::MarkNext => self.eval_mark_search(mark_next),
@@ -854,38 +1087,38 @@ impl BytecodeVm<'_> {
             BuiltinFn::Min => {
                 let right = self.pop_float()?;
                 let left = self.pop_float()?;
-                Ok(RuntimeValue::Float(left.min(right)))
+                Ok(VmValue::Float(left.min(right)))
             }
             BuiltinFn::Max => {
                 let right = self.pop_float()?;
                 let left = self.pop_float()?;
-                Ok(RuntimeValue::Float(left.max(right)))
+                Ok(VmValue::Float(left.max(right)))
             }
             BuiltinFn::Clamp => {
                 let max = self.pop_float()?;
                 let min = self.pop_float()?;
                 let value = self.pop_float()?;
-                Ok(RuntimeValue::Float(value.clamp(min, max)))
+                Ok(VmValue::Float(value.clamp(min, max)))
             }
             BuiltinFn::Smoothstep => {
                 let value = self.pop_float()?;
                 let edge1 = self.pop_float()?;
                 let edge0 = self.pop_float()?;
                 let x = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-                Ok(RuntimeValue::Float(x * x * (3.0 - 2.0 * x)))
+                Ok(VmValue::Float(x * x * (3.0 - 2.0 * x)))
             }
             BuiltinFn::Mix => {
                 let amount = self.pop_float()?;
                 let right = self.pop()?;
                 let left = self.pop()?;
                 match (left, right) {
-                    (RuntimeValue::Color(left), RuntimeValue::Color(right)) => {
-                        Ok(RuntimeValue::Color(left.mix(right, amount)))
+                    (VmValue::Color(left), VmValue::Color(right)) => {
+                        Ok(VmValue::Color(left.mix(right, amount)))
                     }
                     (left, right) => {
                         let left = self.expect_float(left)?;
                         let right = self.expect_float(right)?;
-                        Ok(RuntimeValue::Float(left + (right - left) * amount))
+                        Ok(VmValue::Float(left + (right - left) * amount))
                     }
                 }
             }
@@ -893,7 +1126,7 @@ impl BytecodeVm<'_> {
                 let blue = self.pop_float()?;
                 let green = self.pop_float()?;
                 let red = self.pop_float()?;
-                Ok(RuntimeValue::Color(Color::new(
+                Ok(VmValue::Color(Color::new(
                     red.round().clamp(0.0, 255.0) as u8,
                     green.round().clamp(0.0, 255.0) as u8,
                     blue.round().clamp(0.0, 255.0) as u8,
@@ -903,7 +1136,7 @@ impl BytecodeVm<'_> {
                 let value = self.pop_float()?;
                 let saturation = self.pop_float()?;
                 let hue = self.pop_float()?;
-                Ok(RuntimeValue::Color(hsv_to_rgb(hue, saturation, value)))
+                Ok(VmValue::Color(hsv_to_rgb(hue, saturation, value)))
             }
         }
     }
@@ -911,52 +1144,50 @@ impl BytecodeVm<'_> {
     fn eval_mark_search(
         &mut self,
         search: fn(&[f64], f64) -> Option<f64>,
-    ) -> Result<RuntimeValue, RuntimeError> {
+    ) -> Result<VmValue<'a>, RuntimeError> {
         let fallback = self.pop_float()?;
         let time = self.pop_float()?;
         let marks = self.pop_marks()?;
-        Ok(RuntimeValue::Float(
-            search(&marks, time).unwrap_or(fallback),
-        ))
+        Ok(VmValue::Float(search(marks, time).unwrap_or(fallback)))
     }
 
-    fn expect_float(&self, value: RuntimeValue) -> Result<f64, RuntimeError> {
+    fn expect_float(&self, value: VmValue<'a>) -> Result<f64, RuntimeError> {
         match value {
-            RuntimeValue::Float(value) => Ok(value),
-            RuntimeValue::Int(value) => Ok(value as f64),
+            VmValue::Float(value) => Ok(value),
+            VmValue::Int(value) => Ok(value as f64),
             _ => Err(self.error("expected float value")),
         }
     }
 
-    fn expect_int(&self, value: RuntimeValue) -> Result<i64, RuntimeError> {
+    fn expect_int(&self, value: VmValue<'a>) -> Result<i64, RuntimeError> {
         match value {
-            RuntimeValue::Int(value) => Ok(value),
+            VmValue::Int(value) => Ok(value),
             _ => Err(self.error("expected int value")),
         }
     }
 
-    fn expect_marks(&self, value: RuntimeValue) -> Result<Vec<f64>, RuntimeError> {
+    fn expect_marks(&self, value: VmValue<'a>) -> Result<&'a [f64], RuntimeError> {
         match value {
-            RuntimeValue::Marks(value) => Ok(value),
+            VmValue::Marks(value) => Ok(value),
             _ => Err(self.error("expected marks value")),
         }
     }
 
     fn peek_bool(&self, message: &str) -> Result<bool, RuntimeError> {
         match self.stack.last() {
-            Some(RuntimeValue::Bool(value)) => Ok(*value),
+            Some(VmValue::Bool(value)) => Ok(*value),
             _ => Err(self.error(message)),
         }
     }
 
     fn pop_bool(&mut self, message: &str) -> Result<bool, RuntimeError> {
         match self.pop()? {
-            RuntimeValue::Bool(value) => Ok(value),
+            VmValue::Bool(value) => Ok(value),
             _ => Err(self.error(message)),
         }
     }
 
-    fn pop(&mut self) -> Result<RuntimeValue, RuntimeError> {
+    fn pop(&mut self) -> Result<VmValue<'a>, RuntimeError> {
         self.stack
             .pop()
             .ok_or_else(|| self.error("stack underflow"))
@@ -972,7 +1203,7 @@ impl BytecodeVm<'_> {
         self.expect_int(value)
     }
 
-    fn pop_marks(&mut self) -> Result<Vec<f64>, RuntimeError> {
+    fn pop_marks(&mut self) -> Result<&[f64], RuntimeError> {
         let value = self.pop()?;
         self.expect_marks(value)
     }
@@ -1027,11 +1258,14 @@ fn hsv_to_rgb(hue: f64, saturation: f64, value: f64) -> Color {
 }
 
 fn mark_prev(marks: &[f64], time: f64) -> Option<f64> {
-    marks.iter().rev().copied().find(|mark| *mark <= time)
+    let index = marks.partition_point(|mark| *mark <= time);
+    index.checked_sub(1).map(|index| marks[index])
 }
 
 fn mark_next(marks: &[f64], time: f64) -> Option<f64> {
-    marks.iter().copied().find(|mark| *mark > time)
+    marks
+        .get(marks.partition_point(|mark| *mark <= time))
+        .copied()
 }
 
 fn mark_nearest(marks: &[f64], time: f64) -> Option<f64> {
