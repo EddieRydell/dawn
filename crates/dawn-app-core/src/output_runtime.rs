@@ -5,7 +5,8 @@ use dawn_project::document::{
     SequenceDocument, SequenceEffectParamDocument, SequenceMarkCollectionDocument,
 };
 use dawn_project::effect_script::{
-    CompiledEffect, FixtureContext, PixelContext, PreparedEffectParams, RuntimeError, RuntimeValue,
+    BytecodeStats, CompiledEffect, FixtureContext, PixelContext, PreparedEffectParams,
+    RuntimeError, RuntimeValue,
 };
 use dawn_project::model::{
     Color, Distance, DistanceSpan, EffectParam, FixtureId, Resolved, SequenceEffectScope,
@@ -61,116 +62,220 @@ pub trait OutputSink {
     fn write_frame(&self, frame: OutputFrame);
 }
 
+pub struct SequenceFrameEvaluator<'a> {
+    source: OutputSourceMetadata,
+    bounds: GeometryRenderBounds,
+    fixture_templates: Vec<OutputFixtureFrame>,
+    effects: Vec<PreparedSequenceEffect<'a>>,
+}
+
+impl<'a> SequenceFrameEvaluator<'a> {
+    pub fn new(
+        analysis: &'a ProjectAnalysis,
+        document: &'a SequenceDocument,
+    ) -> Result<Self, String> {
+        let Some(project) = analysis.resolved.as_ref() else {
+            return Err("Project must resolve before preview is available".to_string());
+        };
+        let render_plan = layout_render_plan(&project.display.layout.fixtures);
+        let fixture_templates = render_plan
+            .fixtures
+            .iter()
+            .zip(project.display.layout.fixtures.iter())
+            .map(|(plan, fixture)| OutputFixtureFrame {
+                id: fixture.id,
+                name: fixture.name.clone(),
+                bulb_radius: plan.bulb_radius,
+                pixels: plan
+                    .emitters
+                    .iter()
+                    .map(|position| OutputPixelFrame {
+                        position: *position,
+                        color: Color::new(0, 0, 0),
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+
+        let effects = document
+            .effects
+            .iter()
+            .filter_map(|effect| {
+                let render = effect.render.as_ref()?;
+                let render_plan = match analysis.compiled_script_for_key(&render.script_key) {
+                    Some(script) => match prepare_params_from_document(
+                        script,
+                        &render.params,
+                        &document.mark_collections,
+                        effect.start_seconds,
+                    ) {
+                        Ok(prepared_params) => PreparedEffectRender::Ready {
+                            script,
+                            target_pixels: prepare_effect_pixels(
+                                effect.scope,
+                                &render.target_pixels,
+                                &fixture_templates,
+                            ),
+                            prepared_params,
+                            _bytecode_stats: script.bytecode_stats(),
+                        },
+                        Err(error) => PreparedEffectRender::BadParams(error),
+                    },
+                    None => PreparedEffectRender::MissingScript(render.script_key.clone()),
+                };
+                Some(PreparedSequenceEffect {
+                    start_seconds: effect.start_seconds,
+                    duration_seconds: effect.duration_seconds,
+                    render: render_plan,
+                })
+            })
+            .collect();
+
+        Ok(Self {
+            source: OutputSourceMetadata {
+                label: format!("Sequence {}", document.object_key),
+                kind: OutputSourceKind::Sequence,
+                duration_seconds: document.duration_seconds,
+                fps: document.frame_rate,
+            },
+            bounds: render_plan.bounds,
+            fixture_templates,
+            effects,
+        })
+    }
+
+    pub fn evaluate(&self, time_seconds: f64, generation: u64) -> OutputFrame {
+        let mut fixtures = self.fixture_templates.clone();
+        let mut status = OutputFrameStatus::Live;
+
+        for effect in &self.effects {
+            let local_seconds = if time_seconds < effect.start_seconds
+                || time_seconds >= effect.start_seconds + effect.duration_seconds
+            {
+                continue;
+            } else {
+                time_seconds - effect.start_seconds
+            };
+            let progress = if effect.duration_seconds == 0.0 {
+                0.0
+            } else {
+                (local_seconds / effect.duration_seconds).clamp(0.0, 1.0)
+            };
+
+            let PreparedEffectRender::Ready {
+                script,
+                target_pixels,
+                prepared_params,
+                ..
+            } = &effect.render
+            else {
+                status = effect.render.error_status();
+                continue;
+            };
+
+            for pixel in target_pixels {
+                let output_pixel = &mut fixtures[pixel.fixture_index].pixels[pixel.pixel_index];
+                match script.sample_prepared(
+                    progress,
+                    local_seconds,
+                    pixel.fixture_context,
+                    pixel.pixel_context,
+                    prepared_params,
+                ) {
+                    Ok(color) => add_clamped(&mut output_pixel.color, color),
+                    Err(error) => status = OutputFrameStatus::Error(error.to_string()),
+                }
+            }
+        }
+
+        OutputFrame {
+            source: self.source.clone(),
+            time_seconds,
+            generation,
+            status,
+            bounds: self.bounds,
+            fixtures,
+        }
+    }
+}
+
+struct PreparedSequenceEffect<'a> {
+    start_seconds: f64,
+    duration_seconds: f64,
+    render: PreparedEffectRender<'a>,
+}
+
+enum PreparedEffectRender<'a> {
+    Ready {
+        script: &'a CompiledEffect,
+        target_pixels: Vec<PreparedEffectPixel>,
+        prepared_params: PreparedEffectParams,
+        _bytecode_stats: BytecodeStats,
+    },
+    MissingScript(String),
+    BadParams(RuntimeError),
+}
+
+struct PreparedEffectPixel {
+    fixture_index: usize,
+    pixel_index: usize,
+    fixture_context: FixtureContext,
+    pixel_context: PixelContext,
+}
+
+impl PreparedEffectRender<'_> {
+    fn error_status(&self) -> OutputFrameStatus {
+        match self {
+            Self::Ready { .. } => OutputFrameStatus::Live,
+            Self::MissingScript(script_key) => {
+                OutputFrameStatus::Error(format!("compiled script `{script_key}` was not found"))
+            }
+            Self::BadParams(error) => OutputFrameStatus::Error(error.to_string()),
+        }
+    }
+}
+
+fn prepare_effect_pixels(
+    scope: SequenceEffectScope,
+    target_pixels: &[dawn_project::document::SequenceEffectPixelDocument],
+    fixture_templates: &[OutputFixtureFrame],
+) -> Vec<PreparedEffectPixel> {
+    let target_pixel_count = target_pixels.len();
+    target_pixels
+        .iter()
+        .enumerate()
+        .filter_map(|(target_pixel_index, pixel)| {
+            fixture_templates
+                .get(pixel.fixture_index)?
+                .pixels
+                .get(pixel.pixel_index)?;
+            Some(PreparedEffectPixel {
+                fixture_index: pixel.fixture_index,
+                pixel_index: pixel.pixel_index,
+                fixture_context: FixtureContext {
+                    index: pixel.fixture_index,
+                },
+                pixel_context: pixel_context_for_effect(
+                    scope,
+                    target_pixel_index,
+                    target_pixel_count,
+                    pixel.pixel_index,
+                    pixel.pixel_count,
+                ),
+            })
+        })
+        .collect()
+}
+
 pub fn evaluate_sequence_frame(
     analysis: &ProjectAnalysis,
     document: &SequenceDocument,
     time_seconds: f64,
     generation: u64,
 ) -> OutputFrame {
-    let Some(project) = analysis.resolved.as_ref() else {
-        return empty_frame(
-            generation,
-            "Project must resolve before preview is available",
-        );
-    };
-    let render_plan = layout_render_plan(&project.display.layout.fixtures);
-    let mut fixtures = render_plan
-        .fixtures
-        .iter()
-        .zip(project.display.layout.fixtures.iter())
-        .map(|(plan, fixture)| OutputFixtureFrame {
-            id: fixture.id,
-            name: fixture.name.clone(),
-            bulb_radius: plan.bulb_radius,
-            pixels: plan
-                .emitters
-                .iter()
-                .map(|position| OutputPixelFrame {
-                    position: *position,
-                    color: Color::new(0, 0, 0),
-                })
-                .collect(),
-        })
-        .collect::<Vec<_>>();
-
-    let mut status = OutputFrameStatus::Live;
-    for effect in &document.effects {
-        let Some(render) = &effect.render else {
-            continue;
-        };
-        let local_seconds = if time_seconds < effect.start_seconds
-            || time_seconds >= effect.start_seconds + effect.duration_seconds
-        {
-            continue;
-        } else {
-            time_seconds - effect.start_seconds
-        };
-        let progress = if effect.duration_seconds == 0.0 {
-            0.0
-        } else {
-            (local_seconds / effect.duration_seconds).clamp(0.0, 1.0)
-        };
-        let Some(script) = analysis.compiled_script_for_key(&render.script_key) else {
-            status = OutputFrameStatus::Error(format!(
-                "compiled script `{}` was not found",
-                render.script_key
-            ));
-            continue;
-        };
-        let prepared_params = match prepare_params_from_document(
-            script,
-            &render.params,
-            &document.mark_collections,
-            effect.start_seconds,
-        ) {
-            Ok(params) => params,
-            Err(error) => {
-                status = OutputFrameStatus::Error(error.to_string());
-                continue;
-            }
-        };
-        let target_pixel_count = render.target_pixels.len();
-        for (target_pixel_index, pixel) in render.target_pixels.iter().enumerate() {
-            let Some(fixture) = fixtures.get_mut(pixel.fixture_index) else {
-                continue;
-            };
-            let Some(output_pixel) = fixture.pixels.get_mut(pixel.pixel_index) else {
-                continue;
-            };
-            let pixel_context = pixel_context_for_effect(
-                effect.scope,
-                target_pixel_index,
-                target_pixel_count,
-                pixel.pixel_index,
-                pixel.pixel_count,
-            );
-            match script.sample_prepared(
-                progress,
-                local_seconds,
-                FixtureContext {
-                    index: pixel.fixture_index,
-                },
-                pixel_context,
-                &prepared_params,
-            ) {
-                Ok(color) => add_clamped(&mut output_pixel.color, color),
-                Err(error) => status = OutputFrameStatus::Error(error.to_string()),
-            }
-        }
-    }
-
-    OutputFrame {
-        source: OutputSourceMetadata {
-            label: format!("Sequence {}", document.object_key),
-            kind: OutputSourceKind::Sequence,
-            duration_seconds: document.duration_seconds,
-            fps: document.frame_rate,
-        },
-        time_seconds,
-        generation,
-        status,
-        bounds: render_plan.bounds,
-        fixtures,
+    match SequenceFrameEvaluator::new(analysis, document) {
+        Ok(evaluator) => evaluator.evaluate(time_seconds, generation),
+        Err(message) => empty_frame(generation, message),
     }
 }
 

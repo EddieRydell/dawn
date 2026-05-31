@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
 use dawn_app_core::output_runtime::{
-    evaluate_sequence_frame, pixel_context_for_effect, prepare_params_from_document,
+    pixel_context_for_effect, prepare_params_from_document, SequenceFrameEvaluator,
 };
 use dawn_project::analysis::{
     analyze_project_with_overlays, DiagnosticCode, DiagnosticSeverity, ProjectAnalysis,
@@ -354,24 +354,16 @@ impl EffectBenchReport {
         warmup: usize,
         synthetic_active_effects: Option<usize>,
     ) -> Self {
+        let evaluator = SequenceFrameEvaluator::new(analysis, document)
+            .expect("benchmark analysis must resolve before rendering");
         for generation in 0..warmup {
-            black_box(evaluate_sequence_frame(
-                analysis,
-                document,
-                time_seconds,
-                generation as u64,
-            ));
+            black_box(evaluator.evaluate(time_seconds, generation as u64));
         }
 
         let mut whole_frame_samples = Vec::with_capacity(iterations);
         for generation in 0..iterations {
             let start = Instant::now();
-            black_box(evaluate_sequence_frame(
-                analysis,
-                document,
-                time_seconds,
-                generation as u64,
-            ));
+            black_box(evaluator.evaluate(time_seconds, generation as u64));
             whole_frame_samples.push(start.elapsed());
         }
 
@@ -822,6 +814,7 @@ struct TextPositionReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dawn_app_core::output_runtime::evaluate_sequence_frame;
     use dawn_project::document::{
         LayoutTargetDocument, SequenceEffectPixelDocument, SequenceEffectRenderDocument,
     };

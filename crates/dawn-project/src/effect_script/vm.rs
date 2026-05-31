@@ -122,7 +122,29 @@ pub(super) enum Instruction {
     Jump(usize),
     Pop,
     LoopTick,
-    Call(BuiltinFn),
+    Sin,
+    Cos,
+    Abs,
+    Floor,
+    Srand,
+    Rand,
+    PixelIndex,
+    PixelCount,
+    MarkCount,
+    MarkAt,
+    MarkPrev,
+    MarkNext,
+    MarkNearest,
+    MarkPhase,
+    MarkElapsed,
+    Min,
+    Max,
+    Clamp,
+    Smoothstep,
+    MixFloat,
+    MixColor,
+    Rgb,
+    Hsv,
     CallCurveParam(usize),
     ReturnColor,
 }
@@ -161,62 +183,6 @@ pub(super) enum ContextSlot {
     Seconds,
     Fixture,
     Pixel,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum BuiltinFn {
-    Sin,
-    Cos,
-    Abs,
-    Floor,
-    Srand,
-    Rand,
-    PixelIndex,
-    PixelCount,
-    MarkCount,
-    MarkAt,
-    MarkPrev,
-    MarkNext,
-    MarkNearest,
-    MarkPhase,
-    MarkElapsed,
-    Min,
-    Max,
-    Clamp,
-    Smoothstep,
-    Mix,
-    Rgb,
-    Hsv,
-}
-
-impl BuiltinFn {
-    fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "sin" => Some(Self::Sin),
-            "cos" => Some(Self::Cos),
-            "abs" => Some(Self::Abs),
-            "floor" => Some(Self::Floor),
-            "srand" => Some(Self::Srand),
-            "rand" => Some(Self::Rand),
-            "pixel_index" => Some(Self::PixelIndex),
-            "pixel_count" => Some(Self::PixelCount),
-            "mark_count" => Some(Self::MarkCount),
-            "mark_at" => Some(Self::MarkAt),
-            "mark_prev" => Some(Self::MarkPrev),
-            "mark_next" => Some(Self::MarkNext),
-            "mark_nearest" => Some(Self::MarkNearest),
-            "mark_phase" => Some(Self::MarkPhase),
-            "mark_elapsed" => Some(Self::MarkElapsed),
-            "min" => Some(Self::Min),
-            "max" => Some(Self::Max),
-            "clamp" => Some(Self::Clamp),
-            "smoothstep" => Some(Self::Smoothstep),
-            "mix" => Some(Self::Mix),
-            "rgb" => Some(Self::Rgb),
-            "hsv" => Some(Self::Hsv),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -703,8 +669,33 @@ impl<'a> Compiler<'a> {
         for arg in args {
             self.compile_expr(arg);
         }
-        let builtin = BuiltinFn::from_name(name).expect("type checker validates builtins");
-        self.emit(Instruction::Call(builtin), 1 - args.len() as isize);
+        let instruction = match name {
+            "sin" => Instruction::Sin,
+            "cos" => Instruction::Cos,
+            "abs" => Instruction::Abs,
+            "floor" => Instruction::Floor,
+            "srand" => Instruction::Srand,
+            "rand" => Instruction::Rand,
+            "pixel_index" => Instruction::PixelIndex,
+            "pixel_count" => Instruction::PixelCount,
+            "mark_count" => Instruction::MarkCount,
+            "mark_at" => Instruction::MarkAt,
+            "mark_prev" => Instruction::MarkPrev,
+            "mark_next" => Instruction::MarkNext,
+            "mark_nearest" => Instruction::MarkNearest,
+            "mark_phase" => Instruction::MarkPhase,
+            "mark_elapsed" => Instruction::MarkElapsed,
+            "min" => Instruction::Min,
+            "max" => Instruction::Max,
+            "clamp" => Instruction::Clamp,
+            "smoothstep" => Instruction::Smoothstep,
+            "mix" if self.call_type(name, args) == ScriptType::Color => Instruction::MixColor,
+            "mix" => Instruction::MixFloat,
+            "rgb" => Instruction::Rgb,
+            "hsv" => Instruction::Hsv,
+            _ => unreachable!("type checker validates builtins"),
+        };
+        self.emit(instruction, 1 - args.len() as isize);
     }
 
     fn load_constant(&mut self, value: RuntimeValue) {
@@ -887,9 +878,120 @@ impl<'a> BytecodeVm<'a> {
                         return Err(self.error("effect exceeded the maximum loop iteration count"));
                     }
                 }
-                Instruction::Call(function) => {
-                    let value = self.eval_call(function)?;
-                    self.stack.push(value);
+                Instruction::Sin => {
+                    let value = self.pop()?;
+                    self.stack
+                        .push(VmValue::Float(self.expect_float(value)?.sin()));
+                }
+                Instruction::Cos => {
+                    let value = self.pop()?;
+                    self.stack
+                        .push(VmValue::Float(self.expect_float(value)?.cos()));
+                }
+                Instruction::Abs => {
+                    let value = self.pop()?;
+                    self.stack
+                        .push(VmValue::Float(self.expect_float(value)?.abs()));
+                }
+                Instruction::Floor => {
+                    let value = self.pop()?;
+                    self.stack
+                        .push(VmValue::Float(self.expect_float(value)?.floor()));
+                }
+                Instruction::Srand => {
+                    let value = self.pop()?;
+                    self.rng = seed_from_float(self.expect_float(value)?);
+                    self.stack.push(VmValue::Float(0.0));
+                }
+                Instruction::Rand => {
+                    let value = self.rand();
+                    self.stack.push(VmValue::Float(value));
+                }
+                Instruction::PixelIndex => match self.pop()? {
+                    VmValue::Pixel(pixel) => self.stack.push(VmValue::Int(pixel.index as i64)),
+                    _ => return Err(self.error("expected pixel value")),
+                },
+                Instruction::PixelCount => match self.pop()? {
+                    VmValue::Pixel(pixel) => self.stack.push(VmValue::Int(pixel.count as i64)),
+                    _ => return Err(self.error("expected pixel value")),
+                },
+                Instruction::MarkCount => {
+                    let marks = self.pop()?;
+                    self.stack
+                        .push(VmValue::Int(self.expect_marks(marks)?.len() as i64));
+                }
+                Instruction::MarkAt => {
+                    let fallback = self.pop_float()?;
+                    let index = self.pop_int()?;
+                    let marks = self.pop_marks()?;
+                    let value = usize::try_from(index)
+                        .ok()
+                        .and_then(|index| marks.get(index))
+                        .copied()
+                        .unwrap_or(fallback);
+                    self.stack.push(VmValue::Float(value));
+                }
+                Instruction::MarkPrev => self.push_mark_search(mark_prev)?,
+                Instruction::MarkNext => self.push_mark_search(mark_next)?,
+                Instruction::MarkNearest => self.push_mark_search(mark_nearest)?,
+                Instruction::MarkPhase => self.push_mark_search(mark_phase)?,
+                Instruction::MarkElapsed => self.push_mark_search(mark_elapsed)?,
+                Instruction::Min => {
+                    let right = self.pop_float()?;
+                    let left = self.pop_float()?;
+                    self.stack.push(VmValue::Float(left.min(right)));
+                }
+                Instruction::Max => {
+                    let right = self.pop_float()?;
+                    let left = self.pop_float()?;
+                    self.stack.push(VmValue::Float(left.max(right)));
+                }
+                Instruction::Clamp => {
+                    let max = self.pop_float()?;
+                    let min = self.pop_float()?;
+                    let value = self.pop_float()?;
+                    self.stack.push(VmValue::Float(value.clamp(min, max)));
+                }
+                Instruction::Smoothstep => {
+                    let value = self.pop_float()?;
+                    let edge1 = self.pop_float()?;
+                    let edge0 = self.pop_float()?;
+                    let x = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+                    self.stack.push(VmValue::Float(x * x * (3.0 - 2.0 * x)));
+                }
+                Instruction::MixFloat => {
+                    let amount = self.pop_float()?;
+                    let right = self.pop_float()?;
+                    let left = self.pop_float()?;
+                    self.stack
+                        .push(VmValue::Float(left + (right - left) * amount));
+                }
+                Instruction::MixColor => {
+                    let amount = self.pop_float()?;
+                    let VmValue::Color(right) = self.pop()? else {
+                        return Err(self.error("expected color value"));
+                    };
+                    let VmValue::Color(left) = self.pop()? else {
+                        return Err(self.error("expected color value"));
+                    };
+                    self.stack.push(VmValue::Color(left.mix(right, amount)));
+                }
+                Instruction::Rgb => {
+                    let blue = self.pop_float()?;
+                    let green = self.pop_float()?;
+                    let red = self.pop_float()?;
+                    self.stack.push(VmValue::Color(Color::new(
+                        red.round().clamp(0.0, 255.0) as u8,
+                        green.round().clamp(0.0, 255.0) as u8,
+                        blue.round().clamp(0.0, 255.0) as u8,
+                    )));
+                }
+                Instruction::Hsv => {
+                    let value = self.pop_float()?;
+                    let saturation = self.pop_float()?;
+                    let hue = self.pop_float()?;
+                    self.stack
+                        .push(VmValue::Color(hsv_to_rgb(hue, saturation, value)));
                 }
                 Instruction::CallCurveParam(index) => {
                     let amount = self.pop_float()?;
@@ -1032,123 +1134,16 @@ impl<'a> BytecodeVm<'a> {
         }
     }
 
-    fn eval_call(&mut self, function: BuiltinFn) -> Result<VmValue<'a>, RuntimeError> {
-        match function {
-            BuiltinFn::Sin => {
-                let value = self.pop()?;
-                Ok(VmValue::Float(self.expect_float(value)?.sin()))
-            }
-            BuiltinFn::Cos => {
-                let value = self.pop()?;
-                Ok(VmValue::Float(self.expect_float(value)?.cos()))
-            }
-            BuiltinFn::Abs => {
-                let value = self.pop()?;
-                Ok(VmValue::Float(self.expect_float(value)?.abs()))
-            }
-            BuiltinFn::Floor => {
-                let value = self.pop()?;
-                Ok(VmValue::Float(self.expect_float(value)?.floor()))
-            }
-            BuiltinFn::Srand => {
-                let value = self.pop()?;
-                self.rng = seed_from_float(self.expect_float(value)?);
-                Ok(VmValue::Float(0.0))
-            }
-            BuiltinFn::Rand => Ok(VmValue::Float(self.rand())),
-            BuiltinFn::PixelIndex => match self.pop()? {
-                VmValue::Pixel(pixel) => Ok(VmValue::Int(pixel.index as i64)),
-                _ => Err(self.error("expected pixel value")),
-            },
-            BuiltinFn::PixelCount => match self.pop()? {
-                VmValue::Pixel(pixel) => Ok(VmValue::Int(pixel.count as i64)),
-                _ => Err(self.error("expected pixel value")),
-            },
-            BuiltinFn::MarkCount => {
-                let marks = self.pop()?;
-                Ok(VmValue::Int(self.expect_marks(marks)?.len() as i64))
-            }
-            BuiltinFn::MarkAt => {
-                let fallback = self.pop_float()?;
-                let index = self.pop_int()?;
-                let marks = self.pop_marks()?;
-                let value = usize::try_from(index)
-                    .ok()
-                    .and_then(|index| marks.get(index))
-                    .copied()
-                    .unwrap_or(fallback);
-                Ok(VmValue::Float(value))
-            }
-            BuiltinFn::MarkPrev => self.eval_mark_search(mark_prev),
-            BuiltinFn::MarkNext => self.eval_mark_search(mark_next),
-            BuiltinFn::MarkNearest => self.eval_mark_search(mark_nearest),
-            BuiltinFn::MarkPhase => self.eval_mark_search(mark_phase),
-            BuiltinFn::MarkElapsed => self.eval_mark_search(mark_elapsed),
-            BuiltinFn::Min => {
-                let right = self.pop_float()?;
-                let left = self.pop_float()?;
-                Ok(VmValue::Float(left.min(right)))
-            }
-            BuiltinFn::Max => {
-                let right = self.pop_float()?;
-                let left = self.pop_float()?;
-                Ok(VmValue::Float(left.max(right)))
-            }
-            BuiltinFn::Clamp => {
-                let max = self.pop_float()?;
-                let min = self.pop_float()?;
-                let value = self.pop_float()?;
-                Ok(VmValue::Float(value.clamp(min, max)))
-            }
-            BuiltinFn::Smoothstep => {
-                let value = self.pop_float()?;
-                let edge1 = self.pop_float()?;
-                let edge0 = self.pop_float()?;
-                let x = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-                Ok(VmValue::Float(x * x * (3.0 - 2.0 * x)))
-            }
-            BuiltinFn::Mix => {
-                let amount = self.pop_float()?;
-                let right = self.pop()?;
-                let left = self.pop()?;
-                match (left, right) {
-                    (VmValue::Color(left), VmValue::Color(right)) => {
-                        Ok(VmValue::Color(left.mix(right, amount)))
-                    }
-                    (left, right) => {
-                        let left = self.expect_float(left)?;
-                        let right = self.expect_float(right)?;
-                        Ok(VmValue::Float(left + (right - left) * amount))
-                    }
-                }
-            }
-            BuiltinFn::Rgb => {
-                let blue = self.pop_float()?;
-                let green = self.pop_float()?;
-                let red = self.pop_float()?;
-                Ok(VmValue::Color(Color::new(
-                    red.round().clamp(0.0, 255.0) as u8,
-                    green.round().clamp(0.0, 255.0) as u8,
-                    blue.round().clamp(0.0, 255.0) as u8,
-                )))
-            }
-            BuiltinFn::Hsv => {
-                let value = self.pop_float()?;
-                let saturation = self.pop_float()?;
-                let hue = self.pop_float()?;
-                Ok(VmValue::Color(hsv_to_rgb(hue, saturation, value)))
-            }
-        }
-    }
-
-    fn eval_mark_search(
+    fn push_mark_search(
         &mut self,
         search: fn(&[f64], f64) -> Option<f64>,
-    ) -> Result<VmValue<'a>, RuntimeError> {
+    ) -> Result<(), RuntimeError> {
         let fallback = self.pop_float()?;
         let time = self.pop_float()?;
         let marks = self.pop_marks()?;
-        Ok(VmValue::Float(search(marks, time).unwrap_or(fallback)))
+        let value = search(marks, time).unwrap_or(fallback);
+        self.stack.push(VmValue::Float(value));
+        Ok(())
     }
 
     fn expect_float(&self, value: VmValue<'a>) -> Result<f64, RuntimeError> {
