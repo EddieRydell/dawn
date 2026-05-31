@@ -7,7 +7,7 @@ imports:
 opening:
   type: sequence
   duration: 200s
-  frame_rate: 60
+  frame_rate: 144
   audio: ../audio/song.mp3
   mark_collections:
   - key: marks
@@ -111,7 +111,7 @@ opening:
         value: '#ffaa00'
     script: effects.MarkPulse
   - id: 25
-    start: 39.868s
+    start: 39.768s
     duration: 4.35s
     target:
       type: group

@@ -907,7 +907,7 @@ fn start_preview_worker(app: AppHandle) {
             } else {
                 10
             };
-            let target = Duration::from_millis((1000 / fps as u64).max(1));
+            let target = Duration::from_secs_f64(1.0 / fps as f64);
             let elapsed = started.elapsed();
             timing.target_fps = target_fps;
             timing.active_fps = fps;

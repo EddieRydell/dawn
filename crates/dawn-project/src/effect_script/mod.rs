@@ -6,10 +6,14 @@ use serde::{Deserialize, Serialize};
 use crate::model::{Color, Curve, EffectParam, Flags};
 
 mod ast;
+mod builtins;
+mod bytecode;
+mod compile;
 mod lexer;
+mod params;
 mod parser;
+mod runtime;
 mod type_check;
-mod vm;
 
 #[cfg(test)]
 mod tests;
@@ -20,8 +24,9 @@ pub use parser::parse;
 pub use type_check::type_check;
 
 use ast::BinaryOp;
-use vm::{BytecodeProgram, Vm};
-pub use vm::{BytecodeStats, EffectSampleScratch, PreparedEffectParams};
+pub use bytecode::BytecodeStats;
+use bytecode::{stats_for_program, BytecodeProgram};
+pub use params::{EffectSampleScratch, PreparedEffectParams};
 
 #[derive(Debug, Clone)]
 pub struct ScriptDiagnostic {
@@ -69,14 +74,14 @@ impl CompiledEffect {
         &self,
         params: &BTreeMap<String, RuntimeValue>,
     ) -> Result<PreparedEffectParams, RuntimeError> {
-        Vm::prepare_params(&self.params, params)
+        params::prepare_params(&self.params, params)
     }
 
     pub fn prepare_params_with(
         &self,
         value_for: impl FnMut(&str) -> Option<RuntimeValue>,
     ) -> Result<PreparedEffectParams, RuntimeError> {
-        Vm::prepare_params_with(&self.params, value_for)
+        params::prepare_params_with(&self.params, value_for)
     }
 
     pub fn sample_prepared(
@@ -87,7 +92,7 @@ impl CompiledEffect {
         pixel: PixelContext,
         params: &PreparedEffectParams,
     ) -> Result<Color, RuntimeError> {
-        Vm::run(&self.bytecode, progress, seconds, fixture, pixel, params)
+        runtime::run(&self.bytecode, progress, seconds, fixture, pixel, params)
     }
 
     pub fn sample_prepared_with_scratch(
@@ -99,7 +104,7 @@ impl CompiledEffect {
         params: &PreparedEffectParams,
         scratch: &mut EffectSampleScratch,
     ) -> Result<Color, RuntimeError> {
-        Vm::run_with_scratch(
+        runtime::run_with_scratch(
             &self.bytecode,
             progress,
             seconds,
@@ -111,19 +116,7 @@ impl CompiledEffect {
     }
 
     pub fn bytecode_stats(&self) -> BytecodeStats {
-        BytecodeStats {
-            instruction_count: self.bytecode.instructions.len(),
-            constant_count: self.bytecode.constants.len(),
-            param_slots: self.params.len(),
-            float_slots: self.bytecode.registers.floats,
-            int_slots: self.bytecode.registers.ints,
-            bool_slots: self.bytecode.registers.bools,
-            color_slots: self.bytecode.registers.colors,
-            ref_slots: self.bytecode.registers.refs,
-            fixture_slots: self.bytecode.registers.fixtures,
-            pixel_slots: self.bytecode.registers.pixels,
-            total_slots: self.bytecode.registers.total(),
-        }
+        stats_for_program(&self.bytecode, self.params.len())
     }
 }
 
@@ -321,7 +314,7 @@ pub fn compile(text: &str) -> Result<CompiledEffect, Vec<ScriptDiagnostic>> {
 }
 
 pub fn compile_ast(effect: EffectAst) -> CompiledEffect {
-    let bytecode = Vm::compile(&effect);
+    let bytecode = compile::compile_effect(&effect);
     CompiledEffect {
         name: effect.name,
         params: effect.params,

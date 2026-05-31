@@ -350,7 +350,7 @@ impl PreviewSession {
 
     pub fn target_fps(&self) -> u32 {
         match &self.source {
-            PreviewSource::Sequence { document, .. } => document.frame_rate.clamp(1, 60),
+            PreviewSource::Sequence { document, .. } => document.frame_rate.max(1),
             PreviewSource::None => 30,
         }
     }

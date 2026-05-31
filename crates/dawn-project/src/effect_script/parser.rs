@@ -2,7 +2,7 @@ use crate::model::{Color, Flags};
 
 use super::ast::{BinaryOp, EffectAst, Expr, Stmt, UnaryOp};
 use super::lexer::{Token, TokenKind};
-use super::vm::Vm;
+use super::params;
 use super::{
     is_assignable, EffectParamSchema, ParamDefault, RuntimeValue, ScriptDiagnostic, ScriptType,
 };
@@ -444,9 +444,9 @@ impl Parser<'_> {
             return Ok(RuntimeValue::Flags(Flags { values }));
         }
         let expr = self.expr()?;
-        let value = Vm::eval_constant(&expr)?;
+        let value = params::eval_constant(&expr)?;
         if is_assignable(value_type, value.value_type()) {
-            Vm::coerce_value(value, value_type).map_err(|error| ScriptDiagnostic {
+            params::coerce_value(value, value_type).map_err(|error| ScriptDiagnostic {
                 range: None,
                 message: error.message,
             })

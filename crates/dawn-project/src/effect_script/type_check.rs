@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use super::ast::{EffectAst, Expr, Stmt, UnaryOp};
+use super::builtins::{BuiltinConstant, BuiltinContext, BuiltinFunction};
 use super::{binary_result_type, is_assignable, is_float_compatible, ScriptDiagnostic, ScriptType};
 pub fn type_check(effect: &EffectAst) -> Result<(), Vec<ScriptDiagnostic>> {
     let mut checker = TypeChecker::new(effect);
@@ -26,14 +27,15 @@ struct Binding {
 
 impl<'a> TypeChecker<'a> {
     fn new(effect: &'a EffectAst) -> Self {
-        let mut scopes = HashMap::from([
-            ("progress".to_string(), readonly(ScriptType::Float)),
-            ("seconds".to_string(), readonly(ScriptType::Float)),
-            ("fixture".to_string(), readonly(ScriptType::Fixture)),
-            ("pixel".to_string(), readonly(ScriptType::Pixel)),
-            ("PI".to_string(), readonly(ScriptType::Float)),
-            ("TAU".to_string(), readonly(ScriptType::Float)),
-        ]);
+        let mut scopes = HashMap::new();
+        for context in BuiltinContext::ALL {
+            let context =
+                BuiltinContext::from_name(context.name()).expect("builtin context names are valid");
+            scopes.insert(context.name().to_string(), readonly(context.value_type()));
+        }
+        for constant in BuiltinConstant::ALL {
+            scopes.insert(constant.name().to_string(), readonly(ScriptType::Float));
+        }
         for param in &effect.params {
             scopes.insert(param.name.clone(), readonly(param.value_type));
         }
@@ -270,47 +272,11 @@ impl<'a> TypeChecker<'a> {
             .iter()
             .map(|arg| self.expr_type(arg))
             .collect::<Vec<_>>();
-        match (name, arg_types.as_slice()) {
-            ("sin" | "cos" | "abs", [value]) if is_float_compatible(*value) => ScriptType::Float,
-            ("floor", [value]) if is_float_compatible(*value) => ScriptType::Float,
-            ("srand", [value]) if is_float_compatible(*value) => ScriptType::Float,
-            ("rand", []) => ScriptType::Float,
-            ("pixel_index" | "pixel_count", [ScriptType::Pixel]) => ScriptType::Int,
-            ("mark_count", [ScriptType::Marks]) => ScriptType::Int,
-            ("mark_at", [ScriptType::Marks, ScriptType::Int, fallback])
-                if is_float_compatible(*fallback) =>
-            {
-                ScriptType::Float
-            }
-            (
-                "mark_prev" | "mark_next" | "mark_nearest" | "mark_phase" | "mark_elapsed",
-                [ScriptType::Marks, time, fallback],
-            ) if is_float_compatible(*time) && is_float_compatible(*fallback) => ScriptType::Float,
-            ("min" | "max", [left, right])
-                if is_float_compatible(*left) && is_float_compatible(*right) =>
-            {
-                ScriptType::Float
-            }
-            ("clamp" | "smoothstep", [first, second, third]) | ("mix", [first, second, third])
-                if is_float_compatible(*first)
-                    && is_float_compatible(*second)
-                    && is_float_compatible(*third) =>
-            {
-                ScriptType::Float
-            }
-            ("rgb" | "hsv", [first, second, third])
-                if is_float_compatible(*first)
-                    && is_float_compatible(*second)
-                    && is_float_compatible(*third) =>
-            {
-                ScriptType::Color
-            }
-            ("mix", [ScriptType::Color, ScriptType::Color, amount])
-                if is_float_compatible(*amount) =>
-            {
-                ScriptType::Color
-            }
-            _ => {
+        let value_type =
+            BuiltinFunction::from_name(name).and_then(|function| function.return_type(&arg_types));
+        match value_type {
+            Some(value_type) => value_type,
+            None => {
                 self.errors.push(ScriptDiagnostic {
                     range: None,
                     message: format!("unknown function or invalid call `{name}`"),
