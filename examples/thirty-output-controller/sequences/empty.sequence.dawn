@@ -1,6 +1,9 @@
 imports:
-- from: //?/C:/Users/eddie/dawn/examples/thirty-output-controller/effects
+- from: ../effects
   as: effects
+- from: ../curves
+  as: curves
+
 empty:
   type: sequence
   duration: 200s
@@ -243,8 +246,14 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: color
-        value: '#ffcc66'
+        type: curve
+        curve: curves.warm_gradient
+      hue:
+        type: curve
+        curve: curves.hue_warm_shift
+      hue_mix:
+        type: float
+        value: 0.35
       offset_seconds:
         type: float
         value: -0.09
@@ -253,7 +262,7 @@ empty:
         value: 0.3
       section_width_pixels:
         type: integer
-        value: 6
+        value: 20
       section_edge_fade_pixels:
         type: float
         value: 0.0
@@ -301,13 +310,7 @@ empty:
     params:
       gradient:
         type: curve
-        curve:
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-          - time: 0.385
-            value: '#37ff00'
+        curve: curves.warm_gradient
       pulse_shape:
         type: curve
         curve:
@@ -319,7 +322,7 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 12
-    start: 41.625645157s
+    start: 41.603225945s
     duration: 0.256483659s
     target:
       type: group
@@ -328,11 +331,7 @@ empty:
     params:
       gradient:
         type: curve
-        curve:
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
+        curve: curves.club_gradient
       pulse_shape:
         type: curve
         curve:
@@ -405,7 +404,7 @@ empty:
     script: effects.Chase
   - id: 6
     start: 41.791681292s
-    duration: 0.65s
+    duration: 0.607432956s
     target:
       type: group
       name: All Outputs
@@ -427,26 +426,30 @@ empty:
         value: per_pulse
       pulse_overlap:
         type: float
-        value: 10.0
+        value: 50.0
       chase_position:
         type: curve
         curve:
           value_type: float
           points:
           - time: 0.0
-            value: 1.0
-          - time: 0.068
-            value: 0.724
-          - time: 0.235
-            value: 0.371
-          - time: 0.421
-            value: 0.217
-          - time: 0.597
-            value: 0.1
-          - time: 0.738
-            value: 0.054
-          - time: 1.0
             value: 0.0
+          - time: 0.125
+            value: 0.016
+          - time: 0.25
+            value: 0.063
+          - time: 0.375
+            value: 0.141
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.391
+          - time: 0.75
+            value: 0.563
+          - time: 0.875
+            value: 0.766
+          - time: 1.0
+            value: 1.0
       extend_to_start:
         type: bool
         value: false
@@ -475,13 +478,7 @@ empty:
     params:
       gradient:
         type: curve
-        curve:
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-          - time: 0.299
-            value: '#eeff00'
+        curve: curves.fire_gradient
       pulse_shape:
         type: curve
         curve:
@@ -507,8 +504,14 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: color
-        value: '#66fff5'
+        type: curve
+        curve: curves.cool_gradient
+      hue:
+        type: curve
+        curve: curves.hue_cool_shift
+      hue_mix:
+        type: float
+        value: 0.4
       offset_seconds:
         type: float
         value: -0.09
@@ -517,7 +520,7 @@ empty:
         value: 0.3
       section_width_pixels:
         type: integer
-        value: 7
+        value: 18
       section_edge_fade_pixels:
         type: float
         value: 0.0
@@ -543,8 +546,14 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: color
-        value: '#ffcc66'
+        type: curve
+        curve: curves.fire_gradient
+      hue:
+        type: curve
+        curve: curves.hue_warm_shift
+      hue_mix:
+        type: float
+        value: 0.3
       offset_seconds:
         type: float
         value: -0.09
@@ -553,7 +562,7 @@ empty:
         value: 0.3
       section_width_pixels:
         type: integer
-        value: 6
+        value: 20
       section_edge_fade_pixels:
         type: float
         value: 0.0
@@ -579,8 +588,14 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: color
-        value: '#44ff00'
+        type: curve
+        curve: curves.fire_gradient
+      hue:
+        type: curve
+        curve: curves.hue_sweep
+      hue_mix:
+        type: float
+        value: 0.45
       offset_seconds:
         type: float
         value: -0.08
@@ -589,7 +604,7 @@ empty:
         value: 0.18
       section_width_pixels:
         type: integer
-        value: 2
+        value: 10
       section_edge_fade_pixels:
         type: float
         value: 0.0
@@ -615,8 +630,20 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: color
-        value: '#00fbff'
+        type: curve
+        curve: curves.cool_gradient
+      hue:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 285.0
+      hue_mix:
+        type: float
+        value: 0.4
       offset_seconds:
         type: float
         value: -0.08
@@ -625,7 +652,7 @@ empty:
         value: 0.15
       section_width_pixels:
         type: integer
-        value: 2
+        value: 8
       section_edge_fade_pixels:
         type: float
         value: 0.0
@@ -651,8 +678,24 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: color
-        value: '#ff00c8'
+        type: curve
+        curve: curves.club_gradient
+      hue:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 300.0
+          - time: 0.25
+            value: 210.0
+          - time: 0.5
+            value: 120.0
+          - time: 1.0
+            value: 0.0
+      hue_mix:
+        type: float
+        value: 0.5
       offset_seconds:
         type: float
         value: -0.08
@@ -661,7 +704,7 @@ empty:
         value: 0.15
       section_width_pixels:
         type: integer
-        value: 2
+        value: 9
       section_edge_fade_pixels:
         type: float
         value: 0.0

@@ -1210,13 +1210,26 @@ pub enum Protocol {
     Sacn,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RgbChannelOrder {
+    Rgb,
+    Rbg,
+    Grb,
+    Gbr,
+    Brg,
+    Bgr,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ControllerOutput {
     PatchedDmx {
+        channel_order: RgbChannelOrder,
         universes: Vec<Universe>,
     },
     LinearRgb {
+        channel_order: RgbChannelOrder,
         group: String,
         output_count: usize,
         pixels_per_output: usize,

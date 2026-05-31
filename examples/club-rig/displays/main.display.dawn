@@ -14,6 +14,7 @@ main:
       protocol: artnet
       output:
         type: patched_dmx
+        channel_order: rgb
         universes:
           - id: 1
             range: "1..510"
@@ -23,6 +24,7 @@ main:
       protocol: sacn
       output:
         type: patched_dmx
+        channel_order: rgb
         universes:
           - id: 11
             range: "1..510"

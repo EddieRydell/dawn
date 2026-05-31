@@ -1,0 +1,284 @@
+ease_down:
+  type: curve
+  value_type: float
+  points:
+    - time: 0.0
+      value: 1.0
+    - time: 0.125
+      value: 0.766
+    - time: 0.25
+      value: 0.563
+    - time: 0.375
+      value: 0.391
+    - time: 0.5
+      value: 0.25
+    - time: 0.625
+      value: 0.141
+    - time: 0.75
+      value: 0.063
+    - time: 0.875
+      value: 0.016
+    - time: 1.0
+      value: 0.0
+
+ease_up:
+  type: curve
+  value_type: float
+  points:
+    - time: 0.0
+      value: 0.0
+    - time: 0.125
+      value: 0.234
+    - time: 0.25
+      value: 0.438
+    - time: 0.375
+      value: 0.609
+    - time: 0.5
+      value: 0.75
+    - time: 0.625
+      value: 0.859
+    - time: 0.75
+      value: 0.938
+    - time: 0.875
+      value: 0.984
+    - time: 1.0
+      value: 1.0
+
+ease_down_in:
+  type: curve
+  value_type: float
+  points:
+    - time: 0.0
+      value: 1.0
+    - time: 0.125
+      value: 0.984
+    - time: 0.25
+      value: 0.938
+    - time: 0.375
+      value: 0.859
+    - time: 0.5
+      value: 0.75
+    - time: 0.625
+      value: 0.609
+    - time: 0.75
+      value: 0.438
+    - time: 0.875
+      value: 0.234
+    - time: 1.0
+      value: 0.0
+
+ease_up_in:
+  type: curve
+  value_type: float
+  points:
+    - time: 0.0
+      value: 0.0
+    - time: 0.125
+      value: 0.016
+    - time: 0.25
+      value: 0.063
+    - time: 0.375
+      value: 0.141
+    - time: 0.5
+      value: 0.25
+    - time: 0.625
+      value: 0.391
+    - time: 0.75
+      value: 0.563
+    - time: 0.875
+      value: 0.766
+    - time: 1.0
+      value: 1.0
+
+linear_down:
+  type: curve
+  value_type: float
+  points:
+    - time: 0.0
+      value: 1.0
+    - time: 1.0
+      value: 0.0
+
+linear_up:
+  type: curve
+  value_type: float
+  points:
+    - time: 0.0
+      value: 0.0
+    - time: 1.0
+      value: 1.0
+
+soft_pulse:
+  type: curve
+  value_type: float
+  points:
+    - time: 0.0
+      value: 0.0
+    - time: 0.15
+      value: 0.65
+    - time: 0.32
+      value: 1.0
+    - time: 0.6
+      value: 0.42
+    - time: 1.0
+      value: 0.0
+
+hard_pulse:
+  type: curve
+  value_type: float
+  points:
+    - time: 0.0
+      value: 1.0
+    - time: 0.08
+      value: 1.0
+    - time: 0.22
+      value: 0.45
+    - time: 1.0
+      value: 0.0
+
+center_peak:
+  type: curve
+  value_type: float
+  points:
+    - time: 0.0
+      value: 0.0
+    - time: 0.25
+      value: 0.5
+    - time: 0.5
+      value: 1.0
+    - time: 0.75
+      value: 0.5
+    - time: 1.0
+      value: 0.0
+
+hold_then_drop:
+  type: curve
+  value_type: float
+  points:
+    - time: 0.0
+      value: 1.0
+    - time: 0.6
+      value: 1.0
+    - time: 0.78
+      value: 0.35
+    - time: 1.0
+      value: 0.0
+
+drop_then_hold:
+  type: curve
+  value_type: float
+  points:
+    - time: 0.0
+      value: 1.0
+    - time: 0.18
+      value: 0.35
+    - time: 0.4
+      value: 0.0
+    - time: 1.0
+      value: 0.0
+
+hue_sweep:
+  type: curve
+  value_type: float
+  points:
+    - time: 0.0
+      value: 0.0
+    - time: 0.2
+      value: 55.0
+    - time: 0.4
+      value: 130.0
+    - time: 0.65
+      value: 220.0
+    - time: 0.85
+      value: 300.0
+    - time: 1.0
+      value: 360.0
+
+hue_warm_shift:
+  type: curve
+  value_type: float
+  points:
+    - time: 0.0
+      value: 18.0
+    - time: 0.35
+      value: 38.0
+    - time: 0.7
+      value: 350.0
+    - time: 1.0
+      value: 330.0
+
+hue_cool_shift:
+  type: curve
+  value_type: float
+  points:
+    - time: 0.0
+      value: 185.0
+    - time: 0.35
+      value: 210.0
+    - time: 0.7
+      value: 255.0
+    - time: 1.0
+      value: 285.0
+
+hue_ping_pong:
+  type: curve
+  value_type: float
+  points:
+    - time: 0.0
+      value: 300.0
+    - time: 0.25
+      value: 210.0
+    - time: 0.5
+      value: 120.0
+    - time: 0.75
+      value: 210.0
+    - time: 1.0
+      value: 300.0
+
+warm_gradient:
+  type: curve
+  value_type: color
+  points:
+    - time: 0.0
+      value: '#fff4d6'
+    - time: 0.35
+      value: '#ffb000'
+    - time: 1.0
+      value: '#ff2a00'
+
+cool_gradient:
+  type: curve
+  value_type: color
+  points:
+    - time: 0.0
+      value: '#d9ffff'
+    - time: 0.45
+      value: '#00a6ff'
+    - time: 1.0
+      value: '#3d00ff'
+
+club_gradient:
+  type: curve
+  value_type: color
+  points:
+    - time: 0.0
+      value: '#ffffff'
+    - time: 0.25
+      value: '#ff2bd6'
+    - time: 0.6
+      value: '#2de2ff'
+    - time: 1.0
+      value: '#7cff00'
+
+fire_gradient:
+  type: curve
+  value_type: color
+  points:
+    - time: 0.0
+      value: '#ffffff'
+    - time: 0.18
+      value: '#ffd15c'
+    - time: 0.55
+      value: '#ff4a00'
+    - time: 1.0
+      value: '#1a0000'

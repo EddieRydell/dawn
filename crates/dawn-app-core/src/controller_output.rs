@@ -4,7 +4,8 @@ use std::net::SocketAddr;
 
 use dawn_project::analysis::ProjectAnalysis;
 use dawn_project::model::{
-    ColorModel, Controller, ControllerIndex, ControllerOutput, FixtureIndex, Protocol,
+    Color, ColorModel, Controller, ControllerIndex, ControllerOutput, FixtureIndex, Protocol,
+    RgbChannelOrder,
 };
 
 use crate::output_runtime::OutputFrame;
@@ -36,7 +37,7 @@ impl ControllerOutputPlan {
                 let Some(fixture) = frame.fixtures.get(route.fixture_index.0) else {
                     continue;
                 };
-                let bytes = fixture_rgb_bytes(fixture);
+                let bytes = fixture_rgb_bytes(fixture, route.channel_order);
                 for offset in 0..route.channel_count {
                     let source_channel = route.fixture_channel_offset + offset;
                     let output_channel = route.start_channel + offset;
@@ -74,6 +75,7 @@ pub struct ControllerUniversePlan {
 #[derive(Debug, Clone)]
 struct ControllerRoutePlan {
     fixture_index: FixtureIndex,
+    channel_order: RgbChannelOrder,
     fixture_channel_offset: usize,
     start_channel: usize,
     channel_count: usize,
@@ -291,6 +293,7 @@ pub fn build_output_plan(
             .fixture(route.fixture)
             .ok_or(ControllerOutputError::ProjectNotResolved)?;
         let ControllerOutput::PatchedDmx {
+            channel_order,
             universes: declared_universes,
         } = &controller.output
         else {
@@ -322,6 +325,7 @@ pub fn build_output_plan(
             start: route.start,
             fixture_index: route.fixture,
             fixture_name: &fixture.name,
+            channel_order: *channel_order,
             channel_count,
         })?;
     }
@@ -357,6 +361,7 @@ fn add_linear_rgb_controller(
         .as_ref()
         .ok_or(ControllerOutputError::ProjectNotResolved)?;
     let ControllerOutput::LinearRgb {
+        channel_order,
         group,
         output_count,
         pixels_per_output,
@@ -476,6 +481,7 @@ fn add_linear_rgb_controller(
                 .routes
                 .push(ControllerRoutePlan {
                     fixture_index,
+                    channel_order: *channel_order,
                     fixture_channel_offset: fixture_offset,
                     start_channel,
                     channel_count: segment_channels,
@@ -516,6 +522,7 @@ struct RouteSegmentInput<'a> {
     start: u32,
     fixture_index: FixtureIndex,
     fixture_name: &'a str,
+    channel_order: RgbChannelOrder,
     channel_count: usize,
 }
 
@@ -591,6 +598,7 @@ fn add_route_segments(input: RouteSegmentInput<'_>) -> Result<(), ControllerOutp
             .routes
             .push(ControllerRoutePlan {
                 fixture_index: input.fixture_index,
+                channel_order: input.channel_order,
                 fixture_channel_offset,
                 start_channel,
                 channel_count: segment_channels,
@@ -654,14 +662,26 @@ fn universe_channel_count(universe: &dawn_project::model::Universe) -> usize {
     usize::from(universe.range.end - universe.range.start + 1)
 }
 
-fn fixture_rgb_bytes(fixture: &crate::output_runtime::OutputFixtureFrame) -> Vec<u8> {
+fn fixture_rgb_bytes(
+    fixture: &crate::output_runtime::OutputFixtureFrame,
+    channel_order: RgbChannelOrder,
+) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(fixture.pixels.len() * RGB_CHANNELS_PER_PIXEL);
     for pixel in &fixture.pixels {
-        bytes.push(pixel.color.red);
-        bytes.push(pixel.color.green);
-        bytes.push(pixel.color.blue);
+        bytes.extend(ordered_rgb_bytes(pixel.color, channel_order));
     }
     bytes
+}
+
+fn ordered_rgb_bytes(color: Color, channel_order: RgbChannelOrder) -> [u8; RGB_CHANNELS_PER_PIXEL] {
+    match channel_order {
+        RgbChannelOrder::Rgb => [color.red, color.green, color.blue],
+        RgbChannelOrder::Rbg => [color.red, color.blue, color.green],
+        RgbChannelOrder::Grb => [color.green, color.red, color.blue],
+        RgbChannelOrder::Gbr => [color.green, color.blue, color.red],
+        RgbChannelOrder::Brg => [color.blue, color.red, color.green],
+        RgbChannelOrder::Bgr => [color.blue, color.green, color.red],
+    }
 }
 
 fn fixture_pixel_count(
