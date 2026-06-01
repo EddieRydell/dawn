@@ -9,7 +9,8 @@ use dawn_project::document::{
     SequenceLaneDocument,
 };
 use dawn_project::effect_script::{
-    compile as compile_effect_script, ParamDefault, RuntimeValue, ScriptType,
+    compile as compile_effect_script, lex as lex_effect_script, parse as parse_effect_script,
+    EffectParamSchema, EffectScriptKind, ParamDefault, RuntimeValue, ScriptType,
 };
 use dawn_project::fs::{WorkspaceEntry, WorkspaceEntryKind};
 use dawn_project::model::{
@@ -550,9 +551,17 @@ pub enum SequenceEffectParamCurveSourceDto {
 #[serde(rename_all = "camelCase")]
 pub struct SequenceEffectScriptDto {
     pub name: String,
+    pub kind: SequenceEffectScriptKindDto,
     pub path: String,
     pub import: String,
     pub params: Vec<SequenceEffectScriptParamDto>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SequenceEffectScriptKindDto {
+    Sample,
+    Generator,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -1056,6 +1065,10 @@ impl From<SequenceEffectScriptDocument> for SequenceEffectScriptDto {
     fn from(script: SequenceEffectScriptDocument) -> Self {
         Self {
             name: script.name,
+            kind: match script.kind {
+                EffectScriptKind::Sample => SequenceEffectScriptKindDto::Sample,
+                EffectScriptKind::Generator => SequenceEffectScriptKindDto::Generator,
+            },
             path: script.path,
             import: script.import,
             params: script
@@ -1101,11 +1114,10 @@ fn sequence_effect_params_from_source(
     script_source: &str,
     params: &[dawn_project::document::SequenceEffectParamDocument],
 ) -> Vec<SequenceEffectParamDto> {
-    let Ok(script) = compile_effect_script(script_source) else {
+    let Some(schemas) = effect_param_schemas_from_source(script_source) else {
         return Vec::new();
     };
-    script
-        .params
+    schemas
         .iter()
         .filter_map(|schema| {
             let kind = param_kind_from_script_type(schema.value_type)?;
@@ -1131,6 +1143,15 @@ fn sequence_effect_params_from_source(
         .collect()
 }
 
+fn effect_param_schemas_from_source(script_source: &str) -> Option<Vec<EffectParamSchema>> {
+    if let Ok(script) = compile_effect_script(script_source) {
+        return Some(script.params);
+    }
+    let tokens = lex_effect_script(script_source).ok()?;
+    let ast = parse_effect_script(&tokens).ok()?;
+    Some(ast.params)
+}
+
 fn param_kind_from_script_type(value_type: ScriptType) -> Option<SequenceEffectParamKindDto> {
     match value_type {
         ScriptType::Int => Some(SequenceEffectParamKindDto::Int),
@@ -1142,7 +1163,13 @@ fn param_kind_from_script_type(value_type: ScriptType) -> Option<SequenceEffectP
         ScriptType::CurveFloat => Some(SequenceEffectParamKindDto::FloatCurve),
         ScriptType::CurveColor => Some(SequenceEffectParamKindDto::ColorCurve),
         ScriptType::Marks => Some(SequenceEffectParamKindDto::Marks),
-        ScriptType::Fixture | ScriptType::Pixel | ScriptType::Void => None,
+        ScriptType::Fixture
+        | ScriptType::Pixel
+        | ScriptType::Timeline
+        | ScriptType::Target
+        | ScriptType::TargetItems
+        | ScriptType::TargetItem
+        | ScriptType::Void => None,
     }
 }
 
@@ -1181,7 +1208,13 @@ fn default_param_value(
                 }],
             }),
             ScriptType::Marks => None,
-            ScriptType::Fixture | ScriptType::Pixel | ScriptType::Void => None,
+            ScriptType::Fixture
+            | ScriptType::Pixel
+            | ScriptType::Timeline
+            | ScriptType::Target
+            | ScriptType::TargetItems
+            | ScriptType::TargetItem
+            | ScriptType::Void => None,
         },
     }
 }
@@ -1204,7 +1237,11 @@ fn runtime_value_to_param_value(value: &RuntimeValue) -> Option<SequenceEffectPa
             value: value.values.clone(),
         }),
         RuntimeValue::Marks(_) => None,
-        RuntimeValue::Fixture(_) | RuntimeValue::Pixel(_) => None,
+        RuntimeValue::Fixture(_)
+        | RuntimeValue::Pixel(_)
+        | RuntimeValue::Target(_)
+        | RuntimeValue::TargetItems(_)
+        | RuntimeValue::TargetItem(_) => None,
     }
 }
 

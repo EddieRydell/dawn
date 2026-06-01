@@ -348,3 +348,122 @@ return rgb(value, value, value);
         .iter()
         .any(|error| error.message.contains("expected `(`")));
 }
+
+#[test]
+fn generator_imports_and_emit_blocks_run_once_to_child_effects() {
+    let pulse = compile(
+        r##"
+effect Pulse {
+  param float level = 1.0;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    return rgb(level, level, level);
+  }
+}
+"##,
+    )
+    .unwrap();
+    let generator = compile_with_imports(
+        r##"
+use "./pulse.effect.dawn" as effects;
+
+effect Chase {
+  void generate(Timeline timeline, Target target, float duration) {
+    TargetItems items = sections(target, 2);
+    int item_count = count(items);
+    for (int i = 0; i < item_count; i = i + 1) {
+      TargetItem item = pick(items, i);
+      timeline.emit effects.Pulse {
+        target: item.target;
+        start: item.index;
+        duration: 0.25;
+        params: {
+          level: item.index;
+        };
+      };
+    }
+  }
+}
+"##,
+        &[ImportedEffect {
+            alias: "effects",
+            name: &pulse.name,
+            kind: pulse.kind,
+            params: &pulse.params,
+        }],
+    )
+    .unwrap();
+    let prepared = generator.prepare_params(&BTreeMap::new()).unwrap();
+    let target = GeneratorTarget {
+        pixels: (0..5)
+            .map(|pixel_index| GeneratorTargetPixel {
+                fixture_index: 0,
+                pixel_index,
+                pixel_count: 5,
+            })
+            .collect(),
+    };
+
+    let emitted = run_generator(
+        generator.generator_statements().unwrap(),
+        &prepared,
+        &[],
+        target,
+        1.0,
+    )
+    .unwrap();
+
+    assert_eq!(emitted.len(), 3);
+    assert_eq!(emitted[0].target.pixels.len(), 2);
+    assert_eq!(emitted[1].start_seconds, 1.0);
+    assert_eq!(emitted[2].target.pixels.len(), 1);
+}
+
+#[test]
+fn generator_type_check_rejects_invalid_members_and_missing_child_params() {
+    let pulse = compile(
+        r##"
+effect Pulse {
+  param float required;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    return rgb(required, required, required);
+  }
+}
+"##,
+    )
+    .unwrap();
+    let errors = compile_with_imports(
+        r##"
+use "./pulse.effect.dawn" as effects;
+
+effect BadGenerator {
+  void generate(Timeline timeline, Target target, float duration) {
+    TargetItems items = sections(target, 1);
+    TargetItem item = pick(items, 0);
+    int bad = item.nope;
+    timeline.emit effects.Pulse {
+      target: item.target;
+      start: 0.0;
+      duration: 1.0;
+      params: {};
+    };
+  }
+}
+"##,
+        &[ImportedEffect {
+            alias: "effects",
+            name: &pulse.name,
+            kind: pulse.kind,
+            params: &pulse.params,
+        }],
+    )
+    .unwrap_err();
+
+    assert!(errors
+        .iter()
+        .any(|error| error.message.contains("no member `nope`")));
+    assert!(errors.iter().any(|error| error
+        .message
+        .contains("missing required parameter `required`")));
+}

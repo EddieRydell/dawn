@@ -1,4 +1,4 @@
-use super::{is_float_compatible, ScriptType};
+use super::{is_float_compatible, EffectScriptKind, ScriptType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BuiltinContext {
@@ -67,6 +67,12 @@ pub(super) enum BuiltinFunction {
     Rand,
     PixelIndex,
     PixelCount,
+    Fixtures,
+    Pixels,
+    Sections,
+    Count,
+    Pick,
+    CurveCrossing,
     MarkCount,
     MarkAt,
     MarkPrev,
@@ -94,6 +100,12 @@ impl BuiltinFunction {
             "rand" => Self::Rand,
             "pixel_index" => Self::PixelIndex,
             "pixel_count" => Self::PixelCount,
+            "fixtures" => Self::Fixtures,
+            "pixels" => Self::Pixels,
+            "sections" => Self::Sections,
+            "count" => Self::Count,
+            "pick" => Self::Pick,
+            "curve_crossing" => Self::CurveCrossing,
             "mark_count" => Self::MarkCount,
             "mark_at" => Self::MarkAt,
             "mark_prev" => Self::MarkPrev,
@@ -113,14 +125,57 @@ impl BuiltinFunction {
     }
 
     pub(super) fn return_type(self, args: &[ScriptType]) -> Option<ScriptType> {
+        self.return_type_for_kind(args, EffectScriptKind::Sample)
+    }
+
+    pub(super) fn return_type_for_kind(
+        self,
+        args: &[ScriptType],
+        kind: EffectScriptKind,
+    ) -> Option<ScriptType> {
         match (self, args) {
+            (Self::Floor, [value])
+                if kind == EffectScriptKind::Generator && is_float_compatible(*value) =>
+            {
+                Some(ScriptType::Int)
+            }
             (Self::Sin | Self::Cos | Self::Abs | Self::Floor | Self::Srand, [value])
                 if is_float_compatible(*value) =>
             {
                 Some(ScriptType::Float)
             }
             (Self::Rand, []) => Some(ScriptType::Float),
+            (Self::Rand, [seed, ScriptType::Int])
+                if kind == EffectScriptKind::Generator && is_float_compatible(*seed) =>
+            {
+                Some(ScriptType::Float)
+            }
             (Self::PixelIndex | Self::PixelCount, [ScriptType::Pixel]) => Some(ScriptType::Int),
+            (Self::Fixtures | Self::Pixels, [ScriptType::Target])
+                if kind == EffectScriptKind::Generator =>
+            {
+                Some(ScriptType::TargetItems)
+            }
+            (Self::Sections, [ScriptType::Target, ScriptType::Int])
+                if kind == EffectScriptKind::Generator =>
+            {
+                Some(ScriptType::TargetItems)
+            }
+            (Self::Count, [ScriptType::TargetItems]) if kind == EffectScriptKind::Generator => {
+                Some(ScriptType::Int)
+            }
+            (Self::Pick, [ScriptType::TargetItems, ScriptType::Int])
+                if kind == EffectScriptKind::Generator =>
+            {
+                Some(ScriptType::TargetItem)
+            }
+            (Self::CurveCrossing, [ScriptType::CurveFloat, value, fallback])
+                if kind == EffectScriptKind::Generator
+                    && is_float_compatible(*value)
+                    && is_float_compatible(*fallback) =>
+            {
+                Some(ScriptType::Float)
+            }
             (Self::MarkCount, [ScriptType::Marks]) => Some(ScriptType::Int),
             (Self::MarkAt, [ScriptType::Marks, ScriptType::Int, fallback])
                 if is_float_compatible(*fallback) =>

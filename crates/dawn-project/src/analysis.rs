@@ -4,7 +4,9 @@ use indexmap::IndexMap;
 use serde::Serialize;
 
 use crate::effect_script::{
-    compile as compile_effect_script, CompiledEffect, ParamDefault, RuntimeValue, ScriptDiagnostic,
+    compile as compile_effect_script, compile_with_imports, lex as lex_effect_script,
+    parse as parse_effect_script, CompiledEffect, ImportedEffect, ParamDefault, RuntimeValue,
+    ScriptDiagnostic,
 };
 use crate::fs::{WorkspaceEntryKind, WorkspaceFs};
 use crate::lower::{
@@ -363,7 +365,40 @@ impl AnalysisSession {
         };
 
         if is_effect_script_path(&path) {
-            let result = compile_effect_script(&text);
+            if let Ok(tokens) = lex_effect_script(&text) {
+                if let Ok(ast) = parse_effect_script(&tokens) {
+                    for import in &ast.imports {
+                        let import_path =
+                            resolve_import_path(&path, &Utf8PathBuf::from(import.path.clone()));
+                        if self.visiting.contains(&import_path) {
+                            self.diagnostics.push(ProjectDiagnostic {
+                                path: path.clone(),
+                                range: None,
+                                severity: DiagnosticSeverity::Error,
+                                code: DiagnosticCode::Script,
+                                message: format!(
+                                    "effect script import cycle includes `{}`",
+                                    import_path.to_slash_string()
+                                ),
+                            });
+                        } else if self.can_load_file(&import_path) {
+                            self.visit_file(import_path);
+                        } else {
+                            self.diagnostics.push(ProjectDiagnostic {
+                                path: path.clone(),
+                                range: None,
+                                severity: DiagnosticSeverity::Error,
+                                code: DiagnosticCode::Script,
+                                message: format!(
+                                    "failed to read effect import `{}`: file `{}` was not found",
+                                    import.path, import_path
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+            let result = self.compile_effect_script_with_imports(&path, &text);
             for diagnostic in script_diagnostics(&path, &result) {
                 self.diagnostics.push(diagnostic);
             }
@@ -430,6 +465,32 @@ impl AnalysisSession {
 
     fn can_load_file(&self, path: &Utf8PathBuf) -> bool {
         self.overlays.contains_key(path) || self.fs.is_file(path)
+    }
+
+    fn compile_effect_script_with_imports(
+        &self,
+        path: &Utf8PathBuf,
+        text: &str,
+    ) -> Result<CompiledEffect, Vec<ScriptDiagnostic>> {
+        let tokens = lex_effect_script(text)?;
+        let ast = parse_effect_script(&tokens)?;
+        let mut imports = Vec::new();
+        for import in &ast.imports {
+            let import_path = resolve_import_path(path, &Utf8PathBuf::from(import.path.clone()));
+            if let Some(compiled) = self
+                .scripts
+                .get(&import_path.to_slash_string())
+                .and_then(|script| script.result.as_ref().ok())
+            {
+                imports.push(ImportedEffect {
+                    alias: &import.alias,
+                    name: &compiled.name,
+                    kind: compiled.kind,
+                    params: &compiled.params,
+                });
+            }
+        }
+        compile_with_imports(text, &imports)
     }
 
     fn import_field_range(
@@ -564,7 +625,7 @@ impl AnalysisSession {
         };
 
         if is_effect_script_path(&path) {
-            let result = compile_effect_script(&text);
+            let result = self.compile_effect_script_with_imports(&path, &text);
             for diagnostic in script_diagnostics(&path, &result) {
                 self.diagnostics.push(diagnostic);
             }

@@ -1,10 +1,28 @@
 use std::collections::HashMap;
 
-use super::ast::{EffectAst, Expr, Stmt, UnaryOp};
+use super::ast::{EffectAst, EffectEntrypoint, EmitStmt, Expr, Stmt, UnaryOp};
 use super::builtins::{BuiltinConstant, BuiltinContext, BuiltinFunction};
-use super::{binary_result_type, is_assignable, is_float_compatible, ScriptDiagnostic, ScriptType};
+use super::{
+    binary_result_type, is_assignable, is_float_compatible, EffectParamSchema, EffectScriptKind,
+    ScriptDiagnostic, ScriptType,
+};
 pub fn type_check(effect: &EffectAst) -> Result<(), Vec<ScriptDiagnostic>> {
-    let mut checker = TypeChecker::new(effect);
+    type_check_with_imports(effect, &[])
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ImportedEffect<'a> {
+    pub alias: &'a str,
+    pub name: &'a str,
+    pub kind: EffectScriptKind,
+    pub params: &'a [EffectParamSchema],
+}
+
+pub fn type_check_with_imports(
+    effect: &EffectAst,
+    imports: &[ImportedEffect<'_>],
+) -> Result<(), Vec<ScriptDiagnostic>> {
+    let mut checker = TypeChecker::new(effect, imports);
     checker.check();
     if checker.errors.is_empty() {
         Ok(())
@@ -15,6 +33,8 @@ pub fn type_check(effect: &EffectAst) -> Result<(), Vec<ScriptDiagnostic>> {
 
 struct TypeChecker<'a> {
     effect: &'a EffectAst,
+    imports: &'a [ImportedEffect<'a>],
+    kind: EffectScriptKind,
     scopes: Vec<HashMap<String, Binding>>,
     errors: Vec<ScriptDiagnostic>,
 }
@@ -26,8 +46,12 @@ struct Binding {
 }
 
 impl<'a> TypeChecker<'a> {
-    fn new(effect: &'a EffectAst) -> Self {
+    fn new(effect: &'a EffectAst, imports: &'a [ImportedEffect<'a>]) -> Self {
         let mut scopes = HashMap::new();
+        let kind = match effect.entrypoint {
+            EffectEntrypoint::Sample(_) => EffectScriptKind::Sample,
+            EffectEntrypoint::Generator(_) => EffectScriptKind::Generator,
+        };
         for context in BuiltinContext::ALL {
             let context =
                 BuiltinContext::from_name(context.name()).expect("builtin context names are valid");
@@ -44,8 +68,15 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
+        if kind == EffectScriptKind::Generator {
+            scopes.insert("timeline".to_string(), readonly(ScriptType::Timeline));
+            scopes.insert("target".to_string(), readonly(ScriptType::Target));
+            scopes.insert("duration".to_string(), readonly(ScriptType::Float));
+        }
         Self {
             effect,
+            imports,
+            kind,
             scopes: vec![scopes],
             errors: Vec::new(),
         }
@@ -53,8 +84,15 @@ impl<'a> TypeChecker<'a> {
 
     fn check(&mut self) {
         let mut saw_return = false;
-        self.check_statements(&self.effect.sample, &mut saw_return);
-        if !saw_return {
+        match &self.effect.entrypoint {
+            EffectEntrypoint::Sample(statements) => {
+                self.check_statements(statements, &mut saw_return)
+            }
+            EffectEntrypoint::Generator(statements) => {
+                self.check_statements(statements, &mut saw_return)
+            }
+        }
+        if self.kind == EffectScriptKind::Sample && !saw_return {
             self.errors.push(ScriptDiagnostic {
                 range: None,
                 message: "sample must contain an explicit return".to_string(),
@@ -124,6 +162,13 @@ impl<'a> TypeChecker<'a> {
                 self.pop_scope();
             }
             Stmt::Return(expr) => {
+                if self.kind == EffectScriptKind::Generator {
+                    self.errors.push(ScriptDiagnostic {
+                        range: None,
+                        message: "generator entrypoints cannot return values".to_string(),
+                    });
+                    return;
+                }
                 *saw_return = true;
                 let actual = self.expr_type(expr);
                 if actual != ScriptType::Color {
@@ -132,6 +177,88 @@ impl<'a> TypeChecker<'a> {
                         message: format!("sample must return color, but returned {actual}"),
                     });
                 }
+            }
+            Stmt::Emit(emit) => self.check_emit(emit),
+        }
+    }
+
+    fn check_emit(&mut self, emit: &EmitStmt) {
+        if self.kind != EffectScriptKind::Generator {
+            self.errors.push(ScriptDiagnostic {
+                range: None,
+                message: "only generator effects can emit child effects".to_string(),
+            });
+            return;
+        }
+        if self.expr_type(&emit.target) != ScriptType::Target {
+            self.errors.push(ScriptDiagnostic {
+                range: None,
+                message: "emit target must be Target".to_string(),
+            });
+        }
+        for (label, expr) in [("start", &emit.start), ("duration", &emit.duration)] {
+            let value_type = self.expr_type(expr);
+            if !is_float_compatible(value_type) {
+                self.errors.push(ScriptDiagnostic {
+                    range: None,
+                    message: format!("emit {label} must be float"),
+                });
+            }
+        }
+        let Some(child) = self
+            .imports
+            .iter()
+            .find(|import| import.alias == emit.alias && import.name == emit.effect)
+        else {
+            self.errors.push(ScriptDiagnostic {
+                range: None,
+                message: format!("unresolved emitted effect `{}.{}`", emit.alias, emit.effect),
+            });
+            return;
+        };
+        if child.kind != EffectScriptKind::Sample {
+            self.errors.push(ScriptDiagnostic {
+                range: None,
+                message: format!(
+                    "generator cannot emit generator effect `{}.{}`",
+                    emit.alias, emit.effect
+                ),
+            });
+            return;
+        }
+        for param in &emit.params {
+            let Some(schema) = child.params.iter().find(|schema| schema.name == param.name) else {
+                self.errors.push(ScriptDiagnostic {
+                    range: None,
+                    message: format!(
+                        "emitted effect `{}.{}` has no parameter `{}`",
+                        emit.alias, emit.effect, param.name
+                    ),
+                });
+                continue;
+            };
+            let actual = self.expr_type(&param.expr);
+            if !is_assignable(schema.value_type, actual) {
+                self.errors.push(ScriptDiagnostic {
+                    range: None,
+                    message: format!(
+                        "emitted parameter `{}` must be {}, but found {actual}",
+                        param.name, schema.value_type
+                    ),
+                });
+            }
+        }
+        for schema in child.params {
+            if schema.default.is_none()
+                && !emit.params.iter().any(|param| param.name == schema.name)
+            {
+                self.errors.push(ScriptDiagnostic {
+                    range: None,
+                    message: format!(
+                        "emitted effect is missing required parameter `{}`",
+                        schema.name
+                    ),
+                });
             }
         }
     }
@@ -236,6 +363,39 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Expr::Call { name, args } => self.call_type(name, args),
+            Expr::Member { object, member } => self.member_type(object, member),
+            Expr::Qualified { alias, name } => {
+                if self
+                    .imports
+                    .iter()
+                    .any(|import| import.alias == alias && import.name == name)
+                {
+                    ScriptType::Void
+                } else {
+                    self.errors.push(ScriptDiagnostic {
+                        range: None,
+                        message: format!("unresolved effect `{alias}.{name}`"),
+                    });
+                    ScriptType::Void
+                }
+            }
+        }
+    }
+
+    fn member_type(&mut self, object: &Expr, member: &str) -> ScriptType {
+        match (self.expr_type(object), member) {
+            (ScriptType::TargetItem, "target") => ScriptType::Target,
+            (
+                ScriptType::TargetItem,
+                "index" | "count" | "position" | "fixture_index" | "pixel_start" | "pixel_count",
+            ) => ScriptType::Int,
+            (value_type, _) => {
+                self.errors.push(ScriptDiagnostic {
+                    range: None,
+                    message: format!("type {value_type} has no member `{member}`"),
+                });
+                ScriptType::Void
+            }
         }
     }
 
@@ -277,8 +437,8 @@ impl<'a> TypeChecker<'a> {
             .iter()
             .map(|arg| self.expr_type(arg))
             .collect::<Vec<_>>();
-        let value_type =
-            BuiltinFunction::from_name(name).and_then(|function| function.return_type(&arg_types));
+        let value_type = BuiltinFunction::from_name(name)
+            .and_then(|function| function.return_type_for_kind(&arg_types, self.kind));
         match value_type {
             Some(value_type) => value_type,
             None => {

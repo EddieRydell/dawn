@@ -1013,7 +1013,10 @@ club:
     controllers:
       - name: WallController
         protocol: artnet
-        universes: []
+        output:
+          type: patched_dmx
+          channel_order: rgb
+          universes: []
     patch:
       routes:
         - fixture: 1

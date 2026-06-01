@@ -277,6 +277,7 @@ fn get_sequence_effect_previews(
             &document.object_key,
             document.frame_rate,
             &document.mark_collections,
+            &document,
             effect,
         )? {
             previews.push(preview);

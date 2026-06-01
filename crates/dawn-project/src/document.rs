@@ -8,7 +8,8 @@ use crate::analysis::{
     ProjectAnalysis, ProjectOverlay,
 };
 use crate::effect_script::{
-    compile as compile_effect_script, CompiledEffect, ParamDefault, RuntimeValue, ScriptType,
+    compile as compile_effect_script, lex as lex_effect_script, parse as parse_effect_script,
+    CompiledEffect, EffectEntrypoint, EffectScriptKind, ParamDefault, RuntimeValue, ScriptType,
 };
 use crate::fs::WorkspaceFs;
 use crate::lower::{lower_layout, SymbolResolver};
@@ -218,6 +219,7 @@ pub struct SequenceEffectDocument {
 #[serde(rename_all = "camelCase")]
 pub struct SequenceEffectScriptDocument {
     pub name: String,
+    pub kind: EffectScriptKind,
     pub path: String,
     pub import: String,
     pub params: Vec<SequenceEffectScriptParamDocument>,
@@ -1947,17 +1949,17 @@ fn sequence_effect_script_catalog(
             let Ok(source) = read_text_with_overlays(fs, &path, overlays) else {
                 continue;
             };
-            let Ok(compiled) = compile_effect_script(&source) else {
+            let Some((name, kind, params)) = effect_script_catalog_entry(&source) else {
                 continue;
             };
             by_path.insert(
                 path.clone(),
                 SequenceEffectScriptDocument {
-                    name: compiled.name,
+                    name,
+                    kind,
                     path: path.to_slash_string(),
                     import: serialized_import_path(sequence_path, &path),
-                    params: compiled
-                        .params
+                    params: params
                         .into_iter()
                         .map(|param| SequenceEffectScriptParamDocument {
                             name: param.name,
@@ -1975,6 +1977,25 @@ fn sequence_effect_script_catalog(
             .then_with(|| left.path.cmp(&right.path))
     });
     scripts
+}
+
+fn effect_script_catalog_entry(
+    source: &str,
+) -> Option<(
+    String,
+    EffectScriptKind,
+    Vec<crate::effect_script::EffectParamSchema>,
+)> {
+    if let Ok(compiled) = compile_effect_script(source) {
+        return Some((compiled.name, compiled.kind, compiled.params));
+    }
+    let tokens = lex_effect_script(source).ok()?;
+    let ast = parse_effect_script(&tokens).ok()?;
+    let kind = match ast.entrypoint {
+        EffectEntrypoint::Sample(_) => EffectScriptKind::Sample,
+        EffectEntrypoint::Generator(_) => EffectScriptKind::Generator,
+    };
+    Some((ast.name, kind, ast.params))
 }
 
 fn script_diagnostics_message(diagnostics: &[crate::effect_script::ScriptDiagnostic]) -> String {
@@ -2109,7 +2130,11 @@ fn runtime_value_to_authored_param(value: &RuntimeValue) -> EffectParam<Authored
             value: value.clone(),
         },
         RuntimeValue::Marks(_) => unreachable!("marks params cannot declare defaults"),
-        RuntimeValue::Fixture(_) | RuntimeValue::Pixel(_) => {
+        RuntimeValue::Fixture(_)
+        | RuntimeValue::Pixel(_)
+        | RuntimeValue::Target(_)
+        | RuntimeValue::TargetItems(_)
+        | RuntimeValue::TargetItem(_) => {
             unreachable!("params cannot default to context values")
         }
     }
@@ -2156,9 +2181,13 @@ fn type_default_param(value_type: ScriptType, options: &[String]) -> EffectParam
         ScriptType::Marks => EffectParam::Marks {
             key: "marks".to_string(),
         },
-        ScriptType::Fixture | ScriptType::Pixel | ScriptType::Void => {
-            unreachable!("context and void types are not params")
-        }
+        ScriptType::Fixture
+        | ScriptType::Pixel
+        | ScriptType::Timeline
+        | ScriptType::Target
+        | ScriptType::TargetItems
+        | ScriptType::TargetItem
+        | ScriptType::Void => unreachable!("context, generator, and void types are not params"),
     }
 }
 

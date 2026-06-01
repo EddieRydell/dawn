@@ -947,6 +947,7 @@ mod tests {
             mark_collections: Vec::new(),
             lanes: Vec::new(),
             effect_scripts: Vec::new(),
+            curve_library: Vec::new(),
             effects: vec![effect],
             degraded: false,
         }

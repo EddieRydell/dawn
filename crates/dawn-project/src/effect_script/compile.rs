@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::ast::{BinaryOp, EffectAst, Expr, Stmt, UnaryOp};
+use super::ast::{BinaryOp, EffectAst, EffectEntrypoint, Expr, Stmt, UnaryOp};
 use super::builtins::{BuiltinConstant, BuiltinContext, BuiltinFunction};
 use super::bytecode::{
     BinaryInstruction, BoolSlot, BytecodeProgram, ColorSlot, ContextSlot, FixtureSlot, FloatSlot,
@@ -44,7 +44,10 @@ impl<'a> Compiler<'a> {
         compiler
     }
     fn finish(mut self) -> BytecodeProgram {
-        for statement in &self.effect.sample {
+        let EffectEntrypoint::Sample(statements) = &self.effect.entrypoint else {
+            unreachable!("generator effects are not sample-compiled");
+        };
+        for statement in statements {
             self.compile_statement(statement);
         }
         BytecodeProgram {
@@ -153,6 +156,7 @@ impl<'a> Compiler<'a> {
                 let value = self.compile_expr(expr).color();
                 self.emit(Instruction::ReturnColor(value));
             }
+            Stmt::Emit(_) => unreachable!("sample effects cannot emit"),
         }
     }
     fn compile_expr(&mut self, expr: &Expr) -> ValueSlot {
@@ -207,6 +211,9 @@ impl<'a> Compiler<'a> {
             }
             Expr::Binary { left, op, right } => self.compile_binary(left, *op, right),
             Expr::Call { name, args } => self.compile_call(name, args),
+            Expr::Member { .. } | Expr::Qualified { .. } => {
+                unreachable!("sample type checker rejects generator expressions")
+            }
         }
     }
     fn compile_binary(&mut self, left: &Expr, op: BinaryOp, right: &Expr) -> ValueSlot {
@@ -395,6 +402,9 @@ impl<'a> Compiler<'a> {
                     .expect("type checker validates binary expression")
             }
             Expr::Call { name, args } => self.call_type(name, args),
+            Expr::Member { .. } | Expr::Qualified { .. } => {
+                unreachable!("sample type checker rejects generator expressions")
+            }
         }
     }
     fn call_type(&self, name: &str, args: &[Expr]) -> ScriptType {
@@ -571,6 +581,14 @@ impl<'a> Compiler<'a> {
                 self.emit(Instruction::Hsv(dest, hue, saturation, value));
                 ValueSlot::Color(dest)
             }
+            BuiltinFunction::Fixtures
+            | BuiltinFunction::Pixels
+            | BuiltinFunction::Sections
+            | BuiltinFunction::Count
+            | BuiltinFunction::Pick
+            | BuiltinFunction::CurveCrossing => {
+                unreachable!("sample compiler does not emit generator builtins")
+            }
         }
     }
     fn compile_float_arg(&mut self, expr: &Expr) -> FloatSlot {
@@ -661,7 +679,13 @@ impl<'a> Compiler<'a> {
                 self.registers.pixels += 1;
                 ValueSlot::Pixel(slot)
             }
-            ScriptType::Void => unreachable!("void values are not stored"),
+            ScriptType::Timeline
+            | ScriptType::Target
+            | ScriptType::TargetItems
+            | ScriptType::TargetItem
+            | ScriptType::Void => {
+                unreachable!("generator values are not stored in sample bytecode")
+            }
         }
     }
     fn allocate_float(&mut self) -> FloatSlot {

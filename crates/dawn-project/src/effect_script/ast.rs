@@ -5,12 +5,25 @@ use super::{EffectParamSchema, ScriptType};
 #[derive(Debug, Clone, PartialEq)]
 pub struct EffectAst {
     pub name: String,
+    pub imports: Vec<EffectImport>,
     pub params: Vec<EffectParamSchema>,
-    pub(super) sample: Vec<Stmt>,
+    pub entrypoint: EffectEntrypoint,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectImport {
+    pub path: String,
+    pub alias: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum Stmt {
+pub enum EffectEntrypoint {
+    Sample(Vec<Stmt>),
+    Generator(Vec<Stmt>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Stmt {
     Let {
         name: String,
         value_type: ScriptType,
@@ -35,10 +48,11 @@ pub(super) enum Stmt {
         else_body: Vec<Stmt>,
     },
     Return(Expr),
+    Emit(EmitStmt),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum Expr {
+pub enum Expr {
     Float(f64),
     Int(i64),
     Bool(bool),
@@ -57,16 +71,24 @@ pub(super) enum Expr {
         name: String,
         args: Vec<Expr>,
     },
+    Member {
+        object: Box<Expr>,
+        member: String,
+    },
+    Qualified {
+        alias: String,
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum UnaryOp {
+pub enum UnaryOp {
     Negate,
     Not,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum BinaryOp {
+pub enum BinaryOp {
     Add,
     Subtract,
     Multiply,
@@ -79,4 +101,20 @@ pub(super) enum BinaryOp {
     NotEqual,
     LogicalAnd,
     LogicalOr,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmitStmt {
+    pub alias: String,
+    pub effect: String,
+    pub target: Expr,
+    pub start: Expr,
+    pub duration: Expr,
+    pub params: Vec<EmitParam>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmitParam {
+    pub name: String,
+    pub expr: Expr,
 }

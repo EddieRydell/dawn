@@ -1,6 +1,8 @@
 use crate::model::{Color, Flags};
 
-use super::ast::{BinaryOp, EffectAst, Expr, Stmt, UnaryOp};
+use super::ast::{
+    BinaryOp, EffectAst, EffectEntrypoint, EffectImport, EmitParam, EmitStmt, Expr, Stmt, UnaryOp,
+};
 use super::lexer::{Token, TokenKind};
 use super::params;
 use super::{
@@ -34,16 +36,23 @@ struct Parser<'a> {
 
 impl Parser<'_> {
     fn effect(&mut self) -> Result<EffectAst, ScriptDiagnostic> {
+        let mut imports = Vec::new();
+        while self.at_keyword("use") {
+            imports.push(self.import()?);
+        }
         self.keyword("effect")?;
         let name = self.identifier("effect name")?;
         self.symbol('{')?;
         let mut params = Vec::new();
-        let mut sample = None;
+        let mut entrypoint = None;
         while !self.at_symbol('}') && !self.at_eof() {
             if self.at_keyword("param") {
                 params.push(self.param()?);
             } else {
-                sample = Some(self.sample()?);
+                if entrypoint.is_some() {
+                    return Err(self.error_here("effect must declare exactly one entrypoint"));
+                }
+                entrypoint = Some(self.entrypoint()?);
             }
         }
         self.symbol('}')?;
@@ -52,9 +61,23 @@ impl Parser<'_> {
         }
         Ok(EffectAst {
             name,
+            imports,
             params,
-            sample: sample.ok_or_else(|| self.error_here("missing sample entrypoint"))?,
+            entrypoint: entrypoint.ok_or_else(|| self.error_here("missing effect entrypoint"))?,
         })
+    }
+
+    fn import(&mut self) -> Result<EffectImport, ScriptDiagnostic> {
+        self.keyword("use")?;
+        let token = self.advance().clone();
+        let path = match token.kind {
+            TokenKind::String(value) => value,
+            _ => return Err(self.error_at(&token, "expected import path string")),
+        };
+        self.keyword("as")?;
+        let alias = self.identifier("import alias")?;
+        self.symbol(';')?;
+        Ok(EffectImport { path, alias })
     }
 
     fn param(&mut self) -> Result<EffectParamSchema, ScriptDiagnostic> {
@@ -109,7 +132,24 @@ impl Parser<'_> {
         Ok(options)
     }
 
-    fn sample(&mut self) -> Result<Vec<Stmt>, ScriptDiagnostic> {
+    fn entrypoint(&mut self) -> Result<EffectEntrypoint, ScriptDiagnostic> {
+        if self.consume_keyword("void") {
+            let name = self.identifier("function name")?;
+            if name != "generate" {
+                return Err(self.error_here("void entrypoint must be generate"));
+            }
+            self.symbol('(')?;
+            self.expect_arg("Timeline", "timeline")?;
+            self.symbol(',')?;
+            self.expect_arg("Target", "target")?;
+            self.symbol(',')?;
+            self.expect_arg("float", "duration")?;
+            self.symbol(')')?;
+            self.symbol('{')?;
+            let statements = self.block_statements()?;
+            self.symbol('}')?;
+            return Ok(EffectEntrypoint::Generator(statements));
+        }
         let return_type = self.type_name()?;
         if return_type != ScriptType::Color {
             return Err(self.error_here("sample must return color"));
@@ -130,7 +170,7 @@ impl Parser<'_> {
         self.symbol('{')?;
         let statements = self.block_statements()?;
         self.symbol('}')?;
-        Ok(statements)
+        Ok(EffectEntrypoint::Sample(statements))
     }
 
     fn block_statements(&mut self) -> Result<Vec<Stmt>, ScriptDiagnostic> {
@@ -153,6 +193,16 @@ impl Parser<'_> {
         if self.consume_keyword("if") {
             return self.if_statement();
         }
+        if self.at_keyword("timeline")
+            && self
+                .token_at(self.index + 1)
+                .is_some_and(|token| matches!(token.kind, TokenKind::Symbol('.')))
+            && self.token_at(self.index + 2).is_some_and(
+                |token| matches!(&token.kind, TokenKind::Ident(value) if value == "emit"),
+            )
+        {
+            return self.emit_statement();
+        }
         if self.peek_type_name() {
             return self.let_statement(true);
         }
@@ -166,6 +216,63 @@ impl Parser<'_> {
         let expr = self.expr()?;
         self.symbol(';')?;
         Ok(Stmt::Expr(expr))
+    }
+
+    fn emit_statement(&mut self) -> Result<Stmt, ScriptDiagnostic> {
+        self.keyword("timeline")?;
+        self.symbol('.')?;
+        self.keyword("emit")?;
+        let alias = self.identifier("effect import alias")?;
+        self.symbol('.')?;
+        let effect = self.identifier("effect name")?;
+        self.symbol('{')?;
+        let mut target = None;
+        let mut start = None;
+        let mut duration = None;
+        let mut params = None;
+        while !self.at_symbol('}') && !self.at_eof() {
+            let field = self.identifier("emit field")?;
+            self.symbol(':')?;
+            match field.as_str() {
+                "target" => {
+                    target = Some(self.expr()?);
+                    self.symbol(';')?;
+                }
+                "start" => {
+                    start = Some(self.expr()?);
+                    self.symbol(';')?;
+                }
+                "duration" => {
+                    duration = Some(self.expr()?);
+                    self.symbol(';')?;
+                }
+                "params" => {
+                    self.symbol('{')?;
+                    let mut values = Vec::new();
+                    while !self.at_symbol('}') && !self.at_eof() {
+                        let name = self.identifier("emitted parameter")?;
+                        self.symbol(':')?;
+                        let expr = self.expr()?;
+                        self.symbol(';')?;
+                        values.push(EmitParam { name, expr });
+                    }
+                    self.symbol('}')?;
+                    self.symbol(';')?;
+                    params = Some(values);
+                }
+                _ => return Err(self.error_here(&format!("unknown emit field `{field}`"))),
+            }
+        }
+        self.symbol('}')?;
+        self.symbol(';')?;
+        Ok(Stmt::Emit(EmitStmt {
+            alias,
+            effect,
+            target: target.ok_or_else(|| self.error_here("emit is missing target"))?,
+            start: start.ok_or_else(|| self.error_here("emit is missing start"))?,
+            duration: duration.ok_or_else(|| self.error_here("emit is missing duration"))?,
+            params: params.unwrap_or_default(),
+        }))
     }
 
     fn let_statement(&mut self, semicolon: bool) -> Result<Stmt, ScriptDiagnostic> {
@@ -372,7 +479,7 @@ impl Parser<'_> {
 
     fn primary(&mut self) -> Result<Expr, ScriptDiagnostic> {
         let token = self.advance().clone();
-        match &token.kind {
+        let mut expr = match &token.kind {
             TokenKind::Number(raw) => {
                 if raw.contains('.') {
                     raw.parse::<f64>()
@@ -415,7 +522,25 @@ impl Parser<'_> {
                 Ok(expr)
             }
             _ => Err(self.error_at(&token, "expected expression")),
+        }?;
+        while self.consume_symbol('.') {
+            let member = self.identifier("member name")?;
+            expr = match expr {
+                Expr::Ident(alias)
+                    if alias != "item" && alias != "target" && alias != "timeline" =>
+                {
+                    Expr::Qualified {
+                        alias,
+                        name: member,
+                    }
+                }
+                _ => Expr::Member {
+                    object: Box::new(expr),
+                    member,
+                },
+            };
         }
+        Ok(expr)
     }
 
     fn param_default_value(
@@ -481,6 +606,8 @@ impl Parser<'_> {
             "float" => ScriptType::Float,
             "Fixture" => ScriptType::Fixture,
             "Pixel" => ScriptType::Pixel,
+            "Timeline" => ScriptType::Timeline,
+            "Target" => ScriptType::Target,
             _ => unreachable!("fixed parser type"),
         };
         if actual_type != expected_type {
@@ -505,6 +632,10 @@ impl Parser<'_> {
             "flags" => Ok(ScriptType::Flags),
             "Fixture" => Ok(ScriptType::Fixture),
             "Pixel" => Ok(ScriptType::Pixel),
+            "Timeline" => Ok(ScriptType::Timeline),
+            "Target" => Ok(ScriptType::Target),
+            "TargetItems" => Ok(ScriptType::TargetItems),
+            "TargetItem" => Ok(ScriptType::TargetItem),
             "curve" => {
                 self.symbol('<')?;
                 let inner = self.identifier("curve value type")?;
@@ -596,6 +727,10 @@ impl Parser<'_> {
                         | "flags"
                         | "Fixture"
                         | "Pixel"
+                        | "Timeline"
+                        | "Target"
+                        | "TargetItems"
+                        | "TargetItem"
                 ) =>
             {
                 true

@@ -9,6 +9,7 @@ mod ast;
 mod builtins;
 mod bytecode;
 mod compile;
+mod generator;
 mod lexer;
 mod params;
 mod parser;
@@ -18,14 +19,15 @@ mod type_check;
 #[cfg(test)]
 mod tests;
 
-pub use ast::EffectAst;
+pub use ast::{EffectAst, EffectEntrypoint, EffectImport, Stmt};
 pub use lexer::{lex, Token};
 pub use parser::parse;
-pub use type_check::type_check;
+pub use type_check::{type_check, type_check_with_imports, ImportedEffect};
 
 use ast::BinaryOp;
 pub use bytecode::BytecodeStats;
 use bytecode::{stats_for_program, BytecodeProgram};
+pub use generator::{run_generator, GeneratedChildEffect};
 pub use params::{EffectSampleScratch, PreparedEffectParams};
 
 #[derive(Debug, Clone)]
@@ -49,8 +51,11 @@ pub struct SourcePosition {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledEffect {
     pub name: String,
+    pub kind: EffectScriptKind,
+    pub imports: Vec<EffectImport>,
     pub params: Vec<EffectParamSchema>,
-    bytecode: BytecodeProgram,
+    bytecode: Option<BytecodeProgram>,
+    generator: Option<Vec<Stmt>>,
 }
 
 impl CompiledEffect {
@@ -92,7 +97,10 @@ impl CompiledEffect {
         pixel: PixelContext,
         params: &PreparedEffectParams,
     ) -> Result<Color, RuntimeError> {
-        runtime::run(&self.bytecode, progress, seconds, fixture, pixel, params)
+        let bytecode = self.bytecode.as_ref().ok_or_else(|| RuntimeError {
+            message: format!("effect `{}` is not a sample effect", self.name),
+        })?;
+        runtime::run(bytecode, progress, seconds, fixture, pixel, params)
     }
 
     pub fn sample_prepared_with_scratch(
@@ -104,20 +112,29 @@ impl CompiledEffect {
         params: &PreparedEffectParams,
         scratch: &mut EffectSampleScratch,
     ) -> Result<Color, RuntimeError> {
-        runtime::run_with_scratch(
-            &self.bytecode,
-            progress,
-            seconds,
-            fixture,
-            pixel,
-            params,
-            scratch,
-        )
+        let bytecode = self.bytecode.as_ref().ok_or_else(|| RuntimeError {
+            message: format!("effect `{}` is not a sample effect", self.name),
+        })?;
+        runtime::run_with_scratch(bytecode, progress, seconds, fixture, pixel, params, scratch)
     }
 
     pub fn bytecode_stats(&self) -> BytecodeStats {
-        stats_for_program(&self.bytecode, self.params.len())
+        self.bytecode
+            .as_ref()
+            .map(|bytecode| stats_for_program(bytecode, self.params.len()))
+            .unwrap_or_default()
     }
+
+    pub fn generator_statements(&self) -> Option<&[Stmt]> {
+        self.generator.as_deref()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectScriptKind {
+    Sample,
+    Generator,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,6 +175,10 @@ pub enum ScriptType {
     Flags,
     Fixture,
     Pixel,
+    Timeline,
+    Target,
+    TargetItems,
+    TargetItem,
     Void,
 }
 
@@ -255,6 +276,10 @@ impl fmt::Display for ScriptType {
             Self::Flags => "flags",
             Self::Fixture => "Fixture",
             Self::Pixel => "Pixel",
+            Self::Timeline => "Timeline",
+            Self::Target => "Target",
+            Self::TargetItems => "TargetItems",
+            Self::TargetItem => "TargetItem",
             Self::Void => "void",
         })
     }
@@ -272,6 +297,9 @@ pub enum RuntimeValue {
     Flags(Flags),
     Fixture(FixtureContext),
     Pixel(PixelContext),
+    Target(GeneratorTarget),
+    TargetItems(Vec<GeneratorTargetItem>),
+    TargetItem(GeneratorTargetItem),
 }
 
 impl RuntimeValue {
@@ -290,8 +318,34 @@ impl RuntimeValue {
             Self::Flags(_) => ScriptType::Flags,
             Self::Fixture(_) => ScriptType::Fixture,
             Self::Pixel(_) => ScriptType::Pixel,
+            Self::Target(_) => ScriptType::Target,
+            Self::TargetItems(_) => ScriptType::TargetItems,
+            Self::TargetItem(_) => ScriptType::TargetItem,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratorTarget {
+    pub pixels: Vec<GeneratorTargetPixel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratorTargetPixel {
+    pub fixture_index: usize,
+    pub pixel_index: usize,
+    pub pixel_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratorTargetItem {
+    pub target: GeneratorTarget,
+    pub index: usize,
+    pub count: usize,
+    pub position: usize,
+    pub fixture_index: usize,
+    pub pixel_start: usize,
+    pub pixel_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -314,11 +368,36 @@ pub fn compile(text: &str) -> Result<CompiledEffect, Vec<ScriptDiagnostic>> {
     Ok(compile_ast(effect))
 }
 
+pub fn compile_with_imports(
+    text: &str,
+    imports: &[ImportedEffect<'_>],
+) -> Result<CompiledEffect, Vec<ScriptDiagnostic>> {
+    let tokens = lex(text)?;
+    let effect = parse(&tokens)?;
+    type_check_with_imports(&effect, imports)?;
+    Ok(compile_ast(effect))
+}
+
 pub fn compile_ast(effect: EffectAst) -> CompiledEffect {
-    let bytecode = compile::compile_effect(&effect);
+    let kind = match &effect.entrypoint {
+        EffectEntrypoint::Sample(_) => EffectScriptKind::Sample,
+        EffectEntrypoint::Generator(_) => EffectScriptKind::Generator,
+    };
+    let bytecode = if kind == EffectScriptKind::Sample {
+        Some(compile::compile_effect(&effect))
+    } else {
+        None
+    };
+    let generator = match &effect.entrypoint {
+        EffectEntrypoint::Generator(statements) => Some(statements.clone()),
+        EffectEntrypoint::Sample(_) => None,
+    };
     CompiledEffect {
         name: effect.name,
+        kind,
+        imports: effect.imports,
         params: effect.params,
         bytecode,
+        generator,
     }
 }

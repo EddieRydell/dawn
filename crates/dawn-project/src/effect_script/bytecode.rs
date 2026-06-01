@@ -7,7 +7,7 @@ pub(super) struct BytecodeProgram {
     pub(super) registers: RegisterCounts,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BytecodeStats {
     pub instruction_count: usize,
     pub constant_count: usize,

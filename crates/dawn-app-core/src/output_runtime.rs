@@ -6,12 +6,14 @@ use dawn_project::document::{
     SequenceDocument, SequenceEffectParamDocument, SequenceMarkCollectionDocument,
 };
 use dawn_project::effect_script::{
-    BytecodeStats, CompiledEffect, EffectSampleScratch, FixtureContext, PixelContext,
-    PreparedEffectParams, RuntimeError, RuntimeValue,
+    run_generator, BytecodeStats, CompiledEffect, EffectSampleScratch, EffectScriptKind,
+    FixtureContext, GeneratorTarget, GeneratorTargetPixel, PixelContext, PreparedEffectParams,
+    RuntimeError, RuntimeValue,
 };
 use dawn_project::model::{
     Color, Distance, DistanceSpan, EffectParam, FixtureId, Resolved, SequenceEffectScope,
 };
+use dawn_project::path::{resolve_import_path, PathStringExt, Utf8PathBuf};
 use dawn_project::render::{layout_render_plan, GeometryRenderBounds, GeometryRenderPoint};
 
 #[derive(Debug, Clone)]
@@ -114,46 +116,59 @@ impl SequenceFrameEvaluator {
             })
             .collect::<Vec<_>>();
 
-        let effects = document
-            .effects
-            .iter()
-            .filter(|effect| {
-                effect_filter
-                    .map(|ids| ids.contains(&effect.id))
-                    .unwrap_or(true)
-            })
-            .filter_map(|effect| {
-                let render = effect.render.as_ref()?;
-                let render_plan = match analysis.compiled_script_for_key(&render.script_key) {
-                    Some(script) => match prepare_params_from_document(
+        let mut effects = Vec::new();
+        for effect in document.effects.iter().filter(|effect| {
+            effect_filter
+                .map(|ids| ids.contains(&effect.id))
+                .unwrap_or(true)
+        }) {
+            let Some(render) = effect.render.as_ref() else {
+                continue;
+            };
+            match analysis.compiled_script_for_key(&render.script_key) {
+                Some(script) if script.kind == EffectScriptKind::Generator => {
+                    match prepare_generated_effects(
+                        analysis,
+                        document,
+                        effect.id,
+                        effect.start_seconds,
+                        effect.duration_seconds,
+                        effect.scope,
+                        script,
+                        render,
+                        &fixture_templates,
+                    ) {
+                        Ok(children) => effects.extend(children),
+                        Err(error) => effects.push(PreparedSequenceEffect {
+                            id: effect.id,
+                            start_seconds: effect.start_seconds,
+                            duration_seconds: effect.duration_seconds,
+                            render: PreparedEffectRender::BadParams(error),
+                        }),
+                    }
+                }
+                Some(script) => effects.push(PreparedSequenceEffect {
+                    id: effect.id,
+                    start_seconds: effect.start_seconds,
+                    duration_seconds: effect.duration_seconds,
+                    render: prepare_sample_render(
                         script,
                         &render.params,
                         &document.mark_collections,
                         effect.start_seconds,
-                    ) {
-                        Ok(prepared_params) => PreparedEffectRender::Ready {
-                            script: script.clone(),
-                            target_pixels: prepare_effect_pixels(
-                                effect.scope,
-                                &render.target_pixels,
-                                &fixture_templates,
-                            ),
-                            prepared_params,
-                            scratch: EffectSampleScratch::new(script.bytecode_stats()),
-                            _bytecode_stats: script.bytecode_stats(),
-                        },
-                        Err(error) => PreparedEffectRender::BadParams(error),
-                    },
-                    None => PreparedEffectRender::MissingScript(render.script_key.clone()),
-                };
-                Some(PreparedSequenceEffect {
+                        effect.scope,
+                        &render.target_pixels,
+                        &fixture_templates,
+                    ),
+                }),
+                None => effects.push(PreparedSequenceEffect {
                     id: effect.id,
                     start_seconds: effect.start_seconds,
                     duration_seconds: effect.duration_seconds,
-                    render: render_plan,
-                })
-            })
-            .collect();
+                    render: PreparedEffectRender::MissingScript(render.script_key.clone()),
+                }),
+            }
+        }
 
         Ok(Self {
             source: OutputSourceMetadata {
@@ -358,6 +373,165 @@ impl SequenceFrameEvaluator {
             fixtures,
         }
     }
+}
+
+fn prepare_sample_render(
+    script: &CompiledEffect,
+    params: &[SequenceEffectParamDocument],
+    mark_collections: &[SequenceMarkCollectionDocument],
+    effect_start_seconds: f64,
+    scope: SequenceEffectScope,
+    target_pixels: &[dawn_project::document::SequenceEffectPixelDocument],
+    fixture_templates: &[OutputFixtureFrame],
+) -> PreparedEffectRender {
+    match prepare_params_from_document(script, params, mark_collections, effect_start_seconds) {
+        Ok(prepared_params) => PreparedEffectRender::Ready {
+            script: script.clone(),
+            target_pixels: prepare_effect_pixels(scope, target_pixels, fixture_templates),
+            prepared_params,
+            scratch: EffectSampleScratch::new(script.bytecode_stats()),
+            _bytecode_stats: script.bytecode_stats(),
+        },
+        Err(error) => PreparedEffectRender::BadParams(error),
+    }
+}
+
+fn prepare_generated_effects(
+    analysis: &ProjectAnalysis,
+    document: &SequenceDocument,
+    parent_id: u32,
+    parent_start_seconds: f64,
+    parent_duration_seconds: f64,
+    parent_scope: SequenceEffectScope,
+    generator: &CompiledEffect,
+    render: &dawn_project::document::SequenceEffectRenderDocument,
+    fixture_templates: &[OutputFixtureFrame],
+) -> Result<Vec<PreparedSequenceEffect>, RuntimeError> {
+    let prepared_params = prepare_params_from_document(
+        generator,
+        &render.params,
+        &document.mark_collections,
+        parent_start_seconds,
+    )?;
+    let param_names = generator
+        .params
+        .iter()
+        .map(|param| param.name.clone())
+        .collect::<Vec<_>>();
+    let target = GeneratorTarget {
+        pixels: render
+            .target_pixels
+            .iter()
+            .map(|pixel| GeneratorTargetPixel {
+                fixture_index: pixel.fixture_index,
+                pixel_index: pixel.pixel_index,
+                pixel_count: pixel.pixel_count,
+            })
+            .collect(),
+    };
+    let targets = generator_targets_for_scope(parent_scope, target);
+    let statements = generator
+        .generator_statements()
+        .ok_or_else(|| RuntimeError {
+            message: format!("effect `{}` is not a generator effect", generator.name),
+        })?;
+    let mut children = Vec::new();
+    for target in targets {
+        children.extend(run_generator(
+            statements,
+            &prepared_params,
+            &param_names,
+            target,
+            parent_duration_seconds,
+        )?);
+    }
+    let parent_path = Utf8PathBuf::from(render.script_key.clone());
+    children
+        .into_iter()
+        .map(|child| {
+            let import = generator
+                .imports
+                .iter()
+                .find(|import| import.alias == child.alias)
+                .ok_or_else(|| RuntimeError {
+                    message: format!("generator import alias `{}` was not found", child.alias),
+                })?;
+            let child_path =
+                resolve_import_path(&parent_path, &Utf8PathBuf::from(import.path.clone()))
+                    .to_slash_string();
+            let child_script = analysis
+                .compiled_script_for_key(&child_path)
+                .ok_or_else(|| RuntimeError {
+                    message: format!("compiled child script `{child_path}` was not found"),
+                })?;
+            if child_script.kind != EffectScriptKind::Sample || child_script.name != child.effect {
+                return Err(RuntimeError {
+                    message: format!(
+                        "emitted child `{}.{}` is not a sample effect",
+                        child.alias, child.effect
+                    ),
+                });
+            }
+            let prepared_params = child_script.prepare_params(&child.params)?;
+            Ok(PreparedSequenceEffect {
+                id: parent_id,
+                start_seconds: parent_start_seconds + child.start_seconds,
+                duration_seconds: child.duration_seconds,
+                render: PreparedEffectRender::Ready {
+                    script: child_script.clone(),
+                    target_pixels: prepare_effect_pixels(
+                        SequenceEffectScope::WholeTarget,
+                        &child
+                            .target
+                            .pixels
+                            .iter()
+                            .map(
+                                |pixel| dawn_project::document::SequenceEffectPixelDocument {
+                                    fixture_index: pixel.fixture_index,
+                                    pixel_index: pixel.pixel_index,
+                                    pixel_count: pixel.pixel_count,
+                                },
+                            )
+                            .collect::<Vec<_>>(),
+                        fixture_templates,
+                    ),
+                    prepared_params,
+                    scratch: EffectSampleScratch::new(child_script.bytecode_stats()),
+                    _bytecode_stats: child_script.bytecode_stats(),
+                },
+            })
+        })
+        .collect()
+}
+
+fn generator_targets_for_scope(
+    scope: SequenceEffectScope,
+    target: GeneratorTarget,
+) -> Vec<GeneratorTarget> {
+    match scope {
+        SequenceEffectScope::WholeTarget => vec![target],
+        SequenceEffectScope::PerFixture => {
+            let mut targets = Vec::new();
+            for pixel in target.pixels {
+                match targets.last_mut() {
+                    Some(last) if same_generator_target_fixture(last, pixel.fixture_index) => {
+                        last.pixels.push(pixel);
+                    }
+                    _ => targets.push(GeneratorTarget {
+                        pixels: vec![pixel],
+                    }),
+                }
+            }
+            targets
+        }
+    }
+}
+
+fn same_generator_target_fixture(target: &GeneratorTarget, fixture_index: usize) -> bool {
+    target
+        .pixels
+        .first()
+        .is_some_and(|pixel| pixel.fixture_index == fixture_index)
 }
 
 #[derive(Debug, Clone)]
@@ -588,7 +762,11 @@ mod tests {
     use dawn_project::model::{Color, SequenceEffectScope};
     use dawn_project::path::{utf8_path, Utf8PathBuf};
 
-    use super::{pixel_context_for_effect, OutputFrame, SequenceFrameEvaluator};
+    use dawn_project::effect_script::{GeneratorTarget, GeneratorTargetPixel};
+
+    use super::{
+        generator_targets_for_scope, pixel_context_for_effect, OutputFrame, SequenceFrameEvaluator,
+    };
 
     fn club_rig_project_path() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/club-rig/project.dawn")
@@ -681,6 +859,49 @@ mod tests {
             (per_fixture.index, per_fixture.count),
             (whole_target.index, whole_target.count)
         );
+    }
+
+    #[test]
+    fn generator_per_fixture_scope_splits_target_before_generation() {
+        let target = GeneratorTarget {
+            pixels: vec![
+                GeneratorTargetPixel {
+                    fixture_index: 0,
+                    pixel_index: 0,
+                    pixel_count: 2,
+                },
+                GeneratorTargetPixel {
+                    fixture_index: 0,
+                    pixel_index: 1,
+                    pixel_count: 2,
+                },
+                GeneratorTargetPixel {
+                    fixture_index: 1,
+                    pixel_index: 0,
+                    pixel_count: 3,
+                },
+                GeneratorTargetPixel {
+                    fixture_index: 1,
+                    pixel_index: 1,
+                    pixel_count: 3,
+                },
+                GeneratorTargetPixel {
+                    fixture_index: 1,
+                    pixel_index: 2,
+                    pixel_count: 3,
+                },
+            ],
+        };
+
+        let per_fixture =
+            generator_targets_for_scope(SequenceEffectScope::PerFixture, target.clone());
+        let whole_target = generator_targets_for_scope(SequenceEffectScope::WholeTarget, target);
+
+        assert_eq!(per_fixture.len(), 2);
+        assert_eq!(per_fixture[0].pixels.len(), 2);
+        assert_eq!(per_fixture[1].pixels.len(), 3);
+        assert_eq!(whole_target.len(), 1);
+        assert_eq!(whole_target[0].pixels.len(), 5);
     }
 
     #[test]

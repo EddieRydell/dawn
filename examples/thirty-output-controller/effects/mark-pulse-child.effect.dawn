@@ -1,0 +1,12 @@
+effect MarkPulseChild {
+  param color base = #000000;
+  param curve<color> accent;
+  param color hue_color = #ffffff;
+  param float hue_mix = 0.35;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    float pulse = 1.0 - clamp(progress, 0.0, 1.0);
+    color pulse_color = mix(accent(progress), hue_color, clamp(hue_mix, 0.0, 1.0));
+    return mix(base, pulse_color, pulse);
+  }
+}

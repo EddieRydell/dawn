@@ -327,10 +327,13 @@ export type SequenceEffectScopeDto = "perFixture" | "wholeTarget";
 
 export type SequenceEffectScriptDto = {
 	name: string,
+	kind: SequenceEffectScriptKindDto,
 	path: string,
 	import: string,
 	params: SequenceEffectScriptParamDto[],
 };
+
+export type SequenceEffectScriptKindDto = "sample" | "generator";
 
 export type SequenceEffectScriptParamDto = {
 	name: string,
