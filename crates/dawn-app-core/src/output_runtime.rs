@@ -81,6 +81,29 @@ pub struct SequenceFrameEvaluationTiming {
     pub sampled_pixels: u32,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SequenceFrameEvaluatorPreparationTiming {
+    pub total_ms: f64,
+    pub layout_template_ms: f64,
+    pub authored_sample_ms: f64,
+    pub generator_expansion_ms: f64,
+    pub timeline_index_ms: f64,
+    pub prepared_effect_count: usize,
+    pub generator_parent_count: usize,
+    pub generated_child_count: usize,
+    pub generator_parents: Vec<GeneratorParentPreparationTiming>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GeneratorParentPreparationTiming {
+    pub parent_effect_id: u32,
+    pub script_key: String,
+    pub target_pixels: usize,
+    pub emitted_children: usize,
+    pub prepared_children: usize,
+    pub total_prepare_ms: f64,
+}
+
 #[derive(Debug, Clone)]
 pub struct SequenceFrameEvaluator {
     source: OutputSourceMetadata,
@@ -96,14 +119,32 @@ impl SequenceFrameEvaluator {
         Self::new_filtered(analysis, document, None)
     }
 
+    pub fn new_timed(
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+    ) -> Result<(Self, SequenceFrameEvaluatorPreparationTiming), String> {
+        Self::new_filtered_timed(analysis, document, None)
+    }
+
     pub fn new_filtered(
         analysis: &ProjectAnalysis,
         document: &SequenceDocument,
         effect_filter: Option<&HashSet<u32>>,
     ) -> Result<Self, String> {
+        Self::new_filtered_timed(analysis, document, effect_filter)
+            .map(|(evaluator, _timing)| evaluator)
+    }
+
+    pub fn new_filtered_timed(
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+        effect_filter: Option<&HashSet<u32>>,
+    ) -> Result<(Self, SequenceFrameEvaluatorPreparationTiming), String> {
+        let total_started = Instant::now();
         let Some(project) = analysis.resolved.as_ref() else {
             return Err("Project must resolve before preview is available".to_string());
         };
+        let layout_started = Instant::now();
         let render_plan = layout_render_plan(&project.display.layout.fixtures);
         let fixture_templates = render_plan
             .fixtures
@@ -123,8 +164,14 @@ impl SequenceFrameEvaluator {
                     .collect(),
             })
             .collect::<Vec<_>>();
+        let layout_template_ms = elapsed_ms(layout_started);
 
         let mut effects = Vec::new();
+        let mut authored_sample_ms = 0.0;
+        let mut generator_expansion_ms = 0.0;
+        let mut generator_parent_count = 0;
+        let mut generated_child_count = 0;
+        let mut generator_parents = Vec::new();
         for effect in document.effects.iter().filter(|effect| {
             effect_filter
                 .map(|ids| ids.contains(&effect.id))
@@ -135,6 +182,8 @@ impl SequenceFrameEvaluator {
             };
             match analysis.compiled_script_for_key(&render.script_key) {
                 Some(script) if script.kind == EffectScriptKind::Generator => {
+                    generator_parent_count += 1;
+                    let generator_started = Instant::now();
                     match prepare_generated_effects(
                         analysis,
                         document,
@@ -146,22 +195,44 @@ impl SequenceFrameEvaluator {
                         render,
                         &fixture_templates,
                     ) {
-                        Ok(children) => effects.extend(children),
-                        Err(error) => effects.push(PreparedSequenceEffect {
-                            id: effect.id,
-                            start_seconds: effect.start_seconds,
-                            duration_seconds: effect.duration_seconds,
-                            authored: true,
-                            render: PreparedEffectRender::BadParams(error),
-                        }),
+                        Ok(children) => {
+                            let total_prepare_ms = elapsed_ms(generator_started);
+                            generator_expansion_ms += total_prepare_ms;
+                            generated_child_count += children.len();
+                            generator_parents.push(GeneratorParentPreparationTiming {
+                                parent_effect_id: effect.id,
+                                script_key: render.script_key.clone(),
+                                target_pixels: render.target_pixels.len(),
+                                emitted_children: children.len(),
+                                prepared_children: children.len(),
+                                total_prepare_ms,
+                            });
+                            effects.extend(children);
+                        }
+                        Err(error) => {
+                            let total_prepare_ms = elapsed_ms(generator_started);
+                            generator_expansion_ms += total_prepare_ms;
+                            generator_parents.push(GeneratorParentPreparationTiming {
+                                parent_effect_id: effect.id,
+                                script_key: render.script_key.clone(),
+                                target_pixels: render.target_pixels.len(),
+                                emitted_children: 0,
+                                prepared_children: 0,
+                                total_prepare_ms,
+                            });
+                            effects.push(PreparedSequenceEffect {
+                                id: effect.id,
+                                start_seconds: effect.start_seconds,
+                                duration_seconds: effect.duration_seconds,
+                                authored: true,
+                                render: PreparedEffectRender::BadParams(error),
+                            });
+                        }
                     }
                 }
-                Some(script) => effects.push(PreparedSequenceEffect {
-                    id: effect.id,
-                    start_seconds: effect.start_seconds,
-                    duration_seconds: effect.duration_seconds,
-                    authored: true,
-                    render: prepare_sample_render(
+                Some(script) => {
+                    let sample_started = Instant::now();
+                    let prepared_render = prepare_sample_render(
                         script,
                         &render.params,
                         &document.mark_collections,
@@ -169,8 +240,16 @@ impl SequenceFrameEvaluator {
                         effect.scope,
                         &render.target_pixels,
                         &fixture_templates,
-                    ),
-                }),
+                    );
+                    authored_sample_ms += elapsed_ms(sample_started);
+                    effects.push(PreparedSequenceEffect {
+                        id: effect.id,
+                        start_seconds: effect.start_seconds,
+                        duration_seconds: effect.duration_seconds,
+                        authored: true,
+                        render: prepared_render,
+                    });
+                }
                 None => effects.push(PreparedSequenceEffect {
                     id: effect.id,
                     start_seconds: effect.start_seconds,
@@ -187,8 +266,10 @@ impl SequenceFrameEvaluator {
             duration_seconds: document.duration_seconds,
             fps: document.frame_rate,
         };
+        let timeline_started = Instant::now();
         let effect_indices_by_frame =
             build_effect_indices_by_frame(&effects, source.duration_seconds, source.fps);
+        let timeline_index_ms = elapsed_ms(timeline_started);
         let authored_intervals_by_id = document
             .effects
             .iter()
@@ -203,14 +284,29 @@ impl SequenceFrameEvaluator {
             })
             .collect();
 
-        Ok(Self {
-            source,
-            bounds: render_plan.bounds,
-            fixture_templates,
-            effects,
-            effect_indices_by_frame,
-            authored_intervals_by_id,
-        })
+        let timing = SequenceFrameEvaluatorPreparationTiming {
+            total_ms: elapsed_ms(total_started),
+            layout_template_ms,
+            authored_sample_ms,
+            generator_expansion_ms,
+            timeline_index_ms,
+            prepared_effect_count: effects.len(),
+            generator_parent_count,
+            generated_child_count,
+            generator_parents,
+        };
+
+        Ok((
+            Self {
+                source,
+                bounds: render_plan.bounds,
+                fixture_templates,
+                effects,
+                effect_indices_by_frame,
+                authored_intervals_by_id,
+            },
+            timing,
+        ))
     }
 
     pub fn evaluate(&mut self, time_seconds: f64, generation: u64) -> OutputFrame {

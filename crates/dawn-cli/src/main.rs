@@ -4,19 +4,28 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use camino::Utf8PathBuf;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use dawn_app_core::output_runtime::{
     pixel_context_for_effect, prepare_params_from_document, SequenceFrameEvaluator,
+    SequenceFrameEvaluatorPreparationTiming,
 };
 use dawn_project::analysis::{
     analyze_project_with_overlays, DiagnosticCode, DiagnosticSeverity, ProjectAnalysis,
-    ProjectDiagnostic, TextRange,
+    ProjectDiagnostic, ProjectOverlay, TextRange,
 };
-use dawn_project::document::{get_sequence_document, SequenceDocument, SequenceEffectDocument};
+use dawn_project::document::{
+    get_sequence_document, LayoutTargetDocument, SequenceDocument, SequenceEffectDocument,
+    SequenceEffectParamDocument, SequenceEffectPixelDocument, SequenceEffectRenderDocument,
+    SequenceLaneDocument, SequenceMarkCollectionDocument,
+};
 use dawn_project::effect_script::{EffectSampleScratch, FixtureContext};
 use dawn_project::fs::WorkspaceFs;
-use dawn_project::model::DawnObject;
+use dawn_project::model::{
+    Color, Curve, CurvePoint, CurveValue, CurveValueType, DawnObject, EffectParam,
+    LayoutTargetKind, SequenceEffectScope,
+};
 use dawn_project::path::{canonicalize_path, utf8_path, PathStringExt};
+use dawn_project::render::layout_render_plan;
 use serde::Serialize;
 
 #[derive(Debug, Parser)]
@@ -39,7 +48,13 @@ enum Command {
         #[arg(long)]
         sequence: Option<String>,
         #[arg(long)]
-        time: f64,
+        time: Option<f64>,
+        #[arg(long, value_enum, default_value_t = BenchSuite::Project)]
+        suite: BenchSuite,
+        #[arg(long, value_enum, default_value_t = BenchCaseKindFilter::All)]
+        case_kind: BenchCaseKindFilter,
+        #[arg(long, value_enum, default_value_t = BenchMatrix::Standard)]
+        matrix: BenchMatrix,
         #[arg(long, default_value_t = 300)]
         iterations: usize,
         #[arg(long, default_value_t = 30)]
@@ -73,6 +88,9 @@ fn run() -> Result<ExitCode, String> {
             project_path_or_directory,
             sequence,
             time,
+            suite,
+            case_kind,
+            matrix,
             iterations,
             warmup,
             json,
@@ -82,6 +100,9 @@ fn run() -> Result<ExitCode, String> {
             &project_path_or_directory,
             sequence.as_deref(),
             time,
+            suite,
+            case_kind,
+            matrix,
             iterations,
             warmup,
             json,
@@ -89,6 +110,35 @@ fn run() -> Result<ExitCode, String> {
             no_effect_breakdown,
         ),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum BenchSuite {
+    Project,
+    Synthetic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum BenchCaseKindFilter {
+    All,
+    Sample,
+    Generator,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum BenchCaseKind {
+    Sample,
+    Generator,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum BenchMatrix {
+    Standard,
+    Stress,
 }
 
 fn analyze(path: &Path, json: bool) -> Result<ExitCode, String> {
@@ -115,13 +165,24 @@ fn analyze(path: &Path, json: bool) -> Result<ExitCode, String> {
 fn bench_effect(
     path: &Path,
     sequence: Option<&str>,
-    time_seconds: f64,
+    time_seconds: Option<f64>,
+    suite: BenchSuite,
+    case_kind: BenchCaseKindFilter,
+    matrix: BenchMatrix,
     iterations: usize,
     warmup: usize,
     json: bool,
     synthetic_active_effects: Option<usize>,
     no_effect_breakdown: bool,
 ) -> Result<ExitCode, String> {
+    let time_seconds = match (suite, time_seconds) {
+        (BenchSuite::Project, Some(time_seconds)) => time_seconds,
+        (BenchSuite::Project, None) => {
+            return Err("--time is required for --suite project".to_string())
+        }
+        (BenchSuite::Synthetic, Some(time_seconds)) => time_seconds,
+        (BenchSuite::Synthetic, None) => 1.0,
+    };
     if !time_seconds.is_finite() {
         return Err("time must be finite".to_string());
     }
@@ -131,10 +192,34 @@ fn bench_effect(
 
     let input = project_input(path)?;
     let fs = WorkspaceFs::open(&input.root).map_err(|error| error.to_string())?;
-    let analysis = analyze_project_with_overlays(&fs, input.project_file.clone(), None, Vec::new());
+    let overlays = match suite {
+        BenchSuite::Project => Vec::new(),
+        BenchSuite::Synthetic => synthetic_effect_overlays(&fs, &input)?,
+    };
+    let analysis = analyze_project_with_overlays(&fs, input.project_file.clone(), None, overlays);
     if analysis.has_errors() {
         print_human_report(&analysis);
         return Ok(ExitCode::from(1));
+    }
+
+    if suite == BenchSuite::Synthetic {
+        let report = SyntheticSuiteReport::run(
+            &input,
+            &analysis,
+            time_seconds,
+            iterations,
+            warmup,
+            case_kind,
+            matrix,
+        )?;
+        if json {
+            serde_json::to_writer_pretty(std::io::stdout(), &report)
+                .map_err(|error| error.to_string())?;
+            println!();
+        } else {
+            print_synthetic_suite_report(&report);
+        }
+        return Ok(ExitCode::SUCCESS);
     }
 
     let sequence_target = sequence_target(&analysis, sequence)?;
@@ -430,6 +515,726 @@ impl EffectBenchReport {
         }
     }
 }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SyntheticSuiteReport {
+    project_path: String,
+    project_root: String,
+    suite: BenchSuite,
+    matrix: BenchMatrix,
+    iterations: usize,
+    warmup: usize,
+    time_seconds: f64,
+    case_kind: BenchCaseKindFilter,
+    cases: Vec<SyntheticCaseReport>,
+}
+
+impl SyntheticSuiteReport {
+    fn run(
+        input: &ProjectInput,
+        analysis: &ProjectAnalysis,
+        time_seconds: f64,
+        iterations: usize,
+        warmup: usize,
+        case_kind: BenchCaseKindFilter,
+        matrix: BenchMatrix,
+    ) -> Result<Self, String> {
+        let case_definitions = synthetic_case_definitions(case_kind);
+        let target_sizes = synthetic_target_sizes(matrix);
+        let target_template = synthetic_target_template(analysis)?;
+        let max_target_size = target_sizes.iter().copied().max().unwrap_or(0);
+        if target_template.pixels.len() < max_target_size {
+            return Err(format!(
+                "--matrix {:?} requires at least {} pixels, but the project display has {}",
+                matrix,
+                max_target_size,
+                target_template.pixels.len()
+            ));
+        }
+
+        let mut cases = Vec::new();
+        for target_pixels in target_sizes {
+            let pixels = target_template
+                .pixels
+                .iter()
+                .take(target_pixels)
+                .cloned()
+                .collect::<Vec<_>>();
+            for definition in &case_definitions {
+                let document =
+                    synthetic_sequence_document(analysis, definition, &target_template, &pixels)?;
+                cases.push(SyntheticCaseReport::run(
+                    analysis,
+                    &document,
+                    definition,
+                    target_pixels,
+                    time_seconds,
+                    iterations,
+                    warmup,
+                )?);
+            }
+        }
+
+        Ok(Self {
+            project_path: display_path(&canonicalize_path(&input.project_path)),
+            project_root: display_path(&canonicalize_path(&input.root)),
+            suite: BenchSuite::Synthetic,
+            matrix,
+            iterations,
+            warmup,
+            time_seconds,
+            case_kind,
+            cases,
+        })
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SyntheticCaseReport {
+    name: String,
+    kind: BenchCaseKind,
+    target_pixels: usize,
+    scope: String,
+    authored_effects: usize,
+    prepared_effects: usize,
+    generated_children: usize,
+    prepare: PreparationTimingReport,
+    whole_frame: TimingStatsReport,
+    visited_prepared_effects: u32,
+    rendered_active_prepared_effects: u32,
+    sampled_pixels: u32,
+}
+
+impl SyntheticCaseReport {
+    fn run(
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+        definition: &SyntheticCaseDefinition,
+        target_pixels: usize,
+        time_seconds: f64,
+        iterations: usize,
+        warmup: usize,
+    ) -> Result<Self, String> {
+        let (mut evaluator, prepare_timing) =
+            SequenceFrameEvaluator::new_timed(analysis, document)?;
+        for generation in 0..warmup {
+            black_box(evaluator.evaluate(time_seconds, generation as u64));
+        }
+
+        let mut whole_frame_samples = Vec::with_capacity(iterations);
+        let mut last_evaluation_timing = None;
+        for generation in 0..iterations {
+            let start = Instant::now();
+            let (frame, evaluation_timing) =
+                evaluator.evaluate_timed(time_seconds, generation as u64);
+            black_box(frame);
+            last_evaluation_timing = Some(evaluation_timing);
+            whole_frame_samples.push(start.elapsed());
+        }
+        let last_evaluation_timing = last_evaluation_timing.unwrap_or_default();
+
+        Ok(Self {
+            name: definition.name.to_string(),
+            kind: definition.kind,
+            target_pixels,
+            scope: format!("{:?}", definition.scope),
+            authored_effects: document.effects.len(),
+            prepared_effects: prepare_timing.prepared_effect_count,
+            generated_children: prepare_timing.generated_child_count,
+            prepare: PreparationTimingReport::from_timing(prepare_timing),
+            whole_frame: TimingStatsReport::from_durations(whole_frame_samples),
+            visited_prepared_effects: last_evaluation_timing.visited_prepared_effects,
+            rendered_active_prepared_effects: last_evaluation_timing.active_prepared_effects,
+            sampled_pixels: last_evaluation_timing.sampled_pixels,
+        })
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreparationTimingReport {
+    total_ms: f64,
+    layout_template_ms: f64,
+    authored_sample_ms: f64,
+    generator_expansion_ms: f64,
+    timeline_index_ms: f64,
+    prepared_effect_count: usize,
+    generator_parent_count: usize,
+    generated_child_count: usize,
+    generator_parents: Vec<GeneratorParentTimingReport>,
+}
+
+impl PreparationTimingReport {
+    fn from_timing(timing: SequenceFrameEvaluatorPreparationTiming) -> Self {
+        Self {
+            total_ms: timing.total_ms,
+            layout_template_ms: timing.layout_template_ms,
+            authored_sample_ms: timing.authored_sample_ms,
+            generator_expansion_ms: timing.generator_expansion_ms,
+            timeline_index_ms: timing.timeline_index_ms,
+            prepared_effect_count: timing.prepared_effect_count,
+            generator_parent_count: timing.generator_parent_count,
+            generated_child_count: timing.generated_child_count,
+            generator_parents: timing
+                .generator_parents
+                .into_iter()
+                .map(GeneratorParentTimingReport::from_timing)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GeneratorParentTimingReport {
+    parent_effect_id: u32,
+    script_key: String,
+    target_pixels: usize,
+    emitted_children: usize,
+    prepared_children: usize,
+    total_prepare_ms: f64,
+}
+
+impl GeneratorParentTimingReport {
+    fn from_timing(
+        timing: dawn_app_core::output_runtime::GeneratorParentPreparationTiming,
+    ) -> Self {
+        Self {
+            parent_effect_id: timing.parent_effect_id,
+            script_key: timing.script_key,
+            target_pixels: timing.target_pixels,
+            emitted_children: timing.emitted_children,
+            prepared_children: timing.prepared_children,
+            total_prepare_ms: timing.total_prepare_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SyntheticCaseDefinition {
+    name: &'static str,
+    kind: BenchCaseKind,
+    script_key: &'static str,
+    script: &'static str,
+    scope: SequenceEffectScope,
+    params: Vec<SequenceEffectParamDocument>,
+}
+
+#[derive(Debug)]
+struct SyntheticTargetTemplate {
+    target: LayoutTargetDocument,
+    target_label: String,
+    pixels: Vec<SequenceEffectPixelDocument>,
+}
+
+fn synthetic_effect_overlays(
+    fs: &WorkspaceFs,
+    input: &ProjectInput,
+) -> Result<Vec<ProjectOverlay>, String> {
+    let project_content = fs
+        .read_to_string(&input.project_file)
+        .map_err(|error| error.to_string())?;
+    Ok(vec![
+        ProjectOverlay {
+            path: input.project_file.clone(),
+            content: project_content_with_synthetic_imports(&project_content),
+        },
+        ProjectOverlay {
+            path: synthetic_overlay_path(input, "effects/synthetic-bench-child.effect.dawn")?,
+            content: SYNTHETIC_CHILD_EFFECT.to_string(),
+        },
+        ProjectOverlay {
+            path: synthetic_overlay_path(
+                input,
+                "effects/synthetic-bench-constant-color.effect.dawn",
+            )?,
+            content: SYNTHETIC_CONSTANT_COLOR_EFFECT.to_string(),
+        },
+        ProjectOverlay {
+            path: synthetic_overlay_path(input, "effects/synthetic-bench-curve-color.effect.dawn")?,
+            content: SYNTHETIC_CURVE_COLOR_EFFECT.to_string(),
+        },
+        ProjectOverlay {
+            path: synthetic_overlay_path(input, "effects/synthetic-bench-pixel-math.effect.dawn")?,
+            content: SYNTHETIC_PIXEL_MATH_EFFECT.to_string(),
+        },
+        ProjectOverlay {
+            path: synthetic_overlay_path(
+                input,
+                "effects/synthetic-bench-single-child.effect.dawn",
+            )?,
+            content: SYNTHETIC_SINGLE_CHILD_GENERATOR.to_string(),
+        },
+        ProjectOverlay {
+            path: synthetic_overlay_path(
+                input,
+                "effects/synthetic-bench-sequential-sections.effect.dawn",
+            )?,
+            content: SYNTHETIC_SEQUENTIAL_SECTIONS_GENERATOR.to_string(),
+        },
+        ProjectOverlay {
+            path: synthetic_overlay_path(
+                input,
+                "effects/synthetic-bench-dense-overlap.effect.dawn",
+            )?,
+            content: SYNTHETIC_DENSE_OVERLAP_GENERATOR.to_string(),
+        },
+        ProjectOverlay {
+            path: synthetic_overlay_path(input, "effects/synthetic-bench-per-fixture.effect.dawn")?,
+            content: SYNTHETIC_PER_FIXTURE_GENERATOR.to_string(),
+        },
+        ProjectOverlay {
+            path: synthetic_overlay_path(input, "effects/synthetic-bench-mark-dense.effect.dawn")?,
+            content: SYNTHETIC_MARK_DENSE_GENERATOR.to_string(),
+        },
+    ])
+}
+
+fn synthetic_overlay_path(input: &ProjectInput, path: &str) -> Result<Utf8PathBuf, String> {
+    let root = canonicalize_path(&input.project_path)
+        .parent()
+        .ok_or_else(|| "project path has no parent".to_string())?
+        .to_path_buf();
+    Ok(root.join(path))
+}
+
+fn project_content_with_synthetic_imports(project_content: &str) -> String {
+    let imports = synthetic_effect_overlay_paths()
+        .into_iter()
+        .enumerate()
+        .map(|(index, path)| format!("  - from: {path}\n    as: synthetic_bench_{index}\n"))
+        .collect::<String>();
+    if let Some(rest) = project_content.strip_prefix("imports:\n") {
+        format!("imports:\n{imports}{rest}")
+    } else if let Some(rest) = project_content.strip_prefix("imports:\r\n") {
+        format!("imports:\n{imports}{rest}")
+    } else {
+        format!("imports:\n{imports}\n{project_content}")
+    }
+}
+
+fn synthetic_effect_overlay_paths() -> Vec<&'static str> {
+    vec![
+        "effects/synthetic-bench-child.effect.dawn",
+        "effects/synthetic-bench-constant-color.effect.dawn",
+        "effects/synthetic-bench-curve-color.effect.dawn",
+        "effects/synthetic-bench-pixel-math.effect.dawn",
+        "effects/synthetic-bench-single-child.effect.dawn",
+        "effects/synthetic-bench-sequential-sections.effect.dawn",
+        "effects/synthetic-bench-dense-overlap.effect.dawn",
+        "effects/synthetic-bench-per-fixture.effect.dawn",
+        "effects/synthetic-bench-mark-dense.effect.dawn",
+    ]
+}
+
+fn synthetic_case_definitions(case_kind: BenchCaseKindFilter) -> Vec<SyntheticCaseDefinition> {
+    let mut cases = vec![
+        SyntheticCaseDefinition {
+            name: "sample_constant_color",
+            kind: BenchCaseKind::Sample,
+            script_key: "effects/synthetic-bench-constant-color.effect.dawn",
+            script: "SyntheticConstantColor",
+            scope: SequenceEffectScope::WholeTarget,
+            params: vec![param_color("color", Color::new(12, 48, 180))],
+        },
+        SyntheticCaseDefinition {
+            name: "sample_curve_color",
+            kind: BenchCaseKind::Sample,
+            script_key: "effects/synthetic-bench-curve-color.effect.dawn",
+            script: "SyntheticCurveColor",
+            scope: SequenceEffectScope::WholeTarget,
+            params: vec![param_color_curve("gradient")],
+        },
+        SyntheticCaseDefinition {
+            name: "sample_pixel_math",
+            kind: BenchCaseKind::Sample,
+            script_key: "effects/synthetic-bench-pixel-math.effect.dawn",
+            script: "SyntheticPixelMath",
+            scope: SequenceEffectScope::WholeTarget,
+            params: Vec::new(),
+        },
+        SyntheticCaseDefinition {
+            name: "generator_single_child",
+            kind: BenchCaseKind::Generator,
+            script_key: "effects/synthetic-bench-single-child.effect.dawn",
+            script: "SyntheticSingleChild",
+            scope: SequenceEffectScope::WholeTarget,
+            params: vec![param_color("color", Color::new(255, 80, 24))],
+        },
+        SyntheticCaseDefinition {
+            name: "generator_sequential_sections",
+            kind: BenchCaseKind::Generator,
+            script_key: "effects/synthetic-bench-sequential-sections.effect.dawn",
+            script: "SyntheticSequentialSections",
+            scope: SequenceEffectScope::WholeTarget,
+            params: vec![param_integer("section_width_pixels", 8)],
+        },
+        SyntheticCaseDefinition {
+            name: "generator_dense_overlapping_sections",
+            kind: BenchCaseKind::Generator,
+            script_key: "effects/synthetic-bench-dense-overlap.effect.dawn",
+            script: "SyntheticDenseOverlappingSections",
+            scope: SequenceEffectScope::WholeTarget,
+            params: vec![param_integer("section_width_pixels", 2)],
+        },
+        SyntheticCaseDefinition {
+            name: "generator_per_fixture_sections",
+            kind: BenchCaseKind::Generator,
+            script_key: "effects/synthetic-bench-per-fixture.effect.dawn",
+            script: "SyntheticPerFixtureSections",
+            scope: SequenceEffectScope::PerFixture,
+            params: Vec::new(),
+        },
+        SyntheticCaseDefinition {
+            name: "generator_mark_dense_emission",
+            kind: BenchCaseKind::Generator,
+            script_key: "effects/synthetic-bench-mark-dense.effect.dawn",
+            script: "SyntheticMarkDenseEmission",
+            scope: SequenceEffectScope::WholeTarget,
+            params: vec![
+                param_marks("beats", "synthetic_marks"),
+                param_integer("section_width_pixels", 3),
+                param_integer("sections_per_mark", 6),
+            ],
+        },
+    ];
+    cases.retain(|case| match case_kind {
+        BenchCaseKindFilter::All => true,
+        BenchCaseKindFilter::Sample => case.kind == BenchCaseKind::Sample,
+        BenchCaseKindFilter::Generator => case.kind == BenchCaseKind::Generator,
+    });
+    cases
+}
+
+fn synthetic_target_sizes(matrix: BenchMatrix) -> Vec<usize> {
+    match matrix {
+        BenchMatrix::Standard => vec![30, 300, 1_000],
+        BenchMatrix::Stress => vec![1_000, 3_000],
+    }
+}
+
+fn synthetic_target_template(
+    analysis: &ProjectAnalysis,
+) -> Result<SyntheticTargetTemplate, String> {
+    let project = analysis.resolved.as_ref().ok_or_else(|| {
+        "Project must resolve before synthetic benchmark is available".to_string()
+    })?;
+    let render_plan = layout_render_plan(&project.display.layout.fixtures);
+    let mut pixels = Vec::new();
+    for (fixture_index, fixture) in render_plan.fixtures.iter().enumerate() {
+        let pixel_count = fixture.emitters.len();
+        for pixel_index in 0..pixel_count {
+            pixels.push(SequenceEffectPixelDocument {
+                fixture_index,
+                pixel_index,
+                pixel_count,
+            });
+        }
+    }
+    let group_name = project
+        .display
+        .layout
+        .groups
+        .first()
+        .map(|group| group.name.clone())
+        .unwrap_or_else(|| "synthetic".to_string());
+    Ok(SyntheticTargetTemplate {
+        target: LayoutTargetDocument {
+            kind: LayoutTargetKind::Group,
+            name: group_name.clone(),
+        },
+        target_label: format!("Group {group_name}"),
+        pixels,
+    })
+}
+
+fn synthetic_sequence_document(
+    analysis: &ProjectAnalysis,
+    definition: &SyntheticCaseDefinition,
+    target_template: &SyntheticTargetTemplate,
+    pixels: &[SequenceEffectPixelDocument],
+) -> Result<SequenceDocument, String> {
+    let script_key = synthetic_script_key(analysis, definition.script_key)?;
+    Ok(SequenceDocument {
+        path: "synthetic-bench.sequence.dawn".to_string(),
+        object_key: definition.name.to_string(),
+        duration_seconds: 4.0,
+        frame_rate: 60,
+        audio: None,
+        mark_collections: vec![synthetic_mark_collection()],
+        lanes: vec![SequenceLaneDocument {
+            target: target_template.target.clone(),
+            label: target_template.target_label.clone(),
+        }],
+        effect_scripts: Vec::new(),
+        curve_library: Vec::new(),
+        effects: vec![SequenceEffectDocument {
+            index: 0,
+            id: 1,
+            start_seconds: 0.0,
+            duration_seconds: 4.0,
+            target: target_template.target.clone(),
+            target_label: target_template.target_label.clone(),
+            scope: definition.scope,
+            script: definition.script.to_string(),
+            script_source: Some(script_key.clone()),
+            params: definition.params.clone(),
+            render: Some(SequenceEffectRenderDocument {
+                script_key: script_key.clone(),
+                script_source: script_key,
+                params: definition.params.clone(),
+                target_pixels: pixels.to_vec(),
+            }),
+        }],
+        degraded: false,
+    })
+}
+
+fn synthetic_script_key(analysis: &ProjectAnalysis, path: &str) -> Result<String, String> {
+    let suffix = path.replace('\\', "/");
+    let matches = analysis
+        .scripts
+        .keys()
+        .filter(|script_key| script_key.ends_with(&suffix))
+        .cloned()
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [script_key] => Ok(script_key.clone()),
+        [] => Err(format!("synthetic effect script `{path}` was not analyzed")),
+        _ => Err(format!(
+            "synthetic effect script `{path}` matched multiple analyzed scripts"
+        )),
+    }
+}
+
+fn synthetic_mark_collection() -> SequenceMarkCollectionDocument {
+    SequenceMarkCollectionDocument {
+        key: "synthetic_marks".to_string(),
+        name: "Synthetic Marks".to_string(),
+        color: "#38bdf8".to_string(),
+        marks_seconds: vec![
+            0.15, 0.28, 0.43, 0.61, 0.78, 0.94, 1.12, 1.31, 1.48, 1.66, 1.83, 2.01, 2.18, 2.36,
+            2.54, 2.71, 2.88, 3.05, 3.22, 3.39, 3.56, 3.73,
+        ],
+    }
+}
+
+fn param_color(name: &str, value: Color) -> SequenceEffectParamDocument {
+    SequenceEffectParamDocument {
+        name: name.to_string(),
+        value: EffectParam::Color { value },
+        curve_source: None,
+    }
+}
+
+fn param_integer(name: &str, value: u64) -> SequenceEffectParamDocument {
+    SequenceEffectParamDocument {
+        name: name.to_string(),
+        value: EffectParam::Integer { value },
+        curve_source: None,
+    }
+}
+
+fn param_marks(name: &str, key: &str) -> SequenceEffectParamDocument {
+    SequenceEffectParamDocument {
+        name: name.to_string(),
+        value: EffectParam::Marks {
+            key: key.to_string(),
+        },
+        curve_source: None,
+    }
+}
+
+fn param_color_curve(name: &str) -> SequenceEffectParamDocument {
+    SequenceEffectParamDocument {
+        name: name.to_string(),
+        value: EffectParam::Curve {
+            curve: Curve {
+                value_type: CurveValueType::Color,
+                points: vec![
+                    CurvePoint {
+                        time: 0.0,
+                        value: CurveValue::Color(Color::new(255, 32, 16)),
+                    },
+                    CurvePoint {
+                        time: 0.5,
+                        value: CurveValue::Color(Color::new(16, 220, 120)),
+                    },
+                    CurvePoint {
+                        time: 1.0,
+                        value: CurveValue::Color(Color::new(40, 120, 255)),
+                    },
+                ],
+            },
+        },
+        curve_source: None,
+    }
+}
+
+const SYNTHETIC_CONSTANT_COLOR_EFFECT: &str = r##"
+effect SyntheticConstantColor {
+  param color color = #ffffff;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    return color;
+  }
+}
+"##;
+
+const SYNTHETIC_CURVE_COLOR_EFFECT: &str = r##"
+effect SyntheticCurveColor {
+  param curve<color> gradient;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    return gradient(progress);
+  }
+}
+"##;
+
+const SYNTHETIC_PIXEL_MATH_EFFECT: &str = r##"
+effect SyntheticPixelMath {
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    float index = pixel_index(pixel);
+    float count = max(1.0, pixel_count(pixel));
+    float level = (index + 1.0) / count;
+    return rgb(level * 255.0, progress * 255.0, min(255.0, seconds * 40.0));
+  }
+}
+"##;
+
+const SYNTHETIC_CHILD_EFFECT: &str = r##"
+effect SyntheticChild {
+  param color color = #ffffff;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    return color;
+  }
+}
+"##;
+
+const SYNTHETIC_SINGLE_CHILD_GENERATOR: &str = r##"
+use "./synthetic-bench-child.effect.dawn" as effects;
+
+effect SyntheticSingleChild {
+  param color color = #ffffff;
+
+  void generate(Timeline timeline, Target target, float duration) {
+    timeline.emit effects.SyntheticChild {
+      target: target;
+      start: 0.0;
+      duration: duration;
+      params: {
+        color: color;
+      };
+    };
+  }
+}
+"##;
+
+const SYNTHETIC_SEQUENTIAL_SECTIONS_GENERATOR: &str = r##"
+use "./synthetic-bench-child.effect.dawn" as effects;
+
+effect SyntheticSequentialSections {
+  param int section_width_pixels = 8;
+
+  void generate(Timeline timeline, Target target, float duration) {
+    TargetItems items = sections(target, section_width_pixels);
+    int item_count = count(items);
+    for (int i = 0; i < item_count; i = i + 1) {
+      TargetItem item = pick(items, i);
+      timeline.emit effects.SyntheticChild {
+        target: item.target;
+        start: (i / max(1.0, item_count)) * duration;
+        duration: max(0.1, duration / max(1.0, item_count));
+        params: {
+          color: hsv(item.position * 360.0, 1.0, 1.0);
+        };
+      };
+    }
+  }
+}
+"##;
+
+const SYNTHETIC_DENSE_OVERLAP_GENERATOR: &str = r##"
+use "./synthetic-bench-child.effect.dawn" as effects;
+
+effect SyntheticDenseOverlappingSections {
+  param int section_width_pixels = 2;
+
+  void generate(Timeline timeline, Target target, float duration) {
+    TargetItems items = sections(target, section_width_pixels);
+    int item_count = count(items);
+    for (int i = 0; i < item_count; i = i + 1) {
+      TargetItem item = pick(items, i);
+      timeline.emit effects.SyntheticChild {
+        target: item.target;
+        start: 0.0;
+        duration: duration;
+        params: {
+          color: hsv(item.position * 360.0, 0.8, 1.0);
+        };
+      };
+    }
+  }
+}
+"##;
+
+const SYNTHETIC_PER_FIXTURE_GENERATOR: &str = r##"
+use "./synthetic-bench-child.effect.dawn" as effects;
+
+effect SyntheticPerFixtureSections {
+  void generate(Timeline timeline, Target target, float duration) {
+    TargetItems items = fixtures(target);
+    int item_count = count(items);
+    for (int i = 0; i < item_count; i = i + 1) {
+      TargetItem item = pick(items, i);
+      timeline.emit effects.SyntheticChild {
+        target: item.target;
+        start: 0.0;
+        duration: duration;
+        params: {
+          color: hsv(item.position * 360.0, 1.0, 1.0);
+        };
+      };
+    }
+  }
+}
+"##;
+
+const SYNTHETIC_MARK_DENSE_GENERATOR: &str = r##"
+use "./synthetic-bench-child.effect.dawn" as effects;
+
+effect SyntheticMarkDenseEmission {
+  param marks beats;
+  param int section_width_pixels = 3;
+  param int sections_per_mark = 6;
+
+  void generate(Timeline timeline, Target target, float duration) {
+    TargetItems items = sections(target, section_width_pixels);
+    int item_count = count(items);
+    int beat_count = mark_count(beats);
+    for (int beat = 0; beat < beat_count; beat = beat + 1) {
+      float hit = mark_at(beats, beat, 0.0);
+      if (hit >= 0.0 && hit < duration) {
+        for (int section = 0; section < sections_per_mark; section = section + 1) {
+          int choice = floor(rand(beat, section) * item_count);
+          TargetItem item = pick(items, choice);
+          timeline.emit effects.SyntheticChild {
+            target: item.target;
+            start: hit;
+            duration: 0.25;
+            params: {
+              color: hsv(item.position * 360.0, 1.0, 1.0);
+            };
+          };
+        }
+      }
+    }
+  }
+}
+"##;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -798,6 +1603,59 @@ fn print_effect_bench_report(report: &EffectBenchReport) {
     }
 }
 
+fn print_synthetic_suite_report(report: &SyntheticSuiteReport) {
+    println!(
+        "project={} suite=synthetic matrix={:?} time={:.3}s iterations={} warmup={} case_kind={:?}",
+        report.project_path,
+        report.matrix,
+        report.time_seconds,
+        report.iterations,
+        report.warmup,
+        report.case_kind
+    );
+    println!(
+        "{:<42} {:<9} {:>7} {:>8} {:>9} {:>9} {:>10} {:>10} {:>10}",
+        "case",
+        "kind",
+        "pixels",
+        "authored",
+        "prepared",
+        "children",
+        "prep",
+        "frame p50",
+        "sampled"
+    );
+    for case in &report.cases {
+        println!(
+            "{:<42} {:<9} {:>7} {:>8} {:>9} {:>9} {:>9.3}ms {:>9.3}ms {:>10}",
+            case.name,
+            format!("{:?}", case.kind),
+            case.target_pixels,
+            case.authored_effects,
+            case.prepared_effects,
+            case.generated_children,
+            case.prepare.total_ms,
+            case.whole_frame.p50_ms,
+            case.sampled_pixels
+        );
+        println!(
+            "  prepare total={:.3}ms layout={:.3}ms authored_sample={:.3}ms generator_expand={:.3}ms timeline_index={:.3}ms generator_parents={}",
+            case.prepare.total_ms,
+            case.prepare.layout_template_ms,
+            case.prepare.authored_sample_ms,
+            case.prepare.generator_expansion_ms,
+            case.prepare.timeline_index_ms,
+            case.prepare.generator_parent_count
+        );
+        println!(
+            "  render visited_prepared={} active_prepared={} sampled_pixels={}",
+            case.visited_prepared_effects,
+            case.rendered_active_prepared_effects,
+            case.sampled_pixels
+        );
+    }
+}
+
 fn print_timing_stats(label: &str, stats: &TimingStatsReport) {
     println!(
         "{label}: p50={:.3}ms p95={:.3}ms avg={:.3}ms min={:.3}ms max={:.3}ms p50_hz={:.1}",
@@ -970,6 +1828,21 @@ mod tests {
         }
     }
 
+    fn synthetic_analysis() -> (ProjectInput, ProjectAnalysis) {
+        let project_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("examples")
+            .join("thirty-output-controller");
+        let input = project_input(&project_path).unwrap();
+        let fs = WorkspaceFs::open(&input.root).unwrap();
+        let overlays = synthetic_effect_overlays(&fs, &input).unwrap();
+        let analysis =
+            analyze_project_with_overlays(&fs, input.project_file.clone(), None, overlays);
+        assert!(!analysis.has_errors());
+        (input, analysis)
+    }
+
     #[test]
     fn synthetic_active_effects_expand_one_source_to_requested_count() {
         let document = sequence_document(active_effect(3));
@@ -1023,5 +1896,56 @@ mod tests {
             frame.status,
             dawn_app_core::output_runtime::OutputFrameStatus::Live
         ));
+    }
+
+    #[test]
+    fn synthetic_suite_construction_includes_sample_and_generator_cases() {
+        let cases = synthetic_case_definitions(BenchCaseKindFilter::All);
+
+        assert!(cases.iter().any(|case| case.kind == BenchCaseKind::Sample));
+        assert!(cases
+            .iter()
+            .any(|case| case.kind == BenchCaseKind::Generator));
+    }
+
+    #[test]
+    fn generator_suite_case_reports_generated_children() {
+        let (input, analysis) = synthetic_analysis();
+
+        let report = SyntheticSuiteReport::run(
+            &input,
+            &analysis,
+            1.0,
+            1,
+            0,
+            BenchCaseKindFilter::Generator,
+            BenchMatrix::Standard,
+        )
+        .unwrap();
+
+        assert!(report.cases.iter().any(|case| case.generated_children > 0));
+    }
+
+    #[test]
+    fn synthetic_suite_json_includes_prepare_and_render_timing_fields() {
+        let (input, analysis) = synthetic_analysis();
+        let report = SyntheticSuiteReport::run(
+            &input,
+            &analysis,
+            1.0,
+            1,
+            0,
+            BenchCaseKindFilter::Sample,
+            BenchMatrix::Standard,
+        )
+        .unwrap();
+
+        let value = serde_json::to_value(report).unwrap();
+        let first_case = &value["cases"][0];
+
+        assert!(first_case["prepare"]["totalMs"].is_number());
+        assert!(first_case["prepare"]["timelineIndexMs"].is_number());
+        assert!(first_case["wholeFrame"]["p50Ms"].is_number());
+        assert!(first_case["sampledPixels"].is_number());
     }
 }

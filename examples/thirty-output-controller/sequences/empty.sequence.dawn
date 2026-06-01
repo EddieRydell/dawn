@@ -196,25 +196,28 @@ empty:
       pulse_overlap:
         type: float
         value: 10.0
+      section_width_pixels:
+        type: integer
+        value: 5
       chase_position:
         type: curve
         curve:
           value_type: float
           points:
           - time: 0.0
-            value: 1.0
-          - time: 0.068
-            value: 0.724
-          - time: 0.235
-            value: 0.371
-          - time: 0.421
-            value: 0.217
-          - time: 0.597
-            value: 0.1
-          - time: 0.738
-            value: 0.054
-          - time: 1.0
             value: 0.0
+          - time: 0.068
+            value: 0.276
+          - time: 0.235
+            value: 0.629
+          - time: 0.421
+            value: 0.783
+          - time: 0.597
+            value: 0.9
+          - time: 0.738
+            value: 0.946
+          - time: 1.0
+            value: 1.0
       extend_to_start:
         type: bool
         value: false
