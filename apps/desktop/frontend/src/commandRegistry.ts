@@ -2,6 +2,7 @@ import { commands } from "./api";
 import { runSnapshotCommand, useAppStore } from "./store";
 
 export type CommandId =
+  | "file.newProject"
   | "file.openProject"
   | "file.save"
   | "edit.undo"
@@ -18,6 +19,13 @@ export type CommandDefinition = {
 };
 
 export const commandRegistry: Record<CommandId, CommandDefinition> = {
+  "file.newProject": {
+    id: "file.newProject",
+    label: "New Project...",
+    run: async () => {
+      window.dispatchEvent(new CustomEvent("dawn:new-project"));
+    }
+  },
   "file.openProject": {
     id: "file.openProject",
     label: "Open Project",

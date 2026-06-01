@@ -39,6 +39,8 @@ pub struct WorkbenchLayout {
     pub main_window: WindowLayout,
     #[serde(default = "default_preview_window_layout")]
     pub preview_window: WindowLayout,
+    #[serde(default)]
+    pub effect_preview_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -101,6 +103,7 @@ impl Default for WorkbenchLayout {
             preview_window_open: true,
             main_window: WindowLayout::main_default(),
             preview_window: WindowLayout::preview_default(),
+            effect_preview_enabled: false,
         }
     }
 }
@@ -115,6 +118,7 @@ impl WorkbenchLayout {
             preview_window_open: self.preview_window_open,
             main_window: self.main_window.clone(),
             preview_window: self.preview_window.clone(),
+            effect_preview_enabled: self.effect_preview_enabled,
             ..Self::default()
         };
     }

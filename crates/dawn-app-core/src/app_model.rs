@@ -421,7 +421,30 @@ impl AppModel {
                     !self.workbench_layout.project_tree_visible;
                 save_workbench_layout(&self.workbench_layout)?;
             }
+            AppAction::SetEffectPreviewEnabled(enabled) => {
+                self.workbench_layout.effect_preview_enabled = enabled;
+                save_workbench_layout(&self.workbench_layout)?;
+                if !enabled {
+                    self.preview.clear_effect_preview(self.analysis.as_ref());
+                } else {
+                    self.preview.render_current_frame(self.analysis.as_ref());
+                }
+            }
+            AppAction::SetEffectPreviewEffects(ids) => {
+                let ids = if self.workbench_layout.effect_preview_enabled {
+                    ids
+                } else {
+                    Vec::new()
+                };
+                self.preview
+                    .set_effect_preview_ids(ids, self.analysis.as_ref());
+            }
             AppAction::PreviewPlay => {
+                if self.workbench_layout.effect_preview_enabled {
+                    self.workbench_layout.effect_preview_enabled = false;
+                    save_workbench_layout(&self.workbench_layout)?;
+                    self.preview.clear_effect_preview(self.analysis.as_ref());
+                }
                 self.preview.play(self.analysis.as_ref());
                 self.status = "Preview playing".to_string();
             }

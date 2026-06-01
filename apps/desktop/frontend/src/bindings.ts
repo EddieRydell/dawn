@@ -7,6 +7,8 @@ export const commands = {
 	getSnapshot: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("get_snapshot")),
 	openProjectDialog: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("open_project_dialog")),
 	openProject: (path: string) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("open_project", { path })),
+	chooseNewProjectParentDirectory: () => typedError<string | null, string>(__TAURI_INVOKE("choose_new_project_parent_directory")),
+	createNewProject: (parentPath: string, directoryName: string) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("create_new_project", { parentPath, directoryName })),
 	openFile: (path: string) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("open_file", { path })),
 	closeFile: (path: string) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("close_file", { path })),
 	setActiveFile: (path: string) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("set_active_file", { path })),
@@ -28,6 +30,8 @@ export const commands = {
 	deletePath: (path: string) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("delete_path", { path })),
 	reloadProject: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("reload_project")),
 	toggleProjectTree: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("toggle_project_tree")),
+	setEffectPreviewEnabled: (enabled: boolean) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("set_effect_preview_enabled", { enabled })),
+	setEffectPreviewEffects: (ids: number[]) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("set_effect_preview_effects", { ids })),
 	openPreviewWindow: () => typedError<null, string>(__TAURI_INVOKE("open_preview_window")),
 	previewPlay: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_play")),
 	previewPause: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_pause")),
@@ -56,6 +60,7 @@ export type AppSnapshotDto = {
 	diagnostics: ProjectDiagnosticDto[],
 	status: string,
 	preview: PreviewSnapshotDto,
+	effectPreviewEnabled: boolean,
 	liveOutput: LiveOutputSnapshotDto,
 };
 
@@ -202,6 +207,7 @@ export type PreviewSceneFixtureDto = {
 export type PreviewSnapshotDto = {
 	sourceLabel: string,
 	isPlaying: boolean,
+	effectPreviewActive: boolean,
 	positionSeconds: number,
 	homeSeconds: number,
 	durationSeconds: number,

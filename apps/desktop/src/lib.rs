@@ -17,6 +17,7 @@ mod bindings;
 mod commands;
 mod effect_previews;
 mod live_output;
+mod new_project;
 mod preview;
 mod preview_transport;
 mod state;

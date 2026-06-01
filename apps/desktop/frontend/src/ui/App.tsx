@@ -3,6 +3,7 @@ import { commands } from "../api";
 import { installGlobalShortcuts } from "../commandRegistry";
 import { runSnapshotCommand, subscribeToSnapshots, useAppStore } from "../store";
 import { EditorPane } from "./EditorPane";
+import { NewProjectDialog } from "./NewProjectDialog";
 import { ProjectTree } from "./ProjectTree";
 import { StatusBar } from "./StatusBar";
 import { TitleBar } from "./TitleBar";
@@ -36,6 +37,7 @@ export function App() {
         <EditorPane snapshot={snapshot} />
       </main>
       <StatusBar snapshot={snapshot} />
+      <NewProjectDialog />
       {snapshot.projectRoot === null && (
         <div className="empty-project">
           <button onClick={() => void runSnapshotCommand(commands.openProjectDialog)}>Open Project</button>

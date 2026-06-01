@@ -41,6 +41,7 @@ pub struct AppSnapshotDto {
     pub diagnostics: Vec<ProjectDiagnosticDto>,
     pub status: String,
     pub preview: PreviewSnapshotDto,
+    pub effect_preview_enabled: bool,
     pub live_output: LiveOutputSnapshotDto,
 }
 
@@ -719,6 +720,7 @@ pub struct TextPositionDto {
 pub struct PreviewSnapshotDto {
     pub source_label: String,
     pub is_playing: bool,
+    pub effect_preview_active: bool,
     pub position_seconds: f64,
     pub home_seconds: f64,
     pub duration_seconds: f64,
@@ -767,6 +769,7 @@ impl From<AppSnapshot> for AppSnapshotDto {
             preview: PreviewSnapshotDto {
                 source_label: snapshot.preview.source_label,
                 is_playing: snapshot.preview.is_playing,
+                effect_preview_active: snapshot.preview.effect_preview_active,
                 position_seconds: snapshot.preview.position_seconds,
                 home_seconds: snapshot.preview.home_seconds,
                 duration_seconds: snapshot.preview.duration_seconds,
@@ -775,6 +778,7 @@ impl From<AppSnapshot> for AppSnapshotDto {
                 audio_playback_status: snapshot.preview.audio_playback_status,
                 status: snapshot.preview.status,
             },
+            effect_preview_enabled: snapshot.workbench_layout.effect_preview_enabled,
             live_output: snapshot.live_output.into(),
         }
     }

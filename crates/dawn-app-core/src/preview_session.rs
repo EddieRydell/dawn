@@ -1,11 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use dawn_project::analysis::ProjectAnalysis;
 use dawn_project::document::{SequenceAudioDocument, SequenceDocument};
 use dawn_project::path::Utf8PathBuf;
 
-use crate::output_runtime::{empty_frame, evaluate_sequence_frame, OutputFrame, OutputFrameStatus};
+use crate::output_runtime::{
+    empty_frame, evaluate_sequence_effect_preview_frame, evaluate_sequence_frame_filtered,
+    OutputFrame, OutputFrameStatus,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
@@ -69,8 +72,15 @@ pub struct PreviewSnapshot {
     pub audio: Option<SequenceAudioDocument>,
     pub clock_source: String,
     pub audio_playback_status: AudioPlaybackStatus,
+    pub effect_preview_active: bool,
     pub frame: OutputFrame,
     pub status: String,
+}
+
+#[derive(Debug, Clone)]
+struct EffectPreviewState {
+    ids: HashSet<u32>,
+    started_at: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +88,7 @@ pub struct PreviewSession {
     source: PreviewSource,
     transport: PreviewTransport,
     sequence_states: HashMap<SequenceKey, SequencePlaybackState>,
+    effect_preview: Option<EffectPreviewState>,
     generation: u64,
     snapshot: PreviewSnapshot,
 }
@@ -89,6 +100,7 @@ impl Default for PreviewSession {
             source: PreviewSource::None,
             transport: PreviewTransport::Stopped,
             sequence_states: HashMap::new(),
+            effect_preview: None,
             generation: 0,
             snapshot: PreviewSnapshot {
                 source_label: "No preview source".to_string(),
@@ -100,6 +112,7 @@ impl Default for PreviewSession {
                 audio: None,
                 clock_source: "silent".to_string(),
                 audio_playback_status: AudioPlaybackStatus::None,
+                effect_preview_active: false,
                 frame,
                 status: "No sequence preview source".to_string(),
             },
@@ -144,6 +157,7 @@ impl PreviewSession {
     }
 
     pub fn play(&mut self, analysis: Option<&ProjectAnalysis>) {
+        self.effect_preview = None;
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
             self.transport = PreviewTransport::Stopped;
             self.render(analysis, "No sequence preview source");
@@ -166,6 +180,7 @@ impl PreviewSession {
         position_seconds: f64,
         analysis: Option<&ProjectAnalysis>,
     ) {
+        self.effect_preview = None;
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
             self.transport = PreviewTransport::Stopped;
             self.render(analysis, "No sequence preview source");
@@ -301,6 +316,10 @@ impl PreviewSession {
     }
 
     pub fn tick_clock(&mut self) -> bool {
+        if self.effect_preview.is_some() {
+            self.refresh_snapshot_metadata("Previewing selected effect");
+            return true;
+        }
         if !self.is_playing() || matches!(self.transport, PreviewTransport::NativeAudioPlaying) {
             return false;
         }
@@ -321,6 +340,26 @@ impl PreviewSession {
     }
 
     pub fn render_current_frame(&mut self, analysis: Option<&ProjectAnalysis>) {
+        let status = self.snapshot.status.clone();
+        self.render(analysis, status);
+    }
+
+    pub fn set_effect_preview_ids(&mut self, ids: Vec<u32>, analysis: Option<&ProjectAnalysis>) {
+        let ids = ids.into_iter().collect::<HashSet<_>>();
+        self.effect_preview = if ids.is_empty() {
+            None
+        } else {
+            Some(EffectPreviewState {
+                ids,
+                started_at: Instant::now(),
+            })
+        };
+        let status = self.snapshot.status.clone();
+        self.render(analysis, status);
+    }
+
+    pub fn clear_effect_preview(&mut self, analysis: Option<&ProjectAnalysis>) {
+        self.effect_preview = None;
         let status = self.snapshot.status.clone();
         self.render(analysis, status);
     }
@@ -423,12 +462,22 @@ impl PreviewSession {
                     .map(|state| clamp_position_seconds(state.home_seconds, duration_seconds))
                     .unwrap_or_default();
                 let frame = match analysis {
-                    Some(analysis) => evaluate_sequence_frame(
-                        analysis,
-                        &document,
-                        position_seconds,
-                        self.generation,
-                    ),
+                    Some(analysis) => match self.effect_preview.as_ref() {
+                        Some(effect_preview) => evaluate_sequence_effect_preview_frame(
+                            analysis,
+                            &document,
+                            effect_preview.started_at.elapsed().as_secs_f64(),
+                            self.generation,
+                            &effect_preview.ids,
+                        ),
+                        None => evaluate_sequence_frame_filtered(
+                            analysis,
+                            &document,
+                            position_seconds,
+                            self.generation,
+                            None,
+                        ),
+                    },
                     None => empty_frame(self.generation, "No project analysis"),
                 };
                 (
@@ -455,6 +504,7 @@ impl PreviewSession {
             audio,
             clock_source,
             audio_playback_status,
+            effect_preview_active: self.effect_preview.is_some(),
             frame,
             status: frame_status,
         };
@@ -473,6 +523,7 @@ impl PreviewSession {
                 self.snapshot.audio = None;
                 self.snapshot.clock_source = "silent".to_string();
                 self.snapshot.audio_playback_status = AudioPlaybackStatus::None;
+                self.snapshot.effect_preview_active = false;
                 self.snapshot.status = status;
             }
             PreviewSource::Sequence { key, document } => {
@@ -493,6 +544,7 @@ impl PreviewSession {
                     timing_status_for(self.snapshot.audio.as_ref(), self.is_playing());
                 self.snapshot.clock_source = clock_source;
                 self.snapshot.audio_playback_status = audio_playback_status;
+                self.snapshot.effect_preview_active = self.effect_preview.is_some();
                 self.snapshot.status = status;
             }
         }

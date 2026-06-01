@@ -23,6 +23,7 @@ const PREVIEW_STATE_EVENT_INTERVAL: Duration = Duration::from_millis(33);
 pub struct PreviewStateEventDto {
     pub source_label: String,
     pub is_playing: bool,
+    pub effect_preview_active: bool,
     pub position_seconds: f64,
     pub home_seconds: f64,
     pub duration_seconds: f64,
@@ -164,6 +165,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                     let mut snapshot = model.preview.snapshot();
                     let should_render_frame = (has_sink || live_output_enabled)
                         && (snapshot.is_playing
+                            || snapshot.effect_preview_active
                             || live_output_enabled
                             || last_published_generation != Some(snapshot.frame.generation));
                     if should_render_frame && !rendered_during_clock_apply {
@@ -195,11 +197,17 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                     Some((snapshot.frame.time_seconds - audio_seconds) * 1000.0);
             }
             let should_publish_frame = has_sink
-                && (snapshot.is_playing || last_published_generation != Some(frame_generation));
+                && (snapshot.is_playing
+                    || snapshot.effect_preview_active
+                    || last_published_generation != Some(frame_generation));
             if should_publish_frame {
                 if let Ok(mut runtime) = lock_preview_transport(&state) {
                     let publish_started = Instant::now();
-                    runtime.publish_frame(&snapshot.frame, snapshot.is_playing, backend_seconds);
+                    runtime.publish_frame(
+                        &snapshot.frame,
+                        snapshot.is_playing || snapshot.effect_preview_active,
+                        backend_seconds,
+                    );
                     timing.publish_ms = publish_started.elapsed().as_secs_f64() * 1000.0;
                     timing.published_frame = true;
                     last_published_generation = Some(frame_generation);
@@ -210,7 +218,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             }
 
             let event_identity = PreviewEventIdentity::from(&snapshot);
-            let should_emit_event = if snapshot.is_playing {
+            let should_emit_event = if snapshot.is_playing || snapshot.effect_preview_active {
                 last_event_identity.as_ref() != Some(&event_identity)
                     || last_event_at.elapsed() >= PREVIEW_STATE_EVENT_INTERVAL
             } else {
@@ -218,7 +226,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             };
             let fps = if has_sink || live_output_enabled {
                 target_fps.max(1)
-            } else if snapshot.is_playing {
+            } else if snapshot.is_playing || snapshot.effect_preview_active {
                 target_fps.clamp(1, 30)
             } else {
                 10
@@ -390,6 +398,7 @@ fn persist_preview_window_open(app: &AppHandle, open: bool) {
 struct PreviewEventIdentity {
     source_label: String,
     is_playing: bool,
+    effect_preview_active: bool,
     position_seconds: f64,
     home_seconds: f64,
     duration_seconds: f64,
@@ -405,7 +414,8 @@ impl From<&PreviewSnapshot> for PreviewEventIdentity {
         Self {
             source_label: snapshot.source_label.clone(),
             is_playing: snapshot.is_playing,
-            position_seconds: if snapshot.is_playing {
+            effect_preview_active: snapshot.effect_preview_active,
+            position_seconds: if snapshot.is_playing || snapshot.effect_preview_active {
                 0.0
             } else {
                 snapshot.position_seconds

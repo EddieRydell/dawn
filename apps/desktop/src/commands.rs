@@ -13,6 +13,7 @@ use crate::app_runtime::{
     valid_sequence_audio,
 };
 use crate::effect_previews::{preview_for_effect, SequenceEffectPreviewBatchDto};
+use crate::new_project::{create_starter_project, STARTER_SEQUENCE_PATH};
 use crate::preview::{
     open_or_focus_preview_window, preview_pixel_count, preview_scene_from_frame, PreviewSceneDto,
 };
@@ -56,6 +57,37 @@ fn open_project(
     path: String,
 ) -> CommandResult<AppSnapshotDto> {
     dispatch(&app, &state, AppAction::OpenProject(PathBuf::from(path)))
+}
+
+#[specta::specta]
+#[tauri::command]
+fn choose_new_project_parent_directory() -> CommandResult<Option<String>> {
+    Ok(rfd::FileDialog::new()
+        .set_title("Choose New Project Location")
+        .pick_folder()
+        .map(|path| path.to_string_lossy().replace('\\', "/")))
+}
+
+#[specta::specta]
+#[tauri::command]
+fn create_new_project(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    parent_path: String,
+    directory_name: String,
+) -> CommandResult<AppSnapshotDto> {
+    let target = create_starter_project(&parent_path, &directory_name)?;
+    dispatch(&app, &state, AppAction::OpenProject(target))?;
+    dispatch(
+        &app,
+        &state,
+        AppAction::OpenFile(project_path(STARTER_SEQUENCE_PATH.to_string())),
+    )?;
+    dispatch(
+        &app,
+        &state,
+        AppAction::SetActiveViewMode(EditorViewModeDto::Gui),
+    )
 }
 
 #[specta::specta]
@@ -361,6 +393,26 @@ fn toggle_project_tree(
 
 #[specta::specta]
 #[tauri::command]
+fn set_effect_preview_enabled(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> CommandResult<AppSnapshotDto> {
+    dispatch(&app, &state, AppAction::SetEffectPreviewEnabled(enabled))
+}
+
+#[specta::specta]
+#[tauri::command]
+fn set_effect_preview_effects(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    ids: Vec<u32>,
+) -> CommandResult<AppSnapshotDto> {
+    dispatch(&app, &state, AppAction::SetEffectPreviewEffects(ids))
+}
+
+#[specta::specta]
+#[tauri::command]
 async fn open_preview_window(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
     open_or_focus_preview_window(app, state)
 }
@@ -368,11 +420,18 @@ async fn open_preview_window(app: AppHandle, state: State<'_, AppState>) -> Comm
 #[specta::specta]
 #[tauri::command]
 fn preview_play(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
-    let (audio, position_seconds) = {
+    let (audio, position_seconds, effect_preview_enabled) = {
         let model = lock_model(&state)?;
         let snapshot = model.preview.snapshot();
-        (valid_sequence_audio(&snapshot), snapshot.position_seconds)
+        (
+            valid_sequence_audio(&snapshot),
+            snapshot.position_seconds,
+            model.workbench_layout.effect_preview_enabled,
+        )
     };
+    if effect_preview_enabled {
+        dispatch(&app, &state, AppAction::SetEffectPreviewEnabled(false))?;
+    }
     let Some(audio) = audio else {
         return dispatch(&app, &state, AppAction::PreviewPlay);
     };
@@ -539,6 +598,8 @@ pub(crate) fn register_commands(
         get_snapshot,
         open_project_dialog,
         open_project,
+        choose_new_project_parent_directory,
+        create_new_project,
         open_file,
         close_file,
         set_active_file,
@@ -560,6 +621,8 @@ pub(crate) fn register_commands(
         delete_path,
         reload_project,
         toggle_project_tree,
+        set_effect_preview_enabled,
+        set_effect_preview_effects,
         open_preview_window,
         preview_play,
         preview_pause,

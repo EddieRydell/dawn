@@ -1,0 +1,17 @@
+imports:
+  - from: ../effects
+    as: effects
+  - from: ../curves
+    as: curves
+
+example:
+  type: sequence
+  duration: 120s
+  frame_rate: 144
+  mark_collections:
+    - key: marks
+      name: Marks
+      color: '#38bdf8'
+      marks: []
+  effects: []
+  automation_clips: []

@@ -28,32 +28,7 @@ effect Chase {
     float distance = abs(pixel_position - chase);
     float level = 0.0;
     if (distance <= pulse_radius) {
-      int samples = 64;
-      float hit_progress = 0.0;
-      bool was_active = false;
-      for (int i = 0; i <= samples; i = i + 1) {
-        float sample_progress = progress * i / samples;
-        float sample_chase = mix(travel_start, travel_end, clamp(chase_position(sample_progress), 0.0, 1.0));
-        bool active = abs(pixel_position - sample_chase) <= pulse_radius;
-        if (active && !was_active) {
-          hit_progress = sample_progress;
-        }
-        was_active = active;
-      }
-
-      float exit_progress = 1.0;
-      bool found_exit = false;
-      for (int i = 1; i <= samples; i = i + 1) {
-        float sample_progress = progress + (1.0 - progress) * i / samples;
-        float sample_chase = mix(travel_start, travel_end, clamp(chase_position(sample_progress), 0.0, 1.0));
-        bool active = abs(pixel_position - sample_chase) <= pulse_radius;
-        if (!active && !found_exit) {
-          exit_progress = sample_progress;
-          found_exit = true;
-        }
-      }
-
-      float pulse_progress = clamp((progress - hit_progress) / max(0.000000001, exit_progress - hit_progress), 0.0, 1.0);
+      float pulse_progress = clamp((pixel_position - chase + pulse_radius) / max(0.000000001, pulse_radius * 2.0), 0.0, 1.0);
       level = clamp(pulse_shape(pulse_progress), 0.0, 1.0);
     }
 
@@ -62,7 +37,7 @@ effect Chase {
       gradient_position = pixel_position;
     }
     if (gradient_mode == per_pulse) {
-      gradient_position = clamp((chase + pulse_radius - pixel_position) / max(0.000000001, pulse_radius * 2.0), 0.0, 1.0);
+      gradient_position = clamp((pixel_position - chase + pulse_radius) / max(0.000000001, pulse_radius * 2.0), 0.0, 1.0);
     }
 
     return gradient(clamp(gradient_position, 0.0, 1.0)) * level;

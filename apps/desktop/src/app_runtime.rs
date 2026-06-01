@@ -186,6 +186,7 @@ pub(crate) fn emit_preview_state_dto(
         PreviewStateEventDto {
             source_label: snapshot.preview.source_label.clone(),
             is_playing: snapshot.preview.is_playing,
+            effect_preview_active: snapshot.preview.effect_preview_active,
             position_seconds: snapshot.preview.position_seconds,
             home_seconds: snapshot.preview.home_seconds,
             duration_seconds: snapshot.preview.duration_seconds,
@@ -209,6 +210,7 @@ pub(crate) fn emit_preview_state_snapshot(
         PreviewStateEventDto {
             source_label: snapshot.source_label.clone(),
             is_playing: snapshot.is_playing,
+            effect_preview_active: snapshot.effect_preview_active,
             position_seconds: snapshot.position_seconds,
             home_seconds: snapshot.home_seconds,
             duration_seconds: snapshot.duration_seconds,

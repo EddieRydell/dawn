@@ -7,9 +7,9 @@ import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { commands } from "../api";
-import type { AppSnapshotDto, ProjectDiagnosticDto, TextRangeDto } from "../bindings";
+import type { AppSnapshotDto, ProjectDiagnosticDto, SequenceSelectionDto, TextRangeDto } from "../bindings";
 import { commandRegistry } from "../commandRegistry";
 import { runSnapshotCommand, useAppStore } from "../store";
 import { GuiEditor, SequenceTransportControls } from "./GuiEditor";
@@ -20,12 +20,21 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
   const view = useRef<EditorView | null>(null);
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [editorSignal, setEditorSignal] = useState(0);
+  const [sequenceSelection, setSequenceSelection] = useState<SequenceSelectionDto | null>(null);
   const latestLocalText = useRef(localText);
   const applyingExternalText = useRef(false);
   const activePath = snapshot.activeBuffer?.path ?? null;
   const viewMode = snapshot.activeBuffer?.viewMode ?? "text";
   const activeSequenceDocument =
     viewMode === "gui" && snapshot.activeGuiDocument?.type === "sequence" ? snapshot.activeGuiDocument.document : null;
+  const selectedEffectIds = useMemo(
+    () => (sequenceSelection?.type === "effects" ? sequenceSelection.ids : []),
+    [sequenceSelection]
+  );
+
+  useEffect(() => {
+    setSequenceSelection(null);
+  }, [activePath]);
 
   useEffect(() => {
     latestLocalText.current = localText;
@@ -136,6 +145,8 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
             document={activeSequenceDocument}
             preview={snapshot.preview}
             liveOutput={snapshot.liveOutput}
+            effectPreviewEnabled={snapshot.effectPreviewEnabled}
+            selectedEffectIds={selectedEffectIds}
           />
         )}
         <div className="segmented-control">
@@ -154,7 +165,11 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
         </div>
       </div>
       {viewMode === "gui" ? (
-        <GuiEditor snapshot={snapshot} />
+        <GuiEditor
+          snapshot={snapshot}
+          sequenceSelection={sequenceSelection}
+          setSequenceSelection={setSequenceSelection}
+        />
       ) : (
         <div className="editor-scrollbar-shell">
           <div ref={editorHost} className="editor-host" />

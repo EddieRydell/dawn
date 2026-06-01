@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use dawn_project::analysis::ProjectAnalysis;
 use dawn_project::document::{
@@ -74,6 +74,14 @@ impl<'a> SequenceFrameEvaluator<'a> {
         analysis: &'a ProjectAnalysis,
         document: &'a SequenceDocument,
     ) -> Result<Self, String> {
+        Self::new_filtered(analysis, document, None)
+    }
+
+    pub fn new_filtered(
+        analysis: &'a ProjectAnalysis,
+        document: &'a SequenceDocument,
+        effect_filter: Option<&HashSet<u32>>,
+    ) -> Result<Self, String> {
         let Some(project) = analysis.resolved.as_ref() else {
             return Err("Project must resolve before preview is available".to_string());
         };
@@ -100,6 +108,11 @@ impl<'a> SequenceFrameEvaluator<'a> {
         let effects = document
             .effects
             .iter()
+            .filter(|effect| {
+                effect_filter
+                    .map(|ids| ids.contains(&effect.id))
+                    .unwrap_or(true)
+            })
             .filter_map(|effect| {
                 let render = effect.render.as_ref()?;
                 let render_plan = match analysis.compiled_script_for_key(&render.script_key) {
@@ -191,6 +204,62 @@ impl<'a> SequenceFrameEvaluator<'a> {
             }
         }
 
+        self.output_frame(time_seconds, generation, status, fixtures)
+    }
+
+    pub fn evaluate_effect_preview(
+        &mut self,
+        preview_seconds: f64,
+        generation: u64,
+    ) -> OutputFrame {
+        let mut fixtures = self.fixture_templates.clone();
+        let mut status = OutputFrameStatus::Live;
+
+        for effect in &mut self.effects {
+            if effect.duration_seconds <= 0.0 {
+                continue;
+            }
+            let local_seconds = preview_seconds.rem_euclid(effect.duration_seconds);
+            let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
+
+            let PreparedEffectRender::Ready {
+                script,
+                target_pixels,
+                prepared_params,
+                scratch,
+                ..
+            } = &mut effect.render
+            else {
+                status = effect.render.error_status();
+                continue;
+            };
+
+            for pixel in target_pixels {
+                let output_pixel = &mut fixtures[pixel.fixture_index].pixels[pixel.pixel_index];
+                match script.sample_prepared_with_scratch(
+                    progress,
+                    local_seconds,
+                    pixel.fixture_context,
+                    pixel.pixel_context,
+                    prepared_params,
+                    scratch,
+                ) {
+                    Ok(color) => add_clamped(&mut output_pixel.color, color),
+                    Err(error) => status = OutputFrameStatus::Error(error.to_string()),
+                }
+            }
+        }
+
+        self.output_frame(preview_seconds, generation, status, fixtures)
+    }
+
+    fn output_frame(
+        &self,
+        time_seconds: f64,
+        generation: u64,
+        status: OutputFrameStatus,
+        fixtures: Vec<OutputFixtureFrame>,
+    ) -> OutputFrame {
         OutputFrame {
             source: self.source.clone(),
             time_seconds,
@@ -279,6 +348,32 @@ pub fn evaluate_sequence_frame(
 ) -> OutputFrame {
     match SequenceFrameEvaluator::new(analysis, document) {
         Ok(mut evaluator) => evaluator.evaluate(time_seconds, generation),
+        Err(message) => empty_frame(generation, message),
+    }
+}
+
+pub fn evaluate_sequence_frame_filtered(
+    analysis: &ProjectAnalysis,
+    document: &SequenceDocument,
+    time_seconds: f64,
+    generation: u64,
+    effect_filter: Option<&HashSet<u32>>,
+) -> OutputFrame {
+    match SequenceFrameEvaluator::new_filtered(analysis, document, effect_filter) {
+        Ok(mut evaluator) => evaluator.evaluate(time_seconds, generation),
+        Err(message) => empty_frame(generation, message),
+    }
+}
+
+pub fn evaluate_sequence_effect_preview_frame(
+    analysis: &ProjectAnalysis,
+    document: &SequenceDocument,
+    preview_seconds: f64,
+    generation: u64,
+    effect_filter: &HashSet<u32>,
+) -> OutputFrame {
+    match SequenceFrameEvaluator::new_filtered(analysis, document, Some(effect_filter)) {
+        Ok(mut evaluator) => evaluator.evaluate_effect_preview(preview_seconds, generation),
         Err(message) => empty_frame(generation, message),
     }
 }

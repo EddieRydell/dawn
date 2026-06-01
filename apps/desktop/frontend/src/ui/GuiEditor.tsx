@@ -2,7 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, FlipHorizontal2, FlipVertical2, Link2Off, LoaderCircle, Minus, Music, Pause, Play, RadioTower, SkipBack, Square, Trash2, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Crosshair, FlipHorizontal2, FlipVertical2, Link2Off, LoaderCircle, Minus, Music, Pause, Play, RadioTower, SkipBack, Square, Trash2, X } from "lucide-react";
 import { commands } from "../api";
 import type {
   ActiveGuiDocumentDto,
@@ -90,7 +90,15 @@ const DEFAULT_MARK_COLORS = ["#38bdf8", "#f97316", "#22c55e", "#e879f9", "#facc1
 const MIN_EFFECT_DURATION_SECONDS = 0.000000001;
 let markDisplayMode: MarkDisplayMode = "overlay";
 
-export function GuiEditor({ snapshot }: { snapshot: AppSnapshotDto }) {
+export function GuiEditor({
+  snapshot,
+  sequenceSelection,
+  setSequenceSelection
+}: {
+  snapshot: AppSnapshotDto;
+  sequenceSelection: SequenceSelection;
+  setSequenceSelection: (selection: SequenceSelection) => void;
+}) {
   const gui = snapshot.activeGuiDocument;
 
   if (!gui) {
@@ -101,12 +109,29 @@ export function GuiEditor({ snapshot }: { snapshot: AppSnapshotDto }) {
   }
 
   const editorKey = guiEditorKey(snapshot.activeFile, gui);
-  return <GuiEditorInner key={editorKey} gui={gui} snapshot={snapshot} />;
+  return (
+    <GuiEditorInner
+      key={editorKey}
+      gui={gui}
+      snapshot={snapshot}
+      sequenceSelection={sequenceSelection}
+      setSequenceSelection={setSequenceSelection}
+    />
+  );
 }
 
-function GuiEditorInner({ gui, snapshot }: { gui: ReadyGuiDocumentDto; snapshot: AppSnapshotDto }) {
+function GuiEditorInner({
+  gui,
+  snapshot,
+  sequenceSelection,
+  setSequenceSelection
+}: {
+  gui: ReadyGuiDocumentDto;
+  snapshot: AppSnapshotDto;
+  sequenceSelection: SequenceSelection;
+  setSequenceSelection: (selection: SequenceSelection) => void;
+}) {
   const [selected, setSelected] = useState<string | null>(null);
-  const [sequenceSelection, setSequenceSelection] = useState<SequenceSelection>(null);
   const [activeMarkCollectionKey, setActiveMarkCollectionKey] = useState<string | null>(() =>
     gui.type === "sequence" ? gui.document.markCollections[0]?.key ?? null : null
   );
@@ -207,11 +232,15 @@ function SequenceEditor({
 export function SequenceTransportControls({
   document,
   preview,
-  liveOutput
+  liveOutput,
+  effectPreviewEnabled,
+  selectedEffectIds
 }: {
   document: SequenceDocumentDto;
   preview: AppSnapshotDto["preview"];
   liveOutput: AppSnapshotDto["liveOutput"];
+  effectPreviewEnabled: boolean;
+  selectedEffectIds: number[];
 }) {
   const livePreview = useSequencePreview(preview);
   const unsupported = document.durationSeconds <= 0;
@@ -221,6 +250,7 @@ export function SequenceTransportControls({
   const audioQueued = livePreview.audioPlaybackStatus === "loading_to_play";
   const playCommand = audioQueued || livePreview.isPlaying ? commands.previewPause : commands.previewPlay;
   const [mode, setMode] = useMarkDisplayMode();
+  const selectedEffectIdsSignature = selectedEffectIds.join(",");
   const stepFrame = (direction: -1 | 1) => {
     stepSequenceFrame(document, livePreview.positionSeconds, livePreview.durationSeconds, direction);
   };
@@ -229,6 +259,10 @@ export function SequenceTransportControls({
     window.dispatchEvent(new CustomEvent<MarkDisplayMode>("dawn-mark-display-mode", { detail: nextMode }));
     setMode(nextMode);
   };
+  useEffect(() => {
+    if (!effectPreviewEnabled) return;
+    void runSnapshotCommand(() => commands.setEffectPreviewEffects(selectedEffectIds));
+  }, [effectPreviewEnabled, selectedEffectIds, selectedEffectIdsSignature]);
   return (
     <div
       className="sequence-toolbar"
@@ -278,6 +312,20 @@ export function SequenceTransportControls({
         onClick={() => void runSnapshotCommand(() => commands.setLiveOutputEnabled(!liveOutput.enabled))}
       >
         <RadioTower size={15} />
+      </button>
+      <button
+        type="button"
+        className={effectPreviewEnabled ? "active" : ""}
+        title={effectPreviewEnabled ? "Stop previewing selected effect" : "Preview selected effect"}
+        disabled={!effectPreviewEnabled && selectedEffectIds.length === 0}
+        onClick={() => {
+          const enabled = !effectPreviewEnabled;
+          void runSnapshotCommand(() => commands.setEffectPreviewEnabled(enabled)).then(() => {
+            if (enabled) void runSnapshotCommand(() => commands.setEffectPreviewEffects(selectedEffectIds));
+          });
+        }}
+      >
+        <Crosshair size={15} />
       </button>
       <button
         type="button"

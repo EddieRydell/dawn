@@ -393,7 +393,7 @@ button:focus-visible,
 
 .sequence-toolbar {
   display: grid;
-  grid-template-columns: repeat(8, 32px) auto minmax(0, 1fr);
+  grid-template-columns: repeat(9, 32px) auto minmax(0, 1fr);
   align-items: center;
   gap: 0;
   min-width: min(520px, 100%);
@@ -1270,6 +1270,85 @@ button:focus-visible,
   border-radius: 5px;
   background: #272a2f;
   padding: 6px 10px;
+}
+
+.dialog-actions button:disabled {
+  opacity: 0.55;
+}
+
+.new-project-dialog {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.new-project-form {
+  display: grid;
+  gap: 12px;
+}
+
+.new-project-form label {
+  display: grid;
+  gap: 5px;
+  color: #a8a29a;
+  font-size: 12px;
+}
+
+.new-project-form input {
+  min-width: 0;
+  height: 30px;
+  border: 1px solid #373b42;
+  border-radius: 5px;
+  background: #17181b;
+  padding: 0 8px;
+  color: #ebe7df;
+}
+
+.new-project-location-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.new-project-location-row button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 104px;
+  justify-content: center;
+  border: 1px solid #454a53;
+  border-radius: 5px;
+  background: #272a2f;
+  padding: 0 9px;
+}
+
+.new-project-preview {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid #30343a;
+  border-radius: 5px;
+  background: #1d1f23;
+  padding: 8px;
+  font-size: 12px;
+}
+
+.new-project-preview span {
+  color: #a8a29a;
+}
+
+.new-project-preview strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #ebe7df;
+  font-weight: 500;
+}
+
+.new-project-error {
+  border: 1px solid #7d3b3b;
+  border-radius: 5px;
+  background: #2c1f21;
+  padding: 7px 8px;
+  color: #ffd7d7;
+  font-size: 12px;
 }
 
 .preview-window {
