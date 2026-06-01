@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
+use crate::effect_script::{lex as lex_effect_script, parse_module as parse_effect_module};
 use crate::fs::WorkspaceFs;
 use crate::lower::{
     lower_project, select_referenced_object, LowerError, ResolvedEffectImport, ResolvedImport,
@@ -177,9 +178,13 @@ impl SymbolResolver for FsImportLoader {
         };
         let mut matches = Vec::new();
         for import_path in self.import_paths_for_alias(source_path, alias, reference)? {
-            if effect_name_for_path(&import_path)? == reference.name().as_str() {
+            for effect_name in effect_names_for_path(&import_path)? {
+                if effect_name != reference.name().as_str() {
+                    continue;
+                }
                 matches.push(ResolvedEffectImport {
-                    source_path: import_path,
+                    source_path: import_path.clone(),
+                    effect_name,
                 });
             }
         }
@@ -258,23 +263,30 @@ fn single_match<T>(mut matches: Vec<T>, reference: &SymbolRef) -> Result<T, Lowe
     }
 }
 
-fn effect_name_for_path(path: &Utf8PathBuf) -> Result<String, LowerError> {
+fn effect_names_for_path(path: &Utf8PathBuf) -> Result<Vec<String>, LowerError> {
     let text = std::fs::read_to_string(path.as_std_path()).map_err(|error| LowerError::Import {
         reference: path.to_string(),
         message: error.to_string(),
     })?;
-    effect_name_from_source(&text).ok_or_else(|| LowerError::Import {
+    let tokens = lex_effect_script(&text).map_err(|diagnostics| LowerError::Import {
         reference: path.to_string(),
-        message: "effect file did not declare an effect".to_string(),
-    })
-}
-
-fn effect_name_from_source(source: &str) -> Option<String> {
-    let rest = source.split_once("effect")?.1.trim_start();
-    let name = rest
-        .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
-        .next()?;
-    (!name.is_empty()).then(|| name.to_string())
+        message: diagnostics
+            .first()
+            .map(|diagnostic| diagnostic.message.clone())
+            .unwrap_or_else(|| "effect file did not produce tokens".to_string()),
+    })?;
+    let module = parse_effect_module(&tokens).map_err(|diagnostics| LowerError::Import {
+        reference: path.to_string(),
+        message: diagnostics
+            .first()
+            .map(|diagnostic| diagnostic.message.clone())
+            .unwrap_or_else(|| "effect file did not declare an effect".to_string()),
+    })?;
+    Ok(module
+        .effects
+        .into_iter()
+        .map(|effect| effect.name)
+        .collect())
 }
 
 fn is_dawn_path(path: &Utf8PathBuf) -> bool {

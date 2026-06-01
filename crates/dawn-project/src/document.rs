@@ -4,12 +4,13 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::{
-    analyze_project_with_overlays, AnalysisImportResolver, DiagnosticCode, DiagnosticSeverity,
-    ProjectAnalysis, ProjectOverlay,
+    analyze_project_with_overlays, effect_script_key, split_effect_script_key,
+    AnalysisImportResolver, DiagnosticCode, DiagnosticSeverity, ProjectAnalysis, ProjectOverlay,
 };
 use crate::effect_script::{
-    compile as compile_effect_script, lex as lex_effect_script, parse as parse_effect_script,
-    CompiledEffect, EffectEntrypoint, EffectScriptKind, ParamDefault, RuntimeValue, ScriptType,
+    compile as compile_effect_script, compile_module, lex as lex_effect_script,
+    parse_module as parse_effect_module, CompiledEffect, EffectEntrypoint, EffectScriptKind,
+    EffectVisibility, ParamDefault, RuntimeValue, ScriptType,
 };
 use crate::fs::WorkspaceFs;
 use crate::lower::{lower_layout, SymbolResolver};
@@ -800,7 +801,11 @@ fn apply_sequence_edit_operation(
         } => {
             let id = next_sequence_effect_id(sequence)
                 .ok_or_else(|| "no sequence effect IDs are available".to_string())?;
-            let script_key = Utf8PathBuf::from(script_path.clone()).to_slash_string();
+            let (script_path, effect_name) = split_effect_script_key(&script_path);
+            let script_key = effect_name
+                .as_ref()
+                .map(|name| effect_script_key(&script_path, name))
+                .unwrap_or_else(|| script_path.to_slash_string());
             let compiled_script;
             let script = match analysis
                 .scripts
@@ -809,10 +814,10 @@ fn apply_sequence_edit_operation(
             {
                 Some(script) => script,
                 None => {
-                    let script_path = Utf8PathBuf::from(script_path.clone());
                     let source = read_text_with_overlays(fs, &script_path, overlays)?;
-                    compiled_script = compile_effect_script(&source)
+                    let compiled = compile_module(&source)
                         .map_err(|diagnostics| script_diagnostics_message(&diagnostics))?;
+                    compiled_script = select_compiled_effect(compiled, effect_name.as_deref())?;
                     &compiled_script
                 }
             };
@@ -828,7 +833,6 @@ fn apply_sequence_edit_operation(
                         .saturating_sub(start_nanoseconds),
                 )
                 .max(1);
-            let script_path = Utf8PathBuf::from(script_path);
             let (alias, import) = module_import_for_path(path, &script_path, imports);
             sequence.effects.push(SequenceEffect {
                 id,
@@ -919,7 +923,11 @@ fn apply_sequence_edit_operation(
             );
         }
         SequenceDocumentEdit::ChangeEffectScript { id, script_path } => {
-            let script_key = Utf8PathBuf::from(script_path.clone()).to_slash_string();
+            let (script_path, effect_name) = split_effect_script_key(&script_path);
+            let script_key = effect_name
+                .as_ref()
+                .map(|name| effect_script_key(&script_path, name))
+                .unwrap_or_else(|| script_path.to_slash_string());
             let compiled_script;
             let script = match analysis
                 .scripts
@@ -928,14 +936,13 @@ fn apply_sequence_edit_operation(
             {
                 Some(script) => script,
                 None => {
-                    let script_path = Utf8PathBuf::from(script_path.clone());
                     let source = read_text_with_overlays(fs, &script_path, overlays)?;
-                    compiled_script = compile_effect_script(&source)
+                    let compiled = compile_module(&source)
                         .map_err(|diagnostics| script_diagnostics_message(&diagnostics))?;
+                    compiled_script = select_compiled_effect(compiled, effect_name.as_deref())?;
                     &compiled_script
                 }
             };
-            let script_path = Utf8PathBuf::from(script_path);
             let (alias, import) = module_import_for_path(path, &script_path, imports);
             let mark_collection_key = sequence
                 .mark_collections
@@ -1482,11 +1489,11 @@ fn compiled_effect_for_sequence_effect(
                 files: &analysis.files,
                 scripts: &analysis.scripts,
             };
-            let script_path = resolver
+            let resolved = resolver
                 .resolve_effect(path, reference)
-                .map_err(|error| error.to_string())?
-                .source_path;
-            let script_key = script_path.to_slash_string();
+                .map_err(|error| error.to_string())?;
+            let script_path = resolved.source_path;
+            let script_key = effect_script_key(&script_path, &resolved.effect_name);
             if let Some(script) = analysis
                 .scripts
                 .get(&script_key)
@@ -1495,10 +1502,28 @@ fn compiled_effect_for_sequence_effect(
                 return Ok(script.clone());
             }
             let source = read_text_with_overlays(fs, &script_path, overlays)?;
-            compile_effect_script(&source)
-                .map_err(|diagnostics| script_diagnostics_message(&diagnostics))
+            let compiled = compile_module(&source)
+                .map_err(|diagnostics| script_diagnostics_message(&diagnostics))?;
+            select_compiled_effect(compiled, Some(&resolved.effect_name))
         }
     }
+}
+
+fn select_compiled_effect(
+    mut compiled: Vec<CompiledEffect>,
+    effect_name: Option<&str>,
+) -> Result<CompiledEffect, String> {
+    if let Some(effect_name) = effect_name {
+        let index = compiled
+            .iter()
+            .position(|script| script.name == effect_name)
+            .ok_or_else(|| format!("effect `{effect_name}` was not found"))?;
+        return Ok(compiled.remove(index));
+    }
+    if compiled.len() == 1 {
+        return Ok(compiled.remove(0));
+    }
+    Err("effect selector must include an effect name".to_string())
 }
 
 fn default_param_for_schema(
@@ -1932,7 +1957,7 @@ fn sequence_effect_script_catalog(
     sequence_path: &Utf8PathBuf,
     overlays: &[ProjectOverlay],
 ) -> Vec<SequenceEffectScriptDocument> {
-    let mut by_path = BTreeMap::new();
+    let mut by_path = BTreeMap::<String, SequenceEffectScriptDocument>::new();
     if let Ok(entries) = fs.list_entries() {
         for entry in entries {
             if !entry
@@ -1943,31 +1968,36 @@ fn sequence_effect_script_catalog(
                 continue;
             }
             let path = canonicalize_path(&fs.resolve(&entry.path));
-            if by_path.contains_key(&path) {
+            if by_path
+                .keys()
+                .any(|key| split_effect_script_key(key).0 == path)
+            {
                 continue;
             }
             let Ok(source) = read_text_with_overlays(fs, &path, overlays) else {
                 continue;
             };
-            let Some((name, kind, params)) = effect_script_catalog_entry(&source) else {
-                continue;
-            };
-            by_path.insert(
-                path.clone(),
-                SequenceEffectScriptDocument {
-                    name,
-                    kind,
-                    path: path.to_slash_string(),
-                    import: serialized_import_path(sequence_path, &path),
-                    params: params
-                        .into_iter()
-                        .map(|param| SequenceEffectScriptParamDocument {
-                            name: param.name,
-                            value_type: param.value_type,
-                        })
-                        .collect(),
-                },
-            );
+            for (name, visibility, kind, params) in effect_script_catalog_entries(&source) {
+                if visibility == EffectVisibility::Internal {
+                    continue;
+                };
+                by_path.insert(
+                    effect_script_key(&path, &name),
+                    SequenceEffectScriptDocument {
+                        name: name.clone(),
+                        kind,
+                        path: effect_script_key(&path, &name),
+                        import: serialized_import_path(sequence_path, &path),
+                        params: params
+                            .into_iter()
+                            .map(|param| SequenceEffectScriptParamDocument {
+                                name: param.name,
+                                value_type: param.value_type,
+                            })
+                            .collect(),
+                    },
+                );
+            }
         }
     }
     let mut scripts = by_path.into_values().collect::<Vec<_>>();
@@ -1979,23 +2009,37 @@ fn sequence_effect_script_catalog(
     scripts
 }
 
-fn effect_script_catalog_entry(
+fn effect_script_catalog_entries(
     source: &str,
-) -> Option<(
+) -> Vec<(
     String,
+    EffectVisibility,
     EffectScriptKind,
     Vec<crate::effect_script::EffectParamSchema>,
 )> {
-    if let Ok(compiled) = compile_effect_script(source) {
-        return Some((compiled.name, compiled.kind, compiled.params));
+    if let Ok(compiled) = compile_module(source) {
+        return compiled
+            .into_iter()
+            .map(|script| (script.name, script.visibility, script.kind, script.params))
+            .collect();
     }
-    let tokens = lex_effect_script(source).ok()?;
-    let ast = parse_effect_script(&tokens).ok()?;
-    let kind = match ast.entrypoint {
-        EffectEntrypoint::Sample(_) => EffectScriptKind::Sample,
-        EffectEntrypoint::Generator(_) => EffectScriptKind::Generator,
+    let Ok(tokens) = lex_effect_script(source) else {
+        return Vec::new();
     };
-    Some((ast.name, kind, ast.params))
+    let Ok(module) = parse_effect_module(&tokens) else {
+        return Vec::new();
+    };
+    module
+        .effects
+        .into_iter()
+        .map(|ast| {
+            let kind = match ast.entrypoint {
+                EffectEntrypoint::Sample(_) => EffectScriptKind::Sample,
+                EffectEntrypoint::Generator(_) => EffectScriptKind::Generator,
+            };
+            (ast.name, ast.visibility, kind, ast.params)
+        })
+        .collect()
 }
 
 fn script_diagnostics_message(diagnostics: &[crate::effect_script::ScriptDiagnostic]) -> String {
@@ -2336,11 +2380,9 @@ fn sequence_effect_script_details(
                 files: &analysis.files,
                 scripts: &analysis.scripts,
             };
-            let path = resolver
-                .resolve_effect(sequence_path, reference)
-                .ok()?
-                .source_path;
-            let key = path.to_slash_string();
+            let resolved = resolver.resolve_effect(sequence_path, reference).ok()?;
+            let path = resolved.source_path;
+            let key = effect_script_key(&path, &resolved.effect_name);
             let source = analysis
                 .files
                 .get(&path)

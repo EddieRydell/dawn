@@ -172,7 +172,7 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 8
-    start: 39.376631642s
+    start: 39.361695521s
     duration: 0.65s
     target:
       type: group
@@ -698,6 +698,51 @@ empty:
         type: float
         value: 2.0
     script: effects.MarkPulse
+  - id: 20
+    start: 128.836789387s
+    duration: 0.661261311s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve: curves.club_gradient
+      gradient_mode:
+        type: enum
+        value: through_effect
+      pulse_overlap:
+        type: float
+        value: 120.0
+      section_width_pixels:
+        type: integer
+        value: 5
+      chase_position:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Chase
   - id: 13
     start: 129.512749672s
     duration: 1.690194211s

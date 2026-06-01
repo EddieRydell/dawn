@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::ast::{EffectAst, EffectEntrypoint, EmitStmt, Expr, Stmt, UnaryOp};
+use super::ast::{EffectAst, EffectEntrypoint, EmitEffectRef, EmitStmt, Expr, Stmt, UnaryOp};
 use super::builtins::{BuiltinConstant, BuiltinContext, BuiltinFunction};
 use super::{
     binary_result_type, is_assignable, is_float_compatible, EffectParamSchema, EffectScriptKind,
@@ -12,7 +12,7 @@ pub fn type_check(effect: &EffectAst) -> Result<(), Vec<ScriptDiagnostic>> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ImportedEffect<'a> {
-    pub alias: &'a str,
+    pub alias: Option<&'a str>,
     pub name: &'a str,
     pub kind: EffectScriptKind,
     pub params: &'a [EffectParamSchema],
@@ -208,11 +208,11 @@ impl<'a> TypeChecker<'a> {
         let Some(child) = self
             .imports
             .iter()
-            .find(|import| import.alias == emit.alias && import.name == emit.effect)
+            .find(|import| import.matches(&emit.effect))
         else {
             self.errors.push(ScriptDiagnostic {
                 range: None,
-                message: format!("unresolved emitted effect `{}.{}`", emit.alias, emit.effect),
+                message: format!("unresolved emitted effect `{}`", emit.effect.label()),
             });
             return;
         };
@@ -220,8 +220,8 @@ impl<'a> TypeChecker<'a> {
             self.errors.push(ScriptDiagnostic {
                 range: None,
                 message: format!(
-                    "generator cannot emit generator effect `{}.{}`",
-                    emit.alias, emit.effect
+                    "generator cannot emit generator effect `{}`",
+                    emit.effect.label()
                 ),
             });
             return;
@@ -231,8 +231,9 @@ impl<'a> TypeChecker<'a> {
                 self.errors.push(ScriptDiagnostic {
                     range: None,
                     message: format!(
-                        "emitted effect `{}.{}` has no parameter `{}`",
-                        emit.alias, emit.effect, param.name
+                        "emitted effect `{}` has no parameter `{}`",
+                        emit.effect.label(),
+                        param.name
                     ),
                 });
                 continue;
@@ -368,7 +369,7 @@ impl<'a> TypeChecker<'a> {
                 if self
                     .imports
                     .iter()
-                    .any(|import| import.alias == alias && import.name == name)
+                    .any(|import| import.alias == Some(alias.as_str()) && import.name == name)
                 {
                     ScriptType::Void
                 } else {
@@ -464,6 +465,26 @@ impl<'a> TypeChecker<'a> {
 
     fn pop_scope(&mut self) {
         self.scopes.pop();
+    }
+}
+
+impl ImportedEffect<'_> {
+    fn matches(&self, reference: &EmitEffectRef) -> bool {
+        match reference {
+            EmitEffectRef::Local { name } => self.alias.is_none() && self.name == name,
+            EmitEffectRef::Imported { alias, name } => {
+                self.alias == Some(alias.as_str()) && self.name == name
+            }
+        }
+    }
+}
+
+impl EmitEffectRef {
+    fn label(&self) -> String {
+        match self {
+            Self::Local { name } => name.clone(),
+            Self::Imported { alias, name } => format!("{alias}.{name}"),
+        }
     }
 }
 

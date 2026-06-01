@@ -4,9 +4,9 @@ use indexmap::IndexMap;
 use serde::Serialize;
 
 use crate::effect_script::{
-    compile as compile_effect_script, compile_with_imports, lex as lex_effect_script,
-    parse as parse_effect_script, CompiledEffect, ImportedEffect, ParamDefault, RuntimeValue,
-    ScriptDiagnostic,
+    compile as compile_effect_script, compile_module_with_imports, lex as lex_effect_script,
+    parse_module as parse_effect_module, CompiledEffect, ImportedEffect, ParamDefault,
+    RuntimeValue, ScriptDiagnostic,
 };
 use crate::fs::{WorkspaceEntryKind, WorkspaceFs};
 use crate::lower::{
@@ -52,14 +52,20 @@ impl ProjectAnalysis {
 
     pub fn compiled_script_for_path(&self, path: &Utf8PathBuf) -> Option<&CompiledEffect> {
         self.scripts
-            .get(&path.to_slash_string())?
+            .values()
+            .find(
+                |script| matches!(&script.source, ScriptSource::External(source) if source == path),
+            )?
             .result
             .as_ref()
             .ok()
     }
 
     pub fn compiled_script_for_key(&self, script_key: &str) -> Option<&CompiledEffect> {
-        self.scripts.get(script_key)?.result.as_ref().ok()
+        self.scripts
+            .get(script_key)
+            .and_then(|script| script.result.as_ref().ok())
+            .or_else(|| self.compiled_script_for_path(&Utf8PathBuf::from(script_key)))
     }
 
     pub fn sample_effect_script(
@@ -103,7 +109,26 @@ impl ProjectAnalysis {
         script_path: &Utf8PathBuf,
     ) -> BTreeMap<String, RuntimeValue> {
         let Some(script_analysis) = self.scripts.get(&script_path.to_slash_string()) else {
-            return BTreeMap::new();
+            let Some(script_analysis) = self
+                .scripts
+                .values()
+                .find(|script| matches!(&script.source, ScriptSource::External(source) if source == script_path))
+            else {
+                return BTreeMap::new();
+            };
+            let Some(script) = script_analysis.result.as_ref().ok() else {
+                return BTreeMap::new();
+            };
+            return script
+                .params
+                .iter()
+                .filter_map(|param| {
+                    param
+                        .default
+                        .as_ref()
+                        .map(|ParamDefault::Value(value)| (param.name.clone(), value.clone()))
+                })
+                .collect();
         };
         let Some(script) = script_analysis.result.as_ref().ok() else {
             return BTreeMap::new();
@@ -366,8 +391,8 @@ impl AnalysisSession {
 
         if is_effect_script_path(&path) {
             if let Ok(tokens) = lex_effect_script(&text) {
-                if let Ok(ast) = parse_effect_script(&tokens) {
-                    for import in &ast.imports {
+                if let Ok(module) = parse_effect_module(&tokens) {
+                    for import in &module.imports {
                         let import_path =
                             resolve_import_path(&path, &Utf8PathBuf::from(import.path.clone()));
                         if self.visiting.contains(&import_path) {
@@ -381,6 +406,18 @@ impl AnalysisSession {
                                     import_path.to_slash_string()
                                 ),
                             });
+                        } else if self.fs.is_dir(&import_path) {
+                            if let Ok(entries) = std::fs::read_dir(import_path.as_std_path()) {
+                                for entry in entries.flatten() {
+                                    let Ok(child_path) = Utf8PathBuf::from_path_buf(entry.path())
+                                    else {
+                                        continue;
+                                    };
+                                    if child_path.is_file() && is_effect_script_path(&child_path) {
+                                        self.visit_file(canonicalize_path(&child_path));
+                                    }
+                                }
+                            }
                         } else if self.can_load_file(&import_path) {
                             self.visit_file(import_path);
                         } else {
@@ -402,11 +439,36 @@ impl AnalysisSession {
             for diagnostic in script_diagnostics(&path, &result) {
                 self.diagnostics.push(diagnostic);
             }
-            let script = EffectScriptAnalysis {
-                source: ScriptSource::External(path.clone()),
-                result,
-            };
-            self.scripts.insert(path.to_slash_string(), script.clone());
+            let first_script = result
+                .as_ref()
+                .ok()
+                .and_then(|scripts| scripts.first())
+                .map(|script| EffectScriptAnalysis {
+                    source: ScriptSource::External(path.clone()),
+                    result: Ok(script.clone()),
+                });
+            match result {
+                Ok(scripts) => {
+                    for compiled in scripts {
+                        self.scripts.insert(
+                            effect_script_key(&path, &compiled.name),
+                            EffectScriptAnalysis {
+                                source: ScriptSource::External(path.clone()),
+                                result: Ok(compiled),
+                            },
+                        );
+                    }
+                }
+                Err(diagnostics) => {
+                    self.scripts.insert(
+                        path.to_slash_string(),
+                        EffectScriptAnalysis {
+                            source: ScriptSource::External(path.clone()),
+                            result: Err(diagnostics),
+                        },
+                    );
+                }
+            }
             self.files.insert(
                 path.clone(),
                 AnalyzedFile {
@@ -414,7 +476,7 @@ impl AnalysisSession {
                     text: Some(text.clone()),
                     file: None,
                     source_map: None,
-                    script: Some(script),
+                    script: first_script,
                 },
             );
             self.visiting.remove(&path);
@@ -471,26 +533,47 @@ impl AnalysisSession {
         &self,
         path: &Utf8PathBuf,
         text: &str,
-    ) -> Result<CompiledEffect, Vec<ScriptDiagnostic>> {
+    ) -> Result<Vec<CompiledEffect>, Vec<ScriptDiagnostic>> {
         let tokens = lex_effect_script(text)?;
-        let ast = parse_effect_script(&tokens)?;
+        let module = parse_effect_module(&tokens)?;
         let mut imports = Vec::new();
-        for import in &ast.imports {
+        for import in &module.imports {
             let import_path = resolve_import_path(path, &Utf8PathBuf::from(import.path.clone()));
-            if let Some(compiled) = self
-                .scripts
-                .get(&import_path.to_slash_string())
-                .and_then(|script| script.result.as_ref().ok())
-            {
+            for compiled in self.compiled_scripts_for_import_path(&import_path) {
                 imports.push(ImportedEffect {
-                    alias: &import.alias,
+                    alias: Some(&import.alias),
                     name: &compiled.name,
                     kind: compiled.kind,
                     params: &compiled.params,
                 });
             }
         }
-        compile_with_imports(text, &imports)
+        compile_module_with_imports(text, &imports)
+    }
+
+    fn compiled_scripts_for_source_path(&self, path: &Utf8PathBuf) -> Vec<&CompiledEffect> {
+        self.scripts
+            .values()
+            .filter(
+                |script| matches!(&script.source, ScriptSource::External(source) if source == path),
+            )
+            .filter_map(|script| script.result.as_ref().ok())
+            .collect()
+    }
+
+    fn compiled_scripts_for_import_path(&self, path: &Utf8PathBuf) -> Vec<&CompiledEffect> {
+        let mut scripts = self.compiled_scripts_for_source_path(path);
+        if scripts.is_empty() && self.fs.is_dir(path) {
+            scripts = self
+                .scripts
+                .values()
+                .filter(|script| {
+                    matches!(&script.source, ScriptSource::External(source) if source.parent() == Some(path.as_path()))
+                })
+                .filter_map(|script| script.result.as_ref().ok())
+                .collect();
+        }
+        scripts
     }
 
     fn import_field_range(
@@ -1391,9 +1474,10 @@ impl AnalysisImportResolver<'_> {
         alias: &str,
         reference: &SymbolRef,
     ) -> Result<Vec<Utf8PathBuf>, LowerError> {
+        let (source_path, _) = split_effect_script_key(source_path.as_str());
         let analyzed = self
             .files
-            .get(source_path)
+            .get(&source_path)
             .ok_or_else(|| LowerError::Import {
                 reference: reference.raw().to_string(),
                 message: format!("file `{}` was not loaded", source_path),
@@ -1420,7 +1504,7 @@ impl AnalysisImportResolver<'_> {
                 message: format!("alias `{alias}` is imported more than once"),
             });
         }
-        let import_path = resolve_import_path(source_path, &imports[0]);
+        let import_path = resolve_import_path(&source_path, &imports[0]);
         if self.files.contains_key(&import_path) {
             return Ok(vec![import_path]);
         }
@@ -1505,19 +1589,42 @@ impl SymbolResolver for AnalysisImportResolver<'_> {
         };
         let mut matches = Vec::new();
         for import_path in self.import_paths_for_alias(source_path, alias, reference)? {
-            let Some(script) = self.scripts.get(&import_path.to_slash_string()) else {
-                continue;
-            };
-            let Ok(compiled) = &script.result else {
-                continue;
-            };
-            if compiled.name == reference.name().as_str() {
+            for (script_path, compiled) in self.compiled_effect_matches_source(&import_path) {
+                if compiled.name != reference.name().as_str() {
+                    continue;
+                }
                 matches.push(ResolvedEffectImport {
-                    source_path: import_path,
+                    source_path: script_path,
+                    effect_name: compiled.name.clone(),
                 });
             }
         }
         single_match(matches, reference)
+    }
+}
+
+impl AnalysisImportResolver<'_> {
+    fn compiled_effect_matches_source(
+        &self,
+        path: &Utf8PathBuf,
+    ) -> Vec<(Utf8PathBuf, &CompiledEffect)> {
+        self.scripts
+            .values()
+            .filter_map(|script| {
+                let ScriptSource::External(source_path) = &script.source else {
+                    return None;
+                };
+                (source_path == path)
+                    .then(|| {
+                        script
+                            .result
+                            .as_ref()
+                            .ok()
+                            .map(|compiled| (source_path.clone(), compiled))
+                    })
+                    .flatten()
+            })
+            .collect()
     }
 }
 
@@ -1553,7 +1660,7 @@ fn script_range(range: crate::effect_script::SourceRange) -> TextRange {
 
 fn script_diagnostics(
     path: &Utf8PathBuf,
-    result: &Result<CompiledEffect, Vec<ScriptDiagnostic>>,
+    result: &Result<Vec<CompiledEffect>, Vec<ScriptDiagnostic>>,
 ) -> Vec<ProjectDiagnostic> {
     result
         .as_ref()
@@ -2254,6 +2361,17 @@ fn is_mark_collection_key(value: &str) -> bool {
 fn is_effect_script_path(path: &Utf8PathBuf) -> bool {
     path.file_name()
         .is_some_and(|name| name.ends_with(".effect.dawn"))
+}
+
+pub fn effect_script_key(path: &Utf8PathBuf, effect_name: &str) -> String {
+    format!("{}#{effect_name}", path.to_slash_string())
+}
+
+pub fn split_effect_script_key(script_key: &str) -> (Utf8PathBuf, Option<String>) {
+    match script_key.rsplit_once('#') {
+        Some((path, name)) => (Utf8PathBuf::from(path), Some(name.to_string())),
+        None => (Utf8PathBuf::from(script_key), None),
+    }
 }
 
 fn is_dawn_path(path: &Utf8PathBuf) -> bool {

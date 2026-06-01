@@ -5,15 +5,28 @@ use super::{EffectParamSchema, ScriptType};
 #[derive(Debug, Clone, PartialEq)]
 pub struct EffectAst {
     pub name: String,
+    pub visibility: EffectVisibility,
     pub imports: Vec<EffectImport>,
     pub params: Vec<EffectParamSchema>,
     pub entrypoint: EffectEntrypoint,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectVisibility {
+    Addable,
+    Internal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectImport {
     pub path: String,
     pub alias: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EffectModuleAst {
+    pub imports: Vec<EffectImport>,
+    pub effects: Vec<EffectAst>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -105,12 +118,17 @@ pub enum BinaryOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EmitStmt {
-    pub alias: String,
-    pub effect: String,
+    pub effect: EmitEffectRef,
     pub target: Expr,
     pub start: Expr,
     pub duration: Expr,
     pub params: Vec<EmitParam>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmitEffectRef {
+    Local { name: String },
+    Imported { alias: String, name: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]

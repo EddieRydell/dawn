@@ -241,9 +241,10 @@ fn script_dependencies_json(
     script: &dawn_project::effect_script::CompiledEffect,
 ) -> Result<String, String> {
     let mut dependencies = Vec::new();
+    let (script_path, _) = dawn_project::analysis::split_effect_script_key(script_key);
     for import in &script.imports {
         let path = dawn_project::path::resolve_import_path(
-            &dawn_project::path::Utf8PathBuf::from(script_key.to_string()),
+            &script_path,
             &dawn_project::path::Utf8PathBuf::from(import.path.clone()),
         );
         dependencies.push((

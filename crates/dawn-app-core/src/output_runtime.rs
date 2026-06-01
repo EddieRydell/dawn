@@ -1,22 +1,22 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Instant;
 
-use dawn_project::analysis::ProjectAnalysis;
+use dawn_project::analysis::{effect_script_key, split_effect_script_key, ProjectAnalysis};
 use dawn_project::document::{
     SequenceDocument, SequenceEffectParamDocument, SequenceEffectPixelDocument,
     SequenceMarkCollectionDocument,
 };
 use dawn_project::effect_script::{
     run_generator, BytecodeStats, CompiledEffect, EffectSampleScratch, EffectScriptKind,
-    FixtureContext, GeneratorTarget, GeneratorTargetPixel, PixelContext, PreparedEffectParams,
-    RuntimeError, RuntimeValue,
+    FixtureContext, GeneratedChildEffectRef, GeneratorTarget, GeneratorTargetPixel, PixelContext,
+    PreparedEffectParams, RuntimeError, RuntimeValue,
 };
 use dawn_project::frame::{ceil_frame, floor_frame, frame_count};
 use dawn_project::model::{
     Color, Distance, DistanceSpan, EffectParam, FixtureId, Resolved, SequenceEffectScope, Time,
     TimeSpan,
 };
-use dawn_project::path::{resolve_import_path, PathStringExt, Utf8PathBuf};
+use dawn_project::path::{resolve_import_path, Utf8PathBuf};
 use dawn_project::render::{layout_render_plan, GeometryRenderBounds, GeometryRenderPoint};
 
 #[derive(Debug, Clone)]
@@ -831,31 +831,38 @@ fn prepare_generated_effects(
             parent_duration_seconds,
         )?);
     }
-    let parent_path = Utf8PathBuf::from(render.script_key.clone());
+    let (parent_path, _) = split_effect_script_key(&render.script_key);
     children
         .into_iter()
         .map(|child| {
-            let import = generator
-                .imports
-                .iter()
-                .find(|import| import.alias == child.alias)
-                .ok_or_else(|| RuntimeError {
-                    message: format!("generator import alias `{}` was not found", child.alias),
-                })?;
-            let child_path =
-                resolve_import_path(&parent_path, &Utf8PathBuf::from(import.path.clone()))
-                    .to_slash_string();
+            let (child_path, child_name, child_label) = match &child.effect {
+                GeneratedChildEffectRef::Local { name } => {
+                    (parent_path.clone(), name.clone(), name.clone())
+                }
+                GeneratedChildEffectRef::Imported { alias, name } => {
+                    let import = generator
+                        .imports
+                        .iter()
+                        .find(|import| import.alias == *alias)
+                        .ok_or_else(|| RuntimeError {
+                            message: format!("generator import alias `{alias}` was not found"),
+                        })?;
+                    (
+                        resolve_import_path(&parent_path, &Utf8PathBuf::from(import.path.clone())),
+                        name.clone(),
+                        format!("{alias}.{name}"),
+                    )
+                }
+            };
+            let child_key = effect_script_key(&child_path, &child_name);
             let child_script = analysis
-                .compiled_script_for_key(&child_path)
+                .compiled_script_for_key(&child_key)
                 .ok_or_else(|| RuntimeError {
-                    message: format!("compiled child script `{child_path}` was not found"),
+                    message: format!("compiled child script `{child_key}` was not found"),
                 })?;
-            if child_script.kind != EffectScriptKind::Sample || child_script.name != child.effect {
+            if child_script.kind != EffectScriptKind::Sample || child_script.name != child_name {
                 return Err(RuntimeError {
-                    message: format!(
-                        "emitted child `{}.{}` is not a sample effect",
-                        child.alias, child.effect
-                    ),
+                    message: format!("emitted child `{child_label}` is not a sample effect"),
                 });
             }
             let prepared_params = child_script.prepare_params(&child.params)?;

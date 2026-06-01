@@ -19,15 +19,15 @@ mod type_check;
 #[cfg(test)]
 mod tests;
 
-pub use ast::{EffectAst, EffectEntrypoint, EffectImport, Stmt};
+pub use ast::{EffectAst, EffectEntrypoint, EffectImport, EffectModuleAst, EffectVisibility, Stmt};
 pub use lexer::{lex, Token};
-pub use parser::parse;
+pub use parser::{parse, parse_module};
 pub use type_check::{type_check, type_check_with_imports, ImportedEffect};
 
 use ast::BinaryOp;
 pub use bytecode::BytecodeStats;
 use bytecode::{stats_for_program, BytecodeProgram};
-pub use generator::{run_generator, GeneratedChildEffect};
+pub use generator::{run_generator, GeneratedChildEffect, GeneratedChildEffectRef};
 pub use params::{EffectSampleScratch, PreparedEffectParams};
 
 #[derive(Debug, Clone)]
@@ -51,6 +51,7 @@ pub struct SourcePosition {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledEffect {
     pub name: String,
+    pub visibility: EffectVisibility,
     pub kind: EffectScriptKind,
     pub imports: Vec<EffectImport>,
     pub params: Vec<EffectParamSchema>,
@@ -368,6 +369,25 @@ pub fn compile(text: &str) -> Result<CompiledEffect, Vec<ScriptDiagnostic>> {
     Ok(compile_ast(effect))
 }
 
+pub fn compile_module(text: &str) -> Result<Vec<CompiledEffect>, Vec<ScriptDiagnostic>> {
+    let tokens = lex(text)?;
+    let module = parse_module(&tokens)?;
+    let imports = module
+        .effects
+        .iter()
+        .map(|effect| ImportedEffect {
+            alias: None,
+            name: effect.name.as_str(),
+            kind: kind_for_entrypoint(&effect.entrypoint),
+            params: &effect.params,
+        })
+        .collect::<Vec<_>>();
+    for effect in &module.effects {
+        type_check_with_imports(effect, &imports)?;
+    }
+    Ok(module.effects.into_iter().map(compile_ast).collect())
+}
+
 pub fn compile_with_imports(
     text: &str,
     imports: &[ImportedEffect<'_>],
@@ -378,11 +398,29 @@ pub fn compile_with_imports(
     Ok(compile_ast(effect))
 }
 
+pub fn compile_module_with_imports(
+    text: &str,
+    imports: &[ImportedEffect<'_>],
+) -> Result<Vec<CompiledEffect>, Vec<ScriptDiagnostic>> {
+    let tokens = lex(text)?;
+    let module = parse_module(&tokens)?;
+    let mut available = imports.to_vec();
+    for effect in &module.effects {
+        available.push(ImportedEffect {
+            alias: None,
+            name: effect.name.as_str(),
+            kind: kind_for_entrypoint(&effect.entrypoint),
+            params: &effect.params,
+        });
+    }
+    for effect in &module.effects {
+        type_check_with_imports(effect, &available)?;
+    }
+    Ok(module.effects.into_iter().map(compile_ast).collect())
+}
+
 pub fn compile_ast(effect: EffectAst) -> CompiledEffect {
-    let kind = match &effect.entrypoint {
-        EffectEntrypoint::Sample(_) => EffectScriptKind::Sample,
-        EffectEntrypoint::Generator(_) => EffectScriptKind::Generator,
-    };
+    let kind = kind_for_entrypoint(&effect.entrypoint);
     let bytecode = if kind == EffectScriptKind::Sample {
         Some(compile::compile_effect(&effect))
     } else {
@@ -394,10 +432,18 @@ pub fn compile_ast(effect: EffectAst) -> CompiledEffect {
     };
     CompiledEffect {
         name: effect.name,
+        visibility: effect.visibility,
         kind,
         imports: effect.imports,
         params: effect.params,
         bytecode,
         generator,
+    }
+}
+
+fn kind_for_entrypoint(entrypoint: &EffectEntrypoint) -> EffectScriptKind {
+    match entrypoint {
+        EffectEntrypoint::Sample(_) => EffectScriptKind::Sample,
+        EffectEntrypoint::Generator(_) => EffectScriptKind::Generator,
     }
 }

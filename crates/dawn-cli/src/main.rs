@@ -997,7 +997,10 @@ fn synthetic_script_key(analysis: &ProjectAnalysis, path: &str) -> Result<String
     let matches = analysis
         .scripts
         .keys()
-        .filter(|script_key| script_key.ends_with(&suffix))
+        .filter(|script_key| {
+            let (script_path, _) = dawn_project::analysis::split_effect_script_key(script_key);
+            script_path.to_string().ends_with(&suffix)
+        })
         .cloned()
         .collect::<Vec<_>>();
     match matches.as_slice() {
@@ -1105,7 +1108,7 @@ effect SyntheticPixelMath {
 "##;
 
 const SYNTHETIC_CHILD_EFFECT: &str = r##"
-effect SyntheticChild {
+internal effect SyntheticChild {
   param color color = #ffffff;
 
   color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {

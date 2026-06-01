@@ -1,7 +1,8 @@
 use crate::model::{Color, Flags};
 
 use super::ast::{
-    BinaryOp, EffectAst, EffectEntrypoint, EffectImport, EmitParam, EmitStmt, Expr, Stmt, UnaryOp,
+    BinaryOp, EffectAst, EffectEntrypoint, EffectImport, EffectModuleAst, EffectVisibility,
+    EmitEffectRef, EmitParam, EmitStmt, Expr, Stmt, UnaryOp,
 };
 use super::lexer::{Token, TokenKind};
 use super::params;
@@ -28,6 +29,26 @@ pub fn parse(tokens: &[Token]) -> Result<EffectAst, Vec<ScriptDiagnostic>> {
     }
 }
 
+pub fn parse_module(tokens: &[Token]) -> Result<EffectModuleAst, Vec<ScriptDiagnostic>> {
+    if tokens.is_empty() {
+        return Err(vec![ScriptDiagnostic {
+            range: None,
+            message: "script did not produce tokens".to_string(),
+        }]);
+    }
+    let mut parser = Parser {
+        tokens,
+        index: 0,
+        errors: Vec::new(),
+    };
+    let parsed = parser.module();
+    if parser.errors.is_empty() {
+        parsed.map_err(|diagnostic| vec![diagnostic])
+    } else {
+        Err(parser.errors)
+    }
+}
+
 struct Parser<'a> {
     tokens: &'a [Token],
     index: usize,
@@ -35,11 +56,50 @@ struct Parser<'a> {
 }
 
 impl Parser<'_> {
+    fn module(&mut self) -> Result<EffectModuleAst, ScriptDiagnostic> {
+        let mut imports = Vec::new();
+        while self.at_keyword("use") {
+            imports.push(self.import()?);
+        }
+        let mut names = Vec::new();
+        let mut effects = Vec::new();
+        while !self.at_eof() {
+            let effect = self.effect_with_imports(imports.clone())?;
+            if names.contains(&effect.name) {
+                return Err(
+                    self.error_here(&format!("duplicate effect `{}` in module", effect.name))
+                );
+            }
+            names.push(effect.name.clone());
+            effects.push(effect);
+        }
+        if effects.is_empty() {
+            return Err(self.error_here("missing effect declaration"));
+        }
+        Ok(EffectModuleAst { imports, effects })
+    }
+
     fn effect(&mut self) -> Result<EffectAst, ScriptDiagnostic> {
         let mut imports = Vec::new();
         while self.at_keyword("use") {
             imports.push(self.import()?);
         }
+        let effect = self.effect_with_imports(imports)?;
+        if !self.at_eof() {
+            return Err(self.error_here("expected exactly one effect declaration per file"));
+        }
+        Ok(effect)
+    }
+
+    fn effect_with_imports(
+        &mut self,
+        imports: Vec<EffectImport>,
+    ) -> Result<EffectAst, ScriptDiagnostic> {
+        let visibility = if self.consume_keyword("internal") {
+            EffectVisibility::Internal
+        } else {
+            EffectVisibility::Addable
+        };
         self.keyword("effect")?;
         let name = self.identifier("effect name")?;
         self.symbol('{')?;
@@ -56,11 +116,9 @@ impl Parser<'_> {
             }
         }
         self.symbol('}')?;
-        if !self.at_eof() {
-            return Err(self.error_here("expected exactly one effect declaration per file"));
-        }
         Ok(EffectAst {
             name,
+            visibility,
             imports,
             params,
             entrypoint: entrypoint.ok_or_else(|| self.error_here("missing effect entrypoint"))?,
@@ -222,9 +280,15 @@ impl Parser<'_> {
         self.keyword("timeline")?;
         self.symbol('.')?;
         self.keyword("emit")?;
-        let alias = self.identifier("effect import alias")?;
-        self.symbol('.')?;
-        let effect = self.identifier("effect name")?;
+        let first = self.identifier("effect name")?;
+        let effect = if self.consume_symbol('.') {
+            EmitEffectRef::Imported {
+                alias: first,
+                name: self.identifier("effect name")?,
+            }
+        } else {
+            EmitEffectRef::Local { name: first }
+        };
         self.symbol('{')?;
         let mut target = None;
         let mut start = None;
@@ -266,7 +330,6 @@ impl Parser<'_> {
         self.symbol('}')?;
         self.symbol(';')?;
         Ok(Stmt::Emit(EmitStmt {
-            alias,
             effect,
             target: target.ok_or_else(|| self.error_here("emit is missing target"))?,
             start: start.ok_or_else(|| self.error_here("emit is missing start"))?,

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::model::{Color, CurveValue};
 
-use super::ast::{BinaryOp, EmitStmt, Expr, Stmt, UnaryOp};
+use super::ast::{BinaryOp, EmitEffectRef, EmitStmt, Expr, Stmt, UnaryOp};
 use super::params::PreparedEffectParams;
 use super::{
     binary_result_type, GeneratorTarget, GeneratorTargetItem, RuntimeError, RuntimeValue,
@@ -14,12 +14,17 @@ const MAX_GENERATOR_LOOP_ITERATIONS: usize = 16384;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneratedChildEffect {
-    pub alias: String,
-    pub effect: String,
+    pub effect: GeneratedChildEffectRef,
     pub target: GeneratorTarget,
     pub start_seconds: f64,
     pub duration_seconds: f64,
     pub params: BTreeMap<String, RuntimeValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GeneratedChildEffectRef {
+    Local { name: String },
+    Imported { alias: String, name: String },
 }
 
 pub fn run_generator(
@@ -148,8 +153,15 @@ impl GeneratorRuntime {
         let start_seconds = self.float(&emit.start)?;
         let duration_seconds = self.float(&emit.duration)?;
         self.emitted.push(GeneratedChildEffect {
-            alias: emit.alias.clone(),
-            effect: emit.effect.clone(),
+            effect: match &emit.effect {
+                EmitEffectRef::Local { name } => {
+                    GeneratedChildEffectRef::Local { name: name.clone() }
+                }
+                EmitEffectRef::Imported { alias, name } => GeneratedChildEffectRef::Imported {
+                    alias: alias.clone(),
+                    name: name.clone(),
+                },
+            },
             target,
             start_seconds,
             duration_seconds,
