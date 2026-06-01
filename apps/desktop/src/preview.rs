@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use dawn_app_core::dto::{GeometryRenderBoundsDto, GeometryRenderPointDto};
 use dawn_app_core::output_runtime::OutputFrame;
-use dawn_app_core::preview_session::{AudioPlaybackStatus, PreviewSnapshot};
+use dawn_app_core::preview_session::{AudioPlaybackStatus, PreviewRenderTiming, PreviewSnapshot};
 use dawn_project::analysis::ProjectAnalysis;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -49,12 +49,26 @@ pub struct PreviewTimingDto {
     pub snapshot_minus_audio_ms: Option<f64>,
     pub frame_minus_audio_ms: Option<f64>,
     pub loop_elapsed_ms: f64,
+    pub preview_transport_lock_ms: f64,
+    pub live_output_lock_ms: f64,
+    pub model_lock_wait_ms: f64,
+    pub preview_snapshot_ms: f64,
+    pub analysis_clone_ms: f64,
     pub audio_poll_ms: f64,
     pub audio_apply_ms: f64,
     pub model_update_ms: f64,
     pub render_ms: f64,
+    pub renderer_build_ms: f64,
+    pub frame_evaluate_ms: f64,
+    pub frame_fixture_clone_ms: f64,
+    pub frame_effect_loop_ms: f64,
+    pub frame_output_ms: f64,
     pub publish_ms: f64,
+    pub event_emit_ms: f64,
+    pub live_output_ms: f64,
     pub event_interval_ms: f64,
+    pub rendered_active_effects: u32,
+    pub rendered_sampled_pixels: u32,
     pub has_sink: bool,
     pub published_frame: bool,
     pub rendered_frame: bool,
@@ -75,12 +89,26 @@ impl PreviewTimingDto {
             snapshot_minus_audio_ms: None,
             frame_minus_audio_ms: None,
             loop_elapsed_ms: 0.0,
+            preview_transport_lock_ms: 0.0,
+            live_output_lock_ms: 0.0,
+            model_lock_wait_ms: 0.0,
+            preview_snapshot_ms: 0.0,
+            analysis_clone_ms: 0.0,
             audio_poll_ms: 0.0,
             audio_apply_ms: 0.0,
             model_update_ms: 0.0,
             render_ms: 0.0,
+            renderer_build_ms: 0.0,
+            frame_evaluate_ms: 0.0,
+            frame_fixture_clone_ms: 0.0,
+            frame_effect_loop_ms: 0.0,
+            frame_output_ms: 0.0,
             publish_ms: 0.0,
+            event_emit_ms: 0.0,
+            live_output_ms: 0.0,
             event_interval_ms: 0.0,
+            rendered_active_effects: 0,
+            rendered_sampled_pixels: 0,
             has_sink: false,
             published_frame: false,
             rendered_frame: false,
@@ -116,6 +144,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
         let mut had_sink = false;
         let mut last_event_at = Instant::now() - PREVIEW_STATE_EVENT_INTERVAL;
         let mut last_event_identity: Option<PreviewEventIdentity> = None;
+        let mut last_event_emit_ms = 0.0;
         let mut previous_loop_started = worker_started;
         loop {
             let state = app.state::<AppState>();
@@ -123,24 +152,34 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             let loop_interval_ms =
                 started.duration_since(previous_loop_started).as_secs_f64() * 1000.0;
             previous_loop_started = started;
+            let mut timing = PreviewTimingDto::empty(worker_started.elapsed().as_secs_f64());
+            timing.loop_interval_ms = loop_interval_ms;
+
+            let preview_transport_lock_started = Instant::now();
             let has_sink = lock_preview_transport(&state)
                 .map(|runtime| runtime.has_sinks())
                 .unwrap_or(false);
+            timing.preview_transport_lock_ms = elapsed_ms(preview_transport_lock_started);
+            let live_output_lock_started = Instant::now();
             let live_output_enabled = lock_live_output(&state)
                 .map(|runtime| runtime.enabled())
                 .unwrap_or(false);
+            timing.live_output_lock_ms = elapsed_ms(live_output_lock_started);
             if has_sink && !had_sink {
                 last_published_generation = None;
             }
             had_sink = has_sink;
 
-            let mut timing = PreviewTimingDto::empty(worker_started.elapsed().as_secs_f64());
             timing.has_sink = has_sink;
-            timing.loop_interval_ms = loop_interval_ms;
+            timing.event_emit_ms = last_event_emit_ms;
+            let model_lock_started = Instant::now();
             let (snapshot, target_fps, analysis) = match lock_model(&state) {
                 Ok(mut model) => {
+                    timing.model_lock_wait_ms = elapsed_ms(model_lock_started);
                     let model_started = Instant::now();
+                    let preview_snapshot_started = Instant::now();
                     let preview_snapshot = model.preview.snapshot();
+                    timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
                     let audio_poll_started = Instant::now();
                     let audio_clock = if preview_snapshot.audio.is_some() {
                         lock_audio_runtime(&state)
@@ -153,16 +192,21 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                     timing.audio_position_seconds =
                         audio_clock.as_ref().map(|clock| clock.position_seconds);
                     let rendered_during_clock_apply = if let Some(clock) = audio_clock {
-                        let apply_started = Instant::now();
+                        let analysis_clone_started = Instant::now();
                         let analysis = model.analysis.clone();
+                        timing.analysis_clone_ms += elapsed_ms(analysis_clone_started);
+                        let apply_started = Instant::now();
                         apply_audio_clock_to_model(&mut model, &clock, analysis.as_ref());
                         timing.audio_apply_ms = apply_started.elapsed().as_secs_f64() * 1000.0;
+                        record_render_timing(&mut timing, model.preview.last_render_timing());
                         true
                     } else {
                         model.tick_preview_clock();
                         false
                     };
+                    let preview_snapshot_started = Instant::now();
                     let mut snapshot = model.preview.snapshot();
+                    timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
                     let should_render_frame = (has_sink || live_output_enabled)
                         && (snapshot.is_playing
                             || snapshot.effect_preview_active
@@ -172,13 +216,19 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                         let render_started = Instant::now();
                         model.render_preview_frame();
                         timing.render_ms = render_started.elapsed().as_secs_f64() * 1000.0;
+                        record_render_timing(&mut timing, model.preview.last_render_timing());
                         timing.rendered_frame = true;
+                        let preview_snapshot_started = Instant::now();
                         snapshot = model.preview.snapshot();
+                        timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
                     } else if should_render_frame {
                         timing.rendered_frame = true;
                     }
                     timing.model_update_ms = model_started.elapsed().as_secs_f64() * 1000.0;
-                    (snapshot, model.preview_target_fps(), model.analysis.clone())
+                    let analysis_clone_started = Instant::now();
+                    let analysis = model.analysis.clone();
+                    timing.analysis_clone_ms += elapsed_ms(analysis_clone_started);
+                    (snapshot, model.preview_target_fps(), analysis)
                 }
                 Err(_) => {
                     thread::sleep(Duration::from_millis(100));
@@ -214,7 +264,9 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                 }
             }
             if live_output_enabled {
+                let live_output_started = Instant::now();
                 publish_live_output_frame(&app, &state, analysis.as_ref(), &snapshot.frame);
+                timing.live_output_ms = elapsed_ms(live_output_started);
             }
 
             let event_identity = PreviewEventIdentity::from(&snapshot);
@@ -245,7 +297,9 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             };
             timing.event_interval_ms = last_event_at.elapsed().as_secs_f64() * 1000.0;
             if should_emit_event {
+                let event_emit_started = Instant::now();
                 emit_preview_state_snapshot(&app, &snapshot, timing);
+                last_event_emit_ms = elapsed_ms(event_emit_started);
                 last_event_at = Instant::now();
                 last_event_identity = Some(event_identity);
             }
@@ -254,6 +308,21 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             }
         }
     });
+}
+
+fn record_render_timing(timing: &mut PreviewTimingDto, render_timing: PreviewRenderTiming) {
+    timing.render_ms = render_timing.total_ms;
+    timing.renderer_build_ms = render_timing.renderer_build_ms;
+    timing.frame_evaluate_ms = render_timing.frame_evaluate_ms;
+    timing.frame_fixture_clone_ms = render_timing.fixture_clone_ms;
+    timing.frame_effect_loop_ms = render_timing.effect_loop_ms;
+    timing.frame_output_ms = render_timing.output_frame_ms;
+    timing.rendered_active_effects = render_timing.active_effects;
+    timing.rendered_sampled_pixels = render_timing.sampled_pixels;
+}
+
+fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
 }
 
 fn publish_live_output_frame(

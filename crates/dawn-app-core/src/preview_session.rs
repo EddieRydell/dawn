@@ -6,8 +6,8 @@ use dawn_project::document::{SequenceAudioDocument, SequenceDocument};
 use dawn_project::path::Utf8PathBuf;
 
 use crate::output_runtime::{
-    empty_frame, evaluate_sequence_effect_preview_frame, evaluate_sequence_frame_filtered,
-    OutputFrame, OutputFrameStatus,
+    empty_frame, OutputFrame, OutputFrameStatus, SequenceFrameEvaluationTiming,
+    SequenceFrameEvaluator,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -77,6 +77,18 @@ pub struct PreviewSnapshot {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PreviewRenderTiming {
+    pub total_ms: f64,
+    pub renderer_build_ms: f64,
+    pub frame_evaluate_ms: f64,
+    pub fixture_clone_ms: f64,
+    pub effect_loop_ms: f64,
+    pub output_frame_ms: f64,
+    pub active_effects: u32,
+    pub sampled_pixels: u32,
+}
+
 #[derive(Debug, Clone)]
 struct EffectPreviewState {
     ids: HashSet<u32>,
@@ -89,6 +101,8 @@ pub struct PreviewSession {
     transport: PreviewTransport,
     sequence_states: HashMap<SequenceKey, SequencePlaybackState>,
     effect_preview: Option<EffectPreviewState>,
+    render_cache: Option<SequenceFrameEvaluator>,
+    last_render_timing: PreviewRenderTiming,
     generation: u64,
     snapshot: PreviewSnapshot,
 }
@@ -101,6 +115,8 @@ impl Default for PreviewSession {
             transport: PreviewTransport::Stopped,
             sequence_states: HashMap::new(),
             effect_preview: None,
+            render_cache: None,
+            last_render_timing: PreviewRenderTiming::default(),
             generation: 0,
             snapshot: PreviewSnapshot {
                 source_label: "No preview source".to_string(),
@@ -125,6 +141,10 @@ impl PreviewSession {
         self.snapshot.clone()
     }
 
+    pub fn last_render_timing(&self) -> PreviewRenderTiming {
+        self.last_render_timing
+    }
+
     pub fn reset(&mut self) {
         *self = Self::default();
     }
@@ -139,6 +159,7 @@ impl PreviewSession {
         if source_changed && self.is_playing() {
             self.pause_current(analysis);
         }
+        self.render_cache = None;
 
         match source {
             Some((key, document)) => {
@@ -433,6 +454,8 @@ impl PreviewSession {
     }
 
     fn render(&mut self, analysis: Option<&ProjectAnalysis>, status: impl Into<String>) {
+        let render_started = Instant::now();
+        self.last_render_timing = PreviewRenderTiming::default();
         self.generation = self.generation.saturating_add(1);
         let status = status.into();
         let (
@@ -461,22 +484,16 @@ impl PreviewSession {
                     .get(&key)
                     .map(|state| clamp_position_seconds(state.home_seconds, duration_seconds))
                     .unwrap_or_default();
+                let effect_preview = self.effect_preview.clone();
                 let frame = match analysis {
-                    Some(analysis) => match self.effect_preview.as_ref() {
-                        Some(effect_preview) => evaluate_sequence_effect_preview_frame(
+                    Some(analysis) => match effect_preview.as_ref() {
+                        Some(effect_preview) => self.render_effect_preview_frame(
                             analysis,
                             &document,
                             effect_preview.started_at.elapsed().as_secs_f64(),
-                            self.generation,
                             &effect_preview.ids,
                         ),
-                        None => evaluate_sequence_frame_filtered(
-                            analysis,
-                            &document,
-                            position_seconds,
-                            self.generation,
-                            None,
-                        ),
+                        None => self.render_sequence_frame(analysis, &document, position_seconds),
                     },
                     None => empty_frame(self.generation, "No project analysis"),
                 };
@@ -508,6 +525,7 @@ impl PreviewSession {
             frame,
             status: frame_status,
         };
+        self.last_render_timing.total_ms = elapsed_ms(render_started);
     }
 
     fn refresh_snapshot_metadata(&mut self, status: impl Into<String>) {
@@ -608,6 +626,94 @@ impl PreviewSession {
             PreviewSource::Sequence { .. } => "Ready",
         }
     }
+
+    fn render_sequence_frame(
+        &mut self,
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+        position_seconds: f64,
+    ) -> OutputFrame {
+        let generation = self.generation;
+        let mut render_timing = PreviewRenderTiming::default();
+        match self.cached_renderer(analysis, document) {
+            Ok((renderer, renderer_build_ms)) => {
+                let (frame, evaluation_timing) =
+                    renderer.evaluate_timed(position_seconds, generation);
+                render_timing =
+                    PreviewRenderTiming::from_evaluation(renderer_build_ms, evaluation_timing);
+                self.last_render_timing = render_timing;
+                frame
+            }
+            Err(message) => {
+                self.last_render_timing = render_timing;
+                empty_frame(generation, message)
+            }
+        }
+    }
+
+    fn render_effect_preview_frame(
+        &mut self,
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+        preview_seconds: f64,
+        effect_filter: &HashSet<u32>,
+    ) -> OutputFrame {
+        let generation = self.generation;
+        let mut render_timing = PreviewRenderTiming::default();
+        match self.cached_renderer(analysis, document) {
+            Ok((renderer, renderer_build_ms)) => {
+                let (frame, evaluation_timing) = renderer.evaluate_effect_preview_filtered_timed(
+                    preview_seconds,
+                    generation,
+                    Some(effect_filter),
+                );
+                render_timing =
+                    PreviewRenderTiming::from_evaluation(renderer_build_ms, evaluation_timing);
+                self.last_render_timing = render_timing;
+                frame
+            }
+            Err(message) => {
+                self.last_render_timing = render_timing;
+                empty_frame(generation, message)
+            }
+        }
+    }
+
+    fn cached_renderer(
+        &mut self,
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+    ) -> Result<(&mut SequenceFrameEvaluator, f64), String> {
+        let mut renderer_build_ms = 0.0;
+        if self.render_cache.is_none() {
+            let build_started = Instant::now();
+            self.render_cache = Some(SequenceFrameEvaluator::new(analysis, document)?);
+            renderer_build_ms = elapsed_ms(build_started);
+        }
+        self.render_cache
+            .as_mut()
+            .map(|renderer| (renderer, renderer_build_ms))
+            .ok_or_else(|| "Sequence preview renderer was not prepared".to_string())
+    }
+}
+
+impl PreviewRenderTiming {
+    fn from_evaluation(renderer_build_ms: f64, evaluation: SequenceFrameEvaluationTiming) -> Self {
+        Self {
+            total_ms: renderer_build_ms + evaluation.total_ms,
+            renderer_build_ms,
+            frame_evaluate_ms: evaluation.total_ms,
+            fixture_clone_ms: evaluation.fixture_clone_ms,
+            effect_loop_ms: evaluation.effect_loop_ms,
+            output_frame_ms: evaluation.output_frame_ms,
+            active_effects: evaluation.active_effects,
+            sampled_pixels: evaluation.sampled_pixels,
+        }
+    }
+}
+
+fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
 }
 
 fn status_from_frame(status: &OutputFrameStatus) -> Option<String> {
@@ -642,5 +748,158 @@ fn clamp_position_seconds(position_seconds: f64, duration_seconds: f64) -> f64 {
         0.0
     } else {
         position_seconds.min(duration_seconds.max(0.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use dawn_project::analysis::{analyze_project_with_overlays, ProjectAnalysis, ProjectOverlay};
+    use dawn_project::document::{get_sequence_document, SequenceDocument};
+    use dawn_project::fs::WorkspaceFs;
+    use dawn_project::model::{Color, FixtureId};
+    use dawn_project::path::{canonicalize_path, utf8_path, Utf8PathBuf};
+
+    use super::{PreviewSession, SequenceKey};
+
+    fn club_rig_project_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/club-rig/project.dawn")
+    }
+
+    fn club_rig_context() -> (WorkspaceFs, Utf8PathBuf, Utf8PathBuf) {
+        let project_path = club_rig_project_path();
+        let root = project_path
+            .parent()
+            .expect("club rig project should have a parent");
+        let fs = WorkspaceFs::open(root).expect("club rig root should open");
+        let project_path = utf8_path(
+            project_path
+                .strip_prefix(root)
+                .expect("project path should be under root"),
+        )
+        .expect("project path should be valid UTF-8");
+        let sequence_path = utf8_path(Path::new("sequences/opening.sequence.dawn"))
+            .expect("sequence path should be valid UTF-8");
+        (fs, project_path, sequence_path)
+    }
+
+    fn club_rig_analysis_and_sequence(
+        overlays: Vec<ProjectOverlay>,
+    ) -> (ProjectAnalysis, SequenceDocument, SequenceKey) {
+        let (fs, project_path, sequence_path) = club_rig_context();
+        let analysis = analyze_project_with_overlays(
+            &fs,
+            project_path.clone(),
+            Some("club_rig"),
+            overlays.clone(),
+        );
+        assert!(
+            analysis.diagnostics.is_empty(),
+            "{:?}",
+            analysis.diagnostics
+        );
+        let document = get_sequence_document(
+            &fs,
+            sequence_path.clone(),
+            "opening",
+            project_path,
+            overlays,
+        )
+        .expect("club rig sequence should load");
+        let key = SequenceKey {
+            path: document.path.clone().into(),
+            object_key: document.object_key.clone(),
+        };
+        (analysis, document, key)
+    }
+
+    fn edited_sequence_overlay() -> ProjectOverlay {
+        let (fs, _, sequence_path) = club_rig_context();
+        let sequence_path = canonicalize_path(&fs.resolve(&sequence_path));
+        let content = fs
+            .read_to_string(&sequence_path)
+            .expect("club rig sequence should read")
+            .replace("value: '#66e3ff'", "value: '#0000ff'");
+        ProjectOverlay {
+            path: sequence_path,
+            content,
+        }
+    }
+
+    fn frame_colors(session: &PreviewSession) -> Vec<Color> {
+        session
+            .snapshot
+            .frame
+            .fixtures
+            .iter()
+            .flat_map(|fixture| fixture.pixels.iter().map(|pixel| pixel.color))
+            .collect()
+    }
+
+    fn fixture_is_lit(session: &PreviewSession, id: FixtureId) -> bool {
+        session
+            .snapshot
+            .frame
+            .fixtures
+            .iter()
+            .find(|fixture| fixture.id == id)
+            .map(|fixture| {
+                fixture
+                    .pixels
+                    .iter()
+                    .any(|pixel| pixel.color != Color::new(0, 0, 0))
+            })
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn render_cache_invalidates_when_sequence_source_refreshes() {
+        let (analysis, document, key) = club_rig_analysis_and_sequence(Vec::new());
+        let mut session = PreviewSession::default();
+        session.sync_source(Some((key.clone(), document)), Some(&analysis));
+        session.seek(2.0, Some(&analysis));
+        let before = frame_colors(&session);
+
+        let overlay = edited_sequence_overlay();
+        let (edited_analysis, edited_document, edited_key) =
+            club_rig_analysis_and_sequence(vec![overlay]);
+        assert_eq!(key, edited_key);
+        session.sync_source(Some((edited_key, edited_document)), Some(&edited_analysis));
+        let after = frame_colors(&session);
+
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn effect_preview_id_changes_reuse_the_sequence_render_cache() {
+        let (analysis, document, key) = club_rig_analysis_and_sequence(Vec::new());
+        let mut session = PreviewSession::default();
+        session.sync_source(Some((key, document)), Some(&analysis));
+        let original_cache = session
+            .render_cache
+            .as_ref()
+            .map(|renderer| renderer as *const _ as usize)
+            .expect("source sync should prepare renderer");
+
+        session.set_effect_preview_ids(vec![1], Some(&analysis));
+        let first_selection_cache = session
+            .render_cache
+            .as_ref()
+            .map(|renderer| renderer as *const _ as usize)
+            .expect("effect preview should keep renderer");
+        assert_eq!(original_cache, first_selection_cache);
+        assert!(fixture_is_lit(&session, FixtureId(11)));
+        assert!(!fixture_is_lit(&session, FixtureId(1)));
+
+        session.set_effect_preview_ids(vec![23], Some(&analysis));
+        let second_selection_cache = session
+            .render_cache
+            .as_ref()
+            .map(|renderer| renderer as *const _ as usize)
+            .expect("effect preview id changes should keep renderer");
+        assert_eq!(original_cache, second_selection_cache);
+        assert!(fixture_is_lit(&session, FixtureId(1)));
+        assert!(!fixture_is_lit(&session, FixtureId(11)));
     }
 }

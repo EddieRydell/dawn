@@ -48,12 +48,26 @@ type PreviewTiming = {
   snapshotMinusAudioMs: number | null;
   frameMinusAudioMs: number | null;
   loopElapsedMs: number;
+  previewTransportLockMs: number;
+  liveOutputLockMs: number;
+  modelLockWaitMs: number;
+  previewSnapshotMs: number;
+  analysisCloneMs: number;
   audioPollMs: number;
   audioApplyMs: number;
   modelUpdateMs: number;
   renderMs: number;
+  rendererBuildMs: number;
+  frameEvaluateMs: number;
+  frameFixtureCloneMs: number;
+  frameEffectLoopMs: number;
+  frameOutputMs: number;
   publishMs: number;
+  eventEmitMs: number;
+  liveOutputMs: number;
   eventIntervalMs: number;
+  renderedActiveEffects: number;
+  renderedSampledPixels: number;
   hasSink: boolean;
   publishedFrame: boolean;
   renderedFrame: boolean;
@@ -502,10 +516,18 @@ function previewTimingSummary(timing: PreviewTiming | undefined) {
     `interval ${formatMs(timing.loopIntervalMs)}`,
     `loop ${formatMs(timing.loopElapsedMs)}`,
     `model ${formatMs(timing.modelUpdateMs)}`,
+    `model-lock ${formatMs(timing.modelLockWaitMs)}`,
+    `analysis-clone ${formatMs(timing.analysisCloneMs)}`,
+    `snapshot ${formatMs(timing.previewSnapshotMs)}`,
     `audio ${formatMs(timing.audioPollMs)}`,
     `apply ${formatMs(timing.audioApplyMs)}`,
     `render ${formatMs(timing.renderMs)}`,
+    `build ${formatMs(timing.rendererBuildMs)}`,
+    `eval ${formatMs(timing.frameEvaluateMs)}`,
+    `frame-clone ${formatMs(timing.frameFixtureCloneMs)}`,
+    `effects ${formatMs(timing.frameEffectLoopMs)}`,
     `publish ${formatMs(timing.publishMs)}`,
+    `event-emit ${formatMs(timing.eventEmitMs)}`,
     `event ${formatMs(timing.eventIntervalMs)}`
   ].filter((part): part is string => part !== null);
   return ` | ${parts.join(" | ")}`;

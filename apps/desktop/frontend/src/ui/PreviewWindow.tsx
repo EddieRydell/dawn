@@ -28,12 +28,26 @@ type PreviewTiming = {
   sleepPlannedMs: number;
   loopElapsedMs: number;
   loopIntervalMs: number;
+  previewTransportLockMs: number;
+  liveOutputLockMs: number;
+  modelLockWaitMs: number;
+  previewSnapshotMs: number;
+  analysisCloneMs: number;
   audioPollMs: number;
   audioApplyMs: number;
   modelUpdateMs: number;
   renderMs: number;
+  rendererBuildMs: number;
+  frameEvaluateMs: number;
+  frameFixtureCloneMs: number;
+  frameEffectLoopMs: number;
+  frameOutputMs: number;
   publishMs: number;
+  eventEmitMs: number;
+  liveOutputMs: number;
   eventIntervalMs: number;
+  renderedActiveEffects: number;
+  renderedSampledPixels: number;
   renderedFrame: boolean;
   publishedFrame: boolean;
 };
@@ -248,6 +262,23 @@ export function PreviewWindow() {
           model {formatNumber(state?.timing.modelUpdateMs ?? 0)} ms | audio {formatNumber(state?.timing.audioPollMs ?? 0)} ms | apply{" "}
           {formatNumber(state?.timing.audioApplyMs ?? 0)} ms | render{" "}
           {formatNumber(state?.timing.renderMs ?? 0)} ms | publish {formatNumber(state?.timing.publishMs ?? 0)} ms
+        </div>
+        <div>
+          locks model {formatNumber(state?.timing.modelLockWaitMs ?? 0)} ms | transport{" "}
+          {formatNumber(state?.timing.previewTransportLockMs ?? 0)} ms | live lock {formatNumber(state?.timing.liveOutputLockMs ?? 0)} ms
+        </div>
+        <div>
+          clones analysis {formatNumber(state?.timing.analysisCloneMs ?? 0)} ms | snapshot{" "}
+          {formatNumber(state?.timing.previewSnapshotMs ?? 0)} ms | event emit {formatNumber(state?.timing.eventEmitMs ?? 0)} ms
+        </div>
+        <div>
+          frame build {formatNumber(state?.timing.rendererBuildMs ?? 0)} ms | eval {formatNumber(state?.timing.frameEvaluateMs ?? 0)} ms | clone{" "}
+          {formatNumber(state?.timing.frameFixtureCloneMs ?? 0)} ms | effects {formatNumber(state?.timing.frameEffectLoopMs ?? 0)} ms | output{" "}
+          {formatNumber(state?.timing.frameOutputMs ?? 0)} ms
+        </div>
+        <div>
+          active effects {state?.timing.renderedActiveEffects ?? 0} | sampled pixels {state?.timing.renderedSampledPixels ?? 0} | live output{" "}
+          {formatNumber(state?.timing.liveOutputMs ?? 0)} ms
         </div>
         <div>
           {formatSeconds(state?.positionSeconds ?? metrics.currentTimeSeconds)} | {state?.isPlaying === true ? "Playing" : "Stopped"} |{" "}

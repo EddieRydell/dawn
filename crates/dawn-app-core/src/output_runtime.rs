@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
+use std::time::Instant;
 
 use dawn_project::analysis::ProjectAnalysis;
 use dawn_project::document::{
@@ -62,24 +63,32 @@ pub trait OutputSink {
     fn write_frame(&self, frame: OutputFrame);
 }
 
-pub struct SequenceFrameEvaluator<'a> {
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SequenceFrameEvaluationTiming {
+    pub total_ms: f64,
+    pub fixture_clone_ms: f64,
+    pub effect_loop_ms: f64,
+    pub output_frame_ms: f64,
+    pub active_effects: u32,
+    pub sampled_pixels: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceFrameEvaluator {
     source: OutputSourceMetadata,
     bounds: GeometryRenderBounds,
     fixture_templates: Vec<OutputFixtureFrame>,
-    effects: Vec<PreparedSequenceEffect<'a>>,
+    effects: Vec<PreparedSequenceEffect>,
 }
 
-impl<'a> SequenceFrameEvaluator<'a> {
-    pub fn new(
-        analysis: &'a ProjectAnalysis,
-        document: &'a SequenceDocument,
-    ) -> Result<Self, String> {
+impl SequenceFrameEvaluator {
+    pub fn new(analysis: &ProjectAnalysis, document: &SequenceDocument) -> Result<Self, String> {
         Self::new_filtered(analysis, document, None)
     }
 
     pub fn new_filtered(
-        analysis: &'a ProjectAnalysis,
-        document: &'a SequenceDocument,
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
         effect_filter: Option<&HashSet<u32>>,
     ) -> Result<Self, String> {
         let Some(project) = analysis.resolved.as_ref() else {
@@ -123,7 +132,7 @@ impl<'a> SequenceFrameEvaluator<'a> {
                         effect.start_seconds,
                     ) {
                         Ok(prepared_params) => PreparedEffectRender::Ready {
-                            script,
+                            script: script.clone(),
                             target_pixels: prepare_effect_pixels(
                                 effect.scope,
                                 &render.target_pixels,
@@ -138,6 +147,7 @@ impl<'a> SequenceFrameEvaluator<'a> {
                     None => PreparedEffectRender::MissingScript(render.script_key.clone()),
                 };
                 Some(PreparedSequenceEffect {
+                    id: effect.id,
                     start_seconds: effect.start_seconds,
                     duration_seconds: effect.duration_seconds,
                     render: render_plan,
@@ -159,9 +169,23 @@ impl<'a> SequenceFrameEvaluator<'a> {
     }
 
     pub fn evaluate(&mut self, time_seconds: f64, generation: u64) -> OutputFrame {
-        let mut fixtures = self.fixture_templates.clone();
-        let mut status = OutputFrameStatus::Live;
+        self.evaluate_timed(time_seconds, generation).0
+    }
 
+    pub fn evaluate_timed(
+        &mut self,
+        time_seconds: f64,
+        generation: u64,
+    ) -> (OutputFrame, SequenceFrameEvaluationTiming) {
+        let total_started = Instant::now();
+        let clone_started = Instant::now();
+        let mut fixtures = self.fixture_templates.clone();
+        let fixture_clone_ms = elapsed_ms(clone_started);
+        let mut status = OutputFrameStatus::Live;
+        let mut active_effects = 0u32;
+        let mut sampled_pixels = 0u32;
+
+        let effect_loop_started = Instant::now();
         for effect in &mut self.effects {
             let local_seconds = if time_seconds < effect.start_seconds
                 || time_seconds >= effect.start_seconds + effect.duration_seconds
@@ -188,6 +212,7 @@ impl<'a> SequenceFrameEvaluator<'a> {
                 continue;
             };
 
+            active_effects = active_effects.saturating_add(1);
             for pixel in target_pixels {
                 let output_pixel = &mut fixtures[pixel.fixture_index].pixels[pixel.pixel_index];
                 match script.sample_prepared_with_scratch(
@@ -201,10 +226,26 @@ impl<'a> SequenceFrameEvaluator<'a> {
                     Ok(color) => add_clamped(&mut output_pixel.color, color),
                     Err(error) => status = OutputFrameStatus::Error(error.to_string()),
                 }
+                sampled_pixels = sampled_pixels.saturating_add(1);
             }
         }
+        let effect_loop_ms = elapsed_ms(effect_loop_started);
 
-        self.output_frame(time_seconds, generation, status, fixtures)
+        let output_started = Instant::now();
+        let frame = self.output_frame(time_seconds, generation, status, fixtures);
+        let output_frame_ms = elapsed_ms(output_started);
+        let total_ms = elapsed_ms(total_started);
+        (
+            frame,
+            SequenceFrameEvaluationTiming {
+                total_ms,
+                fixture_clone_ms,
+                effect_loop_ms,
+                output_frame_ms,
+                active_effects,
+                sampled_pixels,
+            },
+        )
     }
 
     pub fn evaluate_effect_preview(
@@ -212,10 +253,41 @@ impl<'a> SequenceFrameEvaluator<'a> {
         preview_seconds: f64,
         generation: u64,
     ) -> OutputFrame {
-        let mut fixtures = self.fixture_templates.clone();
-        let mut status = OutputFrameStatus::Live;
+        self.evaluate_effect_preview_filtered(preview_seconds, generation, None)
+    }
 
+    pub fn evaluate_effect_preview_filtered(
+        &mut self,
+        preview_seconds: f64,
+        generation: u64,
+        effect_filter: Option<&HashSet<u32>>,
+    ) -> OutputFrame {
+        self.evaluate_effect_preview_filtered_timed(preview_seconds, generation, effect_filter)
+            .0
+    }
+
+    pub fn evaluate_effect_preview_filtered_timed(
+        &mut self,
+        preview_seconds: f64,
+        generation: u64,
+        effect_filter: Option<&HashSet<u32>>,
+    ) -> (OutputFrame, SequenceFrameEvaluationTiming) {
+        let total_started = Instant::now();
+        let clone_started = Instant::now();
+        let mut fixtures = self.fixture_templates.clone();
+        let fixture_clone_ms = elapsed_ms(clone_started);
+        let mut status = OutputFrameStatus::Live;
+        let mut active_effects = 0u32;
+        let mut sampled_pixels = 0u32;
+
+        let effect_loop_started = Instant::now();
         for effect in &mut self.effects {
+            if effect_filter
+                .map(|ids| !ids.contains(&effect.id))
+                .unwrap_or(false)
+            {
+                continue;
+            }
             if effect.duration_seconds <= 0.0 {
                 continue;
             }
@@ -234,6 +306,7 @@ impl<'a> SequenceFrameEvaluator<'a> {
                 continue;
             };
 
+            active_effects = active_effects.saturating_add(1);
             for pixel in target_pixels {
                 let output_pixel = &mut fixtures[pixel.fixture_index].pixels[pixel.pixel_index];
                 match script.sample_prepared_with_scratch(
@@ -247,10 +320,26 @@ impl<'a> SequenceFrameEvaluator<'a> {
                     Ok(color) => add_clamped(&mut output_pixel.color, color),
                     Err(error) => status = OutputFrameStatus::Error(error.to_string()),
                 }
+                sampled_pixels = sampled_pixels.saturating_add(1);
             }
         }
+        let effect_loop_ms = elapsed_ms(effect_loop_started);
 
-        self.output_frame(preview_seconds, generation, status, fixtures)
+        let output_started = Instant::now();
+        let frame = self.output_frame(preview_seconds, generation, status, fixtures);
+        let output_frame_ms = elapsed_ms(output_started);
+        let total_ms = elapsed_ms(total_started);
+        (
+            frame,
+            SequenceFrameEvaluationTiming {
+                total_ms,
+                fixture_clone_ms,
+                effect_loop_ms,
+                output_frame_ms,
+                active_effects,
+                sampled_pixels,
+            },
+        )
     }
 
     fn output_frame(
@@ -271,15 +360,18 @@ impl<'a> SequenceFrameEvaluator<'a> {
     }
 }
 
-struct PreparedSequenceEffect<'a> {
+#[derive(Debug, Clone)]
+struct PreparedSequenceEffect {
+    id: u32,
     start_seconds: f64,
     duration_seconds: f64,
-    render: PreparedEffectRender<'a>,
+    render: PreparedEffectRender,
 }
 
-enum PreparedEffectRender<'a> {
+#[derive(Debug, Clone)]
+enum PreparedEffectRender {
     Ready {
-        script: &'a CompiledEffect,
+        script: CompiledEffect,
         target_pixels: Vec<PreparedEffectPixel>,
         prepared_params: PreparedEffectParams,
         scratch: EffectSampleScratch,
@@ -289,6 +381,7 @@ enum PreparedEffectRender<'a> {
     BadParams(RuntimeError),
 }
 
+#[derive(Debug, Clone)]
 struct PreparedEffectPixel {
     fixture_index: usize,
     pixel_index: usize,
@@ -296,7 +389,7 @@ struct PreparedEffectPixel {
     pixel_context: PixelContext,
 }
 
-impl PreparedEffectRender<'_> {
+impl PreparedEffectRender {
     fn error_status(&self) -> OutputFrameStatus {
         match self {
             Self::Ready { .. } => OutputFrameStatus::Live,
@@ -403,6 +496,10 @@ fn add_clamped(target: &mut Color, color: Color) {
     target.blue = target.blue.saturating_add(color.blue);
 }
 
+fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
+}
+
 pub fn runtime_params_from_document(
     params: &[SequenceEffectParamDocument],
     mark_collections: &[SequenceMarkCollectionDocument],
@@ -483,9 +580,65 @@ pub fn empty_frame(generation: u64, message: impl Into<String>) -> OutputFrame {
 
 #[cfg(test)]
 mod tests {
-    use dawn_project::model::SequenceEffectScope;
+    use std::path::{Path, PathBuf};
 
-    use super::pixel_context_for_effect;
+    use dawn_project::analysis::{analyze_project, ProjectAnalysis};
+    use dawn_project::document::{get_sequence_document, SequenceDocument};
+    use dawn_project::fs::WorkspaceFs;
+    use dawn_project::model::{Color, SequenceEffectScope};
+    use dawn_project::path::{utf8_path, Utf8PathBuf};
+
+    use super::{pixel_context_for_effect, OutputFrame, SequenceFrameEvaluator};
+
+    fn club_rig_project_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/club-rig/project.dawn")
+    }
+
+    fn club_rig_context() -> (WorkspaceFs, Utf8PathBuf, Utf8PathBuf) {
+        let project_path = club_rig_project_path();
+        let root = project_path
+            .parent()
+            .expect("club rig project should have a parent");
+        let fs = WorkspaceFs::open(root).expect("club rig root should open");
+        let project_path = utf8_path(
+            project_path
+                .strip_prefix(root)
+                .expect("project path should be under root"),
+        )
+        .expect("project path should be valid UTF-8");
+        let sequence_path = utf8_path(Path::new("sequences/opening.sequence.dawn"))
+            .expect("sequence path should be valid UTF-8");
+        (fs, project_path, sequence_path)
+    }
+
+    fn club_rig_analysis_and_sequence() -> (ProjectAnalysis, SequenceDocument) {
+        let (fs, project_path, sequence_path) = club_rig_context();
+        let analysis = analyze_project(&fs, project_path.clone(), "club_rig");
+        assert!(
+            analysis.diagnostics.is_empty(),
+            "{:?}",
+            analysis.diagnostics
+        );
+        let document =
+            get_sequence_document(&fs, sequence_path, "opening", project_path, Vec::new())
+                .expect("club rig sequence should load");
+        (analysis, document)
+    }
+
+    fn frame_colors(frame: &OutputFrame) -> Vec<Color> {
+        frame
+            .fixtures
+            .iter()
+            .flat_map(|fixture| fixture.pixels.iter().map(|pixel| pixel.color))
+            .collect()
+    }
+
+    fn lit_pixel_count(frame: &OutputFrame) -> usize {
+        frame_colors(frame)
+            .into_iter()
+            .filter(|color| *color != Color::new(0, 0, 0))
+            .count()
+    }
 
     #[test]
     fn per_fixture_scope_repeats_pixel_context_for_group_members() {
@@ -528,5 +681,35 @@ mod tests {
             (per_fixture.index, per_fixture.count),
             (whole_target.index, whole_target.count)
         );
+    }
+
+    #[test]
+    fn reusable_sequence_evaluator_updates_frame_output_over_time() {
+        let (analysis, document) = club_rig_analysis_and_sequence();
+        let mut evaluator =
+            SequenceFrameEvaluator::new(&analysis, &document).expect("renderer should build");
+
+        let first = evaluator.evaluate(2.0, 1);
+        let second = evaluator.evaluate(6.0, 2);
+
+        assert_ne!(frame_colors(&first), frame_colors(&second));
+        assert!(lit_pixel_count(&first) > 0);
+        assert!(lit_pixel_count(&second) > 0);
+    }
+
+    #[test]
+    fn selected_effect_preview_filters_the_reusable_evaluator() {
+        let (analysis, document) = club_rig_analysis_and_sequence();
+        let mut evaluator =
+            SequenceFrameEvaluator::new(&analysis, &document).expect("renderer should build");
+        let first_ids = [1].into_iter().collect();
+        let second_ids = [23].into_iter().collect();
+
+        let first = evaluator.evaluate_effect_preview_filtered(1.0, 1, Some(&first_ids));
+        let second = evaluator.evaluate_effect_preview_filtered(1.0, 2, Some(&second_ids));
+
+        assert_ne!(frame_colors(&first), frame_colors(&second));
+        assert!(lit_pixel_count(&first) > 0);
+        assert!(lit_pixel_count(&second) > 0);
     }
 }
