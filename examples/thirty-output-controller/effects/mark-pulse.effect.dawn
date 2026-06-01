@@ -19,20 +19,22 @@ effect MarkPulse {
     int beat_count = mark_count(beats);
     for (int beat = 0; beat < beat_count; beat = beat + 1) {
       float hit = mark_at(beats, beat, 0.0) + offset_seconds;
-      for (int section = 0; section < sections_per_mark; section = section + 1) {
-        int choice = floor(rand(seed + beat, section) * item_count);
-        TargetItem item = pick(items, choice);
-        timeline.emit effects.MarkPulseChild {
-          target: item.target;
-          start: hit;
-          duration: decay_seconds;
-          params: {
-            base: base;
-            accent: accent;
-            hue_color: hsv(hue(hit / duration), 1.0, 1.0);
-            hue_mix: hue_mix;
+      if (hit >= 0.0 && hit < duration) {
+        for (int section = 0; section < sections_per_mark; section = section + 1) {
+          int choice = floor(rand(seed + beat, section) * item_count);
+          TargetItem item = pick(items, choice);
+          timeline.emit effects.MarkPulseChild {
+            target: item.target;
+            start: hit;
+            duration: decay_seconds;
+            params: {
+              base: base;
+              accent: accent;
+              hue_color: hsv(hue(hit / duration), 1.0, 1.0);
+              hue_mix: hue_mix;
+            };
           };
-        };
+        }
       }
     }
   }

@@ -344,7 +344,10 @@ struct EffectBenchReport {
     synthetic_active_effects: Option<usize>,
     no_effect_breakdown: bool,
     total_effects: usize,
+    prepared_effects: usize,
     active_effect_count: usize,
+    rendered_active_prepared_effects: u32,
+    visited_prepared_effects: u32,
     target_pixel_samples_per_frame: usize,
     bytecode: BytecodeAggregateReport,
     whole_frame: TimingStatsReport,
@@ -369,9 +372,13 @@ impl EffectBenchReport {
         }
 
         let mut whole_frame_samples = Vec::with_capacity(iterations);
+        let mut last_evaluation_timing = None;
         for generation in 0..iterations {
             let start = Instant::now();
-            black_box(evaluator.evaluate(time_seconds, generation as u64));
+            let (frame, evaluation_timing) =
+                evaluator.evaluate_timed(time_seconds, generation as u64);
+            black_box(frame);
+            last_evaluation_timing = Some(evaluation_timing);
             whole_frame_samples.push(start.elapsed());
         }
 
@@ -408,7 +415,14 @@ impl EffectBenchReport {
             synthetic_active_effects,
             no_effect_breakdown,
             total_effects: document.effects.len(),
+            prepared_effects: evaluator.prepared_effect_count(),
             active_effect_count,
+            rendered_active_prepared_effects: last_evaluation_timing
+                .map(|timing| timing.active_prepared_effects)
+                .unwrap_or(0),
+            visited_prepared_effects: last_evaluation_timing
+                .map(|timing| timing.visited_prepared_effects)
+                .unwrap_or(0),
             target_pixel_samples_per_frame,
             bytecode,
             whole_frame: TimingStatsReport::from_durations(whole_frame_samples),
@@ -716,9 +730,12 @@ fn print_effect_bench_report(report: &EffectBenchReport) {
         }
     );
     println!(
-        "total effects={} active effects={} target pixel samples/frame={} bytecode=instructions:{} constants:{} param_slots:{} registers=float:{} int:{} bool:{} color:{} ref:{} fixture:{} pixel:{} total:{}",
+        "total effects={} prepared effects={} authored active effects={} prepared active effects={} visited prepared effects/frame={} target pixel samples/frame={} bytecode=instructions:{} constants:{} param_slots:{} registers=float:{} int:{} bool:{} color:{} ref:{} fixture:{} pixel:{} total:{}",
         report.total_effects,
+        report.prepared_effects,
         report.active_effect_count,
+        report.rendered_active_prepared_effects,
+        report.visited_prepared_effects,
         report.target_pixel_samples_per_frame,
         report.bytecode.instruction_count,
         report.bytecode.constant_count,

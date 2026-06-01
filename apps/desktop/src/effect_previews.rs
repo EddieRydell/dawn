@@ -199,27 +199,25 @@ fn preview_for_generator_effect(
             Ok(evaluator) => evaluator,
             Err(_) => return Ok(None),
         };
-    let mut colors = Vec::with_capacity(sampled_frame_indices.len() * sampled_pixel_indices.len());
-
-    for target_pixel_index in &sampled_pixel_indices {
-        let Some(pixel) = render.target_pixels.get(*target_pixel_index) else {
-            return Ok(None);
-        };
-        for frame_index in &sampled_frame_indices {
-            let local_seconds =
-                local_seconds_for_frame(*frame_index, document.frame_rate, duration);
-            let frame = evaluator.evaluate(effect.start_seconds + local_seconds, 0);
-            let Some(color) = frame
-                .fixtures
-                .get(pixel.fixture_index)
-                .and_then(|fixture| fixture.pixels.get(pixel.pixel_index))
-                .map(|pixel| pixel.color)
-            else {
-                return Ok(None);
-            };
-            colors.push(pack_rgb(color));
-        }
-    }
+    let local_seconds_by_column = sampled_frame_indices
+        .iter()
+        .map(|frame_index| local_seconds_for_frame(*frame_index, document.frame_rate, duration))
+        .collect::<Vec<_>>();
+    let sampled_pixels_by_row = sampled_pixel_indices
+        .iter()
+        .map(|target_pixel_index| render.target_pixels.get(*target_pixel_index).cloned())
+        .collect::<Option<Vec<_>>>();
+    let Some(sampled_pixels_by_row) = sampled_pixels_by_row else {
+        return Ok(None);
+    };
+    let colors = match evaluator.evaluate_generator_effect_thumbnail(
+        effect.id,
+        &local_seconds_by_column,
+        &sampled_pixels_by_row,
+    ) {
+        Ok(colors) => colors.into_iter().map(pack_rgb).collect(),
+        Err(_) => return Ok(None),
+    };
 
     let preview = SequenceEffectPreviewDto {
         effect_id: effect.id,

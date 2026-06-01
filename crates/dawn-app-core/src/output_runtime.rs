@@ -1,17 +1,20 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Instant;
 
 use dawn_project::analysis::ProjectAnalysis;
 use dawn_project::document::{
-    SequenceDocument, SequenceEffectParamDocument, SequenceMarkCollectionDocument,
+    SequenceDocument, SequenceEffectParamDocument, SequenceEffectPixelDocument,
+    SequenceMarkCollectionDocument,
 };
 use dawn_project::effect_script::{
     run_generator, BytecodeStats, CompiledEffect, EffectSampleScratch, EffectScriptKind,
     FixtureContext, GeneratorTarget, GeneratorTargetPixel, PixelContext, PreparedEffectParams,
     RuntimeError, RuntimeValue,
 };
+use dawn_project::frame::{ceil_frame, floor_frame, frame_count};
 use dawn_project::model::{
-    Color, Distance, DistanceSpan, EffectParam, FixtureId, Resolved, SequenceEffectScope,
+    Color, Distance, DistanceSpan, EffectParam, FixtureId, Resolved, SequenceEffectScope, Time,
+    TimeSpan,
 };
 use dawn_project::path::{resolve_import_path, PathStringExt, Utf8PathBuf};
 use dawn_project::render::{layout_render_plan, GeometryRenderBounds, GeometryRenderPoint};
@@ -72,6 +75,9 @@ pub struct SequenceFrameEvaluationTiming {
     pub effect_loop_ms: f64,
     pub output_frame_ms: f64,
     pub active_effects: u32,
+    pub active_authored_effects: u32,
+    pub active_prepared_effects: u32,
+    pub visited_prepared_effects: u32,
     pub sampled_pixels: u32,
 }
 
@@ -81,6 +87,8 @@ pub struct SequenceFrameEvaluator {
     bounds: GeometryRenderBounds,
     fixture_templates: Vec<OutputFixtureFrame>,
     effects: Vec<PreparedSequenceEffect>,
+    effect_indices_by_frame: Vec<Vec<usize>>,
+    authored_intervals_by_id: HashMap<u32, EffectInterval>,
 }
 
 impl SequenceFrameEvaluator {
@@ -143,6 +151,7 @@ impl SequenceFrameEvaluator {
                             id: effect.id,
                             start_seconds: effect.start_seconds,
                             duration_seconds: effect.duration_seconds,
+                            authored: true,
                             render: PreparedEffectRender::BadParams(error),
                         }),
                     }
@@ -151,6 +160,7 @@ impl SequenceFrameEvaluator {
                     id: effect.id,
                     start_seconds: effect.start_seconds,
                     duration_seconds: effect.duration_seconds,
+                    authored: true,
                     render: prepare_sample_render(
                         script,
                         &render.params,
@@ -165,21 +175,41 @@ impl SequenceFrameEvaluator {
                     id: effect.id,
                     start_seconds: effect.start_seconds,
                     duration_seconds: effect.duration_seconds,
+                    authored: true,
                     render: PreparedEffectRender::MissingScript(render.script_key.clone()),
                 }),
             }
         }
 
+        let source = OutputSourceMetadata {
+            label: format!("Sequence {}", document.object_key),
+            kind: OutputSourceKind::Sequence,
+            duration_seconds: document.duration_seconds,
+            fps: document.frame_rate,
+        };
+        let effect_indices_by_frame =
+            build_effect_indices_by_frame(&effects, source.duration_seconds, source.fps);
+        let authored_intervals_by_id = document
+            .effects
+            .iter()
+            .map(|effect| {
+                (
+                    effect.id,
+                    EffectInterval {
+                        start_seconds: effect.start_seconds,
+                        duration_seconds: effect.duration_seconds,
+                    },
+                )
+            })
+            .collect();
+
         Ok(Self {
-            source: OutputSourceMetadata {
-                label: format!("Sequence {}", document.object_key),
-                kind: OutputSourceKind::Sequence,
-                duration_seconds: document.duration_seconds,
-                fps: document.frame_rate,
-            },
+            source,
             bounds: render_plan.bounds,
             fixture_templates,
             effects,
+            effect_indices_by_frame,
+            authored_intervals_by_id,
         })
     }
 
@@ -197,51 +227,18 @@ impl SequenceFrameEvaluator {
         let mut fixtures = self.fixture_templates.clone();
         let fixture_clone_ms = elapsed_ms(clone_started);
         let mut status = OutputFrameStatus::Live;
-        let mut active_effects = 0u32;
-        let mut sampled_pixels = 0u32;
+        let mut counters = SequenceEffectEvaluationCounters::default();
 
         let effect_loop_started = Instant::now();
-        for effect in &mut self.effects {
-            let local_seconds = if time_seconds < effect.start_seconds
-                || time_seconds >= effect.start_seconds + effect.duration_seconds
-            {
-                continue;
-            } else {
-                time_seconds - effect.start_seconds
-            };
-            let progress = if effect.duration_seconds == 0.0 {
-                0.0
-            } else {
-                (local_seconds / effect.duration_seconds).clamp(0.0, 1.0)
-            };
-
-            let PreparedEffectRender::Ready {
-                script,
-                target_pixels,
-                prepared_params,
-                scratch,
-                ..
-            } = &mut effect.render
-            else {
-                status = effect.render.error_status();
-                continue;
-            };
-
-            active_effects = active_effects.saturating_add(1);
-            for pixel in target_pixels {
-                let output_pixel = &mut fixtures[pixel.fixture_index].pixels[pixel.pixel_index];
-                match script.sample_prepared_with_scratch(
-                    progress,
-                    local_seconds,
-                    pixel.fixture_context,
-                    pixel.pixel_context,
-                    prepared_params,
-                    scratch,
-                ) {
-                    Ok(color) => add_clamped(&mut output_pixel.color, color),
-                    Err(error) => status = OutputFrameStatus::Error(error.to_string()),
-                }
-                sampled_pixels = sampled_pixels.saturating_add(1);
+        if let Some(effect_indices) = self.effect_indices_for_time(time_seconds) {
+            for effect_index in effect_indices.clone() {
+                evaluate_prepared_effect_at_time(
+                    &mut self.effects[effect_index],
+                    time_seconds,
+                    &mut fixtures,
+                    &mut status,
+                    &mut counters,
+                );
             }
         }
         let effect_loop_ms = elapsed_ms(effect_loop_started);
@@ -257,8 +254,11 @@ impl SequenceFrameEvaluator {
                 fixture_clone_ms,
                 effect_loop_ms,
                 output_frame_ms,
-                active_effects,
-                sampled_pixels,
+                active_effects: counters.active_prepared_effects,
+                active_authored_effects: counters.active_authored_effects,
+                active_prepared_effects: counters.active_prepared_effects,
+                visited_prepared_effects: counters.visited_prepared_effects,
+                sampled_pixels: counters.sampled_pixels,
             },
         )
     }
@@ -292,50 +292,35 @@ impl SequenceFrameEvaluator {
         let mut fixtures = self.fixture_templates.clone();
         let fixture_clone_ms = elapsed_ms(clone_started);
         let mut status = OutputFrameStatus::Live;
-        let mut active_effects = 0u32;
-        let mut sampled_pixels = 0u32;
+        let mut counters = SequenceEffectEvaluationCounters::default();
 
         let effect_loop_started = Instant::now();
-        for effect in &mut self.effects {
-            if effect_filter
-                .map(|ids| !ids.contains(&effect.id))
-                .unwrap_or(false)
-            {
-                continue;
-            }
-            if effect.duration_seconds <= 0.0 {
-                continue;
-            }
-            let local_seconds = preview_seconds.rem_euclid(effect.duration_seconds);
-            let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
-
-            let PreparedEffectRender::Ready {
-                script,
-                target_pixels,
-                prepared_params,
-                scratch,
-                ..
-            } = &mut effect.render
-            else {
-                status = effect.render.error_status();
-                continue;
-            };
-
-            active_effects = active_effects.saturating_add(1);
-            for pixel in target_pixels {
-                let output_pixel = &mut fixtures[pixel.fixture_index].pixels[pixel.pixel_index];
-                match script.sample_prepared_with_scratch(
-                    progress,
-                    local_seconds,
-                    pixel.fixture_context,
-                    pixel.pixel_context,
-                    prepared_params,
-                    scratch,
-                ) {
-                    Ok(color) => add_clamped(&mut output_pixel.color, color),
-                    Err(error) => status = OutputFrameStatus::Error(error.to_string()),
+        let preview_frame_times = self.preview_frame_times(preview_seconds, effect_filter);
+        let mut visited_effect_indices = HashSet::new();
+        for (preview_id, preview_frame_time) in preview_frame_times {
+            if let Some(effect_indices) = self.effect_indices_for_time(preview_frame_time) {
+                for effect_index in effect_indices.clone() {
+                    if !visited_effect_indices.insert(effect_index) {
+                        continue;
+                    }
+                    let effect = &mut self.effects[effect_index];
+                    if effect.id != preview_id {
+                        continue;
+                    }
+                    if effect_filter
+                        .map(|ids| !ids.contains(&effect.id))
+                        .unwrap_or(false)
+                    {
+                        continue;
+                    }
+                    evaluate_prepared_effect_at_time(
+                        effect,
+                        preview_frame_time,
+                        &mut fixtures,
+                        &mut status,
+                        &mut counters,
+                    );
                 }
-                sampled_pixels = sampled_pixels.saturating_add(1);
             }
         }
         let effect_loop_ms = elapsed_ms(effect_loop_started);
@@ -351,10 +336,119 @@ impl SequenceFrameEvaluator {
                 fixture_clone_ms,
                 effect_loop_ms,
                 output_frame_ms,
-                active_effects,
-                sampled_pixels,
+                active_effects: counters.active_prepared_effects,
+                active_authored_effects: counters.active_authored_effects,
+                active_prepared_effects: counters.active_prepared_effects,
+                visited_prepared_effects: counters.visited_prepared_effects,
+                sampled_pixels: counters.sampled_pixels,
             },
         )
+    }
+
+    pub fn prepared_effect_count(&self) -> usize {
+        self.effects.len()
+    }
+
+    pub fn evaluate_generator_effect_thumbnail(
+        &mut self,
+        effect_id: u32,
+        local_seconds_by_column: &[f64],
+        sampled_pixels_by_row: &[SequenceEffectPixelDocument],
+    ) -> Result<Vec<Color>, String> {
+        let interval = self
+            .authored_intervals_by_id
+            .get(&effect_id)
+            .ok_or_else(|| format!("sequence effect `{effect_id}` was not found"))?;
+        if interval.duration_seconds <= 0.0 {
+            return Err(format!(
+                "sequence effect `{effect_id}` must have a positive duration"
+            ));
+        }
+
+        let mut row_indices_by_pixel = HashMap::new();
+        for (row_index, pixel) in sampled_pixels_by_row.iter().enumerate() {
+            if self
+                .fixture_templates
+                .get(pixel.fixture_index)
+                .and_then(|fixture| fixture.pixels.get(pixel.pixel_index))
+                .is_none()
+            {
+                return Err(format!(
+                    "sequence effect `{effect_id}` references an unavailable preview pixel"
+                ));
+            }
+            row_indices_by_pixel.insert((pixel.fixture_index, pixel.pixel_index), row_index);
+        }
+
+        let columns = local_seconds_by_column.len();
+        let rows = sampled_pixels_by_row.len();
+        let mut colors = vec![Color::new(0, 0, 0); columns * rows];
+
+        for (column_index, local_seconds) in local_seconds_by_column.iter().copied().enumerate() {
+            if !local_seconds.is_finite() || local_seconds < 0.0 {
+                return Err(format!(
+                    "sequence effect `{effect_id}` has an invalid preview sample time"
+                ));
+            }
+            let sequence_seconds = interval.start_seconds + local_seconds;
+            let Some(effect_indices) = self.effect_indices_for_time(sequence_seconds).cloned()
+            else {
+                continue;
+            };
+
+            for effect_index in effect_indices {
+                let effect = &mut self.effects[effect_index];
+                if effect.id != effect_id {
+                    continue;
+                }
+                sample_prepared_effect_thumbnail_column(
+                    effect,
+                    sequence_seconds,
+                    column_index,
+                    columns,
+                    &row_indices_by_pixel,
+                    &mut colors,
+                )?;
+            }
+        }
+
+        Ok(colors)
+    }
+
+    fn effect_indices_for_time(&self, time_seconds: f64) -> Option<&Vec<usize>> {
+        if !time_seconds.is_finite() || time_seconds < 0.0 {
+            return None;
+        }
+        let frame_index = floor_frame(time_from_seconds_clamped(time_seconds), self.source.fps);
+        self.effect_indices_by_frame
+            .get(usize::try_from(frame_index).ok()?)
+    }
+
+    fn preview_frame_times(
+        &self,
+        preview_seconds: f64,
+        effect_filter: Option<&HashSet<u32>>,
+    ) -> Vec<(u32, f64)> {
+        let ids = match effect_filter {
+            Some(ids) => ids.iter().copied().collect::<Vec<_>>(),
+            None => self
+                .authored_intervals_by_id
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+        };
+        ids.into_iter()
+            .filter_map(|id| {
+                let interval = self.authored_intervals_by_id.get(&id)?;
+                (interval.duration_seconds > 0.0).then(|| {
+                    (
+                        id,
+                        interval.start_seconds
+                            + preview_seconds.rem_euclid(interval.duration_seconds),
+                    )
+                })
+            })
+            .collect()
     }
 
     fn output_frame(
@@ -373,6 +467,141 @@ impl SequenceFrameEvaluator {
             fixtures,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EffectInterval {
+    start_seconds: f64,
+    duration_seconds: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SequenceEffectEvaluationCounters {
+    active_authored_effects: u32,
+    active_prepared_effects: u32,
+    visited_prepared_effects: u32,
+    sampled_pixels: u32,
+}
+
+fn evaluate_prepared_effect_at_time(
+    effect: &mut PreparedSequenceEffect,
+    time_seconds: f64,
+    fixtures: &mut [OutputFixtureFrame],
+    status: &mut OutputFrameStatus,
+    counters: &mut SequenceEffectEvaluationCounters,
+) {
+    counters.visited_prepared_effects = counters.visited_prepared_effects.saturating_add(1);
+    let local_seconds =
+        if time_seconds < effect.start_seconds || time_seconds >= effect.end_seconds() {
+            return;
+        } else {
+            time_seconds - effect.start_seconds
+        };
+    sample_prepared_effect(effect, local_seconds, fixtures, status, counters);
+}
+
+fn sample_prepared_effect(
+    effect: &mut PreparedSequenceEffect,
+    local_seconds: f64,
+    fixtures: &mut [OutputFixtureFrame],
+    status: &mut OutputFrameStatus,
+    counters: &mut SequenceEffectEvaluationCounters,
+) {
+    let progress = if effect.duration_seconds == 0.0 {
+        0.0
+    } else {
+        (local_seconds / effect.duration_seconds).clamp(0.0, 1.0)
+    };
+
+    let PreparedEffectRender::Ready {
+        script,
+        target_pixels,
+        prepared_params,
+        scratch,
+        ..
+    } = &mut effect.render
+    else {
+        *status = effect.render.error_status();
+        return;
+    };
+
+    if effect.authored {
+        counters.active_authored_effects = counters.active_authored_effects.saturating_add(1);
+    }
+    counters.active_prepared_effects = counters.active_prepared_effects.saturating_add(1);
+    for pixel in target_pixels {
+        let output_pixel = &mut fixtures[pixel.fixture_index].pixels[pixel.pixel_index];
+        match script.sample_prepared_with_scratch(
+            progress,
+            local_seconds,
+            pixel.fixture_context,
+            pixel.pixel_context,
+            prepared_params,
+            scratch,
+        ) {
+            Ok(color) => add_clamped(&mut output_pixel.color, color),
+            Err(error) => *status = OutputFrameStatus::Error(error.to_string()),
+        }
+        counters.sampled_pixels = counters.sampled_pixels.saturating_add(1);
+    }
+}
+
+fn sample_prepared_effect_thumbnail_column(
+    effect: &mut PreparedSequenceEffect,
+    sequence_seconds: f64,
+    column_index: usize,
+    columns: usize,
+    row_indices_by_pixel: &HashMap<(usize, usize), usize>,
+    colors: &mut [Color],
+) -> Result<(), String> {
+    let local_seconds =
+        if sequence_seconds < effect.start_seconds || sequence_seconds >= effect.end_seconds() {
+            return Ok(());
+        } else {
+            sequence_seconds - effect.start_seconds
+        };
+    let progress = if effect.duration_seconds == 0.0 {
+        0.0
+    } else {
+        (local_seconds / effect.duration_seconds).clamp(0.0, 1.0)
+    };
+
+    let PreparedEffectRender::Ready {
+        script,
+        target_pixels,
+        prepared_params,
+        scratch,
+        ..
+    } = &mut effect.render
+    else {
+        return Err(effect.render.error_message());
+    };
+
+    for pixel in target_pixels {
+        let Some(row_index) = row_indices_by_pixel
+            .get(&(pixel.fixture_index, pixel.pixel_index))
+            .copied()
+        else {
+            continue;
+        };
+        let target_index = row_index
+            .checked_mul(columns)
+            .and_then(|row_start| row_start.checked_add(column_index))
+            .ok_or_else(|| "effect thumbnail raster dimensions overflowed".to_string())?;
+        let color = script
+            .sample_prepared_with_scratch(
+                progress,
+                local_seconds,
+                pixel.fixture_context,
+                pixel.pixel_context,
+                prepared_params,
+                scratch,
+            )
+            .map_err(|error| error.to_string())?;
+        add_clamped(&mut colors[target_index], color);
+    }
+
+    Ok(())
 }
 
 fn prepare_sample_render(
@@ -394,6 +623,67 @@ fn prepare_sample_render(
         },
         Err(error) => PreparedEffectRender::BadParams(error),
     }
+}
+
+fn build_effect_indices_by_frame(
+    effects: &[PreparedSequenceEffect],
+    duration_seconds: f64,
+    frame_rate: u32,
+) -> Vec<Vec<usize>> {
+    let sequence_duration =
+        TimeSpan::try_from_seconds_f64_rounded(duration_seconds.max(0.0)).unwrap_or(TimeSpan::ZERO);
+    let frame_count = frame_count(sequence_duration, frame_rate);
+    let mut indices_by_frame = vec![Vec::new(); frame_count];
+    if frame_count == 0 {
+        return indices_by_frame;
+    }
+
+    for (effect_index, effect) in effects.iter().enumerate() {
+        let Some((start_frame, end_frame)) =
+            effect_frame_range(effect, duration_seconds, frame_rate, frame_count)
+        else {
+            continue;
+        };
+        for frame_indices in &mut indices_by_frame[start_frame..end_frame] {
+            frame_indices.push(effect_index);
+        }
+    }
+    indices_by_frame
+}
+
+fn effect_frame_range(
+    effect: &PreparedSequenceEffect,
+    duration_seconds: f64,
+    frame_rate: u32,
+    frame_count: usize,
+) -> Option<(usize, usize)> {
+    let sequence_end = duration_seconds.max(0.0);
+    let effect_start = effect.start_seconds;
+    let effect_end = effect.end_seconds();
+    if !effect_start.is_finite()
+        || !effect.duration_seconds.is_finite()
+        || effect.duration_seconds <= 0.0
+        || effect_end <= 0.0
+        || effect_start >= sequence_end
+    {
+        return None;
+    }
+
+    let clamped_start = effect_start.max(0.0).min(sequence_end);
+    let clamped_end = effect_end.max(0.0).min(sequence_end);
+    if clamped_start >= clamped_end {
+        return None;
+    }
+
+    let start_frame = floor_frame(time_from_seconds_clamped(clamped_start), frame_rate);
+    let end_frame = ceil_frame(time_from_seconds_clamped(clamped_end), frame_rate);
+    let start_frame = usize::try_from(start_frame).ok()?.min(frame_count);
+    let end_frame = usize::try_from(end_frame).ok()?.min(frame_count);
+    (start_frame < end_frame).then_some((start_frame, end_frame))
+}
+
+fn time_from_seconds_clamped(seconds: f64) -> Time {
+    Time::try_from_seconds_f64_rounded(seconds.max(0.0)).unwrap_or(Time::ZERO)
 }
 
 fn prepare_generated_effects(
@@ -477,6 +767,7 @@ fn prepare_generated_effects(
                 id: parent_id,
                 start_seconds: parent_start_seconds + child.start_seconds,
                 duration_seconds: child.duration_seconds,
+                authored: false,
                 render: PreparedEffectRender::Ready {
                     script: child_script.clone(),
                     target_pixels: prepare_effect_pixels(
@@ -539,7 +830,14 @@ struct PreparedSequenceEffect {
     id: u32,
     start_seconds: f64,
     duration_seconds: f64,
+    authored: bool,
     render: PreparedEffectRender,
+}
+
+impl PreparedSequenceEffect {
+    fn end_seconds(&self) -> f64 {
+        self.start_seconds + self.duration_seconds
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -571,6 +869,16 @@ impl PreparedEffectRender {
                 OutputFrameStatus::Error(format!("compiled script `{script_key}` was not found"))
             }
             Self::BadParams(error) => OutputFrameStatus::Error(error.to_string()),
+        }
+    }
+
+    fn error_message(&self) -> String {
+        match self {
+            Self::Ready { .. } => "effect render is ready".to_string(),
+            Self::MissingScript(script_key) => {
+                format!("compiled script `{script_key}` was not found")
+            }
+            Self::BadParams(error) => error.to_string(),
         }
     }
 }
@@ -759,13 +1067,16 @@ mod tests {
     use dawn_project::analysis::{analyze_project, ProjectAnalysis};
     use dawn_project::document::{get_sequence_document, SequenceDocument};
     use dawn_project::fs::WorkspaceFs;
-    use dawn_project::model::{Color, SequenceEffectScope};
+    use dawn_project::model::{Color, Distance, SequenceEffectScope};
     use dawn_project::path::{utf8_path, Utf8PathBuf};
+    use dawn_project::render::GeometryRenderBounds;
 
     use dawn_project::effect_script::{GeneratorTarget, GeneratorTargetPixel};
 
     use super::{
-        generator_targets_for_scope, pixel_context_for_effect, OutputFrame, SequenceFrameEvaluator,
+        build_effect_indices_by_frame, generator_targets_for_scope, pixel_context_for_effect,
+        OutputFixtureFrame, OutputFrame, OutputFrameStatus, OutputSourceKind, OutputSourceMetadata,
+        PreparedEffectRender, PreparedSequenceEffect, SequenceFrameEvaluator,
     };
 
     fn club_rig_project_path() -> PathBuf {
@@ -803,6 +1114,32 @@ mod tests {
         (analysis, document)
     }
 
+    fn thirty_output_controller_analysis_and_sequence() -> (ProjectAnalysis, SequenceDocument) {
+        let project_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/thirty-output-controller/project.dawn");
+        let root = project_path
+            .parent()
+            .expect("thirty output controller project should have a parent");
+        let fs = WorkspaceFs::open(root).expect("thirty output controller root should open");
+        let project_path = utf8_path(
+            project_path
+                .strip_prefix(root)
+                .expect("project path should be under root"),
+        )
+        .expect("project path should be valid UTF-8");
+        let sequence_path = utf8_path(Path::new("sequences/empty.sequence.dawn"))
+            .expect("sequence path should be valid UTF-8");
+        let analysis = analyze_project(&fs, project_path.clone(), "thirty_output_controller");
+        assert!(
+            analysis.diagnostics.is_empty(),
+            "{:?}",
+            analysis.diagnostics
+        );
+        let document = get_sequence_document(&fs, sequence_path, "empty", project_path, Vec::new())
+            .expect("thirty output controller sequence should load");
+        (analysis, document)
+    }
+
     fn frame_colors(frame: &OutputFrame) -> Vec<Color> {
         frame
             .fixtures
@@ -816,6 +1153,53 @@ mod tests {
             .into_iter()
             .filter(|color| *color != Color::new(0, 0, 0))
             .count()
+    }
+
+    fn bad_effect(
+        id: u32,
+        start_seconds: f64,
+        duration_seconds: f64,
+        authored: bool,
+    ) -> PreparedSequenceEffect {
+        PreparedSequenceEffect {
+            id,
+            start_seconds,
+            duration_seconds,
+            authored,
+            render: PreparedEffectRender::MissingScript("missing.effect.dawn".to_string()),
+        }
+    }
+
+    fn evaluator_for_effects(effects: Vec<PreparedSequenceEffect>) -> SequenceFrameEvaluator {
+        let source = OutputSourceMetadata {
+            label: "Test".to_string(),
+            kind: OutputSourceKind::Sequence,
+            duration_seconds: 3.0,
+            fps: 10,
+        };
+        let effect_indices_by_frame =
+            build_effect_indices_by_frame(&effects, source.duration_seconds, source.fps);
+        SequenceFrameEvaluator {
+            source,
+            bounds: GeometryRenderBounds {
+                min_x: Distance::from_micrometers(0),
+                min_y: Distance::from_micrometers(0),
+                max_x: Distance::from_micrometers(0),
+                max_y: Distance::from_micrometers(0),
+            },
+            fixture_templates: Vec::<OutputFixtureFrame>::new(),
+            effects,
+            effect_indices_by_frame,
+            authored_intervals_by_id: [(
+                1,
+                super::EffectInterval {
+                    start_seconds: 0.0,
+                    duration_seconds: 3.0,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }
     }
 
     #[test]
@@ -902,6 +1286,73 @@ mod tests {
         assert_eq!(per_fixture[1].pixels.len(), 3);
         assert_eq!(whole_target.len(), 1);
         assert_eq!(whole_target[0].pixels.len(), 5);
+    }
+
+    #[test]
+    fn prepared_timeline_index_visits_only_current_frame_bucket() {
+        let mut evaluator = evaluator_for_effects(vec![
+            bad_effect(1, 0.5, 0.2, true),
+            bad_effect(2, 2.0, 0.2, true),
+        ]);
+
+        let (frame, timing) = evaluator.evaluate_timed(0.55, 0);
+
+        assert!(matches!(frame.status, OutputFrameStatus::Error(_)));
+        assert_eq!(timing.visited_prepared_effects, 1);
+    }
+
+    #[test]
+    fn prepared_timeline_index_preserves_effect_boundaries() {
+        let mut evaluator = evaluator_for_effects(vec![bad_effect(1, 0.5, 0.2, true)]);
+
+        let (at_start, at_start_timing) = evaluator.evaluate_timed(0.5, 0);
+        let (at_end, at_end_timing) = evaluator.evaluate_timed(0.7, 0);
+
+        assert!(matches!(at_start.status, OutputFrameStatus::Error(_)));
+        assert_eq!(at_start_timing.visited_prepared_effects, 1);
+        assert!(matches!(at_end.status, OutputFrameStatus::Live));
+        assert_eq!(at_end_timing.visited_prepared_effects, 0);
+    }
+
+    #[test]
+    fn generated_children_are_indexed_by_their_own_interval() {
+        let mut evaluator = evaluator_for_effects(vec![bad_effect(1, 1.2, 0.4, false)]);
+
+        let (frame, timing) = evaluator.evaluate_timed(1.3, 0);
+
+        assert!(matches!(frame.status, OutputFrameStatus::Error(_)));
+        assert_eq!(timing.visited_prepared_effects, 1);
+    }
+
+    #[test]
+    fn bad_prepared_renders_surface_errors_only_during_indexed_interval() {
+        let mut evaluator = evaluator_for_effects(vec![bad_effect(1, 0.5, 0.2, true)]);
+
+        let (before, before_timing) = evaluator.evaluate_timed(0.4, 0);
+        let (during, during_timing) = evaluator.evaluate_timed(0.55, 0);
+        let (after, after_timing) = evaluator.evaluate_timed(0.8, 0);
+
+        assert!(matches!(before.status, OutputFrameStatus::Live));
+        assert_eq!(before_timing.visited_prepared_effects, 0);
+        assert!(matches!(during.status, OutputFrameStatus::Error(_)));
+        assert_eq!(during_timing.visited_prepared_effects, 1);
+        assert!(matches!(after.status, OutputFrameStatus::Live));
+        assert_eq!(after_timing.visited_prepared_effects, 0);
+    }
+
+    #[test]
+    fn generator_heavy_sequence_visits_only_indexed_prepared_children() {
+        let (analysis, document) = thirty_output_controller_analysis_and_sequence();
+        let mut evaluator =
+            SequenceFrameEvaluator::new(&analysis, &document).expect("renderer should build");
+
+        let (first_frame, timing) = evaluator.evaluate_timed(41.0, 1);
+        let second_frame = evaluator.evaluate(41.0, 2);
+
+        assert_eq!(frame_colors(&first_frame), frame_colors(&second_frame));
+        assert!(evaluator.prepared_effect_count() > document.effects.len());
+        assert!(timing.visited_prepared_effects < evaluator.prepared_effect_count() as u32);
+        assert!(timing.active_prepared_effects >= timing.active_authored_effects);
     }
 
     #[test]
