@@ -4,9 +4,9 @@ imports:
   - from: sequences/example.sequence.dawn
     as: sequences
 
-test:
+starter:
   type: project
-  name: Test
+  name: Starter
   display: displays.main
   sequences:
     - sequences.example

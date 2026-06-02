@@ -89,7 +89,7 @@ empty:
     name: Marks2
     color: '#f97316'
     marks:
-    - 131.106414243s
+    - 131.101835333s
     - 131.171289481s
     - 131.239520336s
   effects:
@@ -1062,6 +1062,399 @@ empty:
         type: float
         value: 0.0
     script: effects.MarkPulse
+  - id: 27
+    start: 130.028308779s
+    duration: 0.305334368s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      beats:
+        type: marks
+        key: marks
+      base:
+        type: color
+        value: '#000000'
+      accent:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+      hue:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 0.0
+      hue_mix:
+        type: float
+        value: 0.0
+      offset_seconds:
+        type: float
+        value: -0.08
+      decay_seconds:
+        type: float
+        value: 0.18
+      section_width_pixels:
+        type: integer
+        value: 1
+      section_edge_fade_pixels:
+        type: float
+        value: 0.0
+      sections_per_mark:
+        type: integer
+        value: 20
+      seed:
+        type: float
+        value: 1.0
+    script: effects.MarkPulse
+  - id: 34
+    start: 130.862931348s
+    duration: 0.122470578s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      beats:
+        type: marks
+        key: marks
+      base:
+        type: color
+        value: '#000000'
+      accent:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+      hue:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 0.0
+      hue_mix:
+        type: float
+        value: 0.0
+      offset_seconds:
+        type: float
+        value: -0.08
+      decay_seconds:
+        type: float
+        value: 0.18
+      section_width_pixels:
+        type: integer
+        value: 5
+      section_edge_fade_pixels:
+        type: float
+        value: 0.0
+      sections_per_mark:
+        type: integer
+        value: 20
+      seed:
+        type: float
+        value: 6.0
+    script: effects.MarkPulse
+  - id: 28
+    start: 131.003356878s
+    duration: 0.374566783s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      beats:
+        type: marks
+        key: marks_2
+      base:
+        type: color
+        value: '#000000'
+      accent:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.353
+            value: '#006eff'
+          - time: 0.702
+            value: '#006eff'
+      hue:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.204
+            value: 0.225
+          - time: 0.718
+            value: 0.533
+          - time: 1.0
+            value: 0.0
+      hue_mix:
+        type: float
+        value: 0.0
+      offset_seconds:
+        type: float
+        value: -0.08
+      decay_seconds:
+        type: float
+        value: 0.18
+      section_width_pixels:
+        type: integer
+        value: 5
+      section_edge_fade_pixels:
+        type: float
+        value: 0.0
+      sections_per_mark:
+        type: integer
+        value: 3
+      seed:
+        type: float
+        value: 0.0
+    script: effects.MarkPulse
+  - id: 29
+    start: 131.172172169s
+    duration: 0.402976665s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve: curves.cool_gradient
+      gradient_mode:
+        type: enum
+        value: through_effect
+      pulse_overlap:
+        type: float
+        value: 120.0
+      section_width_pixels:
+        type: integer
+        value: 5
+      chase_position:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Chase
+  - id: 30
+    start: 131.4203985s
+    duration: 0.402976665s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve: curves.club_gradient
+      gradient_mode:
+        type: enum
+        value: through_effect
+      pulse_overlap:
+        type: float
+        value: 120.0
+      section_width_pixels:
+        type: integer
+        value: 5
+      chase_position:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Chase
+  - id: 31
+    start: 131.700257375s
+    duration: 0.402976665s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve: curves.fire_gradient
+      gradient_mode:
+        type: enum
+        value: through_effect
+      pulse_overlap:
+        type: float
+        value: 120.0
+      section_width_pixels:
+        type: integer
+        value: 5
+      chase_position:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Chase
+  - id: 32
+    start: 131.86299674s
+    duration: 0.22358698s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+      gradient_mode:
+        type: enum
+        value: through_effect
+      pulse_overlap:
+        type: float
+        value: 120.0
+      section_width_pixels:
+        type: integer
+        value: 5
+      chase_position:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Chase
+  - id: 33
+    start: 131.993181635s
+    duration: 0.519319981s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve: curves.warm_gradient
+      gradient_mode:
+        type: enum
+        value: through_effect
+      pulse_overlap:
+        type: float
+        value: 120.0
+      section_width_pixels:
+        type: integer
+        value: 5
+      chase_position:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Chase
   - id: 14
     start: 132.21108287s
     duration: 1.950581634s

@@ -7,7 +7,7 @@ This is a Rust workspace. The desktop service and UI state live under `apps/desk
 ## Testing Guidelines
 
 Rust integration tests live under `crates/*/tests`, and desktop service tests may live beside the service modules. Do not add or modify tests unless specifically requested. 
-When tests are requested for project analysis, document edits, diagnostics, or model behavior, prefer fixtures from `examples/thirty-ouptut-controller` for realistic project flows and use temporary test directories for invalid or synthetic Dawn documents.
+When tests are requested for project analysis, document edits, diagnostics, or model behavior, prefer fixtures from `examples/thirty-output-controller` for realistic project flows and use temporary test directories for invalid or synthetic Dawn documents.
 
 ## Agent-Specific Instructions
 

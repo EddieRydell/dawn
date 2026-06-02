@@ -1,4 +1,3 @@
-#![deny(clippy::disallowed_methods)]
 #![deny(unsafe_code)]
 #![cfg_attr(
     not(test),

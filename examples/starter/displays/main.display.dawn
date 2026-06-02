@@ -6,7 +6,7 @@ imports:
 
 main:
   type: display
-  name: Test
+  name: Starter
   layout: layouts.main
   patch: patches.main
   controllers:

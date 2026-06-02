@@ -958,9 +958,7 @@ fn apply_sequence_edit_operation(
                     .get(&schema.name)
                     .filter(|param| authored_param_matches_schema(schema, param, path, analysis))
                     .cloned()
-                    .unwrap_or_else(|| {
-                        default_param_for_schema_with_marks(schema, mark_collection_key)
-                    });
+                    .unwrap_or_else(|| default_sequence_effect_param(schema, mark_collection_key));
                 params.insert(schema.name.clone(), next);
             }
             effect.script =
@@ -1010,7 +1008,7 @@ fn apply_sequence_edit_operation(
                             authored_param_matches_schema(schema, param, path, analysis)
                         })
                         .cloned()
-                        .unwrap_or_else(|| default_param_for_schema(schema))
+                        .unwrap_or_else(|| default_sequence_effect_param(schema, None))
                 };
                 params.insert(schema.name.clone(), next);
             }
@@ -1073,7 +1071,7 @@ fn apply_sequence_edit_operation(
                             authored_param_matches_schema(schema, param, path, analysis)
                         })
                         .cloned()
-                        .unwrap_or_else(|| default_param_for_schema(schema))
+                        .unwrap_or_else(|| default_sequence_effect_param(schema, None))
                 };
                 params.insert(schema.name.clone(), next);
             }
@@ -1126,7 +1124,7 @@ fn apply_sequence_edit_operation(
                             authored_param_matches_schema(schema, param, path, analysis)
                         })
                         .cloned()
-                        .unwrap_or_else(|| default_param_for_schema(schema))
+                        .unwrap_or_else(|| default_sequence_effect_param(schema, None))
                 };
                 params.insert(schema.name.clone(), next);
             }
@@ -1526,13 +1524,7 @@ fn select_compiled_effect(
     Err("effect selector must include an effect name".to_string())
 }
 
-fn default_param_for_schema(
-    schema: &crate::effect_script::EffectParamSchema,
-) -> EffectParam<Authored> {
-    default_param_for_schema_with_marks(schema, None)
-}
-
-fn default_param_for_schema_with_marks(
+pub fn default_sequence_effect_param(
     schema: &crate::effect_script::EffectParamSchema,
     mark_collection_key: Option<&str>,
 ) -> EffectParam<Authored> {
@@ -2141,16 +2133,7 @@ fn materialized_effect_params(
         .params
         .iter()
         .map(|schema| {
-            let param = if schema.value_type == ScriptType::Marks {
-                EffectParam::Marks {
-                    key: mark_collection_key.unwrap_or("marks").to_string(),
-                }
-            } else {
-                match &schema.default {
-                    Some(ParamDefault::Value(value)) => runtime_value_to_authored_param(value),
-                    None => type_default_param(schema.value_type, &schema.options),
-                }
-            };
+            let param = default_sequence_effect_param(schema, mark_collection_key);
             (schema.name.clone(), param)
         })
         .collect()
