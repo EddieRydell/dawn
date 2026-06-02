@@ -12,7 +12,8 @@ import { commands } from "../api";
 import type { AppSnapshotDto, ProjectDiagnosticDto, SequenceSelectionDto, TextRangeDto } from "../bindings";
 import { commandRegistry } from "../commandRegistry";
 import { runSnapshotCommand, useAppStore } from "../store";
-import { GuiEditor, SequenceTransportControls } from "./GuiEditor";
+import { GuiEditor } from "./gui/GuiEditor";
+import { SequenceTransportControls } from "./gui/sequence/SequenceTransportControls";
 
 type BufferExternalState = "current" | "changedOnDisk" | "deletedOnDisk";
 type EditorBufferWithExternalState = NonNullable<AppSnapshotDto["activeBuffer"]>;

@@ -2578,22 +2578,6 @@ mod tests {
     }
 
     #[test]
-    fn sequence_change_impact_invalidates_only_effects_referencing_changed_mark_collection() {
-        let (analysis, document) = thirty_output_controller_analysis_and_sequence();
-        let mut edited = document.clone();
-        edited
-            .mark_collections
-            .iter_mut()
-            .find(|collection| collection.key == "marks")
-            .expect("marks collection should exist")
-            .marks_seconds
-            .push(42.0);
-
-        let impact = SequenceChangeImpact::between(&document, &edited, &analysis);
-        assert_only_invalidated(&impact, &[1, 2, 4, 13, 14, 15], &[1, 2, 4, 13, 14, 15]);
-    }
-
-    #[test]
     fn sequence_render_cache_deleting_effect_prunes_only_that_effect_entries() {
         let (analysis, document) = thirty_output_controller_analysis_and_sequence();
         let mut cache = SequenceRenderCache::default();

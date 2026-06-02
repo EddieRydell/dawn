@@ -25,5 +25,5 @@ Do not jump to editing if the conversation is about diagnosing an issue or discu
 Do not start or leave a frontend dev server running when finishing work. The user needs `pnpm tauri dev` to own the frontend port.
 When planning, don't hesitate to ask the user relevant questions.
 When presenting a plan for approval from the user, list files that will be affected by the plan.
-Run `pnpm check` for linting, tests, and other checks after implementing a plan.
+Run `pnpm check` for linting, tests, and other checks after implementing a plan. Fix any regressions.
 Do not use .env files or environment variables in this codebase.

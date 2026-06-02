@@ -1480,10 +1480,18 @@ stage:
 #[test]
 fn gui_editor_files_do_not_reintroduce_geometry_helpers() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let viewer_paths = [
-        root.join("apps/desktop/frontend/src/ui/GuiEditor.tsx"),
-        root.join("apps/desktop/frontend/src/ui/PreviewWindow.tsx"),
-    ];
+    let mut viewer_paths = vec![root.join("apps/desktop/frontend/src/ui/PreviewWindow.tsx")];
+    let mut pending = vec![root.join("apps/desktop/frontend/src/ui/gui")];
+    while let Some(path) = pending.pop() {
+        for entry in fs::read_dir(path).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().and_then(|extension| extension.to_str()) == Some("tsx") {
+                viewer_paths.push(path);
+            }
+        }
+    }
     let forbidden = [
         "sample_polyline_points",
         "sample_arc_points",
