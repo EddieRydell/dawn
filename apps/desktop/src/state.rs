@@ -2,11 +2,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use dawn_app_core::app_model::AppModel;
-use dawn_app_core::output_runtime::SequenceRenderCache;
 use dawn_project::path::Utf8PathBuf;
 use tauri::State;
 
 use crate::audio_runtime::AudioRuntime;
+use crate::effect_preview_runtime::EffectPreviewRuntime;
 use crate::filesystem_watcher::FilesystemWatcherRuntime;
 use crate::live_output::LiveOutputRuntime;
 use crate::preview_transport::PreviewTransportRuntime;
@@ -14,7 +14,7 @@ use crate::preview_transport::PreviewTransportRuntime;
 pub(crate) struct AppState {
     pub(crate) model: Mutex<AppModel>,
     audio_runtime: Mutex<AudioRuntime>,
-    effect_preview_cache: Mutex<SequenceRenderCache>,
+    effect_preview_runtime: Mutex<EffectPreviewRuntime>,
     preview_transport: Mutex<PreviewTransportRuntime>,
     live_output: Mutex<LiveOutputRuntime>,
     filesystem_watcher: Mutex<FilesystemWatcherRuntime>,
@@ -26,7 +26,7 @@ impl Default for AppState {
         Self {
             model: Mutex::new(AppModel::default()),
             audio_runtime: Mutex::new(AudioRuntime::default()),
-            effect_preview_cache: Mutex::new(SequenceRenderCache::default()),
+            effect_preview_runtime: Mutex::new(EffectPreviewRuntime::default()),
             preview_transport: Mutex::new(PreviewTransportRuntime::default()),
             live_output: Mutex::new(LiveOutputRuntime::default()),
             filesystem_watcher: Mutex::new(FilesystemWatcherRuntime::default()),
@@ -65,13 +65,13 @@ pub(crate) fn lock_audio_runtime<'a>(
         .map_err(|_| "audio runtime lock is poisoned".to_string())
 }
 
-pub(crate) fn lock_effect_preview_cache<'a>(
+pub(crate) fn lock_effect_preview_runtime<'a>(
     state: &'a State<'_, AppState>,
-) -> CommandResult<MutexGuard<'a, SequenceRenderCache>> {
+) -> CommandResult<MutexGuard<'a, EffectPreviewRuntime>> {
     state
-        .effect_preview_cache
+        .effect_preview_runtime
         .lock()
-        .map_err(|_| "effect preview cache lock is poisoned".to_string())
+        .map_err(|_| "effect preview runtime lock is poisoned".to_string())
 }
 
 pub(crate) fn lock_preview_transport<'a>(

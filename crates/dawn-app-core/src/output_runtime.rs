@@ -254,7 +254,38 @@ impl SequenceRenderCache {
         max_columns: usize,
         max_rows: usize,
     ) -> Result<Option<SequenceEffectThumbnail>, String> {
-        sequence_effect_thumbnail(analysis, document, effect, max_columns, max_rows, self)
+        match self.effect_thumbnail_cancellable(
+            analysis,
+            document,
+            effect,
+            max_columns,
+            max_rows,
+            || false,
+        )? {
+            SequenceEffectThumbnailResult::Ready(thumbnail) => Ok(Some(thumbnail)),
+            SequenceEffectThumbnailResult::Unavailable
+            | SequenceEffectThumbnailResult::Cancelled => Ok(None),
+        }
+    }
+
+    pub fn effect_thumbnail_cancellable(
+        &mut self,
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+        effect: &dawn_project::document::SequenceEffectDocument,
+        max_columns: usize,
+        max_rows: usize,
+        is_cancelled: impl Fn() -> bool,
+    ) -> Result<SequenceEffectThumbnailResult, String> {
+        sequence_effect_thumbnail(
+            analysis,
+            document,
+            effect,
+            max_columns,
+            max_rows,
+            self,
+            &is_cancelled,
+        )
     }
 
     pub fn prepared_entry_count(&self) -> usize {
@@ -364,6 +395,13 @@ pub struct SequenceEffectThumbnail {
     pub columns: u32,
     pub rows: u32,
     pub colors: Vec<Color>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SequenceEffectThumbnailResult {
+    Ready(SequenceEffectThumbnail),
+    Unavailable,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1210,6 +1248,24 @@ impl SequenceFrameEvaluator {
         local_seconds_by_column: &[f64],
         sampled_pixels_by_row: &[SequenceEffectPixelDocument],
     ) -> Result<Vec<Color>, String> {
+        match self.evaluate_generator_effect_thumbnail_cancellable(
+            effect_id,
+            local_seconds_by_column,
+            sampled_pixels_by_row,
+            || false,
+        )? {
+            EffectThumbnailColorsResult::Ready(colors) => Ok(colors),
+            EffectThumbnailColorsResult::Cancelled => Ok(Vec::new()),
+        }
+    }
+
+    fn evaluate_generator_effect_thumbnail_cancellable(
+        &mut self,
+        effect_id: u32,
+        local_seconds_by_column: &[f64],
+        sampled_pixels_by_row: &[SequenceEffectPixelDocument],
+        is_cancelled: impl Fn() -> bool,
+    ) -> Result<EffectThumbnailColorsResult, String> {
         let interval = self
             .authored_intervals_by_id
             .get(&effect_id)
@@ -1240,6 +1296,9 @@ impl SequenceFrameEvaluator {
         let mut colors = vec![Color::new(0, 0, 0); columns * rows];
 
         for (column_index, local_seconds) in local_seconds_by_column.iter().copied().enumerate() {
+            if is_cancelled() {
+                return Ok(EffectThumbnailColorsResult::Cancelled);
+            }
             if !local_seconds.is_finite() || local_seconds < 0.0 {
                 return Err(format!(
                     "sequence effect `{effect_id}` has an invalid preview sample time"
@@ -1263,11 +1322,15 @@ impl SequenceFrameEvaluator {
                     columns,
                     &row_indices_by_pixel,
                     &mut colors,
+                    &is_cancelled,
                 )?;
+                if is_cancelled() {
+                    return Ok(EffectThumbnailColorsResult::Cancelled);
+                }
             }
         }
 
-        Ok(colors)
+        Ok(EffectThumbnailColorsResult::Ready(colors))
     }
 
     fn effect_indices_for_time(&self, time_seconds: f64) -> Option<&Vec<usize>> {
@@ -1408,6 +1471,7 @@ fn sample_prepared_effect_thumbnail_column(
     columns: usize,
     row_indices_by_pixel: &HashMap<(usize, usize), usize>,
     colors: &mut [Color],
+    is_cancelled: impl Fn() -> bool,
 ) -> Result<(), String> {
     let local_seconds =
         if sequence_seconds < effect.start_seconds || sequence_seconds >= effect.end_seconds() {
@@ -1433,6 +1497,9 @@ fn sample_prepared_effect_thumbnail_column(
     };
 
     for pixel in target_pixels {
+        if is_cancelled() {
+            return Ok(());
+        }
         let Some(row_index) = row_indices_by_pixel
             .get(&(pixel.fixture_index, pixel.pixel_index))
             .copied()
@@ -1459,6 +1526,11 @@ fn sample_prepared_effect_thumbnail_column(
     Ok(())
 }
 
+enum EffectThumbnailColorsResult {
+    Ready(Vec<Color>),
+    Cancelled,
+}
+
 fn sequence_effect_thumbnail(
     analysis: &ProjectAnalysis,
     document: &SequenceDocument,
@@ -1466,19 +1538,20 @@ fn sequence_effect_thumbnail(
     max_columns: usize,
     max_rows: usize,
     cache: &mut SequenceRenderCache,
-) -> Result<Option<SequenceEffectThumbnail>, String> {
+    is_cancelled: impl Fn() -> bool,
+) -> Result<SequenceEffectThumbnailResult, String> {
     let Some(render) = &effect.render else {
-        return Ok(None);
+        return Ok(SequenceEffectThumbnailResult::Unavailable);
     };
     if document.frame_rate == 0 || effect.duration_seconds == 0.0 || render.target_pixels.is_empty()
     {
-        return Ok(None);
+        return Ok(SequenceEffectThumbnailResult::Unavailable);
     }
 
     let duration =
         TimeSpan::try_from_seconds_f64_rounded(effect.duration_seconds).map_err(str::to_string)?;
     if duration == TimeSpan::ZERO {
-        return Ok(None);
+        return Ok(SequenceEffectThumbnailResult::Unavailable);
     }
 
     let source_pixel_count = render.target_pixels.len();
@@ -1514,11 +1587,14 @@ fn sequence_effect_thumbnail(
         max_rows,
     };
     if let Some(thumbnail) = cache.effect_thumbnails.get(&cache_key).cloned() {
-        return Ok(Some(thumbnail));
+        return Ok(SequenceEffectThumbnailResult::Ready(thumbnail));
+    }
+    if is_cancelled() {
+        return Ok(SequenceEffectThumbnailResult::Cancelled);
     }
 
     let Some(script) = analysis.compiled_script_for_id(&render.script.to_script_id()) else {
-        return Ok(None);
+        return Ok(SequenceEffectThumbnailResult::Unavailable);
     };
     let sampled_frame_indices = evenly_sample_indices(
         total_preview_frames(duration, document.frame_rate),
@@ -1534,6 +1610,7 @@ fn sequence_effect_thumbnail(
             sampled_pixel_indices: &sampled_pixel_indices,
             sampled_frame_indices: &sampled_frame_indices,
             cache,
+            is_cancelled: &is_cancelled,
         })?
     } else {
         sample_effect_thumbnail_colors(SampleEffectThumbnailInput {
@@ -1545,10 +1622,17 @@ fn sequence_effect_thumbnail(
             source_pixel_count,
             sampled_pixel_indices: &sampled_pixel_indices,
             sampled_frame_indices: &sampled_frame_indices,
+            is_cancelled: &is_cancelled,
         })?
     };
+    let colors = match colors {
+        EffectThumbnailColorsResult::Ready(colors) => colors,
+        EffectThumbnailColorsResult::Cancelled => {
+            return Ok(SequenceEffectThumbnailResult::Cancelled);
+        }
+    };
     if colors.len() != sampled_frame_indices.len() * sampled_pixel_indices.len() {
-        return Ok(None);
+        return Ok(SequenceEffectThumbnailResult::Unavailable);
     }
     let thumbnail = SequenceEffectThumbnail {
         effect_id: effect.id,
@@ -1563,7 +1647,7 @@ fn sequence_effect_thumbnail(
         colors,
     };
     cache.effect_thumbnails.insert(cache_key, thumbnail.clone());
-    Ok(Some(thumbnail))
+    Ok(SequenceEffectThumbnailResult::Ready(thumbnail))
 }
 
 struct SampleEffectThumbnailInput<'a> {
@@ -1575,11 +1659,12 @@ struct SampleEffectThumbnailInput<'a> {
     source_pixel_count: usize,
     sampled_pixel_indices: &'a [usize],
     sampled_frame_indices: &'a [usize],
+    is_cancelled: &'a dyn Fn() -> bool,
 }
 
 fn sample_effect_thumbnail_colors(
     input: SampleEffectThumbnailInput<'_>,
-) -> Result<Vec<Color>, String> {
+) -> Result<EffectThumbnailColorsResult, String> {
     let prepared_params = match prepare_params_from_document(
         input.script,
         &input.render.params,
@@ -1587,15 +1672,21 @@ fn sample_effect_thumbnail_colors(
         input.effect.start_seconds,
     ) {
         Ok(params) => params,
-        Err(_) => return Ok(Vec::new()),
+        Err(_) => return Ok(EffectThumbnailColorsResult::Ready(Vec::new())),
     };
     let mut colors =
         Vec::with_capacity(input.sampled_frame_indices.len() * input.sampled_pixel_indices.len());
     for target_pixel_index in input.sampled_pixel_indices {
+        if (input.is_cancelled)() {
+            return Ok(EffectThumbnailColorsResult::Cancelled);
+        }
         let Some(pixel) = input.render.target_pixels.get(*target_pixel_index) else {
-            return Ok(Vec::new());
+            return Ok(EffectThumbnailColorsResult::Ready(Vec::new()));
         };
         for frame_index in input.sampled_frame_indices {
+            if (input.is_cancelled)() {
+                return Ok(EffectThumbnailColorsResult::Cancelled);
+            }
             let local_seconds =
                 local_seconds_for_frame(*frame_index, input.document.frame_rate, input.duration);
             let progress = (local_seconds / input.effect.duration_seconds).clamp(0.0, 1.0);
@@ -1616,12 +1707,12 @@ fn sample_effect_thumbnail_colors(
                 &prepared_params,
             ) {
                 Ok(color) => color,
-                Err(_) => return Ok(Vec::new()),
+                Err(_) => return Ok(EffectThumbnailColorsResult::Ready(Vec::new())),
             };
             colors.push(color);
         }
     }
-    Ok(colors)
+    Ok(EffectThumbnailColorsResult::Ready(colors))
 }
 
 struct GeneratorEffectThumbnailInput<'a> {
@@ -1633,11 +1724,15 @@ struct GeneratorEffectThumbnailInput<'a> {
     sampled_pixel_indices: &'a [usize],
     sampled_frame_indices: &'a [usize],
     cache: &'a mut SequenceRenderCache,
+    is_cancelled: &'a dyn Fn() -> bool,
 }
 
 fn generator_effect_thumbnail_colors(
     input: GeneratorEffectThumbnailInput<'_>,
-) -> Result<Vec<Color>, String> {
+) -> Result<EffectThumbnailColorsResult, String> {
+    if (input.is_cancelled)() {
+        return Ok(EffectThumbnailColorsResult::Cancelled);
+    }
     let filter = [input.effect.id].into_iter().collect();
     let (mut evaluator, _) = SequenceFrameEvaluator::new_filtered_timed_with_preparation_cache(
         input.analysis,
@@ -1658,10 +1753,11 @@ fn generator_effect_thumbnail_colors(
         .map(|target_pixel_index| input.render.target_pixels.get(*target_pixel_index).cloned())
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| "effect thumbnail references an unavailable target pixel".to_string())?;
-    evaluator.evaluate_generator_effect_thumbnail(
+    evaluator.evaluate_generator_effect_thumbnail_cancellable(
         input.effect.id,
         &local_seconds_by_column,
         &sampled_pixels_by_row,
+        input.is_cancelled,
     )
 }
 

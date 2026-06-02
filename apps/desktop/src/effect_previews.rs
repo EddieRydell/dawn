@@ -1,18 +1,54 @@
 use dawn_app_core::output_runtime::SequenceEffectThumbnail;
-use dawn_project::document::{SequenceDocument, SequenceEffectDocument};
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::State;
-
-use crate::state::{lock_effect_preview_cache, AppState, CommandResult};
 
 const PREVIEW_MAX_COLUMNS: usize = 360;
 const PREVIEW_MAX_ROWS: usize = 50;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SequenceEffectPreviewBatchDto {
-    pub previews: Vec<SequenceEffectPreviewDto>,
+pub struct SequenceEffectPreviewRequestEffectDto {
+    pub effect_id: u32,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceEffectPreviewResultsDto {
+    pub results: Vec<SequenceEffectPreviewResultDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum SequenceEffectPreviewResultDto {
+    Ready(SequenceEffectPreviewReadyResultDto),
+    Unavailable(SequenceEffectPreviewUnavailableResultDto),
+    Error(SequenceEffectPreviewErrorResultDto),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceEffectPreviewReadyResultDto {
+    pub request_id: u32,
+    pub signature: String,
+    pub preview: SequenceEffectPreviewDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceEffectPreviewUnavailableResultDto {
+    pub request_id: u32,
+    pub effect_id: u32,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceEffectPreviewErrorResultDto {
+    pub request_id: u32,
+    pub effect_id: u32,
+    pub signature: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -27,32 +63,10 @@ pub struct SequenceEffectPreviewDto {
     pub colors: Vec<u32>,
 }
 
-pub(crate) struct EffectPreviewRequest<'a> {
-    pub(crate) state: &'a State<'a, AppState>,
-    pub(crate) analysis: &'a dawn_project::analysis::ProjectAnalysis,
-    pub(crate) document: &'a SequenceDocument,
-    pub(crate) effect: &'a SequenceEffectDocument,
-}
-
-pub(crate) fn preview_for_effect(
-    request: EffectPreviewRequest<'_>,
-) -> CommandResult<Option<SequenceEffectPreviewDto>> {
-    lock_effect_preview_cache(request.state)?
-        .effect_thumbnail(
-            request.analysis,
-            request.document,
-            request.effect,
-            PREVIEW_MAX_COLUMNS,
-            PREVIEW_MAX_ROWS,
-        )?
-        .map(sequence_effect_preview_dto)
-        .transpose()
-}
-
-fn sequence_effect_preview_dto(
+pub(crate) fn sequence_effect_preview_dto(
     thumbnail: SequenceEffectThumbnail,
-) -> CommandResult<SequenceEffectPreviewDto> {
-    Ok(SequenceEffectPreviewDto {
+) -> SequenceEffectPreviewDto {
+    SequenceEffectPreviewDto {
         effect_id: thumbnail.effect_id,
         duration_seconds: thumbnail.duration_seconds,
         source_pixel_count: thumbnail.source_pixel_count,
@@ -60,7 +74,15 @@ fn sequence_effect_preview_dto(
         columns: thumbnail.columns,
         rows: thumbnail.rows,
         colors: thumbnail.colors.into_iter().map(pack_rgb).collect(),
-    })
+    }
+}
+
+pub(crate) fn preview_max_columns() -> usize {
+    PREVIEW_MAX_COLUMNS
+}
+
+pub(crate) fn preview_max_rows() -> usize {
+    PREVIEW_MAX_ROWS
 }
 
 fn pack_rgb(color: dawn_project::model::Color) -> u32 {
