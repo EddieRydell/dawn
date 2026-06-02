@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use dawn_app_core::actions::AppAction;
 use dawn_app_core::app_model::{AppModel, DispatchOutcome};
 use dawn_app_core::dto::{AppSnapshotDto, PreviewSnapshotDto};
@@ -18,85 +16,31 @@ pub(crate) fn dispatch(
     state: &State<'_, AppState>,
     action: AppAction,
 ) -> CommandResult<AppSnapshotDto> {
-    let total_started = Instant::now();
     let clear_audio_runtime = should_clear_audio_runtime_for_action(&action);
-    let lock_started = Instant::now();
     let mut model = lock_model(state)?;
-    let lock_ms = elapsed_ms(lock_started);
-    let dispatch_started = Instant::now();
     let outcome = model.dispatch(action)?;
-    let dispatch_ms = elapsed_ms(dispatch_started);
-    let snapshot_started = Instant::now();
     let snapshot = model.snapshot_dto();
-    let snapshot_ms = elapsed_ms(snapshot_started);
     if outcome == DispatchOutcome::SnapshotChanged {
-        let watcher_started = Instant::now();
         if let Ok(mut watcher) = lock_filesystem_watcher(state) {
             let _ = watcher.sync_project_root(app, snapshot.project_root.clone());
         }
-        let watcher_ms = elapsed_ms(watcher_started);
-        let audio_clear_started = Instant::now();
         if clear_audio_runtime {
             if let Ok(runtime) = lock_audio_runtime(state) {
                 runtime.clear();
             }
         }
-        let audio_clear_ms = elapsed_ms(audio_clear_started);
-        let audio_load_started = Instant::now();
         if let Some(clock) = sync_active_audio_load(state, &snapshot.preview) {
-            let audio_load_ms = elapsed_ms(audio_load_started);
-            let audio_apply_started = Instant::now();
             let analysis = model.analysis.clone();
             apply_audio_clock_to_model(&mut model, &clock, analysis.as_ref());
-            let audio_apply_ms = elapsed_ms(audio_apply_started);
-            let second_snapshot_started = Instant::now();
             let snapshot = model.snapshot_dto();
-            let second_snapshot_ms = elapsed_ms(second_snapshot_started);
-            let emit_started = Instant::now();
             app.emit("app_snapshot_changed", &snapshot)
                 .map_err(|error| error.to_string())?;
             emit_preview_state_dto(app, &snapshot)?;
-            let emit_ms = elapsed_ms(emit_started);
-            eprintln!(
-                "[dispatch] changed with_audio lock_ms={:.3} dispatch_ms={:.3} snapshot_ms={:.3} watcher_ms={:.3} audio_clear_ms={:.3} audio_load_ms={:.3} audio_apply_ms={:.3} second_snapshot_ms={:.3} emit_ms={:.3} total_ms={:.3}",
-                lock_ms,
-                dispatch_ms,
-                snapshot_ms,
-                watcher_ms,
-                audio_clear_ms,
-                audio_load_ms,
-                audio_apply_ms,
-                second_snapshot_ms,
-                emit_ms,
-                elapsed_ms(total_started),
-            );
             return Ok(snapshot);
         }
-        let audio_load_ms = elapsed_ms(audio_load_started);
-        let emit_started = Instant::now();
         app.emit("app_snapshot_changed", &snapshot)
             .map_err(|error| error.to_string())?;
         emit_preview_state_dto(app, &snapshot)?;
-        let emit_ms = elapsed_ms(emit_started);
-        eprintln!(
-            "[dispatch] changed lock_ms={:.3} dispatch_ms={:.3} snapshot_ms={:.3} watcher_ms={:.3} audio_clear_ms={:.3} audio_load_ms={:.3} emit_ms={:.3} total_ms={:.3}",
-            lock_ms,
-            dispatch_ms,
-            snapshot_ms,
-            watcher_ms,
-            audio_clear_ms,
-            audio_load_ms,
-            emit_ms,
-            elapsed_ms(total_started),
-        );
-    } else {
-        eprintln!(
-            "[dispatch] unchanged lock_ms={:.3} dispatch_ms={:.3} snapshot_ms={:.3} total_ms={:.3}",
-            lock_ms,
-            dispatch_ms,
-            snapshot_ms,
-            elapsed_ms(total_started),
-        );
     }
     Ok(snapshot)
 }
@@ -231,20 +175,10 @@ pub(crate) fn emit_model_snapshot(
     app: &AppHandle,
     model: &AppModel,
 ) -> CommandResult<AppSnapshotDto> {
-    let total_started = Instant::now();
-    let snapshot_started = Instant::now();
     let snapshot = model.snapshot_dto();
-    let snapshot_ms = elapsed_ms(snapshot_started);
-    let emit_started = Instant::now();
     app.emit("app_snapshot_changed", &snapshot)
         .map_err(|error| error.to_string())?;
     emit_preview_state_dto(app, &snapshot)?;
-    eprintln!(
-        "[dispatch] emit_model_snapshot snapshot_ms={:.3} emit_ms={:.3} total_ms={:.3}",
-        snapshot_ms,
-        elapsed_ms(emit_started),
-        elapsed_ms(total_started),
-    );
     Ok(snapshot)
 }
 
@@ -300,8 +234,4 @@ pub(crate) fn valid_sequence_audio(snapshot: &PreviewSnapshot) -> Option<Sequenc
         .as_ref()
         .filter(|audio| audio.exists)
         .cloned()
-}
-
-fn elapsed_ms(started: Instant) -> f64 {
-    started.elapsed().as_secs_f64() * 1000.0
 }

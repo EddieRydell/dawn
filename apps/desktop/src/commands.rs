@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::time::Instant;
 
 use dawn_app_core::actions::AppAction;
 use dawn_app_core::app_model::ActiveGuiDocument;
@@ -165,16 +164,7 @@ fn apply_sequence_gui_edit(
     state: State<'_, AppState>,
     edit: SequenceGuiEditDto,
 ) -> CommandResult<AppSnapshotDto> {
-    let started = Instant::now();
-    let label = sequence_gui_edit_log_label(&edit);
-    let result = dispatch(&app, &state, AppAction::ApplySequenceGuiEdit(edit));
-    eprintln!(
-        "[sequence-edit] apply_sequence_gui_edit {} result={} total_ms={:.3}",
-        label,
-        if result.is_ok() { "ok" } else { "error" },
-        elapsed_ms(started),
-    );
-    result
+    dispatch(&app, &state, AppAction::ApplySequenceGuiEdit(edit))
 }
 
 #[specta::specta]
@@ -735,70 +725,4 @@ pub(crate) fn register_commands(
         dispose_preview_transport,
         get_preview_transport_mode
     ])
-}
-
-fn sequence_gui_edit_log_label(edit: &SequenceGuiEditDto) -> String {
-    match edit {
-        SequenceGuiEditDto::UpdateEffectParam { id, name, value } => {
-            format!(
-                "type=updateEffectParam id={id} name={name} value_type={}",
-                param_value_type(value)
-            )
-        }
-        SequenceGuiEditDto::LinkEffectCurveParam { id, name, .. } => {
-            format!("type=linkEffectCurveParam id={id} name={name}")
-        }
-        SequenceGuiEditDto::UnlinkEffectCurveParam { id, name } => {
-            format!("type=unlinkEffectCurveParam id={id} name={name}")
-        }
-        SequenceGuiEditDto::MoveEffect { id, .. } => format!("type=moveEffect id={id}"),
-        SequenceGuiEditDto::ResizeEffect { id, .. } => format!("type=resizeEffect id={id}"),
-        SequenceGuiEditDto::ChangeEffectScript { id, .. } => {
-            format!("type=changeEffectScript id={id}")
-        }
-        SequenceGuiEditDto::DeleteEffect { id } => format!("type=deleteEffect id={id}"),
-        SequenceGuiEditDto::RetargetEffect { id, .. } => format!("type=retargetEffect id={id}"),
-        SequenceGuiEditDto::SetEffectScope { id, .. } => format!("type=setEffectScope id={id}"),
-        SequenceGuiEditDto::AddEffect { .. } => "type=addEffect".to_string(),
-        SequenceGuiEditDto::SetAudio { .. } => "type=setAudio".to_string(),
-        SequenceGuiEditDto::CreateMarkCollection { key, .. } => {
-            format!("type=createMarkCollection key={key}")
-        }
-        SequenceGuiEditDto::RenameMarkCollection { key, .. } => {
-            format!("type=renameMarkCollection key={key}")
-        }
-        SequenceGuiEditDto::DeleteMarkCollection { key } => {
-            format!("type=deleteMarkCollection key={key}")
-        }
-        SequenceGuiEditDto::SetMarkCollectionColor { key, .. } => {
-            format!("type=setMarkCollectionColor key={key}")
-        }
-        SequenceGuiEditDto::AddMark { collection_key, .. } => {
-            format!("type=addMark collection={collection_key}")
-        }
-        SequenceGuiEditDto::MoveMark { collection_key, .. } => {
-            format!("type=moveMark collection={collection_key}")
-        }
-        SequenceGuiEditDto::DeleteMark { collection_key, .. } => {
-            format!("type=deleteMark collection={collection_key}")
-        }
-    }
-}
-
-fn param_value_type(value: &dawn_app_core::dto::SequenceEffectParamValueDto) -> &'static str {
-    match value {
-        dawn_app_core::dto::SequenceEffectParamValueDto::Int { .. } => "int",
-        dawn_app_core::dto::SequenceEffectParamValueDto::Float { .. } => "float",
-        dawn_app_core::dto::SequenceEffectParamValueDto::Bool { .. } => "bool",
-        dawn_app_core::dto::SequenceEffectParamValueDto::Enum { .. } => "enum",
-        dawn_app_core::dto::SequenceEffectParamValueDto::Flags { .. } => "flags",
-        dawn_app_core::dto::SequenceEffectParamValueDto::Color { .. } => "color",
-        dawn_app_core::dto::SequenceEffectParamValueDto::FloatCurve { .. } => "floatCurve",
-        dawn_app_core::dto::SequenceEffectParamValueDto::ColorCurve { .. } => "colorCurve",
-        dawn_app_core::dto::SequenceEffectParamValueDto::Marks { .. } => "marks",
-    }
-}
-
-fn elapsed_ms(started: Instant) -> f64 {
-    started.elapsed().as_secs_f64() * 1000.0
 }
