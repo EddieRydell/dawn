@@ -6,8 +6,8 @@ use dawn_project::document::{SequenceAudioDocument, SequenceDocument};
 use dawn_project::path::Utf8PathBuf;
 
 use crate::output_runtime::{
-    empty_frame, OutputFrame, OutputFrameStatus, SequenceFrameEvaluationTiming,
-    SequenceFrameEvaluator, SequencePreparationCache,
+    empty_frame, OutputFrame, OutputFrameStatus, SequenceChangeImpact,
+    SequenceFrameEvaluationTiming, SequenceFrameEvaluator, SequenceRenderCache,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -102,7 +102,7 @@ pub struct PreviewSession {
     sequence_states: HashMap<SequenceKey, SequencePlaybackState>,
     effect_preview: Option<EffectPreviewState>,
     render_cache: Option<SequenceFrameEvaluator>,
-    preparation_cache: SequencePreparationCache,
+    sequence_cache: SequenceRenderCache,
     last_render_timing: PreviewRenderTiming,
     generation: u64,
     snapshot: PreviewSnapshot,
@@ -117,7 +117,7 @@ impl Default for PreviewSession {
             sequence_states: HashMap::new(),
             effect_preview: None,
             render_cache: None,
-            preparation_cache: SequencePreparationCache::default(),
+            sequence_cache: SequenceRenderCache::default(),
             last_render_timing: PreviewRenderTiming::default(),
             generation: 0,
             snapshot: PreviewSnapshot {
@@ -156,16 +156,32 @@ impl PreviewSession {
         source: Option<(SequenceKey, SequenceDocument)>,
         analysis: Option<&ProjectAnalysis>,
     ) {
-        let started = Instant::now();
         let next_key = source.as_ref().map(|(key, _)| key);
         let source_changed = self.current_key().as_ref() != next_key;
-        let previous_cache_present = self.render_cache.is_some();
         if source_changed && self.is_playing() {
             self.pause_current(analysis);
         }
-        self.render_cache = None;
         if source_changed {
-            self.preparation_cache.clear();
+            self.sequence_cache.clear();
+            self.render_cache = None;
+        } else if let (
+            Some(analysis),
+            PreviewSource::Sequence {
+                document: previous_document,
+                ..
+            },
+            Some((_, refreshed_document)),
+        ) = (analysis, &self.source, source.as_ref())
+        {
+            let impact =
+                SequenceChangeImpact::between(previous_document, refreshed_document, analysis);
+            if impact.requires_full_clear()
+                || !impact.invalidated_prepared_effect_ids().is_empty()
+                || !impact.invalidated_topology_effect_ids().is_empty()
+            {
+                self.sequence_cache.apply_change_impact(&impact);
+                self.render_cache = None;
+            }
         }
 
         match source {
@@ -181,16 +197,7 @@ impl PreviewSession {
                 self.transport = PreviewTransport::Stopped;
             }
         }
-        let before_render_ms = elapsed_ms(started);
         self.render(analysis, self.status_for_source());
-        eprintln!(
-            "[preview-session] sync_source source_changed={} previous_cache_present={} before_render_ms={:.3} render_total_ms={:.3} total_ms={:.3}",
-            source_changed,
-            previous_cache_present,
-            before_render_ms,
-            self.last_render_timing.total_ms,
-            elapsed_ms(started),
-        );
     }
 
     pub fn play(&mut self, analysis: Option<&ProjectAnalysis>) {
@@ -703,36 +710,9 @@ impl PreviewSession {
         let mut renderer_build_ms = 0.0;
         if self.render_cache.is_none() {
             let build_started = Instant::now();
-            let (renderer, preparation_timing) =
-                SequenceFrameEvaluator::new_with_preparation_cache(
-                    analysis,
-                    document,
-                    &mut self.preparation_cache,
-                )?;
-            let prepared_effect_count = renderer.prepared_effect_count();
-            let prepared_cache_hits = preparation_timing
-                .generator_parents
-                .iter()
-                .filter(|parent| parent.prepared_cache_hit)
-                .count();
-            let topology_cache_hits = preparation_timing
-                .generator_parents
-                .iter()
-                .filter(|parent| parent.topology_cache_hit)
-                .count();
+            let (renderer, _) = self.sequence_cache.build_evaluator(analysis, document)?;
             self.render_cache = Some(renderer);
             renderer_build_ms = elapsed_ms(build_started);
-            eprintln!(
-                "[preview-session] cached_renderer build renderer_build_ms={:.3} prepare_total_ms={:.3} generator_ms={:.3} generator_parents={} prepared_cache_hits={} topology_cache_hits={} generated_children={} prepared_effect_count={}",
-                renderer_build_ms,
-                preparation_timing.total_ms,
-                preparation_timing.generator_expansion_ms,
-                preparation_timing.generator_parent_count,
-                prepared_cache_hits,
-                topology_cache_hits,
-                preparation_timing.generated_child_count,
-                prepared_effect_count,
-            );
         }
         self.render_cache
             .as_mut()

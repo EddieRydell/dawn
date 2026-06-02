@@ -337,72 +337,37 @@ fn get_sequence_effect_previews(
     object_key: String,
     effect_ids: Vec<u32>,
 ) -> CommandResult<SequenceEffectPreviewBatchDto> {
-    let total_started = Instant::now();
-    let requested_count = effect_ids.len();
-    eprintln!(
-        "[effect-preview] command start path={} object={} requested_count={} ids={:?}",
-        path, object_key, requested_count, effect_ids,
-    );
-    let model_lock_started = Instant::now();
     let model = lock_model(&state)?;
-    let model_lock_ms = elapsed_ms(model_lock_started);
-    let clone_analysis_started = Instant::now();
     let analysis = model
         .analysis
         .as_ref()
         .ok_or_else(|| "project analysis is not available".to_string())?
         .clone();
-    let clone_analysis_ms = elapsed_ms(clone_analysis_started);
-    let document_started = Instant::now();
     let document = model.workspace.sequence_document(
         project_path(path),
         &object_key,
         model.editors.dirty_overlays(),
     )?;
-    let document_ms = elapsed_ms(document_started);
     drop(model);
 
     let requested = effect_ids
         .into_iter()
         .collect::<std::collections::HashSet<_>>();
     let mut previews = Vec::new();
-    let preview_loop_started = Instant::now();
     for effect in document
         .effects
         .iter()
         .filter(|effect| requested.contains(&effect.id))
     {
-        let effect_started = Instant::now();
         if let Some(preview) = preview_for_effect(EffectPreviewRequest {
             state: &state,
             analysis: &analysis,
-            sequence_path: &document.path,
-            object_key: &document.object_key,
-            frame_rate: document.frame_rate,
-            mark_collections: &document.mark_collections,
             document: &document,
             effect,
         })? {
             previews.push(preview);
         }
-        eprintln!(
-            "[effect-preview] command effect done effect={} elapsed_ms={:.3}",
-            effect.id,
-            elapsed_ms(effect_started),
-        );
     }
-    let preview_loop_ms = elapsed_ms(preview_loop_started);
-    eprintln!(
-        "[effect-preview] command done object={} requested_count={} returned_count={} model_lock_ms={:.3} clone_analysis_ms={:.3} document_ms={:.3} preview_loop_ms={:.3} total_ms={:.3}",
-        document.object_key,
-        requested_count,
-        previews.len(),
-        model_lock_ms,
-        clone_analysis_ms,
-        document_ms,
-        preview_loop_ms,
-        elapsed_ms(total_started),
-    );
 
     Ok(SequenceEffectPreviewBatchDto { previews })
 }

@@ -475,12 +475,6 @@ empty:
           points:
           - time: 0.0
             value: 1.0
-          - time: 0.29
-            value: 0.602
-          - time: 0.439
-            value: 0.493
-          - time: 0.561
-            value: 0.873
           - time: 1.0
             value: 0.0
     script: effects.Chase

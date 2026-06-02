@@ -13,7 +13,7 @@ use dawn_project::effect_script::{
     GeneratedChildEffectRef, GeneratedChildTopology, GeneratorTarget, GeneratorTargetPixel,
     PixelContext, PreparedEffectParams, RuntimeError, RuntimeValue,
 };
-use dawn_project::frame::{ceil_frame, floor_frame, frame_count};
+use dawn_project::frame::{ceil_frame, floor_frame, frame_count, frame_start};
 use dawn_project::model::{
     Color, Curve, CurveValue, CurveValueType, Distance, DistanceSpan, EffectParam, FixtureId,
     Resolved, SequenceEffectScope, Time, TimeSpan,
@@ -166,6 +166,14 @@ impl SequencePreparationCache {
         );
     }
 
+    fn remove_prepared(&mut self, effect_id: u32) {
+        self.entries.remove(&effect_id);
+    }
+
+    fn remove_topology(&mut self, effect_id: u32) {
+        self.generator_topology_entries.remove(&effect_id);
+    }
+
     fn prune(&mut self, active_effect_ids: &HashSet<u32>) {
         self.entries
             .retain(|effect_id, _| active_effect_ids.contains(effect_id));
@@ -177,6 +185,422 @@ impl SequencePreparationCache {
         self.entries.clear();
         self.generator_topology_entries.clear();
     }
+
+    pub fn prepared_entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn topology_entry_count(&self) -> usize {
+        self.generator_topology_entries.len()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SequenceRenderCache {
+    preparation: SequencePreparationCache,
+    effect_thumbnails: HashMap<SequenceEffectThumbnailCacheKey, SequenceEffectThumbnail>,
+}
+
+impl SequenceRenderCache {
+    pub fn clear(&mut self) {
+        self.preparation.clear();
+        self.effect_thumbnails.clear();
+    }
+
+    pub fn apply_change_impact(&mut self, impact: &SequenceChangeImpact) {
+        if impact.clear_all {
+            self.clear();
+            return;
+        }
+        for effect_id in &impact.invalidated_prepared_effect_ids {
+            self.preparation.remove_prepared(*effect_id);
+            self.effect_thumbnails
+                .retain(|key, _| key.effect_id != *effect_id);
+        }
+        for effect_id in &impact.invalidated_topology_effect_ids {
+            self.preparation.remove_topology(*effect_id);
+        }
+        self.preparation.prune(&impact.active_effect_ids);
+        self.effect_thumbnails
+            .retain(|key, _| impact.active_effect_ids.contains(&key.effect_id));
+    }
+
+    pub fn build_evaluator(
+        &mut self,
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+    ) -> Result<
+        (
+            SequenceFrameEvaluator,
+            SequenceFrameEvaluatorPreparationTiming,
+        ),
+        String,
+    > {
+        SequenceFrameEvaluator::new_with_preparation_cache(
+            analysis,
+            document,
+            &mut self.preparation,
+        )
+    }
+
+    pub fn effect_thumbnail(
+        &mut self,
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+        effect: &dawn_project::document::SequenceEffectDocument,
+        max_columns: usize,
+        max_rows: usize,
+    ) -> Result<Option<SequenceEffectThumbnail>, String> {
+        sequence_effect_thumbnail(analysis, document, effect, max_columns, max_rows, self)
+    }
+
+    pub fn prepared_entry_count(&self) -> usize {
+        self.preparation.prepared_entry_count()
+    }
+
+    pub fn topology_entry_count(&self) -> usize {
+        self.preparation.topology_entry_count()
+    }
+
+    pub fn thumbnail_entry_count(&self) -> usize {
+        self.effect_thumbnails.len()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceChangeImpact {
+    clear_all: bool,
+    active_effect_ids: HashSet<u32>,
+    invalidated_prepared_effect_ids: HashSet<u32>,
+    invalidated_topology_effect_ids: HashSet<u32>,
+}
+
+impl SequenceChangeImpact {
+    pub fn between(
+        previous: &SequenceDocument,
+        refreshed: &SequenceDocument,
+        analysis: &ProjectAnalysis,
+    ) -> Self {
+        let active_effect_ids = refreshed
+            .effects
+            .iter()
+            .map(|effect| effect.id)
+            .collect::<HashSet<_>>();
+        let mut invalidated_prepared_effect_ids = HashSet::new();
+        let mut invalidated_topology_effect_ids = HashSet::new();
+        let previous_effects = previous
+            .effects
+            .iter()
+            .map(|effect| (effect.id, effect))
+            .collect::<HashMap<_, _>>();
+        let refreshed_effects = refreshed
+            .effects
+            .iter()
+            .map(|effect| (effect.id, effect))
+            .collect::<HashMap<_, _>>();
+
+        for effect_id in previous_effects.keys() {
+            if !refreshed_effects.contains_key(effect_id) {
+                invalidated_prepared_effect_ids.insert(*effect_id);
+                invalidated_topology_effect_ids.insert(*effect_id);
+            }
+        }
+
+        for effect in &refreshed.effects {
+            let Some(previous_effect) = previous_effects.get(&effect.id) else {
+                invalidated_prepared_effect_ids.insert(effect.id);
+                if is_generator_effect(analysis, effect) {
+                    invalidated_topology_effect_ids.insert(effect.id);
+                }
+                continue;
+            };
+            let impact =
+                effect_change_impact(previous, refreshed, previous_effect, effect, analysis);
+            if impact.invalidate_prepared {
+                invalidated_prepared_effect_ids.insert(effect.id);
+            }
+            if impact.invalidate_topology {
+                invalidated_topology_effect_ids.insert(effect.id);
+            }
+        }
+
+        for collection_key in changed_mark_collection_keys(previous, refreshed) {
+            for effect in effects_referencing_mark_collection(previous, refreshed, &collection_key)
+            {
+                invalidated_prepared_effect_ids.insert(effect);
+            }
+        }
+
+        Self {
+            clear_all: sequence_source_requires_full_clear(previous, refreshed),
+            active_effect_ids,
+            invalidated_prepared_effect_ids,
+            invalidated_topology_effect_ids,
+        }
+    }
+
+    pub fn invalidated_prepared_effect_ids(&self) -> &HashSet<u32> {
+        &self.invalidated_prepared_effect_ids
+    }
+
+    pub fn invalidated_topology_effect_ids(&self) -> &HashSet<u32> {
+        &self.invalidated_topology_effect_ids
+    }
+
+    pub fn requires_full_clear(&self) -> bool {
+        self.clear_all
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceEffectThumbnail {
+    pub effect_id: u32,
+    pub duration_seconds: f64,
+    pub source_pixel_count: u32,
+    pub sampled_pixel_indices: Vec<u32>,
+    pub columns: u32,
+    pub rows: u32,
+    pub colors: Vec<Color>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SequenceEffectThumbnailCacheKey {
+    sequence_path: String,
+    object_key: String,
+    effect_id: u32,
+    duration_nanoseconds: u64,
+    frame_rate: u32,
+    scope: SequenceEffectScope,
+    script_key: String,
+    script_source: String,
+    params: Vec<PreparedEffectParamCacheKey>,
+    target_pixels: Vec<PreparedEffectPixelCacheKey>,
+    sampled_pixel_indices: Vec<usize>,
+    max_columns: usize,
+    max_rows: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct EffectChangeImpact {
+    invalidate_prepared: bool,
+    invalidate_topology: bool,
+}
+
+fn sequence_source_requires_full_clear(
+    previous: &SequenceDocument,
+    refreshed: &SequenceDocument,
+) -> bool {
+    previous.path != refreshed.path
+        || previous.object_key != refreshed.object_key
+        || previous.frame_rate != refreshed.frame_rate
+        || previous.degraded != refreshed.degraded
+}
+
+fn effect_change_impact(
+    previous_document: &SequenceDocument,
+    refreshed_document: &SequenceDocument,
+    previous: &dawn_project::document::SequenceEffectDocument,
+    refreshed: &dawn_project::document::SequenceEffectDocument,
+    analysis: &ProjectAnalysis,
+) -> EffectChangeImpact {
+    let mut impact = EffectChangeImpact::default();
+    if previous.index != refreshed.index
+        || previous.start_seconds != refreshed.start_seconds
+        || previous.duration_seconds != refreshed.duration_seconds
+        || previous.target != refreshed.target
+        || previous.scope != refreshed.scope
+        || previous.script != refreshed.script
+        || previous.script_source != refreshed.script_source
+        || render_shape_changed(previous.render.as_ref(), refreshed.render.as_ref())
+    {
+        impact.invalidate_prepared = true;
+    }
+
+    match (previous.render.as_ref(), refreshed.render.as_ref()) {
+        (Some(previous_render), Some(refreshed_render)) => {
+            let previous_prepared_key = prepared_effect_cache_key(
+                previous_document,
+                previous.start_seconds,
+                previous.duration_seconds,
+                previous.scope,
+                previous_render,
+            );
+            let refreshed_prepared_key = prepared_effect_cache_key(
+                refreshed_document,
+                refreshed.start_seconds,
+                refreshed.duration_seconds,
+                refreshed.scope,
+                refreshed_render,
+            );
+            if previous_prepared_key != refreshed_prepared_key {
+                impact.invalidate_prepared = true;
+            }
+
+            if generator_topology_key_changed(
+                previous_document,
+                refreshed_document,
+                previous,
+                refreshed,
+                previous_render,
+                refreshed_render,
+                analysis,
+            ) {
+                impact.invalidate_topology = true;
+            }
+        }
+        (None, Some(_)) | (Some(_), None) => {
+            impact.invalidate_prepared = true;
+            if is_generator_effect(analysis, previous) || is_generator_effect(analysis, refreshed) {
+                impact.invalidate_topology = true;
+            }
+        }
+        (None, None) => {}
+    }
+
+    impact
+}
+
+fn render_shape_changed(
+    previous: Option<&dawn_project::document::SequenceEffectRenderDocument>,
+    refreshed: Option<&dawn_project::document::SequenceEffectRenderDocument>,
+) -> bool {
+    match (previous, refreshed) {
+        (Some(previous), Some(refreshed)) => {
+            previous.script_key != refreshed.script_key
+                || previous.script_source != refreshed.script_source
+                || previous.target_pixels.len() != refreshed.target_pixels.len()
+                || previous.params.len() != refreshed.params.len()
+        }
+        (None, None) => false,
+        (None, Some(_)) | (Some(_), None) => true,
+    }
+}
+
+fn generator_topology_key_changed(
+    previous_document: &SequenceDocument,
+    refreshed_document: &SequenceDocument,
+    previous: &dawn_project::document::SequenceEffectDocument,
+    refreshed: &dawn_project::document::SequenceEffectDocument,
+    previous_render: &dawn_project::document::SequenceEffectRenderDocument,
+    refreshed_render: &dawn_project::document::SequenceEffectRenderDocument,
+    analysis: &ProjectAnalysis,
+) -> bool {
+    let Some(script) = analysis.compiled_script_for_key(&refreshed_render.script_key) else {
+        return false;
+    };
+    if script.kind != EffectScriptKind::Generator {
+        return false;
+    }
+    let topology_param_names = script
+        .generator_statements()
+        .map(|statements| {
+            let param_names = script
+                .params
+                .iter()
+                .map(|param| param.name.clone())
+                .collect::<Vec<_>>();
+            generator_topology_param_names(statements, &param_names)
+        })
+        .unwrap_or_default();
+    let previous_key = prepared_effect_cache_key_for_params(
+        previous_document,
+        previous.start_seconds,
+        previous.duration_seconds,
+        previous.scope,
+        previous_render,
+        Some(&topology_param_names),
+    );
+    let refreshed_key = prepared_effect_cache_key_for_params(
+        refreshed_document,
+        refreshed.start_seconds,
+        refreshed.duration_seconds,
+        refreshed.scope,
+        refreshed_render,
+        Some(&topology_param_names),
+    );
+    previous_key != refreshed_key
+}
+
+fn is_generator_effect(
+    analysis: &ProjectAnalysis,
+    effect: &dawn_project::document::SequenceEffectDocument,
+) -> bool {
+    effect
+        .render
+        .as_ref()
+        .and_then(|render| analysis.compiled_script_for_key(&render.script_key))
+        .is_some_and(|script| script.kind == EffectScriptKind::Generator)
+}
+
+fn changed_mark_collection_keys(
+    previous: &SequenceDocument,
+    refreshed: &SequenceDocument,
+) -> HashSet<String> {
+    let previous_collections = previous
+        .mark_collections
+        .iter()
+        .map(|collection| (collection.key.as_str(), collection))
+        .collect::<HashMap<_, _>>();
+    let refreshed_collections = refreshed
+        .mark_collections
+        .iter()
+        .map(|collection| (collection.key.as_str(), collection))
+        .collect::<HashMap<_, _>>();
+    let mut changed = HashSet::new();
+    for key in previous_collections.keys() {
+        match refreshed_collections.get(key) {
+            Some(refreshed_collection)
+                if previous_collections[key].marks_seconds
+                    == refreshed_collection.marks_seconds
+                    && previous_collections[key].name == refreshed_collection.name
+                    && previous_collections[key].color == refreshed_collection.color => {}
+            _ => {
+                changed.insert((*key).to_string());
+            }
+        }
+    }
+    for key in refreshed_collections.keys() {
+        if !previous_collections.contains_key(key) {
+            changed.insert((*key).to_string());
+        }
+    }
+    changed
+}
+
+fn effects_referencing_mark_collection(
+    previous: &SequenceDocument,
+    refreshed: &SequenceDocument,
+    collection_key: &str,
+) -> HashSet<u32> {
+    previous
+        .effects
+        .iter()
+        .chain(refreshed.effects.iter())
+        .filter(|effect| effect_references_mark_collection(effect, collection_key))
+        .map(|effect| effect.id)
+        .collect()
+}
+
+fn effect_references_mark_collection(
+    effect: &dawn_project::document::SequenceEffectDocument,
+    collection_key: &str,
+) -> bool {
+    effect_params_reference_mark_collection(&effect.params, collection_key)
+        || effect.render.as_ref().is_some_and(|render| {
+            effect_params_reference_mark_collection(&render.params, collection_key)
+        })
+}
+
+fn effect_params_reference_mark_collection(
+    params: &[SequenceEffectParamDocument],
+    collection_key: &str,
+) -> bool {
+    params.iter().any(|param| {
+        matches!(
+            &param.value,
+            EffectParam::<Resolved>::Marks { key } if key == collection_key
+        )
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -1028,6 +1452,238 @@ fn sample_prepared_effect_thumbnail_column(
     Ok(())
 }
 
+fn sequence_effect_thumbnail(
+    analysis: &ProjectAnalysis,
+    document: &SequenceDocument,
+    effect: &dawn_project::document::SequenceEffectDocument,
+    max_columns: usize,
+    max_rows: usize,
+    cache: &mut SequenceRenderCache,
+) -> Result<Option<SequenceEffectThumbnail>, String> {
+    let Some(render) = &effect.render else {
+        return Ok(None);
+    };
+    if document.frame_rate == 0 || effect.duration_seconds == 0.0 || render.target_pixels.is_empty()
+    {
+        return Ok(None);
+    }
+
+    let duration =
+        TimeSpan::try_from_seconds_f64_rounded(effect.duration_seconds).map_err(str::to_string)?;
+    if duration == TimeSpan::ZERO {
+        return Ok(None);
+    }
+
+    let source_pixel_count = render.target_pixels.len();
+    let sampled_pixel_indices = evenly_sample_indices(source_pixel_count, max_rows);
+    let cache_key = SequenceEffectThumbnailCacheKey {
+        sequence_path: document.path.clone(),
+        object_key: document.object_key.clone(),
+        effect_id: effect.id,
+        duration_nanoseconds: duration.as_nanoseconds(),
+        frame_rate: document.frame_rate,
+        scope: effect.scope,
+        script_key: render.script_key.clone(),
+        script_source: render.script_source.clone(),
+        params: prepared_effect_cache_key(
+            document,
+            effect.start_seconds,
+            effect.duration_seconds,
+            effect.scope,
+            render,
+        )
+        .params,
+        target_pixels: render
+            .target_pixels
+            .iter()
+            .map(|pixel| PreparedEffectPixelCacheKey {
+                fixture_index: pixel.fixture_index,
+                pixel_index: pixel.pixel_index,
+                pixel_count: pixel.pixel_count,
+            })
+            .collect(),
+        sampled_pixel_indices: sampled_pixel_indices.clone(),
+        max_columns,
+        max_rows,
+    };
+    if let Some(thumbnail) = cache.effect_thumbnails.get(&cache_key).cloned() {
+        return Ok(Some(thumbnail));
+    }
+
+    let Some(script) = analysis.compiled_script_for_key(&render.script_key) else {
+        return Ok(None);
+    };
+    let sampled_frame_indices = evenly_sample_indices(
+        total_preview_frames(duration, document.frame_rate),
+        max_columns,
+    );
+    let colors = if script.kind == EffectScriptKind::Generator {
+        generator_effect_thumbnail_colors(GeneratorEffectThumbnailInput {
+            analysis,
+            document,
+            effect,
+            render,
+            duration,
+            sampled_pixel_indices: &sampled_pixel_indices,
+            sampled_frame_indices: &sampled_frame_indices,
+            cache,
+        })?
+    } else {
+        sample_effect_thumbnail_colors(SampleEffectThumbnailInput {
+            script,
+            document,
+            effect,
+            render,
+            duration,
+            source_pixel_count,
+            sampled_pixel_indices: &sampled_pixel_indices,
+            sampled_frame_indices: &sampled_frame_indices,
+        })?
+    };
+    if colors.len() != sampled_frame_indices.len() * sampled_pixel_indices.len() {
+        return Ok(None);
+    }
+    let thumbnail = SequenceEffectThumbnail {
+        effect_id: effect.id,
+        duration_seconds: effect.duration_seconds,
+        source_pixel_count: source_pixel_count.min(u32::MAX as usize) as u32,
+        sampled_pixel_indices: sampled_pixel_indices
+            .iter()
+            .map(|index| (*index).min(u32::MAX as usize) as u32)
+            .collect(),
+        columns: sampled_frame_indices.len().min(u32::MAX as usize) as u32,
+        rows: sampled_pixel_indices.len().min(u32::MAX as usize) as u32,
+        colors,
+    };
+    cache.effect_thumbnails.insert(cache_key, thumbnail.clone());
+    Ok(Some(thumbnail))
+}
+
+struct SampleEffectThumbnailInput<'a> {
+    script: &'a CompiledEffect,
+    document: &'a SequenceDocument,
+    effect: &'a dawn_project::document::SequenceEffectDocument,
+    render: &'a dawn_project::document::SequenceEffectRenderDocument,
+    duration: TimeSpan,
+    source_pixel_count: usize,
+    sampled_pixel_indices: &'a [usize],
+    sampled_frame_indices: &'a [usize],
+}
+
+fn sample_effect_thumbnail_colors(
+    input: SampleEffectThumbnailInput<'_>,
+) -> Result<Vec<Color>, String> {
+    let prepared_params = match prepare_params_from_document(
+        input.script,
+        &input.render.params,
+        &input.document.mark_collections,
+        input.effect.start_seconds,
+    ) {
+        Ok(params) => params,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let mut colors =
+        Vec::with_capacity(input.sampled_frame_indices.len() * input.sampled_pixel_indices.len());
+    for target_pixel_index in input.sampled_pixel_indices {
+        let Some(pixel) = input.render.target_pixels.get(*target_pixel_index) else {
+            return Ok(Vec::new());
+        };
+        for frame_index in input.sampled_frame_indices {
+            let local_seconds =
+                local_seconds_for_frame(*frame_index, input.document.frame_rate, input.duration);
+            let progress = (local_seconds / input.effect.duration_seconds).clamp(0.0, 1.0);
+            let pixel_context = pixel_context_for_effect(
+                input.effect.scope,
+                *target_pixel_index,
+                input.source_pixel_count,
+                pixel.pixel_index,
+                pixel.pixel_count,
+            );
+            let color = match input.script.sample_prepared(
+                progress,
+                local_seconds,
+                FixtureContext {
+                    index: pixel.fixture_index,
+                },
+                pixel_context,
+                &prepared_params,
+            ) {
+                Ok(color) => color,
+                Err(_) => return Ok(Vec::new()),
+            };
+            colors.push(color);
+        }
+    }
+    Ok(colors)
+}
+
+struct GeneratorEffectThumbnailInput<'a> {
+    analysis: &'a ProjectAnalysis,
+    document: &'a SequenceDocument,
+    effect: &'a dawn_project::document::SequenceEffectDocument,
+    render: &'a dawn_project::document::SequenceEffectRenderDocument,
+    duration: TimeSpan,
+    sampled_pixel_indices: &'a [usize],
+    sampled_frame_indices: &'a [usize],
+    cache: &'a mut SequenceRenderCache,
+}
+
+fn generator_effect_thumbnail_colors(
+    input: GeneratorEffectThumbnailInput<'_>,
+) -> Result<Vec<Color>, String> {
+    let filter = [input.effect.id].into_iter().collect();
+    let (mut evaluator, _) = SequenceFrameEvaluator::new_filtered_timed_with_preparation_cache(
+        input.analysis,
+        input.document,
+        Some(&filter),
+        &mut input.cache.preparation,
+    )?;
+    let local_seconds_by_column = input
+        .sampled_frame_indices
+        .iter()
+        .map(|frame_index| {
+            local_seconds_for_frame(*frame_index, input.document.frame_rate, input.duration)
+        })
+        .collect::<Vec<_>>();
+    let sampled_pixels_by_row = input
+        .sampled_pixel_indices
+        .iter()
+        .map(|target_pixel_index| input.render.target_pixels.get(*target_pixel_index).cloned())
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| "effect thumbnail references an unavailable target pixel".to_string())?;
+    evaluator.evaluate_generator_effect_thumbnail(
+        input.effect.id,
+        &local_seconds_by_column,
+        &sampled_pixels_by_row,
+    )
+}
+
+fn total_preview_frames(duration: TimeSpan, frame_rate: u32) -> usize {
+    frame_count(duration, frame_rate).max(1)
+}
+
+fn local_seconds_for_frame(frame_index: usize, frame_rate: u32, duration: TimeSpan) -> f64 {
+    let local_nanoseconds = frame_start(frame_index as u64, frame_rate)
+        .as_nanoseconds()
+        .min(duration.as_nanoseconds().saturating_sub(1));
+    local_nanoseconds as f64 / 1_000_000_000.0
+}
+
+fn evenly_sample_indices(source_count: usize, max_count: usize) -> Vec<usize> {
+    if source_count == 0 || max_count == 0 {
+        return Vec::new();
+    }
+    let count = source_count.min(max_count);
+    if count == 1 {
+        return vec![0];
+    }
+    (0..count)
+        .map(|index| {
+            ((index as f64) * ((source_count - 1) as f64) / ((count - 1) as f64)).round() as usize
+        })
+        .collect()
+}
+
 fn prepare_sample_render(
     script: &CompiledEffect,
     params: &[SequenceEffectParamDocument],
@@ -1712,7 +2368,9 @@ mod tests {
     use dawn_project::analysis::{analyze_project, ProjectAnalysis};
     use dawn_project::document::{get_sequence_document, SequenceDocument};
     use dawn_project::fs::WorkspaceFs;
-    use dawn_project::model::{Color, Distance, SequenceEffectScope};
+    use dawn_project::model::{
+        Color, CurveValue, Distance, EffectParam, Resolved, SequenceEffectScope,
+    };
     use dawn_project::path::{utf8_path, Utf8PathBuf};
     use dawn_project::render::GeometryRenderBounds;
 
@@ -1721,7 +2379,8 @@ mod tests {
     use super::{
         build_effect_indices_by_frame, generator_targets_for_scope, pixel_context_for_effect,
         OutputFixtureFrame, OutputFrame, OutputFrameStatus, OutputSourceKind, OutputSourceMetadata,
-        PreparedEffectRender, PreparedSequenceEffect, SequenceFrameEvaluator,
+        PreparedEffectRender, PreparedSequenceEffect, SequenceChangeImpact, SequenceFrameEvaluator,
+        SequenceRenderCache,
     };
 
     fn club_rig_project_path() -> PathBuf {
@@ -1783,6 +2442,174 @@ mod tests {
         let document = get_sequence_document(&fs, sequence_path, "empty", project_path, Vec::new())
             .expect("thirty output controller sequence should load");
         (analysis, document)
+    }
+
+    fn mutate_int_param(
+        document: &mut SequenceDocument,
+        effect_id: u32,
+        param_name: &str,
+        value: u64,
+    ) {
+        let param = render_param_mut(document, effect_id, param_name);
+        match &mut param.value {
+            EffectParam::<Resolved>::Integer { value: current } => *current = value,
+            _ => panic!("expected integer param `{param_name}`"),
+        }
+    }
+
+    fn mutate_curve_point(
+        document: &mut SequenceDocument,
+        effect_id: u32,
+        param_name: &str,
+        point_index: usize,
+        value: f64,
+    ) {
+        let param = render_param_mut(document, effect_id, param_name);
+        match &mut param.value {
+            EffectParam::<Resolved>::Curve { curve } => {
+                curve.points[point_index].value = CurveValue::Float(value);
+            }
+            _ => panic!("expected curve param `{param_name}`"),
+        }
+    }
+
+    fn render_param_mut<'a>(
+        document: &'a mut SequenceDocument,
+        effect_id: u32,
+        param_name: &str,
+    ) -> &'a mut dawn_project::document::SequenceEffectParamDocument {
+        document
+            .effects
+            .iter_mut()
+            .find(|effect| effect.id == effect_id)
+            .and_then(|effect| effect.render.as_mut())
+            .and_then(|render| {
+                render
+                    .params
+                    .iter_mut()
+                    .find(|param| param.name == param_name)
+            })
+            .unwrap_or_else(|| panic!("effect `{effect_id}` param `{param_name}` should exist"))
+    }
+
+    fn generator_parent_timing(
+        timing: &super::SequenceFrameEvaluatorPreparationTiming,
+        effect_id: u32,
+    ) -> &super::GeneratorParentPreparationTiming {
+        timing
+            .generator_parents
+            .iter()
+            .find(|parent| parent.parent_effect_id == effect_id)
+            .unwrap_or_else(|| panic!("generator parent `{effect_id}` should be timed"))
+    }
+
+    fn assert_only_invalidated(impact: &SequenceChangeImpact, prepared: &[u32], topology: &[u32]) {
+        assert_eq!(
+            impact
+                .invalidated_prepared_effect_ids()
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>(),
+            prepared
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+        assert_eq!(
+            impact
+                .invalidated_topology_effect_ids()
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>(),
+            topology
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+    }
+
+    #[test]
+    fn sequence_change_impact_invalidates_only_chase_pulse_shape_prepared_entries() {
+        let (analysis, document) = thirty_output_controller_analysis_and_sequence();
+        let mut edited = document.clone();
+        mutate_curve_point(&mut edited, 3, "pulse_shape", 1, 0.25);
+
+        let impact = SequenceChangeImpact::between(&document, &edited, &analysis);
+
+        assert_only_invalidated(&impact, &[3], &[]);
+    }
+
+    #[test]
+    fn sequence_change_impact_invalidates_only_chase_topology_param_entries() {
+        let (analysis, document) = thirty_output_controller_analysis_and_sequence();
+        let mut edited = document.clone();
+        mutate_int_param(&mut edited, 8, "section_width_pixels", 7);
+
+        let impact = SequenceChangeImpact::between(&document, &edited, &analysis);
+
+        assert_only_invalidated(&impact, &[8], &[8]);
+    }
+
+    #[test]
+    fn sequence_render_cache_keeps_unrelated_generator_prepared_hits_across_local_edits() {
+        let (analysis, document) = thirty_output_controller_analysis_and_sequence();
+        let mut cache = SequenceRenderCache::default();
+        let (_, initial_timing) = cache
+            .build_evaluator(&analysis, &document)
+            .expect("initial evaluator should build");
+        assert!(
+            initial_timing.generator_parents.len() > 2,
+            "example should contain multiple generator effects"
+        );
+
+        let mut edited = document.clone();
+        mutate_curve_point(&mut edited, 3, "pulse_shape", 1, 0.25);
+        let impact = SequenceChangeImpact::between(&document, &edited, &analysis);
+        cache.apply_change_impact(&impact);
+        let (_, edited_timing) = cache
+            .build_evaluator(&analysis, &edited)
+            .expect("edited evaluator should build");
+
+        let edited_parent = generator_parent_timing(&edited_timing, 3);
+        let unrelated_parent = generator_parent_timing(&edited_timing, 8);
+        assert!(!edited_parent.prepared_cache_hit);
+        assert!(edited_parent.topology_cache_hit);
+        assert!(unrelated_parent.prepared_cache_hit);
+    }
+
+    #[test]
+    fn sequence_change_impact_invalidates_only_effects_referencing_changed_mark_collection() {
+        let (analysis, document) = thirty_output_controller_analysis_and_sequence();
+        let mut edited = document.clone();
+        edited
+            .mark_collections
+            .iter_mut()
+            .find(|collection| collection.key == "marks")
+            .expect("marks collection should exist")
+            .marks_seconds
+            .push(42.0);
+
+        let impact = SequenceChangeImpact::between(&document, &edited, &analysis);
+        assert_only_invalidated(&impact, &[1, 2, 4, 13, 14, 15], &[1, 2, 4, 13, 14, 15]);
+    }
+
+    #[test]
+    fn sequence_render_cache_deleting_effect_prunes_only_that_effect_entries() {
+        let (analysis, document) = thirty_output_controller_analysis_and_sequence();
+        let mut cache = SequenceRenderCache::default();
+        cache
+            .build_evaluator(&analysis, &document)
+            .expect("initial evaluator should build");
+        let initial_prepared_entries = cache.prepared_entry_count();
+        let initial_topology_entries = cache.topology_entry_count();
+
+        let mut edited = document.clone();
+        edited.effects.retain(|effect| effect.id != 3);
+        let impact = SequenceChangeImpact::between(&document, &edited, &analysis);
+        cache.apply_change_impact(&impact);
+
+        assert_eq!(cache.prepared_entry_count(), initial_prepared_entries - 1);
+        assert_eq!(cache.topology_entry_count(), initial_topology_entries - 1);
     }
 
     fn frame_colors(frame: &OutputFrame) -> Vec<Color> {

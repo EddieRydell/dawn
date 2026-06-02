@@ -1,30 +1,20 @@
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use dawn_app_core::app_model::AppModel;
-use dawn_app_core::output_runtime::SequencePreparationCache;
+use dawn_app_core::output_runtime::SequenceRenderCache;
 use dawn_project::path::Utf8PathBuf;
 use tauri::State;
 
 use crate::audio_runtime::AudioRuntime;
-use crate::effect_previews::{EffectPreviewCacheKey, SequenceEffectPreviewDto};
 use crate::filesystem_watcher::FilesystemWatcherRuntime;
 use crate::live_output::LiveOutputRuntime;
 use crate::preview_transport::PreviewTransportRuntime;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct SequencePreparationCacheKey {
-    pub(crate) sequence_path: String,
-    pub(crate) object_key: String,
-}
-
 pub(crate) struct AppState {
     pub(crate) model: Mutex<AppModel>,
     audio_runtime: Mutex<AudioRuntime>,
-    effect_preview_cache: Mutex<HashMap<EffectPreviewCacheKey, SequenceEffectPreviewDto>>,
-    effect_preview_preparation_cache:
-        Mutex<HashMap<SequencePreparationCacheKey, SequencePreparationCache>>,
+    effect_preview_cache: Mutex<SequenceRenderCache>,
     preview_transport: Mutex<PreviewTransportRuntime>,
     live_output: Mutex<LiveOutputRuntime>,
     filesystem_watcher: Mutex<FilesystemWatcherRuntime>,
@@ -36,8 +26,7 @@ impl Default for AppState {
         Self {
             model: Mutex::new(AppModel::default()),
             audio_runtime: Mutex::new(AudioRuntime::default()),
-            effect_preview_cache: Mutex::new(HashMap::new()),
-            effect_preview_preparation_cache: Mutex::new(HashMap::new()),
+            effect_preview_cache: Mutex::new(SequenceRenderCache::default()),
             preview_transport: Mutex::new(PreviewTransportRuntime::default()),
             live_output: Mutex::new(LiveOutputRuntime::default()),
             filesystem_watcher: Mutex::new(FilesystemWatcherRuntime::default()),
@@ -78,20 +67,11 @@ pub(crate) fn lock_audio_runtime<'a>(
 
 pub(crate) fn lock_effect_preview_cache<'a>(
     state: &'a State<'_, AppState>,
-) -> CommandResult<MutexGuard<'a, HashMap<EffectPreviewCacheKey, SequenceEffectPreviewDto>>> {
+) -> CommandResult<MutexGuard<'a, SequenceRenderCache>> {
     state
         .effect_preview_cache
         .lock()
         .map_err(|_| "effect preview cache lock is poisoned".to_string())
-}
-
-pub(crate) fn lock_effect_preview_preparation_cache<'a>(
-    state: &'a State<'_, AppState>,
-) -> CommandResult<MutexGuard<'a, HashMap<SequencePreparationCacheKey, SequencePreparationCache>>> {
-    state
-        .effect_preview_preparation_cache
-        .lock()
-        .map_err(|_| "effect preview preparation cache lock is poisoned".to_string())
 }
 
 pub(crate) fn lock_preview_transport<'a>(
