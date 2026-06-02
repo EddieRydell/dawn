@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 use dawn_app_core::actions::AppAction;
 use dawn_app_core::app_model::ActiveGuiDocument;
@@ -15,7 +16,9 @@ use crate::app_runtime::{
     dispatch, emit_model_snapshot, sync_active_audio_load, update_preview_from_audio_status,
     valid_sequence_audio,
 };
-use crate::effect_previews::{preview_for_effect, SequenceEffectPreviewBatchDto};
+use crate::effect_previews::{
+    preview_for_effect, EffectPreviewRequest, SequenceEffectPreviewBatchDto,
+};
 use crate::new_project::{create_starter_project, STARTER_SEQUENCE_PATH};
 use crate::preview::{
     open_or_focus_preview_window, preview_pixel_count, preview_scene_from_frame, PreviewSceneDto,
@@ -162,7 +165,16 @@ fn apply_sequence_gui_edit(
     state: State<'_, AppState>,
     edit: SequenceGuiEditDto,
 ) -> CommandResult<AppSnapshotDto> {
-    dispatch(&app, &state, AppAction::ApplySequenceGuiEdit(edit))
+    let started = Instant::now();
+    let label = sequence_gui_edit_log_label(&edit);
+    let result = dispatch(&app, &state, AppAction::ApplySequenceGuiEdit(edit));
+    eprintln!(
+        "[sequence-edit] apply_sequence_gui_edit {} result={} total_ms={:.3}",
+        label,
+        if result.is_ok() { "ok" } else { "error" },
+        elapsed_ms(started),
+    );
+    result
 }
 
 #[specta::specta]
@@ -325,41 +337,72 @@ fn get_sequence_effect_previews(
     object_key: String,
     effect_ids: Vec<u32>,
 ) -> CommandResult<SequenceEffectPreviewBatchDto> {
+    let total_started = Instant::now();
+    let requested_count = effect_ids.len();
+    eprintln!(
+        "[effect-preview] command start path={} object={} requested_count={} ids={:?}",
+        path, object_key, requested_count, effect_ids,
+    );
+    let model_lock_started = Instant::now();
     let model = lock_model(&state)?;
+    let model_lock_ms = elapsed_ms(model_lock_started);
+    let clone_analysis_started = Instant::now();
     let analysis = model
         .analysis
         .as_ref()
         .ok_or_else(|| "project analysis is not available".to_string())?
         .clone();
+    let clone_analysis_ms = elapsed_ms(clone_analysis_started);
+    let document_started = Instant::now();
     let document = model.workspace.sequence_document(
         project_path(path),
         &object_key,
         model.editors.dirty_overlays(),
     )?;
+    let document_ms = elapsed_ms(document_started);
     drop(model);
 
     let requested = effect_ids
         .into_iter()
         .collect::<std::collections::HashSet<_>>();
     let mut previews = Vec::new();
+    let preview_loop_started = Instant::now();
     for effect in document
         .effects
         .iter()
         .filter(|effect| requested.contains(&effect.id))
     {
-        if let Some(preview) = preview_for_effect(
-            &state,
-            &analysis,
-            &document.path,
-            &document.object_key,
-            document.frame_rate,
-            &document.mark_collections,
-            &document,
+        let effect_started = Instant::now();
+        if let Some(preview) = preview_for_effect(EffectPreviewRequest {
+            state: &state,
+            analysis: &analysis,
+            sequence_path: &document.path,
+            object_key: &document.object_key,
+            frame_rate: document.frame_rate,
+            mark_collections: &document.mark_collections,
+            document: &document,
             effect,
-        )? {
+        })? {
             previews.push(preview);
         }
+        eprintln!(
+            "[effect-preview] command effect done effect={} elapsed_ms={:.3}",
+            effect.id,
+            elapsed_ms(effect_started),
+        );
     }
+    let preview_loop_ms = elapsed_ms(preview_loop_started);
+    eprintln!(
+        "[effect-preview] command done object={} requested_count={} returned_count={} model_lock_ms={:.3} clone_analysis_ms={:.3} document_ms={:.3} preview_loop_ms={:.3} total_ms={:.3}",
+        document.object_key,
+        requested_count,
+        previews.len(),
+        model_lock_ms,
+        clone_analysis_ms,
+        document_ms,
+        preview_loop_ms,
+        elapsed_ms(total_started),
+    );
 
     Ok(SequenceEffectPreviewBatchDto { previews })
 }
@@ -616,13 +659,9 @@ fn preview_seek(
         (valid_sequence_audio(&snapshot), snapshot.is_playing)
     };
     let Some(audio) = audio else {
-        return dispatch(
-            &app,
-            &state,
-            AppAction::PreviewSeek(position_seconds.into()),
-        );
+        return dispatch(&app, &state, AppAction::PreviewSeek(position_seconds));
     };
-    let clock = lock_audio_runtime(&state)?.seek(&audio, position_seconds.into(), playing)?;
+    let clock = lock_audio_runtime(&state)?.seek(&audio, position_seconds, playing)?;
     let mut model = lock_model(&state)?;
     let analysis = model.analysis.clone();
     model
@@ -731,4 +770,70 @@ pub(crate) fn register_commands(
         dispose_preview_transport,
         get_preview_transport_mode
     ])
+}
+
+fn sequence_gui_edit_log_label(edit: &SequenceGuiEditDto) -> String {
+    match edit {
+        SequenceGuiEditDto::UpdateEffectParam { id, name, value } => {
+            format!(
+                "type=updateEffectParam id={id} name={name} value_type={}",
+                param_value_type(value)
+            )
+        }
+        SequenceGuiEditDto::LinkEffectCurveParam { id, name, .. } => {
+            format!("type=linkEffectCurveParam id={id} name={name}")
+        }
+        SequenceGuiEditDto::UnlinkEffectCurveParam { id, name } => {
+            format!("type=unlinkEffectCurveParam id={id} name={name}")
+        }
+        SequenceGuiEditDto::MoveEffect { id, .. } => format!("type=moveEffect id={id}"),
+        SequenceGuiEditDto::ResizeEffect { id, .. } => format!("type=resizeEffect id={id}"),
+        SequenceGuiEditDto::ChangeEffectScript { id, .. } => {
+            format!("type=changeEffectScript id={id}")
+        }
+        SequenceGuiEditDto::DeleteEffect { id } => format!("type=deleteEffect id={id}"),
+        SequenceGuiEditDto::RetargetEffect { id, .. } => format!("type=retargetEffect id={id}"),
+        SequenceGuiEditDto::SetEffectScope { id, .. } => format!("type=setEffectScope id={id}"),
+        SequenceGuiEditDto::AddEffect { .. } => "type=addEffect".to_string(),
+        SequenceGuiEditDto::SetAudio { .. } => "type=setAudio".to_string(),
+        SequenceGuiEditDto::CreateMarkCollection { key, .. } => {
+            format!("type=createMarkCollection key={key}")
+        }
+        SequenceGuiEditDto::RenameMarkCollection { key, .. } => {
+            format!("type=renameMarkCollection key={key}")
+        }
+        SequenceGuiEditDto::DeleteMarkCollection { key } => {
+            format!("type=deleteMarkCollection key={key}")
+        }
+        SequenceGuiEditDto::SetMarkCollectionColor { key, .. } => {
+            format!("type=setMarkCollectionColor key={key}")
+        }
+        SequenceGuiEditDto::AddMark { collection_key, .. } => {
+            format!("type=addMark collection={collection_key}")
+        }
+        SequenceGuiEditDto::MoveMark { collection_key, .. } => {
+            format!("type=moveMark collection={collection_key}")
+        }
+        SequenceGuiEditDto::DeleteMark { collection_key, .. } => {
+            format!("type=deleteMark collection={collection_key}")
+        }
+    }
+}
+
+fn param_value_type(value: &dawn_app_core::dto::SequenceEffectParamValueDto) -> &'static str {
+    match value {
+        dawn_app_core::dto::SequenceEffectParamValueDto::Int { .. } => "int",
+        dawn_app_core::dto::SequenceEffectParamValueDto::Float { .. } => "float",
+        dawn_app_core::dto::SequenceEffectParamValueDto::Bool { .. } => "bool",
+        dawn_app_core::dto::SequenceEffectParamValueDto::Enum { .. } => "enum",
+        dawn_app_core::dto::SequenceEffectParamValueDto::Flags { .. } => "flags",
+        dawn_app_core::dto::SequenceEffectParamValueDto::Color { .. } => "color",
+        dawn_app_core::dto::SequenceEffectParamValueDto::FloatCurve { .. } => "floatCurve",
+        dawn_app_core::dto::SequenceEffectParamValueDto::ColorCurve { .. } => "colorCurve",
+        dawn_app_core::dto::SequenceEffectParamValueDto::Marks { .. } => "marks",
+    }
+}
+
+fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
 }

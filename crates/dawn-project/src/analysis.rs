@@ -1551,10 +1551,11 @@ impl SymbolResolver for AnalysisImportResolver<'_> {
             });
         }
 
+        let Some(alias) = reference.alias() else {
+            unreachable!("unaliased references are resolved in the local-file branch");
+        };
         let mut matches = Vec::new();
-        for import_path in
-            self.import_paths_for_alias(source_path, reference.alias().unwrap(), reference)?
-        {
+        for import_path in self.import_paths_for_alias(source_path, alias, reference)? {
             let analyzed = self
                 .files
                 .get(&import_path)
@@ -1972,8 +1973,8 @@ fn locate_effect_id(text: &str, effect_id: u32) -> Option<TextRange> {
 fn locate_effect_params_block(text: &str, effect_id: u32) -> Option<TextRange> {
     let (start, end) = find_effect_block(text, effect_id)?;
     let lines = text.lines().collect::<Vec<_>>();
-    for line_index in start..end {
-        if field_name(lines[line_index]) == Some("params") {
+    for (line_index, line) in lines.iter().enumerate().take(end).skip(start) {
+        if field_name(line) == Some("params") {
             return line_value_range(text, line_index, "params", None);
         }
     }
@@ -1994,8 +1995,8 @@ fn locate_effect_param_field(
 ) -> Option<TextRange> {
     let (start, end) = find_effect_param_block(text, effect_id, param_name)?;
     let lines = text.lines().collect::<Vec<_>>();
-    for line_index in start..end {
-        if field_name(lines[line_index]) == Some(field) {
+    for (line_index, line) in lines.iter().enumerate().take(end).skip(start) {
+        if field_name(line) == Some(field) {
             return line_value_range(text, line_index, field, value);
         }
     }

@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 use dawn_project::analysis::{ProjectAnalysis, ProjectDiagnostic};
 use dawn_project::document::{
@@ -370,9 +371,22 @@ impl AppModel {
                 }
             }
             AppAction::ApplySequenceGuiEdit(edit) => {
+                let label = sequence_gui_edit_log_label(&edit);
+                let action_started = Instant::now();
+                let edit_started = Instant::now();
                 self.apply_sequence_gui_edit(edit)?;
+                let edit_ms = elapsed_ms(edit_started);
+                let autosave_started = Instant::now();
                 self.flush_autosave()?;
+                let autosave_ms = elapsed_ms(autosave_started);
                 self.status = "Autosaved".to_string();
+                eprintln!(
+                    "[sequence-edit-core] dispatch applySequenceGuiEdit {} edit_ms={:.3} autosave_ms={:.3} total_ms={:.3}",
+                    label,
+                    edit_ms,
+                    autosave_ms,
+                    elapsed_ms(action_started),
+                );
             }
             AppAction::ApplyLayoutGuiEdit(edit) => {
                 self.apply_layout_gui_edit(edit)?;
@@ -580,9 +594,25 @@ impl AppModel {
     }
 
     pub fn refresh_analysis(&mut self) -> Result<(), String> {
-        let analysis = self.workspace.analyze(self.editors.dirty_overlays())?;
+        let started = Instant::now();
+        let overlays_started = Instant::now();
+        let overlays = self.editors.dirty_overlays();
+        let overlays_ms = elapsed_ms(overlays_started);
+        let overlay_count = overlays.len();
+        let analyze_started = Instant::now();
+        let analysis = self.workspace.analyze(overlays)?;
+        let analyze_ms = elapsed_ms(analyze_started);
+        let assign_started = Instant::now();
         self.diagnostics = analysis.diagnostics.clone();
         self.analysis = Some(analysis);
+        eprintln!(
+            "[analysis] refresh overlay_count={} overlays_ms={:.3} analyze_ms={:.3} assign_ms={:.3} total_ms={:.3}",
+            overlay_count,
+            overlays_ms,
+            analyze_ms,
+            elapsed_ms(assign_started),
+            elapsed_ms(started),
+        );
         Ok(())
     }
 
@@ -599,18 +629,36 @@ impl AppModel {
     }
 
     pub fn flush_autosave(&mut self) -> Result<(), String> {
+        let started = Instant::now();
+        let collect_started = Instant::now();
         let dirty_buffers = self.editors.dirty_autosave_buffers();
+        let collect_ms = elapsed_ms(collect_started);
         let had_dirty_buffers = !dirty_buffers.is_empty();
+        let dirty_count = dirty_buffers.len();
+        let mut write_ms = 0.0;
         for buffer in dirty_buffers {
+            let write_started = Instant::now();
             let version = self
                 .workspace
                 .write_text_file_with_version(buffer.path.clone(), &buffer.text)?;
+            write_ms += elapsed_ms(write_started);
             self.editors.record_saved_version(&buffer.path, version);
         }
+        let mut refresh_ms = 0.0;
         if had_dirty_buffers {
+            let refresh_started = Instant::now();
             self.refresh_analysis()?;
             self.sync_preview_source();
+            refresh_ms = elapsed_ms(refresh_started);
         }
+        eprintln!(
+            "[autosave] flush dirty_count={} collect_ms={:.3} write_ms={:.3} refresh_sync_ms={:.3} total_ms={:.3}",
+            dirty_count,
+            collect_ms,
+            write_ms,
+            refresh_ms,
+            elapsed_ms(started),
+        );
         Ok(())
     }
 
@@ -791,16 +839,26 @@ impl AppModel {
     }
 
     fn apply_sequence_gui_edit(&mut self, edit: SequenceGuiEditDto) -> Result<(), String> {
+        let total_started = Instant::now();
+        let label = sequence_gui_edit_log_label(&edit);
+        let setup_started = Instant::now();
         self.ensure_active_buffer_not_conflicted()?;
         let path = self.active_path_for_gui_edit()?;
+        let dirty_started = Instant::now();
+        let descriptor_overlays = self.editors.dirty_overlays();
+        let descriptor_overlays_ms = elapsed_ms(dirty_started);
+        let inspect_started = Instant::now();
         let descriptor = self
             .workspace
-            .inspect_document(path.clone(), self.editors.dirty_overlays())?;
+            .inspect_document(path.clone(), descriptor_overlays)?;
+        let inspect_ms = elapsed_ms(inspect_started);
         let object_key = descriptor
             .default_object_keys
             .get(&DocumentViewId::Sequence)
             .ok_or_else(|| "active document is not a sequence".to_string())?
             .clone();
+        let setup_ms = elapsed_ms(setup_started);
+        let convert_started = Instant::now();
         let edit = match edit {
             SequenceGuiEditDto::SetAudio { import } => SequenceDocumentEdit::SetAudio { import },
             SequenceGuiEditDto::AddEffect {
@@ -813,7 +871,7 @@ impl AppModel {
                 script_path,
                 target: target.into(),
                 scope: scope.into(),
-                start_seconds: start_seconds.into(),
+                start_seconds,
                 mark_collection_key,
             },
             SequenceGuiEditDto::MoveEffect {
@@ -822,7 +880,7 @@ impl AppModel {
                 target,
             } => SequenceDocumentEdit::MoveEffect {
                 id,
-                start_seconds: start_seconds.into(),
+                start_seconds,
                 target: target.map(Into::into),
             },
             SequenceGuiEditDto::ResizeEffect {
@@ -831,8 +889,8 @@ impl AppModel {
                 duration_seconds,
             } => SequenceDocumentEdit::ResizeEffect {
                 id,
-                start_seconds: start_seconds.into(),
-                duration_seconds: duration_seconds.into(),
+                start_seconds,
+                duration_seconds,
             },
             SequenceGuiEditDto::ChangeEffectScript { id, script_path } => {
                 SequenceDocumentEdit::ChangeEffectScript { id, script_path }
@@ -888,7 +946,7 @@ impl AppModel {
                 time_seconds,
             } => SequenceDocumentEdit::AddMark {
                 collection_key,
-                time_seconds: time_seconds.into(),
+                time_seconds,
             },
             SequenceGuiEditDto::MoveMark {
                 collection_key,
@@ -897,7 +955,7 @@ impl AppModel {
             } => SequenceDocumentEdit::MoveMark {
                 collection_key,
                 index: index as usize,
-                time_seconds: time_seconds.into(),
+                time_seconds,
             },
             SequenceGuiEditDto::DeleteMark {
                 collection_key,
@@ -907,20 +965,46 @@ impl AppModel {
                 index: index as usize,
             },
         };
+        let convert_ms = elapsed_ms(convert_started);
         let analysis = self
             .analysis
             .as_ref()
             .ok_or_else(|| "project analysis is not available".to_string())?;
+        let base_started = Instant::now();
         let base_content = self.active_buffer_text()?;
+        let base_ms = elapsed_ms(base_started);
+        let overlays_started = Instant::now();
+        let edit_overlays = self.editors.dirty_overlays();
+        let edit_overlays_ms = elapsed_ms(overlays_started);
+        let apply_started = Instant::now();
         let outcome = self.workspace.apply_sequence_edit(
             path,
             &object_key,
             edit,
             base_content,
-            self.editors.dirty_overlays(),
+            edit_overlays,
             analysis,
         )?;
-        self.commit_active_gui_text(outcome.serialized_content)
+        let apply_ms = elapsed_ms(apply_started);
+        let serialized_len = outcome.serialized_content.len();
+        let commit_started = Instant::now();
+        let result = self.commit_active_gui_text(outcome.serialized_content);
+        let commit_ms = elapsed_ms(commit_started);
+        eprintln!(
+            "[sequence-edit-core] apply_sequence_gui_edit {} descriptor_overlays_ms={:.3} inspect_ms={:.3} setup_ms={:.3} convert_ms={:.3} base_ms={:.3} edit_overlays_ms={:.3} apply_sequence_edit_ms={:.3} serialized_len={} commit_refresh_ms={:.3} total_ms={:.3}",
+            label,
+            descriptor_overlays_ms,
+            inspect_ms,
+            setup_ms,
+            convert_ms,
+            base_ms,
+            edit_overlays_ms,
+            apply_ms,
+            serialized_len,
+            commit_ms,
+            elapsed_ms(total_started),
+        );
+        result
     }
 
     pub fn apply_sequence_selection_edit(
@@ -1283,8 +1367,19 @@ impl AppModel {
     }
 
     fn commit_active_gui_text(&mut self, text: String) -> Result<(), String> {
+        let started = Instant::now();
+        let replace_started = Instant::now();
         self.editors.replace_active_text_from_edit(text);
+        let replace_ms = elapsed_ms(replace_started);
+        let refresh_started = Instant::now();
         self.refresh_analysis_after_memory_edit();
+        let refresh_ms = elapsed_ms(refresh_started);
+        eprintln!(
+            "[sequence-edit-core] commit_active_gui_text replace_ms={:.3} refresh_sync_ms={:.3} total_ms={:.3}",
+            replace_ms,
+            refresh_ms,
+            elapsed_ms(started),
+        );
         Ok(())
     }
 
@@ -1322,6 +1417,72 @@ impl AppModel {
             document,
         ))
     }
+}
+
+fn sequence_gui_edit_log_label(edit: &SequenceGuiEditDto) -> String {
+    match edit {
+        SequenceGuiEditDto::UpdateEffectParam { id, name, value } => {
+            format!(
+                "type=updateEffectParam id={id} name={name} value_type={}",
+                param_value_type(value)
+            )
+        }
+        SequenceGuiEditDto::LinkEffectCurveParam { id, name, .. } => {
+            format!("type=linkEffectCurveParam id={id} name={name}")
+        }
+        SequenceGuiEditDto::UnlinkEffectCurveParam { id, name } => {
+            format!("type=unlinkEffectCurveParam id={id} name={name}")
+        }
+        SequenceGuiEditDto::MoveEffect { id, .. } => format!("type=moveEffect id={id}"),
+        SequenceGuiEditDto::ResizeEffect { id, .. } => format!("type=resizeEffect id={id}"),
+        SequenceGuiEditDto::ChangeEffectScript { id, .. } => {
+            format!("type=changeEffectScript id={id}")
+        }
+        SequenceGuiEditDto::DeleteEffect { id } => format!("type=deleteEffect id={id}"),
+        SequenceGuiEditDto::RetargetEffect { id, .. } => format!("type=retargetEffect id={id}"),
+        SequenceGuiEditDto::SetEffectScope { id, .. } => format!("type=setEffectScope id={id}"),
+        SequenceGuiEditDto::AddEffect { .. } => "type=addEffect".to_string(),
+        SequenceGuiEditDto::SetAudio { .. } => "type=setAudio".to_string(),
+        SequenceGuiEditDto::CreateMarkCollection { key, .. } => {
+            format!("type=createMarkCollection key={key}")
+        }
+        SequenceGuiEditDto::RenameMarkCollection { key, .. } => {
+            format!("type=renameMarkCollection key={key}")
+        }
+        SequenceGuiEditDto::DeleteMarkCollection { key } => {
+            format!("type=deleteMarkCollection key={key}")
+        }
+        SequenceGuiEditDto::SetMarkCollectionColor { key, .. } => {
+            format!("type=setMarkCollectionColor key={key}")
+        }
+        SequenceGuiEditDto::AddMark { collection_key, .. } => {
+            format!("type=addMark collection={collection_key}")
+        }
+        SequenceGuiEditDto::MoveMark { collection_key, .. } => {
+            format!("type=moveMark collection={collection_key}")
+        }
+        SequenceGuiEditDto::DeleteMark { collection_key, .. } => {
+            format!("type=deleteMark collection={collection_key}")
+        }
+    }
+}
+
+fn param_value_type(value: &crate::dto::SequenceEffectParamValueDto) -> &'static str {
+    match value {
+        crate::dto::SequenceEffectParamValueDto::Int { .. } => "int",
+        crate::dto::SequenceEffectParamValueDto::Float { .. } => "float",
+        crate::dto::SequenceEffectParamValueDto::Bool { .. } => "bool",
+        crate::dto::SequenceEffectParamValueDto::Color { .. } => "color",
+        crate::dto::SequenceEffectParamValueDto::Enum { .. } => "enum",
+        crate::dto::SequenceEffectParamValueDto::Flags { .. } => "flags",
+        crate::dto::SequenceEffectParamValueDto::FloatCurve { .. } => "floatCurve",
+        crate::dto::SequenceEffectParamValueDto::ColorCurve { .. } => "colorCurve",
+        crate::dto::SequenceEffectParamValueDto::Marks { .. } => "marks",
+    }
+}
+
+fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
 }
 
 fn buffer_matches_any_path(path: &Utf8PathBuf, changed_paths: &[Utf8PathBuf]) -> bool {

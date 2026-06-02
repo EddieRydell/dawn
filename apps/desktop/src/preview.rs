@@ -497,7 +497,7 @@ impl From<&PreviewSnapshot> for PreviewEventIdentity {
                 .map(|audio| audio.resolved_path.clone()),
             audio_exists: snapshot.audio.as_ref().is_some_and(|audio| audio.exists),
             clock_source: snapshot.clock_source.clone(),
-            audio_playback_status: snapshot.audio_playback_status.clone(),
+            audio_playback_status: snapshot.audio_playback_status,
             status: snapshot.status.clone(),
         }
     }

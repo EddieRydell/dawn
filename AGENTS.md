@@ -26,3 +26,4 @@ Do not start or leave a frontend dev server running when finishing work. The use
 When planning, don't hesitate to ask the user relevant questions.
 When presenting a plan for approval from the user, list files that will be affected by the plan.
 Run `pnpm check` for linting, tests, and other checks after implementing a plan.
+Do not use .env files or environment variables in this codebase.

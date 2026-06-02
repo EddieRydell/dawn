@@ -53,8 +53,6 @@ impl<'a> TypeChecker<'a> {
             EffectEntrypoint::Generator(_) => EffectScriptKind::Generator,
         };
         for context in BuiltinContext::ALL {
-            let context =
-                BuiltinContext::from_name(context.name()).expect("builtin context names are valid");
             scopes.insert(context.name().to_string(), readonly(context.value_type()));
         }
         for constant in BuiltinConstant::ALL {

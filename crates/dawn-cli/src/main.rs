@@ -108,10 +108,10 @@ fn run() -> Result<ExitCode, String> {
             json,
             synthetic_active_effects,
             no_effect_breakdown,
-        } => bench_effect(
-            &project_path_or_directory,
-            sequence.as_deref(),
-            time,
+        } => bench_effect(BenchEffectOptions {
+            path: &project_path_or_directory,
+            sequence: sequence.as_deref(),
+            time_seconds: time,
             suite,
             case_kind,
             matrix,
@@ -120,7 +120,7 @@ fn run() -> Result<ExitCode, String> {
             json,
             synthetic_active_effects,
             no_effect_breakdown,
-        ),
+        }),
         Command::ExportFseq {
             project_path_or_directory,
             output,
@@ -187,9 +187,9 @@ fn analyze(path: &Path, json: bool) -> Result<ExitCode, String> {
     }
 }
 
-fn bench_effect(
-    path: &Path,
-    sequence: Option<&str>,
+struct BenchEffectOptions<'a> {
+    path: &'a Path,
+    sequence: Option<&'a str>,
     time_seconds: Option<f64>,
     suite: BenchSuite,
     case_kind: BenchCaseKindFilter,
@@ -199,8 +199,10 @@ fn bench_effect(
     json: bool,
     synthetic_active_effects: Option<usize>,
     no_effect_breakdown: bool,
-) -> Result<ExitCode, String> {
-    let time_seconds = match (suite, time_seconds) {
+}
+
+fn bench_effect(options: BenchEffectOptions<'_>) -> Result<ExitCode, String> {
+    let time_seconds = match (options.suite, options.time_seconds) {
         (BenchSuite::Project, Some(time_seconds)) => time_seconds,
         (BenchSuite::Project, None) => {
             return Err("--time is required for --suite project".to_string())
@@ -211,13 +213,13 @@ fn bench_effect(
     if !time_seconds.is_finite() {
         return Err("time must be finite".to_string());
     }
-    if iterations == 0 {
+    if options.iterations == 0 {
         return Err("iterations must be greater than zero".to_string());
     }
 
-    let input = project_input(path)?;
+    let input = project_input(options.path)?;
     let fs = WorkspaceFs::open(&input.root).map_err(|error| error.to_string())?;
-    let overlays = match suite {
+    let overlays = match options.suite {
         BenchSuite::Project => Vec::new(),
         BenchSuite::Synthetic => synthetic_effect_overlays(&fs, &input)?,
     };
@@ -227,17 +229,17 @@ fn bench_effect(
         return Ok(ExitCode::from(1));
     }
 
-    if suite == BenchSuite::Synthetic {
+    if options.suite == BenchSuite::Synthetic {
         let report = SyntheticSuiteReport::run(
             &input,
             &analysis,
             time_seconds,
-            iterations,
-            warmup,
-            case_kind,
-            matrix,
+            options.iterations,
+            options.warmup,
+            options.case_kind,
+            options.matrix,
         )?;
-        if json {
+        if options.json {
             serde_json::to_writer_pretty(std::io::stdout(), &report)
                 .map_err(|error| error.to_string())?;
             println!();
@@ -247,7 +249,7 @@ fn bench_effect(
         return Ok(ExitCode::SUCCESS);
     }
 
-    let sequence_target = sequence_target(&analysis, sequence)?;
+    let sequence_target = sequence_target(&analysis, options.sequence)?;
     let document = get_sequence_document(
         &fs,
         sequence_target.path,
@@ -256,24 +258,24 @@ fn bench_effect(
         Vec::new(),
     )?;
 
-    let document = if let Some(active_count) = synthetic_active_effects {
+    let document = if let Some(active_count) = options.synthetic_active_effects {
         synthetic_active_effect_document(&document, time_seconds, active_count)?
     } else {
         document
     };
 
-    let report = EffectBenchReport::run(
-        &input,
-        &analysis,
-        &document,
+    let report = EffectBenchReport::run(EffectBenchRunInput {
+        input: &input,
+        analysis: &analysis,
+        document: &document,
         time_seconds,
-        iterations,
-        warmup,
-        synthetic_active_effects,
-        no_effect_breakdown,
-    );
+        iterations: options.iterations,
+        warmup: options.warmup,
+        synthetic_active_effects: options.synthetic_active_effects,
+        no_effect_breakdown: options.no_effect_breakdown,
+    });
 
-    if json {
+    if options.json {
         serde_json::to_writer_pretty(std::io::stdout(), &report)
             .map_err(|error| error.to_string())?;
         println!();
@@ -518,37 +520,29 @@ struct EffectBenchReport {
 }
 
 impl EffectBenchReport {
-    fn run(
-        input: &ProjectInput,
-        analysis: &ProjectAnalysis,
-        document: &SequenceDocument,
-        time_seconds: f64,
-        iterations: usize,
-        warmup: usize,
-        synthetic_active_effects: Option<usize>,
-        no_effect_breakdown: bool,
-    ) -> Self {
-        let mut evaluator = SequenceFrameEvaluator::new(analysis, document)
+    fn run(input: EffectBenchRunInput<'_>) -> Self {
+        let mut evaluator = SequenceFrameEvaluator::new(input.analysis, input.document)
             .expect("benchmark analysis must resolve before rendering");
-        for generation in 0..warmup {
-            black_box(evaluator.evaluate(time_seconds, generation as u64));
+        for generation in 0..input.warmup {
+            black_box(evaluator.evaluate(input.time_seconds, generation as u64));
         }
 
-        let mut whole_frame_samples = Vec::with_capacity(iterations);
+        let mut whole_frame_samples = Vec::with_capacity(input.iterations);
         let mut last_evaluation_timing = None;
-        for generation in 0..iterations {
+        for generation in 0..input.iterations {
             let start = Instant::now();
             let (frame, evaluation_timing) =
-                evaluator.evaluate_timed(time_seconds, generation as u64);
+                evaluator.evaluate_timed(input.time_seconds, generation as u64);
             black_box(frame);
             last_evaluation_timing = Some(evaluation_timing);
             whole_frame_samples.push(start.elapsed());
         }
 
-        let active_effects = document
+        let active_effects = input
+            .document
             .effects
             .iter()
-            .filter(|effect| effect_is_active(effect, time_seconds))
+            .filter(|effect| effect_is_active(effect, input.time_seconds))
             .collect::<Vec<_>>();
         let active_effect_count = active_effects.len();
         let target_pixel_samples_per_frame = active_effects
@@ -556,28 +550,35 @@ impl EffectBenchReport {
             .filter_map(|effect| effect.render.as_ref())
             .map(|render| render.target_pixels.len())
             .sum::<usize>();
-        let bytecode = BytecodeAggregateReport::from_active_effects(analysis, &active_effects);
-        let effects = if no_effect_breakdown {
+        let bytecode =
+            BytecodeAggregateReport::from_active_effects(input.analysis, &active_effects);
+        let effects = if input.no_effect_breakdown {
             Vec::new()
         } else {
             active_effects
                 .iter()
                 .filter_map(|effect| {
-                    EffectBenchItemReport::run(analysis, document, effect, time_seconds, iterations)
+                    EffectBenchItemReport::run(
+                        input.analysis,
+                        input.document,
+                        effect,
+                        input.time_seconds,
+                        input.iterations,
+                    )
                 })
                 .collect::<Vec<_>>()
         };
 
         Self {
-            project_path: display_path(&canonicalize_path(&input.project_path)),
-            project_root: display_path(&canonicalize_path(&input.root)),
-            sequence: document.object_key.clone(),
-            time_seconds,
-            iterations,
-            warmup,
-            synthetic_active_effects,
-            no_effect_breakdown,
-            total_effects: document.effects.len(),
+            project_path: display_path(&canonicalize_path(&input.input.project_path)),
+            project_root: display_path(&canonicalize_path(&input.input.root)),
+            sequence: input.document.object_key.clone(),
+            time_seconds: input.time_seconds,
+            iterations: input.iterations,
+            warmup: input.warmup,
+            synthetic_active_effects: input.synthetic_active_effects,
+            no_effect_breakdown: input.no_effect_breakdown,
+            total_effects: input.document.effects.len(),
             prepared_effects: evaluator.prepared_effect_count(),
             active_effect_count,
             rendered_active_prepared_effects: last_evaluation_timing
@@ -592,6 +593,17 @@ impl EffectBenchReport {
             effects,
         }
     }
+}
+
+struct EffectBenchRunInput<'a> {
+    input: &'a ProjectInput,
+    analysis: &'a ProjectAnalysis,
+    document: &'a SequenceDocument,
+    time_seconds: f64,
+    iterations: usize,
+    warmup: usize,
+    synthetic_active_effects: Option<usize>,
+    no_effect_breakdown: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -772,6 +784,8 @@ struct GeneratorParentTimingReport {
     target_pixels: usize,
     emitted_children: usize,
     prepared_children: usize,
+    prepared_cache_hit: bool,
+    topology_cache_hit: bool,
     total_prepare_ms: f64,
 }
 
@@ -785,6 +799,8 @@ impl GeneratorParentTimingReport {
             target_pixels: timing.target_pixels,
             emitted_children: timing.emitted_children,
             prepared_children: timing.prepared_children,
+            prepared_cache_hit: timing.prepared_cache_hit,
+            topology_cache_hit: timing.topology_cache_hit,
             total_prepare_ms: timing.total_prepare_ms,
         }
     }
@@ -1317,7 +1333,7 @@ effect SyntheticMarkDenseEmission {
 }
 "##;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BytecodeAggregateReport {
     instruction_count: usize,
@@ -1359,24 +1375,6 @@ impl BytecodeAggregateReport {
                 aggregate.total_slots += stats.total_slots;
                 aggregate
             })
-    }
-}
-
-impl Default for BytecodeAggregateReport {
-    fn default() -> Self {
-        Self {
-            instruction_count: 0,
-            constant_count: 0,
-            param_slots: 0,
-            float_slots: 0,
-            int_slots: 0,
-            bool_slots: 0,
-            color_slots: 0,
-            ref_slots: 0,
-            fixture_slots: 0,
-            pixel_slots: 0,
-            total_slots: 0,
-        }
     }
 }
 

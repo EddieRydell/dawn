@@ -214,7 +214,7 @@ mod windows_platform {
                 let _ = write_slice(
                     bytes,
                     FRAME_OFFSET_CURRENT_TIME,
-                    &(frame.time_seconds as f64).to_le_bytes(),
+                    &frame.time_seconds.to_le_bytes(),
                 );
                 let _ = write_slice(bytes, FRAME_OFFSET_PLAYING, &[u8::from(playing)]);
                 let _ = write_slice(

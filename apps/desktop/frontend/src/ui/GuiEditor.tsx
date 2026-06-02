@@ -721,11 +721,26 @@ function SequenceCanvas({
     }
 
     let cancelled = false;
+    const requestStarted = performance.now();
+    console.debug(
+      `[effect-preview-ui] request start object=${document.objectKey} requested_count=${missingEffectIds.length} ids=${missingEffectIds.join(",")}`
+    );
     void commands
       .getSequenceEffectPreviews(document.path, document.objectKey, missingEffectIds)
       .then((batch) => {
-        if (cancelled) return;
+        const commandMs = performance.now() - requestStarted;
+        console.debug(
+          `[effect-preview-ui] request resolved object=${document.objectKey} requested_count=${missingEffectIds.length} returned_count=${batch.previews.length} command_ms=${commandMs.toFixed(3)}`
+        );
+        if (cancelled) {
+          console.debug(
+            `[effect-preview-ui] request cancelled object=${document.objectKey} requested_count=${missingEffectIds.length}`
+          );
+          return;
+        }
+        let canvasMs = 0;
         setPreviewImages((current) => {
+          const updateStarted = performance.now();
           const next = new Map(current);
           const returnedIds = new Set(batch.previews.map((raster) => raster.effectId));
           for (const [requestedId, signature] of requestedSignatures) {
@@ -738,12 +753,18 @@ function SequenceCanvas({
             const signature = requestedSignatures.get(raster.effectId);
             if (signature === undefined) continue;
             if (effectPreviewSignaturesRef.current.get(raster.effectId) !== signature) continue;
+            const canvasStarted = performance.now();
+            const canvas = previewCanvasFromRaster(raster);
+            canvasMs += performance.now() - canvasStarted;
             next.set(raster.effectId, {
               signature,
               status: "ready",
-              canvas: previewCanvasFromRaster(raster)
+              canvas
             });
           }
+          console.debug(
+            `[effect-preview-ui] state update object=${document.objectKey} returned_count=${batch.previews.length} canvas_ms=${canvasMs.toFixed(3)} update_ms=${(performance.now() - updateStarted).toFixed(3)}`
+          );
           return next;
         });
       })
@@ -761,6 +782,9 @@ function SequenceCanvas({
         });
       })
       .finally(() => {
+        console.debug(
+          `[effect-preview-ui] request finally object=${document.objectKey} requested_count=${missingEffectIds.length} total_ms=${(performance.now() - requestStarted).toFixed(3)}`
+        );
         for (const signature of requestedSignatures.values()) {
           inFlightPreviewSignatures.current.delete(signature);
         }
@@ -2264,15 +2288,31 @@ function EffectParamInput({
   curveLibrary: SequenceCurveLibraryItemDto[];
   markCollections: SequenceMarkCollectionDto[];
 }) {
-  const commit = (value: SequenceEffectParamValueDto) =>
-    runSnapshotCommand(() =>
+  const commit = (value: SequenceEffectParamValueDto) => {
+    // eslint-disable-next-line react-hooks/purity
+    const started = performance.now();
+    console.debug(`[sequence-edit-ui] commit start effect=${effectId} param=${param.name} value_type=${value.type}`);
+    return runSnapshotCommand(() =>
       commands.applySequenceGuiEdit({
         type: "updateEffectParam",
         id: effectId,
         name: param.name,
         value
       })
-    ).then(() => undefined);
+    )
+      .then(() => {
+        console.debug(
+          `[sequence-edit-ui] commit resolved effect=${effectId} param=${param.name} value_type=${value.type} total_ms=${(performance.now() - started).toFixed(3)}`
+        );
+        return undefined;
+      })
+      .catch((error: unknown) => {
+        console.debug(
+          `[sequence-edit-ui] commit error effect=${effectId} param=${param.name} value_type=${value.type} total_ms=${(performance.now() - started).toFixed(3)} error=${String(error)}`
+        );
+        throw error;
+      });
+  };
 
   if (!param.editable) {
     return <Readout label={param.name} value="Unavailable" />;

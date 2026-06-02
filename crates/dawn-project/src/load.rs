@@ -145,10 +145,11 @@ impl SymbolResolver for FsImportLoader {
             });
         }
 
+        let Some(alias) = reference.alias() else {
+            unreachable!("unaliased references are resolved in the local-file branch");
+        };
         let mut matches = Vec::new();
-        for import_path in
-            self.import_paths_for_alias(source_path, reference.alias().unwrap(), reference)?
-        {
+        for import_path in self.import_paths_for_alias(source_path, alias, reference)? {
             let file = self
                 .load_cached(&import_path)
                 .map_err(|error| LowerError::Import {

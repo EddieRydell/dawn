@@ -103,11 +103,13 @@ pub struct GeneratorParentPreparationTiming {
     pub target_pixels: usize,
     pub emitted_children: usize,
     pub prepared_children: usize,
+    pub prepared_cache_hit: bool,
+    pub topology_cache_hit: bool,
     pub total_prepare_ms: f64,
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct SequencePreparationCache {
+pub struct SequencePreparationCache {
     entries: HashMap<u32, PreparedEffectCacheEntry>,
     generator_topology_entries: HashMap<u32, GeneratorTopologyCacheEntry>,
 }
@@ -171,7 +173,7 @@ impl SequencePreparationCache {
             .retain(|effect_id, _| active_effect_ids.contains(effect_id));
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.entries.clear();
         self.generator_topology_entries.clear();
     }
@@ -314,6 +316,35 @@ impl SequenceFrameEvaluator {
         Self::new_filtered_timed_with_cache(analysis, document, effect_filter, None)
     }
 
+    pub fn new_filtered_with_preparation_cache(
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+        effect_filter: Option<&HashSet<u32>>,
+        preparation_cache: &mut SequencePreparationCache,
+    ) -> Result<Self, String> {
+        Self::new_filtered_timed_with_preparation_cache(
+            analysis,
+            document,
+            effect_filter,
+            preparation_cache,
+        )
+        .map(|(evaluator, _timing)| evaluator)
+    }
+
+    pub fn new_filtered_timed_with_preparation_cache(
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+        effect_filter: Option<&HashSet<u32>>,
+        preparation_cache: &mut SequencePreparationCache,
+    ) -> Result<(Self, SequenceFrameEvaluatorPreparationTiming), String> {
+        Self::new_filtered_timed_with_cache(
+            analysis,
+            document,
+            effect_filter,
+            Some(preparation_cache),
+        )
+    }
+
     pub(crate) fn new_with_preparation_cache(
         analysis: &ProjectAnalysis,
         document: &SequenceDocument,
@@ -360,15 +391,13 @@ impl SequenceFrameEvaluator {
         let mut generator_parent_count = 0;
         let mut generated_child_count = 0;
         let mut generator_parents = Vec::new();
-        if effect_filter.is_none() {
-            if let Some(cache) = preparation_cache.as_deref_mut() {
-                let active_effect_ids = document
-                    .effects
-                    .iter()
-                    .map(|effect| effect.id)
-                    .collect::<HashSet<_>>();
-                cache.prune(&active_effect_ids);
-            }
+        if let Some(cache) = preparation_cache.as_deref_mut() {
+            let active_effect_ids = document
+                .effects
+                .iter()
+                .map(|effect| effect.id)
+                .collect::<HashSet<_>>();
+            cache.prune(&active_effect_ids);
         }
         for effect in document.effects.iter().filter(|effect| {
             effect_filter
@@ -389,83 +418,105 @@ impl SequenceFrameEvaluator {
                 Some(script) if script.kind == EffectScriptKind::Generator => {
                     generator_parent_count += 1;
                     let generator_started = Instant::now();
-                    let topology_param_names = script
-                        .generator_statements()
-                        .map(|statements| {
-                            let param_names = script
-                                .params
-                                .iter()
-                                .map(|param| param.name.clone())
-                                .collect::<Vec<_>>();
-                            generator_topology_param_names(statements, &param_names)
-                        })
-                        .unwrap_or_default();
-                    let topology_cache_key = prepared_effect_cache_key_for_params(
-                        document,
-                        effect.start_seconds,
-                        effect.duration_seconds,
-                        effect.scope,
-                        render,
-                        Some(&topology_param_names),
-                    );
-                    let prepared = match preparation_cache
-                        .as_deref()
-                        .and_then(|cache| cache.generator_topology(effect.id, &topology_cache_key))
-                    {
-                        Some(children) => prepare_generated_effects_from_topology(
-                            analysis,
-                            parent_path_for_render(render),
-                            effect.id,
-                            effect.start_seconds,
-                            script,
-                            render,
-                            &document.mark_collections,
-                            &fixture_templates,
-                            children,
-                        ),
+                    let mut prepared_cache_hit = false;
+                    let mut topology_cache_hit = false;
+                    let prepared = match preparation_cache.as_deref().and_then(|cache| {
+                        cache.prepared_effects(effect.id, &cache_key, effect.start_seconds)
+                    }) {
+                        Some(prepared) => {
+                            prepared_cache_hit = true;
+                            prepared
+                        }
                         None => {
-                            let topology = prepare_generated_topology(
+                            let topology_param_names = script
+                                .generator_statements()
+                                .map(|statements| {
+                                    let param_names = script
+                                        .params
+                                        .iter()
+                                        .map(|param| param.name.clone())
+                                        .collect::<Vec<_>>();
+                                    generator_topology_param_names(statements, &param_names)
+                                })
+                                .unwrap_or_default();
+                            let topology_cache_key = prepared_effect_cache_key_for_params(
                                 document,
                                 effect.start_seconds,
                                 effect.duration_seconds,
                                 effect.scope,
-                                script,
                                 render,
+                                Some(&topology_param_names),
                             );
-                            match topology {
-                                Ok(children) => {
-                                    if let Some(cache) = preparation_cache.as_deref_mut() {
-                                        cache.store_generator_topology(
-                                            effect.id,
-                                            topology_cache_key,
-                                            &children,
-                                        );
-                                    }
+                            let prepared = match preparation_cache.as_deref().and_then(|cache| {
+                                cache.generator_topology(effect.id, &topology_cache_key)
+                            }) {
+                                Some(children) => {
+                                    topology_cache_hit = true;
                                     prepare_generated_effects_from_topology(
-                                        analysis,
-                                        parent_path_for_render(render),
-                                        effect.id,
-                                        effect.start_seconds,
-                                        script,
-                                        render,
-                                        &document.mark_collections,
-                                        &fixture_templates,
-                                        children,
+                                        GeneratedEffectTopologyInput {
+                                            analysis,
+                                            parent_path: parent_path_for_render(render),
+                                            parent_id: effect.id,
+                                            parent_start_seconds: effect.start_seconds,
+                                            generator: script,
+                                            render,
+                                            mark_collections: &document.mark_collections,
+                                            fixture_templates: &fixture_templates,
+                                            children,
+                                        },
                                     )
                                 }
-                                Err(error) => Err(error),
+                                None => {
+                                    let topology = prepare_generated_topology(
+                                        document,
+                                        effect.start_seconds,
+                                        effect.duration_seconds,
+                                        effect.scope,
+                                        script,
+                                        render,
+                                    );
+                                    match topology {
+                                        Ok(children) => {
+                                            if let Some(cache) = preparation_cache.as_deref_mut() {
+                                                cache.store_generator_topology(
+                                                    effect.id,
+                                                    topology_cache_key,
+                                                    &children,
+                                                );
+                                            }
+                                            prepare_generated_effects_from_topology(
+                                                GeneratedEffectTopologyInput {
+                                                    analysis,
+                                                    parent_path: parent_path_for_render(render),
+                                                    parent_id: effect.id,
+                                                    parent_start_seconds: effect.start_seconds,
+                                                    generator: script,
+                                                    render,
+                                                    mark_collections: &document.mark_collections,
+                                                    fixture_templates: &fixture_templates,
+                                                    children,
+                                                },
+                                            )
+                                        }
+                                        Err(error) => Err(error),
+                                    }
+                                }
                             }
+                            .unwrap_or_else(|error| {
+                                vec![PreparedSequenceEffect {
+                                    id: effect.id,
+                                    start_seconds: effect.start_seconds,
+                                    duration_seconds: effect.duration_seconds,
+                                    authored: true,
+                                    render: PreparedEffectRender::BadParams(error),
+                                }]
+                            });
+                            if let Some(cache) = preparation_cache.as_deref_mut() {
+                                cache.store(effect.id, cache_key, effect.start_seconds, &prepared);
+                            }
+                            prepared
                         }
-                    }
-                    .unwrap_or_else(|error| {
-                        vec![PreparedSequenceEffect {
-                            id: effect.id,
-                            start_seconds: effect.start_seconds,
-                            duration_seconds: effect.duration_seconds,
-                            authored: true,
-                            render: PreparedEffectRender::BadParams(error),
-                        }]
-                    });
+                    };
                     let child_count = prepared_generated_child_count(&prepared);
                     let total_prepare_ms = elapsed_ms(generator_started);
                     generator_expansion_ms += total_prepare_ms;
@@ -476,6 +527,8 @@ impl SequenceFrameEvaluator {
                         target_pixels: render.target_pixels.len(),
                         emitted_children: child_count,
                         prepared_children: child_count,
+                        prepared_cache_hit,
+                        topology_cache_hit,
                         total_prepare_ms,
                     });
                     effects.extend(prepared);
@@ -986,10 +1039,10 @@ fn prepare_sample_render(
 ) -> PreparedEffectRender {
     match prepare_params_from_document(script, params, mark_collections, effect_start_seconds) {
         Ok(prepared_params) => PreparedEffectRender::Ready {
-            script: script.clone(),
+            script: Box::new(script.clone()),
             target_pixels: prepare_effect_pixels(scope, target_pixels, fixture_templates),
             prepared_params,
-            scratch: EffectSampleScratch::new(script.bytecode_stats()),
+            scratch: Box::new(EffectSampleScratch::new(script.bytecode_stats())),
             _bytecode_stats: script.bytecode_stats(),
         },
         Err(error) => PreparedEffectRender::BadParams(error),
@@ -1286,37 +1339,44 @@ fn prepare_generated_topology(
     Ok(children)
 }
 
-fn prepare_generated_effects_from_topology(
-    analysis: &ProjectAnalysis,
+struct GeneratedEffectTopologyInput<'a> {
+    analysis: &'a ProjectAnalysis,
     parent_path: Utf8PathBuf,
     parent_id: u32,
     parent_start_seconds: f64,
-    generator: &CompiledEffect,
-    render: &dawn_project::document::SequenceEffectRenderDocument,
-    mark_collections: &[SequenceMarkCollectionDocument],
-    fixture_templates: &[OutputFixtureFrame],
+    generator: &'a CompiledEffect,
+    render: &'a dawn_project::document::SequenceEffectRenderDocument,
+    mark_collections: &'a [SequenceMarkCollectionDocument],
+    fixture_templates: &'a [OutputFixtureFrame],
     children: Vec<GeneratedChildTopology>,
+}
+
+fn prepare_generated_effects_from_topology(
+    input: GeneratedEffectTopologyInput<'_>,
 ) -> Result<Vec<PreparedSequenceEffect>, RuntimeError> {
     let prepared_parent_params = prepare_params_from_document(
-        generator,
-        &render.params,
-        mark_collections,
-        parent_start_seconds,
+        input.generator,
+        &input.render.params,
+        input.mark_collections,
+        input.parent_start_seconds,
     )?;
-    let param_names = generator
+    let param_names = input
+        .generator
         .params
         .iter()
         .map(|param| param.name.clone())
         .collect::<Vec<_>>();
-    children
+    input
+        .children
         .into_iter()
         .map(|child| {
             let (child_path, child_name, child_label) = match &child.effect {
                 GeneratedChildEffectRef::Local { name } => {
-                    (parent_path.clone(), name.clone(), name.clone())
+                    (input.parent_path.clone(), name.clone(), name.clone())
                 }
                 GeneratedChildEffectRef::Imported { alias, name } => {
-                    let import = generator
+                    let import = input
+                        .generator
                         .imports
                         .iter()
                         .find(|import| import.alias == *alias)
@@ -1324,14 +1384,18 @@ fn prepare_generated_effects_from_topology(
                             message: format!("generator import alias `{alias}` was not found"),
                         })?;
                     (
-                        resolve_import_path(&parent_path, &Utf8PathBuf::from(import.path.clone())),
+                        resolve_import_path(
+                            &input.parent_path,
+                            &Utf8PathBuf::from(import.path.clone()),
+                        ),
                         name.clone(),
                         format!("{alias}.{name}"),
                     )
                 }
             };
             let child_key = effect_script_key(&child_path, &child_name);
-            let child_script = analysis
+            let child_script = input
+                .analysis
                 .compiled_script_for_key(&child_key)
                 .ok_or_else(|| RuntimeError {
                     message: format!("compiled child script `{child_key}` was not found"),
@@ -1345,12 +1409,12 @@ fn prepare_generated_effects_from_topology(
                 evaluate_generated_child_params(&child, &prepared_parent_params, &param_names)?;
             let prepared_params = child_script.prepare_params(&emitted_params)?;
             Ok(PreparedSequenceEffect {
-                id: parent_id,
-                start_seconds: parent_start_seconds + child.start_seconds,
+                id: input.parent_id,
+                start_seconds: input.parent_start_seconds + child.start_seconds,
                 duration_seconds: child.duration_seconds,
                 authored: false,
                 render: PreparedEffectRender::Ready {
-                    script: child_script.clone(),
+                    script: Box::new(child_script.clone()),
                     target_pixels: prepare_effect_pixels(
                         SequenceEffectScope::WholeTarget,
                         &child
@@ -1365,10 +1429,10 @@ fn prepare_generated_effects_from_topology(
                                 },
                             )
                             .collect::<Vec<_>>(),
-                        fixture_templates,
+                        input.fixture_templates,
                     ),
                     prepared_params,
-                    scratch: EffectSampleScratch::new(child_script.bytecode_stats()),
+                    scratch: Box::new(EffectSampleScratch::new(child_script.bytecode_stats())),
                     _bytecode_stats: child_script.bytecode_stats(),
                 },
             })
@@ -1424,10 +1488,10 @@ impl PreparedSequenceEffect {
 #[derive(Debug, Clone)]
 enum PreparedEffectRender {
     Ready {
-        script: CompiledEffect,
+        script: Box<CompiledEffect>,
         target_pixels: Vec<PreparedEffectPixel>,
         prepared_params: PreparedEffectParams,
-        scratch: EffectSampleScratch,
+        scratch: Box<EffectSampleScratch>,
         _bytecode_stats: BytecodeStats,
     },
     MissingScript(String),

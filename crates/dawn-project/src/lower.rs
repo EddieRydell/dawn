@@ -433,15 +433,15 @@ fn lower_sequence(
         }
         automation_clips.push(AutomationClip {
             id: clip.id,
-            start: clip.start.clone(),
-            duration: clip.duration.clone(),
+            start: clip.start,
+            duration: clip.duration,
             curve,
             targets,
         });
     }
 
     Ok(Sequence {
-        duration: sequence.duration.clone(),
+        duration: sequence.duration,
         frame_rate: sequence.frame_rate,
         audio: sequence
             .audio
@@ -489,8 +489,8 @@ fn lower_sequence_effect(
 
     Ok(SequenceEffect {
         id: effect.id,
-        start: effect.start.clone(),
-        duration: effect.duration.clone(),
+        start: effect.start,
+        duration: effect.duration,
         target,
         scope: effect.scope,
         params,

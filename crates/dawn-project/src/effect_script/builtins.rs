@@ -11,10 +11,6 @@ pub(super) enum BuiltinContext {
 impl BuiltinContext {
     pub(super) const ALL: [Self; 4] = [Self::Progress, Self::Seconds, Self::Fixture, Self::Pixel];
 
-    pub(super) fn from_name(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|context| context.name() == name)
-    }
-
     pub(super) fn name(self) -> &'static str {
         match self {
             Self::Progress => "progress",

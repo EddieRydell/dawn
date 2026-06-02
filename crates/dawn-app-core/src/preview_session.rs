@@ -156,8 +156,10 @@ impl PreviewSession {
         source: Option<(SequenceKey, SequenceDocument)>,
         analysis: Option<&ProjectAnalysis>,
     ) {
+        let started = Instant::now();
         let next_key = source.as_ref().map(|(key, _)| key);
         let source_changed = self.current_key().as_ref() != next_key;
+        let previous_cache_present = self.render_cache.is_some();
         if source_changed && self.is_playing() {
             self.pause_current(analysis);
         }
@@ -179,7 +181,16 @@ impl PreviewSession {
                 self.transport = PreviewTransport::Stopped;
             }
         }
+        let before_render_ms = elapsed_ms(started);
         self.render(analysis, self.status_for_source());
+        eprintln!(
+            "[preview-session] sync_source source_changed={} previous_cache_present={} before_render_ms={:.3} render_total_ms={:.3} total_ms={:.3}",
+            source_changed,
+            previous_cache_present,
+            before_render_ms,
+            self.last_render_timing.total_ms,
+            elapsed_ms(started),
+        );
     }
 
     pub fn play(&mut self, analysis: Option<&ProjectAnalysis>) {
@@ -692,13 +703,36 @@ impl PreviewSession {
         let mut renderer_build_ms = 0.0;
         if self.render_cache.is_none() {
             let build_started = Instant::now();
-            let (renderer, _) = SequenceFrameEvaluator::new_with_preparation_cache(
-                analysis,
-                document,
-                &mut self.preparation_cache,
-            )?;
+            let (renderer, preparation_timing) =
+                SequenceFrameEvaluator::new_with_preparation_cache(
+                    analysis,
+                    document,
+                    &mut self.preparation_cache,
+                )?;
+            let prepared_effect_count = renderer.prepared_effect_count();
+            let prepared_cache_hits = preparation_timing
+                .generator_parents
+                .iter()
+                .filter(|parent| parent.prepared_cache_hit)
+                .count();
+            let topology_cache_hits = preparation_timing
+                .generator_parents
+                .iter()
+                .filter(|parent| parent.topology_cache_hit)
+                .count();
             self.render_cache = Some(renderer);
             renderer_build_ms = elapsed_ms(build_started);
+            eprintln!(
+                "[preview-session] cached_renderer build renderer_build_ms={:.3} prepare_total_ms={:.3} generator_ms={:.3} generator_parents={} prepared_cache_hits={} topology_cache_hits={} generated_children={} prepared_effect_count={}",
+                renderer_build_ms,
+                preparation_timing.total_ms,
+                preparation_timing.generator_expansion_ms,
+                preparation_timing.generator_parent_count,
+                prepared_cache_hits,
+                topology_cache_hits,
+                preparation_timing.generated_child_count,
+                prepared_effect_count,
+            );
         }
         self.render_cache
             .as_mut()

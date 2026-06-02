@@ -11,6 +11,7 @@ use tauri::{AppHandle, Manager};
 use crate::app_runtime::dispatch;
 use crate::state::AppState;
 
+#[derive(Default)]
 pub(crate) struct FilesystemWatcherRuntime {
     root: Option<PathBuf>,
     watcher: Option<RecommendedWatcher>,
@@ -72,15 +73,6 @@ impl FilesystemWatcherRuntime {
 
         self.watcher = Some(watcher);
         Ok(())
-    }
-}
-
-impl Default for FilesystemWatcherRuntime {
-    fn default() -> Self {
-        Self {
-            root: None,
-            watcher: None,
-        }
     }
 }
 

@@ -58,8 +58,6 @@ impl<'a> Compiler<'a> {
     }
     fn define_builtin_bindings(&mut self) {
         for context in BuiltinContext::ALL {
-            let context =
-                BuiltinContext::from_name(context.name()).expect("builtin context names are valid");
             self.define(context.name(), Binding::Context(context));
         }
         for constant in BuiltinConstant::ALL {
@@ -256,10 +254,11 @@ impl<'a> Compiler<'a> {
                 let left = self.compile_expr(left);
                 let right = self.compile_expr(right);
                 let instruction = self.binary_instruction(left_type, op, right_type);
-                let dest = self.allocate_slot(
-                    binary_result_type(left_type, op, right_type)
-                        .expect("type checker validates binary expression"),
-                );
+                let result_type = match binary_result_type(left_type, op, right_type) {
+                    Some(result_type) => result_type,
+                    None => unreachable!("type checker validates binary expression"),
+                };
+                let dest = self.allocate_slot(result_type);
                 let left = self.float_promote_if_needed(left, instruction, true);
                 let right = self.float_promote_if_needed(right, instruction, false);
                 self.emit(Instruction::Binary(dest, instruction, left, right));
@@ -273,24 +272,23 @@ impl<'a> Compiler<'a> {
         instruction: BinaryInstruction,
         is_left: bool,
     ) -> ValueSlot {
-        let needs_float = match (instruction, is_left) {
+        let needs_float = matches!(
+            (instruction, is_left),
             (
                 BinaryInstruction::FloatAdd
-                | BinaryInstruction::FloatSubtract
-                | BinaryInstruction::FloatMultiply
-                | BinaryInstruction::FloatDivide
-                | BinaryInstruction::FloatLess
-                | BinaryInstruction::FloatLessEqual
-                | BinaryInstruction::FloatGreater
-                | BinaryInstruction::FloatGreaterEqual
-                | BinaryInstruction::FloatEqual
-                | BinaryInstruction::FloatNotEqual,
+                    | BinaryInstruction::FloatSubtract
+                    | BinaryInstruction::FloatMultiply
+                    | BinaryInstruction::FloatDivide
+                    | BinaryInstruction::FloatLess
+                    | BinaryInstruction::FloatLessEqual
+                    | BinaryInstruction::FloatGreater
+                    | BinaryInstruction::FloatGreaterEqual
+                    | BinaryInstruction::FloatEqual
+                    | BinaryInstruction::FloatNotEqual,
                 _,
-            ) => true,
-            (BinaryInstruction::ColorMultiplyFloat, false) => true,
-            (BinaryInstruction::FloatMultiplyColor, true) => true,
-            _ => false,
-        };
+            ) | (BinaryInstruction::ColorMultiplyFloat, false)
+                | (BinaryInstruction::FloatMultiplyColor, true)
+        );
         if needs_float && matches!(slot, ValueSlot::Int(_)) {
             let dest = self.allocate_float();
             self.emit(Instruction::IntToFloat(dest, slot.int()));
@@ -398,8 +396,10 @@ impl<'a> Compiler<'a> {
             Expr::Binary { left, op, right } => {
                 let left = self.expr_type(left);
                 let right = self.expr_type(right);
-                binary_result_type(left, *op, right)
-                    .expect("type checker validates binary expression")
+                match binary_result_type(left, *op, right) {
+                    Some(result_type) => result_type,
+                    None => unreachable!("type checker validates binary expression"),
+                }
             }
             Expr::Call { name, args } => self.call_type(name, args),
             Expr::Member { .. } | Expr::Qualified { .. } => {
@@ -419,9 +419,11 @@ impl<'a> Compiler<'a> {
             .iter()
             .map(|arg| self.expr_type(arg))
             .collect::<Vec<_>>();
-        BuiltinFunction::from_name(name)
-            .and_then(|function| function.return_type(&arg_types))
-            .expect("type checker validates builtins")
+        match BuiltinFunction::from_name(name).and_then(|function| function.return_type(&arg_types))
+        {
+            Some(return_type) => return_type,
+            None => unreachable!("type checker validates builtins"),
+        }
     }
     fn compile_call(&mut self, name: &str, args: &[Expr]) -> ValueSlot {
         if let Some(Binding::Param { index, value_type }) = self.binding(name) {
@@ -436,7 +438,10 @@ impl<'a> Compiler<'a> {
                 return dest;
             }
         }
-        let function = BuiltinFunction::from_name(name).expect("type checker validates builtins");
+        let function = match BuiltinFunction::from_name(name) {
+            Some(function) => function,
+            None => unreachable!("type checker validates builtins"),
+        };
         match function {
             BuiltinFunction::Sin => {
                 let value = self.compile_float_arg(&args[0]);
@@ -715,14 +720,16 @@ impl<'a> Compiler<'a> {
             .find_map(|scope| scope.get(name).copied())
     }
     fn expect_binding(&self, name: &str) -> Binding {
-        self.binding(name)
-            .unwrap_or_else(|| panic!("type checker validates binding `{name}`"))
+        match self.binding(name) {
+            Some(binding) => binding,
+            None => unreachable!("type checker validates binding `{name}`"),
+        }
     }
     fn define(&mut self, name: &str, binding: Binding) {
-        self.scopes
-            .last_mut()
-            .expect("compiler always has a scope")
-            .insert(name.to_string(), binding);
+        let Some(scope) = self.scopes.last_mut() else {
+            unreachable!("compiler always has a scope");
+        };
+        scope.insert(name.to_string(), binding);
     }
     fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());
