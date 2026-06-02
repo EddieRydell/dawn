@@ -37,6 +37,10 @@ const SEQUENCE_CANVAS = {
   shiftedNudgeSeconds: 0.01
 } as const;
 
+const PREVIEW_REQUEST_SETTLE_MS = 200;
+const PREVIEW_REQUEST_BATCH_SIZE = 4;
+const PREVIEW_CANVAS_DECODE_CHUNK_SIZE = 2;
+
 const SEQUENCE_COLORS = {
   page: "#111214",
   panel: "#17181b",
@@ -110,6 +114,7 @@ export function SequenceCanvas({
   const [viewport, setViewport] = useState<SequenceViewport>({ pxPerSecond: SEQUENCE_CANVAS.initialPxPerSecond, laneHeight: SEQUENCE_CANVAS.initialLaneHeightPx, scrollXSeconds: 0, scrollY: 0 });
   const [previewImages, setPreviewImages] = useState<Map<number, SequencePreviewImage>>(() => new Map());
   const [previewRequestTick, setPreviewRequestTick] = useState(0);
+  const [settledPreviewViewportKey, setSettledPreviewViewportKey] = useState<string | null>(null);
   const previewImagesRef = useRef(previewImages);
   const inFlightPreviewSignatures = useRef<Set<string>>(new Set());
   const initializedViewportKey = useRef<string | null>(null);
@@ -127,6 +132,10 @@ export function SequenceCanvas({
   );
   const canvasCursor =
     dragCursor ?? (hover === null ? undefined : hover.kind === "mark" ? "pointer" : hover.resize === "none" ? "grab" : "ew-resize");
+  const previewViewportKey = useMemo(
+    () => [viewport.scrollXSeconds, viewport.scrollY, viewport.pxPerSecond, viewport.laneHeight, canvasSize.width, canvasSize.height].join(":"),
+    [canvasSize.height, canvasSize.width, viewport.laneHeight, viewport.pxPerSecond, viewport.scrollXSeconds, viewport.scrollY]
+  );
 
   const updateSequenceSelection = useCallback((selection: SequenceSelection) => {
     sequenceSelectionRef.current = selection;
@@ -144,6 +153,18 @@ export function SequenceCanvas({
   useEffect(() => {
     effectPreviewSignaturesRef.current = effectPreviewSignatures;
   }, [effectPreviewSignatures]);
+
+  useEffect(() => {
+    if (canvasSize.width <= 0 || canvasSize.height <= 0) {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      setSettledPreviewViewportKey(previewViewportKey);
+    }, PREVIEW_REQUEST_SETTLE_MS);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [canvasSize.height, canvasSize.width, previewViewportKey]);
 
   useEffect(() => {
     const target = canvas.current;
@@ -185,6 +206,7 @@ export function SequenceCanvas({
   useEffect(() => {
     const target = canvas.current;
     if (!target || canvasSize.width <= 0 || canvasSize.height <= 0) return;
+    if (settledPreviewViewportKey !== previewViewportKey) return;
 
     const timelineWidth = Math.max(1, canvasSize.width - left);
     const visibleEffectIds = Array.from(
@@ -211,44 +233,67 @@ export function SequenceCanvas({
       });
     if (missingEffects.length === 0) return;
 
-    const missingEffectIds = missingEffects.map((effect) => effect.id);
-    const requestedSignatures = new Map(missingEffects.map((effect) => [effect.id, effect.signature]));
+    const requestedEffects = missingEffects.slice(0, PREVIEW_REQUEST_BATCH_SIZE);
+    const missingEffectIds = requestedEffects.map((effect) => effect.id);
+    const requestedSignatures = new Map(requestedEffects.map((effect) => [effect.id, effect.signature]));
     for (const signature of requestedSignatures.values()) {
       inFlightPreviewSignatures.current.add(signature);
     }
 
-    let cancelled = false;
+    const request = { cancelled: false };
     void commands
       .getSequenceEffectPreviews(document.path, document.objectKey, missingEffectIds)
-      .then((batch) => {
-        if (cancelled) {
+      .then(async (batch) => {
+        if (previewRequestCancelled(request)) {
           return;
         }
+        const returnedIds = new Set(batch.previews.map((raster) => raster.effectId));
         setPreviewImages((current) => {
           const next = new Map(current);
-          const returnedIds = new Set(batch.previews.map((raster) => raster.effectId));
           for (const [requestedId, signature] of requestedSignatures) {
             if (effectPreviewSignaturesRef.current.get(requestedId) !== signature) continue;
             if (!returnedIds.has(requestedId) && next.get(requestedId)?.signature !== signature) {
               next.set(requestedId, { signature, status: "unavailable" });
             }
           }
-          for (const raster of batch.previews) {
-            const signature = requestedSignatures.get(raster.effectId);
-            if (signature === undefined) continue;
-            if (effectPreviewSignaturesRef.current.get(raster.effectId) !== signature) continue;
-            const canvas = previewCanvasFromRaster(raster);
-            next.set(raster.effectId, {
-              signature,
-              status: "ready",
-              canvas
-            });
-          }
           return next;
         });
+        for (let index = 0; index < batch.previews.length; index += PREVIEW_CANVAS_DECODE_CHUNK_SIZE) {
+          const chunk = batch.previews.slice(index, index + PREVIEW_CANVAS_DECODE_CHUNK_SIZE);
+          const decoded = chunk.flatMap((raster) => {
+            const signature = requestedSignatures.get(raster.effectId);
+            if (signature === undefined) return [];
+            if (effectPreviewSignaturesRef.current.get(raster.effectId) !== signature) return [];
+            return [{
+              effectId: raster.effectId,
+              signature,
+              canvas: previewCanvasFromRaster(raster)
+            }];
+          });
+          if (previewRequestCancelled(request)) {
+            return;
+          }
+          if (decoded.length > 0) {
+            setPreviewImages((current) => {
+              const next = new Map(current);
+              for (const image of decoded) {
+                if (effectPreviewSignaturesRef.current.get(image.effectId) !== image.signature) continue;
+                next.set(image.effectId, {
+                  signature: image.signature,
+                  status: "ready",
+                  canvas: image.canvas
+                });
+              }
+              return next;
+            });
+          }
+          if (index + PREVIEW_CANVAS_DECODE_CHUNK_SIZE < batch.previews.length) {
+            await nextAnimationFrame();
+          }
+        }
       })
       .catch(() => {
-        if (cancelled) return;
+        if (previewRequestCancelled(request)) return;
         setPreviewImages((current) => {
           const next = new Map(current);
           for (const [id, signature] of requestedSignatures) {
@@ -268,9 +313,9 @@ export function SequenceCanvas({
       });
 
     return () => {
-      cancelled = true;
+      request.cancelled = true;
     };
-  }, [canvasSize.height, canvasSize.width, document.objectKey, document.path, effectPreviewSignatures, left, previewRequestTick, top, visibleClips]);
+  }, [canvasSize.height, canvasSize.width, document.objectKey, document.path, effectPreviewSignatures, left, previewRequestTick, previewViewportKey, settledPreviewViewportKey, top, visibleClips]);
 
   useEffect(() => {
     const target = canvas.current;
@@ -1362,6 +1407,18 @@ function previewCanvasFromRaster(raster: SequenceEffectPreviewDto) {
   }
   ctx.putImageData(image, 0, 0);
   return canvas;
+}
+
+function nextAnimationFrame() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => {
+      resolve();
+    });
+  });
+}
+
+function previewRequestCancelled(request: { cancelled: boolean }) {
+  return request.cancelled;
 }
 
 function validPreviewImage(image: SequencePreviewImage | undefined, signature: string | undefined) {

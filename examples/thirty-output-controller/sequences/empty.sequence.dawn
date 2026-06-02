@@ -1010,10 +1010,10 @@ empty:
         value: 0.0
       chase_seconds:
         type: float
-        value: 0.5
+        value: 0.2
       pulse_overlap:
         type: float
-        value: 8.0
+        value: 25.0
       section_width_pixels:
         type: integer
         value: 5
