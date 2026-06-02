@@ -214,16 +214,6 @@ impl<'a> TypeChecker<'a> {
             });
             return;
         };
-        if child.kind != EffectScriptKind::Sample {
-            self.errors.push(ScriptDiagnostic {
-                range: None,
-                message: format!(
-                    "generator cannot emit generator effect `{}`",
-                    emit.effect.label()
-                ),
-            });
-            return;
-        }
         for param in &emit.params {
             let Some(schema) = child.params.iter().find(|schema| schema.name == param.name) else {
                 self.errors.push(ScriptDiagnostic {

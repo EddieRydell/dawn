@@ -22,6 +22,8 @@ use dawn_project::model::{
 use dawn_project::path::{resolve_import_path, Utf8PathBuf};
 use dawn_project::render::{layout_render_plan, GeometryRenderBounds, GeometryRenderPoint};
 
+const MAX_FLATTENED_GENERATED_CHILDREN: usize = 65_536;
+
 #[derive(Debug, Clone)]
 pub struct OutputFrame {
     pub source: OutputSourceMetadata,
@@ -885,6 +887,7 @@ impl SequenceFrameEvaluator {
                                             parent_path: parent_path_for_render(render),
                                             parent_id: effect.id,
                                             parent_start_seconds: effect.start_seconds,
+                                            generator_id: script_id.clone(),
                                             generator: script,
                                             render,
                                             mark_collections: &document.mark_collections,
@@ -917,6 +920,7 @@ impl SequenceFrameEvaluator {
                                                     parent_path: parent_path_for_render(render),
                                                     parent_id: effect.id,
                                                     parent_start_seconds: effect.start_seconds,
+                                                    generator_id: script_id.clone(),
                                                     generator: script,
                                                     render,
                                                     mark_collections: &document.mark_collections,
@@ -2002,6 +2006,7 @@ struct GeneratedEffectTopologyInput<'a> {
     parent_path: Utf8PathBuf,
     parent_id: u32,
     parent_start_seconds: f64,
+    generator_id: EffectScriptId,
     generator: &'a CompiledEffect,
     render: &'a dawn_project::document::SequenceEffectRenderDocument,
     mark_collections: &'a [SequenceMarkCollectionDocument],
@@ -2018,86 +2023,248 @@ fn prepare_generated_effects_from_topology(
         input.mark_collections,
         input.parent_start_seconds,
     )?;
+    let mut effects = Vec::new();
+    let mut stack = vec![input.generator_id];
+    let mut child_count = 0;
+    flatten_generated_children(
+        GeneratedChildFlattenInput {
+            analysis: input.analysis,
+            parent_path: &input.parent_path,
+            parent_id: input.parent_id,
+            parent_start_seconds: input.parent_start_seconds,
+            parent_script: input.generator,
+            parent_params: &prepared_parent_params,
+            fixture_templates: input.fixture_templates,
+            children: input.children,
+        },
+        &mut stack,
+        &mut child_count,
+        &mut effects,
+    )?;
+    Ok(effects)
+}
+
+struct GeneratedChildFlattenInput<'a> {
+    analysis: &'a ProjectAnalysis,
+    parent_path: &'a Utf8PathBuf,
+    parent_id: u32,
+    parent_start_seconds: f64,
+    parent_script: &'a CompiledEffect,
+    parent_params: &'a PreparedEffectParams,
+    fixture_templates: &'a [OutputFixtureFrame],
+    children: Vec<GeneratedChildTopology>,
+}
+
+fn flatten_generated_children(
+    input: GeneratedChildFlattenInput<'_>,
+    stack: &mut Vec<EffectScriptId>,
+    child_count: &mut usize,
+    effects: &mut Vec<PreparedSequenceEffect>,
+) -> Result<(), RuntimeError> {
     let param_names = input
-        .generator
+        .parent_script
         .params
         .iter()
         .map(|param| param.name.clone())
         .collect::<Vec<_>>();
-    input
-        .children
-        .into_iter()
-        .map(|child| {
-            let (child_path, child_name, child_label) = match &child.effect {
-                GeneratedChildEffectRef::Local { name } => {
-                    (input.parent_path.clone(), name.clone(), name.clone())
-                }
-                GeneratedChildEffectRef::Imported { alias, name } => {
-                    let import = input
-                        .generator
-                        .imports
-                        .iter()
-                        .find(|import| import.alias == *alias)
-                        .ok_or_else(|| RuntimeError {
-                            message: format!("generator import alias `{alias}` was not found"),
-                        })?;
-                    (
-                        resolve_import_path(
-                            &input.parent_path,
-                            &Utf8PathBuf::from(import.path.clone()),
+    for child in input.children {
+        let child_ref = resolve_generated_child_effect(
+            input.analysis,
+            input.parent_path,
+            input.parent_script,
+            &child.effect,
+        )?;
+        let emitted_params =
+            evaluate_generated_child_params(&child, input.parent_params, &param_names)?;
+        let prepared_params = child_ref.script.prepare_params(&emitted_params)?;
+        match child_ref.script.kind {
+            EffectScriptKind::Sample => {
+                if *child_count >= MAX_FLATTENED_GENERATED_CHILDREN {
+                    return Err(RuntimeError {
+                        message: format!(
+                            "generator exceeded maximum flattened child count ({MAX_FLATTENED_GENERATED_CHILDREN})"
                         ),
-                        name.clone(),
-                        format!("{alias}.{name}"),
-                    )
+                    });
                 }
-            };
-            let child_id = EffectScriptId::new(child_path, child_name.clone());
-            let child_script = input
-                .analysis
-                .compiled_script_for_id(&child_id)
-                .ok_or_else(|| RuntimeError {
-                    message: format!(
-                        "compiled child script `{}` was not found",
-                        child_id.display_key()
-                    ),
-                })?;
-            if child_script.kind != EffectScriptKind::Sample || child_script.name != child_name {
-                return Err(RuntimeError {
-                    message: format!("emitted child `{child_label}` is not a sample effect"),
+                *child_count += 1;
+                effects.push(PreparedSequenceEffect {
+                    id: input.parent_id,
+                    start_seconds: input.parent_start_seconds + child.start_seconds,
+                    duration_seconds: child.duration_seconds,
+                    authored: false,
+                    render: PreparedEffectRender::Ready {
+                        script: Box::new(child_ref.script.clone()),
+                        target_pixels: prepare_effect_pixels(
+                            SequenceEffectScope::WholeTarget,
+                            &sequence_effect_pixels_for_generator_target(&child.target),
+                            input.fixture_templates,
+                        ),
+                        prepared_params,
+                        scratch: Box::new(EffectSampleScratch::new(
+                            child_ref.script.bytecode_stats(),
+                        )),
+                        _bytecode_stats: child_ref.script.bytecode_stats(),
+                    },
                 });
             }
-            let emitted_params =
-                evaluate_generated_child_params(&child, &prepared_parent_params, &param_names)?;
-            let prepared_params = child_script.prepare_params(&emitted_params)?;
-            Ok(PreparedSequenceEffect {
-                id: input.parent_id,
-                start_seconds: input.parent_start_seconds + child.start_seconds,
-                duration_seconds: child.duration_seconds,
-                authored: false,
-                render: PreparedEffectRender::Ready {
-                    script: Box::new(child_script.clone()),
-                    target_pixels: prepare_effect_pixels(
-                        SequenceEffectScope::WholeTarget,
-                        &child
-                            .target
-                            .pixels
-                            .iter()
-                            .map(
-                                |pixel| dawn_project::document::SequenceEffectPixelDocument {
-                                    fixture_index: pixel.fixture_index,
-                                    pixel_index: pixel.pixel_index,
-                                    pixel_count: pixel.pixel_count,
-                                },
-                            )
-                            .collect::<Vec<_>>(),
-                        input.fixture_templates,
-                    ),
-                    prepared_params,
-                    scratch: Box::new(EffectSampleScratch::new(child_script.bytecode_stats())),
-                    _bytecode_stats: child_script.bytecode_stats(),
-                },
-            })
-        })
+            EffectScriptKind::Generator => {
+                if let Some(cycle_start) = stack
+                    .iter()
+                    .position(|script_id| *script_id == child_ref.id)
+                {
+                    let mut cycle = stack[cycle_start..]
+                        .iter()
+                        .map(EffectScriptId::display_key)
+                        .collect::<Vec<_>>();
+                    cycle.push(child_ref.id.display_key());
+                    return Err(RuntimeError {
+                        message: format!("generator cycle detected: {}", cycle.join(" -> ")),
+                    });
+                }
+                let statements =
+                    child_ref
+                        .script
+                        .generator_statements()
+                        .ok_or_else(|| RuntimeError {
+                            message: format!(
+                                "effect `{}` is not a generator effect",
+                                child_ref.script.name
+                            ),
+                        })?;
+                let child_param_names = child_ref
+                    .script
+                    .params
+                    .iter()
+                    .map(|param| param.name.clone())
+                    .collect::<Vec<_>>();
+                let nested_children = prepare_child_generator_topology(
+                    statements,
+                    &prepared_params,
+                    &child_param_names,
+                    child.target,
+                    child.duration_seconds,
+                )?;
+                stack.push(child_ref.id.clone());
+                flatten_generated_children(
+                    GeneratedChildFlattenInput {
+                        analysis: input.analysis,
+                        parent_path: &child_ref.id.path,
+                        parent_id: input.parent_id,
+                        parent_start_seconds: input.parent_start_seconds + child.start_seconds,
+                        parent_script: child_ref.script,
+                        parent_params: &prepared_params,
+                        fixture_templates: input.fixture_templates,
+                        children: nested_children,
+                    },
+                    stack,
+                    child_count,
+                    effects,
+                )?;
+                stack.pop();
+            }
+        }
+    }
+    Ok(())
+}
+
+struct ResolvedGeneratedChildEffect<'a> {
+    id: EffectScriptId,
+    script: &'a CompiledEffect,
+}
+
+fn resolve_generated_child_effect<'a>(
+    analysis: &'a ProjectAnalysis,
+    parent_path: &Utf8PathBuf,
+    parent_script: &CompiledEffect,
+    child: &GeneratedChildEffectRef,
+) -> Result<ResolvedGeneratedChildEffect<'a>, RuntimeError> {
+    let (child_path, child_name) = match child {
+        GeneratedChildEffectRef::Local { name } => (parent_path.clone(), name.clone()),
+        GeneratedChildEffectRef::Imported { alias, name } => {
+            let import = parent_script
+                .imports
+                .iter()
+                .find(|import| import.alias == *alias)
+                .ok_or_else(|| RuntimeError {
+                    message: format!("generator import alias `{alias}` was not found"),
+                })?;
+            (
+                resolve_import_path(parent_path, &Utf8PathBuf::from(import.path.clone())),
+                name.clone(),
+            )
+        }
+    };
+    let child_id = EffectScriptId::new(child_path, child_name.clone());
+    let child_script = analysis
+        .compiled_script_for_id(&child_id)
+        .ok_or_else(|| RuntimeError {
+            message: format!(
+                "compiled child script `{}` was not found",
+                child_id.display_key()
+            ),
+        })?;
+    if child_script.name != child_name {
+        return Err(RuntimeError {
+            message: format!(
+                "compiled child script `{}` did not match emitted effect `{child_name}`",
+                child_id.display_key()
+            ),
+        });
+    }
+    Ok(ResolvedGeneratedChildEffect {
+        id: child_id,
+        script: child_script,
+    })
+}
+
+fn prepare_child_generator_topology(
+    statements: &[dawn_project::effect_script::Stmt],
+    prepared_params: &PreparedEffectParams,
+    param_names: &[String],
+    target: GeneratorTarget,
+    duration_seconds: f64,
+) -> Result<Vec<GeneratedChildTopology>, RuntimeError> {
+    let mut children = run_generator_topology(
+        statements,
+        prepared_params,
+        param_names,
+        target,
+        duration_seconds,
+    )?;
+    scale_generated_children_to_duration(&mut children, duration_seconds);
+    Ok(children)
+}
+
+fn scale_generated_children_to_duration(
+    children: &mut [GeneratedChildTopology],
+    duration_seconds: f64,
+) {
+    let max_child_end = children
+        .iter()
+        .map(|child| child.start_seconds + child.duration_seconds)
+        .fold(0.0, f64::max);
+    if max_child_end > duration_seconds {
+        let timeline_scale = duration_seconds / max_child_end;
+        for child in children {
+            child.start_seconds *= timeline_scale;
+            child.duration_seconds *= timeline_scale;
+        }
+    }
+}
+
+fn sequence_effect_pixels_for_generator_target(
+    target: &GeneratorTarget,
+) -> Vec<dawn_project::document::SequenceEffectPixelDocument> {
+    target
+        .pixels
+        .iter()
+        .map(
+            |pixel| dawn_project::document::SequenceEffectPixelDocument {
+                fixture_index: pixel.fixture_index,
+                pixel_index: pixel.pixel_index,
+                pixel_count: pixel.pixel_count,
+            },
+        )
         .collect()
 }
 
