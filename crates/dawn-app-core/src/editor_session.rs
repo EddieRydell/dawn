@@ -27,11 +27,27 @@ pub struct EditorTabState {
     pub view_mode: EditorViewMode,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileDiskVersion {
+    pub len: u64,
+    pub modified_millis: Option<u128>,
+    pub content_hash: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BufferExternalState {
+    Current,
+    ChangedOnDisk,
+    DeletedOnDisk,
+}
+
 #[derive(Debug, Clone)]
 pub struct EditorBuffer {
     pub path: Utf8PathBuf,
     pub text: String,
     pub saved_text: String,
+    pub disk_version: Option<FileDiskVersion>,
+    pub external_state: BufferExternalState,
     pub view_mode: EditorViewMode,
     undo_stack: Vec<String>,
     redo_stack: Vec<String>,
@@ -40,6 +56,10 @@ pub struct EditorBuffer {
 impl EditorBuffer {
     pub fn is_dirty(&self) -> bool {
         self.text != self.saved_text
+    }
+
+    pub fn is_conflicted(&self) -> bool {
+        self.external_state != BufferExternalState::Current
     }
 }
 
@@ -51,7 +71,7 @@ pub struct EditorSession {
 }
 
 impl EditorSession {
-    pub fn open_file(&mut self, path: Utf8PathBuf, text: String) {
+    pub fn open_file(&mut self, path: Utf8PathBuf, text: String, disk_version: FileDiskVersion) {
         if !self.open_editors.contains_key(&path) {
             self.open_editors.insert(
                 path.clone(),
@@ -59,6 +79,8 @@ impl EditorSession {
                     path: path.clone(),
                     saved_text: text.clone(),
                     text,
+                    disk_version: Some(disk_version),
+                    external_state: BufferExternalState::Current,
                     view_mode: EditorViewMode::Text,
                     undo_stack: Vec::new(),
                     redo_stack: Vec::new(),
@@ -100,6 +122,9 @@ impl EditorSession {
 
     pub fn update_active_text(&mut self, text: String) {
         if let Some(buffer) = self.active_buffer_mut() {
+            if buffer.is_conflicted() {
+                return;
+            }
             if buffer.text == text {
                 return;
             }
@@ -110,6 +135,9 @@ impl EditorSession {
 
     pub fn replace_active_text_from_edit(&mut self, text: String) {
         if let Some(buffer) = self.active_buffer_mut() {
+            if buffer.is_conflicted() {
+                return;
+            }
             if buffer.text == text {
                 return;
             }
@@ -197,17 +225,19 @@ impl EditorSession {
 
     pub fn restore(
         &mut self,
-        tabs: Vec<(Utf8PathBuf, String, EditorViewMode)>,
+        tabs: Vec<(Utf8PathBuf, String, FileDiskVersion, EditorViewMode)>,
         active_file: Option<Utf8PathBuf>,
     ) {
         self.clear();
-        for (path, text, view_mode) in tabs {
+        for (path, text, disk_version, view_mode) in tabs {
             self.open_editors.insert(
                 path.clone(),
                 EditorBuffer {
                     path: path.clone(),
                     saved_text: text.clone(),
                     text,
+                    disk_version: Some(disk_version),
+                    external_state: BufferExternalState::Current,
                     view_mode,
                     undo_stack: Vec::new(),
                     redo_stack: Vec::new(),
@@ -220,10 +250,49 @@ impl EditorSession {
             .or_else(|| self.tab_order.last().cloned());
     }
 
-    pub fn mark_saved(&mut self, path: &Utf8PathBuf, saved_text: String) {
+    pub fn mark_saved(
+        &mut self,
+        path: &Utf8PathBuf,
+        saved_text: String,
+        disk_version: FileDiskVersion,
+    ) {
         if let Some(buffer) = self.open_editors.get_mut(path) {
             buffer.text = saved_text.clone();
             buffer.saved_text = saved_text;
+            buffer.disk_version = Some(disk_version);
+            buffer.external_state = BufferExternalState::Current;
+        }
+    }
+
+    pub fn record_saved_version(&mut self, path: &Utf8PathBuf, disk_version: FileDiskVersion) {
+        if let Some(buffer) = self.open_editors.get_mut(path) {
+            buffer.saved_text = buffer.text.clone();
+            buffer.disk_version = Some(disk_version);
+            buffer.external_state = BufferExternalState::Current;
+        }
+    }
+
+    pub fn replace_from_disk(
+        &mut self,
+        path: &Utf8PathBuf,
+        text: String,
+        disk_version: FileDiskVersion,
+        preserve_undo: bool,
+    ) {
+        if let Some(buffer) = self.open_editors.get_mut(path) {
+            if preserve_undo {
+                buffer.record_snapshot();
+            }
+            buffer.text = text.clone();
+            buffer.saved_text = text;
+            buffer.disk_version = Some(disk_version);
+            buffer.external_state = BufferExternalState::Current;
+        }
+    }
+
+    pub fn mark_external_state(&mut self, path: &Utf8PathBuf, state: BufferExternalState) {
+        if let Some(buffer) = self.open_editors.get_mut(path) {
+            buffer.external_state = state;
         }
     }
 
@@ -244,6 +313,18 @@ impl EditorSession {
             .filter(|buffer| buffer.is_dirty())
             .cloned()
             .collect()
+    }
+
+    pub fn dirty_autosave_buffers(&self) -> Vec<EditorBuffer> {
+        self.open_editors
+            .values()
+            .filter(|buffer| buffer.is_dirty() && !buffer.is_conflicted())
+            .cloned()
+            .collect()
+    }
+
+    pub fn buffers(&self) -> Vec<EditorBuffer> {
+        self.open_editors.values().cloned().collect()
     }
 
     pub fn reconcile_moved_paths(&mut self, moves: &[(Utf8PathBuf, Utf8PathBuf)]) {

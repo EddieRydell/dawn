@@ -5,6 +5,7 @@ export type CommandId =
   | "file.newProject"
   | "file.openProject"
   | "file.save"
+  | "file.exportFseq"
   | "edit.undo"
   | "edit.redo"
   | "view.toggleProjectTree"
@@ -22,8 +23,9 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
   "file.newProject": {
     id: "file.newProject",
     label: "New Project...",
-    run: async () => {
+    run: () => {
       window.dispatchEvent(new CustomEvent("dawn:new-project"));
+      return Promise.resolve();
     }
   },
   "file.openProject": {
@@ -40,6 +42,14 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     shortcut: "Ctrl+S",
     run: async () => {
       await runSnapshotCommand(commands.flushAutosave);
+    }
+  },
+  "file.exportFseq": {
+    id: "file.exportFseq",
+    label: "Export FSEQ...",
+    run: () => {
+      window.dispatchEvent(new CustomEvent("dawn:export-fseq"));
+      return Promise.resolve();
     }
   },
   "edit.undo": {

@@ -7,7 +7,9 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::audio_runtime::AudioClock;
 use crate::preview::{PreviewStateEventDto, PreviewTimingDto};
-use crate::state::{lock_audio_runtime, lock_model, AppState, CommandResult};
+use crate::state::{
+    lock_audio_runtime, lock_filesystem_watcher, lock_model, AppState, CommandResult,
+};
 
 pub(crate) fn dispatch(
     app: &AppHandle,
@@ -19,6 +21,9 @@ pub(crate) fn dispatch(
     let outcome = model.dispatch(action)?;
     let snapshot = model.snapshot_dto();
     if outcome == DispatchOutcome::SnapshotChanged {
+        if let Ok(mut watcher) = lock_filesystem_watcher(state) {
+            let _ = watcher.sync_project_root(app, snapshot.project_root.clone());
+        }
         if clear_audio_runtime {
             if let Ok(runtime) = lock_audio_runtime(state) {
                 runtime.clear();

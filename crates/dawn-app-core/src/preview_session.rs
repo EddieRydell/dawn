@@ -7,7 +7,7 @@ use dawn_project::path::Utf8PathBuf;
 
 use crate::output_runtime::{
     empty_frame, OutputFrame, OutputFrameStatus, SequenceFrameEvaluationTiming,
-    SequenceFrameEvaluator,
+    SequenceFrameEvaluator, SequencePreparationCache,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -102,6 +102,7 @@ pub struct PreviewSession {
     sequence_states: HashMap<SequenceKey, SequencePlaybackState>,
     effect_preview: Option<EffectPreviewState>,
     render_cache: Option<SequenceFrameEvaluator>,
+    preparation_cache: SequencePreparationCache,
     last_render_timing: PreviewRenderTiming,
     generation: u64,
     snapshot: PreviewSnapshot,
@@ -116,6 +117,7 @@ impl Default for PreviewSession {
             sequence_states: HashMap::new(),
             effect_preview: None,
             render_cache: None,
+            preparation_cache: SequencePreparationCache::default(),
             last_render_timing: PreviewRenderTiming::default(),
             generation: 0,
             snapshot: PreviewSnapshot {
@@ -160,6 +162,9 @@ impl PreviewSession {
             self.pause_current(analysis);
         }
         self.render_cache = None;
+        if source_changed {
+            self.preparation_cache.clear();
+        }
 
         match source {
             Some((key, document)) => {
@@ -687,7 +692,12 @@ impl PreviewSession {
         let mut renderer_build_ms = 0.0;
         if self.render_cache.is_none() {
             let build_started = Instant::now();
-            self.render_cache = Some(SequenceFrameEvaluator::new(analysis, document)?);
+            let (renderer, _) = SequenceFrameEvaluator::new_with_preparation_cache(
+                analysis,
+                document,
+                &mut self.preparation_cache,
+            )?;
+            self.render_cache = Some(renderer);
             renderer_build_ms = elapsed_ms(build_started);
         }
         self.render_cache

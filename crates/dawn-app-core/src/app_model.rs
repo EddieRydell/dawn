@@ -18,7 +18,7 @@ use crate::dto::{
     SequencePasteAnchorDto, SequenceResizeEdgeDto, SequenceSelectionDto, SequenceSelectionEditDto,
     SequenceSelectionEditResultDto,
 };
-use crate::editor_session::{EditorBuffer, EditorSession, EditorViewMode};
+use crate::editor_session::{BufferExternalState, EditorBuffer, EditorSession, EditorViewMode};
 use crate::layout_persistence::{
     load_workbench_layout, save_workbench_layout, WindowLayout, WorkbenchLayout,
 };
@@ -309,15 +309,18 @@ impl AppModel {
                 self.status = "Project opened".to_string();
             }
             AppAction::ReloadProject => {
-                self.flush_autosave()?;
-                self.refresh_project_entries()?;
-                self.refresh_analysis()?;
-                self.sync_preview_source();
+                let paths = self
+                    .editors
+                    .buffers()
+                    .into_iter()
+                    .map(|buffer| buffer.path)
+                    .collect();
+                self.reconcile_filesystem_changes(paths)?;
                 self.status = "Project checked".to_string();
             }
             AppAction::OpenFile(path) => {
-                let text = self.workspace.read_file(path.clone())?;
-                self.editors.open_file(path, text);
+                let (text, disk_version) = self.workspace.read_file_with_version(path.clone())?;
+                self.editors.open_file(path, text, disk_version);
                 self.refresh_analysis()?;
                 self.sync_preview_source();
                 self.persist_workbench_layout()?;
@@ -345,13 +348,14 @@ impl AppModel {
                 self.persist_workbench_layout()?;
             }
             AppAction::UpdateActiveText(text) => {
+                self.ensure_active_buffer_not_conflicted()?;
                 self.editors.update_active_text(text);
-                self.save_active_file_after_text_edit()?;
-                self.status = "Autosaved".to_string();
+                self.refresh_analysis_after_memory_edit();
+                self.status = "Edited".to_string();
             }
             AppAction::UndoActiveEdit => {
                 if self.editors.undo_active_text_edit() {
-                    self.save_active_file_after_text_edit()?;
+                    self.refresh_analysis_after_memory_edit();
                     self.status = "Undo".to_string();
                 } else {
                     return Ok(DispatchOutcome::NoSnapshotChange);
@@ -359,7 +363,7 @@ impl AppModel {
             }
             AppAction::RedoActiveEdit => {
                 if self.editors.redo_active_text_edit() {
-                    self.save_active_file_after_text_edit()?;
+                    self.refresh_analysis_after_memory_edit();
                     self.status = "Redo".to_string();
                 } else {
                     return Ok(DispatchOutcome::NoSnapshotChange);
@@ -367,26 +371,41 @@ impl AppModel {
             }
             AppAction::ApplySequenceGuiEdit(edit) => {
                 self.apply_sequence_gui_edit(edit)?;
+                self.flush_autosave()?;
                 self.status = "Autosaved".to_string();
             }
             AppAction::ApplyLayoutGuiEdit(edit) => {
                 self.apply_layout_gui_edit(edit)?;
+                self.flush_autosave()?;
                 self.status = "Autosaved".to_string();
             }
             AppAction::ApplyFixtureGuiEdit(edit) => {
                 self.apply_fixture_gui_edit(edit)?;
+                self.flush_autosave()?;
                 self.status = "Autosaved".to_string();
             }
             AppAction::FlushAutosave => {
                 self.flush_autosave()?;
                 self.status = "Saved".to_string();
             }
+            AppAction::FilesystemChanged(paths) => {
+                self.reconcile_filesystem_changes(paths)?;
+                self.status = "Filesystem refreshed".to_string();
+            }
+            AppAction::ReloadActiveBufferFromDisk => {
+                self.reload_active_buffer_from_disk()?;
+                self.status = "Reloaded from disk".to_string();
+            }
+            AppAction::KeepActiveBuffer => {
+                self.keep_active_buffer()?;
+                self.status = "Kept IDE changes".to_string();
+            }
             AppAction::CreateFile { parent, name } => {
                 self.flush_autosave()?;
                 let path = self.workspace.create_file(parent, &name)?;
                 self.refresh_project_entries()?;
-                let text = self.workspace.read_file(path.clone())?;
-                self.editors.open_file(path, text);
+                let (text, disk_version) = self.workspace.read_file_with_version(path.clone())?;
+                self.editors.open_file(path, text, disk_version);
                 self.refresh_analysis()?;
                 self.sync_preview_source();
                 self.persist_workbench_layout()?;
@@ -535,9 +554,9 @@ impl AppModel {
             .into_iter()
             .filter_map(|tab| {
                 self.workspace
-                    .read_file(tab.path.clone())
+                    .read_file_with_version(tab.path.clone())
                     .ok()
-                    .map(|text| (tab.path, text, tab.view_mode))
+                    .map(|(text, disk_version)| (tab.path, text, disk_version, tab.view_mode))
             })
             .collect();
         self.editors.restore(
@@ -567,37 +586,114 @@ impl AppModel {
         Ok(())
     }
 
-    fn save_active_file_after_text_edit(&mut self) -> Result<(), String> {
-        let Some(buffer) = self.editors.active_buffer().cloned() else {
-            return Ok(());
-        };
-        self.workspace
-            .write_file(buffer.path.clone(), buffer.text.as_bytes())?;
-        self.editors.mark_saved(&buffer.path, buffer.text);
+    fn refresh_analysis_after_memory_edit(&mut self) {
         match self.refresh_analysis() {
             Ok(()) => {
                 self.sync_preview_source();
-                Ok(())
             }
             Err(error) => {
                 self.status = error;
                 self.sync_preview_source();
-                Ok(())
             }
         }
     }
 
     pub fn flush_autosave(&mut self) -> Result<(), String> {
-        let had_dirty_buffers = !self.editors.dirty_buffers().is_empty();
-        for buffer in self.editors.dirty_buffers() {
-            self.workspace
-                .write_file(buffer.path.clone(), buffer.text.as_bytes())?;
-            self.editors.mark_saved(&buffer.path, buffer.text);
+        let dirty_buffers = self.editors.dirty_autosave_buffers();
+        let had_dirty_buffers = !dirty_buffers.is_empty();
+        for buffer in dirty_buffers {
+            let version = self
+                .workspace
+                .write_text_file_with_version(buffer.path.clone(), &buffer.text)?;
+            self.editors.record_saved_version(&buffer.path, version);
         }
         if had_dirty_buffers {
             self.refresh_analysis()?;
             self.sync_preview_source();
         }
+        Ok(())
+    }
+
+    fn reconcile_filesystem_changes(&mut self, paths: Vec<Utf8PathBuf>) -> Result<(), String> {
+        let watched_paths = if paths.is_empty() {
+            self.editors
+                .buffers()
+                .into_iter()
+                .map(|buffer| buffer.path)
+                .collect()
+        } else {
+            paths
+        };
+        let buffers = self.editors.buffers();
+        for buffer in buffers {
+            if !buffer_matches_any_path(&buffer.path, &watched_paths) {
+                continue;
+            }
+            match self.workspace.read_file_with_version(buffer.path.clone()) {
+                Ok((disk_text, disk_version)) => {
+                    if buffer.disk_version.as_ref() == Some(&disk_version) {
+                        continue;
+                    }
+                    if buffer.is_dirty() {
+                        self.editors
+                            .mark_external_state(&buffer.path, BufferExternalState::ChangedOnDisk);
+                    } else {
+                        self.editors.replace_from_disk(
+                            &buffer.path,
+                            disk_text,
+                            disk_version,
+                            false,
+                        );
+                    }
+                }
+                Err(_) => {
+                    if buffer.is_dirty() {
+                        self.editors
+                            .mark_external_state(&buffer.path, BufferExternalState::DeletedOnDisk);
+                    } else {
+                        self.editors.close_file(&buffer.path);
+                    }
+                }
+            }
+        }
+        self.refresh_project_entries()?;
+        self.refresh_analysis()?;
+        self.sync_preview_source();
+        self.persist_workbench_layout()?;
+        Ok(())
+    }
+
+    fn reload_active_buffer_from_disk(&mut self) -> Result<(), String> {
+        let Some(buffer) = self.editors.active_buffer().cloned() else {
+            return Ok(());
+        };
+        match self.workspace.read_file_with_version(buffer.path.clone()) {
+            Ok((text, disk_version)) => {
+                self.editors
+                    .replace_from_disk(&buffer.path, text, disk_version, true);
+            }
+            Err(_) => {
+                self.editors.close_file(&buffer.path);
+                self.persist_workbench_layout()?;
+            }
+        }
+        self.refresh_project_entries()?;
+        self.refresh_analysis()?;
+        self.sync_preview_source();
+        Ok(())
+    }
+
+    fn keep_active_buffer(&mut self) -> Result<(), String> {
+        let Some(buffer) = self.editors.active_buffer().cloned() else {
+            return Ok(());
+        };
+        let version = self
+            .workspace
+            .write_text_file_with_version(buffer.path.clone(), &buffer.text)?;
+        self.editors.record_saved_version(&buffer.path, version);
+        self.refresh_project_entries()?;
+        self.refresh_analysis()?;
+        self.sync_preview_source();
         Ok(())
     }
 
@@ -620,6 +716,12 @@ impl AppModel {
         let buffer = self.editors.active_buffer()?;
         if buffer.view_mode != EditorViewMode::Gui {
             return None;
+        }
+        if buffer.is_conflicted() {
+            return Some(ActiveGuiDocument::Blocked {
+                reason: "This document has external disk changes.".to_string(),
+                diagnostics: Vec::new(),
+            });
         }
         let diagnostics = self
             .diagnostics
@@ -689,6 +791,7 @@ impl AppModel {
     }
 
     fn apply_sequence_gui_edit(&mut self, edit: SequenceGuiEditDto) -> Result<(), String> {
+        self.ensure_active_buffer_not_conflicted()?;
         let path = self.active_path_for_gui_edit()?;
         let descriptor = self
             .workspace
@@ -904,6 +1007,7 @@ impl AppModel {
         };
 
         self.apply_sequence_document_edit(document_edit)?;
+        self.flush_autosave()?;
         let snapshot = self.snapshot_dto();
         Ok(SequenceSelectionEditResultDto {
             snapshot,
@@ -914,6 +1018,7 @@ impl AppModel {
     }
 
     fn apply_sequence_document_edit(&mut self, edit: SequenceDocumentEdit) -> Result<(), String> {
+        self.ensure_active_buffer_not_conflicted()?;
         let path = self.active_path_for_gui_edit()?;
         let descriptor = self
             .workspace
@@ -1073,6 +1178,7 @@ impl AppModel {
     }
 
     fn apply_layout_gui_edit(&mut self, edit: LayoutGuiEditDto) -> Result<(), String> {
+        self.ensure_active_buffer_not_conflicted()?;
         let path = self.active_path_for_gui_edit()?;
         let descriptor = self
             .workspace
@@ -1111,6 +1217,7 @@ impl AppModel {
     }
 
     fn apply_fixture_gui_edit(&mut self, edit: FixtureGuiEditDto) -> Result<(), String> {
+        self.ensure_active_buffer_not_conflicted()?;
         let path = self.active_path_for_gui_edit()?;
         let mut document =
             self.workspace
@@ -1177,7 +1284,18 @@ impl AppModel {
 
     fn commit_active_gui_text(&mut self, text: String) -> Result<(), String> {
         self.editors.replace_active_text_from_edit(text);
-        self.save_active_file_after_text_edit()
+        self.refresh_analysis_after_memory_edit();
+        Ok(())
+    }
+
+    fn ensure_active_buffer_not_conflicted(&self) -> Result<(), String> {
+        let Some(buffer) = self.editors.active_buffer() else {
+            return Ok(());
+        };
+        if buffer.is_conflicted() {
+            return Err("active document has external disk changes".to_string());
+        }
+        Ok(())
     }
 
     fn active_sequence_source(
@@ -1204,4 +1322,10 @@ impl AppModel {
             document,
         ))
     }
+}
+
+fn buffer_matches_any_path(path: &Utf8PathBuf, changed_paths: &[Utf8PathBuf]) -> bool {
+    changed_paths
+        .iter()
+        .any(|changed_path| path == changed_path || path.starts_with(changed_path))
 }

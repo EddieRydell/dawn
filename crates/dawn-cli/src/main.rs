@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
+use dawn_app_core::fseq_export::{export_fseq_file, FseqExportOptions};
 use dawn_app_core::output_runtime::{
     pixel_context_for_effect, prepare_params_from_document, SequenceFrameEvaluator,
     SequenceFrameEvaluatorPreparationTiming,
@@ -66,6 +67,17 @@ enum Command {
         #[arg(long)]
         no_effect_breakdown: bool,
     },
+    ExportFseq {
+        project_path_or_directory: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        sequence: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        step_ms: u8,
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -108,6 +120,19 @@ fn run() -> Result<ExitCode, String> {
             json,
             synthetic_active_effects,
             no_effect_breakdown,
+        ),
+        Command::ExportFseq {
+            project_path_or_directory,
+            output,
+            sequence,
+            step_ms,
+            force,
+        } => export_fseq_command(
+            &project_path_or_directory,
+            &output,
+            sequence.as_deref(),
+            step_ms,
+            force,
         ),
     }
 }
@@ -256,6 +281,59 @@ fn bench_effect(
         print_effect_bench_report(&report);
     }
 
+    Ok(ExitCode::SUCCESS)
+}
+
+fn export_fseq_command(
+    path: &Path,
+    output: &Path,
+    sequence: Option<&str>,
+    step_ms: u8,
+    force: bool,
+) -> Result<ExitCode, String> {
+    if output.exists() && !force {
+        return Err(format!(
+            "output already exists; pass --force to overwrite: {}",
+            output.display()
+        ));
+    }
+
+    let input = project_input(path)?;
+    let fs = WorkspaceFs::open(&input.root).map_err(|error| error.to_string())?;
+    let analysis = analyze_project_with_overlays(&fs, input.project_file.clone(), None, Vec::new());
+    if analysis.has_errors() {
+        print_human_report(&analysis);
+        return Ok(ExitCode::from(1));
+    }
+
+    let sequence_target = sequence_target(&analysis, sequence)?;
+    let document = get_sequence_document(
+        &fs,
+        sequence_target.path,
+        &sequence_target.object_key,
+        input.project_file,
+        Vec::new(),
+    )?;
+    let report = export_fseq_file(
+        &analysis,
+        &document,
+        output,
+        FseqExportOptions {
+            step_ms,
+            ..FseqExportOptions::default()
+        },
+    )
+    .map_err(|error| error.to_string())?;
+
+    println!(
+        "exported sequence={} step_ms={} frames={} channels={} bytes={} output={}",
+        report.sequence,
+        report.step_ms,
+        report.frame_count,
+        report.channel_count,
+        report.bytes_written,
+        output.display()
+    );
     Ok(ExitCode::SUCCESS)
 }
 

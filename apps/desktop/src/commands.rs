@@ -1,10 +1,13 @@
 use std::path::PathBuf;
 
 use dawn_app_core::actions::AppAction;
+use dawn_app_core::app_model::ActiveGuiDocument;
 use dawn_app_core::dto::{
     AppSnapshotDto, EditorViewModeDto, FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto,
     SequenceSelectionEditDto, SequenceSelectionEditResultDto,
 };
+use dawn_app_core::fseq_export::{export_fseq_file, FseqExportOptions};
+use dawn_project::document::DocumentViewId;
 use dawn_project::path::{serialized_import_path, utf8_path, Utf8PathBuf};
 use tauri::{AppHandle, Manager, State};
 
@@ -242,6 +245,80 @@ fn clear_sequence_audio(
 
 #[specta::specta]
 #[tauri::command]
+fn export_active_sequence_fseq(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    step_ms: u8,
+) -> CommandResult<AppSnapshotDto> {
+    let (analysis, document, default_name) = {
+        let model = lock_model(&state)?;
+        let analysis = model
+            .analysis
+            .as_ref()
+            .ok_or_else(|| "project analysis is not available".to_string())?
+            .clone();
+        if analysis.has_errors() {
+            return Err("project has analysis errors".to_string());
+        }
+        let snapshot = model.snapshot();
+        if matches!(
+            snapshot.active_gui_document,
+            Some(ActiveGuiDocument::Blocked { .. })
+        ) {
+            return Err("active document is blocked by diagnostics".to_string());
+        }
+        let path = model
+            .editors
+            .active_file()
+            .cloned()
+            .ok_or_else(|| "no active sequence file is selected".to_string())?;
+        let overlays = model.editors.dirty_overlays();
+        let descriptor = model
+            .workspace
+            .inspect_document(path.clone(), overlays.clone())?;
+        let object_key = descriptor
+            .default_object_keys
+            .get(&DocumentViewId::Sequence)
+            .cloned()
+            .ok_or_else(|| "active document is not a sequence".to_string())?;
+        let document = model
+            .workspace
+            .sequence_document(path, &object_key, overlays)?;
+        let default_name = format!("{}.fseq", document.object_key);
+        (analysis, document, default_name)
+    };
+
+    let Some(output_path) = rfd::FileDialog::new()
+        .set_title("Export FSEQ")
+        .set_file_name(&default_name)
+        .add_filter("FSEQ", &["fseq"])
+        .save_file()
+    else {
+        return get_snapshot(state);
+    };
+
+    let report = export_fseq_file(
+        &analysis,
+        &document,
+        &output_path,
+        FseqExportOptions {
+            step_ms,
+            ..FseqExportOptions::default()
+        },
+    )
+    .map_err(|error| error.to_string())?;
+
+    let mut model = lock_model(&state)?;
+    model.status = format!(
+        "Exported FSEQ: {} frames, {} channels",
+        report.frame_count, report.channel_count
+    );
+    emit_model_snapshot(&app, &model)?;
+    Ok(model.snapshot_dto())
+}
+
+#[specta::specta]
+#[tauri::command]
 fn get_sequence_effect_previews(
     state: State<'_, AppState>,
     path: String,
@@ -311,6 +388,21 @@ fn apply_fixture_gui_edit(
 #[tauri::command]
 fn flush_autosave(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
     dispatch(&app, &state, AppAction::FlushAutosave)
+}
+
+#[specta::specta]
+#[tauri::command]
+fn reload_active_buffer_from_disk(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<AppSnapshotDto> {
+    dispatch(&app, &state, AppAction::ReloadActiveBufferFromDisk)
+}
+
+#[specta::specta]
+#[tauri::command]
+fn keep_active_buffer(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
+    dispatch(&app, &state, AppAction::KeepActiveBuffer)
 }
 
 #[specta::specta]
@@ -612,10 +704,13 @@ pub(crate) fn register_commands(
         apply_sequence_selection_edit,
         choose_sequence_audio,
         clear_sequence_audio,
+        export_active_sequence_fseq,
         get_sequence_effect_previews,
         apply_layout_gui_edit,
         apply_fixture_gui_edit,
         flush_autosave,
+        reload_active_buffer_from_disk,
+        keep_active_buffer,
         create_file,
         create_directory,
         rename_path,

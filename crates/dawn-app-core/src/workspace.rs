@@ -1,5 +1,8 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use dawn_project::analysis::{analyze_project_with_overlays, ProjectAnalysis, ProjectOverlay};
 use dawn_project::document::{
@@ -14,6 +17,8 @@ use dawn_project::document::{
 };
 use dawn_project::fs::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFs};
 use dawn_project::path::{serialized_import_path, utf8_path, PathStringExt, Utf8PathBuf};
+
+use crate::editor_session::FileDiskVersion;
 
 #[derive(Debug, Default)]
 pub struct WorkspaceService {
@@ -206,10 +211,57 @@ impl WorkspaceService {
             .map_err(|error| error.to_string())
     }
 
+    pub fn read_file_with_version(
+        &self,
+        path: Utf8PathBuf,
+    ) -> Result<(String, FileDiskVersion), String> {
+        let text = self.read_file(path.clone())?;
+        let version = self
+            .file_version(&path, &text)?
+            .ok_or_else(|| "file does not exist".to_string())?;
+        Ok((text, version))
+    }
+
     pub fn write_file(&self, path: Utf8PathBuf, content: impl AsRef<[u8]>) -> Result<(), String> {
         self.project_fs()?
             .write(&path, content)
             .map_err(|error| error.to_string())
+    }
+
+    pub fn write_text_file_with_version(
+        &self,
+        path: Utf8PathBuf,
+        content: &str,
+    ) -> Result<FileDiskVersion, String> {
+        self.write_file(path.clone(), content.as_bytes())?;
+        self.file_version(&path, content)?
+            .ok_or_else(|| "written file does not exist".to_string())
+    }
+
+    pub fn file_version(
+        &self,
+        path: &Utf8PathBuf,
+        content: &str,
+    ) -> Result<Option<FileDiskVersion>, String> {
+        let resolved = self.project_fs()?.resolve(path);
+        let metadata = match std::fs::metadata(resolved.as_std_path()) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        };
+        if !metadata.is_file() {
+            return Ok(None);
+        }
+        let modified_millis = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis());
+        Ok(Some(FileDiskVersion {
+            len: metadata.len(),
+            modified_millis,
+            content_hash: content_hash(content),
+        }))
     }
 
     pub fn create_file(&mut self, parent: Utf8PathBuf, name: &str) -> Result<Utf8PathBuf, String> {
@@ -341,6 +393,12 @@ impl WorkspaceService {
             utf8_path(selected_file)
         }
     }
+}
+
+fn content_hash(content: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn no_project() -> String {

@@ -2,21 +2,12 @@
 
 ## Project Structure & Module Organization
 
-This is a Rust workspace. Rust workspace members are listed in `Cargo.toml`: `crates/dawn-project` contains the Dawn project model and analysis logic, while `apps/desktop` contains the native Floem desktop app. The desktop service and UI state live under `apps/desktop/src`, with Floem views under `apps/desktop/src/ui`. Example Dawn projects and fixtures are in `examples/`, especially `examples/club-rig`.
-
-## Build, Test, and Development Commands
-
-- `cargo run -p dawn-desktop`: run the native desktop app.
-- `cargo check -p dawn-desktop`: check the Floem desktop crate.
-- `cargo test`: run all Rust workspace tests.
-
-## Coding Style & Naming Conventions
-
-Use standard Rust 2021 style and run `cargo fmt` before submitting Rust changes. Rust tests use descriptive snake_case names such as `analyzes_club_rig_to_resolved_project`. Keep desktop additions aligned with the existing service, app model, and Floem UI module boundaries.
+This is a Rust workspace. The desktop service and UI state live under `apps/desktop/src`. Example Dawn projects and fixtures are in `examples/`.
 
 ## Testing Guidelines
 
-Rust integration tests live under `crates/*/tests`, and desktop service tests may live beside the service modules. Do not add or modify tests unless specifically requested. When tests are requested for project analysis, document edits, diagnostics, or model behavior, prefer fixtures from `examples/club-rig` for realistic project flows and use temporary test directories for invalid or synthetic Dawn documents.
+Rust integration tests live under `crates/*/tests`, and desktop service tests may live beside the service modules. Do not add or modify tests unless specifically requested. 
+When tests are requested for project analysis, document edits, diagnostics, or model behavior, prefer fixtures from `examples/thirty-ouptut-controller` for realistic project flows and use temporary test directories for invalid or synthetic Dawn documents.
 
 ## Agent-Specific Instructions
 
@@ -34,3 +25,4 @@ Do not jump to editing if the conversation is about diagnosing an issue or discu
 Do not start or leave a frontend dev server running when finishing work. The user needs `pnpm tauri dev` to own the frontend port.
 When planning, don't hesitate to ask the user relevant questions.
 When presenting a plan for approval from the user, list files that will be affected by the plan.
+Run `pnpm check` for linting, tests, and other checks after implementing a plan.

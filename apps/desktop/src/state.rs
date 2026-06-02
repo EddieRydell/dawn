@@ -8,6 +8,7 @@ use tauri::State;
 
 use crate::audio_runtime::AudioRuntime;
 use crate::effect_previews::{EffectPreviewCacheKey, SequenceEffectPreviewDto};
+use crate::filesystem_watcher::FilesystemWatcherRuntime;
 use crate::live_output::LiveOutputRuntime;
 use crate::preview_transport::PreviewTransportRuntime;
 
@@ -17,6 +18,7 @@ pub(crate) struct AppState {
     effect_preview_cache: Mutex<HashMap<EffectPreviewCacheKey, SequenceEffectPreviewDto>>,
     preview_transport: Mutex<PreviewTransportRuntime>,
     live_output: Mutex<LiveOutputRuntime>,
+    filesystem_watcher: Mutex<FilesystemWatcherRuntime>,
     shutting_down: AtomicBool,
 }
 
@@ -28,6 +30,7 @@ impl Default for AppState {
             effect_preview_cache: Mutex::new(HashMap::new()),
             preview_transport: Mutex::new(PreviewTransportRuntime::default()),
             live_output: Mutex::new(LiveOutputRuntime::default()),
+            filesystem_watcher: Mutex::new(FilesystemWatcherRuntime::default()),
             shutting_down: AtomicBool::new(false),
         }
     }
@@ -88,6 +91,15 @@ pub(crate) fn lock_live_output<'a>(
         .live_output
         .lock()
         .map_err(|_| "live output lock is poisoned".to_string())
+}
+
+pub(crate) fn lock_filesystem_watcher<'a>(
+    state: &'a State<'_, AppState>,
+) -> CommandResult<MutexGuard<'a, FilesystemWatcherRuntime>> {
+    state
+        .filesystem_watcher
+        .lock()
+        .map_err(|_| "filesystem watcher lock is poisoned".to_string())
 }
 
 pub(crate) fn project_path(path: String) -> Utf8PathBuf {

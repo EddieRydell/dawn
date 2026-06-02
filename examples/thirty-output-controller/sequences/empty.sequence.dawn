@@ -346,7 +346,7 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 5
-    start: 41.642343634s
+    start: 41.657279755s
     duration: 0.65s
     target:
       type: group
@@ -406,8 +406,8 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 6
-    start: 41.791681292s
-    duration: 0.607432956s
+    start: 41.774148012s
+    duration: 0.529984768s
     target:
       type: group
       name: All Outputs
@@ -430,6 +430,9 @@ empty:
       pulse_overlap:
         type: float
         value: 50.0
+      section_width_pixels:
+        type: integer
+        value: 5
       chase_position:
         type: curve
         curve:
@@ -465,8 +468,6 @@ empty:
           value_type: float
           points:
           - time: 0.0
-            value: 0.0
-          - time: 0.19
             value: 1.0
           - time: 1.0
             value: 0.0

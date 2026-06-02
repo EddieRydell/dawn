@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
 use dawn_project::analysis::{effect_script_key, split_effect_script_key, ProjectAnalysis};
@@ -13,8 +14,8 @@ use dawn_project::effect_script::{
 };
 use dawn_project::frame::{ceil_frame, floor_frame, frame_count};
 use dawn_project::model::{
-    Color, Distance, DistanceSpan, EffectParam, FixtureId, Resolved, SequenceEffectScope, Time,
-    TimeSpan,
+    Color, Curve, CurveValue, CurveValueType, Distance, DistanceSpan, EffectParam, FixtureId,
+    Resolved, SequenceEffectScope, Time, TimeSpan,
 };
 use dawn_project::path::{resolve_import_path, Utf8PathBuf};
 use dawn_project::render::{layout_render_plan, GeometryRenderBounds, GeometryRenderPoint};
@@ -104,6 +105,141 @@ pub struct GeneratorParentPreparationTiming {
     pub total_prepare_ms: f64,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SequencePreparationCache {
+    entries: HashMap<u32, PreparedEffectCacheEntry>,
+}
+
+impl SequencePreparationCache {
+    fn prepared_effects(
+        &self,
+        effect_id: u32,
+        key: &PreparedEffectCacheKey,
+        parent_start_seconds: f64,
+    ) -> Option<Vec<PreparedSequenceEffect>> {
+        let entry = self.entries.get(&effect_id)?;
+        (entry.key == *key)
+            .then(|| shift_prepared_effects_to_parent_start(&entry.effects, parent_start_seconds))
+    }
+
+    fn store(
+        &mut self,
+        effect_id: u32,
+        key: PreparedEffectCacheKey,
+        parent_start_seconds: f64,
+        effects: &[PreparedSequenceEffect],
+    ) {
+        self.entries.insert(
+            effect_id,
+            PreparedEffectCacheEntry {
+                key,
+                effects: localize_prepared_effects(effects, parent_start_seconds),
+            },
+        );
+    }
+
+    fn prune(&mut self, active_effect_ids: &HashSet<u32>) {
+        self.entries
+            .retain(|effect_id, _| active_effect_ids.contains(effect_id));
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PreparedEffectCacheEntry {
+    key: PreparedEffectCacheKey,
+    effects: Vec<PreparedSequenceEffect>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PreparedEffectCacheKey {
+    script_key: String,
+    script_source: String,
+    scope: SequenceEffectScope,
+    duration_seconds: F64CacheKey,
+    params: Vec<PreparedEffectParamCacheKey>,
+    target_pixels: Vec<PreparedEffectPixelCacheKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PreparedEffectParamCacheKey {
+    name: String,
+    value: EffectParamCacheValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum EffectParamCacheValue {
+    Integer(u64),
+    Float(F64CacheKey),
+    Boolean(bool),
+    Enum(String),
+    Flags(Vec<String>),
+    Color(ColorCacheKey),
+    Curve(CurveCacheKey),
+    Marks {
+        collection_key: String,
+        local_seconds: Option<Vec<F64CacheKey>>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CurveCacheKey {
+    value_type: CurveValueTypeCacheKey,
+    points: Vec<CurvePointCacheKey>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum CurveValueTypeCacheKey {
+    Float,
+    Color,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CurvePointCacheKey {
+    time: F64CacheKey,
+    value: CurveValueCacheKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum CurveValueCacheKey {
+    Float(F64CacheKey),
+    Color(ColorCacheKey),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ColorCacheKey {
+    red: u8,
+    green: u8,
+    blue: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct PreparedEffectPixelCacheKey {
+    fixture_index: usize,
+    pixel_index: usize,
+    pixel_count: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct F64CacheKey(f64);
+
+impl PartialEq for F64CacheKey {
+    fn eq(&self, other: &Self) -> bool {
+        normalized_f64_bits(self.0) == normalized_f64_bits(other.0)
+    }
+}
+
+impl Eq for F64CacheKey {}
+
+impl Hash for F64CacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        normalized_f64_bits(self.0).hash(state);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SequenceFrameEvaluator {
     source: OutputSourceMetadata,
@@ -140,6 +276,23 @@ impl SequenceFrameEvaluator {
         document: &SequenceDocument,
         effect_filter: Option<&HashSet<u32>>,
     ) -> Result<(Self, SequenceFrameEvaluatorPreparationTiming), String> {
+        Self::new_filtered_timed_with_cache(analysis, document, effect_filter, None)
+    }
+
+    pub(crate) fn new_with_preparation_cache(
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+        preparation_cache: &mut SequencePreparationCache,
+    ) -> Result<(Self, SequenceFrameEvaluatorPreparationTiming), String> {
+        Self::new_filtered_timed_with_cache(analysis, document, None, Some(preparation_cache))
+    }
+
+    fn new_filtered_timed_with_cache(
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+        effect_filter: Option<&HashSet<u32>>,
+        mut preparation_cache: Option<&mut SequencePreparationCache>,
+    ) -> Result<(Self, SequenceFrameEvaluatorPreparationTiming), String> {
         let total_started = Instant::now();
         let Some(project) = analysis.resolved.as_ref() else {
             return Err("Project must resolve before preview is available".to_string());
@@ -172,6 +325,16 @@ impl SequenceFrameEvaluator {
         let mut generator_parent_count = 0;
         let mut generated_child_count = 0;
         let mut generator_parents = Vec::new();
+        if effect_filter.is_none() {
+            if let Some(cache) = preparation_cache.as_deref_mut() {
+                let active_effect_ids = document
+                    .effects
+                    .iter()
+                    .map(|effect| effect.id)
+                    .collect::<HashSet<_>>();
+                cache.prune(&active_effect_ids);
+            }
+        }
         for effect in document.effects.iter().filter(|effect| {
             effect_filter
                 .map(|ids| ids.contains(&effect.id))
@@ -180,36 +343,71 @@ impl SequenceFrameEvaluator {
             let Some(render) = effect.render.as_ref() else {
                 continue;
             };
+            let cache_key = prepared_effect_cache_key(
+                document,
+                effect.start_seconds,
+                effect.duration_seconds,
+                effect.scope,
+                render,
+            );
             match analysis.compiled_script_for_key(&render.script_key) {
                 Some(script) if script.kind == EffectScriptKind::Generator => {
                     generator_parent_count += 1;
                     let generator_started = Instant::now();
-                    match prepare_generated_effects(
-                        analysis,
-                        document,
-                        effect.id,
-                        effect.start_seconds,
-                        effect.duration_seconds,
-                        effect.scope,
-                        script,
-                        render,
-                        &fixture_templates,
-                    ) {
-                        Ok(children) => {
+                    if let Some(children) = preparation_cache.as_deref().and_then(|cache| {
+                        cache.prepared_effects(effect.id, &cache_key, effect.start_seconds)
+                    }) {
+                        let total_prepare_ms = elapsed_ms(generator_started);
+                        generator_expansion_ms += total_prepare_ms;
+                        let child_count = prepared_generated_child_count(&children);
+                        generated_child_count += child_count;
+                        generator_parents.push(GeneratorParentPreparationTiming {
+                            parent_effect_id: effect.id,
+                            script_key: render.script_key.clone(),
+                            target_pixels: render.target_pixels.len(),
+                            emitted_children: child_count,
+                            prepared_children: child_count,
+                            total_prepare_ms,
+                        });
+                        effects.extend(children);
+                    } else {
+                        let prepared = match prepare_generated_effects(
+                            analysis,
+                            document,
+                            effect.id,
+                            effect.start_seconds,
+                            effect.duration_seconds,
+                            effect.scope,
+                            script,
+                            render,
+                            &fixture_templates,
+                        ) {
+                            Ok(children) => children,
+                            Err(error) => vec![PreparedSequenceEffect {
+                                id: effect.id,
+                                start_seconds: effect.start_seconds,
+                                duration_seconds: effect.duration_seconds,
+                                authored: true,
+                                render: PreparedEffectRender::BadParams(error),
+                            }],
+                        };
+                        if let Some(cache) = preparation_cache.as_deref_mut() {
+                            cache.store(effect.id, cache_key, effect.start_seconds, &prepared);
+                        }
+                        let child_count = prepared_generated_child_count(&prepared);
+                        if child_count > 0 {
                             let total_prepare_ms = elapsed_ms(generator_started);
                             generator_expansion_ms += total_prepare_ms;
-                            generated_child_count += children.len();
+                            generated_child_count += child_count;
                             generator_parents.push(GeneratorParentPreparationTiming {
                                 parent_effect_id: effect.id,
                                 script_key: render.script_key.clone(),
                                 target_pixels: render.target_pixels.len(),
-                                emitted_children: children.len(),
-                                prepared_children: children.len(),
+                                emitted_children: child_count,
+                                prepared_children: child_count,
                                 total_prepare_ms,
                             });
-                            effects.extend(children);
-                        }
-                        Err(error) => {
+                        } else {
                             let total_prepare_ms = elapsed_ms(generator_started);
                             generator_expansion_ms += total_prepare_ms;
                             generator_parents.push(GeneratorParentPreparationTiming {
@@ -220,43 +418,62 @@ impl SequenceFrameEvaluator {
                                 prepared_children: 0,
                                 total_prepare_ms,
                             });
-                            effects.push(PreparedSequenceEffect {
-                                id: effect.id,
-                                start_seconds: effect.start_seconds,
-                                duration_seconds: effect.duration_seconds,
-                                authored: true,
-                                render: PreparedEffectRender::BadParams(error),
-                            });
                         }
+                        effects.extend(prepared);
                     }
                 }
                 Some(script) => {
                     let sample_started = Instant::now();
-                    let prepared_render = prepare_sample_render(
-                        script,
-                        &render.params,
-                        &document.mark_collections,
-                        effect.start_seconds,
-                        effect.scope,
-                        &render.target_pixels,
-                        &fixture_templates,
-                    );
-                    authored_sample_ms += elapsed_ms(sample_started);
-                    effects.push(PreparedSequenceEffect {
+                    if let Some(prepared) = preparation_cache.as_deref().and_then(|cache| {
+                        cache.prepared_effects(effect.id, &cache_key, effect.start_seconds)
+                    }) {
+                        authored_sample_ms += elapsed_ms(sample_started);
+                        effects.extend(prepared);
+                        continue;
+                    }
+                    let prepared = vec![PreparedSequenceEffect {
                         id: effect.id,
                         start_seconds: effect.start_seconds,
                         duration_seconds: effect.duration_seconds,
                         authored: true,
-                        render: prepared_render,
-                    });
+                        render: prepare_sample_render(
+                            script,
+                            &render.params,
+                            &document.mark_collections,
+                            effect.start_seconds,
+                            effect.scope,
+                            &render.target_pixels,
+                            &fixture_templates,
+                        ),
+                    }];
+                    if let Some(cache) = preparation_cache.as_deref_mut() {
+                        cache.store(effect.id, cache_key, effect.start_seconds, &prepared);
+                    }
+                    authored_sample_ms += elapsed_ms(sample_started);
+                    effects.extend(prepared);
                 }
-                None => effects.push(PreparedSequenceEffect {
-                    id: effect.id,
-                    start_seconds: effect.start_seconds,
-                    duration_seconds: effect.duration_seconds,
-                    authored: true,
-                    render: PreparedEffectRender::MissingScript(render.script_key.clone()),
-                }),
+                None => {
+                    let sample_started = Instant::now();
+                    if let Some(prepared) = preparation_cache.as_deref().and_then(|cache| {
+                        cache.prepared_effects(effect.id, &cache_key, effect.start_seconds)
+                    }) {
+                        authored_sample_ms += elapsed_ms(sample_started);
+                        effects.extend(prepared);
+                        continue;
+                    }
+                    let prepared = vec![PreparedSequenceEffect {
+                        id: effect.id,
+                        start_seconds: effect.start_seconds,
+                        duration_seconds: effect.duration_seconds,
+                        authored: true,
+                        render: PreparedEffectRender::MissingScript(render.script_key.clone()),
+                    }];
+                    if let Some(cache) = preparation_cache.as_deref_mut() {
+                        cache.store(effect.id, cache_key, effect.start_seconds, &prepared);
+                    }
+                    authored_sample_ms += elapsed_ms(sample_started);
+                    effects.extend(prepared);
+                }
             }
         }
 
@@ -721,6 +938,145 @@ fn prepare_sample_render(
     }
 }
 
+fn prepared_effect_cache_key(
+    document: &SequenceDocument,
+    effect_start_seconds: f64,
+    duration_seconds: f64,
+    scope: SequenceEffectScope,
+    render: &dawn_project::document::SequenceEffectRenderDocument,
+) -> PreparedEffectCacheKey {
+    PreparedEffectCacheKey {
+        script_key: render.script_key.clone(),
+        script_source: render.script_source.clone(),
+        scope,
+        duration_seconds: F64CacheKey(duration_seconds),
+        params: render
+            .params
+            .iter()
+            .map(|param| PreparedEffectParamCacheKey {
+                name: param.name.clone(),
+                value: effect_param_cache_value(
+                    &param.value,
+                    &document.mark_collections,
+                    effect_start_seconds,
+                ),
+            })
+            .collect(),
+        target_pixels: render
+            .target_pixels
+            .iter()
+            .map(|pixel| PreparedEffectPixelCacheKey {
+                fixture_index: pixel.fixture_index,
+                pixel_index: pixel.pixel_index,
+                pixel_count: pixel.pixel_count,
+            })
+            .collect(),
+    }
+}
+
+fn effect_param_cache_value(
+    param: &EffectParam<Resolved>,
+    mark_collections: &[SequenceMarkCollectionDocument],
+    effect_start_seconds: f64,
+) -> EffectParamCacheValue {
+    match param {
+        EffectParam::Integer { value } => EffectParamCacheValue::Integer(*value),
+        EffectParam::Float { value } => EffectParamCacheValue::Float(F64CacheKey(*value)),
+        EffectParam::Boolean { value } => EffectParamCacheValue::Boolean(*value),
+        EffectParam::Enum { value } => EffectParamCacheValue::Enum(value.clone()),
+        EffectParam::Flags { value } => EffectParamCacheValue::Flags(value.values.clone()),
+        EffectParam::Color { value } => EffectParamCacheValue::Color(color_cache_key(*value)),
+        EffectParam::Curve { curve } => EffectParamCacheValue::Curve(curve_cache_key(curve)),
+        EffectParam::Marks { key } => {
+            let mut local_seconds = mark_collections
+                .iter()
+                .find(|collection| collection.key == *key)
+                .map(|collection| {
+                    collection
+                        .marks_seconds
+                        .iter()
+                        .map(|mark_seconds| F64CacheKey(*mark_seconds - effect_start_seconds))
+                        .collect::<Vec<_>>()
+                });
+            if let Some(local_seconds) = local_seconds.as_mut() {
+                local_seconds.sort_by(|left, right| left.0.total_cmp(&right.0));
+            }
+            EffectParamCacheValue::Marks {
+                collection_key: key.clone(),
+                local_seconds,
+            }
+        }
+    }
+}
+
+fn curve_cache_key(curve: &Curve) -> CurveCacheKey {
+    CurveCacheKey {
+        value_type: match curve.value_type {
+            CurveValueType::Float => CurveValueTypeCacheKey::Float,
+            CurveValueType::Color => CurveValueTypeCacheKey::Color,
+        },
+        points: curve
+            .points
+            .iter()
+            .map(|point| CurvePointCacheKey {
+                time: F64CacheKey(point.time),
+                value: match &point.value {
+                    CurveValue::Float(value) => CurveValueCacheKey::Float(F64CacheKey(*value)),
+                    CurveValue::Color(value) => CurveValueCacheKey::Color(color_cache_key(*value)),
+                },
+            })
+            .collect(),
+    }
+}
+
+fn color_cache_key(color: Color) -> ColorCacheKey {
+    ColorCacheKey {
+        red: color.red,
+        green: color.green,
+        blue: color.blue,
+    }
+}
+
+fn localize_prepared_effects(
+    effects: &[PreparedSequenceEffect],
+    parent_start_seconds: f64,
+) -> Vec<PreparedSequenceEffect> {
+    effects
+        .iter()
+        .cloned()
+        .map(|mut effect| {
+            effect.start_seconds -= parent_start_seconds;
+            effect
+        })
+        .collect()
+}
+
+fn shift_prepared_effects_to_parent_start(
+    effects: &[PreparedSequenceEffect],
+    parent_start_seconds: f64,
+) -> Vec<PreparedSequenceEffect> {
+    effects
+        .iter()
+        .cloned()
+        .map(|mut effect| {
+            effect.start_seconds += parent_start_seconds;
+            effect
+        })
+        .collect()
+}
+
+fn prepared_generated_child_count(effects: &[PreparedSequenceEffect]) -> usize {
+    effects.iter().filter(|effect| !effect.authored).count()
+}
+
+fn normalized_f64_bits(value: f64) -> u64 {
+    if value == 0.0 {
+        0.0f64.to_bits()
+    } else {
+        value.to_bits()
+    }
+}
+
 fn build_effect_indices_by_frame(
     effects: &[PreparedSequenceEffect],
     duration_seconds: f64,
@@ -830,6 +1186,17 @@ fn prepare_generated_effects(
             target,
             parent_duration_seconds,
         )?);
+    }
+    let max_child_end = children
+        .iter()
+        .map(|child| child.start_seconds + child.duration_seconds)
+        .fold(0.0, f64::max);
+    if max_child_end > parent_duration_seconds {
+        let timeline_scale = parent_duration_seconds / max_child_end;
+        for child in &mut children {
+            child.start_seconds *= timeline_scale;
+            child.duration_seconds *= timeline_scale;
+        }
     }
     let (parent_path, _) = split_effect_script_key(&render.script_key);
     children

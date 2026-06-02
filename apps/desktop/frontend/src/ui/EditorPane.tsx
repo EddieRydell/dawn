@@ -6,7 +6,7 @@ import { linter, setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import { X } from "lucide-react";
+import { RefreshCw, Save, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { commands } from "../api";
 import type { AppSnapshotDto, ProjectDiagnosticDto, SequenceSelectionDto, TextRangeDto } from "../bindings";
@@ -14,27 +14,37 @@ import { commandRegistry } from "../commandRegistry";
 import { runSnapshotCommand, useAppStore } from "../store";
 import { GuiEditor, SequenceTransportControls } from "./GuiEditor";
 
+type BufferExternalState = "current" | "changedOnDisk" | "deletedOnDisk";
+type EditorBufferWithExternalState = NonNullable<AppSnapshotDto["activeBuffer"]>;
+type PathSelection = { path: string | null; selection: SequenceSelectionDto | null };
+
 export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
   const { localText, setLocalText } = useAppStore();
   const editorHost = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [editorSignal, setEditorSignal] = useState(0);
-  const [sequenceSelection, setSequenceSelection] = useState<SequenceSelectionDto | null>(null);
+  const [pathSelection, setPathSelection] = useState<PathSelection>({ path: null, selection: null });
   const latestLocalText = useRef(localText);
   const applyingExternalText = useRef(false);
-  const activePath = snapshot.activeBuffer?.path ?? null;
-  const viewMode = snapshot.activeBuffer?.viewMode ?? "text";
+  const activeBuffer = snapshot.activeBuffer;
+  const activePath = activeBuffer?.path ?? null;
+  const viewMode = activeBuffer?.viewMode ?? "text";
+  const activeExternalState = activeBufferExternalState(activeBuffer);
+  const activeConflicted = activeExternalState !== "current";
   const activeSequenceDocument =
     viewMode === "gui" && snapshot.activeGuiDocument?.type === "sequence" ? snapshot.activeGuiDocument.document : null;
+  const sequenceSelection = pathSelection.path === activePath ? pathSelection.selection : null;
+  const setSequenceSelection = useCallback(
+    (selection: SequenceSelectionDto | null) => {
+      setPathSelection({ path: activePath, selection });
+    },
+    [activePath]
+  );
   const selectedEffectIds = useMemo(
     () => (sequenceSelection?.type === "effects" ? sequenceSelection.ids : []),
     [sequenceSelection]
   );
-
-  useEffect(() => {
-    setSequenceSelection(null);
-  }, [activePath]);
 
   useEffect(() => {
     latestLocalText.current = localText;
@@ -52,11 +62,15 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
       state: createState(
         latestLocalText.current,
         activePath,
+        activeConflicted,
         (update) => {
           if (update.docChanged || update.viewportChanged || update.geometryChanged) {
             setEditorSignal((signal) => signal + 1);
           }
           if (update.docChanged && !applyingExternalText.current) {
+            if (activeConflicted) {
+              return;
+            }
             const text = update.state.doc.toString();
             setLocalText(text);
             scheduleAutosave(text);
@@ -88,7 +102,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
         setEditorView(null);
       });
     };
-  }, [activePath, setLocalText, viewMode]);
+  }, [activeConflicted, activePath, setLocalText, viewMode]);
 
   useEffect(() => {
     if (!view.current) return;
@@ -119,7 +133,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
   }
 
   return (
-    <section className="editor-shell">
+    <section className={`editor-shell ${activeConflicted ? "has-conflict-banner" : ""}`}>
       <div className="tab-strip">
         {snapshot.tabs.map((tab) => (
           <button
@@ -129,6 +143,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
           >
             <span>{tab.name}</span>
             {tab.dirty && <span className="dirty-dot" />}
+            {tabExternalState(tab) !== "current" && <span className="conflict-dot" />}
             <X
               size={14}
               onClick={(event) => {
@@ -164,6 +179,23 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
           </button>
         </div>
       </div>
+      {activeConflicted && (
+        <div className="conflict-banner">
+          <span>
+            {activeExternalState === "deletedOnDisk"
+              ? "This file was deleted on disk."
+              : "This file changed on disk."}
+          </span>
+          <button type="button" onClick={() => void runSnapshotCommand(commands.reloadActiveBufferFromDisk)}>
+            <RefreshCw size={14} />
+            Reload from Disk
+          </button>
+          <button type="button" onClick={() => void runSnapshotCommand(commands.keepActiveBuffer)}>
+            <Save size={14} />
+            Keep Mine
+          </button>
+        </div>
+      )}
       {viewMode === "gui" ? (
         <GuiEditor
           snapshot={snapshot}
@@ -172,7 +204,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
         />
       ) : (
         <div className="editor-scrollbar-shell">
-          <div ref={editorHost} className="editor-host" />
+          <div ref={editorHost} className={`editor-host ${activeConflicted ? "conflicted" : ""}`} />
           <EditorScrollbar
             activePath={activePath}
             diagnostics={snapshot.diagnostics}
@@ -370,8 +402,18 @@ let autosaveTimer: number | undefined;
 function scheduleAutosave(text: string) {
   window.clearTimeout(autosaveTimer);
   autosaveTimer = window.setTimeout(() => {
-    void runSnapshotCommand(() => commands.updateActiveText(text));
+    void runSnapshotCommand(() => commands.updateActiveText(text)).then(() =>
+      runSnapshotCommand(commands.flushAutosave)
+    );
   }, 450);
+}
+
+function activeBufferExternalState(buffer: EditorBufferWithExternalState | null): BufferExternalState {
+  return buffer?.externalState ?? "current";
+}
+
+function tabExternalState(tab: AppSnapshotDto["tabs"][number]): BufferExternalState {
+  return tab.externalState;
 }
 
 function squiggleDataUri(color: string): string {
@@ -382,6 +424,7 @@ function squiggleDataUri(color: string): string {
 function createState(
   text: string,
   path: string | null,
+  readOnly: boolean,
   onUpdate: (update: ViewUpdate) => void,
   onHistoryCommand: (text: string, redo: boolean) => Promise<void>
 ) {
@@ -390,6 +433,8 @@ function createState(
     extensions: [
       languageForPath(path),
       syntaxHighlighting(dawnHighlightStyle),
+      EditorState.readOnly.of(readOnly),
+      EditorView.editable.of(!readOnly),
       linter(null, { autoPanel: false }),
       keymap.of([
         {

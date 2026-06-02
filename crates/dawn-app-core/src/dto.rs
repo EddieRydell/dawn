@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::app_model::{ActiveGuiDocument, AppSnapshot, LiveOutputSnapshot};
-use crate::editor_session::{EditorBuffer, EditorViewMode};
+use crate::editor_session::{BufferExternalState, EditorBuffer, EditorViewMode};
 use crate::preview_session::AudioPlaybackStatus;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -69,7 +69,16 @@ pub struct EditorBufferDto {
     pub name: String,
     pub text: String,
     pub dirty: bool,
+    pub external_state: BufferExternalStateDto,
     pub view_mode: EditorViewModeDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum BufferExternalStateDto {
+    Current,
+    ChangedOnDisk,
+    DeletedOnDisk,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -1653,6 +1662,11 @@ impl From<EditorBuffer> for EditorBufferDto {
             name,
             text: buffer.text,
             dirty,
+            external_state: match buffer.external_state {
+                BufferExternalState::Current => BufferExternalStateDto::Current,
+                BufferExternalState::ChangedOnDisk => BufferExternalStateDto::ChangedOnDisk,
+                BufferExternalState::DeletedOnDisk => BufferExternalStateDto::DeletedOnDisk,
+            },
             view_mode: match buffer.view_mode {
                 EditorViewMode::Text => EditorViewModeDto::Text,
                 EditorViewMode::Gui => EditorViewModeDto::Gui,

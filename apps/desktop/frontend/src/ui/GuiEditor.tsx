@@ -498,7 +498,8 @@ function useSequenceAudioStatus(preview: AppSnapshotDto["preview"]) {
       return { label: "Audio missing", tone: "error" };
     case "error":
       return { label: "Audio error", tone: "error" };
-    default:
+    case "ended":
+    case "none":
       return loadedNoticeVisible ? { label: "Audio loaded", tone: "ready" } : null;
   }
 }
@@ -943,7 +944,7 @@ function SequenceCanvas({
         ctx.stroke();
       }
     }
-    if (marquee?.active) {
+    if (marquee?.active === true) {
       const box = normalizedRect(marquee.startX, marquee.startY, marquee.x, marquee.y);
       ctx.fillStyle = marquee.mode === "marks" ? "rgb(142 202 230 / 12%)" : "rgb(240 196 107 / 12%)";
       ctx.strokeStyle = marquee.mode === "marks" ? "#8ecae6" : "#f0c46b";
@@ -1208,10 +1209,12 @@ function SequenceCanvas({
         }
         if (x < left && y >= top && document.lanes.length > 0) {
           const laneIndex = clamp(Math.floor((y - top + viewport.scrollY) / viewport.laneHeight), 0, document.lanes.length - 1);
-          const ids = document.effects.filter((effect) => document.lanes[laneIndex]?.target !== undefined && targetsEqual(effect.target, document.lanes[laneIndex].target)).map((effect) => effect.id);
+          const lane = document.lanes[laneIndex];
+          if (lane === undefined) return;
+          const ids = document.effects.filter((effect) => targetsEqual(effect.target, lane.target)).map((effect) => effect.id);
           setSelectedLaneIndex(laneIndex);
           updateSequenceSelection(ids.length > 0 ? { type: "effects", ids } : null);
-          setSelected(ids.length === 1 ? `effect:${ids[0]}` : null);
+          setSelected(singleEffectSelectionString(ids));
           return;
         }
         const hit = hitSequence(visibleClips, event.nativeEvent.offsetX, event.nativeEvent.offsetY);
@@ -1222,7 +1225,7 @@ function SequenceCanvas({
             ? activeSelection
             : nextEffectSelection(activeSelection?.type === "effects" ? activeSelection : null, hit.effect.id, event.shiftKey, event.ctrlKey || event.metaKey);
           updateSequenceSelection(nextSelection);
-          setSelected(nextSelection.type === "effects" && nextSelection.ids.length === 1 ? `effect:${nextSelection.ids[0]}` : `effect:${hit.effect.id}`);
+          setSelected(nextSelection.type === "effects" ? singleEffectSelectionString(nextSelection.ids) ?? `effect:${hit.effect.id}` : `effect:${hit.effect.id}`);
           setSelectedLaneIndex(hit.laneIndex);
           setDragCursor("grabbing");
           drag.current = {
@@ -3548,12 +3551,18 @@ function selectionFromSingle(selected: string | null): SequenceSelection {
 }
 
 function singleSelectionString(selection: SequenceSelection): string | null {
-  if (selection?.type === "effects" && selection.ids.length === 1) return `effect:${selection.ids[0]}`;
+  if (selection?.type === "effects") return singleEffectSelectionString(selection.ids);
   if (selection?.type === "marks" && selection.marks.length === 1) {
     const mark = selection.marks[0];
     return mark === undefined ? null : `mark:${mark.collectionKey}:${mark.index}`;
   }
   return null;
+}
+
+function singleEffectSelectionString(ids: number[]): string | null {
+  if (ids.length !== 1) return null;
+  const id = ids[0];
+  return id === undefined ? null : `effect:${id}`;
 }
 
 function selectionCount(selection: SequenceSelectionDto) {

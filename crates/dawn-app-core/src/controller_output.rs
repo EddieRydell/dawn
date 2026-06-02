@@ -51,6 +51,20 @@ impl ControllerOutputPlan {
         outputs
     }
 
+    pub fn frame_channel_bytes(&self, frame: &OutputFrame) -> Vec<u8> {
+        self.frame_buffers(frame)
+            .into_iter()
+            .flat_map(|buffer| buffer.data)
+            .collect()
+    }
+
+    pub fn channel_count(&self) -> usize {
+        self.universes
+            .iter()
+            .map(|universe| universe.channel_count)
+            .sum()
+    }
+
     pub fn blackout_buffers(&self) -> Vec<ControllerUniverseFrame> {
         self.universes
             .iter()
@@ -66,7 +80,7 @@ impl ControllerOutputPlan {
 #[derive(Debug, Clone)]
 pub struct ControllerUniversePlan {
     pub controller_name: String,
-    pub destination: SocketAddr,
+    pub destination: Option<SocketAddr>,
     pub universe: u16,
     channel_count: usize,
     routes: Vec<ControllerRoutePlan>,
@@ -83,7 +97,7 @@ struct ControllerRoutePlan {
 
 #[derive(Debug, Clone)]
 pub struct ControllerUniverseFrame {
-    pub destination: SocketAddr,
+    pub destination: Option<SocketAddr>,
     pub universe: u16,
     pub data: Vec<u8>,
 }
@@ -264,6 +278,25 @@ impl std::error::Error for ControllerOutputError {}
 pub fn build_output_plan(
     analysis: &ProjectAnalysis,
 ) -> Result<ControllerOutputPlan, ControllerOutputError> {
+    build_output_plan_for(analysis, ControllerOutputPurpose::Live)
+}
+
+pub fn build_fseq_output_plan(
+    analysis: &ProjectAnalysis,
+) -> Result<ControllerOutputPlan, ControllerOutputError> {
+    build_output_plan_for(analysis, ControllerOutputPurpose::Fseq)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ControllerOutputPurpose {
+    Live,
+    Fseq,
+}
+
+fn build_output_plan_for(
+    analysis: &ProjectAnalysis,
+    purpose: ControllerOutputPurpose,
+) -> Result<ControllerOutputPlan, ControllerOutputError> {
     let project = analysis
         .resolved
         .as_ref()
@@ -278,6 +311,7 @@ pub fn build_output_plan(
                 ControllerIndex(controller_index),
                 controller,
                 &mut universes,
+                purpose,
             )?;
         }
     }
@@ -302,7 +336,12 @@ pub fn build_output_plan(
                 controller: controller.name.clone(),
             });
         };
-        let destination = controller_destination(controller)?;
+        if purpose == ControllerOutputPurpose::Live {
+            validate_live_controller(controller)?;
+        }
+        let destination = controller
+            .destination
+            .map(|destination| destination.socket_addr());
         let universe_index =
             controller_universe_index(&controller.name, declared_universes, route.universe)?;
 
@@ -319,7 +358,7 @@ pub fn build_output_plan(
             occupancy: &mut occupancy,
             controller_index: route.controller,
             controller_name: &controller.name,
-            destination: destination.socket_addr(),
+            destination,
             declared_universes,
             start_universe_index: universe_index,
             start: route.start,
@@ -355,6 +394,7 @@ fn add_linear_rgb_controller(
     controller_index: ControllerIndex,
     controller: &Controller,
     universes: &mut HashMap<UniverseKey, ControllerUniverseBuilder>,
+    purpose: ControllerOutputPurpose,
 ) -> Result<(), ControllerOutputError> {
     let project = analysis
         .resolved
@@ -389,7 +429,12 @@ fn add_linear_rgb_controller(
             message: "slots_per_universe must be in 1..512",
         });
     }
-    let destination = controller_destination(controller)?;
+    if purpose == ControllerOutputPurpose::Live {
+        validate_live_controller(controller)?;
+    }
+    let destination = controller
+        .destination
+        .map(|destination| destination.socket_addr());
     let group = project
         .display
         .layout
@@ -473,7 +518,7 @@ fn add_linear_rgb_controller(
                 .entry(key)
                 .or_insert_with(|| ControllerUniverseBuilder {
                     controller_name: controller.name.clone(),
-                    destination: destination.socket_addr(),
+                    destination,
                     universe: universe as u16,
                     channel_count: universe_slots,
                     routes: Vec::new(),
@@ -495,20 +540,19 @@ fn add_linear_rgb_controller(
     Ok(())
 }
 
-fn controller_destination(
-    controller: &Controller,
-) -> Result<dawn_project::model::ControllerDestination, ControllerOutputError> {
+fn validate_live_controller(controller: &Controller) -> Result<(), ControllerOutputError> {
     if controller.protocol != Protocol::Sacn {
         return Err(ControllerOutputError::UnsupportedProtocol {
             controller: controller.name.clone(),
             protocol: controller.protocol,
         });
     }
-    controller
-        .destination
-        .ok_or_else(|| ControllerOutputError::MissingDestination {
+    if controller.destination.is_none() {
+        return Err(ControllerOutputError::MissingDestination {
             controller: controller.name.clone(),
-        })
+        });
+    }
+    Ok(())
 }
 
 struct RouteSegmentInput<'a> {
@@ -516,7 +560,7 @@ struct RouteSegmentInput<'a> {
     occupancy: &'a mut HashMap<UniverseKey, Vec<bool>>,
     controller_index: ControllerIndex,
     controller_name: &'a str,
-    destination: SocketAddr,
+    destination: Option<SocketAddr>,
     declared_universes: &'a [dawn_project::model::Universe],
     start_universe_index: usize,
     start: u32,
@@ -750,7 +794,7 @@ fn write_source_name(target: &mut [u8]) {
 #[derive(Debug, Clone)]
 struct ControllerUniverseBuilder {
     controller_name: String,
-    destination: SocketAddr,
+    destination: Option<SocketAddr>,
     universe: u16,
     channel_count: usize,
     routes: Vec<ControllerRoutePlan>,

@@ -3,6 +3,7 @@ import { commands } from "../api";
 import { installGlobalShortcuts } from "../commandRegistry";
 import { runSnapshotCommand, subscribeToSnapshots, useAppStore } from "../store";
 import { EditorPane } from "./EditorPane";
+import { ExportFseqDialog } from "./ExportFseqDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { ProjectTree } from "./ProjectTree";
 import { StatusBar } from "./StatusBar";
@@ -38,6 +39,7 @@ export function App() {
       </main>
       <StatusBar snapshot={snapshot} />
       <NewProjectDialog />
+      <ExportFseqDialog />
       {snapshot.projectRoot === null && (
         <div className="empty-project">
           <button onClick={() => void runSnapshotCommand(commands.openProjectDialog)}>Open Project</button>

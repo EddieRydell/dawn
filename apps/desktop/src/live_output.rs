@@ -146,8 +146,11 @@ impl LiveOutputRuntime {
             self.socket = Some(UdpSocket::bind("0.0.0.0:0").map_err(|error| error.to_string())?);
         }
         for buffer in buffers {
+            let destination = buffer
+                .destination
+                .ok_or_else(|| "live output destination is not available".to_string())?;
             let key = UniverseSequenceKey {
-                destination: buffer.destination,
+                destination,
                 universe: buffer.universe,
             };
             let sequence = self.sequence_counters.entry(key).or_insert(0);
@@ -158,7 +161,7 @@ impl LiveOutputRuntime {
                 .as_ref()
                 .ok_or_else(|| "live output socket is not available".to_string())?;
             socket
-                .send_to(&packet, buffer.destination)
+                .send_to(&packet, destination)
                 .map_err(|error| error.to_string())?;
         }
         Ok(())

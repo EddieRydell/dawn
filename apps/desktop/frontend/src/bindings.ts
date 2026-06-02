@@ -20,10 +20,13 @@ export const commands = {
 	applySequenceSelectionEdit: (edit: SequenceSelectionEditDto) => typedError<SequenceSelectionEditResultDto, string>(__TAURI_INVOKE("apply_sequence_selection_edit", { edit })),
 	chooseSequenceAudio: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("choose_sequence_audio")),
 	clearSequenceAudio: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("clear_sequence_audio")),
+	exportActiveSequenceFseq: (stepMs: number) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("export_active_sequence_fseq", { stepMs })),
 	getSequenceEffectPreviews: (path: string, objectKey: string, effectIds: number[]) => typedError<SequenceEffectPreviewBatchDto, string>(__TAURI_INVOKE("get_sequence_effect_previews", { path, objectKey, effectIds })),
 	applyLayoutGuiEdit: (edit: LayoutGuiEditDto) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("apply_layout_gui_edit", { edit })),
 	applyFixtureGuiEdit: (edit: FixtureGuiEditDto) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("apply_fixture_gui_edit", { edit })),
 	flushAutosave: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("flush_autosave")),
+	reloadActiveBufferFromDisk: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("reload_active_buffer_from_disk")),
+	keepActiveBuffer: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("keep_active_buffer")),
 	createFile: (parent: string, name: string) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("create_file", { parent, name })),
 	createDirectory: (parent: string, name: string) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("create_directory", { parent, name })),
 	renamePath: (path: string, newName: string) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("rename_path", { path, newName })),
@@ -66,6 +69,8 @@ export type AppSnapshotDto = {
 
 export type AudioPlaybackStatus = "none" | "missing" | "loading" | "loading_to_play" | "ready" | "playing" | "ended" | "error";
 
+export type BufferExternalStateDto = "current" | "changedOnDisk" | "deletedOnDisk";
+
 export type ColorCurvePointDto = {
 	time: number,
 	value: string,
@@ -97,6 +102,7 @@ export type EditorBufferDto = {
 	name: string,
 	text: string,
 	dirty: boolean,
+	externalState: BufferExternalStateDto,
 	viewMode: EditorViewModeDto,
 };
 

@@ -16,6 +16,7 @@ mod audio_runtime;
 mod bindings;
 mod commands;
 mod effect_previews;
+mod filesystem_watcher;
 mod live_output;
 mod new_project;
 mod preview;
@@ -43,6 +44,13 @@ pub fn run() -> Result<(), tauri::Error> {
                 .map_err(std::io::Error::other)?;
             preview::start_preview_worker(app.handle().clone());
             let state = app.state::<state::AppState>();
+            if let Ok(model) = state::lock_model(&state) {
+                let root = model.snapshot_dto().project_root;
+                drop(model);
+                if let Ok(mut watcher) = state::lock_filesystem_watcher(&state) {
+                    let _ = watcher.sync_project_root(app.handle(), root);
+                }
+            }
             preview::open_preview_window_on_startup(app.handle().clone(), state)
                 .map_err(std::io::Error::other)?;
             Ok(())

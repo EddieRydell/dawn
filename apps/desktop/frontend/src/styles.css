@@ -181,6 +181,10 @@ button:focus-visible,
   background: #17181b;
 }
 
+.editor-shell.has-conflict-banner {
+  grid-template-rows: 34px 32px 36px 1fr;
+}
+
 .empty-editor {
   display: grid;
   place-items: center;
@@ -228,6 +232,51 @@ button:focus-visible,
   flex: 0 0 7px;
   border-radius: 50%;
   background: #e3a84f;
+}
+
+.conflict-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 2px;
+  background: #df6b6b;
+}
+
+.conflict-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border-bottom: 1px solid #5e3434;
+  background: #2c1f21;
+  padding: 0 10px;
+  color: #ffd7d7;
+  font-size: 12px;
+}
+
+.conflict-banner span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conflict-banner button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  border: 1px solid #7d3b3b;
+  border-radius: 4px;
+  background: #17181b;
+  padding: 0 8px;
+  color: #ffd7d7;
+  font-size: 12px;
+}
+
+.editor-host.conflicted {
+  opacity: 0.82;
 }
 
 .editor-scrollbar-shell {
@@ -1285,14 +1334,16 @@ button:focus-visible,
   gap: 12px;
 }
 
-.new-project-form label {
+.new-project-form label,
+.export-fseq-form label {
   display: grid;
   gap: 5px;
   color: #a8a29a;
   font-size: 12px;
 }
 
-.new-project-form input {
+.new-project-form input,
+.export-fseq-form input {
   min-width: 0;
   height: 30px;
   border: 1px solid #373b42;
@@ -1300,6 +1351,11 @@ button:focus-visible,
   background: #17181b;
   padding: 0 8px;
   color: #ebe7df;
+}
+
+.export-fseq-form {
+  display: grid;
+  gap: 12px;
 }
 
 .new-project-location-row {
