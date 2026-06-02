@@ -29,15 +29,7 @@ pub(crate) fn dispatch(
                 runtime.clear();
             }
         }
-        if let Some(clock) = sync_active_audio_load(state, &snapshot.preview) {
-            let analysis = model.analysis.clone();
-            apply_audio_clock_to_model(&mut model, &clock, analysis.as_ref());
-            let snapshot = model.snapshot_dto();
-            app.emit("app_snapshot_changed", &snapshot)
-                .map_err(|error| error.to_string())?;
-            emit_preview_state_dto(app, &snapshot)?;
-            return Ok(snapshot);
-        }
+        preload_active_preview_audio(state, &snapshot.preview);
         app.emit("app_snapshot_changed", &snapshot)
             .map_err(|error| error.to_string())?;
         emit_preview_state_dto(app, &snapshot)?;
@@ -138,17 +130,17 @@ pub(crate) fn apply_audio_clock_to_model(
     }
 }
 
-pub(crate) fn sync_active_audio_load(
+pub(crate) fn preload_active_preview_audio(
     state: &State<'_, AppState>,
     preview: &PreviewSnapshotDto,
-) -> Option<AudioClock> {
+) {
     let Some(audio) = preview.audio.as_ref() else {
         if preview.source_label != "No preview source" {
             if let Ok(runtime) = lock_audio_runtime(state) {
                 runtime.clear();
             }
         }
-        return None;
+        return;
     };
     let audio = SequenceAudioDocument {
         import: audio.import.clone(),
@@ -165,10 +157,9 @@ pub(crate) fn sync_active_audio_load(
         )
     {
         if let Ok(runtime) = lock_audio_runtime(state) {
-            return runtime.preload(&audio).ok();
+            let _clock = runtime.preload(&audio);
         }
     }
-    None
 }
 
 pub(crate) fn emit_model_snapshot(
@@ -191,6 +182,7 @@ pub(crate) fn emit_preview_state_dto(
         PreviewStateEventDto {
             source_label: snapshot.preview.source_label.clone(),
             is_playing: snapshot.preview.is_playing,
+            preview_updating: snapshot.preview.preview_updating,
             effect_preview_active: snapshot.preview.effect_preview_active,
             position_seconds: snapshot.preview.position_seconds,
             home_seconds: snapshot.preview.home_seconds,
@@ -215,6 +207,7 @@ pub(crate) fn emit_preview_state_snapshot(
         PreviewStateEventDto {
             source_label: snapshot.source_label.clone(),
             is_playing: snapshot.is_playing,
+            preview_updating: snapshot.preview_updating,
             effect_preview_active: snapshot.effect_preview_active,
             position_seconds: snapshot.position_seconds,
             home_seconds: snapshot.home_seconds,

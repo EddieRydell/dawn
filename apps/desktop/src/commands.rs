@@ -12,7 +12,7 @@ use dawn_project::path::{serialized_import_path, utf8_path, Utf8PathBuf};
 use tauri::{AppHandle, Manager, State};
 
 use crate::app_runtime::{
-    dispatch, emit_model_snapshot, sync_active_audio_load, update_preview_from_audio_status,
+    dispatch, emit_model_snapshot, preload_active_preview_audio, update_preview_from_audio_status,
     valid_sequence_audio,
 };
 use crate::effect_previews::{
@@ -35,7 +35,7 @@ fn get_snapshot(state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
     let mut model = lock_model(&state)?;
     model.set_live_output_snapshot(live_output);
     let snapshot = model.snapshot_dto();
-    let _ = sync_active_audio_load(&state, &snapshot.preview);
+    preload_active_preview_audio(&state, &snapshot.preview);
     Ok(snapshot)
 }
 

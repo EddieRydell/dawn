@@ -2,14 +2,21 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use dawn_app_core::dto::{GeometryRenderBoundsDto, GeometryRenderPointDto};
-use dawn_app_core::output_runtime::OutputFrame;
-use dawn_app_core::preview_session::{AudioPlaybackStatus, PreviewRenderTiming, PreviewSnapshot};
+use dawn_app_core::output_runtime::{
+    empty_frame, OutputFrame, SequenceChangeImpact, SequenceFrameEvaluator, SequenceRenderCache,
+};
+use dawn_app_core::preview_session::{
+    AudioPlaybackStatus, PreviewRenderRequest, PreviewRenderResult, PreviewRenderTiming,
+    PreviewSnapshot, SequenceKey,
+};
 use dawn_project::analysis::ProjectAnalysis;
+use dawn_project::document::SequenceDocument;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use crate::app_runtime::{apply_audio_clock_to_model, emit_preview_state_snapshot};
+use crate::audio_runtime::AudioClock;
 use crate::state::{
     lock_audio_runtime, lock_live_output, lock_model, lock_preview_transport, AppState,
     CommandResult,
@@ -23,6 +30,7 @@ const PREVIEW_STATE_EVENT_INTERVAL: Duration = Duration::from_millis(33);
 pub struct PreviewStateEventDto {
     pub source_label: String,
     pub is_playing: bool,
+    pub preview_updating: bool,
     pub effect_preview_active: bool,
     pub position_seconds: f64,
     pub home_seconds: f64,
@@ -136,10 +144,95 @@ pub struct PreviewSceneFixtureDto {
     pub pixels: Vec<GeometryRenderPointDto>,
 }
 
+#[derive(Debug, Default)]
+struct DeferredPreviewRenderer {
+    sequence_cache: SequenceRenderCache,
+    render_cache: Option<SequenceFrameEvaluator>,
+    previous_key: Option<SequenceKey>,
+    previous_document: Option<SequenceDocument>,
+}
+
+impl DeferredPreviewRenderer {
+    fn render(
+        &mut self,
+        analysis: Option<&ProjectAnalysis>,
+        request: PreviewRenderRequest,
+    ) -> PreviewRenderResult {
+        let Some(analysis) = analysis else {
+            let frame = empty_frame(request.generation, "No project analysis");
+            return PreviewRenderResult {
+                request,
+                frame,
+                timing: PreviewRenderTiming::default(),
+            };
+        };
+        self.apply_request_cache_invalidation(analysis, &request);
+        let mut timing = PreviewRenderTiming::default();
+        let frame = match self.cached_renderer(analysis, &request.document) {
+            Ok((renderer, renderer_build_ms)) => {
+                let (frame, evaluation_timing) =
+                    renderer.evaluate_timed(request.position_seconds, request.generation);
+                timing = PreviewRenderTiming::from_evaluation(renderer_build_ms, evaluation_timing);
+                frame
+            }
+            Err(message) => empty_frame(request.generation, message),
+        };
+        self.previous_key = Some(request.key.clone());
+        self.previous_document = Some(request.document.clone());
+        PreviewRenderResult {
+            request,
+            frame,
+            timing,
+        }
+    }
+
+    fn apply_request_cache_invalidation(
+        &mut self,
+        analysis: &ProjectAnalysis,
+        request: &PreviewRenderRequest,
+    ) {
+        if self.previous_key.as_ref() != Some(&request.key) {
+            self.sequence_cache.clear();
+            self.render_cache = None;
+            return;
+        }
+        let Some(previous_document) = self.previous_document.as_ref() else {
+            return;
+        };
+        let impact = SequenceChangeImpact::between(previous_document, &request.document, analysis);
+        if impact.requires_full_clear()
+            || !impact.invalidated_prepared_effect_ids().is_empty()
+            || !impact.invalidated_topology_effect_ids().is_empty()
+        {
+            self.sequence_cache.apply_change_impact(&impact);
+            self.render_cache = None;
+        }
+    }
+
+    fn cached_renderer(
+        &mut self,
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+    ) -> Result<(&mut SequenceFrameEvaluator, f64), String> {
+        let mut renderer_build_ms = 0.0;
+        if self.render_cache.is_none() {
+            let build_started = Instant::now();
+            let (renderer, _) = self.sequence_cache.build_evaluator(analysis, document)?;
+            self.render_cache = Some(renderer);
+            renderer_build_ms = elapsed_ms(build_started);
+        }
+        self.render_cache
+            .as_mut()
+            .map(|renderer| (renderer, renderer_build_ms))
+            .ok_or_else(|| "Sequence preview renderer was not prepared".to_string())
+    }
+}
+
 pub(crate) fn start_preview_worker(app: AppHandle) {
     thread::spawn(move || {
         let worker_started = Instant::now();
         let sleeper = spin_sleep::SpinSleeper::default();
+        let mut deferred_renderer = DeferredPreviewRenderer::default();
         let mut last_published_generation: Option<u64> = None;
         let mut had_sink = false;
         let mut last_event_at = Instant::now() - PREVIEW_STATE_EVENT_INTERVAL;
@@ -173,68 +266,114 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             timing.has_sink = has_sink;
             timing.event_emit_ms = last_event_emit_ms;
             let model_lock_started = Instant::now();
-            let (snapshot, target_fps, analysis) = match lock_model(&state) {
-                Ok(mut model) => {
-                    timing.model_lock_wait_ms = elapsed_ms(model_lock_started);
-                    let model_started = Instant::now();
-                    let preview_snapshot_started = Instant::now();
-                    let preview_snapshot = model.preview.snapshot();
-                    timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
-                    let audio_poll_started = Instant::now();
-                    let audio_clock = if preview_snapshot.audio.is_some() {
-                        lock_audio_runtime(&state)
-                            .ok()
-                            .and_then(|runtime| runtime.clock().ok())
-                    } else {
-                        None
-                    };
-                    timing.audio_poll_ms = audio_poll_started.elapsed().as_secs_f64() * 1000.0;
-                    timing.audio_position_seconds =
-                        audio_clock.as_ref().map(|clock| clock.position_seconds);
-                    let rendered_during_clock_apply = if let Some(clock) = audio_clock {
+            let (mut snapshot, mut target_fps, mut analysis, deferred_request) =
+                match lock_model(&state) {
+                    Ok(mut model) => {
+                        timing.model_lock_wait_ms = elapsed_ms(model_lock_started);
+                        let model_started = Instant::now();
+                        let preview_snapshot_started = Instant::now();
+                        let preview_snapshot = model.preview.snapshot();
+                        timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
+                        let audio_poll_started = Instant::now();
+                        let audio_clock = if preview_snapshot.audio.is_some() {
+                            lock_audio_runtime(&state)
+                                .ok()
+                                .and_then(|runtime| runtime.clock().ok())
+                        } else {
+                            None
+                        };
+                        timing.audio_poll_ms = audio_poll_started.elapsed().as_secs_f64() * 1000.0;
+                        timing.audio_position_seconds =
+                            audio_clock.as_ref().map(|clock| clock.position_seconds);
+                        let rendered_during_clock_apply = if let Some(clock) = audio_clock {
+                            if !should_apply_audio_clock_to_model(&preview_snapshot, &clock) {
+                                false
+                            } else {
+                                let analysis_clone_started = Instant::now();
+                                let analysis = model.analysis.clone();
+                                timing.analysis_clone_ms += elapsed_ms(analysis_clone_started);
+                                let apply_started = Instant::now();
+                                apply_audio_clock_to_model(&mut model, &clock, analysis.as_ref());
+                                timing.audio_apply_ms =
+                                    apply_started.elapsed().as_secs_f64() * 1000.0;
+                                record_render_timing(
+                                    &mut timing,
+                                    model.preview.last_render_timing(),
+                                );
+                                true
+                            }
+                        } else {
+                            model.tick_preview_clock();
+                            false
+                        };
+                        let preview_snapshot_started = Instant::now();
+                        let mut snapshot = model.preview.snapshot();
+                        timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
+                        let should_render_frame = (has_sink || live_output_enabled)
+                            && (snapshot.is_playing
+                                || snapshot.preview_updating
+                                || snapshot.effect_preview_active
+                                || live_output_enabled
+                                || last_published_generation != Some(snapshot.frame.generation));
+                        let should_render_frame = should_render_frame || snapshot.preview_updating;
+                        let deferred_request =
+                            if snapshot.preview_updating && !rendered_during_clock_apply {
+                                model.begin_deferred_preview_render()
+                            } else {
+                                None
+                            };
+                        if should_render_frame
+                            && !rendered_during_clock_apply
+                            && deferred_request.is_none()
+                        {
+                            let render_started = Instant::now();
+                            model.render_preview_frame();
+                            timing.render_ms = render_started.elapsed().as_secs_f64() * 1000.0;
+                            record_render_timing(&mut timing, model.preview.last_render_timing());
+                            timing.rendered_frame = true;
+                            let preview_snapshot_started = Instant::now();
+                            snapshot = model.preview.snapshot();
+                            timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
+                        } else if should_render_frame {
+                            timing.rendered_frame = true;
+                        }
+                        timing.model_update_ms = model_started.elapsed().as_secs_f64() * 1000.0;
                         let analysis_clone_started = Instant::now();
                         let analysis = model.analysis.clone();
                         timing.analysis_clone_ms += elapsed_ms(analysis_clone_started);
-                        let apply_started = Instant::now();
-                        apply_audio_clock_to_model(&mut model, &clock, analysis.as_ref());
-                        timing.audio_apply_ms = apply_started.elapsed().as_secs_f64() * 1000.0;
-                        record_render_timing(&mut timing, model.preview.last_render_timing());
-                        true
-                    } else {
-                        model.tick_preview_clock();
-                        false
-                    };
-                    let preview_snapshot_started = Instant::now();
-                    let mut snapshot = model.preview.snapshot();
-                    timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
-                    let should_render_frame = (has_sink || live_output_enabled)
-                        && (snapshot.is_playing
-                            || snapshot.effect_preview_active
-                            || live_output_enabled
-                            || last_published_generation != Some(snapshot.frame.generation));
-                    if should_render_frame && !rendered_during_clock_apply {
-                        let render_started = Instant::now();
-                        model.render_preview_frame();
-                        timing.render_ms = render_started.elapsed().as_secs_f64() * 1000.0;
-                        record_render_timing(&mut timing, model.preview.last_render_timing());
-                        timing.rendered_frame = true;
-                        let preview_snapshot_started = Instant::now();
-                        snapshot = model.preview.snapshot();
-                        timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
-                    } else if should_render_frame {
-                        timing.rendered_frame = true;
+                        (
+                            snapshot,
+                            model.preview_target_fps(),
+                            analysis,
+                            deferred_request,
+                        )
                     }
-                    timing.model_update_ms = model_started.elapsed().as_secs_f64() * 1000.0;
+                    Err(_) => {
+                        thread::sleep(Duration::from_millis(100));
+                        continue;
+                    }
+                };
+            if let Some(request) = deferred_request {
+                let render_started = Instant::now();
+                let result = deferred_renderer.render(analysis.as_ref(), request);
+                timing.render_ms = elapsed_ms(render_started);
+                record_render_timing(&mut timing, result.timing);
+                timing.rendered_frame = true;
+                let model_lock_started = Instant::now();
+                if let Ok(mut model) = lock_model(&state) {
+                    timing.model_lock_wait_ms += elapsed_ms(model_lock_started);
+                    let model_started = Instant::now();
+                    let _completed = model.complete_deferred_preview_render(result);
+                    let preview_snapshot_started = Instant::now();
+                    snapshot = model.preview.snapshot();
+                    timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
                     let analysis_clone_started = Instant::now();
-                    let analysis = model.analysis.clone();
+                    analysis = model.analysis.clone();
                     timing.analysis_clone_ms += elapsed_ms(analysis_clone_started);
-                    (snapshot, model.preview_target_fps(), analysis)
+                    target_fps = model.preview_target_fps();
+                    timing.model_update_ms += elapsed_ms(model_started);
                 }
-                Err(_) => {
-                    thread::sleep(Duration::from_millis(100));
-                    continue;
-                }
-            };
+            }
             let backend_seconds = worker_started.elapsed().as_secs_f32();
             let frame_generation = snapshot.frame.generation;
             timing.backend_seconds = backend_seconds as f64;
@@ -323,6 +462,21 @@ fn record_render_timing(timing: &mut PreviewTimingDto, render_timing: PreviewRen
 
 fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
+}
+
+fn should_apply_audio_clock_to_model(
+    preview_snapshot: &PreviewSnapshot,
+    clock: &AudioClock,
+) -> bool {
+    preview_snapshot.is_playing
+        || matches!(
+            clock.status,
+            AudioPlaybackStatus::LoadingToPlay
+                | AudioPlaybackStatus::Playing
+                | AudioPlaybackStatus::Ended
+        )
+        || clock.ended
+        || preview_snapshot.audio_playback_status == AudioPlaybackStatus::LoadingToPlay
 }
 
 fn publish_live_output_frame(
@@ -467,6 +621,7 @@ fn persist_preview_window_open(app: &AppHandle, open: bool) {
 struct PreviewEventIdentity {
     source_label: String,
     is_playing: bool,
+    preview_updating: bool,
     effect_preview_active: bool,
     position_seconds: f64,
     home_seconds: f64,
@@ -483,6 +638,7 @@ impl From<&PreviewSnapshot> for PreviewEventIdentity {
         Self {
             source_label: snapshot.source_label.clone(),
             is_playing: snapshot.is_playing,
+            preview_updating: snapshot.preview_updating,
             effect_preview_active: snapshot.effect_preview_active,
             position_seconds: if snapshot.is_playing || snapshot.effect_preview_active {
                 0.0

@@ -101,6 +101,10 @@ empty:
     - 131.101835333s
     - 131.171289481s
     - 131.239520336s
+    - 134.033382466s
+    - 134.170487116s
+    - 134.313726777s
+    - 134.435539212s
   effects:
   - id: 9
     start: 39.257519581s
@@ -973,7 +977,7 @@ empty:
         value: 2.0
     script: effects.MarkPulse
   - id: 35
-    start: 65.108533137s
+    start: 65.088343485s
     duration: 3.131871902s
     target:
       type: group
@@ -988,11 +992,7 @@ empty:
         value: '#000000'
       accent:
         type: curve
-        curve:
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
+        curve: curves.club_gradient
       hue:
         type: curve
         curve:
@@ -1024,6 +1024,20 @@ empty:
           points:
           - time: 0.0
             value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
           - time: 1.0
             value: 0.0
       pulse_shape:
@@ -1033,6 +1047,14 @@ empty:
           points:
           - time: 0.0
             value: 1.0
+          - time: 0.179
+            value: 0.335
+          - time: 0.327
+            value: 0.672
+          - time: 0.427
+            value: 0.328
+          - time: 0.505
+            value: 0.708
           - time: 1.0
             value: 0.0
     script: effects.MarkChase

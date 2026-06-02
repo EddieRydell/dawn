@@ -141,6 +141,7 @@ export function SequenceTransportControls({
         {formatSeconds(livePreview.positionSeconds)} / {formatSeconds(livePreview.durationSeconds || document.durationSeconds)} | Home {formatSeconds(livePreview.homeSeconds)}
         {document.audio ? ` | ${document.audio.exists ? document.audio.fileName : "Missing audio"}` : ""}
         {liveOutput.enabled ? ` | Live ${liveOutput.status} (${liveOutput.activeUniverseCount})` : ""}
+        {livePreview.previewUpdating ? <span className="sequence-preview-status">Updating preview</span> : null}
         {audioStatus !== null && <span className={`sequence-audio-status sequence-audio-status-${audioStatus.tone}`}>{audioStatus.label}</span>}
         {timingSummary !== null && <span className="sequence-timing-status">{timingSummary}</span>}
       </span>

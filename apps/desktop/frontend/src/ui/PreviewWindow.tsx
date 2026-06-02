@@ -13,6 +13,7 @@ import {
 type PreviewState = {
   sourceLabel: string;
   isPlaying: boolean;
+  previewUpdating: boolean;
   positionSeconds: number;
   durationSeconds: number;
   audioPlaybackStatus: AudioPlaybackStatus;
@@ -282,7 +283,7 @@ export function PreviewWindow() {
         </div>
         <div>
           {formatSeconds(state?.positionSeconds ?? metrics.currentTimeSeconds)} | {state?.isPlaying === true ? "Playing" : "Stopped"} |{" "}
-          {previewAudioStatusLabel(state?.audioPlaybackStatus) ?? state?.status ?? error ?? "Ready"}
+          {state?.previewUpdating === true ? "Updating preview" : previewAudioStatusLabel(state?.audioPlaybackStatus) ?? state?.status ?? error ?? "Ready"}
         </div>
       </div>
       <button

@@ -219,6 +219,7 @@ export type PreviewSceneFixtureDto = {
 export type PreviewSnapshotDto = {
 	sourceLabel: string,
 	isPlaying: boolean,
+	previewUpdating: boolean,
 	effectPreviewActive: boolean,
 	positionSeconds: number,
 	homeSeconds: number,

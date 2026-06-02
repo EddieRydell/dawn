@@ -21,7 +21,10 @@ use crate::editor_session::{BufferExternalState, EditorBuffer, EditorSession, Ed
 use crate::layout_persistence::{
     load_workbench_layout, save_workbench_layout, WindowLayout, WorkbenchLayout,
 };
-use crate::preview_session::{PreviewSession, PreviewSnapshot, SequenceKey};
+use crate::preview_session::{
+    PreviewRenderRequest, PreviewRenderResult, PreviewSession, PreviewSnapshot, PreviewSyncMode,
+    SequenceKey,
+};
 use crate::workspace::WorkspaceService;
 
 const MIN_EFFECT_DURATION_SECONDS: f64 = 0.000000001;
@@ -331,13 +334,13 @@ impl AppModel {
                 let (text, disk_version) = self.workspace.read_file_with_version(path.clone())?;
                 self.editors.open_file(path, text, disk_version);
                 self.refresh_analysis()?;
-                self.sync_preview_source();
+                self.sync_preview_source(PreviewSyncMode::RenderNow);
                 self.persist_workbench_layout()?;
             }
             AppAction::CloseFile(path) => {
                 self.editors.close_file(&path);
                 self.refresh_analysis()?;
-                self.sync_preview_source();
+                self.sync_preview_source(PreviewSyncMode::RenderNow);
                 self.persist_workbench_layout()?;
             }
             AppAction::SetActiveFile(path) => {
@@ -346,7 +349,7 @@ impl AppModel {
                 if active_changed {
                     self.invalidate_active_gui_document_cache();
                     self.preview.pause(self.analysis.as_ref());
-                    self.sync_preview_source();
+                    self.sync_preview_source(PreviewSyncMode::RenderNow);
                     self.persist_workbench_layout()?;
                 }
             }
@@ -357,7 +360,7 @@ impl AppModel {
                 let mode = mode.into();
                 self.editors.set_view_mode(&path, mode);
                 self.invalidate_active_gui_document_cache();
-                self.sync_preview_source();
+                self.sync_preview_source(PreviewSyncMode::RenderNow);
                 self.persist_workbench_layout()?;
             }
             AppAction::UpdateActiveText(text) => {
@@ -420,7 +423,7 @@ impl AppModel {
                 let (text, disk_version) = self.workspace.read_file_with_version(path.clone())?;
                 self.editors.open_file(path, text, disk_version);
                 self.refresh_analysis()?;
-                self.sync_preview_source();
+                self.sync_preview_source(PreviewSyncMode::RenderNow);
                 self.persist_workbench_layout()?;
             }
             AppAction::CreateDirectory { parent, name } => {
@@ -428,7 +431,7 @@ impl AppModel {
                 self.workspace.create_directory(parent, &name)?;
                 self.refresh_project_entries()?;
                 self.refresh_analysis()?;
-                self.sync_preview_source();
+                self.sync_preview_source(PreviewSyncMode::RenderNow);
             }
             AppAction::RenamePath { path, new_name } => {
                 self.flush_autosave()?;
@@ -436,7 +439,7 @@ impl AppModel {
                 self.refresh_project_entries()?;
                 self.editors.reconcile_moved_paths(&moves);
                 self.refresh_analysis()?;
-                self.sync_preview_source();
+                self.sync_preview_source(PreviewSyncMode::RenderNow);
                 self.persist_workbench_layout()?;
             }
             AppAction::DeletePath(path) => {
@@ -445,7 +448,7 @@ impl AppModel {
                 self.refresh_project_entries()?;
                 self.editors.reconcile_deleted_path(&path);
                 self.refresh_analysis()?;
-                self.sync_preview_source();
+                self.sync_preview_source(PreviewSyncMode::RenderNow);
                 self.persist_workbench_layout()?;
             }
             AppAction::ToggleProjectTree => {
@@ -513,6 +516,14 @@ impl AppModel {
         self.preview.render_current_frame(self.analysis.as_ref());
     }
 
+    pub fn begin_deferred_preview_render(&mut self) -> Option<PreviewRenderRequest> {
+        self.preview.begin_deferred_render()
+    }
+
+    pub fn complete_deferred_preview_render(&mut self, result: PreviewRenderResult) -> bool {
+        self.preview.complete_deferred_render(result)
+    }
+
     pub fn preview_target_fps(&self) -> u32 {
         self.preview.target_fps()
     }
@@ -550,7 +561,7 @@ impl AppModel {
             self.restore_editor_session();
         }
         self.refresh_analysis()?;
-        self.sync_preview_source();
+        self.sync_preview_source(PreviewSyncMode::RenderNow);
         if remember {
             self.workbench_layout.last_project_root = Some(path);
             self.persist_workbench_layout()?;
@@ -604,11 +615,11 @@ impl AppModel {
     fn refresh_analysis_after_memory_edit(&mut self) {
         match self.refresh_analysis() {
             Ok(()) => {
-                self.sync_preview_source();
+                self.sync_preview_source(PreviewSyncMode::RenderNow);
             }
             Err(error) => {
                 self.status = error;
-                self.sync_preview_source();
+                self.sync_preview_source(PreviewSyncMode::RenderNow);
             }
         }
     }
@@ -639,7 +650,7 @@ impl AppModel {
         if had_dirty_buffers {
             self.refresh_analysis()?;
             if sync_preview {
-                self.sync_preview_source();
+                self.sync_preview_source(PreviewSyncMode::RenderNow);
             }
         }
         Ok(())
@@ -689,7 +700,7 @@ impl AppModel {
         }
         self.refresh_project_entries()?;
         self.refresh_analysis()?;
-        self.sync_preview_source();
+        self.sync_preview_source(PreviewSyncMode::RenderNow);
         self.persist_workbench_layout()?;
         Ok(())
     }
@@ -710,7 +721,7 @@ impl AppModel {
         }
         self.refresh_project_entries()?;
         self.refresh_analysis()?;
-        self.sync_preview_source();
+        self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
 
@@ -724,17 +735,23 @@ impl AppModel {
         self.editors.record_saved_version(&buffer.path, version);
         self.refresh_project_entries()?;
         self.refresh_analysis()?;
-        self.sync_preview_source();
+        self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
 
-    fn sync_preview_source(&mut self) {
+    fn sync_preview_source(&mut self, mode: PreviewSyncMode) {
         let source = self.active_sequence_source();
         self.cache_active_sequence_source(source.as_ref());
-        self.preview.sync_source(source, self.analysis.as_ref());
+        self.preview
+            .sync_source(source, self.analysis.as_ref(), mode);
     }
 
-    fn sync_preview_source_from_document(&mut self, path: Utf8PathBuf, document: SequenceDocument) {
+    fn sync_preview_source_from_document(
+        &mut self,
+        path: Utf8PathBuf,
+        document: SequenceDocument,
+        mode: PreviewSyncMode,
+    ) {
         let source = Some((
             SequenceKey {
                 path,
@@ -743,7 +760,8 @@ impl AppModel {
             document,
         ));
         self.cache_active_sequence_source(source.as_ref());
-        self.preview.sync_source(source, self.analysis.as_ref());
+        self.preview
+            .sync_source(source, self.analysis.as_ref(), mode);
     }
 
     fn cache_active_sequence_source(&mut self, source: Option<&(SequenceKey, SequenceDocument)>) {
@@ -1047,7 +1065,9 @@ impl AppModel {
             path,
             outcome.serialized_content,
             outcome.refreshed_document,
-        )
+            PreviewSyncMode::DeferRender,
+        )?;
+        Ok(())
     }
 
     pub fn apply_sequence_selection_edit(
@@ -1171,6 +1191,7 @@ impl AppModel {
             path,
             outcome.serialized_content,
             outcome.refreshed_document,
+            PreviewSyncMode::DeferRender,
         )
     }
 
@@ -1432,9 +1453,10 @@ impl AppModel {
         path: Utf8PathBuf,
         text: String,
         document: SequenceDocument,
+        mode: PreviewSyncMode,
     ) -> Result<(), String> {
         self.editors.replace_active_text_from_edit(text);
-        self.sync_preview_source_from_document(path, document);
+        self.sync_preview_source_from_document(path, document, mode);
         Ok(())
     }
 

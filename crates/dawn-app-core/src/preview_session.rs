@@ -66,6 +66,7 @@ pub struct PreviewSnapshot {
     pub source_label: String,
     pub source_key: Option<SequenceKey>,
     pub is_playing: bool,
+    pub preview_updating: bool,
     pub position_seconds: f64,
     pub home_seconds: f64,
     pub duration_seconds: f64,
@@ -75,6 +76,12 @@ pub struct PreviewSnapshot {
     pub effect_preview_active: bool,
     pub frame: OutputFrame,
     pub status: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewSyncMode {
+    RenderNow,
+    DeferRender,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -87,6 +94,24 @@ pub struct PreviewRenderTiming {
     pub output_frame_ms: f64,
     pub active_effects: u32,
     pub sampled_pixels: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreviewRenderRequest {
+    pub id: u64,
+    pub dirty_revision: u64,
+    pub generation: u64,
+    pub key: SequenceKey,
+    pub document: SequenceDocument,
+    pub position_seconds: f64,
+    pub status: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreviewRenderResult {
+    pub request: PreviewRenderRequest,
+    pub frame: OutputFrame,
+    pub timing: PreviewRenderTiming,
 }
 
 #[derive(Debug, Clone)]
@@ -105,7 +130,16 @@ pub struct PreviewSession {
     sequence_cache: SequenceRenderCache,
     last_render_timing: PreviewRenderTiming,
     generation: u64,
+    dirty_revision: u64,
+    next_deferred_render_id: u64,
+    pending_deferred_render: Option<PendingDeferredRender>,
     snapshot: PreviewSnapshot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingDeferredRender {
+    id: u64,
+    dirty_revision: u64,
 }
 
 impl Default for PreviewSession {
@@ -120,10 +154,14 @@ impl Default for PreviewSession {
             sequence_cache: SequenceRenderCache::default(),
             last_render_timing: PreviewRenderTiming::default(),
             generation: 0,
+            dirty_revision: 0,
+            next_deferred_render_id: 0,
+            pending_deferred_render: None,
             snapshot: PreviewSnapshot {
                 source_label: "No preview source".to_string(),
                 source_key: None,
                 is_playing: false,
+                preview_updating: false,
                 position_seconds: 0.0,
                 home_seconds: 0.0,
                 duration_seconds: 0.0,
@@ -155,12 +193,15 @@ impl PreviewSession {
         &mut self,
         source: Option<(SequenceKey, SequenceDocument)>,
         analysis: Option<&ProjectAnalysis>,
+        mode: PreviewSyncMode,
     ) {
         let next_key = source.as_ref().map(|(key, _)| key);
         let source_changed = self.current_key().as_ref() != next_key;
         if source_changed && self.is_playing() {
             self.pause_current(analysis);
         }
+        self.dirty_revision = self.dirty_revision.saturating_add(1);
+        self.pending_deferred_render = None;
         if source_changed {
             self.sequence_cache.clear();
             self.render_cache = None;
@@ -197,7 +238,13 @@ impl PreviewSession {
                 self.transport = PreviewTransport::Stopped;
             }
         }
-        self.render(analysis, self.status_for_source());
+        match mode {
+            PreviewSyncMode::RenderNow => self.render(analysis, self.status_for_source()),
+            PreviewSyncMode::DeferRender => {
+                self.refresh_snapshot_metadata(self.status_for_source());
+                self.snapshot.preview_updating = true;
+            }
+        }
     }
 
     pub fn play(&mut self, analysis: Option<&ProjectAnalysis>) {
@@ -388,6 +435,58 @@ impl PreviewSession {
         self.render(analysis, status);
     }
 
+    pub fn begin_deferred_render(&mut self) -> Option<PreviewRenderRequest> {
+        if !self.snapshot.preview_updating || self.effect_preview.is_some() {
+            return None;
+        }
+        let pending = PendingDeferredRender {
+            id: self.next_deferred_render_id,
+            dirty_revision: self.dirty_revision,
+        };
+        if self.pending_deferred_render == Some(pending) {
+            return None;
+        }
+        let PreviewSource::Sequence { key, document } = self.source.clone() else {
+            self.snapshot.preview_updating = false;
+            return None;
+        };
+        self.next_deferred_render_id = self.next_deferred_render_id.saturating_add(1);
+        self.pending_deferred_render = Some(pending);
+        self.generation = self.generation.saturating_add(1);
+        let position_seconds = self.current_position_seconds(&key, document.duration_seconds);
+        Some(PreviewRenderRequest {
+            id: pending.id,
+            dirty_revision: pending.dirty_revision,
+            generation: self.generation,
+            key,
+            document: *document,
+            position_seconds,
+            status: self.snapshot.status.clone(),
+        })
+    }
+
+    pub fn complete_deferred_render(&mut self, result: PreviewRenderResult) -> bool {
+        let pending = PendingDeferredRender {
+            id: result.request.id,
+            dirty_revision: result.request.dirty_revision,
+        };
+        if self.pending_deferred_render != Some(pending)
+            || self.dirty_revision != result.request.dirty_revision
+            || self.current_key().as_ref() != Some(&result.request.key)
+        {
+            return false;
+        }
+        self.pending_deferred_render = None;
+        self.last_render_timing = result.timing;
+        self.refresh_snapshot_metadata(result.request.status);
+        let frame_status =
+            status_from_frame(&result.frame.status).unwrap_or_else(|| self.snapshot.status.clone());
+        self.snapshot.frame = result.frame;
+        self.snapshot.status = frame_status;
+        self.snapshot.preview_updating = false;
+        true
+    }
+
     pub fn set_effect_preview_ids(&mut self, ids: Vec<u32>, analysis: Option<&ProjectAnalysis>) {
         let ids = ids.into_iter().collect::<HashSet<_>>();
         self.effect_preview = if ids.is_empty() {
@@ -479,6 +578,8 @@ impl PreviewSession {
     fn render(&mut self, analysis: Option<&ProjectAnalysis>, status: impl Into<String>) {
         let render_started = Instant::now();
         self.last_render_timing = PreviewRenderTiming::default();
+        self.dirty_revision = self.dirty_revision.saturating_add(1);
+        self.pending_deferred_render = None;
         self.generation = self.generation.saturating_add(1);
         let status = status.into();
         let (
@@ -538,6 +639,7 @@ impl PreviewSession {
             source_label,
             source_key,
             is_playing: self.is_playing(),
+            preview_updating: false,
             position_seconds,
             home_seconds,
             duration_seconds,
@@ -558,6 +660,7 @@ impl PreviewSession {
                 self.snapshot.source_label = "No preview source".to_string();
                 self.snapshot.source_key = None;
                 self.snapshot.is_playing = false;
+                self.snapshot.preview_updating = false;
                 self.snapshot.position_seconds = 0.0;
                 self.snapshot.home_seconds = 0.0;
                 self.snapshot.duration_seconds = 0.0;
@@ -722,7 +825,10 @@ impl PreviewSession {
 }
 
 impl PreviewRenderTiming {
-    fn from_evaluation(renderer_build_ms: f64, evaluation: SequenceFrameEvaluationTiming) -> Self {
+    pub fn from_evaluation(
+        renderer_build_ms: f64,
+        evaluation: SequenceFrameEvaluationTiming,
+    ) -> Self {
         Self {
             total_ms: renderer_build_ms + evaluation.total_ms,
             renderer_build_ms,
@@ -785,7 +891,7 @@ mod tests {
     use dawn_project::model::{Color, FixtureId};
     use dawn_project::path::{canonicalize_path, utf8_path, Utf8PathBuf};
 
-    use super::{PreviewSession, SequenceKey};
+    use super::{PreviewSession, PreviewSyncMode, SequenceKey};
 
     fn club_rig_project_path() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/club-rig/project.dawn")
@@ -881,7 +987,11 @@ mod tests {
     fn render_cache_invalidates_when_sequence_source_refreshes() {
         let (analysis, document, key) = club_rig_analysis_and_sequence(Vec::new());
         let mut session = PreviewSession::default();
-        session.sync_source(Some((key.clone(), document)), Some(&analysis));
+        session.sync_source(
+            Some((key.clone(), document)),
+            Some(&analysis),
+            PreviewSyncMode::RenderNow,
+        );
         session.seek(2.0, Some(&analysis));
         let before = frame_colors(&session);
 
@@ -889,7 +999,11 @@ mod tests {
         let (edited_analysis, edited_document, edited_key) =
             club_rig_analysis_and_sequence(vec![overlay]);
         assert_eq!(key, edited_key);
-        session.sync_source(Some((edited_key, edited_document)), Some(&edited_analysis));
+        session.sync_source(
+            Some((edited_key, edited_document)),
+            Some(&edited_analysis),
+            PreviewSyncMode::RenderNow,
+        );
         let after = frame_colors(&session);
 
         assert_ne!(before, after);
@@ -899,7 +1013,11 @@ mod tests {
     fn effect_preview_id_changes_reuse_the_sequence_render_cache() {
         let (analysis, document, key) = club_rig_analysis_and_sequence(Vec::new());
         let mut session = PreviewSession::default();
-        session.sync_source(Some((key, document)), Some(&analysis));
+        session.sync_source(
+            Some((key, document)),
+            Some(&analysis),
+            PreviewSyncMode::RenderNow,
+        );
         let original_cache = session
             .render_cache
             .as_ref()

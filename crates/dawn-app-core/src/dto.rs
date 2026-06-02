@@ -747,6 +747,7 @@ pub struct TextPositionDto {
 pub struct PreviewSnapshotDto {
     pub source_label: String,
     pub is_playing: bool,
+    pub preview_updating: bool,
     pub effect_preview_active: bool,
     pub position_seconds: f64,
     pub home_seconds: f64,
@@ -796,6 +797,7 @@ impl From<AppSnapshot> for AppSnapshotDto {
             preview: PreviewSnapshotDto {
                 source_label: snapshot.preview.source_label,
                 is_playing: snapshot.preview.is_playing,
+                preview_updating: snapshot.preview.preview_updating,
                 effect_preview_active: snapshot.preview.effect_preview_active,
                 position_seconds: snapshot.preview.position_seconds,
                 home_seconds: snapshot.preview.home_seconds,
