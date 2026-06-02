@@ -638,6 +638,9 @@ empty:
       pulse_overlap:
         type: float
         value: 60.0
+      section_width_pixels:
+        type: integer
+        value: 5
       chase_position:
         type: curve
         curve: curves.ease_up

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::model::{Color, CurveValue};
 
@@ -21,6 +21,22 @@ pub struct GeneratedChildEffect {
     pub params: BTreeMap<String, RuntimeValue>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeneratedChildTopology {
+    pub effect: GeneratedChildEffectRef,
+    pub target: GeneratorTarget,
+    pub start_seconds: f64,
+    pub duration_seconds: f64,
+    params: Vec<GeneratedChildParamExpr>,
+    captured_bindings: HashMap<String, RuntimeValue>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct GeneratedChildParamExpr {
+    name: String,
+    expr: Expr,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GeneratedChildEffectRef {
     Local { name: String },
@@ -34,31 +50,93 @@ pub fn run_generator(
     target: GeneratorTarget,
     duration_seconds: f64,
 ) -> Result<Vec<GeneratedChildEffect>, RuntimeError> {
-    let mut scopes = vec![HashMap::new()];
-    scopes[0].insert("target".to_string(), RuntimeValue::Target(target));
-    scopes[0].insert(
-        "duration".to_string(),
-        RuntimeValue::Float(duration_seconds),
-    );
-    for (index, name) in param_names.iter().enumerate() {
-        scopes[0].insert(name.clone(), params.values[index].clone());
-    }
-    let mut runtime = GeneratorRuntime {
-        scopes,
-        emitted: Vec::new(),
-        loop_iterations: 0,
-    };
+    run_generator_topology(statements, params, param_names, target, duration_seconds)?
+        .into_iter()
+        .map(|child| {
+            let emitted_params = evaluate_generated_child_params(&child, params, param_names)?;
+            Ok(GeneratedChildEffect {
+                effect: child.effect,
+                target: child.target,
+                start_seconds: child.start_seconds,
+                duration_seconds: child.duration_seconds,
+                params: emitted_params,
+            })
+        })
+        .collect()
+}
+
+pub fn run_generator_topology(
+    statements: &[Stmt],
+    params: &PreparedEffectParams,
+    param_names: &[String],
+    target: GeneratorTarget,
+    duration_seconds: f64,
+) -> Result<Vec<GeneratedChildTopology>, RuntimeError> {
+    let mut runtime = GeneratorRuntime::new(params, param_names, target, duration_seconds);
     runtime.run_statements(statements)?;
     Ok(runtime.emitted)
 }
 
+pub fn evaluate_generated_child_params(
+    child: &GeneratedChildTopology,
+    params: &PreparedEffectParams,
+    param_names: &[String],
+) -> Result<BTreeMap<String, RuntimeValue>, RuntimeError> {
+    let mut current_params = HashMap::new();
+    for (index, name) in param_names.iter().enumerate() {
+        current_params.insert(name.clone(), params.values[index].clone());
+    }
+    let mut runtime = GeneratorRuntime {
+        scopes: vec![current_params, child.captured_bindings.clone()],
+        emitted: Vec::new(),
+        loop_iterations: 0,
+        parent_param_names: param_names.iter().cloned().collect(),
+    };
+    child
+        .params
+        .iter()
+        .map(|param| Ok((param.name.clone(), runtime.eval(&param.expr)?)))
+        .collect()
+}
+
+pub fn generator_topology_param_names(
+    statements: &[Stmt],
+    param_names: &[String],
+) -> BTreeSet<String> {
+    GeneratorDependencyAnalyzer::new(param_names).analyze(statements)
+}
+
 struct GeneratorRuntime {
     scopes: Vec<HashMap<String, RuntimeValue>>,
-    emitted: Vec<GeneratedChildEffect>,
+    emitted: Vec<GeneratedChildTopology>,
     loop_iterations: usize,
+    parent_param_names: HashSet<String>,
 }
 
 impl GeneratorRuntime {
+    fn new(
+        params: &PreparedEffectParams,
+        param_names: &[String],
+        target: GeneratorTarget,
+        duration_seconds: f64,
+    ) -> Self {
+        let mut scopes = vec![HashMap::new()];
+        scopes[0].insert("target".to_string(), RuntimeValue::Target(target));
+        scopes[0].insert(
+            "duration".to_string(),
+            RuntimeValue::Float(duration_seconds),
+        );
+        for (index, name) in param_names.iter().enumerate() {
+            scopes[0].insert(name.clone(), params.values[index].clone());
+        }
+        Self {
+            scopes,
+            emitted: Vec::new(),
+            loop_iterations: 0,
+            parent_param_names: param_names.iter().cloned().collect(),
+        }
+    }
+
     fn run_statements(&mut self, statements: &[Stmt]) -> Result<(), RuntimeError> {
         for statement in statements {
             self.run_statement(statement)?;
@@ -75,10 +153,10 @@ impl GeneratorRuntime {
             } => {
                 let raw = self.eval(expr)?;
                 let value = self.coerce(raw, *value_type)?;
-                self.scopes
-                    .last_mut()
-                    .expect("generator always has scope")
-                    .insert(name.clone(), value);
+                let Some(scope) = self.scopes.last_mut() else {
+                    return Err(self.error("generator scope stack is empty"));
+                };
+                scope.insert(name.clone(), value);
             }
             Stmt::Assign { name, expr } => {
                 let value = self.eval(expr)?;
@@ -104,10 +182,10 @@ impl GeneratorRuntime {
                 self.push_scope();
                 let raw = self.eval(initializer)?;
                 let value = self.coerce(raw, *value_type)?;
-                self.scopes
-                    .last_mut()
-                    .expect("generator always has scope")
-                    .insert(name.clone(), value);
+                let Some(scope) = self.scopes.last_mut() else {
+                    return Err(self.error("generator scope stack is empty"));
+                };
+                scope.insert(name.clone(), value);
                 while self.bool(condition)? {
                     self.loop_iterations += 1;
                     if self.loop_iterations > MAX_GENERATOR_LOOP_ITERATIONS {
@@ -146,13 +224,9 @@ impl GeneratorRuntime {
         let RuntimeValue::Target(target) = self.eval(&emit.target)? else {
             return Err(self.error("emit target must be Target"));
         };
-        let mut params = BTreeMap::new();
-        for param in &emit.params {
-            params.insert(param.name.clone(), self.eval(&param.expr)?);
-        }
         let start_seconds = self.float(&emit.start)?;
         let duration_seconds = self.float(&emit.duration)?;
-        self.emitted.push(GeneratedChildEffect {
+        self.emitted.push(GeneratedChildTopology {
             effect: match &emit.effect {
                 EmitEffectRef::Local { name } => {
                     GeneratedChildEffectRef::Local { name: name.clone() }
@@ -165,7 +239,15 @@ impl GeneratorRuntime {
             target,
             start_seconds,
             duration_seconds,
-            params,
+            params: emit
+                .params
+                .iter()
+                .map(|param| GeneratedChildParamExpr {
+                    name: param.name.clone(),
+                    expr: param.expr.clone(),
+                })
+                .collect(),
+            captured_bindings: self.captured_bindings(),
         });
         Ok(())
     }
@@ -468,9 +550,186 @@ impl GeneratorRuntime {
         self.scopes.pop();
     }
 
+    fn captured_bindings(&self) -> HashMap<String, RuntimeValue> {
+        self.scopes
+            .iter()
+            .enumerate()
+            .flat_map(|(scope_index, scope)| {
+                scope
+                    .iter()
+                    .filter(move |(name, _)| {
+                        scope_index != 0 || !self.parent_param_names.contains(name.as_str())
+                    })
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
     fn error(&self, message: impl Into<String>) -> RuntimeError {
         RuntimeError {
             message: message.into(),
+        }
+    }
+}
+
+struct GeneratorDependencyAnalyzer<'a> {
+    param_names: HashSet<&'a str>,
+    local_deps: HashMap<String, BTreeSet<String>>,
+    topology_params: BTreeSet<String>,
+    emit_param_exprs: Vec<Expr>,
+}
+
+impl<'a> GeneratorDependencyAnalyzer<'a> {
+    fn new(param_names: &'a [String]) -> Self {
+        Self {
+            param_names: param_names.iter().map(String::as_str).collect(),
+            local_deps: HashMap::new(),
+            topology_params: BTreeSet::new(),
+            emit_param_exprs: Vec::new(),
+        }
+    }
+
+    fn analyze(mut self, statements: &[Stmt]) -> BTreeSet<String> {
+        self.visit_statements(statements);
+        for expr in self.emit_param_exprs.clone() {
+            if self.expr_uses_sample_derived_local(&expr) {
+                self.topology_params.extend(self.expr_deps(&expr));
+            }
+        }
+        self.topology_params
+    }
+
+    fn visit_statements(&mut self, statements: &[Stmt]) {
+        for statement in statements {
+            self.visit_statement(statement);
+        }
+    }
+
+    fn visit_statement(&mut self, statement: &Stmt) {
+        match statement {
+            Stmt::Let { name, expr, .. } => {
+                let deps = self.expr_deps(expr);
+                self.local_deps.insert(name.clone(), deps);
+            }
+            Stmt::Assign { name, expr } => {
+                let deps = self.expr_deps(expr);
+                self.local_deps.insert(name.clone(), deps);
+            }
+            Stmt::Expr(expr) | Stmt::Return(expr) => {
+                self.expr_deps(expr);
+            }
+            Stmt::For {
+                name,
+                initializer,
+                condition,
+                update,
+                body,
+                ..
+            } => {
+                self.add_topology_expr(initializer);
+                self.local_deps
+                    .insert(name.clone(), self.expr_deps(initializer));
+                self.add_topology_expr(condition);
+                self.visit_statement(update);
+                if let Stmt::Assign { expr, .. } = update.as_ref() {
+                    self.add_topology_expr(expr);
+                }
+                self.visit_statements(body);
+            }
+            Stmt::If {
+                condition,
+                then_body,
+                else_body,
+            } => {
+                self.add_topology_expr(condition);
+                self.visit_statements(then_body);
+                self.visit_statements(else_body);
+            }
+            Stmt::Emit(emit) => {
+                self.add_topology_expr(&emit.target);
+                self.add_topology_expr(&emit.start);
+                self.add_topology_expr(&emit.duration);
+                self.emit_param_exprs
+                    .extend(emit.params.iter().map(|param| param.expr.clone()));
+            }
+        }
+    }
+
+    fn add_topology_expr(&mut self, expr: &Expr) {
+        self.topology_params.extend(self.expr_deps(expr));
+    }
+
+    fn expr_uses_sample_derived_local(&self, expr: &Expr) -> bool {
+        let mut identifiers = BTreeSet::new();
+        self.collect_identifiers(expr, &mut identifiers);
+        identifiers.into_iter().any(|name| {
+            self.local_deps
+                .get(&name)
+                .map(|deps| deps.iter().any(|dep| !self.topology_params.contains(dep)))
+                .unwrap_or(false)
+        })
+    }
+
+    fn expr_deps(&self, expr: &Expr) -> BTreeSet<String> {
+        let mut deps = BTreeSet::new();
+        self.collect_deps(expr, &mut deps);
+        deps
+    }
+
+    fn collect_deps(&self, expr: &Expr, deps: &mut BTreeSet<String>) {
+        match expr {
+            Expr::Float(_)
+            | Expr::Int(_)
+            | Expr::Bool(_)
+            | Expr::Color(_)
+            | Expr::Qualified { .. } => {}
+            Expr::Ident(name) => {
+                if self.param_names.contains(name.as_str()) {
+                    deps.insert(name.clone());
+                } else if let Some(local_deps) = self.local_deps.get(name) {
+                    deps.extend(local_deps.iter().cloned());
+                }
+            }
+            Expr::Unary { expr, .. } => self.collect_deps(expr, deps),
+            Expr::Binary { left, right, .. } => {
+                self.collect_deps(left, deps);
+                self.collect_deps(right, deps);
+            }
+            Expr::Call { name, args } => {
+                if self.param_names.contains(name.as_str()) {
+                    deps.insert(name.clone());
+                }
+                for arg in args {
+                    self.collect_deps(arg, deps);
+                }
+            }
+            Expr::Member { object, .. } => self.collect_deps(object, deps),
+        }
+    }
+
+    fn collect_identifiers(&self, expr: &Expr, identifiers: &mut BTreeSet<String>) {
+        match expr {
+            Expr::Float(_)
+            | Expr::Int(_)
+            | Expr::Bool(_)
+            | Expr::Color(_)
+            | Expr::Qualified { .. } => {}
+            Expr::Ident(name) => {
+                identifiers.insert(name.clone());
+            }
+            Expr::Unary { expr, .. } => self.collect_identifiers(expr, identifiers),
+            Expr::Binary { left, right, .. } => {
+                self.collect_identifiers(left, identifiers);
+                self.collect_identifiers(right, identifiers);
+            }
+            Expr::Call { name, args } => {
+                identifiers.insert(name.clone());
+                for arg in args {
+                    self.collect_identifiers(arg, identifiers);
+                }
+            }
+            Expr::Member { object, .. } => self.collect_identifiers(object, identifiers),
         }
     }
 }

@@ -27,7 +27,10 @@ pub use type_check::{type_check, type_check_with_imports, ImportedEffect};
 use ast::BinaryOp;
 pub use bytecode::BytecodeStats;
 use bytecode::{stats_for_program, BytecodeProgram};
-pub use generator::{run_generator, GeneratedChildEffect, GeneratedChildEffectRef};
+pub use generator::{
+    evaluate_generated_child_params, generator_topology_param_names, run_generator,
+    run_generator_topology, GeneratedChildEffect, GeneratedChildEffectRef, GeneratedChildTopology,
+};
 pub use params::{EffectSampleScratch, PreparedEffectParams};
 
 #[derive(Debug, Clone)]
