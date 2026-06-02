@@ -6,7 +6,7 @@ import type { LayoutDocumentDto } from "../../../bindings";
 
 import { runSnapshotCommand } from "../../../store";
 
-import { denormalizeTransform, drawSpatialCanvas, nearestPlacement, normalizeBounds, normalizePoint, normalizeTransform, round6, unproject, type Transform } from "../shared";
+import { denormalizeTransform, drawSpatialCanvas, nearestPlacement, normalizeBounds, normalizePoint, normalizeTransform, round6, unproject, type GuiFocus, type Transform } from "../shared";
 
 type LayoutDragState = { kind: "layout"; id: number; startX: number; startY: number; original: Transform; preview: Transform } | null;
 
@@ -16,8 +16,8 @@ export function LayoutCanvas({
   setSelected
 }: {
   document: LayoutDocumentDto;
-  selected: string | null;
-  setSelected: (id: string | null) => void;
+  selected: GuiFocus;
+  setSelected: (id: GuiFocus) => void;
 }) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const drag = useRef<LayoutDragState>(null);
@@ -29,7 +29,7 @@ export function LayoutCanvas({
       for (const fixture of document.fixtures) {
         const transform = drag.current?.kind === "layout" && drag.current.id === fixture.id ? drag.current.preview : normalizeTransform(fixture.transform);
         const center = project(transform.position);
-        ctx.fillStyle = selected === `placement:${fixture.id}` ? "#6abf8a" : "#d6a35a";
+        ctx.fillStyle = selected?.type === "placement" && selected.id === fixture.id ? "#6abf8a" : "#d6a35a";
         ctx.beginPath();
         ctx.arc(center.x, center.y, 7, 0, Math.PI * 2);
         ctx.fill();
@@ -60,7 +60,7 @@ export function LayoutCanvas({
           setSelected(null);
           return;
         }
-        setSelected(`placement:${hit.id}`);
+        setSelected({ type: "placement", id: hit.id });
         drag.current = {
           kind: "layout",
           id: hit.id,

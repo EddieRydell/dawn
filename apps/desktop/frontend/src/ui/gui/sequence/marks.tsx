@@ -1,12 +1,20 @@
 import { useEffect, useState } from "react";
 
-import type { SequenceMarkCollectionDto, SequenceMarkRefDto } from "../../../bindings";
+import type { SequenceMarkCollectionDto } from "../../../bindings";
 
-import type { MarkPreview, MarkPreviewLookup } from "./sequenceSelection";
+import type { GuiFocus } from "../shared";
+
+import { getMarkPreview, markPreviewEntries, setMarkPreview, type MarkPreviewLookup, type MarkRefLookup } from "./sequenceSelection";
 
 export type MarkDisplayMode = "overlay" | "strip" | "hidden";
 
 const DEFAULT_MARK_COLORS = ["#38bdf8", "#f97316", "#22c55e", "#e879f9", "#facc15", "#ef4444"];
+
+const MARK_DRAWING = {
+  cullPaddingPx: 6,
+  selectedCapHalfWidthPx: 4,
+  selectedStroke: "#fffaf0"
+} as const;
 
 let markDisplayMode: MarkDisplayMode = "overlay";
 
@@ -34,8 +42,8 @@ export function useMarkDisplayMode() {
 export function drawSequenceMarks(
   ctx: CanvasRenderingContext2D,
   collections: SequenceMarkCollectionDto[],
-  selected: string | null,
-  selectedMarkKeys: Set<string>,
+  selected: GuiFocus,
+  selectedMarks: MarkRefLookup,
   mode: MarkDisplayMode,
   left: number,
   audioStripTop: number,
@@ -55,11 +63,14 @@ export function drawSequenceMarks(
   ctx.clip();
   for (const collection of collections) {
     for (const [index, timeSeconds] of collection.marksSeconds.entries()) {
-      const preview = previews.get(markKey({ collectionKey: collection.key, index }));
+      const mark = { collectionKey: collection.key, index };
+      const preview = getMarkPreview(previews, mark);
       const drawnTimeSeconds = preview?.timeSeconds ?? timeSeconds;
       const x = left + (drawnTimeSeconds - scrollXSeconds) * pxPerSecond;
-      if (x < left - 6 || x > left + width + 6) continue;
-      const isSelected = selected === `mark:${collection.key}:${index}` || selectedMarkKeys.has(markKey({ collectionKey: collection.key, index }));
+      if (x < left - MARK_DRAWING.cullPaddingPx || x > left + width + MARK_DRAWING.cullPaddingPx) continue;
+      const isSelected =
+        (selected?.type === "mark" && selected.collectionKey === collection.key && selected.index === index) ||
+        (selectedMarks.get(collection.key)?.has(index) ?? false);
       ctx.strokeStyle = collection.color;
       ctx.lineWidth = isSelected ? 2 : 1;
       ctx.globalAlpha = mode === "strip" ? 0.95 : 0.75;
@@ -69,11 +80,11 @@ export function drawSequenceMarks(
       ctx.stroke();
       if (isSelected) {
         ctx.globalAlpha = 1;
-        ctx.strokeStyle = "#fffaf0";
+        ctx.strokeStyle = MARK_DRAWING.selectedStroke;
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(x - 4, y1 + 0.5);
-        ctx.lineTo(x + 4, y1 + 0.5);
+        ctx.moveTo(x - MARK_DRAWING.selectedCapHalfWidthPx, y1 + 0.5);
+        ctx.lineTo(x + MARK_DRAWING.selectedCapHalfWidthPx, y1 + 0.5);
         ctx.stroke();
       }
     }
@@ -82,30 +93,18 @@ export function drawSequenceMarks(
 }
 
 export function committedMarkPreviews(collections: SequenceMarkCollectionDto[], previews: MarkPreviewLookup) {
-  const next = new Map<string, MarkPreview>();
-  for (const [key, preview] of previews) {
+  const next: MarkPreviewLookup = new Map();
+  for (const preview of markPreviewEntries(previews)) {
     if (preview.committedIndex === undefined) {
-      next.set(key, preview);
+      setMarkPreview(next, preview, preview);
       continue;
     }
     const collection = collections.find((candidate) => candidate.key === preview.collectionKey);
     if (collection?.marksSeconds[preview.committedIndex] !== preview.timeSeconds) {
-      next.set(key, preview);
+      setMarkPreview(next, preview, preview);
     }
   }
   return next;
-}
-
-export function parseSelectedMark(selected: string | null): { collectionKey: string; index: number } | null {
-  if (selected === null || !selected.startsWith("mark:")) return null;
-  const [, collectionKey, rawIndex] = selected.split(":");
-  const index = Number(rawIndex);
-  if (collectionKey === undefined || collectionKey.length === 0 || !Number.isInteger(index) || index < 0) return null;
-  return { collectionKey, index };
-}
-
-export function markKey(mark: SequenceMarkRefDto) {
-  return `${mark.collectionKey}:${mark.index}`;
 }
 
 export function markIndexAfterMove(collection: SequenceMarkCollectionDto, index: number, timeSeconds: number) {

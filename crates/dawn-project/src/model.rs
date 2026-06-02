@@ -6,13 +6,33 @@ use indexmap::IndexMap;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::path::Utf8PathBuf;
+use crate::path::{PathStringExt, Utf8PathBuf};
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub enum Authored {}
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub enum Resolved {}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectScriptId {
+    pub path: Utf8PathBuf,
+    pub effect_name: String,
+}
+
+impl EffectScriptId {
+    pub fn new(path: Utf8PathBuf, effect_name: impl Into<String>) -> Self {
+        Self {
+            path,
+            effect_name: effect_name.into(),
+        }
+    }
+
+    pub fn display_key(&self) -> String {
+        format!("{}#{}", self.path.to_slash_string(), self.effect_name)
+    }
+}
 
 pub type AuthoredProject = Project<Authored>;
 pub type ResolvedProject = Project<Resolved>;
@@ -1526,7 +1546,7 @@ pub struct SequenceEffect<M: ModelMode = Authored> {
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum ScriptSource {
     Inline(String),
-    External(Utf8PathBuf),
+    External(EffectScriptId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

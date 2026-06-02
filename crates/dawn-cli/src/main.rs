@@ -22,7 +22,7 @@ use dawn_project::document::{
 use dawn_project::effect_script::{EffectSampleScratch, FixtureContext};
 use dawn_project::fs::WorkspaceFs;
 use dawn_project::model::{
-    Color, Curve, CurvePoint, CurveValue, CurveValueType, DawnObject, EffectParam,
+    Color, Curve, CurvePoint, CurveValue, CurveValueType, DawnObject, EffectParam, EffectScriptId,
     LayoutTargetKind, SequenceEffectScope,
 };
 use dawn_project::path::{canonicalize_path, utf8_path, PathStringExt};
@@ -780,7 +780,7 @@ impl PreparationTimingReport {
 #[serde(rename_all = "camelCase")]
 struct GeneratorParentTimingReport {
     parent_effect_id: u32,
-    script_key: String,
+    script: EffectScriptReport,
     target_pixels: usize,
     emitted_children: usize,
     prepared_children: usize,
@@ -789,13 +789,29 @@ struct GeneratorParentTimingReport {
     total_prepare_ms: f64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EffectScriptReport {
+    path: String,
+    effect_name: String,
+}
+
+impl EffectScriptReport {
+    fn from_id(script_id: &EffectScriptId) -> Self {
+        Self {
+            path: display_path(&script_id.path),
+            effect_name: script_id.effect_name.clone(),
+        }
+    }
+}
+
 impl GeneratorParentTimingReport {
     fn from_timing(
         timing: dawn_app_core::output_runtime::GeneratorParentPreparationTiming,
     ) -> Self {
         Self {
             parent_effect_id: timing.parent_effect_id,
-            script_key: timing.script_key,
+            script: EffectScriptReport::from_id(&timing.script_id),
             target_pixels: timing.target_pixels,
             emitted_children: timing.emitted_children,
             prepared_children: timing.prepared_children,
@@ -810,7 +826,7 @@ impl GeneratorParentTimingReport {
 struct SyntheticCaseDefinition {
     name: &'static str,
     kind: BenchCaseKind,
-    script_key: &'static str,
+    script_path: &'static str,
     script: &'static str,
     scope: SequenceEffectScope,
     params: Vec<SequenceEffectParamDocument>,
@@ -928,7 +944,7 @@ fn synthetic_case_definitions(case_kind: BenchCaseKindFilter) -> Vec<SyntheticCa
         SyntheticCaseDefinition {
             name: "sample_constant_color",
             kind: BenchCaseKind::Sample,
-            script_key: "effects/synthetic-bench-constant-color.effect.dawn",
+            script_path: "effects/synthetic-bench-constant-color.effect.dawn",
             script: "SyntheticConstantColor",
             scope: SequenceEffectScope::WholeTarget,
             params: vec![param_color("color", Color::new(12, 48, 180))],
@@ -936,7 +952,7 @@ fn synthetic_case_definitions(case_kind: BenchCaseKindFilter) -> Vec<SyntheticCa
         SyntheticCaseDefinition {
             name: "sample_curve_color",
             kind: BenchCaseKind::Sample,
-            script_key: "effects/synthetic-bench-curve-color.effect.dawn",
+            script_path: "effects/synthetic-bench-curve-color.effect.dawn",
             script: "SyntheticCurveColor",
             scope: SequenceEffectScope::WholeTarget,
             params: vec![param_color_curve("gradient")],
@@ -944,7 +960,7 @@ fn synthetic_case_definitions(case_kind: BenchCaseKindFilter) -> Vec<SyntheticCa
         SyntheticCaseDefinition {
             name: "sample_pixel_math",
             kind: BenchCaseKind::Sample,
-            script_key: "effects/synthetic-bench-pixel-math.effect.dawn",
+            script_path: "effects/synthetic-bench-pixel-math.effect.dawn",
             script: "SyntheticPixelMath",
             scope: SequenceEffectScope::WholeTarget,
             params: Vec::new(),
@@ -952,7 +968,7 @@ fn synthetic_case_definitions(case_kind: BenchCaseKindFilter) -> Vec<SyntheticCa
         SyntheticCaseDefinition {
             name: "generator_single_child",
             kind: BenchCaseKind::Generator,
-            script_key: "effects/synthetic-bench-single-child.effect.dawn",
+            script_path: "effects/synthetic-bench-single-child.effect.dawn",
             script: "SyntheticSingleChild",
             scope: SequenceEffectScope::WholeTarget,
             params: vec![param_color("color", Color::new(255, 80, 24))],
@@ -960,7 +976,7 @@ fn synthetic_case_definitions(case_kind: BenchCaseKindFilter) -> Vec<SyntheticCa
         SyntheticCaseDefinition {
             name: "generator_sequential_sections",
             kind: BenchCaseKind::Generator,
-            script_key: "effects/synthetic-bench-sequential-sections.effect.dawn",
+            script_path: "effects/synthetic-bench-sequential-sections.effect.dawn",
             script: "SyntheticSequentialSections",
             scope: SequenceEffectScope::WholeTarget,
             params: vec![param_integer("section_width_pixels", 8)],
@@ -968,7 +984,7 @@ fn synthetic_case_definitions(case_kind: BenchCaseKindFilter) -> Vec<SyntheticCa
         SyntheticCaseDefinition {
             name: "generator_dense_overlapping_sections",
             kind: BenchCaseKind::Generator,
-            script_key: "effects/synthetic-bench-dense-overlap.effect.dawn",
+            script_path: "effects/synthetic-bench-dense-overlap.effect.dawn",
             script: "SyntheticDenseOverlappingSections",
             scope: SequenceEffectScope::WholeTarget,
             params: vec![param_integer("section_width_pixels", 2)],
@@ -976,7 +992,7 @@ fn synthetic_case_definitions(case_kind: BenchCaseKindFilter) -> Vec<SyntheticCa
         SyntheticCaseDefinition {
             name: "generator_per_fixture_sections",
             kind: BenchCaseKind::Generator,
-            script_key: "effects/synthetic-bench-per-fixture.effect.dawn",
+            script_path: "effects/synthetic-bench-per-fixture.effect.dawn",
             script: "SyntheticPerFixtureSections",
             scope: SequenceEffectScope::PerFixture,
             params: Vec::new(),
@@ -984,7 +1000,7 @@ fn synthetic_case_definitions(case_kind: BenchCaseKindFilter) -> Vec<SyntheticCa
         SyntheticCaseDefinition {
             name: "generator_mark_dense_emission",
             kind: BenchCaseKind::Generator,
-            script_key: "effects/synthetic-bench-mark-dense.effect.dawn",
+            script_path: "effects/synthetic-bench-mark-dense.effect.dawn",
             script: "SyntheticMarkDenseEmission",
             scope: SequenceEffectScope::WholeTarget,
             params: vec![
@@ -1050,7 +1066,7 @@ fn synthetic_sequence_document(
     target_template: &SyntheticTargetTemplate,
     pixels: &[SequenceEffectPixelDocument],
 ) -> Result<SequenceDocument, String> {
-    let script_key = synthetic_script_key(analysis, definition.script_key)?;
+    let script_id = synthetic_script_id(analysis, definition.script_path)?;
     Ok(SequenceDocument {
         path: "synthetic-bench.sequence.dawn".to_string(),
         object_key: definition.name.to_string(),
@@ -1073,11 +1089,11 @@ fn synthetic_sequence_document(
             target_label: target_template.target_label.clone(),
             scope: definition.scope,
             script: definition.script.to_string(),
-            script_source: Some(script_key.clone()),
+            script_source: Some(script_id.clone().into()),
             params: definition.params.clone(),
             render: Some(SequenceEffectRenderDocument {
-                script_key: script_key.clone(),
-                script_source: script_key,
+                script: script_id.clone().into(),
+                script_source: script_id.display_key(),
                 params: definition.params.clone(),
                 target_pixels: pixels.to_vec(),
             }),
@@ -1086,19 +1102,16 @@ fn synthetic_sequence_document(
     })
 }
 
-fn synthetic_script_key(analysis: &ProjectAnalysis, path: &str) -> Result<String, String> {
+fn synthetic_script_id(analysis: &ProjectAnalysis, path: &str) -> Result<EffectScriptId, String> {
     let suffix = path.replace('\\', "/");
     let matches = analysis
         .scripts
         .keys()
-        .filter(|script_key| {
-            let (script_path, _) = dawn_project::analysis::split_effect_script_key(script_key);
-            script_path.to_string().ends_with(&suffix)
-        })
+        .filter(|script_id| script_id.path.to_slash_string().ends_with(&suffix))
         .cloned()
         .collect::<Vec<_>>();
     match matches.as_slice() {
-        [script_key] => Ok(script_key.clone()),
+        [script] => Ok(script.clone()),
         [] => Err(format!("synthetic effect script `{path}` was not analyzed")),
         _ => Err(format!(
             "synthetic effect script `{path}` matched multiple analyzed scripts"
@@ -1358,7 +1371,7 @@ impl BytecodeAggregateReport {
             .iter()
             .filter_map(|effect| {
                 let render = effect.render.as_ref()?;
-                analysis.compiled_script_for_key(&render.script_key)
+                analysis.compiled_script_for_id(&render.script.to_script_id())
             })
             .map(|script| script.bytecode_stats())
             .fold(Self::default(), |mut aggregate, stats| {
@@ -1383,8 +1396,8 @@ impl BytecodeAggregateReport {
 struct EffectBenchItemReport {
     effect_id: u32,
     effect_index: usize,
-    script: String,
-    script_key: String,
+    script_label: String,
+    script: EffectScriptReport,
     scope: String,
     target_label: String,
     target_pixels: usize,
@@ -1419,7 +1432,7 @@ impl EffectBenchItemReport {
         } else {
             (local_seconds / effect.duration_seconds).clamp(0.0, 1.0)
         };
-        let script = analysis.compiled_script_for_key(&render.script_key)?;
+        let script = analysis.compiled_script_for_id(&render.script.to_script_id())?;
         let prepared_params = prepare_params_from_document(
             script,
             &render.params,
@@ -1462,8 +1475,8 @@ impl EffectBenchItemReport {
         Some(Self {
             effect_id: effect.id,
             effect_index: effect.index,
-            script: effect.script.clone(),
-            script_key: render.script_key.clone(),
+            script_label: effect.script.clone(),
+            script: EffectScriptReport::from_id(&render.script.to_script_id()),
             scope: format!("{:?}", effect.scope),
             target_label: effect.target_label.clone(),
             target_pixels: target_pixel_count,
@@ -1654,7 +1667,7 @@ fn print_effect_bench_report(report: &EffectBenchReport) {
             "effect id={} index={} script={} target={} pixels={} params={} scope={} bytecode=instructions:{} constants:{} param_slots:{} registers=float:{} int:{} bool:{} color:{} ref:{} fixture:{} pixel:{} total:{}",
             effect.effect_id,
             effect.effect_index,
-            effect.script,
+            effect.script_label,
             effect.target_label,
             effect.target_pixels,
             effect.params,
@@ -1874,10 +1887,16 @@ mod tests {
             target_label: "Group all".to_string(),
             scope: SequenceEffectScope::WholeTarget,
             script: "pulse".to_string(),
-            script_source: Some("effects/pulse.effect.dawn".to_string()),
+            script_source: Some(dawn_project::document::EffectScriptReferenceDocument {
+                path: "effects/pulse.effect.dawn".to_string(),
+                effect_name: "pulse".to_string(),
+            }),
             params: Vec::new(),
             render: Some(SequenceEffectRenderDocument {
-                script_key: "effects/pulse.effect.dawn".to_string(),
+                script: dawn_project::document::EffectScriptReferenceDocument {
+                    path: "effects/pulse.effect.dawn".to_string(),
+                    effect_name: "pulse".to_string(),
+                },
                 script_source: "effects/pulse.effect.dawn".to_string(),
                 params: Vec::new(),
                 target_pixels: (0..target_pixels)

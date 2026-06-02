@@ -1,8 +1,8 @@
 import type { SequenceDocumentDto, SequenceEffectDto, SequenceMarkCollectionDto, SequenceMarkRefDto, SequenceSelectionDto } from "../../../bindings";
 
-import { clamp, type SequenceSelection } from "../shared";
+import { clamp, type GuiFocus, type SequenceSelection } from "../shared";
 
-import { markIndexAfterMove, markKey, parseSelectedMark, type MarkDisplayMode } from "./marks";
+import { markIndexAfterMove, type MarkDisplayMode } from "./marks";
 
 import { targetsEqual } from "./sequencePreviewSignatures";
 
@@ -10,7 +10,9 @@ export type SequencePreview = { id: number; startSeconds: number; durationSecond
 
 export type MarkPreview = { collectionKey: string; index: number; timeSeconds: number; committedIndex?: number };
 
-export type MarkPreviewLookup = Map<string, MarkPreview>;
+export type MarkPreviewLookup = Map<string, Map<number, MarkPreview>>;
+
+export type MarkRefLookup = Map<string, Set<number>>;
 
 export type SequenceContextMenu =
   | { kind: "blank"; laneIndex: number; startSeconds: number }
@@ -25,6 +27,11 @@ export type SequenceHover =
 export type SequenceMarquee = { mode: "effects" | "marks"; startX: number; startY: number; x: number; y: number; active: boolean; shift: boolean; ctrl: boolean };
 
 export const MIN_EFFECT_DURATION_SECONDS = 0.000000001;
+
+const SEQUENCE_HIT_RADII = {
+  effectResizeHandlePx: 8,
+  markPx: 5
+} as const;
 
 export type SequenceViewport = {
   pxPerSecond: number;
@@ -169,7 +176,7 @@ export function hitSequence(clips: SequenceClipLayout[], x: number, y: number): 
     const { rect } = clip;
     if (x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height) {
       const resize: "left" | "right" | "none" =
-        x - rect.x < 8 ? "left" : rect.x + rect.width - x < 8 ? "right" : "none";
+        x - rect.x < SEQUENCE_HIT_RADII.effectResizeHandlePx ? "left" : rect.x + rect.width - x < SEQUENCE_HIT_RADII.effectResizeHandlePx ? "right" : "none";
       return {
         effect: clip.effect,
         laneIndex: clip.laneIndex,
@@ -198,7 +205,7 @@ export function hitSequenceMark(
     for (let index = collection.marksSeconds.length - 1; index >= 0; index -= 1) {
       const timeSeconds = collection.marksSeconds[index] ?? 0;
       const markX = left + (timeSeconds - viewport.scrollXSeconds) * viewport.pxPerSecond;
-      if (Math.abs(x - markX) <= 5) {
+      if (Math.abs(x - markX) <= SEQUENCE_HIT_RADII.markPx) {
         return { collectionKey: collection.key, index, timeSeconds };
       }
     }
@@ -216,44 +223,43 @@ export function sequenceHoverEqual(left: SequenceHover, right: SequenceHover) {
   return left.collectionKey === right.collectionKey && left.index === right.index;
 }
 
-export function parseSelectedEffectId(selected: string | null): number | null {
-  if (selected === null || !selected.startsWith("effect:")) return null;
-  const id = Number(selected.split(":")[1]);
-  return Number.isInteger(id) ? id : null;
+export function selectedEffectId(selected: GuiFocus): number | null {
+  return selected?.type === "effect" ? selected.id : null;
 }
 
-export function selectionFromSingle(selected: string | null): SequenceSelection {
-  const effectId = parseSelectedEffectId(selected);
+export function selectionFromSingle(selected: GuiFocus): SequenceSelection {
+  const effectId = selectedEffectId(selected);
   if (effectId !== null) return { type: "effects", ids: [effectId] };
-  const mark = parseSelectedMark(selected);
-  if (mark !== null) return { type: "marks", marks: [mark] };
+  if (selected?.type === "mark") return { type: "marks", marks: [{ collectionKey: selected.collectionKey, index: selected.index }] };
   return null;
 }
 
-export function singleSelectionString(selection: SequenceSelection): string | null {
-  if (selection?.type === "effects") return singleEffectSelectionString(selection.ids);
+export function singleSelectionFocus(selection: SequenceSelection): GuiFocus {
+  if (selection?.type === "effects") return singleEffectSelectionFocus(selection.ids);
   if (selection?.type === "marks" && selection.marks.length === 1) {
     const mark = selection.marks[0];
-    return mark === undefined ? null : `mark:${mark.collectionKey}:${mark.index}`;
+    return mark === undefined ? null : { type: "mark", collectionKey: mark.collectionKey, index: mark.index };
   }
   return null;
 }
 
-export function singleEffectSelectionString(ids: number[]): string | null {
+export function singleEffectSelectionFocus(ids: number[]): GuiFocus {
   if (ids.length !== 1) return null;
   const id = ids[0];
-  return id === undefined ? null : `effect:${id}`;
+  return id === undefined ? null : { type: "effect", id };
 }
 
 export function selectionCount(selection: SequenceSelectionDto) {
   return selection.type === "effects" ? selection.ids.length : selection.marks.length;
 }
 
-export function selectionCompatibleWithFocusedItem(selection: SequenceSelectionDto, selected: string | null) {
-  const effectId = parseSelectedEffectId(selected);
+export function selectionCompatibleWithFocusedItem(selection: SequenceSelectionDto, selected: GuiFocus) {
+  const effectId = selectedEffectId(selected);
   if (effectId !== null) return selection.type === "effects" && selection.ids.includes(effectId);
-  const mark = parseSelectedMark(selected);
-  if (mark !== null) return selection.type === "marks" && selection.marks.some((candidate) => markKey(candidate) === markKey(mark));
+  if (selected?.type === "mark") {
+    const mark = { collectionKey: selected.collectionKey, index: selected.index };
+    return selection.type === "marks" && markLookupHas(markRefLookup(selection.marks), mark);
+  }
   return true;
 }
 
@@ -267,11 +273,10 @@ export function nextEffectSelection(current: SequenceSelection, id: number, shif
 
 export function nextMarkSelection(current: SequenceSelection, mark: SequenceMarkRefDto, shift: boolean, ctrl: boolean): SequenceSelectionDto {
   if (current?.type !== "marks" || (!shift && !ctrl)) return { type: "marks", marks: [mark] };
-  const byKey = new Map(current.marks.map((candidate) => [markKey(candidate), candidate]));
-  const key = markKey(mark);
-  if (ctrl && byKey.has(key)) byKey.delete(key);
-  else byKey.set(key, mark);
-  return { type: "marks", marks: [...byKey.values()] };
+  const byCollection = markRefLookup(current.marks);
+  if (ctrl && markLookupHas(byCollection, mark)) removeMarkRef(byCollection, mark);
+  else addMarkRef(byCollection, mark);
+  return { type: "marks", marks: markRefsFromLookup(byCollection) };
 }
 
 export function mergeSequenceSelection(current: SequenceSelection, next: SequenceSelectionDto, shift: boolean, ctrl: boolean): SequenceSelection {
@@ -284,13 +289,12 @@ export function mergeSequenceSelection(current: SequenceSelection, next: Sequenc
     }
     return { type: "effects", ids: [...ids] };
   }
-  const marks = new Map(current.type === "marks" ? current.marks.map((mark) => [markKey(mark), mark]) : []);
+  const marks = markRefLookup(current.type === "marks" ? current.marks : []);
   for (const mark of next.marks) {
-    const key = markKey(mark);
-    if (ctrl && marks.has(key)) marks.delete(key);
-    else marks.set(key, mark);
+    if (ctrl && markLookupHas(marks, mark)) removeMarkRef(marks, mark);
+    else addMarkRef(marks, mark);
   }
-  return { type: "marks", marks: [...marks.values()] };
+  return { type: "marks", marks: markRefsFromLookup(marks) };
 }
 
 export function normalizedRect(startX: number, startY: number, x: number, y: number) {
@@ -326,7 +330,7 @@ export function selectionFromMarqueeMarks(
   for (const collection of collections) {
     collection.marksSeconds.forEach((timeSeconds, index) => {
       const x = left + (timeSeconds - viewport.scrollXSeconds) * viewport.pxPerSecond;
-      if (rectsIntersect(box, { x: x - 5, y: y1, width: 10, height: y2 - y1 })) {
+      if (rectsIntersect(box, { x: x - SEQUENCE_HIT_RADII.markPx, y: y1, width: SEQUENCE_HIT_RADII.markPx * 2, height: y2 - y1 })) {
         marks.push({ collectionKey: collection.key, index });
       }
     });
@@ -424,7 +428,7 @@ export function markMovePreviews(document: SequenceDocumentDto, marks: SequenceM
     const timeSeconds = collection?.marksSeconds[mark.index];
     if (collection === undefined || timeSeconds === undefined) continue;
     const nextTimeSeconds = clamp(timeSeconds + deltaSeconds, 0, document.durationSeconds);
-    previews.set(markKey(mark), {
+    setMarkPreview(previews, mark, {
       collectionKey: mark.collectionKey,
       index: mark.index,
       timeSeconds: nextTimeSeconds,
@@ -434,6 +438,55 @@ export function markMovePreviews(document: SequenceDocumentDto, marks: SequenceM
   return previews;
 }
 
-export function markSelectionConsumesKey(selected: string | null, key: string) {
-  return parseSelectedMark(selected) !== null && (key === "ArrowLeft" || key === "ArrowRight");
+export function markSelectionConsumesKey(selected: GuiFocus, key: string) {
+  return selected?.type === "mark" && (key === "ArrowLeft" || key === "ArrowRight");
+}
+
+export function markRefLookup(marks: SequenceMarkRefDto[]): MarkRefLookup {
+  const lookup: MarkRefLookup = new Map();
+  for (const mark of marks) {
+    addMarkRef(lookup, mark);
+  }
+  return lookup;
+}
+
+function markLookupHas(lookup: MarkRefLookup, mark: SequenceMarkRefDto) {
+  return lookup.get(mark.collectionKey)?.has(mark.index) ?? false;
+}
+
+function addMarkRef(lookup: MarkRefLookup, mark: SequenceMarkRefDto) {
+  const collection = lookup.get(mark.collectionKey) ?? new Set<number>();
+  collection.add(mark.index);
+  lookup.set(mark.collectionKey, collection);
+}
+
+function removeMarkRef(lookup: MarkRefLookup, mark: SequenceMarkRefDto) {
+  const collection = lookup.get(mark.collectionKey);
+  if (collection === undefined) return;
+  collection.delete(mark.index);
+  if (collection.size === 0) lookup.delete(mark.collectionKey);
+}
+
+function markRefsFromLookup(lookup: MarkRefLookup): SequenceMarkRefDto[] {
+  const marks: SequenceMarkRefDto[] = [];
+  for (const [collectionKey, indexes] of lookup) {
+    for (const index of indexes) {
+      marks.push({ collectionKey, index });
+    }
+  }
+  return marks;
+}
+
+export function getMarkPreview(lookup: MarkPreviewLookup, mark: SequenceMarkRefDto): MarkPreview | undefined {
+  return lookup.get(mark.collectionKey)?.get(mark.index);
+}
+
+export function setMarkPreview(lookup: MarkPreviewLookup, mark: SequenceMarkRefDto, preview: MarkPreview) {
+  const collection = lookup.get(mark.collectionKey) ?? new Map<number, MarkPreview>();
+  collection.set(mark.index, preview);
+  lookup.set(mark.collectionKey, collection);
+}
+
+export function markPreviewEntries(lookup: MarkPreviewLookup): MarkPreview[] {
+  return [...lookup.values()].flatMap((collection) => [...collection.values()]);
 }

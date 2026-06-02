@@ -44,6 +44,15 @@ empty:
     - 47.139063495s
     - 47.337684135s
     - 47.437699901s
+    - 65.225202229s
+    - 65.432116503s
+    - 65.63569345s
+    - 66.029498035s
+    - 66.636891549s
+    - 66.835462505s
+    - 67.039039452s
+    - 67.230935754s
+    - 67.633083657s
     - 129.635546594s
     - 129.769771226s
     - 129.902877318s
@@ -963,6 +972,70 @@ empty:
         type: float
         value: 2.0
     script: effects.MarkPulse
+  - id: 35
+    start: 65.108533137s
+    duration: 3.131871902s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      beats:
+        type: marks
+        key: marks
+      base:
+        type: color
+        value: '#000000'
+      accent:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+      hue:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      hue_mix:
+        type: float
+        value: 0.35
+      offset_seconds:
+        type: float
+        value: 0.0
+      chase_seconds:
+        type: float
+        value: 0.5
+      pulse_overlap:
+        type: float
+        value: 8.0
+      section_width_pixels:
+        type: integer
+        value: 5
+      chase_position:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.MarkChase
   - id: 20
     start: 128.836789387s
     duration: 0.661261311s

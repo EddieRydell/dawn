@@ -10,6 +10,16 @@ import { runSnapshotCommand } from "../../../../store";
 import { Readout } from "../../InspectorScrollArea";
 import { clamp } from "../../shared";
 
+const CURVE_EDITOR = {
+  width: 240,
+  height: 120,
+  roundScale: 1000,
+  flatRangeEpsilon: 0.0001,
+  colorMismatchDistance: 0.001,
+  emptyGradient: "#17181b",
+  defaultColor: "#ffffff"
+} as const;
+
 export type EditedFloatCurvePoint = { time: number; value: number };
 
 export type EditedColorCurvePoint = { time: number; value: string };
@@ -254,9 +264,9 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
   const linked = source !== null;
   const linkedLabel = source?.displayName ?? source?.reference ?? "";
   const matchingCurves = curveLibrary.filter((item) => item.valueType === valueType);
-  const linkedValue = linked && source.path !== null && source.objectKey !== null
-    ? `${source.path}::${source.objectKey}`
-    : "";
+  const selectedCurveIndex = linked && source.path !== null && source.objectKey !== null
+    ? matchingCurves.findIndex((item) => item.path === source.path && item.objectKey === source.objectKey)
+    : -1;
   const unlinkCopy = () =>
     runSnapshotCommand(() =>
       commands.applySequenceGuiEdit({
@@ -314,27 +324,27 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
         <select
           title={`${param.name} library curve`}
           disabled={matchingCurves.length === 0}
-          value={linkedValue}
+          value={String(selectedCurveIndex)}
           onChange={(event) => {
-            const [curvePath, objectKey] = event.currentTarget.value.split("::");
-            if (curvePath === undefined || objectKey === undefined) return;
+            const curve = matchingCurves[Number(event.currentTarget.value)];
+            if (curve === undefined) return;
             void runSnapshotCommand(() =>
               commands.applySequenceGuiEdit({
                 type: "linkEffectCurveParam",
                 id: effectId,
                 name: param.name,
-                curvePath,
-                objectKey
+                curvePath: curve.path,
+                objectKey: curve.objectKey
               })
             );
           }}
         >
-          {!linked && <option value="">Choose curve</option>}
-          {linkedValue !== "" && !matchingCurves.some((item) => `${item.path}::${item.objectKey}` === linkedValue) && (
-            <option value={linkedValue}>{linkedLabel}</option>
+          {!linked && <option value="-1">Choose curve</option>}
+          {linked && selectedCurveIndex === -1 && (
+            <option value="-1">{linkedLabel}</option>
           )}
-          {matchingCurves.map((item) => (
-            <option key={`${item.path}::${item.objectKey}`} value={`${item.path}::${item.objectKey}`}>
+          {matchingCurves.map((item, index) => (
+            <option key={index} value={String(index)}>
               {item.displayName}
             </option>
           ))}
@@ -478,7 +488,7 @@ function FloatCurveParam({
       <svg
         ref={svgRef}
         className="float-curve-graph"
-        viewBox="0 0 240 120"
+        viewBox={`0 0 ${CURVE_EDITOR.width} ${CURVE_EDITOR.height}`}
         role="img"
         aria-label={`${name} curve`}
         onPointerDown={(event) => {
@@ -509,13 +519,13 @@ function FloatCurveParam({
           update(draftsRef.current);
         }}
       >
-        <rect className="float-curve-graph-bg" x="0" y="0" width="240" height="120" />
-        <path className="float-curve-grid-line" d="M0 60H240" />
-        <path className="float-curve-grid-line" d="M120 0V120" />
+        <rect className="float-curve-graph-bg" x="0" y="0" width={CURVE_EDITOR.width} height={CURVE_EDITOR.height} />
+        <path className="float-curve-grid-line" d={`M0 ${CURVE_EDITOR.height / 2}H${CURVE_EDITOR.width}`} />
+        <path className="float-curve-grid-line" d={`M${CURVE_EDITOR.width / 2} 0V${CURVE_EDITOR.height}`} />
         <path className="float-curve-line" d={path} />
         {drafts.map((point, index) => {
-          const x = point.time * 240;
-          const y = 120 - ((point.value - valueRange.min) / (valueRange.max - valueRange.min)) * 120;
+          const x = point.time * CURVE_EDITOR.width;
+          const y = CURVE_EDITOR.height - ((point.value - valueRange.min) / (valueRange.max - valueRange.min)) * CURVE_EDITOR.height;
           return (
             <circle
               key={index}
@@ -755,7 +765,7 @@ function ColorCurveParam({
             return;
           }
           if (event.target !== event.currentTarget) return;
-          const previous = draftsRef.current[draftsRef.current.length - 1]?.value ?? "#ffffff";
+          const previous = draftsRef.current[draftsRef.current.length - 1]?.value ?? CURVE_EDITOR.defaultColor;
           const point = pointFromPointer(event, previous);
           update([...draftsRef.current, point]);
           setSelectedIndex(nearestColorPointIndex(draftsRef.current, point));
@@ -788,7 +798,7 @@ function ColorCurveParam({
         }}
       >
         {drafts.map((point, index) => {
-          const displayedColor = isHexColor(point.value) ? point.value : (points[index]?.value ?? "#ffffff");
+          const displayedColor = isHexColor(point.value) ? point.value : (points[index]?.value ?? CURVE_EDITOR.defaultColor);
           return (
             <span
               key={index}
@@ -857,7 +867,7 @@ function ColorCurveParam({
         {!pointsCollapsed && (
           <div className="float-curve-point-list">
             {drafts.map((point, index) => {
-              const displayedColor = isHexColor(point.value) ? point.value : (points[index]?.value ?? "#ffffff");
+              const displayedColor = isHexColor(point.value) ? point.value : (points[index]?.value ?? CURVE_EDITOR.defaultColor);
               return (
                 <div
                   key={index}
@@ -926,7 +936,7 @@ function ColorCurveParam({
         )}
       </div>
       <button type="button" disabled={readOnly} onClick={() => {
-        const nextPoint = { time: 1, value: drafts[drafts.length - 1]?.value ?? "#ffffff" };
+        const nextPoint = { time: 1, value: drafts[drafts.length - 1]?.value ?? CURVE_EDITOR.defaultColor };
         update([...drafts, nextPoint]);
         setSelectedIndex(drafts.length);
       }}>Add stop</button>
@@ -946,7 +956,7 @@ function floatCurveValueRange(points: EditedFloatCurvePoint[]) {
   const values = points.map((point) => point.value).filter(Number.isFinite);
   const min = Math.min(0, ...values);
   const max = Math.max(1, ...values);
-  if (Math.abs(max - min) < 0.0001) return { min: min - 0.5, max: max + 0.5 };
+  if (Math.abs(max - min) < CURVE_EDITOR.flatRangeEpsilon) return { min: min - 0.5, max: max + 0.5 };
   return { min, max };
 }
 
@@ -955,8 +965,8 @@ function floatCurveSvgPath(points: EditedFloatCurvePoint[], range: { min: number
   if (sorted.length === 0) return "";
   return sorted
     .map((point, index) => {
-      const x = point.time * 240;
-      const y = 120 - ((point.value - range.min) / (range.max - range.min)) * 120;
+      const x = point.time * CURVE_EDITOR.width;
+      const y = CURVE_EDITOR.height - ((point.value - range.min) / (range.max - range.min)) * CURVE_EDITOR.height;
       return `${index === 0 ? "M" : "L"}${x.toFixed(2)} ${y.toFixed(2)}`;
     })
     .join(" ");
@@ -979,7 +989,7 @@ function nearestColorPointIndex(points: EditedColorCurvePoint[], point: EditedCo
   let bestIndex = 0;
   let bestDistance = Infinity;
   points.forEach((candidate, index) => {
-    const distance = Math.abs(candidate.time - point.time) + (candidate.value === point.value ? 0 : 0.001);
+    const distance = Math.abs(candidate.time - point.time) + (candidate.value === point.value ? 0 : CURVE_EDITOR.colorMismatchDistance);
     if (distance < bestDistance) {
       bestDistance = distance;
       bestIndex = index;
@@ -992,13 +1002,13 @@ function colorCurveGradient(points: EditedColorCurvePoint[]) {
   const stops = sortCurvePoints(points)
     .filter((point) => isHexColor(point.value))
     .map((point) => `${point.value} ${clamp(point.time, 0, 1) * 100}%`);
-  if (stops.length === 0) return "#17181b";
-  if (stops.length === 1) return stops[0]?.split(" ")[0] ?? "#17181b";
+  if (stops.length === 0) return CURVE_EDITOR.emptyGradient;
+  if (stops.length === 1) return stops[0]?.split(" ")[0] ?? CURVE_EDITOR.emptyGradient;
   return `linear-gradient(90deg, ${stops.join(", ")})`;
 }
 
 function roundCurveValue(value: number) {
-  return Math.round(value * 1000) / 1000;
+  return Math.round(value * CURVE_EDITOR.roundScale) / CURVE_EDITOR.roundScale;
 }
 
 function curvePointsSignature(points: Array<{ time: number; value: number | string }>) {
@@ -1017,7 +1027,7 @@ function normalizeColorCurvePoints(points: ColorCurvePointDto[]): EditedColorCur
     .filter((point) => isHexColor(point.value))
     .filter((point) => Number.isFinite(point.time))
     .map((point) => ({ time: clamp(point.time, 0, 1), value: point.value.toLowerCase() }));
-  return normalized.length > 0 ? normalized : [{ time: 0, value: "#ffffff" }];
+  return normalized.length > 0 ? normalized : [{ time: 0, value: CURVE_EDITOR.defaultColor }];
 }
 
 function isHexColor(value: string): boolean {

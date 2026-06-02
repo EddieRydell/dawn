@@ -4,8 +4,8 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 use crate::analysis::{
-    analyze_project_with_overlays, effect_script_key, split_effect_script_key,
-    AnalysisImportResolver, DiagnosticCode, DiagnosticSeverity, ProjectAnalysis, ProjectOverlay,
+    analyze_project_with_overlays, AnalysisImportResolver, DiagnosticCode, DiagnosticSeverity,
+    ProjectAnalysis, ProjectOverlay,
 };
 use crate::effect_script::{
     compile as compile_effect_script, compile_module, lex as lex_effect_script,
@@ -211,7 +211,7 @@ pub struct SequenceEffectDocument {
     pub target_label: String,
     pub scope: SequenceEffectScope,
     pub script: String,
-    pub script_source: Option<String>,
+    pub script_source: Option<EffectScriptReferenceDocument>,
     pub params: Vec<SequenceEffectParamDocument>,
     pub render: Option<SequenceEffectRenderDocument>,
 }
@@ -221,9 +221,31 @@ pub struct SequenceEffectDocument {
 pub struct SequenceEffectScriptDocument {
     pub name: String,
     pub kind: EffectScriptKind,
-    pub path: String,
+    pub script: EffectScriptReferenceDocument,
     pub import: String,
     pub params: Vec<SequenceEffectScriptParamDocument>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectScriptReferenceDocument {
+    pub path: String,
+    pub effect_name: String,
+}
+
+impl From<EffectScriptId> for EffectScriptReferenceDocument {
+    fn from(id: EffectScriptId) -> Self {
+        Self {
+            path: id.path.to_string(),
+            effect_name: id.effect_name,
+        }
+    }
+}
+
+impl EffectScriptReferenceDocument {
+    pub fn to_script_id(&self) -> EffectScriptId {
+        EffectScriptId::new(Utf8PathBuf::from(&self.path), self.effect_name.clone())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,7 +271,7 @@ pub enum SequenceDocumentEdit {
         import: Option<String>,
     },
     AddEffect {
-        script_path: String,
+        script: EffectScriptReferenceDocument,
         target: LayoutTargetDocument,
         scope: SequenceEffectScope,
         start_seconds: f64,
@@ -273,7 +295,7 @@ pub enum SequenceDocumentEdit {
     },
     ChangeEffectScript {
         id: u32,
-        script_path: String,
+        script: EffectScriptReferenceDocument,
     },
     RetargetEffect {
         id: u32,
@@ -414,7 +436,7 @@ pub enum SequenceEffectParamCurveValueEditValue {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceEffectRenderDocument {
-    pub script_key: String,
+    pub script: EffectScriptReferenceDocument,
     pub script_source: String,
     pub params: Vec<SequenceEffectParamDocument>,
     pub target_pixels: Vec<SequenceEffectPixelDocument>,
@@ -793,7 +815,7 @@ fn apply_sequence_edit_operation(
                 .flatten();
         }
         SequenceDocumentEdit::AddEffect {
-            script_path,
+            script,
             target,
             scope,
             start_seconds,
@@ -801,23 +823,20 @@ fn apply_sequence_edit_operation(
         } => {
             let id = next_sequence_effect_id(sequence)
                 .ok_or_else(|| "no sequence effect IDs are available".to_string())?;
-            let (script_path, effect_name) = split_effect_script_key(&script_path);
-            let script_key = effect_name
-                .as_ref()
-                .map(|name| effect_script_key(&script_path, name))
-                .unwrap_or_else(|| script_path.to_slash_string());
+            let script_id = script.to_script_id();
             let compiled_script;
             let script = match analysis
                 .scripts
-                .get(&script_key)
+                .get(&script_id)
                 .and_then(|script| script.result.as_ref().ok())
             {
                 Some(script) => script,
                 None => {
-                    let source = read_text_with_overlays(fs, &script_path, overlays)?;
+                    let source = read_text_with_overlays(fs, &script_id.path, overlays)?;
                     let compiled = compile_module(&source)
                         .map_err(|diagnostics| script_diagnostics_message(&diagnostics))?;
-                    compiled_script = select_compiled_effect(compiled, effect_name.as_deref())?;
+                    compiled_script =
+                        select_compiled_effect(compiled, Some(&script_id.effect_name))?;
                     &compiled_script
                 }
             };
@@ -833,7 +852,7 @@ fn apply_sequence_edit_operation(
                         .saturating_sub(start_nanoseconds),
                 )
                 .max(1);
-            let (alias, import) = module_import_for_path(path, &script_path, imports);
+            let (alias, import) = module_import_for_path(path, &script_id.path, imports);
             sequence.effects.push(SequenceEffect {
                 id,
                 start: Time::from_nanoseconds(start_nanoseconds),
@@ -922,28 +941,25 @@ fn apply_sequence_edit_operation(
                 ),
             );
         }
-        SequenceDocumentEdit::ChangeEffectScript { id, script_path } => {
-            let (script_path, effect_name) = split_effect_script_key(&script_path);
-            let script_key = effect_name
-                .as_ref()
-                .map(|name| effect_script_key(&script_path, name))
-                .unwrap_or_else(|| script_path.to_slash_string());
+        SequenceDocumentEdit::ChangeEffectScript { id, script } => {
+            let script_id = script.to_script_id();
             let compiled_script;
             let script = match analysis
                 .scripts
-                .get(&script_key)
+                .get(&script_id)
                 .and_then(|script| script.result.as_ref().ok())
             {
                 Some(script) => script,
                 None => {
-                    let source = read_text_with_overlays(fs, &script_path, overlays)?;
+                    let source = read_text_with_overlays(fs, &script_id.path, overlays)?;
                     let compiled = compile_module(&source)
                         .map_err(|diagnostics| script_diagnostics_message(&diagnostics))?;
-                    compiled_script = select_compiled_effect(compiled, effect_name.as_deref())?;
+                    compiled_script =
+                        select_compiled_effect(compiled, Some(&script_id.effect_name))?;
                     &compiled_script
                 }
             };
-            let (alias, import) = module_import_for_path(path, &script_path, imports);
+            let (alias, import) = module_import_for_path(path, &script_id.path, imports);
             let mark_collection_key = sequence
                 .mark_collections
                 .first()
@@ -1490,19 +1506,18 @@ fn compiled_effect_for_sequence_effect(
             let resolved = resolver
                 .resolve_effect(path, reference)
                 .map_err(|error| error.to_string())?;
-            let script_path = resolved.source_path;
-            let script_key = effect_script_key(&script_path, &resolved.effect_name);
+            let script_id = EffectScriptId::new(resolved.source_path, resolved.effect_name);
             if let Some(script) = analysis
                 .scripts
-                .get(&script_key)
+                .get(&script_id)
                 .and_then(|script| script.result.as_ref().ok())
             {
                 return Ok(script.clone());
             }
-            let source = read_text_with_overlays(fs, &script_path, overlays)?;
+            let source = read_text_with_overlays(fs, &script_id.path, overlays)?;
             let compiled = compile_module(&source)
                 .map_err(|diagnostics| script_diagnostics_message(&diagnostics))?;
-            select_compiled_effect(compiled, Some(&resolved.effect_name))
+            select_compiled_effect(compiled, Some(&script_id.effect_name))
         }
     }
 }
@@ -1819,8 +1834,8 @@ fn sequence_to_document(
         .map(|(index, effect)| {
             let target = effect_target_document(&effect.target, &fixture_names_by_id);
             let target_label = target_label(target.kind, &target.name);
-            let script_source =
-                sequence_effect_script_details(path, effect, analysis).map(|(_, source)| source);
+            let script_source = sequence_effect_script_details(path, effect, analysis)
+                .map(|(script, _)| script.into());
             let params = analysis
                 .and_then(|analysis| sequence_effect_param_documents(path, effect, analysis))
                 .unwrap_or_default();
@@ -1949,7 +1964,7 @@ fn sequence_effect_script_catalog(
     sequence_path: &Utf8PathBuf,
     overlays: &[ProjectOverlay],
 ) -> Vec<SequenceEffectScriptDocument> {
-    let mut by_path = BTreeMap::<String, SequenceEffectScriptDocument>::new();
+    let mut by_path = BTreeMap::<EffectScriptId, SequenceEffectScriptDocument>::new();
     if let Ok(entries) = fs.list_entries() {
         for entry in entries {
             if !entry
@@ -1960,10 +1975,7 @@ fn sequence_effect_script_catalog(
                 continue;
             }
             let path = canonicalize_path(&fs.resolve(&entry.path));
-            if by_path
-                .keys()
-                .any(|key| split_effect_script_key(key).0 == path)
-            {
+            if by_path.keys().any(|key| key.path == path) {
                 continue;
             }
             let Ok(source) = read_text_with_overlays(fs, &path, overlays) else {
@@ -1973,12 +1985,13 @@ fn sequence_effect_script_catalog(
                 if visibility == EffectVisibility::Internal {
                     continue;
                 };
+                let script_id = EffectScriptId::new(path.clone(), name.clone());
                 by_path.insert(
-                    effect_script_key(&path, &name),
+                    script_id.clone(),
                     SequenceEffectScriptDocument {
                         name: name.clone(),
                         kind,
-                        path: effect_script_key(&path, &name),
+                        script: script_id.into(),
                         import: serialized_import_path(sequence_path, &path),
                         params: params
                             .into_iter()
@@ -1996,7 +2009,8 @@ fn sequence_effect_script_catalog(
     scripts.sort_by(|left, right| {
         left.name
             .cmp(&right.name)
-            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.script.path.cmp(&right.script.path))
+            .then_with(|| left.script.effect_name.cmp(&right.script.effect_name))
     });
     scripts
 }
@@ -2324,11 +2338,11 @@ fn sequence_effect_render_document(
     if target_pixels.is_empty() {
         return None;
     }
-    let (script_key, script_source) =
+    let (script_id, script_source) =
         sequence_effect_script_details(sequence_path, effect, Some(analysis))?;
     if analysis
         .scripts
-        .get(&script_key)
+        .get(&script_id)
         .is_none_or(|script| script.result.is_err())
     {
         return None;
@@ -2336,7 +2350,7 @@ fn sequence_effect_render_document(
     let params = sequence_effect_param_documents(sequence_path, effect, analysis)?;
 
     Some(SequenceEffectRenderDocument {
-        script_key,
+        script: script_id.into(),
         script_source,
         params,
         target_pixels,
@@ -2347,16 +2361,9 @@ fn sequence_effect_script_details(
     sequence_path: &Utf8PathBuf,
     effect: &SequenceEffect<Authored>,
     analysis: Option<&ProjectAnalysis>,
-) -> Option<(String, String)> {
+) -> Option<(EffectScriptId, String)> {
     match &effect.script {
-        InlineScriptOrRef::Inline { inline } => Some((
-            format!(
-                "inline:{}:{}",
-                analysis?.root_path.to_slash_string(),
-                effect.id
-            ),
-            inline.clone(),
-        )),
+        InlineScriptOrRef::Inline { .. } => None,
         InlineScriptOrRef::Ref(reference) => {
             let analysis = analysis?;
             let mut resolver = AnalysisImportResolver {
@@ -2364,14 +2371,13 @@ fn sequence_effect_script_details(
                 scripts: &analysis.scripts,
             };
             let resolved = resolver.resolve_effect(sequence_path, reference).ok()?;
-            let path = resolved.source_path;
-            let key = effect_script_key(&path, &resolved.effect_name);
+            let script_id = EffectScriptId::new(resolved.source_path, resolved.effect_name);
             let source = analysis
                 .files
-                .get(&path)
+                .get(&script_id.path)
                 .and_then(|file| file.text.clone())
-                .unwrap_or_else(|| key.clone());
-            Some((key, source))
+                .unwrap_or_else(|| script_id.display_key());
+            Some((script_id, source))
         }
     }
 }

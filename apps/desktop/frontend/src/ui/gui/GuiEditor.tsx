@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import type { AppSnapshotDto } from "../../bindings";
 
-import type { ReadyGuiDocumentDto, SequenceSelection } from "./shared";
+import type { GuiFocus, ReadyGuiDocumentDto, SequenceSelection } from "./shared";
 
 import { LayoutCanvas } from "./layout/LayoutCanvas";
 
@@ -59,7 +59,7 @@ function GuiEditorInner({
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
 }) {
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<GuiFocus>(null);
   const [activeMarkCollectionKey, setActiveMarkCollectionKey] = useState<string | null>(() =>
     gui.type === "sequence" ? gui.document.markCollections[0]?.key ?? null : null
   );

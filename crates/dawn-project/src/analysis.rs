@@ -22,7 +22,7 @@ pub struct ProjectAnalysis {
     pub root_path: Utf8PathBuf,
     pub project_key: String,
     pub files: IndexMap<Utf8PathBuf, AnalyzedFile>,
-    pub scripts: IndexMap<String, EffectScriptAnalysis>,
+    pub scripts: IndexMap<EffectScriptId, EffectScriptAnalysis>,
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub resolved: Option<ResolvedProject>,
 }
@@ -53,19 +53,16 @@ impl ProjectAnalysis {
     pub fn compiled_script_for_path(&self, path: &Utf8PathBuf) -> Option<&CompiledEffect> {
         self.scripts
             .values()
-            .find(
-                |script| matches!(&script.source, ScriptSource::External(source) if source == path),
-            )?
+            .find(|script| {
+                matches!(&script.source, ScriptSource::External(source) if script_paths_equal(&source.path, path))
+            })?
             .result
             .as_ref()
             .ok()
     }
 
-    pub fn compiled_script_for_key(&self, script_key: &str) -> Option<&CompiledEffect> {
-        self.scripts
-            .get(script_key)
-            .and_then(|script| script.result.as_ref().ok())
-            .or_else(|| self.compiled_script_for_path(&Utf8PathBuf::from(script_key)))
+    pub fn compiled_script_for_id(&self, script_id: &EffectScriptId) -> Option<&CompiledEffect> {
+        compiled_script_for_id(&self.scripts, script_id)
     }
 
     pub fn sample_effect_script(
@@ -77,28 +74,30 @@ impl ProjectAnalysis {
         pixel: crate::effect_script::PixelContext,
         params: BTreeMap<String, RuntimeValue>,
     ) -> Result<Color, String> {
-        self.sample_effect_script_key(
-            &script_path.to_slash_string(),
-            progress,
-            seconds,
-            fixture,
-            pixel,
-            &params,
-        )
+        let script = self
+            .scripts
+            .iter()
+            .find(|(id, _)| id.path == *script_path)
+            .map(|(id, _)| id.clone())
+            .ok_or_else(|| format!("compiled script `{}` was not found", script_path))?;
+        self.sample_effect_script_id(&script, progress, seconds, fixture, pixel, &params)
     }
 
-    pub fn sample_effect_script_key(
+    pub fn sample_effect_script_id(
         &self,
-        script_key: &str,
+        script_id: &EffectScriptId,
         progress: f64,
         seconds: f64,
         fixture: crate::effect_script::FixtureContext,
         pixel: crate::effect_script::PixelContext,
         params: &BTreeMap<String, RuntimeValue>,
     ) -> Result<Color, String> {
-        let script = self
-            .compiled_script_for_key(script_key)
-            .ok_or_else(|| format!("compiled script `{script_key}` was not found"))?;
+        let script = self.compiled_script_for_id(script_id).ok_or_else(|| {
+            format!(
+                "compiled script `{}` was not found",
+                script_id.display_key()
+            )
+        })?;
         script
             .sample(progress, seconds, fixture, pixel, params)
             .map_err(|error| error.to_string())
@@ -108,11 +107,18 @@ impl ProjectAnalysis {
         &self,
         script_path: &Utf8PathBuf,
     ) -> BTreeMap<String, RuntimeValue> {
-        let Some(script_analysis) = self.scripts.get(&script_path.to_slash_string()) else {
+        let Some(script_analysis) = self
+            .scripts
+            .iter()
+            .find(|(id, _)| id.path == *script_path)
+            .map(|(_, analysis)| analysis)
+        else {
             let Some(script_analysis) = self
                 .scripts
                 .values()
-                .find(|script| matches!(&script.source, ScriptSource::External(source) if source == script_path))
+                .find(|script| {
+                    matches!(&script.source, ScriptSource::External(source) if script_paths_equal(&source.path, script_path))
+                })
             else {
                 return BTreeMap::new();
             };
@@ -327,7 +333,7 @@ struct AnalysisSession {
     fs: WorkspaceFs,
     files: IndexMap<Utf8PathBuf, AnalyzedFile>,
     diagnostics: Vec<ProjectDiagnostic>,
-    scripts: IndexMap<String, EffectScriptAnalysis>,
+    scripts: IndexMap<EffectScriptId, EffectScriptAnalysis>,
     visiting: HashSet<Utf8PathBuf>,
     overlays: HashMap<Utf8PathBuf, String>,
 }
@@ -444,26 +450,36 @@ impl AnalysisSession {
                 .ok()
                 .and_then(|scripts| scripts.first())
                 .map(|script| EffectScriptAnalysis {
-                    source: ScriptSource::External(path.clone()),
+                    source: ScriptSource::External(EffectScriptId::new(
+                        path.clone(),
+                        script.name.clone(),
+                    )),
                     result: Ok(script.clone()),
                 });
             match result {
                 Ok(scripts) => {
                     for compiled in scripts {
                         self.scripts.insert(
-                            effect_script_key(&path, &compiled.name),
+                            EffectScriptId::new(path.clone(), compiled.name.clone()),
                             EffectScriptAnalysis {
-                                source: ScriptSource::External(path.clone()),
+                                source: ScriptSource::External(EffectScriptId::new(
+                                    path.clone(),
+                                    compiled.name.clone(),
+                                )),
                                 result: Ok(compiled),
                             },
                         );
                     }
                 }
                 Err(diagnostics) => {
+                    let effect_name = path.file_stem().unwrap_or("effect").to_string();
                     self.scripts.insert(
-                        path.to_slash_string(),
+                        EffectScriptId::new(path.clone(), effect_name.clone()),
                         EffectScriptAnalysis {
-                            source: ScriptSource::External(path.clone()),
+                            source: ScriptSource::External(EffectScriptId::new(
+                                path.clone(),
+                                effect_name,
+                            )),
                             result: Err(diagnostics),
                         },
                     );
@@ -555,7 +571,7 @@ impl AnalysisSession {
         self.scripts
             .values()
             .filter(
-                |script| matches!(&script.source, ScriptSource::External(source) if source == path),
+                |script| matches!(&script.source, ScriptSource::External(source) if source.path == *path),
             )
             .filter_map(|script| script.result.as_ref().ok())
             .collect()
@@ -568,7 +584,7 @@ impl AnalysisSession {
                 .scripts
                 .values()
                 .filter(|script| {
-                    matches!(&script.source, ScriptSource::External(source) if source.parent() == Some(path.as_path()))
+                    matches!(&script.source, ScriptSource::External(source) if source.path.parent() == Some(path.as_path()))
                 })
                 .filter_map(|script| script.result.as_ref().ok())
                 .collect();
@@ -1188,28 +1204,17 @@ impl AnalysisSession {
         for sequence in &project.sequences {
             for effect in &sequence.effects {
                 let script = match &effect.script {
-                    ScriptSource::External(path) => self
-                        .scripts
-                        .get(&path.to_slash_string())
-                        .and_then(|script| script.result.as_ref().ok())
-                        .cloned(),
+                    ScriptSource::External(script_id) => {
+                        compiled_script_for_id(&self.scripts, script_id).cloned()
+                    }
                     ScriptSource::Inline(text) => {
-                        let key = format!("inline:{}:{}", root_path.to_slash_string(), effect.id);
                         let result = compile_effect_script(text);
                         for diagnostic in
                             self.inline_script_diagnostics(root_path, effect.id, &result)
                         {
                             self.diagnostics.push(diagnostic);
                         }
-                        let script = result.as_ref().ok().cloned();
-                        self.scripts.insert(
-                            key,
-                            EffectScriptAnalysis {
-                                source: ScriptSource::Inline(text.clone()),
-                                result,
-                            },
-                        );
-                        script
+                        result.as_ref().ok().cloned()
                     }
                 };
                 if let Some(script) = script {
@@ -1464,7 +1469,7 @@ impl AnalysisSession {
 
 pub(crate) struct AnalysisImportResolver<'a> {
     pub(crate) files: &'a IndexMap<Utf8PathBuf, AnalyzedFile>,
-    pub(crate) scripts: &'a IndexMap<String, EffectScriptAnalysis>,
+    pub(crate) scripts: &'a IndexMap<EffectScriptId, EffectScriptAnalysis>,
 }
 
 impl AnalysisImportResolver<'_> {
@@ -1474,10 +1479,9 @@ impl AnalysisImportResolver<'_> {
         alias: &str,
         reference: &SymbolRef,
     ) -> Result<Vec<Utf8PathBuf>, LowerError> {
-        let (source_path, _) = split_effect_script_key(source_path.as_str());
         let analyzed = self
             .files
-            .get(&source_path)
+            .get(source_path)
             .ok_or_else(|| LowerError::Import {
                 reference: reference.raw().to_string(),
                 message: format!("file `{}` was not loaded", source_path),
@@ -1504,7 +1508,7 @@ impl AnalysisImportResolver<'_> {
                 message: format!("alias `{alias}` is imported more than once"),
             });
         }
-        let import_path = resolve_import_path(&source_path, &imports[0]);
+        let import_path = resolve_import_path(source_path, &imports[0]);
         if self.files.contains_key(&import_path) {
             return Ok(vec![import_path]);
         }
@@ -1612,16 +1616,16 @@ impl AnalysisImportResolver<'_> {
         self.scripts
             .values()
             .filter_map(|script| {
-                let ScriptSource::External(source_path) = &script.source else {
+                let ScriptSource::External(source) = &script.source else {
                     return None;
                 };
-                (source_path == path)
+                script_paths_equal(&source.path, path)
                     .then(|| {
                         script
                             .result
                             .as_ref()
                             .ok()
-                            .map(|compiled| (source_path.clone(), compiled))
+                            .map(|compiled| (source.path.clone(), compiled))
                     })
                     .flatten()
             })
@@ -1644,6 +1648,29 @@ fn single_match<T>(mut matches: Vec<T>, reference: &SymbolRef) -> Result<T, Lowe
             ),
         }),
     }
+}
+
+fn compiled_script_for_id<'a>(
+    scripts: &'a IndexMap<EffectScriptId, EffectScriptAnalysis>,
+    script_id: &EffectScriptId,
+) -> Option<&'a CompiledEffect> {
+    scripts
+        .get(script_id)
+        .and_then(|script| script.result.as_ref().ok())
+        .or_else(|| {
+            scripts
+                .iter()
+                .find(|(id, _)| effect_script_ids_equal(id, script_id))
+                .and_then(|(_, script)| script.result.as_ref().ok())
+        })
+}
+
+fn script_paths_equal(left: &Utf8PathBuf, right: &Utf8PathBuf) -> bool {
+    left == right || left.to_slash_string() == right.to_slash_string()
+}
+
+fn effect_script_ids_equal(left: &EffectScriptId, right: &EffectScriptId) -> bool {
+    left.effect_name == right.effect_name && script_paths_equal(&left.path, &right.path)
 }
 
 fn script_range(range: crate::effect_script::SourceRange) -> TextRange {
@@ -2362,17 +2389,6 @@ fn is_mark_collection_key(value: &str) -> bool {
 fn is_effect_script_path(path: &Utf8PathBuf) -> bool {
     path.file_name()
         .is_some_and(|name| name.ends_with(".effect.dawn"))
-}
-
-pub fn effect_script_key(path: &Utf8PathBuf, effect_name: &str) -> String {
-    format!("{}#{effect_name}", path.to_slash_string())
-}
-
-pub fn split_effect_script_key(script_key: &str) -> (Utf8PathBuf, Option<String>) {
-    match script_key.rsplit_once('#') {
-        Some((path, name)) => (Utf8PathBuf::from(path), Some(name.to_string())),
-        None => (Utf8PathBuf::from(script_key), None),
-    }
 }
 
 fn is_dawn_path(path: &Utf8PathBuf) -> bool {

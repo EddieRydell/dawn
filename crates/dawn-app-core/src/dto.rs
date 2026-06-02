@@ -1,12 +1,12 @@
 use dawn_project::analysis::{DiagnosticSeverity, ProjectDiagnostic, TextRange};
 use dawn_project::document::{
     default_sequence_effect_param, DocumentDescriptor, DocumentObjectDescriptor, DocumentViewId,
-    FixtureDefinitionDocument, FixtureDocument, LayoutDocument, LayoutFixturePlacement,
-    ResolvedLayoutFixture, SequenceAudioDocument, SequenceCurveLibraryItemDocument,
-    SequenceDocument, SequenceEffectDocument, SequenceEffectParamCurvePointEditValue,
-    SequenceEffectParamCurveSourceDocument, SequenceEffectParamCurveValueEditValue,
-    SequenceEffectParamEditValue, SequenceEffectScriptDocument, SequenceEffectScriptParamDocument,
-    SequenceLaneDocument,
+    EffectScriptReferenceDocument, FixtureDefinitionDocument, FixtureDocument, LayoutDocument,
+    LayoutFixturePlacement, ResolvedLayoutFixture, SequenceAudioDocument,
+    SequenceCurveLibraryItemDocument, SequenceDocument, SequenceEffectDocument,
+    SequenceEffectParamCurvePointEditValue, SequenceEffectParamCurveSourceDocument,
+    SequenceEffectParamCurveValueEditValue, SequenceEffectParamEditValue,
+    SequenceEffectScriptDocument, SequenceEffectScriptParamDocument, SequenceLaneDocument,
 };
 use dawn_project::effect_script::{
     lex as lex_effect_script, parse_module as parse_effect_module, EffectParamSchema,
@@ -167,7 +167,7 @@ pub enum SequenceGuiEditDto {
         import: Option<String>,
     },
     AddEffect {
-        script_path: String,
+        script: EffectScriptReferenceDto,
         target: LayoutTargetDto,
         scope: SequenceEffectScopeDto,
         start_seconds: f64,
@@ -185,7 +185,7 @@ pub enum SequenceGuiEditDto {
     },
     ChangeEffectScript {
         id: u32,
-        script_path: String,
+        script: EffectScriptReferenceDto,
     },
     DeleteEffect {
         id: u32,
@@ -446,6 +446,7 @@ pub struct SequenceEffectDto {
     pub target_label: String,
     pub scope: SequenceEffectScopeDto,
     pub script: String,
+    pub script_source: Option<EffectScriptReferenceDto>,
     pub params: Vec<SequenceEffectParamDto>,
 }
 
@@ -562,9 +563,16 @@ pub enum SequenceEffectParamCurveSourceDto {
 pub struct SequenceEffectScriptDto {
     pub name: String,
     pub kind: SequenceEffectScriptKindDto,
-    pub path: String,
+    pub script: EffectScriptReferenceDto,
     pub import: String,
     pub params: Vec<SequenceEffectScriptParamDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectScriptReferenceDto {
+    pub path: String,
+    pub effect_name: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
@@ -1085,13 +1093,31 @@ impl From<SequenceEffectScriptDocument> for SequenceEffectScriptDto {
                 EffectScriptKind::Sample => SequenceEffectScriptKindDto::Sample,
                 EffectScriptKind::Generator => SequenceEffectScriptKindDto::Generator,
             },
-            path: script.path,
+            script: script.script.into(),
             import: script.import,
             params: script
                 .params
                 .into_iter()
                 .filter_map(SequenceEffectScriptParamDto::try_from_document)
                 .collect(),
+        }
+    }
+}
+
+impl From<EffectScriptReferenceDocument> for EffectScriptReferenceDto {
+    fn from(script: EffectScriptReferenceDocument) -> Self {
+        Self {
+            path: script.path,
+            effect_name: script.effect_name,
+        }
+    }
+}
+
+impl From<EffectScriptReferenceDto> for EffectScriptReferenceDocument {
+    fn from(script: EffectScriptReferenceDto) -> Self {
+        Self {
+            path: script.path,
+            effect_name: script.effect_name,
         }
     }
 }
@@ -1108,13 +1134,14 @@ impl SequenceEffectScriptParamDto {
 impl SequenceEffectDto {
     fn from_document(effect: SequenceEffectDocument, mark_collection_key: Option<&str>) -> Self {
         let script = effect.script;
+        let script_source = effect.script_source.map(EffectScriptReferenceDto::from);
         let params = effect
-            .script_source
+            .render
             .as_ref()
             .map(|script_source| {
                 sequence_effect_params_from_source(
                     &script,
-                    script_source,
+                    &script_source.script_source,
                     &effect.params,
                     mark_collection_key,
                 )
@@ -1129,6 +1156,7 @@ impl SequenceEffectDto {
             target_label: effect.target_label,
             scope: effect.scope.into(),
             script,
+            script_source,
             params,
         }
     }

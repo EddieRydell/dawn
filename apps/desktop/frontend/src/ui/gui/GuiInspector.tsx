@@ -1,4 +1,4 @@
-import type { ReadyGuiDocumentDto, SequenceSelection } from "./shared";
+import type { GuiFocus, ReadyGuiDocumentDto, SequenceSelection } from "./shared";
 import { FixtureInspector } from "./fixture/FixtureInspector";
 import { LayoutInspector } from "./layout/LayoutInspector";
 import { SequenceInspector } from "./sequence/SequenceInspector";
@@ -14,8 +14,8 @@ export function GuiInspector({
   setVisibleMarkCollectionKeys
 }: {
   gui: ReadyGuiDocumentDto;
-  selected: string | null;
-  setSelected: (id: string | null) => void;
+  selected: GuiFocus;
+  setSelected: (id: GuiFocus) => void;
   sequenceSelection: SequenceSelection;
   activeMarkCollectionKey: string | null;
   setActiveMarkCollectionKey: (key: string | null) => void;

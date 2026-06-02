@@ -1,3 +1,4 @@
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -22,6 +23,7 @@ use dawn_project::effect_script::{
     compile as compile_effect_script, FixtureContext, PixelContext, RuntimeValue,
 };
 use dawn_project::fs::WorkspaceFs;
+use dawn_project::model::EffectScriptId;
 use dawn_project::model::{
     Color, ColorModel, Curve, CurveValue, CurveValueType, Distance, DistanceSpan, FixtureId,
     Geometry, LayoutTargetKind, Point3, Transform,
@@ -344,6 +346,123 @@ fn project_analysis_loads_effect_scripts_without_yaml_parsing() {
     assert!(analyzed.file.is_none());
     assert!(analyzed.script.is_some());
     assert!(analysis.compiled_script_for_path(&effect_path).is_some());
+}
+
+#[test]
+fn effect_script_id_uses_path_and_effect_name_for_identity() {
+    let pulse = EffectScriptId::new(Utf8PathBuf::from("effects/shared.effect.dawn"), "Pulse");
+    let chase = EffectScriptId::new(Utf8PathBuf::from("effects/shared.effect.dawn"), "Chase");
+    let other_file = EffectScriptId::new(Utf8PathBuf::from("effects/other.effect.dawn"), "Pulse");
+
+    assert_eq!(
+        pulse,
+        EffectScriptId::new(Utf8PathBuf::from("effects/shared.effect.dawn"), "Pulse")
+    );
+    assert_ne!(pulse, chase);
+    assert_ne!(pulse, other_file);
+
+    let hash_set = HashSet::from([pulse.clone(), chase.clone(), other_file.clone()]);
+    assert!(hash_set.contains(&pulse));
+    assert_eq!(hash_set.len(), 3);
+
+    let ordered = BTreeSet::from([chase.clone(), pulse.clone(), other_file.clone()]);
+    assert_eq!(
+        ordered.into_iter().collect::<Vec<_>>(),
+        vec![other_file, chase, pulse]
+    );
+}
+
+#[test]
+fn project_analysis_indexes_multiple_effects_in_one_file_by_script_id() {
+    let dir = temp_dir("multi-effect-script-id");
+    fs::create_dir_all(dir.join("effects")).unwrap();
+    fs::write(
+        dir.join("effects/shared.effect.dawn"),
+        r#"
+effect Pulse {
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    return #ffffff;
+  }
+}
+
+effect Chase {
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    return #000000;
+  }
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("project.dawn"),
+        r#"
+imports:
+  - from: effects
+    as: effects
+
+club:
+  type: project
+  name: club
+  display:
+    name: main
+    controllers: []
+    patch:
+      routes: []
+    layout:
+      name: stage
+      target_order:
+        - type: group
+          name: all
+      fixtures: []
+      groups:
+        - name: all
+          members: []
+  sequences:
+    - duration: 1s
+      frame_rate: 60
+      audio:
+      effects:
+        - id: 1
+          start: 0s
+          duration: 1s
+          target: { type: group, name: all }
+          scope: per_fixture
+          params: {}
+          script: effects.Pulse
+        - id: 2
+          start: 0s
+          duration: 1s
+          target: { type: group, name: all }
+          scope: per_fixture
+          params: {}
+          script: effects.Chase
+"#,
+    )
+    .unwrap();
+
+    let analysis = analyze_project(dir.join("project.dawn"), "club");
+    let script_path = analysis
+        .files
+        .keys()
+        .find(|path| path.to_slash_string().ends_with("shared.effect.dawn"))
+        .expect("shared effect script should be loaded")
+        .clone();
+    let pulse_id = EffectScriptId::new(script_path.clone(), "Pulse");
+    let chase_id = EffectScriptId::new(script_path, "Chase");
+
+    assert_eq!(
+        analysis
+            .compiled_script_for_id(&pulse_id)
+            .map(|script| script.name.as_str()),
+        Some("Pulse")
+    );
+    assert_eq!(
+        analysis
+            .compiled_script_for_id(&chase_id)
+            .map(|script| script.name.as_str()),
+        Some("Chase")
+    );
+    assert_eq!(analysis.scripts.len(), 2);
 }
 
 #[test]
@@ -860,7 +979,7 @@ opening:
         &sequence_path,
         "opening",
         SequenceDocumentEdit::AddEffect {
-            script_path: script.path,
+            script: script.script,
             target: LayoutTargetDocument {
                 kind: LayoutTargetKind::Group,
                 name: "all".to_string(),

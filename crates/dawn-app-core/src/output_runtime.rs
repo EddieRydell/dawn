@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
-use dawn_project::analysis::{effect_script_key, split_effect_script_key, ProjectAnalysis};
+use dawn_project::analysis::ProjectAnalysis;
 use dawn_project::document::{
     SequenceDocument, SequenceEffectParamDocument, SequenceEffectPixelDocument,
     SequenceMarkCollectionDocument,
@@ -14,6 +14,7 @@ use dawn_project::effect_script::{
     PixelContext, PreparedEffectParams, RuntimeError, RuntimeValue,
 };
 use dawn_project::frame::{ceil_frame, floor_frame, frame_count, frame_start};
+use dawn_project::model::EffectScriptId;
 use dawn_project::model::{
     Color, Curve, CurveValue, CurveValueType, Distance, DistanceSpan, EffectParam, FixtureId,
     Resolved, SequenceEffectScope, Time, TimeSpan,
@@ -99,7 +100,7 @@ pub struct SequenceFrameEvaluatorPreparationTiming {
 #[derive(Debug, Clone)]
 pub struct GeneratorParentPreparationTiming {
     pub parent_effect_id: u32,
-    pub script_key: String,
+    pub script_id: EffectScriptId,
     pub target_pixels: usize,
     pub emitted_children: usize,
     pub prepared_children: usize,
@@ -371,7 +372,7 @@ struct SequenceEffectThumbnailCacheKey {
     duration_nanoseconds: u64,
     frame_rate: u32,
     scope: SequenceEffectScope,
-    script_key: String,
+    script_id: EffectScriptId,
     script_source: String,
     params: Vec<PreparedEffectParamCacheKey>,
     target_pixels: Vec<PreparedEffectPixelCacheKey>,
@@ -466,7 +467,7 @@ fn render_shape_changed(
 ) -> bool {
     match (previous, refreshed) {
         (Some(previous), Some(refreshed)) => {
-            previous.script_key != refreshed.script_key
+            previous.script != refreshed.script
                 || previous.script_source != refreshed.script_source
                 || previous.target_pixels.len() != refreshed.target_pixels.len()
                 || previous.params.len() != refreshed.params.len()
@@ -485,7 +486,8 @@ fn generator_topology_key_changed(
     refreshed_render: &dawn_project::document::SequenceEffectRenderDocument,
     analysis: &ProjectAnalysis,
 ) -> bool {
-    let Some(script) = analysis.compiled_script_for_key(&refreshed_render.script_key) else {
+    let script_id = refreshed_render.script.to_script_id();
+    let Some(script) = analysis.compiled_script_for_id(&script_id) else {
         return false;
     };
     if script.kind != EffectScriptKind::Generator {
@@ -528,7 +530,7 @@ fn is_generator_effect(
     effect
         .render
         .as_ref()
-        .and_then(|render| analysis.compiled_script_for_key(&render.script_key))
+        .and_then(|render| analysis.compiled_script_for_id(&render.script.to_script_id()))
         .is_some_and(|script| script.kind == EffectScriptKind::Generator)
 }
 
@@ -617,7 +619,7 @@ struct GeneratorTopologyCacheEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct PreparedEffectCacheKey {
-    script_key: String,
+    script_id: EffectScriptId,
     script_source: String,
     scope: SequenceEffectScope,
     duration_seconds: F64CacheKey,
@@ -838,7 +840,8 @@ impl SequenceFrameEvaluator {
                 effect.scope,
                 render,
             );
-            match analysis.compiled_script_for_key(&render.script_key) {
+            let script_id = render.script.to_script_id();
+            match analysis.compiled_script_for_id(&script_id) {
                 Some(script) if script.kind == EffectScriptKind::Generator => {
                     generator_parent_count += 1;
                     let generator_started = Instant::now();
@@ -947,7 +950,7 @@ impl SequenceFrameEvaluator {
                     generated_child_count += child_count;
                     generator_parents.push(GeneratorParentPreparationTiming {
                         parent_effect_id: effect.id,
-                        script_key: render.script_key.clone(),
+                        script_id: script_id.clone(),
                         target_pixels: render.target_pixels.len(),
                         emitted_children: child_count,
                         prepared_children: child_count,
@@ -1001,7 +1004,7 @@ impl SequenceFrameEvaluator {
                         start_seconds: effect.start_seconds,
                         duration_seconds: effect.duration_seconds,
                         authored: true,
-                        render: PreparedEffectRender::MissingScript(render.script_key.clone()),
+                        render: PreparedEffectRender::MissingScript(script_id.clone()),
                     }];
                     if let Some(cache) = preparation_cache.as_deref_mut() {
                         cache.store(effect.id, cache_key, effect.start_seconds, &prepared);
@@ -1483,7 +1486,7 @@ fn sequence_effect_thumbnail(
         duration_nanoseconds: duration.as_nanoseconds(),
         frame_rate: document.frame_rate,
         scope: effect.scope,
-        script_key: render.script_key.clone(),
+        script_id: render.script.to_script_id(),
         script_source: render.script_source.clone(),
         params: prepared_effect_cache_key(
             document,
@@ -1510,7 +1513,7 @@ fn sequence_effect_thumbnail(
         return Ok(Some(thumbnail));
     }
 
-    let Some(script) = analysis.compiled_script_for_key(&render.script_key) else {
+    let Some(script) = analysis.compiled_script_for_id(&render.script.to_script_id()) else {
         return Ok(None);
     };
     let sampled_frame_indices = evenly_sample_indices(
@@ -1731,7 +1734,7 @@ fn prepared_effect_cache_key_for_params(
     included_params: Option<&BTreeSet<String>>,
 ) -> PreparedEffectCacheKey {
     PreparedEffectCacheKey {
-        script_key: render.script_key.clone(),
+        script_id: render.script.to_script_id(),
         script_source: render.script_source.clone(),
         scope,
         duration_seconds: F64CacheKey(duration_seconds),
@@ -1767,8 +1770,7 @@ fn prepared_effect_cache_key_for_params(
 fn parent_path_for_render(
     render: &dawn_project::document::SequenceEffectRenderDocument,
 ) -> Utf8PathBuf {
-    let (parent_path, _) = split_effect_script_key(&render.script_key);
-    parent_path
+    Utf8PathBuf::from(&render.script.path)
 }
 
 fn effect_param_cache_value(
@@ -2049,12 +2051,15 @@ fn prepare_generated_effects_from_topology(
                     )
                 }
             };
-            let child_key = effect_script_key(&child_path, &child_name);
+            let child_id = EffectScriptId::new(child_path, child_name.clone());
             let child_script = input
                 .analysis
-                .compiled_script_for_key(&child_key)
+                .compiled_script_for_id(&child_id)
                 .ok_or_else(|| RuntimeError {
-                    message: format!("compiled child script `{child_key}` was not found"),
+                    message: format!(
+                        "compiled child script `{}` was not found",
+                        child_id.display_key()
+                    ),
                 })?;
             if child_script.kind != EffectScriptKind::Sample || child_script.name != child_name {
                 return Err(RuntimeError {
@@ -2150,7 +2155,7 @@ enum PreparedEffectRender {
         scratch: Box<EffectSampleScratch>,
         _bytecode_stats: BytecodeStats,
     },
-    MissingScript(String),
+    MissingScript(EffectScriptId),
     BadParams(RuntimeError),
 }
 
@@ -2166,9 +2171,10 @@ impl PreparedEffectRender {
     fn error_status(&self) -> OutputFrameStatus {
         match self {
             Self::Ready { .. } => OutputFrameStatus::Live,
-            Self::MissingScript(script_key) => {
-                OutputFrameStatus::Error(format!("compiled script `{script_key}` was not found"))
-            }
+            Self::MissingScript(script_id) => OutputFrameStatus::Error(format!(
+                "compiled script `{}` was not found",
+                script_id.display_key()
+            )),
             Self::BadParams(error) => OutputFrameStatus::Error(error.to_string()),
         }
     }
@@ -2176,8 +2182,11 @@ impl PreparedEffectRender {
     fn error_message(&self) -> String {
         match self {
             Self::Ready { .. } => "effect render is ready".to_string(),
-            Self::MissingScript(script_key) => {
-                format!("compiled script `{script_key}` was not found")
+            Self::MissingScript(script_id) => {
+                format!(
+                    "compiled script `{}` was not found",
+                    script_id.display_key()
+                )
             }
             Self::BadParams(error) => error.to_string(),
         }
@@ -2369,7 +2378,7 @@ mod tests {
     use dawn_project::document::{get_sequence_document, SequenceDocument};
     use dawn_project::fs::WorkspaceFs;
     use dawn_project::model::{
-        Color, CurveValue, Distance, EffectParam, Resolved, SequenceEffectScope,
+        Color, CurveValue, Distance, EffectParam, EffectScriptId, Resolved, SequenceEffectScope,
     };
     use dawn_project::path::{utf8_path, Utf8PathBuf};
     use dawn_project::render::GeometryRenderBounds;
@@ -2622,7 +2631,10 @@ mod tests {
             start_seconds,
             duration_seconds,
             authored,
-            render: PreparedEffectRender::MissingScript("missing.effect.dawn".to_string()),
+            render: PreparedEffectRender::MissingScript(EffectScriptId::new(
+                Utf8PathBuf::from("missing.effect.dawn"),
+                "Missing",
+            )),
         }
     }
 

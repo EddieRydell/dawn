@@ -5,7 +5,7 @@ use std::fmt;
 use indexmap::IndexMap;
 
 use crate::model::*;
-use crate::path::{resolve_import_path, PathStringExt, Utf8PathBuf};
+use crate::path::{resolve_import_path, Utf8PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct ResolvedImport {
@@ -498,11 +498,10 @@ fn lower_sequence_effect(
             InlineScriptOrRef::Inline { inline } => ScriptSource::Inline(inline.clone()),
             InlineScriptOrRef::Ref(reference) => {
                 let resolved = resolver.resolve_effect(source_path, reference)?;
-                ScriptSource::External(Utf8PathBuf::from(format!(
-                    "{}#{}",
-                    resolved.source_path.to_slash_string(),
-                    resolved.effect_name
-                )))
+                ScriptSource::External(EffectScriptId::new(
+                    resolved.source_path,
+                    resolved.effect_name,
+                ))
             }
         },
     })

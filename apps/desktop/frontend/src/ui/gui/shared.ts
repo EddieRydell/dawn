@@ -50,6 +50,27 @@ export type ReadyGuiDocumentDto = Exclude<ActiveGuiDocumentDto, { type: "blocked
 
 export type SequenceSelection = SequenceSelectionDto | null;
 
+export type GuiFocus =
+  | { type: "effect"; id: number }
+  | { type: "mark"; collectionKey: string; index: number }
+  | { type: "placement"; id: number }
+  | { type: "point"; index: number }
+  | null;
+
+const GUI_CANVAS = {
+  gridStepPx: 32,
+  spatialPaddingPx: 42,
+  pointHitMeters: 0.8,
+  placementHitMeters: 1.2,
+  meterRoundScale: 1_000_000,
+  nanosecondRoundScale: 1_000_000_000
+} as const;
+
+const GUI_COLORS = {
+  canvasBackground: "#17181b",
+  canvasGrid: "#2c3036"
+} as const;
+
 export function normalizePoint(point: Point3MetersDto | GeometryRenderPointDto): Point3 {
   return {
     x: point.xMeters,
@@ -124,7 +145,7 @@ export function drawSpatialCanvas(
   if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, rect.width, rect.height);
-  ctx.fillStyle = "#17181b";
+  ctx.fillStyle = GUI_COLORS.canvasBackground;
   ctx.fillRect(0, 0, rect.width, rect.height);
   ctx.font = "12px Inter, sans-serif";
   const project = (point: Point3) => projectPoint(point, rect.width, rect.height, bounds);
@@ -133,15 +154,15 @@ export function drawSpatialCanvas(
 }
 
 function drawGrid(ctx: CanvasRenderingContext2D, width: number, height: number) {
-  ctx.strokeStyle = "#2c3036";
+  ctx.strokeStyle = GUI_COLORS.canvasGrid;
   ctx.lineWidth = 1;
-  for (let x = 0; x < width; x += 32) {
+  for (let x = 0; x < width; x += GUI_CANVAS.gridStepPx) {
     ctx.beginPath();
     ctx.moveTo(x, 0);
     ctx.lineTo(x, height);
     ctx.stroke();
   }
-  for (let y = 0; y < height; y += 32) {
+  for (let y = 0; y < height; y += GUI_CANVAS.gridStepPx) {
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(width, y);
@@ -150,7 +171,7 @@ function drawGrid(ctx: CanvasRenderingContext2D, width: number, height: number) 
 }
 
 function projectPoint(point: Point3, width: number, height: number, bounds: RenderBounds) {
-  const padding = 42;
+  const padding = GUI_CANVAS.spatialPaddingPx;
   const spanX = Math.max(1, bounds.maxX - bounds.minX);
   const spanY = Math.max(1, bounds.maxY - bounds.minY);
   const scale = Math.min((width - padding * 2) / spanX, (height - padding * 2) / spanY);
@@ -164,7 +185,7 @@ export function unproject(x: number, y: number, canvas: HTMLCanvasElement | null
   const rect = canvas?.getBoundingClientRect();
   const width = rect?.width ?? 1;
   const height = rect?.height ?? 1;
-  const padding = 42;
+  const padding = GUI_CANVAS.spatialPaddingPx;
   const spanX = Math.max(1, bounds.maxX - bounds.minX);
   const spanY = Math.max(1, bounds.maxY - bounds.minY);
   const scale = Math.min((width - padding * 2) / spanX, (height - padding * 2) / spanY);
@@ -181,7 +202,7 @@ export function nearestPlacement(document: LayoutDocumentDto, point: Point3): La
   for (const placement of document.fixtures) {
     const transform = normalizeTransform(placement.transform);
     const distance = Math.hypot(transform.position.x - point.x, transform.position.y - point.y);
-    if (distance < bestDistance && distance < 1.2) {
+    if (distance < bestDistance && distance < GUI_CANVAS.placementHitMeters) {
       best = placement;
       bestDistance = distance;
     }
@@ -196,7 +217,7 @@ export function nearestPoint(points: Point3[], point: Point3) {
     const candidate = points[index];
     if (candidate === undefined) continue;
     const distance = Math.hypot(candidate.x - point.x, candidate.y - point.y);
-    if (distance < bestDistance && distance < 0.8) {
+    if (distance < bestDistance && distance < GUI_CANVAS.pointHitMeters) {
       best = index;
       bestDistance = distance;
     }
@@ -205,7 +226,7 @@ export function nearestPoint(points: Point3[], point: Point3) {
 }
 
 export function round6(value: number) {
-  return Math.round(value * 1_000_000) / 1_000_000;
+  return Math.round(value * GUI_CANVAS.meterRoundScale) / GUI_CANVAS.meterRoundScale;
 }
 
 export function clamp(value: number, min: number, max: number) {
@@ -213,7 +234,7 @@ export function clamp(value: number, min: number, max: number) {
 }
 
 export function roundToNanosecond(value: number) {
-  return Math.round(value * 1_000_000_000) / 1_000_000_000;
+  return Math.round(value * GUI_CANVAS.nanosecondRoundScale) / GUI_CANVAS.nanosecondRoundScale;
 }
 
 export function formatSeconds(value: number) {

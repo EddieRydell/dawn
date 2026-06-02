@@ -2,8 +2,9 @@ import type { FixtureDocumentDto } from "../../../bindings";
 import { commands } from "../../../api";
 import { runSnapshotCommand } from "../../../store";
 import { InspectorScrollArea } from "../InspectorScrollArea";
+import type { GuiFocus } from "../shared";
 
-export function FixtureInspector({ document, selected }: { document: FixtureDocumentDto; selected: string | null }) {
+export function FixtureInspector({ document, selected }: { document: FixtureDocumentDto; selected: GuiFocus }) {
   const fixture = document.fixtures.find((candidate) => candidate.objectKey === document.selectedObjectKey) ?? document.fixtures[0];
   return (
     <InspectorScrollArea>
@@ -30,7 +31,7 @@ export function FixtureInspector({ document, selected }: { document: FixtureDocu
             />
           </label>
           <label>Geometry<input readOnly value={fixture.geometrySummary} /></label>
-          <p>{selected !== null && selected.startsWith("point:") ? `Point ${Number(selected.split(":")[1]) + 1}` : "Select a point."}</p>
+          <p>{selected?.type === "point" ? `Point ${selected.index + 1}` : "Select a point."}</p>
         </>
       ) : (
         <p>No fixture.</p>

@@ -6,7 +6,7 @@ import type { FixtureDocumentDto } from "../../../bindings";
 
 import { runSnapshotCommand } from "../../../store";
 
-import { denormalizePoint, drawSpatialCanvas, nearestPoint, normalizeBounds, normalizePoint, round6, unproject, type Point3 } from "../shared";
+import { denormalizePoint, drawSpatialCanvas, nearestPoint, normalizeBounds, normalizePoint, round6, unproject, type GuiFocus, type Point3 } from "../shared";
 import { BlockedGui } from "../BlockedGui";
 
 type FixturePointDragState = { kind: "fixturePoint"; objectKey: string; pointIndex: number; preview: Point3 } | null;
@@ -17,8 +17,8 @@ export function FixtureCanvas({
   setSelected
 }: {
   document: FixtureDocumentDto;
-  selected: string | null;
-  setSelected: (id: string | null) => void;
+  selected: GuiFocus;
+  setSelected: (id: GuiFocus) => void;
 }) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const drag = useRef<FixturePointDragState>(null);
@@ -42,7 +42,7 @@ export function FixtureCanvas({
       fixture.renderPlan.emitters.forEach((point, index) => {
         const normalizedPoint = normalizePoint(point);
         const projected = project(drag.current?.kind === "fixturePoint" && drag.current.pointIndex === index ? drag.current.preview : normalizedPoint);
-        ctx.fillStyle = selected === `point:${index}` ? "#6abf8a" : "#d6a35a";
+        ctx.fillStyle = selected?.type === "point" && selected.index === index ? "#6abf8a" : "#d6a35a";
         ctx.beginPath();
         ctx.arc(projected.x, projected.y, 6, 0, Math.PI * 2);
         ctx.fill();
@@ -67,7 +67,7 @@ export function FixtureCanvas({
         }
         const point = points[index];
         if (point === undefined) return;
-        setSelected(`point:${index}`);
+        setSelected({ type: "point", index });
         drag.current = { kind: "fixturePoint", objectKey: fixture.objectKey, pointIndex: index, preview: point };
       }}
       onMouseMove={(event) => {

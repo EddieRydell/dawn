@@ -923,13 +923,13 @@ impl AppModel {
         let edit = match edit {
             SequenceGuiEditDto::SetAudio { import } => SequenceDocumentEdit::SetAudio { import },
             SequenceGuiEditDto::AddEffect {
-                script_path,
+                script,
                 target,
                 scope,
                 start_seconds,
                 mark_collection_key,
             } => SequenceDocumentEdit::AddEffect {
-                script_path,
+                script: script.into(),
                 target: target.into(),
                 scope: scope.into(),
                 start_seconds,
@@ -953,8 +953,11 @@ impl AppModel {
                 start_seconds,
                 duration_seconds,
             },
-            SequenceGuiEditDto::ChangeEffectScript { id, script_path } => {
-                SequenceDocumentEdit::ChangeEffectScript { id, script_path }
+            SequenceGuiEditDto::ChangeEffectScript { id, script } => {
+                SequenceDocumentEdit::ChangeEffectScript {
+                    id,
+                    script: script.into(),
+                }
             }
             SequenceGuiEditDto::DeleteEffect { id } => SequenceDocumentEdit::DeleteEffect { id },
             SequenceGuiEditDto::RetargetEffect { id, target } => {

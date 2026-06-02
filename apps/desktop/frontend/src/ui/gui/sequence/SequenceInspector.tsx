@@ -2,14 +2,20 @@ import type { SequenceDocumentDto, SequenceEffectDto, SequenceEffectScopeDto, Se
 import { commands } from "../../../api";
 import { runSnapshotCommand } from "../../../store";
 import { InspectorScrollArea, Readout } from "../InspectorScrollArea";
-import { formatSeconds, roundToNanosecond, type SequenceSelection } from "../shared";
+import { formatSeconds, roundToNanosecond, type GuiFocus, type SequenceSelection } from "../shared";
 import { ColorField, EffectParamInput } from "./params/EffectParamInput";
-import { defaultMarkColor, nextCollectionKey, parseSelectedMark } from "./marks";
-import { parseSelectedEffectId, selectionCompatibleWithFocusedItem, selectionCount } from "./sequenceSelection";
+import { defaultMarkColor, nextCollectionKey } from "./marks";
+import { selectedEffectId, selectionCompatibleWithFocusedItem, selectionCount } from "./sequenceSelection";
 
-function selectedEffectScriptPath(effect: SequenceEffectDto, scripts: SequenceEffectScriptDto[]) {
-  const currentName = effect.script.includes(".") ? effect.script.split(".").pop() ?? effect.script : effect.script;
-  return scripts.find((script) => script.name === currentName)?.path ?? "";
+function selectedEffectScriptValue(effect: SequenceEffectDto, scripts: SequenceEffectScriptDto[]) {
+  const currentScript = effect.scriptSource;
+  if (currentScript === null) return "";
+  const index = scripts.findIndex((script) => scriptsEqual(script.script, currentScript));
+  return index < 0 ? "" : String(index);
+}
+
+function scriptsEqual(left: SequenceEffectScriptDto["script"], right: SequenceEffectScriptDto["script"]) {
+  return left.path === right.path && left.effectName === right.effectName;
 }
 
 export function SequenceInspector({
@@ -23,17 +29,17 @@ export function SequenceInspector({
   setVisibleMarkCollectionKeys
 }: {
   document: SequenceDocumentDto;
-  selected: string | null;
-  setSelected: (id: string | null) => void;
+  selected: GuiFocus;
+  setSelected: (id: GuiFocus) => void;
   sequenceSelection: SequenceSelection;
   activeMarkCollectionKey: string | null;
   setActiveMarkCollectionKey: (key: string | null) => void;
   visibleMarkCollectionKeys: Set<string>;
   setVisibleMarkCollectionKeys: (keys: Set<string>) => void;
 }) {
-const id = parseSelectedEffectId(selected);
+const id = selectedEffectId(selected);
     const effect = document.effects.find((candidate) => candidate.id === id);
-    const selectedMark = parseSelectedMark(selected);
+    const selectedMark = selected?.type === "mark" ? { collectionKey: selected.collectionKey, index: selected.index } : null;
     const selectedMarkCollection = selectedMark === null ? null : document.markCollections.find((collection) => collection.key === selectedMark.collectionKey) ?? null;
     const activeCollection = document.markCollections.find((collection) => collection.key === activeMarkCollectionKey) ?? document.markCollections[0] ?? null;
     const selectedMarkTime = selectedMarkCollection?.marksSeconds[selectedMark?.index ?? -1];
@@ -114,7 +120,7 @@ const id = parseSelectedEffectId(selected);
       );
     }
     if (effect !== undefined) {
-      const currentScriptPath = selectedEffectScriptPath(effect, document.effectScripts);
+      const currentScriptValue = selectedEffectScriptValue(effect, document.effectScripts);
       const resizeEffect = (startSeconds: number, durationSeconds: number) =>
         runSnapshotCommand(() =>
           commands.applySequenceGuiEdit({
@@ -164,21 +170,23 @@ const id = parseSelectedEffectId(selected);
           <label>
             Effect type
             <select
-              value={currentScriptPath}
+              value={currentScriptValue}
               disabled={document.effectScripts.length === 0}
-              onChange={(event) =>
+              onChange={(event) => {
+                const script = document.effectScripts[Number(event.currentTarget.value)]?.script;
+                if (script === undefined) return;
                 void runSnapshotCommand(() =>
                   commands.applySequenceGuiEdit({
                     type: "changeEffectScript",
                     id: effect.id,
-                    scriptPath: event.currentTarget.value
+                    script
                   })
-                )
-              }
+                );
+              }}
             >
-              {currentScriptPath === "" && <option value="">{effect.script}</option>}
-              {document.effectScripts.map((script) => (
-                <option key={script.path} value={script.path}>
+              {currentScriptValue === "" && <option value="">{effect.script}</option>}
+              {document.effectScripts.map((script, index) => (
+                <option key={`${script.script.path}:${script.script.effectName}`} value={String(index)}>
                   {script.name}
                 </option>
               ))}

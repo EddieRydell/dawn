@@ -2,7 +2,7 @@ import type { KeyboardEvent } from "react";
 
 import type { SequenceDocumentDto } from "../../../bindings";
 
-import type { LivePreview, SequenceSelection } from "../shared";
+import type { GuiFocus, LivePreview, SequenceSelection } from "../shared";
 
 import { SequenceCanvas } from "./SequenceCanvas";
 import { handleSequencePlaybackShortcut } from "./SequenceTransportControls";
@@ -21,8 +21,8 @@ export function SequenceEditor({
 }: {
   document: SequenceDocumentDto;
   preview: LivePreview;
-  selected: string | null;
-  setSelected: (id: string | null) => void;
+  selected: GuiFocus;
+  setSelected: (id: GuiFocus) => void;
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
   activeMarkCollectionKey: string | null;

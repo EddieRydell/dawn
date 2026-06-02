@@ -1,0 +1,59 @@
+effect MarkChase {
+  param marks beats;
+  param color base = #000000;
+  param curve<color> accent;
+  param curve<float> hue;
+  param float hue_mix = 0.35;
+  param float offset_seconds = 0.0;
+  param float chase_seconds = 0.5;
+  param float pulse_overlap = 8.0;
+  param int section_width_pixels = 5;
+  param curve<float> chase_position;
+  param curve<float> pulse_shape;
+
+  void generate(Timeline timeline, Target target, float duration) {
+    TargetItems items = sections(target, section_width_pixels);
+    int item_count = count(items);
+    int beat_count = mark_count(beats);
+    for (int beat = 0; beat < beat_count; beat = beat + 1) {
+      float hit = mark_at(beats, beat, 0.0) + offset_seconds;
+      if (hit >= 0.0 && hit < duration) {
+        color hue_color = hsv(hue(hit / duration), 1.0, 1.0);
+        for (int i = 0; i < item_count; i = i + 1) {
+          TargetItem item = pick(items, i);
+          float position = 0.0;
+          if (item_count > 1) {
+            position = item.index / (item_count - 1.0);
+          }
+          float chase_progress = curve_crossing(chase_position, position, position);
+          timeline.emit MarkChaseChild {
+            target: item.target;
+            start: hit + chase_progress * chase_seconds;
+            duration: chase_seconds * max(1.0, pulse_overlap) / max(1.0, item_count);
+            params: {
+              base: base;
+              accent: accent;
+              hue_color: hue_color;
+              hue_mix: hue_mix;
+              pulse_shape: pulse_shape;
+            };
+          };
+        }
+      }
+    }
+  }
+}
+
+internal effect MarkChaseChild {
+  param color base = #000000;
+  param curve<color> accent;
+  param color hue_color = #ffffff;
+  param float hue_mix = 0.35;
+  param curve<float> pulse_shape;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    float pulse = pulse_shape(progress);
+    color pulse_color = mix(accent(progress), hue_color, clamp(hue_mix, 0.0, 1.0));
+    return mix(base, pulse_color, pulse);
+  }
+}
