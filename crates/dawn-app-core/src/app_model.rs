@@ -174,12 +174,21 @@ pub struct AppModel {
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub status: String,
     pub sequence_clipboard: Option<SequenceClipboard>,
+    active_sequence_gui_document: Option<CachedActiveGuiDocument>,
 }
 
 #[derive(Debug, Clone)]
 pub enum SequenceClipboard {
     Effects(Vec<SequenceEffect<Authored>>),
     Marks(Vec<SequenceMarkPasteDocumentEdit>),
+}
+
+#[derive(Debug, Clone)]
+struct CachedActiveGuiDocument {
+    path: Utf8PathBuf,
+    object_key: String,
+    view_mode: EditorViewMode,
+    document: SequenceDocument,
 }
 
 #[derive(Debug, Clone)]
@@ -264,6 +273,7 @@ impl Default for AppModel {
             diagnostics: Vec::new(),
             status: "No project open".to_string(),
             sequence_clipboard: None,
+            active_sequence_gui_document: None,
         };
         if let Some(path) = last_project_root {
             match model.open_project(path, false, true) {
@@ -334,6 +344,7 @@ impl AppModel {
                 let active_changed = self.editors.active_file() != Some(&path);
                 self.editors.set_active_file(path);
                 if active_changed {
+                    self.invalidate_active_gui_document_cache();
                     self.preview.pause(self.analysis.as_ref());
                     self.sync_preview_source();
                     self.persist_workbench_layout()?;
@@ -343,7 +354,10 @@ impl AppModel {
                 let Some(path) = self.editors.active_file().cloned() else {
                     return Ok(DispatchOutcome::NoSnapshotChange);
                 };
-                self.editors.set_view_mode(&path, mode.into());
+                let mode = mode.into();
+                self.editors.set_view_mode(&path, mode);
+                self.invalidate_active_gui_document_cache();
+                self.sync_preview_source();
                 self.persist_workbench_layout()?;
             }
             AppAction::UpdateActiveText(text) => {
@@ -370,7 +384,7 @@ impl AppModel {
             }
             AppAction::ApplySequenceGuiEdit(edit) => {
                 self.apply_sequence_gui_edit(edit)?;
-                self.flush_autosave_without_preview_sync()?;
+                self.flush_autosave_without_analysis()?;
                 self.status = "Autosaved".to_string();
             }
             AppAction::ApplyLayoutGuiEdit(edit) => {
@@ -579,6 +593,7 @@ impl AppModel {
     }
 
     pub fn refresh_analysis(&mut self) -> Result<(), String> {
+        self.invalidate_active_gui_document_cache();
         let overlays = self.editors.dirty_overlays();
         let analysis = self.workspace.analyze(overlays)?;
         self.diagnostics = analysis.diagnostics.clone();
@@ -602,8 +617,14 @@ impl AppModel {
         self.flush_autosave_with_preview_sync(true)
     }
 
-    fn flush_autosave_without_preview_sync(&mut self) -> Result<(), String> {
-        self.flush_autosave_with_preview_sync(false)
+    fn flush_autosave_without_analysis(&mut self) -> Result<(), String> {
+        for buffer in self.editors.dirty_autosave_buffers() {
+            let version = self
+                .workspace
+                .write_text_file_with_version(buffer.path.clone(), &buffer.text)?;
+            self.editors.record_saved_version(&buffer.path, version);
+        }
+        Ok(())
     }
 
     fn flush_autosave_with_preview_sync(&mut self, sync_preview: bool) -> Result<(), String> {
@@ -709,7 +730,48 @@ impl AppModel {
 
     fn sync_preview_source(&mut self) {
         let source = self.active_sequence_source();
+        self.cache_active_sequence_source(source.as_ref());
         self.preview.sync_source(source, self.analysis.as_ref());
+    }
+
+    fn sync_preview_source_from_document(&mut self, path: Utf8PathBuf, document: SequenceDocument) {
+        let source = Some((
+            SequenceKey {
+                path,
+                object_key: document.object_key.clone(),
+            },
+            document,
+        ));
+        self.cache_active_sequence_source(source.as_ref());
+        self.preview.sync_source(source, self.analysis.as_ref());
+    }
+
+    fn cache_active_sequence_source(&mut self, source: Option<&(SequenceKey, SequenceDocument)>) {
+        let Some((key, document)) = source else {
+            self.invalidate_active_gui_document_cache();
+            return;
+        };
+        let Some(buffer) = self.editors.active_buffer() else {
+            self.invalidate_active_gui_document_cache();
+            return;
+        };
+        if buffer.path != key.path
+            || buffer.view_mode != EditorViewMode::Gui
+            || buffer.is_conflicted()
+        {
+            self.invalidate_active_gui_document_cache();
+            return;
+        }
+        self.active_sequence_gui_document = Some(CachedActiveGuiDocument {
+            path: key.path.clone(),
+            object_key: key.object_key.clone(),
+            view_mode: buffer.view_mode,
+            document: document.clone(),
+        });
+    }
+
+    fn invalidate_active_gui_document_cache(&mut self) {
+        self.active_sequence_gui_document = None;
     }
 
     fn active_document_descriptor(&self) -> Option<DocumentDescriptor> {
@@ -750,6 +812,11 @@ impl AppModel {
             .default_object_keys
             .get(&DocumentViewId::Sequence)
         {
+            if let Some(document) =
+                self.cached_active_sequence_document(&buffer.path, object_key, buffer.view_mode)
+            {
+                return Some(ActiveGuiDocument::Sequence(document));
+            }
             return Some(
                 match self
                     .workspace
@@ -798,6 +865,47 @@ impl AppModel {
             reason: "This document has no GUI editor view.".to_string(),
             diagnostics,
         })
+    }
+
+    fn cached_active_sequence_document(
+        &self,
+        path: &Utf8PathBuf,
+        object_key: &str,
+        view_mode: EditorViewMode,
+    ) -> Option<SequenceDocument> {
+        let cached = self.active_sequence_gui_document.as_ref()?;
+        if cached.path == *path && cached.object_key == object_key && cached.view_mode == view_mode
+        {
+            Some(cached.document.clone())
+        } else {
+            None
+        }
+    }
+
+    pub fn cached_sequence_document_for_preview_request(
+        &self,
+        path: &Utf8PathBuf,
+        object_key: &str,
+    ) -> Result<SequenceDocument, String> {
+        let cached = self
+            .active_sequence_gui_document
+            .as_ref()
+            .ok_or_else(|| "sequence preview request does not match active sequence".to_string())?;
+        let Some(buffer) = self.editors.active_buffer() else {
+            return Err("sequence preview request does not match active sequence".to_string());
+        };
+        let path_matches =
+            cached.path == *path || cached.document.path == path.as_str() || buffer.path == *path;
+        if buffer.path == cached.path
+            && buffer.view_mode == cached.view_mode
+            && cached.view_mode == EditorViewMode::Gui
+            && cached.object_key == object_key
+            && path_matches
+        {
+            Ok(cached.document.clone())
+        } else {
+            Err("sequence preview request does not match active sequence".to_string())
+        }
     }
 
     fn apply_sequence_gui_edit(&mut self, edit: SequenceGuiEditDto) -> Result<(), String> {
@@ -925,14 +1033,18 @@ impl AppModel {
         let base_content = self.active_buffer_text()?;
         let edit_overlays = self.editors.dirty_overlays();
         let outcome = self.workspace.apply_sequence_edit(
-            path,
+            path.clone(),
             &object_key,
             edit,
             base_content,
             edit_overlays,
             analysis,
         )?;
-        self.commit_active_gui_text(outcome.serialized_content)
+        self.commit_active_sequence_gui_text(
+            path,
+            outcome.serialized_content,
+            outcome.refreshed_document,
+        )
     }
 
     pub fn apply_sequence_selection_edit(
@@ -1019,7 +1131,7 @@ impl AppModel {
         };
 
         self.apply_sequence_document_edit(document_edit)?;
-        self.flush_autosave()?;
+        self.flush_autosave_without_analysis()?;
         let snapshot = self.snapshot_dto();
         Ok(SequenceSelectionEditResultDto {
             snapshot,
@@ -1045,14 +1157,18 @@ impl AppModel {
             .as_ref()
             .ok_or_else(|| "project analysis is not available".to_string())?;
         let outcome = self.workspace.apply_sequence_edit(
-            path,
+            path.clone(),
             &object_key,
             edit,
             self.active_buffer_text()?,
             self.editors.dirty_overlays(),
             analysis,
         )?;
-        self.commit_active_gui_text(outcome.serialized_content)
+        self.commit_active_sequence_gui_text(
+            path,
+            outcome.serialized_content,
+            outcome.refreshed_document,
+        )
     }
 
     fn active_sequence_authored(&self) -> Result<dawn_project::model::Sequence<Authored>, String> {
@@ -1068,8 +1184,16 @@ impl AppModel {
     fn active_sequence_document(&self) -> Result<SequenceDocument, String> {
         let path = self.active_path_for_gui_edit()?;
         let object_key = self.active_sequence_object_key()?;
-        self.workspace
-            .sequence_document(path, &object_key, self.editors.dirty_overlays())
+        let view_mode = self
+            .editors
+            .active_buffer()
+            .map(|buffer| buffer.view_mode)
+            .unwrap_or(EditorViewMode::Text);
+        if let Some(document) = self.cached_active_sequence_document(&path, &object_key, view_mode)
+        {
+            return Ok(document);
+        }
+        Err("active sequence GUI document is not cached".to_string())
     }
 
     fn active_sequence_object_key(&self) -> Result<String, String> {
@@ -1297,6 +1421,17 @@ impl AppModel {
     fn commit_active_gui_text(&mut self, text: String) -> Result<(), String> {
         self.editors.replace_active_text_from_edit(text);
         self.refresh_analysis_after_memory_edit();
+        Ok(())
+    }
+
+    fn commit_active_sequence_gui_text(
+        &mut self,
+        path: Utf8PathBuf,
+        text: String,
+        document: SequenceDocument,
+    ) -> Result<(), String> {
+        self.editors.replace_active_text_from_edit(text);
+        self.sync_preview_source_from_document(path, document);
         Ok(())
     }
 

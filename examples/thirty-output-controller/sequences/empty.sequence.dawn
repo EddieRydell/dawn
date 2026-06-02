@@ -85,6 +85,13 @@ empty:
     - 137.232549299s
     - 137.366435539s
     - 137.503054151s
+  - key: marks_2
+    name: Marks2
+    color: '#f97316'
+    marks:
+    - 131.106414243s
+    - 131.171289481s
+    - 131.239520336s
   effects:
   - id: 9
     start: 39.257519581s
@@ -352,7 +359,7 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 5
-    start: 41.657279755s
+    start: 41.72698165s
     duration: 0.65s
     target:
       type: group
@@ -412,7 +419,7 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 6
-    start: 41.774148012s
+    start: 41.948402751s
     duration: 0.529984768s
     target:
       type: group
@@ -462,6 +469,61 @@ empty:
             value: 0.766
           - time: 1.0
             value: 1.0
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.148
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Chase
+  - id: 26
+    start: 42.002119622s
+    duration: 0.462299662s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve: curves.fire_gradient
+      gradient_mode:
+        type: enum
+        value: through_effect
+      pulse_overlap:
+        type: float
+        value: 50.0
+      section_width_pixels:
+        type: integer
+        value: 5
+      chase_position:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.127
+            value: 0.646
+          - time: 0.244
+            value: 0.296
+          - time: 0.483
+            value: 0.126
+          - time: 0.718
+            value: 0.09
+          - time: 1.0
+            value: 0.0
       extend_to_start:
         type: bool
         value: false
@@ -629,7 +691,7 @@ empty:
     script: effects.Pulse
   - id: 19
     start: 44.05325324s
-    duration: 0.356687593s
+    duration: 0.638691752s
     target:
       type: group
       name: All Outputs
@@ -666,6 +728,199 @@ empty:
           - time: 1.0
             value: 0.0
     script: effects.Chase
+  - id: 21
+    start: 44.552843918s
+    duration: 0.64651178s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve: curves.cool_gradient
+      gradient_mode:
+        type: enum
+        value: through_effect
+      pulse_overlap:
+        type: float
+        value: 25.0
+      section_width_pixels:
+        type: integer
+        value: 5
+      chase_position:
+        type: curve
+        curve: curves.ease_down
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Chase
+  - id: 22
+    start: 44.696725522s
+    duration: 0.64651178s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#d9ffff'
+          - time: 0.45
+            value: '#ffc800'
+          - time: 1.0
+            value: '#3d00ff'
+      gradient_mode:
+        type: enum
+        value: through_effect
+      pulse_overlap:
+        type: float
+        value: 25.0
+      section_width_pixels:
+        type: integer
+        value: 5
+      chase_position:
+        type: curve
+        curve: curves.ease_up
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Chase
+  - id: 23
+    start: 44.883427046s
+    duration: 0.64651178s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#d9ffff'
+          - time: 0.45
+            value: '#ff0095'
+          - time: 1.0
+            value: '#ff0000'
+      gradient_mode:
+        type: enum
+        value: through_effect
+      pulse_overlap:
+        type: float
+        value: 25.0
+      section_width_pixels:
+        type: integer
+        value: 5
+      chase_position:
+        type: curve
+        curve: curves.ease_down
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Chase
+  - id: 25
+    start: 45.231936559s
+    duration: 0.842397373s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve: curves.club_gradient
+      gradient_mode:
+        type: enum
+        value: through_effect
+      pulse_overlap:
+        type: float
+        value: 25.0
+      section_width_pixels:
+        type: integer
+        value: 5
+      chase_position:
+        type: curve
+        curve: curves.soft_pulse
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Chase
+  - id: 24
+    start: 45.460395646s
+    duration: 0.655351459s
+    target:
+      type: group
+      name: All Outputs
+    scope: whole_target
+    params:
+      gradient:
+        type: curve
+        curve: curves.fire_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Pulse
   - id: 4
     start: 45.924220329s
     duration: 1.85s
@@ -718,7 +973,17 @@ empty:
     params:
       gradient:
         type: curve
-        curve: curves.club_gradient
+        curve:
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.25
+            value: '#ff2bd6'
+          - time: 0.6
+            value: '#2de2ff'
+          - time: 1.0
+            value: '#ff6600'
       gradient_mode:
         type: enum
         value: through_effect
@@ -735,6 +1000,8 @@ empty:
           points:
           - time: 0.0
             value: 1.0
+          - time: 0.331
+            value: 0.308
           - time: 1.0
             value: 0.0
       extend_to_start:
@@ -755,7 +1022,7 @@ empty:
     script: effects.Chase
   - id: 13
     start: 129.512749672s
-    duration: 1.690194211s
+    duration: 1.726904807s
     target:
       type: group
       name: All Outputs

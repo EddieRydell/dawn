@@ -333,11 +333,8 @@ fn get_sequence_effect_previews(
         .as_ref()
         .ok_or_else(|| "project analysis is not available".to_string())?
         .clone();
-    let document = model.workspace.sequence_document(
-        project_path(path),
-        &object_key,
-        model.editors.dirty_overlays(),
-    )?;
+    let document =
+        model.cached_sequence_document_for_preview_request(&project_path(path), &object_key)?;
     drop(model);
 
     let requested = effect_ids
