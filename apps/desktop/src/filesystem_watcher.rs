@@ -67,7 +67,7 @@ impl FilesystemWatcherRuntime {
                             let Ok(mut model) = crate::state::lock_runtime(&state) else {
                                 continue;
                             };
-                            let model = model.domain_mut();
+                            let model = model.core_mut();
                             if model.handle_filesystem_changes(paths).is_ok() {
                                 let _ = emit_runtime_read_models(&app, model);
                             }

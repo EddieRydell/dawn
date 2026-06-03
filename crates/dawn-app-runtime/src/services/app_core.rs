@@ -10,9 +10,6 @@ use dawn_project::parse::parse_dawn_file_with_source_map;
 use dawn_project::path::Utf8PathBuf;
 use std::path::PathBuf;
 
-use crate::document_state::{
-    BufferExternalState, DocumentBufferStore, EditorBuffer, EditorViewMode,
-};
 use crate::dto::{
     FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto, SequenceMarkRefDto,
     SequencePasteAnchorDto, SequenceResizeEdgeDto, SequenceSelectionDto, SequenceSelectionEditDto,
@@ -25,20 +22,21 @@ use crate::preview_session::{
     PreviewController, PreviewRenderRequest, PreviewRenderResult, PreviewSnapshot, PreviewSyncMode,
     SequenceKey,
 };
-use crate::workspace::WorkspaceService;
+use crate::services::editor_state::{BufferExternalState, BufferTab, EditorStore, EditorViewMode};
+use crate::workspace::ProjectWorkspace;
 
 const MIN_EFFECT_DURATION_SECONDS: f64 = 0.000000001;
 
-pub type ProjectIndexSnapshot = ProjectAnalysis;
+pub type AnalysisSnapshot = ProjectAnalysis;
 
-pub fn open_project_workspace(path: &std::path::Path) -> Result<WorkspaceService, String> {
-    let mut workspace = WorkspaceService::new();
+pub fn load_project_workspace(path: &std::path::Path) -> Result<ProjectWorkspace, String> {
+    let mut workspace = ProjectWorkspace::new();
     workspace.open_project(path)?;
     Ok(workspace)
 }
 
-pub fn project_root_display_for_path(path: &std::path::Path) -> Result<String, String> {
-    let workspace = open_project_workspace(path)?;
+pub fn project_root_label_for_path(path: &std::path::Path) -> Result<String, String> {
+    let workspace = load_project_workspace(path)?;
     workspace
         .project_root_display()
         .map(ToString::to_string)
@@ -169,9 +167,9 @@ fn mark_move_edits(
 }
 
 #[derive(Debug)]
-pub struct RuntimeDomain {
-    pub workspace: WorkspaceService,
-    pub editors: DocumentBufferStore,
+pub struct AppCore {
+    pub workspace: ProjectWorkspace,
+    pub editors: EditorStore,
     pub workbench_layout: WorkbenchLayout,
     pub preview: PreviewController,
     pub live_output: OutputReadout,
@@ -199,7 +197,7 @@ struct CachedActiveGuiDocument {
 }
 
 #[derive(Debug, Clone)]
-pub struct RuntimeDomainSnapshot {
+pub struct AppCoreSnapshot {
     pub project_root: Option<String>,
     pub project_entries: Vec<WorkspaceEntry>,
     pub analysis: Option<ProjectAnalysis>,
@@ -207,19 +205,19 @@ pub struct RuntimeDomainSnapshot {
     pub workbench_layout: WorkbenchLayout,
     pub preview: PreviewSnapshot,
     pub live_output: OutputReadout,
-    pub tabs: Vec<EditorBuffer>,
+    pub tabs: Vec<BufferTab>,
     pub active_file: Option<Utf8PathBuf>,
-    pub active_buffer: Option<EditorBuffer>,
+    pub active_buffer: Option<BufferTab>,
     pub active_document_descriptor: Option<DocumentDescriptor>,
     pub active_gui_document: Option<ActiveGuiDocument>,
     pub status: String,
 }
 
 #[derive(Debug, Clone)]
-pub struct RuntimeSessionBufferMirror {
+pub struct SessionBufferState {
     pub path: Utf8PathBuf,
     pub text: String,
-    pub disk_version: crate::document_state::FileDiskVersion,
+    pub disk_version: crate::services::editor_state::FileVersion,
     pub view_mode: EditorViewMode,
 }
 
@@ -227,7 +225,7 @@ pub struct RuntimeSessionBufferMirror {
 pub struct CreatedRuntimeFile {
     pub path: Utf8PathBuf,
     pub text: String,
-    pub disk_version: crate::document_state::FileDiskVersion,
+    pub disk_version: crate::services::editor_state::FileVersion,
 }
 
 #[derive(Debug, Clone)]
@@ -239,6 +237,16 @@ pub enum ActiveGuiDocument {
         reason: String,
         diagnostics: Vec<ProjectDiagnostic>,
     },
+}
+
+impl ActiveGuiDocument {
+    pub fn is_sequence(&self) -> bool {
+        matches!(self, Self::Sequence(_))
+    }
+
+    pub fn is_blocked(&self) -> bool {
+        matches!(self, Self::Blocked { .. })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -279,12 +287,12 @@ impl OutputReadoutStatus {
     }
 }
 
-impl Default for RuntimeDomain {
+impl Default for AppCore {
     fn default() -> Self {
         let workbench_layout = load_workbench_layout();
         Self {
-            workspace: WorkspaceService::default(),
-            editors: DocumentBufferStore::default(),
+            workspace: ProjectWorkspace::default(),
+            editors: EditorStore::default(),
             workbench_layout,
             preview: PreviewController::default(),
             live_output: OutputReadout::default(),
@@ -299,11 +307,11 @@ impl Default for RuntimeDomain {
     }
 }
 
-impl RuntimeDomain {
-    pub fn snapshot(&self) -> RuntimeDomainSnapshot {
+impl AppCore {
+    pub fn snapshot(&self) -> AppCoreSnapshot {
         let active_document_descriptor = self.active_document_descriptor();
         let active_gui_document = self.active_gui_document(active_document_descriptor.as_ref());
-        RuntimeDomainSnapshot {
+        AppCoreSnapshot {
             project_root: self.project_root.clone(),
             project_entries: self.project_entries.clone(),
             analysis: self.analysis.clone(),
@@ -341,7 +349,7 @@ impl RuntimeDomain {
     pub fn sync_session_opened(
         &mut self,
         path: PathBuf,
-        buffers: Vec<RuntimeSessionBufferMirror>,
+        buffers: Vec<SessionBufferState>,
         active_file: Option<Utf8PathBuf>,
         status: impl Into<String>,
     ) -> Result<(), String> {
@@ -372,7 +380,7 @@ impl RuntimeDomain {
         &mut self,
         path: Utf8PathBuf,
         text: String,
-        disk_version: crate::document_state::FileDiskVersion,
+        disk_version: crate::services::editor_state::FileVersion,
         view_mode: EditorViewMode,
     ) -> Result<(), String> {
         self.editors
@@ -1122,7 +1130,7 @@ impl RuntimeDomain {
             edit_overlays,
             analysis,
         )?;
-        self.commit_active_sequence_gui_text(
+        self.save_active_sequence_gui_text(
             path,
             outcome.serialized_content,
             outcome.refreshed_document,
@@ -1245,7 +1253,7 @@ impl RuntimeDomain {
             self.editors.dirty_overlays(),
             analysis,
         )?;
-        self.commit_active_sequence_gui_text(
+        self.save_active_sequence_gui_text(
             path,
             outcome.serialized_content,
             outcome.refreshed_document,
@@ -1431,7 +1439,7 @@ impl RuntimeDomain {
             self.active_buffer_text()?,
             self.editors.dirty_overlays(),
         )?;
-        self.commit_active_gui_text(outcome.serialized_content)
+        self.save_active_gui_text(outcome.serialized_content)
     }
 
     fn apply_fixture_gui_edit(&mut self, edit: FixtureGuiEditDto) -> Result<(), String> {
@@ -1483,7 +1491,7 @@ impl RuntimeDomain {
             self.active_buffer_text()?,
             self.editors.dirty_overlays(),
         )?;
-        self.commit_active_gui_text(outcome.serialized_content)
+        self.save_active_gui_text(outcome.serialized_content)
     }
 
     fn active_path_for_gui_edit(&self) -> Result<Utf8PathBuf, String> {
@@ -1500,20 +1508,20 @@ impl RuntimeDomain {
             .ok_or_else(|| "no active document".to_string())
     }
 
-    fn commit_active_gui_text(&mut self, text: String) -> Result<(), String> {
-        self.editors.replace_active_text_from_edit(text);
+    fn save_active_gui_text(&mut self, text: String) -> Result<(), String> {
+        self.editors.replace_active_text_from_gui(text);
         self.refresh_analysis_after_memory_edit();
         Ok(())
     }
 
-    fn commit_active_sequence_gui_text(
+    fn save_active_sequence_gui_text(
         &mut self,
         path: Utf8PathBuf,
         text: String,
         document: SequenceDocument,
         mode: PreviewSyncMode,
     ) -> Result<(), String> {
-        self.editors.replace_active_text_from_edit(text);
+        self.editors.replace_active_text_from_gui(text);
         self.sync_preview_source_from_document(path, document, mode);
         Ok(())
     }

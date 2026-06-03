@@ -3,15 +3,15 @@ use std::time::{Duration, Instant};
 
 use dawn_app_runtime::contracts::{CommandAck, DiskVersion, RequestId};
 use dawn_app_runtime::coordinator::AppCoordinator;
-use dawn_app_runtime::domain::RuntimeDomain;
 use dawn_app_runtime::read_model::AppReadModels;
+use dawn_app_runtime::services::app_core::AppCore;
 use dawn_app_runtime::services::document_store::{DocumentStoreCommand, ViewMode};
 use dawn_project::path::Utf8PathBuf;
 
 const RUNTIME_DOCUMENT_TIMEOUT: Duration = Duration::from_millis(500);
 const RUNTIME_DOCUMENT_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
-pub(crate) struct RuntimeBufferEdit {
+pub(crate) struct BufferTextEdit {
     pub(crate) project_root: Option<String>,
     pub(crate) path: Utf8PathBuf,
     pub(crate) text: String,
@@ -24,12 +24,12 @@ pub(crate) struct RuntimeHost {
 }
 
 impl RuntimeHost {
-    pub(crate) fn domain(&self) -> &RuntimeDomain {
-        self.coordinator.domain()
+    pub(crate) fn core(&self) -> &AppCore {
+        self.coordinator.core()
     }
 
-    pub(crate) fn domain_mut(&mut self) -> &mut RuntimeDomain {
-        self.coordinator.domain_mut()
+    pub(crate) fn core_mut(&mut self) -> &mut AppCore {
+        self.coordinator.core_mut()
     }
 
     pub(crate) fn read_models(&self) -> &AppReadModels {
@@ -44,7 +44,7 @@ impl RuntimeHost {
 
     pub(crate) fn update_active_text(
         &mut self,
-        active_buffer: RuntimeBufferEdit,
+        active_buffer: BufferTextEdit,
         text: String,
     ) -> Result<(), String> {
         if active_buffer.conflicted {
@@ -197,7 +197,7 @@ impl RuntimeHost {
         self.open_project(project_root.to_string())
     }
 
-    fn ensure_buffer_open(&mut self, active_buffer: &RuntimeBufferEdit) -> Result<(), String> {
+    fn ensure_buffer_open(&mut self, active_buffer: &BufferTextEdit) -> Result<(), String> {
         if self
             .coordinator
             .read_models()

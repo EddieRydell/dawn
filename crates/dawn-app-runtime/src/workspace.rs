@@ -18,10 +18,10 @@ use dawn_project::document::{
 use dawn_project::fs::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFs};
 use dawn_project::path::{serialized_import_path, utf8_path, PathStringExt, Utf8PathBuf};
 
-use crate::document_state::FileDiskVersion;
+use crate::services::editor_state::FileVersion;
 
 #[derive(Debug, Default)]
-pub struct WorkspaceService {
+pub struct ProjectWorkspace {
     root_path: Option<PathBuf>,
     root_display: Option<String>,
     fs: Option<WorkspaceFs>,
@@ -35,7 +35,7 @@ struct PlannedMove {
     new_path: Utf8PathBuf,
 }
 
-impl WorkspaceService {
+impl ProjectWorkspace {
     pub fn new() -> Self {
         Self::default()
     }
@@ -218,7 +218,7 @@ impl WorkspaceService {
     pub fn read_file_with_version(
         &self,
         path: Utf8PathBuf,
-    ) -> Result<(String, FileDiskVersion), String> {
+    ) -> Result<(String, FileVersion), String> {
         let text = self.read_file(path.clone())?;
         let version = self
             .file_version(&path, &text)?
@@ -236,7 +236,7 @@ impl WorkspaceService {
         &self,
         path: Utf8PathBuf,
         content: &str,
-    ) -> Result<FileDiskVersion, String> {
+    ) -> Result<FileVersion, String> {
         self.write_file(path.clone(), content.as_bytes())?;
         self.file_version(&path, content)?
             .ok_or_else(|| "written file does not exist".to_string())
@@ -246,7 +246,7 @@ impl WorkspaceService {
         &self,
         path: &Utf8PathBuf,
         content: &str,
-    ) -> Result<Option<FileDiskVersion>, String> {
+    ) -> Result<Option<FileVersion>, String> {
         let resolved = self.project_fs()?.resolve(path);
         let metadata = match std::fs::metadata(resolved.as_std_path()) {
             Ok(metadata) => metadata,
@@ -261,7 +261,7 @@ impl WorkspaceService {
             .ok()
             .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
             .map(|duration| duration.as_millis());
-        Ok(Some(FileDiskVersion {
+        Ok(Some(FileVersion {
             len: metadata.len(),
             modified_millis,
             content_hash: content_hash(content),

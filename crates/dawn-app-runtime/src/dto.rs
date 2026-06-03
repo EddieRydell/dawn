@@ -25,9 +25,9 @@ use dawn_project::render::{
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::document_state::{BufferExternalState, EditorBuffer, EditorViewMode};
-use crate::domain::{ActiveGuiDocument, OutputReadout, RuntimeDomain, RuntimeDomainSnapshot};
 use crate::preview_session::AudioPlaybackStatus;
+use crate::services::app_core::{ActiveGuiDocument, AppCore, AppCoreSnapshot, OutputReadout};
+use crate::services::editor_state::{BufferExternalState, BufferTab, EditorViewMode};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -816,8 +816,8 @@ pub struct OutputReadoutDto {
     pub last_error: Option<String>,
 }
 
-impl From<RuntimeDomainSnapshot> for RuntimeReadModelsDto {
-    fn from(snapshot: RuntimeDomainSnapshot) -> Self {
+impl From<AppCoreSnapshot> for RuntimeReadModelsDto {
+    fn from(snapshot: AppCoreSnapshot) -> Self {
         let project_tree_visible = snapshot.workbench_layout.project_tree_visible;
         let effect_preview_enabled = snapshot.workbench_layout.effect_preview_enabled;
         Self {
@@ -882,8 +882,8 @@ impl From<RuntimeDomainSnapshot> for RuntimeReadModelsDto {
     }
 }
 
-impl From<&RuntimeDomain> for RuntimeReadModelsDto {
-    fn from(domain: &RuntimeDomain) -> Self {
+impl From<&AppCore> for RuntimeReadModelsDto {
+    fn from(domain: &AppCore) -> Self {
         let snapshot = domain.snapshot();
         Self::from(snapshot)
     }
@@ -1793,8 +1793,8 @@ impl From<WorkspaceEntry> for WorkspaceEntryDto {
     }
 }
 
-impl From<EditorBuffer> for EditorBufferDto {
-    fn from(buffer: EditorBuffer) -> Self {
+impl From<BufferTab> for EditorBufferDto {
+    fn from(buffer: BufferTab) -> Self {
         let dirty = buffer.is_dirty();
         let name = buffer
             .path

@@ -4,9 +4,9 @@ use std::net::{SocketAddr, UdpSocket};
 use dawn_app_runtime::controller_output::{
     build_output_plan, encode_e131_data_packet, ControllerOutputPlan,
 };
-use dawn_app_runtime::domain::ProjectIndexSnapshot;
-use dawn_app_runtime::domain::{OutputReadout, OutputReadoutStatus};
 use dawn_app_runtime::output_runtime::OutputFrame;
+use dawn_app_runtime::services::app_core::AnalysisSnapshot;
+use dawn_app_runtime::services::app_core::{OutputReadout, OutputReadoutStatus};
 
 #[derive(Debug, Default)]
 pub(crate) struct LiveOutputRuntime {
@@ -29,7 +29,7 @@ impl LiveOutputRuntime {
     pub(crate) fn set_enabled(
         &mut self,
         enabled: bool,
-        analysis: Option<&ProjectIndexSnapshot>,
+        analysis: Option<&AnalysisSnapshot>,
     ) -> OutputReadout {
         if enabled {
             match self.enable(analysis) {
@@ -54,7 +54,7 @@ impl LiveOutputRuntime {
 
     pub(crate) fn send_frame(
         &mut self,
-        analysis: Option<&ProjectIndexSnapshot>,
+        analysis: Option<&AnalysisSnapshot>,
         frame: &OutputFrame,
     ) -> OutputReadout {
         if !self.enabled {
@@ -91,7 +91,7 @@ impl LiveOutputRuntime {
         self.snapshot()
     }
 
-    fn enable(&mut self, analysis: Option<&ProjectIndexSnapshot>) -> Result<(), String> {
+    fn enable(&mut self, analysis: Option<&AnalysisSnapshot>) -> Result<(), String> {
         let analysis = analysis.ok_or_else(|| "project analysis is not available".to_string())?;
         let plan = build_output_plan(analysis).map_err(|error| error.to_string())?;
         let active_universe_count = plan.active_universe_count();

@@ -1,6 +1,8 @@
+pub mod app_core;
 pub mod audio_engine;
 pub mod autosave;
 pub mod document_store;
+pub mod editor_state;
 pub mod file_watcher;
 pub mod layout_prefs;
 pub mod live_output;

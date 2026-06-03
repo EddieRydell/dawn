@@ -12,7 +12,7 @@ pub enum EditorViewMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileDiskVersion {
+pub struct FileVersion {
     pub len: u64,
     pub modified_millis: Option<u128>,
     pub content_hash: u64,
@@ -26,18 +26,18 @@ pub enum BufferExternalState {
 }
 
 #[derive(Debug, Clone)]
-pub struct EditorBuffer {
+pub struct BufferTab {
     pub path: Utf8PathBuf,
     pub text: String,
     pub saved_text: String,
-    pub disk_version: Option<FileDiskVersion>,
+    pub disk_version: Option<FileVersion>,
     pub external_state: BufferExternalState,
     pub view_mode: EditorViewMode,
     undo_stack: Vec<String>,
     redo_stack: Vec<String>,
 }
 
-impl EditorBuffer {
+impl BufferTab {
     pub fn is_dirty(&self) -> bool {
         self.text != self.saved_text
     }
@@ -48,18 +48,18 @@ impl EditorBuffer {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct DocumentBufferStore {
-    open_editors: BTreeMap<Utf8PathBuf, EditorBuffer>,
+pub struct EditorStore {
+    open_editors: BTreeMap<Utf8PathBuf, BufferTab>,
     tab_order: Vec<Utf8PathBuf>,
     active_file: Option<Utf8PathBuf>,
 }
 
-impl DocumentBufferStore {
-    pub fn open_file(&mut self, path: Utf8PathBuf, text: String, disk_version: FileDiskVersion) {
+impl EditorStore {
+    pub fn open_file(&mut self, path: Utf8PathBuf, text: String, disk_version: FileVersion) {
         if !self.open_editors.contains_key(&path) {
             self.open_editors.insert(
                 path.clone(),
-                EditorBuffer {
+                BufferTab {
                     path: path.clone(),
                     saved_text: text.clone(),
                     text,
@@ -79,7 +79,7 @@ impl DocumentBufferStore {
         &mut self,
         path: Utf8PathBuf,
         text: String,
-        disk_version: FileDiskVersion,
+        disk_version: FileVersion,
         view_mode: EditorViewMode,
     ) {
         self.open_file(path.clone(), text, disk_version);
@@ -104,13 +104,13 @@ impl DocumentBufferStore {
         self.active_file.as_ref()
     }
 
-    pub fn active_buffer(&self) -> Option<&EditorBuffer> {
+    pub fn active_buffer(&self) -> Option<&BufferTab> {
         self.active_file
             .as_ref()
             .and_then(|path| self.open_editors.get(path))
     }
 
-    pub fn active_buffer_mut(&mut self) -> Option<&mut EditorBuffer> {
+    pub fn active_buffer_mut(&mut self) -> Option<&mut BufferTab> {
         let path = self.active_file.clone()?;
         self.open_editors.get_mut(&path)
     }
@@ -134,7 +134,7 @@ impl DocumentBufferStore {
         }
     }
 
-    pub fn replace_active_text_from_edit(&mut self, text: String) {
+    pub fn replace_active_text_from_gui(&mut self, text: String) {
         if let Some(buffer) = self.active_buffer_mut() {
             if buffer.is_conflicted() {
                 return;
@@ -201,7 +201,7 @@ impl DocumentBufferStore {
         self.active_file = self.tab_order.get(next).cloned();
     }
 
-    pub fn tabs(&self) -> Vec<EditorBuffer> {
+    pub fn tabs(&self) -> Vec<BufferTab> {
         self.tab_order
             .iter()
             .filter_map(|path| self.open_editors.get(path).cloned())
@@ -210,14 +210,14 @@ impl DocumentBufferStore {
 
     pub fn restore(
         &mut self,
-        tabs: Vec<(Utf8PathBuf, String, FileDiskVersion, EditorViewMode)>,
+        tabs: Vec<(Utf8PathBuf, String, FileVersion, EditorViewMode)>,
         active_file: Option<Utf8PathBuf>,
     ) {
         self.clear();
         for (path, text, disk_version, view_mode) in tabs {
             self.open_editors.insert(
                 path.clone(),
-                EditorBuffer {
+                BufferTab {
                     path: path.clone(),
                     saved_text: text.clone(),
                     text,
@@ -239,7 +239,7 @@ impl DocumentBufferStore {
         &mut self,
         path: &Utf8PathBuf,
         saved_text: String,
-        disk_version: FileDiskVersion,
+        disk_version: FileVersion,
     ) {
         if let Some(buffer) = self.open_editors.get_mut(path) {
             buffer.text = saved_text.clone();
@@ -249,7 +249,7 @@ impl DocumentBufferStore {
         }
     }
 
-    pub fn record_saved_version(&mut self, path: &Utf8PathBuf, disk_version: FileDiskVersion) {
+    pub fn record_saved_version(&mut self, path: &Utf8PathBuf, disk_version: FileVersion) {
         if let Some(buffer) = self.open_editors.get_mut(path) {
             buffer.saved_text = buffer.text.clone();
             buffer.disk_version = Some(disk_version);
@@ -261,7 +261,7 @@ impl DocumentBufferStore {
         &mut self,
         path: &Utf8PathBuf,
         text: String,
-        disk_version: FileDiskVersion,
+        disk_version: FileVersion,
         preserve_undo: bool,
     ) {
         if let Some(buffer) = self.open_editors.get_mut(path) {
@@ -292,7 +292,7 @@ impl DocumentBufferStore {
             .collect()
     }
 
-    pub fn dirty_buffers(&self) -> Vec<EditorBuffer> {
+    pub fn dirty_buffers(&self) -> Vec<BufferTab> {
         self.open_editors
             .values()
             .filter(|buffer| buffer.is_dirty())
@@ -300,7 +300,7 @@ impl DocumentBufferStore {
             .collect()
     }
 
-    pub fn dirty_autosave_buffers(&self) -> Vec<EditorBuffer> {
+    pub fn dirty_autosave_buffers(&self) -> Vec<BufferTab> {
         self.open_editors
             .values()
             .filter(|buffer| buffer.is_dirty() && !buffer.is_conflicted())
@@ -308,7 +308,7 @@ impl DocumentBufferStore {
             .collect()
     }
 
-    pub fn buffers(&self) -> Vec<EditorBuffer> {
+    pub fn buffers(&self) -> Vec<BufferTab> {
         self.open_editors.values().cloned().collect()
     }
 
@@ -368,7 +368,7 @@ impl DocumentBufferStore {
     }
 }
 
-impl EditorBuffer {
+impl BufferTab {
     fn record_snapshot(&mut self) {
         if self.undo_stack.last() == Some(&self.text) {
             return;

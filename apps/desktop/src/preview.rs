@@ -1,7 +1,6 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
-use dawn_app_runtime::domain::ProjectIndexSnapshot;
 use dawn_app_runtime::dto::{GeometryRenderBoundsDto, GeometryRenderPointDto};
 use dawn_app_runtime::output_runtime::{
     empty_frame, OutputFrame, SequenceChangeImpact, SequenceFrameEvaluator, SequenceRenderCache,
@@ -10,13 +9,14 @@ use dawn_app_runtime::preview_session::{
     AudioPlaybackStatus, PreviewRenderRequest, PreviewRenderResult, PreviewRenderTiming,
     PreviewSnapshot, SequenceKey,
 };
+use dawn_app_runtime::services::app_core::AnalysisSnapshot;
 use dawn_project::document::SequenceDocument;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use crate::app_runtime::{
-    apply_audio_clock_to_model, emit_preview_state_snapshot, emit_runtime_read_models,
+    apply_audio_clock_to_core, emit_preview_state_snapshot, emit_runtime_read_models,
 };
 use crate::audio_runtime::AudioClock;
 use crate::state::{
@@ -157,7 +157,7 @@ struct DeferredPreviewRenderer {
 impl DeferredPreviewRenderer {
     fn render(
         &mut self,
-        analysis: Option<&ProjectIndexSnapshot>,
+        analysis: Option<&AnalysisSnapshot>,
         request: PreviewRenderRequest,
     ) -> PreviewRenderResult {
         let Some(analysis) = analysis else {
@@ -190,7 +190,7 @@ impl DeferredPreviewRenderer {
 
     fn apply_request_cache_invalidation(
         &mut self,
-        analysis: &ProjectIndexSnapshot,
+        analysis: &AnalysisSnapshot,
         request: &PreviewRenderRequest,
     ) {
         if self.previous_key.as_ref() != Some(&request.key) {
@@ -213,7 +213,7 @@ impl DeferredPreviewRenderer {
 
     fn cached_renderer(
         &mut self,
-        analysis: &ProjectIndexSnapshot,
+        analysis: &AnalysisSnapshot,
         document: &SequenceDocument,
     ) -> Result<(&mut SequenceFrameEvaluator, f64), String> {
         let mut renderer_build_ms = 0.0;
@@ -271,7 +271,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             let (mut snapshot, mut target_fps, mut analysis, deferred_request) =
                 match lock_runtime(&state) {
                     Ok(mut model) => {
-                        let model = model.domain_mut();
+                        let model = model.core_mut();
                         timing.model_lock_wait_ms = elapsed_ms(model_lock_started);
                         let model_started = Instant::now();
                         let preview_snapshot_started = Instant::now();
@@ -289,14 +289,14 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                         timing.audio_position_seconds =
                             audio_clock.as_ref().map(|clock| clock.position_seconds);
                         let rendered_during_clock_apply = if let Some(clock) = audio_clock {
-                            if !should_apply_audio_clock_to_model(&preview_snapshot, &clock) {
+                            if !should_apply_audio_clock_to_core(&preview_snapshot, &clock) {
                                 false
                             } else {
                                 let analysis_clone_started = Instant::now();
                                 let analysis = model.analysis.clone();
                                 timing.analysis_clone_ms += elapsed_ms(analysis_clone_started);
                                 let apply_started = Instant::now();
-                                apply_audio_clock_to_model(model, &clock, analysis.as_ref());
+                                apply_audio_clock_to_core(model, &clock, analysis.as_ref());
                                 timing.audio_apply_ms =
                                     apply_started.elapsed().as_secs_f64() * 1000.0;
                                 record_render_timing(
@@ -364,7 +364,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                 timing.rendered_frame = true;
                 let model_lock_started = Instant::now();
                 if let Ok(mut model) = lock_runtime(&state) {
-                    let model = model.domain_mut();
+                    let model = model.core_mut();
                     timing.model_lock_wait_ms += elapsed_ms(model_lock_started);
                     let model_started = Instant::now();
                     let _completed = model.complete_deferred_preview_render(result);
@@ -468,7 +468,7 @@ fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
 }
 
-fn should_apply_audio_clock_to_model(
+fn should_apply_audio_clock_to_core(
     preview_snapshot: &PreviewSnapshot,
     clock: &AudioClock,
 ) -> bool {
@@ -486,7 +486,7 @@ fn should_apply_audio_clock_to_model(
 fn publish_live_output_frame(
     app: &AppHandle,
     state: &State<'_, AppState>,
-    analysis: Option<&ProjectIndexSnapshot>,
+    analysis: Option<&AnalysisSnapshot>,
     frame: &OutputFrame,
 ) {
     let snapshot = match lock_live_output(state) {
@@ -496,7 +496,7 @@ fn publish_live_output_frame(
     let Ok(mut model) = lock_runtime(state) else {
         return;
     };
-    let model = model.domain_mut();
+    let model = model.core_mut();
     if model.live_output != snapshot {
         model.set_live_output_snapshot(snapshot);
         let _ = emit_runtime_read_models(app, model);
@@ -557,7 +557,7 @@ pub(crate) fn open_preview_window_on_startup(
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
     let should_open = lock_runtime(&state)?
-        .domain()
+        .core()
         .workbench_layout
         .preview_window_open;
     if should_open {
@@ -581,7 +581,7 @@ fn open_preview_window(
 
     let layout = {
         let mut model = lock_runtime(&state)?;
-        let model = model.domain_mut();
+        let model = model.core_mut();
         model.set_preview_window_open(true)?;
         model.workbench_layout.preview_window.clone()
     };
@@ -621,7 +621,7 @@ fn open_preview_window(
 fn persist_preview_window_open(app: &AppHandle, open: bool) {
     let state = app.state::<AppState>();
     if let Ok(mut model) = lock_runtime(&state) {
-        let model = model.domain_mut();
+        let model = model.core_mut();
         let _ = model.set_preview_window_open(open);
     };
 }
