@@ -6,7 +6,7 @@ use crate::contracts::{
 };
 use crate::read_model::{AppReadModels, ReadModelCore};
 use crate::runtime::{spawn_service, BackpressurePolicy, ServiceHandle};
-use crate::services::app_core::AppCore;
+use crate::services::app_state::RuntimeState;
 use crate::services::audio_engine::{AudioEngineCommand, AudioEngineCore};
 use crate::services::autosave::{AutosaveCommand, AutosaveCore};
 use crate::services::document_store::{DocumentStoreCommand, DocumentStoreCore};
@@ -20,7 +20,7 @@ use dawn_project::path::Utf8PathBuf;
 const SERVICE_QUEUE_CAPACITY: usize = 128;
 
 pub struct AppCoordinator {
-    core: AppCore,
+    state: RuntimeState,
     next_request_id: u64,
     events: Receiver<EventEnvelope>,
     read_model: ReadModelCore,
@@ -48,7 +48,7 @@ impl AppCoordinator {
         let (tx, events) = unbounded();
         let policy = BackpressurePolicy::Reject;
         Self {
-            core: AppCore::default(),
+            state: RuntimeState::default(),
             next_request_id: 1,
             events,
             read_model: ReadModelCore::default(),
@@ -96,12 +96,12 @@ impl AppCoordinator {
         }
     }
 
-    pub fn core(&self) -> &AppCore {
-        &self.core
+    pub fn runtime_state(&self) -> &RuntimeState {
+        &self.state
     }
 
-    pub fn core_mut(&mut self) -> &mut AppCore {
-        &mut self.core
+    pub fn runtime_state_mut(&mut self) -> &mut RuntimeState {
+        &mut self.state
     }
 
     pub fn read_models(&self) -> &AppReadModels {

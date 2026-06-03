@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use dawn_app_runtime::contracts::{CommandAck, DiskVersion, RequestId};
 use dawn_app_runtime::coordinator::AppCoordinator;
 use dawn_app_runtime::read_model::AppReadModels;
-use dawn_app_runtime::services::app_core::AppCore;
+use dawn_app_runtime::services::app_state::RuntimeState;
 use dawn_app_runtime::services::document_store::{DocumentStoreCommand, ViewMode};
 use dawn_project::path::Utf8PathBuf;
 
@@ -24,12 +24,12 @@ pub(crate) struct RuntimeHost {
 }
 
 impl RuntimeHost {
-    pub(crate) fn core(&self) -> &AppCore {
-        self.coordinator.core()
+    pub(crate) fn runtime_state(&self) -> &RuntimeState {
+        self.coordinator.runtime_state()
     }
 
-    pub(crate) fn core_mut(&mut self) -> &mut AppCore {
-        self.coordinator.core_mut()
+    pub(crate) fn runtime_state_mut(&mut self) -> &mut RuntimeState {
+        self.coordinator.runtime_state_mut()
     }
 
     pub(crate) fn read_models(&self) -> &AppReadModels {

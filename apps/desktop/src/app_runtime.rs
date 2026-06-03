@@ -1,6 +1,6 @@
 use dawn_app_runtime::dto::{PreviewSnapshotDto, RuntimeReadModelsDto};
 use dawn_app_runtime::preview_session::{AudioPlaybackStatus, PreviewSnapshot};
-use dawn_app_runtime::services::app_core::AppCore;
+use dawn_app_runtime::services::app_state::RuntimeState;
 use dawn_project::document::SequenceAudioDocument;
 use tauri::{AppHandle, Emitter, State};
 
@@ -14,88 +14,18 @@ pub(crate) fn update_preview_from_audio_status(
     clock: AudioClock,
 ) -> CommandResult<RuntimeReadModelsDto> {
     let mut model = lock_runtime(state)?;
-    let model = model.core_mut();
-    let analysis = model.analysis.clone();
-    apply_audio_clock_to_core(model, &clock, analysis.as_ref());
+    let model = model.runtime_state_mut();
+    apply_audio_clock_to_runtime(model, &clock);
     emit_runtime_read_models(app, model)
 }
 
-pub(crate) fn apply_audio_clock_to_core(
-    model: &mut AppCore,
-    clock: &AudioClock,
-    analysis: Option<&dawn_app_runtime::services::app_core::AnalysisSnapshot>,
-) {
-    if let Some(error) = &clock.error {
-        model.preview.pause_at(clock.position_seconds, analysis);
-        model
-            .preview
-            .set_timing_status("nativeAudio", AudioPlaybackStatus::Error);
-        model.status = format!("Audio error: {error}");
-        return;
-    }
-    if clock.ended {
-        model
-            .preview
-            .render_at_native_audio_clock(clock.position_seconds, true, analysis);
-        model
-            .preview
-            .set_timing_status("nativeAudio", AudioPlaybackStatus::Ended);
-        model.status = "Preview complete".to_string();
-        return;
-    }
-    match clock.status {
-        AudioPlaybackStatus::Loading => {
-            model.preview.pause_at(clock.position_seconds, analysis);
-            model
-                .preview
-                .set_timing_status("nativeAudio", AudioPlaybackStatus::Loading);
-            model.status = "Loading audio".to_string();
-        }
-        AudioPlaybackStatus::LoadingToPlay => {
-            model.preview.pause_at(clock.position_seconds, analysis);
-            model
-                .preview
-                .set_timing_status("nativeAudio", AudioPlaybackStatus::LoadingToPlay);
-            model.status = "Loading audio - will play".to_string();
-        }
-        AudioPlaybackStatus::Playing => {
-            model
-                .preview
-                .play_from_native_audio_clock(clock.position_seconds, analysis);
-            model
-                .preview
-                .set_timing_status("nativeAudio", AudioPlaybackStatus::Playing);
-            model.status = "Preview playing".to_string();
-        }
-        AudioPlaybackStatus::Ended => {
-            model
-                .preview
-                .render_at_native_audio_clock(clock.position_seconds, true, analysis);
-            model
-                .preview
-                .set_timing_status("nativeAudio", AudioPlaybackStatus::Ended);
-            model.status = "Preview complete".to_string();
-        }
-        AudioPlaybackStatus::Missing => {
-            model.preview.pause_at(clock.position_seconds, analysis);
-            model
-                .preview
-                .set_timing_status("silent", AudioPlaybackStatus::Missing);
-            model.status = "Audio missing".to_string();
-        }
-        AudioPlaybackStatus::None => {
-            model.preview.pause_at(clock.position_seconds, analysis);
-            model
-                .preview
-                .set_timing_status("silent", AudioPlaybackStatus::None);
-            model.status = "Preview ready".to_string();
-        }
-        AudioPlaybackStatus::Ready | AudioPlaybackStatus::Error => {
-            model.preview.pause_at(clock.position_seconds, analysis);
-            model.preview.set_timing_status("nativeAudio", clock.status);
-            model.status = "Preview ready".to_string();
-        }
-    }
+pub(crate) fn apply_audio_clock_to_runtime(model: &mut RuntimeState, clock: &AudioClock) {
+    model.apply_audio_clock_state(
+        clock.position_seconds,
+        clock.status,
+        clock.ended,
+        clock.error.as_deref(),
+    );
 }
 
 pub(crate) fn preload_active_preview_audio(
@@ -132,7 +62,7 @@ pub(crate) fn preload_active_preview_audio(
 
 pub(crate) fn emit_runtime_read_models(
     app: &AppHandle,
-    model: &AppCore,
+    model: &RuntimeState,
 ) -> CommandResult<RuntimeReadModelsDto> {
     let read_models = RuntimeReadModelsDto::from(model);
     app.emit("runtime_workspace_changed", &read_models.workspace)

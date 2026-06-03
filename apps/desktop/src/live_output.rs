@@ -5,8 +5,8 @@ use dawn_app_runtime::controller_output::{
     build_output_plan, encode_e131_data_packet, ControllerOutputPlan,
 };
 use dawn_app_runtime::output_runtime::OutputFrame;
-use dawn_app_runtime::services::app_core::AnalysisSnapshot;
-use dawn_app_runtime::services::app_core::{OutputReadout, OutputReadoutStatus};
+use dawn_app_runtime::services::app_state::RuntimeAnalysis;
+use dawn_app_runtime::services::live_output::{LiveOutputSnapshot, LiveOutputStatus};
 
 #[derive(Debug, Default)]
 pub(crate) struct LiveOutputRuntime {
@@ -14,11 +14,11 @@ pub(crate) struct LiveOutputRuntime {
     socket: Option<UdpSocket>,
     plan: Option<ControllerOutputPlan>,
     sequence_counters: HashMap<UniverseSequenceKey, u8>,
-    snapshot: OutputReadout,
+    snapshot: LiveOutputSnapshot,
 }
 
 impl LiveOutputRuntime {
-    pub(crate) fn snapshot(&self) -> OutputReadout {
+    pub(crate) fn snapshot(&self) -> LiveOutputSnapshot {
         self.snapshot.clone()
     }
 
@@ -29,8 +29,8 @@ impl LiveOutputRuntime {
     pub(crate) fn set_enabled(
         &mut self,
         enabled: bool,
-        analysis: Option<&AnalysisSnapshot>,
-    ) -> OutputReadout {
+        analysis: Option<&RuntimeAnalysis>,
+    ) -> LiveOutputSnapshot {
         if enabled {
             match self.enable(analysis) {
                 Ok(()) => {}
@@ -38,9 +38,9 @@ impl LiveOutputRuntime {
                     self.enabled = true;
                     self.socket = None;
                     self.plan = None;
-                    self.snapshot = OutputReadout {
+                    self.snapshot = LiveOutputSnapshot {
                         enabled: true,
-                        status: OutputReadoutStatus::Error,
+                        status: LiveOutputStatus::Error,
                         active_universe_count: 0,
                         last_error: Some(error),
                     };
@@ -54,9 +54,9 @@ impl LiveOutputRuntime {
 
     pub(crate) fn send_frame(
         &mut self,
-        analysis: Option<&AnalysisSnapshot>,
+        analysis: Option<&RuntimeAnalysis>,
         frame: &OutputFrame,
-    ) -> OutputReadout {
+    ) -> LiveOutputSnapshot {
         if !self.enabled {
             return self.snapshot();
         }
@@ -79,9 +79,9 @@ impl LiveOutputRuntime {
         };
         match self.send_buffers(plan.frame_buffers(frame)) {
             Ok(()) => {
-                self.snapshot = OutputReadout {
+                self.snapshot = LiveOutputSnapshot {
                     enabled: true,
-                    status: OutputReadoutStatus::Sending,
+                    status: LiveOutputStatus::Sending,
                     active_universe_count,
                     last_error: None,
                 };
@@ -91,7 +91,7 @@ impl LiveOutputRuntime {
         self.snapshot()
     }
 
-    fn enable(&mut self, analysis: Option<&AnalysisSnapshot>) -> Result<(), String> {
+    fn enable(&mut self, analysis: Option<&RuntimeAnalysis>) -> Result<(), String> {
         let analysis = analysis.ok_or_else(|| "project analysis is not available".to_string())?;
         let plan = build_output_plan(analysis).map_err(|error| error.to_string())?;
         let active_universe_count = plan.active_universe_count();
@@ -100,9 +100,9 @@ impl LiveOutputRuntime {
         self.socket = Some(socket);
         self.plan = Some(plan);
         self.sequence_counters.clear();
-        self.snapshot = OutputReadout {
+        self.snapshot = LiveOutputSnapshot {
             enabled: true,
-            status: OutputReadoutStatus::Ready,
+            status: LiveOutputStatus::Ready,
             active_universe_count,
             last_error: None,
         };
@@ -118,18 +118,18 @@ impl LiveOutputRuntime {
         self.socket = None;
         self.plan = None;
         self.sequence_counters.clear();
-        self.snapshot = OutputReadout {
+        self.snapshot = LiveOutputSnapshot {
             enabled: false,
-            status: OutputReadoutStatus::Disabled,
+            status: LiveOutputStatus::Disabled,
             active_universe_count: 0,
             last_error,
         };
     }
 
     fn set_error(&mut self, error: String, active_universe_count: usize) {
-        self.snapshot = OutputReadout {
+        self.snapshot = LiveOutputSnapshot {
             enabled: true,
-            status: OutputReadoutStatus::Error,
+            status: LiveOutputStatus::Error,
             active_universe_count,
             last_error: Some(error),
         };

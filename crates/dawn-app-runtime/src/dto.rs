@@ -26,8 +26,9 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::preview_session::AudioPlaybackStatus;
-use crate::services::app_core::{ActiveGuiDocument, AppCore, AppCoreSnapshot, OutputReadout};
+use crate::services::app_state::{ActiveGuiDocument, RuntimeSnapshot, RuntimeState};
 use crate::services::editor_state::{BufferExternalState, BufferTab, EditorViewMode};
+use crate::services::live_output::LiveOutputReadout;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -816,8 +817,8 @@ pub struct OutputReadoutDto {
     pub last_error: Option<String>,
 }
 
-impl From<AppCoreSnapshot> for RuntimeReadModelsDto {
-    fn from(snapshot: AppCoreSnapshot) -> Self {
+impl From<RuntimeSnapshot> for RuntimeReadModelsDto {
+    fn from(snapshot: RuntimeSnapshot) -> Self {
         let project_tree_visible = snapshot.workbench_layout.project_tree_visible;
         let effect_preview_enabled = snapshot.workbench_layout.effect_preview_enabled;
         Self {
@@ -882,15 +883,15 @@ impl From<AppCoreSnapshot> for RuntimeReadModelsDto {
     }
 }
 
-impl From<&AppCore> for RuntimeReadModelsDto {
-    fn from(domain: &AppCore) -> Self {
+impl From<&RuntimeState> for RuntimeReadModelsDto {
+    fn from(domain: &RuntimeState) -> Self {
         let snapshot = domain.snapshot();
         Self::from(snapshot)
     }
 }
 
-impl From<OutputReadout> for OutputReadoutDto {
-    fn from(snapshot: OutputReadout) -> Self {
+impl From<LiveOutputReadout> for OutputReadoutDto {
+    fn from(snapshot: LiveOutputReadout) -> Self {
         Self {
             enabled: snapshot.enabled,
             status: snapshot.status.label().to_string(),

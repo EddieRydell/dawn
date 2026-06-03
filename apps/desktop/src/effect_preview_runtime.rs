@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use dawn_app_runtime::output_runtime::{SequenceEffectThumbnailResult, SequenceRenderCache};
-use dawn_app_runtime::services::app_core::AnalysisSnapshot;
+use dawn_app_runtime::services::app_state::RuntimeAnalysis;
 use dawn_project::document::SequenceDocument;
 
 use crate::effect_previews::{
@@ -54,7 +54,7 @@ impl EffectPreviewRuntime {
         object_key: String,
         request_id: u32,
         effects: Vec<SequenceEffectPreviewRequestEffectDto>,
-        analysis: AnalysisSnapshot,
+        analysis: RuntimeAnalysis,
         document: SequenceDocument,
     ) -> Result<(), String> {
         let key = SequencePreviewDocumentKey::new(path, object_key);
@@ -92,7 +92,7 @@ struct EffectPreviewJob {
     key: SequencePreviewDocumentKey,
     request_id: u32,
     effects: Vec<SequenceEffectPreviewRequestEffectDto>,
-    analysis: AnalysisSnapshot,
+    analysis: RuntimeAnalysis,
     document: SequenceDocument,
 }
 

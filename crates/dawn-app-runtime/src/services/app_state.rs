@@ -19,15 +19,16 @@ use crate::layout_persistence::{
     load_workbench_layout, save_workbench_layout, WindowLayout, WorkbenchLayout,
 };
 use crate::preview_session::{
-    PreviewController, PreviewRenderRequest, PreviewRenderResult, PreviewSnapshot, PreviewSyncMode,
-    SequenceKey,
+    AudioPlaybackStatus, PreviewController, PreviewRenderRequest, PreviewRenderResult,
+    PreviewSnapshot, PreviewSyncMode, SequenceKey,
 };
 use crate::services::editor_state::{BufferExternalState, BufferTab, EditorStore, EditorViewMode};
+use crate::services::live_output::LiveOutputReadout;
 use crate::workspace::ProjectWorkspace;
 
 const MIN_EFFECT_DURATION_SECONDS: f64 = 0.000000001;
 
-pub type AnalysisSnapshot = ProjectAnalysis;
+pub type RuntimeAnalysis = ProjectAnalysis;
 
 pub fn load_project_workspace(path: &std::path::Path) -> Result<ProjectWorkspace, String> {
     let mut workspace = ProjectWorkspace::new();
@@ -167,18 +168,18 @@ fn mark_move_edits(
 }
 
 #[derive(Debug)]
-pub struct AppCore {
-    pub workspace: ProjectWorkspace,
-    pub editors: EditorStore,
-    pub workbench_layout: WorkbenchLayout,
-    pub preview: PreviewController,
-    pub live_output: OutputReadout,
-    pub project_root: Option<String>,
-    pub project_entries: Vec<WorkspaceEntry>,
-    pub analysis: Option<ProjectAnalysis>,
-    pub diagnostics: Vec<ProjectDiagnostic>,
-    pub status: String,
-    pub sequence_clipboard: Option<SequenceClipboard>,
+pub struct RuntimeState {
+    workspace: ProjectWorkspace,
+    editors: EditorStore,
+    workbench_layout: WorkbenchLayout,
+    preview: PreviewController,
+    live_output: LiveOutputReadout,
+    project_root: Option<String>,
+    project_entries: Vec<WorkspaceEntry>,
+    analysis: Option<ProjectAnalysis>,
+    diagnostics: Vec<ProjectDiagnostic>,
+    status: String,
+    sequence_clipboard: Option<SequenceClipboard>,
     active_sequence_gui_document: Option<CachedActiveGuiDocument>,
 }
 
@@ -197,14 +198,14 @@ struct CachedActiveGuiDocument {
 }
 
 #[derive(Debug, Clone)]
-pub struct AppCoreSnapshot {
+pub struct RuntimeSnapshot {
     pub project_root: Option<String>,
     pub project_entries: Vec<WorkspaceEntry>,
     pub analysis: Option<ProjectAnalysis>,
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub workbench_layout: WorkbenchLayout,
     pub preview: PreviewSnapshot,
-    pub live_output: OutputReadout,
+    pub live_output: LiveOutputReadout,
     pub tabs: Vec<BufferTab>,
     pub active_file: Option<Utf8PathBuf>,
     pub active_buffer: Option<BufferTab>,
@@ -249,45 +250,7 @@ impl ActiveGuiDocument {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutputReadout {
-    pub enabled: bool,
-    pub status: OutputReadoutStatus,
-    pub active_universe_count: usize,
-    pub last_error: Option<String>,
-}
-
-impl Default for OutputReadout {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            status: OutputReadoutStatus::Disabled,
-            active_universe_count: 0,
-            last_error: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OutputReadoutStatus {
-    Disabled,
-    Ready,
-    Sending,
-    Error,
-}
-
-impl OutputReadoutStatus {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Disabled => "Disabled",
-            Self::Ready => "Ready",
-            Self::Sending => "Sending",
-            Self::Error => "Error",
-        }
-    }
-}
-
-impl Default for AppCore {
+impl Default for RuntimeState {
     fn default() -> Self {
         let workbench_layout = load_workbench_layout();
         Self {
@@ -295,7 +258,7 @@ impl Default for AppCore {
             editors: EditorStore::default(),
             workbench_layout,
             preview: PreviewController::default(),
-            live_output: OutputReadout::default(),
+            live_output: LiveOutputReadout::default(),
             project_root: None,
             project_entries: Vec::new(),
             analysis: None,
@@ -307,11 +270,11 @@ impl Default for AppCore {
     }
 }
 
-impl AppCore {
-    pub fn snapshot(&self) -> AppCoreSnapshot {
+impl RuntimeState {
+    pub fn snapshot(&self) -> RuntimeSnapshot {
         let active_document_descriptor = self.active_document_descriptor();
         let active_gui_document = self.active_gui_document(active_document_descriptor.as_ref());
-        AppCoreSnapshot {
+        RuntimeSnapshot {
             project_root: self.project_root.clone(),
             project_entries: self.project_entries.clone(),
             analysis: self.analysis.clone(),
@@ -626,7 +589,7 @@ impl AppCore {
         self.preview.target_fps()
     }
 
-    pub fn set_live_output_snapshot(&mut self, snapshot: OutputReadout) {
+    pub fn set_live_output_snapshot(&mut self, snapshot: LiveOutputReadout) {
         self.live_output = snapshot;
     }
 
@@ -643,6 +606,243 @@ impl AppCore {
     pub fn set_preview_window_open(&mut self, open: bool) -> Result<(), String> {
         self.workbench_layout.preview_window_open = open;
         save_workbench_layout(&self.workbench_layout)
+    }
+
+    pub fn last_project_root(&self) -> Option<PathBuf> {
+        self.workbench_layout.last_project_root.clone()
+    }
+
+    pub fn project_root(&self) -> Option<String> {
+        self.project_root.clone()
+    }
+
+    pub fn set_status(&mut self, status: impl Into<String>) {
+        self.status = status.into();
+    }
+
+    pub fn read_file_with_version(
+        &self,
+        path: Utf8PathBuf,
+    ) -> Result<(String, crate::services::editor_state::FileVersion), String> {
+        self.workspace.read_file_with_version(path)
+    }
+
+    pub fn preview_snapshot(&self) -> PreviewSnapshot {
+        self.preview.snapshot()
+    }
+
+    pub fn preview_last_render_timing(&self) -> crate::preview_session::PreviewRenderTiming {
+        self.preview.last_render_timing()
+    }
+
+    pub fn current_analysis(&self) -> Option<RuntimeAnalysis> {
+        self.analysis.clone()
+    }
+
+    pub fn effect_preview_enabled(&self) -> bool {
+        self.workbench_layout.effect_preview_enabled
+    }
+
+    pub fn preview_pause_at_native_audio(
+        &mut self,
+        position_seconds: f64,
+        status: AudioPlaybackStatus,
+    ) {
+        self.preview
+            .pause_at(position_seconds, self.analysis.as_ref());
+        self.preview.set_timing_status("nativeAudio", status);
+        self.status = "Preview paused".to_string();
+    }
+
+    pub fn preview_stop_native_audio(&mut self, status: AudioPlaybackStatus) {
+        self.preview.stop_native_audio(self.analysis.as_ref());
+        self.preview.set_timing_status("nativeAudio", status);
+        self.status = "Preview stopped".to_string();
+    }
+
+    pub fn preview_rewind_native_audio(&mut self, status: AudioPlaybackStatus) {
+        self.preview
+            .go_to_sequence_beginning_native_audio(self.analysis.as_ref());
+        self.preview.set_timing_status("nativeAudio", status);
+        self.status = "Preview rewound".to_string();
+    }
+
+    pub fn preview_seek_native_audio(
+        &mut self,
+        position_seconds: f64,
+        playing: bool,
+        status: AudioPlaybackStatus,
+    ) {
+        self.preview
+            .seek_native_audio(position_seconds, playing, self.analysis.as_ref());
+        self.preview.set_timing_status("nativeAudio", status);
+        self.status = "Preview seeked".to_string();
+    }
+
+    pub fn apply_audio_clock_state(
+        &mut self,
+        position_seconds: f64,
+        status: AudioPlaybackStatus,
+        ended: bool,
+        error: Option<&str>,
+    ) {
+        if let Some(error) = error {
+            self.preview
+                .pause_at(position_seconds, self.analysis.as_ref());
+            self.preview
+                .set_timing_status("nativeAudio", AudioPlaybackStatus::Error);
+            self.status = format!("Audio error: {error}");
+            return;
+        }
+        if ended {
+            self.preview.render_at_native_audio_clock(
+                position_seconds,
+                true,
+                self.analysis.as_ref(),
+            );
+            self.preview
+                .set_timing_status("nativeAudio", AudioPlaybackStatus::Ended);
+            self.status = "Preview complete".to_string();
+            return;
+        }
+        match status {
+            AudioPlaybackStatus::Loading => {
+                self.preview
+                    .pause_at(position_seconds, self.analysis.as_ref());
+                self.preview
+                    .set_timing_status("nativeAudio", AudioPlaybackStatus::Loading);
+                self.status = "Loading audio".to_string();
+            }
+            AudioPlaybackStatus::LoadingToPlay => {
+                self.preview
+                    .pause_at(position_seconds, self.analysis.as_ref());
+                self.preview
+                    .set_timing_status("nativeAudio", AudioPlaybackStatus::LoadingToPlay);
+                self.status = "Loading audio - will play".to_string();
+            }
+            AudioPlaybackStatus::Playing => {
+                self.preview
+                    .play_from_native_audio_clock(position_seconds, self.analysis.as_ref());
+                self.preview
+                    .set_timing_status("nativeAudio", AudioPlaybackStatus::Playing);
+                self.status = "Preview playing".to_string();
+            }
+            AudioPlaybackStatus::Ended => {
+                self.preview.render_at_native_audio_clock(
+                    position_seconds,
+                    true,
+                    self.analysis.as_ref(),
+                );
+                self.preview
+                    .set_timing_status("nativeAudio", AudioPlaybackStatus::Ended);
+                self.status = "Preview complete".to_string();
+            }
+            AudioPlaybackStatus::Missing => {
+                self.preview
+                    .pause_at(position_seconds, self.analysis.as_ref());
+                self.preview
+                    .set_timing_status("silent", AudioPlaybackStatus::Missing);
+                self.status = "Audio missing".to_string();
+            }
+            AudioPlaybackStatus::None => {
+                self.preview
+                    .pause_at(position_seconds, self.analysis.as_ref());
+                self.preview
+                    .set_timing_status("silent", AudioPlaybackStatus::None);
+                self.status = "Preview ready".to_string();
+            }
+            AudioPlaybackStatus::Ready | AudioPlaybackStatus::Error => {
+                self.preview
+                    .pause_at(position_seconds, self.analysis.as_ref());
+                self.preview.set_timing_status("nativeAudio", status);
+                self.status = "Preview ready".to_string();
+            }
+        }
+    }
+
+    pub fn active_sequence_export_source(
+        &self,
+    ) -> Result<(RuntimeAnalysis, SequenceDocument, String), String> {
+        let analysis = self
+            .analysis
+            .as_ref()
+            .ok_or_else(|| "project analysis is not available".to_string())?
+            .clone();
+        if analysis.has_errors() {
+            return Err("project has analysis errors".to_string());
+        }
+        let snapshot = self.snapshot();
+        if snapshot
+            .active_gui_document
+            .as_ref()
+            .is_some_and(|document| document.is_blocked())
+        {
+            return Err("active document is blocked by diagnostics".to_string());
+        }
+        let path = self
+            .editors
+            .active_file()
+            .cloned()
+            .ok_or_else(|| "no active sequence file is selected".to_string())?;
+        let overlays = self.editors.dirty_overlays();
+        let descriptor = self
+            .workspace
+            .inspect_document(path.clone(), overlays.clone())?;
+        let object_key = descriptor
+            .default_object_keys
+            .get(&DocumentViewId::Sequence)
+            .cloned()
+            .ok_or_else(|| "active document is not a sequence".to_string())?;
+        let document = self
+            .workspace
+            .sequence_document(path, &object_key, overlays)?;
+        let default_name = format!("{}.fseq", document.object_key);
+        Ok((analysis, document, default_name))
+    }
+
+    pub fn active_sequence_audio_context(&self) -> Result<(Option<String>, Utf8PathBuf), String> {
+        let snapshot = self.snapshot();
+        let Some(sequence_path) = snapshot.active_file else {
+            return Err("no active sequence file is selected".to_string());
+        };
+        if !snapshot
+            .active_gui_document
+            .as_ref()
+            .is_some_and(|document| document.is_sequence())
+        {
+            return Err("active document is not a sequence".to_string());
+        }
+        Ok((self.project_root.clone(), sequence_path))
+    }
+
+    pub fn effect_preview_request_source(
+        &self,
+        path: Utf8PathBuf,
+        object_key: &str,
+    ) -> Result<(RuntimeAnalysis, SequenceDocument), String> {
+        let analysis = self
+            .analysis
+            .as_ref()
+            .ok_or_else(|| "project analysis is not available".to_string())?
+            .clone();
+        let document = self.cached_sequence_document_for_preview_request(&path, object_key)?;
+        Ok((analysis, document))
+    }
+
+    pub fn preview_window_should_open(&self) -> bool {
+        self.workbench_layout.preview_window_open
+    }
+
+    pub fn preview_window_layout(&self) -> WindowLayout {
+        self.workbench_layout.preview_window.clone()
+    }
+
+    pub fn main_window_layout(&self) -> WindowLayout {
+        self.workbench_layout.main_window.clone()
+    }
+
+    pub fn live_output_snapshot_matches(&self, snapshot: &LiveOutputReadout) -> bool {
+        &self.live_output == snapshot
     }
 
     fn open_project(&mut self, path: PathBuf, remember: bool) -> Result<(), String> {

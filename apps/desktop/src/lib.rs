@@ -53,7 +53,7 @@ pub fn run() -> Result<(), tauri::Error> {
                 let _ = runtime.read_models();
             }
             if let Ok(model) = state::lock_runtime(&state) {
-                let root = model.core().snapshot().project_root;
+                let root = model.runtime_state().project_root();
                 drop(model);
                 if let Ok(mut watcher) = state::lock_filesystem_watcher(&state) {
                     let _ = watcher.sync_project_root(app.handle(), root);

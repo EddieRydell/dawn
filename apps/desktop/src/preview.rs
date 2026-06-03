@@ -9,14 +9,14 @@ use dawn_app_runtime::preview_session::{
     AudioPlaybackStatus, PreviewRenderRequest, PreviewRenderResult, PreviewRenderTiming,
     PreviewSnapshot, SequenceKey,
 };
-use dawn_app_runtime::services::app_core::AnalysisSnapshot;
+use dawn_app_runtime::services::app_state::RuntimeAnalysis;
 use dawn_project::document::SequenceDocument;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use crate::app_runtime::{
-    apply_audio_clock_to_core, emit_preview_state_snapshot, emit_runtime_read_models,
+    apply_audio_clock_to_runtime, emit_preview_state_snapshot, emit_runtime_read_models,
 };
 use crate::audio_runtime::AudioClock;
 use crate::state::{
@@ -157,7 +157,7 @@ struct DeferredPreviewRenderer {
 impl DeferredPreviewRenderer {
     fn render(
         &mut self,
-        analysis: Option<&AnalysisSnapshot>,
+        analysis: Option<&RuntimeAnalysis>,
         request: PreviewRenderRequest,
     ) -> PreviewRenderResult {
         let Some(analysis) = analysis else {
@@ -190,7 +190,7 @@ impl DeferredPreviewRenderer {
 
     fn apply_request_cache_invalidation(
         &mut self,
-        analysis: &AnalysisSnapshot,
+        analysis: &RuntimeAnalysis,
         request: &PreviewRenderRequest,
     ) {
         if self.previous_key.as_ref() != Some(&request.key) {
@@ -213,7 +213,7 @@ impl DeferredPreviewRenderer {
 
     fn cached_renderer(
         &mut self,
-        analysis: &AnalysisSnapshot,
+        analysis: &RuntimeAnalysis,
         document: &SequenceDocument,
     ) -> Result<(&mut SequenceFrameEvaluator, f64), String> {
         let mut renderer_build_ms = 0.0;
@@ -271,11 +271,11 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             let (mut snapshot, mut target_fps, mut analysis, deferred_request) =
                 match lock_runtime(&state) {
                     Ok(mut model) => {
-                        let model = model.core_mut();
+                        let model = model.runtime_state_mut();
                         timing.model_lock_wait_ms = elapsed_ms(model_lock_started);
                         let model_started = Instant::now();
                         let preview_snapshot_started = Instant::now();
-                        let preview_snapshot = model.preview.snapshot();
+                        let preview_snapshot = model.preview_snapshot();
                         timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
                         let audio_poll_started = Instant::now();
                         let audio_clock = if preview_snapshot.audio.is_some() {
@@ -289,19 +289,16 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                         timing.audio_position_seconds =
                             audio_clock.as_ref().map(|clock| clock.position_seconds);
                         let rendered_during_clock_apply = if let Some(clock) = audio_clock {
-                            if !should_apply_audio_clock_to_core(&preview_snapshot, &clock) {
+                            if !should_apply_audio_clock_to_runtime(&preview_snapshot, &clock) {
                                 false
                             } else {
-                                let analysis_clone_started = Instant::now();
-                                let analysis = model.analysis.clone();
-                                timing.analysis_clone_ms += elapsed_ms(analysis_clone_started);
                                 let apply_started = Instant::now();
-                                apply_audio_clock_to_core(model, &clock, analysis.as_ref());
+                                apply_audio_clock_to_runtime(model, &clock);
                                 timing.audio_apply_ms =
                                     apply_started.elapsed().as_secs_f64() * 1000.0;
                                 record_render_timing(
                                     &mut timing,
-                                    model.preview.last_render_timing(),
+                                    model.preview_last_render_timing(),
                                 );
                                 true
                             }
@@ -310,7 +307,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                             false
                         };
                         let preview_snapshot_started = Instant::now();
-                        let mut snapshot = model.preview.snapshot();
+                        let mut snapshot = model.preview_snapshot();
                         timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
                         let should_render_frame = (has_sink || live_output_enabled)
                             && (snapshot.is_playing
@@ -332,17 +329,17 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                             let render_started = Instant::now();
                             model.render_preview_frame();
                             timing.render_ms = render_started.elapsed().as_secs_f64() * 1000.0;
-                            record_render_timing(&mut timing, model.preview.last_render_timing());
+                            record_render_timing(&mut timing, model.preview_last_render_timing());
                             timing.rendered_frame = true;
                             let preview_snapshot_started = Instant::now();
-                            snapshot = model.preview.snapshot();
+                            snapshot = model.preview_snapshot();
                             timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
                         } else if should_render_frame {
                             timing.rendered_frame = true;
                         }
                         timing.model_update_ms = model_started.elapsed().as_secs_f64() * 1000.0;
                         let analysis_clone_started = Instant::now();
-                        let analysis = model.analysis.clone();
+                        let analysis = model.current_analysis();
                         timing.analysis_clone_ms += elapsed_ms(analysis_clone_started);
                         (
                             snapshot,
@@ -364,15 +361,15 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                 timing.rendered_frame = true;
                 let model_lock_started = Instant::now();
                 if let Ok(mut model) = lock_runtime(&state) {
-                    let model = model.core_mut();
+                    let model = model.runtime_state_mut();
                     timing.model_lock_wait_ms += elapsed_ms(model_lock_started);
                     let model_started = Instant::now();
                     let _completed = model.complete_deferred_preview_render(result);
                     let preview_snapshot_started = Instant::now();
-                    snapshot = model.preview.snapshot();
+                    snapshot = model.preview_snapshot();
                     timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
                     let analysis_clone_started = Instant::now();
-                    analysis = model.analysis.clone();
+                    analysis = model.current_analysis();
                     timing.analysis_clone_ms += elapsed_ms(analysis_clone_started);
                     target_fps = model.preview_target_fps();
                     timing.model_update_ms += elapsed_ms(model_started);
@@ -468,7 +465,7 @@ fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
 }
 
-fn should_apply_audio_clock_to_core(
+fn should_apply_audio_clock_to_runtime(
     preview_snapshot: &PreviewSnapshot,
     clock: &AudioClock,
 ) -> bool {
@@ -486,7 +483,7 @@ fn should_apply_audio_clock_to_core(
 fn publish_live_output_frame(
     app: &AppHandle,
     state: &State<'_, AppState>,
-    analysis: Option<&AnalysisSnapshot>,
+    analysis: Option<&RuntimeAnalysis>,
     frame: &OutputFrame,
 ) {
     let snapshot = match lock_live_output(state) {
@@ -496,8 +493,8 @@ fn publish_live_output_frame(
     let Ok(mut model) = lock_runtime(state) else {
         return;
     };
-    let model = model.core_mut();
-    if model.live_output != snapshot {
+    let model = model.runtime_state_mut();
+    if !model.live_output_snapshot_matches(&snapshot) {
         model.set_live_output_snapshot(snapshot);
         let _ = emit_runtime_read_models(app, model);
     }
@@ -557,9 +554,8 @@ pub(crate) fn open_preview_window_on_startup(
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
     let should_open = lock_runtime(&state)?
-        .core()
-        .workbench_layout
-        .preview_window_open;
+        .runtime_state()
+        .preview_window_should_open();
     if should_open {
         open_preview_window(app, state, false)?;
     }
@@ -581,9 +577,9 @@ fn open_preview_window(
 
     let layout = {
         let mut model = lock_runtime(&state)?;
-        let model = model.core_mut();
+        let model = model.runtime_state_mut();
         model.set_preview_window_open(true)?;
-        model.workbench_layout.preview_window.clone()
+        model.preview_window_layout()
     };
     let window =
         WebviewWindowBuilder::new(&app, "preview", WebviewUrl::App("/?view=preview".into()))
@@ -621,7 +617,7 @@ fn open_preview_window(
 fn persist_preview_window_open(app: &AppHandle, open: bool) {
     let state = app.state::<AppState>();
     if let Ok(mut model) = lock_runtime(&state) {
-        let model = model.core_mut();
+        let model = model.runtime_state_mut();
         let _ = model.set_preview_window_open(open);
     };
 }
