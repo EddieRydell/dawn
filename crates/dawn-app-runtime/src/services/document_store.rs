@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use dawn_project::path::Utf8PathBuf;
 
 use crate::contracts::{
-    Event, Revision, RuntimeError, RuntimeErrorKind, RuntimeResult, ServiceName,
+    BufferExternalState, DiskVersion, Event, Revision, RuntimeError, RuntimeErrorKind,
+    RuntimeResult, ServiceName,
 };
 use crate::runtime::ServiceCore;
 
@@ -15,9 +16,9 @@ pub struct BufferState {
     pub text: String,
     pub saved_text: String,
     pub revision: Revision,
-    pub disk_revision: Revision,
+    pub disk_version: Option<DiskVersion>,
+    pub external_state: BufferExternalState,
     pub view_mode: ViewMode,
-    pub conflicted: bool,
     undo_stack: Vec<String>,
     redo_stack: Vec<String>,
 }
@@ -40,6 +41,7 @@ impl BufferState {
 pub struct RuntimeSessionBuffer {
     pub path: Utf8PathBuf,
     pub text: String,
+    pub disk_version: Option<DiskVersion>,
     pub view_mode: ViewMode,
 }
 
@@ -56,7 +58,7 @@ pub enum DocumentStoreCommand {
     OpenBuffer {
         path: Utf8PathBuf,
         text: String,
-        disk_revision: Revision,
+        disk_version: Option<DiskVersion>,
     },
     UpdateBufferText {
         path: Utf8PathBuf,
@@ -66,12 +68,30 @@ pub enum DocumentStoreCommand {
     MarkSaved {
         path: Utf8PathBuf,
         expected_revision: Revision,
-        disk_revision: Revision,
+        disk_version: DiskVersion,
     },
     ExternalDiskChanged {
         path: Utf8PathBuf,
-        disk_revision: Revision,
+        disk_version: DiskVersion,
         text: String,
+    },
+    ExternalDiskDeleted {
+        path: Utf8PathBuf,
+    },
+    ReloadBufferFromDisk {
+        path: Utf8PathBuf,
+        text: String,
+        disk_version: DiskVersion,
+    },
+    KeepBuffer {
+        path: Utf8PathBuf,
+    },
+    ReconcileMovedPath {
+        old_path: Utf8PathBuf,
+        new_path: Utf8PathBuf,
+    },
+    ReconcileDeletedPath {
+        path: Utf8PathBuf,
     },
     SetActiveBuffer {
         path: Utf8PathBuf,
@@ -155,9 +175,9 @@ impl DocumentStoreCore {
                             saved_text: session_buffer.text.clone(),
                             text: session_buffer.text,
                             revision,
-                            disk_revision: Revision::INITIAL,
+                            disk_version: session_buffer.disk_version,
+                            external_state: BufferExternalState::Current,
                             view_mode: session_buffer.view_mode,
-                            conflicted: false,
                             undo_stack: Vec::new(),
                             redo_stack: Vec::new(),
                         },
@@ -166,6 +186,10 @@ impl DocumentStoreCore {
                     events.push(Event::BufferOpened {
                         path: path.clone(),
                         revision,
+                        text: self.buffers[&path].text.clone(),
+                        disk_version: self.buffers[&path].disk_version.clone(),
+                        external_state: self.buffers[&path].external_state,
+                        view_mode: self.buffers[&path].view_mode,
                     });
                     if session_buffer.view_mode != ViewMode::Text {
                         self.revision = self.revision.next();
@@ -195,7 +219,7 @@ impl DocumentStoreCore {
             DocumentStoreCommand::OpenBuffer {
                 path,
                 text,
-                disk_revision,
+                disk_version,
             } => {
                 let revision = self.revision.next();
                 self.revision = revision;
@@ -209,15 +233,23 @@ impl DocumentStoreCore {
                         saved_text: text.clone(),
                         text,
                         revision,
-                        disk_revision,
+                        disk_version,
+                        external_state: BufferExternalState::Current,
                         view_mode: ViewMode::Text,
-                        conflicted: false,
                         undo_stack: Vec::new(),
                         redo_stack: Vec::new(),
                     },
                 );
                 self.active_file = Some(path.clone());
-                Ok(vec![Event::BufferOpened { path, revision }])
+                let buffer = &self.buffers[&path];
+                Ok(vec![Event::BufferOpened {
+                    path: path.clone(),
+                    revision,
+                    text: buffer.text.clone(),
+                    disk_version: buffer.disk_version.clone(),
+                    external_state: buffer.external_state,
+                    view_mode: buffer.view_mode,
+                }])
             }
             DocumentStoreCommand::UpdateBufferText {
                 path,
@@ -225,7 +257,7 @@ impl DocumentStoreCore {
                 text,
             } => {
                 let buffer = self.buffer_mut(&path)?;
-                if buffer.conflicted {
+                if buffer.external_state != BufferExternalState::Current {
                     return Err(RuntimeError::new(
                         ServiceName::DocumentStore,
                         RuntimeErrorKind::Conflict,
@@ -249,6 +281,8 @@ impl DocumentStoreCore {
                     path: path.clone(),
                     revision: buffer.revision,
                     dirty: buffer.dirty(),
+                    disk_version: buffer.disk_version.clone(),
+                    external_state: buffer.external_state,
                 };
                 Ok(vec![
                     event,
@@ -262,7 +296,7 @@ impl DocumentStoreCore {
             DocumentStoreCommand::MarkSaved {
                 path,
                 expected_revision,
-                disk_revision,
+                disk_version,
             } => {
                 let buffer = self.buffer_mut(&path)?;
                 if buffer.revision != expected_revision {
@@ -273,39 +307,111 @@ impl DocumentStoreCore {
                     ));
                 }
                 buffer.saved_text = buffer.text.clone();
-                buffer.disk_revision = disk_revision;
-                buffer.conflicted = false;
+                buffer.disk_version = Some(disk_version);
+                buffer.external_state = BufferExternalState::Current;
                 Ok(vec![Event::BufferUpdated {
                     path,
                     revision: buffer.revision,
                     dirty: false,
+                    disk_version: buffer.disk_version.clone(),
+                    external_state: buffer.external_state,
                 }])
             }
             DocumentStoreCommand::ExternalDiskChanged {
                 path,
-                disk_revision,
+                disk_version,
                 text,
             } => {
                 let buffer = self.buffer_mut(&path)?;
                 if buffer.dirty() {
                     let clean_revision = buffer.revision;
-                    buffer.conflicted = true;
-                    buffer.disk_revision = disk_revision;
+                    buffer.external_state = BufferExternalState::ChangedOnDisk;
+                    buffer.disk_version = Some(disk_version);
                     return Ok(vec![Event::BufferConflict {
                         path,
                         clean_revision,
-                        disk_revision,
+                        disk_version: buffer.disk_version.clone(),
+                        external_state: buffer.external_state,
                     }]);
                 }
                 buffer.text = text.clone();
                 buffer.saved_text = text;
-                buffer.disk_revision = disk_revision;
+                buffer.disk_version = Some(disk_version);
+                buffer.external_state = BufferExternalState::Current;
                 buffer.revision = buffer.revision.next();
+                Ok(vec![
+                    Event::BufferUpdated {
+                        path: path.clone(),
+                        revision: buffer.revision,
+                        dirty: false,
+                        disk_version: buffer.disk_version.clone(),
+                        external_state: buffer.external_state,
+                    },
+                    Event::BufferTextUpdated {
+                        path,
+                        revision: buffer.revision,
+                        text: buffer.text.clone(),
+                    },
+                ])
+            }
+            DocumentStoreCommand::ExternalDiskDeleted { path } => {
+                let buffer = self.buffer_mut(&path)?;
+                if buffer.dirty() {
+                    let clean_revision = buffer.revision;
+                    buffer.external_state = BufferExternalState::DeletedOnDisk;
+                    buffer.disk_version = None;
+                    return Ok(vec![Event::BufferConflict {
+                        path,
+                        clean_revision,
+                        disk_version: None,
+                        external_state: buffer.external_state,
+                    }]);
+                }
+                self.close_buffer_events(path)
+            }
+            DocumentStoreCommand::ReloadBufferFromDisk {
+                path,
+                text,
+                disk_version,
+            } => {
+                let buffer = self.buffer_mut(&path)?;
+                buffer.record_snapshot();
+                buffer.text = text.clone();
+                buffer.saved_text = text;
+                buffer.disk_version = Some(disk_version);
+                buffer.external_state = BufferExternalState::Current;
+                buffer.revision = buffer.revision.next();
+                Ok(vec![
+                    Event::BufferUpdated {
+                        path: path.clone(),
+                        revision: buffer.revision,
+                        dirty: false,
+                        disk_version: buffer.disk_version.clone(),
+                        external_state: buffer.external_state,
+                    },
+                    Event::BufferTextUpdated {
+                        path,
+                        revision: buffer.revision,
+                        text: buffer.text.clone(),
+                    },
+                ])
+            }
+            DocumentStoreCommand::KeepBuffer { path } => {
+                let buffer = self.buffer_mut(&path)?;
+                buffer.external_state = BufferExternalState::Current;
                 Ok(vec![Event::BufferUpdated {
                     path,
                     revision: buffer.revision,
-                    dirty: false,
+                    dirty: buffer.dirty(),
+                    disk_version: buffer.disk_version.clone(),
+                    external_state: buffer.external_state,
                 }])
+            }
+            DocumentStoreCommand::ReconcileMovedPath { old_path, new_path } => {
+                Ok(self.reconcile_moved_path_events(old_path, new_path))
+            }
+            DocumentStoreCommand::ReconcileDeletedPath { path } => {
+                Ok(self.reconcile_deleted_path_events(path))
             }
             DocumentStoreCommand::SetActiveBuffer { path } => {
                 if !self.buffers.contains_key(&path) {
@@ -333,23 +439,14 @@ impl DocumentStoreCore {
                 }])
             }
             DocumentStoreCommand::CloseBuffer { path } => {
-                if self.buffers.remove(&path).is_none() {
+                if !self.buffers.contains_key(&path) {
                     return Err(RuntimeError::new(
                         ServiceName::DocumentStore,
                         RuntimeErrorKind::NotFound,
                         format!("buffer not open: {path}"),
                     ));
                 }
-                self.tab_order.retain(|candidate| candidate != &path);
-                if self.active_file.as_ref() == Some(&path) {
-                    self.active_file = self.tab_order.last().cloned();
-                }
-                self.revision = self.revision.next();
-                Ok(vec![Event::BufferClosed {
-                    path,
-                    active_file: self.active_file.clone(),
-                    revision: self.revision,
-                }])
+                self.close_buffer_events(path)
             }
             DocumentStoreCommand::UndoBufferText {
                 path,
@@ -372,6 +469,83 @@ impl DocumentStoreCore {
         })
     }
 
+    fn close_buffer_events(&mut self, path: Utf8PathBuf) -> RuntimeResult<Vec<Event>> {
+        self.buffers.remove(&path);
+        self.tab_order.retain(|candidate| candidate != &path);
+        if self.active_file.as_ref() == Some(&path) {
+            self.active_file = self.tab_order.last().cloned();
+        }
+        self.revision = self.revision.next();
+        Ok(vec![Event::BufferClosed {
+            path,
+            active_file: self.active_file.clone(),
+            revision: self.revision,
+        }])
+    }
+
+    fn reconcile_moved_path_events(
+        &mut self,
+        old_path: Utf8PathBuf,
+        new_path: Utf8PathBuf,
+    ) -> Vec<Event> {
+        let changed_paths = self
+            .buffers
+            .keys()
+            .filter_map(|path| {
+                moved_path(path, &old_path, &new_path).map(|next| (path.clone(), next))
+            })
+            .collect::<Vec<_>>();
+
+        let mut events = Vec::new();
+        for (old_buffer_path, new_buffer_path) in changed_paths {
+            if let Some(mut buffer) = self.buffers.remove(&old_buffer_path) {
+                buffer.path = new_buffer_path.clone();
+                self.buffers.insert(new_buffer_path.clone(), buffer);
+                self.revision = self.revision.next();
+                events.push(Event::BufferPathReconciled {
+                    old_path: old_buffer_path,
+                    new_path: new_buffer_path,
+                    revision: self.revision,
+                });
+            }
+        }
+        for tab in &mut self.tab_order {
+            if let Some(next_tab) = moved_path(tab, &old_path, &new_path) {
+                *tab = next_tab;
+            }
+        }
+        if let Some(active_file) = self.active_file.as_ref() {
+            if let Some(next_active_file) = moved_path(active_file, &old_path, &new_path) {
+                self.active_file = Some(next_active_file);
+            }
+        }
+        events
+    }
+
+    fn reconcile_deleted_path_events(&mut self, path: Utf8PathBuf) -> Vec<Event> {
+        let closed_paths = self
+            .buffers
+            .keys()
+            .filter(|candidate| *candidate == &path || candidate.starts_with(&path))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut events = Vec::new();
+        for closed_path in closed_paths {
+            self.buffers.remove(&closed_path);
+            self.tab_order.retain(|candidate| candidate != &closed_path);
+            if self.active_file.as_ref() == Some(&closed_path) {
+                self.active_file = self.tab_order.last().cloned();
+            }
+            self.revision = self.revision.next();
+            events.push(Event::BufferClosed {
+                path: closed_path,
+                active_file: self.active_file.clone(),
+                revision: self.revision,
+            });
+        }
+        events
+    }
+
     fn apply_history_edit(
         &mut self,
         path: Utf8PathBuf,
@@ -379,7 +553,7 @@ impl DocumentStoreCore {
         direction: HistoryDirection,
     ) -> RuntimeResult<Vec<Event>> {
         let buffer = self.buffer_mut(&path)?;
-        if buffer.conflicted {
+        if buffer.external_state != BufferExternalState::Current {
             return Err(RuntimeError::new(
                 ServiceName::DocumentStore,
                 RuntimeErrorKind::Conflict,
@@ -416,6 +590,8 @@ impl DocumentStoreCore {
                 path: path.clone(),
                 revision: buffer.revision,
                 dirty: buffer.dirty(),
+                disk_version: buffer.disk_version.clone(),
+                external_state: buffer.external_state,
             },
             Event::BufferTextUpdated {
                 path,
@@ -430,6 +606,21 @@ impl DocumentStoreCore {
 enum HistoryDirection {
     Undo,
     Redo,
+}
+
+fn moved_path(
+    path: &Utf8PathBuf,
+    old_path: &Utf8PathBuf,
+    new_path: &Utf8PathBuf,
+) -> Option<Utf8PathBuf> {
+    if path == old_path {
+        return Some(new_path.clone());
+    }
+    if !path.starts_with(old_path) {
+        return None;
+    }
+    let relative = path.strip_prefix(old_path).ok()?;
+    Some(new_path.join(relative))
 }
 
 impl ServiceCore for DocumentStoreCore {

@@ -74,19 +74,27 @@ versions into runtime-owned state transitions.
 - Changed desktop publication to per-slice runtime events.
 - Kept mutating commands snapshot-free with `RuntimeCommandResultDto`.
 - Kept data-returning commands data-returning.
+- Added runtime-native `DiskVersion` and moved `DocumentStore` buffers from
+  revision-based disk identity plus a conflict boolean to
+  `disk_version: Option<DiskVersion>` and
+  `external_state: BufferExternalState`.
+- Extended `DocumentStore` commands/events/read models for structured external
+  changes, reload, keep, moved-path reconciliation, deleted-path
+  reconciliation, editor text, dirty state, view mode, and disk version.
+- Moved desktop file-version conversion to the desktop/runtime boundary for
+  restored sessions and opened/created files.
 - Regenerated TypeScript bindings from Rust sources.
 
 ## Remaining Runtime Debt
 
-- Finish moving autosave, watcher reconciliation, rename/delete path
-  reconciliation, and external disk state transitions fully through
-  `DocumentStore`.
+- Finish moving autosave and watcher decisions fully through `RuntimeHost`, then
+  wire desktop watcher events to `DocumentStore` reload/keep/delete commands.
 - Replace remaining desktop mirror state with direct runtime/service read models
   where adapters no longer need local mutable state.
 - Move sequence clipboard and all GUI edit commit paths into `RuntimeHost`
   orchestration backed by `DocumentStore` buffers.
-- Add or extend focused runtime tests for the full document-store and adapter
-  boundary behavior requested by the migration plan.
+- Add adapter-boundary tests for autosave/watcher behavior and GUI edit commit
+  paths requested by the migration plan.
 - Delete obsolete compatibility helpers after the desktop no longer mirrors
   editor state for adapter compatibility.
 

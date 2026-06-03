@@ -136,6 +136,22 @@ pub enum ViewMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskVersion {
+    pub len: u64,
+    pub modified_millis: Option<u128>,
+    pub content_hash: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BufferExternalState {
+    Current,
+    ChangedOnDisk,
+    DeletedOnDisk,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandAck {
     pub request_id: RequestId,
     pub service: ServiceName,
@@ -169,6 +185,10 @@ pub enum Event {
     BufferOpened {
         path: Utf8PathBuf,
         revision: Revision,
+        text: String,
+        disk_version: Option<DiskVersion>,
+        external_state: BufferExternalState,
+        view_mode: ViewMode,
     },
     ActiveBufferChanged {
         path: Utf8PathBuf,
@@ -188,6 +208,8 @@ pub enum Event {
         path: Utf8PathBuf,
         revision: Revision,
         dirty: bool,
+        disk_version: Option<DiskVersion>,
+        external_state: BufferExternalState,
     },
     BufferTextUpdated {
         path: Utf8PathBuf,
@@ -197,7 +219,13 @@ pub enum Event {
     BufferConflict {
         path: Utf8PathBuf,
         clean_revision: Revision,
-        disk_revision: Revision,
+        disk_version: Option<DiskVersion>,
+        external_state: BufferExternalState,
+    },
+    BufferPathReconciled {
+        old_path: Utf8PathBuf,
+        new_path: Utf8PathBuf,
+        revision: Revision,
     },
     AnalysisUpdated {
         revision: Revision,

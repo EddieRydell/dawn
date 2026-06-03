@@ -4,7 +4,8 @@ use dawn_project::path::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::contracts::{
-    Event, EventEnvelope, Revision, RuntimeError, RuntimeResult, ServiceName, TaskRecord, ViewMode,
+    BufferExternalState, DiskVersion, Event, EventEnvelope, Revision, RuntimeError, RuntimeResult,
+    ServiceName, TaskRecord, ViewMode,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,9 +17,11 @@ pub struct WorkspaceModel {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EditorBufferModel {
     pub path: Utf8PathBuf,
+    pub text: String,
     pub revision: Revision,
     pub dirty: bool,
-    pub conflicted: bool,
+    pub disk_version: Option<DiskVersion>,
+    pub external_state: BufferExternalState,
     pub view_mode: ViewMode,
 }
 
@@ -106,16 +109,25 @@ impl ReadModelCore {
                 self.models.diagnostics.stale = true;
                 self.models.preview.stale = true;
             }
-            Event::BufferOpened { path, revision } => {
+            Event::BufferOpened {
+                path,
+                revision,
+                text,
+                disk_version,
+                external_state,
+                view_mode,
+            } => {
                 self.clear_transient_status();
                 self.models.editor.buffers.insert(
                     path.clone(),
                     EditorBufferModel {
                         path: path.clone(),
+                        text: text.clone(),
                         revision: *revision,
                         dirty: false,
-                        conflicted: false,
-                        view_mode: ViewMode::Text,
+                        disk_version: disk_version.clone(),
+                        external_state: *external_state,
+                        view_mode: *view_mode,
                     },
                 );
                 self.models.editor.active_file = Some(path.clone());
@@ -169,6 +181,8 @@ impl ReadModelCore {
                 path,
                 revision,
                 dirty,
+                disk_version,
+                external_state,
                 ..
             } => {
                 self.clear_transient_status();
@@ -181,16 +195,23 @@ impl ReadModelCore {
                 };
                 buffer.revision = *revision;
                 buffer.dirty = *dirty;
+                buffer.disk_version = disk_version.clone();
+                buffer.external_state = *external_state;
                 self.models.editor.revision = self.models.editor.revision.next();
                 self.models.diagnostics.stale = true;
                 self.models.preview.stale = true;
             }
-            Event::BufferTextUpdated { .. } => {
+            Event::BufferTextUpdated { path, text, .. } => {
                 self.clear_transient_status();
+                if let Some(buffer) = self.models.editor.buffers.get_mut(path) {
+                    buffer.text = text.clone();
+                }
             }
             Event::BufferConflict {
                 path,
                 clean_revision,
+                disk_version,
+                external_state,
                 ..
             } => {
                 self.clear_transient_status();
@@ -202,7 +223,28 @@ impl ReadModelCore {
                     ));
                 };
                 buffer.revision = *clean_revision;
-                buffer.conflicted = true;
+                buffer.disk_version = disk_version.clone();
+                buffer.external_state = *external_state;
+            }
+            Event::BufferPathReconciled {
+                old_path,
+                new_path,
+                revision,
+            } => {
+                self.clear_transient_status();
+                let Some(mut buffer) = self.models.editor.buffers.remove(old_path) else {
+                    return Err(RuntimeError::new(
+                        ServiceName::ReadModel,
+                        crate::contracts::RuntimeErrorKind::NotFound,
+                        format!("buffer not open: {old_path}"),
+                    ));
+                };
+                buffer.path = new_path.clone();
+                self.models.editor.buffers.insert(new_path.clone(), buffer);
+                if self.models.editor.active_file.as_ref() == Some(old_path) {
+                    self.models.editor.active_file = Some(new_path.clone());
+                }
+                self.models.editor.revision = *revision;
             }
             Event::AnalysisUpdated {
                 revision,

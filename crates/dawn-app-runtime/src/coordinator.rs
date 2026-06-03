@@ -230,7 +230,7 @@ impl AppCoordinator {
         command: FileWatcherCommand,
     ) -> RuntimeResult<CommandAck> {
         let target_revision = match &command {
-            FileWatcherCommand::DiskChanged { disk_revision, .. } => Some(*disk_revision),
+            FileWatcherCommand::DiskChanged { .. } => None,
         };
         let request_id = self.next_request_id();
         submit(
@@ -323,6 +323,11 @@ fn document_store_target_revision(command: &DocumentStoreCommand) -> Option<Revi
         | DocumentStoreCommand::OpenSession { .. }
         | DocumentStoreCommand::OpenBuffer { .. }
         | DocumentStoreCommand::ExternalDiskChanged { .. }
+        | DocumentStoreCommand::ExternalDiskDeleted { .. }
+        | DocumentStoreCommand::ReloadBufferFromDisk { .. }
+        | DocumentStoreCommand::KeepBuffer { .. }
+        | DocumentStoreCommand::ReconcileMovedPath { .. }
+        | DocumentStoreCommand::ReconcileDeletedPath { .. }
         | DocumentStoreCommand::SetActiveBuffer { .. }
         | DocumentStoreCommand::SetViewMode { .. }
         | DocumentStoreCommand::CloseBuffer { .. } => None,

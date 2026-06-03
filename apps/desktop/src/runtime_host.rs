@@ -3,7 +3,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use dawn_app_core::runtime_state::RuntimeState;
-use dawn_app_runtime::contracts::{CommandAck, RequestId, Revision};
+use dawn_app_runtime::contracts::{CommandAck, DiskVersion, RequestId};
 use dawn_app_runtime::coordinator::AppCoordinator;
 use dawn_app_runtime::read_model::AppReadModels;
 use dawn_app_runtime::services::document_store::{
@@ -141,13 +141,18 @@ impl RuntimeHost {
         })
     }
 
-    pub(crate) fn open_buffer(&mut self, path: Utf8PathBuf, text: String) -> Result<(), String> {
+    pub(crate) fn open_buffer(
+        &mut self,
+        path: Utf8PathBuf,
+        text: String,
+        disk_version: Option<DiskVersion>,
+    ) -> Result<(), String> {
         let ack = self
             .coordinator
             .submit_document_store(DocumentStoreCommand::OpenBuffer {
                 path: path.clone(),
                 text,
-                disk_revision: Revision::INITIAL,
+                disk_version,
             })
             .map_err(|error| error.to_string())?;
         self.drain_until_request(ack, |host| {
@@ -244,7 +249,7 @@ impl RuntimeHost {
         {
             return Ok(());
         }
-        self.open_buffer(active_buffer.path.clone(), active_buffer.text.clone())
+        self.open_buffer(active_buffer.path.clone(), active_buffer.text.clone(), None)
     }
 
     fn apply_history_edit(

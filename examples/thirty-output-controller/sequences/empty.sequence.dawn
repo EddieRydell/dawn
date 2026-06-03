@@ -1048,6 +1048,12 @@ empty:
           points:
           - time: 0.0
             value: 1.0
+          - time: 0.19
+            value: 0.271
+          - time: 0.484
+            value: 0.733
+          - time: 0.656
+            value: 0.624
           - time: 1.0
             value: 0.0
     script: effects.MarkChase

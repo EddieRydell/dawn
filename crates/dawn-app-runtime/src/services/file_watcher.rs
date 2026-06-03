@@ -1,4 +1,6 @@
-use crate::contracts::{Event, Revision, RuntimeResult, SelfWriteTag};
+use crate::contracts::{
+    BufferExternalState, DiskVersion, Event, Revision, RuntimeResult, SelfWriteTag,
+};
 use crate::runtime::ServiceCore;
 use dawn_project::path::Utf8PathBuf;
 
@@ -6,7 +8,7 @@ use dawn_project::path::Utf8PathBuf;
 pub enum FileWatcherCommand {
     DiskChanged {
         path: Utf8PathBuf,
-        disk_revision: Revision,
+        disk_version: DiskVersion,
         matching_self_write: Option<SelfWriteTag>,
     },
 }
@@ -21,17 +23,18 @@ impl FileWatcherCore {
         match command {
             FileWatcherCommand::DiskChanged {
                 path,
-                disk_revision,
+                disk_version,
                 matching_self_write,
             } => {
                 if matching_self_write.is_some() {
                     return Ok(Vec::new());
                 }
-                self.revision = disk_revision;
+                self.revision = self.revision.next();
                 Ok(vec![Event::BufferConflict {
                     path,
-                    clean_revision: disk_revision,
-                    disk_revision,
+                    clean_revision: self.revision,
+                    disk_version: Some(disk_version),
+                    external_state: BufferExternalState::ChangedOnDisk,
                 }])
             }
         }

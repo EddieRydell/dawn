@@ -5,10 +5,11 @@ use dawn_app_core::dto::{
     RuntimeReadModelsDto, SequenceGuiEditDto, SequenceSelectionEditDto,
     SequenceSelectionEditResultDto,
 };
-use dawn_app_core::editor_session::EditorViewMode;
+use dawn_app_core::editor_session::{EditorViewMode, FileDiskVersion};
 use dawn_app_core::fseq_export::{export_fseq_file, FseqExportOptions};
 use dawn_app_core::runtime_state::{ActiveGuiDocument, RuntimeSessionMirrorBuffer};
 use dawn_app_core::workspace::WorkspaceService;
+use dawn_app_runtime::contracts::DiskVersion;
 use dawn_app_runtime::services::document_store::{RuntimeSessionBuffer, ViewMode};
 use dawn_project::document::DocumentViewId;
 use dawn_project::path::{serialized_import_path, utf8_path, Utf8PathBuf};
@@ -89,6 +90,7 @@ fn hydrate_startup_session(state: &State<'_, AppState>) -> CommandResult<()> {
         runtime_buffers.push(RuntimeSessionBuffer {
             path: tab.path.clone(),
             text: text.clone(),
+            disk_version: Some(runtime_disk_version(&disk_version)),
             view_mode: runtime_view_mode_from_editor(tab.view_mode),
         });
         mirror_buffers.push(RuntimeSessionMirrorBuffer {
@@ -212,7 +214,11 @@ fn open_file_runtime_then_model(
         let model = lock_runtime(state)?;
         model.workspace.read_file_with_version(path.clone())?
     };
-    lock_runtime(state)?.open_buffer(path.clone(), text.clone())?;
+    lock_runtime(state)?.open_buffer(
+        path.clone(),
+        text.clone(),
+        Some(runtime_disk_version(&disk_version)),
+    )?;
     let mut model = lock_runtime(state)?;
     model.mirror_runtime_file_opened(path, text, disk_version, EditorViewMode::Text)?;
     let read_models = emit_runtime_read_models(app, &model)?;
@@ -323,6 +329,14 @@ fn runtime_view_mode_from_editor(mode: EditorViewMode) -> ViewMode {
     match mode {
         EditorViewMode::Text => ViewMode::Text,
         EditorViewMode::Gui => ViewMode::Gui,
+    }
+}
+
+fn runtime_disk_version(version: &FileDiskVersion) -> DiskVersion {
+    DiskVersion {
+        len: version.len,
+        modified_millis: version.modified_millis,
+        content_hash: version.content_hash,
     }
 }
 
@@ -637,7 +651,11 @@ fn create_file(
     name: String,
 ) -> CommandResult<RuntimeCommandResultDto> {
     let created = lock_runtime(&state)?.create_file_for_runtime_open(project_path(parent), name)?;
-    lock_runtime(&state)?.open_buffer(created.path.clone(), created.text.clone())?;
+    lock_runtime(&state)?.open_buffer(
+        created.path.clone(),
+        created.text.clone(),
+        Some(runtime_disk_version(&created.disk_version)),
+    )?;
     let mut model = lock_runtime(&state)?;
     model.mirror_runtime_file_opened(
         created.path,

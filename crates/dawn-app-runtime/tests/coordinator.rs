@@ -1,7 +1,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
-use dawn_app_runtime::contracts::{Revision, RuntimeErrorKind, ServiceName};
+use dawn_app_runtime::contracts::{DiskVersion, Revision, RuntimeErrorKind, ServiceName};
 use dawn_app_runtime::coordinator::AppCoordinator;
 use dawn_app_runtime::services::document_store::DocumentStoreCommand;
 use dawn_project::path::Utf8PathBuf;
@@ -60,7 +60,7 @@ fn coordinator_drains_buffer_revisions_into_editor_read_model() {
         .submit_document_store(DocumentStoreCommand::OpenBuffer {
             path: path.clone(),
             text: "first".to_string(),
-            disk_revision: Revision::INITIAL,
+            disk_version: Some(disk_version(5, 1)),
         })
         .expect("open buffer accepted");
     let edit_ack = coordinator
@@ -109,7 +109,7 @@ fn coordinator_seeds_project_buffer_then_publishes_text_edit() {
         .submit_document_store(DocumentStoreCommand::OpenBuffer {
             path: path.clone(),
             text: "seed".to_string(),
-            disk_revision: Revision::INITIAL,
+            disk_version: Some(disk_version(4, 1)),
         })
         .expect("open buffer accepted");
     drain_until(&mut coordinator, |coordinator| {
@@ -159,7 +159,7 @@ fn stale_buffer_edits_are_rejected_by_document_store_core() {
         .submit_document_store(DocumentStoreCommand::OpenBuffer {
             path: path.clone(),
             text: "first".to_string(),
-            disk_revision: Revision::INITIAL,
+            disk_version: Some(disk_version(5, 1)),
         })
         .expect("open buffer accepted");
     drain_until(&mut coordinator, |coordinator| {
@@ -238,4 +238,12 @@ fn drain_until(coordinator: &mut AppCoordinator, done: impl Fn(&AppCoordinator) 
         done(coordinator),
         "condition was not reached before timeout"
     );
+}
+
+fn disk_version(len: u64, content_hash: u64) -> DiskVersion {
+    DiskVersion {
+        len,
+        modified_millis: None,
+        content_hash,
+    }
 }
