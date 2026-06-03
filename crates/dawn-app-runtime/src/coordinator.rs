@@ -4,6 +4,7 @@ use crate::contracts::{
     CommandAck, Event, EventEnvelope, RequestId, Revision, RuntimeError, RuntimeErrorKind,
     RuntimeResult, ServiceName,
 };
+use crate::domain::RuntimeDomain;
 use crate::read_model::{AppReadModels, ReadModelCore};
 use crate::runtime::{spawn_service, BackpressurePolicy, ServiceHandle};
 use crate::services::audio_engine::{AudioEngineCommand, AudioEngineCore};
@@ -19,6 +20,7 @@ use dawn_project::path::Utf8PathBuf;
 const SERVICE_QUEUE_CAPACITY: usize = 128;
 
 pub struct AppCoordinator {
+    domain: RuntimeDomain,
     next_request_id: u64,
     events: Receiver<EventEnvelope>,
     read_model: ReadModelCore,
@@ -46,6 +48,7 @@ impl AppCoordinator {
         let (tx, events) = unbounded();
         let policy = BackpressurePolicy::Reject;
         Self {
+            domain: RuntimeDomain::default(),
             next_request_id: 1,
             events,
             read_model: ReadModelCore::default(),
@@ -91,6 +94,14 @@ impl AppCoordinator {
                 tx,
             )),
         }
+    }
+
+    pub fn domain(&self) -> &RuntimeDomain {
+        &self.domain
+    }
+
+    pub fn domain_mut(&mut self) -> &mut RuntimeDomain {
+        &mut self.domain
     }
 
     pub fn read_models(&self) -> &AppReadModels {

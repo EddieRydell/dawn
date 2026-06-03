@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { commands } from "../../../api";
 
-import type { AudioPlaybackStatus, SequenceDocumentDto, PreviewSnapshotDto, LiveOutputSnapshotDto } from "../../../bindings";
+import type { AudioPlaybackStatus, SequenceDocumentDto, PreviewSnapshotDto, OutputReadoutDto } from "../../../bindings";
 
 import { runRuntimeCommand } from "../../../store";
 
@@ -22,7 +22,7 @@ export function SequenceTransportControls({
 }: {
   document: SequenceDocumentDto;
   preview: PreviewSnapshotDto;
-  liveOutput: LiveOutputSnapshotDto;
+  liveOutput: OutputReadoutDto;
   effectPreviewEnabled: boolean;
   selectedEffectIds: number[];
 }) {

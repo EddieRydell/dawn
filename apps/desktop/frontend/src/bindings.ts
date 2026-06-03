@@ -5,44 +5,44 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	getRuntimeReadModels: () => typedError<RuntimeReadModelsDto, string>(__TAURI_INVOKE("get_runtime_read_models")),
-	openProjectDialog: () => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("open_project_dialog")),
-	openProject: (path: string) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("open_project", { path })),
+	openProjectDialog: () => typedError<null, string>(__TAURI_INVOKE("open_project_dialog")),
+	openProject: (path: string) => typedError<null, string>(__TAURI_INVOKE("open_project", { path })),
 	chooseNewProjectParentDirectory: () => typedError<string | null, string>(__TAURI_INVOKE("choose_new_project_parent_directory")),
-	createNewProject: (parentPath: string, directoryName: string) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("create_new_project", { parentPath, directoryName })),
-	openFile: (path: string) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("open_file", { path })),
-	closeFile: (path: string) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("close_file", { path })),
-	setActiveFile: (path: string) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("set_active_file", { path })),
-	updateActiveText: (text: string) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("update_active_text", { text })),
-	setActiveViewMode: (mode: EditorViewModeDto) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("set_active_view_mode", { mode })),
-	undoActiveEdit: () => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("undo_active_edit")),
-	redoActiveEdit: () => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("redo_active_edit")),
-	applySequenceGuiEdit: (edit: SequenceGuiEditDto) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("apply_sequence_gui_edit", { edit })),
+	createNewProject: (parentPath: string, directoryName: string) => typedError<null, string>(__TAURI_INVOKE("create_new_project", { parentPath, directoryName })),
+	openFile: (path: string) => typedError<null, string>(__TAURI_INVOKE("open_file", { path })),
+	closeFile: (path: string) => typedError<null, string>(__TAURI_INVOKE("close_file", { path })),
+	setActiveFile: (path: string) => typedError<null, string>(__TAURI_INVOKE("set_active_file", { path })),
+	updateActiveText: (text: string) => typedError<null, string>(__TAURI_INVOKE("update_active_text", { text })),
+	setActiveViewMode: (mode: EditorViewModeDto) => typedError<null, string>(__TAURI_INVOKE("set_active_view_mode", { mode })),
+	undoActiveEdit: () => typedError<null, string>(__TAURI_INVOKE("undo_active_edit")),
+	redoActiveEdit: () => typedError<null, string>(__TAURI_INVOKE("redo_active_edit")),
+	applySequenceGuiEdit: (edit: SequenceGuiEditDto) => typedError<null, string>(__TAURI_INVOKE("apply_sequence_gui_edit", { edit })),
 	applySequenceSelectionEdit: (edit: SequenceSelectionEditDto) => typedError<SequenceSelectionEditResultDto, string>(__TAURI_INVOKE("apply_sequence_selection_edit", { edit })),
-	chooseSequenceAudio: () => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("choose_sequence_audio")),
-	clearSequenceAudio: () => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("clear_sequence_audio")),
-	exportActiveSequenceFseq: (stepMs: number) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("export_active_sequence_fseq", { stepMs })),
+	chooseSequenceAudio: () => typedError<null, string>(__TAURI_INVOKE("choose_sequence_audio")),
+	clearSequenceAudio: () => typedError<null, string>(__TAURI_INVOKE("clear_sequence_audio")),
+	exportActiveSequenceFseq: (stepMs: number) => typedError<null, string>(__TAURI_INVOKE("export_active_sequence_fseq", { stepMs })),
 	requestSequenceEffectPreviews: (path: string, objectKey: string, requestId: number, effects: SequenceEffectPreviewRequestEffectDto[]) => typedError<null, string>(__TAURI_INVOKE("request_sequence_effect_previews", { path, objectKey, requestId, effects })),
 	takeSequenceEffectPreviewResults: (path: string, objectKey: string) => typedError<SequenceEffectPreviewResultsDto, string>(__TAURI_INVOKE("take_sequence_effect_preview_results", { path, objectKey })),
-	applyLayoutGuiEdit: (edit: LayoutGuiEditDto) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("apply_layout_gui_edit", { edit })),
-	applyFixtureGuiEdit: (edit: FixtureGuiEditDto) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("apply_fixture_gui_edit", { edit })),
-	flushAutosave: () => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("flush_autosave")),
-	reloadActiveBufferFromDisk: () => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("reload_active_buffer_from_disk")),
-	keepActiveBuffer: () => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("keep_active_buffer")),
-	createFile: (parent: string, name: string) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("create_file", { parent, name })),
-	createDirectory: (parent: string, name: string) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("create_directory", { parent, name })),
-	renamePath: (path: string, newName: string) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("rename_path", { path, newName })),
-	deletePath: (path: string) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("delete_path", { path })),
-	reloadProject: () => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("reload_project")),
-	toggleProjectTree: () => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("toggle_project_tree")),
-	setEffectPreviewEnabled: (enabled: boolean) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("set_effect_preview_enabled", { enabled })),
-	setEffectPreviewEffects: (ids: number[]) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("set_effect_preview_effects", { ids })),
+	applyLayoutGuiEdit: (edit: LayoutGuiEditDto) => typedError<null, string>(__TAURI_INVOKE("apply_layout_gui_edit", { edit })),
+	applyFixtureGuiEdit: (edit: FixtureGuiEditDto) => typedError<null, string>(__TAURI_INVOKE("apply_fixture_gui_edit", { edit })),
+	flushAutosave: () => typedError<null, string>(__TAURI_INVOKE("flush_autosave")),
+	reloadActiveBufferFromDisk: () => typedError<null, string>(__TAURI_INVOKE("reload_active_buffer_from_disk")),
+	keepActiveBuffer: () => typedError<null, string>(__TAURI_INVOKE("keep_active_buffer")),
+	createFile: (parent: string, name: string) => typedError<null, string>(__TAURI_INVOKE("create_file", { parent, name })),
+	createDirectory: (parent: string, name: string) => typedError<null, string>(__TAURI_INVOKE("create_directory", { parent, name })),
+	renamePath: (path: string, newName: string) => typedError<null, string>(__TAURI_INVOKE("rename_path", { path, newName })),
+	deletePath: (path: string) => typedError<null, string>(__TAURI_INVOKE("delete_path", { path })),
+	reloadProject: () => typedError<null, string>(__TAURI_INVOKE("reload_project")),
+	toggleProjectTree: () => typedError<null, string>(__TAURI_INVOKE("toggle_project_tree")),
+	setEffectPreviewEnabled: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_effect_preview_enabled", { enabled })),
+	setEffectPreviewEffects: (ids: number[]) => typedError<null, string>(__TAURI_INVOKE("set_effect_preview_effects", { ids })),
 	openPreviewWindow: () => typedError<null, string>(__TAURI_INVOKE("open_preview_window")),
-	previewPlay: () => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("preview_play")),
-	previewPause: () => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("preview_pause")),
-	previewStop: () => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("preview_stop")),
-	previewRewindToZero: () => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("preview_rewind_to_zero")),
-	previewSeek: (positionSeconds: number) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("preview_seek", { positionSeconds })),
-	setLiveOutputEnabled: (enabled: boolean) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("set_live_output_enabled", { enabled })),
+	previewPlay: () => typedError<null, string>(__TAURI_INVOKE("preview_play")),
+	previewPause: () => typedError<null, string>(__TAURI_INVOKE("preview_pause")),
+	previewStop: () => typedError<null, string>(__TAURI_INVOKE("preview_stop")),
+	previewRewindToZero: () => typedError<null, string>(__TAURI_INVOKE("preview_rewind_to_zero")),
+	previewSeek: (positionSeconds: number) => typedError<null, string>(__TAURI_INVOKE("preview_seek", { positionSeconds })),
+	setLiveOutputEnabled: (enabled: boolean) => typedError<null, string>(__TAURI_INVOKE("set_live_output_enabled", { enabled })),
 	getPreviewScene: () => typedError<PreviewSceneDto, string>(__TAURI_INVOKE("get_preview_scene")),
 	initPreviewTransport: () => typedError<null, string>(__TAURI_INVOKE("init_preview_transport")),
 	disposePreviewTransport: () => typedError<null, string>(__TAURI_INVOKE("dispose_preview_transport")),
@@ -185,17 +185,17 @@ export type LayoutTargetDto = {
 export type LayoutTargetKindDto = "group" | "fixture";
 
 export type LiveOutputReadModelDto = {
-	liveOutput: LiveOutputSnapshotDto,
+	liveOutput: OutputReadoutDto,
 };
 
-export type LiveOutputSnapshotDto = {
+export type ObjectKindDto = "project" | "display" | "controller" | "layout" | "fixture" | "patch" | "sequence" | "curve";
+
+export type OutputReadoutDto = {
 	enabled: boolean,
 	status: string,
 	activeUniverseCount: number,
 	lastError: string | null,
 };
-
-export type ObjectKindDto = "project" | "display" | "controller" | "layout" | "fixture" | "patch" | "sequence" | "curve";
 
 export type Point3MetersDto = {
 	xMeters: number,
@@ -268,8 +268,6 @@ export type Rotation3DegreesDto = {
 	yDegrees: number,
 	zDegrees: number,
 };
-
-export type RuntimeCommandResultDto = "changed" | "unchanged";
 
 export type RuntimeReadModelsDto = {
 	workspace: WorkspaceReadModelDto,

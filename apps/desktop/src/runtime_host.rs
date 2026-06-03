@@ -1,20 +1,17 @@
-use std::ops::{Deref, DerefMut};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use dawn_app_core::runtime_state::RuntimeState;
 use dawn_app_runtime::contracts::{CommandAck, DiskVersion, RequestId};
 use dawn_app_runtime::coordinator::AppCoordinator;
+use dawn_app_runtime::domain::RuntimeDomain;
 use dawn_app_runtime::read_model::AppReadModels;
-use dawn_app_runtime::services::document_store::{
-    DocumentStoreCommand, RuntimeSessionBuffer, ViewMode,
-};
+use dawn_app_runtime::services::document_store::{DocumentStoreCommand, ViewMode};
 use dawn_project::path::Utf8PathBuf;
 
 const RUNTIME_DOCUMENT_TIMEOUT: Duration = Duration::from_millis(500);
 const RUNTIME_DOCUMENT_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
-pub(crate) struct ActiveRuntimeBuffer {
+pub(crate) struct RuntimeBufferEdit {
     pub(crate) project_root: Option<String>,
     pub(crate) path: Utf8PathBuf,
     pub(crate) text: String,
@@ -23,25 +20,18 @@ pub(crate) struct ActiveRuntimeBuffer {
 
 #[derive(Default)]
 pub(crate) struct RuntimeHost {
-    state: RuntimeState,
     coordinator: AppCoordinator,
 }
 
-impl Deref for RuntimeHost {
-    type Target = RuntimeState;
-
-    fn deref(&self) -> &Self::Target {
-        &self.state
-    }
-}
-
-impl DerefMut for RuntimeHost {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.state
-    }
-}
-
 impl RuntimeHost {
+    pub(crate) fn domain(&self) -> &RuntimeDomain {
+        self.coordinator.domain()
+    }
+
+    pub(crate) fn domain_mut(&mut self) -> &mut RuntimeDomain {
+        self.coordinator.domain_mut()
+    }
+
     pub(crate) fn read_models(&self) -> &AppReadModels {
         self.coordinator.read_models()
     }
@@ -54,7 +44,7 @@ impl RuntimeHost {
 
     pub(crate) fn update_active_text(
         &mut self,
-        active_buffer: ActiveRuntimeBuffer,
+        active_buffer: RuntimeBufferEdit,
         text: String,
     ) -> Result<(), String> {
         if active_buffer.conflicted {
@@ -106,38 +96,6 @@ impl RuntimeHost {
                 .project_root
                 .as_deref()
                 == Some(root.as_str())
-        })
-    }
-
-    pub(crate) fn open_session(
-        &mut self,
-        root: String,
-        buffers: Vec<RuntimeSessionBuffer>,
-        active_file: Option<Utf8PathBuf>,
-    ) -> Result<(), String> {
-        let expected_paths = buffers
-            .iter()
-            .map(|buffer| buffer.path.clone())
-            .collect::<Vec<_>>();
-        let expected_active = active_file
-            .clone()
-            .filter(|path| expected_paths.contains(path))
-            .or_else(|| expected_paths.last().cloned());
-        let ack = self
-            .coordinator
-            .submit_document_store(DocumentStoreCommand::OpenSession {
-                root: root.clone(),
-                buffers,
-                active_file,
-            })
-            .map_err(|error| error.to_string())?;
-        self.drain_until_request(ack, |host| {
-            let models = host.coordinator.read_models();
-            models.workspace.project_root.as_deref() == Some(root.as_str())
-                && expected_paths
-                    .iter()
-                    .all(|path| models.editor.buffers.contains_key(path))
-                && models.editor.active_file == expected_active
         })
     }
 
@@ -239,7 +197,7 @@ impl RuntimeHost {
         self.open_project(project_root.to_string())
     }
 
-    fn ensure_buffer_open(&mut self, active_buffer: &ActiveRuntimeBuffer) -> Result<(), String> {
+    fn ensure_buffer_open(&mut self, active_buffer: &RuntimeBufferEdit) -> Result<(), String> {
         if self
             .coordinator
             .read_models()

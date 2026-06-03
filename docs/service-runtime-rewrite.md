@@ -1,115 +1,253 @@
 # Dawn Service Runtime Rewrite
 
-This document records the post-cutover runtime contract. The desktop no longer
-publishes an AppModel-shaped runtime blob to the frontend, and normal UI updates
-flow through focused runtime read-model slices.
+This document tracks the runtime ownership cutover. Keep it as a plan and
+progress ledger: check off completed work, record exact changes, and document
+exceptions rather than replacing the plan with a summary.
 
-## Current Baseline
+## Goal
 
-`RuntimeHost` owns desktop orchestration. It drives `dawn-app-runtime`
-`DocumentStore` commands for project/session open, tab lifecycle, active file,
-view mode, text edits, and undo/redo before mirroring state needed by the
-desktop adapters. Desktop-owned adapters remain in `apps/desktop`: native
-dialogs, filesystem watcher plumbing, native audio, preview transport/window,
-live-output socket work, and file I/O.
+Finish the migration by deleting the moved-but-still-central `AppModel` path
+entirely. `dawn-app-runtime::AppCoordinator` becomes the only owner of app
+behavior, runtime services own their domains, and desktop becomes a
+Tauri/native adapter that invokes runtime commands, executes explicit adapter
+effects, and emits runtime read-model events.
 
-The frontend hydrates with `get_runtime_read_models() -> RuntimeReadModelsDto`.
-Mutating Tauri commands return `RuntimeCommandResultDto::{Changed, Unchanged}`
-unless they are data-returning commands such as dialogs, preview scene/transport
-queries, effect-preview results, sequence selection edits, or export-style
-reports. A `Changed` result means committed read models were updated and slice
-events are emitted; the command result is not a state snapshot.
+Completion requires:
 
-## Slice Event Contract
+- [x] Delete `crates/dawn-app-runtime/src/app_model.rs`.
+- [x] `RuntimeHost` owns only `AppCoordinator` and adapter-effect dispatch
+  helpers.
+- [x] Runtime services own all app behavior domains.
+- [x] Desktop contains only native adapters.
+- [x] All read models are produced from runtime service events.
+- [x] `docs/service-runtime-rewrite.md` accurately records progress.
+- [x] `pnpm check` passes.
+- [x] `pnpm bindings:check` passes.
+- [x] Acceptance scans pass, with documented legitimate exceptions only.
+- [x] Manual validation status is recorded; scenarios remain unchecked below.
 
-Initial hydration returns all slices:
+## Current Implementation Pass - 2026-06-03
 
-- `workspace: WorkspaceReadModelDto`
-- `editor: EditorReadModelDto`
-- `activeDocument: ActiveDocumentReadModelDto`
-- `diagnostics: DiagnosticsReadModelDto`
-- `preview: PreviewReadModelDto`
-- `liveOutput: LiveOutputReadModelDto`
-- `status: StatusReadModelDto`
-- `prefs: PrefsReadModelDto`
+Files changed:
 
-Committed changes are published with focused events:
+- [x] `crates/dawn-app-runtime/src/app_model.rs` deleted.
+- [x] The remaining runtime domain moved under `crates/dawn-app-runtime/src/domain.rs`.
+- [x] `crates/dawn-app-runtime/src/lib.rs` exports `domain` instead of the old
+  app-model path.
+- [x] `crates/dawn-app-runtime/src/dto.rs` imports runtime domain types from
+  `domain`.
+- [x] `apps/desktop/src/runtime_host.rs` no longer defines
+  `Deref`/`DerefMut`.
+- [x] Temporary runtime access bridge was removed; desktop call sites no longer
+  use the old runtime entrypoint accessors.
+- [x] `apps/desktop/src/commands.rs` no longer directly names
+  `WorkspaceService`; project-root opening helpers are runtime-facing.
+- [x] `apps/desktop/src/app_runtime.rs`, `apps/desktop/src/live_output.rs`, and
+  generated type imports were updated for renamed runtime domain types.
+- [x] Stale public names were removed from code:
+  `AppModel`, `AppModelSnapshot`, `app_model`, `SessionMirrorBuffer`,
+  `ActiveRuntimeBuffer`, `apply_runtime_*`, `OutputSnapshot`, and
+  `OutputStatus`.
 
-- `runtime_workspace_changed`
-- `runtime_editor_changed`
-- `runtime_active_document_changed`
-- `runtime_diagnostics_changed`
-- `runtime_preview_changed`
-- `runtime_live_output_changed`
-- `runtime_status_changed`
-- `runtime_prefs_changed`
+Verification from this pass:
 
-`preview_state_changed` remains the high-frequency preview transport event and
-is derived from the preview slice plus timing data.
+- [x] `cargo check` passed after deleting `app_model.rs`.
+- [x] Acceptance scan returned no matches:
+  `rg 'AppModel|AppModelSnapshot|app_model|BufferSession|SessionMirrorBuffer|apply_runtime_|EditorSession|RuntimeState|AppSnapshot|mirror_runtime_' crates apps/desktop/src`
+- [x] Acceptance scan returned no matches:
+  `rg 'Deref|DerefMut|ActiveRuntimeBuffer' apps/desktop/src/runtime_host.rs`
+- [x] Acceptance scan returned no matches:
+  `rg 'WorkspaceService::default\(\)|WorkspaceService' apps/desktop/src`
+- [x] Acceptance scan returned no matches:
+  `rg 'SequenceClipboard|PreviewController|OutputSnapshot|OutputStatus' apps/desktop/src`
+- [x] Acceptance scan returned no matches for the removed app-core crate names.
+- [x] `pnpm check` passed.
+- [x] `pnpm bindings:check` passed.
+- Manual validation was not run in this pass.
 
-## Runtime Contracts
+## Completion Implementation Pass - 2026-06-03
 
-The runtime model uses typed command acknowledgements, request IDs, revisions,
-and structured service errors. Stale document edits are rejected through expected
-revisions; there is no last-write-wins behavior. Document buffers carry dirty
-state, view mode, revisions, undo/redo history, and structured external disk
-state.
+Files changed:
 
-Current external disk states:
+- [x] `crates/dawn-app-runtime/src/domain.rs` is the runtime-owned domain path;
+  old public runtime ownership names were removed from code.
+- [x] `crates/dawn-app-runtime/src/document_state.rs` owns editor buffer state;
+  obsolete persisted editor-tab state structs were deleted.
+- [x] `crates/dawn-app-runtime/src/layout_persistence.rs` no longer persists or
+  restores editor tabs.
+- [x] `crates/dawn-app-runtime/src/coordinator.rs` owns the runtime domain and
+  exposes domain access through `AppCoordinator`.
+- [x] `crates/dawn-app-runtime/src/contracts.rs` defines
+  `RuntimeCommandOutcome`, `RuntimeSlice`, and `RuntimeEffect`.
+- [x] `crates/dawn-app-runtime/src/dto.rs` converts read models from the
+  runtime-owned domain without command-result refetch paths.
+- [x] `apps/desktop/src/runtime_host.rs` owns only `AppCoordinator`.
+- [x] `apps/desktop/src/commands.rs` restores only the last project root on
+  startup; old editor-tab restore was removed.
+- [x] `apps/desktop/src/app_runtime.rs`, `apps/desktop/src/preview.rs`,
+  `apps/desktop/src/live_output.rs`, and
+  `apps/desktop/src/effect_preview_runtime.rs` no longer name
+  `ProjectAnalysis` directly.
 
-- `Current`
-- `ChangedOnDisk`
-- `DeletedOnDisk`
+Verification from this pass:
 
-The target disk identity contract is `DiskVersion { len, modified_millis,
-content_hash }`. Desktop file I/O is responsible for computing and passing disk
-versions into runtime-owned state transitions.
+- [x] `cargo fmt` completed.
+- [x] `cargo check` passed.
+- [x] `pnpm bindings:check` passed without generated binding changes.
+- [x] `pnpm check` passed.
+- [x] Acceptance scan returned no matches:
+  `rg 'RuntimeApplication|RuntimeApplicationSnapshot|application\(|application_mut\(' crates apps/desktop/src`
+- [x] Acceptance scan returned no matches:
+  `rg 'OpenBufferSet|OpenBufferSetState|editor_session' crates/dawn-app-runtime/src apps/desktop/src`
+- [x] Acceptance scan returned no matches:
+  `rg 'ProjectAnalysis' apps/desktop/src`
+- [x] Acceptance scan returned no matches:
+  `rg 'RuntimeReadModelsDto::from\(.*snapshot|RuntimeApplicationSnapshot' crates apps/desktop/src`
+- [x] Acceptance scan returned no matches:
+  `rg 'WorkspaceService::default\(\)|WorkspaceService' apps/desktop/src`
+- [x] Acceptance scan returned no matches:
+  `rg 'Deref|DerefMut|ActiveRuntimeBuffer' apps/desktop/src`
+- [x] Acceptance scan returned no matches:
+  `rg 'shim|compat|legacy|fallback' crates/dawn-app-runtime/src apps/desktop/src`
+- Manual validation was not run in this pass.
 
-## Completed Migration Items
+Documented scan exception:
 
-- Removed frontend use of `get_runtime_state`, `runtime_state_changed`, and
-  generated `RuntimeStateDto`.
-- Added `RuntimeReadModelsDto` and focused read-model DTOs for workspace,
-  editor, active document, diagnostics, preview, live output, status, and prefs.
-- Changed desktop publication to per-slice runtime events.
-- Kept mutating commands snapshot-free with `RuntimeCommandResultDto`.
-- Kept data-returning commands data-returning.
-- Added runtime-native `DiskVersion` and moved `DocumentStore` buffers from
-  revision-based disk identity plus a conflict boolean to
-  `disk_version: Option<DiskVersion>` and
-  `external_state: BufferExternalState`.
-- Extended `DocumentStore` commands/events/read models for structured external
-  changes, reload, keep, moved-path reconciliation, deleted-path
-  reconciliation, editor text, dirty state, view mode, and disk version.
-- Moved desktop file-version conversion to the desktop/runtime boundary for
-  restored sessions and opened/created files.
-- Regenerated TypeScript bindings from Rust sources.
+- [x] `rg 'RuntimeCommandResultDto|changed\"|unchanged\"' apps/desktop crates/dawn-app-runtime apps/desktop/frontend/src`
+  matches current Tauri event names such as `runtime_workspace_changed` and
+  `preview_state_changed`. These are runtime slice event names, not old
+  command-result changed/unchanged variants.
 
-## Remaining Runtime Debt
+## Key Interface Changes
 
-- Finish moving autosave and watcher decisions fully through `RuntimeHost`, then
-  wire desktop watcher events to `DocumentStore` reload/keep/delete commands.
-- Replace remaining desktop mirror state with direct runtime/service read models
-  where adapters no longer need local mutable state.
-- Move sequence clipboard and all GUI edit commit paths into `RuntimeHost`
-  orchestration backed by `DocumentStore` buffers.
-- Add adapter-boundary tests for autosave/watcher behavior and GUI edit commit
-  paths requested by the migration plan.
-- Delete obsolete compatibility helpers after the desktop no longer mirrors
-  editor state for adapter compatibility.
+- [x] Existing Tauri command names were kept.
+- [x] Frontend DTO wire shapes were kept except for stale generated binding
+  names caused by runtime type renames.
+- [x] Initial hydration still uses `get_runtime_read_models`.
+- [x] Add runtime-facing command outcome shape:
+  `RuntimeCommandOutcome { changed_slices, effects }`.
+- [x] Add explicit desktop adapter effect enums for native-only work.
+- [x] Replace runtime read model DTO conversion with direct conversion from
+  runtime-owned read models.
+- [x] Expand runtime events/read models to include the full missing slices:
+  workspace entries, active document descriptor, GUI document, full
+  diagnostics, preview snapshot, prefs/status, and live-output state.
+- [x] Keep `ProjectAnalysis` out of public DTOs.
 
-## Manual Verification Notes
+## Runtime Ownership
 
-Run manual verification with `pnpm tauri dev`, then stop it afterward:
+- [x] Delete `AppModel` as an ownership bucket, not by only renaming the old
+  file path.
+- [x] Workspace service owns project root, project file, entries, file
+  reads/writes, disk versions, create/rename/delete, reload, and path
+  reconciliation inputs.
+- [x] Document store remains the editor buffer owner.
+- [x] Project-index service owns full `ProjectAnalysis` and full diagnostics.
+- [x] Active-document service owns descriptors, GUI blocked states, and
+  sequence/layout/fixture GUI document derivation.
+- [x] GUI edit service owns sequence selection clipboard and edit
+  serialization.
+- [x] Prefs/status service owns status text, project tree visibility,
+  effect-preview enabled, preview-window open state, last project root, and
+  layout persistence.
+- [x] Live-output service owns enabled/status/error/universe count.
+- [x] Preview service owns source selection, playback state, effect preview
+  state, render cache, deferred render requests/results, preview snapshots, and
+  native-audio clock/status application.
+- [x] Autosave/file-watcher services own self-write tags and external
+  change/delete classification.
+- [x] Reusable `controller_output`, `output_runtime`, and `fseq_export` remain
+  in `dawn-app-runtime`.
 
-- Launch with a persisted project and restored tabs. Confirm tab order, active
-  tab, and saved view modes restore before opening a new file.
-- Open a different project. Confirm previous tabs clear and the project tree,
-  editor, diagnostics, preview, live-output, status, and prefs update through
-  slice events.
-- Open files, switch tabs, close inactive tabs, and close the active tab.
-  Confirm active fallback and editor text stay synchronized.
-- Edit text, undo, redo, switch tabs, toggle GUI/text view, and confirm no
-  command returns a snapshot.
-- Trigger GUI sequence/layout/fixture edits and confirm autosave, diagnostics,
-  active GUI document, and preview update from the slice store.
+## Desktop Adapter Cleanup
+
+- [x] `RuntimeHost` owns only `AppCoordinator` and adapter-effect dispatch
+  helpers.
+- [x] Delete `RuntimeHost::Deref`/`DerefMut` from
+  `apps/desktop/src/runtime_host.rs`.
+- [x] Delete the `state: AppModel` field.
+- [x] Delete `ActiveRuntimeBuffer`.
+- [x] Delete all temporary deref bridge access to runtime application state.
+- [x] Rewrite Tauri commands so they collect native inputs, call one runtime
+  command, execute returned desktop effects, emit changed runtime slices, and
+  return `()` unless intentionally data-returning.
+- [x] Remove old startup editor-tab restore.
+- [x] Desktop keeps only native adapters.
+
+## DTO And Frontend
+
+- [x] Keep frontend store contract as initial hydration plus runtime slice
+  events.
+- [x] No command-result/refetch path was reintroduced.
+- [x] Update generated bindings after stale binding check.
+- [x] Ensure frontend runtime state is composed only from
+  `RuntimeReadModelsDto` and slice events.
+
+## Documentation
+
+- [x] Fix stale statements about `RuntimeCommandResultDto`.
+- [x] Fix stale statements about the removed app-core crate.
+- [x] Remove the incorrect “delete `dawn-app-runtime`” target.
+- [x] Current state calls out remaining runtime application responsibilities
+  after deleting the old `AppModel` path.
+- [x] Record exact acceptance scans run.
+- [x] Record final `pnpm check` result.
+- [x] Record final `pnpm bindings:check` result.
+- [x] Record manual validation status.
+
+## Verification Plan
+
+No new or modified tests are added for this cutover unless specifically
+requested.
+
+Required commands:
+
+- [x] `pnpm check`
+- [x] `pnpm bindings:check`
+- [x] `pnpm generate-bindings` only if `pnpm bindings:check` reports stale
+  bindings
+
+Acceptance scans:
+
+- [x] `rg 'AppModel|AppModelSnapshot|app_model|BufferSession|SessionMirrorBuffer|apply_runtime_|EditorSession|RuntimeState|AppSnapshot|mirror_runtime_' crates apps/desktop/src`
+- [x] `rg 'RuntimeCommandResultDto|changed\"|unchanged\"' apps/desktop crates/dawn-app-runtime apps/desktop/frontend/src`
+  has documented event-name exceptions.
+- [x] `rg 'Deref|DerefMut|ActiveRuntimeBuffer' apps/desktop/src/runtime_host.rs`
+- [x] `rg 'WorkspaceService::default\(\)|WorkspaceService' apps/desktop/src`
+- [x] `rg 'SequenceClipboard|PreviewController|OutputSnapshot|OutputStatus' apps/desktop/src crates/dawn-app-runtime/src/app_model.rs`
+  is satisfied because `app_model.rs` is deleted and desktop has no old-symbol
+  matches.
+- [x] Repository-wide scan for the removed app-core crate names.
+- [x] `rg 'RuntimeApplication|RuntimeApplicationSnapshot|application\(|application_mut\(' crates apps/desktop/src`
+- [x] `rg 'OpenBufferSet|OpenBufferSetState|editor_session' crates/dawn-app-runtime/src apps/desktop/src`
+- [x] `rg 'ProjectAnalysis' apps/desktop/src`
+- [x] `rg 'RuntimeReadModelsDto::from\(.*snapshot|RuntimeApplicationSnapshot' crates apps/desktop/src`
+- [x] `rg 'shim|compat|legacy|fallback' crates/dawn-app-runtime/src apps/desktop/src`
+
+Manual scenarios:
+
+- [ ] Hydrate app state from `get_runtime_read_models`.
+- [ ] Open project, open/close files, switch active file, edit text,
+  undo/redo, toggle GUI/text view.
+- [ ] Create, rename, delete files/directories and verify editor
+  reconciliation.
+- [ ] Apply sequence/layout/fixture GUI edits.
+- [ ] Copy/cut/paste sequence selections.
+- [ ] Flush autosave, reload disk changes, keep dirty IDE changes after
+  external change/delete.
+- [ ] Preview play/pause/seek/stop, effect previews, native audio clock
+  updates, preview window.
+- [ ] Toggle project tree/effect previews/preview window and persist window
+  layout.
+- [ ] Enable/disable live output and verify socket transport status reports
+  through runtime.
+- [ ] Export active sequence FSEQ from runtime-owned analysis/output data.
+
+## Assumptions
+
+- Public command names remain stable.
+- Frontend wire DTO shapes stay stable unless deleting the old state path makes
+  stale generated bindings unavoidable.
+- No old persisted tab restore path is kept.
+- No new or modified tests are added unless specifically requested.
+- No frontend dev server is left running after validation.

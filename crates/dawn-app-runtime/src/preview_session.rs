@@ -121,7 +121,7 @@ struct EffectPreviewState {
 }
 
 #[derive(Debug, Clone)]
-pub struct PreviewSession {
+pub struct PreviewController {
     source: PreviewSource,
     transport: PreviewTransport,
     sequence_states: HashMap<SequenceKey, SequencePlaybackState>,
@@ -142,7 +142,7 @@ struct PendingDeferredRender {
     dirty_revision: u64,
 }
 
-impl Default for PreviewSession {
+impl Default for PreviewController {
     fn default() -> Self {
         let frame = empty_frame(0, "No sequence preview source");
         Self {
@@ -176,7 +176,7 @@ impl Default for PreviewSession {
     }
 }
 
-impl PreviewSession {
+impl PreviewController {
     pub fn snapshot(&self) -> PreviewSnapshot {
         self.snapshot.clone()
     }
@@ -891,7 +891,7 @@ mod tests {
     use dawn_project::model::{Color, FixtureId};
     use dawn_project::path::{canonicalize_path, utf8_path, Utf8PathBuf};
 
-    use super::{PreviewSession, PreviewSyncMode, SequenceKey};
+    use super::{PreviewController, PreviewSyncMode, SequenceKey};
 
     fn club_rig_project_path() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/club-rig/project.dawn")
@@ -957,7 +957,7 @@ mod tests {
         }
     }
 
-    fn frame_colors(session: &PreviewSession) -> Vec<Color> {
+    fn frame_colors(session: &PreviewController) -> Vec<Color> {
         session
             .snapshot
             .frame
@@ -967,7 +967,7 @@ mod tests {
             .collect()
     }
 
-    fn fixture_is_lit(session: &PreviewSession, id: FixtureId) -> bool {
+    fn fixture_is_lit(session: &PreviewController, id: FixtureId) -> bool {
         session
             .snapshot
             .frame
@@ -986,7 +986,7 @@ mod tests {
     #[test]
     fn render_cache_invalidates_when_sequence_source_refreshes() {
         let (analysis, document, key) = club_rig_analysis_and_sequence(Vec::new());
-        let mut session = PreviewSession::default();
+        let mut session = PreviewController::default();
         session.sync_source(
             Some((key.clone(), document)),
             Some(&analysis),
@@ -1012,7 +1012,7 @@ mod tests {
     #[test]
     fn effect_preview_id_changes_reuse_the_sequence_render_cache() {
         let (analysis, document, key) = club_rig_analysis_and_sequence(Vec::new());
-        let mut session = PreviewSession::default();
+        let mut session = PreviewController::default();
         session.sync_source(
             Some((key, document)),
             Some(&analysis),

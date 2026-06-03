@@ -1,7 +1,6 @@
 [workspace]
 members = [
   "apps/desktop",
-  "crates/dawn-app-core",
   "crates/dawn-app-runtime",
   "crates/dawn-cli",
   "crates/dawn-project",

@@ -18,7 +18,7 @@ use dawn_project::document::{
 use dawn_project::fs::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFs};
 use dawn_project::path::{serialized_import_path, utf8_path, PathStringExt, Utf8PathBuf};
 
-use crate::editor_session::FileDiskVersion;
+use crate::document_state::FileDiskVersion;
 
 #[derive(Debug, Default)]
 pub struct WorkspaceService {
@@ -36,6 +36,10 @@ struct PlannedMove {
 }
 
 impl WorkspaceService {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn open_project(&mut self, path: impl AsRef<Path>) -> Result<(), String> {
         let path = path.as_ref();
         let (root, project_file) = if path.is_dir() {

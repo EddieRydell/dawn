@@ -1,6 +1,6 @@
-use dawn_app_core::dto::{PreviewSnapshotDto, RuntimeReadModelsDto};
-use dawn_app_core::preview_session::{AudioPlaybackStatus, PreviewSnapshot};
-use dawn_app_core::runtime_state::RuntimeState;
+use dawn_app_runtime::domain::RuntimeDomain;
+use dawn_app_runtime::dto::{PreviewSnapshotDto, RuntimeReadModelsDto};
+use dawn_app_runtime::preview_session::{AudioPlaybackStatus, PreviewSnapshot};
 use dawn_project::document::SequenceAudioDocument;
 use tauri::{AppHandle, Emitter, State};
 
@@ -14,15 +14,16 @@ pub(crate) fn update_preview_from_audio_status(
     clock: AudioClock,
 ) -> CommandResult<RuntimeReadModelsDto> {
     let mut model = lock_runtime(state)?;
+    let model = model.domain_mut();
     let analysis = model.analysis.clone();
-    apply_audio_clock_to_model(&mut model, &clock, analysis.as_ref());
-    emit_runtime_read_models(app, &model)
+    apply_audio_clock_to_model(model, &clock, analysis.as_ref());
+    emit_runtime_read_models(app, model)
 }
 
 pub(crate) fn apply_audio_clock_to_model(
-    model: &mut RuntimeState,
+    model: &mut RuntimeDomain,
     clock: &AudioClock,
-    analysis: Option<&dawn_project::analysis::ProjectAnalysis>,
+    analysis: Option<&dawn_app_runtime::domain::ProjectIndexSnapshot>,
 ) {
     if let Some(error) = &clock.error {
         model.preview.pause_at(clock.position_seconds, analysis);
@@ -131,9 +132,9 @@ pub(crate) fn preload_active_preview_audio(
 
 pub(crate) fn emit_runtime_read_models(
     app: &AppHandle,
-    model: &RuntimeState,
+    model: &RuntimeDomain,
 ) -> CommandResult<RuntimeReadModelsDto> {
-    let read_models = RuntimeReadModelsDto::from(model.snapshot());
+    let read_models = RuntimeReadModelsDto::from(model);
     app.emit("runtime_workspace_changed", &read_models.workspace)
         .map_err(|error| error.to_string())?;
     app.emit("runtime_editor_changed", &read_models.editor)

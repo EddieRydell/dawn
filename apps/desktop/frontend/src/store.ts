@@ -8,7 +8,6 @@ import type {
   LiveOutputReadModelDto,
   PrefsReadModelDto,
   PreviewReadModelDto,
-  RuntimeCommandResultDto,
   RuntimeReadModelsDto,
   StatusReadModelDto,
   WorkspaceReadModelDto
@@ -59,7 +58,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setRuntimeSlices: (runtimeSlices) => {
     set({
       runtimeSlices,
-      runtimeState: composeRuntimeState(runtimeSlices),
+      runtimeState: composeruntimeState(runtimeSlices),
       localText: runtimeSlices.editor.activeBuffer?.text ?? ""
     });
   },
@@ -97,14 +96,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const runtimeSlices = await commands.getRuntimeReadModels();
     set({
       runtimeSlices,
-      runtimeState: composeRuntimeState(runtimeSlices),
+      runtimeState: composeruntimeState(runtimeSlices),
       localText: runtimeSlices.editor.activeBuffer?.text ?? "",
       error: null
     });
   }
 }));
 
-export async function subscribeToRuntimeState() {
+export async function subscribeToruntimeState() {
   const disposers = await Promise.all([
     listen<WorkspaceReadModelDto>("runtime_workspace_changed", (event) => {
       useAppStore.getState().updateWorkspace(event.payload);
@@ -141,9 +140,6 @@ export async function subscribeToRuntimeState() {
 export async function runRuntimeCommand<T>(command: () => Promise<T>) {
   try {
     const result = await command();
-    if (isRuntimeCommandResult(result) && result === "changed") {
-      useAppStore.getState().setRuntimeSlices(await commands.getRuntimeReadModels());
-    }
     useAppStore.getState().setError(null);
     return result;
   } catch (error) {
@@ -166,12 +162,12 @@ function updateSlice(
   const nextActiveText = runtimeSlices.editor.activeBuffer?.text;
   set({
     runtimeSlices,
-    runtimeState: composeRuntimeState(runtimeSlices),
+    runtimeState: composeruntimeState(runtimeSlices),
     ...(previousActiveText !== nextActiveText ? { localText: nextActiveText ?? "" } : {})
   });
 }
 
-function composeRuntimeState(runtimeSlices: RuntimeSlices): RuntimeUiState {
+function composeruntimeState(runtimeSlices: RuntimeSlices): RuntimeUiState {
   return {
     projectRoot: runtimeSlices.workspace.projectRoot,
     projectTreeVisible: runtimeSlices.workspace.projectTreeVisible,
@@ -187,8 +183,4 @@ function composeRuntimeState(runtimeSlices: RuntimeSlices): RuntimeUiState {
     effectPreviewEnabled: runtimeSlices.preview.effectPreviewEnabled,
     liveOutput: runtimeSlices.liveOutput.liveOutput
   };
-}
-
-function isRuntimeCommandResult(value: unknown): value is RuntimeCommandResultDto {
-  return value === "changed" || value === "unchanged";
 }

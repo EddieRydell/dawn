@@ -53,7 +53,6 @@ empty:
     - 67.039039452s
     - 67.230935754s
     - 67.633083657s
-    - 71.244862568s
     - 129.635546594s
     - 129.769771226s
     - 129.902877318s
@@ -1111,6 +1110,12 @@ empty:
           points:
           - time: 0.0
             value: 1.0
+          - time: 0.222
+            value: 0.195
+          - time: 0.498
+            value: 0.394
+          - time: 0.67
+            value: 0.086
           - time: 1.0
             value: 0.0
     script: effects.Chase

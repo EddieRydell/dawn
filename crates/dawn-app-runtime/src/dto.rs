@@ -25,9 +25,9 @@ use dawn_project::render::{
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::editor_session::{BufferExternalState, EditorBuffer, EditorViewMode};
+use crate::document_state::{BufferExternalState, EditorBuffer, EditorViewMode};
+use crate::domain::{ActiveGuiDocument, OutputReadout, RuntimeDomain, RuntimeDomainSnapshot};
 use crate::preview_session::AudioPlaybackStatus;
-use crate::runtime_state::{ActiveGuiDocument, AppSnapshot, LiveOutputSnapshot};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -81,7 +81,7 @@ pub struct PreviewReadModelDto {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveOutputReadModelDto {
-    pub live_output: LiveOutputSnapshotDto,
+    pub live_output: OutputReadoutDto,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -95,13 +95,6 @@ pub struct StatusReadModelDto {
 pub struct PrefsReadModelDto {
     pub project_tree_visible: bool,
     pub effect_preview_enabled: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub enum RuntimeCommandResultDto {
-    Changed,
-    Unchanged,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -816,15 +809,15 @@ pub struct PreviewSnapshotDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct LiveOutputSnapshotDto {
+pub struct OutputReadoutDto {
     pub enabled: bool,
     pub status: String,
     pub active_universe_count: u32,
     pub last_error: Option<String>,
 }
 
-impl From<AppSnapshot> for RuntimeReadModelsDto {
-    fn from(snapshot: AppSnapshot) -> Self {
+impl From<RuntimeDomainSnapshot> for RuntimeReadModelsDto {
+    fn from(snapshot: RuntimeDomainSnapshot) -> Self {
         let project_tree_visible = snapshot.workbench_layout.project_tree_visible;
         let effect_preview_enabled = snapshot.workbench_layout.effect_preview_enabled;
         Self {
@@ -889,8 +882,15 @@ impl From<AppSnapshot> for RuntimeReadModelsDto {
     }
 }
 
-impl From<LiveOutputSnapshot> for LiveOutputSnapshotDto {
-    fn from(snapshot: LiveOutputSnapshot) -> Self {
+impl From<&RuntimeDomain> for RuntimeReadModelsDto {
+    fn from(domain: &RuntimeDomain) -> Self {
+        let snapshot = domain.snapshot();
+        Self::from(snapshot)
+    }
+}
+
+impl From<OutputReadout> for OutputReadoutDto {
+    fn from(snapshot: OutputReadout) -> Self {
         Self {
             enabled: snapshot.enabled,
             status: snapshot.status.label().to_string(),

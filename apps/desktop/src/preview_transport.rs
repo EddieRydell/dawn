@@ -1,6 +1,6 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use dawn_app_core::output_runtime::OutputFrame;
+use dawn_app_runtime::output_runtime::OutputFrame;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 

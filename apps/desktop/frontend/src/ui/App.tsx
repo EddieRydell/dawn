@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { commands } from "../api";
 import { installGlobalShortcuts } from "../commandRegistry";
-import { runRuntimeCommand, subscribeToRuntimeState, useAppStore } from "../store";
+import { runRuntimeCommand, subscribeToruntimeState, useAppStore } from "../store";
 import { EditorPane } from "./EditorPane";
 import { ExportFseqDialog } from "./ExportFseqDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
@@ -16,7 +16,7 @@ export function App() {
     void hydrate();
     const disposeShortcuts = installGlobalShortcuts();
     let disposeEvents: (() => void) | undefined;
-    void subscribeToRuntimeState().then((dispose) => {
+    void subscribeToruntimeState().then((dispose) => {
       disposeEvents = dispose;
     });
     return () => {

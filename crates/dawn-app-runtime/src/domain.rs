@@ -10,22 +10,40 @@ use dawn_project::parse::parse_dawn_file_with_source_map;
 use dawn_project::path::Utf8PathBuf;
 use std::path::PathBuf;
 
+use crate::document_state::{
+    BufferExternalState, DocumentBufferStore, EditorBuffer, EditorViewMode,
+};
 use crate::dto::{
     FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto, SequenceMarkRefDto,
     SequencePasteAnchorDto, SequenceResizeEdgeDto, SequenceSelectionDto, SequenceSelectionEditDto,
     SequenceSelectionEditResultDto,
 };
-use crate::editor_session::{BufferExternalState, EditorBuffer, EditorSession, EditorViewMode};
 use crate::layout_persistence::{
     load_workbench_layout, save_workbench_layout, WindowLayout, WorkbenchLayout,
 };
 use crate::preview_session::{
-    PreviewRenderRequest, PreviewRenderResult, PreviewSession, PreviewSnapshot, PreviewSyncMode,
+    PreviewController, PreviewRenderRequest, PreviewRenderResult, PreviewSnapshot, PreviewSyncMode,
     SequenceKey,
 };
 use crate::workspace::WorkspaceService;
 
 const MIN_EFFECT_DURATION_SECONDS: f64 = 0.000000001;
+
+pub type ProjectIndexSnapshot = ProjectAnalysis;
+
+pub fn open_project_workspace(path: &std::path::Path) -> Result<WorkspaceService, String> {
+    let mut workspace = WorkspaceService::new();
+    workspace.open_project(path)?;
+    Ok(workspace)
+}
+
+pub fn project_root_display_for_path(path: &std::path::Path) -> Result<String, String> {
+    let workspace = open_project_workspace(path)?;
+    workspace
+        .project_root_display()
+        .map(ToString::to_string)
+        .ok_or_else(|| "project root was not opened".to_string())
+}
 
 fn sequence_delete_edit(selection: SequenceSelectionDto) -> SequenceDocumentEdit {
     match selection {
@@ -151,12 +169,12 @@ fn mark_move_edits(
 }
 
 #[derive(Debug)]
-pub struct RuntimeState {
+pub struct RuntimeDomain {
     pub workspace: WorkspaceService,
-    pub editors: EditorSession,
+    pub editors: DocumentBufferStore,
     pub workbench_layout: WorkbenchLayout,
-    pub preview: PreviewSession,
-    pub live_output: LiveOutputSnapshot,
+    pub preview: PreviewController,
+    pub live_output: OutputReadout,
     pub project_root: Option<String>,
     pub project_entries: Vec<WorkspaceEntry>,
     pub analysis: Option<ProjectAnalysis>,
@@ -181,14 +199,14 @@ struct CachedActiveGuiDocument {
 }
 
 #[derive(Debug, Clone)]
-pub struct AppSnapshot {
+pub struct RuntimeDomainSnapshot {
     pub project_root: Option<String>,
     pub project_entries: Vec<WorkspaceEntry>,
     pub analysis: Option<ProjectAnalysis>,
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub workbench_layout: WorkbenchLayout,
     pub preview: PreviewSnapshot,
-    pub live_output: LiveOutputSnapshot,
+    pub live_output: OutputReadout,
     pub tabs: Vec<EditorBuffer>,
     pub active_file: Option<Utf8PathBuf>,
     pub active_buffer: Option<EditorBuffer>,
@@ -198,10 +216,10 @@ pub struct AppSnapshot {
 }
 
 #[derive(Debug, Clone)]
-pub struct RuntimeSessionMirrorBuffer {
+pub struct RuntimeSessionBufferMirror {
     pub path: Utf8PathBuf,
     pub text: String,
-    pub disk_version: crate::editor_session::FileDiskVersion,
+    pub disk_version: crate::document_state::FileDiskVersion,
     pub view_mode: EditorViewMode,
 }
 
@@ -209,7 +227,7 @@ pub struct RuntimeSessionMirrorBuffer {
 pub struct CreatedRuntimeFile {
     pub path: Utf8PathBuf,
     pub text: String,
-    pub disk_version: crate::editor_session::FileDiskVersion,
+    pub disk_version: crate::document_state::FileDiskVersion,
 }
 
 #[derive(Debug, Clone)]
@@ -224,18 +242,18 @@ pub enum ActiveGuiDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LiveOutputSnapshot {
+pub struct OutputReadout {
     pub enabled: bool,
-    pub status: LiveOutputStatus,
+    pub status: OutputReadoutStatus,
     pub active_universe_count: usize,
     pub last_error: Option<String>,
 }
 
-impl Default for LiveOutputSnapshot {
+impl Default for OutputReadout {
     fn default() -> Self {
         Self {
             enabled: false,
-            status: LiveOutputStatus::Disabled,
+            status: OutputReadoutStatus::Disabled,
             active_universe_count: 0,
             last_error: None,
         }
@@ -243,14 +261,14 @@ impl Default for LiveOutputSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LiveOutputStatus {
+pub enum OutputReadoutStatus {
     Disabled,
     Ready,
     Sending,
     Error,
 }
 
-impl LiveOutputStatus {
+impl OutputReadoutStatus {
     pub fn label(self) -> &'static str {
         match self {
             Self::Disabled => "Disabled",
@@ -261,15 +279,15 @@ impl LiveOutputStatus {
     }
 }
 
-impl Default for RuntimeState {
+impl Default for RuntimeDomain {
     fn default() -> Self {
         let workbench_layout = load_workbench_layout();
         Self {
             workspace: WorkspaceService::default(),
-            editors: EditorSession::default(),
+            editors: DocumentBufferStore::default(),
             workbench_layout,
-            preview: PreviewSession::default(),
-            live_output: LiveOutputSnapshot::default(),
+            preview: PreviewController::default(),
+            live_output: OutputReadout::default(),
             project_root: None,
             project_entries: Vec::new(),
             analysis: None,
@@ -281,11 +299,11 @@ impl Default for RuntimeState {
     }
 }
 
-impl RuntimeState {
-    pub fn snapshot(&self) -> AppSnapshot {
+impl RuntimeDomain {
+    pub fn snapshot(&self) -> RuntimeDomainSnapshot {
         let active_document_descriptor = self.active_document_descriptor();
         let active_gui_document = self.active_gui_document(active_document_descriptor.as_ref());
-        AppSnapshot {
+        RuntimeDomainSnapshot {
             project_root: self.project_root.clone(),
             project_entries: self.project_entries.clone(),
             analysis: self.analysis.clone(),
@@ -306,13 +324,13 @@ impl RuntimeState {
         self.flush_autosave()
     }
 
-    pub fn mirror_runtime_project_opened(
+    pub fn sync_project_opened(
         &mut self,
         path: PathBuf,
         remember: bool,
         status: impl Into<String>,
     ) -> Result<(), String> {
-        self.open_project(path.clone(), remember, false)?;
+        self.open_project(path.clone(), remember)?;
         if remember {
             self.workbench_layout.last_project_root = Some(path);
         }
@@ -320,10 +338,10 @@ impl RuntimeState {
         Ok(())
     }
 
-    pub fn mirror_runtime_session_opened(
+    pub fn sync_session_opened(
         &mut self,
         path: PathBuf,
-        buffers: Vec<RuntimeSessionMirrorBuffer>,
+        buffers: Vec<RuntimeSessionBufferMirror>,
         active_file: Option<Utf8PathBuf>,
         status: impl Into<String>,
     ) -> Result<(), String> {
@@ -350,11 +368,11 @@ impl RuntimeState {
         Ok(())
     }
 
-    pub fn mirror_runtime_file_opened(
+    pub fn sync_file_opened(
         &mut self,
         path: Utf8PathBuf,
         text: String,
-        disk_version: crate::editor_session::FileDiskVersion,
+        disk_version: crate::document_state::FileDiskVersion,
         view_mode: EditorViewMode,
     ) -> Result<(), String> {
         self.editors
@@ -364,14 +382,14 @@ impl RuntimeState {
         self.persist_workbench_layout()
     }
 
-    pub fn mirror_runtime_file_closed(&mut self, path: Utf8PathBuf) -> Result<(), String> {
+    pub fn sync_file_closed(&mut self, path: Utf8PathBuf) -> Result<(), String> {
         self.editors.close_file(&path);
         self.refresh_analysis()?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         self.persist_workbench_layout()
     }
 
-    pub fn mirror_runtime_active_file(&mut self, path: Utf8PathBuf) -> Result<(), String> {
+    pub fn sync_active_file(&mut self, path: Utf8PathBuf) -> Result<(), String> {
         let active_changed = self.editors.active_file() != Some(&path);
         self.editors.set_active_file(path);
         if active_changed {
@@ -383,7 +401,7 @@ impl RuntimeState {
         Ok(())
     }
 
-    pub fn mirror_runtime_active_view_mode(&mut self, mode: EditorViewMode) -> Result<(), String> {
+    pub fn sync_active_view_mode(&mut self, mode: EditorViewMode) -> Result<(), String> {
         let Some(path) = self.editors.active_file().cloned() else {
             return Ok(());
         };
@@ -393,7 +411,7 @@ impl RuntimeState {
         self.persist_workbench_layout()
     }
 
-    pub fn mirror_runtime_active_text_update(&mut self, text: String) -> Result<(), String> {
+    pub fn sync_active_text_update(&mut self, text: String) -> Result<(), String> {
         self.ensure_active_buffer_not_conflicted()?;
         self.editors.update_active_text(text);
         self.refresh_analysis_after_memory_edit();
@@ -401,7 +419,7 @@ impl RuntimeState {
         Ok(())
     }
 
-    pub fn mirror_runtime_active_history_text(&mut self, text: String, status: impl Into<String>) {
+    pub fn sync_active_history_text(&mut self, text: String, status: impl Into<String>) {
         self.editors.replace_active_text_from_runtime(text);
         self.refresh_analysis_after_memory_edit();
         self.status = status.into();
@@ -600,7 +618,7 @@ impl RuntimeState {
         self.preview.target_fps()
     }
 
-    pub fn set_live_output_snapshot(&mut self, snapshot: LiveOutputSnapshot) {
+    pub fn set_live_output_snapshot(&mut self, snapshot: OutputReadout) {
         self.live_output = snapshot;
     }
 
@@ -619,19 +637,11 @@ impl RuntimeState {
         save_workbench_layout(&self.workbench_layout)
     }
 
-    fn open_project(
-        &mut self,
-        path: PathBuf,
-        remember: bool,
-        restore_editor_session: bool,
-    ) -> Result<(), String> {
+    fn open_project(&mut self, path: PathBuf, remember: bool) -> Result<(), String> {
         self.workspace.open_project(&path)?;
         self.refresh_project_entries()?;
         self.editors.clear();
         self.preview.reset();
-        if restore_editor_session {
-            self.restore_editor_session();
-        }
         self.refresh_analysis()?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         if remember {
@@ -641,28 +651,7 @@ impl RuntimeState {
         Ok(())
     }
 
-    fn restore_editor_session(&mut self) {
-        let tabs = self
-            .workbench_layout
-            .editor_session
-            .tabs
-            .clone()
-            .into_iter()
-            .filter_map(|tab| {
-                self.workspace
-                    .read_file_with_version(tab.path.clone())
-                    .ok()
-                    .map(|(text, disk_version)| (tab.path, text, disk_version, tab.view_mode))
-            })
-            .collect();
-        self.editors.restore(
-            tabs,
-            self.workbench_layout.editor_session.active_file.clone(),
-        );
-    }
-
     fn persist_workbench_layout(&mut self) -> Result<(), String> {
-        self.workbench_layout.editor_session = self.editors.state();
         save_workbench_layout(&self.workbench_layout)
     }
 

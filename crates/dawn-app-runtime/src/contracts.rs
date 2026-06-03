@@ -128,6 +128,58 @@ impl std::error::Error for RuntimeError {}
 
 pub type RuntimeResult<T> = Result<T, RuntimeError>;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeCommandOutcome {
+    pub changed_slices: Vec<RuntimeSlice>,
+    pub effects: Vec<RuntimeEffect>,
+}
+
+impl RuntimeCommandOutcome {
+    pub fn all_slices() -> Self {
+        Self {
+            changed_slices: RuntimeSlice::all(),
+            effects: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeSlice {
+    Workspace,
+    Editor,
+    ActiveDocument,
+    Diagnostics,
+    Preview,
+    LiveOutput,
+    Status,
+    Prefs,
+}
+
+impl RuntimeSlice {
+    pub fn all() -> Vec<Self> {
+        vec![
+            Self::Workspace,
+            Self::Editor,
+            Self::ActiveDocument,
+            Self::Diagnostics,
+            Self::Preview,
+            Self::LiveOutput,
+            Self::Status,
+            Self::Prefs,
+        ]
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeEffect {
+    SyncWatcherRoot { project_root: Option<String> },
+    ClearNativeAudio,
+    OpenPreviewWindow { focus: bool },
+    ClosePreviewWindow,
+    SyncPreviewTransport { pixel_count: usize },
+    SendLiveOutputFrame,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ViewMode {

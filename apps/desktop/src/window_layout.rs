@@ -1,4 +1,4 @@
-use dawn_app_core::layout_persistence::WindowLayout;
+use dawn_app_runtime::layout_persistence::WindowLayout;
 use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalSize, Position, Size, WebviewWindow, WindowEvent,
 };
@@ -25,7 +25,11 @@ pub(crate) fn restore_main_window_layout(app: &AppHandle) -> CommandResult<()> {
         .get_webview_window(WorkbenchWindow::Main.label())
         .ok_or_else(|| "main window is not open".to_string())?;
     let state = app.state::<AppState>();
-    let layout = lock_runtime(&state)?.workbench_layout.main_window.clone();
+    let layout = lock_runtime(&state)?
+        .domain()
+        .workbench_layout
+        .main_window
+        .clone();
     apply_window_layout(&window, &layout)
 }
 
@@ -63,6 +67,7 @@ pub(crate) fn persist_window_layout(app: &AppHandle, target: WorkbenchWindow) {
     };
     let state = app.state::<AppState>();
     if let Ok(mut model) = lock_runtime(&state) {
+        let model = model.domain_mut();
         match target {
             WorkbenchWindow::Main => {
                 let _ = model.set_main_window_layout(layout);
