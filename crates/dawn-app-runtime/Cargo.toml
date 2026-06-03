@@ -1,0 +1,15 @@
+[package]
+name = "dawn-app-runtime"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+camino.workspace = true
+crossbeam-channel.workspace = true
+dawn-project = { path = "../dawn-project" }
+serde.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

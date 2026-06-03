@@ -2,6 +2,7 @@
 members = [
   "apps/desktop",
   "crates/dawn-app-core",
+  "crates/dawn-app-runtime",
   "crates/dawn-cli",
   "crates/dawn-project",
 ]
@@ -20,3 +21,6 @@ pathdiff = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
+crossbeam-channel = "0.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
