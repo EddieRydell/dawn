@@ -25,9 +25,9 @@ use dawn_project::render::{
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
-use crate::app_model::{ActiveGuiDocument, AppSnapshot, LiveOutputSnapshot};
 use crate::editor_session::{BufferExternalState, EditorBuffer, EditorViewMode};
 use crate::preview_session::AudioPlaybackStatus;
+use crate::runtime_state::{ActiveGuiDocument, AppSnapshot, LiveOutputSnapshot};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -279,7 +279,6 @@ pub struct SequencePasteAnchorDto {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceSelectionEditResultDto {
-    pub snapshot: RuntimeStateDto,
     pub selection: Option<SequenceSelectionDto>,
     pub copied_count: u32,
     pub skipped_count: u32,

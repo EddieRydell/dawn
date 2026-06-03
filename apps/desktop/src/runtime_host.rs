@@ -1,6 +1,8 @@
+use std::ops::{Deref, DerefMut};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use dawn_app_core::runtime_state::RuntimeState;
 use dawn_app_runtime::contracts::{CommandAck, RequestId, Revision};
 use dawn_app_runtime::coordinator::AppCoordinator;
 use dawn_app_runtime::read_model::AppReadModels;
@@ -21,7 +23,22 @@ pub(crate) struct ActiveRuntimeBuffer {
 
 #[derive(Default)]
 pub(crate) struct RuntimeHost {
+    state: RuntimeState,
     coordinator: AppCoordinator,
+}
+
+impl Deref for RuntimeHost {
+    type Target = RuntimeState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl DerefMut for RuntimeHost {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
+    }
 }
 
 impl RuntimeHost {

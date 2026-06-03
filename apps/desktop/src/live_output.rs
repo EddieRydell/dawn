@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
 
-use dawn_app_core::app_model::{LiveOutputSnapshot, LiveOutputStatus};
 use dawn_app_core::controller_output::{
     build_output_plan, encode_e131_data_packet, ControllerOutputPlan,
 };
 use dawn_app_core::output_runtime::OutputFrame;
+use dawn_app_core::runtime_state::{LiveOutputSnapshot, LiveOutputStatus};
 use dawn_project::analysis::ProjectAnalysis;
 
 #[derive(Debug, Default)]

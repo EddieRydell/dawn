@@ -10,7 +10,6 @@ use dawn_project::parse::parse_dawn_file_with_source_map;
 use dawn_project::path::Utf8PathBuf;
 use std::path::PathBuf;
 
-use crate::actions::AppAction;
 use crate::dto::RuntimeStateDto;
 use crate::dto::{
     FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto, SequenceMarkRefDto,
@@ -28,18 +27,6 @@ use crate::preview_session::{
 use crate::workspace::WorkspaceService;
 
 const MIN_EFFECT_DURATION_SECONDS: f64 = 0.000000001;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DispatchOutcome {
-    SnapshotChanged,
-    NoSnapshotChange,
-}
-
-impl DispatchOutcome {
-    pub fn snapshot_changed(self) -> bool {
-        matches!(self, Self::SnapshotChanged)
-    }
-}
 
 fn sequence_delete_edit(selection: SequenceSelectionDto) -> SequenceDocumentEdit {
     match selection {
@@ -165,7 +152,7 @@ fn mark_move_edits(
 }
 
 #[derive(Debug)]
-pub struct AppModel {
+pub struct RuntimeState {
     pub workspace: WorkspaceService,
     pub editors: EditorSession,
     pub workbench_layout: WorkbenchLayout,
@@ -275,7 +262,7 @@ impl LiveOutputStatus {
     }
 }
 
-impl Default for AppModel {
+impl Default for RuntimeState {
     fn default() -> Self {
         let workbench_layout = load_workbench_layout();
         Self {
@@ -295,7 +282,7 @@ impl Default for AppModel {
     }
 }
 
-impl AppModel {
+impl RuntimeState {
     pub fn snapshot(&self) -> AppSnapshot {
         let active_document_descriptor = self.active_document_descriptor();
         let active_gui_document = self.active_gui_document(active_document_descriptor.as_ref());
@@ -441,195 +428,157 @@ impl AppModel {
         })
     }
 
-    pub fn dispatch(&mut self, action: AppAction) -> Result<DispatchOutcome, String> {
-        match action {
-            AppAction::OpenProject(path) => {
-                self.flush_autosave()?;
-                self.open_project(path, true, false)?;
-                self.status = "Project opened".to_string();
-            }
-            AppAction::ReloadProject => {
-                let paths = self
-                    .editors
-                    .buffers()
-                    .into_iter()
-                    .map(|buffer| buffer.path)
-                    .collect();
-                self.reconcile_filesystem_changes(paths)?;
-                self.status = "Project checked".to_string();
-            }
-            AppAction::OpenFile(path) => {
-                let (text, disk_version) = self.workspace.read_file_with_version(path.clone())?;
-                self.editors.open_file(path, text, disk_version);
-                self.refresh_analysis()?;
-                self.sync_preview_source(PreviewSyncMode::RenderNow);
-                self.persist_workbench_layout()?;
-            }
-            AppAction::CloseFile(path) => {
-                self.editors.close_file(&path);
-                self.refresh_analysis()?;
-                self.sync_preview_source(PreviewSyncMode::RenderNow);
-                self.persist_workbench_layout()?;
-            }
-            AppAction::SetActiveFile(path) => {
-                let active_changed = self.editors.active_file() != Some(&path);
-                self.editors.set_active_file(path);
-                if active_changed {
-                    self.invalidate_active_gui_document_cache();
-                    self.preview.pause(self.analysis.as_ref());
-                    self.sync_preview_source(PreviewSyncMode::RenderNow);
-                    self.persist_workbench_layout()?;
-                }
-            }
-            AppAction::SetActiveViewMode(mode) => {
-                let Some(path) = self.editors.active_file().cloned() else {
-                    return Ok(DispatchOutcome::NoSnapshotChange);
-                };
-                let mode = mode.into();
-                self.editors.set_view_mode(&path, mode);
-                self.invalidate_active_gui_document_cache();
-                self.sync_preview_source(PreviewSyncMode::RenderNow);
-                self.persist_workbench_layout()?;
-            }
-            AppAction::UpdateActiveText(text) => {
-                self.ensure_active_buffer_not_conflicted()?;
-                self.editors.update_active_text(text);
-                self.refresh_analysis_after_memory_edit();
-                self.status = "Edited".to_string();
-            }
-            AppAction::UndoActiveEdit => {
-                if self.editors.undo_active_text_edit() {
-                    self.refresh_analysis_after_memory_edit();
-                    self.status = "Undo".to_string();
-                } else {
-                    return Ok(DispatchOutcome::NoSnapshotChange);
-                }
-            }
-            AppAction::RedoActiveEdit => {
-                if self.editors.redo_active_text_edit() {
-                    self.refresh_analysis_after_memory_edit();
-                    self.status = "Redo".to_string();
-                } else {
-                    return Ok(DispatchOutcome::NoSnapshotChange);
-                }
-            }
-            AppAction::ApplySequenceGuiEdit(edit) => {
-                self.apply_sequence_gui_edit(edit)?;
-                self.flush_autosave_without_analysis()?;
-                self.status = "Autosaved".to_string();
-            }
-            AppAction::ApplyLayoutGuiEdit(edit) => {
-                self.apply_layout_gui_edit(edit)?;
-                self.flush_autosave()?;
-                self.status = "Autosaved".to_string();
-            }
-            AppAction::ApplyFixtureGuiEdit(edit) => {
-                self.apply_fixture_gui_edit(edit)?;
-                self.flush_autosave()?;
-                self.status = "Autosaved".to_string();
-            }
-            AppAction::FlushAutosave => {
-                self.flush_autosave()?;
-                self.status = "Saved".to_string();
-            }
-            AppAction::FilesystemChanged(paths) => {
-                self.reconcile_filesystem_changes(paths)?;
-                self.status = "Filesystem refreshed".to_string();
-            }
-            AppAction::ReloadActiveBufferFromDisk => {
-                self.reload_active_buffer_from_disk()?;
-                self.status = "Reloaded from disk".to_string();
-            }
-            AppAction::KeepActiveBuffer => {
-                self.keep_active_buffer()?;
-                self.status = "Kept IDE changes".to_string();
-            }
-            AppAction::CreateFile { parent, name } => {
-                self.flush_autosave()?;
-                let path = self.workspace.create_file(parent, &name)?;
-                self.refresh_project_entries()?;
-                let (text, disk_version) = self.workspace.read_file_with_version(path.clone())?;
-                self.editors.open_file(path, text, disk_version);
-                self.refresh_analysis()?;
-                self.sync_preview_source(PreviewSyncMode::RenderNow);
-                self.persist_workbench_layout()?;
-            }
-            AppAction::CreateDirectory { parent, name } => {
-                self.flush_autosave()?;
-                self.workspace.create_directory(parent, &name)?;
-                self.refresh_project_entries()?;
-                self.refresh_analysis()?;
-                self.sync_preview_source(PreviewSyncMode::RenderNow);
-            }
-            AppAction::RenamePath { path, new_name } => {
-                self.flush_autosave()?;
-                let moves = self.workspace.rename_path(path.clone(), &new_name)?;
-                self.refresh_project_entries()?;
-                self.editors.reconcile_moved_paths(&moves);
-                self.refresh_analysis()?;
-                self.sync_preview_source(PreviewSyncMode::RenderNow);
-                self.persist_workbench_layout()?;
-            }
-            AppAction::DeletePath(path) => {
-                self.flush_autosave()?;
-                self.workspace.delete_path(path.clone())?;
-                self.refresh_project_entries()?;
-                self.editors.reconcile_deleted_path(&path);
-                self.refresh_analysis()?;
-                self.sync_preview_source(PreviewSyncMode::RenderNow);
-                self.persist_workbench_layout()?;
-            }
-            AppAction::ToggleProjectTree => {
-                self.workbench_layout.project_tree_visible =
-                    !self.workbench_layout.project_tree_visible;
-                save_workbench_layout(&self.workbench_layout)?;
-            }
-            AppAction::SetEffectPreviewEnabled(enabled) => {
-                self.workbench_layout.effect_preview_enabled = enabled;
-                save_workbench_layout(&self.workbench_layout)?;
-                if !enabled {
-                    self.preview.clear_effect_preview(self.analysis.as_ref());
-                } else {
-                    self.preview.render_current_frame(self.analysis.as_ref());
-                }
-            }
-            AppAction::SetEffectPreviewEffects(ids) => {
-                let ids = if self.workbench_layout.effect_preview_enabled {
-                    ids
-                } else {
-                    Vec::new()
-                };
-                self.preview
-                    .set_effect_preview_ids(ids, self.analysis.as_ref());
-            }
-            AppAction::PreviewPlay => {
-                if self.workbench_layout.effect_preview_enabled {
-                    self.workbench_layout.effect_preview_enabled = false;
-                    save_workbench_layout(&self.workbench_layout)?;
-                    self.preview.clear_effect_preview(self.analysis.as_ref());
-                }
-                self.preview.play(self.analysis.as_ref());
-                self.status = "Preview playing".to_string();
-            }
-            AppAction::PreviewPause => {
-                self.preview.pause(self.analysis.as_ref());
-                self.status = "Preview paused".to_string();
-            }
-            AppAction::PreviewStop => {
-                self.preview.stop(self.analysis.as_ref());
-                self.status = "Preview stopped".to_string();
-            }
-            AppAction::PreviewRewindToZero => {
-                self.preview
-                    .go_to_sequence_beginning(self.analysis.as_ref());
-                self.status = "Preview rewound".to_string();
-            }
-            AppAction::PreviewSeek(position_seconds) => {
-                self.preview.seek(position_seconds, self.analysis.as_ref());
-                self.status = "Preview seeked".to_string();
-            }
+    pub fn reload_project(&mut self) -> Result<(), String> {
+        let paths = self
+            .editors
+            .buffers()
+            .into_iter()
+            .map(|buffer| buffer.path)
+            .collect();
+        self.reconcile_filesystem_changes(paths)?;
+        self.status = "Project checked".to_string();
+        Ok(())
+    }
+
+    pub fn apply_sequence_gui_edit_and_autosave(
+        &mut self,
+        edit: SequenceGuiEditDto,
+    ) -> Result<(), String> {
+        self.apply_sequence_gui_edit(edit)?;
+        self.flush_autosave_without_analysis()?;
+        self.status = "Autosaved".to_string();
+        Ok(())
+    }
+
+    pub fn apply_layout_gui_edit_and_autosave(
+        &mut self,
+        edit: LayoutGuiEditDto,
+    ) -> Result<(), String> {
+        self.apply_layout_gui_edit(edit)?;
+        self.flush_autosave()?;
+        self.status = "Autosaved".to_string();
+        Ok(())
+    }
+
+    pub fn apply_fixture_gui_edit_and_autosave(
+        &mut self,
+        edit: FixtureGuiEditDto,
+    ) -> Result<(), String> {
+        self.apply_fixture_gui_edit(edit)?;
+        self.flush_autosave()?;
+        self.status = "Autosaved".to_string();
+        Ok(())
+    }
+
+    pub fn flush_autosave_command(&mut self) -> Result<(), String> {
+        self.flush_autosave()?;
+        self.status = "Saved".to_string();
+        Ok(())
+    }
+
+    pub fn handle_filesystem_changes(&mut self, paths: Vec<Utf8PathBuf>) -> Result<(), String> {
+        self.reconcile_filesystem_changes(paths)?;
+        self.status = "Filesystem refreshed".to_string();
+        Ok(())
+    }
+
+    pub fn reload_active_buffer_from_disk_command(&mut self) -> Result<(), String> {
+        self.reload_active_buffer_from_disk()?;
+        self.status = "Reloaded from disk".to_string();
+        Ok(())
+    }
+
+    pub fn keep_active_buffer_command(&mut self) -> Result<(), String> {
+        self.keep_active_buffer()?;
+        self.status = "Kept IDE changes".to_string();
+        Ok(())
+    }
+
+    pub fn create_directory(&mut self, parent: Utf8PathBuf, name: String) -> Result<(), String> {
+        self.flush_autosave()?;
+        self.workspace.create_directory(parent, &name)?;
+        self.refresh_project_entries()?;
+        self.refresh_analysis()?;
+        self.sync_preview_source(PreviewSyncMode::RenderNow);
+        Ok(())
+    }
+
+    pub fn rename_path(&mut self, path: Utf8PathBuf, new_name: String) -> Result<(), String> {
+        self.flush_autosave()?;
+        let moves = self.workspace.rename_path(path.clone(), &new_name)?;
+        self.refresh_project_entries()?;
+        self.editors.reconcile_moved_paths(&moves);
+        self.refresh_analysis()?;
+        self.sync_preview_source(PreviewSyncMode::RenderNow);
+        self.persist_workbench_layout()
+    }
+
+    pub fn delete_path(&mut self, path: Utf8PathBuf) -> Result<(), String> {
+        self.flush_autosave()?;
+        self.workspace.delete_path(path.clone())?;
+        self.refresh_project_entries()?;
+        self.editors.reconcile_deleted_path(&path);
+        self.refresh_analysis()?;
+        self.sync_preview_source(PreviewSyncMode::RenderNow);
+        self.persist_workbench_layout()
+    }
+
+    pub fn toggle_project_tree(&mut self) -> Result<(), String> {
+        self.workbench_layout.project_tree_visible = !self.workbench_layout.project_tree_visible;
+        save_workbench_layout(&self.workbench_layout)
+    }
+
+    pub fn set_effect_preview_enabled(&mut self, enabled: bool) -> Result<(), String> {
+        self.workbench_layout.effect_preview_enabled = enabled;
+        save_workbench_layout(&self.workbench_layout)?;
+        if !enabled {
+            self.preview.clear_effect_preview(self.analysis.as_ref());
+        } else {
+            self.preview.render_current_frame(self.analysis.as_ref());
         }
-        Ok(DispatchOutcome::SnapshotChanged)
+        Ok(())
+    }
+
+    pub fn set_effect_preview_effects(&mut self, ids: Vec<u32>) {
+        let ids = if self.workbench_layout.effect_preview_enabled {
+            ids
+        } else {
+            Vec::new()
+        };
+        self.preview
+            .set_effect_preview_ids(ids, self.analysis.as_ref());
+    }
+
+    pub fn preview_play(&mut self) -> Result<(), String> {
+        if self.workbench_layout.effect_preview_enabled {
+            self.workbench_layout.effect_preview_enabled = false;
+            save_workbench_layout(&self.workbench_layout)?;
+            self.preview.clear_effect_preview(self.analysis.as_ref());
+        }
+        self.preview.play(self.analysis.as_ref());
+        self.status = "Preview playing".to_string();
+        Ok(())
+    }
+
+    pub fn preview_pause(&mut self) {
+        self.preview.pause(self.analysis.as_ref());
+        self.status = "Preview paused".to_string();
+    }
+
+    pub fn preview_stop(&mut self) {
+        self.preview.stop(self.analysis.as_ref());
+        self.status = "Preview stopped".to_string();
+    }
+
+    pub fn preview_rewind_to_zero(&mut self) {
+        self.preview
+            .go_to_sequence_beginning(self.analysis.as_ref());
+        self.status = "Preview rewound".to_string();
+    }
+
+    pub fn preview_seek(&mut self, position_seconds: f64) {
+        self.preview.seek(position_seconds, self.analysis.as_ref());
+        self.status = "Preview seeked".to_string();
     }
 
     pub fn tick_preview(&mut self) {
@@ -1214,7 +1163,6 @@ impl AppModel {
                     self.copy_sequence_selection(&before, &before_document, &selection)?;
                 self.status = format!("Copied {copied_count}");
                 return Ok(SequenceSelectionEditResultDto {
-                    snapshot: self.snapshot_dto(),
                     selection: Some(selection),
                     copied_count,
                     skipped_count,
@@ -1283,9 +1231,7 @@ impl AppModel {
 
         self.apply_sequence_document_edit(document_edit)?;
         self.flush_autosave_without_analysis()?;
-        let snapshot = self.snapshot_dto();
         Ok(SequenceSelectionEditResultDto {
-            snapshot,
             selection: resulting_selection,
             copied_count,
             skipped_count,

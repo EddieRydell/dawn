@@ -3,7 +3,7 @@ use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalSize, Position, Size, WebviewWindow, WindowEvent,
 };
 
-use crate::state::{lock_model, AppState, CommandResult};
+use crate::state::{lock_runtime, AppState, CommandResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WorkbenchWindow {
@@ -25,7 +25,7 @@ pub(crate) fn restore_main_window_layout(app: &AppHandle) -> CommandResult<()> {
         .get_webview_window(WorkbenchWindow::Main.label())
         .ok_or_else(|| "main window is not open".to_string())?;
     let state = app.state::<AppState>();
-    let layout = lock_model(&state)?.workbench_layout.main_window.clone();
+    let layout = lock_runtime(&state)?.workbench_layout.main_window.clone();
     apply_window_layout(&window, &layout)
 }
 
@@ -62,7 +62,7 @@ pub(crate) fn persist_window_layout(app: &AppHandle, target: WorkbenchWindow) {
         return;
     };
     let state = app.state::<AppState>();
-    if let Ok(mut model) = lock_model(&state) {
+    if let Ok(mut model) = lock_runtime(&state) {
         match target {
             WorkbenchWindow::Main => {
                 let _ = model.set_main_window_layout(layout);

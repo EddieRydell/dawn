@@ -1,59 +1,26 @@
-use dawn_app_core::actions::AppAction;
-use dawn_app_core::app_model::{AppModel, DispatchOutcome};
 use dawn_app_core::dto::{PreviewSnapshotDto, RuntimeStateDto};
 use dawn_app_core::preview_session::{AudioPlaybackStatus, PreviewSnapshot};
+use dawn_app_core::runtime_state::RuntimeState;
 use dawn_project::document::SequenceAudioDocument;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::audio_runtime::AudioClock;
 use crate::preview::{PreviewStateEventDto, PreviewTimingDto};
-use crate::state::{
-    lock_audio_runtime, lock_filesystem_watcher, lock_model, AppState, CommandResult,
-};
-
-pub(crate) fn dispatch(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    action: AppAction,
-) -> CommandResult<RuntimeStateDto> {
-    let clear_audio_runtime = should_clear_audio_runtime_for_action(&action);
-    let mut model = lock_model(state)?;
-    let outcome = model.dispatch(action)?;
-    let snapshot = model.snapshot_dto();
-    if outcome == DispatchOutcome::SnapshotChanged {
-        if let Ok(mut watcher) = lock_filesystem_watcher(state) {
-            let _ = watcher.sync_project_root(app, snapshot.project_root.clone());
-        }
-        if clear_audio_runtime {
-            if let Ok(runtime) = lock_audio_runtime(state) {
-                runtime.clear();
-            }
-        }
-        preload_active_preview_audio(state, &snapshot.preview);
-        app.emit("runtime_state_changed", &snapshot)
-            .map_err(|error| error.to_string())?;
-        emit_preview_state_dto(app, &snapshot)?;
-    }
-    Ok(snapshot)
-}
-
-fn should_clear_audio_runtime_for_action(action: &AppAction) -> bool {
-    matches!(action, AppAction::OpenProject(_))
-}
+use crate::state::{lock_audio_runtime, lock_runtime, AppState, CommandResult};
 
 pub(crate) fn update_preview_from_audio_status(
     app: &AppHandle,
     state: &State<'_, AppState>,
     clock: AudioClock,
 ) -> CommandResult<RuntimeStateDto> {
-    let mut model = lock_model(state)?;
+    let mut model = lock_runtime(state)?;
     let analysis = model.analysis.clone();
     apply_audio_clock_to_model(&mut model, &clock, analysis.as_ref());
-    emit_model_snapshot(app, &model)
+    emit_runtime_snapshot(app, &model)
 }
 
 pub(crate) fn apply_audio_clock_to_model(
-    model: &mut AppModel,
+    model: &mut RuntimeState,
     clock: &AudioClock,
     analysis: Option<&dawn_project::analysis::ProjectAnalysis>,
 ) {
@@ -162,9 +129,9 @@ pub(crate) fn preload_active_preview_audio(
     }
 }
 
-pub(crate) fn emit_model_snapshot(
+pub(crate) fn emit_runtime_snapshot(
     app: &AppHandle,
-    model: &AppModel,
+    model: &RuntimeState,
 ) -> CommandResult<RuntimeStateDto> {
     let snapshot = model.snapshot_dto();
     app.emit("runtime_state_changed", &snapshot)

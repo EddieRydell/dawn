@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use dawn_app_core::app_model::AppModel;
 use dawn_project::path::Utf8PathBuf;
 use tauri::State;
 
@@ -13,7 +12,6 @@ use crate::preview_transport::PreviewTransportRuntime;
 use crate::runtime_host::RuntimeHost;
 
 pub(crate) struct AppState {
-    pub(crate) model: Mutex<AppModel>,
     audio_runtime: Mutex<AudioRuntime>,
     effect_preview_runtime: Mutex<EffectPreviewRuntime>,
     preview_transport: Mutex<PreviewTransportRuntime>,
@@ -27,7 +25,6 @@ pub(crate) struct AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self {
-            model: Mutex::new(AppModel::default()),
             audio_runtime: Mutex::new(AudioRuntime::default()),
             effect_preview_runtime: Mutex::new(EffectPreviewRuntime::default()),
             preview_transport: Mutex::new(PreviewTransportRuntime::default()),
@@ -55,15 +52,6 @@ impl AppState {
 }
 
 pub(crate) type CommandResult<T> = Result<T, String>;
-
-pub(crate) fn lock_model<'a>(
-    state: &'a State<'_, AppState>,
-) -> CommandResult<MutexGuard<'a, AppModel>> {
-    state
-        .model
-        .lock()
-        .map_err(|_| "application state lock is poisoned".to_string())
-}
 
 pub(crate) fn lock_audio_runtime<'a>(
     state: &'a State<'_, AppState>,

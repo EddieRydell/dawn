@@ -52,7 +52,7 @@ pub fn run() -> Result<(), tauri::Error> {
                 let _ = runtime.drain_events();
                 let _ = runtime.read_models();
             }
-            if let Ok(model) = state::lock_model(&state) {
+            if let Ok(model) = state::lock_runtime(&state) {
                 let root = model.snapshot_dto().project_root;
                 drop(model);
                 if let Ok(mut watcher) = state::lock_filesystem_watcher(&state) {

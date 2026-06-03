@@ -1,7 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { commands } from "./api";
-import type { RuntimeStateDto } from "./bindings";
+import type { RuntimeCommandResultDto, RuntimeStateDto } from "./bindings";
 
 type AppStore = {
   runtimeState: RuntimeStateDto | null;
@@ -47,8 +47,11 @@ export async function subscribeToRuntimeState() {
 export async function runRuntimeCommand<T>(command: () => Promise<T>) {
   try {
     const result = await command();
-    const runtimeState = isRuntimeState(result) ? result : await commands.getRuntimeState();
-    useAppStore.getState().setRuntimeState(runtimeState);
+    if (isRuntimeState(result)) {
+      useAppStore.getState().setRuntimeState(result);
+    } else if (isRuntimeCommandResult(result) && result === "changed") {
+      useAppStore.getState().setRuntimeState(await commands.getRuntimeState());
+    }
     useAppStore.getState().setError(null);
     return result;
   } catch (error) {
@@ -59,4 +62,8 @@ export async function runRuntimeCommand<T>(command: () => Promise<T>) {
 
 function isRuntimeState(value: unknown): value is RuntimeStateDto {
   return typeof value === "object" && value !== null && "activeBuffer" in value && "preview" in value;
+}
+
+function isRuntimeCommandResult(value: unknown): value is RuntimeCommandResultDto {
+  return value === "changed" || value === "unchanged";
 }

@@ -3,12 +3,11 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
-use dawn_app_core::actions::AppAction;
 use dawn_project::path::{utf8_path, Utf8PathBuf};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use tauri::{AppHandle, Manager};
 
-use crate::app_runtime::dispatch;
+use crate::app_runtime::emit_runtime_snapshot;
 use crate::state::AppState;
 
 #[derive(Default)]
@@ -64,7 +63,14 @@ impl FilesystemWatcherRuntime {
                         let paths = pending.iter().cloned().collect::<Vec<_>>();
                         pending.clear();
                         let state = app.state::<AppState>();
-                        let _ = dispatch(&app, &state, AppAction::FilesystemChanged(paths));
+                        {
+                            let Ok(mut model) = crate::state::lock_runtime(&state) else {
+                                continue;
+                            };
+                            if model.handle_filesystem_changes(paths).is_ok() {
+                                let _ = emit_runtime_snapshot(&app, &model);
+                            }
+                        }
                     }
                     Err(RecvTimeoutError::Disconnected) => break,
                 }

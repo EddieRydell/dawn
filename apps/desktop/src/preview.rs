@@ -18,7 +18,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder
 use crate::app_runtime::{apply_audio_clock_to_model, emit_preview_state_snapshot};
 use crate::audio_runtime::AudioClock;
 use crate::state::{
-    lock_audio_runtime, lock_live_output, lock_model, lock_preview_transport, AppState,
+    lock_audio_runtime, lock_live_output, lock_preview_transport, lock_runtime, AppState,
     CommandResult,
 };
 use crate::window_layout::{persist_window_layout, WorkbenchWindow};
@@ -267,7 +267,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             timing.event_emit_ms = last_event_emit_ms;
             let model_lock_started = Instant::now();
             let (mut snapshot, mut target_fps, mut analysis, deferred_request) =
-                match lock_model(&state) {
+                match lock_runtime(&state) {
                     Ok(mut model) => {
                         timing.model_lock_wait_ms = elapsed_ms(model_lock_started);
                         let model_started = Instant::now();
@@ -360,7 +360,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                 record_render_timing(&mut timing, result.timing);
                 timing.rendered_frame = true;
                 let model_lock_started = Instant::now();
-                if let Ok(mut model) = lock_model(&state) {
+                if let Ok(mut model) = lock_runtime(&state) {
                     timing.model_lock_wait_ms += elapsed_ms(model_lock_started);
                     let model_started = Instant::now();
                     let _completed = model.complete_deferred_preview_render(result);
@@ -489,7 +489,7 @@ fn publish_live_output_frame(
         Ok(mut runtime) => runtime.send_frame(analysis, frame),
         Err(_) => return,
     };
-    let Ok(mut model) = lock_model(state) else {
+    let Ok(mut model) = lock_runtime(state) else {
         return;
     };
     if model.live_output != snapshot {
@@ -552,7 +552,7 @@ pub(crate) fn open_preview_window_on_startup(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
-    let should_open = lock_model(&state)?.workbench_layout.preview_window_open;
+    let should_open = lock_runtime(&state)?.workbench_layout.preview_window_open;
     if should_open {
         open_preview_window(app, state, false)?;
     }
@@ -573,7 +573,7 @@ fn open_preview_window(
     }
 
     let layout = {
-        let mut model = lock_model(&state)?;
+        let mut model = lock_runtime(&state)?;
         model.set_preview_window_open(true)?;
         model.workbench_layout.preview_window.clone()
     };
@@ -612,7 +612,7 @@ fn open_preview_window(
 
 fn persist_preview_window_open(app: &AppHandle, open: bool) {
     let state = app.state::<AppState>();
-    if let Ok(mut model) = lock_model(&state) {
+    if let Ok(mut model) = lock_runtime(&state) {
         let _ = model.set_preview_window_open(open);
     };
 }
