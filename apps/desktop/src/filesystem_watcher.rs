@@ -7,7 +7,7 @@ use dawn_project::path::{utf8_path, Utf8PathBuf};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use tauri::{AppHandle, Manager};
 
-use crate::app_runtime::emit_runtime_snapshot;
+use crate::app_runtime::emit_runtime_read_models;
 use crate::state::AppState;
 
 #[derive(Default)]
@@ -68,7 +68,7 @@ impl FilesystemWatcherRuntime {
                                 continue;
                             };
                             if model.handle_filesystem_changes(paths).is_ok() {
-                                let _ = emit_runtime_snapshot(&app, &model);
+                                let _ = emit_runtime_read_models(&app, &model);
                             }
                         }
                     }

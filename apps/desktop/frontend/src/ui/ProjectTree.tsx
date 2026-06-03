@@ -5,7 +5,8 @@ import { useMemo, useState, type CSSProperties } from "react";
 import type { NodeApi } from "react-arborist";
 import { Tree } from "react-arborist";
 import { commands } from "../api";
-import type { RuntimeStateDto, ProjectDiagnosticDto, WorkspaceEntryDto } from "../bindings";
+import type { ProjectDiagnosticDto, WorkspaceEntryDto } from "../bindings";
+import type { RuntimeUiState } from "../store";
 import { runRuntimeCommand } from "../store";
 
 type TreeNode = {
@@ -16,7 +17,7 @@ type TreeNode = {
   children?: TreeNode[];
 };
 
-export function ProjectTree({ snapshot }: { snapshot: RuntimeStateDto }) {
+export function ProjectTree({ snapshot }: { snapshot: RuntimeUiState }) {
   const treeData = useMemo(
     () => buildTree(snapshot.projectEntries, snapshot.diagnostics, snapshot.projectRoot),
     [snapshot.diagnostics, snapshot.projectEntries, snapshot.projectRoot]

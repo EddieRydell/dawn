@@ -9,17 +9,18 @@ import { tags } from "@lezer/highlight";
 import { RefreshCw, Save, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { commands } from "../api";
-import type { RuntimeStateDto, ProjectDiagnosticDto, SequenceSelectionDto, TextRangeDto } from "../bindings";
+import type { ProjectDiagnosticDto, SequenceSelectionDto, TextRangeDto } from "../bindings";
+import type { RuntimeUiState } from "../store";
 import { commandRegistry } from "../commandRegistry";
 import { runRuntimeCommand, useAppStore } from "../store";
 import { GuiEditor } from "./gui/GuiEditor";
 import { SequenceTransportControls } from "./gui/sequence/SequenceTransportControls";
 
 type BufferExternalState = "current" | "changedOnDisk" | "deletedOnDisk";
-type EditorBufferWithExternalState = NonNullable<RuntimeStateDto["activeBuffer"]>;
+type EditorBufferWithExternalState = NonNullable<RuntimeUiState["activeBuffer"]>;
 type PathSelection = { path: string | null; selection: SequenceSelectionDto | null };
 
-export function EditorPane({ snapshot }: { snapshot: RuntimeStateDto }) {
+export function EditorPane({ snapshot }: { snapshot: RuntimeUiState }) {
   const { localText, setLocalText } = useAppStore();
   const editorHost = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
@@ -413,7 +414,7 @@ function activeBufferExternalState(buffer: EditorBufferWithExternalState | null)
   return buffer?.externalState ?? "current";
 }
 
-function tabExternalState(tab: RuntimeStateDto["tabs"][number]): BufferExternalState {
+function tabExternalState(tab: RuntimeUiState["tabs"][number]): BufferExternalState {
   return tab.externalState;
 }
 

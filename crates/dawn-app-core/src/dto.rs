@@ -31,20 +31,70 @@ use crate::runtime_state::{ActiveGuiDocument, AppSnapshot, LiveOutputSnapshot};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct RuntimeStateDto {
+pub struct RuntimeReadModelsDto {
+    pub workspace: WorkspaceReadModelDto,
+    pub editor: EditorReadModelDto,
+    pub active_document: ActiveDocumentReadModelDto,
+    pub diagnostics: DiagnosticsReadModelDto,
+    pub preview: PreviewReadModelDto,
+    pub live_output: LiveOutputReadModelDto,
+    pub status: StatusReadModelDto,
+    pub prefs: PrefsReadModelDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceReadModelDto {
     pub project_root: Option<String>,
     pub project_tree_visible: bool,
     pub project_entries: Vec<WorkspaceEntryDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorReadModelDto {
     pub tabs: Vec<EditorBufferDto>,
     pub active_file: Option<String>,
     pub active_buffer: Option<EditorBufferDto>,
-    pub active_document_descriptor: Option<DocumentDescriptorDto>,
-    pub active_gui_document: Option<ActiveGuiDocumentDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveDocumentReadModelDto {
+    pub descriptor: Option<DocumentDescriptorDto>,
+    pub gui_document: Option<ActiveGuiDocumentDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsReadModelDto {
     pub diagnostics: Vec<ProjectDiagnosticDto>,
-    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewReadModelDto {
     pub preview: PreviewSnapshotDto,
     pub effect_preview_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveOutputReadModelDto {
     pub live_output: LiveOutputSnapshotDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusReadModelDto {
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PrefsReadModelDto {
+    pub project_tree_visible: bool,
+    pub effect_preview_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
@@ -773,48 +823,68 @@ pub struct LiveOutputSnapshotDto {
     pub last_error: Option<String>,
 }
 
-impl From<AppSnapshot> for RuntimeStateDto {
+impl From<AppSnapshot> for RuntimeReadModelsDto {
     fn from(snapshot: AppSnapshot) -> Self {
+        let project_tree_visible = snapshot.workbench_layout.project_tree_visible;
+        let effect_preview_enabled = snapshot.workbench_layout.effect_preview_enabled;
         Self {
-            project_root: snapshot.project_root,
-            project_tree_visible: snapshot.workbench_layout.project_tree_visible,
-            project_entries: snapshot
-                .project_entries
-                .into_iter()
-                .map(WorkspaceEntryDto::from)
-                .collect(),
-            tabs: snapshot
-                .tabs
-                .into_iter()
-                .map(EditorBufferDto::from)
-                .collect(),
-            active_file: snapshot.active_file.map(|path| path.to_slash_string()),
-            active_buffer: snapshot.active_buffer.map(EditorBufferDto::from),
-            active_document_descriptor: snapshot
-                .active_document_descriptor
-                .map(DocumentDescriptorDto::from),
-            active_gui_document: snapshot.active_gui_document.map(ActiveGuiDocumentDto::from),
-            diagnostics: snapshot
-                .diagnostics
-                .into_iter()
-                .map(ProjectDiagnosticDto::from)
-                .collect(),
-            status: snapshot.status,
-            preview: PreviewSnapshotDto {
-                source_label: snapshot.preview.source_label,
-                is_playing: snapshot.preview.is_playing,
-                preview_updating: snapshot.preview.preview_updating,
-                effect_preview_active: snapshot.preview.effect_preview_active,
-                position_seconds: snapshot.preview.position_seconds,
-                home_seconds: snapshot.preview.home_seconds,
-                duration_seconds: snapshot.preview.duration_seconds,
-                audio: snapshot.preview.audio.map(SequenceAudioDto::from),
-                clock_source: snapshot.preview.clock_source,
-                audio_playback_status: snapshot.preview.audio_playback_status,
-                status: snapshot.preview.status,
+            workspace: WorkspaceReadModelDto {
+                project_root: snapshot.project_root,
+                project_tree_visible,
+                project_entries: snapshot
+                    .project_entries
+                    .into_iter()
+                    .map(WorkspaceEntryDto::from)
+                    .collect(),
             },
-            effect_preview_enabled: snapshot.workbench_layout.effect_preview_enabled,
-            live_output: snapshot.live_output.into(),
+            editor: EditorReadModelDto {
+                tabs: snapshot
+                    .tabs
+                    .into_iter()
+                    .map(EditorBufferDto::from)
+                    .collect(),
+                active_file: snapshot.active_file.map(|path| path.to_slash_string()),
+                active_buffer: snapshot.active_buffer.map(EditorBufferDto::from),
+            },
+            active_document: ActiveDocumentReadModelDto {
+                descriptor: snapshot
+                    .active_document_descriptor
+                    .map(DocumentDescriptorDto::from),
+                gui_document: snapshot.active_gui_document.map(ActiveGuiDocumentDto::from),
+            },
+            diagnostics: DiagnosticsReadModelDto {
+                diagnostics: snapshot
+                    .diagnostics
+                    .into_iter()
+                    .map(ProjectDiagnosticDto::from)
+                    .collect(),
+            },
+            preview: PreviewReadModelDto {
+                preview: PreviewSnapshotDto {
+                    source_label: snapshot.preview.source_label,
+                    is_playing: snapshot.preview.is_playing,
+                    preview_updating: snapshot.preview.preview_updating,
+                    effect_preview_active: snapshot.preview.effect_preview_active,
+                    position_seconds: snapshot.preview.position_seconds,
+                    home_seconds: snapshot.preview.home_seconds,
+                    duration_seconds: snapshot.preview.duration_seconds,
+                    audio: snapshot.preview.audio.map(SequenceAudioDto::from),
+                    clock_source: snapshot.preview.clock_source,
+                    audio_playback_status: snapshot.preview.audio_playback_status,
+                    status: snapshot.preview.status,
+                },
+                effect_preview_enabled,
+            },
+            live_output: LiveOutputReadModelDto {
+                live_output: snapshot.live_output.into(),
+            },
+            status: StatusReadModelDto {
+                status: snapshot.status,
+            },
+            prefs: PrefsReadModelDto {
+                project_tree_visible,
+                effect_preview_enabled,
+            },
         }
     }
 }

@@ -12,7 +12,7 @@ async function unwrap<T>(result: GeneratedResult<T>): Promise<T> {
 }
 
 export const commands = {
-  getRuntimeState: () => unwrap(generatedCommands.getRuntimeState()),
+  getRuntimeReadModels: () => unwrap(generatedCommands.getRuntimeReadModels()),
   openProjectDialog: () => unwrap(generatedCommands.openProjectDialog()),
   openProject: (path: string) => unwrap(generatedCommands.openProject(path)),
   chooseNewProjectParentDirectory: () => unwrap(generatedCommands.chooseNewProjectParentDirectory()),

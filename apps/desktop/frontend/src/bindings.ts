@@ -4,7 +4,7 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 
 /** Commands */
 export const commands = {
-	getRuntimeState: () => typedError<RuntimeStateDto, string>(__TAURI_INVOKE("get_runtime_state")),
+	getRuntimeReadModels: () => typedError<RuntimeReadModelsDto, string>(__TAURI_INVOKE("get_runtime_read_models")),
 	openProjectDialog: () => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("open_project_dialog")),
 	openProject: (path: string) => typedError<RuntimeCommandResultDto, string>(__TAURI_INVOKE("open_project", { path })),
 	chooseNewProjectParentDirectory: () => typedError<string | null, string>(__TAURI_INVOKE("choose_new_project_parent_directory")),
@@ -50,6 +50,11 @@ export const commands = {
 };
 
 /* Types */
+export type ActiveDocumentReadModelDto = {
+	descriptor: DocumentDescriptorDto | null,
+	guiDocument: ActiveGuiDocumentDto | null,
+};
+
 export type ActiveGuiDocumentDto = { type: "sequence"; document: SequenceDocumentDto } | { type: "layout"; document: LayoutDocumentDto } | { type: "fixture"; document: FixtureDocumentDto } | { type: "blocked"; reason: string; diagnostics: ProjectDiagnosticDto[] };
 
 export type AudioPlaybackStatus = "none" | "missing" | "loading" | "loading_to_play" | "ready" | "playing" | "ended" | "error";
@@ -62,6 +67,10 @@ export type ColorCurvePointDto = {
 };
 
 export type DiagnosticSeverityDto = "error" | "warning";
+
+export type DiagnosticsReadModelDto = {
+	diagnostics: ProjectDiagnosticDto[],
+};
 
 export type DocumentDefaultObjectKeyDto = {
 	view: DocumentViewIdDto,
@@ -89,6 +98,12 @@ export type EditorBufferDto = {
 	dirty: boolean,
 	externalState: BufferExternalStateDto,
 	viewMode: EditorViewModeDto,
+};
+
+export type EditorReadModelDto = {
+	tabs: EditorBufferDto[],
+	activeFile: string | null,
+	activeBuffer: EditorBufferDto | null,
 };
 
 export type EditorViewModeDto = "text" | "gui";
@@ -169,6 +184,10 @@ export type LayoutTargetDto = {
 
 export type LayoutTargetKindDto = "group" | "fixture";
 
+export type LiveOutputReadModelDto = {
+	liveOutput: LiveOutputSnapshotDto,
+};
+
 export type LiveOutputSnapshotDto = {
 	enabled: boolean,
 	status: string,
@@ -182,6 +201,16 @@ export type Point3MetersDto = {
 	xMeters: number,
 	yMeters: number,
 	zMeters: number,
+};
+
+export type PrefsReadModelDto = {
+	projectTreeVisible: boolean,
+	effectPreviewEnabled: boolean,
+};
+
+export type PreviewReadModelDto = {
+	preview: PreviewSnapshotDto,
+	effectPreviewEnabled: boolean,
 };
 
 export type PreviewSceneDto = {
@@ -242,20 +271,15 @@ export type Rotation3DegreesDto = {
 
 export type RuntimeCommandResultDto = "changed" | "unchanged";
 
-export type RuntimeStateDto = {
-	projectRoot: string | null,
-	projectTreeVisible: boolean,
-	projectEntries: WorkspaceEntryDto[],
-	tabs: EditorBufferDto[],
-	activeFile: string | null,
-	activeBuffer: EditorBufferDto | null,
-	activeDocumentDescriptor: DocumentDescriptorDto | null,
-	activeGuiDocument: ActiveGuiDocumentDto | null,
-	diagnostics: ProjectDiagnosticDto[],
-	status: string,
-	preview: PreviewSnapshotDto,
-	effectPreviewEnabled: boolean,
-	liveOutput: LiveOutputSnapshotDto,
+export type RuntimeReadModelsDto = {
+	workspace: WorkspaceReadModelDto,
+	editor: EditorReadModelDto,
+	activeDocument: ActiveDocumentReadModelDto,
+	diagnostics: DiagnosticsReadModelDto,
+	preview: PreviewReadModelDto,
+	liveOutput: LiveOutputReadModelDto,
+	status: StatusReadModelDto,
+	prefs: PrefsReadModelDto,
 };
 
 export type Scale3Dto = {
@@ -424,6 +448,10 @@ export type SequenceSelectionEditResultDto = {
 	skippedCount: number,
 };
 
+export type StatusReadModelDto = {
+	status: string,
+};
+
 export type TextPositionDto = {
 	line: number,
 	character: number,
@@ -448,6 +476,12 @@ export type WorkspaceEntryDto = {
 };
 
 export type WorkspaceEntryKindDto = "directory" | "file";
+
+export type WorkspaceReadModelDto = {
+	projectRoot: string | null,
+	projectTreeVisible: boolean,
+	projectEntries: WorkspaceEntryDto[],
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

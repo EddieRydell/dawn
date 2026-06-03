@@ -10,7 +10,6 @@ use dawn_project::parse::parse_dawn_file_with_source_map;
 use dawn_project::path::Utf8PathBuf;
 use std::path::PathBuf;
 
-use crate::dto::RuntimeStateDto;
 use crate::dto::{
     FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto, SequenceMarkRefDto,
     SequencePasteAnchorDto, SequenceResizeEdgeDto, SequenceSelectionDto, SequenceSelectionEditDto,
@@ -301,10 +300,6 @@ impl RuntimeState {
             active_gui_document,
             status: self.status.clone(),
         }
-    }
-
-    pub fn snapshot_dto(&self) -> RuntimeStateDto {
-        self.snapshot().into()
     }
 
     pub fn prepare_for_runtime_project_open(&mut self) -> Result<(), String> {

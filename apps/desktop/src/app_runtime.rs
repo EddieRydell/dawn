@@ -1,4 +1,4 @@
-use dawn_app_core::dto::{PreviewSnapshotDto, RuntimeStateDto};
+use dawn_app_core::dto::{PreviewSnapshotDto, RuntimeReadModelsDto};
 use dawn_app_core::preview_session::{AudioPlaybackStatus, PreviewSnapshot};
 use dawn_app_core::runtime_state::RuntimeState;
 use dawn_project::document::SequenceAudioDocument;
@@ -12,11 +12,11 @@ pub(crate) fn update_preview_from_audio_status(
     app: &AppHandle,
     state: &State<'_, AppState>,
     clock: AudioClock,
-) -> CommandResult<RuntimeStateDto> {
+) -> CommandResult<RuntimeReadModelsDto> {
     let mut model = lock_runtime(state)?;
     let analysis = model.analysis.clone();
     apply_audio_clock_to_model(&mut model, &clock, analysis.as_ref());
-    emit_runtime_snapshot(app, &model)
+    emit_runtime_read_models(app, &model)
 }
 
 pub(crate) fn apply_audio_clock_to_model(
@@ -129,35 +129,53 @@ pub(crate) fn preload_active_preview_audio(
     }
 }
 
-pub(crate) fn emit_runtime_snapshot(
+pub(crate) fn emit_runtime_read_models(
     app: &AppHandle,
     model: &RuntimeState,
-) -> CommandResult<RuntimeStateDto> {
-    let snapshot = model.snapshot_dto();
-    app.emit("runtime_state_changed", &snapshot)
+) -> CommandResult<RuntimeReadModelsDto> {
+    let read_models = RuntimeReadModelsDto::from(model.snapshot());
+    app.emit("runtime_workspace_changed", &read_models.workspace)
         .map_err(|error| error.to_string())?;
-    emit_preview_state_dto(app, &snapshot)?;
-    Ok(snapshot)
+    app.emit("runtime_editor_changed", &read_models.editor)
+        .map_err(|error| error.to_string())?;
+    app.emit(
+        "runtime_active_document_changed",
+        &read_models.active_document,
+    )
+    .map_err(|error| error.to_string())?;
+    app.emit("runtime_diagnostics_changed", &read_models.diagnostics)
+        .map_err(|error| error.to_string())?;
+    app.emit("runtime_preview_changed", &read_models.preview)
+        .map_err(|error| error.to_string())?;
+    app.emit("runtime_live_output_changed", &read_models.live_output)
+        .map_err(|error| error.to_string())?;
+    app.emit("runtime_status_changed", &read_models.status)
+        .map_err(|error| error.to_string())?;
+    app.emit("runtime_prefs_changed", &read_models.prefs)
+        .map_err(|error| error.to_string())?;
+    emit_preview_state_dto(app, &read_models)?;
+    Ok(read_models)
 }
 
 pub(crate) fn emit_preview_state_dto(
     app: &AppHandle,
-    snapshot: &RuntimeStateDto,
+    read_models: &RuntimeReadModelsDto,
 ) -> CommandResult<()> {
+    let snapshot = &read_models.preview.preview;
     app.emit(
         "preview_state_changed",
         PreviewStateEventDto {
-            source_label: snapshot.preview.source_label.clone(),
-            is_playing: snapshot.preview.is_playing,
-            preview_updating: snapshot.preview.preview_updating,
-            effect_preview_active: snapshot.preview.effect_preview_active,
-            position_seconds: snapshot.preview.position_seconds,
-            home_seconds: snapshot.preview.home_seconds,
-            duration_seconds: snapshot.preview.duration_seconds,
-            audio: snapshot.preview.audio.clone(),
-            clock_source: snapshot.preview.clock_source.clone(),
-            audio_playback_status: snapshot.preview.audio_playback_status,
-            status: snapshot.preview.status.clone(),
+            source_label: snapshot.source_label.clone(),
+            is_playing: snapshot.is_playing,
+            preview_updating: snapshot.preview_updating,
+            effect_preview_active: snapshot.effect_preview_active,
+            position_seconds: snapshot.position_seconds,
+            home_seconds: snapshot.home_seconds,
+            duration_seconds: snapshot.duration_seconds,
+            audio: snapshot.audio.clone(),
+            clock_source: snapshot.clock_source.clone(),
+            audio_playback_status: snapshot.audio_playback_status,
+            status: snapshot.status.clone(),
             timing: PreviewTimingDto::empty(0.0),
         },
     )

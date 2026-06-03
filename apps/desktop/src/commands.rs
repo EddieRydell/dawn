@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 
 use dawn_app_core::dto::{
     EditorViewModeDto, FixtureGuiEditDto, LayoutGuiEditDto, RuntimeCommandResultDto,
-    RuntimeStateDto, SequenceGuiEditDto, SequenceSelectionEditDto, SequenceSelectionEditResultDto,
+    RuntimeReadModelsDto, SequenceGuiEditDto, SequenceSelectionEditDto,
+    SequenceSelectionEditResultDto,
 };
 use dawn_app_core::editor_session::EditorViewMode;
 use dawn_app_core::fseq_export::{export_fseq_file, FseqExportOptions};
@@ -14,7 +15,7 @@ use dawn_project::path::{serialized_import_path, utf8_path, Utf8PathBuf};
 use tauri::{AppHandle, Manager, State};
 
 use crate::app_runtime::{
-    emit_runtime_snapshot, preload_active_preview_audio, update_preview_from_audio_status,
+    emit_runtime_read_models, preload_active_preview_audio, update_preview_from_audio_status,
     valid_sequence_audio,
 };
 use crate::effect_previews::{
@@ -33,14 +34,14 @@ use crate::state::{
 
 #[specta::specta]
 #[tauri::command]
-fn get_runtime_state(state: State<'_, AppState>) -> CommandResult<RuntimeStateDto> {
+fn get_runtime_read_models(state: State<'_, AppState>) -> CommandResult<RuntimeReadModelsDto> {
     hydrate_startup_session(&state)?;
     let live_output = lock_live_output(&state)?.snapshot();
     let mut model = lock_runtime(&state)?;
     model.set_live_output_snapshot(live_output);
-    let snapshot = model.snapshot_dto();
-    preload_active_preview_audio(&state, &snapshot.preview);
-    Ok(snapshot)
+    let read_models = RuntimeReadModelsDto::from(model.snapshot());
+    preload_active_preview_audio(&state, &read_models.preview.preview);
+    Ok(read_models)
 }
 
 fn emit_changed(
@@ -48,8 +49,8 @@ fn emit_changed(
     state: &State<'_, AppState>,
     model: &dawn_app_core::runtime_state::RuntimeState,
 ) -> CommandResult<RuntimeCommandResultDto> {
-    let snapshot = emit_runtime_snapshot(app, model)?;
-    preload_active_preview_audio(state, &snapshot.preview);
+    let read_models = emit_runtime_read_models(app, model)?;
+    preload_active_preview_audio(state, &read_models.preview.preview);
     Ok(RuntimeCommandResultDto::Changed)
 }
 
@@ -181,14 +182,14 @@ fn open_project_runtime_then_model(
     {
         let mut model = lock_runtime(state)?;
         model.mirror_runtime_project_opened(path, true, "Project opened")?;
-        let snapshot = emit_runtime_snapshot(app, &model)?;
+        let read_models = emit_runtime_read_models(app, &model)?;
         if let Ok(mut watcher) = crate::state::lock_filesystem_watcher(state) {
-            let _ = watcher.sync_project_root(app, snapshot.project_root.clone());
+            let _ = watcher.sync_project_root(app, read_models.workspace.project_root.clone());
         }
         if let Ok(runtime) = lock_audio_runtime(state) {
             runtime.clear();
         }
-        preload_active_preview_audio(state, &snapshot.preview);
+        preload_active_preview_audio(state, &read_models.preview.preview);
         Ok(RuntimeCommandResultDto::Changed)
     }
 }
@@ -214,8 +215,8 @@ fn open_file_runtime_then_model(
     lock_runtime(state)?.open_buffer(path.clone(), text.clone())?;
     let mut model = lock_runtime(state)?;
     model.mirror_runtime_file_opened(path, text, disk_version, EditorViewMode::Text)?;
-    let snapshot = emit_runtime_snapshot(app, &model)?;
-    preload_active_preview_audio(state, &snapshot.preview);
+    let read_models = emit_runtime_read_models(app, &model)?;
+    preload_active_preview_audio(state, &read_models.preview.preview);
     Ok(RuntimeCommandResultDto::Changed)
 }
 
@@ -390,7 +391,7 @@ fn apply_sequence_selection_edit(
 ) -> CommandResult<SequenceSelectionEditResultDto> {
     let mut model = lock_runtime(&state)?;
     let result = model.apply_sequence_selection_edit(edit)?;
-    emit_runtime_snapshot(&app, &model)?;
+    emit_runtime_read_models(&app, &model)?;
     Ok(result)
 }
 
@@ -933,7 +934,7 @@ pub(crate) fn register_commands(
     builder: tauri_specta::Builder<tauri::Wry>,
 ) -> tauri_specta::Builder<tauri::Wry> {
     builder.commands(tauri_specta::collect_commands![
-        get_runtime_state,
+        get_runtime_read_models,
         open_project_dialog,
         open_project,
         choose_new_project_parent_directory,

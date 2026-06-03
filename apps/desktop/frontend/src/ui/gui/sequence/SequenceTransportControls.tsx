@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { commands } from "../../../api";
 
-import type { RuntimeStateDto, AudioPlaybackStatus, SequenceDocumentDto } from "../../../bindings";
+import type { AudioPlaybackStatus, SequenceDocumentDto, PreviewSnapshotDto, LiveOutputSnapshotDto } from "../../../bindings";
 
 import { runRuntimeCommand } from "../../../store";
 
@@ -21,8 +21,8 @@ export function SequenceTransportControls({
   selectedEffectIds
 }: {
   document: SequenceDocumentDto;
-  preview: RuntimeStateDto["preview"];
-  liveOutput: RuntimeStateDto["liveOutput"];
+  preview: PreviewSnapshotDto;
+  liveOutput: LiveOutputSnapshotDto;
   effectPreviewEnabled: boolean;
   selectedEffectIds: number[];
 }) {
@@ -149,7 +149,7 @@ export function SequenceTransportControls({
   );
 }
 
-export function useSequencePreview(preview: RuntimeStateDto["preview"]): LivePreview {
+export function useSequencePreview(preview: PreviewSnapshotDto): LivePreview {
   const [eventPreview, setEventPreview] = useState<PreviewStateEvent | null>(null);
   const [animatedPositionSeconds, setAnimatedPositionSeconds] = useState(preview.positionSeconds);
   const anchor = useRef({
@@ -219,7 +219,7 @@ export function useSequencePreview(preview: RuntimeStateDto["preview"]): LivePre
     : livePreview;
 }
 
-function useSequenceAudioStatus(preview: RuntimeStateDto["preview"]) {
+function useSequenceAudioStatus(preview: PreviewSnapshotDto) {
   const [loadedNoticeVisible, setLoadedNoticeVisible] = useState(false);
   const previousStatus = useRef(preview.audioPlaybackStatus);
 
@@ -302,7 +302,7 @@ function isEditableShortcutTarget(target: EventTarget | null) {
 export function handleSequencePlaybackShortcut(
   event: KeyboardEvent<HTMLElement>,
   document: SequenceDocumentDto,
-  preview: RuntimeStateDto["preview"],
+  preview: PreviewSnapshotDto,
   unsupported: boolean
 ) {
   if (unsupported || isEditableShortcutTarget(event.target)) return;

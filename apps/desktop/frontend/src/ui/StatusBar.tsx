@@ -1,7 +1,7 @@
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
-import type { RuntimeStateDto } from "../bindings";
+import type { RuntimeUiState } from "../store";
 
-export function StatusBar({ snapshot }: { snapshot: RuntimeStateDto }) {
+export function StatusBar({ snapshot }: { snapshot: RuntimeUiState }) {
   const errors = snapshot.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
   const warnings = snapshot.diagnostics.filter((diagnostic) => diagnostic.severity === "warning").length;
   return (

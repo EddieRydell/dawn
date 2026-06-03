@@ -13,9 +13,11 @@ use dawn_project::analysis::ProjectAnalysis;
 use dawn_project::document::SequenceDocument;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-use crate::app_runtime::{apply_audio_clock_to_model, emit_preview_state_snapshot};
+use crate::app_runtime::{
+    apply_audio_clock_to_model, emit_preview_state_snapshot, emit_runtime_read_models,
+};
 use crate::audio_runtime::AudioClock;
 use crate::state::{
     lock_audio_runtime, lock_live_output, lock_preview_transport, lock_runtime, AppState,
@@ -494,8 +496,7 @@ fn publish_live_output_frame(
     };
     if model.live_output != snapshot {
         model.set_live_output_snapshot(snapshot);
-        let dto = model.snapshot_dto();
-        let _ = app.emit("runtime_state_changed", &dto);
+        let _ = emit_runtime_read_models(app, &model);
     }
 }
 
