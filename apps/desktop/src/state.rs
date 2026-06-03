@@ -20,6 +20,7 @@ pub(crate) struct AppState {
     live_output: Mutex<LiveOutputRuntime>,
     filesystem_watcher: Mutex<FilesystemWatcherRuntime>,
     runtime: Mutex<RuntimeHost>,
+    startup_hydrated: AtomicBool,
     shutting_down: AtomicBool,
 }
 
@@ -33,6 +34,7 @@ impl Default for AppState {
             live_output: Mutex::new(LiveOutputRuntime::default()),
             filesystem_watcher: Mutex::new(FilesystemWatcherRuntime::default()),
             runtime: Mutex::new(RuntimeHost::default()),
+            startup_hydrated: AtomicBool::new(false),
             shutting_down: AtomicBool::new(false),
         }
     }
@@ -45,6 +47,10 @@ impl AppState {
 
     pub(crate) fn is_shutting_down(&self) -> bool {
         self.shutting_down.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn mark_startup_hydrated(&self) -> bool {
+        self.startup_hydrated.swap(true, Ordering::Relaxed)
     }
 }
 

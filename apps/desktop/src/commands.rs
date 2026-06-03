@@ -1,13 +1,15 @@
 use std::path::{Path, PathBuf};
 
 use dawn_app_core::actions::AppAction;
-use dawn_app_core::app_model::ActiveGuiDocument;
+use dawn_app_core::app_model::{ActiveGuiDocument, RuntimeSessionMirrorBuffer};
 use dawn_app_core::dto::{
     AppSnapshotDto, EditorViewModeDto, FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto,
     SequenceSelectionEditDto, SequenceSelectionEditResultDto,
 };
+use dawn_app_core::editor_session::EditorViewMode;
 use dawn_app_core::fseq_export::{export_fseq_file, FseqExportOptions};
 use dawn_app_core::workspace::WorkspaceService;
+use dawn_app_runtime::services::document_store::{RuntimeSessionBuffer, ViewMode};
 use dawn_project::document::DocumentViewId;
 use dawn_project::path::{serialized_import_path, utf8_path, Utf8PathBuf};
 use tauri::{AppHandle, Manager, State};
@@ -33,12 +35,68 @@ use crate::state::{
 #[specta::specta]
 #[tauri::command]
 fn get_snapshot(state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
+    hydrate_startup_session(&state)?;
     let live_output = lock_live_output(&state)?.snapshot();
     let mut model = lock_model(&state)?;
     model.set_live_output_snapshot(live_output);
     let snapshot = model.snapshot_dto();
     preload_active_preview_audio(&state, &snapshot.preview);
     Ok(snapshot)
+}
+
+fn hydrate_startup_session(state: &State<'_, AppState>) -> CommandResult<()> {
+    if state.mark_startup_hydrated() {
+        return Ok(());
+    }
+
+    let (Some(path), editor_session) = ({
+        let model = lock_model(state)?;
+        (
+            model.workbench_layout.last_project_root.clone(),
+            model.workbench_layout.editor_session.clone(),
+        )
+    }) else {
+        return Ok(());
+    };
+
+    let mut workspace = WorkspaceService::default();
+    if let Err(error) = workspace.open_project(&path) {
+        lock_model(state)?.status = format!("Could not restore last project: {error}");
+        return Ok(());
+    }
+    let Some(root) = workspace.project_root_display().map(ToString::to_string) else {
+        lock_model(state)?.status =
+            "Could not restore last project: project root was not opened".to_string();
+        return Ok(());
+    };
+
+    let mut runtime_buffers = Vec::new();
+    let mut mirror_buffers = Vec::new();
+    for tab in editor_session.tabs {
+        let Ok((text, disk_version)) = workspace.read_file_with_version(tab.path.clone()) else {
+            continue;
+        };
+        runtime_buffers.push(RuntimeSessionBuffer {
+            path: tab.path.clone(),
+            text: text.clone(),
+            view_mode: runtime_view_mode_from_editor(tab.view_mode),
+        });
+        mirror_buffers.push(RuntimeSessionMirrorBuffer {
+            path: tab.path,
+            text,
+            disk_version,
+            view_mode: tab.view_mode,
+        });
+    }
+
+    lock_runtime(state)?.open_session(root, runtime_buffers, editor_session.active_file.clone())?;
+    lock_model(state)?.mirror_runtime_session_opened(
+        path,
+        mirror_buffers,
+        editor_session.active_file,
+        "Project restored",
+    )?;
+    Ok(())
 }
 
 #[specta::specta]
@@ -90,11 +148,7 @@ fn create_new_project(
         &state,
         project_path(STARTER_SEQUENCE_PATH.to_string()),
     )?;
-    dispatch(
-        &app,
-        &state,
-        AppAction::SetActiveViewMode(EditorViewModeDto::Gui),
-    )
+    set_active_view_mode_runtime_then_model(&app, &state, EditorViewModeDto::Gui)
 }
 
 #[specta::specta]
@@ -112,9 +166,22 @@ fn open_project_runtime_then_model(
     state: &State<'_, AppState>,
     path: PathBuf,
 ) -> CommandResult<AppSnapshotDto> {
+    lock_model(state)?.prepare_for_runtime_project_open()?;
     let root = project_root_display_for_open_path(&path)?;
     lock_runtime(state)?.open_project(root)?;
-    dispatch(app, state, AppAction::OpenProject(path))
+    {
+        let mut model = lock_model(state)?;
+        model.mirror_runtime_project_opened(path, true, "Project opened")?;
+        let snapshot = emit_model_snapshot(app, &model)?;
+        if let Ok(mut watcher) = crate::state::lock_filesystem_watcher(state) {
+            let _ = watcher.sync_project_root(app, snapshot.project_root.clone());
+        }
+        if let Ok(runtime) = lock_audio_runtime(state) {
+            runtime.clear();
+        }
+        preload_active_preview_audio(state, &snapshot.preview);
+        Ok(snapshot)
+    }
 }
 
 fn project_root_display_for_open_path(path: &Path) -> CommandResult<String> {
@@ -131,12 +198,16 @@ fn open_file_runtime_then_model(
     state: &State<'_, AppState>,
     path: Utf8PathBuf,
 ) -> CommandResult<AppSnapshotDto> {
-    let text = {
+    let (text, disk_version) = {
         let model = lock_model(state)?;
-        model.workspace.read_file(path.clone())?
+        model.workspace.read_file_with_version(path.clone())?
     };
-    lock_runtime(state)?.open_buffer(path.clone(), text)?;
-    dispatch(app, state, AppAction::OpenFile(path))
+    lock_runtime(state)?.open_buffer(path.clone(), text.clone())?;
+    let mut model = lock_model(state)?;
+    model.mirror_runtime_file_opened(path, text, disk_version, EditorViewMode::Text)?;
+    let snapshot = emit_model_snapshot(app, &model)?;
+    preload_active_preview_audio(state, &snapshot.preview);
+    Ok(snapshot)
 }
 
 #[specta::specta]
@@ -146,7 +217,13 @@ fn close_file(
     state: State<'_, AppState>,
     path: String,
 ) -> CommandResult<AppSnapshotDto> {
-    dispatch(&app, &state, AppAction::CloseFile(project_path(path)))
+    let path = project_path(path);
+    lock_runtime(&state)?.close_buffer(path.clone())?;
+    let mut model = lock_model(&state)?;
+    model.mirror_runtime_file_closed(path)?;
+    let snapshot = emit_model_snapshot(&app, &model)?;
+    preload_active_preview_audio(&state, &snapshot.preview);
+    Ok(snapshot)
 }
 
 #[specta::specta]
@@ -156,7 +233,13 @@ fn set_active_file(
     state: State<'_, AppState>,
     path: String,
 ) -> CommandResult<AppSnapshotDto> {
-    dispatch(&app, &state, AppAction::SetActiveFile(project_path(path)))
+    let path = project_path(path);
+    lock_runtime(&state)?.set_active_buffer(path.clone())?;
+    let mut model = lock_model(&state)?;
+    model.mirror_runtime_active_file(path)?;
+    let snapshot = emit_model_snapshot(&app, &model)?;
+    preload_active_preview_audio(&state, &snapshot.preview);
+    Ok(snapshot)
 }
 
 #[specta::specta]
@@ -182,7 +265,9 @@ fn update_active_text(
     };
 
     lock_runtime(&state)?.update_active_text(active_buffer, text.clone())?;
-    dispatch(&app, &state, AppAction::UpdateActiveText(text))
+    let mut model = lock_model(&state)?;
+    model.mirror_runtime_active_text_update(text)?;
+    emit_model_snapshot(&app, &model)
 }
 
 #[specta::specta]
@@ -192,19 +277,87 @@ fn set_active_view_mode(
     state: State<'_, AppState>,
     mode: EditorViewModeDto,
 ) -> CommandResult<AppSnapshotDto> {
-    dispatch(&app, &state, AppAction::SetActiveViewMode(mode))
+    set_active_view_mode_runtime_then_model(&app, &state, mode)
+}
+
+fn set_active_view_mode_runtime_then_model(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    mode: EditorViewModeDto,
+) -> CommandResult<AppSnapshotDto> {
+    let active_file = {
+        let model = lock_model(state)?;
+        let snapshot = model.snapshot();
+        let Some(active_file) = snapshot.active_file else {
+            return Ok(snapshot.into());
+        };
+        active_file
+    };
+    lock_runtime(state)?.set_view_mode(active_file, runtime_view_mode(&mode))?;
+    let mut model = lock_model(state)?;
+    model.mirror_runtime_active_view_mode(editor_view_mode(&mode))?;
+    let snapshot = emit_model_snapshot(app, &model)?;
+    preload_active_preview_audio(state, &snapshot.preview);
+    Ok(snapshot)
+}
+
+fn runtime_view_mode(mode: &EditorViewModeDto) -> ViewMode {
+    match mode {
+        EditorViewModeDto::Text => ViewMode::Text,
+        EditorViewModeDto::Gui => ViewMode::Gui,
+    }
+}
+
+fn editor_view_mode(mode: &EditorViewModeDto) -> EditorViewMode {
+    match mode {
+        EditorViewModeDto::Text => EditorViewMode::Text,
+        EditorViewModeDto::Gui => EditorViewMode::Gui,
+    }
+}
+
+fn runtime_view_mode_from_editor(mode: EditorViewMode) -> ViewMode {
+    match mode {
+        EditorViewMode::Text => ViewMode::Text,
+        EditorViewMode::Gui => ViewMode::Gui,
+    }
 }
 
 #[specta::specta]
 #[tauri::command]
 fn undo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
-    dispatch(&app, &state, AppAction::UndoActiveEdit)
+    let path = {
+        let model = lock_model(&state)?;
+        let snapshot = model.snapshot();
+        let Some(path) = snapshot.active_file else {
+            return Ok(snapshot.into());
+        };
+        path
+    };
+    let Some(text) = lock_runtime(&state)?.undo_buffer_text(path)? else {
+        return get_snapshot(state);
+    };
+    let mut model = lock_model(&state)?;
+    model.mirror_runtime_active_history_text(text, "Undo");
+    emit_model_snapshot(&app, &model)
 }
 
 #[specta::specta]
 #[tauri::command]
 fn redo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
-    dispatch(&app, &state, AppAction::RedoActiveEdit)
+    let path = {
+        let model = lock_model(&state)?;
+        let snapshot = model.snapshot();
+        let Some(path) = snapshot.active_file else {
+            return Ok(snapshot.into());
+        };
+        path
+    };
+    let Some(text) = lock_runtime(&state)?.redo_buffer_text(path)? else {
+        return get_snapshot(state);
+    };
+    let mut model = lock_model(&state)?;
+    model.mirror_runtime_active_history_text(text, "Redo");
+    emit_model_snapshot(&app, &model)
 }
 
 #[specta::specta]
@@ -460,14 +613,18 @@ fn create_file(
     parent: String,
     name: String,
 ) -> CommandResult<AppSnapshotDto> {
-    dispatch(
-        &app,
-        &state,
-        AppAction::CreateFile {
-            parent: project_path(parent),
-            name,
-        },
-    )
+    let created = lock_model(&state)?.create_file_for_runtime_open(project_path(parent), name)?;
+    lock_runtime(&state)?.open_buffer(created.path.clone(), created.text.clone())?;
+    let mut model = lock_model(&state)?;
+    model.mirror_runtime_file_opened(
+        created.path,
+        created.text,
+        created.disk_version,
+        EditorViewMode::Text,
+    )?;
+    let snapshot = emit_model_snapshot(&app, &model)?;
+    preload_active_preview_audio(&state, &snapshot.preview);
+    Ok(snapshot)
 }
 
 #[specta::specta]

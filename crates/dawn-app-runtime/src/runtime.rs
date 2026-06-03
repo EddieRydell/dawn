@@ -139,6 +139,16 @@ fn run_loop<C>(
                 command,
             } => match core.handle(command) {
                 Ok(core_events) => {
+                    if core_events.is_empty() {
+                        let _ = events.send(envelope(
+                            Some(request_id),
+                            core.service_name(),
+                            &sequence,
+                            Event::CommandCompleted {
+                                service: core.service_name(),
+                            },
+                        ));
+                    }
                     for event in core_events {
                         let _ = events.send(envelope(
                             Some(request_id),
@@ -149,14 +159,23 @@ fn run_loop<C>(
                     }
                 }
                 Err(error) => {
+                    let event = if error.kind == RuntimeErrorKind::Fatal {
+                        Event::Fatal {
+                            service: error.service,
+                            message: error.message,
+                        }
+                    } else {
+                        Event::CommandFailed {
+                            service: error.service,
+                            kind: error.kind,
+                            message: error.message,
+                        }
+                    };
                     let _ = events.send(envelope(
                         Some(request_id),
                         core.service_name(),
                         &sequence,
-                        Event::Fatal {
-                            service: error.service,
-                            message: error.message,
-                        },
+                        event,
                     ));
                 }
             },

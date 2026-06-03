@@ -91,6 +91,17 @@ impl EditorSession {
         self.active_file = Some(path);
     }
 
+    pub fn open_file_with_view_mode(
+        &mut self,
+        path: Utf8PathBuf,
+        text: String,
+        disk_version: FileDiskVersion,
+        view_mode: EditorViewMode,
+    ) {
+        self.open_file(path.clone(), text, disk_version);
+        self.set_view_mode(&path, view_mode);
+    }
+
     pub fn close_file(&mut self, path: &Utf8PathBuf) {
         self.open_editors.remove(path);
         self.tab_order.retain(|candidate| candidate != path);
@@ -129,6 +140,12 @@ impl EditorSession {
                 return;
             }
             buffer.record_snapshot();
+            buffer.text = text;
+        }
+    }
+
+    pub fn replace_active_text_from_runtime(&mut self, text: String) {
+        if let Some(buffer) = self.active_buffer_mut() {
             buffer.text = text;
         }
     }

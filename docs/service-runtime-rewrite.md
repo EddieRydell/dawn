@@ -12,20 +12,19 @@ defines the first-pass contracts, service cores, read-model composition,
 bounded-channel runner surface, coordinator ownership, opt-in file logging, and
 focused service-core/coordinator tests.
 
-Desktop behavior has started a narrow runtime-gated cutover. The
-`update_active_text`, explicit `open_project`, and explicit `open_file`
-commands now submit lifecycle or edit commands through the runtime
-`DocumentStore` before mutating `dawn-app-core::app_model::AppModel`. The
-frontend contract is unchanged and still receives the current full
-`AppSnapshotDto`; `AppModel` remains the compatibility snapshot publisher.
+Desktop behavior has moved the editor/project lifecycle cutover through the
+runtime `DocumentStore`. Startup restore, explicit project and file opening,
+create-file auto-open, active-tab changes, close file, view-mode changes,
+active text edits, and text undo/redo submit runtime commands before
+`dawn-app-core::app_model::AppModel` mirrors the approved state for the
+existing `AppSnapshotDto` frontend contract.
 
 ## Next Decision
 
-Choose the next desktop command cutover slice. `update_active_text`, explicit
-project opening, and explicit file opening are gated by the runtime, while
-startup restore, close file, active-tab changes, undo/redo, GUI edits,
-autosave, analysis, preview sync, and frontend store behavior remain on the
-existing `AppModel` path.
+Choose the next runtime ownership slice outside editor lifecycle. GUI edits,
+autosave persistence, file watcher reconciliation, analysis/preview runtime
+parity, and frontend read-model migration remain on the existing `AppModel`
+compatibility path.
 
 ## Milestone Tracker
 
@@ -83,7 +82,8 @@ Affected files:
 - [x] Add `ServiceCore` trait and bounded `crossbeam-channel` runner.
 - [x] Add explicit backpressure policy enum: reject, latest-only, coalesce.
 - [x] Add typed shutdown and worker join surface.
-- [x] Surface runner/service errors as fatal typed events.
+- [x] Surface true runner/service failures as fatal typed events.
+- [x] Surface ordinary command failures as request-scoped, non-sticky events.
 - [ ] Implement actual latest-only queue replacement semantics per message type.
 - [ ] Implement actual coalescing semantics per message type.
 - [x] Add `AppCoordinator` for request IDs, service handles, routing policy,
@@ -107,6 +107,13 @@ Affected files:
   `updateActiveText(text) -> AppSnapshotDto`.
 - [x] Runtime-gate explicit `open_project` and `open_file` while preserving
   `AppSnapshotDto` command returns and `AppModel` snapshot publication.
+- [x] Runtime-gate explicit active-tab changes, close file, and view-mode
+  changes while preserving `AppSnapshotDto` command returns and `AppModel`
+  snapshot publication.
+- [x] Runtime-own startup project/session restore, with `AppModel` only
+  mirroring the restored compatibility snapshot.
+- [x] Runtime-gate create-file auto-open, active text undo, and active text
+  redo while preserving `AppSnapshotDto` command returns.
 - [ ] Replace selected Tauri command wiring with explicit runtime commands that
   return minimal typed acknowledgements.
 - [ ] Emit read-model slice events from backend to frontend.
@@ -181,6 +188,10 @@ optional target revision, not an app snapshot. Root and lifecycle commands use
 no target revision because their committed revisions are only known after
 service processing and event publication.
 
+Ordinary command failures such as missing buffers are request-scoped and do not
+set the global fatal read-model status. Fatal status is reserved for stopped
+services, disconnected runners, panics, and equivalent runtime failures.
+
 ## Services
 
 - `DocumentStore`: project root lifecycle, open buffers, active file, view mode,
@@ -234,3 +245,20 @@ unconditional console or stderr timing logs.
    adapters in `apps/desktop`.
 5. Delete the old `AppModel` dispatch path only after service parity and
    frontend read-model migration pass.
+
+## Manual Verification Notes
+
+Run these manually with `pnpm tauri dev`, then stop the dev server when done:
+
+- Launch with a persisted project and restored tabs. Confirm the runtime-owned
+  restored session opens in the saved tab order, the saved active tab is active,
+  and saved view modes are applied before opening any new file.
+- Open a different project. Confirm previous tabs are cleared and later valid
+  file operations still work after any previous missing-buffer command error.
+- Open multiple files, switch tabs, close inactive tabs, and close the active
+  tab. Confirm active fallback follows the editor session rule.
+- Create a file. Confirm the new file is opened as a runtime-known tab.
+- Edit text, undo, redo, switch tabs, and toggle view mode. Confirm the
+  compatibility snapshot mirrors runtime-approved text and view state.
+- Trigger a missing-buffer command from DevTools/API. Confirm the command
+  returns an error and a subsequent valid project/file command still succeeds.

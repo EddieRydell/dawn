@@ -1,8 +1,8 @@
 use crossbeam_channel::{unbounded, Receiver};
 
 use crate::contracts::{
-    CommandAck, EventEnvelope, RequestId, Revision, RuntimeError, RuntimeErrorKind, RuntimeResult,
-    ServiceName,
+    CommandAck, Event, EventEnvelope, RequestId, Revision, RuntimeError, RuntimeErrorKind,
+    RuntimeResult, ServiceName,
 };
 use crate::read_model::{AppReadModels, ReadModelCore};
 use crate::runtime::{spawn_service, BackpressurePolicy, ServiceHandle};
@@ -14,6 +14,7 @@ use crate::services::layout_prefs::LayoutPrefsCore;
 use crate::services::live_output::LiveOutputCore;
 use crate::services::preview_engine::{PreviewEngineCommand, PreviewEngineCore};
 use crate::services::project_index::{ProjectIndexCommand, ProjectIndexCore};
+use dawn_project::path::Utf8PathBuf;
 
 const SERVICE_QUEUE_CAPACITY: usize = 128;
 
@@ -21,6 +22,9 @@ pub struct AppCoordinator {
     next_request_id: u64,
     events: Receiver<EventEnvelope>,
     read_model: ReadModelCore,
+    command_failures: Vec<(RequestId, RuntimeError)>,
+    buffer_text_updates: Vec<(RequestId, Utf8PathBuf, String, Revision)>,
+    command_completions: Vec<RequestId>,
     live_output: LiveOutputCore,
     layout_prefs: LayoutPrefsCore,
     document_store: Option<ServiceHandle<DocumentStoreCommand>>,
@@ -45,6 +49,9 @@ impl AppCoordinator {
             next_request_id: 1,
             events,
             read_model: ReadModelCore::default(),
+            command_failures: Vec::new(),
+            buffer_text_updates: Vec::new(),
+            command_completions: Vec::new(),
             live_output: LiveOutputCore::default(),
             layout_prefs: LayoutPrefsCore::default(),
             document_store: Some(spawn_service(
@@ -96,6 +103,38 @@ impl AppCoordinator {
 
     pub fn layout_prefs(&self) -> &LayoutPrefsCore {
         &self.layout_prefs
+    }
+
+    pub fn take_command_failure(&mut self, request_id: RequestId) -> Option<RuntimeError> {
+        let index = self
+            .command_failures
+            .iter()
+            .position(|(candidate, _)| *candidate == request_id)?;
+        Some(self.command_failures.remove(index).1)
+    }
+
+    pub fn take_buffer_text_update(
+        &mut self,
+        request_id: RequestId,
+    ) -> Option<(Utf8PathBuf, String, Revision)> {
+        let index = self
+            .buffer_text_updates
+            .iter()
+            .position(|(candidate, _, _, _)| *candidate == request_id)?;
+        let (_, path, text, revision) = self.buffer_text_updates.remove(index);
+        Some((path, text, revision))
+    }
+
+    pub fn take_command_completion(&mut self, request_id: RequestId) -> bool {
+        let Some(index) = self
+            .command_completions
+            .iter()
+            .position(|candidate| *candidate == request_id)
+        else {
+            return false;
+        };
+        self.command_completions.remove(index);
+        true
     }
 
     pub fn submit_document_store(
@@ -206,6 +245,37 @@ impl AppCoordinator {
     pub fn drain_events(&mut self) -> RuntimeResult<usize> {
         let mut drained = 0;
         while let Ok(envelope) = self.events.try_recv() {
+            if let (
+                Some(request_id),
+                Event::CommandFailed {
+                    service,
+                    kind,
+                    message,
+                },
+            ) = (envelope.request_id, &envelope.event)
+            {
+                self.command_failures.push((
+                    request_id,
+                    RuntimeError::new(service.clone(), kind.clone(), message.clone()),
+                ));
+            }
+            if let (
+                Some(request_id),
+                Event::BufferTextUpdated {
+                    path,
+                    revision,
+                    text,
+                },
+            ) = (envelope.request_id, &envelope.event)
+            {
+                self.buffer_text_updates
+                    .push((request_id, path.clone(), text.clone(), *revision));
+            }
+            if let (Some(request_id), Event::CommandCompleted { .. }) =
+                (envelope.request_id, &envelope.event)
+            {
+                self.command_completions.push(request_id);
+            }
             if let Some(live_event) = self.live_output.consume(&envelope.event)? {
                 self.read_model.apply(&EventEnvelope {
                     event: live_event,
@@ -250,10 +320,18 @@ fn document_store_target_revision(command: &DocumentStoreCommand) -> Option<Revi
             expected_revision, ..
         } => Some(*expected_revision),
         DocumentStoreCommand::OpenProject { .. }
+        | DocumentStoreCommand::OpenSession { .. }
         | DocumentStoreCommand::OpenBuffer { .. }
         | DocumentStoreCommand::ExternalDiskChanged { .. }
         | DocumentStoreCommand::SetActiveBuffer { .. }
-        | DocumentStoreCommand::SetViewMode { .. } => None,
+        | DocumentStoreCommand::SetViewMode { .. }
+        | DocumentStoreCommand::CloseBuffer { .. } => None,
+        DocumentStoreCommand::UndoBufferText {
+            expected_revision, ..
+        }
+        | DocumentStoreCommand::RedoBufferText {
+            expected_revision, ..
+        } => Some(*expected_revision),
     }
 }
 

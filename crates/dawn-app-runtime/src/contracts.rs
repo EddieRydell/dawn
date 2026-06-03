@@ -128,6 +128,13 @@ impl std::error::Error for RuntimeError {}
 
 pub type RuntimeResult<T> = Result<T, RuntimeError>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ViewMode {
+    Text,
+    Gui,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandAck {
     pub request_id: RequestId,
@@ -163,10 +170,29 @@ pub enum Event {
         path: Utf8PathBuf,
         revision: Revision,
     },
+    ActiveBufferChanged {
+        path: Utf8PathBuf,
+        revision: Revision,
+    },
+    BufferClosed {
+        path: Utf8PathBuf,
+        active_file: Option<Utf8PathBuf>,
+        revision: Revision,
+    },
+    BufferViewModeChanged {
+        path: Utf8PathBuf,
+        mode: ViewMode,
+        revision: Revision,
+    },
     BufferUpdated {
         path: Utf8PathBuf,
         revision: Revision,
         dirty: bool,
+    },
+    BufferTextUpdated {
+        path: Utf8PathBuf,
+        revision: Revision,
+        text: String,
     },
     BufferConflict {
         path: Utf8PathBuf,
@@ -195,6 +221,14 @@ pub enum Event {
         path: Utf8PathBuf,
         tag: SelfWriteTag,
         revision: Revision,
+    },
+    CommandFailed {
+        service: ServiceName,
+        kind: RuntimeErrorKind,
+        message: String,
+    },
+    CommandCompleted {
+        service: ServiceName,
     },
     TaskChanged(TaskRecord),
     Fatal {

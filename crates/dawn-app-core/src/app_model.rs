@@ -212,6 +212,21 @@ pub struct AppSnapshot {
 }
 
 #[derive(Debug, Clone)]
+pub struct RuntimeSessionMirrorBuffer {
+    pub path: Utf8PathBuf,
+    pub text: String,
+    pub disk_version: crate::editor_session::FileDiskVersion,
+    pub view_mode: EditorViewMode,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreatedRuntimeFile {
+    pub path: Utf8PathBuf,
+    pub text: String,
+    pub disk_version: crate::editor_session::FileDiskVersion,
+}
+
+#[derive(Debug, Clone)]
 pub enum ActiveGuiDocument {
     Sequence(SequenceDocument),
     Layout(LayoutDocument),
@@ -263,8 +278,7 @@ impl LiveOutputStatus {
 impl Default for AppModel {
     fn default() -> Self {
         let workbench_layout = load_workbench_layout();
-        let last_project_root = workbench_layout.last_project_root.clone();
-        let mut model = Self {
+        Self {
             workspace: WorkspaceService::default(),
             editors: EditorSession::default(),
             workbench_layout,
@@ -277,14 +291,7 @@ impl Default for AppModel {
             status: "No project open".to_string(),
             sequence_clipboard: None,
             active_sequence_gui_document: None,
-        };
-        if let Some(path) = last_project_root {
-            match model.open_project(path, false, true) {
-                Ok(()) => model.status = "Project restored".to_string(),
-                Err(error) => model.status = format!("Could not restore last project: {error}"),
-            }
         }
-        model
     }
 }
 
@@ -311,6 +318,127 @@ impl AppModel {
 
     pub fn snapshot_dto(&self) -> AppSnapshotDto {
         self.snapshot().into()
+    }
+
+    pub fn prepare_for_runtime_project_open(&mut self) -> Result<(), String> {
+        self.flush_autosave()
+    }
+
+    pub fn mirror_runtime_project_opened(
+        &mut self,
+        path: PathBuf,
+        remember: bool,
+        status: impl Into<String>,
+    ) -> Result<(), String> {
+        self.open_project(path.clone(), remember, false)?;
+        if remember {
+            self.workbench_layout.last_project_root = Some(path);
+        }
+        self.status = status.into();
+        Ok(())
+    }
+
+    pub fn mirror_runtime_session_opened(
+        &mut self,
+        path: PathBuf,
+        buffers: Vec<RuntimeSessionMirrorBuffer>,
+        active_file: Option<Utf8PathBuf>,
+        status: impl Into<String>,
+    ) -> Result<(), String> {
+        self.workspace.open_project(&path)?;
+        self.refresh_project_entries()?;
+        self.editors.restore(
+            buffers
+                .into_iter()
+                .map(|buffer| {
+                    (
+                        buffer.path,
+                        buffer.text,
+                        buffer.disk_version,
+                        buffer.view_mode,
+                    )
+                })
+                .collect(),
+            active_file,
+        );
+        self.preview.reset();
+        self.refresh_analysis()?;
+        self.sync_preview_source(PreviewSyncMode::RenderNow);
+        self.status = status.into();
+        Ok(())
+    }
+
+    pub fn mirror_runtime_file_opened(
+        &mut self,
+        path: Utf8PathBuf,
+        text: String,
+        disk_version: crate::editor_session::FileDiskVersion,
+        view_mode: EditorViewMode,
+    ) -> Result<(), String> {
+        self.editors
+            .open_file_with_view_mode(path, text, disk_version, view_mode);
+        self.refresh_analysis()?;
+        self.sync_preview_source(PreviewSyncMode::RenderNow);
+        self.persist_workbench_layout()
+    }
+
+    pub fn mirror_runtime_file_closed(&mut self, path: Utf8PathBuf) -> Result<(), String> {
+        self.editors.close_file(&path);
+        self.refresh_analysis()?;
+        self.sync_preview_source(PreviewSyncMode::RenderNow);
+        self.persist_workbench_layout()
+    }
+
+    pub fn mirror_runtime_active_file(&mut self, path: Utf8PathBuf) -> Result<(), String> {
+        let active_changed = self.editors.active_file() != Some(&path);
+        self.editors.set_active_file(path);
+        if active_changed {
+            self.invalidate_active_gui_document_cache();
+            self.preview.pause(self.analysis.as_ref());
+            self.sync_preview_source(PreviewSyncMode::RenderNow);
+            self.persist_workbench_layout()?;
+        }
+        Ok(())
+    }
+
+    pub fn mirror_runtime_active_view_mode(&mut self, mode: EditorViewMode) -> Result<(), String> {
+        let Some(path) = self.editors.active_file().cloned() else {
+            return Ok(());
+        };
+        self.editors.set_view_mode(&path, mode);
+        self.invalidate_active_gui_document_cache();
+        self.sync_preview_source(PreviewSyncMode::RenderNow);
+        self.persist_workbench_layout()
+    }
+
+    pub fn mirror_runtime_active_text_update(&mut self, text: String) -> Result<(), String> {
+        self.ensure_active_buffer_not_conflicted()?;
+        self.editors.update_active_text(text);
+        self.refresh_analysis_after_memory_edit();
+        self.status = "Edited".to_string();
+        Ok(())
+    }
+
+    pub fn mirror_runtime_active_history_text(&mut self, text: String, status: impl Into<String>) {
+        self.editors.replace_active_text_from_runtime(text);
+        self.refresh_analysis_after_memory_edit();
+        self.status = status.into();
+    }
+
+    pub fn create_file_for_runtime_open(
+        &mut self,
+        parent: Utf8PathBuf,
+        name: String,
+    ) -> Result<CreatedRuntimeFile, String> {
+        self.flush_autosave()?;
+        let path = self.workspace.create_file(parent, &name)?;
+        self.refresh_project_entries()?;
+        let (text, disk_version) = self.workspace.read_file_with_version(path.clone())?;
+        Ok(CreatedRuntimeFile {
+            path,
+            text,
+            disk_version,
+        })
     }
 
     pub fn dispatch(&mut self, action: AppAction) -> Result<DispatchOutcome, String> {
