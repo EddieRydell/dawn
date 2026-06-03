@@ -21,6 +21,7 @@ mod live_output;
 mod new_project;
 mod preview;
 mod preview_transport;
+mod runtime_host;
 mod state;
 mod window_layout;
 
@@ -47,6 +48,10 @@ pub fn run() -> Result<(), tauri::Error> {
                 .map_err(std::io::Error::other)?;
             preview::start_preview_worker(app.handle().clone());
             let state = app.state::<state::AppState>();
+            if let Ok(mut runtime) = state::lock_runtime(&state) {
+                let _ = runtime.drain_events();
+                let _ = runtime.read_models();
+            }
             if let Ok(model) = state::lock_model(&state) {
                 let root = model.snapshot_dto().project_root;
                 drop(model);

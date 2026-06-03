@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use dawn_app_core::actions::AppAction;
 use dawn_app_core::app_model::ActiveGuiDocument;
@@ -7,6 +7,7 @@ use dawn_app_core::dto::{
     SequenceSelectionEditDto, SequenceSelectionEditResultDto,
 };
 use dawn_app_core::fseq_export::{export_fseq_file, FseqExportOptions};
+use dawn_app_core::workspace::WorkspaceService;
 use dawn_project::document::DocumentViewId;
 use dawn_project::path::{serialized_import_path, utf8_path, Utf8PathBuf};
 use tauri::{AppHandle, Manager, State};
@@ -23,9 +24,10 @@ use crate::preview::{
     open_or_focus_preview_window, preview_pixel_count, preview_scene_from_frame, PreviewSceneDto,
 };
 use crate::preview_transport::{PreviewTransportMode, PreviewTransportRuntime};
+use crate::runtime_host::ActiveRuntimeBuffer;
 use crate::state::{
     lock_audio_runtime, lock_effect_preview_runtime, lock_live_output, lock_model,
-    lock_preview_transport, project_path, AppState, CommandResult,
+    lock_preview_transport, lock_runtime, project_path, AppState, CommandResult,
 };
 
 #[specta::specta]
@@ -51,7 +53,7 @@ fn open_project_dialog(
     else {
         return get_snapshot(state);
     };
-    dispatch(&app, &state, AppAction::OpenProject(path))
+    open_project_runtime_then_model(&app, &state, path)
 }
 
 #[specta::specta]
@@ -61,7 +63,7 @@ fn open_project(
     state: State<'_, AppState>,
     path: String,
 ) -> CommandResult<AppSnapshotDto> {
-    dispatch(&app, &state, AppAction::OpenProject(PathBuf::from(path)))
+    open_project_runtime_then_model(&app, &state, PathBuf::from(path))
 }
 
 #[specta::specta]
@@ -82,11 +84,11 @@ fn create_new_project(
     directory_name: String,
 ) -> CommandResult<AppSnapshotDto> {
     let target = create_starter_project(&parent_path, &directory_name)?;
-    dispatch(&app, &state, AppAction::OpenProject(target))?;
-    dispatch(
+    open_project_runtime_then_model(&app, &state, target)?;
+    open_file_runtime_then_model(
         &app,
         &state,
-        AppAction::OpenFile(project_path(STARTER_SEQUENCE_PATH.to_string())),
+        project_path(STARTER_SEQUENCE_PATH.to_string()),
     )?;
     dispatch(
         &app,
@@ -102,7 +104,39 @@ fn open_file(
     state: State<'_, AppState>,
     path: String,
 ) -> CommandResult<AppSnapshotDto> {
-    dispatch(&app, &state, AppAction::OpenFile(project_path(path)))
+    open_file_runtime_then_model(&app, &state, project_path(path))
+}
+
+fn open_project_runtime_then_model(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    path: PathBuf,
+) -> CommandResult<AppSnapshotDto> {
+    let root = project_root_display_for_open_path(&path)?;
+    lock_runtime(state)?.open_project(root)?;
+    dispatch(app, state, AppAction::OpenProject(path))
+}
+
+fn project_root_display_for_open_path(path: &Path) -> CommandResult<String> {
+    let mut workspace = WorkspaceService::default();
+    workspace.open_project(path)?;
+    workspace
+        .project_root_display()
+        .map(ToString::to_string)
+        .ok_or_else(|| "project root was not opened".to_string())
+}
+
+fn open_file_runtime_then_model(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    path: Utf8PathBuf,
+) -> CommandResult<AppSnapshotDto> {
+    let text = {
+        let model = lock_model(state)?;
+        model.workspace.read_file(path.clone())?
+    };
+    lock_runtime(state)?.open_buffer(path.clone(), text)?;
+    dispatch(app, state, AppAction::OpenFile(path))
 }
 
 #[specta::specta]
@@ -132,6 +166,22 @@ fn update_active_text(
     state: State<'_, AppState>,
     text: String,
 ) -> CommandResult<AppSnapshotDto> {
+    let active_buffer = {
+        let model = lock_model(&state)?;
+        let snapshot = model.snapshot();
+        let Some(buffer) = snapshot.active_buffer else {
+            return Ok(snapshot.into());
+        };
+        let conflicted = buffer.is_conflicted();
+        ActiveRuntimeBuffer {
+            project_root: snapshot.project_root,
+            path: buffer.path,
+            conflicted,
+            text: buffer.text,
+        }
+    };
+
+    lock_runtime(&state)?.update_active_text(active_buffer, text.clone())?;
     dispatch(&app, &state, AppAction::UpdateActiveText(text))
 }
 

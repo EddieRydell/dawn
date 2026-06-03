@@ -977,8 +977,8 @@ empty:
         value: 2.0
     script: effects.MarkPulse
   - id: 35
-    start: 65.088343485s
-    duration: 3.131871902s
+    start: 64.914878756s
+    duration: 3.305336631s
     target:
       type: group
       name: All Outputs
@@ -1007,7 +1007,7 @@ empty:
         value: 0.35
       offset_seconds:
         type: float
-        value: 0.0
+        value: -0.08
       chase_seconds:
         type: float
         value: 0.2
@@ -1047,6 +1047,10 @@ empty:
           points:
           - time: 0.0
             value: 1.0
+          - time: 0.259
+            value: 0.824
+          - time: 0.591
+            value: 0.202
           - time: 1.0
             value: 0.0
     script: effects.MarkChase

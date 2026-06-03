@@ -1,0 +1,173 @@
+vertical_113:
+  type: fixture
+  name: Vertical 113px Line
+  color_model: rgb
+  bulb_diameter: 0.05
+  geometry:
+    type: lines
+    points:
+      - { x: 0.0, y: 0.0, z: 0.0 }
+      - { x: 0.0, y: 11.2, z: 0.0 }
+    pixels: 113
+
+horizontal_50:
+  type: fixture
+  name: Horizontal 50px Line
+  color_model: rgb
+  bulb_diameter: 0.05
+  geometry:
+    type: lines
+    points:
+      - { x: 0.0, y: 0.0, z: 0.0 }
+      - { x: 4.9, y: 0.0, z: 0.0 }
+    pixels: 50
+
+pixel_bar_100:
+  type: fixture
+  name: Pixel Bar 100px
+  color_model: rgb
+  bulb_diameter: 0.045
+  geometry:
+    type: lines
+    points:
+      - { x: -5.0, y: 0.0, z: 0.0 }
+      - { x: 5.0, y: 0.0, z: 0.0 }
+    pixels: 100
+
+single_pixel:
+  type: fixture
+  name: Single Pixel
+  color_model: rgb
+  bulb_diameter: 0.08
+  geometry:
+    type: points
+    points:
+      - { x: 0.0, y: 0.0, z: 0.0 }
+
+two_eye_blinder:
+  type: fixture
+  name: Two Eye Blinder
+  color_model: rgb
+  bulb_diameter: 0.12
+  geometry:
+    type: points
+    points:
+      - { x: -0.35, y: 0.0, z: 0.0 }
+      - { x: 0.35, y: 0.0, z: 0.0 }
+
+grid_4x4:
+  type: fixture
+  name: 4x4 Pixel Grid
+  color_model: rgb
+  bulb_diameter: 0.055
+  geometry:
+    type: points
+    points:
+      - { x: -0.6, y: 0.6, z: 0.0 }
+      - { x: -0.2, y: 0.6, z: 0.0 }
+      - { x: 0.2, y: 0.6, z: 0.0 }
+      - { x: 0.6, y: 0.6, z: 0.0 }
+      - { x: -0.6, y: 0.2, z: 0.0 }
+      - { x: -0.2, y: 0.2, z: 0.0 }
+      - { x: 0.2, y: 0.2, z: 0.0 }
+      - { x: 0.6, y: 0.2, z: 0.0 }
+      - { x: -0.6, y: -0.2, z: 0.0 }
+      - { x: -0.2, y: -0.2, z: 0.0 }
+      - { x: 0.2, y: -0.2, z: 0.0 }
+      - { x: 0.6, y: -0.2, z: 0.0 }
+      - { x: -0.6, y: -0.6, z: 0.0 }
+      - { x: -0.2, y: -0.6, z: 0.0 }
+      - { x: 0.2, y: -0.6, z: 0.0 }
+      - { x: 0.6, y: -0.6, z: 0.0 }
+
+rectangle_96:
+  type: fixture
+  name: Rectangle Outline 96px
+  color_model: rgb
+  bulb_diameter: 0.05
+  geometry:
+    type: lines
+    points:
+      - { x: -1.2, y: 0.75, z: 0.0 }
+      - { x: 1.2, y: 0.75, z: 0.0 }
+      - { x: 1.2, y: -0.75, z: 0.0 }
+      - { x: -1.2, y: -0.75, z: 0.0 }
+      - { x: -1.2, y: 0.75, z: 0.0 }
+    pixels: 96
+
+triangle_75:
+  type: fixture
+  name: Triangle Outline 75px
+  color_model: rgb
+  bulb_diameter: 0.05
+  geometry:
+    type: lines
+    points:
+      - { x: -1.0, y: -0.6, z: 0.0 }
+      - { x: 0.0, y: 1.1, z: 0.0 }
+      - { x: 1.0, y: -0.6, z: 0.0 }
+      - { x: -1.0, y: -0.6, z: 0.0 }
+    pixels: 75
+
+half_arc_60:
+  type: fixture
+  name: Half Arc 60px
+  color_model: rgb
+  bulb_diameter: 0.05
+  geometry:
+    type: arc
+    center: { x: 0.0, y: 0.0, z: 0.0 }
+    radius: 1.2
+    startDegrees: 0.0
+    endDegrees: 180.0
+    pixels: 60
+
+circle_72:
+  type: fixture
+  name: Circle 72px
+  color_model: rgb
+  bulb_diameter: 0.05
+  geometry:
+    type: arc
+    center: { x: 0.0, y: 0.0, z: 0.0 }
+    radius: 1.0
+    startDegrees: 0.0
+    endDegrees: 360.0
+    pixels: 72
+
+tree_outline_88:
+  type: fixture
+  name: Tree Outline 88px
+  color_model: rgb
+  bulb_diameter: 0.05
+  geometry:
+    type: lines
+    points:
+      - { x: 0.0, y: 1.25, z: 0.0 }
+      - { x: -0.9, y: -0.25, z: 0.0 }
+      - { x: -0.45, y: -0.25, z: 0.0 }
+      - { x: -1.1, y: -1.15, z: 0.0 }
+      - { x: 1.1, y: -1.15, z: 0.0 }
+      - { x: 0.45, y: -0.25, z: 0.0 }
+      - { x: 0.9, y: -0.25, z: 0.0 }
+      - { x: 0.0, y: 1.25, z: 0.0 }
+    pixels: 88
+
+star_10:
+  type: fixture
+  name: Star 10 Points
+  color_model: rgb
+  bulb_diameter: 0.07
+  geometry:
+    type: points
+    points:
+      - { x: 0.0, y: 0.55, z: 0.0 }
+      - { x: 0.16, y: 0.16, z: 0.0 }
+      - { x: 0.55, y: 0.16, z: 0.0 }
+      - { x: 0.24, y: -0.08, z: 0.0 }
+      - { x: 0.34, y: -0.48, z: 0.0 }
+      - { x: 0.0, y: -0.24, z: 0.0 }
+      - { x: -0.34, y: -0.48, z: 0.0 }
+      - { x: -0.24, y: -0.08, z: 0.0 }
+      - { x: -0.55, y: 0.16, z: 0.0 }
+      - { x: -0.16, y: 0.16, z: 0.0 }

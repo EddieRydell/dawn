@@ -11,6 +11,7 @@
 )]
 
 pub mod contracts;
+pub mod coordinator;
 pub mod logging;
 pub mod read_model;
 pub mod runtime;

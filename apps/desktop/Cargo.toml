@@ -10,6 +10,7 @@ default-run = "dawn-desktop"
 [dependencies]
 camino.workspace = true
 dawn-app-core = { path = "../../crates/dawn-app-core" }
+dawn-app-runtime = { path = "../../crates/dawn-app-runtime" }
 dawn-project = { path = "../../crates/dawn-project" }
 kira = { version = "0.12", features = ["aac", "isomp4"] }
 notify = "8"

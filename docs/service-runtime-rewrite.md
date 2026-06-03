@@ -9,18 +9,23 @@ tests and `pnpm check`.
 
 The new `dawn-app-runtime` crate exists and compiles in the workspace. It
 defines the first-pass contracts, service cores, read-model composition,
-bounded-channel runner surface, opt-in file logging, and focused service-core
-tests.
+bounded-channel runner surface, coordinator ownership, opt-in file logging, and
+focused service-core/coordinator tests.
 
-Desktop behavior has not changed yet. `apps/desktop` still routes through
-`dawn-app-core::app_model::AppModel`, and frontend commands still receive the
-current full `AppSnapshotDto`.
+Desktop behavior has started a narrow runtime-gated cutover. The
+`update_active_text`, explicit `open_project`, and explicit `open_file`
+commands now submit lifecycle or edit commands through the runtime
+`DocumentStore` before mutating `dawn-app-core::app_model::AppModel`. The
+frontend contract is unchanged and still receives the current full
+`AppSnapshotDto`; `AppModel` remains the compatibility snapshot publisher.
 
 ## Next Decision
 
-Plan the app coordinator and first desktop cutover slice. The next slice should
-choose one narrow command path, list affected files, and preserve `pnpm check`.
-Good candidates are `open_project`, `open_file`, or `update_active_text`.
+Choose the next desktop command cutover slice. `update_active_text`, explicit
+project opening, and explicit file opening are gated by the runtime, while
+startup restore, close file, active-tab changes, undo/redo, GUI edits,
+autosave, analysis, preview sync, and frontend store behavior remain on the
+existing `AppModel` path.
 
 ## Milestone Tracker
 
@@ -81,23 +86,27 @@ Affected files:
 - [x] Surface runner/service errors as fatal typed events.
 - [ ] Implement actual latest-only queue replacement semantics per message type.
 - [ ] Implement actual coalescing semantics per message type.
-- [ ] Add `AppCoordinator` for request IDs, service handles, routing policy,
+- [x] Add `AppCoordinator` for request IDs, service handles, routing policy,
   event fan-out, and read-model publication.
-- [ ] Add startup/shutdown orchestration for all service runners.
+- [x] Add startup/shutdown orchestration for all service runners.
 - [ ] Add runtime smoke tests for runner lifecycle, backpressure, and fatal
   event publication.
 
 Affected files:
 
 - `crates/dawn-app-runtime/src/runtime.rs`
-- Future coordinator files under `crates/dawn-app-runtime/src/**`
-- Runtime smoke tests under `crates/dawn-app-runtime/tests/**`
+- `crates/dawn-app-runtime/src/coordinator.rs`
+- `crates/dawn-app-runtime/tests/**`
 
 ### Phase 4: Desktop Adapter Cutover
 
 - [ ] Keep native dialogs, windows, shared preview buffers, native audio, file
   watcher adapters, and preview transport adapters in `apps/desktop`.
-- [ ] Add desktop-owned runtime state beside the old `AppModel` state.
+- [x] Add desktop-owned runtime state beside the old `AppModel` state.
+- [x] Runtime-gate `update_active_text` while preserving
+  `updateActiveText(text) -> AppSnapshotDto`.
+- [x] Runtime-gate explicit `open_project` and `open_file` while preserving
+  `AppSnapshotDto` command returns and `AppModel` snapshot publication.
 - [ ] Replace selected Tauri command wiring with explicit runtime commands that
   return minimal typed acknowledgements.
 - [ ] Emit read-model slice events from backend to frontend.
@@ -167,8 +176,10 @@ commands and events across bounded `crossbeam-channel` queues.
 
 Commands carry a `RequestId` and expected `Revision`. A command that targets an
 old revision is rejected with `RuntimeErrorKind::StaleRevision`; there is no
-last-write-wins behavior. Command acknowledgements are minimal and contain the
-accepted revision, not an app snapshot.
+last-write-wins behavior. Command acknowledgements are minimal and contain an
+optional target revision, not an app snapshot. Root and lifecycle commands use
+no target revision because their committed revisions are only known after
+service processing and event publication.
 
 ## Services
 

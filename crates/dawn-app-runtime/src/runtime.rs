@@ -21,7 +21,7 @@ pub enum BackpressurePolicy {
 pub enum RunnerMessage<C> {
     Command {
         request_id: RequestId,
-        expected_revision: Revision,
+        target_revision: Option<Revision>,
         command: C,
     },
     Shutdown,
@@ -47,7 +47,7 @@ impl<C: Send + 'static> ServiceHandle<C> {
     pub fn submit(
         &self,
         request_id: RequestId,
-        expected_revision: Revision,
+        target_revision: Option<Revision>,
         command: C,
     ) -> RuntimeResult<CommandAck> {
         if self.stopped.load(Ordering::SeqCst) {
@@ -59,14 +59,14 @@ impl<C: Send + 'static> ServiceHandle<C> {
         }
         let message = RunnerMessage::Command {
             request_id,
-            expected_revision,
+            target_revision,
             command,
         };
         match self.tx.try_send(message) {
             Ok(()) => Ok(CommandAck {
                 request_id,
                 service: self.service.clone(),
-                accepted_revision: expected_revision,
+                target_revision,
             }),
             Err(TrySendError::Full(_)) => Err(RuntimeError::new(
                 self.service.clone(),
@@ -135,50 +135,31 @@ fn run_loop<C>(
         match message {
             RunnerMessage::Command {
                 request_id,
-                expected_revision,
+                target_revision: _,
                 command,
-            } => {
-                if expected_revision != core.revision() {
+            } => match core.handle(command) {
+                Ok(core_events) => {
+                    for event in core_events {
+                        let _ = events.send(envelope(
+                            Some(request_id),
+                            core.service_name(),
+                            &sequence,
+                            event,
+                        ));
+                    }
+                }
+                Err(error) => {
                     let _ = events.send(envelope(
                         Some(request_id),
                         core.service_name(),
                         &sequence,
                         Event::Fatal {
-                            service: core.service_name(),
-                            message: RuntimeError::stale(
-                                core.service_name(),
-                                expected_revision,
-                                core.revision(),
-                            )
-                            .to_string(),
+                            service: error.service,
+                            message: error.message,
                         },
                     ));
-                    continue;
                 }
-                match core.handle(command) {
-                    Ok(core_events) => {
-                        for event in core_events {
-                            let _ = events.send(envelope(
-                                Some(request_id),
-                                core.service_name(),
-                                &sequence,
-                                event,
-                            ));
-                        }
-                    }
-                    Err(error) => {
-                        let _ = events.send(envelope(
-                            Some(request_id),
-                            core.service_name(),
-                            &sequence,
-                            Event::Fatal {
-                                service: error.service,
-                                message: error.message,
-                            },
-                        ));
-                    }
-                }
-            }
+            },
             RunnerMessage::Shutdown => {
                 stopped.store(true, Ordering::SeqCst);
                 return;

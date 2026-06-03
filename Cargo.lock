@@ -929,6 +929,7 @@ version = "0.1.0"
 dependencies = [
  "camino",
  "dawn-app-core",
+ "dawn-app-runtime",
  "dawn-project",
  "kira",
  "notify",

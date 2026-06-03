@@ -132,7 +132,7 @@ pub type RuntimeResult<T> = Result<T, RuntimeError>;
 pub struct CommandAck {
     pub request_id: RequestId,
     pub service: ServiceName,
-    pub accepted_revision: Revision,
+    pub target_revision: Option<Revision>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
