@@ -11,7 +11,7 @@ use dawn_project::path::Utf8PathBuf;
 use std::path::PathBuf;
 
 use crate::actions::AppAction;
-use crate::dto::AppSnapshotDto;
+use crate::dto::RuntimeStateDto;
 use crate::dto::{
     FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto, SequenceMarkRefDto,
     SequencePasteAnchorDto, SequenceResizeEdgeDto, SequenceSelectionDto, SequenceSelectionEditDto,
@@ -316,7 +316,7 @@ impl AppModel {
         }
     }
 
-    pub fn snapshot_dto(&self) -> AppSnapshotDto {
+    pub fn snapshot_dto(&self) -> RuntimeStateDto {
         self.snapshot().into()
     }
 

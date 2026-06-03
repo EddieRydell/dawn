@@ -495,7 +495,7 @@ fn publish_live_output_frame(
     if model.live_output != snapshot {
         model.set_live_output_snapshot(snapshot);
         let dto = model.snapshot_dto();
-        let _ = app.emit("app_snapshot_changed", &dto);
+        let _ = app.emit("runtime_state_changed", &dto);
     }
 }
 

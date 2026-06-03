@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import type { AppSnapshotDto } from "../../bindings";
+import type { RuntimeStateDto } from "../../bindings";
 
 import type { GuiFocus, ReadyGuiDocumentDto, SequenceSelection } from "./shared";
 
@@ -23,7 +23,7 @@ export function GuiEditor({
   sequenceSelection,
   setSequenceSelection
 }: {
-  snapshot: AppSnapshotDto;
+  snapshot: RuntimeStateDto;
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
 }) {
@@ -55,7 +55,7 @@ function GuiEditorInner({
   setSequenceSelection
 }: {
   gui: ReadyGuiDocumentDto;
-  snapshot: AppSnapshotDto;
+  snapshot: RuntimeStateDto;
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
 }) {

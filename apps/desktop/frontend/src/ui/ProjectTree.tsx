@@ -5,8 +5,8 @@ import { useMemo, useState, type CSSProperties } from "react";
 import type { NodeApi } from "react-arborist";
 import { Tree } from "react-arborist";
 import { commands } from "../api";
-import type { AppSnapshotDto, ProjectDiagnosticDto, WorkspaceEntryDto } from "../bindings";
-import { runSnapshotCommand } from "../store";
+import type { RuntimeStateDto, ProjectDiagnosticDto, WorkspaceEntryDto } from "../bindings";
+import { runRuntimeCommand } from "../store";
 
 type TreeNode = {
   id: string;
@@ -16,7 +16,7 @@ type TreeNode = {
   children?: TreeNode[];
 };
 
-export function ProjectTree({ snapshot }: { snapshot: AppSnapshotDto }) {
+export function ProjectTree({ snapshot }: { snapshot: RuntimeStateDto }) {
   const treeData = useMemo(
     () => buildTree(snapshot.projectEntries, snapshot.diagnostics, snapshot.projectRoot),
     [snapshot.diagnostics, snapshot.projectEntries, snapshot.projectRoot]
@@ -45,7 +45,7 @@ export function ProjectTree({ snapshot }: { snapshot: AppSnapshotDto }) {
         openByDefault
         onActivate={(node) => {
           if (node.data.kind === "file") {
-            void runSnapshotCommand(() => commands.openFile(node.data.id));
+            void runRuntimeCommand(() => commands.openFile(node.data.id));
           }
         }}
       >
@@ -61,7 +61,7 @@ export function ProjectTree({ snapshot }: { snapshot: AppSnapshotDto }) {
               <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
               <AlertDialog.Action
                 onClick={() => {
-                  if (pendingDelete) void runSnapshotCommand(() => commands.deletePath(pendingDelete.id));
+                  if (pendingDelete) void runRuntimeCommand(() => commands.deletePath(pendingDelete.id));
                 }}
               >
                 Delete
@@ -193,15 +193,15 @@ function isAbsolutePath(path: string): boolean {
 
 function createFile(parent: string) {
   const name = window.prompt("File name");
-  if (name !== null && name !== "") void runSnapshotCommand(() => commands.createFile(parent, name));
+  if (name !== null && name !== "") void runRuntimeCommand(() => commands.createFile(parent, name));
 }
 
 function createDirectory(parent: string) {
   const name = window.prompt("Folder name");
-  if (name !== null && name !== "") void runSnapshotCommand(() => commands.createDirectory(parent, name));
+  if (name !== null && name !== "") void runRuntimeCommand(() => commands.createDirectory(parent, name));
 }
 
 function renameNode(node: TreeNode) {
   const newName = window.prompt("New name", node.name);
-  if (newName !== null && newName !== "" && newName !== node.name) void runSnapshotCommand(() => commands.renamePath(node.id, newName));
+  if (newName !== null && newName !== "" && newName !== node.name) void runRuntimeCommand(() => commands.renamePath(node.id, newName));
 }

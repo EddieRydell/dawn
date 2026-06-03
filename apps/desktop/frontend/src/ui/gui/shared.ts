@@ -1,4 +1,4 @@
-import type { ActiveGuiDocumentDto, AppSnapshotDto, GeometryRenderBoundsDto, GeometryRenderPointDto, LayoutDocumentDto, LayoutFixturePlacementDto, Point3MetersDto, SequenceSelectionDto, TransformDto } from "../../bindings";
+import type { ActiveGuiDocumentDto, RuntimeStateDto, GeometryRenderBoundsDto, GeometryRenderPointDto, LayoutDocumentDto, LayoutFixturePlacementDto, Point3MetersDto, SequenceSelectionDto, TransformDto } from "../../bindings";
 
 export type Point3 = { x: number; y: number; z: number };
 
@@ -42,9 +42,9 @@ export type PreviewTiming = {
   renderedFrame: boolean;
 };
 
-export type PreviewStateEvent = AppSnapshotDto["preview"] & { timing: PreviewTiming };
+export type PreviewStateEvent = RuntimeStateDto["preview"] & { timing: PreviewTiming };
 
-export type LivePreview = AppSnapshotDto["preview"] & { timing?: PreviewTiming };
+export type LivePreview = RuntimeStateDto["preview"] & { timing?: PreviewTiming };
 
 export type ReadyGuiDocumentDto = Exclude<ActiveGuiDocumentDto, { type: "blocked" }>;
 

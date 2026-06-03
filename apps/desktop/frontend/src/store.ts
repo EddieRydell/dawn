@@ -1,26 +1,26 @@
 import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { commands } from "./api";
-import type { AppSnapshotDto } from "./bindings";
+import type { RuntimeStateDto } from "./bindings";
 
 type AppStore = {
-  snapshot: AppSnapshotDto | null;
+  runtimeState: RuntimeStateDto | null;
   error: string | null;
   localText: string;
-  setSnapshot: (snapshot: AppSnapshotDto) => void;
+  setRuntimeState: (runtimeState: RuntimeStateDto) => void;
   setError: (error: string | null) => void;
   setLocalText: (text: string) => void;
   hydrate: () => Promise<void>;
 };
 
 export const useAppStore = create<AppStore>((set) => ({
-  snapshot: null,
+  runtimeState: null,
   error: null,
   localText: "",
-  setSnapshot: (snapshot) => {
+  setRuntimeState: (runtimeState) => {
     set({
-      snapshot,
-      localText: snapshot.activeBuffer?.text ?? ""
+      runtimeState,
+      localText: runtimeState.activeBuffer?.text ?? ""
     });
   },
   setError: (error) => {
@@ -30,28 +30,33 @@ export const useAppStore = create<AppStore>((set) => ({
     set({ localText });
   },
   hydrate: async () => {
-    const snapshot = await commands.getSnapshot();
-    set({ snapshot, localText: snapshot.activeBuffer?.text ?? "", error: null });
+    const runtimeState = await commands.getRuntimeState();
+    set({ runtimeState, localText: runtimeState.activeBuffer?.text ?? "", error: null });
   }
 }));
 
-export async function subscribeToSnapshots() {
-  const disposeSnapshots = await listen<AppSnapshotDto>("app_snapshot_changed", (event) => {
-    useAppStore.getState().setSnapshot(event.payload);
+export async function subscribeToRuntimeState() {
+  const disposeRuntimeState = await listen<RuntimeStateDto>("runtime_state_changed", (event) => {
+    useAppStore.getState().setRuntimeState(event.payload);
   });
   return () => {
-    disposeSnapshots();
+    disposeRuntimeState();
   };
 }
 
-export async function runSnapshotCommand(command: () => Promise<AppSnapshotDto>) {
+export async function runRuntimeCommand<T>(command: () => Promise<T>) {
   try {
-    const snapshot = await command();
-    useAppStore.getState().setSnapshot(snapshot);
+    const result = await command();
+    const runtimeState = isRuntimeState(result) ? result : await commands.getRuntimeState();
+    useAppStore.getState().setRuntimeState(runtimeState);
     useAppStore.getState().setError(null);
-    return snapshot;
+    return result;
   } catch (error) {
     useAppStore.getState().setError(String(error));
     throw error;
   }
+}
+
+function isRuntimeState(value: unknown): value is RuntimeStateDto {
+  return typeof value === "object" && value !== null && "activeBuffer" in value && "preview" in value;
 }

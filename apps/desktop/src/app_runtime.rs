@@ -1,6 +1,6 @@
 use dawn_app_core::actions::AppAction;
 use dawn_app_core::app_model::{AppModel, DispatchOutcome};
-use dawn_app_core::dto::{AppSnapshotDto, PreviewSnapshotDto};
+use dawn_app_core::dto::{PreviewSnapshotDto, RuntimeStateDto};
 use dawn_app_core::preview_session::{AudioPlaybackStatus, PreviewSnapshot};
 use dawn_project::document::SequenceAudioDocument;
 use tauri::{AppHandle, Emitter, State};
@@ -15,7 +15,7 @@ pub(crate) fn dispatch(
     app: &AppHandle,
     state: &State<'_, AppState>,
     action: AppAction,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     let clear_audio_runtime = should_clear_audio_runtime_for_action(&action);
     let mut model = lock_model(state)?;
     let outcome = model.dispatch(action)?;
@@ -30,7 +30,7 @@ pub(crate) fn dispatch(
             }
         }
         preload_active_preview_audio(state, &snapshot.preview);
-        app.emit("app_snapshot_changed", &snapshot)
+        app.emit("runtime_state_changed", &snapshot)
             .map_err(|error| error.to_string())?;
         emit_preview_state_dto(app, &snapshot)?;
     }
@@ -45,7 +45,7 @@ pub(crate) fn update_preview_from_audio_status(
     app: &AppHandle,
     state: &State<'_, AppState>,
     clock: AudioClock,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     let mut model = lock_model(state)?;
     let analysis = model.analysis.clone();
     apply_audio_clock_to_model(&mut model, &clock, analysis.as_ref());
@@ -165,9 +165,9 @@ pub(crate) fn preload_active_preview_audio(
 pub(crate) fn emit_model_snapshot(
     app: &AppHandle,
     model: &AppModel,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     let snapshot = model.snapshot_dto();
-    app.emit("app_snapshot_changed", &snapshot)
+    app.emit("runtime_state_changed", &snapshot)
         .map_err(|error| error.to_string())?;
     emit_preview_state_dto(app, &snapshot)?;
     Ok(snapshot)
@@ -175,7 +175,7 @@ pub(crate) fn emit_model_snapshot(
 
 pub(crate) fn emit_preview_state_dto(
     app: &AppHandle,
-    snapshot: &AppSnapshotDto,
+    snapshot: &RuntimeStateDto,
 ) -> CommandResult<()> {
     app.emit(
         "preview_state_changed",

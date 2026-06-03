@@ -5,7 +5,7 @@ import { commands } from "../../../../api";
 
 import type { ColorCurvePointDto, FloatCurvePointDto, SequenceCurveLibraryItemDto, SequenceEffectParamDto, SequenceEffectParamValueDto, SequenceMarkCollectionDto } from "../../../../bindings";
 
-import { runSnapshotCommand } from "../../../../store";
+import { runRuntimeCommand } from "../../../../store";
 
 import { Readout } from "../../InspectorScrollArea";
 import { clamp } from "../../shared";
@@ -36,7 +36,7 @@ export function EffectParamInput({
   markCollections: SequenceMarkCollectionDto[];
 }) {
   const commit = (value: SequenceEffectParamValueDto) => {
-    return runSnapshotCommand(() =>
+    return runRuntimeCommand(() =>
       commands.applySequenceGuiEdit({
         type: "updateEffectParam",
         id: effectId,
@@ -268,7 +268,7 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
     ? matchingCurves.findIndex((item) => item.path === source.path && item.objectKey === source.objectKey)
     : -1;
   const unlinkCopy = () =>
-    runSnapshotCommand(() =>
+    runRuntimeCommand(() =>
       commands.applySequenceGuiEdit({
         type: "unlinkEffectCurveParam",
         id: effectId,
@@ -307,7 +307,7 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
             }
             const first = matchingCurves[0];
             if (first === undefined) return;
-            void runSnapshotCommand(() =>
+            void runRuntimeCommand(() =>
               commands.applySequenceGuiEdit({
                 type: "linkEffectCurveParam",
                 id: effectId,
@@ -328,7 +328,7 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
           onChange={(event) => {
             const curve = matchingCurves[Number(event.currentTarget.value)];
             if (curve === undefined) return;
-            void runSnapshotCommand(() =>
+            void runRuntimeCommand(() =>
               commands.applySequenceGuiEdit({
                 type: "linkEffectCurveParam",
                 id: effectId,

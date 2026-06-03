@@ -17,14 +17,20 @@ runtime `DocumentStore`. Startup restore, explicit project and file opening,
 create-file auto-open, active-tab changes, close file, view-mode changes,
 active text edits, and text undo/redo submit runtime commands before
 `dawn-app-core::app_model::AppModel` mirrors the approved state for the
-existing `AppSnapshotDto` frontend contract.
+runtime-state frontend contract.
+
+The frontend no longer subscribes to `app_snapshot_changed` or calls
+`get_snapshot`. It hydrates from `get_runtime_state`, listens for
+`runtime_state_changed`, stores `runtimeState`, and consumes generated
+`RuntimeStateDto` bindings. The DTO currently preserves the previous wire shape
+while backend service ownership continues to move out of `AppModel`.
 
 ## Next Decision
 
 Choose the next runtime ownership slice outside editor lifecycle. GUI edits,
 autosave persistence, file watcher reconciliation, analysis/preview runtime
-parity, and frontend read-model migration remain on the existing `AppModel`
-compatibility path.
+parity, mutating-command acknowledgements, focused frontend slices, and final
+`AppModel` deletion remain on the existing compatibility path.
 
 ## Milestone Tracker
 
@@ -104,20 +110,22 @@ Affected files:
   watcher adapters, and preview transport adapters in `apps/desktop`.
 - [x] Add desktop-owned runtime state beside the old `AppModel` state.
 - [x] Runtime-gate `update_active_text` while preserving
-  `updateActiveText(text) -> AppSnapshotDto`.
+  `updateActiveText(text) -> RuntimeStateDto`.
 - [x] Runtime-gate explicit `open_project` and `open_file` while preserving
-  `AppSnapshotDto` command returns and `AppModel` snapshot publication.
+  `RuntimeStateDto` command returns and `AppModel` runtime-state publication.
 - [x] Runtime-gate explicit active-tab changes, close file, and view-mode
-  changes while preserving `AppSnapshotDto` command returns and `AppModel`
-  snapshot publication.
+  changes while preserving `RuntimeStateDto` command returns and `AppModel`
+  runtime-state publication.
 - [x] Runtime-own startup project/session restore, with `AppModel` only
   mirroring the restored compatibility snapshot.
 - [x] Runtime-gate create-file auto-open, active text undo, and active text
-  redo while preserving `AppSnapshotDto` command returns.
+  redo while preserving `RuntimeStateDto` command returns.
+- [x] Replace `get_snapshot`/`app_snapshot_changed` with
+  `get_runtime_state`/`runtime_state_changed`.
+- [x] Generate TypeScript bindings with the public `RuntimeStateDto` contract.
 - [ ] Replace selected Tauri command wiring with explicit runtime commands that
   return minimal typed acknowledgements.
 - [ ] Emit read-model slice events from backend to frontend.
-- [ ] Generate TypeScript bindings from Rust runtime contracts.
 - [ ] Move FSEQ export to a background task with task status records.
 - [ ] Preserve old `AppModel` route until service parity is proven.
 - [ ] Delete old `AppModel` dispatch route only after full parity and frontend
@@ -138,13 +146,18 @@ Affected files:
 
 ### Phase 5: Frontend Read-Model Migration
 
-- [ ] Replace the single snapshot store with focused Zustand slices/hooks.
+- [x] Replace the frontend snapshot store name and event subscription with
+  runtime-state hydration and `runtimeState` storage.
+- [ ] Replace the single runtime-state store with focused Zustand slices/hooks.
 - [ ] Preserve current screens and workflows.
 - [ ] Add targeted UI for stale/updating state, autosave/task status,
   conflicts, and fatal runtime errors.
 - [ ] Use frontend draft previews for interactions; committed state comes from
   backend ack/read-model events.
-- [ ] Remove old snapshot assumptions after all commands use runtime slices.
+- [x] Remove frontend dependency on `AppSnapshotDto`, `getSnapshot`,
+  `runSnapshotCommand`, and `app_snapshot_changed`.
+- [ ] Remove remaining full-state assumptions after all commands use runtime
+  slices and acknowledgements.
 
 Affected files:
 

@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { commands } from "../api";
 import { installGlobalShortcuts } from "../commandRegistry";
-import { runSnapshotCommand, subscribeToSnapshots, useAppStore } from "../store";
+import { runRuntimeCommand, subscribeToRuntimeState, useAppStore } from "../store";
 import { EditorPane } from "./EditorPane";
 import { ExportFseqDialog } from "./ExportFseqDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
@@ -10,13 +10,13 @@ import { StatusBar } from "./StatusBar";
 import { TitleBar } from "./TitleBar";
 
 export function App() {
-  const { snapshot, error, hydrate } = useAppStore();
+  const { runtimeState, error, hydrate } = useAppStore();
 
   useEffect(() => {
     void hydrate();
     const disposeShortcuts = installGlobalShortcuts();
     let disposeEvents: (() => void) | undefined;
-    void subscribeToSnapshots().then((dispose) => {
+    void subscribeToRuntimeState().then((dispose) => {
       disposeEvents = dispose;
     });
     return () => {
@@ -25,7 +25,7 @@ export function App() {
     };
   }, [hydrate]);
 
-  if (!snapshot) {
+  if (!runtimeState) {
     return <div className="app-loading">Dawn</div>;
   }
 
@@ -34,15 +34,15 @@ export function App() {
       <TitleBar />
       {error !== null && error !== "" && <div className="error-strip">{error}</div>}
       <main className="workbench">
-        {snapshot.projectTreeVisible ? <ProjectTree snapshot={snapshot} /> : null}
-        <EditorPane snapshot={snapshot} />
+        {runtimeState.projectTreeVisible ? <ProjectTree snapshot={runtimeState} /> : null}
+        <EditorPane snapshot={runtimeState} />
       </main>
-      <StatusBar snapshot={snapshot} />
+      <StatusBar snapshot={runtimeState} />
       <NewProjectDialog />
       <ExportFseqDialog />
-      {snapshot.projectRoot === null && (
+      {runtimeState.projectRoot === null && (
         <div className="empty-project">
-          <button onClick={() => void runSnapshotCommand(commands.openProjectDialog)}>Open Project</button>
+          <button onClick={() => void runRuntimeCommand(commands.openProjectDialog)}>Open Project</button>
         </div>
       )}
     </div>

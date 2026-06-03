@@ -1,6 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
 import { commands as generatedCommands } from "./bindings";
-import type { AppSnapshotDto, SequenceEffectPreviewRequestEffectDto } from "./bindings";
+import type { SequenceEffectPreviewRequestEffectDto } from "./bindings";
 
 type GeneratedResult<T> = Promise<{ status: "ok"; data: T } | { status: "error"; error: string }>;
 
@@ -12,12 +11,8 @@ async function unwrap<T>(result: GeneratedResult<T>): Promise<T> {
   return resolved.data;
 }
 
-async function rawInvoke<T>(command: string): Promise<T> {
-  return await invoke<T>(command);
-}
-
 export const commands = {
-  getSnapshot: () => unwrap(generatedCommands.getSnapshot()),
+  getRuntimeState: () => unwrap(generatedCommands.getRuntimeState()),
   openProjectDialog: () => unwrap(generatedCommands.openProjectDialog()),
   openProject: (path: string) => unwrap(generatedCommands.openProject(path)),
   chooseNewProjectParentDirectory: () => unwrap(generatedCommands.chooseNewProjectParentDirectory()),
@@ -50,8 +45,8 @@ export const commands = {
   applyFixtureGuiEdit: (edit: Parameters<typeof generatedCommands.applyFixtureGuiEdit>[0]) =>
     unwrap(generatedCommands.applyFixtureGuiEdit(edit)),
   flushAutosave: () => unwrap(generatedCommands.flushAutosave()),
-  reloadActiveBufferFromDisk: () => rawInvoke<AppSnapshotDto>("reload_active_buffer_from_disk"),
-  keepActiveBuffer: () => rawInvoke<AppSnapshotDto>("keep_active_buffer"),
+  reloadActiveBufferFromDisk: () => unwrap(generatedCommands.reloadActiveBufferFromDisk()),
+  keepActiveBuffer: () => unwrap(generatedCommands.keepActiveBuffer()),
   createFile: (parent: string, name: string) => unwrap(generatedCommands.createFile(parent, name)),
   createDirectory: (parent: string, name: string) => unwrap(generatedCommands.createDirectory(parent, name)),
   renamePath: (path: string, newName: string) => unwrap(generatedCommands.renamePath(path, newName)),

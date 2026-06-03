@@ -3,7 +3,7 @@ import { FolderOpen } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { commands } from "../api";
-import { useAppStore } from "../store";
+import { runRuntimeCommand, useAppStore } from "../store";
 
 const NEW_PROJECT_EVENT = "dawn:new-project";
 
@@ -50,8 +50,7 @@ export function NewProjectDialog() {
     setCreating(true);
     setError(null);
     try {
-      const snapshot = await commands.createNewProject(parentPath, directoryName);
-      useAppStore.getState().setSnapshot(snapshot);
+      await runRuntimeCommand(() => commands.createNewProject(parentPath, directoryName));
       useAppStore.getState().setError(null);
       setOpen(false);
       setDirectoryName("");

@@ -2,7 +2,7 @@ import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { commands } from "../api";
-import { useAppStore } from "../store";
+import { runRuntimeCommand, useAppStore } from "../store";
 
 const EXPORT_FSEQ_EVENT = "dawn:export-fseq";
 const DEFAULT_STEP_MS = 50;
@@ -39,12 +39,10 @@ export function ExportFseqDialog() {
     setError(null);
     try {
       const store = useAppStore.getState();
-      if (store.snapshot?.activeBuffer?.viewMode === "text") {
-        const textSnapshot = await commands.updateActiveText(store.localText);
-        store.setSnapshot(textSnapshot);
+      if (store.runtimeState?.activeBuffer?.viewMode === "text") {
+        await runRuntimeCommand(() => commands.updateActiveText(store.localText));
       }
-      const snapshot = await commands.exportActiveSequenceFseq(parsedStepMs);
-      useAppStore.getState().setSnapshot(snapshot);
+      await runRuntimeCommand(() => commands.exportActiveSequenceFseq(parsedStepMs));
       useAppStore.getState().setError(null);
       setOpen(false);
     } catch (caught) {

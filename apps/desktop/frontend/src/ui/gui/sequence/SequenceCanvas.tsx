@@ -10,7 +10,7 @@ import { commands } from "../../../api";
 
 import type { LayoutTargetDto, SequenceAudioDto, SequenceDocumentDto, SequenceEffectPreviewDto, SequenceEffectPreviewResultDto, SequenceEffectScopeDto, SequenceEffectScriptDto } from "../../../bindings";
 
-import { runSnapshotCommand } from "../../../store";
+import { runRuntimeCommand } from "../../../store";
 
 import { clamp, formatSeconds, roundToNanosecond, type GuiFocus, type SequenceSelection } from "../shared";
 
@@ -549,7 +549,7 @@ export function SequenceCanvas({
     const x = event.nativeEvent.offsetX;
     if (x < left) return;
     const positionSeconds = clamp(Math.round((viewport.scrollXSeconds + (x - left) / viewport.pxPerSecond) / SEQUENCE_CANVAS.scrubStepSeconds) * SEQUENCE_CANVAS.scrubStepSeconds, 0, document.durationSeconds);
-    void runSnapshotCommand(() => commands.previewSeek(positionSeconds));
+    void runRuntimeCommand(() => commands.previewSeek(positionSeconds));
   };
   const timeFromCanvasX = (x: number) => clamp(roundToNanosecond(viewport.scrollXSeconds + (x - left) / viewport.pxPerSecond), 0, document.durationSeconds);
   const addEffectFromContextMenu = async (script: SequenceEffectScriptDto, menu: SequenceContextMenu) => {
@@ -557,7 +557,7 @@ export function SequenceCanvas({
     let markCollectionKey = hasMarksParams ? activeMarkCollectionKey ?? document.markCollections[0]?.key ?? null : null;
     if (hasMarksParams && markCollectionKey === null) {
       const newCollectionKey = nextCollectionKey("Marks", document.markCollections);
-      await runSnapshotCommand(() =>
+      await runRuntimeCommand(() =>
         commands.applySequenceGuiEdit({
           type: "createMarkCollection",
           key: newCollectionKey,
@@ -572,7 +572,7 @@ export function SequenceCanvas({
     const target = document.lanes[menu.laneIndex]?.target ?? document.lanes[0]?.target;
     if (target === undefined) return;
     const scope: SequenceEffectScopeDto = target.kind === "group" ? "wholeTarget" : "perFixture";
-    await runSnapshotCommand(() =>
+    await runRuntimeCommand(() =>
       commands.applySequenceGuiEdit({
         type: "addEffect",
         script: script.script,
@@ -587,7 +587,7 @@ export function SequenceCanvas({
     let targetCollectionKey = collectionKey;
     if (targetCollectionKey === null) {
       const newCollectionKey = nextCollectionKey("Marks", document.markCollections);
-      await runSnapshotCommand(() =>
+      await runRuntimeCommand(() =>
         commands.applySequenceGuiEdit({
           type: "createMarkCollection",
           key: newCollectionKey,
@@ -599,7 +599,7 @@ export function SequenceCanvas({
       setActiveMarkCollectionKey(targetCollectionKey);
       setVisibleMarkCollectionKeys(new Set([...visibleMarkCollectionKeys, targetCollectionKey]));
     }
-    await runSnapshotCommand(() =>
+    await runRuntimeCommand(() =>
       commands.applySequenceGuiEdit({
         type: "addMark",
         collectionKey: targetCollectionKey,
@@ -611,7 +611,7 @@ export function SequenceCanvas({
     let collectionKey = activeMarkCollectionKey ?? document.markCollections[0]?.key ?? null;
     if (collectionKey === null) {
       const newCollectionKey = nextCollectionKey("Marks", document.markCollections);
-      await runSnapshotCommand(() =>
+      await runRuntimeCommand(() =>
         commands.applySequenceGuiEdit({
           type: "createMarkCollection",
           key: newCollectionKey,
@@ -623,7 +623,7 @@ export function SequenceCanvas({
       setActiveMarkCollectionKey(newCollectionKey);
       setVisibleMarkCollectionKeys(new Set([...visibleMarkCollectionKeys, newCollectionKey]));
     }
-    await runSnapshotCommand(() =>
+    await runRuntimeCommand(() =>
       commands.applySequenceGuiEdit({
         type: "addMark",
         collectionKey,
@@ -638,12 +638,12 @@ export function SequenceCanvas({
     setSelected({ type: "mark", collectionKey, index: Math.max(0, nextIndex) });
   };
   const deleteSelectedEffect = async (effectId: number) => {
-    await runSnapshotCommand(() => commands.applySequenceGuiEdit({ type: "deleteEffect", id: effectId }));
+    await runRuntimeCommand(() => commands.applySequenceGuiEdit({ type: "deleteEffect", id: effectId }));
     setSelected(null);
     updateSequenceSelection(null);
   };
   const deleteContextMark = async (menu: Extract<SequenceContextMenu, { kind: "mark" }>) => {
-    await runSnapshotCommand(() =>
+    await runRuntimeCommand(() =>
       commands.applySequenceGuiEdit({
         type: "deleteMark",
         collectionKey: menu.collectionKey,
@@ -654,7 +654,7 @@ export function SequenceCanvas({
     updateSequenceSelection(null);
   };
   const retargetContextEffect = async (effectId: number, target: LayoutTargetDto) => {
-    await runSnapshotCommand(() => commands.applySequenceGuiEdit({ type: "retargetEffect", id: effectId, target }));
+    await runRuntimeCommand(() => commands.applySequenceGuiEdit({ type: "retargetEffect", id: effectId, target }));
   };
   const markCollectionsForMenu = () => {
     if (activeMarkCollectionKey === null) return document.markCollections;
@@ -716,7 +716,7 @@ export function SequenceCanvas({
           const nextPreviews: MarkPreviewLookup = new Map();
           setMarkPreview(nextPreviews, selectedMark, { collectionKey: selectedMark.collectionKey, index: selectedMark.index, timeSeconds: nextTimeSeconds, committedIndex: nextIndex });
           setMarkPreviews(nextPreviews);
-          void runSnapshotCommand(() =>
+          void runRuntimeCommand(() =>
             commands.applySequenceGuiEdit({
               type: "moveMark",
               collectionKey: selectedMark.collectionKey,
@@ -743,7 +743,7 @@ export function SequenceCanvas({
           return;
         }
         if (selectedMark === null) return;
-        void runSnapshotCommand(() =>
+        void runRuntimeCommand(() =>
           commands.applySequenceGuiEdit({
             type: "deleteMark",
             collectionKey: selectedMark.collectionKey,
@@ -984,7 +984,7 @@ export function SequenceCanvas({
           const timeSeconds = clamp(current.originalTimeSeconds + deltaSeconds, 0, document.durationSeconds);
           const collection = document.markCollections.find((candidate) => candidate.key === current.collectionKey);
           const nextIndex = collection === undefined ? current.index : markIndexAfterMove(collection, current.index, timeSeconds);
-          void runSnapshotCommand(() =>
+          void runRuntimeCommand(() =>
             commands.applySequenceGuiEdit({
               type: "moveMark",
               collectionKey: current.collectionKey,
@@ -1032,7 +1032,7 @@ export function SequenceCanvas({
                 startSeconds: committedPreview.startSeconds,
                 durationSeconds: committedPreview.durationSeconds
               });
-        void runSnapshotCommand(edit).finally(() => {
+        void runRuntimeCommand(edit).finally(() => {
           setPreview((currentPreview) => (currentPreview === committedPreview ? null : currentPreview));
           setGroupPreview([]);
         });
@@ -1119,7 +1119,7 @@ export function SequenceCanvas({
               <ContextMenu.Item
                 className="menu-item"
                 onSelect={() => {
-                  void runSnapshotCommand(() => commands.previewSeek(sequenceContextMenu.startSeconds));
+                  void runRuntimeCommand(() => commands.previewSeek(sequenceContextMenu.startSeconds));
                 }}
               >
                 Set Playhead Here

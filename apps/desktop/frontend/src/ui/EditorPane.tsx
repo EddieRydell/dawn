@@ -9,17 +9,17 @@ import { tags } from "@lezer/highlight";
 import { RefreshCw, Save, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { commands } from "../api";
-import type { AppSnapshotDto, ProjectDiagnosticDto, SequenceSelectionDto, TextRangeDto } from "../bindings";
+import type { RuntimeStateDto, ProjectDiagnosticDto, SequenceSelectionDto, TextRangeDto } from "../bindings";
 import { commandRegistry } from "../commandRegistry";
-import { runSnapshotCommand, useAppStore } from "../store";
+import { runRuntimeCommand, useAppStore } from "../store";
 import { GuiEditor } from "./gui/GuiEditor";
 import { SequenceTransportControls } from "./gui/sequence/SequenceTransportControls";
 
 type BufferExternalState = "current" | "changedOnDisk" | "deletedOnDisk";
-type EditorBufferWithExternalState = NonNullable<AppSnapshotDto["activeBuffer"]>;
+type EditorBufferWithExternalState = NonNullable<RuntimeStateDto["activeBuffer"]>;
 type PathSelection = { path: string | null; selection: SequenceSelectionDto | null };
 
-export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
+export function EditorPane({ snapshot }: { snapshot: RuntimeStateDto }) {
   const { localText, setLocalText } = useAppStore();
   const editorHost = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
@@ -80,10 +80,10 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
         async (text, redo) => {
           window.clearTimeout(autosaveTimer);
           if (!redo) {
-            await runSnapshotCommand(() => commands.updateActiveText(text));
-            await runSnapshotCommand(commands.undoActiveEdit);
+            await runRuntimeCommand(() => commands.updateActiveText(text));
+            await runRuntimeCommand(commands.undoActiveEdit);
           } else {
-            await runSnapshotCommand(commands.redoActiveEdit);
+            await runRuntimeCommand(commands.redoActiveEdit);
           }
         }
       )
@@ -140,7 +140,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
           <button
             key={tab.path}
             className={`tab ${tab.path === snapshot.activeFile ? "active" : ""}`}
-            onClick={() => void runSnapshotCommand(() => commands.setActiveFile(tab.path))}
+            onClick={() => void runRuntimeCommand(() => commands.setActiveFile(tab.path))}
           >
             <span>{tab.name}</span>
             {tab.dirty && <span className="dirty-dot" />}
@@ -149,7 +149,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
               size={14}
               onClick={(event) => {
                 event.stopPropagation();
-                void runSnapshotCommand(() => commands.closeFile(tab.path));
+                void runRuntimeCommand(() => commands.closeFile(tab.path));
               }}
             />
           </button>
@@ -168,13 +168,13 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
         <div className="segmented-control">
           <button
             className={viewMode === "text" ? "active" : ""}
-            onClick={() => void runSnapshotCommand(() => commands.setActiveViewMode("text"))}
+            onClick={() => void runRuntimeCommand(() => commands.setActiveViewMode("text"))}
           >
             Text
           </button>
           <button
             className={viewMode === "gui" ? "active" : ""}
-            onClick={() => void runSnapshotCommand(() => commands.setActiveViewMode("gui"))}
+            onClick={() => void runRuntimeCommand(() => commands.setActiveViewMode("gui"))}
           >
             GUI
           </button>
@@ -187,11 +187,11 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
               ? "This file was deleted on disk."
               : "This file changed on disk."}
           </span>
-          <button type="button" onClick={() => void runSnapshotCommand(commands.reloadActiveBufferFromDisk)}>
+          <button type="button" onClick={() => void runRuntimeCommand(commands.reloadActiveBufferFromDisk)}>
             <RefreshCw size={14} />
             Reload from Disk
           </button>
-          <button type="button" onClick={() => void runSnapshotCommand(commands.keepActiveBuffer)}>
+          <button type="button" onClick={() => void runRuntimeCommand(commands.keepActiveBuffer)}>
             <Save size={14} />
             Keep Mine
           </button>
@@ -403,8 +403,8 @@ let autosaveTimer: number | undefined;
 function scheduleAutosave(text: string) {
   window.clearTimeout(autosaveTimer);
   autosaveTimer = window.setTimeout(() => {
-    void runSnapshotCommand(() => commands.updateActiveText(text)).then(() =>
-      runSnapshotCommand(commands.flushAutosave)
+    void runRuntimeCommand(() => commands.updateActiveText(text)).then(() =>
+      runRuntimeCommand(commands.flushAutosave)
     );
   }, 450);
 }
@@ -413,7 +413,7 @@ function activeBufferExternalState(buffer: EditorBufferWithExternalState | null)
   return buffer?.externalState ?? "current";
 }
 
-function tabExternalState(tab: AppSnapshotDto["tabs"][number]): BufferExternalState {
+function tabExternalState(tab: RuntimeStateDto["tabs"][number]): BufferExternalState {
   return tab.externalState;
 }
 

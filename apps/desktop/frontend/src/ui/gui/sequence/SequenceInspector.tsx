@@ -1,6 +1,6 @@
 import type { SequenceDocumentDto, SequenceEffectDto, SequenceEffectScopeDto, SequenceEffectScriptDto } from "../../../bindings";
 import { commands } from "../../../api";
-import { runSnapshotCommand } from "../../../store";
+import { runRuntimeCommand } from "../../../store";
 import { InspectorScrollArea, Readout } from "../InspectorScrollArea";
 import { formatSeconds, roundToNanosecond, type GuiFocus, type SequenceSelection } from "../shared";
 import { ColorField, EffectParamInput } from "./params/EffectParamInput";
@@ -46,7 +46,7 @@ const id = selectedEffectId(selected);
     const createCollection = () => {
       const name = "Marks";
       const key = nextCollectionKey(name, document.markCollections);
-      void runSnapshotCommand(() =>
+      void runRuntimeCommand(() =>
         commands.applySequenceGuiEdit({
           type: "createMarkCollection",
           key,
@@ -81,7 +81,7 @@ const id = selectedEffectId(selected);
     const deleteActiveCollection = () => {
       if (activeCollection === null) return;
       if (activeCollection.marksSeconds.length > 0 && !window.confirm(`Delete ${activeCollection.name} and ${activeCollection.marksSeconds.length} marks?`)) return;
-      void runSnapshotCommand(() =>
+      void runRuntimeCommand(() =>
         commands.applySequenceGuiEdit({
           type: "deleteMarkCollection",
           key: activeCollection.key
@@ -103,7 +103,7 @@ const id = selectedEffectId(selected);
           <button
             type="button"
             onClick={() =>
-              void runSnapshotCommand(() =>
+              void runRuntimeCommand(() =>
                 commands.applySequenceGuiEdit({
                   type: "deleteMark",
                   collectionKey: selectedMark.collectionKey,
@@ -122,7 +122,7 @@ const id = selectedEffectId(selected);
     if (effect !== undefined) {
       const currentScriptValue = selectedEffectScriptValue(effect, document.effectScripts);
       const resizeEffect = (startSeconds: number, durationSeconds: number) =>
-        runSnapshotCommand(() =>
+        runRuntimeCommand(() =>
           commands.applySequenceGuiEdit({
             type: "resizeEffect",
             id: effect.id,
@@ -175,7 +175,7 @@ const id = selectedEffectId(selected);
               onChange={(event) => {
                 const script = document.effectScripts[Number(event.currentTarget.value)]?.script;
                 if (script === undefined) return;
-                void runSnapshotCommand(() =>
+                void runRuntimeCommand(() =>
                   commands.applySequenceGuiEdit({
                     type: "changeEffectScript",
                     id: effect.id,
@@ -197,7 +197,7 @@ const id = selectedEffectId(selected);
             <select
               value={effect.scope}
               onChange={(event) =>
-                void runSnapshotCommand(() =>
+                void runRuntimeCommand(() =>
                   commands.applySequenceGuiEdit({
                     type: "setEffectScope",
                     id: effect.id,
@@ -224,7 +224,7 @@ const id = selectedEffectId(selected);
               ))}
             </div>
           )}
-          <button onClick={() => void runSnapshotCommand(() => commands.applySequenceGuiEdit({ type: "deleteEffect", id: effect.id }))}>Delete</button>
+          <button onClick={() => void runRuntimeCommand(() => commands.applySequenceGuiEdit({ type: "deleteEffect", id: effect.id }))}>Delete</button>
         </InspectorScrollArea>
       );
     }
@@ -259,7 +259,7 @@ const id = selectedEffectId(selected);
                       onBlur={(event) => {
                         const name = event.currentTarget.value.trim() || activeCollection.name;
                         if (name === activeCollection.name) return;
-                        void runSnapshotCommand(() =>
+                        void runRuntimeCommand(() =>
                           commands.applySequenceGuiEdit({ type: "renameMarkCollection", key: activeCollection.key, name })
                         );
                       }}
@@ -270,7 +270,7 @@ const id = selectedEffectId(selected);
                     label="Color"
                     value={activeCollection.color}
                     commit={(color) =>
-                      runSnapshotCommand(() =>
+                      runRuntimeCommand(() =>
                         commands.applySequenceGuiEdit({
                           type: "setMarkCollectionColor",
                           key: activeCollection.key,

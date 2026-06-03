@@ -4,7 +4,7 @@ import { commands } from "../../../api";
 
 import type { FixtureDocumentDto } from "../../../bindings";
 
-import { runSnapshotCommand } from "../../../store";
+import { runRuntimeCommand } from "../../../store";
 
 import { denormalizePoint, drawSpatialCanvas, nearestPoint, normalizeBounds, normalizePoint, round6, unproject, type GuiFocus, type Point3 } from "../shared";
 import { BlockedGui } from "../BlockedGui";
@@ -81,7 +81,7 @@ export function FixtureCanvas({
         const current = drag.current;
         drag.current = null;
         if (!current) return;
-        void runSnapshotCommand(() =>
+        void runRuntimeCommand(() =>
           commands.applyFixtureGuiEdit({
             type: "movePoint",
             objectKey: current.objectKey,

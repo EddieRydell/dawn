@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use dawn_app_core::actions::AppAction;
 use dawn_app_core::app_model::{ActiveGuiDocument, RuntimeSessionMirrorBuffer};
 use dawn_app_core::dto::{
-    AppSnapshotDto, EditorViewModeDto, FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto,
+    EditorViewModeDto, FixtureGuiEditDto, LayoutGuiEditDto, RuntimeStateDto, SequenceGuiEditDto,
     SequenceSelectionEditDto, SequenceSelectionEditResultDto,
 };
 use dawn_app_core::editor_session::EditorViewMode;
@@ -34,7 +34,7 @@ use crate::state::{
 
 #[specta::specta]
 #[tauri::command]
-fn get_snapshot(state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
+fn get_runtime_state(state: State<'_, AppState>) -> CommandResult<RuntimeStateDto> {
     hydrate_startup_session(&state)?;
     let live_output = lock_live_output(&state)?.snapshot();
     let mut model = lock_model(&state)?;
@@ -104,12 +104,12 @@ fn hydrate_startup_session(state: &State<'_, AppState>) -> CommandResult<()> {
 fn open_project_dialog(
     app: AppHandle,
     state: State<'_, AppState>,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     let Some(path) = rfd::FileDialog::new()
         .set_title("Open Dawn Project")
         .pick_folder()
     else {
-        return get_snapshot(state);
+        return get_runtime_state(state);
     };
     open_project_runtime_then_model(&app, &state, path)
 }
@@ -120,7 +120,7 @@ fn open_project(
     app: AppHandle,
     state: State<'_, AppState>,
     path: String,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     open_project_runtime_then_model(&app, &state, PathBuf::from(path))
 }
 
@@ -140,7 +140,7 @@ fn create_new_project(
     state: State<'_, AppState>,
     parent_path: String,
     directory_name: String,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     let target = create_starter_project(&parent_path, &directory_name)?;
     open_project_runtime_then_model(&app, &state, target)?;
     open_file_runtime_then_model(
@@ -157,7 +157,7 @@ fn open_file(
     app: AppHandle,
     state: State<'_, AppState>,
     path: String,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     open_file_runtime_then_model(&app, &state, project_path(path))
 }
 
@@ -165,7 +165,7 @@ fn open_project_runtime_then_model(
     app: &AppHandle,
     state: &State<'_, AppState>,
     path: PathBuf,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     lock_model(state)?.prepare_for_runtime_project_open()?;
     let root = project_root_display_for_open_path(&path)?;
     lock_runtime(state)?.open_project(root)?;
@@ -197,7 +197,7 @@ fn open_file_runtime_then_model(
     app: &AppHandle,
     state: &State<'_, AppState>,
     path: Utf8PathBuf,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     let (text, disk_version) = {
         let model = lock_model(state)?;
         model.workspace.read_file_with_version(path.clone())?
@@ -216,7 +216,7 @@ fn close_file(
     app: AppHandle,
     state: State<'_, AppState>,
     path: String,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     let path = project_path(path);
     lock_runtime(&state)?.close_buffer(path.clone())?;
     let mut model = lock_model(&state)?;
@@ -232,7 +232,7 @@ fn set_active_file(
     app: AppHandle,
     state: State<'_, AppState>,
     path: String,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     let path = project_path(path);
     lock_runtime(&state)?.set_active_buffer(path.clone())?;
     let mut model = lock_model(&state)?;
@@ -248,7 +248,7 @@ fn update_active_text(
     app: AppHandle,
     state: State<'_, AppState>,
     text: String,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     let active_buffer = {
         let model = lock_model(&state)?;
         let snapshot = model.snapshot();
@@ -276,7 +276,7 @@ fn set_active_view_mode(
     app: AppHandle,
     state: State<'_, AppState>,
     mode: EditorViewModeDto,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     set_active_view_mode_runtime_then_model(&app, &state, mode)
 }
 
@@ -284,7 +284,7 @@ fn set_active_view_mode_runtime_then_model(
     app: &AppHandle,
     state: &State<'_, AppState>,
     mode: EditorViewModeDto,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     let active_file = {
         let model = lock_model(state)?;
         let snapshot = model.snapshot();
@@ -324,7 +324,7 @@ fn runtime_view_mode_from_editor(mode: EditorViewMode) -> ViewMode {
 
 #[specta::specta]
 #[tauri::command]
-fn undo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
+fn undo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult<RuntimeStateDto> {
     let path = {
         let model = lock_model(&state)?;
         let snapshot = model.snapshot();
@@ -334,7 +334,7 @@ fn undo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult
         path
     };
     let Some(text) = lock_runtime(&state)?.undo_buffer_text(path)? else {
-        return get_snapshot(state);
+        return get_runtime_state(state);
     };
     let mut model = lock_model(&state)?;
     model.mirror_runtime_active_history_text(text, "Undo");
@@ -343,7 +343,7 @@ fn undo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult
 
 #[specta::specta]
 #[tauri::command]
-fn redo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
+fn redo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult<RuntimeStateDto> {
     let path = {
         let model = lock_model(&state)?;
         let snapshot = model.snapshot();
@@ -353,7 +353,7 @@ fn redo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult
         path
     };
     let Some(text) = lock_runtime(&state)?.redo_buffer_text(path)? else {
-        return get_snapshot(state);
+        return get_runtime_state(state);
     };
     let mut model = lock_model(&state)?;
     model.mirror_runtime_active_history_text(text, "Redo");
@@ -366,7 +366,7 @@ fn apply_sequence_gui_edit(
     app: AppHandle,
     state: State<'_, AppState>,
     edit: SequenceGuiEditDto,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     dispatch(&app, &state, AppAction::ApplySequenceGuiEdit(edit))
 }
 
@@ -388,7 +388,7 @@ fn apply_sequence_selection_edit(
 fn choose_sequence_audio(
     app: AppHandle,
     state: State<'_, AppState>,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     let (project_root, sequence_path) = {
         let model = lock_model(&state)?;
         let snapshot = model.snapshot();
@@ -423,7 +423,7 @@ fn choose_sequence_audio(
     }
 
     let Some(path) = dialog.pick_file() else {
-        return get_snapshot(state);
+        return get_runtime_state(state);
     };
     let import = serialized_import_path(&sequence_path, &utf8_path(path)?);
     dispatch(
@@ -440,7 +440,7 @@ fn choose_sequence_audio(
 fn clear_sequence_audio(
     app: AppHandle,
     state: State<'_, AppState>,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     dispatch(
         &app,
         &state,
@@ -454,7 +454,7 @@ fn export_active_sequence_fseq(
     app: AppHandle,
     state: State<'_, AppState>,
     step_ms: u8,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     let (analysis, document, default_name) = {
         let model = lock_model(&state)?;
         let analysis = model
@@ -499,7 +499,7 @@ fn export_active_sequence_fseq(
         .add_filter("FSEQ", &["fseq"])
         .save_file()
     else {
-        return get_snapshot(state);
+        return get_runtime_state(state);
     };
 
     let report = export_fseq_file(
@@ -570,7 +570,7 @@ fn apply_layout_gui_edit(
     app: AppHandle,
     state: State<'_, AppState>,
     edit: LayoutGuiEditDto,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     dispatch(&app, &state, AppAction::ApplyLayoutGuiEdit(edit))
 }
 
@@ -580,13 +580,13 @@ fn apply_fixture_gui_edit(
     app: AppHandle,
     state: State<'_, AppState>,
     edit: FixtureGuiEditDto,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     dispatch(&app, &state, AppAction::ApplyFixtureGuiEdit(edit))
 }
 
 #[specta::specta]
 #[tauri::command]
-fn flush_autosave(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
+fn flush_autosave(app: AppHandle, state: State<'_, AppState>) -> CommandResult<RuntimeStateDto> {
     dispatch(&app, &state, AppAction::FlushAutosave)
 }
 
@@ -595,13 +595,16 @@ fn flush_autosave(app: AppHandle, state: State<'_, AppState>) -> CommandResult<A
 fn reload_active_buffer_from_disk(
     app: AppHandle,
     state: State<'_, AppState>,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     dispatch(&app, &state, AppAction::ReloadActiveBufferFromDisk)
 }
 
 #[specta::specta]
 #[tauri::command]
-fn keep_active_buffer(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
+fn keep_active_buffer(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<RuntimeStateDto> {
     dispatch(&app, &state, AppAction::KeepActiveBuffer)
 }
 
@@ -612,7 +615,7 @@ fn create_file(
     state: State<'_, AppState>,
     parent: String,
     name: String,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     let created = lock_model(&state)?.create_file_for_runtime_open(project_path(parent), name)?;
     lock_runtime(&state)?.open_buffer(created.path.clone(), created.text.clone())?;
     let mut model = lock_model(&state)?;
@@ -634,7 +637,7 @@ fn create_directory(
     state: State<'_, AppState>,
     parent: String,
     name: String,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     dispatch(
         &app,
         &state,
@@ -652,7 +655,7 @@ fn rename_path(
     state: State<'_, AppState>,
     path: String,
     new_name: String,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     dispatch(
         &app,
         &state,
@@ -669,13 +672,13 @@ fn delete_path(
     app: AppHandle,
     state: State<'_, AppState>,
     path: String,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     dispatch(&app, &state, AppAction::DeletePath(project_path(path)))
 }
 
 #[specta::specta]
 #[tauri::command]
-fn reload_project(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
+fn reload_project(app: AppHandle, state: State<'_, AppState>) -> CommandResult<RuntimeStateDto> {
     dispatch(&app, &state, AppAction::ReloadProject)
 }
 
@@ -684,7 +687,7 @@ fn reload_project(app: AppHandle, state: State<'_, AppState>) -> CommandResult<A
 fn toggle_project_tree(
     app: AppHandle,
     state: State<'_, AppState>,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     dispatch(&app, &state, AppAction::ToggleProjectTree)
 }
 
@@ -694,7 +697,7 @@ fn set_effect_preview_enabled(
     app: AppHandle,
     state: State<'_, AppState>,
     enabled: bool,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     dispatch(&app, &state, AppAction::SetEffectPreviewEnabled(enabled))
 }
 
@@ -704,7 +707,7 @@ fn set_effect_preview_effects(
     app: AppHandle,
     state: State<'_, AppState>,
     ids: Vec<u32>,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     dispatch(&app, &state, AppAction::SetEffectPreviewEffects(ids))
 }
 
@@ -716,7 +719,7 @@ async fn open_preview_window(app: AppHandle, state: State<'_, AppState>) -> Comm
 
 #[specta::specta]
 #[tauri::command]
-fn preview_play(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
+fn preview_play(app: AppHandle, state: State<'_, AppState>) -> CommandResult<RuntimeStateDto> {
     let (audio, position_seconds, effect_preview_enabled) = {
         let model = lock_model(&state)?;
         let snapshot = model.preview.snapshot();
@@ -738,7 +741,7 @@ fn preview_play(app: AppHandle, state: State<'_, AppState>) -> CommandResult<App
 
 #[specta::specta]
 #[tauri::command]
-fn preview_pause(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
+fn preview_pause(app: AppHandle, state: State<'_, AppState>) -> CommandResult<RuntimeStateDto> {
     let has_audio = {
         let model = lock_model(&state)?;
         valid_sequence_audio(&model.preview.snapshot()).is_some()
@@ -759,7 +762,7 @@ fn preview_pause(app: AppHandle, state: State<'_, AppState>) -> CommandResult<Ap
 
 #[specta::specta]
 #[tauri::command]
-fn preview_stop(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
+fn preview_stop(app: AppHandle, state: State<'_, AppState>) -> CommandResult<RuntimeStateDto> {
     let (has_audio, home_seconds) = {
         let model = lock_model(&state)?;
         let snapshot = model.preview.snapshot();
@@ -785,7 +788,7 @@ fn preview_stop(app: AppHandle, state: State<'_, AppState>) -> CommandResult<App
 fn preview_rewind_to_zero(
     app: AppHandle,
     state: State<'_, AppState>,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     let has_audio = {
         let model = lock_model(&state)?;
         valid_sequence_audio(&model.preview.snapshot()).is_some()
@@ -810,7 +813,7 @@ fn preview_seek(
     app: AppHandle,
     state: State<'_, AppState>,
     position_seconds: f64,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     if !position_seconds.is_finite() || position_seconds < 0.0 {
         return Err("preview seek seconds must be finite and non-negative".to_string());
     }
@@ -839,7 +842,7 @@ fn set_live_output_enabled(
     app: AppHandle,
     state: State<'_, AppState>,
     enabled: bool,
-) -> CommandResult<AppSnapshotDto> {
+) -> CommandResult<RuntimeStateDto> {
     let analysis = lock_model(&state)?.analysis.clone();
     let snapshot = lock_live_output(&state)?.set_enabled(enabled, analysis.as_ref());
     let mut model = lock_model(&state)?;
@@ -888,7 +891,7 @@ pub(crate) fn register_commands(
     builder: tauri_specta::Builder<tauri::Wry>,
 ) -> tauri_specta::Builder<tauri::Wry> {
     builder.commands(tauri_specta::collect_commands![
-        get_snapshot,
+        get_runtime_state,
         open_project_dialog,
         open_project,
         choose_new_project_parent_directory,

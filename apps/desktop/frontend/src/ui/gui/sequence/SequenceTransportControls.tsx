@@ -6,9 +6,9 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { commands } from "../../../api";
 
-import type { AppSnapshotDto, AudioPlaybackStatus, SequenceDocumentDto } from "../../../bindings";
+import type { RuntimeStateDto, AudioPlaybackStatus, SequenceDocumentDto } from "../../../bindings";
 
-import { runSnapshotCommand } from "../../../store";
+import { runRuntimeCommand } from "../../../store";
 
 import { clamp, formatMs, formatSeconds, formatSignedMs, type LivePreview, type PreviewStateEvent, type PreviewTiming } from "../shared";
 import { setGlobalMarkDisplayMode, useMarkDisplayMode, type MarkDisplayMode } from "./marks";
@@ -21,8 +21,8 @@ export function SequenceTransportControls({
   selectedEffectIds
 }: {
   document: SequenceDocumentDto;
-  preview: AppSnapshotDto["preview"];
-  liveOutput: AppSnapshotDto["liveOutput"];
+  preview: RuntimeStateDto["preview"];
+  liveOutput: RuntimeStateDto["liveOutput"];
   effectPreviewEnabled: boolean;
   selectedEffectIds: number[];
 }) {
@@ -44,7 +44,7 @@ export function SequenceTransportControls({
   };
   useEffect(() => {
     if (!effectPreviewEnabled) return;
-    void runSnapshotCommand(() => commands.setEffectPreviewEffects(selectedEffectIds));
+    void runRuntimeCommand(() => commands.setEffectPreviewEffects(selectedEffectIds));
   }, [effectPreviewEnabled, selectedEffectIds, selectedEffectIdsSignature]);
   return (
     <div
@@ -58,14 +58,14 @@ export function SequenceTransportControls({
         type="button"
         title={audioQueued ? "Cancel queued playback" : audioLoading ? "Play when audio loads" : livePreview.isPlaying ? "Pause" : "Play"}
         disabled={unsupported}
-        onClick={() => void runSnapshotCommand(playCommand)}
+        onClick={() => void runRuntimeCommand(playCommand)}
       >
         {audioLoading ? <LoaderCircle className="sequence-loading-icon" size={15} /> : livePreview.isPlaying ? <Pause size={15} /> : <Play size={15} />}
       </button>
-      <button type="button" title="Stop" disabled={unsupported} onClick={() => void runSnapshotCommand(commands.previewStop)}>
+      <button type="button" title="Stop" disabled={unsupported} onClick={() => void runRuntimeCommand(commands.previewStop)}>
         <Square size={14} />
       </button>
-      <button type="button" title="Rewind to zero" disabled={unsupported} onClick={() => void runSnapshotCommand(commands.previewRewindToZero)}>
+      <button type="button" title="Rewind to zero" disabled={unsupported} onClick={() => void runRuntimeCommand(commands.previewRewindToZero)}>
         <SkipBack size={15} />
       </button>
       <button
@@ -92,7 +92,7 @@ export function SequenceTransportControls({
         type="button"
         className={liveOutput.enabled ? "active" : ""}
         title={liveOutput.lastError ?? `Live output: ${liveOutput.status}`}
-        onClick={() => void runSnapshotCommand(() => commands.setLiveOutputEnabled(!liveOutput.enabled))}
+        onClick={() => void runRuntimeCommand(() => commands.setLiveOutputEnabled(!liveOutput.enabled))}
       >
         <RadioTower size={15} />
       </button>
@@ -103,8 +103,8 @@ export function SequenceTransportControls({
         disabled={!effectPreviewEnabled && selectedEffectIds.length === 0}
         onClick={() => {
           const enabled = !effectPreviewEnabled;
-          void runSnapshotCommand(() => commands.setEffectPreviewEnabled(enabled)).then(() => {
-            if (enabled) void runSnapshotCommand(() => commands.setEffectPreviewEffects(selectedEffectIds));
+          void runRuntimeCommand(() => commands.setEffectPreviewEnabled(enabled)).then(() => {
+            if (enabled) void runRuntimeCommand(() => commands.setEffectPreviewEffects(selectedEffectIds));
           });
         }}
       >
@@ -113,7 +113,7 @@ export function SequenceTransportControls({
       <button
         type="button"
         title="Choose audio"
-        onClick={() => void runSnapshotCommand(commands.chooseSequenceAudio)}
+        onClick={() => void runRuntimeCommand(commands.chooseSequenceAudio)}
       >
         <Music size={15} />
       </button>
@@ -121,7 +121,7 @@ export function SequenceTransportControls({
         type="button"
         title="Clear audio"
         disabled={document.audio === null}
-        onClick={() => void runSnapshotCommand(commands.clearSequenceAudio)}
+        onClick={() => void runRuntimeCommand(commands.clearSequenceAudio)}
       >
         <X size={15} />
       </button>
@@ -149,7 +149,7 @@ export function SequenceTransportControls({
   );
 }
 
-export function useSequencePreview(preview: AppSnapshotDto["preview"]): LivePreview {
+export function useSequencePreview(preview: RuntimeStateDto["preview"]): LivePreview {
   const [eventPreview, setEventPreview] = useState<PreviewStateEvent | null>(null);
   const [animatedPositionSeconds, setAnimatedPositionSeconds] = useState(preview.positionSeconds);
   const anchor = useRef({
@@ -219,7 +219,7 @@ export function useSequencePreview(preview: AppSnapshotDto["preview"]): LivePrev
     : livePreview;
 }
 
-function useSequenceAudioStatus(preview: AppSnapshotDto["preview"]) {
+function useSequenceAudioStatus(preview: RuntimeStateDto["preview"]) {
   const [loadedNoticeVisible, setLoadedNoticeVisible] = useState(false);
   const previousStatus = useRef(preview.audioPlaybackStatus);
 
@@ -302,22 +302,22 @@ function isEditableShortcutTarget(target: EventTarget | null) {
 export function handleSequencePlaybackShortcut(
   event: KeyboardEvent<HTMLElement>,
   document: SequenceDocumentDto,
-  preview: AppSnapshotDto["preview"],
+  preview: RuntimeStateDto["preview"],
   unsupported: boolean
 ) {
   if (unsupported || isEditableShortcutTarget(event.target)) return;
   if (event.key === " ") {
     event.preventDefault();
     event.stopPropagation();
-    void runSnapshotCommand(preview.audioPlaybackStatus === "loading_to_play" ? commands.previewPause : preview.isPlaying ? commands.previewStop : commands.previewPlay);
+    void runRuntimeCommand(preview.audioPlaybackStatus === "loading_to_play" ? commands.previewPause : preview.isPlaying ? commands.previewStop : commands.previewPlay);
   } else if (event.key.toLowerCase() === "s") {
     event.preventDefault();
     event.stopPropagation();
-    void runSnapshotCommand(commands.previewStop);
+    void runRuntimeCommand(commands.previewStop);
   } else if (event.key === "Home") {
     event.preventDefault();
     event.stopPropagation();
-    void runSnapshotCommand(commands.previewRewindToZero);
+    void runRuntimeCommand(commands.previewRewindToZero);
   } else if (event.key === "ArrowLeft") {
     event.preventDefault();
     event.stopPropagation();
@@ -332,5 +332,5 @@ export function handleSequencePlaybackShortcut(
 function stepSequenceFrame(document: SequenceDocumentDto, positionSeconds: number, previewDurationSeconds: number, direction: -1 | 1) {
   const frameSeconds = 1 / Math.max(1, document.frameRate);
   const nextPositionSeconds = clamp(positionSeconds + direction * frameSeconds, 0, previewDurationSeconds || document.durationSeconds);
-  void runSnapshotCommand(() => commands.previewSeek(nextPositionSeconds));
+  void runRuntimeCommand(() => commands.previewSeek(nextPositionSeconds));
 }

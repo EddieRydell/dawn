@@ -31,7 +31,7 @@ use crate::preview_session::AudioPlaybackStatus;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct AppSnapshotDto {
+pub struct RuntimeStateDto {
     pub project_root: Option<String>,
     pub project_tree_visible: bool,
     pub project_entries: Vec<WorkspaceEntryDto>,
@@ -45,6 +45,13 @@ pub struct AppSnapshotDto {
     pub preview: PreviewSnapshotDto,
     pub effect_preview_enabled: bool,
     pub live_output: LiveOutputSnapshotDto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum RuntimeCommandResultDto {
+    Changed,
+    Unchanged,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -272,7 +279,7 @@ pub struct SequencePasteAnchorDto {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceSelectionEditResultDto {
-    pub snapshot: AppSnapshotDto,
+    pub snapshot: RuntimeStateDto,
     pub selection: Option<SequenceSelectionDto>,
     pub copied_count: u32,
     pub skipped_count: u32,
@@ -767,7 +774,7 @@ pub struct LiveOutputSnapshotDto {
     pub last_error: Option<String>,
 }
 
-impl From<AppSnapshot> for AppSnapshotDto {
+impl From<AppSnapshot> for RuntimeStateDto {
     fn from(snapshot: AppSnapshot) -> Self {
         Self {
             project_root: snapshot.project_root,

@@ -1,5 +1,5 @@
 import { commands } from "./api";
-import { runSnapshotCommand, useAppStore } from "./store";
+import { runRuntimeCommand, useAppStore } from "./store";
 
 export type CommandId =
   | "file.newProject"
@@ -33,7 +33,7 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     label: "Open Project",
     shortcut: "Ctrl+O",
     run: async () => {
-      await runSnapshotCommand(commands.openProjectDialog);
+      await runRuntimeCommand(commands.openProjectDialog);
     }
   },
   "file.save": {
@@ -41,7 +41,7 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     label: "Save",
     shortcut: "Ctrl+S",
     run: async () => {
-      await runSnapshotCommand(commands.flushAutosave);
+      await runRuntimeCommand(commands.flushAutosave);
     }
   },
   "file.exportFseq": {
@@ -58,8 +58,8 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     shortcut: "Ctrl+Z",
     run: async () => {
       const text = useAppStore.getState().localText;
-      await runSnapshotCommand(commands.updateActiveText.bind(null, text));
-      await runSnapshotCommand(commands.undoActiveEdit);
+      await runRuntimeCommand(commands.updateActiveText.bind(null, text));
+      await runRuntimeCommand(commands.undoActiveEdit);
     }
   },
   "edit.redo": {
@@ -67,7 +67,7 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     label: "Redo",
     shortcut: "Ctrl+Shift+Z",
     run: async () => {
-      await runSnapshotCommand(commands.redoActiveEdit);
+      await runRuntimeCommand(commands.redoActiveEdit);
     }
   },
   "view.toggleProjectTree": {
@@ -75,7 +75,7 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     label: "Project Tree",
     shortcut: "Ctrl+B",
     run: async () => {
-      await runSnapshotCommand(commands.toggleProjectTree);
+      await runRuntimeCommand(commands.toggleProjectTree);
     }
   },
   "view.openPreviewWindow": {
@@ -91,7 +91,7 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     label: "Reload / Check",
     shortcut: "Ctrl+R",
     run: async () => {
-      await runSnapshotCommand(commands.reloadProject);
+      await runRuntimeCommand(commands.reloadProject);
     }
   }
 };
@@ -100,7 +100,7 @@ export function installGlobalShortcuts() {
   const onKeyDown = (event: KeyboardEvent) => {
     const ctrl = event.ctrlKey || event.metaKey;
     if (!ctrl) return;
-    const active = useAppStore.getState().snapshot;
+    const active = useAppStore.getState().runtimeState;
     if (!active) return;
     const key = event.key.toLowerCase();
     if (key === "z") {
