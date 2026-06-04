@@ -1,5 +1,5 @@
-use dawn_project::analysis::{DiagnosticSeverity, ProjectDiagnostic, TextRange};
-use dawn_project::document::{
+use dawn_language::analysis::{DiagnosticSeverity, ProjectDiagnostic, TextRange};
+use dawn_language::document::{
     default_sequence_effect_param, DocumentDescriptor, DocumentObjectDescriptor, DocumentViewId,
     EffectScriptReferenceDocument, FixtureDefinitionDocument, FixtureDocument, LayoutDocument,
     LayoutFixturePlacement, ResolvedLayoutFixture, SequenceAudioDocument,
@@ -8,18 +8,18 @@ use dawn_project::document::{
     SequenceEffectParamCurveValueEditValue, SequenceEffectParamEditValue,
     SequenceEffectScriptDocument, SequenceEffectScriptParamDocument, SequenceLaneDocument,
 };
-use dawn_project::effect_script::{
+use dawn_language::effect_script::{
     lex as lex_effect_script, parse_module as parse_effect_module, EffectParamSchema,
     EffectScriptKind, EffectVisibility, ScriptType,
 };
-use dawn_project::fs::{WorkspaceEntry, WorkspaceEntryKind};
-use dawn_project::model::{
+use dawn_language::fs::{WorkspaceEntry, WorkspaceEntryKind};
+use dawn_language::model::{
     Authored, ColorModel, Curve, CurveValue, CurveValueType, Distance, EffectParam, Geometry,
     InlineOrRef, LayoutTargetKind, ObjectKind, Point3, Rotation3, Scale3, SequenceEffectScope,
     Transform,
 };
-use dawn_project::path::PathStringExt;
-use dawn_project::render::{
+use dawn_language::path::PathStringExt;
+use dawn_language::render::{
     GeometryRenderBounds, GeometryRenderGuide, GeometryRenderPlan, GeometryRenderPoint,
 };
 use serde::{Deserialize, Serialize};
@@ -1131,7 +1131,7 @@ impl From<ActiveGuiDocument> for ActiveGuiDocumentDto {
     }
 }
 
-impl From<LayoutTargetDto> for dawn_project::document::LayoutTargetDocument {
+impl From<LayoutTargetDto> for dawn_language::document::LayoutTargetDocument {
     fn from(target: LayoutTargetDto) -> Self {
         Self {
             kind: match target.kind {
@@ -1143,8 +1143,8 @@ impl From<LayoutTargetDto> for dawn_project::document::LayoutTargetDocument {
     }
 }
 
-impl From<dawn_project::document::LayoutTargetDocument> for LayoutTargetDto {
-    fn from(target: dawn_project::document::LayoutTargetDocument) -> Self {
+impl From<dawn_language::document::LayoutTargetDocument> for LayoutTargetDto {
+    fn from(target: dawn_language::document::LayoutTargetDocument) -> Self {
         Self {
             kind: match target.kind {
                 LayoutTargetKind::Group => LayoutTargetKindDto::Group,
@@ -1267,8 +1267,8 @@ impl From<SequenceEffectParamCurveSourceDocument> for SequenceEffectParamCurveSo
     }
 }
 
-impl From<dawn_project::document::SequenceMarkCollectionDocument> for SequenceMarkCollectionDto {
-    fn from(collection: dawn_project::document::SequenceMarkCollectionDocument) -> Self {
+impl From<dawn_language::document::SequenceMarkCollectionDocument> for SequenceMarkCollectionDto {
+    fn from(collection: dawn_language::document::SequenceMarkCollectionDocument) -> Self {
         Self {
             key: collection.key,
             name: collection.name,
@@ -1378,7 +1378,7 @@ impl SequenceEffectDto {
 fn sequence_effect_params_from_source(
     script: &str,
     script_source: &str,
-    params: &[dawn_project::document::SequenceEffectParamDocument],
+    params: &[dawn_language::document::SequenceEffectParamDocument],
     mark_collection_key: Option<&str>,
 ) -> Vec<SequenceEffectParamDto> {
     let Some(schemas) = effect_param_schemas_from_source(script, script_source) else {
@@ -1472,7 +1472,7 @@ fn param_kind_from_script_type(value_type: ScriptType) -> Option<SequenceEffectP
 }
 
 fn default_param_value(
-    schema: &dawn_project::effect_script::EffectParamSchema,
+    schema: &dawn_language::effect_script::EffectParamSchema,
     mark_collection_key: Option<&str>,
 ) -> Option<SequenceEffectParamValueDto> {
     let value = default_sequence_effect_param(schema, mark_collection_key);
@@ -1481,7 +1481,7 @@ fn default_param_value(
 
 fn param_value_from_resolved(
     value_type: ScriptType,
-    value: &EffectParam<dawn_project::model::Resolved>,
+    value: &EffectParam<dawn_language::model::Resolved>,
 ) -> Option<SequenceEffectParamValueDto> {
     match (value_type, value) {
         (ScriptType::Int, EffectParam::Integer { value }) => {
@@ -1511,12 +1511,12 @@ fn param_value_from_resolved(
             })
         }
         (ScriptType::CurveFloat, EffectParam::Curve { curve })
-            if curve.value_type == dawn_project::model::CurveValueType::Float =>
+            if curve.value_type == dawn_language::model::CurveValueType::Float =>
         {
             curve_to_param_value(curve)
         }
         (ScriptType::CurveColor, EffectParam::Curve { curve })
-            if curve.value_type == dawn_project::model::CurveValueType::Color =>
+            if curve.value_type == dawn_language::model::CurveValueType::Color =>
         {
             curve_to_param_value(curve)
         }
@@ -1563,7 +1563,7 @@ fn param_value_from_authored(
             EffectParam::Curve {
                 curve: InlineOrRef::Inline(curve),
             },
-        ) if curve.value_type == dawn_project::model::CurveValueType::Float => {
+        ) if curve.value_type == dawn_language::model::CurveValueType::Float => {
             curve_to_param_value(curve)
         }
         (
@@ -1571,7 +1571,7 @@ fn param_value_from_authored(
             EffectParam::Curve {
                 curve: InlineOrRef::Inline(curve),
             },
-        ) if curve.value_type == dawn_project::model::CurveValueType::Color => {
+        ) if curve.value_type == dawn_language::model::CurveValueType::Color => {
             curve_to_param_value(curve)
         }
         (ScriptType::Marks, EffectParam::Marks { key }) => {
@@ -1583,7 +1583,7 @@ fn param_value_from_authored(
 
 fn curve_to_param_value(curve: &Curve) -> Option<SequenceEffectParamValueDto> {
     match curve.value_type {
-        dawn_project::model::CurveValueType::Float => {
+        dawn_language::model::CurveValueType::Float => {
             Some(SequenceEffectParamValueDto::FloatCurve {
                 points: curve
                     .points
@@ -1600,7 +1600,7 @@ fn curve_to_param_value(curve: &Curve) -> Option<SequenceEffectParamValueDto> {
                     .collect(),
             })
         }
-        dawn_project::model::CurveValueType::Color => {
+        dawn_language::model::CurveValueType::Color => {
             Some(SequenceEffectParamValueDto::ColorCurve {
                 points: curve
                     .points

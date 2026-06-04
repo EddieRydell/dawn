@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
-use dawn_project::analysis::{ProjectDiagnostic, ProjectOverlay};
-use dawn_project::document::{
+use dawn_language::analysis::{ProjectDiagnostic, ProjectOverlay};
+use dawn_language::document::{
     DocumentDescriptor, DocumentViewId, FixtureDocument, LayoutDocument, SequenceDocument,
 };
-use dawn_project::path::Utf8PathBuf;
+use dawn_language::path::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::contracts::{

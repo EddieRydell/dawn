@@ -1,5 +1,5 @@
 [package]
-name = "dawn-project"
+name = "dawn-language"
 edition.workspace = true
 version.workspace = true
 

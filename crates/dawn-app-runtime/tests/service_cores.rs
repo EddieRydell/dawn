@@ -9,7 +9,7 @@ use dawn_app_runtime::services::autosave::{AutosaveCommand, AutosaveCore};
 use dawn_app_runtime::services::document_store::{DocumentStoreCommand, DocumentStoreCore};
 use dawn_app_runtime::services::file_watcher::{FileWatcherCommand, FileWatcherCore};
 use dawn_app_runtime::services::preview_engine::{PreviewEngineCommand, PreviewEngineCore};
-use dawn_project::path::Utf8PathBuf;
+use dawn_language::path::Utf8PathBuf;
 
 #[test]
 fn document_store_rejects_stale_text_edits() {

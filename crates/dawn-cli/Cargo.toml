@@ -8,7 +8,7 @@ default-run = "dawn"
 camino.workspace = true
 clap.workspace = true
 dawn-app-runtime = { path = "../dawn-app-runtime" }
-dawn-project = { path = "../dawn-project" }
+dawn-language = { path = "../dawn-language" }
 serde.workspace = true
 serde_json.workspace = true
 

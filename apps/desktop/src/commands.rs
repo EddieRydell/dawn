@@ -9,7 +9,7 @@ use dawn_app_runtime::dto::{
 use dawn_app_runtime::fseq_export::{export_fseq_file, FseqExportOptions};
 use dawn_app_runtime::services::document_store::ViewMode;
 use dawn_app_runtime::services::editor_state::{EditorViewMode, FileVersion};
-use dawn_project::path::{serialized_import_path, utf8_path, Utf8PathBuf};
+use dawn_language::path::{serialized_import_path, utf8_path, Utf8PathBuf};
 use tauri::{AppHandle, Manager, State};
 
 use crate::app_runtime::{

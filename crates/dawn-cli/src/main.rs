@@ -10,23 +10,23 @@ use dawn_app_runtime::output_runtime::{
     pixel_context_for_effect, prepare_params_from_document, SequenceFrameEvaluator,
     SequenceFrameEvaluatorPreparationTiming,
 };
-use dawn_project::analysis::{
+use dawn_language::analysis::{
     analyze_project_with_overlays, DiagnosticCode, DiagnosticSeverity, ProjectAnalysis,
     ProjectDiagnostic, ProjectOverlay, TextRange,
 };
-use dawn_project::document::{
+use dawn_language::document::{
     get_sequence_document, LayoutTargetDocument, SequenceDocument, SequenceEffectDocument,
     SequenceEffectParamDocument, SequenceEffectPixelDocument, SequenceEffectRenderDocument,
     SequenceLaneDocument, SequenceMarkCollectionDocument,
 };
-use dawn_project::effect_script::{EffectSampleScratch, FixtureContext};
-use dawn_project::fs::WorkspaceFs;
-use dawn_project::model::{
+use dawn_language::effect_script::{EffectSampleScratch, FixtureContext};
+use dawn_language::fs::WorkspaceFs;
+use dawn_language::model::{
     Color, Curve, CurvePoint, CurveValue, CurveValueType, DawnObject, EffectParam, EffectScriptId,
     LayoutTargetKind, SequenceEffectScope,
 };
-use dawn_project::path::{canonicalize_path, utf8_path, PathStringExt};
-use dawn_project::render::layout_render_plan;
+use dawn_language::path::{canonicalize_path, utf8_path, PathStringExt};
+use dawn_language::render::layout_render_plan;
 use serde::Serialize;
 
 #[derive(Debug, Parser)]
@@ -1868,11 +1868,11 @@ struct TextPositionReport {
 mod tests {
     use super::*;
     use dawn_app_runtime::output_runtime::evaluate_sequence_frame;
-    use dawn_project::document::{
+    use dawn_language::document::{
         LayoutTargetDocument, SequenceEffectPixelDocument, SequenceEffectRenderDocument,
     };
-    use dawn_project::model::LayoutTargetKind;
-    use dawn_project::model::SequenceEffectScope;
+    use dawn_language::model::LayoutTargetKind;
+    use dawn_language::model::SequenceEffectScope;
 
     fn active_effect(target_pixels: usize) -> SequenceEffectDocument {
         SequenceEffectDocument {
@@ -1887,13 +1887,13 @@ mod tests {
             target_label: "Group all".to_string(),
             scope: SequenceEffectScope::WholeTarget,
             script: "pulse".to_string(),
-            script_source: Some(dawn_project::document::EffectScriptReferenceDocument {
+            script_source: Some(dawn_language::document::EffectScriptReferenceDocument {
                 path: "effects/pulse.effect.dawn".to_string(),
                 effect_name: "pulse".to_string(),
             }),
             params: Vec::new(),
             render: Some(SequenceEffectRenderDocument {
-                script: dawn_project::document::EffectScriptReferenceDocument {
+                script: dawn_language::document::EffectScriptReferenceDocument {
                     path: "effects/pulse.effect.dawn".to_string(),
                     effect_name: "pulse".to_string(),
                 },

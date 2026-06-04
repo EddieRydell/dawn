@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use dawn_project::analysis::{analyze_project_with_overlays, ProjectAnalysis, ProjectOverlay};
-use dawn_project::fs::WorkspaceFs;
-use dawn_project::path::Utf8PathBuf;
+use dawn_language::analysis::{analyze_project_with_overlays, ProjectAnalysis, ProjectOverlay};
+use dawn_language::fs::WorkspaceFs;
+use dawn_language::path::Utf8PathBuf;
 
 use crate::contracts::{Event, Revision, RuntimeResult};
 use crate::runtime::ServiceCore;

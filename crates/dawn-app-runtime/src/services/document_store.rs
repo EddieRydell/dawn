@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use dawn_project::path::Utf8PathBuf;
+use dawn_language::path::Utf8PathBuf;
 
 use crate::contracts::{
     BufferExternalState, DiskVersion, Event, Revision, RuntimeError, RuntimeErrorKind,

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use dawn_project::analysis::ProjectOverlay;
-use dawn_project::path::Utf8PathBuf;
+use dawn_language::analysis::ProjectOverlay;
+use dawn_language::path::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -4,8 +4,8 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use dawn_project::analysis::{analyze_project_with_overlays, ProjectAnalysis, ProjectOverlay};
-use dawn_project::document::{
+use dawn_language::analysis::{analyze_project_with_overlays, ProjectAnalysis, ProjectOverlay};
+use dawn_language::document::{
     apply_fixture_document_edit as edit_fixture_document,
     apply_layout_document_edit as edit_layout_document,
     apply_sequence_document_edit as edit_sequence_document,
@@ -15,8 +15,8 @@ use dawn_project::document::{
     DocumentDescriptor, DocumentEditOutcome, FixtureDocument, LayoutDocument, SequenceDocument,
     SequenceDocumentEdit,
 };
-use dawn_project::fs::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFs};
-use dawn_project::path::{serialized_import_path, utf8_path, PathStringExt, Utf8PathBuf};
+use dawn_language::fs::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFs};
+use dawn_language::path::{serialized_import_path, utf8_path, PathStringExt, Utf8PathBuf};
 
 use crate::services::editor_state::FileVersion;
 

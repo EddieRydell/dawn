@@ -2,25 +2,25 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
-use dawn_project::analysis::ProjectAnalysis;
-use dawn_project::document::{
+use dawn_language::analysis::ProjectAnalysis;
+use dawn_language::document::{
     SequenceDocument, SequenceEffectParamDocument, SequenceEffectPixelDocument,
     SequenceMarkCollectionDocument,
 };
-use dawn_project::effect_script::{
+use dawn_language::effect_script::{
     evaluate_generated_child_params, generator_topology_param_names, run_generator_topology,
     BytecodeStats, CompiledEffect, EffectSampleScratch, EffectScriptKind, FixtureContext,
     GeneratedChildEffectRef, GeneratedChildTopology, GeneratorTarget, GeneratorTargetPixel,
     PixelContext, PreparedEffectParams, RuntimeError, RuntimeValue,
 };
-use dawn_project::frame::{ceil_frame, floor_frame, frame_count, frame_start};
-use dawn_project::model::EffectScriptId;
-use dawn_project::model::{
+use dawn_language::frame::{ceil_frame, floor_frame, frame_count, frame_start};
+use dawn_language::model::EffectScriptId;
+use dawn_language::model::{
     Color, Curve, CurveValue, CurveValueType, Distance, DistanceSpan, EffectParam, FixtureId,
     Resolved, SequenceEffectScope, Time, TimeSpan,
 };
-use dawn_project::path::{resolve_import_path, Utf8PathBuf};
-use dawn_project::render::{layout_render_plan, GeometryRenderBounds, GeometryRenderPoint};
+use dawn_language::path::{resolve_import_path, Utf8PathBuf};
+use dawn_language::render::{layout_render_plan, GeometryRenderBounds, GeometryRenderPoint};
 
 const MAX_FLATTENED_GENERATED_CHILDREN: usize = 65_536;
 
@@ -250,7 +250,7 @@ impl SequenceRenderCache {
         &mut self,
         analysis: &ProjectAnalysis,
         document: &SequenceDocument,
-        effect: &dawn_project::document::SequenceEffectDocument,
+        effect: &dawn_language::document::SequenceEffectDocument,
         max_columns: usize,
         max_rows: usize,
     ) -> Result<Option<SequenceEffectThumbnail>, String> {
@@ -272,7 +272,7 @@ impl SequenceRenderCache {
         &mut self,
         analysis: &ProjectAnalysis,
         document: &SequenceDocument,
-        effect: &dawn_project::document::SequenceEffectDocument,
+        effect: &dawn_language::document::SequenceEffectDocument,
         max_columns: usize,
         max_rows: usize,
         is_cancelled: impl Fn() -> bool,
@@ -440,8 +440,8 @@ fn sequence_source_requires_full_clear(
 fn effect_change_impact(
     previous_document: &SequenceDocument,
     refreshed_document: &SequenceDocument,
-    previous: &dawn_project::document::SequenceEffectDocument,
-    refreshed: &dawn_project::document::SequenceEffectDocument,
+    previous: &dawn_language::document::SequenceEffectDocument,
+    refreshed: &dawn_language::document::SequenceEffectDocument,
     analysis: &ProjectAnalysis,
 ) -> EffectChangeImpact {
     let mut impact = EffectChangeImpact::default();
@@ -502,8 +502,8 @@ fn effect_change_impact(
 }
 
 fn render_shape_changed(
-    previous: Option<&dawn_project::document::SequenceEffectRenderDocument>,
-    refreshed: Option<&dawn_project::document::SequenceEffectRenderDocument>,
+    previous: Option<&dawn_language::document::SequenceEffectRenderDocument>,
+    refreshed: Option<&dawn_language::document::SequenceEffectRenderDocument>,
 ) -> bool {
     match (previous, refreshed) {
         (Some(previous), Some(refreshed)) => {
@@ -520,10 +520,10 @@ fn render_shape_changed(
 fn generator_topology_key_changed(
     previous_document: &SequenceDocument,
     refreshed_document: &SequenceDocument,
-    previous: &dawn_project::document::SequenceEffectDocument,
-    refreshed: &dawn_project::document::SequenceEffectDocument,
-    previous_render: &dawn_project::document::SequenceEffectRenderDocument,
-    refreshed_render: &dawn_project::document::SequenceEffectRenderDocument,
+    previous: &dawn_language::document::SequenceEffectDocument,
+    refreshed: &dawn_language::document::SequenceEffectDocument,
+    previous_render: &dawn_language::document::SequenceEffectRenderDocument,
+    refreshed_render: &dawn_language::document::SequenceEffectRenderDocument,
     analysis: &ProjectAnalysis,
 ) -> bool {
     let script_id = refreshed_render.script.to_script_id();
@@ -565,7 +565,7 @@ fn generator_topology_key_changed(
 
 fn is_generator_effect(
     analysis: &ProjectAnalysis,
-    effect: &dawn_project::document::SequenceEffectDocument,
+    effect: &dawn_language::document::SequenceEffectDocument,
 ) -> bool {
     effect
         .render
@@ -624,7 +624,7 @@ fn effects_referencing_mark_collection(
 }
 
 fn effect_references_mark_collection(
-    effect: &dawn_project::document::SequenceEffectDocument,
+    effect: &dawn_language::document::SequenceEffectDocument,
     collection_key: &str,
 ) -> bool {
     effect_params_reference_mark_collection(&effect.params, collection_key)
@@ -1534,7 +1534,7 @@ enum EffectThumbnailColorsResult {
 fn sequence_effect_thumbnail(
     analysis: &ProjectAnalysis,
     document: &SequenceDocument,
-    effect: &dawn_project::document::SequenceEffectDocument,
+    effect: &dawn_language::document::SequenceEffectDocument,
     max_columns: usize,
     max_rows: usize,
     cache: &mut SequenceRenderCache,
@@ -1653,8 +1653,8 @@ fn sequence_effect_thumbnail(
 struct SampleEffectThumbnailInput<'a> {
     script: &'a CompiledEffect,
     document: &'a SequenceDocument,
-    effect: &'a dawn_project::document::SequenceEffectDocument,
-    render: &'a dawn_project::document::SequenceEffectRenderDocument,
+    effect: &'a dawn_language::document::SequenceEffectDocument,
+    render: &'a dawn_language::document::SequenceEffectRenderDocument,
     duration: TimeSpan,
     source_pixel_count: usize,
     sampled_pixel_indices: &'a [usize],
@@ -1718,8 +1718,8 @@ fn sample_effect_thumbnail_colors(
 struct GeneratorEffectThumbnailInput<'a> {
     analysis: &'a ProjectAnalysis,
     document: &'a SequenceDocument,
-    effect: &'a dawn_project::document::SequenceEffectDocument,
-    render: &'a dawn_project::document::SequenceEffectRenderDocument,
+    effect: &'a dawn_language::document::SequenceEffectDocument,
+    render: &'a dawn_language::document::SequenceEffectRenderDocument,
     duration: TimeSpan,
     sampled_pixel_indices: &'a [usize],
     sampled_frame_indices: &'a [usize],
@@ -1793,7 +1793,7 @@ fn prepare_sample_render(
     mark_collections: &[SequenceMarkCollectionDocument],
     effect_start_seconds: f64,
     scope: SequenceEffectScope,
-    target_pixels: &[dawn_project::document::SequenceEffectPixelDocument],
+    target_pixels: &[dawn_language::document::SequenceEffectPixelDocument],
     fixture_templates: &[OutputFixtureFrame],
 ) -> PreparedEffectRender {
     match prepare_params_from_document(script, params, mark_collections, effect_start_seconds) {
@@ -1813,7 +1813,7 @@ fn prepared_effect_cache_key(
     effect_start_seconds: f64,
     duration_seconds: f64,
     scope: SequenceEffectScope,
-    render: &dawn_project::document::SequenceEffectRenderDocument,
+    render: &dawn_language::document::SequenceEffectRenderDocument,
 ) -> PreparedEffectCacheKey {
     prepared_effect_cache_key_for_params(
         document,
@@ -1830,7 +1830,7 @@ fn prepared_effect_cache_key_for_params(
     effect_start_seconds: f64,
     duration_seconds: f64,
     scope: SequenceEffectScope,
-    render: &dawn_project::document::SequenceEffectRenderDocument,
+    render: &dawn_language::document::SequenceEffectRenderDocument,
     included_params: Option<&BTreeSet<String>>,
 ) -> PreparedEffectCacheKey {
     PreparedEffectCacheKey {
@@ -1868,7 +1868,7 @@ fn prepared_effect_cache_key_for_params(
 }
 
 fn parent_path_for_render(
-    render: &dawn_project::document::SequenceEffectRenderDocument,
+    render: &dawn_language::document::SequenceEffectRenderDocument,
 ) -> Utf8PathBuf {
     Utf8PathBuf::from(&render.script.path)
 }
@@ -2043,7 +2043,7 @@ fn prepare_generated_topology(
     parent_duration_seconds: f64,
     parent_scope: SequenceEffectScope,
     generator: &CompiledEffect,
-    render: &dawn_project::document::SequenceEffectRenderDocument,
+    render: &dawn_language::document::SequenceEffectRenderDocument,
 ) -> Result<Vec<GeneratedChildTopology>, RuntimeError> {
     let prepared_params = prepare_params_from_document(
         generator,
@@ -2104,7 +2104,7 @@ struct GeneratedEffectTopologyInput<'a> {
     parent_start_seconds: f64,
     generator_id: EffectScriptId,
     generator: &'a CompiledEffect,
-    render: &'a dawn_project::document::SequenceEffectRenderDocument,
+    render: &'a dawn_language::document::SequenceEffectRenderDocument,
     mark_collections: &'a [SequenceMarkCollectionDocument],
     fixture_templates: &'a [OutputFixtureFrame],
     children: Vec<GeneratedChildTopology>,
@@ -2314,7 +2314,7 @@ fn resolve_generated_child_effect<'a>(
 }
 
 fn prepare_child_generator_topology(
-    statements: &[dawn_project::effect_script::Stmt],
+    statements: &[dawn_language::effect_script::Stmt],
     prepared_params: &PreparedEffectParams,
     param_names: &[String],
     target: GeneratorTarget,
@@ -2350,12 +2350,12 @@ fn scale_generated_children_to_duration(
 
 fn sequence_effect_pixels_for_generator_target(
     target: &GeneratorTarget,
-) -> Vec<dawn_project::document::SequenceEffectPixelDocument> {
+) -> Vec<dawn_language::document::SequenceEffectPixelDocument> {
     target
         .pixels
         .iter()
         .map(
-            |pixel| dawn_project::document::SequenceEffectPixelDocument {
+            |pixel| dawn_language::document::SequenceEffectPixelDocument {
                 fixture_index: pixel.fixture_index,
                 pixel_index: pixel.pixel_index,
                 pixel_count: pixel.pixel_count,
@@ -2458,7 +2458,7 @@ impl PreparedEffectRender {
 
 fn prepare_effect_pixels(
     scope: SequenceEffectScope,
-    target_pixels: &[dawn_project::document::SequenceEffectPixelDocument],
+    target_pixels: &[dawn_language::document::SequenceEffectPixelDocument],
     fixture_templates: &[OutputFixtureFrame],
 ) -> Vec<PreparedEffectPixel> {
     let target_pixel_count = target_pixels.len();
@@ -2637,16 +2637,16 @@ pub fn empty_frame(generation: u64, message: impl Into<String>) -> OutputFrame {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use dawn_project::analysis::{analyze_project, ProjectAnalysis};
-    use dawn_project::document::{get_sequence_document, SequenceDocument};
-    use dawn_project::fs::WorkspaceFs;
-    use dawn_project::model::{
+    use dawn_language::analysis::{analyze_project, ProjectAnalysis};
+    use dawn_language::document::{get_sequence_document, SequenceDocument};
+    use dawn_language::fs::WorkspaceFs;
+    use dawn_language::model::{
         Color, CurveValue, Distance, EffectParam, EffectScriptId, Resolved, SequenceEffectScope,
     };
-    use dawn_project::path::{utf8_path, Utf8PathBuf};
-    use dawn_project::render::GeometryRenderBounds;
+    use dawn_language::path::{utf8_path, Utf8PathBuf};
+    use dawn_language::render::GeometryRenderBounds;
 
-    use dawn_project::effect_script::{GeneratorTarget, GeneratorTargetPixel};
+    use dawn_language::effect_script::{GeneratorTarget, GeneratorTargetPixel};
 
     use super::{
         build_effect_indices_by_frame, generator_targets_for_scope, pixel_context_for_effect,
@@ -2749,7 +2749,7 @@ mod tests {
         document: &'a mut SequenceDocument,
         effect_id: u32,
         param_name: &str,
-    ) -> &'a mut dawn_project::document::SequenceEffectParamDocument {
+    ) -> &'a mut dawn_language::document::SequenceEffectParamDocument {
         document
             .effects
             .iter_mut()

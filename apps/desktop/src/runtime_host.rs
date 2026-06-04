@@ -11,7 +11,7 @@ use dawn_app_runtime::layout_persistence::WindowLayout;
 use dawn_app_runtime::read_model::AppReadModels;
 use dawn_app_runtime::services::document_store::{DocumentStoreCommand, ViewMode};
 use dawn_app_runtime::services::live_output::LiveOutputReadout;
-use dawn_project::path::Utf8PathBuf;
+use dawn_language::path::Utf8PathBuf;
 
 const RUNTIME_DOCUMENT_TIMEOUT: Duration = Duration::from_millis(500);
 const RUNTIME_DOCUMENT_POLL_INTERVAL: Duration = Duration::from_millis(5);

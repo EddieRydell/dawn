@@ -10,7 +10,7 @@ use dawn_app_runtime::preview_session::{
     AudioPlaybackStatus, PreviewRenderRequest, PreviewRenderResult, PreviewRenderTiming,
     PreviewSnapshot, SequenceKey,
 };
-use dawn_project::document::SequenceDocument;
+use dawn_language::document::SequenceDocument;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};

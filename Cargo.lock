@@ -892,7 +892,7 @@ version = "0.1.0"
 dependencies = [
  "camino",
  "crossbeam-channel",
- "dawn-project",
+ "dawn-language",
  "dirs",
  "serde",
  "serde_json",
@@ -909,7 +909,7 @@ dependencies = [
  "camino",
  "clap",
  "dawn-app-runtime",
- "dawn-project",
+ "dawn-language",
  "serde",
  "serde_json",
 ]
@@ -920,7 +920,7 @@ version = "0.1.0"
 dependencies = [
  "camino",
  "dawn-app-runtime",
- "dawn-project",
+ "dawn-language",
  "kira",
  "notify",
  "rfd",
@@ -937,7 +937,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dawn-project"
+name = "dawn-language"
 version = "0.1.0"
 dependencies = [
  "camino",

@@ -5,7 +5,7 @@ use std::thread;
 
 use dawn_app_runtime::app_model::RuntimeAnalysis;
 use dawn_app_runtime::output_runtime::{SequenceEffectThumbnailResult, SequenceRenderCache};
-use dawn_project::document::SequenceDocument;
+use dawn_language::document::SequenceDocument;
 
 use crate::effect_previews::{
     preview_max_columns, preview_max_rows, sequence_effect_preview_dto,

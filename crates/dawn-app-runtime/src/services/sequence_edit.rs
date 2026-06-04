@@ -1,9 +1,9 @@
-use dawn_project::analysis::ProjectAnalysis;
-use dawn_project::document::{
+use dawn_language::analysis::ProjectAnalysis;
+use dawn_language::document::{
     apply_sequence_document_edit, DocumentEditOutcome, SequenceDocument, SequenceDocumentEdit,
 };
-use dawn_project::fs::WorkspaceFs;
-use dawn_project::path::Utf8PathBuf;
+use dawn_language::fs::WorkspaceFs;
+use dawn_language::path::Utf8PathBuf;
 
 use crate::contracts::{Revision, RuntimeError, RuntimeResult, ServiceName};
 
@@ -15,7 +15,7 @@ pub struct SequenceEditCommand {
     pub current_revision: Revision,
     pub edit: SequenceDocumentEdit,
     pub base_content: String,
-    pub overlays: Vec<dawn_project::analysis::ProjectOverlay>,
+    pub overlays: Vec<dawn_language::analysis::ProjectOverlay>,
     pub fs: WorkspaceFs,
     pub analysis: ProjectAnalysis,
 }

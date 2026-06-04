@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use dawn_app_runtime::contracts::{DiskVersion, Revision, RuntimeErrorKind, ServiceName};
 use dawn_app_runtime::coordinator::AppCoordinator;
 use dawn_app_runtime::services::document_store::DocumentStoreCommand;
-use dawn_project::path::Utf8PathBuf;
+use dawn_language::path::Utf8PathBuf;
 
 #[test]
 fn coordinator_assigns_monotonic_request_ids() {

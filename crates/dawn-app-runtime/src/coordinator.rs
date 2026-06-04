@@ -17,9 +17,9 @@ use crate::services::layout_prefs::LayoutPrefsCore;
 use crate::services::live_output::{LiveOutputCore, LiveOutputReadout};
 use crate::services::preview_engine::{PreviewEngineCommand, PreviewEngineCore};
 use crate::services::project_index::{ProjectIndexCommand, ProjectIndexCore};
-use dawn_project::document::SequenceMarkPasteDocumentEdit;
-use dawn_project::model::{Authored, SequenceEffect};
-use dawn_project::path::Utf8PathBuf;
+use dawn_language::document::SequenceMarkPasteDocumentEdit;
+use dawn_language::model::{Authored, SequenceEffect};
+use dawn_language::path::Utf8PathBuf;
 
 const SERVICE_QUEUE_CAPACITY: usize = 128;
 

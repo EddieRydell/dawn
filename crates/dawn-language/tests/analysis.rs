@@ -3,12 +3,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use dawn_project::analysis::{
+use dawn_language::analysis::{
     analyze_project as core_analyze_project,
     analyze_project_with_overlays as core_analyze_project_with_overlays, DiagnosticCode,
     ProjectAnalysis, ProjectOverlay,
 };
-use dawn_project::document::{
+use dawn_language::document::{
     apply_fixture_document_edit as core_apply_fixture_document_edit,
     apply_layout_document_edit as core_apply_layout_document_edit,
     apply_sequence_document_edit as core_apply_sequence_document_edit,
@@ -19,17 +19,17 @@ use dawn_project::document::{
     LayoutFixtureRef, LayoutTargetDocument, ResolvedLayoutFixture, SequenceDocument,
     SequenceDocumentEdit,
 };
-use dawn_project::effect_script::{
+use dawn_language::effect_script::{
     compile as compile_effect_script, FixtureContext, PixelContext, RuntimeValue,
 };
-use dawn_project::fs::WorkspaceFs;
-use dawn_project::model::EffectScriptId;
-use dawn_project::model::{
+use dawn_language::fs::WorkspaceFs;
+use dawn_language::model::EffectScriptId;
+use dawn_language::model::{
     Color, ColorModel, Curve, CurveValue, CurveValueType, Distance, DistanceSpan, FixtureId,
     Geometry, LayoutTargetKind, Point3, Transform,
 };
-use dawn_project::path::{utf8_path, PathStringExt, Utf8PathBuf};
-use dawn_project::render::{GeometryRenderBounds, GeometryRenderGuide, GeometryRenderPlan};
+use dawn_language::path::{utf8_path, PathStringExt, Utf8PathBuf};
+use dawn_language::render::{GeometryRenderBounds, GeometryRenderGuide, GeometryRenderPlan};
 
 fn project_context(project_path: impl AsRef<Path>) -> (WorkspaceFs, Utf8PathBuf, PathBuf) {
     let project_path = project_path.as_ref();
@@ -583,15 +583,15 @@ effect Options {
     assert_eq!(script.params[0].options, vec!["normal", "flash"]);
     assert_eq!(
         script.params[0].default,
-        Some(dawn_project::effect_script::ParamDefault::Value(
+        Some(dawn_language::effect_script::ParamDefault::Value(
             RuntimeValue::Enum("flash".to_string())
         ))
     );
     assert_eq!(script.params[1].default, None);
     assert_eq!(
         script.params[2].default,
-        Some(dawn_project::effect_script::ParamDefault::Value(
-            RuntimeValue::Flags(dawn_project::model::Flags {
+        Some(dawn_language::effect_script::ParamDefault::Value(
+            RuntimeValue::Flags(dawn_language::model::Flags {
                 values: vec!["red".to_string(), "blue".to_string()]
             })
         ))
@@ -984,7 +984,7 @@ opening:
                 kind: LayoutTargetKind::Group,
                 name: "all".to_string(),
             },
-            scope: dawn_project::model::SequenceEffectScope::WholeTarget,
+            scope: dawn_language::model::SequenceEffectScope::WholeTarget,
             start_seconds: 1.5,
             mark_collection_key: None,
         },
@@ -1012,11 +1012,11 @@ opening:
     assert_eq!(duplicated.refreshed_document.effects.len(), 2);
     assert_eq!(
         duplicated.refreshed_document.effects[0].scope,
-        dawn_project::model::SequenceEffectScope::WholeTarget
+        dawn_language::model::SequenceEffectScope::WholeTarget
     );
     assert_eq!(
         duplicated.refreshed_document.effects[1].scope,
-        dawn_project::model::SequenceEffectScope::WholeTarget
+        dawn_language::model::SequenceEffectScope::WholeTarget
     );
 
     let moved = apply_sequence_document_edit(
@@ -1039,7 +1039,7 @@ opening:
     assert_eq!(moved.refreshed_document.effects[0].target.name, "1");
     assert_eq!(
         moved.refreshed_document.effects[0].scope,
-        dawn_project::model::SequenceEffectScope::WholeTarget
+        dawn_language::model::SequenceEffectScope::WholeTarget
     );
 
     let deleted = apply_sequence_document_edit(
@@ -2466,7 +2466,7 @@ fn temp_dir(label: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = std::env::temp_dir().join(format!("dawn-project-{label}-{nanos}"));
+    let path = std::env::temp_dir().join(format!("dawn-language-{label}-{nanos}"));
     fs::create_dir_all(&path).unwrap();
     path
 }

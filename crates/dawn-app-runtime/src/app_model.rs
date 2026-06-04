@@ -1,13 +1,13 @@
-use dawn_project::analysis::{ProjectAnalysis, ProjectDiagnostic};
-use dawn_project::document::{
+use dawn_language::analysis::{ProjectAnalysis, ProjectDiagnostic};
+use dawn_language::document::{
     DocumentDescriptor, DocumentViewId, SequenceDocument, SequenceDocumentEdit,
     SequenceEffectMoveDocumentEdit, SequenceEffectResizeDocumentEdit, SequenceMarkMoveDocumentEdit,
     SequenceMarkPasteDocumentEdit, SequenceMarkRefDocumentEdit,
 };
-use dawn_project::fs::WorkspaceEntry;
-use dawn_project::model::{Authored, DawnObject, Geometry};
-use dawn_project::parse::parse_dawn_file_with_source_map;
-use dawn_project::path::Utf8PathBuf;
+use dawn_language::fs::WorkspaceEntry;
+use dawn_language::model::{Authored, DawnObject, Geometry};
+use dawn_language::parse::parse_dawn_file_with_source_map;
+use dawn_language::path::Utf8PathBuf;
 
 use crate::coordinator::SequenceClipboard;
 use crate::dto::{
@@ -1238,7 +1238,7 @@ impl AppRuntimeModel {
         )
     }
 
-    fn active_sequence_authored(&self) -> Result<dawn_project::model::Sequence<Authored>, String> {
+    fn active_sequence_authored(&self) -> Result<dawn_language::model::Sequence<Authored>, String> {
         let object_key = self.active_sequence_object_key()?;
         let parsed = parse_dawn_file_with_source_map(&self.active_buffer_text()?)
             .map_err(|error| error.to_string())?;
@@ -1276,7 +1276,7 @@ impl AppRuntimeModel {
     fn copy_sequence_selection(
         &self,
         sequence_clipboard: &mut Option<SequenceClipboard>,
-        sequence: &dawn_project::model::Sequence<Authored>,
+        sequence: &dawn_language::model::Sequence<Authored>,
         document: &SequenceDocument,
         selection: &SequenceSelectionDto,
     ) -> Result<u32, String> {
@@ -1398,7 +1398,7 @@ impl AppRuntimeModel {
         )?;
         match edit {
             LayoutGuiEditDto::UpdatePlacementTransform { id, transform } => {
-                let id = dawn_project::model::FixtureId(id);
+                let id = dawn_language::model::FixtureId(id);
                 let placement = document
                     .fixtures
                     .iter_mut()
@@ -1436,7 +1436,7 @@ impl AppRuntimeModel {
                     .find(|fixture| fixture.object_key == object_key)
                     .ok_or_else(|| format!("fixture `{object_key}` was not found"))?;
                 fixture.bulb_diameter =
-                    dawn_project::model::DistanceSpan::try_from_meters_f64_truncated(
+                    dawn_language::model::DistanceSpan::try_from_meters_f64_truncated(
                         bulb_diameter_meters,
                     )
                     .map_err(str::to_string)?;
@@ -1515,7 +1515,7 @@ impl AppRuntimeModel {
 
     fn active_sequence_source(
         &self,
-    ) -> Option<(SequenceKey, dawn_project::document::SequenceDocument)> {
+    ) -> Option<(SequenceKey, dawn_language::document::SequenceDocument)> {
         let path = self.editors.active_file()?.clone();
         let overlays = self.editors.dirty_overlays();
         let descriptor = self
@@ -1524,7 +1524,7 @@ impl AppRuntimeModel {
             .ok()?;
         let object_key = descriptor
             .default_object_keys
-            .get(&dawn_project::document::DocumentViewId::Sequence)?;
+            .get(&dawn_language::document::DocumentViewId::Sequence)?;
         let document = self
             .workspace
             .sequence_document(path.clone(), object_key, overlays)

@@ -3,7 +3,7 @@ members = [
   "apps/desktop",
   "crates/dawn-app-runtime",
   "crates/dawn-cli",
-  "crates/dawn-project",
+  "crates/dawn-language",
 ]
 resolver = "2"
 

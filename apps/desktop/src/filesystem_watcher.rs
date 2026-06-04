@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
-use dawn_project::path::{utf8_path, Utf8PathBuf};
+use dawn_language::path::{utf8_path, Utf8PathBuf};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use tauri::{AppHandle, Manager};
 

@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-use dawn_project::analysis::ProjectAnalysis;
-use dawn_project::document::{SequenceAudioDocument, SequenceDocument};
-use dawn_project::path::Utf8PathBuf;
+use dawn_language::analysis::ProjectAnalysis;
+use dawn_language::document::{SequenceAudioDocument, SequenceDocument};
+use dawn_language::path::Utf8PathBuf;
 
 use crate::output_runtime::{
     empty_frame, OutputFrame, OutputFrameStatus, SequenceChangeImpact,
@@ -885,11 +885,11 @@ fn clamp_position_seconds(position_seconds: f64, duration_seconds: f64) -> f64 {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use dawn_project::analysis::{analyze_project_with_overlays, ProjectAnalysis, ProjectOverlay};
-    use dawn_project::document::{get_sequence_document, SequenceDocument};
-    use dawn_project::fs::WorkspaceFs;
-    use dawn_project::model::{Color, FixtureId};
-    use dawn_project::path::{canonicalize_path, utf8_path, Utf8PathBuf};
+    use dawn_language::analysis::{analyze_project_with_overlays, ProjectAnalysis, ProjectOverlay};
+    use dawn_language::document::{get_sequence_document, SequenceDocument};
+    use dawn_language::fs::WorkspaceFs;
+    use dawn_language::model::{Color, FixtureId};
+    use dawn_language::path::{canonicalize_path, utf8_path, Utf8PathBuf};
 
     use super::{PreviewController, PreviewSyncMode, SequenceKey};
 

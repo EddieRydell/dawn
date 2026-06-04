@@ -2,7 +2,7 @@ use crate::contracts::{
     BufferExternalState, DiskVersion, Event, Revision, RuntimeResult, SelfWriteTag,
 };
 use crate::runtime::ServiceCore;
-use dawn_project::path::Utf8PathBuf;
+use dawn_language::path::Utf8PathBuf;
 
 #[derive(Debug, Clone)]
 pub enum FileWatcherCommand {

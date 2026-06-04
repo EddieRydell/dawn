@@ -2,7 +2,7 @@ use dawn_app_runtime::dto::{
     AppRuntimeChangedDto, AppSnapshotDto, PreviewSnapshotDto, RuntimeSliceDto,
 };
 use dawn_app_runtime::preview_session::{AudioPlaybackStatus, PreviewSnapshot};
-use dawn_project::document::SequenceAudioDocument;
+use dawn_language::document::SequenceAudioDocument;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::audio_runtime::AudioClock;

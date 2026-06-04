@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use dawn_project::path::Utf8PathBuf;
+use dawn_language::path::Utf8PathBuf;
 
 use crate::contracts::{Event, Revision, RuntimeResult, SelfWriteTag};
 use crate::runtime::ServiceCore;

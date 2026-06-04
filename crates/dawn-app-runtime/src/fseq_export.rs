@@ -3,8 +3,8 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use dawn_project::analysis::ProjectAnalysis;
-use dawn_project::document::SequenceDocument;
+use dawn_language::analysis::ProjectAnalysis;
+use dawn_language::document::SequenceDocument;
 
 use crate::controller_output::{
     build_fseq_output_plan, ControllerOutputError, ControllerOutputPlan,
