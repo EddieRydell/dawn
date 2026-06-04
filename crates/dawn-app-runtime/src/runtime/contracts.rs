@@ -4,11 +4,7 @@ use std::time::SystemTime;
 use dawn_language::path::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
-pub use crate::editor::{
-    BufferExternalState, EditorViewMode as ViewMode, FileVersion as DiskVersion,
-};
-
-use crate::editor::{EditorViewMode, FileVersion};
+use crate::editor::{BufferExternalState, EditorViewMode, FileVersion};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Revision(u64);

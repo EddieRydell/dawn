@@ -1,6 +1,6 @@
 use dawn_language::path::{path_matches_any, Utf8PathBuf};
 
-use crate::editor::document_store::DocumentStoreCommand;
+use crate::editor::document_store::{DocumentStoreCommand, RuntimeSessionBuffer};
 use crate::preview::session::PreviewSyncMode;
 use crate::runtime::contracts::RuntimeStatus;
 use crate::workspace::CreatedRuntimeFile;
@@ -8,6 +8,58 @@ use crate::workspace::CreatedRuntimeFile;
 use super::CoordinatorState;
 
 impl CoordinatorState {
+    pub(crate) fn sync_project_opened(
+        &mut self,
+        path: std::path::PathBuf,
+        _remember: bool,
+        status: impl Into<String>,
+    ) -> Result<(), String> {
+        self.open_project(path)?;
+        self.status = RuntimeStatus::message(status);
+        Ok(())
+    }
+
+    pub(crate) fn sync_session_opened(
+        &mut self,
+        path: std::path::PathBuf,
+        buffers: Vec<RuntimeSessionBuffer>,
+        active_file: Option<Utf8PathBuf>,
+        status: impl Into<String>,
+    ) -> Result<(), String> {
+        self.workspace.open_project(&path)?;
+        let root = self
+            .workspace
+            .project_root()
+            .ok_or_else(|| "project root was not opened".to_string())?;
+        self.document_store
+            .handle(DocumentStoreCommand::OpenSession {
+                root,
+                buffers,
+                active_file,
+            })
+            .map_err(|error| error.to_string())?;
+        self.preview.reset();
+        self.refresh_analysis_from_document_store()?;
+        self.sync_preview_source(PreviewSyncMode::RenderNow);
+        self.status = RuntimeStatus::message(status);
+        Ok(())
+    }
+
+    pub(crate) fn project_root(&self) -> Option<String> {
+        self.workspace.project_root()
+    }
+
+    pub(crate) fn read_file_with_version(
+        &self,
+        path: Utf8PathBuf,
+    ) -> Result<(String, crate::editor::FileVersion), String> {
+        self.workspace.read_file_with_version(path)
+    }
+
+    pub(crate) fn current_analysis(&self) -> Option<dawn_language::analysis::ProjectAnalysis> {
+        self.workspace.analysis_cloned()
+    }
+
     pub(crate) fn create_file_for_runtime_open(
         &mut self,
         parent: Utf8PathBuf,

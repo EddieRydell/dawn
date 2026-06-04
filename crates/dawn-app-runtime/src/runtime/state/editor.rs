@@ -1,6 +1,6 @@
 use dawn_language::path::Utf8PathBuf;
 
-use crate::editor::document_store::{DocumentStoreCommand, RuntimeSessionBuffer};
+use crate::editor::document_store::DocumentStoreCommand;
 use crate::editor::{EditorViewMode, FileVersion};
 use crate::preview::session::PreviewSyncMode;
 use crate::runtime::contracts::{Event, RuntimeResult, RuntimeStatus};
@@ -13,43 +13,6 @@ impl CoordinatorState {
         command: DocumentStoreCommand,
     ) -> RuntimeResult<Vec<Event>> {
         self.document_store.handle(command)
-    }
-
-    pub(crate) fn sync_project_opened(
-        &mut self,
-        path: std::path::PathBuf,
-        _remember: bool,
-        status: impl Into<String>,
-    ) -> Result<(), String> {
-        self.open_project(path)?;
-        self.status = RuntimeStatus::message(status);
-        Ok(())
-    }
-
-    pub(crate) fn sync_session_opened(
-        &mut self,
-        path: std::path::PathBuf,
-        buffers: Vec<RuntimeSessionBuffer>,
-        active_file: Option<Utf8PathBuf>,
-        status: impl Into<String>,
-    ) -> Result<(), String> {
-        self.workspace.open_project(&path)?;
-        let root = self
-            .workspace
-            .project_root()
-            .ok_or_else(|| "project root was not opened".to_string())?;
-        self.document_store
-            .handle(DocumentStoreCommand::OpenSession {
-                root,
-                buffers,
-                active_file,
-            })
-            .map_err(|error| error.to_string())?;
-        self.preview.reset();
-        self.refresh_analysis_from_document_store()?;
-        self.sync_preview_source(PreviewSyncMode::RenderNow);
-        self.status = RuntimeStatus::message(status);
-        Ok(())
     }
 
     pub(crate) fn open_buffer(
@@ -140,31 +103,22 @@ impl CoordinatorState {
         Ok(())
     }
 
-    pub(crate) fn undo_buffer_text(&mut self, path: Utf8PathBuf) -> Result<Option<String>, String> {
+    pub(crate) fn undo_active_text(&mut self) -> Result<Option<String>, String> {
+        let Some(path) = self.document_store.active_file().cloned() else {
+            return Ok(None);
+        };
         self.apply_history_edit(path, HistoryCommand::Undo)
     }
 
-    pub(crate) fn redo_buffer_text(&mut self, path: Utf8PathBuf) -> Result<Option<String>, String> {
+    pub(crate) fn redo_active_text(&mut self) -> Result<Option<String>, String> {
+        let Some(path) = self.document_store.active_file().cloned() else {
+            return Ok(None);
+        };
         self.apply_history_edit(path, HistoryCommand::Redo)
-    }
-
-    pub(crate) fn project_root(&self) -> Option<String> {
-        self.workspace.project_root()
     }
 
     pub(crate) fn set_status(&mut self, status: impl Into<String>) {
         self.status = RuntimeStatus::message(status);
-    }
-
-    pub(crate) fn read_file_with_version(
-        &self,
-        path: Utf8PathBuf,
-    ) -> Result<(String, FileVersion), String> {
-        self.workspace.read_file_with_version(path)
-    }
-
-    pub(crate) fn current_analysis(&self) -> Option<dawn_language::analysis::ProjectAnalysis> {
-        self.workspace.analysis_cloned()
     }
 
     pub(crate) fn refresh_analysis_after_memory_edit(&mut self) {

@@ -40,10 +40,6 @@ pub fn run() -> Result<(), tauri::Error> {
                 .map_err(std::io::Error::other)?;
             preview::start_preview_worker(app.handle().clone());
             let state = app.state::<app::state::AppState>();
-            if let Ok(mut runtime) = app::state::lock_runtime(&state) {
-                let _ = runtime.drain_events();
-                let _ = runtime.read_models();
-            }
             if let Ok(model) = app::state::lock_runtime(&state) {
                 let root = model.project_root();
                 drop(model);

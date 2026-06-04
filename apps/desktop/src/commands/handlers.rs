@@ -1,13 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use dawn_app_runtime::dto::{
-    AppCommandDto, AppCommandResponseDto, AppSnapshotDto, BufferExternalStateDto,
-    EditorViewModeDto, FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto,
-    SequenceSelectionEditDto, SequenceSelectionEditResultDto,
+    AppCommandDto, AppCommandResponseDto, AppSnapshotDto, EditorViewModeDto, FixtureGuiEditDto,
+    LayoutGuiEditDto, SequenceGuiEditDto, SequenceSelectionEditDto, SequenceSelectionEditResultDto,
 };
-use dawn_app_runtime::editor::EditorViewMode;
 use dawn_app_runtime::output::fseq_export::{export_fseq_file, FseqExportOptions};
-use dawn_app_runtime::runtime::coordinator::BufferTextEdit;
 use dawn_app_runtime::workspace::{load_project_workspace, project_root_label_for_path};
 use dawn_language::path::{serialized_import_path, utf8_path, Utf8PathBuf};
 use tauri::{AppHandle, Manager, State};
@@ -381,24 +378,9 @@ fn update_active_text(
     state: State<'_, AppState>,
     text: String,
 ) -> CommandResult<()> {
-    let active_buffer = {
-        let runtime = lock_runtime(&state)?;
-        let snapshot = runtime.app_snapshot();
-        let Some(buffer) = snapshot.editor.active_buffer else {
-            return Ok(());
-        };
-        let conflicted = !matches!(buffer.external_state, BufferExternalStateDto::Current);
-        BufferTextEdit {
-            project_root: snapshot.workspace.project_root,
-            path: project_path(buffer.path),
-            conflicted,
-            text: buffer.text,
-        }
-    };
-
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime.update_active_text(active_buffer, text)?;
+        runtime.update_active_text(text)?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -419,45 +401,22 @@ fn set_active_view_mode_runtime_then_model(
     state: &State<'_, AppState>,
     mode: EditorViewModeDto,
 ) -> CommandResult<()> {
-    let active_file = {
-        let runtime = lock_runtime(state)?;
-        let snapshot = runtime.app_snapshot();
-        let Some(active_file) = snapshot.editor.active_file else {
-            return Ok(());
-        };
-        project_path(active_file)
-    };
     let snapshot = {
         let mut runtime = lock_runtime(state)?;
-        runtime.set_view_mode(active_file, editor_view_mode(&mode))?;
+        runtime.set_active_view_mode(mode.into())?;
         runtime.app_snapshot()
     };
     emit_runtime_update(app, state, snapshot)
 }
 
-fn editor_view_mode(mode: &EditorViewModeDto) -> EditorViewMode {
-    match mode {
-        EditorViewModeDto::Text => EditorViewMode::Text,
-        EditorViewModeDto::Gui => EditorViewMode::Gui,
-    }
-}
-
 #[specta::specta]
 #[tauri::command]
 fn undo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
-    let path = {
-        let runtime = lock_runtime(&state)?;
-        let snapshot = runtime.app_snapshot();
-        let Some(path) = snapshot.editor.active_file else {
-            return Ok(());
-        };
-        project_path(path)
-    };
-    if lock_runtime(&state)?.undo_buffer_text(path)?.is_none() {
-        return Ok(());
-    }
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
+        if runtime.undo_active_text()?.is_none() {
+            return Ok(());
+        }
         runtime.set_status("Undo");
         runtime.app_snapshot()
     };
@@ -467,19 +426,11 @@ fn undo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult
 #[specta::specta]
 #[tauri::command]
 fn redo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
-    let path = {
-        let runtime = lock_runtime(&state)?;
-        let snapshot = runtime.app_snapshot();
-        let Some(path) = snapshot.editor.active_file else {
-            return Ok(());
-        };
-        project_path(path)
-    };
-    if lock_runtime(&state)?.redo_buffer_text(path)?.is_none() {
-        return Ok(());
-    }
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
+        if runtime.redo_active_text()?.is_none() {
+            return Ok(());
+        }
         runtime.set_status("Redo");
         runtime.app_snapshot()
     };

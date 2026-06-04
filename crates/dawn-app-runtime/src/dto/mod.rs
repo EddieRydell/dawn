@@ -9,8 +9,7 @@ use dawn_language::document::{
     SequenceEffectScriptDocument, SequenceEffectScriptParamDocument, SequenceLaneDocument,
 };
 use dawn_language::effect_script::{
-    lex as lex_effect_script, parse_module as parse_effect_module, EffectParamSchema,
-    EffectScriptKind, EffectVisibility, ScriptType,
+    editable_param_schemas_from_source, EffectScriptKind, ScriptType,
 };
 use dawn_language::fs::{WorkspaceEntry, WorkspaceEntryKind};
 use dawn_language::model::{
@@ -1400,7 +1399,7 @@ fn sequence_effect_params_from_source(
     params: &[dawn_language::document::SequenceEffectParamDocument],
     mark_collection_key: Option<&str>,
 ) -> Vec<SequenceEffectParamDto> {
-    let Some(schemas) = effect_param_schemas_from_source(script, script_source) else {
+    let Some(schemas) = editable_param_schemas_from_source(script, script_source) else {
         return Vec::new();
     };
     schemas
@@ -1427,46 +1426,6 @@ fn sequence_effect_params_from_source(
             })
         })
         .collect()
-}
-
-fn effect_param_schemas_from_source(
-    script: &str,
-    script_source: &str,
-) -> Option<Vec<EffectParamSchema>> {
-    let tokens = lex_effect_script(script_source).ok()?;
-    let module = parse_effect_module(&tokens).ok()?;
-    let selected_name = effect_name_from_script_label(script);
-    if let Some(selected_name) = selected_name {
-        return module
-            .effects
-            .into_iter()
-            .find(|effect| effect.name == selected_name)
-            .map(|effect| effect.params);
-    }
-    if module.effects.len() == 1 {
-        return module
-            .effects
-            .into_iter()
-            .next()
-            .map(|effect| effect.params);
-    }
-    let mut addable = module
-        .effects
-        .into_iter()
-        .filter(|effect| effect.visibility == EffectVisibility::Addable)
-        .collect::<Vec<_>>();
-    if addable.len() == 1 {
-        Some(addable.remove(0).params)
-    } else {
-        None
-    }
-}
-
-fn effect_name_from_script_label(script: &str) -> Option<&str> {
-    script
-        .rsplit_once('.')
-        .map(|(_, name)| name)
-        .filter(|name| !name.is_empty())
 }
 
 fn param_kind_from_script_type(value_type: ScriptType) -> Option<SequenceEffectParamKindDto> {

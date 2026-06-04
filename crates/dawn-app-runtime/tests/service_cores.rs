@@ -1,11 +1,11 @@
 use std::time::SystemTime;
 
 use dawn_app_runtime::editor::document_store::{DocumentStoreCommand, DocumentStoreCore};
+use dawn_app_runtime::editor::{BufferExternalState, EditorViewMode, FileVersion};
 use dawn_app_runtime::preview::engine_service::{PreviewEngineCommand, PreviewEngineCore};
 use dawn_app_runtime::runtime::autosave_service::{AutosaveCommand, AutosaveCore};
 use dawn_app_runtime::runtime::contracts::{
-    BufferExternalState, DiskVersion, Event, EventEnvelope, Revision, RuntimeErrorKind, SequenceId,
-    ServiceName,
+    Event, EventEnvelope, Revision, RuntimeErrorKind, SequenceId, ServiceName,
 };
 use dawn_app_runtime::runtime::file_watcher_service::{FileWatcherCommand, FileWatcherCore};
 use dawn_app_runtime::runtime::read_model::ReadModelCore;
@@ -214,8 +214,8 @@ fn read_model_applies_editor_and_preview_events() {
             revision: Revision::new(1),
             text: "saved".to_string(),
             disk_version: Some(disk_version(5, 1)),
-            external_state: dawn_app_runtime::runtime::contracts::BufferExternalState::Current,
-            view_mode: dawn_app_runtime::runtime::contracts::ViewMode::Text,
+            external_state: BufferExternalState::Current,
+            view_mode: EditorViewMode::Text,
         },
     );
     apply(
@@ -225,7 +225,7 @@ fn read_model_applies_editor_and_preview_events() {
             revision: Revision::new(2),
             dirty: true,
             disk_version: Some(disk_version(5, 1)),
-            external_state: dawn_app_runtime::runtime::contracts::BufferExternalState::Current,
+            external_state: BufferExternalState::Current,
         },
     );
     apply(
@@ -249,8 +249,8 @@ fn read_model_applies_editor_and_preview_events() {
     assert!(!core.models().preview.updating);
 }
 
-fn disk_version(len: u64, content_hash: u64) -> DiskVersion {
-    DiskVersion {
+fn disk_version(len: u64, content_hash: u64) -> FileVersion {
+    FileVersion {
         len,
         modified_millis: None,
         content_hash,

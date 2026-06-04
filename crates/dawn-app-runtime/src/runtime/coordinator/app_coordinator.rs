@@ -23,13 +23,7 @@ use dawn_language::path::Utf8PathBuf;
 
 pub use crate::workspace::CreatedRuntimeFile;
 
-pub struct BufferTextEdit {
-    pub project_root: Option<String>,
-    pub path: Utf8PathBuf,
-    pub text: String,
-    pub conflicted: bool,
-}
-
+#[allow(dead_code)]
 pub struct AppCoordinator {
     state: CoordinatorState,
     stopped: bool,
@@ -56,6 +50,7 @@ impl Default for AppCoordinator {
     }
 }
 
+#[allow(dead_code)]
 impl AppCoordinator {
     pub fn new() -> Self {
         Self {
@@ -311,7 +306,7 @@ impl AppCoordinator {
         self.state.effect_preview_request_source(path, object_key)
     }
 
-    pub fn read_models(&self) -> &AppReadModels {
+    pub(crate) fn read_models(&self) -> &AppReadModels {
         self.read_model.models()
     }
 
@@ -406,7 +401,7 @@ impl AppCoordinator {
             .apply_sequence_selection_edit(edit, &mut self.sequence_clipboard)
     }
 
-    pub fn take_command_failure(&mut self, request_id: RequestId) -> Option<RuntimeError> {
+    pub(crate) fn take_command_failure(&mut self, request_id: RequestId) -> Option<RuntimeError> {
         let index = self
             .command_failures
             .iter()
@@ -414,7 +409,7 @@ impl AppCoordinator {
         Some(self.command_failures.remove(index).1)
     }
 
-    pub fn take_buffer_text_update(
+    pub(crate) fn take_buffer_text_update(
         &mut self,
         request_id: RequestId,
     ) -> Option<(Utf8PathBuf, String, Revision)> {
@@ -426,7 +421,7 @@ impl AppCoordinator {
         Some((path, text, revision))
     }
 
-    pub fn take_command_completion(&mut self, request_id: RequestId) -> bool {
+    pub(crate) fn take_command_completion(&mut self, request_id: RequestId) -> bool {
         let Some(index) = self
             .command_completions
             .iter()
@@ -438,7 +433,7 @@ impl AppCoordinator {
         true
     }
 
-    pub fn submit_document_store(
+    pub(crate) fn submit_document_store(
         &mut self,
         command: DocumentStoreCommand,
     ) -> RuntimeResult<CommandAck> {
@@ -454,7 +449,7 @@ impl AppCoordinator {
         })
     }
 
-    pub fn submit_project_index(
+    pub(crate) fn submit_project_index(
         &mut self,
         command: ProjectIndexCommand,
     ) -> RuntimeResult<CommandAck> {
@@ -474,7 +469,7 @@ impl AppCoordinator {
         })
     }
 
-    pub fn submit_preview_engine(
+    pub(crate) fn submit_preview_engine(
         &mut self,
         command: PreviewEngineCommand,
     ) -> RuntimeResult<CommandAck> {
@@ -497,7 +492,7 @@ impl AppCoordinator {
         })
     }
 
-    pub fn submit_audio_engine(
+    pub(crate) fn submit_audio_engine(
         &mut self,
         command: AudioEngineCommand,
     ) -> RuntimeResult<CommandAck> {
@@ -515,7 +510,10 @@ impl AppCoordinator {
         })
     }
 
-    pub fn submit_autosave(&mut self, command: AutosaveCommand) -> RuntimeResult<CommandAck> {
+    pub(crate) fn submit_autosave(
+        &mut self,
+        command: AutosaveCommand,
+    ) -> RuntimeResult<CommandAck> {
         self.ensure_running(ServiceName::Autosave)?;
         let target_revision = match &command {
             AutosaveCommand::TagSelfWrite { revision, .. } => Some(*revision),
@@ -531,7 +529,7 @@ impl AppCoordinator {
         })
     }
 
-    pub fn submit_file_watcher(
+    pub(crate) fn submit_file_watcher(
         &mut self,
         command: FileWatcherCommand,
     ) -> RuntimeResult<CommandAck> {
@@ -549,7 +547,7 @@ impl AppCoordinator {
         })
     }
 
-    pub fn drain_events(&mut self) -> RuntimeResult<usize> {
+    pub(crate) fn drain_events(&mut self) -> RuntimeResult<usize> {
         let mut drained = 0;
         while let Some(envelope) = self.events.pop_front() {
             if let (
@@ -595,20 +593,7 @@ impl AppCoordinator {
         Ok(drained)
     }
 
-    pub fn update_active_text(
-        &mut self,
-        active_buffer: BufferTextEdit,
-        text: String,
-    ) -> Result<(), String> {
-        if active_buffer.conflicted {
-            return Err("active document has external disk changes".to_string());
-        }
-        if active_buffer.text == text {
-            return Ok(());
-        }
-
-        let _ = active_buffer.project_root;
-        self.state.set_active_buffer(active_buffer.path)?;
+    pub fn update_active_text(&mut self, text: String) -> Result<(), String> {
         self.state.update_active_text(text)
     }
 
@@ -636,17 +621,16 @@ impl AppCoordinator {
         self.state.close_buffer(path)
     }
 
-    pub fn set_view_mode(&mut self, path: Utf8PathBuf, mode: EditorViewMode) -> Result<(), String> {
-        self.state.set_active_buffer(path)?;
+    pub fn set_active_view_mode(&mut self, mode: EditorViewMode) -> Result<(), String> {
         self.state.set_active_view_mode(mode)
     }
 
-    pub fn undo_buffer_text(&mut self, path: Utf8PathBuf) -> Result<Option<String>, String> {
-        self.state.undo_buffer_text(path)
+    pub fn undo_active_text(&mut self) -> Result<Option<String>, String> {
+        self.state.undo_active_text()
     }
 
-    pub fn redo_buffer_text(&mut self, path: Utf8PathBuf) -> Result<Option<String>, String> {
-        self.state.redo_buffer_text(path)
+    pub fn redo_active_text(&mut self) -> Result<Option<String>, String> {
+        self.state.redo_active_text()
     }
 
     pub fn shutdown(&mut self) -> RuntimeResult<()> {
@@ -754,5 +738,256 @@ fn document_store_target_revision(command: &DocumentStoreCommand) -> Option<Revi
         | DocumentStoreCommand::RedoBufferText {
             expected_revision, ..
         } => Some(*expected_revision),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::editor::FileVersion;
+
+    #[test]
+    fn coordinator_assigns_monotonic_request_ids() {
+        let mut coordinator = AppCoordinator::new();
+
+        let first = coordinator
+            .submit_document_store(DocumentStoreCommand::OpenProject {
+                root: "C:/project".to_string(),
+            })
+            .expect("first command accepted");
+        let second = coordinator
+            .submit_document_store(DocumentStoreCommand::OpenProject {
+                root: "C:/project-2".to_string(),
+            })
+            .expect("second command accepted");
+
+        assert_eq!(first.request_id.get(), 1);
+        assert_eq!(second.request_id.get(), 2);
+        assert_eq!(first.target_revision, None);
+        coordinator.shutdown().expect("shutdown joins workers");
+    }
+
+    #[test]
+    fn coordinator_drains_project_opened_into_read_model() {
+        let mut coordinator = AppCoordinator::new();
+        coordinator
+            .submit_document_store(DocumentStoreCommand::OpenProject {
+                root: "C:/project".to_string(),
+            })
+            .expect("open project accepted");
+
+        drain_until(&mut coordinator, |coordinator| {
+            coordinator.read_models().workspace.project_root.as_deref() == Some("C:/project")
+        });
+
+        assert_eq!(
+            coordinator.read_models().workspace.revision,
+            Revision::new(1)
+        );
+        coordinator.shutdown().expect("shutdown joins workers");
+    }
+
+    #[test]
+    fn coordinator_drains_buffer_revisions_into_editor_read_model() {
+        let path = Utf8PathBuf::from("sequences/example.sequence.dawn");
+        let mut coordinator = AppCoordinator::new();
+        coordinator
+            .submit_document_store(DocumentStoreCommand::OpenProject {
+                root: "C:/project".to_string(),
+            })
+            .expect("open project accepted");
+        coordinator
+            .submit_document_store(DocumentStoreCommand::OpenBuffer {
+                path: path.clone(),
+                text: "first".to_string(),
+                disk_version: Some(disk_version(5, 1)),
+            })
+            .expect("open buffer accepted");
+        let edit_ack = coordinator
+            .submit_document_store(DocumentStoreCommand::UpdateBufferText {
+                path: path.clone(),
+                expected_revision: Revision::new(2),
+                text: "second".to_string(),
+            })
+            .expect("edit accepted");
+
+        assert_eq!(edit_ack.target_revision, Some(Revision::new(2)));
+        drain_until(&mut coordinator, |coordinator| {
+            coordinator
+                .read_models()
+                .editor
+                .buffers
+                .get(&path)
+                .is_some_and(|buffer| buffer.revision == Revision::new(3) && buffer.dirty)
+        });
+
+        let buffer = coordinator
+            .read_models()
+            .editor
+            .buffers
+            .get(&path)
+            .expect("buffer is published");
+        assert_eq!(buffer.revision, Revision::new(3));
+        assert!(buffer.dirty);
+        coordinator.shutdown().expect("shutdown joins workers");
+    }
+
+    #[test]
+    fn coordinator_seeds_project_buffer_then_publishes_text_edit() {
+        let path = Utf8PathBuf::from("sequences/example.sequence.dawn");
+        let mut coordinator = AppCoordinator::new();
+        coordinator
+            .submit_document_store(DocumentStoreCommand::OpenProject {
+                root: "C:/project".to_string(),
+            })
+            .expect("open project accepted");
+        drain_until(&mut coordinator, |coordinator| {
+            coordinator.read_models().workspace.project_root.as_deref() == Some("C:/project")
+        });
+
+        coordinator
+            .submit_document_store(DocumentStoreCommand::OpenBuffer {
+                path: path.clone(),
+                text: "seed".to_string(),
+                disk_version: Some(disk_version(4, 1)),
+            })
+            .expect("open buffer accepted");
+        drain_until(&mut coordinator, |coordinator| {
+            coordinator
+                .read_models()
+                .editor
+                .buffers
+                .get(&path)
+                .is_some_and(|buffer| buffer.revision == Revision::new(2) && !buffer.dirty)
+        });
+
+        let revision = coordinator
+            .read_models()
+            .editor
+            .buffers
+            .get(&path)
+            .expect("buffer is seeded")
+            .revision;
+        coordinator
+            .submit_document_store(DocumentStoreCommand::UpdateBufferText {
+                path: path.clone(),
+                expected_revision: revision,
+                text: "edited".to_string(),
+            })
+            .expect("edit accepted");
+        drain_until(&mut coordinator, |coordinator| {
+            coordinator
+                .read_models()
+                .editor
+                .buffers
+                .get(&path)
+                .is_some_and(|buffer| buffer.revision == revision.next() && buffer.dirty)
+        });
+
+        assert_eq!(
+            coordinator.read_models().editor.active_file.as_ref(),
+            Some(&path)
+        );
+        coordinator.shutdown().expect("shutdown joins workers");
+    }
+
+    #[test]
+    fn stale_buffer_edits_are_rejected_by_document_store_core() {
+        let path = Utf8PathBuf::from("sequences/example.sequence.dawn");
+        let mut coordinator = AppCoordinator::new();
+        coordinator
+            .submit_document_store(DocumentStoreCommand::OpenBuffer {
+                path: path.clone(),
+                text: "first".to_string(),
+                disk_version: Some(disk_version(5, 1)),
+            })
+            .expect("open buffer accepted");
+        drain_until(&mut coordinator, |coordinator| {
+            coordinator.read_models().editor.buffers.contains_key(&path)
+        });
+
+        let ack = coordinator
+            .submit_document_store(DocumentStoreCommand::UpdateBufferText {
+                path,
+                expected_revision: Revision::INITIAL,
+                text: "second".to_string(),
+            })
+            .expect("stale edit reaches service runner");
+
+        assert_eq!(ack.target_revision, Some(Revision::INITIAL));
+        drain_until(&mut coordinator, |coordinator| {
+            coordinator.read_models().status.fatal_error.is_some()
+        });
+
+        assert_eq!(
+            coordinator.read_models().status.fatal_error.as_deref(),
+            Some("DocumentStore: stale revision: expected 0, current 1")
+        );
+        coordinator.shutdown().expect("shutdown joins workers");
+    }
+
+    #[test]
+    fn service_errors_are_reflected_as_fatal_status() {
+        let mut coordinator = AppCoordinator::new();
+        coordinator
+            .submit_document_store(DocumentStoreCommand::SetActiveBuffer {
+                path: Utf8PathBuf::from("missing.sequence.dawn"),
+            })
+            .expect("invalid command still reaches service runner");
+
+        drain_until(&mut coordinator, |coordinator| {
+            coordinator.read_models().status.fatal_error.is_some()
+        });
+
+        let fatal = coordinator
+            .read_models()
+            .status
+            .fatal_error
+            .as_deref()
+            .expect("fatal status is published");
+        assert!(fatal.starts_with("DocumentStore: buffer not open:"));
+        coordinator.shutdown().expect("shutdown joins workers");
+    }
+
+    #[test]
+    fn coordinator_shutdown_joins_service_workers() {
+        let mut coordinator = AppCoordinator::new();
+        coordinator.shutdown().expect("shutdown joins workers");
+
+        let error = coordinator
+            .submit_document_store(DocumentStoreCommand::OpenProject {
+                root: "C:/project".to_string(),
+            })
+            .expect_err("stopped coordinator rejects commands");
+
+        assert_eq!(error.kind, RuntimeErrorKind::Fatal);
+        assert_eq!(error.service, ServiceName::DocumentStore);
+    }
+
+    fn drain_until(coordinator: &mut AppCoordinator, done: impl Fn(&AppCoordinator) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            coordinator.drain_events().expect("events drain");
+            if done(coordinator) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        coordinator.drain_events().expect("events drain");
+        assert!(
+            done(coordinator),
+            "condition was not reached before timeout"
+        );
+    }
+
+    fn disk_version(len: u64, content_hash: u64) -> FileVersion {
+        FileVersion {
+            len,
+            modified_millis: None,
+            content_hash,
+        }
     }
 }

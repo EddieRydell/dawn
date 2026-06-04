@@ -422,6 +422,39 @@ pub fn compile_module_with_imports(
     Ok(module.effects.into_iter().map(compile_ast).collect())
 }
 
+pub fn editable_param_schemas_from_source(
+    script_label: &str,
+    script_source: &str,
+) -> Option<Vec<EffectParamSchema>> {
+    let tokens = lex(script_source).ok()?;
+    let module = parse_module(&tokens).ok()?;
+    let selected_name = effect_name_from_script_label(script_label);
+    if let Some(selected_name) = selected_name {
+        return module
+            .effects
+            .into_iter()
+            .find(|effect| effect.name == selected_name)
+            .map(|effect| effect.params);
+    }
+    if module.effects.len() == 1 {
+        return module
+            .effects
+            .into_iter()
+            .next()
+            .map(|effect| effect.params);
+    }
+    let mut addable = module
+        .effects
+        .into_iter()
+        .filter(|effect| effect.visibility == EffectVisibility::Addable)
+        .collect::<Vec<_>>();
+    if addable.len() == 1 {
+        Some(addable.remove(0).params)
+    } else {
+        None
+    }
+}
+
 pub fn compile_ast(effect: EffectAst) -> CompiledEffect {
     let kind = kind_for_entrypoint(&effect.entrypoint);
     let bytecode = if kind == EffectScriptKind::Sample {
@@ -449,4 +482,11 @@ fn kind_for_entrypoint(entrypoint: &EffectEntrypoint) -> EffectScriptKind {
         EffectEntrypoint::Sample(_) => EffectScriptKind::Sample,
         EffectEntrypoint::Generator(_) => EffectScriptKind::Generator,
     }
+}
+
+fn effect_name_from_script_label(script: &str) -> Option<&str> {
+    script
+        .rsplit_once('.')
+        .map(|(_, name)| name)
+        .filter(|name| !name.is_empty())
 }
