@@ -1,6 +1,4 @@
 pub mod document_store;
-mod session;
-mod store;
+mod types;
 
-pub use session::{EditorSession, SessionBufferState};
-pub use store::{BufferExternalState, BufferTab, EditorStore, EditorViewMode, FileVersion};
+pub use types::{BufferExternalState, BufferTab, EditorViewMode, FileVersion};

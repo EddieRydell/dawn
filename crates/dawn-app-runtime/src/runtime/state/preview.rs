@@ -217,7 +217,7 @@ impl CoordinatorState {
         path: &Utf8PathBuf,
         object_key: &str,
     ) -> Result<SequenceDocument, String> {
-        let Some(buffer) = self.editor.active_buffer() else {
+        let Some(buffer) = self.document_store.active_buffer() else {
             return Err("sequence preview request does not match active sequence".to_string());
         };
         if buffer.view_mode != EditorViewMode::Gui || buffer.is_conflicted() {
@@ -226,7 +226,7 @@ impl CoordinatorState {
         let document = self.workspace.sequence_document(
             buffer.path.clone(),
             object_key,
-            self.editor.dirty_overlays(),
+            self.document_store.dirty_overlays(),
         )?;
         if buffer.path != *path && document.path != path.as_str() {
             return Err("sequence preview request does not match active sequence".to_string());

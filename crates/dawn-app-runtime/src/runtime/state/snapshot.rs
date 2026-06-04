@@ -5,7 +5,7 @@ use crate::editor::BufferTab;
 use crate::output::live_output::LiveOutputReadout;
 use crate::preview::session::PreviewSnapshot;
 use crate::runtime::contracts::RuntimeStatus;
-use crate::runtime::read_model::ActiveGuiDocument;
+use crate::workspace::ActiveGuiDocument;
 
 use super::CoordinatorState;
 
@@ -35,10 +35,11 @@ impl CoordinatorState {
         live_output: LiveOutputReadout,
     ) -> CoordinatorSnapshot {
         let active_document_descriptor = self.active_document_descriptor();
+        let active_buffer = self.document_store.active_tab();
         let active_gui_document = self.workspace.active_gui_document(
-            self.editor.active_buffer(),
+            active_buffer.as_ref(),
             active_document_descriptor.as_ref(),
-            self.editor.dirty_overlays(),
+            self.document_store.dirty_overlays(),
         );
         CoordinatorSnapshot {
             project_root: self.workspace.project_root(),
@@ -49,9 +50,9 @@ impl CoordinatorState {
             effect_preview_enabled,
             preview: self.preview.snapshot(),
             live_output,
-            tabs: self.editor.tabs(),
-            active_file: self.editor.active_file().cloned(),
-            active_buffer: self.editor.active_buffer().cloned(),
+            tabs: self.document_store.tabs(),
+            active_file: self.document_store.active_file().cloned(),
+            active_buffer,
             active_document_descriptor,
             active_gui_document,
             status: self.status.clone(),

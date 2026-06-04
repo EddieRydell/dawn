@@ -1,20 +1,19 @@
 use std::collections::VecDeque;
-use std::thread;
 use std::time::SystemTime;
-use std::time::{Duration, Instant};
 
 use crate::app_shell::LayoutPrefsCore;
 use crate::app_shell::WindowLayout;
 use crate::dto::{AppSnapshotDto, SequenceSelectionEditDto, SequenceSelectionEditResultDto};
-use crate::editor::document_store::{DocumentStoreCommand, DocumentStoreCore, ViewMode};
+use crate::editor::document_store::{DocumentStoreCommand, RuntimeSessionBuffer};
+use crate::editor::{EditorViewMode, FileVersion};
 use crate::gui_edits::selection::SequenceClipboard;
 use crate::output::live_output::{LiveOutputCore, LiveOutputReadout};
 use crate::preview::audio_engine::{AudioEngineCommand, AudioEngineCore};
 use crate::preview::engine_service::{PreviewEngineCommand, PreviewEngineCore};
 use crate::runtime::autosave_service::{AutosaveCommand, AutosaveCore};
 use crate::runtime::contracts::{
-    CommandAck, DiskVersion, Event, EventEnvelope, RequestId, Revision, RuntimeError,
-    RuntimeErrorKind, RuntimeResult, ServiceName,
+    CommandAck, Event, EventEnvelope, RequestId, Revision, RuntimeError, RuntimeErrorKind,
+    RuntimeResult, ServiceName,
 };
 use crate::runtime::file_watcher_service::{FileWatcherCommand, FileWatcherCore};
 use crate::runtime::read_model::{AppReadModels, ReadModelCore};
@@ -22,11 +21,7 @@ use crate::runtime::state::CoordinatorState;
 use crate::workspace::project_index::{ProjectIndexCommand, ProjectIndexCore};
 use dawn_language::path::Utf8PathBuf;
 
-pub use crate::editor::SessionBufferState;
 pub use crate::workspace::CreatedRuntimeFile;
-
-const RUNTIME_DOCUMENT_TIMEOUT: Duration = Duration::from_millis(500);
-const RUNTIME_DOCUMENT_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 pub struct BufferTextEdit {
     pub project_root: Option<String>,
@@ -48,7 +43,6 @@ pub struct AppCoordinator {
     command_completions: Vec<RequestId>,
     live_output: LiveOutputCore,
     layout_prefs: LayoutPrefsCore,
-    document_store: DocumentStoreCore,
     project_index: ProjectIndexCore,
     preview_engine: PreviewEngineCore,
     audio_engine: AudioEngineCore,
@@ -77,7 +71,6 @@ impl AppCoordinator {
             command_completions: Vec::new(),
             live_output: LiveOutputCore::default(),
             layout_prefs: LayoutPrefsCore::default(),
-            document_store: DocumentStoreCore::default(),
             project_index: ProjectIndexCore::default(),
             preview_engine: PreviewEngineCore::default(),
             audio_engine: AudioEngineCore::default(),
@@ -102,46 +95,12 @@ impl AppCoordinator {
     pub fn sync_session_opened(
         &mut self,
         path: std::path::PathBuf,
-        buffers: Vec<SessionBufferState>,
+        buffers: Vec<RuntimeSessionBuffer>,
         active_file: Option<Utf8PathBuf>,
         status: impl Into<String>,
     ) -> Result<(), String> {
         self.state
             .sync_session_opened(path, buffers, active_file, status)
-    }
-
-    pub fn sync_file_opened(
-        &mut self,
-        path: Utf8PathBuf,
-        text: String,
-        disk_version: crate::editor::FileVersion,
-        view_mode: crate::editor::EditorViewMode,
-    ) -> Result<(), String> {
-        self.state
-            .sync_file_opened(path, text, disk_version, view_mode)
-    }
-
-    pub fn sync_file_closed(&mut self, path: Utf8PathBuf) -> Result<(), String> {
-        self.state.sync_file_closed(path)
-    }
-
-    pub fn sync_active_file(&mut self, path: Utf8PathBuf) -> Result<(), String> {
-        self.state.sync_active_file(path)
-    }
-
-    pub fn sync_active_view_mode(
-        &mut self,
-        mode: crate::editor::EditorViewMode,
-    ) -> Result<(), String> {
-        self.state.sync_active_view_mode(mode)
-    }
-
-    pub fn sync_active_text_update(&mut self, text: String) -> Result<(), String> {
-        self.state.sync_active_text_update(text)
-    }
-
-    pub fn sync_active_history_text(&mut self, text: String, status: impl Into<String>) {
-        self.state.sync_active_history_text(text, status);
     }
 
     pub fn create_file_for_runtime_open(
@@ -261,7 +220,7 @@ impl AppCoordinator {
     pub fn read_file_with_version(
         &self,
         path: &Utf8PathBuf,
-    ) -> Result<(String, crate::editor::FileVersion), String> {
+    ) -> Result<(String, FileVersion), String> {
         self.state.read_file_with_version(path.clone())
     }
 
@@ -486,7 +445,7 @@ impl AppCoordinator {
         self.ensure_running(ServiceName::DocumentStore)?;
         let target_revision = document_store_target_revision(&command);
         let request_id = self.next_request_id();
-        let result = self.document_store.handle(command);
+        let result = self.state.submit_document_store(command);
         self.push_service_result(request_id, ServiceName::DocumentStore, result);
         Ok(CommandAck {
             request_id,
@@ -648,202 +607,46 @@ impl AppCoordinator {
             return Ok(());
         }
 
-        self.ensure_project_open(active_buffer.project_root.as_deref())?;
-        self.ensure_buffer_open(&active_buffer)?;
-
-        let revision = self
-            .read_models()
-            .editor
-            .buffers
-            .get(&active_buffer.path)
-            .map(|buffer| buffer.revision)
-            .ok_or_else(|| format!("runtime buffer is not open: {}", active_buffer.path))?;
-        let expected_revision = revision.next();
-        let ack = self
-            .submit_document_store(DocumentStoreCommand::UpdateBufferText {
-                path: active_buffer.path.clone(),
-                expected_revision: revision,
-                text,
-            })
-            .map_err(|error| error.to_string())?;
-        self.drain_until_request(ack, |coordinator| {
-            coordinator
-                .read_models()
-                .editor
-                .buffers
-                .get(&active_buffer.path)
-                .is_some_and(|buffer| buffer.revision == expected_revision)
-        })
+        let _ = active_buffer.project_root;
+        self.state.set_active_buffer(active_buffer.path)?;
+        self.state.update_active_text(text)
     }
 
     pub fn open_project(&mut self, root: String) -> Result<(), String> {
-        let ack = self
-            .submit_document_store(DocumentStoreCommand::OpenProject { root: root.clone() })
+        self.state
+            .submit_document_store(DocumentStoreCommand::OpenProject { root })
             .map_err(|error| error.to_string())?;
-        self.drain_until_request(ack, |coordinator| {
-            coordinator.read_models().workspace.project_root.as_deref() == Some(root.as_str())
-        })
+        Ok(())
     }
 
     pub fn open_buffer(
         &mut self,
         path: Utf8PathBuf,
         text: String,
-        disk_version: Option<DiskVersion>,
+        disk_version: Option<FileVersion>,
     ) -> Result<(), String> {
-        let ack = self
-            .submit_document_store(DocumentStoreCommand::OpenBuffer {
-                path: path.clone(),
-                text,
-                disk_version,
-            })
-            .map_err(|error| error.to_string())?;
-        self.drain_until_request(ack, |coordinator| {
-            coordinator.read_models().editor.buffers.contains_key(&path)
-        })
+        self.state.open_buffer(path, text, disk_version)
     }
 
     pub fn set_active_buffer(&mut self, path: Utf8PathBuf) -> Result<(), String> {
-        let ack = self
-            .submit_document_store(DocumentStoreCommand::SetActiveBuffer { path: path.clone() })
-            .map_err(|error| error.to_string())?;
-        self.drain_until_request(ack, |coordinator| {
-            coordinator.read_models().editor.active_file.as_ref() == Some(&path)
-        })
+        self.state.set_active_buffer(path)
     }
 
     pub fn close_buffer(&mut self, path: Utf8PathBuf) -> Result<(), String> {
-        let previous_active = self.read_models().editor.active_file.clone();
-        let ack = self
-            .submit_document_store(DocumentStoreCommand::CloseBuffer { path: path.clone() })
-            .map_err(|error| error.to_string())?;
-        self.drain_until_request(ack, |coordinator| {
-            let editor = &coordinator.read_models().editor;
-            if editor.buffers.contains_key(&path) {
-                return false;
-            }
-            if previous_active.as_ref() == Some(&path) {
-                return editor.active_file.as_ref() != Some(&path);
-            }
-            editor.active_file == previous_active
-        })
+        self.state.close_buffer(path)
     }
 
-    pub fn set_view_mode(&mut self, path: Utf8PathBuf, mode: ViewMode) -> Result<(), String> {
-        let ack = self
-            .submit_document_store(DocumentStoreCommand::SetViewMode {
-                path: path.clone(),
-                mode,
-            })
-            .map_err(|error| error.to_string())?;
-        self.drain_until_request(ack, |coordinator| {
-            coordinator
-                .read_models()
-                .editor
-                .buffers
-                .get(&path)
-                .is_some_and(|buffer| buffer.view_mode == mode)
-        })
+    pub fn set_view_mode(&mut self, path: Utf8PathBuf, mode: EditorViewMode) -> Result<(), String> {
+        self.state.set_active_buffer(path)?;
+        self.state.set_active_view_mode(mode)
     }
 
     pub fn undo_buffer_text(&mut self, path: Utf8PathBuf) -> Result<Option<String>, String> {
-        self.apply_history_edit(path, HistoryCommand::Undo)
+        self.state.undo_buffer_text(path)
     }
 
     pub fn redo_buffer_text(&mut self, path: Utf8PathBuf) -> Result<Option<String>, String> {
-        self.apply_history_edit(path, HistoryCommand::Redo)
-    }
-
-    fn ensure_project_open(&mut self, project_root: Option<&str>) -> Result<(), String> {
-        if self.read_models().workspace.project_root.as_deref() == project_root {
-            return Ok(());
-        }
-        let Some(project_root) = project_root else {
-            return Ok(());
-        };
-        self.open_project(project_root.to_string())
-    }
-
-    fn ensure_buffer_open(&mut self, active_buffer: &BufferTextEdit) -> Result<(), String> {
-        if self
-            .read_models()
-            .editor
-            .buffers
-            .contains_key(&active_buffer.path)
-        {
-            return Ok(());
-        }
-        self.open_buffer(active_buffer.path.clone(), active_buffer.text.clone(), None)
-    }
-
-    fn apply_history_edit(
-        &mut self,
-        path: Utf8PathBuf,
-        command: HistoryCommand,
-    ) -> Result<Option<String>, String> {
-        let revision = self
-            .read_models()
-            .editor
-            .buffers
-            .get(&path)
-            .map(|buffer| buffer.revision)
-            .ok_or_else(|| format!("runtime buffer is not open: {path}"))?;
-        let ack = match command {
-            HistoryCommand::Undo => {
-                self.submit_document_store(DocumentStoreCommand::UndoBufferText {
-                    path: path.clone(),
-                    expected_revision: revision,
-                })
-            }
-            HistoryCommand::Redo => {
-                self.submit_document_store(DocumentStoreCommand::RedoBufferText {
-                    path: path.clone(),
-                    expected_revision: revision,
-                })
-            }
-        }
-        .map_err(|error| error.to_string())?;
-        let request_id = ack.request_id;
-        self.drain_until_request(ack, |coordinator| {
-            coordinator
-                .read_models()
-                .editor
-                .buffers
-                .get(&path)
-                .is_some_and(|buffer| buffer.revision == revision.next())
-                || coordinator.has_request_completion(request_id)
-        })?;
-        Ok(self
-            .take_buffer_text_update(request_id)
-            .map(|(_, text, _)| text))
-    }
-
-    fn drain_until_request(
-        &mut self,
-        ack: CommandAck,
-        done: impl Fn(&mut Self) -> bool,
-    ) -> Result<(), String> {
-        let deadline = Instant::now() + RUNTIME_DOCUMENT_TIMEOUT;
-        loop {
-            self.drain_events().map_err(|error| error.to_string())?;
-            if let Some(error) = self.take_command_failure(ack.request_id) {
-                return Err(error.to_string());
-            }
-            if let Some(error) = self.read_models().status.fatal_error.as_ref() {
-                return Err(error.clone());
-            }
-            if done(self) {
-                return Ok(());
-            }
-            if Instant::now() >= deadline {
-                return Err("runtime timed out waiting for document store update".to_string());
-            }
-            thread::sleep(RUNTIME_DOCUMENT_POLL_INTERVAL);
-        }
-    }
-
-    fn has_request_completion(&mut self, request_id: RequestId) -> bool {
-        self.take_command_completion(request_id)
+        self.state.redo_buffer_text(path)
     }
 
     pub fn shutdown(&mut self) -> RuntimeResult<()> {
@@ -917,12 +720,6 @@ impl AppCoordinator {
             event,
         });
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum HistoryCommand {
-    Undo,
-    Redo,
 }
 
 impl Drop for AppCoordinator {

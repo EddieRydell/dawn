@@ -1,13 +1,12 @@
 use std::collections::BTreeMap;
 
-use dawn_language::path::Utf8PathBuf;
+use dawn_language::analysis::ProjectOverlay;
+use dawn_language::path::{moved_path, path_affects, Utf8PathBuf};
 
+use crate::editor::{BufferExternalState, BufferTab, EditorViewMode, FileVersion};
 use crate::runtime::contracts::{
-    BufferExternalState, DiskVersion, Event, Revision, RuntimeError, RuntimeErrorKind,
-    RuntimeResult, ServiceName,
+    Event, Revision, RuntimeError, RuntimeErrorKind, RuntimeResult, ServiceName,
 };
-
-pub use crate::runtime::contracts::ViewMode;
 
 #[derive(Debug, Clone)]
 pub struct BufferState {
@@ -15,9 +14,9 @@ pub struct BufferState {
     pub text: String,
     pub saved_text: String,
     pub revision: Revision,
-    pub disk_version: Option<DiskVersion>,
+    pub disk_version: Option<FileVersion>,
     pub external_state: BufferExternalState,
-    pub view_mode: ViewMode,
+    pub view_mode: EditorViewMode,
     undo_stack: Vec<String>,
     redo_stack: Vec<String>,
 }
@@ -25,6 +24,10 @@ pub struct BufferState {
 impl BufferState {
     pub fn dirty(&self) -> bool {
         self.text != self.saved_text
+    }
+
+    pub fn is_conflicted(&self) -> bool {
+        self.external_state != BufferExternalState::Current
     }
 
     fn record_snapshot(&mut self) {
@@ -40,8 +43,8 @@ impl BufferState {
 pub struct RuntimeSessionBuffer {
     pub path: Utf8PathBuf,
     pub text: String,
-    pub disk_version: Option<DiskVersion>,
-    pub view_mode: ViewMode,
+    pub disk_version: Option<FileVersion>,
+    pub view_mode: EditorViewMode,
 }
 
 #[derive(Debug, Clone)]
@@ -57,7 +60,7 @@ pub enum DocumentStoreCommand {
     OpenBuffer {
         path: Utf8PathBuf,
         text: String,
-        disk_version: Option<DiskVersion>,
+        disk_version: Option<FileVersion>,
     },
     UpdateBufferText {
         path: Utf8PathBuf,
@@ -67,11 +70,11 @@ pub enum DocumentStoreCommand {
     MarkSaved {
         path: Utf8PathBuf,
         expected_revision: Revision,
-        disk_version: DiskVersion,
+        disk_version: FileVersion,
     },
     ExternalDiskChanged {
         path: Utf8PathBuf,
-        disk_version: DiskVersion,
+        disk_version: FileVersion,
         text: String,
     },
     ExternalDiskDeleted {
@@ -80,7 +83,7 @@ pub enum DocumentStoreCommand {
     ReloadBufferFromDisk {
         path: Utf8PathBuf,
         text: String,
-        disk_version: DiskVersion,
+        disk_version: FileVersion,
     },
     KeepBuffer {
         path: Utf8PathBuf,
@@ -97,7 +100,7 @@ pub enum DocumentStoreCommand {
     },
     SetViewMode {
         path: Utf8PathBuf,
-        mode: ViewMode,
+        mode: EditorViewMode,
     },
     CloseBuffer {
         path: Utf8PathBuf,
@@ -132,6 +135,68 @@ impl DocumentStoreCore {
 
     pub fn active_file(&self) -> Option<&Utf8PathBuf> {
         self.active_file.as_ref()
+    }
+
+    pub fn active_buffer(&self) -> Option<&BufferState> {
+        self.active_file
+            .as_ref()
+            .and_then(|path| self.buffers.get(path))
+    }
+
+    pub fn active_path(&self) -> Result<Utf8PathBuf, String> {
+        self.active_file()
+            .cloned()
+            .ok_or_else(|| "no active document".to_string())
+    }
+
+    pub fn active_text(&self) -> Result<String, String> {
+        self.active_buffer()
+            .map(|buffer| buffer.text.clone())
+            .ok_or_else(|| "no active document".to_string())
+    }
+
+    pub fn ensure_active_buffer_not_conflicted(&self) -> Result<(), String> {
+        let Some(buffer) = self.active_buffer() else {
+            return Ok(());
+        };
+        if buffer.is_conflicted() {
+            return Err("active document has external disk changes".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn tabs(&self) -> Vec<BufferTab> {
+        self.tab_order
+            .iter()
+            .filter_map(|path| self.buffers.get(path).map(BufferTab::from))
+            .collect()
+    }
+
+    pub fn active_tab(&self) -> Option<BufferTab> {
+        self.active_buffer().map(BufferTab::from)
+    }
+
+    pub fn buffer_tabs(&self) -> Vec<BufferTab> {
+        self.buffers.values().map(BufferTab::from).collect()
+    }
+
+    pub fn dirty_overlays(&self) -> Vec<ProjectOverlay> {
+        self.buffers
+            .values()
+            .filter(|buffer| buffer.dirty())
+            .map(|buffer| ProjectOverlay {
+                path: buffer.path.clone(),
+                content: buffer.text.clone(),
+            })
+            .collect()
+    }
+
+    pub fn dirty_autosave_buffers(&self) -> Vec<BufferTab> {
+        self.buffers
+            .values()
+            .filter(|buffer| buffer.dirty() && !buffer.is_conflicted())
+            .map(BufferTab::from)
+            .collect()
     }
 
     pub fn handle(&mut self, command: DocumentStoreCommand) -> RuntimeResult<Vec<Event>> {
@@ -190,7 +255,7 @@ impl DocumentStoreCore {
                         external_state: self.buffers[&path].external_state,
                         view_mode: self.buffers[&path].view_mode,
                     });
-                    if session_buffer.view_mode != ViewMode::Text {
+                    if session_buffer.view_mode != EditorViewMode::Text {
                         self.revision = self.revision.next();
                         events.push(Event::BufferViewModeChanged {
                             path,
@@ -234,7 +299,7 @@ impl DocumentStoreCore {
                         revision,
                         disk_version,
                         external_state: BufferExternalState::Current,
-                        view_mode: ViewMode::Text,
+                        view_mode: EditorViewMode::Text,
                         undo_stack: Vec::new(),
                         redo_stack: Vec::new(),
                     },
@@ -525,7 +590,7 @@ impl DocumentStoreCore {
         let closed_paths = self
             .buffers
             .keys()
-            .filter(|candidate| *candidate == &path || candidate.starts_with(&path))
+            .filter(|candidate| path_affects(candidate, &path))
             .cloned()
             .collect::<Vec<_>>();
         let mut events = Vec::new();
@@ -607,17 +672,16 @@ enum HistoryDirection {
     Redo,
 }
 
-fn moved_path(
-    path: &Utf8PathBuf,
-    old_path: &Utf8PathBuf,
-    new_path: &Utf8PathBuf,
-) -> Option<Utf8PathBuf> {
-    if path == old_path {
-        return Some(new_path.clone());
+impl From<&BufferState> for BufferTab {
+    fn from(buffer: &BufferState) -> Self {
+        Self {
+            path: buffer.path.clone(),
+            text: buffer.text.clone(),
+            saved_text: buffer.saved_text.clone(),
+            disk_version: buffer.disk_version.clone(),
+            external_state: buffer.external_state,
+            view_mode: buffer.view_mode,
+            revision: buffer.revision,
+        }
     }
-    if !path.starts_with(old_path) {
-        return None;
-    }
-    let relative = path.strip_prefix(old_path).ok()?;
-    Some(new_path.join(relative))
 }

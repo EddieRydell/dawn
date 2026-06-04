@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use dawn_language::fs::WorkspaceFs;
-use dawn_language::path::{PathStringExt, Utf8PathBuf};
+use dawn_language::path::{moved_path, PathStringExt, Utf8PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PlannedMove {
@@ -137,19 +137,4 @@ fn rollback_completed_moves(fs: &WorkspaceFs, completed: &[PlannedMove]) -> Resu
     } else {
         Err(errors.join("; "))
     }
-}
-
-fn moved_path(
-    path: &Utf8PathBuf,
-    old_path: &Utf8PathBuf,
-    new_path: &Utf8PathBuf,
-) -> Option<Utf8PathBuf> {
-    if path == old_path {
-        return Some(new_path.clone());
-    }
-    if !path.starts_with(old_path) {
-        return None;
-    }
-    let relative = path.strip_prefix(old_path).ok()?;
-    Some(new_path.join(relative))
 }

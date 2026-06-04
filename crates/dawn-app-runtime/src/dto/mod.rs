@@ -29,8 +29,8 @@ use crate::editor::{BufferExternalState, BufferTab, EditorViewMode};
 use crate::output::live_output::LiveOutputReadout;
 use crate::preview::session::AudioPlaybackStatus;
 use crate::runtime::contracts::RuntimeStatus;
-use crate::runtime::read_model::ActiveGuiDocument;
 use crate::runtime::state::CoordinatorSnapshot;
+use crate::workspace::ActiveGuiDocument;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]

@@ -30,11 +30,11 @@ impl CoordinatorState {
             return Err("active document is blocked by diagnostics".to_string());
         }
         let path = self
-            .editor
+            .document_store
             .active_file()
             .cloned()
             .ok_or_else(|| "no active sequence file is selected".to_string())?;
-        let overlays = self.editor.dirty_overlays();
+        let overlays = self.document_store.dirty_overlays();
         let descriptor = self
             .workspace
             .inspect_document(path.clone(), overlays.clone())?;
@@ -53,7 +53,7 @@ impl CoordinatorState {
     pub(crate) fn active_sequence_audio_context(
         &self,
     ) -> Result<(Option<String>, Utf8PathBuf), String> {
-        let Some(sequence_path) = self.editor.active_file().cloned() else {
+        let Some(sequence_path) = self.document_store.active_file().cloned() else {
             return Err("no active sequence file is selected".to_string());
         };
         if !self

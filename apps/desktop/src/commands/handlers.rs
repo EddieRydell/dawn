@@ -5,10 +5,8 @@ use dawn_app_runtime::dto::{
     EditorViewModeDto, FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto,
     SequenceSelectionEditDto, SequenceSelectionEditResultDto,
 };
-use dawn_app_runtime::editor::document_store::ViewMode;
-use dawn_app_runtime::editor::{EditorViewMode, FileVersion};
+use dawn_app_runtime::editor::EditorViewMode;
 use dawn_app_runtime::output::fseq_export::{export_fseq_file, FseqExportOptions};
-use dawn_app_runtime::runtime::contracts::DiskVersion;
 use dawn_app_runtime::runtime::coordinator::BufferTextEdit;
 use dawn_app_runtime::workspace::{load_project_workspace, project_root_label_for_path};
 use dawn_language::path::{serialized_import_path, utf8_path, Utf8PathBuf};
@@ -342,14 +340,9 @@ fn open_file_runtime_then_model(
         let model = model;
         model.read_file_with_version(&path)?
     };
-    lock_runtime(state)?.open_buffer(
-        path.clone(),
-        text.clone(),
-        Some(runtime_disk_version(&disk_version)),
-    )?;
     let snapshot = {
         let mut runtime = lock_runtime(state)?;
-        runtime.sync_file_opened(path, text, disk_version, EditorViewMode::Text)?;
+        runtime.open_buffer(path, text, Some(disk_version))?;
         runtime.app_snapshot()
     };
     let read_models = emit_runtime_read_models(app, snapshot)?;
@@ -361,10 +354,9 @@ fn open_file_runtime_then_model(
 #[tauri::command]
 fn close_file(app: AppHandle, state: State<'_, AppState>, path: String) -> CommandResult<()> {
     let path = project_path(path);
-    lock_runtime(&state)?.close_buffer(path.clone())?;
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime.sync_file_closed(path)?;
+        runtime.close_buffer(path)?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -374,10 +366,9 @@ fn close_file(app: AppHandle, state: State<'_, AppState>, path: String) -> Comma
 #[tauri::command]
 fn set_active_file(app: AppHandle, state: State<'_, AppState>, path: String) -> CommandResult<()> {
     let path = project_path(path);
-    lock_runtime(&state)?.set_active_buffer(path.clone())?;
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime.sync_active_file(path)?;
+        runtime.set_active_buffer(path)?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -405,10 +396,9 @@ fn update_active_text(
         }
     };
 
-    lock_runtime(&state)?.update_active_text(active_buffer, text.clone())?;
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime.sync_active_text_update(text)?;
+        runtime.update_active_text(active_buffer, text)?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -437,34 +427,18 @@ fn set_active_view_mode_runtime_then_model(
         };
         project_path(active_file)
     };
-    lock_runtime(state)?.set_view_mode(active_file, runtime_view_mode(&mode))?;
     let snapshot = {
         let mut runtime = lock_runtime(state)?;
-        runtime.sync_active_view_mode(editor_view_mode(&mode))?;
+        runtime.set_view_mode(active_file, editor_view_mode(&mode))?;
         runtime.app_snapshot()
     };
     emit_runtime_update(app, state, snapshot)
-}
-
-fn runtime_view_mode(mode: &EditorViewModeDto) -> ViewMode {
-    match mode {
-        EditorViewModeDto::Text => ViewMode::Text,
-        EditorViewModeDto::Gui => ViewMode::Gui,
-    }
 }
 
 fn editor_view_mode(mode: &EditorViewModeDto) -> EditorViewMode {
     match mode {
         EditorViewModeDto::Text => EditorViewMode::Text,
         EditorViewModeDto::Gui => EditorViewMode::Gui,
-    }
-}
-
-fn runtime_disk_version(version: &FileVersion) -> DiskVersion {
-    DiskVersion {
-        len: version.len,
-        modified_millis: version.modified_millis,
-        content_hash: version.content_hash,
     }
 }
 
@@ -479,12 +453,12 @@ fn undo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult
         };
         project_path(path)
     };
-    let Some(text) = lock_runtime(&state)?.undo_buffer_text(path)? else {
+    if lock_runtime(&state)?.undo_buffer_text(path)?.is_none() {
         return Ok(());
-    };
+    }
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime.sync_active_history_text(text, "Undo");
+        runtime.set_status("Undo");
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -501,12 +475,12 @@ fn redo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult
         };
         project_path(path)
     };
-    let Some(text) = lock_runtime(&state)?.redo_buffer_text(path)? else {
+    if lock_runtime(&state)?.redo_buffer_text(path)?.is_none() {
         return Ok(());
-    };
+    }
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime.sync_active_history_text(text, "Redo");
+        runtime.set_status("Redo");
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -740,19 +714,9 @@ fn create_file(
     name: String,
 ) -> CommandResult<()> {
     let created = lock_runtime(&state)?.create_file_for_runtime_open(project_path(parent), name)?;
-    lock_runtime(&state)?.open_buffer(
-        created.path.clone(),
-        created.text.clone(),
-        Some(runtime_disk_version(&created.disk_version)),
-    )?;
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime.sync_file_opened(
-            created.path,
-            created.text,
-            created.disk_version,
-            EditorViewMode::Text,
-        )?;
+        runtime.open_buffer(created.path, created.text, Some(created.disk_version))?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)

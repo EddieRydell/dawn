@@ -60,6 +60,31 @@ pub fn lexical_normalize(path: &Utf8Path) -> Utf8PathBuf {
     Utf8PathBuf::from_path_buf(normalized).unwrap_or_else(|_| path.to_path_buf())
 }
 
+pub fn moved_path(
+    path: &Utf8PathBuf,
+    old_path: &Utf8PathBuf,
+    new_path: &Utf8PathBuf,
+) -> Option<Utf8PathBuf> {
+    if path == old_path {
+        return Some(new_path.clone());
+    }
+    if !path.starts_with(old_path) {
+        return None;
+    }
+    let relative = path.strip_prefix(old_path).ok()?;
+    Some(new_path.join(relative))
+}
+
+pub fn path_affects(candidate: &Utf8PathBuf, changed_path: &Utf8PathBuf) -> bool {
+    candidate == changed_path || candidate.starts_with(changed_path)
+}
+
+pub fn path_matches_any(candidate: &Utf8PathBuf, changed_paths: &[Utf8PathBuf]) -> bool {
+    changed_paths
+        .iter()
+        .any(|changed_path| path_affects(candidate, changed_path))
+}
+
 fn lexical_absolute(path: &Utf8Path) -> Utf8PathBuf {
     let absolute = if path.is_absolute() {
         path.to_path_buf()

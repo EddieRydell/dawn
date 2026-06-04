@@ -1,5 +1,6 @@
-use dawn_language::path::Utf8PathBuf;
+use dawn_language::path::{path_matches_any, Utf8PathBuf};
 
+use crate::editor::document_store::DocumentStoreCommand;
 use crate::preview::session::PreviewSyncMode;
 use crate::runtime::contracts::RuntimeStatus;
 use crate::workspace::CreatedRuntimeFile;
@@ -18,8 +19,8 @@ impl CoordinatorState {
 
     pub(crate) fn reload_project(&mut self) -> Result<(), String> {
         let paths = self
-            .editor
-            .buffers()
+            .document_store
+            .buffer_tabs()
             .into_iter()
             .map(|buffer| buffer.path)
             .collect();
@@ -56,7 +57,7 @@ impl CoordinatorState {
     ) -> Result<(), String> {
         self.flush_autosave()?;
         self.workspace.create_directory(parent, &name)?;
-        self.workspace.refresh_analysis_from_editor(&self.editor)?;
+        self.refresh_analysis_from_document_store()?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
@@ -68,8 +69,12 @@ impl CoordinatorState {
     ) -> Result<(), String> {
         self.flush_autosave()?;
         let moves = self.workspace.rename_path(path.clone(), &new_name)?;
-        self.editor.reconcile_moved_paths(&moves);
-        self.workspace.refresh_analysis_from_editor(&self.editor)?;
+        for (old_path, new_path) in moves {
+            self.document_store
+                .handle(DocumentStoreCommand::ReconcileMovedPath { old_path, new_path })
+                .map_err(|error| error.to_string())?;
+        }
+        self.refresh_analysis_from_document_store()?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
@@ -77,17 +82,25 @@ impl CoordinatorState {
     pub(crate) fn delete_path(&mut self, path: Utf8PathBuf) -> Result<(), String> {
         self.flush_autosave()?;
         self.workspace.delete_path(path.clone())?;
-        self.editor.reconcile_deleted_path(&path);
-        self.workspace.refresh_analysis_from_editor(&self.editor)?;
+        self.document_store
+            .handle(DocumentStoreCommand::ReconcileDeletedPath { path })
+            .map_err(|error| error.to_string())?;
+        self.refresh_analysis_from_document_store()?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
 
     pub(super) fn open_project(&mut self, path: std::path::PathBuf) -> Result<(), String> {
         self.workspace.open_project(&path)?;
-        self.editor.clear();
+        let root = self
+            .workspace
+            .project_root()
+            .ok_or_else(|| "project root was not opened".to_string())?;
+        self.document_store
+            .handle(DocumentStoreCommand::OpenProject { root })
+            .map_err(|error| error.to_string())?;
         self.preview.reset();
-        self.workspace.refresh_analysis_from_editor(&self.editor)?;
+        self.refresh_analysis_from_document_store()?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
@@ -96,21 +109,88 @@ impl CoordinatorState {
         &mut self,
         paths: Vec<Utf8PathBuf>,
     ) -> Result<(), String> {
-        self.workspace
-            .reconcile_filesystem_changes(&mut self.editor, paths)?;
+        let watched_paths = if paths.is_empty() {
+            self.document_store
+                .buffer_tabs()
+                .into_iter()
+                .map(|buffer| buffer.path)
+                .collect()
+        } else {
+            paths
+        };
+        let buffers = self.document_store.buffer_tabs();
+        for buffer in buffers {
+            if !path_matches_any(&buffer.path, &watched_paths) {
+                continue;
+            }
+            match self.workspace.read_file_with_version(buffer.path.clone()) {
+                Ok((disk_text, disk_version)) => {
+                    if buffer.disk_version.as_ref() == Some(&disk_version) {
+                        continue;
+                    }
+                    self.document_store
+                        .handle(DocumentStoreCommand::ExternalDiskChanged {
+                            path: buffer.path,
+                            disk_version,
+                            text: disk_text,
+                        })
+                        .map_err(|error| error.to_string())?;
+                }
+                Err(_) => {
+                    self.document_store
+                        .handle(DocumentStoreCommand::ExternalDiskDeleted { path: buffer.path })
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+        }
+        self.workspace.refresh_project_entries()?;
+        self.refresh_analysis_from_document_store()?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
 
     fn reload_active_buffer_from_disk(&mut self) -> Result<(), String> {
-        self.workspace
-            .reload_active_buffer_from_disk(&mut self.editor)?;
+        let Some(buffer) = self.document_store.active_tab() else {
+            return Ok(());
+        };
+        match self.workspace.read_file_with_version(buffer.path.clone()) {
+            Ok((text, disk_version)) => {
+                self.document_store
+                    .handle(DocumentStoreCommand::ReloadBufferFromDisk {
+                        path: buffer.path,
+                        text,
+                        disk_version,
+                    })
+                    .map_err(|error| error.to_string())?;
+            }
+            Err(_) => {
+                self.document_store
+                    .handle(DocumentStoreCommand::CloseBuffer { path: buffer.path })
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        self.workspace.refresh_project_entries()?;
+        self.refresh_analysis_from_document_store()?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
 
     fn keep_active_buffer(&mut self) -> Result<(), String> {
-        self.workspace.keep_active_buffer(&mut self.editor)?;
+        let Some(buffer) = self.document_store.active_tab() else {
+            return Ok(());
+        };
+        let version = self
+            .workspace
+            .write_text_file_with_version(buffer.path.clone(), &buffer.text)?;
+        self.document_store
+            .handle(DocumentStoreCommand::MarkSaved {
+                path: buffer.path,
+                expected_revision: buffer.revision,
+                disk_version: version,
+            })
+            .map_err(|error| error.to_string())?;
+        self.workspace.refresh_project_entries()?;
+        self.refresh_analysis_from_document_store()?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }

@@ -61,9 +61,9 @@ impl CoordinatorState {
     }
 
     fn apply_sequence_gui_edit(&mut self, edit: SequenceGuiEditDto) -> Result<(), String> {
-        self.editor.ensure_active_buffer_not_conflicted()?;
-        let path = self.editor.active_path()?;
-        let descriptor_overlays = self.editor.dirty_overlays();
+        self.document_store.ensure_active_buffer_not_conflicted()?;
+        let path = self.document_store.active_path()?;
+        let descriptor_overlays = self.document_store.dirty_overlays();
         let descriptor = self
             .workspace
             .inspect_document(path.clone(), descriptor_overlays)?;
@@ -73,8 +73,8 @@ impl CoordinatorState {
             .ok_or_else(|| "active document is not a sequence".to_string())?
             .clone();
         let edit = crate::gui_edits::sequence::sequence_document_edit_from_gui(edit);
-        let base_content = self.editor.active_text()?;
-        let edit_overlays = self.editor.dirty_overlays();
+        let base_content = self.document_store.active_text()?;
+        let edit_overlays = self.document_store.dirty_overlays();
         let outcome = self.workspace.apply_sequence_edit(
             path.clone(),
             &object_key,
@@ -92,11 +92,11 @@ impl CoordinatorState {
     }
 
     fn apply_sequence_document_edit(&mut self, edit: SequenceDocumentEdit) -> Result<(), String> {
-        self.editor.ensure_active_buffer_not_conflicted()?;
-        let path = self.editor.active_path()?;
+        self.document_store.ensure_active_buffer_not_conflicted()?;
+        let path = self.document_store.active_path()?;
         let descriptor = self
             .workspace
-            .inspect_document(path.clone(), self.editor.dirty_overlays())?;
+            .inspect_document(path.clone(), self.document_store.dirty_overlays())?;
         let object_key = descriptor
             .default_object_keys
             .get(&DocumentViewId::Sequence)
@@ -106,8 +106,8 @@ impl CoordinatorState {
             path.clone(),
             &object_key,
             edit,
-            self.editor.active_text()?,
-            self.editor.dirty_overlays(),
+            self.document_store.active_text()?,
+            self.document_store.dirty_overlays(),
         )?;
         self.save_active_sequence_gui_text(
             path,
@@ -118,11 +118,11 @@ impl CoordinatorState {
     }
 
     fn apply_layout_gui_edit(&mut self, edit: LayoutGuiEditDto) -> Result<(), String> {
-        self.editor.ensure_active_buffer_not_conflicted()?;
-        let path = self.editor.active_path()?;
+        self.document_store.ensure_active_buffer_not_conflicted()?;
+        let path = self.document_store.active_path()?;
         let descriptor = self
             .workspace
-            .inspect_document(path.clone(), self.editor.dirty_overlays())?;
+            .inspect_document(path.clone(), self.document_store.dirty_overlays())?;
         let object_key = descriptor
             .default_object_keys
             .get(&DocumentViewId::Layout)
@@ -131,37 +131,39 @@ impl CoordinatorState {
         let mut document = self.workspace.layout_document(
             path.clone(),
             &object_key,
-            self.editor.dirty_overlays(),
+            self.document_store.dirty_overlays(),
         )?;
         crate::gui_edits::layout::apply_layout_gui_edit(&mut document, edit)?;
         let outcome = self.workspace.apply_layout_edit(
             path,
             &object_key,
             document,
-            self.editor.active_text()?,
-            self.editor.dirty_overlays(),
+            self.document_store.active_text()?,
+            self.document_store.dirty_overlays(),
         )?;
         self.save_active_gui_text(outcome.serialized_content)
     }
 
     fn apply_fixture_gui_edit(&mut self, edit: FixtureGuiEditDto) -> Result<(), String> {
-        self.editor.ensure_active_buffer_not_conflicted()?;
-        let path = self.editor.active_path()?;
-        let mut document =
-            self.workspace
-                .fixture_document(path.clone(), None, self.editor.dirty_overlays())?;
+        self.document_store.ensure_active_buffer_not_conflicted()?;
+        let path = self.document_store.active_path()?;
+        let mut document = self.workspace.fixture_document(
+            path.clone(),
+            None,
+            self.document_store.dirty_overlays(),
+        )?;
         crate::gui_edits::fixture::apply_fixture_gui_edit(&mut document, edit)?;
         let outcome = self.workspace.apply_fixture_edit(
             path,
             document,
-            self.editor.active_text()?,
-            self.editor.dirty_overlays(),
+            self.document_store.active_text()?,
+            self.document_store.dirty_overlays(),
         )?;
         self.save_active_gui_text(outcome.serialized_content)
     }
 
     fn save_active_gui_text(&mut self, text: String) -> Result<(), String> {
-        self.editor.replace_active_text_from_gui(text);
+        self.replace_active_gui_text(text)?;
         self.refresh_analysis_after_memory_edit();
         Ok(())
     }
@@ -173,7 +175,7 @@ impl CoordinatorState {
         document: SequenceDocument,
         mode: PreviewSyncMode,
     ) -> Result<(), String> {
-        self.editor.replace_active_text_from_gui(text);
+        self.replace_active_gui_text(text)?;
         self.sync_preview_source_from_document(path, document, mode);
         Ok(())
     }

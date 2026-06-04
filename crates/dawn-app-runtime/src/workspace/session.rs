@@ -6,9 +6,8 @@ use dawn_language::document::{
 use dawn_language::fs::WorkspaceEntry;
 use dawn_language::path::Utf8PathBuf;
 
-use crate::editor::EditorSession;
-use crate::editor::{BufferExternalState, BufferTab, FileVersion};
-use crate::runtime::read_model::ActiveGuiDocument;
+use crate::editor::{BufferTab, FileVersion};
+use crate::workspace::ActiveGuiDocument;
 use crate::workspace::ProjectWorkspace;
 
 #[derive(Debug, Clone)]
@@ -49,8 +48,11 @@ impl WorkspaceSession {
         Ok(())
     }
 
-    pub fn refresh_analysis_from_editor(&mut self, editor: &EditorSession) -> Result<(), String> {
-        self.refresh_analysis(editor.dirty_overlays())
+    pub fn refresh_analysis_from_overlays(
+        &mut self,
+        overlays: Vec<ProjectOverlay>,
+    ) -> Result<(), String> {
+        self.refresh_analysis(overlays)
     }
 
     pub fn project_root(&self) -> Option<String> {
@@ -167,108 +169,18 @@ impl WorkspaceSession {
         self.workspace.write_text_file_with_version(path, content)
     }
 
-    pub fn flush_autosave_without_analysis(
+    pub fn flush_autosave_buffers(
         &self,
-        editor: &mut EditorSession,
-    ) -> Result<(), String> {
-        for buffer in editor.dirty_autosave_buffers() {
-            let version = self
-                .workspace
-                .write_text_file_with_version(buffer.path.clone(), &buffer.text)?;
-            editor.record_saved_version(&buffer.path, version);
-        }
-        Ok(())
-    }
-
-    pub fn flush_autosave(&mut self, editor: &mut EditorSession) -> Result<bool, String> {
-        let dirty_buffers = editor.dirty_autosave_buffers();
-        let had_dirty_buffers = !dirty_buffers.is_empty();
-        for buffer in dirty_buffers {
-            let version = self
-                .workspace
-                .write_text_file_with_version(buffer.path.clone(), &buffer.text)?;
-            editor.record_saved_version(&buffer.path, version);
-        }
-        if had_dirty_buffers {
-            self.refresh_analysis_from_editor(editor)?;
-        }
-        Ok(had_dirty_buffers)
-    }
-
-    pub fn reconcile_filesystem_changes(
-        &mut self,
-        editor: &mut EditorSession,
-        paths: Vec<Utf8PathBuf>,
-    ) -> Result<(), String> {
-        let watched_paths = if paths.is_empty() {
-            editor
-                .buffers()
-                .into_iter()
-                .map(|buffer| buffer.path)
-                .collect()
-        } else {
-            paths
-        };
-        let buffers = editor.buffers();
+        buffers: Vec<BufferTab>,
+    ) -> Result<Vec<(Utf8PathBuf, FileVersion)>, String> {
+        let mut saved = Vec::new();
         for buffer in buffers {
-            if !buffer_matches_any_path(&buffer.path, &watched_paths) {
-                continue;
-            }
-            match self.workspace.read_file_with_version(buffer.path.clone()) {
-                Ok((disk_text, disk_version)) => {
-                    if buffer.disk_version.as_ref() == Some(&disk_version) {
-                        continue;
-                    }
-                    if buffer.is_dirty() {
-                        editor
-                            .mark_external_state(&buffer.path, BufferExternalState::ChangedOnDisk);
-                    } else {
-                        editor.replace_from_disk(&buffer.path, disk_text, disk_version, false);
-                    }
-                }
-                Err(_) => {
-                    if buffer.is_dirty() {
-                        editor
-                            .mark_external_state(&buffer.path, BufferExternalState::DeletedOnDisk);
-                    } else {
-                        editor.close_file(&buffer.path);
-                    }
-                }
-            }
+            let version = self
+                .workspace
+                .write_text_file_with_version(buffer.path.clone(), &buffer.text)?;
+            saved.push((buffer.path, version));
         }
-        self.refresh_project_entries()?;
-        self.refresh_analysis_from_editor(editor)
-    }
-
-    pub fn reload_active_buffer_from_disk(
-        &mut self,
-        editor: &mut EditorSession,
-    ) -> Result<(), String> {
-        let Some(buffer) = editor.active_buffer().cloned() else {
-            return Ok(());
-        };
-        match self.workspace.read_file_with_version(buffer.path.clone()) {
-            Ok((text, disk_version)) => {
-                editor.replace_from_disk(&buffer.path, text, disk_version, true);
-            }
-            Err(_) => {
-                editor.close_file(&buffer.path);
-            }
-        }
-        self.refresh_project_entries()?;
-        self.refresh_analysis_from_editor(editor)
-    }
-
-    pub fn keep_active_buffer(&mut self, editor: &mut EditorSession) -> Result<(), String> {
-        let Some(buffer) = editor.active_buffer().cloned() else {
-            return Ok(());
-        };
-        let version = self
-            .workspace
-            .write_text_file_with_version(buffer.path.clone(), &buffer.text)?;
-        editor.record_saved_version(&buffer.path, version);
-        self.refresh_project_entries()?;
-        self.refresh_analysis_from_editor(editor)
+        Ok(saved)
     }
 
     pub fn create_file_for_runtime_open(
@@ -312,7 +224,7 @@ impl WorkspaceSession {
         active_document_descriptor: Option<&DocumentDescriptor>,
         overlays: Vec<ProjectOverlay>,
     ) -> Option<ActiveGuiDocument> {
-        crate::runtime::read_model::build_active_gui_document(
+        crate::workspace::build_active_gui_document(
             &self.workspace,
             active_buffer,
             &self.diagnostics,
@@ -334,10 +246,4 @@ pub fn project_root_label_for_path(path: &std::path::Path) -> Result<String, Str
         .project_root_display()
         .map(ToString::to_string)
         .ok_or_else(|| "project root was not opened".to_string())
-}
-
-fn buffer_matches_any_path(path: &Utf8PathBuf, changed_paths: &[Utf8PathBuf]) -> bool {
-    changed_paths
-        .iter()
-        .any(|changed_path| path == changed_path || path.starts_with(changed_path))
 }

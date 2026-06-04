@@ -1,13 +1,12 @@
-use crate::runtime::contracts::{
-    BufferExternalState, DiskVersion, Event, Revision, RuntimeResult, SelfWriteTag,
-};
+use crate::editor::{BufferExternalState, FileVersion};
+use crate::runtime::contracts::{Event, Revision, RuntimeResult, SelfWriteTag};
 use dawn_language::path::Utf8PathBuf;
 
 #[derive(Debug, Clone)]
 pub enum FileWatcherCommand {
     DiskChanged {
         path: Utf8PathBuf,
-        disk_version: DiskVersion,
+        disk_version: FileVersion,
         matching_self_write: Option<SelfWriteTag>,
     },
 }
