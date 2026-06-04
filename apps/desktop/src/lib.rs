@@ -10,51 +10,44 @@
     )
 )]
 
-mod app_runtime;
-mod audio_runtime;
+mod app;
 mod bindings;
 mod commands;
-mod effect_preview_runtime;
-mod effect_previews;
-mod filesystem_watcher;
-mod live_output;
-mod new_project;
 mod preview;
-mod preview_transport;
-mod state;
-mod window_layout;
+mod project;
+mod shell;
 
 pub use bindings::{check_bindings, export_bindings, specta_builder};
-pub use effect_previews::{
-    SequenceEffectPreviewDto, SequenceEffectPreviewRequestEffectDto,
-    SequenceEffectPreviewResultDto, SequenceEffectPreviewResultsDto,
-};
 pub use preview::{
     PreviewSceneDto, PreviewSceneFixtureDto, PreviewStateEventDto, PreviewTimingDto,
+};
+pub use preview::{
+    SequenceEffectPreviewDto, SequenceEffectPreviewRequestEffectDto,
+    SequenceEffectPreviewResultDto, SequenceEffectPreviewResultsDto,
 };
 use tauri::Manager;
 
 pub fn run() -> Result<(), tauri::Error> {
     let builder = specta_builder();
     tauri::Builder::default()
-        .manage(state::AppState::default())
+        .manage(app::state::AppState::default())
         .invoke_handler(builder.invoke_handler())
         .setup(|app| {
             let _ = app.get_webview_window("main");
-            window_layout::restore_main_window_layout(app.handle())
+            shell::window_layout::restore_main_window_layout(app.handle())
                 .map_err(std::io::Error::other)?;
-            window_layout::register_main_window_layout_events(app.handle())
+            shell::window_layout::register_main_window_layout_events(app.handle())
                 .map_err(std::io::Error::other)?;
             preview::start_preview_worker(app.handle().clone());
-            let state = app.state::<state::AppState>();
-            if let Ok(mut runtime) = state::lock_runtime(&state) {
+            let state = app.state::<app::state::AppState>();
+            if let Ok(mut runtime) = app::state::lock_runtime(&state) {
                 let _ = runtime.drain_events();
                 let _ = runtime.read_models();
             }
-            if let Ok(model) = state::lock_runtime(&state) {
+            if let Ok(model) = app::state::lock_runtime(&state) {
                 let root = model.project_root();
                 drop(model);
-                if let Ok(mut watcher) = state::lock_filesystem_watcher(&state) {
+                if let Ok(mut watcher) = app::state::lock_filesystem_watcher(&state) {
                     let _ = watcher.sync_project_root(app.handle(), root);
                 }
             }

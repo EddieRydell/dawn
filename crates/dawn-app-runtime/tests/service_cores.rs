@@ -1,14 +1,14 @@
 use std::time::SystemTime;
 
-use dawn_app_runtime::read_model::ReadModelCore;
+use dawn_app_runtime::editor::document_store::{DocumentStoreCommand, DocumentStoreCore};
+use dawn_app_runtime::preview::engine_service::{PreviewEngineCommand, PreviewEngineCore};
+use dawn_app_runtime::runtime::autosave_service::{AutosaveCommand, AutosaveCore};
 use dawn_app_runtime::runtime::contracts::{
     BufferExternalState, DiskVersion, Event, EventEnvelope, Revision, RuntimeErrorKind, SequenceId,
     ServiceName,
 };
-use dawn_app_runtime::services::autosave::{AutosaveCommand, AutosaveCore};
-use dawn_app_runtime::services::document_store::{DocumentStoreCommand, DocumentStoreCore};
-use dawn_app_runtime::services::file_watcher::{FileWatcherCommand, FileWatcherCore};
-use dawn_app_runtime::services::preview_engine::{PreviewEngineCommand, PreviewEngineCore};
+use dawn_app_runtime::runtime::file_watcher_service::{FileWatcherCommand, FileWatcherCore};
+use dawn_app_runtime::runtime::read_model::ReadModelCore;
 use dawn_language::path::Utf8PathBuf;
 
 #[test]

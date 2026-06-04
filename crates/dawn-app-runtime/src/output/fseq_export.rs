@@ -9,7 +9,7 @@ use dawn_language::document::SequenceDocument;
 use crate::output::controller_output::{
     build_fseq_output_plan, ControllerOutputError, ControllerOutputPlan,
 };
-use crate::output::runtime::SequenceFrameEvaluator;
+use crate::output::sequence::SequenceFrameEvaluator;
 
 const FSEQ_IDENTIFIER: &[u8; 4] = b"PSEQ";
 const FSEQ_STANDARD_HEADER_LENGTH: usize = 32;

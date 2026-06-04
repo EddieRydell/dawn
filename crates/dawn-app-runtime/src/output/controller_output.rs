@@ -8,7 +8,7 @@ use dawn_language::model::{
     RgbChannelOrder,
 };
 
-use crate::output::runtime::OutputFrame;
+use crate::output::sequence::OutputFrame;
 
 pub const DMX_UNIVERSE_CHANNELS: usize = 512;
 const RGB_CHANNELS_PER_PIXEL: usize = 3;
@@ -707,7 +707,7 @@ fn universe_channel_count(universe: &dawn_language::model::Universe) -> usize {
 }
 
 fn fixture_rgb_bytes(
-    fixture: &crate::output::runtime::OutputFixtureFrame,
+    fixture: &crate::output::sequence::OutputFixtureFrame,
     channel_order: RgbChannelOrder,
 ) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(fixture.pixels.len() * RGB_CHANNELS_PER_PIXEL);

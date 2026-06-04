@@ -10,14 +10,12 @@
     )
 )]
 
+pub mod app_shell;
 pub mod dto;
-pub mod editor_session;
-pub mod layout_persistence;
+pub mod editor;
+pub mod gui_edits;
 pub mod logging;
 pub mod output;
 pub mod preview;
-pub mod read_model;
 pub mod runtime;
-pub mod services;
 pub mod workspace;
-pub mod workspace_session;

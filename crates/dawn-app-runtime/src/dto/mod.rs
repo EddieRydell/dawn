@@ -25,12 +25,12 @@ use dawn_language::render::{
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
+use crate::editor::{BufferExternalState, BufferTab, EditorViewMode};
+use crate::output::live_output::LiveOutputReadout;
 use crate::preview::session::AudioPlaybackStatus;
-use crate::read_model::ActiveGuiDocument;
 use crate::runtime::contracts::RuntimeStatus;
+use crate::runtime::read_model::ActiveGuiDocument;
 use crate::runtime::state::CoordinatorSnapshot;
-use crate::services::editor_state::{BufferExternalState, BufferTab, EditorViewMode};
-use crate::services::live_output::LiveOutputReadout;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
