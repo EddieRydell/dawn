@@ -1,26 +1,31 @@
 use crossbeam_channel::{unbounded, Receiver};
 
+use crate::app_model::AppRuntimeModel;
 use crate::contracts::{
     CommandAck, Event, EventEnvelope, RequestId, Revision, RuntimeError, RuntimeErrorKind,
     RuntimeResult, ServiceName,
 };
+use crate::dto::{AppSnapshotDto, SequenceSelectionEditDto, SequenceSelectionEditResultDto};
+use crate::layout_persistence::WindowLayout;
 use crate::read_model::{AppReadModels, ReadModelCore};
 use crate::runtime::{spawn_service, BackpressurePolicy, ServiceHandle};
-use crate::services::app_state::RuntimeState;
 use crate::services::audio_engine::{AudioEngineCommand, AudioEngineCore};
 use crate::services::autosave::{AutosaveCommand, AutosaveCore};
 use crate::services::document_store::{DocumentStoreCommand, DocumentStoreCore};
 use crate::services::file_watcher::{FileWatcherCommand, FileWatcherCore};
 use crate::services::layout_prefs::LayoutPrefsCore;
-use crate::services::live_output::LiveOutputCore;
+use crate::services::live_output::{LiveOutputCore, LiveOutputReadout};
 use crate::services::preview_engine::{PreviewEngineCommand, PreviewEngineCore};
 use crate::services::project_index::{ProjectIndexCommand, ProjectIndexCore};
+use dawn_project::document::SequenceMarkPasteDocumentEdit;
+use dawn_project::model::{Authored, SequenceEffect};
 use dawn_project::path::Utf8PathBuf;
 
 const SERVICE_QUEUE_CAPACITY: usize = 128;
 
 pub struct AppCoordinator {
-    state: RuntimeState,
+    state: AppRuntimeModel,
+    sequence_clipboard: Option<SequenceClipboard>,
     next_request_id: u64,
     events: Receiver<EventEnvelope>,
     read_model: ReadModelCore,
@@ -37,6 +42,12 @@ pub struct AppCoordinator {
     file_watcher: Option<ServiceHandle<FileWatcherCommand>>,
 }
 
+#[derive(Debug, Clone)]
+pub enum SequenceClipboard {
+    Effects(Vec<SequenceEffect<Authored>>),
+    Marks(Vec<SequenceMarkPasteDocumentEdit>),
+}
+
 impl Default for AppCoordinator {
     fn default() -> Self {
         Self::new()
@@ -48,7 +59,8 @@ impl AppCoordinator {
         let (tx, events) = unbounded();
         let policy = BackpressurePolicy::Reject;
         Self {
-            state: RuntimeState::default(),
+            state: AppRuntimeModel::default(),
+            sequence_clipboard: None,
             next_request_id: 1,
             events,
             read_model: ReadModelCore::default(),
@@ -96,11 +108,11 @@ impl AppCoordinator {
         }
     }
 
-    pub fn runtime_state(&self) -> &RuntimeState {
+    pub fn runtime_model(&self) -> &AppRuntimeModel {
         &self.state
     }
 
-    pub fn runtime_state_mut(&mut self) -> &mut RuntimeState {
+    pub fn runtime_model_mut(&mut self) -> &mut AppRuntimeModel {
         &mut self.state
     }
 
@@ -114,6 +126,89 @@ impl AppCoordinator {
 
     pub fn layout_prefs(&self) -> &LayoutPrefsCore {
         &self.layout_prefs
+    }
+
+    pub fn app_snapshot(&self) -> AppSnapshotDto {
+        AppSnapshotDto::from(self.state.snapshot(
+            self.layout_prefs.project_tree_visible(),
+            self.layout_prefs.effect_preview_enabled(),
+            self.live_output.readout(),
+        ))
+    }
+
+    pub fn sync_live_output_readout(&mut self, readout: LiveOutputReadout) {
+        self.live_output.sync_readout(readout);
+    }
+
+    pub fn live_output_readout(&self) -> LiveOutputReadout {
+        self.live_output.readout()
+    }
+
+    pub fn last_project_root(&self) -> Option<std::path::PathBuf> {
+        self.layout_prefs.last_project_root()
+    }
+
+    pub fn remember_project_root(&mut self, path: std::path::PathBuf) -> Result<(), String> {
+        self.layout_prefs.remember_project_root(path)
+    }
+
+    pub fn toggle_project_tree(&mut self) -> Result<(), String> {
+        self.layout_prefs.toggle_project_tree()
+    }
+
+    pub fn set_effect_preview_enabled(&mut self, enabled: bool) -> Result<(), String> {
+        self.layout_prefs.set_effect_preview_enabled(enabled)?;
+        self.state.set_effect_preview_enabled(enabled)
+    }
+
+    pub fn set_effect_preview_effects(&mut self, ids: Vec<u32>) {
+        self.state
+            .set_effect_preview_effects(ids, self.layout_prefs.effect_preview_enabled());
+    }
+
+    pub fn preview_play(&mut self) -> Result<(), String> {
+        if self.layout_prefs.effect_preview_enabled() {
+            self.layout_prefs.set_effect_preview_enabled(false)?;
+            self.state.set_effect_preview_enabled(false)?;
+        }
+        self.state.preview_play();
+        Ok(())
+    }
+
+    pub fn effect_preview_enabled(&self) -> bool {
+        self.layout_prefs.effect_preview_enabled()
+    }
+
+    pub fn preview_window_should_open(&self) -> bool {
+        self.layout_prefs.preview_window_open()
+    }
+
+    pub fn preview_window_layout(&self) -> WindowLayout {
+        self.layout_prefs.preview_window_layout()
+    }
+
+    pub fn main_window_layout(&self) -> WindowLayout {
+        self.layout_prefs.main_window_layout()
+    }
+
+    pub fn set_main_window_layout(&mut self, layout: WindowLayout) -> Result<(), String> {
+        self.layout_prefs.set_main_window_layout(layout)
+    }
+
+    pub fn set_preview_window_layout(&mut self, layout: WindowLayout) -> Result<(), String> {
+        self.layout_prefs.set_preview_window_layout(layout)
+    }
+
+    pub fn set_preview_window_open(&mut self, open: bool) -> Result<(), String> {
+        self.layout_prefs.set_preview_window_open(open)
+    }
+
+    pub fn apply_sequence_selection_edit(
+        &mut self,
+        edit: SequenceSelectionEditDto,
+    ) -> Result<SequenceSelectionEditResultDto, String> {
+        self.state
+            .apply_sequence_selection_edit(edit, &mut self.sequence_clipboard)
     }
 
     pub fn take_command_failure(&mut self, request_id: RequestId) -> Option<RuntimeError> {

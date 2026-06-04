@@ -44,11 +44,21 @@ pub type LiveOutputStatus = LiveOutputReadoutStatus;
 #[derive(Debug, Default, Clone)]
 pub struct LiveOutputCore {
     pub enabled: bool,
+    readout: LiveOutputReadout,
 }
 
 impl LiveOutputCore {
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
+    }
+
+    pub fn sync_readout(&mut self, readout: LiveOutputReadout) {
+        self.enabled = readout.enabled;
+        self.readout = readout;
+    }
+
+    pub fn readout(&self) -> LiveOutputReadout {
+        self.readout.clone()
     }
 
     pub fn consume(&self, event: &Event) -> RuntimeResult<Option<Event>> {

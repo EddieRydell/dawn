@@ -25,14 +25,15 @@ use dawn_project::render::{
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
+use crate::app_model::AppRuntimeSnapshot;
 use crate::preview_session::AudioPlaybackStatus;
-use crate::services::app_state::{ActiveGuiDocument, RuntimeSnapshot, RuntimeState};
+use crate::read_model::ActiveGuiDocument;
 use crate::services::editor_state::{BufferExternalState, BufferTab, EditorViewMode};
 use crate::services::live_output::LiveOutputReadout;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct RuntimeReadModelsDto {
+pub struct AppSnapshotDto {
     pub workspace: WorkspaceReadModelDto,
     pub editor: EditorReadModelDto,
     pub active_document: ActiveDocumentReadModelDto,
@@ -41,6 +42,146 @@ pub struct RuntimeReadModelsDto {
     pub live_output: LiveOutputReadModelDto,
     pub status: StatusReadModelDto,
     pub prefs: PrefsReadModelDto,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AppRuntimeChangedDto {
+    pub snapshot: AppSnapshotDto,
+    pub changed_slices: Vec<RuntimeSliceDto>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum RuntimeSliceDto {
+    Workspace,
+    Editor,
+    ActiveDocument,
+    Diagnostics,
+    Preview,
+    LiveOutput,
+    Status,
+    Prefs,
+}
+
+impl RuntimeSliceDto {
+    pub fn all() -> Vec<Self> {
+        vec![
+            Self::Workspace,
+            Self::Editor,
+            Self::ActiveDocument,
+            Self::Diagnostics,
+            Self::Preview,
+            Self::LiveOutput,
+            Self::Status,
+            Self::Prefs,
+        ]
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum AppCommandDto {
+    OpenProjectDialog,
+    OpenProject {
+        path: String,
+    },
+    ChooseNewProjectParentDirectory,
+    CreateNewProject {
+        parent_path: String,
+        directory_name: String,
+    },
+    OpenFile {
+        path: String,
+    },
+    CloseFile {
+        path: String,
+    },
+    SetActiveFile {
+        path: String,
+    },
+    UpdateActiveText {
+        text: String,
+    },
+    SetActiveViewMode {
+        mode: EditorViewModeDto,
+    },
+    UndoActiveEdit,
+    RedoActiveEdit,
+    ApplySequenceGuiEdit {
+        edit: SequenceGuiEditDto,
+    },
+    ApplySequenceSelectionEdit {
+        edit: SequenceSelectionEditDto,
+    },
+    ChooseSequenceAudio,
+    ClearSequenceAudio,
+    ExportActiveSequenceFseq {
+        step_ms: u8,
+    },
+    ApplyLayoutGuiEdit {
+        edit: LayoutGuiEditDto,
+    },
+    ApplyFixtureGuiEdit {
+        edit: FixtureGuiEditDto,
+    },
+    FlushAutosave,
+    ReloadActiveBufferFromDisk,
+    KeepActiveBuffer,
+    CreateFile {
+        parent: String,
+        name: String,
+    },
+    CreateDirectory {
+        parent: String,
+        name: String,
+    },
+    RenamePath {
+        path: String,
+        new_name: String,
+    },
+    DeletePath {
+        path: String,
+    },
+    ReloadProject,
+    ToggleProjectTree,
+    SetEffectPreviewEnabled {
+        enabled: bool,
+    },
+    SetEffectPreviewEffects {
+        ids: Vec<u32>,
+    },
+    OpenPreviewWindow,
+    PreviewPlay,
+    PreviewPause,
+    PreviewStop,
+    PreviewRewindToZero,
+    PreviewSeek {
+        position_seconds: f64,
+    },
+    SetLiveOutputEnabled {
+        enabled: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum AppCommandResponseDto {
+    None,
+    OptionalString {
+        value: Option<String>,
+    },
+    SequenceSelectionEditResult {
+        result: SequenceSelectionEditResultDto,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -817,10 +958,10 @@ pub struct OutputReadoutDto {
     pub last_error: Option<String>,
 }
 
-impl From<RuntimeSnapshot> for RuntimeReadModelsDto {
-    fn from(snapshot: RuntimeSnapshot) -> Self {
-        let project_tree_visible = snapshot.workbench_layout.project_tree_visible;
-        let effect_preview_enabled = snapshot.workbench_layout.effect_preview_enabled;
+impl From<AppRuntimeSnapshot> for AppSnapshotDto {
+    fn from(snapshot: AppRuntimeSnapshot) -> Self {
+        let project_tree_visible = snapshot.project_tree_visible;
+        let effect_preview_enabled = snapshot.effect_preview_enabled;
         Self {
             workspace: WorkspaceReadModelDto {
                 project_root: snapshot.project_root,
@@ -880,13 +1021,6 @@ impl From<RuntimeSnapshot> for RuntimeReadModelsDto {
                 effect_preview_enabled,
             },
         }
-    }
-}
-
-impl From<&RuntimeState> for RuntimeReadModelsDto {
-    fn from(domain: &RuntimeState) -> Self {
-        let snapshot = domain.snapshot();
-        Self::from(snapshot)
     }
 }
 

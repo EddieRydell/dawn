@@ -4,7 +4,7 @@ effect Chase {
   param curve<color> gradient;
   param enum gradient_mode { through_effect, across_items, per_pulse } = through_effect;
   param float pulse_overlap = 8.0;
-  param int section_width_pixels = 5;
+  param int section_width_pixels = 1;
   param curve<float> chase_position;
   param bool extend_to_start = false;
   param bool extend_to_end = false;

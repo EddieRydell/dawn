@@ -1,11 +1,16 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
+use dawn_app_runtime::app_model::AppRuntimeModel;
 use dawn_app_runtime::contracts::{CommandAck, DiskVersion, RequestId};
 use dawn_app_runtime::coordinator::AppCoordinator;
+use dawn_app_runtime::dto::{
+    AppSnapshotDto, SequenceSelectionEditDto, SequenceSelectionEditResultDto,
+};
+use dawn_app_runtime::layout_persistence::WindowLayout;
 use dawn_app_runtime::read_model::AppReadModels;
-use dawn_app_runtime::services::app_state::RuntimeState;
 use dawn_app_runtime::services::document_store::{DocumentStoreCommand, ViewMode};
+use dawn_app_runtime::services::live_output::LiveOutputReadout;
 use dawn_project::path::Utf8PathBuf;
 
 const RUNTIME_DOCUMENT_TIMEOUT: Duration = Duration::from_millis(500);
@@ -24,16 +29,87 @@ pub(crate) struct RuntimeHost {
 }
 
 impl RuntimeHost {
-    pub(crate) fn runtime_state(&self) -> &RuntimeState {
-        self.coordinator.runtime_state()
+    pub(crate) fn runtime_model(&self) -> &AppRuntimeModel {
+        self.coordinator.runtime_model()
     }
 
-    pub(crate) fn runtime_state_mut(&mut self) -> &mut RuntimeState {
-        self.coordinator.runtime_state_mut()
+    pub(crate) fn runtime_model_mut(&mut self) -> &mut AppRuntimeModel {
+        self.coordinator.runtime_model_mut()
     }
 
     pub(crate) fn read_models(&self) -> &AppReadModels {
         self.coordinator.read_models()
+    }
+
+    pub(crate) fn app_snapshot(&self) -> AppSnapshotDto {
+        self.coordinator.app_snapshot()
+    }
+
+    pub(crate) fn sync_live_output_readout(&mut self, readout: LiveOutputReadout) {
+        self.coordinator.sync_live_output_readout(readout);
+    }
+
+    pub(crate) fn live_output_readout(&self) -> LiveOutputReadout {
+        self.coordinator.live_output_readout()
+    }
+
+    pub(crate) fn last_project_root(&self) -> Option<std::path::PathBuf> {
+        self.coordinator.last_project_root()
+    }
+
+    pub(crate) fn remember_project_root(&mut self, path: std::path::PathBuf) -> Result<(), String> {
+        self.coordinator.remember_project_root(path)
+    }
+
+    pub(crate) fn toggle_project_tree(&mut self) -> Result<(), String> {
+        self.coordinator.toggle_project_tree()
+    }
+
+    pub(crate) fn set_effect_preview_enabled(&mut self, enabled: bool) -> Result<(), String> {
+        self.coordinator.set_effect_preview_enabled(enabled)
+    }
+
+    pub(crate) fn set_effect_preview_effects(&mut self, ids: Vec<u32>) {
+        self.coordinator.set_effect_preview_effects(ids);
+    }
+
+    pub(crate) fn effect_preview_enabled(&self) -> bool {
+        self.coordinator.effect_preview_enabled()
+    }
+
+    pub(crate) fn preview_play(&mut self) -> Result<(), String> {
+        self.coordinator.preview_play()
+    }
+
+    pub(crate) fn preview_window_should_open(&self) -> bool {
+        self.coordinator.preview_window_should_open()
+    }
+
+    pub(crate) fn preview_window_layout(&self) -> WindowLayout {
+        self.coordinator.preview_window_layout()
+    }
+
+    pub(crate) fn main_window_layout(&self) -> WindowLayout {
+        self.coordinator.main_window_layout()
+    }
+
+    pub(crate) fn set_main_window_layout(&mut self, layout: WindowLayout) -> Result<(), String> {
+        self.coordinator.set_main_window_layout(layout)
+    }
+
+    pub(crate) fn set_preview_window_layout(&mut self, layout: WindowLayout) -> Result<(), String> {
+        self.coordinator.set_preview_window_layout(layout)
+    }
+
+    pub(crate) fn set_preview_window_open(&mut self, open: bool) -> Result<(), String> {
+        self.coordinator.set_preview_window_open(open)
+    }
+
+    pub(crate) fn apply_sequence_selection_edit(
+        &mut self,
+        edit: SequenceSelectionEditDto,
+    ) -> Result<SequenceSelectionEditResultDto, String> {
+        self.coordinator.apply_sequence_selection_edit(edit)
     }
 
     pub(crate) fn drain_events(&mut self) -> Result<usize, String> {

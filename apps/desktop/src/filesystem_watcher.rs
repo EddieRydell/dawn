@@ -63,14 +63,21 @@ impl FilesystemWatcherRuntime {
                         let paths = pending.iter().cloned().collect::<Vec<_>>();
                         pending.clear();
                         let state = app.state::<AppState>();
-                        {
-                            let Ok(mut model) = crate::state::lock_runtime(&state) else {
+                        let snapshot = {
+                            let Ok(mut runtime) = crate::state::lock_runtime(&state) else {
                                 continue;
                             };
-                            let model = model.runtime_state_mut();
-                            if model.handle_filesystem_changes(paths).is_ok() {
-                                let _ = emit_runtime_read_models(&app, model);
+                            if runtime
+                                .runtime_model_mut()
+                                .handle_filesystem_changes(paths)
+                                .is_err()
+                            {
+                                continue;
                             }
+                            runtime.app_snapshot()
+                        };
+                        {
+                            let _ = emit_runtime_read_models(&app, snapshot);
                         }
                     }
                     Err(RecvTimeoutError::Disconnected) => break,

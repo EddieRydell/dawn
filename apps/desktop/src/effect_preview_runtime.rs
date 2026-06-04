@@ -3,8 +3,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use dawn_app_runtime::app_model::RuntimeAnalysis;
 use dawn_app_runtime::output_runtime::{SequenceEffectThumbnailResult, SequenceRenderCache};
-use dawn_app_runtime::services::app_state::RuntimeAnalysis;
 use dawn_project::document::SequenceDocument;
 
 use crate::effect_previews::{

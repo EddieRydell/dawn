@@ -1,6 +1,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
+use dawn_app_runtime::app_model::RuntimeAnalysis;
 use dawn_app_runtime::dto::{GeometryRenderBoundsDto, GeometryRenderPointDto};
 use dawn_app_runtime::output_runtime::{
     empty_frame, OutputFrame, SequenceChangeImpact, SequenceFrameEvaluator, SequenceRenderCache,
@@ -9,7 +10,6 @@ use dawn_app_runtime::preview_session::{
     AudioPlaybackStatus, PreviewRenderRequest, PreviewRenderResult, PreviewRenderTiming,
     PreviewSnapshot, SequenceKey,
 };
-use dawn_app_runtime::services::app_state::RuntimeAnalysis;
 use dawn_project::document::SequenceDocument;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -271,7 +271,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             let (mut snapshot, mut target_fps, mut analysis, deferred_request) =
                 match lock_runtime(&state) {
                     Ok(mut model) => {
-                        let model = model.runtime_state_mut();
+                        let model = model.runtime_model_mut();
                         timing.model_lock_wait_ms = elapsed_ms(model_lock_started);
                         let model_started = Instant::now();
                         let preview_snapshot_started = Instant::now();
@@ -361,7 +361,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                 timing.rendered_frame = true;
                 let model_lock_started = Instant::now();
                 if let Ok(mut model) = lock_runtime(&state) {
-                    let model = model.runtime_state_mut();
+                    let model = model.runtime_model_mut();
                     timing.model_lock_wait_ms += elapsed_ms(model_lock_started);
                     let model_started = Instant::now();
                     let _completed = model.complete_deferred_preview_render(result);
@@ -490,14 +490,17 @@ fn publish_live_output_frame(
         Ok(mut runtime) => runtime.send_frame(analysis, frame),
         Err(_) => return,
     };
-    let Ok(mut model) = lock_runtime(state) else {
-        return;
+    let snapshot = {
+        let Ok(mut runtime) = lock_runtime(state) else {
+            return;
+        };
+        if runtime.live_output_readout() == snapshot {
+            return;
+        }
+        runtime.sync_live_output_readout(snapshot);
+        runtime.app_snapshot()
     };
-    let model = model.runtime_state_mut();
-    if !model.live_output_snapshot_matches(&snapshot) {
-        model.set_live_output_snapshot(snapshot);
-        let _ = emit_runtime_read_models(app, model);
-    }
+    let _ = emit_runtime_read_models(app, snapshot);
 }
 
 pub(crate) fn preview_pixel_count(frame: &OutputFrame) -> usize {
@@ -553,9 +556,7 @@ pub(crate) fn open_preview_window_on_startup(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<()> {
-    let should_open = lock_runtime(&state)?
-        .runtime_state()
-        .preview_window_should_open();
+    let should_open = lock_runtime(&state)?.preview_window_should_open();
     if should_open {
         open_preview_window(app, state, false)?;
     }
@@ -576,10 +577,9 @@ fn open_preview_window(
     }
 
     let layout = {
-        let mut model = lock_runtime(&state)?;
-        let model = model.runtime_state_mut();
-        model.set_preview_window_open(true)?;
-        model.preview_window_layout()
+        let mut runtime = lock_runtime(&state)?;
+        runtime.set_preview_window_open(true)?;
+        runtime.preview_window_layout()
     };
     let window =
         WebviewWindowBuilder::new(&app, "preview", WebviewUrl::App("/?view=preview".into()))
@@ -617,7 +617,6 @@ fn open_preview_window(
 fn persist_preview_window_open(app: &AppHandle, open: bool) {
     let state = app.state::<AppState>();
     if let Ok(mut model) = lock_runtime(&state) {
-        let model = model.runtime_state_mut();
         let _ = model.set_preview_window_open(open);
     };
 }

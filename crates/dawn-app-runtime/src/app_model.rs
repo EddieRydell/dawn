@@ -1,27 +1,25 @@
 use dawn_project::analysis::{ProjectAnalysis, ProjectDiagnostic};
 use dawn_project::document::{
-    DocumentDescriptor, DocumentViewId, FixtureDocument, LayoutDocument, SequenceDocument,
-    SequenceDocumentEdit, SequenceEffectMoveDocumentEdit, SequenceEffectResizeDocumentEdit,
-    SequenceMarkMoveDocumentEdit, SequenceMarkPasteDocumentEdit, SequenceMarkRefDocumentEdit,
+    DocumentDescriptor, DocumentViewId, SequenceDocument, SequenceDocumentEdit,
+    SequenceEffectMoveDocumentEdit, SequenceEffectResizeDocumentEdit, SequenceMarkMoveDocumentEdit,
+    SequenceMarkPasteDocumentEdit, SequenceMarkRefDocumentEdit,
 };
 use dawn_project::fs::WorkspaceEntry;
-use dawn_project::model::{Authored, DawnObject, Geometry, SequenceEffect};
+use dawn_project::model::{Authored, DawnObject, Geometry};
 use dawn_project::parse::parse_dawn_file_with_source_map;
 use dawn_project::path::Utf8PathBuf;
-use std::path::PathBuf;
 
+use crate::coordinator::SequenceClipboard;
 use crate::dto::{
     FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto, SequenceMarkRefDto,
     SequencePasteAnchorDto, SequenceResizeEdgeDto, SequenceSelectionDto, SequenceSelectionEditDto,
     SequenceSelectionEditResultDto,
 };
-use crate::layout_persistence::{
-    load_workbench_layout, save_workbench_layout, WindowLayout, WorkbenchLayout,
-};
 use crate::preview_session::{
     AudioPlaybackStatus, PreviewController, PreviewRenderRequest, PreviewRenderResult,
     PreviewSnapshot, PreviewSyncMode, SequenceKey,
 };
+use crate::read_model::{build_active_gui_document, ActiveGuiDocument};
 use crate::services::editor_state::{BufferExternalState, BufferTab, EditorStore, EditorViewMode};
 use crate::services::live_output::LiveOutputReadout;
 use crate::workspace::ProjectWorkspace;
@@ -168,42 +166,25 @@ fn mark_move_edits(
 }
 
 #[derive(Debug)]
-pub struct RuntimeState {
+pub struct AppRuntimeModel {
     workspace: ProjectWorkspace,
     editors: EditorStore,
-    workbench_layout: WorkbenchLayout,
     preview: PreviewController,
-    live_output: LiveOutputReadout,
     project_root: Option<String>,
     project_entries: Vec<WorkspaceEntry>,
     analysis: Option<ProjectAnalysis>,
     diagnostics: Vec<ProjectDiagnostic>,
     status: String,
-    sequence_clipboard: Option<SequenceClipboard>,
-    active_sequence_gui_document: Option<CachedActiveGuiDocument>,
 }
 
 #[derive(Debug, Clone)]
-pub enum SequenceClipboard {
-    Effects(Vec<SequenceEffect<Authored>>),
-    Marks(Vec<SequenceMarkPasteDocumentEdit>),
-}
-
-#[derive(Debug, Clone)]
-struct CachedActiveGuiDocument {
-    path: Utf8PathBuf,
-    object_key: String,
-    view_mode: EditorViewMode,
-    document: SequenceDocument,
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeSnapshot {
+pub struct AppRuntimeSnapshot {
     pub project_root: Option<String>,
     pub project_entries: Vec<WorkspaceEntry>,
     pub analysis: Option<ProjectAnalysis>,
     pub diagnostics: Vec<ProjectDiagnostic>,
-    pub workbench_layout: WorkbenchLayout,
+    pub project_tree_visible: bool,
+    pub effect_preview_enabled: bool,
     pub preview: PreviewSnapshot,
     pub live_output: LiveOutputReadout,
     pub tabs: Vec<BufferTab>,
@@ -229,59 +210,45 @@ pub struct CreatedRuntimeFile {
     pub disk_version: crate::services::editor_state::FileVersion,
 }
 
-#[derive(Debug, Clone)]
-pub enum ActiveGuiDocument {
-    Sequence(SequenceDocument),
-    Layout(LayoutDocument),
-    Fixture(FixtureDocument),
-    Blocked {
-        reason: String,
-        diagnostics: Vec<ProjectDiagnostic>,
-    },
-}
-
-impl ActiveGuiDocument {
-    pub fn is_sequence(&self) -> bool {
-        matches!(self, Self::Sequence(_))
-    }
-
-    pub fn is_blocked(&self) -> bool {
-        matches!(self, Self::Blocked { .. })
-    }
-}
-
-impl Default for RuntimeState {
+impl Default for AppRuntimeModel {
     fn default() -> Self {
-        let workbench_layout = load_workbench_layout();
         Self {
             workspace: ProjectWorkspace::default(),
             editors: EditorStore::default(),
-            workbench_layout,
             preview: PreviewController::default(),
-            live_output: LiveOutputReadout::default(),
             project_root: None,
             project_entries: Vec::new(),
             analysis: None,
             diagnostics: Vec::new(),
             status: "No project open".to_string(),
-            sequence_clipboard: None,
-            active_sequence_gui_document: None,
         }
     }
 }
 
-impl RuntimeState {
-    pub fn snapshot(&self) -> RuntimeSnapshot {
+impl AppRuntimeModel {
+    pub fn snapshot(
+        &self,
+        project_tree_visible: bool,
+        effect_preview_enabled: bool,
+        live_output: LiveOutputReadout,
+    ) -> AppRuntimeSnapshot {
         let active_document_descriptor = self.active_document_descriptor();
-        let active_gui_document = self.active_gui_document(active_document_descriptor.as_ref());
-        RuntimeSnapshot {
+        let active_gui_document = build_active_gui_document(
+            &self.workspace,
+            self.editors.active_buffer(),
+            &self.diagnostics,
+            active_document_descriptor.as_ref(),
+            self.editors.dirty_overlays(),
+        );
+        AppRuntimeSnapshot {
             project_root: self.project_root.clone(),
             project_entries: self.project_entries.clone(),
             analysis: self.analysis.clone(),
             diagnostics: self.diagnostics.clone(),
-            workbench_layout: self.workbench_layout.clone(),
+            project_tree_visible,
+            effect_preview_enabled,
             preview: self.preview.snapshot(),
-            live_output: self.live_output.clone(),
+            live_output,
             tabs: self.editors.tabs(),
             active_file: self.editors.active_file().cloned(),
             active_buffer: self.editors.active_buffer().cloned(),
@@ -297,21 +264,18 @@ impl RuntimeState {
 
     pub fn sync_project_opened(
         &mut self,
-        path: PathBuf,
-        remember: bool,
+        path: std::path::PathBuf,
+        _remember: bool,
         status: impl Into<String>,
     ) -> Result<(), String> {
-        self.open_project(path.clone(), remember)?;
-        if remember {
-            self.workbench_layout.last_project_root = Some(path);
-        }
+        self.open_project(path)?;
         self.status = status.into();
         Ok(())
     }
 
     pub fn sync_session_opened(
         &mut self,
-        path: PathBuf,
+        path: std::path::PathBuf,
         buffers: Vec<SessionBufferState>,
         active_file: Option<Utf8PathBuf>,
         status: impl Into<String>,
@@ -350,24 +314,22 @@ impl RuntimeState {
             .open_file_with_view_mode(path, text, disk_version, view_mode);
         self.refresh_analysis()?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
-        self.persist_workbench_layout()
+        Ok(())
     }
 
     pub fn sync_file_closed(&mut self, path: Utf8PathBuf) -> Result<(), String> {
         self.editors.close_file(&path);
         self.refresh_analysis()?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
-        self.persist_workbench_layout()
+        Ok(())
     }
 
     pub fn sync_active_file(&mut self, path: Utf8PathBuf) -> Result<(), String> {
         let active_changed = self.editors.active_file() != Some(&path);
         self.editors.set_active_file(path);
         if active_changed {
-            self.invalidate_active_gui_document_cache();
             self.preview.pause(self.analysis.as_ref());
             self.sync_preview_source(PreviewSyncMode::RenderNow);
-            self.persist_workbench_layout()?;
         }
         Ok(())
     }
@@ -377,9 +339,8 @@ impl RuntimeState {
             return Ok(());
         };
         self.editors.set_view_mode(&path, mode);
-        self.invalidate_active_gui_document_cache();
         self.sync_preview_source(PreviewSyncMode::RenderNow);
-        self.persist_workbench_layout()
+        Ok(())
     }
 
     pub fn sync_active_text_update(&mut self, text: String) -> Result<(), String> {
@@ -494,7 +455,7 @@ impl RuntimeState {
         self.editors.reconcile_moved_paths(&moves);
         self.refresh_analysis()?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
-        self.persist_workbench_layout()
+        Ok(())
     }
 
     pub fn delete_path(&mut self, path: Utf8PathBuf) -> Result<(), String> {
@@ -504,17 +465,10 @@ impl RuntimeState {
         self.editors.reconcile_deleted_path(&path);
         self.refresh_analysis()?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
-        self.persist_workbench_layout()
-    }
-
-    pub fn toggle_project_tree(&mut self) -> Result<(), String> {
-        self.workbench_layout.project_tree_visible = !self.workbench_layout.project_tree_visible;
-        save_workbench_layout(&self.workbench_layout)
+        Ok(())
     }
 
     pub fn set_effect_preview_enabled(&mut self, enabled: bool) -> Result<(), String> {
-        self.workbench_layout.effect_preview_enabled = enabled;
-        save_workbench_layout(&self.workbench_layout)?;
         if !enabled {
             self.preview.clear_effect_preview(self.analysis.as_ref());
         } else {
@@ -523,8 +477,8 @@ impl RuntimeState {
         Ok(())
     }
 
-    pub fn set_effect_preview_effects(&mut self, ids: Vec<u32>) {
-        let ids = if self.workbench_layout.effect_preview_enabled {
+    pub fn set_effect_preview_effects(&mut self, ids: Vec<u32>, effect_preview_enabled: bool) {
+        let ids = if effect_preview_enabled {
             ids
         } else {
             Vec::new()
@@ -533,15 +487,9 @@ impl RuntimeState {
             .set_effect_preview_ids(ids, self.analysis.as_ref());
     }
 
-    pub fn preview_play(&mut self) -> Result<(), String> {
-        if self.workbench_layout.effect_preview_enabled {
-            self.workbench_layout.effect_preview_enabled = false;
-            save_workbench_layout(&self.workbench_layout)?;
-            self.preview.clear_effect_preview(self.analysis.as_ref());
-        }
+    pub fn preview_play(&mut self) {
         self.preview.play(self.analysis.as_ref());
         self.status = "Preview playing".to_string();
-        Ok(())
     }
 
     pub fn preview_pause(&mut self) {
@@ -589,29 +537,6 @@ impl RuntimeState {
         self.preview.target_fps()
     }
 
-    pub fn set_live_output_snapshot(&mut self, snapshot: LiveOutputReadout) {
-        self.live_output = snapshot;
-    }
-
-    pub fn set_main_window_layout(&mut self, layout: WindowLayout) -> Result<(), String> {
-        self.workbench_layout.main_window = layout;
-        save_workbench_layout(&self.workbench_layout)
-    }
-
-    pub fn set_preview_window_layout(&mut self, layout: WindowLayout) -> Result<(), String> {
-        self.workbench_layout.preview_window = layout;
-        save_workbench_layout(&self.workbench_layout)
-    }
-
-    pub fn set_preview_window_open(&mut self, open: bool) -> Result<(), String> {
-        self.workbench_layout.preview_window_open = open;
-        save_workbench_layout(&self.workbench_layout)
-    }
-
-    pub fn last_project_root(&self) -> Option<PathBuf> {
-        self.workbench_layout.last_project_root.clone()
-    }
-
     pub fn project_root(&self) -> Option<String> {
         self.project_root.clone()
     }
@@ -637,10 +562,6 @@ impl RuntimeState {
 
     pub fn current_analysis(&self) -> Option<RuntimeAnalysis> {
         self.analysis.clone()
-    }
-
-    pub fn effect_preview_enabled(&self) -> bool {
-        self.workbench_layout.effect_preview_enabled
     }
 
     pub fn preview_pause_at_native_audio(
@@ -771,9 +692,8 @@ impl RuntimeState {
         if analysis.has_errors() {
             return Err("project has analysis errors".to_string());
         }
-        let snapshot = self.snapshot();
-        if snapshot
-            .active_gui_document
+        if self
+            .active_gui_document()
             .as_ref()
             .is_some_and(|document| document.is_blocked())
         {
@@ -801,18 +721,28 @@ impl RuntimeState {
     }
 
     pub fn active_sequence_audio_context(&self) -> Result<(Option<String>, Utf8PathBuf), String> {
-        let snapshot = self.snapshot();
-        let Some(sequence_path) = snapshot.active_file else {
+        let Some(sequence_path) = self.editors.active_file().cloned() else {
             return Err("no active sequence file is selected".to_string());
         };
-        if !snapshot
-            .active_gui_document
+        if !self
+            .active_gui_document()
             .as_ref()
             .is_some_and(|document| document.is_sequence())
         {
             return Err("active document is not a sequence".to_string());
         }
         Ok((self.project_root.clone(), sequence_path))
+    }
+
+    fn active_gui_document(&self) -> Option<ActiveGuiDocument> {
+        let descriptor = self.active_document_descriptor();
+        build_active_gui_document(
+            &self.workspace,
+            self.editors.active_buffer(),
+            &self.diagnostics,
+            descriptor.as_ref(),
+            self.editors.dirty_overlays(),
+        )
     }
 
     pub fn effect_preview_request_source(
@@ -825,42 +755,18 @@ impl RuntimeState {
             .as_ref()
             .ok_or_else(|| "project analysis is not available".to_string())?
             .clone();
-        let document = self.cached_sequence_document_for_preview_request(&path, object_key)?;
+        let document = self.active_sequence_document_for_preview_request(&path, object_key)?;
         Ok((analysis, document))
     }
 
-    pub fn preview_window_should_open(&self) -> bool {
-        self.workbench_layout.preview_window_open
-    }
-
-    pub fn preview_window_layout(&self) -> WindowLayout {
-        self.workbench_layout.preview_window.clone()
-    }
-
-    pub fn main_window_layout(&self) -> WindowLayout {
-        self.workbench_layout.main_window.clone()
-    }
-
-    pub fn live_output_snapshot_matches(&self, snapshot: &LiveOutputReadout) -> bool {
-        &self.live_output == snapshot
-    }
-
-    fn open_project(&mut self, path: PathBuf, remember: bool) -> Result<(), String> {
+    fn open_project(&mut self, path: std::path::PathBuf) -> Result<(), String> {
         self.workspace.open_project(&path)?;
         self.refresh_project_entries()?;
         self.editors.clear();
         self.preview.reset();
         self.refresh_analysis()?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
-        if remember {
-            self.workbench_layout.last_project_root = Some(path);
-            self.persist_workbench_layout()?;
-        }
         Ok(())
-    }
-
-    fn persist_workbench_layout(&mut self) -> Result<(), String> {
-        save_workbench_layout(&self.workbench_layout)
     }
 
     pub fn refresh_project_entries(&mut self) -> Result<(), String> {
@@ -873,7 +779,6 @@ impl RuntimeState {
     }
 
     pub fn refresh_analysis(&mut self) -> Result<(), String> {
-        self.invalidate_active_gui_document_cache();
         let overlays = self.editors.dirty_overlays();
         let analysis = self.workspace.analyze(overlays)?;
         self.diagnostics = analysis.diagnostics.clone();
@@ -970,7 +875,6 @@ impl RuntimeState {
         self.refresh_project_entries()?;
         self.refresh_analysis()?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
-        self.persist_workbench_layout()?;
         Ok(())
     }
 
@@ -985,7 +889,6 @@ impl RuntimeState {
             }
             Err(_) => {
                 self.editors.close_file(&buffer.path);
-                self.persist_workbench_layout()?;
             }
         }
         self.refresh_project_entries()?;
@@ -1010,7 +913,6 @@ impl RuntimeState {
 
     fn sync_preview_source(&mut self, mode: PreviewSyncMode) {
         let source = self.active_sequence_source();
-        self.cache_active_sequence_source(source.as_ref());
         self.preview
             .sync_source(source, self.analysis.as_ref(), mode);
     }
@@ -1028,37 +930,8 @@ impl RuntimeState {
             },
             document,
         ));
-        self.cache_active_sequence_source(source.as_ref());
         self.preview
             .sync_source(source, self.analysis.as_ref(), mode);
-    }
-
-    fn cache_active_sequence_source(&mut self, source: Option<&(SequenceKey, SequenceDocument)>) {
-        let Some((key, document)) = source else {
-            self.invalidate_active_gui_document_cache();
-            return;
-        };
-        let Some(buffer) = self.editors.active_buffer() else {
-            self.invalidate_active_gui_document_cache();
-            return;
-        };
-        if buffer.path != key.path
-            || buffer.view_mode != EditorViewMode::Gui
-            || buffer.is_conflicted()
-        {
-            self.invalidate_active_gui_document_cache();
-            return;
-        }
-        self.active_sequence_gui_document = Some(CachedActiveGuiDocument {
-            path: key.path.clone(),
-            object_key: key.object_key.clone(),
-            view_mode: buffer.view_mode,
-            document: document.clone(),
-        });
-    }
-
-    fn invalidate_active_gui_document_cache(&mut self) {
-        self.active_sequence_gui_document = None;
     }
 
     fn active_document_descriptor(&self) -> Option<DocumentDescriptor> {
@@ -1068,131 +941,26 @@ impl RuntimeState {
             .ok()
     }
 
-    fn active_gui_document(
-        &self,
-        descriptor: Option<&DocumentDescriptor>,
-    ) -> Option<ActiveGuiDocument> {
-        let buffer = self.editors.active_buffer()?;
-        if buffer.view_mode != EditorViewMode::Gui {
-            return None;
-        }
-        if buffer.is_conflicted() {
-            return Some(ActiveGuiDocument::Blocked {
-                reason: "This document has external disk changes.".to_string(),
-                diagnostics: Vec::new(),
-            });
-        }
-        let diagnostics = self
-            .diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.path == buffer.path)
-            .cloned()
-            .collect::<Vec<_>>();
-        let Some(descriptor) = descriptor else {
-            return Some(ActiveGuiDocument::Blocked {
-                reason: "Text could not be parsed as a Dawn document.".to_string(),
-                diagnostics,
-            });
-        };
-        let overlays = self.editors.dirty_overlays();
-        if let Some(object_key) = descriptor
-            .default_object_keys
-            .get(&DocumentViewId::Sequence)
-        {
-            if let Some(document) =
-                self.cached_active_sequence_document(&buffer.path, object_key, buffer.view_mode)
-            {
-                return Some(ActiveGuiDocument::Sequence(document));
-            }
-            return Some(
-                match self
-                    .workspace
-                    .sequence_document(buffer.path.clone(), object_key, overlays)
-                {
-                    Ok(document) => ActiveGuiDocument::Sequence(document),
-                    Err(error) => ActiveGuiDocument::Blocked {
-                        reason: error,
-                        diagnostics,
-                    },
-                },
-            );
-        }
-        if let Some(object_key) = descriptor.default_object_keys.get(&DocumentViewId::Layout) {
-            return Some(
-                match self
-                    .workspace
-                    .layout_document(buffer.path.clone(), object_key, overlays)
-                {
-                    Ok(document) => ActiveGuiDocument::Layout(document),
-                    Err(error) => ActiveGuiDocument::Blocked {
-                        reason: error,
-                        diagnostics,
-                    },
-                },
-            );
-        }
-        if descriptor
-            .default_object_keys
-            .contains_key(&DocumentViewId::Fixture)
-        {
-            return Some(
-                match self
-                    .workspace
-                    .fixture_document(buffer.path.clone(), None, overlays)
-                {
-                    Ok(document) => ActiveGuiDocument::Fixture(document),
-                    Err(error) => ActiveGuiDocument::Blocked {
-                        reason: error,
-                        diagnostics,
-                    },
-                },
-            );
-        }
-        Some(ActiveGuiDocument::Blocked {
-            reason: "This document has no GUI editor view.".to_string(),
-            diagnostics,
-        })
-    }
-
-    fn cached_active_sequence_document(
-        &self,
-        path: &Utf8PathBuf,
-        object_key: &str,
-        view_mode: EditorViewMode,
-    ) -> Option<SequenceDocument> {
-        let cached = self.active_sequence_gui_document.as_ref()?;
-        if cached.path == *path && cached.object_key == object_key && cached.view_mode == view_mode
-        {
-            Some(cached.document.clone())
-        } else {
-            None
-        }
-    }
-
-    pub fn cached_sequence_document_for_preview_request(
+    pub fn active_sequence_document_for_preview_request(
         &self,
         path: &Utf8PathBuf,
         object_key: &str,
     ) -> Result<SequenceDocument, String> {
-        let cached = self
-            .active_sequence_gui_document
-            .as_ref()
-            .ok_or_else(|| "sequence preview request does not match active sequence".to_string())?;
         let Some(buffer) = self.editors.active_buffer() else {
             return Err("sequence preview request does not match active sequence".to_string());
         };
-        let path_matches =
-            cached.path == *path || cached.document.path == path.as_str() || buffer.path == *path;
-        if buffer.path == cached.path
-            && buffer.view_mode == cached.view_mode
-            && cached.view_mode == EditorViewMode::Gui
-            && cached.object_key == object_key
-            && path_matches
-        {
-            Ok(cached.document.clone())
-        } else {
-            Err("sequence preview request does not match active sequence".to_string())
+        if buffer.view_mode != EditorViewMode::Gui || buffer.is_conflicted() {
+            return Err("sequence preview request does not match active sequence".to_string());
         }
+        let document = self.workspace.sequence_document(
+            buffer.path.clone(),
+            object_key,
+            self.editors.dirty_overlays(),
+        )?;
+        if buffer.path != *path && document.path != path.as_str() {
+            return Err("sequence preview request does not match active sequence".to_string());
+        }
+        Ok(document)
     }
 
     fn apply_sequence_gui_edit(&mut self, edit: SequenceGuiEditDto) -> Result<(), String> {
@@ -1342,6 +1110,7 @@ impl RuntimeState {
     pub fn apply_sequence_selection_edit(
         &mut self,
         edit: SequenceSelectionEditDto,
+        sequence_clipboard: &mut Option<SequenceClipboard>,
     ) -> Result<SequenceSelectionEditResultDto, String> {
         let before = self.active_sequence_authored()?;
         let before_document = self.active_sequence_document()?;
@@ -1351,8 +1120,12 @@ impl RuntimeState {
 
         let document_edit = match edit {
             SequenceSelectionEditDto::Copy { selection } => {
-                copied_count =
-                    self.copy_sequence_selection(&before, &before_document, &selection)?;
+                copied_count = self.copy_sequence_selection(
+                    sequence_clipboard,
+                    &before,
+                    &before_document,
+                    &selection,
+                )?;
                 self.status = format!("Copied {copied_count}");
                 return Ok(SequenceSelectionEditResultDto {
                     selection: Some(selection),
@@ -1361,8 +1134,12 @@ impl RuntimeState {
                 });
             }
             SequenceSelectionEditDto::Cut { selection } => {
-                copied_count =
-                    self.copy_sequence_selection(&before, &before_document, &selection)?;
+                copied_count = self.copy_sequence_selection(
+                    sequence_clipboard,
+                    &before,
+                    &before_document,
+                    &selection,
+                )?;
                 let edit = sequence_delete_edit(selection.clone());
                 self.status = format!("Cut {copied_count}");
                 resulting_selection = Some(selection_empty_like(&selection));
@@ -1376,7 +1153,7 @@ impl RuntimeState {
             }
             SequenceSelectionEditDto::Paste { anchor } => {
                 let (edit, selection, skipped) =
-                    self.sequence_paste_edit(&before_document, anchor)?;
+                    self.sequence_paste_edit(sequence_clipboard, &before_document, anchor)?;
                 skipped_count = skipped;
                 copied_count = selection_count(&selection);
                 self.status = if skipped_count == 0 {
@@ -1474,16 +1251,14 @@ impl RuntimeState {
     fn active_sequence_document(&self) -> Result<SequenceDocument, String> {
         let path = self.active_path_for_gui_edit()?;
         let object_key = self.active_sequence_object_key()?;
-        let view_mode = self
-            .editors
-            .active_buffer()
-            .map(|buffer| buffer.view_mode)
-            .unwrap_or(EditorViewMode::Text);
-        if let Some(document) = self.cached_active_sequence_document(&path, &object_key, view_mode)
-        {
-            return Ok(document);
+        let Some(buffer) = self.editors.active_buffer() else {
+            return Err("no active document".to_string());
+        };
+        if buffer.view_mode != EditorViewMode::Gui || buffer.is_conflicted() {
+            return Err("active sequence GUI document is not available".to_string());
         }
-        Err("active sequence GUI document is not cached".to_string())
+        self.workspace
+            .sequence_document(path, &object_key, self.editors.dirty_overlays())
     }
 
     fn active_sequence_object_key(&self) -> Result<String, String> {
@@ -1499,7 +1274,8 @@ impl RuntimeState {
     }
 
     fn copy_sequence_selection(
-        &mut self,
+        &self,
+        sequence_clipboard: &mut Option<SequenceClipboard>,
         sequence: &dawn_project::model::Sequence<Authored>,
         document: &SequenceDocument,
         selection: &SequenceSelectionDto,
@@ -1517,7 +1293,7 @@ impl RuntimeState {
                     })
                     .collect::<Vec<_>>();
                 let count = effects.len().min(u32::MAX as usize) as u32;
-                self.sequence_clipboard = Some(SequenceClipboard::Effects(effects));
+                *sequence_clipboard = Some(SequenceClipboard::Effects(effects));
                 Ok(count)
             }
             SequenceSelectionDto::Marks { marks } => {
@@ -1538,7 +1314,7 @@ impl RuntimeState {
                     })
                     .collect::<Vec<_>>();
                 let count = copied.len().min(u32::MAX as usize) as u32;
-                self.sequence_clipboard = Some(SequenceClipboard::Marks(copied));
+                *sequence_clipboard = Some(SequenceClipboard::Marks(copied));
                 Ok(count)
             }
         }
@@ -1546,10 +1322,11 @@ impl RuntimeState {
 
     fn sequence_paste_edit(
         &self,
+        sequence_clipboard: &Option<SequenceClipboard>,
         document: &SequenceDocument,
         anchor: SequencePasteAnchorDto,
     ) -> Result<(SequenceDocumentEdit, SequenceSelectionDto, u32), String> {
-        match self.sequence_clipboard.clone() {
+        match sequence_clipboard.clone() {
             Some(SequenceClipboard::Effects(effects)) => {
                 let first_id = document
                     .effects

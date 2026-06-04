@@ -9,7 +9,7 @@ effect MarkChase {
   param float offset_seconds = 0.0;
   param float chase_seconds = 0.5;
   param float pulse_overlap = 8.0;
-  param int section_width_pixels = 5;
+  param int section_width_pixels = 1;
   param curve<float> chase_position;
   param curve<float> pulse_shape;
 

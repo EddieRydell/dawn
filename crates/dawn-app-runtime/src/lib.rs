@@ -10,6 +10,7 @@
     )
 )]
 
+pub mod app_model;
 pub mod contracts;
 pub mod controller_output;
 pub mod coordinator;

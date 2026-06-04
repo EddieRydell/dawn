@@ -1,4 +1,3 @@
-pub mod app_state;
 pub mod audio_engine;
 pub mod autosave;
 pub mod document_store;

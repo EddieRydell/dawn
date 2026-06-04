@@ -6,10 +6,8 @@ import type {
   DiagnosticsReadModelDto,
   EditorReadModelDto,
   LiveOutputReadModelDto,
-  PrefsReadModelDto,
   PreviewReadModelDto,
-  RuntimeReadModelsDto,
-  StatusReadModelDto,
+  AppSnapshotDto,
   WorkspaceReadModelDto
 } from "./bindings";
 
@@ -29,7 +27,12 @@ export type RuntimeUiState = {
   liveOutput: LiveOutputReadModelDto["liveOutput"];
 };
 
-type RuntimeSlices = RuntimeReadModelsDto;
+type RuntimeSlices = AppSnapshotDto;
+
+type AppRuntimeChangedEvent = {
+  snapshot: AppSnapshotDto;
+  changedSlices: unknown[];
+};
 
 type AppStore = {
   runtimeSlices: RuntimeSlices | null;
@@ -37,14 +40,6 @@ type AppStore = {
   error: string | null;
   localText: string;
   setRuntimeSlices: (runtimeSlices: RuntimeSlices) => void;
-  updateWorkspace: (workspace: WorkspaceReadModelDto) => void;
-  updateEditor: (editor: EditorReadModelDto) => void;
-  updateActiveDocument: (activeDocument: ActiveDocumentReadModelDto) => void;
-  updateDiagnostics: (diagnostics: DiagnosticsReadModelDto) => void;
-  updatePreview: (preview: PreviewReadModelDto) => void;
-  updateLiveOutput: (liveOutput: LiveOutputReadModelDto) => void;
-  updateStatus: (status: StatusReadModelDto) => void;
-  updatePrefs: (prefs: PrefsReadModelDto) => void;
   setError: (error: string | null) => void;
   setLocalText: (text: string) => void;
   hydrate: () => Promise<void>;
@@ -56,35 +51,13 @@ export const useAppStore = create<AppStore>((set, get) => ({
   error: null,
   localText: "",
   setRuntimeSlices: (runtimeSlices) => {
+    const previousActiveText = get().runtimeSlices?.editor.activeBuffer?.text;
+    const nextActiveText = runtimeSlices.editor.activeBuffer?.text;
     set({
       runtimeSlices,
       runtimeState: composeruntimeState(runtimeSlices),
-      localText: runtimeSlices.editor.activeBuffer?.text ?? ""
+      ...(previousActiveText !== nextActiveText ? { localText: nextActiveText ?? "" } : {})
     });
-  },
-  updateWorkspace: (workspace) => {
-    updateSlice(set, get, { workspace });
-  },
-  updateEditor: (editor) => {
-    updateSlice(set, get, { editor });
-  },
-  updateActiveDocument: (activeDocument) => {
-    updateSlice(set, get, { activeDocument });
-  },
-  updateDiagnostics: (diagnostics) => {
-    updateSlice(set, get, { diagnostics });
-  },
-  updatePreview: (preview) => {
-    updateSlice(set, get, { preview });
-  },
-  updateLiveOutput: (liveOutput) => {
-    updateSlice(set, get, { liveOutput });
-  },
-  updateStatus: (status) => {
-    updateSlice(set, get, { status });
-  },
-  updatePrefs: (prefs) => {
-    updateSlice(set, get, { prefs });
   },
   setError: (error) => {
     set({ error });
@@ -93,7 +66,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ localText });
   },
   hydrate: async () => {
-    const runtimeSlices = await commands.getRuntimeReadModels();
+    const runtimeSlices = await commands.getAppSnapshot();
     set({
       runtimeSlices,
       runtimeState: composeruntimeState(runtimeSlices),
@@ -105,29 +78,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
 export async function subscribeToruntimeState() {
   const disposers = await Promise.all([
-    listen<WorkspaceReadModelDto>("runtime_workspace_changed", (event) => {
-      useAppStore.getState().updateWorkspace(event.payload);
-    }),
-    listen<EditorReadModelDto>("runtime_editor_changed", (event) => {
-      useAppStore.getState().updateEditor(event.payload);
-    }),
-    listen<ActiveDocumentReadModelDto>("runtime_active_document_changed", (event) => {
-      useAppStore.getState().updateActiveDocument(event.payload);
-    }),
-    listen<DiagnosticsReadModelDto>("runtime_diagnostics_changed", (event) => {
-      useAppStore.getState().updateDiagnostics(event.payload);
-    }),
-    listen<PreviewReadModelDto>("runtime_preview_changed", (event) => {
-      useAppStore.getState().updatePreview(event.payload);
-    }),
-    listen<LiveOutputReadModelDto>("runtime_live_output_changed", (event) => {
-      useAppStore.getState().updateLiveOutput(event.payload);
-    }),
-    listen<StatusReadModelDto>("runtime_status_changed", (event) => {
-      useAppStore.getState().updateStatus(event.payload);
-    }),
-    listen<PrefsReadModelDto>("runtime_prefs_changed", (event) => {
-      useAppStore.getState().updatePrefs(event.payload);
+    listen<AppRuntimeChangedEvent>("app_runtime_changed", (event) => {
+      useAppStore.getState().setRuntimeSlices(event.payload.snapshot);
     })
   ]);
   return () => {
@@ -146,25 +98,6 @@ export async function runRuntimeCommand<T>(command: () => Promise<T>) {
     useAppStore.getState().setError(String(error));
     throw error;
   }
-}
-
-function updateSlice(
-  set: (partial: Partial<AppStore>) => void,
-  get: () => AppStore,
-  update: Partial<RuntimeSlices>
-) {
-  const current = get().runtimeSlices;
-  if (current === null) {
-    return;
-  }
-  const runtimeSlices = { ...current, ...update };
-  const previousActiveText = current.editor.activeBuffer?.text;
-  const nextActiveText = runtimeSlices.editor.activeBuffer?.text;
-  set({
-    runtimeSlices,
-    runtimeState: composeruntimeState(runtimeSlices),
-    ...(previousActiveText !== nextActiveText ? { localText: nextActiveText ?? "" } : {})
-  });
 }
 
 function composeruntimeState(runtimeSlices: RuntimeSlices): RuntimeUiState {
