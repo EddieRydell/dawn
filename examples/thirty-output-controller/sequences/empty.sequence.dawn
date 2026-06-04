@@ -1704,7 +1704,7 @@ empty:
     target:
       type: group
       name: All Outputs
-    scope: whole_target
+    scope: per_fixture
     params:
       gradient:
         type: curve

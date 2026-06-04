@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use crate::contracts::Revision;
 use crate::layout_persistence::{
     load_workbench_layout, save_workbench_layout, WindowLayout, WorkbenchLayout,
 };
+use crate::runtime::contracts::Revision;
 
 #[derive(Debug, Clone)]
 pub struct LayoutPrefsCore {

@@ -2,8 +2,7 @@ use std::collections::BTreeSet;
 
 use dawn_language::path::Utf8PathBuf;
 
-use crate::contracts::{Event, Revision, RuntimeResult, SelfWriteTag};
-use crate::runtime::ServiceCore;
+use crate::runtime::contracts::{Event, Revision, RuntimeResult, SelfWriteTag};
 
 #[derive(Debug, Clone)]
 pub enum AutosaveCommand {
@@ -53,21 +52,5 @@ impl AutosaveCore {
                 Ok(Vec::new())
             }
         }
-    }
-}
-
-impl ServiceCore for AutosaveCore {
-    type Command = AutosaveCommand;
-
-    fn service_name(&self) -> crate::contracts::ServiceName {
-        crate::contracts::ServiceName::Autosave
-    }
-
-    fn revision(&self) -> Revision {
-        self.revision
-    }
-
-    fn handle(&mut self, command: Self::Command) -> RuntimeResult<Vec<Event>> {
-        AutosaveCore::handle(self, command)
     }
 }

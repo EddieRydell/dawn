@@ -5,7 +5,7 @@ use dawn_language::document::{
 use dawn_language::fs::WorkspaceFs;
 use dawn_language::path::Utf8PathBuf;
 
-use crate::contracts::{Revision, RuntimeError, RuntimeResult, ServiceName};
+use crate::runtime::contracts::{Revision, RuntimeError, RuntimeResult, ServiceName};
 
 #[derive(Debug, Clone)]
 pub struct SequenceEditCommand {
@@ -47,7 +47,7 @@ impl SequenceEditCore {
         .map_err(|message| {
             RuntimeError::new(
                 ServiceName::SequenceEdit,
-                crate::contracts::RuntimeErrorKind::InvalidCommand,
+                crate::runtime::contracts::RuntimeErrorKind::InvalidCommand,
                 message,
             )
         })

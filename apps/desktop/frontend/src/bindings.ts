@@ -249,6 +249,8 @@ export type Rotation3DegreesDto = {
 	zDegrees: number,
 };
 
+export type RuntimeStatusDto = { type: "noProjectOpen" } | { type: "saved" } | { type: "message"; message: string };
+
 export type Scale3Dto = {
 	x: number,
 	y: number,
@@ -416,7 +418,7 @@ export type SequenceSelectionEditResultDto = {
 };
 
 export type StatusReadModelDto = {
-	status: string,
+	status: RuntimeStatusDto,
 };
 
 export type TextPositionDto = {

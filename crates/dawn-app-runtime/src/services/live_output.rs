@@ -1,4 +1,4 @@
-use crate::contracts::{Event, RuntimeResult};
+use crate::runtime::contracts::{Event, RuntimeResult};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveOutputReadout {

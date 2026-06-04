@@ -67,11 +67,7 @@ impl FilesystemWatcherRuntime {
                             let Ok(mut runtime) = crate::state::lock_runtime(&state) else {
                                 continue;
                             };
-                            if runtime
-                                .runtime_model_mut()
-                                .handle_filesystem_changes(paths)
-                                .is_err()
-                            {
+                            if runtime.handle_filesystem_changes(paths).is_err() {
                                 continue;
                             }
                             runtime.app_snapshot()

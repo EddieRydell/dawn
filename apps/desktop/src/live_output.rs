@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
 
-use dawn_app_runtime::app_model::RuntimeAnalysis;
-use dawn_app_runtime::controller_output::{
+use dawn_app_runtime::output::controller_output::{
     build_output_plan, encode_e131_data_packet, ControllerOutputPlan,
 };
-use dawn_app_runtime::output_runtime::OutputFrame;
+use dawn_app_runtime::output::runtime::OutputFrame;
 use dawn_app_runtime::services::live_output::{LiveOutputSnapshot, LiveOutputStatus};
+use dawn_language::analysis::ProjectAnalysis;
 
 #[derive(Debug, Default)]
 pub(crate) struct LiveOutputRuntime {
@@ -29,7 +29,7 @@ impl LiveOutputRuntime {
     pub(crate) fn set_enabled(
         &mut self,
         enabled: bool,
-        analysis: Option<&RuntimeAnalysis>,
+        analysis: Option<&ProjectAnalysis>,
     ) -> LiveOutputSnapshot {
         if enabled {
             match self.enable(analysis) {
@@ -54,7 +54,7 @@ impl LiveOutputRuntime {
 
     pub(crate) fn send_frame(
         &mut self,
-        analysis: Option<&RuntimeAnalysis>,
+        analysis: Option<&ProjectAnalysis>,
         frame: &OutputFrame,
     ) -> LiveOutputSnapshot {
         if !self.enabled {
@@ -91,7 +91,7 @@ impl LiveOutputRuntime {
         self.snapshot()
     }
 
-    fn enable(&mut self, analysis: Option<&RuntimeAnalysis>) -> Result<(), String> {
+    fn enable(&mut self, analysis: Option<&ProjectAnalysis>) -> Result<(), String> {
         let analysis = analysis.ok_or_else(|| "project analysis is not available".to_string())?;
         let plan = build_output_plan(analysis).map_err(|error| error.to_string())?;
         let active_universe_count = plan.active_universe_count();
@@ -137,7 +137,7 @@ impl LiveOutputRuntime {
 
     fn send_buffers(
         &mut self,
-        buffers: Vec<dawn_app_runtime::controller_output::ControllerUniverseFrame>,
+        buffers: Vec<dawn_app_runtime::output::controller_output::ControllerUniverseFrame>,
     ) -> Result<(), String> {
         if buffers.is_empty() {
             return Ok(());

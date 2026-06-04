@@ -1,10 +1,10 @@
 use std::time::SystemTime;
 
-use dawn_app_runtime::contracts::{
+use dawn_app_runtime::read_model::ReadModelCore;
+use dawn_app_runtime::runtime::contracts::{
     BufferExternalState, DiskVersion, Event, EventEnvelope, Revision, RuntimeErrorKind, SequenceId,
     ServiceName,
 };
-use dawn_app_runtime::read_model::ReadModelCore;
 use dawn_app_runtime::services::autosave::{AutosaveCommand, AutosaveCore};
 use dawn_app_runtime::services::document_store::{DocumentStoreCommand, DocumentStoreCore};
 use dawn_app_runtime::services::file_watcher::{FileWatcherCommand, FileWatcherCore};
@@ -214,8 +214,8 @@ fn read_model_applies_editor_and_preview_events() {
             revision: Revision::new(1),
             text: "saved".to_string(),
             disk_version: Some(disk_version(5, 1)),
-            external_state: dawn_app_runtime::contracts::BufferExternalState::Current,
-            view_mode: dawn_app_runtime::contracts::ViewMode::Text,
+            external_state: dawn_app_runtime::runtime::contracts::BufferExternalState::Current,
+            view_mode: dawn_app_runtime::runtime::contracts::ViewMode::Text,
         },
     );
     apply(
@@ -225,7 +225,7 @@ fn read_model_applies_editor_and_preview_events() {
             revision: Revision::new(2),
             dirty: true,
             disk_version: Some(disk_version(5, 1)),
-            external_state: dawn_app_runtime::contracts::BufferExternalState::Current,
+            external_state: dawn_app_runtime::runtime::contracts::BufferExternalState::Current,
         },
     );
     apply(

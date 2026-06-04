@@ -1,5 +1,4 @@
-use crate::contracts::{Event, Revision, RuntimeResult, SequenceId};
-use crate::runtime::ServiceCore;
+use crate::runtime::contracts::{Event, Revision, RuntimeResult, SequenceId};
 
 #[derive(Debug, Clone)]
 pub enum PreviewEngineCommand {
@@ -47,21 +46,5 @@ impl PreviewEngineCore {
                 }])
             }
         }
-    }
-}
-
-impl ServiceCore for PreviewEngineCore {
-    type Command = PreviewEngineCommand;
-
-    fn service_name(&self) -> crate::contracts::ServiceName {
-        crate::contracts::ServiceName::PreviewEngine
-    }
-
-    fn revision(&self) -> Revision {
-        self.frame_revision
-    }
-
-    fn handle(&mut self, command: Self::Command) -> RuntimeResult<Vec<Event>> {
-        PreviewEngineCore::handle(self, command)
     }
 }

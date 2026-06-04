@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::SystemTime;
 
-use dawn_app_runtime::preview_session::AudioPlaybackStatus;
+use dawn_app_runtime::preview::session::AudioPlaybackStatus;
 use dawn_language::document::SequenceAudioDocument;
 use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
 use kira::sound::PlaybackState;

@@ -1,4 +1,4 @@
-use dawn_app_runtime::output_runtime::SequenceEffectThumbnail;
+use dawn_app_runtime::output::runtime::SequenceEffectThumbnail;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 

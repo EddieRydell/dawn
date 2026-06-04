@@ -7,7 +7,7 @@ use dawn_language::document::{
 use dawn_language::path::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
-use crate::contracts::{
+use crate::runtime::contracts::{
     BufferExternalState, DiskVersion, Event, EventEnvelope, Revision, RuntimeError, RuntimeResult,
     ServiceName, TaskRecord, ViewMode,
 };
@@ -238,7 +238,7 @@ impl ReadModelCore {
                 if !self.models.editor.buffers.contains_key(path) {
                     return Err(RuntimeError::new(
                         ServiceName::ReadModel,
-                        crate::contracts::RuntimeErrorKind::NotFound,
+                        crate::runtime::contracts::RuntimeErrorKind::NotFound,
                         format!("buffer not open: {path}"),
                     ));
                 }
@@ -254,7 +254,7 @@ impl ReadModelCore {
                 if self.models.editor.buffers.remove(path).is_none() {
                     return Err(RuntimeError::new(
                         ServiceName::ReadModel,
-                        crate::contracts::RuntimeErrorKind::NotFound,
+                        crate::runtime::contracts::RuntimeErrorKind::NotFound,
                         format!("buffer not open: {path}"),
                     ));
                 }
@@ -270,7 +270,7 @@ impl ReadModelCore {
                 let Some(buffer) = self.models.editor.buffers.get_mut(path) else {
                     return Err(RuntimeError::new(
                         ServiceName::ReadModel,
-                        crate::contracts::RuntimeErrorKind::NotFound,
+                        crate::runtime::contracts::RuntimeErrorKind::NotFound,
                         format!("buffer not open: {path}"),
                     ));
                 };
@@ -289,7 +289,7 @@ impl ReadModelCore {
                 let Some(buffer) = self.models.editor.buffers.get_mut(path) else {
                     return Err(RuntimeError::new(
                         ServiceName::ReadModel,
-                        crate::contracts::RuntimeErrorKind::NotFound,
+                        crate::runtime::contracts::RuntimeErrorKind::NotFound,
                         format!("buffer not open: {path}"),
                     ));
                 };
@@ -318,7 +318,7 @@ impl ReadModelCore {
                 let Some(buffer) = self.models.editor.buffers.get_mut(path) else {
                     return Err(RuntimeError::new(
                         ServiceName::ReadModel,
-                        crate::contracts::RuntimeErrorKind::NotFound,
+                        crate::runtime::contracts::RuntimeErrorKind::NotFound,
                         format!("buffer not open: {path}"),
                     ));
                 };
@@ -335,7 +335,7 @@ impl ReadModelCore {
                 let Some(mut buffer) = self.models.editor.buffers.remove(old_path) else {
                     return Err(RuntimeError::new(
                         ServiceName::ReadModel,
-                        crate::contracts::RuntimeErrorKind::NotFound,
+                        crate::runtime::contracts::RuntimeErrorKind::NotFound,
                         format!("buffer not open: {old_path}"),
                     ));
                 };

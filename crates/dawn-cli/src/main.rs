@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
-use dawn_app_runtime::fseq_export::{export_fseq_file, FseqExportOptions};
-use dawn_app_runtime::output_runtime::{
+use dawn_app_runtime::output::fseq_export::{export_fseq_file, FseqExportOptions};
+use dawn_app_runtime::output::runtime::{
     pixel_context_for_effect, prepare_params_from_document, SequenceFrameEvaluator,
     SequenceFrameEvaluatorPreparationTiming,
 };
@@ -807,7 +807,7 @@ impl EffectScriptReport {
 
 impl GeneratorParentTimingReport {
     fn from_timing(
-        timing: dawn_app_runtime::output_runtime::GeneratorParentPreparationTiming,
+        timing: dawn_app_runtime::output::runtime::GeneratorParentPreparationTiming,
     ) -> Self {
         Self {
             parent_effect_id: timing.parent_effect_id,
@@ -1867,7 +1867,7 @@ struct TextPositionReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dawn_app_runtime::output_runtime::evaluate_sequence_frame;
+    use dawn_app_runtime::output::runtime::evaluate_sequence_frame;
     use dawn_language::document::{
         LayoutTargetDocument, SequenceEffectPixelDocument, SequenceEffectRenderDocument,
     };
@@ -1992,7 +1992,7 @@ mod tests {
         );
         assert!(matches!(
             frame.status,
-            dawn_app_runtime::output_runtime::OutputFrameStatus::Live
+            dawn_app_runtime::output::runtime::OutputFrameStatus::Live
         ));
     }
 

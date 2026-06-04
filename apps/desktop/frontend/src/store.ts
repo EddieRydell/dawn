@@ -8,6 +8,7 @@ import type {
   LiveOutputReadModelDto,
   PreviewReadModelDto,
   AppSnapshotDto,
+  RuntimeStatusDto,
   WorkspaceReadModelDto
 } from "./bindings";
 
@@ -111,9 +112,20 @@ function composeruntimeState(runtimeSlices: RuntimeSlices): RuntimeUiState {
     activeDocumentDescriptor: runtimeSlices.activeDocument.descriptor,
     activeGuiDocument: runtimeSlices.activeDocument.guiDocument,
     diagnostics: runtimeSlices.diagnostics.diagnostics,
-    status: runtimeSlices.status.status,
+    status: runtimeStatusLabel(runtimeSlices.status.status),
     preview: runtimeSlices.preview.preview,
     effectPreviewEnabled: runtimeSlices.preview.effectPreviewEnabled,
     liveOutput: runtimeSlices.liveOutput.liveOutput
   };
+}
+
+function runtimeStatusLabel(status: RuntimeStatusDto): string {
+  switch (status.type) {
+    case "noProjectOpen":
+      return "No project open";
+    case "saved":
+      return "Saved";
+    case "message":
+      return status.message;
+  }
 }

@@ -1,7 +1,8 @@
 use dawn_app_runtime::dto::{
     AppRuntimeChangedDto, AppSnapshotDto, PreviewSnapshotDto, RuntimeSliceDto,
 };
-use dawn_app_runtime::preview_session::{AudioPlaybackStatus, PreviewSnapshot};
+use dawn_app_runtime::preview::session::{AudioPlaybackStatus, PreviewSnapshot};
+use dawn_app_runtime::runtime::coordinator::AppCoordinator;
 use dawn_language::document::SequenceAudioDocument;
 use tauri::{AppHandle, Emitter, State};
 
@@ -16,14 +17,14 @@ pub(crate) fn update_preview_from_audio_status(
 ) -> CommandResult<AppSnapshotDto> {
     let snapshot = {
         let mut runtime = lock_runtime(state)?;
-        apply_audio_clock_to_runtime(runtime.runtime_model_mut(), &clock);
+        apply_audio_clock_to_runtime(&mut runtime, &clock);
         runtime.app_snapshot()
     };
     emit_runtime_read_models(app, snapshot)
 }
 
-pub(crate) fn apply_audio_clock_to_runtime(model: &mut AppRuntimeModel, clock: &AudioClock) {
-    model.apply_audio_clock_state(
+pub(crate) fn apply_audio_clock_to_runtime(coordinator: &mut AppCoordinator, clock: &AudioClock) {
+    coordinator.apply_audio_clock_state(
         clock.position_seconds,
         clock.status,
         clock.ended,
@@ -135,4 +136,3 @@ pub(crate) fn valid_preview_audio(snapshot: &PreviewSnapshot) -> Option<Sequence
         .filter(|audio| audio.exists)
         .cloned()
 }
-use dawn_app_runtime::app_model::AppRuntimeModel;

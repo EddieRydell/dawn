@@ -1,46 +1,30 @@
-use dawn_language::analysis::{ProjectAnalysis, ProjectDiagnostic};
 use dawn_language::document::{
     DocumentDescriptor, DocumentViewId, SequenceDocument, SequenceDocumentEdit,
     SequenceEffectMoveDocumentEdit, SequenceEffectResizeDocumentEdit, SequenceMarkMoveDocumentEdit,
     SequenceMarkPasteDocumentEdit, SequenceMarkRefDocumentEdit,
 };
-use dawn_language::fs::WorkspaceEntry;
 use dawn_language::model::{Authored, DawnObject, Geometry};
 use dawn_language::parse::parse_dawn_file_with_source_map;
 use dawn_language::path::Utf8PathBuf;
 
-use crate::coordinator::SequenceClipboard;
 use crate::dto::{
     FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto, SequenceMarkRefDto,
     SequencePasteAnchorDto, SequenceResizeEdgeDto, SequenceSelectionDto, SequenceSelectionEditDto,
     SequenceSelectionEditResultDto,
 };
-use crate::preview_session::{
+use crate::editor_session::{EditorSession, SessionBufferState};
+use crate::preview::session::{
     AudioPlaybackStatus, PreviewController, PreviewRenderRequest, PreviewRenderResult,
     PreviewSnapshot, PreviewSyncMode, SequenceKey,
 };
-use crate::read_model::{build_active_gui_document, ActiveGuiDocument};
-use crate::services::editor_state::{BufferExternalState, BufferTab, EditorStore, EditorViewMode};
+use crate::read_model::ActiveGuiDocument;
+use crate::runtime::contracts::RuntimeStatus;
+use crate::runtime::coordinator::SequenceClipboard;
+use crate::services::editor_state::{BufferTab, EditorViewMode};
 use crate::services::live_output::LiveOutputReadout;
-use crate::workspace::ProjectWorkspace;
+use crate::workspace_session::{CreatedRuntimeFile, WorkspaceSession};
 
 const MIN_EFFECT_DURATION_SECONDS: f64 = 0.000000001;
-
-pub type RuntimeAnalysis = ProjectAnalysis;
-
-pub fn load_project_workspace(path: &std::path::Path) -> Result<ProjectWorkspace, String> {
-    let mut workspace = ProjectWorkspace::new();
-    workspace.open_project(path)?;
-    Ok(workspace)
-}
-
-pub fn project_root_label_for_path(path: &std::path::Path) -> Result<String, String> {
-    let workspace = load_project_workspace(path)?;
-    workspace
-        .project_root_display()
-        .map(ToString::to_string)
-        .ok_or_else(|| "project root was not opened".to_string())
-}
 
 fn sequence_delete_edit(selection: SequenceSelectionDto) -> SequenceDocumentEdit {
     match selection {
@@ -166,23 +150,19 @@ fn mark_move_edits(
 }
 
 #[derive(Debug)]
-pub struct AppRuntimeModel {
-    workspace: ProjectWorkspace,
-    editors: EditorStore,
+pub struct CoordinatorState {
+    workspace: WorkspaceSession,
+    editor: EditorSession,
     preview: PreviewController,
-    project_root: Option<String>,
-    project_entries: Vec<WorkspaceEntry>,
-    analysis: Option<ProjectAnalysis>,
-    diagnostics: Vec<ProjectDiagnostic>,
-    status: String,
+    status: RuntimeStatus,
 }
 
 #[derive(Debug, Clone)]
-pub struct AppRuntimeSnapshot {
+pub struct CoordinatorSnapshot {
     pub project_root: Option<String>,
-    pub project_entries: Vec<WorkspaceEntry>,
-    pub analysis: Option<ProjectAnalysis>,
-    pub diagnostics: Vec<ProjectDiagnostic>,
+    pub project_entries: Vec<dawn_language::fs::WorkspaceEntry>,
+    pub analysis: Option<dawn_language::analysis::ProjectAnalysis>,
+    pub diagnostics: Vec<dawn_language::analysis::ProjectDiagnostic>,
     pub project_tree_visible: bool,
     pub effect_preview_enabled: bool,
     pub preview: PreviewSnapshot,
@@ -192,66 +172,45 @@ pub struct AppRuntimeSnapshot {
     pub active_buffer: Option<BufferTab>,
     pub active_document_descriptor: Option<DocumentDescriptor>,
     pub active_gui_document: Option<ActiveGuiDocument>,
-    pub status: String,
+    pub status: RuntimeStatus,
 }
 
-#[derive(Debug, Clone)]
-pub struct SessionBufferState {
-    pub path: Utf8PathBuf,
-    pub text: String,
-    pub disk_version: crate::services::editor_state::FileVersion,
-    pub view_mode: EditorViewMode,
-}
-
-#[derive(Debug, Clone)]
-pub struct CreatedRuntimeFile {
-    pub path: Utf8PathBuf,
-    pub text: String,
-    pub disk_version: crate::services::editor_state::FileVersion,
-}
-
-impl Default for AppRuntimeModel {
+impl Default for CoordinatorState {
     fn default() -> Self {
         Self {
-            workspace: ProjectWorkspace::default(),
-            editors: EditorStore::default(),
+            workspace: WorkspaceSession::default(),
+            editor: EditorSession::default(),
             preview: PreviewController::default(),
-            project_root: None,
-            project_entries: Vec::new(),
-            analysis: None,
-            diagnostics: Vec::new(),
-            status: "No project open".to_string(),
+            status: RuntimeStatus::NoProjectOpen,
         }
     }
 }
 
-impl AppRuntimeModel {
+impl CoordinatorState {
     pub fn snapshot(
         &self,
         project_tree_visible: bool,
         effect_preview_enabled: bool,
         live_output: LiveOutputReadout,
-    ) -> AppRuntimeSnapshot {
+    ) -> CoordinatorSnapshot {
         let active_document_descriptor = self.active_document_descriptor();
-        let active_gui_document = build_active_gui_document(
-            &self.workspace,
-            self.editors.active_buffer(),
-            &self.diagnostics,
+        let active_gui_document = self.workspace.active_gui_document(
+            self.editor.active_buffer(),
             active_document_descriptor.as_ref(),
-            self.editors.dirty_overlays(),
+            self.editor.dirty_overlays(),
         );
-        AppRuntimeSnapshot {
-            project_root: self.project_root.clone(),
-            project_entries: self.project_entries.clone(),
-            analysis: self.analysis.clone(),
-            diagnostics: self.diagnostics.clone(),
+        CoordinatorSnapshot {
+            project_root: self.workspace.project_root(),
+            project_entries: self.workspace.project_entries(),
+            analysis: self.workspace.analysis_cloned(),
+            diagnostics: self.workspace.diagnostics_cloned(),
             project_tree_visible,
             effect_preview_enabled,
             preview: self.preview.snapshot(),
             live_output,
-            tabs: self.editors.tabs(),
-            active_file: self.editors.active_file().cloned(),
-            active_buffer: self.editors.active_buffer().cloned(),
+            tabs: self.editor.tabs(),
+            active_file: self.editor.active_file().cloned(),
+            active_buffer: self.editor.active_buffer().cloned(),
             active_document_descriptor,
             active_gui_document,
             status: self.status.clone(),
@@ -269,7 +228,7 @@ impl AppRuntimeModel {
         status: impl Into<String>,
     ) -> Result<(), String> {
         self.open_project(path)?;
-        self.status = status.into();
+        self.status = RuntimeStatus::message(status);
         Ok(())
     }
 
@@ -281,25 +240,11 @@ impl AppRuntimeModel {
         status: impl Into<String>,
     ) -> Result<(), String> {
         self.workspace.open_project(&path)?;
-        self.refresh_project_entries()?;
-        self.editors.restore(
-            buffers
-                .into_iter()
-                .map(|buffer| {
-                    (
-                        buffer.path,
-                        buffer.text,
-                        buffer.disk_version,
-                        buffer.view_mode,
-                    )
-                })
-                .collect(),
-            active_file,
-        );
+        self.editor.restore(buffers, active_file);
         self.preview.reset();
-        self.refresh_analysis()?;
+        self.workspace.refresh_analysis_from_editor(&self.editor)?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
-        self.status = status.into();
+        self.status = RuntimeStatus::message(status);
         Ok(())
     }
 
@@ -310,51 +255,47 @@ impl AppRuntimeModel {
         disk_version: crate::services::editor_state::FileVersion,
         view_mode: EditorViewMode,
     ) -> Result<(), String> {
-        self.editors
-            .open_file_with_view_mode(path, text, disk_version, view_mode);
-        self.refresh_analysis()?;
+        self.editor.open_file(path, text, disk_version, view_mode);
+        self.workspace.refresh_analysis_from_editor(&self.editor)?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
 
     pub fn sync_file_closed(&mut self, path: Utf8PathBuf) -> Result<(), String> {
-        self.editors.close_file(&path);
-        self.refresh_analysis()?;
+        self.editor.close_file(&path);
+        self.workspace.refresh_analysis_from_editor(&self.editor)?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
 
     pub fn sync_active_file(&mut self, path: Utf8PathBuf) -> Result<(), String> {
-        let active_changed = self.editors.active_file() != Some(&path);
-        self.editors.set_active_file(path);
+        let active_changed = self.editor.active_file() != Some(&path);
+        self.editor.set_active_file(path);
         if active_changed {
-            self.preview.pause(self.analysis.as_ref());
+            self.preview.pause(self.workspace.analysis());
             self.sync_preview_source(PreviewSyncMode::RenderNow);
         }
         Ok(())
     }
 
     pub fn sync_active_view_mode(&mut self, mode: EditorViewMode) -> Result<(), String> {
-        let Some(path) = self.editors.active_file().cloned() else {
-            return Ok(());
-        };
-        self.editors.set_view_mode(&path, mode);
+        self.editor.set_active_view_mode(mode);
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
 
     pub fn sync_active_text_update(&mut self, text: String) -> Result<(), String> {
         self.ensure_active_buffer_not_conflicted()?;
-        self.editors.update_active_text(text);
+        self.editor.update_active_text(text);
         self.refresh_analysis_after_memory_edit();
-        self.status = "Edited".to_string();
+        self.status = RuntimeStatus::message("Edited");
         Ok(())
     }
 
     pub fn sync_active_history_text(&mut self, text: String, status: impl Into<String>) {
-        self.editors.replace_active_text_from_runtime(text);
+        self.editor.replace_active_text_from_runtime(text);
         self.refresh_analysis_after_memory_edit();
-        self.status = status.into();
+        self.status = RuntimeStatus::message(status);
     }
 
     pub fn create_file_for_runtime_open(
@@ -363,25 +304,18 @@ impl AppRuntimeModel {
         name: String,
     ) -> Result<CreatedRuntimeFile, String> {
         self.flush_autosave()?;
-        let path = self.workspace.create_file(parent, &name)?;
-        self.refresh_project_entries()?;
-        let (text, disk_version) = self.workspace.read_file_with_version(path.clone())?;
-        Ok(CreatedRuntimeFile {
-            path,
-            text,
-            disk_version,
-        })
+        self.workspace.create_file_for_runtime_open(parent, &name)
     }
 
     pub fn reload_project(&mut self) -> Result<(), String> {
         let paths = self
-            .editors
+            .editor
             .buffers()
             .into_iter()
             .map(|buffer| buffer.path)
             .collect();
         self.reconcile_filesystem_changes(paths)?;
-        self.status = "Project checked".to_string();
+        self.status = RuntimeStatus::message("Project checked");
         Ok(())
     }
 
@@ -391,7 +325,7 @@ impl AppRuntimeModel {
     ) -> Result<(), String> {
         self.apply_sequence_gui_edit(edit)?;
         self.flush_autosave_without_analysis()?;
-        self.status = "Autosaved".to_string();
+        self.status = RuntimeStatus::message("Autosaved");
         Ok(())
     }
 
@@ -401,7 +335,7 @@ impl AppRuntimeModel {
     ) -> Result<(), String> {
         self.apply_layout_gui_edit(edit)?;
         self.flush_autosave()?;
-        self.status = "Autosaved".to_string();
+        self.status = RuntimeStatus::message("Autosaved");
         Ok(())
     }
 
@@ -411,39 +345,38 @@ impl AppRuntimeModel {
     ) -> Result<(), String> {
         self.apply_fixture_gui_edit(edit)?;
         self.flush_autosave()?;
-        self.status = "Autosaved".to_string();
+        self.status = RuntimeStatus::message("Autosaved");
         Ok(())
     }
 
     pub fn flush_autosave_command(&mut self) -> Result<(), String> {
         self.flush_autosave()?;
-        self.status = "Saved".to_string();
+        self.status = RuntimeStatus::Saved;
         Ok(())
     }
 
     pub fn handle_filesystem_changes(&mut self, paths: Vec<Utf8PathBuf>) -> Result<(), String> {
         self.reconcile_filesystem_changes(paths)?;
-        self.status = "Filesystem refreshed".to_string();
+        self.status = RuntimeStatus::message("Filesystem refreshed");
         Ok(())
     }
 
     pub fn reload_active_buffer_from_disk_command(&mut self) -> Result<(), String> {
         self.reload_active_buffer_from_disk()?;
-        self.status = "Reloaded from disk".to_string();
+        self.status = RuntimeStatus::message("Reloaded from disk");
         Ok(())
     }
 
     pub fn keep_active_buffer_command(&mut self) -> Result<(), String> {
         self.keep_active_buffer()?;
-        self.status = "Kept IDE changes".to_string();
+        self.status = RuntimeStatus::message("Kept IDE changes");
         Ok(())
     }
 
     pub fn create_directory(&mut self, parent: Utf8PathBuf, name: String) -> Result<(), String> {
         self.flush_autosave()?;
         self.workspace.create_directory(parent, &name)?;
-        self.refresh_project_entries()?;
-        self.refresh_analysis()?;
+        self.workspace.refresh_analysis_from_editor(&self.editor)?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
@@ -451,9 +384,8 @@ impl AppRuntimeModel {
     pub fn rename_path(&mut self, path: Utf8PathBuf, new_name: String) -> Result<(), String> {
         self.flush_autosave()?;
         let moves = self.workspace.rename_path(path.clone(), &new_name)?;
-        self.refresh_project_entries()?;
-        self.editors.reconcile_moved_paths(&moves);
-        self.refresh_analysis()?;
+        self.editor.reconcile_moved_paths(&moves);
+        self.workspace.refresh_analysis_from_editor(&self.editor)?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
@@ -461,18 +393,17 @@ impl AppRuntimeModel {
     pub fn delete_path(&mut self, path: Utf8PathBuf) -> Result<(), String> {
         self.flush_autosave()?;
         self.workspace.delete_path(path.clone())?;
-        self.refresh_project_entries()?;
-        self.editors.reconcile_deleted_path(&path);
-        self.refresh_analysis()?;
+        self.editor.reconcile_deleted_path(&path);
+        self.workspace.refresh_analysis_from_editor(&self.editor)?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
 
     pub fn set_effect_preview_enabled(&mut self, enabled: bool) -> Result<(), String> {
         if !enabled {
-            self.preview.clear_effect_preview(self.analysis.as_ref());
+            self.preview.clear_effect_preview(self.workspace.analysis());
         } else {
-            self.preview.render_current_frame(self.analysis.as_ref());
+            self.preview.render_current_frame(self.workspace.analysis());
         }
         Ok(())
     }
@@ -484,37 +415,38 @@ impl AppRuntimeModel {
             Vec::new()
         };
         self.preview
-            .set_effect_preview_ids(ids, self.analysis.as_ref());
+            .set_effect_preview_ids(ids, self.workspace.analysis());
     }
 
     pub fn preview_play(&mut self) {
-        self.preview.play(self.analysis.as_ref());
-        self.status = "Preview playing".to_string();
+        self.preview.play(self.workspace.analysis());
+        self.status = RuntimeStatus::message("Preview playing");
     }
 
     pub fn preview_pause(&mut self) {
-        self.preview.pause(self.analysis.as_ref());
-        self.status = "Preview paused".to_string();
+        self.preview.pause(self.workspace.analysis());
+        self.status = RuntimeStatus::message("Preview paused");
     }
 
     pub fn preview_stop(&mut self) {
-        self.preview.stop(self.analysis.as_ref());
-        self.status = "Preview stopped".to_string();
+        self.preview.stop(self.workspace.analysis());
+        self.status = RuntimeStatus::message("Preview stopped");
     }
 
     pub fn preview_rewind_to_zero(&mut self) {
         self.preview
-            .go_to_sequence_beginning(self.analysis.as_ref());
-        self.status = "Preview rewound".to_string();
+            .go_to_sequence_beginning(self.workspace.analysis());
+        self.status = RuntimeStatus::message("Preview rewound");
     }
 
     pub fn preview_seek(&mut self, position_seconds: f64) {
-        self.preview.seek(position_seconds, self.analysis.as_ref());
-        self.status = "Preview seeked".to_string();
+        self.preview
+            .seek(position_seconds, self.workspace.analysis());
+        self.status = RuntimeStatus::message("Preview seeked");
     }
 
     pub fn tick_preview(&mut self) {
-        self.preview.tick(self.analysis.as_ref());
+        self.preview.tick(self.workspace.analysis());
     }
 
     pub fn tick_preview_clock(&mut self) {
@@ -522,7 +454,7 @@ impl AppRuntimeModel {
     }
 
     pub fn render_preview_frame(&mut self) {
-        self.preview.render_current_frame(self.analysis.as_ref());
+        self.preview.render_current_frame(self.workspace.analysis());
     }
 
     pub fn begin_deferred_preview_render(&mut self) -> Option<PreviewRenderRequest> {
@@ -538,11 +470,11 @@ impl AppRuntimeModel {
     }
 
     pub fn project_root(&self) -> Option<String> {
-        self.project_root.clone()
+        self.workspace.project_root()
     }
 
     pub fn set_status(&mut self, status: impl Into<String>) {
-        self.status = status.into();
+        self.status = RuntimeStatus::message(status);
     }
 
     pub fn read_file_with_version(
@@ -556,12 +488,12 @@ impl AppRuntimeModel {
         self.preview.snapshot()
     }
 
-    pub fn preview_last_render_timing(&self) -> crate::preview_session::PreviewRenderTiming {
+    pub fn preview_last_render_timing(&self) -> crate::preview::session::PreviewRenderTiming {
         self.preview.last_render_timing()
     }
 
-    pub fn current_analysis(&self) -> Option<RuntimeAnalysis> {
-        self.analysis.clone()
+    pub fn current_analysis(&self) -> Option<dawn_language::analysis::ProjectAnalysis> {
+        self.workspace.analysis_cloned()
     }
 
     pub fn preview_pause_at_native_audio(
@@ -570,22 +502,22 @@ impl AppRuntimeModel {
         status: AudioPlaybackStatus,
     ) {
         self.preview
-            .pause_at(position_seconds, self.analysis.as_ref());
+            .pause_at(position_seconds, self.workspace.analysis());
         self.preview.set_timing_status("nativeAudio", status);
-        self.status = "Preview paused".to_string();
+        self.status = RuntimeStatus::message("Preview paused");
     }
 
     pub fn preview_stop_native_audio(&mut self, status: AudioPlaybackStatus) {
-        self.preview.stop_native_audio(self.analysis.as_ref());
+        self.preview.stop_native_audio(self.workspace.analysis());
         self.preview.set_timing_status("nativeAudio", status);
-        self.status = "Preview stopped".to_string();
+        self.status = RuntimeStatus::message("Preview stopped");
     }
 
     pub fn preview_rewind_native_audio(&mut self, status: AudioPlaybackStatus) {
         self.preview
-            .go_to_sequence_beginning_native_audio(self.analysis.as_ref());
+            .go_to_sequence_beginning_native_audio(self.workspace.analysis());
         self.preview.set_timing_status("nativeAudio", status);
-        self.status = "Preview rewound".to_string();
+        self.status = RuntimeStatus::message("Preview rewound");
     }
 
     pub fn preview_seek_native_audio(
@@ -595,9 +527,9 @@ impl AppRuntimeModel {
         status: AudioPlaybackStatus,
     ) {
         self.preview
-            .seek_native_audio(position_seconds, playing, self.analysis.as_ref());
+            .seek_native_audio(position_seconds, playing, self.workspace.analysis());
         self.preview.set_timing_status("nativeAudio", status);
-        self.status = "Preview seeked".to_string();
+        self.status = RuntimeStatus::message("Preview seeked");
     }
 
     pub fn apply_audio_clock_state(
@@ -609,84 +541,91 @@ impl AppRuntimeModel {
     ) {
         if let Some(error) = error {
             self.preview
-                .pause_at(position_seconds, self.analysis.as_ref());
+                .pause_at(position_seconds, self.workspace.analysis());
             self.preview
                 .set_timing_status("nativeAudio", AudioPlaybackStatus::Error);
-            self.status = format!("Audio error: {error}");
+            self.status = RuntimeStatus::message(format!("Audio error: {error}"));
             return;
         }
         if ended {
             self.preview.render_at_native_audio_clock(
                 position_seconds,
                 true,
-                self.analysis.as_ref(),
+                self.workspace.analysis(),
             );
             self.preview
                 .set_timing_status("nativeAudio", AudioPlaybackStatus::Ended);
-            self.status = "Preview complete".to_string();
+            self.status = RuntimeStatus::message("Preview complete");
             return;
         }
         match status {
             AudioPlaybackStatus::Loading => {
                 self.preview
-                    .pause_at(position_seconds, self.analysis.as_ref());
+                    .pause_at(position_seconds, self.workspace.analysis());
                 self.preview
                     .set_timing_status("nativeAudio", AudioPlaybackStatus::Loading);
-                self.status = "Loading audio".to_string();
+                self.status = RuntimeStatus::message("Loading audio");
             }
             AudioPlaybackStatus::LoadingToPlay => {
                 self.preview
-                    .pause_at(position_seconds, self.analysis.as_ref());
+                    .pause_at(position_seconds, self.workspace.analysis());
                 self.preview
                     .set_timing_status("nativeAudio", AudioPlaybackStatus::LoadingToPlay);
-                self.status = "Loading audio - will play".to_string();
+                self.status = RuntimeStatus::message("Loading audio - will play");
             }
             AudioPlaybackStatus::Playing => {
                 self.preview
-                    .play_from_native_audio_clock(position_seconds, self.analysis.as_ref());
+                    .play_from_native_audio_clock(position_seconds, self.workspace.analysis());
                 self.preview
                     .set_timing_status("nativeAudio", AudioPlaybackStatus::Playing);
-                self.status = "Preview playing".to_string();
+                self.status = RuntimeStatus::message("Preview playing");
             }
             AudioPlaybackStatus::Ended => {
                 self.preview.render_at_native_audio_clock(
                     position_seconds,
                     true,
-                    self.analysis.as_ref(),
+                    self.workspace.analysis(),
                 );
                 self.preview
                     .set_timing_status("nativeAudio", AudioPlaybackStatus::Ended);
-                self.status = "Preview complete".to_string();
+                self.status = RuntimeStatus::message("Preview complete");
             }
             AudioPlaybackStatus::Missing => {
                 self.preview
-                    .pause_at(position_seconds, self.analysis.as_ref());
+                    .pause_at(position_seconds, self.workspace.analysis());
                 self.preview
                     .set_timing_status("silent", AudioPlaybackStatus::Missing);
-                self.status = "Audio missing".to_string();
+                self.status = RuntimeStatus::message("Audio missing");
             }
             AudioPlaybackStatus::None => {
                 self.preview
-                    .pause_at(position_seconds, self.analysis.as_ref());
+                    .pause_at(position_seconds, self.workspace.analysis());
                 self.preview
                     .set_timing_status("silent", AudioPlaybackStatus::None);
-                self.status = "Preview ready".to_string();
+                self.status = RuntimeStatus::message("Preview ready");
             }
             AudioPlaybackStatus::Ready | AudioPlaybackStatus::Error => {
                 self.preview
-                    .pause_at(position_seconds, self.analysis.as_ref());
+                    .pause_at(position_seconds, self.workspace.analysis());
                 self.preview.set_timing_status("nativeAudio", status);
-                self.status = "Preview ready".to_string();
+                self.status = RuntimeStatus::message("Preview ready");
             }
         }
     }
 
     pub fn active_sequence_export_source(
         &self,
-    ) -> Result<(RuntimeAnalysis, SequenceDocument, String), String> {
+    ) -> Result<
+        (
+            dawn_language::analysis::ProjectAnalysis,
+            SequenceDocument,
+            String,
+        ),
+        String,
+    > {
         let analysis = self
-            .analysis
-            .as_ref()
+            .workspace
+            .analysis()
             .ok_or_else(|| "project analysis is not available".to_string())?
             .clone();
         if analysis.has_errors() {
@@ -700,11 +639,11 @@ impl AppRuntimeModel {
             return Err("active document is blocked by diagnostics".to_string());
         }
         let path = self
-            .editors
+            .editor
             .active_file()
             .cloned()
             .ok_or_else(|| "no active sequence file is selected".to_string())?;
-        let overlays = self.editors.dirty_overlays();
+        let overlays = self.editor.dirty_overlays();
         let descriptor = self
             .workspace
             .inspect_document(path.clone(), overlays.clone())?;
@@ -721,7 +660,7 @@ impl AppRuntimeModel {
     }
 
     pub fn active_sequence_audio_context(&self) -> Result<(Option<String>, Utf8PathBuf), String> {
-        let Some(sequence_path) = self.editors.active_file().cloned() else {
+        let Some(sequence_path) = self.editor.active_file().cloned() else {
             return Err("no active sequence file is selected".to_string());
         };
         if !self
@@ -731,17 +670,15 @@ impl AppRuntimeModel {
         {
             return Err("active document is not a sequence".to_string());
         }
-        Ok((self.project_root.clone(), sequence_path))
+        Ok((self.workspace.project_root(), sequence_path))
     }
 
     fn active_gui_document(&self) -> Option<ActiveGuiDocument> {
         let descriptor = self.active_document_descriptor();
-        build_active_gui_document(
-            &self.workspace,
-            self.editors.active_buffer(),
-            &self.diagnostics,
+        self.workspace.active_gui_document(
+            self.editor.active_buffer(),
             descriptor.as_ref(),
-            self.editors.dirty_overlays(),
+            self.editor.dirty_overlays(),
         )
     }
 
@@ -749,10 +686,10 @@ impl AppRuntimeModel {
         &self,
         path: Utf8PathBuf,
         object_key: &str,
-    ) -> Result<(RuntimeAnalysis, SequenceDocument), String> {
+    ) -> Result<(dawn_language::analysis::ProjectAnalysis, SequenceDocument), String> {
         let analysis = self
-            .analysis
-            .as_ref()
+            .workspace
+            .analysis()
             .ok_or_else(|| "project analysis is not available".to_string())?
             .clone();
         let document = self.active_sequence_document_for_preview_request(&path, object_key)?;
@@ -761,38 +698,20 @@ impl AppRuntimeModel {
 
     fn open_project(&mut self, path: std::path::PathBuf) -> Result<(), String> {
         self.workspace.open_project(&path)?;
-        self.refresh_project_entries()?;
-        self.editors.clear();
+        self.editor.clear();
         self.preview.reset();
-        self.refresh_analysis()?;
+        self.workspace.refresh_analysis_from_editor(&self.editor)?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
 
-    pub fn refresh_project_entries(&mut self) -> Result<(), String> {
-        self.project_root = self
-            .workspace
-            .project_root_display()
-            .map(ToString::to_string);
-        self.project_entries = self.workspace.project_entries()?;
-        Ok(())
-    }
-
-    pub fn refresh_analysis(&mut self) -> Result<(), String> {
-        let overlays = self.editors.dirty_overlays();
-        let analysis = self.workspace.analyze(overlays)?;
-        self.diagnostics = analysis.diagnostics.clone();
-        self.analysis = Some(analysis);
-        Ok(())
-    }
-
     fn refresh_analysis_after_memory_edit(&mut self) {
-        match self.refresh_analysis() {
+        match self.workspace.refresh_analysis_from_editor(&self.editor) {
             Ok(()) => {
                 self.sync_preview_source(PreviewSyncMode::RenderNow);
             }
             Err(error) => {
-                self.status = error;
+                self.status = RuntimeStatus::message(error);
                 self.sync_preview_source(PreviewSyncMode::RenderNow);
             }
         }
@@ -803,110 +722,34 @@ impl AppRuntimeModel {
     }
 
     fn flush_autosave_without_analysis(&mut self) -> Result<(), String> {
-        for buffer in self.editors.dirty_autosave_buffers() {
-            let version = self
-                .workspace
-                .write_text_file_with_version(buffer.path.clone(), &buffer.text)?;
-            self.editors.record_saved_version(&buffer.path, version);
-        }
-        Ok(())
+        self.workspace
+            .flush_autosave_without_analysis(&mut self.editor)
     }
 
     fn flush_autosave_with_preview_sync(&mut self, sync_preview: bool) -> Result<(), String> {
-        let dirty_buffers = self.editors.dirty_autosave_buffers();
-        let had_dirty_buffers = !dirty_buffers.is_empty();
-        for buffer in dirty_buffers {
-            let version = self
-                .workspace
-                .write_text_file_with_version(buffer.path.clone(), &buffer.text)?;
-            self.editors.record_saved_version(&buffer.path, version);
-        }
-        if had_dirty_buffers {
-            self.refresh_analysis()?;
-            if sync_preview {
-                self.sync_preview_source(PreviewSyncMode::RenderNow);
-            }
+        let had_dirty_buffers = self.workspace.flush_autosave(&mut self.editor)?;
+        if had_dirty_buffers && sync_preview {
+            self.sync_preview_source(PreviewSyncMode::RenderNow);
         }
         Ok(())
     }
 
     fn reconcile_filesystem_changes(&mut self, paths: Vec<Utf8PathBuf>) -> Result<(), String> {
-        let watched_paths = if paths.is_empty() {
-            self.editors
-                .buffers()
-                .into_iter()
-                .map(|buffer| buffer.path)
-                .collect()
-        } else {
-            paths
-        };
-        let buffers = self.editors.buffers();
-        for buffer in buffers {
-            if !buffer_matches_any_path(&buffer.path, &watched_paths) {
-                continue;
-            }
-            match self.workspace.read_file_with_version(buffer.path.clone()) {
-                Ok((disk_text, disk_version)) => {
-                    if buffer.disk_version.as_ref() == Some(&disk_version) {
-                        continue;
-                    }
-                    if buffer.is_dirty() {
-                        self.editors
-                            .mark_external_state(&buffer.path, BufferExternalState::ChangedOnDisk);
-                    } else {
-                        self.editors.replace_from_disk(
-                            &buffer.path,
-                            disk_text,
-                            disk_version,
-                            false,
-                        );
-                    }
-                }
-                Err(_) => {
-                    if buffer.is_dirty() {
-                        self.editors
-                            .mark_external_state(&buffer.path, BufferExternalState::DeletedOnDisk);
-                    } else {
-                        self.editors.close_file(&buffer.path);
-                    }
-                }
-            }
-        }
-        self.refresh_project_entries()?;
-        self.refresh_analysis()?;
+        self.workspace
+            .reconcile_filesystem_changes(&mut self.editor, paths)?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
 
     fn reload_active_buffer_from_disk(&mut self) -> Result<(), String> {
-        let Some(buffer) = self.editors.active_buffer().cloned() else {
-            return Ok(());
-        };
-        match self.workspace.read_file_with_version(buffer.path.clone()) {
-            Ok((text, disk_version)) => {
-                self.editors
-                    .replace_from_disk(&buffer.path, text, disk_version, true);
-            }
-            Err(_) => {
-                self.editors.close_file(&buffer.path);
-            }
-        }
-        self.refresh_project_entries()?;
-        self.refresh_analysis()?;
+        self.workspace
+            .reload_active_buffer_from_disk(&mut self.editor)?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
 
     fn keep_active_buffer(&mut self) -> Result<(), String> {
-        let Some(buffer) = self.editors.active_buffer().cloned() else {
-            return Ok(());
-        };
-        let version = self
-            .workspace
-            .write_text_file_with_version(buffer.path.clone(), &buffer.text)?;
-        self.editors.record_saved_version(&buffer.path, version);
-        self.refresh_project_entries()?;
-        self.refresh_analysis()?;
+        self.workspace.keep_active_buffer(&mut self.editor)?;
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
@@ -914,7 +757,7 @@ impl AppRuntimeModel {
     fn sync_preview_source(&mut self, mode: PreviewSyncMode) {
         let source = self.active_sequence_source();
         self.preview
-            .sync_source(source, self.analysis.as_ref(), mode);
+            .sync_source(source, self.workspace.analysis(), mode);
     }
 
     fn sync_preview_source_from_document(
@@ -931,13 +774,13 @@ impl AppRuntimeModel {
             document,
         ));
         self.preview
-            .sync_source(source, self.analysis.as_ref(), mode);
+            .sync_source(source, self.workspace.analysis(), mode);
     }
 
     fn active_document_descriptor(&self) -> Option<DocumentDescriptor> {
-        let path = self.editors.active_file()?.clone();
+        let path = self.editor.active_file()?.clone();
         self.workspace
-            .inspect_document(path, self.editors.dirty_overlays())
+            .inspect_document(path, self.editor.dirty_overlays())
             .ok()
     }
 
@@ -946,7 +789,7 @@ impl AppRuntimeModel {
         path: &Utf8PathBuf,
         object_key: &str,
     ) -> Result<SequenceDocument, String> {
-        let Some(buffer) = self.editors.active_buffer() else {
+        let Some(buffer) = self.editor.active_buffer() else {
             return Err("sequence preview request does not match active sequence".to_string());
         };
         if buffer.view_mode != EditorViewMode::Gui || buffer.is_conflicted() {
@@ -955,7 +798,7 @@ impl AppRuntimeModel {
         let document = self.workspace.sequence_document(
             buffer.path.clone(),
             object_key,
-            self.editors.dirty_overlays(),
+            self.editor.dirty_overlays(),
         )?;
         if buffer.path != *path && document.path != path.as_str() {
             return Err("sequence preview request does not match active sequence".to_string());
@@ -966,7 +809,7 @@ impl AppRuntimeModel {
     fn apply_sequence_gui_edit(&mut self, edit: SequenceGuiEditDto) -> Result<(), String> {
         self.ensure_active_buffer_not_conflicted()?;
         let path = self.active_path_for_gui_edit()?;
-        let descriptor_overlays = self.editors.dirty_overlays();
+        let descriptor_overlays = self.editor.dirty_overlays();
         let descriptor = self
             .workspace
             .inspect_document(path.clone(), descriptor_overlays)?;
@@ -1084,19 +927,14 @@ impl AppRuntimeModel {
                 index: index as usize,
             },
         };
-        let analysis = self
-            .analysis
-            .as_ref()
-            .ok_or_else(|| "project analysis is not available".to_string())?;
         let base_content = self.active_buffer_text()?;
-        let edit_overlays = self.editors.dirty_overlays();
+        let edit_overlays = self.editor.dirty_overlays();
         let outcome = self.workspace.apply_sequence_edit(
             path.clone(),
             &object_key,
             edit,
             base_content,
             edit_overlays,
-            analysis,
         )?;
         self.save_active_sequence_gui_text(
             path,
@@ -1126,7 +964,7 @@ impl AppRuntimeModel {
                     &before_document,
                     &selection,
                 )?;
-                self.status = format!("Copied {copied_count}");
+                self.status = RuntimeStatus::message(format!("Copied {copied_count}"));
                 return Ok(SequenceSelectionEditResultDto {
                     selection: Some(selection),
                     copied_count,
@@ -1141,13 +979,13 @@ impl AppRuntimeModel {
                     &selection,
                 )?;
                 let edit = sequence_delete_edit(selection.clone());
-                self.status = format!("Cut {copied_count}");
+                self.status = RuntimeStatus::message(format!("Cut {copied_count}"));
                 resulting_selection = Some(selection_empty_like(&selection));
                 edit
             }
             SequenceSelectionEditDto::Delete { selection } => {
                 let edit = sequence_delete_edit(selection.clone());
-                self.status = "Deleted selection".to_string();
+                self.status = RuntimeStatus::message("Deleted selection");
                 resulting_selection = Some(selection_empty_like(&selection));
                 edit
             }
@@ -1156,11 +994,11 @@ impl AppRuntimeModel {
                     self.sequence_paste_edit(sequence_clipboard, &before_document, anchor)?;
                 skipped_count = skipped;
                 copied_count = selection_count(&selection);
-                self.status = if skipped_count == 0 {
+                self.status = RuntimeStatus::message(if skipped_count == 0 {
                     format!("Pasted {copied_count}")
                 } else {
                     format!("Pasted {copied_count}, skipped {skipped_count}")
-                };
+                });
                 resulting_selection = Some(selection);
                 edit
             }
@@ -1212,23 +1050,18 @@ impl AppRuntimeModel {
         let path = self.active_path_for_gui_edit()?;
         let descriptor = self
             .workspace
-            .inspect_document(path.clone(), self.editors.dirty_overlays())?;
+            .inspect_document(path.clone(), self.editor.dirty_overlays())?;
         let object_key = descriptor
             .default_object_keys
             .get(&DocumentViewId::Sequence)
             .ok_or_else(|| "active document is not a sequence".to_string())?
             .clone();
-        let analysis = self
-            .analysis
-            .as_ref()
-            .ok_or_else(|| "project analysis is not available".to_string())?;
         let outcome = self.workspace.apply_sequence_edit(
             path.clone(),
             &object_key,
             edit,
             self.active_buffer_text()?,
-            self.editors.dirty_overlays(),
-            analysis,
+            self.editor.dirty_overlays(),
         )?;
         self.save_active_sequence_gui_text(
             path,
@@ -1251,21 +1084,21 @@ impl AppRuntimeModel {
     fn active_sequence_document(&self) -> Result<SequenceDocument, String> {
         let path = self.active_path_for_gui_edit()?;
         let object_key = self.active_sequence_object_key()?;
-        let Some(buffer) = self.editors.active_buffer() else {
+        let Some(buffer) = self.editor.active_buffer() else {
             return Err("no active document".to_string());
         };
         if buffer.view_mode != EditorViewMode::Gui || buffer.is_conflicted() {
             return Err("active sequence GUI document is not available".to_string());
         }
         self.workspace
-            .sequence_document(path, &object_key, self.editors.dirty_overlays())
+            .sequence_document(path, &object_key, self.editor.dirty_overlays())
     }
 
     fn active_sequence_object_key(&self) -> Result<String, String> {
         let path = self.active_path_for_gui_edit()?;
         let descriptor = self
             .workspace
-            .inspect_document(path, self.editors.dirty_overlays())?;
+            .inspect_document(path, self.editor.dirty_overlays())?;
         descriptor
             .default_object_keys
             .get(&DocumentViewId::Sequence)
@@ -1385,7 +1218,7 @@ impl AppRuntimeModel {
         let path = self.active_path_for_gui_edit()?;
         let descriptor = self
             .workspace
-            .inspect_document(path.clone(), self.editors.dirty_overlays())?;
+            .inspect_document(path.clone(), self.editor.dirty_overlays())?;
         let object_key = descriptor
             .default_object_keys
             .get(&DocumentViewId::Layout)
@@ -1394,7 +1227,7 @@ impl AppRuntimeModel {
         let mut document = self.workspace.layout_document(
             path.clone(),
             &object_key,
-            self.editors.dirty_overlays(),
+            self.editor.dirty_overlays(),
         )?;
         match edit {
             LayoutGuiEditDto::UpdatePlacementTransform { id, transform } => {
@@ -1414,7 +1247,7 @@ impl AppRuntimeModel {
             &object_key,
             document,
             self.active_buffer_text()?,
-            self.editors.dirty_overlays(),
+            self.editor.dirty_overlays(),
         )?;
         self.save_active_gui_text(outcome.serialized_content)
     }
@@ -1424,7 +1257,7 @@ impl AppRuntimeModel {
         let path = self.active_path_for_gui_edit()?;
         let mut document =
             self.workspace
-                .fixture_document(path.clone(), None, self.editors.dirty_overlays())?;
+                .fixture_document(path.clone(), None, self.editor.dirty_overlays())?;
         match edit {
             FixtureGuiEditDto::UpdateBulbDiameter {
                 object_key,
@@ -1466,27 +1299,27 @@ impl AppRuntimeModel {
             path,
             document,
             self.active_buffer_text()?,
-            self.editors.dirty_overlays(),
+            self.editor.dirty_overlays(),
         )?;
         self.save_active_gui_text(outcome.serialized_content)
     }
 
     fn active_path_for_gui_edit(&self) -> Result<Utf8PathBuf, String> {
-        self.editors
+        self.editor
             .active_file()
             .cloned()
             .ok_or_else(|| "no active document".to_string())
     }
 
     fn active_buffer_text(&self) -> Result<String, String> {
-        self.editors
+        self.editor
             .active_buffer()
             .map(|buffer| buffer.text.clone())
             .ok_or_else(|| "no active document".to_string())
     }
 
     fn save_active_gui_text(&mut self, text: String) -> Result<(), String> {
-        self.editors.replace_active_text_from_gui(text);
+        self.editor.replace_active_text_from_gui(text);
         self.refresh_analysis_after_memory_edit();
         Ok(())
     }
@@ -1498,13 +1331,13 @@ impl AppRuntimeModel {
         document: SequenceDocument,
         mode: PreviewSyncMode,
     ) -> Result<(), String> {
-        self.editors.replace_active_text_from_gui(text);
+        self.editor.replace_active_text_from_gui(text);
         self.sync_preview_source_from_document(path, document, mode);
         Ok(())
     }
 
     fn ensure_active_buffer_not_conflicted(&self) -> Result<(), String> {
-        let Some(buffer) = self.editors.active_buffer() else {
+        let Some(buffer) = self.editor.active_buffer() else {
             return Ok(());
         };
         if buffer.is_conflicted() {
@@ -1516,8 +1349,8 @@ impl AppRuntimeModel {
     fn active_sequence_source(
         &self,
     ) -> Option<(SequenceKey, dawn_language::document::SequenceDocument)> {
-        let path = self.editors.active_file()?.clone();
-        let overlays = self.editors.dirty_overlays();
+        let path = self.editor.active_file()?.clone();
+        let overlays = self.editor.dirty_overlays();
         let descriptor = self
             .workspace
             .inspect_document(path.clone(), overlays.clone())
@@ -1537,10 +1370,4 @@ impl AppRuntimeModel {
             document,
         ))
     }
-}
-
-fn buffer_matches_any_path(path: &Utf8PathBuf, changed_paths: &[Utf8PathBuf]) -> bool {
-    changed_paths
-        .iter()
-        .any(|changed_path| path == changed_path || path.starts_with(changed_path))
 }

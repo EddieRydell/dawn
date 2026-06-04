@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
+use dawn_app_runtime::runtime::coordinator::AppCoordinator;
 use dawn_language::path::Utf8PathBuf;
 use tauri::State;
 
@@ -9,7 +10,6 @@ use crate::effect_preview_runtime::EffectPreviewRuntime;
 use crate::filesystem_watcher::FilesystemWatcherRuntime;
 use crate::live_output::LiveOutputRuntime;
 use crate::preview_transport::PreviewTransportRuntime;
-use crate::runtime_host::RuntimeHost;
 
 pub(crate) struct AppState {
     audio_runtime: Mutex<AudioRuntime>,
@@ -17,7 +17,7 @@ pub(crate) struct AppState {
     preview_transport: Mutex<PreviewTransportRuntime>,
     live_output: Mutex<LiveOutputRuntime>,
     filesystem_watcher: Mutex<FilesystemWatcherRuntime>,
-    runtime: Mutex<RuntimeHost>,
+    runtime: Mutex<AppCoordinator>,
     startup_hydrated: AtomicBool,
     shutting_down: AtomicBool,
 }
@@ -30,7 +30,7 @@ impl Default for AppState {
             preview_transport: Mutex::new(PreviewTransportRuntime::default()),
             live_output: Mutex::new(LiveOutputRuntime::default()),
             filesystem_watcher: Mutex::new(FilesystemWatcherRuntime::default()),
-            runtime: Mutex::new(RuntimeHost::default()),
+            runtime: Mutex::new(AppCoordinator::default()),
             startup_hydrated: AtomicBool::new(false),
             shutting_down: AtomicBool::new(false),
         }
@@ -100,7 +100,7 @@ pub(crate) fn lock_filesystem_watcher<'a>(
 
 pub(crate) fn lock_runtime<'a>(
     state: &'a State<'_, AppState>,
-) -> CommandResult<MutexGuard<'a, RuntimeHost>> {
+) -> CommandResult<MutexGuard<'a, AppCoordinator>> {
     state
         .runtime
         .lock()

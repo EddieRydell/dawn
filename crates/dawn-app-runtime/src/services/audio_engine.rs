@@ -1,5 +1,4 @@
-use crate::contracts::{Event, Revision, RuntimeResult, SequenceId};
-use crate::runtime::ServiceCore;
+use crate::runtime::contracts::{Event, Revision, RuntimeResult, SequenceId};
 
 #[derive(Debug, Clone)]
 pub enum AudioEngineCommand {
@@ -31,21 +30,5 @@ impl AudioEngineCore {
                 }])
             }
         }
-    }
-}
-
-impl ServiceCore for AudioEngineCore {
-    type Command = AudioEngineCommand;
-
-    fn service_name(&self) -> crate::contracts::ServiceName {
-        crate::contracts::ServiceName::AudioEngine
-    }
-
-    fn revision(&self) -> Revision {
-        self.revision
-    }
-
-    fn handle(&mut self, command: Self::Command) -> RuntimeResult<Vec<Event>> {
-        AudioEngineCore::handle(self, command)
     }
 }

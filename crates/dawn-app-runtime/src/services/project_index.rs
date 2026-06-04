@@ -4,8 +4,7 @@ use dawn_language::analysis::{analyze_project_with_overlays, ProjectAnalysis, Pr
 use dawn_language::fs::WorkspaceFs;
 use dawn_language::path::Utf8PathBuf;
 
-use crate::contracts::{Event, Revision, RuntimeResult};
-use crate::runtime::ServiceCore;
+use crate::runtime::contracts::{Event, Revision, RuntimeResult};
 
 #[derive(Debug, Clone)]
 pub enum ProjectIndexCommand {
@@ -46,21 +45,5 @@ impl ProjectIndexCore {
                 }])
             }
         }
-    }
-}
-
-impl ServiceCore for ProjectIndexCore {
-    type Command = ProjectIndexCommand;
-
-    fn service_name(&self) -> crate::contracts::ServiceName {
-        crate::contracts::ServiceName::ProjectIndex
-    }
-
-    fn revision(&self) -> Revision {
-        self.revision
-    }
-
-    fn handle(&mut self, command: Self::Command) -> RuntimeResult<Vec<Event>> {
-        ProjectIndexCore::handle(self, command)
     }
 }

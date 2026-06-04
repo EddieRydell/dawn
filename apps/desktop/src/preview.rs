@@ -1,15 +1,15 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
-use dawn_app_runtime::app_model::RuntimeAnalysis;
 use dawn_app_runtime::dto::{GeometryRenderBoundsDto, GeometryRenderPointDto};
-use dawn_app_runtime::output_runtime::{
+use dawn_app_runtime::output::runtime::{
     empty_frame, OutputFrame, SequenceChangeImpact, SequenceFrameEvaluator, SequenceRenderCache,
 };
-use dawn_app_runtime::preview_session::{
+use dawn_app_runtime::preview::session::{
     AudioPlaybackStatus, PreviewRenderRequest, PreviewRenderResult, PreviewRenderTiming,
     PreviewSnapshot, SequenceKey,
 };
+use dawn_language::analysis::ProjectAnalysis;
 use dawn_language::document::SequenceDocument;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -157,7 +157,7 @@ struct DeferredPreviewRenderer {
 impl DeferredPreviewRenderer {
     fn render(
         &mut self,
-        analysis: Option<&RuntimeAnalysis>,
+        analysis: Option<&ProjectAnalysis>,
         request: PreviewRenderRequest,
     ) -> PreviewRenderResult {
         let Some(analysis) = analysis else {
@@ -190,7 +190,7 @@ impl DeferredPreviewRenderer {
 
     fn apply_request_cache_invalidation(
         &mut self,
-        analysis: &RuntimeAnalysis,
+        analysis: &ProjectAnalysis,
         request: &PreviewRenderRequest,
     ) {
         if self.previous_key.as_ref() != Some(&request.key) {
@@ -213,7 +213,7 @@ impl DeferredPreviewRenderer {
 
     fn cached_renderer(
         &mut self,
-        analysis: &RuntimeAnalysis,
+        analysis: &ProjectAnalysis,
         document: &SequenceDocument,
     ) -> Result<(&mut SequenceFrameEvaluator, f64), String> {
         let mut renderer_build_ms = 0.0;
@@ -270,8 +270,8 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             let model_lock_started = Instant::now();
             let (mut snapshot, mut target_fps, mut analysis, deferred_request) =
                 match lock_runtime(&state) {
-                    Ok(mut model) => {
-                        let model = model.runtime_model_mut();
+                    Ok(model) => {
+                        let mut model = model;
                         timing.model_lock_wait_ms = elapsed_ms(model_lock_started);
                         let model_started = Instant::now();
                         let preview_snapshot_started = Instant::now();
@@ -293,7 +293,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                                 false
                             } else {
                                 let apply_started = Instant::now();
-                                apply_audio_clock_to_runtime(model, &clock);
+                                apply_audio_clock_to_runtime(&mut model, &clock);
                                 timing.audio_apply_ms =
                                     apply_started.elapsed().as_secs_f64() * 1000.0;
                                 record_render_timing(
@@ -360,8 +360,8 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                 record_render_timing(&mut timing, result.timing);
                 timing.rendered_frame = true;
                 let model_lock_started = Instant::now();
-                if let Ok(mut model) = lock_runtime(&state) {
-                    let model = model.runtime_model_mut();
+                if let Ok(model) = lock_runtime(&state) {
+                    let mut model = model;
                     timing.model_lock_wait_ms += elapsed_ms(model_lock_started);
                     let model_started = Instant::now();
                     let _completed = model.complete_deferred_preview_render(result);
@@ -483,7 +483,7 @@ fn should_apply_audio_clock_to_runtime(
 fn publish_live_output_frame(
     app: &AppHandle,
     state: &State<'_, AppState>,
-    analysis: Option<&RuntimeAnalysis>,
+    analysis: Option<&ProjectAnalysis>,
     frame: &OutputFrame,
 ) {
     let snapshot = match lock_live_output(state) {

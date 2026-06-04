@@ -10,17 +10,14 @@
     )
 )]
 
-pub mod app_model;
-pub mod contracts;
-pub mod controller_output;
-pub mod coordinator;
 pub mod dto;
-pub mod fseq_export;
+pub mod editor_session;
 pub mod layout_persistence;
 pub mod logging;
-pub mod output_runtime;
-pub mod preview_session;
+pub mod output;
+pub mod preview;
 pub mod read_model;
 pub mod runtime;
 pub mod services;
 pub mod workspace;
+pub mod workspace_session;

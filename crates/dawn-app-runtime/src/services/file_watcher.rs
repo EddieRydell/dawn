@@ -1,7 +1,6 @@
-use crate::contracts::{
+use crate::runtime::contracts::{
     BufferExternalState, DiskVersion, Event, Revision, RuntimeResult, SelfWriteTag,
 };
-use crate::runtime::ServiceCore;
 use dawn_language::path::Utf8PathBuf;
 
 #[derive(Debug, Clone)]
@@ -38,21 +37,5 @@ impl FileWatcherCore {
                 }])
             }
         }
-    }
-}
-
-impl ServiceCore for FileWatcherCore {
-    type Command = FileWatcherCommand;
-
-    fn service_name(&self) -> crate::contracts::ServiceName {
-        crate::contracts::ServiceName::FileWatcher
-    }
-
-    fn revision(&self) -> Revision {
-        self.revision
-    }
-
-    fn handle(&mut self, command: Self::Command) -> RuntimeResult<Vec<Event>> {
-        FileWatcherCore::handle(self, command)
     }
 }

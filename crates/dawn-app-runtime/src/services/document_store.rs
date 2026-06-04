@@ -2,13 +2,12 @@ use std::collections::BTreeMap;
 
 use dawn_language::path::Utf8PathBuf;
 
-use crate::contracts::{
+use crate::runtime::contracts::{
     BufferExternalState, DiskVersion, Event, Revision, RuntimeError, RuntimeErrorKind,
     RuntimeResult, ServiceName,
 };
-use crate::runtime::ServiceCore;
 
-pub use crate::contracts::ViewMode;
+pub use crate::runtime::contracts::ViewMode;
 
 #[derive(Debug, Clone)]
 pub struct BufferState {
@@ -621,20 +620,4 @@ fn moved_path(
     }
     let relative = path.strip_prefix(old_path).ok()?;
     Some(new_path.join(relative))
-}
-
-impl ServiceCore for DocumentStoreCore {
-    type Command = DocumentStoreCommand;
-
-    fn service_name(&self) -> ServiceName {
-        ServiceName::DocumentStore
-    }
-
-    fn revision(&self) -> Revision {
-        self.revision
-    }
-
-    fn handle(&mut self, command: Self::Command) -> RuntimeResult<Vec<Event>> {
-        DocumentStoreCore::handle(self, command)
-    }
 }

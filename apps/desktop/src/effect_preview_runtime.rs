@@ -3,8 +3,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use dawn_app_runtime::app_model::RuntimeAnalysis;
-use dawn_app_runtime::output_runtime::{SequenceEffectThumbnailResult, SequenceRenderCache};
+use dawn_app_runtime::output::runtime::{SequenceEffectThumbnailResult, SequenceRenderCache};
+use dawn_language::analysis::ProjectAnalysis;
 use dawn_language::document::SequenceDocument;
 
 use crate::effect_previews::{
@@ -54,7 +54,7 @@ impl EffectPreviewRuntime {
         object_key: String,
         request_id: u32,
         effects: Vec<SequenceEffectPreviewRequestEffectDto>,
-        analysis: RuntimeAnalysis,
+        analysis: ProjectAnalysis,
         document: SequenceDocument,
     ) -> Result<(), String> {
         let key = SequencePreviewDocumentKey::new(path, object_key);
@@ -92,7 +92,7 @@ struct EffectPreviewJob {
     key: SequencePreviewDocumentKey,
     request_id: u32,
     effects: Vec<SequenceEffectPreviewRequestEffectDto>,
-    analysis: RuntimeAnalysis,
+    analysis: ProjectAnalysis,
     document: SequenceDocument,
 }
 

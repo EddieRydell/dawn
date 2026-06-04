@@ -1,14 +1,16 @@
 use std::path::{Path, PathBuf};
 
-use dawn_app_runtime::app_model::{load_project_workspace, project_root_label_for_path};
-use dawn_app_runtime::contracts::DiskVersion;
 use dawn_app_runtime::dto::{
-    AppCommandDto, AppCommandResponseDto, AppSnapshotDto, EditorViewModeDto, FixtureGuiEditDto,
-    LayoutGuiEditDto, SequenceGuiEditDto, SequenceSelectionEditDto, SequenceSelectionEditResultDto,
+    AppCommandDto, AppCommandResponseDto, AppSnapshotDto, BufferExternalStateDto,
+    EditorViewModeDto, FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto,
+    SequenceSelectionEditDto, SequenceSelectionEditResultDto,
 };
-use dawn_app_runtime::fseq_export::{export_fseq_file, FseqExportOptions};
+use dawn_app_runtime::output::fseq_export::{export_fseq_file, FseqExportOptions};
+use dawn_app_runtime::runtime::contracts::DiskVersion;
+use dawn_app_runtime::runtime::coordinator::BufferTextEdit;
 use dawn_app_runtime::services::document_store::ViewMode;
 use dawn_app_runtime::services::editor_state::{EditorViewMode, FileVersion};
+use dawn_app_runtime::workspace_session::{load_project_workspace, project_root_label_for_path};
 use dawn_language::path::{serialized_import_path, utf8_path, Utf8PathBuf};
 use tauri::{AppHandle, Manager, State};
 
@@ -24,7 +26,6 @@ use crate::preview::{
     open_or_focus_preview_window, preview_pixel_count, preview_scene_from_frame, PreviewSceneDto,
 };
 use crate::preview_transport::{PreviewTransportMode, PreviewTransportRuntime};
-use crate::runtime_host::BufferTextEdit;
 use crate::state::{
     lock_audio_runtime, lock_effect_preview_runtime, lock_live_output, lock_preview_transport,
     lock_runtime, project_path, AppState, CommandResult,
@@ -233,15 +234,12 @@ fn hydrate_startup_session(state: &State<'_, AppState>) -> CommandResult<()> {
     let workspace = match load_project_workspace(&path) {
         Ok(workspace) => workspace,
         Err(error) => {
-            lock_runtime(state)?
-                .runtime_model_mut()
-                .set_status(format!("Could not restore last project: {error}"));
+            lock_runtime(state)?.set_status(format!("Could not restore last project: {error}"));
             return Ok(());
         }
     };
     let Some(root) = workspace.project_root_display().map(ToString::to_string) else {
         lock_runtime(state)?
-            .runtime_model_mut()
             .set_status("Could not restore last project: project root was not opened");
         return Ok(());
     };
@@ -249,9 +247,7 @@ fn hydrate_startup_session(state: &State<'_, AppState>) -> CommandResult<()> {
     lock_runtime(state)?.open_project(root)?;
     {
         let mut runtime = lock_runtime(state)?;
-        runtime
-            .runtime_model_mut()
-            .sync_project_opened(path, false, "Project restored")?;
+        runtime.sync_project_opened(path, false, "Project restored")?;
     }
     Ok(())
 }
@@ -312,16 +308,12 @@ fn open_project_runtime_then_model(
     state: &State<'_, AppState>,
     path: PathBuf,
 ) -> CommandResult<()> {
-    lock_runtime(state)?
-        .runtime_model_mut()
-        .prepare_for_runtime_project_open()?;
+    lock_runtime(state)?.prepare_for_runtime_project_open()?;
     let root = project_root_display_for_open_path(&path)?;
     lock_runtime(state)?.open_project(root)?;
     let read_models = {
         let mut runtime = lock_runtime(state)?;
-        runtime
-            .runtime_model_mut()
-            .sync_project_opened(path.clone(), true, "Project opened")?;
+        runtime.sync_project_opened(path.clone(), true, "Project opened")?;
         runtime.remember_project_root(path)?;
         runtime.app_snapshot()
     };
@@ -347,8 +339,8 @@ fn open_file_runtime_then_model(
 ) -> CommandResult<()> {
     let (text, disk_version) = {
         let model = lock_runtime(state)?;
-        let model = model.runtime_model();
-        model.read_file_with_version(path.clone())?
+        let model = model;
+        model.read_file_with_version(&path)?
     };
     lock_runtime(state)?.open_buffer(
         path.clone(),
@@ -357,12 +349,7 @@ fn open_file_runtime_then_model(
     )?;
     let snapshot = {
         let mut runtime = lock_runtime(state)?;
-        runtime.runtime_model_mut().sync_file_opened(
-            path,
-            text,
-            disk_version,
-            EditorViewMode::Text,
-        )?;
+        runtime.sync_file_opened(path, text, disk_version, EditorViewMode::Text)?;
         runtime.app_snapshot()
     };
     let read_models = emit_runtime_read_models(app, snapshot)?;
@@ -377,7 +364,7 @@ fn close_file(app: AppHandle, state: State<'_, AppState>, path: String) -> Comma
     lock_runtime(&state)?.close_buffer(path.clone())?;
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime.runtime_model_mut().sync_file_closed(path)?;
+        runtime.sync_file_closed(path)?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -390,7 +377,7 @@ fn set_active_file(app: AppHandle, state: State<'_, AppState>, path: String) -> 
     lock_runtime(&state)?.set_active_buffer(path.clone())?;
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime.runtime_model_mut().sync_active_file(path)?;
+        runtime.sync_active_file(path)?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -405,17 +392,14 @@ fn update_active_text(
 ) -> CommandResult<()> {
     let active_buffer = {
         let runtime = lock_runtime(&state)?;
-        let snapshot =
-            runtime
-                .runtime_model()
-                .snapshot(false, false, runtime.live_output_readout());
-        let Some(buffer) = snapshot.active_buffer else {
+        let snapshot = runtime.app_snapshot();
+        let Some(buffer) = snapshot.editor.active_buffer else {
             return Ok(());
         };
-        let conflicted = buffer.is_conflicted();
+        let conflicted = !matches!(buffer.external_state, BufferExternalStateDto::Current);
         BufferTextEdit {
-            project_root: snapshot.project_root,
-            path: buffer.path,
+            project_root: snapshot.workspace.project_root,
+            path: project_path(buffer.path),
             conflicted,
             text: buffer.text,
         }
@@ -424,7 +408,7 @@ fn update_active_text(
     lock_runtime(&state)?.update_active_text(active_buffer, text.clone())?;
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime.runtime_model_mut().sync_active_text_update(text)?;
+        runtime.sync_active_text_update(text)?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -447,21 +431,16 @@ fn set_active_view_mode_runtime_then_model(
 ) -> CommandResult<()> {
     let active_file = {
         let runtime = lock_runtime(state)?;
-        let snapshot =
-            runtime
-                .runtime_model()
-                .snapshot(false, false, runtime.live_output_readout());
-        let Some(active_file) = snapshot.active_file else {
+        let snapshot = runtime.app_snapshot();
+        let Some(active_file) = snapshot.editor.active_file else {
             return Ok(());
         };
-        active_file
+        project_path(active_file)
     };
     lock_runtime(state)?.set_view_mode(active_file, runtime_view_mode(&mode))?;
     let snapshot = {
         let mut runtime = lock_runtime(state)?;
-        runtime
-            .runtime_model_mut()
-            .sync_active_view_mode(editor_view_mode(&mode))?;
+        runtime.sync_active_view_mode(editor_view_mode(&mode))?;
         runtime.app_snapshot()
     };
     emit_runtime_update(app, state, snapshot)
@@ -494,23 +473,18 @@ fn runtime_disk_version(version: &FileVersion) -> DiskVersion {
 fn undo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
     let path = {
         let runtime = lock_runtime(&state)?;
-        let snapshot =
-            runtime
-                .runtime_model()
-                .snapshot(false, false, runtime.live_output_readout());
-        let Some(path) = snapshot.active_file else {
+        let snapshot = runtime.app_snapshot();
+        let Some(path) = snapshot.editor.active_file else {
             return Ok(());
         };
-        path
+        project_path(path)
     };
     let Some(text) = lock_runtime(&state)?.undo_buffer_text(path)? else {
         return Ok(());
     };
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime
-            .runtime_model_mut()
-            .sync_active_history_text(text, "Undo");
+        runtime.sync_active_history_text(text, "Undo");
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -521,23 +495,18 @@ fn undo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult
 fn redo_active_edit(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
     let path = {
         let runtime = lock_runtime(&state)?;
-        let snapshot =
-            runtime
-                .runtime_model()
-                .snapshot(false, false, runtime.live_output_readout());
-        let Some(path) = snapshot.active_file else {
+        let snapshot = runtime.app_snapshot();
+        let Some(path) = snapshot.editor.active_file else {
             return Ok(());
         };
-        path
+        project_path(path)
     };
     let Some(text) = lock_runtime(&state)?.redo_buffer_text(path)? else {
         return Ok(());
     };
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime
-            .runtime_model_mut()
-            .sync_active_history_text(text, "Redo");
+        runtime.sync_active_history_text(text, "Redo");
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -552,9 +521,7 @@ fn apply_sequence_gui_edit(
 ) -> CommandResult<()> {
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime
-            .runtime_model_mut()
-            .apply_sequence_gui_edit_and_autosave(edit)?;
+        runtime.apply_sequence_gui_edit_and_autosave(edit)?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -579,9 +546,7 @@ fn apply_sequence_selection_edit(
 #[specta::specta]
 #[tauri::command]
 fn choose_sequence_audio(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
-    let (project_root, sequence_path) = lock_runtime(&state)?
-        .runtime_model()
-        .active_sequence_audio_context()?;
+    let (project_root, sequence_path) = lock_runtime(&state)?.active_sequence_audio_context()?;
 
     let Some(project_root) = project_root else {
         return Err("no project is open".to_string());
@@ -607,11 +572,9 @@ fn choose_sequence_audio(app: AppHandle, state: State<'_, AppState>) -> CommandR
     let import = serialized_import_path(&sequence_path, &utf8_path(path)?);
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime
-            .runtime_model_mut()
-            .apply_sequence_gui_edit_and_autosave(SequenceGuiEditDto::SetAudio {
-                import: Some(import),
-            })?;
+        runtime.apply_sequence_gui_edit_and_autosave(SequenceGuiEditDto::SetAudio {
+            import: Some(import),
+        })?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -623,7 +586,6 @@ fn clear_sequence_audio(app: AppHandle, state: State<'_, AppState>) -> CommandRe
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
         runtime
-            .runtime_model_mut()
             .apply_sequence_gui_edit_and_autosave(SequenceGuiEditDto::SetAudio { import: None })?;
         runtime.app_snapshot()
     };
@@ -637,9 +599,8 @@ fn export_active_sequence_fseq(
     state: State<'_, AppState>,
     step_ms: u8,
 ) -> CommandResult<()> {
-    let (analysis, document, default_name) = lock_runtime(&state)?
-        .runtime_model()
-        .active_sequence_export_source()?;
+    let (analysis, document, default_name) =
+        lock_runtime(&state)?.active_sequence_export_source()?;
 
     let Some(output_path) = rfd::FileDialog::new()
         .set_title("Export FSEQ")
@@ -663,7 +624,7 @@ fn export_active_sequence_fseq(
 
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime.runtime_model_mut().set_status(format!(
+        runtime.set_status(format!(
             "Exported FSEQ: {} frames, {} channels",
             report.frame_count, report.channel_count
         ));
@@ -683,9 +644,8 @@ fn request_sequence_effect_previews(
 ) -> CommandResult<()> {
     let request_path = path.clone();
     let request_object_key = object_key.clone();
-    let (analysis, document) = lock_runtime(&state)?
-        .runtime_model()
-        .effect_preview_request_source(project_path(path), &object_key)?;
+    let (analysis, document) =
+        lock_runtime(&state)?.effect_preview_request_source(project_path(path), &object_key)?;
 
     lock_effect_preview_runtime(&state)?.request(
         request_path,
@@ -717,9 +677,7 @@ fn apply_layout_gui_edit(
 ) -> CommandResult<()> {
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime
-            .runtime_model_mut()
-            .apply_layout_gui_edit_and_autosave(edit)?;
+        runtime.apply_layout_gui_edit_and_autosave(edit)?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -734,9 +692,7 @@ fn apply_fixture_gui_edit(
 ) -> CommandResult<()> {
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime
-            .runtime_model_mut()
-            .apply_fixture_gui_edit_and_autosave(edit)?;
+        runtime.apply_fixture_gui_edit_and_autosave(edit)?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -747,7 +703,7 @@ fn apply_fixture_gui_edit(
 fn flush_autosave(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime.runtime_model_mut().flush_autosave_command()?;
+        runtime.flush_autosave_command()?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -758,9 +714,7 @@ fn flush_autosave(app: AppHandle, state: State<'_, AppState>) -> CommandResult<(
 fn reload_active_buffer_from_disk(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime
-            .runtime_model_mut()
-            .reload_active_buffer_from_disk_command()?;
+        runtime.reload_active_buffer_from_disk_command()?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -771,7 +725,7 @@ fn reload_active_buffer_from_disk(app: AppHandle, state: State<'_, AppState>) ->
 fn keep_active_buffer(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime.runtime_model_mut().keep_active_buffer_command()?;
+        runtime.keep_active_buffer_command()?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -785,9 +739,7 @@ fn create_file(
     parent: String,
     name: String,
 ) -> CommandResult<()> {
-    let created = lock_runtime(&state)?
-        .runtime_model_mut()
-        .create_file_for_runtime_open(project_path(parent), name)?;
+    let created = lock_runtime(&state)?.create_file_for_runtime_open(project_path(parent), name)?;
     lock_runtime(&state)?.open_buffer(
         created.path.clone(),
         created.text.clone(),
@@ -795,7 +747,7 @@ fn create_file(
     )?;
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime.runtime_model_mut().sync_file_opened(
+        runtime.sync_file_opened(
             created.path,
             created.text,
             created.disk_version,
@@ -816,9 +768,7 @@ fn create_directory(
 ) -> CommandResult<()> {
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime
-            .runtime_model_mut()
-            .create_directory(project_path(parent), name)?;
+        runtime.create_directory(project_path(parent), name)?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -834,9 +784,7 @@ fn rename_path(
 ) -> CommandResult<()> {
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime
-            .runtime_model_mut()
-            .rename_path(project_path(path), new_name)?;
+        runtime.rename_path(project_path(path), new_name)?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -847,9 +795,7 @@ fn rename_path(
 fn delete_path(app: AppHandle, state: State<'_, AppState>, path: String) -> CommandResult<()> {
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime
-            .runtime_model_mut()
-            .delete_path(project_path(path))?;
+        runtime.delete_path(project_path(path))?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -860,7 +806,7 @@ fn delete_path(app: AppHandle, state: State<'_, AppState>, path: String) -> Comm
 fn reload_project(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime.runtime_model_mut().reload_project()?;
+        runtime.reload_project()?;
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -918,7 +864,7 @@ async fn open_preview_window(app: AppHandle, state: State<'_, AppState>) -> Comm
 fn preview_play(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
     let (audio, position_seconds, effect_preview_enabled) = {
         let model = lock_runtime(&state)?;
-        let snapshot = model.runtime_model().preview_snapshot();
+        let snapshot = model.preview_snapshot();
         (
             valid_preview_audio(&snapshot),
             snapshot.position_seconds,
@@ -951,13 +897,13 @@ fn preview_play(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()>
 fn preview_pause(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
     let has_audio = {
         let model = lock_runtime(&state)?;
-        let model = model.runtime_model();
+        let model = model;
         valid_preview_audio(&model.preview_snapshot()).is_some()
     };
     if !has_audio {
         let snapshot = {
             let mut runtime = lock_runtime(&state)?;
-            runtime.runtime_model_mut().preview_pause();
+            runtime.preview_pause();
             runtime.app_snapshot()
         };
         return emit_runtime_update(&app, &state, snapshot);
@@ -965,9 +911,7 @@ fn preview_pause(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()
     let clock = lock_audio_runtime(&state)?.pause()?;
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime
-            .runtime_model_mut()
-            .preview_pause_at_native_audio(clock.position_seconds, clock.status);
+        runtime.preview_pause_at_native_audio(clock.position_seconds, clock.status);
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -978,7 +922,7 @@ fn preview_pause(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()
 fn preview_stop(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
     let (has_audio, home_seconds) = {
         let model = lock_runtime(&state)?;
-        let model = model.runtime_model();
+        let model = model;
         let snapshot = model.preview_snapshot();
         (
             valid_preview_audio(&snapshot).is_some(),
@@ -988,7 +932,7 @@ fn preview_stop(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()>
     if !has_audio {
         let snapshot = {
             let mut runtime = lock_runtime(&state)?;
-            runtime.runtime_model_mut().preview_stop();
+            runtime.preview_stop();
             runtime.app_snapshot()
         };
         return emit_runtime_update(&app, &state, snapshot);
@@ -996,9 +940,7 @@ fn preview_stop(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()>
     let clock = lock_audio_runtime(&state)?.stop(home_seconds)?;
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime
-            .runtime_model_mut()
-            .preview_stop_native_audio(clock.status);
+        runtime.preview_stop_native_audio(clock.status);
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -1009,13 +951,13 @@ fn preview_stop(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()>
 fn preview_rewind_to_zero(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
     let has_audio = {
         let model = lock_runtime(&state)?;
-        let model = model.runtime_model();
+        let model = model;
         valid_preview_audio(&model.preview_snapshot()).is_some()
     };
     if !has_audio {
         let snapshot = {
             let mut runtime = lock_runtime(&state)?;
-            runtime.runtime_model_mut().preview_rewind_to_zero();
+            runtime.preview_rewind_to_zero();
             runtime.app_snapshot()
         };
         return emit_runtime_update(&app, &state, snapshot);
@@ -1023,9 +965,7 @@ fn preview_rewind_to_zero(app: AppHandle, state: State<'_, AppState>) -> Command
     let clock = lock_audio_runtime(&state)?.stop(0.0)?;
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime
-            .runtime_model_mut()
-            .preview_rewind_native_audio(clock.status);
+        runtime.preview_rewind_native_audio(clock.status);
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -1043,14 +983,14 @@ fn preview_seek(
     }
     let (audio, playing) = {
         let model = lock_runtime(&state)?;
-        let model = model.runtime_model();
+        let model = model;
         let snapshot = model.preview_snapshot();
         (valid_preview_audio(&snapshot), snapshot.is_playing)
     };
     let Some(audio) = audio else {
         let snapshot = {
             let mut runtime = lock_runtime(&state)?;
-            runtime.runtime_model_mut().preview_seek(position_seconds);
+            runtime.preview_seek(position_seconds);
             runtime.app_snapshot()
         };
         return emit_runtime_update(&app, &state, snapshot);
@@ -1058,11 +998,7 @@ fn preview_seek(
     let clock = lock_audio_runtime(&state)?.seek(&audio, position_seconds, playing)?;
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
-        runtime.runtime_model_mut().preview_seek_native_audio(
-            clock.position_seconds,
-            playing,
-            clock.status,
-        );
+        runtime.preview_seek_native_audio(clock.position_seconds, playing, clock.status);
         runtime.app_snapshot()
     };
     emit_runtime_update(&app, &state, snapshot)
@@ -1075,7 +1011,7 @@ fn set_live_output_enabled(
     state: State<'_, AppState>,
     enabled: bool,
 ) -> CommandResult<()> {
-    let analysis = lock_runtime(&state)?.runtime_model().current_analysis();
+    let analysis = lock_runtime(&state)?.current_analysis();
     let snapshot = lock_live_output(&state)?.set_enabled(enabled, analysis.as_ref());
     let snapshot = {
         let mut runtime = lock_runtime(&state)?;
@@ -1088,7 +1024,7 @@ fn set_live_output_enabled(
 #[specta::specta]
 #[tauri::command]
 fn get_preview_scene(state: State<'_, AppState>) -> CommandResult<PreviewSceneDto> {
-    let snapshot = lock_runtime(&state)?.runtime_model().preview_snapshot();
+    let snapshot = lock_runtime(&state)?.preview_snapshot();
     Ok(preview_scene_from_frame(
         &snapshot.frame,
         snapshot.source_label,
@@ -1107,12 +1043,7 @@ fn init_preview_transport(app: AppHandle, state: State<'_, AppState>) -> Command
     let Some(window) = app.get_webview_window("preview") else {
         return Err("preview window is not open".to_string());
     };
-    let pixel_count = preview_pixel_count(
-        &lock_runtime(&state)?
-            .runtime_model()
-            .preview_snapshot()
-            .frame,
-    );
+    let pixel_count = preview_pixel_count(&lock_runtime(&state)?.preview_snapshot().frame);
     lock_preview_transport(&state)?.init_window(&window, pixel_count)
 }
 
