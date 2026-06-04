@@ -7,6 +7,7 @@ use crate::app_shell::LayoutPrefsCore;
 use crate::app_shell::WindowLayout;
 use crate::dto::{AppSnapshotDto, SequenceSelectionEditDto, SequenceSelectionEditResultDto};
 use crate::editor::document_store::{DocumentStoreCommand, DocumentStoreCore, ViewMode};
+use crate::gui_edits::selection::SequenceClipboard;
 use crate::output::live_output::{LiveOutputCore, LiveOutputReadout};
 use crate::preview::audio_engine::{AudioEngineCommand, AudioEngineCore};
 use crate::preview::engine_service::{PreviewEngineCommand, PreviewEngineCore};
@@ -19,8 +20,6 @@ use crate::runtime::file_watcher_service::{FileWatcherCommand, FileWatcherCore};
 use crate::runtime::read_model::{AppReadModels, ReadModelCore};
 use crate::runtime::state::CoordinatorState;
 use crate::workspace::project_index::{ProjectIndexCommand, ProjectIndexCore};
-use dawn_language::document::SequenceMarkPasteDocumentEdit;
-use dawn_language::model::{Authored, SequenceEffect};
 use dawn_language::path::Utf8PathBuf;
 
 pub use crate::editor::SessionBufferState;
@@ -55,12 +54,6 @@ pub struct AppCoordinator {
     audio_engine: AudioEngineCore,
     autosave: AutosaveCore,
     file_watcher: FileWatcherCore,
-}
-
-#[derive(Debug, Clone)]
-pub enum SequenceClipboard {
-    Effects(Vec<SequenceEffect<Authored>>),
-    Marks(Vec<SequenceMarkPasteDocumentEdit>),
 }
 
 impl Default for AppCoordinator {
