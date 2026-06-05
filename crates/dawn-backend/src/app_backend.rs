@@ -343,16 +343,6 @@ impl AppBackend {
         Ok(self.idle_update())
     }
 
-    pub fn undo_active_edit(&mut self) -> BackendResult<AppUpdate> {
-        self.editor.undo_active_edit()?;
-        Ok(self.idle_update())
-    }
-
-    pub fn redo_active_edit(&mut self) -> BackendResult<AppUpdate> {
-        self.editor.redo_active_edit()?;
-        Ok(self.idle_update())
-    }
-
     fn idle_update(&self) -> AppUpdate {
         AppUpdate {
             view: self.view(),

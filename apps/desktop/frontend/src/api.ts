@@ -39,8 +39,6 @@ export const commands = {
   setActiveFile: (path: string) => dispatchNone({ type: "setActiveFile", path }),
   updateActiveText: (text: string) => dispatchNone({ type: "updateActiveText", text }),
   setActiveViewMode: (mode: "text" | "gui") => dispatchNone({ type: "setActiveViewMode", mode }),
-  undoActiveEdit: () => dispatchNone({ type: "undoActiveEdit" }),
-  redoActiveEdit: () => dispatchNone({ type: "redoActiveEdit" }),
   applySequenceGuiEdit: (edit: Extract<AppCommandDto, { type: "applySequenceGuiEdit" }>["edit"]) =>
     dispatchNone({ type: "applySequenceGuiEdit", edit }),
   applySequenceSelectionEdit: async (edit: Extract<AppCommandDto, { type: "applySequenceSelectionEdit" }>["edit"]) => {

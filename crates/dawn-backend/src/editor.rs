@@ -10,7 +10,6 @@ use crate::{
 };
 
 const INACTIVE_RESTORE_LOAD_LIMIT_BYTES: u64 = 1024 * 1024;
-const UNDO_LIMIT: usize = 50;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Revision(u64);
@@ -48,8 +47,6 @@ pub(crate) struct EditorBuffer {
     saved_text: String,
     disk_version: FileVersion,
     revision: Revision,
-    undo_stack: Vec<String>,
-    redo_stack: Vec<String>,
 }
 
 impl EditorBuffer {
@@ -59,8 +56,6 @@ impl EditorBuffer {
             saved_text: snapshot.text,
             disk_version: snapshot.version,
             revision: Revision::INITIAL,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
         }
     }
 
@@ -72,39 +67,8 @@ impl EditorBuffer {
         if self.text == text {
             return;
         }
-        self.record_undo_snapshot();
         self.text = text;
         self.revision = self.revision.next();
-    }
-
-    fn undo(&mut self) {
-        let Some(previous) = self.undo_stack.pop() else {
-            return;
-        };
-        self.redo_stack.push(self.text.clone());
-        self.text = previous;
-        self.revision = self.revision.next();
-    }
-
-    fn redo(&mut self) {
-        let Some(next) = self.redo_stack.pop() else {
-            return;
-        };
-        self.undo_stack.push(self.text.clone());
-        self.text = next;
-        self.revision = self.revision.next();
-    }
-
-    fn record_undo_snapshot(&mut self) {
-        if self.undo_stack.last() == Some(&self.text) {
-            self.redo_stack.clear();
-            return;
-        }
-        self.undo_stack.push(self.text.clone());
-        if self.undo_stack.len() > UNDO_LIMIT {
-            self.undo_stack.remove(0);
-        }
-        self.redo_stack.clear();
     }
 }
 
@@ -274,16 +238,6 @@ impl Editor {
         Ok(())
     }
 
-    pub(crate) fn undo_active_edit(&mut self) -> BackendResult<()> {
-        self.active_buffer_mut()?.undo();
-        Ok(())
-    }
-
-    pub(crate) fn redo_active_edit(&mut self) -> BackendResult<()> {
-        self.active_buffer_mut()?.redo();
-        Ok(())
-    }
-
     pub(crate) fn active_save_request(&self) -> BackendResult<EditorBufferSaveRequest> {
         let active_file = self
             .active_file
@@ -331,12 +285,10 @@ impl Editor {
         snapshot: ProjectFileSnapshot,
     ) -> BackendResult<()> {
         let buffer = self.active_buffer_mut()?;
-        buffer.record_undo_snapshot();
         buffer.text = snapshot.text.clone();
         buffer.saved_text = snapshot.text;
         buffer.disk_version = snapshot.version;
         buffer.revision = buffer.revision.next();
-        buffer.redo_stack.clear();
         Ok(())
     }
 

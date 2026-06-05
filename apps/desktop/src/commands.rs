@@ -67,14 +67,6 @@ pub(crate) async fn dispatch_app_command(
             })?;
             Ok(AppCommandResponseDto::None)
         }
-        AppCommandDto::UndoActiveEdit => {
-            run_backend_command(&app, state.inner(), AppBackend::undo_active_edit)?;
-            Ok(AppCommandResponseDto::None)
-        }
-        AppCommandDto::RedoActiveEdit => {
-            run_backend_command(&app, state.inner(), AppBackend::redo_active_edit)?;
-            Ok(AppCommandResponseDto::None)
-        }
         AppCommandDto::FlushAutosave => {
             run_backend_command(&app, state.inner(), AppBackend::save_active_file)?;
             Ok(AppCommandResponseDto::None)

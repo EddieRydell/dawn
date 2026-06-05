@@ -51,8 +51,6 @@ pub(crate) enum AppCommandDto {
     SetActiveViewMode {
         mode: EditorViewModeDto,
     },
-    UndoActiveEdit,
-    RedoActiveEdit,
     ApplySequenceGuiEdit {
         edit: SequenceGuiEditDto,
     },

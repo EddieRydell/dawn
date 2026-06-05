@@ -6,8 +6,6 @@ export type CommandId =
   | "file.openProject"
   | "file.save"
   | "file.exportFseq"
-  | "edit.undo"
-  | "edit.redo"
   | "view.toggleProjectTree"
   | "view.openPreviewWindow"
   | "project.reload";
@@ -52,24 +50,6 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
       return Promise.resolve();
     }
   },
-  "edit.undo": {
-    id: "edit.undo",
-    label: "Undo",
-    shortcut: "Ctrl+Z",
-    run: async () => {
-      const text = useAppStore.getState().localText;
-      await runRuntimeCommand(commands.updateActiveText.bind(null, text));
-      await runRuntimeCommand(commands.undoActiveEdit);
-    }
-  },
-  "edit.redo": {
-    id: "edit.redo",
-    label: "Redo",
-    shortcut: "Ctrl+Shift+Z",
-    run: async () => {
-      await runRuntimeCommand(commands.redoActiveEdit);
-    }
-  },
   "view.toggleProjectTree": {
     id: "view.toggleProjectTree",
     label: "Project Tree",
@@ -98,16 +78,12 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
 
 export function installGlobalShortcuts() {
   const onKeyDown = (event: KeyboardEvent) => {
+    if (event.defaultPrevented) return;
     const ctrl = event.ctrlKey || event.metaKey;
     if (!ctrl) return;
     const active = useAppStore.getState().runtimeState;
     if (!active) return;
     const key = event.key.toLowerCase();
-    if (key === "z") {
-      event.preventDefault();
-      void (event.shiftKey ? commandRegistry["edit.redo"] : commandRegistry["edit.undo"]).run();
-      return;
-    }
     const command =
       key === "o"
         ? commandRegistry["file.openProject"]

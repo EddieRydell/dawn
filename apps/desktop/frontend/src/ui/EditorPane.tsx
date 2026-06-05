@@ -1,4 +1,4 @@
-import { defaultKeymap } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { cpp } from "@codemirror/lang-cpp";
 import { yaml } from "@codemirror/lang-yaml";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -78,15 +78,6 @@ export function EditorPane({ snapshot }: { snapshot: RuntimeUiState }) {
             scheduleAutosave(text);
           }
         },
-        async (text, redo) => {
-          window.clearTimeout(autosaveTimer);
-          if (!redo) {
-            await runRuntimeCommand(() => commands.updateActiveText(text));
-            await runRuntimeCommand(commands.undoActiveEdit);
-          } else {
-            await runRuntimeCommand(commands.redoActiveEdit);
-          }
-        }
       )
     });
     view.current = nextView;
@@ -427,8 +418,7 @@ function createState(
   text: string,
   path: string | null,
   readOnly: boolean,
-  onUpdate: (update: ViewUpdate) => void,
-  onHistoryCommand: (text: string, redo: boolean) => Promise<void>
+  onUpdate: (update: ViewUpdate) => void
 ) {
   return EditorState.create({
     doc: text,
@@ -437,6 +427,7 @@ function createState(
       syntaxHighlighting(dawnHighlightStyle),
       EditorState.readOnly.of(readOnly),
       EditorView.editable.of(!readOnly),
+      history(),
       linter(null, { autoPanel: false }),
       keymap.of([
         {
@@ -446,20 +437,7 @@ function createState(
             return true;
           }
         },
-        {
-          key: "Mod-z",
-          run: (view) => {
-            void onHistoryCommand(view.state.doc.toString(), false);
-            return true;
-          }
-        },
-        {
-          key: "Mod-Shift-z",
-          run: () => {
-            void onHistoryCommand("", true);
-            return true;
-          }
-        },
+        ...historyKeymap,
         ...defaultKeymap
       ]),
       EditorView.updateListener.of(onUpdate),
