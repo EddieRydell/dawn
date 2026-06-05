@@ -1,6 +1,6 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use dawn_app_runtime::output::sequence::OutputFrame;
+use deprecated_dawn_backend::RenderedFrame;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -47,7 +47,7 @@ impl PreviewTransportRuntime {
         self.platform.has_sinks()
     }
 
-    pub fn publish_frame(&mut self, frame: &OutputFrame, playing: bool, backend_seconds: f32) {
+    pub fn publish_frame(&mut self, frame: &RenderedFrame, playing: bool, backend_seconds: f32) {
         if !self.has_sinks() {
             return;
         }
@@ -76,7 +76,7 @@ fn write_slice(bytes: &mut [u8], offset: usize, src: &[u8]) -> bool {
     true
 }
 
-fn write_frame_rgb(frame: &OutputFrame, pixel_count: usize, dest: &mut [u8]) -> usize {
+fn write_frame_rgb(frame: &RenderedFrame, pixel_count: usize, dest: &mut [u8]) -> usize {
     let mut written_pixels = 0usize;
     for fixture in &frame.fixtures {
         for pixel in &fixture.pixels {
@@ -119,7 +119,7 @@ impl PlatformRuntime {
     fn publish_frame(
         &mut self,
         _seq: u32,
-        _frame: &OutputFrame,
+        _frame: &RenderedFrame,
         _playing: bool,
         _backend_seconds: f32,
     ) {
@@ -139,7 +139,7 @@ mod windows_platform {
     use windows_core::Interface;
 
     use super::{
-        frame_payload_bytes, write_frame_rgb, write_slice, OutputFrame, PreviewTransportMode,
+        frame_payload_bytes, write_frame_rgb, write_slice, PreviewTransportMode, RenderedFrame,
         FRAME_HEADER_LEN, FRAME_MAGIC, FRAME_OFFSET_BACKEND_SECONDS, FRAME_OFFSET_CURRENT_TIME,
         FRAME_OFFSET_LATEST_SEQ, FRAME_OFFSET_LATEST_SLOT, FRAME_OFFSET_PAYLOAD_BYTES,
         FRAME_OFFSET_PIXEL_COUNT, FRAME_OFFSET_PLAYING, FRAME_OFFSET_SLOT_COUNT, FRAME_SLOT_COUNT,
@@ -186,7 +186,7 @@ mod windows_platform {
         pub(super) fn publish_frame(
             &mut self,
             seq: u32,
-            frame: &OutputFrame,
+            frame: &RenderedFrame,
             playing: bool,
             backend_seconds: f32,
         ) {

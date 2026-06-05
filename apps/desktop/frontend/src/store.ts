@@ -28,35 +28,35 @@ export type RuntimeUiState = {
   liveOutput: LiveOutputReadModelDto["liveOutput"];
 };
 
-type RuntimeSlices = AppSnapshotDto;
+type BackendSlices = AppSnapshotDto;
 
-type AppRuntimeChangedEvent = {
+type AppBackendChangedEvent = {
   snapshot: AppSnapshotDto;
   changedSlices: unknown[];
 };
 
 type AppStore = {
-  runtimeSlices: RuntimeSlices | null;
+  BackendSlices: BackendSlices | null;
   runtimeState: RuntimeUiState | null;
   error: string | null;
   localText: string;
-  setRuntimeSlices: (runtimeSlices: RuntimeSlices) => void;
+  setBackendSlices: (BackendSlices: BackendSlices) => void;
   setError: (error: string | null) => void;
   setLocalText: (text: string) => void;
   hydrate: () => Promise<void>;
 };
 
 export const useAppStore = create<AppStore>((set, get) => ({
-  runtimeSlices: null,
+  BackendSlices: null,
   runtimeState: null,
   error: null,
   localText: "",
-  setRuntimeSlices: (runtimeSlices) => {
-    const previousActiveText = get().runtimeSlices?.editor.activeBuffer?.text;
-    const nextActiveText = runtimeSlices.editor.activeBuffer?.text;
+  setBackendSlices: (BackendSlices) => {
+    const previousActiveText = get().BackendSlices?.editor.activeBuffer?.text;
+    const nextActiveText = BackendSlices.editor.activeBuffer?.text;
     set({
-      runtimeSlices,
-      runtimeState: composeruntimeState(runtimeSlices),
+      BackendSlices,
+      runtimeState: composeruntimeState(BackendSlices),
       ...(previousActiveText !== nextActiveText ? { localText: nextActiveText ?? "" } : {})
     });
   },
@@ -67,11 +67,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ localText });
   },
   hydrate: async () => {
-    const runtimeSlices = await commands.getAppSnapshot();
+    const BackendSlices = await commands.getAppSnapshot();
     set({
-      runtimeSlices,
-      runtimeState: composeruntimeState(runtimeSlices),
-      localText: runtimeSlices.editor.activeBuffer?.text ?? "",
+      BackendSlices,
+      runtimeState: composeruntimeState(BackendSlices),
+      localText: BackendSlices.editor.activeBuffer?.text ?? "",
       error: null
     });
   }
@@ -79,8 +79,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
 export async function subscribeToruntimeState() {
   const disposers = await Promise.all([
-    listen<AppRuntimeChangedEvent>("app_runtime_changed", (event) => {
-      useAppStore.getState().setRuntimeSlices(event.payload.snapshot);
+    listen<AppBackendChangedEvent>("app_backend_changed", (event) => {
+      useAppStore.getState().setBackendSlices(event.payload.snapshot);
     })
   ]);
   return () => {
@@ -101,21 +101,21 @@ export async function runRuntimeCommand<T>(command: () => Promise<T>) {
   }
 }
 
-function composeruntimeState(runtimeSlices: RuntimeSlices): RuntimeUiState {
+function composeruntimeState(BackendSlices: BackendSlices): RuntimeUiState {
   return {
-    projectRoot: runtimeSlices.workspace.projectRoot,
-    projectTreeVisible: runtimeSlices.workspace.projectTreeVisible,
-    projectEntries: runtimeSlices.workspace.projectEntries,
-    tabs: runtimeSlices.editor.tabs,
-    activeFile: runtimeSlices.editor.activeFile,
-    activeBuffer: runtimeSlices.editor.activeBuffer,
-    activeDocumentDescriptor: runtimeSlices.activeDocument.descriptor,
-    activeGuiDocument: runtimeSlices.activeDocument.guiDocument,
-    diagnostics: runtimeSlices.diagnostics.diagnostics,
-    status: runtimeStatusLabel(runtimeSlices.status.status),
-    preview: runtimeSlices.preview.preview,
-    effectPreviewEnabled: runtimeSlices.preview.effectPreviewEnabled,
-    liveOutput: runtimeSlices.liveOutput.liveOutput
+    projectRoot: BackendSlices.workspace.projectRoot,
+    projectTreeVisible: BackendSlices.workspace.projectTreeVisible,
+    projectEntries: BackendSlices.workspace.projectEntries,
+    tabs: BackendSlices.editor.tabs,
+    activeFile: BackendSlices.editor.activeFile,
+    activeBuffer: BackendSlices.editor.activeBuffer,
+    activeDocumentDescriptor: BackendSlices.activeDocument.descriptor,
+    activeGuiDocument: BackendSlices.activeDocument.guiDocument,
+    diagnostics: BackendSlices.diagnostics.diagnostics,
+    status: runtimeStatusLabel(BackendSlices.status.status),
+    preview: BackendSlices.preview.preview,
+    effectPreviewEnabled: BackendSlices.preview.effectPreviewEnabled,
+    liveOutput: BackendSlices.liveOutput.liveOutput
   };
 }
 

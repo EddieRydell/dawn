@@ -1,9 +1,9 @@
-use dawn_app_runtime::app_shell::WindowLayout;
+use deprecated_dawn_backend::WindowLayout;
 use tauri::{
     AppHandle, Manager, PhysicalPosition, PhysicalSize, Position, Size, WebviewWindow, WindowEvent,
 };
 
-use crate::app::state::{lock_runtime, AppState, CommandResult};
+use crate::app::state::{lock_backend, AppState, CommandResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WorkbenchWindow {
@@ -25,7 +25,7 @@ pub(crate) fn restore_main_window_layout(app: &AppHandle) -> CommandResult<()> {
         .get_webview_window(WorkbenchWindow::Main.label())
         .ok_or_else(|| "main window is not open".to_string())?;
     let state = app.state::<AppState>();
-    let layout = lock_runtime(&state)?.main_window_layout();
+    let layout = lock_backend(&state)?.main_window_layout();
     apply_window_layout(&window, &layout)
 }
 
@@ -62,7 +62,7 @@ pub(crate) fn persist_window_layout(app: &AppHandle, target: WorkbenchWindow) {
         return;
     };
     let state = app.state::<AppState>();
-    if let Ok(mut model) = lock_runtime(&state) {
+    if let Ok(mut model) = lock_backend(&state) {
         match target {
             WorkbenchWindow::Main => {
                 let _ = model.set_main_window_layout(layout);

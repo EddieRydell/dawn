@@ -5,11 +5,6 @@ use std::time::{Duration, Instant};
 
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
-use dawn_app_runtime::output::fseq_export::{export_fseq_file, FseqExportOptions};
-use dawn_app_runtime::output::sequence::{
-    pixel_context_for_effect, prepare_params_from_document, SequenceFrameEvaluator,
-    SequenceFrameEvaluatorPreparationTiming,
-};
 use dawn_language::analysis::{
     analyze_project_with_overlays, DiagnosticCode, DiagnosticSeverity, ProjectAnalysis,
     ProjectDiagnostic, ProjectOverlay, TextRange,
@@ -27,6 +22,11 @@ use dawn_language::model::{
 };
 use dawn_language::path::{canonicalize_path, utf8_path, PathStringExt};
 use dawn_language::render::layout_render_plan;
+use deprecated_dawn_backend::output::fseq_export::{export_fseq_file, FseqExportOptions};
+use deprecated_dawn_backend::output::sequence::{
+    pixel_context_for_effect, prepare_params_from_document, SequenceFrameEvaluator,
+    SequenceFrameEvaluatorPreparationTiming,
+};
 use serde::Serialize;
 
 #[derive(Debug, Parser)]
@@ -807,7 +807,7 @@ impl EffectScriptReport {
 
 impl GeneratorParentTimingReport {
     fn from_timing(
-        timing: dawn_app_runtime::output::sequence::GeneratorParentPreparationTiming,
+        timing: deprecated_dawn_backend::output::sequence::GeneratorParentPreparationTiming,
     ) -> Self {
         Self {
             parent_effect_id: timing.parent_effect_id,
@@ -1867,12 +1867,12 @@ struct TextPositionReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dawn_app_runtime::output::sequence::evaluate_sequence_frame;
     use dawn_language::document::{
         LayoutTargetDocument, SequenceEffectPixelDocument, SequenceEffectRenderDocument,
     };
     use dawn_language::model::LayoutTargetKind;
     use dawn_language::model::SequenceEffectScope;
+    use deprecated_dawn_backend::output::sequence::evaluate_sequence_frame;
 
     fn active_effect(target_pixels: usize) -> SequenceEffectDocument {
         SequenceEffectDocument {
@@ -1992,7 +1992,7 @@ mod tests {
         );
         assert!(matches!(
             frame.status,
-            dawn_app_runtime::output::sequence::OutputFrameStatus::Live
+            deprecated_dawn_backend::output::sequence::OutputFrameStatus::Live
         ));
     }
 

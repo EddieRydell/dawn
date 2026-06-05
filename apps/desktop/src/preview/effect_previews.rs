@@ -1,15 +1,23 @@
-use dawn_app_runtime::output::sequence::SequenceEffectThumbnail;
+use deprecated_dawn_backend::{
+    SequenceEffectPreview, SequenceEffectPreviewRequestEffect, SequenceEffectPreviewResult,
+};
 use serde::{Deserialize, Serialize};
 use specta::Type;
-
-const PREVIEW_MAX_COLUMNS: usize = 360;
-const PREVIEW_MAX_ROWS: usize = 50;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceEffectPreviewRequestEffectDto {
     pub effect_id: u32,
     pub signature: String,
+}
+
+impl From<SequenceEffectPreviewRequestEffectDto> for SequenceEffectPreviewRequestEffect {
+    fn from(value: SequenceEffectPreviewRequestEffectDto) -> Self {
+        Self {
+            effect_id: value.effect_id,
+            signature: value.signature,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -63,9 +71,36 @@ pub struct SequenceEffectPreviewDto {
     pub colors: Vec<u32>,
 }
 
-pub(crate) fn sequence_effect_preview_dto(
-    thumbnail: SequenceEffectThumbnail,
-) -> SequenceEffectPreviewDto {
+pub(crate) fn sequence_effect_preview_result_dto(
+    result: SequenceEffectPreviewResult,
+) -> SequenceEffectPreviewResultDto {
+    match result {
+        SequenceEffectPreviewResult::Ready(result) => {
+            SequenceEffectPreviewResultDto::Ready(SequenceEffectPreviewReadyResultDto {
+                request_id: result.request_id,
+                signature: result.signature,
+                preview: sequence_effect_preview_dto(result.preview),
+            })
+        }
+        SequenceEffectPreviewResult::Unavailable(result) => {
+            SequenceEffectPreviewResultDto::Unavailable(SequenceEffectPreviewUnavailableResultDto {
+                request_id: result.request_id,
+                effect_id: result.effect_id,
+                signature: result.signature,
+            })
+        }
+        SequenceEffectPreviewResult::Error(result) => {
+            SequenceEffectPreviewResultDto::Error(SequenceEffectPreviewErrorResultDto {
+                request_id: result.request_id,
+                effect_id: result.effect_id,
+                signature: result.signature,
+                message: result.message,
+            })
+        }
+    }
+}
+
+fn sequence_effect_preview_dto(thumbnail: SequenceEffectPreview) -> SequenceEffectPreviewDto {
     SequenceEffectPreviewDto {
         effect_id: thumbnail.effect_id,
         duration_seconds: thumbnail.duration_seconds,
@@ -75,14 +110,6 @@ pub(crate) fn sequence_effect_preview_dto(
         rows: thumbnail.rows,
         colors: thumbnail.colors.into_iter().map(pack_rgb).collect(),
     }
-}
-
-pub(crate) fn preview_max_columns() -> usize {
-    PREVIEW_MAX_COLUMNS
-}
-
-pub(crate) fn preview_max_rows() -> usize {
-    PREVIEW_MAX_ROWS
 }
 
 fn pack_rgb(color: dawn_language::model::Color) -> u32 {

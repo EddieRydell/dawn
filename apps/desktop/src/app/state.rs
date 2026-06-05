@@ -1,23 +1,15 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use dawn_app_runtime::runtime::coordinator::AppCoordinator;
 use dawn_language::path::Utf8PathBuf;
+use deprecated_dawn_backend::AppBackend;
 use tauri::State;
 
-use crate::preview::audio_runtime::AudioRuntime;
-use crate::preview::effect_preview_runtime::EffectPreviewRuntime;
-use crate::preview::live_output::LiveOutputRuntime;
 use crate::preview::transport::PreviewTransportRuntime;
-use crate::project::watcher::FilesystemWatcherRuntime;
 
 pub(crate) struct AppState {
-    audio_runtime: Mutex<AudioRuntime>,
-    effect_preview_runtime: Mutex<EffectPreviewRuntime>,
     preview_transport: Mutex<PreviewTransportRuntime>,
-    live_output: Mutex<LiveOutputRuntime>,
-    filesystem_watcher: Mutex<FilesystemWatcherRuntime>,
-    runtime: Mutex<AppCoordinator>,
+    backend: Mutex<AppBackend>,
     startup_hydrated: AtomicBool,
     shutting_down: AtomicBool,
 }
@@ -25,12 +17,8 @@ pub(crate) struct AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self {
-            audio_runtime: Mutex::new(AudioRuntime::default()),
-            effect_preview_runtime: Mutex::new(EffectPreviewRuntime::default()),
             preview_transport: Mutex::new(PreviewTransportRuntime::default()),
-            live_output: Mutex::new(LiveOutputRuntime::default()),
-            filesystem_watcher: Mutex::new(FilesystemWatcherRuntime::default()),
-            runtime: Mutex::new(AppCoordinator::default()),
+            backend: Mutex::new(AppBackend::default()),
             startup_hydrated: AtomicBool::new(false),
             shutting_down: AtomicBool::new(false),
         }
@@ -53,24 +41,6 @@ impl AppState {
 
 pub(crate) type CommandResult<T> = Result<T, String>;
 
-pub(crate) fn lock_audio_runtime<'a>(
-    state: &'a State<'_, AppState>,
-) -> CommandResult<MutexGuard<'a, AudioRuntime>> {
-    state
-        .audio_runtime
-        .lock()
-        .map_err(|_| "audio runtime lock is poisoned".to_string())
-}
-
-pub(crate) fn lock_effect_preview_runtime<'a>(
-    state: &'a State<'_, AppState>,
-) -> CommandResult<MutexGuard<'a, EffectPreviewRuntime>> {
-    state
-        .effect_preview_runtime
-        .lock()
-        .map_err(|_| "effect preview runtime lock is poisoned".to_string())
-}
-
 pub(crate) fn lock_preview_transport<'a>(
     state: &'a State<'_, AppState>,
 ) -> CommandResult<MutexGuard<'a, PreviewTransportRuntime>> {
@@ -80,31 +50,13 @@ pub(crate) fn lock_preview_transport<'a>(
         .map_err(|_| "preview transport lock is poisoned".to_string())
 }
 
-pub(crate) fn lock_live_output<'a>(
+pub(crate) fn lock_backend<'a>(
     state: &'a State<'_, AppState>,
-) -> CommandResult<MutexGuard<'a, LiveOutputRuntime>> {
+) -> CommandResult<MutexGuard<'a, AppBackend>> {
     state
-        .live_output
+        .backend
         .lock()
-        .map_err(|_| "live output lock is poisoned".to_string())
-}
-
-pub(crate) fn lock_filesystem_watcher<'a>(
-    state: &'a State<'_, AppState>,
-) -> CommandResult<MutexGuard<'a, FilesystemWatcherRuntime>> {
-    state
-        .filesystem_watcher
-        .lock()
-        .map_err(|_| "filesystem watcher lock is poisoned".to_string())
-}
-
-pub(crate) fn lock_runtime<'a>(
-    state: &'a State<'_, AppState>,
-) -> CommandResult<MutexGuard<'a, AppCoordinator>> {
-    state
-        .runtime
-        .lock()
-        .map_err(|_| "runtime lock is poisoned".to_string())
+        .map_err(|_| "backend lock is poisoned".to_string())
 }
 
 pub(crate) fn project_path(path: String) -> Utf8PathBuf {

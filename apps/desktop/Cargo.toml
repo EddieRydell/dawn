@@ -9,10 +9,9 @@ default-run = "dawn-desktop"
 
 [dependencies]
 camino.workspace = true
-dawn-app-runtime = { path = "../../crates/dawn-app-runtime" }
+deprecated-dawn-backend = { path = "../../crates/deprecated-dawn-backend" }
 dawn-language = { path = "../../crates/dawn-language" }
 kira = { version = "0.12", features = ["aac", "isomp4"] }
-notify = "8"
 rfd = "0.15"
 serde.workspace = true
 serde_json.workspace = true
