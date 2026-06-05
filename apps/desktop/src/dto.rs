@@ -1,17 +1,28 @@
 use dawn_backend::{
-    AppView, EditorTabView, EditorView, EditorViewMode as BackendEditorViewMode,
-    LoadedEditorTabView, RenderedFixtureFrame, RenderedFrame, SequenceEffectPreviewResult,
-    WorkspaceEntry, WorkspaceEntryKind,
+    ActiveDocumentView, ActiveGuiDocument, AppView, EditorTabView, EditorView,
+    EditorViewMode as BackendEditorViewMode, FixtureGuiEdit, LayoutGuiEdit, LoadedEditorTabView,
+    RenderedFixtureFrame, RenderedFrame, SequenceEffectPreviewResult, SequenceGuiEdit,
+    SequenceMarkRef, SequencePasteAnchor, SequenceResizeEdge, SequenceSelection,
+    SequenceSelectionEdit, SequenceSelectionEditResult, WorkspaceEntry, WorkspaceEntryKind,
 };
 use dawn_language::analysis::{
     DiagnosticCode, DiagnosticSeverity, ProjectAnalysis, ProjectDiagnostic, TextRange,
 };
 use dawn_language::document::{
-    EffectScriptReferenceDocument, FixtureDefinitionDocument, FixtureDocument, LayoutDocument,
-    LayoutFixturePlacement, ResolvedLayoutFixture, SequenceAudioDocument,
+    DocumentDescriptor, DocumentObjectDescriptor, DocumentViewId, EffectScriptReferenceDocument,
+    FixtureDefinitionDocument, FixtureDocument, LayoutDocument, LayoutFixturePlacement,
+    LayoutTargetDocument, ResolvedLayoutFixture, SequenceAudioDocument,
+    SequenceCurveLibraryItemDocument, SequenceDocument, SequenceEffectDocument,
+    SequenceEffectParamCurvePointEditValue, SequenceEffectParamCurveSourceDocument,
+    SequenceEffectParamCurveValueEditValue, SequenceEffectParamDocument,
+    SequenceEffectParamEditValue, SequenceEffectScriptDocument, SequenceEffectScriptParamDocument,
+    SequenceLaneDocument, SequenceMarkCollectionDocument,
 };
+use dawn_language::effect_script::{EffectScriptKind, ScriptType};
 use dawn_language::model::{
-    Color, ColorModel, Geometry, LayoutTargetKind, Point3, SequenceEffectScope, Transform,
+    Color, ColorModel, CurveValue, CurveValueType, Distance, EffectParam, Geometry,
+    LayoutTargetKind, ObjectKind, Point3, Resolved, Rotation3, Scale3, SequenceEffectScope,
+    Transform,
 };
 use dawn_language::path::{PathStringExt, Utf8PathBuf};
 use dawn_language::render::{
@@ -181,7 +192,7 @@ impl From<AppView> for AppSnapshotDto {
                     .collect(),
             },
             editor: EditorReadModelDto::from(view.editor),
-            active_document: ActiveDocumentReadModelDto::default(),
+            active_document: ActiveDocumentReadModelDto::from(view.active_document),
             diagnostics: DiagnosticsReadModelDto { diagnostics },
             preview: PreviewReadModelDto::from_frame(view.render.frame.as_ref()),
             live_output: LiveOutputReadModelDto::default(),
@@ -441,6 +452,100 @@ pub(crate) enum ActiveGuiDocumentDto {
         reason: String,
         diagnostics: Vec<ProjectDiagnosticDto>,
     },
+}
+
+impl From<ActiveDocumentView> for ActiveDocumentReadModelDto {
+    fn from(document: ActiveDocumentView) -> Self {
+        Self {
+            descriptor: document.descriptor.map(DocumentDescriptorDto::from),
+            gui_document: document.gui_document.map(ActiveGuiDocumentDto::from),
+        }
+    }
+}
+
+impl From<DocumentDescriptor> for DocumentDescriptorDto {
+    fn from(descriptor: DocumentDescriptor) -> Self {
+        Self {
+            path: descriptor.path,
+            objects: descriptor
+                .objects
+                .into_iter()
+                .map(DocumentObjectDescriptorDto::from)
+                .collect(),
+            available_views: descriptor
+                .available_views
+                .into_iter()
+                .map(DocumentViewIdDto::from)
+                .collect(),
+            default_object_keys: descriptor
+                .default_object_keys
+                .into_iter()
+                .map(|(view, object_key)| DocumentDefaultObjectKeyDto {
+                    view: view.into(),
+                    object_key,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<DocumentObjectDescriptor> for DocumentObjectDescriptorDto {
+    fn from(descriptor: DocumentObjectDescriptor) -> Self {
+        Self {
+            key: descriptor.key,
+            kind: descriptor.kind.into(),
+        }
+    }
+}
+
+impl From<DocumentViewId> for DocumentViewIdDto {
+    fn from(view: DocumentViewId) -> Self {
+        match view {
+            DocumentViewId::Text => Self::Text,
+            DocumentViewId::Layout => Self::Layout,
+            DocumentViewId::Fixture => Self::Fixture,
+            DocumentViewId::Sequence => Self::Sequence,
+        }
+    }
+}
+
+impl From<ObjectKind> for ObjectKindDto {
+    fn from(kind: ObjectKind) -> Self {
+        match kind {
+            ObjectKind::Project => Self::Project,
+            ObjectKind::Display => Self::Display,
+            ObjectKind::Controller => Self::Controller,
+            ObjectKind::Layout => Self::Layout,
+            ObjectKind::Fixture => Self::Fixture,
+            ObjectKind::Patch => Self::Patch,
+            ObjectKind::Sequence => Self::Sequence,
+            ObjectKind::Curve => Self::Curve,
+        }
+    }
+}
+
+impl From<ActiveGuiDocument> for ActiveGuiDocumentDto {
+    fn from(document: ActiveGuiDocument) -> Self {
+        match document {
+            ActiveGuiDocument::Sequence(document) => Self::Sequence {
+                document: document.into(),
+            },
+            ActiveGuiDocument::Layout(document) => Self::Layout {
+                document: document.into(),
+            },
+            ActiveGuiDocument::Fixture(document) => Self::Fixture {
+                document: document.into(),
+            },
+            ActiveGuiDocument::Blocked(blocked) => Self::Blocked {
+                reason: blocked.reason,
+                diagnostics: blocked
+                    .diagnostics
+                    .iter()
+                    .map(ProjectDiagnosticDto::from)
+                    .collect(),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -975,6 +1080,314 @@ pub(crate) enum FixtureGuiEditDto {
     },
 }
 
+impl TryFrom<SequenceGuiEditDto> for SequenceGuiEdit {
+    type Error = String;
+
+    fn try_from(edit: SequenceGuiEditDto) -> Result<Self, Self::Error> {
+        Ok(Self::Document(match edit {
+            SequenceGuiEditDto::SetAudio { import } => {
+                dawn_language::document::SequenceDocumentEdit::SetAudio { import }
+            }
+            SequenceGuiEditDto::AddEffect {
+                script,
+                target,
+                scope,
+                start_seconds,
+                mark_collection_key,
+            } => dawn_language::document::SequenceDocumentEdit::AddEffect {
+                script: script.into(),
+                target: target.into(),
+                scope: scope.into(),
+                start_seconds,
+                mark_collection_key,
+            },
+            SequenceGuiEditDto::MoveEffect {
+                id,
+                start_seconds,
+                target,
+            } => dawn_language::document::SequenceDocumentEdit::MoveEffect {
+                id,
+                start_seconds,
+                target: target.map(Into::into),
+            },
+            SequenceGuiEditDto::ResizeEffect {
+                id,
+                start_seconds,
+                duration_seconds,
+            } => dawn_language::document::SequenceDocumentEdit::ResizeEffect {
+                id,
+                start_seconds,
+                duration_seconds,
+            },
+            SequenceGuiEditDto::ChangeEffectScript { id, script } => {
+                dawn_language::document::SequenceDocumentEdit::ChangeEffectScript {
+                    id,
+                    script: script.into(),
+                }
+            }
+            SequenceGuiEditDto::DeleteEffect { id } => {
+                dawn_language::document::SequenceDocumentEdit::DeleteEffect { id }
+            }
+            SequenceGuiEditDto::RetargetEffect { id, target } => {
+                dawn_language::document::SequenceDocumentEdit::RetargetEffect {
+                    id,
+                    target: target.into(),
+                }
+            }
+            SequenceGuiEditDto::SetEffectScope { id, scope } => {
+                dawn_language::document::SequenceDocumentEdit::SetEffectScope {
+                    id,
+                    scope: scope.into(),
+                }
+            }
+            SequenceGuiEditDto::UpdateEffectParam { id, name, value } => {
+                dawn_language::document::SequenceDocumentEdit::UpdateEffectParam {
+                    id,
+                    name,
+                    value: value.into(),
+                }
+            }
+            SequenceGuiEditDto::LinkEffectCurveParam {
+                id,
+                name,
+                curve_path,
+                object_key,
+            } => dawn_language::document::SequenceDocumentEdit::LinkEffectCurveParam {
+                id,
+                name,
+                curve_path,
+                object_key,
+            },
+            SequenceGuiEditDto::UnlinkEffectCurveParam { id, name } => {
+                dawn_language::document::SequenceDocumentEdit::UnlinkEffectCurveParam { id, name }
+            }
+            SequenceGuiEditDto::CreateMarkCollection { key, name, color } => {
+                dawn_language::document::SequenceDocumentEdit::CreateMarkCollection {
+                    key,
+                    name,
+                    color,
+                }
+            }
+            SequenceGuiEditDto::RenameMarkCollection { key, name } => {
+                dawn_language::document::SequenceDocumentEdit::RenameMarkCollection { key, name }
+            }
+            SequenceGuiEditDto::DeleteMarkCollection { key } => {
+                dawn_language::document::SequenceDocumentEdit::DeleteMarkCollection { key }
+            }
+            SequenceGuiEditDto::SetMarkCollectionColor { key, color } => {
+                dawn_language::document::SequenceDocumentEdit::SetMarkCollectionColor { key, color }
+            }
+            SequenceGuiEditDto::AddMark {
+                collection_key,
+                time_seconds,
+            } => dawn_language::document::SequenceDocumentEdit::AddMark {
+                collection_key,
+                time_seconds,
+            },
+            SequenceGuiEditDto::MoveMark {
+                collection_key,
+                index,
+                time_seconds,
+            } => dawn_language::document::SequenceDocumentEdit::MoveMark {
+                collection_key,
+                index: index as usize,
+                time_seconds,
+            },
+            SequenceGuiEditDto::DeleteMark {
+                collection_key,
+                index,
+            } => dawn_language::document::SequenceDocumentEdit::DeleteMark {
+                collection_key,
+                index: index as usize,
+            },
+        }))
+    }
+}
+
+impl From<SequenceEffectParamValueDto> for SequenceEffectParamEditValue {
+    fn from(value: SequenceEffectParamValueDto) -> Self {
+        match value {
+            SequenceEffectParamValueDto::Int { value } => Self::Integer(value as u64),
+            SequenceEffectParamValueDto::Float { value } => Self::Float(value),
+            SequenceEffectParamValueDto::Bool { value } => Self::Boolean(value),
+            SequenceEffectParamValueDto::Color { value } => Self::Color(value),
+            SequenceEffectParamValueDto::Enum { value } => Self::Enum(value),
+            SequenceEffectParamValueDto::Flags { value } => Self::Flags(value),
+            SequenceEffectParamValueDto::FloatCurve { points } => Self::FloatCurve(
+                points
+                    .into_iter()
+                    .map(|point| SequenceEffectParamCurvePointEditValue {
+                        time: point.time,
+                        value: SequenceEffectParamCurveValueEditValue::Float(point.value),
+                    })
+                    .collect(),
+            ),
+            SequenceEffectParamValueDto::ColorCurve { points } => Self::ColorCurve(
+                points
+                    .into_iter()
+                    .map(|point| SequenceEffectParamCurvePointEditValue {
+                        time: point.time,
+                        value: SequenceEffectParamCurveValueEditValue::Color(point.value),
+                    })
+                    .collect(),
+            ),
+            SequenceEffectParamValueDto::Marks { key } => Self::Marks(key),
+        }
+    }
+}
+
+impl From<SequenceSelectionDto> for SequenceSelection {
+    fn from(selection: SequenceSelectionDto) -> Self {
+        match selection {
+            SequenceSelectionDto::Effects { ids } => Self::Effects { ids },
+            SequenceSelectionDto::Marks { marks } => Self::Marks {
+                marks: marks.into_iter().map(SequenceMarkRef::from).collect(),
+            },
+        }
+    }
+}
+
+impl From<SequenceMarkRefDto> for SequenceMarkRef {
+    fn from(mark: SequenceMarkRefDto) -> Self {
+        Self {
+            collection_key: mark.collection_key,
+            index: mark.index,
+        }
+    }
+}
+
+impl From<SequencePasteAnchorDto> for SequencePasteAnchor {
+    fn from(anchor: SequencePasteAnchorDto) -> Self {
+        Self {
+            lane_index: Some(anchor.lane_index),
+            time_seconds: Some(anchor.time_seconds),
+        }
+    }
+}
+
+impl From<SequenceSelectionEditDto> for SequenceSelectionEdit {
+    fn from(edit: SequenceSelectionEditDto) -> Self {
+        match edit {
+            SequenceSelectionEditDto::Copy { selection } => Self::Copy {
+                selection: selection.into(),
+            },
+            SequenceSelectionEditDto::Cut { selection } => Self::Cut {
+                selection: selection.into(),
+            },
+            SequenceSelectionEditDto::Delete { selection } => Self::Delete {
+                selection: selection.into(),
+            },
+            SequenceSelectionEditDto::Paste { anchor } => Self::Paste {
+                anchor: anchor.into(),
+            },
+            SequenceSelectionEditDto::MoveEffects {
+                ids,
+                time_delta_seconds,
+                lane_delta,
+            } => Self::MoveEffects {
+                ids,
+                time_delta_seconds,
+                lane_delta,
+            },
+            SequenceSelectionEditDto::ResizeEffects {
+                ids,
+                edge,
+                time_delta_seconds,
+            } => Self::ResizeEffects {
+                ids,
+                edge: edge.into(),
+                time_delta_seconds,
+            },
+            SequenceSelectionEditDto::MoveMarks {
+                marks,
+                time_delta_seconds,
+            } => Self::MoveMarks {
+                marks: marks.into_iter().map(SequenceMarkRef::from).collect(),
+                time_delta_seconds,
+            },
+        }
+    }
+}
+
+impl From<SequenceResizeEdgeDto> for SequenceResizeEdge {
+    fn from(edge: SequenceResizeEdgeDto) -> Self {
+        match edge {
+            SequenceResizeEdgeDto::Left => Self::Left,
+            SequenceResizeEdgeDto::Right => Self::Right,
+        }
+    }
+}
+
+impl From<SequenceSelectionEditResult> for SequenceSelectionEditResultDto {
+    fn from(result: SequenceSelectionEditResult) -> Self {
+        Self {
+            selection: result.selection.map(SequenceSelectionDto::from),
+            copied_count: result.copied_count,
+            skipped_count: result.skipped_count,
+        }
+    }
+}
+
+impl From<SequenceSelection> for SequenceSelectionDto {
+    fn from(selection: SequenceSelection) -> Self {
+        match selection {
+            SequenceSelection::Effects { ids } => Self::Effects { ids },
+            SequenceSelection::Marks { marks } => Self::Marks {
+                marks: marks.into_iter().map(SequenceMarkRefDto::from).collect(),
+            },
+        }
+    }
+}
+
+impl From<SequenceMarkRef> for SequenceMarkRefDto {
+    fn from(mark: SequenceMarkRef) -> Self {
+        Self {
+            collection_key: mark.collection_key,
+            index: mark.index,
+        }
+    }
+}
+
+impl TryFrom<LayoutGuiEditDto> for LayoutGuiEdit {
+    type Error = String;
+
+    fn try_from(edit: LayoutGuiEditDto) -> Result<Self, Self::Error> {
+        match edit {
+            LayoutGuiEditDto::UpdatePlacementTransform { id, transform } => {
+                Ok(Self::UpdatePlacementTransform {
+                    id,
+                    transform: transform.try_into()?,
+                })
+            }
+        }
+    }
+}
+
+impl TryFrom<FixtureGuiEditDto> for FixtureGuiEdit {
+    type Error = String;
+
+    fn try_from(edit: FixtureGuiEditDto) -> Result<Self, Self::Error> {
+        match edit {
+            FixtureGuiEditDto::UpdateBulbDiameter {
+                object_key,
+                bulb_diameter_meters,
+            } => Ok(Self::UpdateBulbDiameter {
+                object_key,
+                bulb_diameter_meters,
+            }),
+            FixtureGuiEditDto::MovePoint {
+                object_key,
+                point_index,
+                point,
+            } => Ok(Self::MovePoint {
+                object_key,
+                point_index,
+                point: point.try_into()?,
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LayoutTargetDto {
@@ -994,6 +1407,36 @@ impl From<LayoutTargetKind> for LayoutTargetKindDto {
         match kind {
             LayoutTargetKind::Group => Self::Group,
             LayoutTargetKind::Fixture => Self::Fixture,
+        }
+    }
+}
+
+impl From<LayoutTargetDocument> for LayoutTargetDto {
+    fn from(target: LayoutTargetDocument) -> Self {
+        Self {
+            kind: target.kind.into(),
+            name: target.name,
+        }
+    }
+}
+
+impl From<LayoutTargetDto> for LayoutTargetDocument {
+    fn from(target: LayoutTargetDto) -> Self {
+        Self {
+            kind: match target.kind {
+                LayoutTargetKindDto::Group => LayoutTargetKind::Group,
+                LayoutTargetKindDto::Fixture => LayoutTargetKind::Fixture,
+            },
+            name: target.name,
+        }
+    }
+}
+
+impl From<SequenceEffectScopeDto> for SequenceEffectScope {
+    fn from(scope: SequenceEffectScopeDto) -> Self {
+        match scope {
+            SequenceEffectScopeDto::PerFixture => Self::PerFixture,
+            SequenceEffectScopeDto::WholeTarget => Self::WholeTarget,
         }
     }
 }
@@ -1024,6 +1467,26 @@ impl From<Transform> for TransformDto {
     }
 }
 
+impl TryFrom<TransformDto> for Transform {
+    type Error = String;
+
+    fn try_from(transform: TransformDto) -> Result<Self, Self::Error> {
+        Ok(Self {
+            position: transform.position.try_into()?,
+            rotation: Rotation3 {
+                x: transform.rotation.x_degrees,
+                y: transform.rotation.y_degrees,
+                z: transform.rotation.z_degrees,
+            },
+            scale: Scale3 {
+                x: transform.scale.x,
+                y: transform.scale.y,
+                z: transform.scale.z,
+            },
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Point3MetersDto {
@@ -1039,6 +1502,18 @@ impl From<Point3> for Point3MetersDto {
             y_meters: point.y.as_meters_f64(),
             z_meters: point.z.as_meters_f64(),
         }
+    }
+}
+
+impl TryFrom<Point3MetersDto> for Point3 {
+    type Error = String;
+
+    fn try_from(point: Point3MetersDto) -> Result<Self, Self::Error> {
+        Ok(Self {
+            x: Distance::try_from_meters_f64_truncated(point.x_meters).map_err(str::to_string)?,
+            y: Distance::try_from_meters_f64_truncated(point.y_meters).map_err(str::to_string)?,
+            z: Distance::try_from_meters_f64_truncated(point.z_meters).map_err(str::to_string)?,
+        })
     }
 }
 
@@ -1268,11 +1743,267 @@ impl From<EffectScriptReferenceDocument> for EffectScriptReferenceDto {
     }
 }
 
+impl From<EffectScriptReferenceDto> for EffectScriptReferenceDocument {
+    fn from(script: EffectScriptReferenceDto) -> Self {
+        Self {
+            path: script.path,
+            effect_name: script.effect_name,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum SequenceEffectScriptKindDto {
     Sample,
     Generator,
+}
+
+impl From<SequenceDocument> for SequenceDocumentDto {
+    fn from(document: SequenceDocument) -> Self {
+        Self {
+            path: document.path,
+            object_key: document.object_key,
+            duration_seconds: document.duration_seconds,
+            frame_rate: document.frame_rate,
+            audio: document.audio.map(SequenceAudioDto::from),
+            mark_collections: document
+                .mark_collections
+                .into_iter()
+                .map(SequenceMarkCollectionDto::from)
+                .collect(),
+            lanes: document
+                .lanes
+                .into_iter()
+                .map(SequenceLaneDto::from)
+                .collect(),
+            effect_scripts: document
+                .effect_scripts
+                .into_iter()
+                .map(SequenceEffectScriptDto::from)
+                .collect(),
+            curve_library: document
+                .curve_library
+                .into_iter()
+                .map(SequenceCurveLibraryItemDto::from)
+                .collect(),
+            effects: document
+                .effects
+                .into_iter()
+                .map(SequenceEffectDto::from)
+                .collect(),
+            degraded: document.degraded,
+        }
+    }
+}
+
+impl From<SequenceMarkCollectionDocument> for SequenceMarkCollectionDto {
+    fn from(collection: SequenceMarkCollectionDocument) -> Self {
+        Self {
+            key: collection.key,
+            name: collection.name,
+            color: collection.color,
+            marks_seconds: collection.marks_seconds,
+        }
+    }
+}
+
+impl From<SequenceLaneDocument> for SequenceLaneDto {
+    fn from(lane: SequenceLaneDocument) -> Self {
+        Self {
+            target: lane.target.into(),
+            label: lane.label,
+        }
+    }
+}
+
+impl From<SequenceEffectDocument> for SequenceEffectDto {
+    fn from(effect: SequenceEffectDocument) -> Self {
+        Self {
+            index: effect.index.min(u32::MAX as usize) as u32,
+            id: effect.id,
+            start_seconds: effect.start_seconds,
+            duration_seconds: effect.duration_seconds,
+            target: effect.target.into(),
+            target_label: effect.target_label,
+            scope: effect.scope.into(),
+            script: effect.script,
+            script_source: effect.script_source.map(EffectScriptReferenceDto::from),
+            params: effect
+                .params
+                .into_iter()
+                .map(SequenceEffectParamDto::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<SequenceEffectParamDocument> for SequenceEffectParamDto {
+    fn from(param: SequenceEffectParamDocument) -> Self {
+        let kind = sequence_param_kind(&param.value);
+        Self {
+            name: param.name,
+            kind,
+            options: Vec::new(),
+            editable: true,
+            value: SequenceEffectParamValueDto::from(param.value),
+            curve_source: param
+                .curve_source
+                .map(SequenceEffectParamCurveSourceDto::from),
+        }
+    }
+}
+
+impl From<EffectParam<Resolved>> for SequenceEffectParamValueDto {
+    fn from(param: EffectParam<Resolved>) -> Self {
+        match param {
+            EffectParam::Integer { value } => Self::Int {
+                value: value.min(u32::MAX as u64) as u32,
+            },
+            EffectParam::Float { value } => Self::Float { value },
+            EffectParam::Boolean { value } => Self::Bool { value },
+            EffectParam::Color { value } => Self::Color {
+                value: value.to_hex(),
+            },
+            EffectParam::Enum { value } => Self::Enum { value },
+            EffectParam::Flags { value } => Self::Flags {
+                value: value.values,
+            },
+            EffectParam::Curve { curve } => match curve.value_type {
+                CurveValueType::Float => Self::FloatCurve {
+                    points: curve
+                        .points
+                        .into_iter()
+                        .filter_map(|point| match point.value {
+                            CurveValue::Float(value) => Some(FloatCurvePointDto {
+                                time: point.time,
+                                value,
+                            }),
+                            CurveValue::Color(_) => None,
+                        })
+                        .collect(),
+                },
+                CurveValueType::Color => Self::ColorCurve {
+                    points: curve
+                        .points
+                        .into_iter()
+                        .filter_map(|point| match point.value {
+                            CurveValue::Color(value) => Some(ColorCurvePointDto {
+                                time: point.time,
+                                value: value.to_hex(),
+                            }),
+                            CurveValue::Float(_) => None,
+                        })
+                        .collect(),
+                },
+            },
+            EffectParam::Marks { key } => Self::Marks { key },
+        }
+    }
+}
+
+impl From<SequenceEffectParamCurveSourceDocument> for SequenceEffectParamCurveSourceDto {
+    fn from(source: SequenceEffectParamCurveSourceDocument) -> Self {
+        match source {
+            SequenceEffectParamCurveSourceDocument::Inline => Self::Inline,
+            SequenceEffectParamCurveSourceDocument::Library {
+                reference,
+                path,
+                object_key,
+                display_name,
+            } => Self::Library {
+                reference,
+                path,
+                object_key,
+                display_name,
+            },
+        }
+    }
+}
+
+impl From<SequenceCurveLibraryItemDocument> for SequenceCurveLibraryItemDto {
+    fn from(item: SequenceCurveLibraryItemDocument) -> Self {
+        let points = match item.curve.value_type {
+            CurveValueType::Float => SequenceCurveLibraryPointsDto::Float {
+                points: item
+                    .curve
+                    .points
+                    .into_iter()
+                    .filter_map(|point| match point.value {
+                        CurveValue::Float(value) => Some(FloatCurvePointDto {
+                            time: point.time,
+                            value,
+                        }),
+                        CurveValue::Color(_) => None,
+                    })
+                    .collect(),
+            },
+            CurveValueType::Color => SequenceCurveLibraryPointsDto::Color {
+                points: item
+                    .curve
+                    .points
+                    .into_iter()
+                    .filter_map(|point| match point.value {
+                        CurveValue::Color(value) => Some(ColorCurvePointDto {
+                            time: point.time,
+                            value: value.to_hex(),
+                        }),
+                        CurveValue::Float(_) => None,
+                    })
+                    .collect(),
+            },
+        };
+        Self {
+            path: item.path,
+            object_key: item.object_key,
+            display_name: item.display_name,
+            value_type: item.value_type.into(),
+            points,
+        }
+    }
+}
+
+impl From<CurveValueType> for SequenceCurveValueTypeDto {
+    fn from(value_type: CurveValueType) -> Self {
+        match value_type {
+            CurveValueType::Float => Self::Float,
+            CurveValueType::Color => Self::Color,
+        }
+    }
+}
+
+impl From<SequenceEffectScriptDocument> for SequenceEffectScriptDto {
+    fn from(script: SequenceEffectScriptDocument) -> Self {
+        Self {
+            name: script.name,
+            kind: script.kind.into(),
+            script: script.script.into(),
+            import: script.import,
+            params: script
+                .params
+                .into_iter()
+                .filter_map(SequenceEffectScriptParamDto::from_document)
+                .collect(),
+        }
+    }
+}
+
+impl SequenceEffectScriptParamDto {
+    fn from_document(param: SequenceEffectScriptParamDocument) -> Option<Self> {
+        Some(Self {
+            name: param.name,
+            kind: script_type_param_kind(param.value_type)?,
+        })
+    }
+}
+
+impl From<EffectScriptKind> for SequenceEffectScriptKindDto {
+    fn from(kind: EffectScriptKind) -> Self {
+        match kind {
+            EffectScriptKind::Sample => Self::Sample,
+            EffectScriptKind::Generator => Self::Generator,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -1581,6 +2312,43 @@ impl From<SequenceEffectPreviewResult> for SequenceEffectPreviewResultDto {
                 })
             }
         }
+    }
+}
+
+fn sequence_param_kind(param: &EffectParam<Resolved>) -> SequenceEffectParamKindDto {
+    match param {
+        EffectParam::Integer { .. } => SequenceEffectParamKindDto::Int,
+        EffectParam::Float { .. } => SequenceEffectParamKindDto::Float,
+        EffectParam::Boolean { .. } => SequenceEffectParamKindDto::Bool,
+        EffectParam::Color { .. } => SequenceEffectParamKindDto::Color,
+        EffectParam::Enum { .. } => SequenceEffectParamKindDto::Enum,
+        EffectParam::Flags { .. } => SequenceEffectParamKindDto::Flags,
+        EffectParam::Curve { curve } => match curve.value_type {
+            CurveValueType::Float => SequenceEffectParamKindDto::FloatCurve,
+            CurveValueType::Color => SequenceEffectParamKindDto::ColorCurve,
+        },
+        EffectParam::Marks { .. } => SequenceEffectParamKindDto::Marks,
+    }
+}
+
+fn script_type_param_kind(value_type: ScriptType) -> Option<SequenceEffectParamKindDto> {
+    match value_type {
+        ScriptType::Float => Some(SequenceEffectParamKindDto::Float),
+        ScriptType::Int => Some(SequenceEffectParamKindDto::Int),
+        ScriptType::Bool => Some(SequenceEffectParamKindDto::Bool),
+        ScriptType::Color => Some(SequenceEffectParamKindDto::Color),
+        ScriptType::Marks => Some(SequenceEffectParamKindDto::Marks),
+        ScriptType::CurveFloat => Some(SequenceEffectParamKindDto::FloatCurve),
+        ScriptType::CurveColor => Some(SequenceEffectParamKindDto::ColorCurve),
+        ScriptType::Enum => Some(SequenceEffectParamKindDto::Enum),
+        ScriptType::Flags => Some(SequenceEffectParamKindDto::Flags),
+        ScriptType::Fixture
+        | ScriptType::Pixel
+        | ScriptType::Timeline
+        | ScriptType::Target
+        | ScriptType::TargetItems
+        | ScriptType::TargetItem
+        | ScriptType::Void => None,
     }
 }
 

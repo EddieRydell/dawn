@@ -8,6 +8,7 @@ use crate::{
     },
     BackendError, BackendErrorKind, BackendResult,
 };
+use dawn_language::analysis::ProjectOverlay;
 
 const INACTIVE_RESTORE_LOAD_LIMIT_BYTES: u64 = 1024 * 1024;
 
@@ -121,6 +122,13 @@ pub(crate) struct EditorBufferSaveRequest {
     pub(crate) dirty: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ActiveEditorBuffer {
+    pub(crate) path: Utf8PathBuf,
+    pub(crate) view_mode: EditorViewMode,
+    pub(crate) text: String,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Editor {
     tabs: Vec<EditorTab>,
@@ -230,6 +238,46 @@ impl Editor {
     pub(crate) fn update_active_text(&mut self, text: String) -> BackendResult<()> {
         self.active_buffer_mut()?.update_text(text);
         Ok(())
+    }
+
+    pub(crate) fn replace_active_text(&mut self, text: String) -> BackendResult<()> {
+        self.active_buffer_mut()?.update_text(text);
+        Ok(())
+    }
+
+    pub(crate) fn active_loaded_buffer(&self) -> BackendResult<ActiveEditorBuffer> {
+        let active_file = self
+            .active_file
+            .as_ref()
+            .ok_or_else(no_active_loaded_buffer)?;
+        let tab = self
+            .tabs
+            .iter()
+            .find(|tab| &tab.path == active_file)
+            .ok_or_else(no_active_loaded_buffer)?;
+        let EditorTabContent::Loaded(buffer) = &tab.content else {
+            return Err(no_active_loaded_buffer());
+        };
+        Ok(ActiveEditorBuffer {
+            path: tab.path.clone(),
+            view_mode: tab.view_mode,
+            text: buffer.text.clone(),
+        })
+    }
+
+    pub(crate) fn dirty_overlays(&self) -> Vec<ProjectOverlay> {
+        self.tabs
+            .iter()
+            .filter_map(|tab| {
+                let EditorTabContent::Loaded(buffer) = &tab.content else {
+                    return None;
+                };
+                buffer.is_dirty().then(|| ProjectOverlay {
+                    path: tab.path.clone(),
+                    content: buffer.text.clone(),
+                })
+            })
+            .collect()
     }
 
     pub(crate) fn set_active_view_mode(&mut self, view_mode: EditorViewMode) -> BackendResult<()> {

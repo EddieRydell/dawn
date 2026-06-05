@@ -1,4 +1,4 @@
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, redo, undo } from "@codemirror/commands";
 import { cpp } from "@codemirror/lang-cpp";
 import { yaml } from "@codemirror/lang-yaml";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -24,6 +24,8 @@ export function EditorPane({ snapshot }: { snapshot: RuntimeUiState }) {
   const { localText, setLocalText } = useAppStore();
   const editorHost = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
+  const editorPath = useRef<string | null>(null);
+  const editorReadOnly = useRef<boolean>(false);
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [editorSignal, setEditorSignal] = useState(0);
   const [pathSelection, setPathSelection] = useState<PathSelection>({ path: null, selection: null });
@@ -53,10 +55,11 @@ export function EditorPane({ snapshot }: { snapshot: RuntimeUiState }) {
   }, [localText]);
 
   useEffect(() => {
-    if (viewMode !== "text") {
+    const needsNewEditor = editorPath.current !== activePath || editorReadOnly.current !== activeConflicted;
+    if (needsNewEditor) {
       view.current?.destroy();
       view.current = null;
-      return;
+      editorPath.current = null;
     }
     if (!editorHost.current || view.current) return;
     const nextView = new EditorView({
@@ -81,6 +84,8 @@ export function EditorPane({ snapshot }: { snapshot: RuntimeUiState }) {
       )
     });
     view.current = nextView;
+    editorPath.current = activePath;
+    editorReadOnly.current = activeConflicted;
     let disposed = false;
     window.requestAnimationFrame(() => {
       if (disposed) return;
@@ -91,15 +96,15 @@ export function EditorPane({ snapshot }: { snapshot: RuntimeUiState }) {
       disposed = true;
       view.current?.destroy();
       view.current = null;
+      editorPath.current = null;
       window.requestAnimationFrame(() => {
         setEditorView(null);
       });
     };
-  }, [activeConflicted, activePath, setLocalText, viewMode]);
+  }, [activeConflicted, activePath, setLocalText]);
 
   useEffect(() => {
     if (!view.current) return;
-    if (viewMode !== "text") return;
     const current = view.current.state.doc.toString();
     if (current !== localText) {
       applyingExternalText.current = true;
@@ -108,14 +113,31 @@ export function EditorPane({ snapshot }: { snapshot: RuntimeUiState }) {
       });
       applyingExternalText.current = false;
     }
-  }, [activePath, localText, viewMode]);
+  }, [activePath, localText]);
 
   useEffect(() => {
     if (!view.current) return;
-    if (viewMode !== "text") return;
     const diagnostics = editorDiagnostics(snapshot.diagnostics, activePath, snapshot.projectRoot, view.current);
     view.current.dispatch(setDiagnostics(view.current.state, diagnostics));
-  }, [activePath, snapshot.diagnostics, snapshot.projectRoot, viewMode]);
+  }, [activePath, snapshot.diagnostics, snapshot.projectRoot]);
+
+  useEffect(() => {
+    if (viewMode !== "gui") return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!event.metaKey && !event.ctrlKey) return;
+      const key = event.key.toLowerCase();
+      const command = key === "z" && !event.shiftKey ? undo : key === "y" || (key === "z" && event.shiftKey) ? redo : null;
+      if (command === null || view.current === null) return;
+      if (command(view.current)) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [viewMode]);
 
   if (snapshot.tabs.length === 0) {
     return (
@@ -189,24 +211,23 @@ export function EditorPane({ snapshot }: { snapshot: RuntimeUiState }) {
           </button>
         </div>
       )}
-      {viewMode === "gui" ? (
+      {viewMode === "gui" && (
         <GuiEditor
           snapshot={snapshot}
           sequenceSelection={sequenceSelection}
           setSequenceSelection={setSequenceSelection}
         />
-      ) : (
-        <div className="editor-scrollbar-shell">
-          <div ref={editorHost} className={`editor-host ${activeConflicted ? "conflicted" : ""}`} />
-          <EditorScrollbar
-            activePath={activePath}
-            diagnostics={snapshot.diagnostics}
-            editorSignal={editorSignal}
-            projectRoot={snapshot.projectRoot}
-            view={editorView}
-          />
-        </div>
       )}
+      <div className="editor-scrollbar-shell" hidden={viewMode === "gui"}>
+        <div ref={editorHost} className={`editor-host ${activeConflicted ? "conflicted" : ""}`} />
+        <EditorScrollbar
+          activePath={activePath}
+          diagnostics={snapshot.diagnostics}
+          editorSignal={editorSignal}
+          projectRoot={snapshot.projectRoot}
+          view={editorView}
+        />
+      </div>
     </section>
   );
 }

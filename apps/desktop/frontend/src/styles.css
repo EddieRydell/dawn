@@ -309,6 +309,10 @@ button:focus-visible,
   min-height: 0;
 }
 
+.editor-scrollbar-shell[hidden] {
+  display: none;
+}
+
 .editor-host {
   min-height: 0;
   overflow: hidden;

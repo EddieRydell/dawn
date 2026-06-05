@@ -152,6 +152,20 @@ impl Project {
         Ok(&self.require_open()?.project_entries)
     }
 
+    pub(crate) fn workspace_fs(&self) -> BackendResult<WorkspaceFs> {
+        WorkspaceFs::open(self.root()?).map_err(|error| {
+            BackendError::new(
+                BackendErrorKind::Io,
+                format!(
+                    "failed to open project root '{}' as workspace fs: {error}",
+                    self.root()
+                        .map(|root| root.display().to_string())
+                        .unwrap_or_else(|_| "<closed>".to_string())
+                ),
+            )
+        })
+    }
+
     pub(crate) fn file_metadata(
         &self,
         path: &Utf8PathBuf,

@@ -5,16 +5,21 @@ use std::{
 };
 
 use camino::Utf8PathBuf;
-use dawn_language::document::SequenceDocument;
+use dawn_language::{
+    analysis::{DiagnosticCode, DiagnosticSeverity, ProjectDiagnostic},
+    document::SequenceDocument,
+};
 
 use crate::{
-    analysis, audio,
+    analysis, audio, documents,
     editor::{self, EditorBufferSaveRequest},
-    output, preferences, preview, project, render,
+    gui_edits, output, preferences, preview, project, render,
     tasks::{BackendTask, BackendTaskOutput},
     types::{
-        AnalysisTaskOutput, EditorViewMode, ExportFseqTaskOutput, FseqExportOptions,
+        ActiveDocumentView, ActiveGuiDocument, ActiveGuiDocumentBlocked, AnalysisTaskOutput,
+        EditorViewMode, ExportFseqTaskOutput, FixtureGuiEdit, FseqExportOptions, LayoutGuiEdit,
         RenderEffectPreviewRequestEffect, RenderEffectPreviewTaskOutput, RenderFrameTaskOutput,
+        SequenceClipboard, SequenceGuiEdit, SequenceSelectionEdit, SequenceSelectionEditResult,
     },
     view::AppView,
 };
@@ -74,6 +79,7 @@ pub struct AppBackend {
     audio: audio::Audio,
     output: output::Output,
     preferences: preferences::Preferences,
+    sequence_clipboard: Option<SequenceClipboard>,
 }
 
 impl AppBackend {
@@ -102,6 +108,7 @@ impl AppBackend {
                 .unwrap_or_default(),
             analysis: self.analysis.snapshot(),
             editor: self.editor.snapshot(),
+            active_document: self.active_document_view(),
             render: self.renderer.snapshot(),
         }
     }
@@ -343,11 +350,218 @@ impl AppBackend {
         Ok(self.idle_update())
     }
 
+    pub fn apply_sequence_gui_edit(&mut self, edit: SequenceGuiEdit) -> BackendResult<AppUpdate> {
+        let edit = gui_edits::sequence_document_edit_from_gui(edit);
+        let active = self.require_active_sequence_document()?;
+        let fs = self.project.workspace_fs()?;
+        let project_path = self.project.project_file()?.to_path_buf();
+        let overlays = self.editor.dirty_overlays();
+        let analysis = dawn_language::analysis::analyze_project_with_overlays(
+            &fs,
+            project_path,
+            None,
+            overlays.clone(),
+        );
+        let outcome = documents::apply_sequence_document_edit(
+            &fs,
+            active.path,
+            &active.object_key,
+            edit,
+            active.text,
+            overlays,
+            &analysis,
+        )?;
+        self.replace_active_text_and_save(outcome.serialized_content)
+    }
+
+    pub fn apply_sequence_selection_edit(
+        &mut self,
+        edit: SequenceSelectionEdit,
+    ) -> BackendResult<(AppUpdate, SequenceSelectionEditResult)> {
+        let active = self.require_active_sequence_document()?;
+        let sequence = gui_edits::parse_authored_sequence(&active.text, &active.object_key)
+            .map_err(invalid_input_error)?;
+        let planned = gui_edits::plan_sequence_selection_edit(
+            edit,
+            &mut self.sequence_clipboard,
+            &sequence,
+            &active.document,
+        )
+        .map_err(invalid_input_error)?;
+
+        let update = if let Some(edit) = planned.document_edit {
+            let fs = self.project.workspace_fs()?;
+            let project_path = self.project.project_file()?.to_path_buf();
+            let overlays = self.editor.dirty_overlays();
+            let analysis = dawn_language::analysis::analyze_project_with_overlays(
+                &fs,
+                project_path,
+                None,
+                overlays.clone(),
+            );
+            let outcome = documents::apply_sequence_document_edit(
+                &fs,
+                active.path,
+                &active.object_key,
+                edit,
+                active.text,
+                overlays,
+                &analysis,
+            )?;
+            self.replace_active_text_and_save(outcome.serialized_content)?
+        } else {
+            self.idle_update()
+        };
+
+        Ok((update, planned.result))
+    }
+
+    pub fn apply_layout_gui_edit(&mut self, edit: LayoutGuiEdit) -> BackendResult<AppUpdate> {
+        let active = self.require_active_layout_document()?;
+        let mut document = active.document;
+        gui_edits::apply_layout_gui_edit(&mut document, edit).map_err(invalid_input_error)?;
+        let fs = self.project.workspace_fs()?;
+        let overlays = self.editor.dirty_overlays();
+        let outcome = documents::apply_layout_document_edit(
+            &fs,
+            active.path,
+            &active.object_key,
+            document,
+            active.text,
+            overlays,
+        )?;
+        self.replace_active_text_and_save(outcome.serialized_content)
+    }
+
+    pub fn apply_fixture_gui_edit(&mut self, edit: FixtureGuiEdit) -> BackendResult<AppUpdate> {
+        let active = self.require_active_fixture_document()?;
+        let mut document = active.document;
+        gui_edits::apply_fixture_gui_edit(&mut document, edit).map_err(invalid_input_error)?;
+        let fs = self.project.workspace_fs()?;
+        let overlays = self.editor.dirty_overlays();
+        let outcome = documents::apply_fixture_document_edit(
+            &fs,
+            active.path,
+            document,
+            active.text,
+            overlays,
+        )?;
+        self.replace_active_text_and_save(outcome.serialized_content)
+    }
+
     fn idle_update(&self) -> AppUpdate {
         AppUpdate {
             view: self.view(),
             tasks: Vec::new(),
         }
+    }
+
+    fn active_document_view(&self) -> ActiveDocumentView {
+        let Ok(active) = self.editor.active_loaded_buffer() else {
+            return ActiveDocumentView::default();
+        };
+        let Ok(fs) = self.project.workspace_fs() else {
+            return ActiveDocumentView::default();
+        };
+        let overlays = self.editor.dirty_overlays();
+        let descriptor =
+            match documents::inspect_active_document(&fs, active.path.clone(), overlays.clone()) {
+                Ok(descriptor) => descriptor,
+                Err(error) => {
+                    return ActiveDocumentView {
+                        descriptor: None,
+                        gui_document: (active.view_mode == EditorViewMode::Gui).then(|| {
+                            ActiveGuiDocument::Blocked(blocked_gui_document(
+                                &active.path,
+                                error.to_string(),
+                            ))
+                        }),
+                    };
+                }
+            };
+
+        let gui_document = if active.view_mode == EditorViewMode::Gui {
+            self.project.project_file().ok().map(|project_path| {
+                documents::get_active_gui_document(
+                    &fs,
+                    active.path,
+                    project_path.to_path_buf(),
+                    &descriptor,
+                    overlays,
+                )
+            })
+        } else {
+            None
+        };
+
+        ActiveDocumentView {
+            descriptor: Some(descriptor),
+            gui_document,
+        }
+    }
+
+    fn require_active_sequence_document(&self) -> BackendResult<ActiveSequenceDocument> {
+        let active = self.require_active_gui_document()?;
+        match active.gui_document {
+            ActiveGuiDocument::Sequence(document) => Ok(ActiveSequenceDocument {
+                path: active.path,
+                text: active.text,
+                object_key: document.object_key.clone(),
+                document,
+            }),
+            ActiveGuiDocument::Blocked(blocked) => Err(invalid_input_error(blocked.reason)),
+            _ => Err(invalid_input_error("active GUI document is not a sequence")),
+        }
+    }
+
+    fn require_active_layout_document(&self) -> BackendResult<ActiveLayoutDocument> {
+        let active = self.require_active_gui_document()?;
+        match active.gui_document {
+            ActiveGuiDocument::Layout(document) => Ok(ActiveLayoutDocument {
+                path: active.path,
+                text: active.text,
+                object_key: document.object_key.clone(),
+                document,
+            }),
+            ActiveGuiDocument::Blocked(blocked) => Err(invalid_input_error(blocked.reason)),
+            _ => Err(invalid_input_error("active GUI document is not a layout")),
+        }
+    }
+
+    fn require_active_fixture_document(&self) -> BackendResult<ActiveFixtureDocument> {
+        let active = self.require_active_gui_document()?;
+        match active.gui_document {
+            ActiveGuiDocument::Fixture(document) => Ok(ActiveFixtureDocument {
+                path: active.path,
+                text: active.text,
+                document,
+            }),
+            ActiveGuiDocument::Blocked(blocked) => Err(invalid_input_error(blocked.reason)),
+            _ => Err(invalid_input_error("active GUI document is not a fixture")),
+        }
+    }
+
+    fn require_active_gui_document(&self) -> BackendResult<ActiveGuiDocumentContext> {
+        let active = self.editor.active_loaded_buffer()?;
+        if active.view_mode != EditorViewMode::Gui {
+            return Err(invalid_input_error(
+                "active editor buffer is not in GUI mode",
+            ));
+        }
+        let view = self.active_document_view();
+        let gui_document = view
+            .gui_document
+            .ok_or_else(|| invalid_input_error("active GUI document is unavailable"))?;
+        Ok(ActiveGuiDocumentContext {
+            path: active.path,
+            text: active.text,
+            gui_document,
+        })
+    }
+
+    fn replace_active_text_and_save(&mut self, text: String) -> BackendResult<AppUpdate> {
+        self.editor.replace_active_text(text)?;
+        self.save_active_file()
     }
 
     fn analysis_update(&mut self) -> BackendResult<AppUpdate> {
@@ -412,4 +626,51 @@ impl AppBackend {
         }
         Ok(())
     }
+}
+
+#[derive(Debug)]
+struct ActiveGuiDocumentContext {
+    path: Utf8PathBuf,
+    text: String,
+    gui_document: ActiveGuiDocument,
+}
+
+#[derive(Debug)]
+struct ActiveSequenceDocument {
+    path: Utf8PathBuf,
+    text: String,
+    object_key: String,
+    document: SequenceDocument,
+}
+
+#[derive(Debug)]
+struct ActiveLayoutDocument {
+    path: Utf8PathBuf,
+    text: String,
+    object_key: String,
+    document: dawn_language::document::LayoutDocument,
+}
+
+#[derive(Debug)]
+struct ActiveFixtureDocument {
+    path: Utf8PathBuf,
+    text: String,
+    document: dawn_language::document::FixtureDocument,
+}
+
+fn blocked_gui_document(path: &Utf8PathBuf, reason: String) -> ActiveGuiDocumentBlocked {
+    ActiveGuiDocumentBlocked {
+        reason: reason.clone(),
+        diagnostics: vec![ProjectDiagnostic {
+            path: path.clone(),
+            range: None,
+            severity: DiagnosticSeverity::Error,
+            code: DiagnosticCode::Yaml,
+            message: reason,
+        }],
+    }
+}
+
+fn invalid_input_error(message: impl Into<String>) -> BackendError {
+    BackendError::new(BackendErrorKind::InvalidInput, message)
 }

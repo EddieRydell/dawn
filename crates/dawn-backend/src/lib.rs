@@ -13,7 +13,9 @@
 mod analysis;
 mod app_backend;
 mod audio;
+mod documents;
 mod editor;
+mod gui_edits;
 mod output;
 mod preferences;
 mod preview;
@@ -30,13 +32,16 @@ pub use editor::{
 };
 pub use tasks::{BackendTask, BackendTaskOutput};
 pub use types::{
-    AnalysisTask, AnalysisTaskId, AnalysisTaskOutput, EditorViewMode, ExportFseqTask,
-    ExportFseqTaskOutput, FileVersion, FseqExportMetadata, FseqExportOptions, FseqExportReport,
+    ActiveDocumentView, ActiveGuiDocument, ActiveGuiDocumentBlocked, AnalysisTask, AnalysisTaskId,
+    AnalysisTaskOutput, EditorViewMode, ExportFseqTask, ExportFseqTaskOutput, FileVersion,
+    FixtureGuiEdit, FseqExportMetadata, FseqExportOptions, FseqExportReport, LayoutGuiEdit,
     RenderEffectPreviewRequestEffect, RenderEffectPreviewTask, RenderEffectPreviewTaskOutput,
     RenderFrameTask, RenderFrameTaskOutput, RenderTaskId, RenderView, RenderedFixtureFrame,
     RenderedFrame, RenderedFrameSource, RenderedFrameSourceKind, RenderedFrameStatus,
     RenderedPixelFrame, SequenceEffectPreview, SequenceEffectPreviewErrorResult,
     SequenceEffectPreviewReadyResult, SequenceEffectPreviewResult,
-    SequenceEffectPreviewUnavailableResult, WorkspaceEntry, WorkspaceEntryKind,
+    SequenceEffectPreviewUnavailableResult, SequenceGuiEdit, SequenceMarkRef, SequencePasteAnchor,
+    SequenceResizeEdge, SequenceSelection, SequenceSelectionEdit, SequenceSelectionEditResult,
+    WorkspaceEntry, WorkspaceEntryKind,
 };
 pub use view::AppView;

@@ -67,6 +67,36 @@ pub(crate) async fn dispatch_app_command(
             })?;
             Ok(AppCommandResponseDto::None)
         }
+        AppCommandDto::ApplySequenceGuiEdit { edit } => {
+            let edit = edit.try_into()?;
+            run_backend_command(&app, state.inner(), |backend| {
+                backend.apply_sequence_gui_edit(edit)
+            })?;
+            Ok(AppCommandResponseDto::None)
+        }
+        AppCommandDto::ApplySequenceSelectionEdit { edit } => {
+            let edit = edit.into();
+            let result = run_backend_command_with_response(&app, state.inner(), |backend| {
+                backend.apply_sequence_selection_edit(edit)
+            })?;
+            Ok(AppCommandResponseDto::SequenceSelectionEditResult {
+                result: result.into(),
+            })
+        }
+        AppCommandDto::ApplyLayoutGuiEdit { edit } => {
+            let edit = edit.try_into()?;
+            run_backend_command(&app, state.inner(), |backend| {
+                backend.apply_layout_gui_edit(edit)
+            })?;
+            Ok(AppCommandResponseDto::None)
+        }
+        AppCommandDto::ApplyFixtureGuiEdit { edit } => {
+            let edit = edit.try_into()?;
+            run_backend_command(&app, state.inner(), |backend| {
+                backend.apply_fixture_gui_edit(edit)
+            })?;
+            Ok(AppCommandResponseDto::None)
+        }
         AppCommandDto::FlushAutosave => {
             run_backend_command(&app, state.inner(), AppBackend::save_active_file)?;
             Ok(AppCommandResponseDto::None)
@@ -109,13 +139,9 @@ pub(crate) async fn dispatch_app_command(
         }
         AppCommandDto::ChooseNewProjectParentDirectory
         | AppCommandDto::CreateNewProject { .. }
-        | AppCommandDto::ApplySequenceGuiEdit { .. }
-        | AppCommandDto::ApplySequenceSelectionEdit { .. }
         | AppCommandDto::ChooseSequenceAudio
         | AppCommandDto::ClearSequenceAudio
         | AppCommandDto::ExportActiveSequenceFseq { .. }
-        | AppCommandDto::ApplyLayoutGuiEdit { .. }
-        | AppCommandDto::ApplyFixtureGuiEdit { .. }
         | AppCommandDto::ReloadProject
         | AppCommandDto::ToggleProjectTree
         | AppCommandDto::SetEffectPreviewEnabled { .. }
@@ -157,6 +183,20 @@ fn run_backend_command(
         command(&mut backend).map_err(|error| error.to_string())?
     };
     jobs::handle_backend_update(app, backend, update)
+}
+
+fn run_backend_command_with_response<T>(
+    app: &AppHandle,
+    state: &AppState,
+    command: impl FnOnce(&mut AppBackend) -> BackendResult<(AppUpdate, T)>,
+) -> CommandResult<T> {
+    let backend = state.backend();
+    let (update, response) = {
+        let mut backend = state.lock_backend()?;
+        command(&mut backend).map_err(|error| error.to_string())?
+    };
+    jobs::handle_backend_update(app, backend, update)?;
+    Ok(response)
 }
 
 fn editor_view_mode(mode: EditorViewModeDto) -> EditorViewMode {

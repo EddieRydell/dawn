@@ -1,6 +1,11 @@
 use camino::Utf8PathBuf;
 use dawn_language::{
-    analysis::ProjectAnalysis, document::SequenceDocument, sequence_render::SequenceRenderCache,
+    analysis::ProjectAnalysis,
+    document::{
+        DocumentDescriptor, FixtureDocument, LayoutDocument, SequenceDocument, SequenceDocumentEdit,
+    },
+    model::{Point3, SequenceEffect, Transform},
+    sequence_render::SequenceRenderCache,
 };
 use serde::{Deserialize, Serialize};
 
@@ -300,6 +305,116 @@ pub(crate) struct ProjectFileMetadata {
 pub(crate) struct ProjectFileSnapshot {
     pub(crate) text: String,
     pub(crate) version: FileVersion,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ActiveDocumentView {
+    pub descriptor: Option<DocumentDescriptor>,
+    pub gui_document: Option<ActiveGuiDocument>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ActiveGuiDocument {
+    Sequence(SequenceDocument),
+    Layout(LayoutDocument),
+    Fixture(FixtureDocument),
+    Blocked(ActiveGuiDocumentBlocked),
+}
+
+#[derive(Debug, Clone)]
+pub struct ActiveGuiDocumentBlocked {
+    pub reason: String,
+    pub diagnostics: Vec<dawn_language::analysis::ProjectDiagnostic>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SequenceGuiEdit {
+    Document(SequenceDocumentEdit),
+}
+
+#[derive(Debug, Clone)]
+pub enum SequenceSelection {
+    Effects { ids: Vec<u32> },
+    Marks { marks: Vec<SequenceMarkRef> },
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceMarkRef {
+    pub collection_key: String,
+    pub index: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct SequencePasteAnchor {
+    pub lane_index: Option<u32>,
+    pub time_seconds: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceSelectionEditResult {
+    pub selection: Option<SequenceSelection>,
+    pub copied_count: u32,
+    pub skipped_count: u32,
+}
+
+#[derive(Debug, Clone)]
+pub enum SequenceSelectionEdit {
+    Copy {
+        selection: SequenceSelection,
+    },
+    Cut {
+        selection: SequenceSelection,
+    },
+    Delete {
+        selection: SequenceSelection,
+    },
+    Paste {
+        anchor: SequencePasteAnchor,
+    },
+    MoveEffects {
+        ids: Vec<u32>,
+        time_delta_seconds: f64,
+        lane_delta: i32,
+    },
+    ResizeEffects {
+        ids: Vec<u32>,
+        edge: SequenceResizeEdge,
+        time_delta_seconds: f64,
+    },
+    MoveMarks {
+        marks: Vec<SequenceMarkRef>,
+        time_delta_seconds: f64,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SequenceResizeEdge {
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone)]
+pub enum SequenceClipboard {
+    Effects(Vec<SequenceEffect<dawn_language::model::Authored>>),
+    Marks(Vec<dawn_language::document::SequenceMarkPasteDocumentEdit>),
+}
+
+#[derive(Debug, Clone)]
+pub enum LayoutGuiEdit {
+    UpdatePlacementTransform { id: u32, transform: Transform },
+}
+
+#[derive(Debug, Clone)]
+pub enum FixtureGuiEdit {
+    UpdateBulbDiameter {
+        object_key: String,
+        bulb_diameter_meters: f64,
+    },
+    MovePoint {
+        object_key: String,
+        point_index: u32,
+        point: Point3,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,5 +1,5 @@
 use crate::editor::EditorView;
-use crate::types::{RenderView, WorkspaceEntry};
+use crate::types::{ActiveDocumentView, RenderView, WorkspaceEntry};
 
 #[derive(Debug, Clone, Default)]
 pub struct AppView {
@@ -8,5 +8,6 @@ pub struct AppView {
     pub project_entries: Vec<WorkspaceEntry>,
     pub analysis: Option<dawn_language::analysis::ProjectAnalysis>,
     pub editor: EditorView,
+    pub active_document: ActiveDocumentView,
     pub render: RenderView,
 }
