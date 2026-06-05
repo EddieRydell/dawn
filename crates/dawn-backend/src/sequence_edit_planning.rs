@@ -1,15 +1,15 @@
 use dawn_language::{
     document::{
-        LayoutDocument, SequenceDocument, SequenceDocumentEdit, SequenceEffectMoveDocumentEdit,
+        SequenceDocument, SequenceDocumentEdit, SequenceEffectMoveDocumentEdit,
         SequenceEffectResizeDocumentEdit, SequenceMarkMoveDocumentEdit,
         SequenceMarkPasteDocumentEdit, SequenceMarkRefDocumentEdit,
     },
-    model::{Authored, DawnFile, DawnObject, FixtureId, Geometry, Sequence},
+    model::{Authored, DawnFile, DawnObject, Sequence},
 };
 
 use crate::types::{
-    FixtureGuiEdit, LayoutGuiEdit, SequenceClipboard, SequenceGuiEdit, SequenceMarkRef,
-    SequenceResizeEdge, SequenceSelection, SequenceSelectionEdit, SequenceSelectionEditResult,
+    SequenceClipboard, SequenceGuiEdit, SequenceMarkRef, SequenceResizeEdge, SequenceSelection,
+    SequenceSelectionEdit, SequenceSelectionEditResult,
 };
 
 const MIN_EFFECT_DURATION_SECONDS: f64 = 0.000000001;
@@ -24,66 +24,6 @@ pub(crate) fn sequence_document_edit_from_gui(edit: SequenceGuiEdit) -> Sequence
     match edit {
         SequenceGuiEdit::Document(edit) => edit,
     }
-}
-
-pub(crate) fn apply_layout_gui_edit(
-    document: &mut LayoutDocument,
-    edit: LayoutGuiEdit,
-) -> Result<(), String> {
-    match edit {
-        LayoutGuiEdit::UpdatePlacementTransform { id, transform } => {
-            let id = FixtureId(id);
-            let placement = document
-                .fixtures
-                .iter_mut()
-                .find(|fixture| fixture.id == id)
-                .ok_or_else(|| format!("fixture placement `{id}` was not found"))?;
-            placement.transform = transform;
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn apply_fixture_gui_edit(
-    document: &mut dawn_language::document::FixtureDocument,
-    edit: FixtureGuiEdit,
-) -> Result<(), String> {
-    match edit {
-        FixtureGuiEdit::UpdateBulbDiameter {
-            object_key,
-            bulb_diameter_meters,
-        } => {
-            let fixture = document
-                .fixtures
-                .iter_mut()
-                .find(|fixture| fixture.object_key == object_key)
-                .ok_or_else(|| format!("fixture `{object_key}` was not found"))?;
-            fixture.bulb_diameter =
-                dawn_language::model::DistanceSpan::try_from_meters_f64_truncated(
-                    bulb_diameter_meters,
-                )
-                .map_err(str::to_string)?;
-        }
-        FixtureGuiEdit::MovePoint {
-            object_key,
-            point_index,
-            point,
-        } => {
-            let fixture = document
-                .fixtures
-                .iter_mut()
-                .find(|fixture| fixture.object_key == object_key)
-                .ok_or_else(|| format!("fixture `{object_key}` was not found"))?;
-            let Geometry::Points { points } = &mut fixture.geometry else {
-                return Err("only point geometry can be edited in this milestone".to_string());
-            };
-            let target = points
-                .get_mut(point_index as usize)
-                .ok_or_else(|| format!("point `{point_index}` was not found"))?;
-            *target = point;
-        }
-    }
-    Ok(())
 }
 
 pub(crate) fn parse_authored_sequence(

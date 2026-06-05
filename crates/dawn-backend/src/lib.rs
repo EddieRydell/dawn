@@ -10,17 +10,20 @@
     )
 )]
 
+mod active_document;
 mod analysis;
 mod app_backend;
 mod audio;
-mod documents;
+mod document_editing;
 mod editor;
-mod gui_edits;
+mod fixture_edit_planning;
+mod layout_edit_planning;
 mod output;
 mod preferences;
 mod preview;
 mod project;
 mod render;
+mod sequence_edit_planning;
 mod tasks;
 mod types;
 mod view;
@@ -40,8 +43,8 @@ pub use types::{
     RenderedFrame, RenderedFrameSource, RenderedFrameSourceKind, RenderedFrameStatus,
     RenderedPixelFrame, SequenceEffectPreview, SequenceEffectPreviewErrorResult,
     SequenceEffectPreviewReadyResult, SequenceEffectPreviewResult,
-    SequenceEffectPreviewUnavailableResult, SequenceGuiEdit, SequenceMarkRef, SequencePasteAnchor,
-    SequenceResizeEdge, SequenceSelection, SequenceSelectionEdit, SequenceSelectionEditResult,
-    WorkspaceEntry, WorkspaceEntryKind,
+    SequenceEffectPreviewResultBatch, SequenceEffectPreviewUnavailableResult, SequenceGuiEdit,
+    SequenceMarkRef, SequencePasteAnchor, SequenceResizeEdge, SequenceSelection,
+    SequenceSelectionEdit, SequenceSelectionEditResult, WorkspaceEntry, WorkspaceEntryKind,
 };
 pub use view::AppView;

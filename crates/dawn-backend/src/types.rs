@@ -72,6 +72,9 @@ pub struct RenderFrameTaskOutput {
 #[derive(Debug, Clone)]
 pub struct RenderEffectPreviewTask {
     pub id: RenderTaskId,
+    pub path: Utf8PathBuf,
+    pub object_key: String,
+    pub request_id: u32,
     pub analysis: ProjectAnalysis,
     pub document: SequenceDocument,
     pub effects: Vec<RenderEffectPreviewRequestEffect>,
@@ -87,8 +90,17 @@ pub struct RenderEffectPreviewRequestEffect {
 #[derive(Debug, Clone)]
 pub struct RenderEffectPreviewTaskOutput {
     pub id: RenderTaskId,
+    pub path: Utf8PathBuf,
+    pub object_key: String,
+    pub request_id: u32,
     pub results: Vec<SequenceEffectPreviewResult>,
     pub cache: SequenceRenderCache,
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceEffectPreviewResultBatch {
+    pub request_id: u32,
+    pub results: Vec<SequenceEffectPreviewResult>,
 }
 
 #[derive(Debug, Clone)]

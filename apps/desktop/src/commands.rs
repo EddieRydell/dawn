@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use dawn_backend::{AppBackend, AppUpdate, BackendResult, EditorViewMode};
+use dawn_backend::{
+    AppBackend, AppUpdate, BackendResult, EditorViewMode, RenderEffectPreviewRequestEffect,
+    SequenceEffectPreviewResult, SequenceEffectPreviewResultBatch,
+};
 use dawn_language::path::Utf8PathBuf;
 use tauri::{AppHandle, State};
 
@@ -209,23 +212,76 @@ fn editor_view_mode(mode: EditorViewModeDto) -> EditorViewMode {
 #[specta::specta]
 #[tauri::command]
 pub(crate) fn request_sequence_effect_previews(
-    _path: String,
-    _object_key: String,
-    _request_id: u32,
-    _effects: Vec<SequenceEffectPreviewRequestEffectDto>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    object_key: String,
+    request_id: u32,
+    effects: Vec<SequenceEffectPreviewRequestEffectDto>,
 ) -> CommandResult<()> {
-    Err("sequence effect previews have not been rebuilt yet".to_string())
+    let effects = effects
+        .into_iter()
+        .map(|effect| RenderEffectPreviewRequestEffect {
+            effect_id: effect.effect_id,
+            signature: effect.signature,
+        })
+        .collect();
+    run_backend_command(&app, state.inner(), |backend| {
+        backend.request_sequence_effect_previews(
+            Utf8PathBuf::from(path),
+            object_key,
+            request_id,
+            effects,
+        )
+    })
 }
 
 #[specta::specta]
 #[tauri::command]
 pub(crate) fn take_sequence_effect_preview_results(
-    _path: String,
-    _object_key: String,
+    state: State<'_, AppState>,
+    path: String,
+    object_key: String,
 ) -> CommandResult<SequenceEffectPreviewResultsDto> {
-    Ok(SequenceEffectPreviewResultsDto {
-        results: Vec::new(),
-    })
+    let batch = {
+        let mut backend = state.lock_backend()?;
+        backend
+            .take_sequence_effect_preview_results(Utf8PathBuf::from(path), object_key)
+            .map_err(|error| error.to_string())?
+    };
+    Ok(sequence_effect_preview_results_dto(batch))
+}
+
+fn sequence_effect_preview_results_dto(
+    batch: SequenceEffectPreviewResultBatch,
+) -> SequenceEffectPreviewResultsDto {
+    SequenceEffectPreviewResultsDto {
+        results: batch
+            .results
+            .into_iter()
+            .map(|result| sequence_effect_preview_result_dto(batch.request_id, result))
+            .collect(),
+    }
+}
+
+fn sequence_effect_preview_result_dto(
+    request_id: u32,
+    result: SequenceEffectPreviewResult,
+) -> crate::dto::SequenceEffectPreviewResultDto {
+    match crate::dto::SequenceEffectPreviewResultDto::from(result) {
+        crate::dto::SequenceEffectPreviewResultDto::Ready(mut result) => {
+            result.request_id = request_id;
+            crate::dto::SequenceEffectPreviewResultDto::Ready(result)
+        }
+        crate::dto::SequenceEffectPreviewResultDto::Unavailable(mut result) => {
+            result.request_id = request_id;
+            crate::dto::SequenceEffectPreviewResultDto::Unavailable(result)
+        }
+        crate::dto::SequenceEffectPreviewResultDto::Error(mut result) => {
+            result.request_id = request_id;
+            crate::dto::SequenceEffectPreviewResultDto::Error(result)
+        }
+    }
 }
 
 #[specta::specta]

@@ -1,3 +1,4 @@
+use camino::Utf8PathBuf;
 use dawn_language::{
     analysis::ProjectAnalysis,
     document::SequenceDocument,
@@ -10,7 +11,7 @@ use crate::{
         RenderEffectPreviewTask, RenderEffectPreviewTaskOutput, RenderFrameTask,
         RenderFrameTaskOutput, RenderTaskId, RenderView, SequenceEffectPreviewErrorResult,
         SequenceEffectPreviewReadyResult, SequenceEffectPreviewResult,
-        SequenceEffectPreviewUnavailableResult,
+        SequenceEffectPreviewResultBatch, SequenceEffectPreviewUnavailableResult,
     },
     BackendError, BackendErrorKind, BackendResult,
 };
@@ -25,6 +26,7 @@ pub(crate) struct Renderer {
     latest_effect_preview_task: Option<RenderTaskId>,
     latest_export_task: Option<RenderTaskId>,
     cache: SequenceRenderCache,
+    completed_effect_previews: Option<CompletedEffectPreviews>,
     snapshot: RenderView,
 }
 
@@ -50,14 +52,21 @@ impl Renderer {
 
     pub(crate) fn request_effect_previews(
         &mut self,
+        path: Utf8PathBuf,
+        object_key: String,
+        request_id: u32,
         analysis: ProjectAnalysis,
         document: SequenceDocument,
         effects: Vec<RenderEffectPreviewRequestEffect>,
     ) -> RenderEffectPreviewTask {
         let id = self.next_id();
         self.latest_effect_preview_task = Some(id);
+        self.completed_effect_previews = None;
         RenderEffectPreviewTask {
             id,
+            path,
+            object_key,
+            request_id,
             analysis,
             document,
             effects,
@@ -97,7 +106,13 @@ impl Renderer {
             return;
         }
         self.cache = output.cache;
-        self.snapshot.effect_previews = output.results;
+        self.snapshot.effect_previews = output.results.clone();
+        self.completed_effect_previews = Some(CompletedEffectPreviews {
+            path: output.path,
+            object_key: output.object_key,
+            request_id: output.request_id,
+            results: output.results,
+        });
     }
 
     pub(crate) fn accept_export(&mut self, output: ExportFseqTaskOutput) {
@@ -112,11 +127,36 @@ impl Renderer {
         self.snapshot.clone()
     }
 
+    pub(crate) fn take_effect_preview_results(
+        &mut self,
+        path: &Utf8PathBuf,
+        object_key: &str,
+    ) -> Option<SequenceEffectPreviewResultBatch> {
+        let completed = self.completed_effect_previews.as_ref()?;
+        if completed.path != *path || completed.object_key != object_key {
+            return None;
+        }
+        self.completed_effect_previews
+            .take()
+            .map(|completed| SequenceEffectPreviewResultBatch {
+                request_id: completed.request_id,
+                results: completed.results,
+            })
+    }
+
     fn next_id(&mut self) -> RenderTaskId {
         let id = RenderTaskId(self.next_task_id);
         self.next_task_id = self.next_task_id.saturating_add(1);
         id
     }
+}
+
+#[derive(Debug, Clone)]
+struct CompletedEffectPreviews {
+    path: Utf8PathBuf,
+    object_key: String,
+    request_id: u32,
+    results: Vec<SequenceEffectPreviewResult>,
 }
 
 pub(crate) fn execute_render_frame(mut task: RenderFrameTask) -> RenderFrameTaskOutput {
@@ -191,6 +231,9 @@ pub(crate) fn execute_effect_previews(
     }
     RenderEffectPreviewTaskOutput {
         id: task.id,
+        path: task.path,
+        object_key: task.object_key,
+        request_id: task.request_id,
         results,
         cache: task.cache,
     }

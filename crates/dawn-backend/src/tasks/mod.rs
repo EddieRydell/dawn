@@ -1,7 +1,7 @@
 use dawn_language::{analysis::analyze_project_with_overlays, fs::WorkspaceFs};
 
 use crate::{
-    documents, output, render,
+    active_document, output, render,
     types::{
         ActiveGuiDocumentOutput, AnalysisTask, AnalysisTaskOutput, ExportFseqTask,
         ExportFseqTaskOutput, RenderEffectPreviewTask, RenderEffectPreviewTaskOutput,
@@ -59,7 +59,7 @@ fn run_analysis(request: AnalysisTask) -> BackendResult<BackendTaskOutput> {
         request.overlays.clone(),
     );
     let active_gui_document = request.active_gui_document.map(|active| {
-        let document = documents::build_active_gui_document_from_analysis(
+        let document = active_document::build_active_gui_document_from_analysis(
             &fs,
             active.cache_key.path.clone(),
             &active.descriptor,
