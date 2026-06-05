@@ -21,8 +21,14 @@ mod preferences;
 mod preview;
 mod project;
 mod render;
+mod types;
 mod view;
 
-pub use app_backend::{AppBackend, BackendError, BackendResult, BackendUpdate};
+pub use app_backend::{AppBackend, BackendError, BackendErrorKind, BackendResult, BackendUpdate};
+pub use editor::{
+    EditorBufferView, EditorTabView, EditorView, LoadedEditorTabView, Revision,
+    UnloadedEditorTabView,
+};
 pub use jobs::BackendJob;
+pub use types::{EditorViewMode, FileVersion};
 pub use view::AppView;
