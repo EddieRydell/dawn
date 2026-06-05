@@ -16,6 +16,7 @@ Avoid using strings in internal logic. Prefer enums or other structured data.
 Do not reintroduce generated web bindings or desktop schema files.
 Avoid unrelated edits to lockfiles, IDE files, or generated assets. 
 Check both Rust and desktop manifests before assuming a command or dependency belongs at the workspace root. 
+Keep crates and modules independent: do not include functionality across crates, do not make sibling modules depend on each other for shared concepts, and factor shared contracts into the appropriate common type/module (types.rs) instead of creating cross-crate or cross-module coupling.
 Do not add compatibility layers, shims, fallbacks, or allow for legacy code when adding features or refactoring. 
 Do not add fallbacks when something doesn't work. This hides errors and makes debugging harder.
 The goal is fast development, not support. Minimize clutter and favor having a single way of doing things. SSOT is your friend.

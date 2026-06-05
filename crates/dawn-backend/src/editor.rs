@@ -2,9 +2,10 @@ use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    preferences::{ProjectSessionPreferences, ProjectSessionTabPreference},
-    project::{Project, ProjectFileSnapshot},
-    types::{EditorViewMode, FileVersion},
+    types::{
+        EditorViewMode, FileVersion, ProjectFileMetadata, ProjectFileSnapshot, ProjectPathMove,
+        ProjectSessionPreferences, ProjectSessionTabPreference,
+    },
     BackendError, BackendErrorKind, BackendResult,
 };
 
@@ -148,6 +149,14 @@ pub struct EditorBufferView {
     pub dirty: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct EditorBufferSaveRequest {
+    pub(crate) path: Utf8PathBuf,
+    pub(crate) text: String,
+    pub(crate) saved_disk_version: FileVersion,
+    pub(crate) dirty: bool,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Editor {
     tabs: Vec<EditorTab>,
@@ -157,22 +166,23 @@ pub(crate) struct Editor {
 impl Editor {
     pub(crate) fn restore_for_project(
         &mut self,
-        project: &Project,
         preferences: ProjectSessionPreferences,
+        mut file_metadata: impl FnMut(&Utf8PathBuf) -> BackendResult<Option<ProjectFileMetadata>>,
+        mut read_file_snapshot: impl FnMut(&Utf8PathBuf) -> BackendResult<ProjectFileSnapshot>,
     ) -> BackendResult<()> {
         self.tabs.clear();
         self.active_file = None;
 
         for tab_preference in preferences.tabs {
-            let Some(metadata) = project.file_metadata(&tab_preference.path)? else {
+            let Some(metadata) = file_metadata(&tab_preference.path)? else {
                 continue;
             };
             let should_load = preferences.active_file.as_ref() == Some(&tab_preference.path)
                 || metadata.len <= INACTIVE_RESTORE_LOAD_LIMIT_BYTES;
             let content = if should_load {
-                EditorTabContent::Loaded(EditorBuffer::from_snapshot(
-                    project.read_file_snapshot(&tab_preference.path)?,
-                ))
+                EditorTabContent::Loaded(EditorBuffer::from_snapshot(read_file_snapshot(
+                    &tab_preference.path,
+                )?))
             } else {
                 EditorTabContent::Unloaded(UnloadedEditorTab {
                     byte_len: metadata.len,
@@ -193,14 +203,18 @@ impl Editor {
         Ok(())
     }
 
-    pub(crate) fn open_file(&mut self, project: &Project, path: Utf8PathBuf) -> BackendResult<()> {
+    pub(crate) fn open_file(
+        &mut self,
+        path: Utf8PathBuf,
+        mut read_file_snapshot: impl FnMut(&Utf8PathBuf) -> BackendResult<ProjectFileSnapshot>,
+    ) -> BackendResult<()> {
         if let Some(index) = self.tab_index(&path) {
-            self.load_tab_at(project, index)?;
+            self.load_tab_at(index, read_file_snapshot)?;
             self.active_file = Some(path);
             return Ok(());
         }
 
-        let buffer = EditorBuffer::from_snapshot(project.read_file_snapshot(&path)?);
+        let buffer = EditorBuffer::from_snapshot(read_file_snapshot(&path)?);
         self.tabs.push(EditorTab {
             path: path.clone(),
             view_mode: EditorViewMode::Text,
@@ -212,8 +226,8 @@ impl Editor {
 
     pub(crate) fn set_active_file(
         &mut self,
-        project: &Project,
         path: Utf8PathBuf,
+        read_file_snapshot: impl FnMut(&Utf8PathBuf) -> BackendResult<ProjectFileSnapshot>,
     ) -> BackendResult<()> {
         let index = self.tab_index(&path).ok_or_else(|| {
             BackendError::new(
@@ -221,7 +235,7 @@ impl Editor {
                 format!("file is not open: {path}"),
             )
         })?;
-        self.load_tab_at(project, index)?;
+        self.load_tab_at(index, read_file_snapshot)?;
         self.active_file = Some(path);
         Ok(())
     }
@@ -270,6 +284,109 @@ impl Editor {
         Ok(())
     }
 
+    pub(crate) fn active_save_request(&self) -> BackendResult<EditorBufferSaveRequest> {
+        let active_file = self
+            .active_file
+            .as_ref()
+            .ok_or_else(no_active_loaded_buffer)?;
+        let tab = self
+            .tabs
+            .iter()
+            .find(|tab| &tab.path == active_file)
+            .ok_or_else(no_active_loaded_buffer)?;
+        let EditorTabContent::Loaded(buffer) = &tab.content else {
+            return Err(no_active_loaded_buffer());
+        };
+        Ok(EditorBufferSaveRequest {
+            path: tab.path.clone(),
+            text: buffer.text.clone(),
+            saved_disk_version: buffer.disk_version.clone(),
+            dirty: buffer.is_dirty(),
+        })
+    }
+
+    pub(crate) fn mark_active_buffer_saved(
+        &mut self,
+        disk_version: FileVersion,
+    ) -> BackendResult<()> {
+        let buffer = self.active_buffer_mut()?;
+        buffer.saved_text = buffer.text.clone();
+        buffer.disk_version = disk_version;
+        Ok(())
+    }
+
+    pub(crate) fn mark_buffer_saved(
+        &mut self,
+        path: &Utf8PathBuf,
+        disk_version: FileVersion,
+    ) -> BackendResult<()> {
+        let buffer = self.loaded_buffer_mut(path)?;
+        buffer.saved_text = buffer.text.clone();
+        buffer.disk_version = disk_version;
+        Ok(())
+    }
+
+    pub(crate) fn replace_active_buffer_from_snapshot(
+        &mut self,
+        snapshot: ProjectFileSnapshot,
+    ) -> BackendResult<()> {
+        let buffer = self.active_buffer_mut()?;
+        buffer.record_undo_snapshot();
+        buffer.text = snapshot.text.clone();
+        buffer.saved_text = snapshot.text;
+        buffer.disk_version = snapshot.version;
+        buffer.revision = buffer.revision.next();
+        buffer.redo_stack.clear();
+        Ok(())
+    }
+
+    pub(crate) fn close_active_buffer_force(&mut self) -> BackendResult<()> {
+        let active_file = self
+            .active_file
+            .clone()
+            .ok_or_else(no_active_loaded_buffer)?;
+        self.close_file_force(&active_file)
+    }
+
+    pub(crate) fn affected_dirty_save_requests(
+        &self,
+        changed_paths: &[Utf8PathBuf],
+    ) -> Vec<EditorBufferSaveRequest> {
+        self.tabs
+            .iter()
+            .filter(|tab| path_matches_any(&tab.path, changed_paths))
+            .filter_map(|tab| {
+                let EditorTabContent::Loaded(buffer) = &tab.content else {
+                    return None;
+                };
+                buffer.is_dirty().then(|| EditorBufferSaveRequest {
+                    path: tab.path.clone(),
+                    text: buffer.text.clone(),
+                    saved_disk_version: buffer.disk_version.clone(),
+                    dirty: true,
+                })
+            })
+            .collect()
+    }
+
+    pub(crate) fn reconcile_moved_paths(&mut self, moves: &[ProjectPathMove]) {
+        for path_move in moves {
+            self.reconcile_moved_path(path_move);
+        }
+    }
+
+    pub(crate) fn reconcile_deleted_path(&mut self, path: &Utf8PathBuf) {
+        let closed_paths = self
+            .tabs
+            .iter()
+            .filter(|tab| path_affects(&tab.path, path))
+            .map(|tab| tab.path.clone())
+            .collect::<Vec<_>>();
+        for closed_path in closed_paths {
+            let _ = self.close_file_force(&closed_path);
+        }
+    }
+
     pub(crate) fn session_preferences(&self) -> ProjectSessionPreferences {
         ProjectSessionPreferences {
             tabs: self
@@ -298,11 +415,15 @@ impl Editor {
         }
     }
 
-    fn load_tab_at(&mut self, project: &Project, index: usize) -> BackendResult<()> {
+    fn load_tab_at(
+        &mut self,
+        index: usize,
+        mut read_file_snapshot: impl FnMut(&Utf8PathBuf) -> BackendResult<ProjectFileSnapshot>,
+    ) -> BackendResult<()> {
         if matches!(self.tabs[index].content, EditorTabContent::Loaded(_)) {
             return Ok(());
         }
-        let snapshot = project.read_file_snapshot(&self.tabs[index].path)?;
+        let snapshot = read_file_snapshot(&self.tabs[index].path)?;
         self.tabs[index].content = EditorTabContent::Loaded(EditorBuffer::from_snapshot(snapshot));
         Ok(())
     }
@@ -328,6 +449,49 @@ impl Editor {
         }
     }
 
+    fn loaded_buffer_mut(&mut self, path: &Utf8PathBuf) -> BackendResult<&mut EditorBuffer> {
+        let index = self.tab_index(path).ok_or_else(|| {
+            BackendError::new(
+                BackendErrorKind::NotFound,
+                format!("file is not open: {path}"),
+            )
+        })?;
+        match &mut self.tabs[index].content {
+            EditorTabContent::Loaded(buffer) => Ok(buffer),
+            EditorTabContent::Unloaded(_) => Err(no_active_loaded_buffer()),
+        }
+    }
+
+    fn close_file_force(&mut self, path: &Utf8PathBuf) -> BackendResult<()> {
+        let index = self.tab_index(path).ok_or_else(|| {
+            BackendError::new(
+                BackendErrorKind::NotFound,
+                format!("file is not open: {path}"),
+            )
+        })?;
+        self.tabs.remove(index);
+        if self.active_file.as_ref() == Some(path) {
+            self.active_file = self.tabs.last().map(|tab| tab.path.clone());
+        }
+        Ok(())
+    }
+
+    fn reconcile_moved_path(&mut self, path_move: &ProjectPathMove) {
+        for tab in &mut self.tabs {
+            if let Some(new_path) = moved_path(&tab.path, &path_move.old_path, &path_move.new_path)
+            {
+                tab.path = new_path;
+            }
+        }
+        if let Some(active_file) = self.active_file.as_ref() {
+            if let Some(new_active_file) =
+                moved_path(active_file, &path_move.old_path, &path_move.new_path)
+            {
+                self.active_file = Some(new_active_file);
+            }
+        }
+    }
+
     fn tab_index(&self, path: &Utf8PathBuf) -> Option<usize> {
         self.tabs.iter().position(|tab| &tab.path == path)
     }
@@ -338,6 +502,31 @@ fn no_active_loaded_buffer() -> BackendError {
         BackendErrorKind::InvalidInput,
         "there is no active loaded editor buffer",
     )
+}
+
+fn moved_path(
+    path: &Utf8PathBuf,
+    old_path: &Utf8PathBuf,
+    new_path: &Utf8PathBuf,
+) -> Option<Utf8PathBuf> {
+    if path == old_path {
+        return Some(new_path.clone());
+    }
+    if !path.starts_with(old_path) {
+        return None;
+    }
+    let relative = path.strip_prefix(old_path).ok()?;
+    Some(new_path.join(relative))
+}
+
+fn path_affects(candidate: &Utf8PathBuf, changed_path: &Utf8PathBuf) -> bool {
+    candidate == changed_path || candidate.starts_with(changed_path)
+}
+
+fn path_matches_any(candidate: &Utf8PathBuf, changed_paths: &[Utf8PathBuf]) -> bool {
+    changed_paths
+        .iter()
+        .any(|changed_path| path_affects(candidate, changed_path))
 }
 
 impl From<&EditorTab> for EditorTabView {

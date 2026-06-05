@@ -14,7 +14,6 @@ mod analysis;
 mod app_backend;
 mod audio;
 mod editor;
-mod filesystem;
 mod jobs;
 mod output;
 mod preferences;

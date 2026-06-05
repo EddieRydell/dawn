@@ -7,8 +7,12 @@ use std::{
 use camino::Utf8PathBuf;
 
 use crate::{
-    analysis, audio, editor, jobs::BackendJob, output, preferences, preview, project,
-    render, types::EditorViewMode, view::AppView,
+    analysis, audio,
+    editor::{self, EditorBufferSaveRequest},
+    jobs::BackendJob,
+    output, preferences, preview, project, render,
+    types::EditorViewMode,
+    view::AppView,
 };
 
 pub type BackendResult<T> = Result<T, BackendError>;
@@ -102,8 +106,11 @@ impl AppBackend {
 
         let project_session_preferences =
             self.preferences.session_for_project(self.project.root()?)?;
-        self.editor
-            .restore_for_project(&self.project, project_session_preferences)?;
+        self.editor.restore_for_project(
+            project_session_preferences,
+            |path| self.project.file_metadata(path),
+            |path| self.project.read_file_snapshot(path),
+        )?;
         self.preferences
             .set_session_for_project(self.project.root()?, self.editor.session_preferences())?;
         self.preferences
@@ -119,7 +126,8 @@ impl AppBackend {
     }
 
     pub fn open_file(&mut self, path: Utf8PathBuf) -> BackendResult<BackendUpdate> {
-        self.editor.open_file(&self.project, path)?;
+        self.editor
+            .open_file(path, |path| self.project.read_file_snapshot(path))?;
         self.persist_active_session()?;
         Ok(self.idle_update())
     }
@@ -131,7 +139,8 @@ impl AppBackend {
     }
 
     pub fn set_active_file(&mut self, path: Utf8PathBuf) -> BackendResult<BackendUpdate> {
-        self.editor.set_active_file(&self.project, path)?;
+        self.editor
+            .set_active_file(path, |path| self.project.read_file_snapshot(path))?;
         self.persist_active_session()?;
         Ok(self.idle_update())
     }
@@ -139,6 +148,97 @@ impl AppBackend {
     pub fn update_active_text(&mut self, text: String) -> BackendResult<BackendUpdate> {
         self.editor.update_active_text(text)?;
         Ok(self.idle_update())
+    }
+
+    pub fn save_active_file(&mut self) -> BackendResult<BackendUpdate> {
+        let request = self.editor.active_save_request()?;
+        if !request.dirty {
+            return Ok(self.idle_update());
+        }
+        self.ensure_save_request_current(&request)?;
+        let version = self
+            .project
+            .write_text_file_with_version(&request.path, &request.text)?;
+        self.editor.mark_active_buffer_saved(version)?;
+        self.analysis_update()
+    }
+
+    pub fn reload_active_file_from_disk(&mut self) -> BackendResult<BackendUpdate> {
+        let request = self.editor.active_save_request()?;
+        match self.project.read_file_snapshot(&request.path) {
+            Ok(snapshot) => {
+                self.editor.replace_active_buffer_from_snapshot(snapshot)?;
+                Ok(self.idle_update())
+            }
+            Err(error) if error.kind() == BackendErrorKind::NotFound => {
+                self.editor.close_active_buffer_force()?;
+                self.persist_active_session()?;
+                Ok(self.idle_update())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub fn keep_active_file(&mut self) -> BackendResult<BackendUpdate> {
+        let request = self.editor.active_save_request()?;
+        let version = self
+            .project
+            .write_text_file_with_version(&request.path, &request.text)?;
+        self.editor.mark_active_buffer_saved(version)?;
+        self.analysis_update()
+    }
+
+    pub fn create_file(
+        &mut self,
+        parent: Utf8PathBuf,
+        name: String,
+    ) -> BackendResult<BackendUpdate> {
+        let path = self.project.create_file(&parent, &name)?;
+        self.editor
+            .open_file(path, |path| self.project.read_file_snapshot(path))?;
+        self.persist_active_session()?;
+        self.analysis_update()
+    }
+
+    pub fn create_directory(
+        &mut self,
+        parent: Utf8PathBuf,
+        name: String,
+    ) -> BackendResult<BackendUpdate> {
+        self.project.create_directory(&parent, &name)?;
+        self.analysis_update()
+    }
+
+    pub fn rename_path(
+        &mut self,
+        path: Utf8PathBuf,
+        new_name: String,
+    ) -> BackendResult<BackendUpdate> {
+        self.save_affected_dirty_buffers(std::slice::from_ref(&path))?;
+        let path_move = self.project.rename_path(&path, &new_name)?;
+        self.editor
+            .reconcile_moved_paths(std::slice::from_ref(&path_move));
+        self.persist_active_session()?;
+        self.analysis_update()
+    }
+
+    pub fn move_paths(
+        &mut self,
+        paths: Vec<Utf8PathBuf>,
+        new_parent: Utf8PathBuf,
+    ) -> BackendResult<BackendUpdate> {
+        self.save_affected_dirty_buffers(&paths)?;
+        let path_moves = self.project.move_paths(&paths, &new_parent)?;
+        self.editor.reconcile_moved_paths(&path_moves);
+        self.persist_active_session()?;
+        self.analysis_update()
+    }
+
+    pub fn delete_path(&mut self, path: Utf8PathBuf) -> BackendResult<BackendUpdate> {
+        self.project.delete_path(&path)?;
+        self.editor.reconcile_deleted_path(&path);
+        self.persist_active_session()?;
+        self.analysis_update()
     }
 
     pub fn set_active_view_mode(
@@ -167,8 +267,59 @@ impl AppBackend {
         }
     }
 
+    fn analysis_update(&self) -> BackendResult<BackendUpdate> {
+        Ok(BackendUpdate {
+            view: self.view(),
+            jobs: vec![self.analyze_project_job()?],
+        })
+    }
+
     fn persist_active_session(&mut self) -> BackendResult<()> {
         self.preferences
             .set_session_for_project(self.project.root()?, self.editor.session_preferences())
+    }
+
+    fn analyze_project_job(&self) -> BackendResult<BackendJob> {
+        Ok(BackendJob::AnalyzeProject {
+            project_root: self.project.root()?.to_path_buf(),
+            project_file: self.project.project_file()?.to_path_buf(),
+        })
+    }
+
+    fn save_affected_dirty_buffers(&mut self, paths: &[Utf8PathBuf]) -> BackendResult<()> {
+        let requests = self.editor.affected_dirty_save_requests(paths);
+        for request in &requests {
+            self.ensure_save_request_current(request)?;
+        }
+        for request in requests {
+            let version = self
+                .project
+                .write_text_file_with_version(&request.path, &request.text)?;
+            self.editor.mark_buffer_saved(&request.path, version)?;
+        }
+        Ok(())
+    }
+
+    fn ensure_save_request_current(&self, request: &EditorBufferSaveRequest) -> BackendResult<()> {
+        let snapshot = self
+            .project
+            .read_file_snapshot(&request.path)
+            .map_err(|error| {
+                if error.kind() == BackendErrorKind::NotFound {
+                    BackendError::new(
+                        BackendErrorKind::Conflict,
+                        format!("file no longer exists on disk: {}", request.path),
+                    )
+                } else {
+                    error
+                }
+            })?;
+        if snapshot.version != request.saved_disk_version {
+            return Err(BackendError::new(
+                BackendErrorKind::Conflict,
+                format!("file changed on disk: {}", request.path),
+            ));
+        }
+        Ok(())
     }
 }

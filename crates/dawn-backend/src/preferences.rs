@@ -4,10 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
-use crate::{types::EditorViewMode, BackendError, BackendErrorKind, BackendResult};
+use crate::{types::ProjectSessionPreferences, BackendError, BackendErrorKind, BackendResult};
 
 const CONFIG_FILE_NAME: &str = "workbench.json";
 
@@ -49,10 +48,7 @@ impl Preferences {
         if self.loaded {
             return Ok(());
         }
-        let Some(path) = config_path()? else {
-            self.loaded = true;
-            return Ok(());
-        };
+        let path = config_path();
         if !path.exists() {
             self.loaded = true;
             return Ok(());
@@ -77,12 +73,7 @@ impl Preferences {
     }
 
     fn save(&self) -> BackendResult<()> {
-        let Some(path) = config_path()? else {
-            return Err(BackendError::new(
-                BackendErrorKind::Preferences,
-                "could not resolve user config directory",
-            ));
-        };
+        let path = config_path();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|error| {
                 BackendError::new(
@@ -138,20 +129,9 @@ impl ProjectSessionPreferencesStore {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ProjectSessionPreferences {
-    pub(crate) tabs: Vec<ProjectSessionTabPreference>,
-    pub(crate) active_file: Option<Utf8PathBuf>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ProjectSessionTabPreference {
-    pub(crate) path: Utf8PathBuf,
-    pub(crate) view_mode: EditorViewMode,
-}
-
-fn config_path() -> BackendResult<Option<PathBuf>> {
-    Ok(dirs::config_dir().map(|directory| directory.join("dawn").join(CONFIG_FILE_NAME)))
+fn config_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_default()
+        .join("dawn")
+        .join(CONFIG_FILE_NAME)
 }
