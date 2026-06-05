@@ -9,7 +9,7 @@ default-run = "dawn-desktop"
 
 [dependencies]
 camino.workspace = true
-deprecated-dawn-backend = { path = "../../crates/deprecated-dawn-backend" }
+dawn-backend = { path = "../../crates/dawn-backend" }
 dawn-language = { path = "../../crates/dawn-language" }
 kira = { version = "0.12", features = ["aac", "isomp4"] }
 rfd = "0.15"

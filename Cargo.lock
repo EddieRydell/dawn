@@ -903,8 +903,8 @@ version = "0.1.0"
 dependencies = [
  "camino",
  "clap",
+ "dawn-backend",
  "dawn-language",
- "deprecated-dawn-backend",
  "serde",
  "serde_json",
 ]
@@ -914,8 +914,8 @@ name = "dawn-desktop"
 version = "0.1.0"
 dependencies = [
  "camino",
+ "dawn-backend",
  "dawn-language",
- "deprecated-dawn-backend",
  "kira",
  "rfd",
  "serde",

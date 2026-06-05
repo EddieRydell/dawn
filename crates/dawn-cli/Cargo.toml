@@ -7,7 +7,7 @@ default-run = "dawn"
 [dependencies]
 camino.workspace = true
 clap.workspace = true
-deprecated-dawn-backend = { path = "../deprecated-dawn-backend" }
+dawn-backend = { path = "../dawn-backend" }
 dawn-language = { path = "../dawn-language" }
 serde.workspace = true
 serde_json.workspace = true

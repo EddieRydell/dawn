@@ -10,39 +10,27 @@
     )
 )]
 
-mod app;
 mod bindings;
 mod commands;
 mod dto;
-mod preview;
-mod shell;
+mod events;
+mod jobs;
+mod state;
 
-pub use bindings::{check_bindings, export_bindings, specta_builder};
-pub use preview::{
-    PreviewSceneDto, PreviewSceneFixtureDto, PreviewStateEventDto, PreviewTimingDto,
-};
-pub use preview::{
-    SequenceEffectPreviewDto, SequenceEffectPreviewRequestEffectDto,
-    SequenceEffectPreviewResultDto, SequenceEffectPreviewResultsDto,
-};
-use tauri::Manager;
+pub use bindings::{check_bindings, export_bindings};
 
 pub fn run() -> Result<(), tauri::Error> {
-    let builder = specta_builder();
     tauri::Builder::default()
-        .manage(app::state::AppState::default())
-        .invoke_handler(builder.invoke_handler())
-        .setup(|app| {
-            let _ = app.get_webview_window("main");
-            shell::window_layout::restore_main_window_layout(app.handle())
-                .map_err(std::io::Error::other)?;
-            shell::window_layout::register_main_window_layout_events(app.handle())
-                .map_err(std::io::Error::other)?;
-            preview::start_preview_worker(app.handle().clone());
-            let state = app.state::<app::state::AppState>();
-            preview::open_preview_window_on_startup(app.handle().clone(), state)
-                .map_err(std::io::Error::other)?;
-            Ok(())
-        })
+        .manage(state::AppState::default())
+        .invoke_handler(tauri::generate_handler![
+            commands::get_app_snapshot,
+            commands::dispatch_app_command,
+            commands::request_sequence_effect_previews,
+            commands::take_sequence_effect_preview_results,
+            commands::get_preview_scene,
+            commands::init_preview_transport,
+            commands::dispose_preview_transport,
+            commands::get_preview_transport_mode
+        ])
         .run(tauri::generate_context!())
 }

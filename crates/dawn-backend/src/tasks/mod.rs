@@ -41,6 +41,7 @@ impl BackendTask {
     }
 }
 
+//TODO move to correct files
 fn run_analysis(request: AnalysisTask) -> BackendResult<BackendTaskOutput> {
     let fs = WorkspaceFs::open(request.project_root.as_std_path()).map_err(|error| {
         BackendError::new(
