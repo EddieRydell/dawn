@@ -128,6 +128,13 @@ impl AppBackend {
         })
     }
 
+    pub fn restore_last_project(&mut self) -> BackendResult<AppUpdate> {
+        let Some(project_root) = self.preferences.last_project_root()? else {
+            return Ok(self.idle_update());
+        };
+        self.open_project(project_root)
+    }
+
     pub fn complete_task(&mut self, output: BackendTaskOutput) -> BackendResult<AppUpdate> {
         match output {
             BackendTaskOutput::AnalyzeProject(output) => self.accept_analysis_output(output),

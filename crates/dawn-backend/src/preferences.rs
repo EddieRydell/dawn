@@ -18,6 +18,11 @@ pub(crate) struct Preferences {
 }
 
 impl Preferences {
+    pub(crate) fn last_project_root(&mut self) -> BackendResult<Option<PathBuf>> {
+        self.ensure_loaded()?;
+        Ok(self.user.last_project_root.clone())
+    }
+
     pub(crate) fn session_for_project(
         &mut self,
         project_root: &Path,
