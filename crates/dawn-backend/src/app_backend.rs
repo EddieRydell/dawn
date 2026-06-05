@@ -74,7 +74,10 @@ impl AppBackend {
 
     pub fn open_project(&mut self, path: PathBuf) -> BackendResult<BackendUpdate> {
         self.project.open(path)?;
-        self.editor.restore_for_project(&self.project)?;
+
+        let project_session_preferences = self.preferences.project_session(self.project.root()?)?;
+        self.editor.restore_for_project(&self.project, project_session_preferences)?;
+        self.preferences.remember_last_project(self.project.root()?)?;
 
         Ok(BackendUpdate {
             view: self.view(),
