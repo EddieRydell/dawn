@@ -891,6 +891,7 @@ name = "dawn-backend"
 version = "0.1.0"
 dependencies = [
  "camino",
+ "dawn-language",
  "dirs",
  "serde",
  "serde_json",

@@ -9,9 +9,9 @@ use camino::Utf8PathBuf;
 use crate::{
     analysis, audio,
     editor::{self, EditorBufferSaveRequest},
-    jobs::BackendJob,
+    jobs::{BackendJob, BackendJobResult},
     output, preferences, preview, project, render,
-    types::EditorViewMode,
+    types::{AnalysisJobResult, EditorViewMode},
     view::AppView,
 };
 
@@ -78,13 +78,7 @@ impl AppBackend {
     }
 
     pub fn view(&self) -> AppView {
-        let _ = (
-            &self.analysis,
-            &self.preview,
-            &self.renderer,
-            &self.audio,
-            &self.output,
-        );
+        let _ = (&self.preview, &self.renderer, &self.audio, &self.output);
 
         AppView {
             project_root: self
@@ -96,13 +90,15 @@ impl AppBackend {
                 .project
                 .project_file()
                 .ok()
-                .map(|path| path.to_string_lossy().replace('\\', "/")),
+                .map(|path| path.as_str().replace('\\', "/")),
+            analysis: self.analysis.snapshot(),
             editor: self.editor.snapshot(),
         }
     }
 
     pub fn open_project(&mut self, path: PathBuf) -> BackendResult<BackendUpdate> {
         self.project.open(path)?;
+        self.analysis = analysis::Analysis::default();
 
         let project_session_preferences =
             self.preferences.session_for_project(self.project.root()?)?;
@@ -118,11 +114,19 @@ impl AppBackend {
 
         Ok(BackendUpdate {
             view: self.view(),
-            jobs: vec![BackendJob::AnalyzeProject {
-                project_root: self.project.root()?.to_path_buf(),
-                project_file: self.project.project_file()?.to_path_buf(),
-            }],
+            jobs: vec![self.analyze_project_job()?],
         })
+    }
+
+    pub fn complete_job(&mut self, result: BackendJobResult) -> BackendResult<BackendUpdate> {
+        match result {
+            BackendJobResult::AnalyzeProject(result) => self.complete_analysis(result),
+        }
+    }
+
+    pub fn complete_analysis(&mut self, result: AnalysisJobResult) -> BackendResult<BackendUpdate> {
+        self.analysis.complete(result);
+        Ok(self.idle_update())
     }
 
     pub fn open_file(&mut self, path: Utf8PathBuf) -> BackendResult<BackendUpdate> {
@@ -267,7 +271,7 @@ impl AppBackend {
         }
     }
 
-    fn analysis_update(&self) -> BackendResult<BackendUpdate> {
+    fn analysis_update(&mut self) -> BackendResult<BackendUpdate> {
         Ok(BackendUpdate {
             view: self.view(),
             jobs: vec![self.analyze_project_job()?],
@@ -279,11 +283,18 @@ impl AppBackend {
             .set_session_for_project(self.project.root()?, self.editor.session_preferences())
     }
 
-    fn analyze_project_job(&self) -> BackendResult<BackendJob> {
-        Ok(BackendJob::AnalyzeProject {
-            project_root: self.project.root()?.to_path_buf(),
-            project_file: self.project.project_file()?.to_path_buf(),
-        })
+    fn analyze_project_job(&mut self) -> BackendResult<BackendJob> {
+        let project_root = Utf8PathBuf::from_path_buf(self.project.root()?.to_path_buf())
+            .map_err(|path| {
+            BackendError::new(
+                BackendErrorKind::InvalidInput,
+                format!("project root '{}' is not valid UTF-8", path.display()),
+            )
+        })?;
+        let project_file = self.project.project_file()?.to_path_buf();
+        Ok(BackendJob::AnalyzeProject(
+            self.analysis.request(project_root, project_file),
+        ))
     }
 
     fn save_affected_dirty_buffers(&mut self, paths: &[Utf8PathBuf]) -> BackendResult<()> {

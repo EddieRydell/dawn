@@ -28,6 +28,8 @@ pub use editor::{
     EditorBufferView, EditorTabView, EditorView, LoadedEditorTabView, Revision,
     UnloadedEditorTabView,
 };
-pub use jobs::BackendJob;
-pub use types::{EditorViewMode, FileVersion};
+pub use jobs::{BackendJob, BackendJobResult};
+pub use types::{
+    AnalysisJobId, AnalysisJobRequest, AnalysisJobResult, EditorViewMode, FileVersion,
+};
 pub use view::AppView;

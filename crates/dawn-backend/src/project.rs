@@ -7,7 +7,7 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{
     types::{FileVersion, ProjectFileMetadata, ProjectFileSnapshot, ProjectPathMove},
@@ -24,7 +24,7 @@ pub(crate) struct Project {
 #[derive(Debug)]
 pub(crate) struct OpenProject {
     root: PathBuf,
-    project_file: PathBuf,
+    project_file: Utf8PathBuf,
 }
 
 impl Project {
@@ -56,8 +56,8 @@ impl Project {
                     ),
                 )
             })?;
-            let project_file = PathBuf::from(DEFAULT_PROJECT_FILE);
-            let project_file_path = root.join(&project_file);
+            let project_file = Utf8PathBuf::from(DEFAULT_PROJECT_FILE);
+            let project_file_path = root.join(project_file.as_std_path());
 
             if !project_file_path.is_file() {
                 return Err(BackendError::new(
@@ -94,7 +94,7 @@ impl Project {
                         ),
                     )
                 })?;
-            let project_file = project_file_path
+            let project_file_path_buf = project_file_path
                 .file_name()
                 .map(PathBuf::from)
                 .ok_or_else(|| {
@@ -104,6 +104,13 @@ impl Project {
                             "project file '{}' has no file name",
                             project_file_path.display()
                         ),
+                    )
+                })?;
+            let project_file =
+                Utf8PathBuf::from_path_buf(project_file_path_buf).map_err(|path| {
+                    BackendError::new(
+                        BackendErrorKind::InvalidInput,
+                        format!("project file '{}' is not valid UTF-8", path.display()),
                     )
                 })?;
 
@@ -127,7 +134,7 @@ impl Project {
         Ok(&self.require_open()?.root)
     }
 
-    pub(crate) fn project_file(&self) -> BackendResult<&Path> {
+    pub(crate) fn project_file(&self) -> BackendResult<&Utf8Path> {
         Ok(&self.require_open()?.project_file)
     }
 
