@@ -7,7 +7,7 @@ use std::{
 use camino::Utf8PathBuf;
 
 use crate::{
-    analysis, audio, editor, filesystem, jobs::BackendJob, output, preferences, preview, project,
+    analysis, audio, editor, jobs::BackendJob, output, preferences, preview, project,
     render, types::EditorViewMode, view::AppView,
 };
 
@@ -61,7 +61,6 @@ pub struct AppBackend {
     project: project::Project,
     editor: editor::Editor,
     analysis: analysis::Analysis,
-    filesystem: filesystem::Filesystem,
     preview: preview::Preview,
     renderer: render::Renderer,
     audio: audio::Audio,
@@ -77,7 +76,6 @@ impl AppBackend {
     pub fn view(&self) -> AppView {
         let _ = (
             &self.analysis,
-            &self.filesystem,
             &self.preview,
             &self.renderer,
             &self.audio,
