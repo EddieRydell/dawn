@@ -29,5 +29,14 @@ pub use editor::{
     UnloadedEditorTabView,
 };
 pub use tasks::{BackendTask, BackendTaskOutput};
-pub use types::{AnalysisTask, AnalysisTaskId, AnalysisTaskOutput, EditorViewMode, FileVersion};
+pub use types::{
+    AnalysisTask, AnalysisTaskId, AnalysisTaskOutput, EditorViewMode, ExportFseqTask,
+    ExportFseqTaskOutput, FileVersion, FseqExportMetadata, FseqExportOptions, FseqExportReport,
+    RenderEffectPreviewRequestEffect, RenderEffectPreviewTask, RenderEffectPreviewTaskOutput,
+    RenderFrameTask, RenderFrameTaskOutput, RenderTaskId, RenderView, RenderedFixtureFrame,
+    RenderedFrame, RenderedFrameSource, RenderedFrameSourceKind, RenderedFrameStatus,
+    RenderedPixelFrame, SequenceEffectPreview, SequenceEffectPreviewErrorResult,
+    SequenceEffectPreviewReadyResult, SequenceEffectPreviewResult,
+    SequenceEffectPreviewUnavailableResult,
+};
 pub use view::AppView;

@@ -1,5 +1,7 @@
 use camino::Utf8PathBuf;
-use dawn_language::analysis::ProjectAnalysis;
+use dawn_language::{
+    analysis::ProjectAnalysis, document::SequenceDocument, sequence_render::SequenceRenderCache,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -16,6 +18,249 @@ pub struct AnalysisTask {
 pub struct AnalysisTaskOutput {
     pub id: AnalysisTaskId,
     pub analysis: ProjectAnalysis,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RenderTaskId(pub u64);
+
+#[derive(Debug, Clone)]
+pub struct RenderFrameTask {
+    pub id: RenderTaskId,
+    pub analysis: ProjectAnalysis,
+    pub document: SequenceDocument,
+    pub position_seconds: f64,
+    pub generation: u64,
+    pub cache: SequenceRenderCache,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderFrameTaskOutput {
+    pub id: RenderTaskId,
+    pub frame: RenderedFrame,
+    pub cache: SequenceRenderCache,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderEffectPreviewTask {
+    pub id: RenderTaskId,
+    pub analysis: ProjectAnalysis,
+    pub document: SequenceDocument,
+    pub effects: Vec<RenderEffectPreviewRequestEffect>,
+    pub cache: SequenceRenderCache,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderEffectPreviewRequestEffect {
+    pub effect_id: u32,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderEffectPreviewTaskOutput {
+    pub id: RenderTaskId,
+    pub results: Vec<SequenceEffectPreviewResult>,
+    pub cache: SequenceRenderCache,
+}
+
+#[derive(Debug, Clone)]
+pub enum SequenceEffectPreviewResult {
+    Ready(SequenceEffectPreviewReadyResult),
+    Unavailable(SequenceEffectPreviewUnavailableResult),
+    Error(SequenceEffectPreviewErrorResult),
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceEffectPreviewReadyResult {
+    pub signature: String,
+    pub preview: SequenceEffectPreview,
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceEffectPreview {
+    pub effect_id: u32,
+    pub duration_seconds: f64,
+    pub source_pixel_count: u32,
+    pub sampled_pixel_indices: Vec<u32>,
+    pub columns: u32,
+    pub rows: u32,
+    pub colors: Vec<dawn_language::model::Color>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceEffectPreviewUnavailableResult {
+    pub effect_id: u32,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceEffectPreviewErrorResult {
+    pub effect_id: u32,
+    pub signature: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExportFseqTask {
+    pub id: RenderTaskId,
+    pub analysis: ProjectAnalysis,
+    pub document: SequenceDocument,
+    pub output_path: Utf8PathBuf,
+    pub options: FseqExportOptions,
+    pub cache: SequenceRenderCache,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExportFseqTaskOutput {
+    pub id: RenderTaskId,
+    pub report: FseqExportReport,
+    pub cache: SequenceRenderCache,
+}
+
+#[derive(Debug, Clone)]
+pub struct FseqExportOptions {
+    pub step_ms: u8,
+    pub metadata: FseqExportMetadata,
+}
+
+impl Default for FseqExportOptions {
+    fn default() -> Self {
+        Self {
+            step_ms: 50,
+            metadata: FseqExportMetadata::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct FseqExportMetadata {
+    pub media_filename: Option<String>,
+    pub producer: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FseqExportReport {
+    pub sequence: String,
+    pub step_ms: u8,
+    pub frame_count: u32,
+    pub channel_count: u32,
+    pub bytes_written: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RenderView {
+    pub frame: Option<RenderedFrame>,
+    pub effect_previews: Vec<SequenceEffectPreviewResult>,
+    pub export_report: Option<FseqExportReport>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderedFrame {
+    pub source: RenderedFrameSource,
+    pub time_seconds: f64,
+    pub generation: u64,
+    pub status: RenderedFrameStatus,
+    pub bounds: dawn_language::render::GeometryRenderBounds,
+    pub fixtures: Vec<RenderedFixtureFrame>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderedFrameSource {
+    pub label: String,
+    pub kind: RenderedFrameSourceKind,
+    pub duration_seconds: f64,
+    pub fps: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderedFrameSourceKind {
+    Sequence,
+    Empty,
+}
+
+#[derive(Debug, Clone)]
+pub enum RenderedFrameStatus {
+    Live,
+    Idle(String),
+    Error(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderedFixtureFrame {
+    pub id: dawn_language::model::FixtureId,
+    pub name: String,
+    pub bulb_radius: dawn_language::model::DistanceSpan,
+    pub pixels: Vec<RenderedPixelFrame>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderedPixelFrame {
+    pub position: dawn_language::render::GeometryRenderPoint,
+    pub color: dawn_language::model::Color,
+}
+
+impl From<dawn_language::sequence_render::OutputFrame> for RenderedFrame {
+    fn from(value: dawn_language::sequence_render::OutputFrame) -> Self {
+        Self {
+            source: value.source.into(),
+            time_seconds: value.time_seconds,
+            generation: value.generation,
+            status: value.status.into(),
+            bounds: value.bounds,
+            fixtures: value.fixtures.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<dawn_language::sequence_render::OutputSourceMetadata> for RenderedFrameSource {
+    fn from(value: dawn_language::sequence_render::OutputSourceMetadata) -> Self {
+        Self {
+            label: value.label,
+            kind: value.kind.into(),
+            duration_seconds: value.duration_seconds,
+            fps: value.fps,
+        }
+    }
+}
+
+impl From<dawn_language::sequence_render::OutputSourceKind> for RenderedFrameSourceKind {
+    fn from(value: dawn_language::sequence_render::OutputSourceKind) -> Self {
+        match value {
+            dawn_language::sequence_render::OutputSourceKind::Sequence => Self::Sequence,
+            dawn_language::sequence_render::OutputSourceKind::Empty => Self::Empty,
+        }
+    }
+}
+
+impl From<dawn_language::sequence_render::OutputFrameStatus> for RenderedFrameStatus {
+    fn from(value: dawn_language::sequence_render::OutputFrameStatus) -> Self {
+        match value {
+            dawn_language::sequence_render::OutputFrameStatus::Live => Self::Live,
+            dawn_language::sequence_render::OutputFrameStatus::Idle(message) => Self::Idle(message),
+            dawn_language::sequence_render::OutputFrameStatus::Error(message) => {
+                Self::Error(message)
+            }
+        }
+    }
+}
+
+impl From<dawn_language::sequence_render::OutputFixtureFrame> for RenderedFixtureFrame {
+    fn from(value: dawn_language::sequence_render::OutputFixtureFrame) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
+            bulb_radius: value.bulb_radius,
+            pixels: value.pixels.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<dawn_language::sequence_render::OutputPixelFrame> for RenderedPixelFrame {
+    fn from(value: dawn_language::sequence_render::OutputPixelFrame) -> Self {
+        Self {
+            position: value.position,
+            color: value.color,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

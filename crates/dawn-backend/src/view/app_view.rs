@@ -1,4 +1,5 @@
 use crate::editor::EditorView;
+use crate::types::RenderView;
 
 #[derive(Debug, Clone, Default)]
 pub struct AppView {
@@ -6,4 +7,5 @@ pub struct AppView {
     pub project_file: Option<String>,
     pub analysis: Option<dawn_language::analysis::ProjectAnalysis>,
     pub editor: EditorView,
+    pub render: RenderView,
 }

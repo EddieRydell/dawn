@@ -21,3 +21,4 @@ pub mod model;
 pub mod parse;
 pub mod path;
 pub mod render;
+pub mod sequence_render;
