@@ -47,7 +47,7 @@ const id = selectedEffectId(selected);
       const name = "Marks";
       const key = nextCollectionKey(name, document.markCollections);
       void runRuntimeCommand(() =>
-        commands.applySequenceGuiEdit({
+        commands.applySequenceDocumentEdit({
           type: "createMarkCollection",
           key,
           name,
@@ -68,7 +68,13 @@ const id = selectedEffectId(selected);
           <button
             type="button"
             onClick={() =>
-              void commands.applySequenceSelectionEdit({ type: "delete", selection: sequenceSelection }).then(() => {
+              void runRuntimeCommand(() =>
+                commands.applySequenceDocumentEdit(
+                  sequenceSelection.type === "effects"
+                    ? { type: "deleteEffects", ids: sequenceSelection.ids }
+                    : { type: "deleteMarks", marks: sequenceSelection.marks }
+                )
+              ).then(() => {
                 setSelected(null);
               })
             }
@@ -82,7 +88,7 @@ const id = selectedEffectId(selected);
       if (activeCollection === null) return;
       if (activeCollection.marksSeconds.length > 0 && !window.confirm(`Delete ${activeCollection.name} and ${activeCollection.marksSeconds.length} marks?`)) return;
       void runRuntimeCommand(() =>
-        commands.applySequenceGuiEdit({
+        commands.applySequenceDocumentEdit({
           type: "deleteMarkCollection",
           key: activeCollection.key
         })
@@ -104,7 +110,7 @@ const id = selectedEffectId(selected);
             type="button"
             onClick={() =>
               void runRuntimeCommand(() =>
-                commands.applySequenceGuiEdit({
+                commands.applySequenceDocumentEdit({
                   type: "deleteMark",
                   collectionKey: selectedMark.collectionKey,
                   index: selectedMark.index
@@ -123,7 +129,7 @@ const id = selectedEffectId(selected);
       const currentScriptValue = selectedEffectScriptValue(effect, document.effectScripts);
       const resizeEffect = (startSeconds: number, durationSeconds: number) =>
         runRuntimeCommand(() =>
-          commands.applySequenceGuiEdit({
+          commands.applySequenceDocumentEdit({
             type: "resizeEffect",
             id: effect.id,
             startSeconds: Math.max(0, roundToNanosecond(startSeconds)),
@@ -176,7 +182,7 @@ const id = selectedEffectId(selected);
                 const script = document.effectScripts[Number(event.currentTarget.value)]?.script;
                 if (script === undefined) return;
                 void runRuntimeCommand(() =>
-                  commands.applySequenceGuiEdit({
+                  commands.applySequenceDocumentEdit({
                     type: "changeEffectScript",
                     id: effect.id,
                     script
@@ -198,7 +204,7 @@ const id = selectedEffectId(selected);
               value={effect.scope}
               onChange={(event) =>
                 void runRuntimeCommand(() =>
-                  commands.applySequenceGuiEdit({
+                  commands.applySequenceDocumentEdit({
                     type: "setEffectScope",
                     id: effect.id,
                     scope: event.currentTarget.value as SequenceEffectScopeDto
@@ -224,7 +230,7 @@ const id = selectedEffectId(selected);
               ))}
             </div>
           )}
-          <button onClick={() => void runRuntimeCommand(() => commands.applySequenceGuiEdit({ type: "deleteEffect", id: effect.id }))}>Delete</button>
+          <button onClick={() => void runRuntimeCommand(() => commands.applySequenceDocumentEdit({ type: "deleteEffect", id: effect.id }))}>Delete</button>
         </InspectorScrollArea>
       );
     }
@@ -260,7 +266,7 @@ const id = selectedEffectId(selected);
                         const name = event.currentTarget.value.trim() || activeCollection.name;
                         if (name === activeCollection.name) return;
                         void runRuntimeCommand(() =>
-                          commands.applySequenceGuiEdit({ type: "renameMarkCollection", key: activeCollection.key, name })
+                          commands.applySequenceDocumentEdit({ type: "renameMarkCollection", key: activeCollection.key, name })
                         );
                       }}
                     />
@@ -271,7 +277,7 @@ const id = selectedEffectId(selected);
                     value={activeCollection.color}
                     commit={(color) =>
                       runRuntimeCommand(() =>
-                        commands.applySequenceGuiEdit({
+                        commands.applySequenceDocumentEdit({
                           type: "setMarkCollectionColor",
                           key: activeCollection.key,
                           color

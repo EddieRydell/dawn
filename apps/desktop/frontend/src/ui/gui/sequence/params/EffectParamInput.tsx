@@ -37,7 +37,7 @@ export function EffectParamInput({
 }) {
   const commit = (value: SequenceEffectParamValueDto) => {
     return runRuntimeCommand(() =>
-      commands.applySequenceGuiEdit({
+      commands.applySequenceDocumentEdit({
         type: "updateEffectParam",
         id: effectId,
         name: param.name,
@@ -269,7 +269,7 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
     : -1;
   const unlinkCopy = () =>
     runRuntimeCommand(() =>
-      commands.applySequenceGuiEdit({
+      commands.applySequenceDocumentEdit({
         type: "unlinkEffectCurveParam",
         id: effectId,
         name: param.name
@@ -308,7 +308,7 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
             const first = matchingCurves[0];
             if (first === undefined) return;
             void runRuntimeCommand(() =>
-              commands.applySequenceGuiEdit({
+              commands.applySequenceDocumentEdit({
                 type: "linkEffectCurveParam",
                 id: effectId,
                 name: param.name,
@@ -329,7 +329,7 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
             const curve = matchingCurves[Number(event.currentTarget.value)];
             if (curve === undefined) return;
             void runRuntimeCommand(() =>
-              commands.applySequenceGuiEdit({
+              commands.applySequenceDocumentEdit({
                 type: "linkEffectCurveParam",
                 id: effectId,
                 name: param.name,

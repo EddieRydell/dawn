@@ -2,7 +2,118 @@
 
 ## Project Structure & Module Organization
 
-This is a Rust workspace. The desktop service and UI state live under `apps/desktop/src`. Example Dawn projects and fixtures are in `examples/`.
+This is a Rust workspace. Example Dawn projects and fixtures are in `examples/`.
+
+## Non-Negotiable Architecture Boundaries
+
+The codebase is intentionally split by ownership. Do not collapse these boundaries for convenience. Do not put behavior in the nearest large file just because it is easy to patch. If a change does not fit these boundaries, stop and ask before editing.
+
+### `crates/dawn-language`
+
+Owns the Dawn language and project document model.
+
+Allowed here:
+- parsing and loading Dawn files
+- authored and resolved document structs
+- project analysis and diagnostics
+- document edit primitives
+- typed sequence/layout/fixture document edit semantics
+- render and evaluation logic that is independent of the desktop app
+- path/import semantics for Dawn documents
+- effect script compiler/runtime
+
+Not allowed here:
+- editor tabs or active-file state
+- app preferences
+- Tauri, desktop dialogs, windows, or events
+- preview window lifecycle or native preview transport
+- app commands or command DTOs
+- async task scheduling for the desktop app
+
+### `crates/dawn-backend`
+
+Owns application/domain state transitions. This crate is the source of truth for what the app state becomes after a user or system action.
+
+Allowed here:
+- open/reload project behavior
+- workspace file operations as app behavior
+- editor session state
+- dirty buffer, save, and conflict behavior
+- active document selection and GUI document construction
+- active document edit transaction handling
+- preview state machine
+- render/export task planning
+- preferences that affect backend/app state
+- plain persisted workbench/window preference data that does not require native window APIs
+- backend tasks and task outputs
+- backend-native app snapshot/view types
+
+Not allowed here:
+- Tauri commands, Tauri events, or window APIs
+- native file dialogs
+- native audio playback implementation
+- shared-buffer preview transport
+- generated frontend DTO details
+- frontend-specific defaults or presentation choices
+- direct UI concepts such as menus, shortcuts, panels, or React state
+- Tauri/native window operations or window lifecycle mechanics
+
+### `apps/desktop/src`
+
+Owns the Tauri/native shell boundary.
+
+Allowed here:
+- Tauri command registration
+- converting command DTOs into backend calls
+- converting backend views into frontend DTOs
+- Tauri event emission
+- native file dialogs
+- native audio runtime
+- preview window lifecycle
+- preview transport/shared-buffer plumbing
+- background task spawning glue
+- window layout integration when it depends on Tauri window APIs
+
+Not allowed here:
+- Dawn document semantics
+- GUI edit semantics
+- project analysis rules
+- backend state decisions
+- duplicated backend defaults
+- fake snapshot state
+
+### `apps/desktop/frontend/src`
+
+Owns presentation and user interaction.
+
+Allowed here:
+- React components
+- input handling
+- command invocation
+- local interaction state such as selection, dragging, viewport, and canvas state
+- rendering DTOs into UI
+- frontend-only affordances such as menus and shortcuts
+
+Not allowed here:
+- Dawn document mutation rules beyond constructing typed commands
+- project/file semantic decisions
+- backend defaults
+- duplicated analysis/render logic
+- hidden fallbacks for missing backend state
+
+### File-Level Boundary Rules
+
+`apps/desktop/src/commands.rs` is a thin adapter. It may receive a DTO command, perform a native dialog when required, convert DTO/path types, call backend methods, and hand backend updates to job/event glue. It must not implement app behavior, manually coordinate multiple backend subsystems, or contain policy branches that belong in `crates/dawn-backend`.
+
+`apps/desktop/src/dto.rs` can be large, but it must be dumb. It may define TypeScript-facing shapes and `From`/`TryFrom` mappings. It must not invent app state, hardcode live defaults, hardcode preferences, choose fallback preview sources, or perform domain validation beyond DTO shape validation.
+
+`crates/dawn-backend/src/app_backend.rs` is a transaction-script facade/orchestrator. It may coordinate `Project`, `Editor`, `Analysis`, `Preview`, `Render`, and `Preferences`, expose the public backend API to desktop, return `AppUpdate`, and decide which backend modules/tasks participate in a workflow. It is allowed to stay large when it is sequencing backend transactions, but it must not absorb detailed file algorithms, detailed document edit semantics, render/export implementation, DTO mapping, native runtime logic, or become a replacement god file for the old app model.
+
+Rule of thumb:
+- If the code answers "what does Dawn mean?", it belongs in `crates/dawn-language`.
+- If the code answers "what should the app state become?", it belongs in `crates/dawn-backend`.
+- If the code answers "how does desktop/OS/Tauri do this?", it belongs in `apps/desktop/src`.
+- If the code answers "how does the user see or manipulate this?", it belongs in `apps/desktop/frontend/src`.
 
 ## Testing Guidelines
 

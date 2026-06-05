@@ -1,7 +1,10 @@
 use camino::Utf8PathBuf;
 use dawn_language::{
     analysis::ProjectOverlay,
-    document::{self, DocumentEditOutcome, FixtureDocument, LayoutDocument, SequenceDocumentEdit},
+    document::{
+        self, DocumentEditOutcome, FixtureDocument, FixtureDocumentEdit, LayoutDocument,
+        LayoutDocumentEdit, SequenceDocumentEdit,
+    },
     fs::WorkspaceFs,
 };
 
@@ -32,10 +35,13 @@ pub(crate) fn apply_layout_document_edit(
     fs: &WorkspaceFs,
     path: Utf8PathBuf,
     object_key: &str,
-    document: LayoutDocument,
+    mut document: LayoutDocument,
+    edit: LayoutDocumentEdit,
     base_content: String,
     overlays: Vec<ProjectOverlay>,
 ) -> BackendResult<DocumentEditOutcome<LayoutDocument>> {
+    document::apply_layout_document_edit_operation(&mut document, edit)
+        .map_err(invalid_document_error)?;
     document::apply_layout_document_edit(fs, path, object_key, document, base_content, overlays)
         .map_err(invalid_document_error)
 }
@@ -43,10 +49,13 @@ pub(crate) fn apply_layout_document_edit(
 pub(crate) fn apply_fixture_document_edit(
     fs: &WorkspaceFs,
     path: Utf8PathBuf,
-    document: FixtureDocument,
+    mut document: FixtureDocument,
+    edit: FixtureDocumentEdit,
     base_content: String,
     overlays: Vec<ProjectOverlay>,
 ) -> BackendResult<DocumentEditOutcome<FixtureDocument>> {
+    document::apply_fixture_document_edit_operation(&mut document, edit)
+        .map_err(invalid_document_error)?;
     document::apply_fixture_document_edit(fs, path, document, base_content, overlays)
         .map_err(invalid_document_error)
 }

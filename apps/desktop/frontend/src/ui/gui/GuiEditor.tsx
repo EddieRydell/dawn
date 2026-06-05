@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import type { RuntimeUiState } from "../../store";
 
-import type { GuiFocus, ReadyGuiDocumentDto, SequenceSelection } from "./shared";
+import type { GuiFocus, LivePreview, ReadyGuiDocumentDto, SequenceSelection } from "./shared";
 
 import { LayoutCanvas } from "./layout/LayoutCanvas";
 
@@ -14,16 +14,18 @@ import { BlockedGui } from "./BlockedGui";
 
 import { SequenceEditor } from "./sequence/SequenceEditor";
 
-import { useSequencePreview, handleSequencePlaybackShortcut } from "./sequence/SequenceTransportControls";
+import { handleSequencePlaybackShortcut } from "./sequence/SequenceTransportControls";
 
 import { markSelectionConsumesKey } from "./sequence/sequenceSelection";
 
 export function GuiEditor({
   snapshot,
+  livePreview,
   sequenceSelection,
   setSequenceSelection
 }: {
   snapshot: RuntimeUiState;
+  livePreview: LivePreview | null;
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
 }) {
@@ -41,7 +43,7 @@ export function GuiEditor({
     <GuiEditorInner
       key={editorKey}
       gui={gui}
-      snapshot={snapshot}
+      livePreview={livePreview}
       sequenceSelection={sequenceSelection}
       setSequenceSelection={setSequenceSelection}
     />
@@ -50,12 +52,12 @@ export function GuiEditor({
 
 function GuiEditorInner({
   gui,
-  snapshot,
+  livePreview,
   sequenceSelection,
   setSequenceSelection
 }: {
   gui: ReadyGuiDocumentDto;
-  snapshot: RuntimeUiState;
+  livePreview: LivePreview | null;
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
 }) {
@@ -66,18 +68,16 @@ function GuiEditorInner({
   const [visibleMarkCollectionKeys, setVisibleMarkCollectionKeys] = useState<Set<string>>(() =>
     new Set(gui.type === "sequence" ? gui.document.markCollections.map((collection) => collection.key) : [])
   );
-  const livePreview = useSequencePreview(snapshot.preview);
-
   return (
     <div
       className="gui-editor-shell"
       onKeyDownCapture={(event) => {
-        if (gui.type === "sequence" && !markSelectionConsumesKey(selected, event.key)) {
+        if (gui.type === "sequence" && livePreview !== null && !markSelectionConsumesKey(selected, event.key)) {
           handleSequencePlaybackShortcut(event, gui.document, livePreview, gui.document.durationSeconds <= 0);
         }
       }}
     >
-      {gui.type === "sequence" && (
+      {gui.type === "sequence" && livePreview !== null && (
         <SequenceEditor
           key={`${gui.document.path}:${gui.document.objectKey}`}
           document={gui.document}

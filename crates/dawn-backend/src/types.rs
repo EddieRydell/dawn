@@ -3,9 +3,7 @@ use dawn_language::{
     analysis::{ProjectAnalysis, ProjectOverlay},
     document::{
         DocumentDescriptor, DocumentViewId, FixtureDocument, LayoutDocument, SequenceDocument,
-        SequenceDocumentEdit,
     },
-    model::{Point3, SequenceEffect, Transform},
     sequence_render::SequenceRenderCache,
 };
 use serde::{Deserialize, Serialize};
@@ -195,6 +193,39 @@ pub struct RenderView {
 }
 
 #[derive(Debug, Clone)]
+pub struct PreviewHostState {
+    pub target_fps: u32,
+    pub frame_generation: u64,
+    pub is_playing: bool,
+    pub preview_updating: bool,
+    pub effect_preview_active: bool,
+    pub audio_playback_status: crate::preview::AudioPlaybackStatus,
+    pub has_valid_audio: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreviewAudioClock {
+    pub position_seconds: f64,
+    pub ended: bool,
+    pub status: crate::preview::AudioPlaybackStatus,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreviewTickOutput {
+    pub snapshot: crate::preview::PreviewSnapshot,
+    pub target_fps: u32,
+    pub render_timing: crate::preview::PreviewRenderTiming,
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceAudioDialog {
+    pub project_root: std::path::PathBuf,
+    pub sequence_path: camino::Utf8PathBuf,
+    pub audio_directory: std::path::PathBuf,
+}
+
+#[derive(Debug, Clone)]
 pub struct RenderedFrame {
     pub source: RenderedFrameSource,
     pub time_seconds: f64,
@@ -361,96 +392,6 @@ pub enum ActiveGuiDocument {
 pub struct ActiveGuiDocumentBlocked {
     pub reason: String,
     pub diagnostics: Vec<dawn_language::analysis::ProjectDiagnostic>,
-}
-
-#[derive(Debug, Clone)]
-pub enum SequenceGuiEdit {
-    Document(SequenceDocumentEdit),
-}
-
-#[derive(Debug, Clone)]
-pub enum SequenceSelection {
-    Effects { ids: Vec<u32> },
-    Marks { marks: Vec<SequenceMarkRef> },
-}
-
-#[derive(Debug, Clone)]
-pub struct SequenceMarkRef {
-    pub collection_key: String,
-    pub index: u32,
-}
-
-#[derive(Debug, Clone)]
-pub struct SequencePasteAnchor {
-    pub lane_index: Option<u32>,
-    pub time_seconds: Option<f64>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SequenceSelectionEditResult {
-    pub selection: Option<SequenceSelection>,
-    pub copied_count: u32,
-    pub skipped_count: u32,
-}
-
-#[derive(Debug, Clone)]
-pub enum SequenceSelectionEdit {
-    Copy {
-        selection: SequenceSelection,
-    },
-    Cut {
-        selection: SequenceSelection,
-    },
-    Delete {
-        selection: SequenceSelection,
-    },
-    Paste {
-        anchor: SequencePasteAnchor,
-    },
-    MoveEffects {
-        ids: Vec<u32>,
-        time_delta_seconds: f64,
-        lane_delta: i32,
-    },
-    ResizeEffects {
-        ids: Vec<u32>,
-        edge: SequenceResizeEdge,
-        time_delta_seconds: f64,
-    },
-    MoveMarks {
-        marks: Vec<SequenceMarkRef>,
-        time_delta_seconds: f64,
-    },
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum SequenceResizeEdge {
-    Left,
-    Right,
-}
-
-#[derive(Debug, Clone)]
-pub enum SequenceClipboard {
-    Effects(Vec<SequenceEffect<dawn_language::model::Authored>>),
-    Marks(Vec<dawn_language::document::SequenceMarkPasteDocumentEdit>),
-}
-
-#[derive(Debug, Clone)]
-pub enum LayoutGuiEdit {
-    UpdatePlacementTransform { id: u32, transform: Transform },
-}
-
-#[derive(Debug, Clone)]
-pub enum FixtureGuiEdit {
-    UpdateBulbDiameter {
-        object_key: String,
-        bulb_diameter_meters: f64,
-    },
-    MovePoint {
-        object_key: String,
-        point_index: u32,
-        point: Point3,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

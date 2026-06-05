@@ -9,16 +9,17 @@ import { tags } from "@lezer/highlight";
 import { RefreshCw, Save, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { commands } from "../api";
-import type { ProjectDiagnosticDto, SequenceSelectionDto, TextRangeDto } from "../bindings";
+import type { ProjectDiagnosticDto, TextRangeDto } from "../bindings";
 import type { RuntimeUiState } from "../store";
 import { commandRegistry } from "../commandRegistry";
 import { runRuntimeCommand, useAppStore } from "../store";
 import { GuiEditor } from "./gui/GuiEditor";
-import { SequenceTransportControls } from "./gui/sequence/SequenceTransportControls";
+import type { SequenceSelection } from "./gui/shared";
+import { SequenceTransportControls, useSequencePreview } from "./gui/sequence/SequenceTransportControls";
 
 type BufferExternalState = "current" | "changedOnDisk" | "deletedOnDisk";
 type EditorBufferWithExternalState = NonNullable<RuntimeUiState["activeBuffer"]>;
-type PathSelection = { path: string | null; selection: SequenceSelectionDto | null };
+type PathSelection = { path: string | null; selection: SequenceSelection };
 
 export function EditorPane({ snapshot }: { snapshot: RuntimeUiState }) {
   const { localText, setLocalText } = useAppStore();
@@ -40,7 +41,7 @@ export function EditorPane({ snapshot }: { snapshot: RuntimeUiState }) {
     viewMode === "gui" && snapshot.activeGuiDocument?.type === "sequence" ? snapshot.activeGuiDocument.document : null;
   const sequenceSelection = pathSelection.path === activePath ? pathSelection.selection : null;
   const setSequenceSelection = useCallback(
-    (selection: SequenceSelectionDto | null) => {
+    (selection: SequenceSelection) => {
       setPathSelection({ path: activePath, selection });
     },
     [activePath]
@@ -49,6 +50,7 @@ export function EditorPane({ snapshot }: { snapshot: RuntimeUiState }) {
     () => (sequenceSelection?.type === "effects" ? sequenceSelection.ids : []),
     [sequenceSelection]
   );
+  const livePreview = useSequencePreview(snapshot.preview);
 
   useEffect(() => {
     latestLocalText.current = localText;
@@ -170,11 +172,10 @@ export function EditorPane({ snapshot }: { snapshot: RuntimeUiState }) {
         ))}
       </div>
       <div className="editor-toolbar">
-        {activeSequenceDocument !== null && (
+        {activeSequenceDocument !== null && livePreview !== null && (
           <SequenceTransportControls
             document={activeSequenceDocument}
-            preview={snapshot.preview}
-            liveOutput={snapshot.liveOutput}
+            preview={livePreview}
             effectPreviewEnabled={snapshot.effectPreviewEnabled}
             selectedEffectIds={selectedEffectIds}
           />
@@ -214,6 +215,7 @@ export function EditorPane({ snapshot }: { snapshot: RuntimeUiState }) {
       {viewMode === "gui" && (
         <GuiEditor
           snapshot={snapshot}
+          livePreview={livePreview}
           sequenceSelection={sequenceSelection}
           setSequenceSelection={setSequenceSelection}
         />

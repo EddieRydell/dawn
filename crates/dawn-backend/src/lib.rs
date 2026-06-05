@@ -16,14 +16,11 @@ mod app_backend;
 mod audio;
 mod document_editing;
 mod editor;
-mod fixture_edit_planning;
-mod layout_edit_planning;
 mod output;
 mod preferences;
 mod preview;
 mod project;
 mod render;
-mod sequence_edit_planning;
 mod tasks;
 mod types;
 mod view;
@@ -33,18 +30,20 @@ pub use editor::{
     EditorBufferView, EditorTabView, EditorView, LoadedEditorTabView, Revision,
     UnloadedEditorTabView,
 };
+pub use preview::{
+    AudioPlaybackStatus, PreviewRenderTiming, PreviewSnapshot, PreviewSyncMode, SequenceKey,
+};
 pub use tasks::{BackendTask, BackendTaskOutput};
 pub use types::{
     ActiveDocumentView, ActiveGuiDocument, ActiveGuiDocumentBlocked, AnalysisTask, AnalysisTaskId,
     AnalysisTaskOutput, EditorViewMode, ExportFseqTask, ExportFseqTaskOutput, FileVersion,
-    FixtureGuiEdit, FseqExportMetadata, FseqExportOptions, FseqExportReport, LayoutGuiEdit,
-    RenderEffectPreviewRequestEffect, RenderEffectPreviewTask, RenderEffectPreviewTaskOutput,
-    RenderFrameTask, RenderFrameTaskOutput, RenderTaskId, RenderView, RenderedFixtureFrame,
-    RenderedFrame, RenderedFrameSource, RenderedFrameSourceKind, RenderedFrameStatus,
-    RenderedPixelFrame, SequenceEffectPreview, SequenceEffectPreviewErrorResult,
-    SequenceEffectPreviewReadyResult, SequenceEffectPreviewResult,
-    SequenceEffectPreviewResultBatch, SequenceEffectPreviewUnavailableResult, SequenceGuiEdit,
-    SequenceMarkRef, SequencePasteAnchor, SequenceResizeEdge, SequenceSelection,
-    SequenceSelectionEdit, SequenceSelectionEditResult, WorkspaceEntry, WorkspaceEntryKind,
+    FseqExportMetadata, FseqExportOptions, FseqExportReport, PreviewAudioClock, PreviewHostState,
+    PreviewTickOutput, RenderEffectPreviewRequestEffect, RenderEffectPreviewTask,
+    RenderEffectPreviewTaskOutput, RenderFrameTask, RenderFrameTaskOutput, RenderTaskId,
+    RenderView, RenderedFixtureFrame, RenderedFrame, RenderedFrameSource, RenderedFrameSourceKind,
+    RenderedFrameStatus, RenderedPixelFrame, SequenceAudioDialog, SequenceEffectPreview,
+    SequenceEffectPreviewErrorResult, SequenceEffectPreviewReadyResult,
+    SequenceEffectPreviewResult, SequenceEffectPreviewResultBatch,
+    SequenceEffectPreviewUnavailableResult, WorkspaceEntry, WorkspaceEntryKind,
 };
 pub use view::AppView;

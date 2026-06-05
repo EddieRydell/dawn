@@ -10,11 +10,14 @@
     )
 )]
 
+mod audio_runtime;
 mod bindings;
 mod commands;
 mod dto;
 mod events;
 mod jobs;
+mod preview_host;
+mod preview_transport;
 mod state;
 
 use dawn_backend::BackendError;
@@ -27,6 +30,7 @@ pub fn run() -> Result<(), tauri::Error> {
     tauri::Builder::default()
         .manage(state::AppState::default())
         .setup(|app| {
+            preview_host::start(app.handle().clone());
             restore_last_project(app.handle()).map_err(std::io::Error::other)?;
             Ok(())
         })

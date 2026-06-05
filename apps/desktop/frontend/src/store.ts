@@ -5,7 +5,6 @@ import type {
   ActiveDocumentReadModelDto,
   DiagnosticsReadModelDto,
   EditorReadModelDto,
-  LiveOutputReadModelDto,
   PreviewReadModelDto,
   AppSnapshotDto,
   RuntimeStatusDto,
@@ -25,7 +24,7 @@ export type RuntimeUiState = {
   status: string;
   preview: PreviewReadModelDto["preview"];
   effectPreviewEnabled: boolean;
-  liveOutput: LiveOutputReadModelDto["liveOutput"];
+  commandAvailability: AppSnapshotDto["commandAvailability"];
 };
 
 type BackendSlices = AppSnapshotDto;
@@ -104,7 +103,7 @@ export async function runRuntimeCommand<T>(command: () => Promise<T>) {
 function composeruntimeState(BackendSlices: BackendSlices): RuntimeUiState {
   return {
     projectRoot: BackendSlices.workspace.projectRoot,
-    projectTreeVisible: BackendSlices.workspace.projectTreeVisible,
+    projectTreeVisible: true,
     projectEntries: BackendSlices.workspace.projectEntries,
     tabs: BackendSlices.editor.tabs,
     activeFile: BackendSlices.editor.activeFile,
@@ -115,7 +114,7 @@ function composeruntimeState(BackendSlices: BackendSlices): RuntimeUiState {
     status: runtimeStatusLabel(BackendSlices.status.status),
     preview: BackendSlices.preview.preview,
     effectPreviewEnabled: BackendSlices.preview.effectPreviewEnabled,
-    liveOutput: BackendSlices.liveOutput.liveOutput
+    commandAvailability: BackendSlices.commandAvailability
   };
 }
 

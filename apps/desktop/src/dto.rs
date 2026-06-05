@@ -1,18 +1,19 @@
+// TypeScript-facing shapes and conversions only; no fabricated app state or policy.
 use dawn_backend::{
     ActiveDocumentView, ActiveGuiDocument, AppView, EditorTabView, EditorView,
-    EditorViewMode as BackendEditorViewMode, FixtureGuiEdit, LayoutGuiEdit, LoadedEditorTabView,
-    RenderedFixtureFrame, RenderedFrame, SequenceEffectPreviewResult, SequenceGuiEdit,
-    SequenceMarkRef, SequencePasteAnchor, SequenceResizeEdge, SequenceSelection,
-    SequenceSelectionEdit, SequenceSelectionEditResult, WorkspaceEntry, WorkspaceEntryKind,
+    EditorViewMode as BackendEditorViewMode, LoadedEditorTabView, PreviewRenderTiming,
+    PreviewSnapshot, RenderedFixtureFrame, RenderedFrame, SequenceEffectPreviewResult,
+    WorkspaceEntry, WorkspaceEntryKind,
 };
 use dawn_language::analysis::{
     DiagnosticCode, DiagnosticSeverity, ProjectAnalysis, ProjectDiagnostic, TextRange,
 };
 use dawn_language::document::{
-    DocumentDescriptor, DocumentObjectDescriptor, DocumentViewId, EffectScriptReferenceDocument,
-    FixtureDefinitionDocument, FixtureDocument, LayoutDocument, LayoutFixturePlacement,
-    LayoutTargetDocument, ResolvedLayoutFixture, SequenceAudioDocument,
-    SequenceCurveLibraryItemDocument, SequenceDocument, SequenceEffectDocument,
+    DocumentDescriptor, DocumentEdit, DocumentObjectDescriptor, DocumentViewId,
+    EffectScriptReferenceDocument, FixtureDefinitionDocument, FixtureDocument, FixtureDocumentEdit,
+    LayoutDocument, LayoutDocumentEdit, LayoutFixturePlacement, LayoutTargetDocument,
+    ResolvedLayoutFixture, SequenceAudioDocument, SequenceCurveLibraryItemDocument,
+    SequenceDocument, SequenceDocumentEdit, SequenceEffectDocument,
     SequenceEffectParamCurvePointEditValue, SequenceEffectParamCurveSourceDocument,
     SequenceEffectParamCurveValueEditValue, SequenceEffectParamDocument,
     SequenceEffectParamEditValue, SequenceEffectScriptDocument, SequenceEffectScriptParamDocument,
@@ -20,9 +21,9 @@ use dawn_language::document::{
 };
 use dawn_language::effect_script::{EffectScriptKind, ScriptType};
 use dawn_language::model::{
-    Color, ColorModel, CurveValue, CurveValueType, Distance, EffectParam, Geometry,
-    LayoutTargetKind, ObjectKind, Point3, Resolved, Rotation3, Scale3, SequenceEffectScope,
-    Transform,
+    Color, ColorModel, CurveValue, CurveValueType, Distance, DistanceSpan, EffectParam, FixtureId,
+    Geometry, LayoutTargetKind, ObjectKind, Point3, Resolved, Rotation3, Scale3,
+    SequenceEffectScope, Transform,
 };
 use dawn_language::path::{PathStringExt, Utf8PathBuf};
 use dawn_language::render::{
@@ -62,22 +63,13 @@ pub(crate) enum AppCommandDto {
     SetActiveViewMode {
         mode: EditorViewModeDto,
     },
-    ApplySequenceGuiEdit {
-        edit: SequenceGuiEditDto,
-    },
-    ApplySequenceSelectionEdit {
-        edit: SequenceSelectionEditDto,
+    ApplyActiveDocumentEdit {
+        edit: DocumentEditDto,
     },
     ChooseSequenceAudio,
     ClearSequenceAudio,
     ExportActiveSequenceFseq {
         step_ms: u8,
-    },
-    ApplyLayoutGuiEdit {
-        edit: LayoutGuiEditDto,
-    },
-    ApplyFixtureGuiEdit {
-        edit: FixtureGuiEditDto,
     },
     FlushAutosave,
     ReloadActiveBufferFromDisk,
@@ -126,12 +118,7 @@ pub(crate) enum AppCommandDto {
 )]
 pub(crate) enum AppCommandResponseDto {
     None,
-    OptionalString {
-        value: Option<String>,
-    },
-    SequenceSelectionEditResult {
-        result: SequenceSelectionEditResultDto,
-    },
+    OptionalString { value: Option<String> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -162,9 +149,8 @@ pub(crate) struct AppSnapshotDto {
     pub(crate) active_document: ActiveDocumentReadModelDto,
     pub(crate) diagnostics: DiagnosticsReadModelDto,
     pub(crate) preview: PreviewReadModelDto,
-    pub(crate) live_output: LiveOutputReadModelDto,
     pub(crate) status: StatusReadModelDto,
-    pub(crate) prefs: PrefsReadModelDto,
+    pub(crate) command_availability: Vec<CommandAvailabilityDto>,
 }
 
 impl Default for AppSnapshotDto {
@@ -184,7 +170,6 @@ impl From<AppView> for AppSnapshotDto {
         Self {
             workspace: WorkspaceReadModelDto {
                 project_root: view.project_root,
-                project_tree_visible: true,
                 project_entries: view
                     .project_entries
                     .into_iter()
@@ -194,22 +179,30 @@ impl From<AppView> for AppSnapshotDto {
             editor: EditorReadModelDto::from(view.editor),
             active_document: ActiveDocumentReadModelDto::from(view.active_document),
             diagnostics: DiagnosticsReadModelDto { diagnostics },
-            preview: PreviewReadModelDto::from_frame(view.render.frame.as_ref()),
-            live_output: LiveOutputReadModelDto::default(),
-            status: StatusReadModelDto { status },
-            prefs: PrefsReadModelDto {
-                project_tree_visible: true,
-                effect_preview_enabled: false,
+            preview: PreviewReadModelDto {
+                preview: view.preview.as_ref().map(PreviewSnapshotDto::from),
+                effect_preview_enabled: view.effect_preview_enabled,
             },
+            status: StatusReadModelDto { status },
+            command_availability: command_availability(),
         }
     }
 }
 
-impl PreviewReadModelDto {
-    fn from_frame(frame: Option<&RenderedFrame>) -> Self {
+impl From<&PreviewSnapshot> for PreviewSnapshotDto {
+    fn from(snapshot: &PreviewSnapshot) -> Self {
         Self {
-            preview: frame.map(PreviewSnapshotDto::from).unwrap_or_default(),
-            effect_preview_enabled: false,
+            source_label: snapshot.source_label.clone(),
+            is_playing: snapshot.is_playing,
+            preview_updating: snapshot.preview_updating,
+            effect_preview_active: snapshot.effect_preview_active,
+            position_seconds: snapshot.position_seconds,
+            home_seconds: snapshot.home_seconds,
+            duration_seconds: snapshot.duration_seconds,
+            audio: snapshot.audio.clone().map(SequenceAudioDto::from),
+            clock_source: snapshot.clock_source.clone(),
+            audio_playback_status: AudioPlaybackStatus::from(snapshot.audio_playback_status),
+            status: snapshot.status.clone(),
         }
     }
 }
@@ -241,7 +234,6 @@ fn project_diagnostics(analysis: &ProjectAnalysis) -> Vec<ProjectDiagnosticDto> 
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WorkspaceReadModelDto {
     pub(crate) project_root: Option<String>,
-    pub(crate) project_tree_visible: bool,
     pub(crate) project_entries: Vec<WorkspaceEntryDto>,
 }
 
@@ -624,8 +616,91 @@ impl From<DiagnosticSeverity> for DiagnosticSeverityDto {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PreviewReadModelDto {
-    pub(crate) preview: PreviewSnapshotDto,
+    pub(crate) preview: Option<PreviewSnapshotDto>,
     pub(crate) effect_preview_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CommandAvailabilityDto {
+    pub(crate) command: AppCommandKindDto,
+    pub(crate) available: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum AppCommandKindDto {
+    OpenProjectDialog,
+    OpenProject,
+    ChooseNewProjectParentDirectory,
+    CreateNewProject,
+    OpenFile,
+    CloseFile,
+    SetActiveFile,
+    UpdateActiveText,
+    SetActiveViewMode,
+    ApplyActiveDocumentEdit,
+    ChooseSequenceAudio,
+    ClearSequenceAudio,
+    ExportActiveSequenceFseq,
+    FlushAutosave,
+    ReloadActiveBufferFromDisk,
+    KeepActiveBuffer,
+    CreateFile,
+    CreateDirectory,
+    RenamePath,
+    DeletePath,
+    ReloadProject,
+    ToggleProjectTree,
+    SetEffectPreviewEnabled,
+    SetEffectPreviewEffects,
+    OpenPreviewWindow,
+    PreviewPlay,
+    PreviewPause,
+    PreviewStop,
+    PreviewRewindToZero,
+    PreviewSeek,
+    SetLiveOutputEnabled,
+}
+
+fn command_availability() -> Vec<CommandAvailabilityDto> {
+    use AppCommandKindDto::*;
+    [
+        (OpenProjectDialog, true),
+        (OpenProject, true),
+        (ChooseNewProjectParentDirectory, false),
+        (CreateNewProject, false),
+        (OpenFile, true),
+        (CloseFile, true),
+        (SetActiveFile, true),
+        (UpdateActiveText, true),
+        (SetActiveViewMode, true),
+        (ApplyActiveDocumentEdit, true),
+        (ChooseSequenceAudio, true),
+        (ClearSequenceAudio, true),
+        (ExportActiveSequenceFseq, false),
+        (FlushAutosave, true),
+        (ReloadActiveBufferFromDisk, true),
+        (KeepActiveBuffer, true),
+        (CreateFile, true),
+        (CreateDirectory, true),
+        (RenamePath, true),
+        (DeletePath, true),
+        (ReloadProject, false),
+        (ToggleProjectTree, false),
+        (SetEffectPreviewEnabled, true),
+        (SetEffectPreviewEffects, true),
+        (OpenPreviewWindow, true),
+        (PreviewPlay, true),
+        (PreviewPause, true),
+        (PreviewStop, true),
+        (PreviewRewindToZero, true),
+        (PreviewSeek, true),
+        (SetLiveOutputEnabled, false),
+    ]
+    .into_iter()
+    .map(|(command, available)| CommandAvailabilityDto { command, available })
+    .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -697,32 +772,99 @@ pub(crate) enum AudioPlaybackStatus {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct LiveOutputReadModelDto {
-    pub(crate) live_output: OutputReadoutDto,
-}
-
-impl Default for LiveOutputReadModelDto {
-    fn default() -> Self {
-        Self {
-            live_output: OutputReadoutDto {
-                enabled: false,
-                status: "disabled".to_string(),
-                active_universe_count: 0,
-                last_error: None,
-            },
+impl From<dawn_backend::AudioPlaybackStatus> for AudioPlaybackStatus {
+    fn from(status: dawn_backend::AudioPlaybackStatus) -> Self {
+        match status {
+            dawn_backend::AudioPlaybackStatus::None => Self::None,
+            dawn_backend::AudioPlaybackStatus::Missing => Self::Missing,
+            dawn_backend::AudioPlaybackStatus::Loading => Self::Loading,
+            dawn_backend::AudioPlaybackStatus::LoadingToPlay => Self::LoadingToPlay,
+            dawn_backend::AudioPlaybackStatus::Ready => Self::Ready,
+            dawn_backend::AudioPlaybackStatus::Playing => Self::Playing,
+            dawn_backend::AudioPlaybackStatus::Ended => Self::Ended,
+            dawn_backend::AudioPlaybackStatus::Error => Self::Error,
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct OutputReadoutDto {
-    pub(crate) enabled: bool,
-    pub(crate) status: String,
-    pub(crate) active_universe_count: u32,
-    pub(crate) last_error: Option<String>,
+pub(crate) struct PreviewStateEventDto {
+    #[serde(flatten)]
+    pub(crate) preview: PreviewSnapshotDto,
+    pub(crate) timing: PreviewTimingDto,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PreviewTimingDto {
+    pub(crate) backend_seconds: f64,
+    pub(crate) target_fps: u32,
+    pub(crate) active_fps: u32,
+    pub(crate) target_frame_ms: f64,
+    pub(crate) sleep_planned_ms: f64,
+    pub(crate) loop_interval_ms: f64,
+    pub(crate) audio_position_seconds: Option<f64>,
+    pub(crate) snapshot_position_seconds: f64,
+    pub(crate) frame_position_seconds: f64,
+    pub(crate) snapshot_minus_audio_ms: Option<f64>,
+    pub(crate) frame_minus_audio_ms: Option<f64>,
+    pub(crate) loop_elapsed_ms: f64,
+    pub(crate) preview_transport_lock_ms: f64,
+    pub(crate) live_output_lock_ms: f64,
+    pub(crate) model_lock_wait_ms: f64,
+    pub(crate) preview_snapshot_ms: f64,
+    pub(crate) analysis_clone_ms: f64,
+    pub(crate) audio_poll_ms: f64,
+    pub(crate) audio_apply_ms: f64,
+    pub(crate) model_update_ms: f64,
+    pub(crate) render_ms: f64,
+    pub(crate) renderer_build_ms: f64,
+    pub(crate) frame_evaluate_ms: f64,
+    pub(crate) frame_fixture_clone_ms: f64,
+    pub(crate) frame_effect_loop_ms: f64,
+    pub(crate) frame_output_ms: f64,
+    pub(crate) publish_ms: f64,
+    pub(crate) event_emit_ms: f64,
+    pub(crate) live_output_ms: f64,
+    pub(crate) event_interval_ms: f64,
+    pub(crate) rendered_active_effects: u32,
+    pub(crate) rendered_sampled_pixels: u32,
+    pub(crate) has_sink: bool,
+    pub(crate) published_frame: bool,
+    pub(crate) rendered_frame: bool,
+}
+
+impl PreviewTimingDto {
+    pub(crate) fn from_render(
+        timing: PreviewRenderTiming,
+        backend_seconds: f64,
+        target_fps: u32,
+        loop_elapsed_ms: f64,
+        has_sink: bool,
+        published_frame: bool,
+    ) -> Self {
+        let target_frame_ms = 1000.0 / f64::from(target_fps.max(1));
+        Self {
+            backend_seconds,
+            target_fps,
+            active_fps: target_fps,
+            target_frame_ms,
+            loop_elapsed_ms,
+            render_ms: timing.total_ms,
+            renderer_build_ms: timing.renderer_build_ms,
+            frame_evaluate_ms: timing.frame_evaluate_ms,
+            frame_fixture_clone_ms: timing.fixture_clone_ms,
+            frame_effect_loop_ms: timing.effect_loop_ms,
+            frame_output_ms: timing.output_frame_ms,
+            rendered_active_effects: timing.active_effects,
+            rendered_sampled_pixels: timing.sampled_pixels,
+            has_sink,
+            published_frame,
+            rendered_frame: true,
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -737,13 +879,6 @@ pub(crate) enum RuntimeStatusDto {
     NoProjectOpen,
     Saved,
     Message { message: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct PrefsReadModelDto {
-    pub(crate) project_tree_visible: bool,
-    pub(crate) effect_preview_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -895,7 +1030,19 @@ pub(crate) enum PreviewTransportMode {
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-pub(crate) enum SequenceGuiEditDto {
+pub(crate) enum DocumentEditDto {
+    Sequence { edit: SequenceDocumentEditDto },
+    Layout { edit: LayoutDocumentEditDto },
+    Fixture { edit: FixtureDocumentEditDto },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub(crate) enum SequenceDocumentEditDto {
     SetAudio {
         import: Option<String>,
     },
@@ -975,17 +1122,45 @@ pub(crate) enum SequenceGuiEditDto {
         collection_key: String,
         index: u32,
     },
+    DeleteEffects {
+        ids: Vec<u32>,
+    },
+    MoveEffects {
+        edits: Vec<SequenceEffectMoveDocumentEditDto>,
+    },
+    ResizeEffects {
+        edits: Vec<SequenceEffectResizeDocumentEditDto>,
+    },
+    DeleteMarks {
+        marks: Vec<SequenceMarkRefDto>,
+    },
+    MoveMarks {
+        edits: Vec<SequenceMarkMoveDocumentEditDto>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub(crate) enum SequenceSelectionDto {
-    Effects { ids: Vec<u32> },
-    Marks { marks: Vec<SequenceMarkRefDto> },
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SequenceEffectMoveDocumentEditDto {
+    pub(crate) id: u32,
+    pub(crate) start_seconds: f64,
+    pub(crate) target: Option<LayoutTargetDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SequenceEffectResizeDocumentEditDto {
+    pub(crate) id: u32,
+    pub(crate) start_seconds: f64,
+    pub(crate) duration_seconds: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SequenceMarkMoveDocumentEditDto {
+    pub(crate) collection_key: String,
+    pub(crate) index: u32,
+    pub(crate) time_seconds: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -996,69 +1171,12 @@ pub(crate) struct SequenceMarkRefDto {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SequencePasteAnchorDto {
-    pub(crate) lane_index: u32,
-    pub(crate) time_seconds: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SequenceSelectionEditResultDto {
-    pub(crate) selection: Option<SequenceSelectionDto>,
-    pub(crate) copied_count: u32,
-    pub(crate) skipped_count: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-pub(crate) enum SequenceSelectionEditDto {
-    Copy {
-        selection: SequenceSelectionDto,
-    },
-    Cut {
-        selection: SequenceSelectionDto,
-    },
-    Delete {
-        selection: SequenceSelectionDto,
-    },
-    Paste {
-        anchor: SequencePasteAnchorDto,
-    },
-    MoveEffects {
-        ids: Vec<u32>,
-        time_delta_seconds: f64,
-        lane_delta: i32,
-    },
-    ResizeEffects {
-        ids: Vec<u32>,
-        edge: SequenceResizeEdgeDto,
-        time_delta_seconds: f64,
-    },
-    MoveMarks {
-        marks: Vec<SequenceMarkRefDto>,
-        time_delta_seconds: f64,
-    },
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub(crate) enum SequenceResizeEdgeDto {
-    Left,
-    Right,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub(crate) enum LayoutGuiEditDto {
+pub(crate) enum LayoutDocumentEditDto {
     UpdatePlacementTransform { id: u32, transform: TransformDto },
 }
 
@@ -1068,7 +1186,7 @@ pub(crate) enum LayoutGuiEditDto {
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-pub(crate) enum FixtureGuiEditDto {
+pub(crate) enum FixtureDocumentEditDto {
     UpdateBulbDiameter {
         object_key: String,
         bulb_diameter_meters: f64,
@@ -1080,127 +1198,185 @@ pub(crate) enum FixtureGuiEditDto {
     },
 }
 
-impl TryFrom<SequenceGuiEditDto> for SequenceGuiEdit {
+impl TryFrom<DocumentEditDto> for DocumentEdit {
     type Error = String;
 
-    fn try_from(edit: SequenceGuiEditDto) -> Result<Self, Self::Error> {
-        Ok(Self::Document(match edit {
-            SequenceGuiEditDto::SetAudio { import } => {
-                dawn_language::document::SequenceDocumentEdit::SetAudio { import }
-            }
-            SequenceGuiEditDto::AddEffect {
+    fn try_from(edit: DocumentEditDto) -> Result<Self, Self::Error> {
+        Ok(match edit {
+            DocumentEditDto::Sequence { edit } => Self::Sequence(edit.try_into()?),
+            DocumentEditDto::Layout { edit } => Self::Layout(edit.try_into()?),
+            DocumentEditDto::Fixture { edit } => Self::Fixture(edit.try_into()?),
+        })
+    }
+}
+
+impl TryFrom<SequenceDocumentEditDto> for SequenceDocumentEdit {
+    type Error = String;
+
+    fn try_from(edit: SequenceDocumentEditDto) -> Result<Self, Self::Error> {
+        Ok(match edit {
+            SequenceDocumentEditDto::SetAudio { import } => Self::SetAudio { import },
+            SequenceDocumentEditDto::AddEffect {
                 script,
                 target,
                 scope,
                 start_seconds,
                 mark_collection_key,
-            } => dawn_language::document::SequenceDocumentEdit::AddEffect {
+            } => Self::AddEffect {
                 script: script.into(),
                 target: target.into(),
                 scope: scope.into(),
                 start_seconds,
                 mark_collection_key,
             },
-            SequenceGuiEditDto::MoveEffect {
+            SequenceDocumentEditDto::MoveEffect {
                 id,
                 start_seconds,
                 target,
-            } => dawn_language::document::SequenceDocumentEdit::MoveEffect {
+            } => Self::MoveEffect {
                 id,
                 start_seconds,
                 target: target.map(Into::into),
             },
-            SequenceGuiEditDto::ResizeEffect {
+            SequenceDocumentEditDto::ResizeEffect {
                 id,
                 start_seconds,
                 duration_seconds,
-            } => dawn_language::document::SequenceDocumentEdit::ResizeEffect {
+            } => Self::ResizeEffect {
                 id,
                 start_seconds,
                 duration_seconds,
             },
-            SequenceGuiEditDto::ChangeEffectScript { id, script } => {
-                dawn_language::document::SequenceDocumentEdit::ChangeEffectScript {
+            SequenceDocumentEditDto::ChangeEffectScript { id, script } => {
+                Self::ChangeEffectScript {
                     id,
                     script: script.into(),
                 }
             }
-            SequenceGuiEditDto::DeleteEffect { id } => {
-                dawn_language::document::SequenceDocumentEdit::DeleteEffect { id }
-            }
-            SequenceGuiEditDto::RetargetEffect { id, target } => {
-                dawn_language::document::SequenceDocumentEdit::RetargetEffect {
-                    id,
-                    target: target.into(),
-                }
-            }
-            SequenceGuiEditDto::SetEffectScope { id, scope } => {
-                dawn_language::document::SequenceDocumentEdit::SetEffectScope {
-                    id,
-                    scope: scope.into(),
-                }
-            }
-            SequenceGuiEditDto::UpdateEffectParam { id, name, value } => {
-                dawn_language::document::SequenceDocumentEdit::UpdateEffectParam {
+            SequenceDocumentEditDto::DeleteEffect { id } => Self::DeleteEffect { id },
+            SequenceDocumentEditDto::RetargetEffect { id, target } => Self::RetargetEffect {
+                id,
+                target: target.into(),
+            },
+            SequenceDocumentEditDto::SetEffectScope { id, scope } => Self::SetEffectScope {
+                id,
+                scope: scope.into(),
+            },
+            SequenceDocumentEditDto::UpdateEffectParam { id, name, value } => {
+                Self::UpdateEffectParam {
                     id,
                     name,
                     value: value.into(),
                 }
             }
-            SequenceGuiEditDto::LinkEffectCurveParam {
+            SequenceDocumentEditDto::LinkEffectCurveParam {
                 id,
                 name,
                 curve_path,
                 object_key,
-            } => dawn_language::document::SequenceDocumentEdit::LinkEffectCurveParam {
+            } => Self::LinkEffectCurveParam {
                 id,
                 name,
                 curve_path,
                 object_key,
             },
-            SequenceGuiEditDto::UnlinkEffectCurveParam { id, name } => {
-                dawn_language::document::SequenceDocumentEdit::UnlinkEffectCurveParam { id, name }
+            SequenceDocumentEditDto::UnlinkEffectCurveParam { id, name } => {
+                Self::UnlinkEffectCurveParam { id, name }
             }
-            SequenceGuiEditDto::CreateMarkCollection { key, name, color } => {
-                dawn_language::document::SequenceDocumentEdit::CreateMarkCollection {
-                    key,
-                    name,
-                    color,
-                }
+            SequenceDocumentEditDto::CreateMarkCollection { key, name, color } => {
+                Self::CreateMarkCollection { key, name, color }
             }
-            SequenceGuiEditDto::RenameMarkCollection { key, name } => {
-                dawn_language::document::SequenceDocumentEdit::RenameMarkCollection { key, name }
+            SequenceDocumentEditDto::RenameMarkCollection { key, name } => {
+                Self::RenameMarkCollection { key, name }
             }
-            SequenceGuiEditDto::DeleteMarkCollection { key } => {
-                dawn_language::document::SequenceDocumentEdit::DeleteMarkCollection { key }
+            SequenceDocumentEditDto::DeleteMarkCollection { key } => {
+                Self::DeleteMarkCollection { key }
             }
-            SequenceGuiEditDto::SetMarkCollectionColor { key, color } => {
-                dawn_language::document::SequenceDocumentEdit::SetMarkCollectionColor { key, color }
+            SequenceDocumentEditDto::SetMarkCollectionColor { key, color } => {
+                Self::SetMarkCollectionColor { key, color }
             }
-            SequenceGuiEditDto::AddMark {
+            SequenceDocumentEditDto::AddMark {
                 collection_key,
                 time_seconds,
-            } => dawn_language::document::SequenceDocumentEdit::AddMark {
+            } => Self::AddMark {
                 collection_key,
                 time_seconds,
             },
-            SequenceGuiEditDto::MoveMark {
+            SequenceDocumentEditDto::MoveMark {
                 collection_key,
                 index,
                 time_seconds,
-            } => dawn_language::document::SequenceDocumentEdit::MoveMark {
+            } => Self::MoveMark {
                 collection_key,
                 index: index as usize,
                 time_seconds,
             },
-            SequenceGuiEditDto::DeleteMark {
+            SequenceDocumentEditDto::DeleteMark {
                 collection_key,
                 index,
-            } => dawn_language::document::SequenceDocumentEdit::DeleteMark {
+            } => Self::DeleteMark {
                 collection_key,
                 index: index as usize,
             },
-        }))
+            SequenceDocumentEditDto::DeleteEffects { ids } => Self::DeleteEffects { ids },
+            SequenceDocumentEditDto::MoveEffects { edits } => Self::MoveEffects {
+                edits: edits.into_iter().map(Into::into).collect(),
+            },
+            SequenceDocumentEditDto::ResizeEffects { edits } => Self::ResizeEffects {
+                edits: edits.into_iter().map(Into::into).collect(),
+            },
+            SequenceDocumentEditDto::DeleteMarks { marks } => Self::DeleteMarks {
+                marks: marks.into_iter().map(Into::into).collect(),
+            },
+            SequenceDocumentEditDto::MoveMarks { edits } => Self::MoveMarks {
+                edits: edits.into_iter().map(Into::into).collect(),
+            },
+        })
+    }
+}
+
+impl From<SequenceEffectMoveDocumentEditDto>
+    for dawn_language::document::SequenceEffectMoveDocumentEdit
+{
+    fn from(edit: SequenceEffectMoveDocumentEditDto) -> Self {
+        Self {
+            id: edit.id,
+            start_seconds: edit.start_seconds,
+            target: edit.target.map(Into::into),
+        }
+    }
+}
+
+impl From<SequenceEffectResizeDocumentEditDto>
+    for dawn_language::document::SequenceEffectResizeDocumentEdit
+{
+    fn from(edit: SequenceEffectResizeDocumentEditDto) -> Self {
+        Self {
+            id: edit.id,
+            start_seconds: edit.start_seconds,
+            duration_seconds: edit.duration_seconds,
+        }
+    }
+}
+
+impl From<SequenceMarkRefDto> for dawn_language::document::SequenceMarkRefDocumentEdit {
+    fn from(mark: SequenceMarkRefDto) -> Self {
+        Self {
+            collection_key: mark.collection_key,
+            index: mark.index as usize,
+        }
+    }
+}
+
+impl From<SequenceMarkMoveDocumentEditDto>
+    for dawn_language::document::SequenceMarkMoveDocumentEdit
+{
+    fn from(mark: SequenceMarkMoveDocumentEditDto) -> Self {
+        Self {
+            collection_key: mark.collection_key,
+            index: mark.index as usize,
+            time_seconds: mark.time_seconds,
+        }
     }
 }
 
@@ -1236,126 +1412,14 @@ impl From<SequenceEffectParamValueDto> for SequenceEffectParamEditValue {
     }
 }
 
-impl From<SequenceSelectionDto> for SequenceSelection {
-    fn from(selection: SequenceSelectionDto) -> Self {
-        match selection {
-            SequenceSelectionDto::Effects { ids } => Self::Effects { ids },
-            SequenceSelectionDto::Marks { marks } => Self::Marks {
-                marks: marks.into_iter().map(SequenceMarkRef::from).collect(),
-            },
-        }
-    }
-}
-
-impl From<SequenceMarkRefDto> for SequenceMarkRef {
-    fn from(mark: SequenceMarkRefDto) -> Self {
-        Self {
-            collection_key: mark.collection_key,
-            index: mark.index,
-        }
-    }
-}
-
-impl From<SequencePasteAnchorDto> for SequencePasteAnchor {
-    fn from(anchor: SequencePasteAnchorDto) -> Self {
-        Self {
-            lane_index: Some(anchor.lane_index),
-            time_seconds: Some(anchor.time_seconds),
-        }
-    }
-}
-
-impl From<SequenceSelectionEditDto> for SequenceSelectionEdit {
-    fn from(edit: SequenceSelectionEditDto) -> Self {
-        match edit {
-            SequenceSelectionEditDto::Copy { selection } => Self::Copy {
-                selection: selection.into(),
-            },
-            SequenceSelectionEditDto::Cut { selection } => Self::Cut {
-                selection: selection.into(),
-            },
-            SequenceSelectionEditDto::Delete { selection } => Self::Delete {
-                selection: selection.into(),
-            },
-            SequenceSelectionEditDto::Paste { anchor } => Self::Paste {
-                anchor: anchor.into(),
-            },
-            SequenceSelectionEditDto::MoveEffects {
-                ids,
-                time_delta_seconds,
-                lane_delta,
-            } => Self::MoveEffects {
-                ids,
-                time_delta_seconds,
-                lane_delta,
-            },
-            SequenceSelectionEditDto::ResizeEffects {
-                ids,
-                edge,
-                time_delta_seconds,
-            } => Self::ResizeEffects {
-                ids,
-                edge: edge.into(),
-                time_delta_seconds,
-            },
-            SequenceSelectionEditDto::MoveMarks {
-                marks,
-                time_delta_seconds,
-            } => Self::MoveMarks {
-                marks: marks.into_iter().map(SequenceMarkRef::from).collect(),
-                time_delta_seconds,
-            },
-        }
-    }
-}
-
-impl From<SequenceResizeEdgeDto> for SequenceResizeEdge {
-    fn from(edge: SequenceResizeEdgeDto) -> Self {
-        match edge {
-            SequenceResizeEdgeDto::Left => Self::Left,
-            SequenceResizeEdgeDto::Right => Self::Right,
-        }
-    }
-}
-
-impl From<SequenceSelectionEditResult> for SequenceSelectionEditResultDto {
-    fn from(result: SequenceSelectionEditResult) -> Self {
-        Self {
-            selection: result.selection.map(SequenceSelectionDto::from),
-            copied_count: result.copied_count,
-            skipped_count: result.skipped_count,
-        }
-    }
-}
-
-impl From<SequenceSelection> for SequenceSelectionDto {
-    fn from(selection: SequenceSelection) -> Self {
-        match selection {
-            SequenceSelection::Effects { ids } => Self::Effects { ids },
-            SequenceSelection::Marks { marks } => Self::Marks {
-                marks: marks.into_iter().map(SequenceMarkRefDto::from).collect(),
-            },
-        }
-    }
-}
-
-impl From<SequenceMarkRef> for SequenceMarkRefDto {
-    fn from(mark: SequenceMarkRef) -> Self {
-        Self {
-            collection_key: mark.collection_key,
-            index: mark.index,
-        }
-    }
-}
-
-impl TryFrom<LayoutGuiEditDto> for LayoutGuiEdit {
+impl TryFrom<LayoutDocumentEditDto> for LayoutDocumentEdit {
     type Error = String;
 
-    fn try_from(edit: LayoutGuiEditDto) -> Result<Self, Self::Error> {
+    fn try_from(edit: LayoutDocumentEditDto) -> Result<Self, Self::Error> {
         match edit {
-            LayoutGuiEditDto::UpdatePlacementTransform { id, transform } => {
+            LayoutDocumentEditDto::UpdatePlacementTransform { id, transform } => {
                 Ok(Self::UpdatePlacementTransform {
-                    id,
+                    id: FixtureId(id),
                     transform: transform.try_into()?,
                 })
             }
@@ -1363,25 +1427,26 @@ impl TryFrom<LayoutGuiEditDto> for LayoutGuiEdit {
     }
 }
 
-impl TryFrom<FixtureGuiEditDto> for FixtureGuiEdit {
+impl TryFrom<FixtureDocumentEditDto> for FixtureDocumentEdit {
     type Error = String;
 
-    fn try_from(edit: FixtureGuiEditDto) -> Result<Self, Self::Error> {
+    fn try_from(edit: FixtureDocumentEditDto) -> Result<Self, Self::Error> {
         match edit {
-            FixtureGuiEditDto::UpdateBulbDiameter {
+            FixtureDocumentEditDto::UpdateBulbDiameter {
                 object_key,
                 bulb_diameter_meters,
             } => Ok(Self::UpdateBulbDiameter {
                 object_key,
-                bulb_diameter_meters,
+                bulb_diameter: DistanceSpan::try_from_meters_f64_truncated(bulb_diameter_meters)
+                    .map_err(str::to_string)?,
             }),
-            FixtureGuiEditDto::MovePoint {
+            FixtureDocumentEditDto::MovePoint {
                 object_key,
                 point_index,
                 point,
             } => Ok(Self::MovePoint {
                 object_key,
-                point_index,
+                point_index: point_index as usize,
                 point: point.try_into()?,
             }),
         }

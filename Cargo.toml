@@ -2,7 +2,6 @@
 members = [
   "apps/desktop",
   "crates/dawn-backend",
-  "crates/deprecated-dawn-backend",
   "crates/dawn-cli",
   "crates/dawn-language",
 ]

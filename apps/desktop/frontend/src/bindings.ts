@@ -22,9 +22,11 @@ export type ActiveDocumentReadModelDto = {
 
 export type ActiveGuiDocumentDto = { type: "sequence"; document: SequenceDocumentDto } | { type: "layout"; document: LayoutDocumentDto } | { type: "fixture"; document: FixtureDocumentDto } | { type: "blocked"; reason: string; diagnostics: ProjectDiagnosticDto[] };
 
-export type AppCommandDto = { type: "openProjectDialog" } | { type: "openProject"; path: string } | { type: "chooseNewProjectParentDirectory" } | { type: "createNewProject"; parentPath: string; directoryName: string } | { type: "openFile"; path: string } | { type: "closeFile"; path: string } | { type: "setActiveFile"; path: string } | { type: "updateActiveText"; text: string } | { type: "setActiveViewMode"; mode: EditorViewModeDto } | { type: "applySequenceGuiEdit"; edit: SequenceGuiEditDto } | { type: "applySequenceSelectionEdit"; edit: SequenceSelectionEditDto } | { type: "chooseSequenceAudio" } | { type: "clearSequenceAudio" } | { type: "exportActiveSequenceFseq"; stepMs: number } | { type: "applyLayoutGuiEdit"; edit: LayoutGuiEditDto } | { type: "applyFixtureGuiEdit"; edit: FixtureGuiEditDto } | { type: "flushAutosave" } | { type: "reloadActiveBufferFromDisk" } | { type: "keepActiveBuffer" } | { type: "createFile"; parent: string; name: string } | { type: "createDirectory"; parent: string; name: string } | { type: "renamePath"; path: string; newName: string } | { type: "deletePath"; path: string } | { type: "reloadProject" } | { type: "toggleProjectTree" } | { type: "setEffectPreviewEnabled"; enabled: boolean } | { type: "setEffectPreviewEffects"; ids: number[] } | { type: "openPreviewWindow" } | { type: "previewPlay" } | { type: "previewPause" } | { type: "previewStop" } | { type: "previewRewindToZero" } | { type: "previewSeek"; positionSeconds: number } | { type: "setLiveOutputEnabled"; enabled: boolean };
+export type AppCommandDto = { type: "openProjectDialog" } | { type: "openProject"; path: string } | { type: "chooseNewProjectParentDirectory" } | { type: "createNewProject"; parentPath: string; directoryName: string } | { type: "openFile"; path: string } | { type: "closeFile"; path: string } | { type: "setActiveFile"; path: string } | { type: "updateActiveText"; text: string } | { type: "setActiveViewMode"; mode: EditorViewModeDto } | { type: "applyActiveDocumentEdit"; edit: DocumentEditDto } | { type: "chooseSequenceAudio" } | { type: "clearSequenceAudio" } | { type: "exportActiveSequenceFseq"; stepMs: number } | { type: "flushAutosave" } | { type: "reloadActiveBufferFromDisk" } | { type: "keepActiveBuffer" } | { type: "createFile"; parent: string; name: string } | { type: "createDirectory"; parent: string; name: string } | { type: "renamePath"; path: string; newName: string } | { type: "deletePath"; path: string } | { type: "reloadProject" } | { type: "toggleProjectTree" } | { type: "setEffectPreviewEnabled"; enabled: boolean } | { type: "setEffectPreviewEffects"; ids: number[] } | { type: "openPreviewWindow" } | { type: "previewPlay" } | { type: "previewPause" } | { type: "previewStop" } | { type: "previewRewindToZero" } | { type: "previewSeek"; positionSeconds: number } | { type: "setLiveOutputEnabled"; enabled: boolean };
 
-export type AppCommandResponseDto = { type: "none" } | { type: "optionalString"; value: string | null } | { type: "sequenceSelectionEditResult"; result: SequenceSelectionEditResultDto };
+export type AppCommandKindDto = "openProjectDialog" | "openProject" | "chooseNewProjectParentDirectory" | "createNewProject" | "openFile" | "closeFile" | "setActiveFile" | "updateActiveText" | "setActiveViewMode" | "applyActiveDocumentEdit" | "chooseSequenceAudio" | "clearSequenceAudio" | "exportActiveSequenceFseq" | "flushAutosave" | "reloadActiveBufferFromDisk" | "keepActiveBuffer" | "createFile" | "createDirectory" | "renamePath" | "deletePath" | "reloadProject" | "toggleProjectTree" | "setEffectPreviewEnabled" | "setEffectPreviewEffects" | "openPreviewWindow" | "previewPlay" | "previewPause" | "previewStop" | "previewRewindToZero" | "previewSeek" | "setLiveOutputEnabled";
+
+export type AppCommandResponseDto = { type: "none" } | { type: "optionalString"; value: string | null };
 
 export type AppSnapshotDto = {
 	workspace: WorkspaceReadModelDto,
@@ -32,9 +34,8 @@ export type AppSnapshotDto = {
 	activeDocument: ActiveDocumentReadModelDto,
 	diagnostics: DiagnosticsReadModelDto,
 	preview: PreviewReadModelDto,
-	liveOutput: LiveOutputReadModelDto,
 	status: StatusReadModelDto,
-	prefs: PrefsReadModelDto,
+	commandAvailability: CommandAvailabilityDto[],
 };
 
 export type AudioPlaybackStatus = "none" | "missing" | "loading" | "loading_to_play" | "ready" | "playing" | "ended" | "error";
@@ -44,6 +45,11 @@ export type BufferExternalStateDto = "current" | "changedOnDisk" | "deletedOnDis
 export type ColorCurvePointDto = {
 	time: number,
 	value: string,
+};
+
+export type CommandAvailabilityDto = {
+	command: AppCommandKindDto,
+	available: boolean,
 };
 
 export type DiagnosticSeverityDto = "error" | "warning";
@@ -63,6 +69,8 @@ export type DocumentDescriptorDto = {
 	availableViews: DocumentViewIdDto[],
 	defaultObjectKeys: DocumentDefaultObjectKeyDto[],
 };
+
+export type DocumentEditDto = { type: "sequence"; edit: SequenceDocumentEditDto } | { type: "layout"; edit: LayoutDocumentEditDto } | { type: "fixture"; edit: FixtureDocumentEditDto };
 
 export type DocumentObjectDescriptorDto = {
 	key: string,
@@ -109,7 +117,7 @@ export type FixtureDocumentDto = {
 	fixtures: FixtureDefinitionDto[],
 };
 
-export type FixtureGuiEditDto = { type: "updateBulbDiameter"; objectKey: string; bulbDiameterMeters: number } | { type: "movePoint"; objectKey: string; pointIndex: number; point: Point3MetersDto };
+export type FixtureDocumentEditDto = { type: "updateBulbDiameter"; objectKey: string; bulbDiameterMeters: number } | { type: "movePoint"; objectKey: string; pointIndex: number; point: Point3MetersDto };
 
 export type FloatCurvePointDto = {
 	time: number,
@@ -148,14 +156,14 @@ export type LayoutDocumentDto = {
 	fixtures: LayoutFixturePlacementDto[],
 };
 
+export type LayoutDocumentEditDto = { type: "updatePlacementTransform"; id: number; transform: TransformDto };
+
 export type LayoutFixturePlacementDto = {
 	id: number,
 	name: string,
 	transform: TransformDto,
 	resolvedFixture: ResolvedLayoutFixtureDto,
 };
-
-export type LayoutGuiEditDto = { type: "updatePlacementTransform"; id: number; transform: TransformDto };
 
 export type LayoutTargetDto = {
 	kind: LayoutTargetKindDto,
@@ -164,18 +172,7 @@ export type LayoutTargetDto = {
 
 export type LayoutTargetKindDto = "group" | "fixture";
 
-export type LiveOutputReadModelDto = {
-	liveOutput: OutputReadoutDto,
-};
-
 export type ObjectKindDto = "project" | "display" | "controller" | "layout" | "fixture" | "patch" | "sequence" | "curve";
-
-export type OutputReadoutDto = {
-	enabled: boolean,
-	status: string,
-	activeUniverseCount: number,
-	lastError: string | null,
-};
 
 export type Point3MetersDto = {
 	xMeters: number,
@@ -183,13 +180,8 @@ export type Point3MetersDto = {
 	zMeters: number,
 };
 
-export type PrefsReadModelDto = {
-	projectTreeVisible: boolean,
-	effectPreviewEnabled: boolean,
-};
-
 export type PreviewReadModelDto = {
-	preview: PreviewSnapshotDto,
+	preview: PreviewSnapshotDto | null,
 	effectPreviewEnabled: boolean,
 };
 
@@ -290,6 +282,8 @@ export type SequenceDocumentDto = {
 	degraded: boolean,
 };
 
+export type SequenceDocumentEditDto = { type: "setAudio"; import: string | null } | { type: "addEffect"; script: EffectScriptReferenceDto; target: LayoutTargetDto; scope: SequenceEffectScopeDto; startSeconds: number; markCollectionKey: string | null } | { type: "moveEffect"; id: number; startSeconds: number; target: LayoutTargetDto | null } | { type: "resizeEffect"; id: number; startSeconds: number; durationSeconds: number } | { type: "changeEffectScript"; id: number; script: EffectScriptReferenceDto } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTargetDto } | { type: "setEffectScope"; id: number; scope: SequenceEffectScopeDto } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValueDto } | { type: "linkEffectCurveParam"; id: number; name: string; curvePath: string; objectKey: string } | { type: "unlinkEffectCurveParam"; id: number; name: string } | { type: "createMarkCollection"; key: string; name: string; color: string } | { type: "renameMarkCollection"; key: string; name: string } | { type: "deleteMarkCollection"; key: string } | { type: "setMarkCollectionColor"; key: string; color: string } | { type: "addMark"; collectionKey: string; timeSeconds: number } | { type: "moveMark"; collectionKey: string; index: number; timeSeconds: number } | { type: "deleteMark"; collectionKey: string; index: number } | { type: "deleteEffects"; ids: number[] } | { type: "moveEffects"; edits: SequenceEffectMoveDocumentEditDto[] } | { type: "resizeEffects"; edits: SequenceEffectResizeDocumentEditDto[] } | { type: "deleteMarks"; marks: SequenceMarkRefDto[] } | { type: "moveMarks"; edits: SequenceMarkMoveDocumentEditDto[] };
+
 export type SequenceEffectDto = {
 	index: number,
 	id: number,
@@ -301,6 +295,12 @@ export type SequenceEffectDto = {
 	script: string,
 	scriptSource: EffectScriptReferenceDto | null,
 	params: SequenceEffectParamDto[],
+};
+
+export type SequenceEffectMoveDocumentEditDto = {
+	id: number,
+	startSeconds: number,
+	target: LayoutTargetDto | null,
 };
 
 export type SequenceEffectParamCurveSourceDto = { type: "inline" } | { type: "library"; reference: string; path: string | null; objectKey: string | null; displayName: string | null };
@@ -364,6 +364,12 @@ export type SequenceEffectPreviewUnavailableResultDto = {
 	signature: string,
 };
 
+export type SequenceEffectResizeDocumentEditDto = {
+	id: number,
+	startSeconds: number,
+	durationSeconds: number,
+};
+
 export type SequenceEffectScopeDto = "perFixture" | "wholeTarget";
 
 export type SequenceEffectScriptDto = {
@@ -381,8 +387,6 @@ export type SequenceEffectScriptParamDto = {
 	kind: SequenceEffectParamKindDto,
 };
 
-export type SequenceGuiEditDto = { type: "setAudio"; import: string | null } | { type: "addEffect"; script: EffectScriptReferenceDto; target: LayoutTargetDto; scope: SequenceEffectScopeDto; startSeconds: number; markCollectionKey: string | null } | { type: "moveEffect"; id: number; startSeconds: number; target: LayoutTargetDto | null } | { type: "resizeEffect"; id: number; startSeconds: number; durationSeconds: number } | { type: "changeEffectScript"; id: number; script: EffectScriptReferenceDto } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTargetDto } | { type: "setEffectScope"; id: number; scope: SequenceEffectScopeDto } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValueDto } | { type: "linkEffectCurveParam"; id: number; name: string; curvePath: string; objectKey: string } | { type: "unlinkEffectCurveParam"; id: number; name: string } | { type: "createMarkCollection"; key: string; name: string; color: string } | { type: "renameMarkCollection"; key: string; name: string } | { type: "deleteMarkCollection"; key: string } | { type: "setMarkCollectionColor"; key: string; color: string } | { type: "addMark"; collectionKey: string; timeSeconds: number } | { type: "moveMark"; collectionKey: string; index: number; timeSeconds: number } | { type: "deleteMark"; collectionKey: string; index: number };
-
 export type SequenceLaneDto = {
 	target: LayoutTargetDto,
 	label: string,
@@ -395,26 +399,15 @@ export type SequenceMarkCollectionDto = {
 	marksSeconds: number[],
 };
 
-export type SequenceMarkRefDto = {
+export type SequenceMarkMoveDocumentEditDto = {
 	collectionKey: string,
 	index: number,
-};
-
-export type SequencePasteAnchorDto = {
-	laneIndex: number,
 	timeSeconds: number,
 };
 
-export type SequenceResizeEdgeDto = "left" | "right";
-
-export type SequenceSelectionDto = { type: "effects"; ids: number[] } | { type: "marks"; marks: SequenceMarkRefDto[] };
-
-export type SequenceSelectionEditDto = { type: "copy"; selection: SequenceSelectionDto } | { type: "cut"; selection: SequenceSelectionDto } | { type: "delete"; selection: SequenceSelectionDto } | { type: "paste"; anchor: SequencePasteAnchorDto } | { type: "moveEffects"; ids: number[]; timeDeltaSeconds: number; laneDelta: number } | { type: "resizeEffects"; ids: number[]; edge: SequenceResizeEdgeDto; timeDeltaSeconds: number } | { type: "moveMarks"; marks: SequenceMarkRefDto[]; timeDeltaSeconds: number };
-
-export type SequenceSelectionEditResultDto = {
-	selection: SequenceSelectionDto | null,
-	copiedCount: number,
-	skippedCount: number,
+export type SequenceMarkRefDto = {
+	collectionKey: string,
+	index: number,
 };
 
 export type StatusReadModelDto = {
@@ -448,7 +441,6 @@ export type WorkspaceEntryKindDto = "directory" | "file";
 
 export type WorkspaceReadModelDto = {
 	projectRoot: string | null,
-	projectTreeVisible: boolean,
 	projectEntries: WorkspaceEntryDto[],
 };
 

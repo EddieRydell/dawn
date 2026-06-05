@@ -1,7 +1,7 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Maximize2, Minus, X } from "lucide-react";
-import { commandRegistry } from "../commandRegistry";
+import { commandRegistry, isCommandAvailable } from "../commandRegistry";
 
 const appWindow = getCurrentWindow();
 
@@ -46,11 +46,14 @@ function Menu({ label, commands }: { label: string; commands: Array<keyof typeof
         <DropdownMenu.Content className="menu-content" sideOffset={7}>
           {commands.map((id) => {
             const command = commandRegistry[id];
+            const available = isCommandAvailable(command);
             return (
               <DropdownMenu.Item
                 key={id}
                 className="menu-item"
+                disabled={!available}
                 onSelect={() => {
+                  if (!available) return;
                   void command.run();
                 }}
               >

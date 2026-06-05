@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
+// Thin Tauri adapter only: convert DTOs, call backend, emit updates.
 use dawn_backend::{
     AppBackend, AppUpdate, BackendResult, EditorViewMode, RenderEffectPreviewRequestEffect,
     SequenceEffectPreviewResult, SequenceEffectPreviewResultBatch,
 };
 use dawn_language::path::Utf8PathBuf;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 use crate::{
     dto::{
@@ -13,7 +14,7 @@ use crate::{
         PreviewTransportMode, SequenceEffectPreviewRequestEffectDto,
         SequenceEffectPreviewResultsDto,
     },
-    events, jobs,
+    jobs,
     state::{AppState, CommandResult},
 };
 
@@ -70,33 +71,10 @@ pub(crate) async fn dispatch_app_command(
             })?;
             Ok(AppCommandResponseDto::None)
         }
-        AppCommandDto::ApplySequenceGuiEdit { edit } => {
+        AppCommandDto::ApplyActiveDocumentEdit { edit } => {
             let edit = edit.try_into()?;
             run_backend_command(&app, state.inner(), |backend| {
-                backend.apply_sequence_gui_edit(edit)
-            })?;
-            Ok(AppCommandResponseDto::None)
-        }
-        AppCommandDto::ApplySequenceSelectionEdit { edit } => {
-            let edit = edit.into();
-            let result = run_backend_command_with_response(&app, state.inner(), |backend| {
-                backend.apply_sequence_selection_edit(edit)
-            })?;
-            Ok(AppCommandResponseDto::SequenceSelectionEditResult {
-                result: result.into(),
-            })
-        }
-        AppCommandDto::ApplyLayoutGuiEdit { edit } => {
-            let edit = edit.try_into()?;
-            run_backend_command(&app, state.inner(), |backend| {
-                backend.apply_layout_gui_edit(edit)
-            })?;
-            Ok(AppCommandResponseDto::None)
-        }
-        AppCommandDto::ApplyFixtureGuiEdit { edit } => {
-            let edit = edit.try_into()?;
-            run_backend_command(&app, state.inner(), |backend| {
-                backend.apply_fixture_gui_edit(edit)
+                backend.apply_active_document_edit(edit)
             })?;
             Ok(AppCommandResponseDto::None)
         }
@@ -140,21 +118,91 @@ pub(crate) async fn dispatch_app_command(
             })?;
             Ok(AppCommandResponseDto::None)
         }
+        AppCommandDto::ChooseSequenceAudio => {
+            choose_sequence_audio(app, state)?;
+            Ok(AppCommandResponseDto::None)
+        }
+        AppCommandDto::ClearSequenceAudio => {
+            state.audio().clear();
+            run_backend_command(&app, state.inner(), AppBackend::clear_active_sequence_audio)?;
+            Ok(AppCommandResponseDto::None)
+        }
+        AppCommandDto::SetEffectPreviewEnabled { enabled } => {
+            state.audio().clear();
+            run_backend_command(&app, state.inner(), |backend| {
+                backend.set_effect_preview_enabled(enabled)
+            })?;
+            Ok(AppCommandResponseDto::None)
+        }
+        AppCommandDto::SetEffectPreviewEffects { ids } => {
+            run_backend_command(&app, state.inner(), |backend| {
+                backend.set_effect_preview_effects(ids)
+            })?;
+            Ok(AppCommandResponseDto::None)
+        }
+        AppCommandDto::OpenPreviewWindow => {
+            open_preview_window(app)?;
+            Ok(AppCommandResponseDto::None)
+        }
+        AppCommandDto::PreviewPlay => {
+            preview_play(app, state)?;
+            Ok(AppCommandResponseDto::None)
+        }
+        AppCommandDto::PreviewPause => {
+            let clock = state.audio().pause()?;
+            run_backend_command(&app, state.inner(), |backend| {
+                if backend.preview_snapshot().audio.is_some() {
+                    backend.preview_apply_audio_clock(clock)
+                } else {
+                    backend.preview_pause()
+                }
+            })?;
+            Ok(AppCommandResponseDto::None)
+        }
+        AppCommandDto::PreviewStop => {
+            let home_seconds = state.lock_backend()?.preview_snapshot().home_seconds;
+            let clock = state.audio().stop(home_seconds)?;
+            run_backend_command(&app, state.inner(), |backend| {
+                if backend.preview_snapshot().audio.is_some() {
+                    backend.preview_apply_audio_clock(clock)
+                } else {
+                    backend.preview_stop()
+                }
+            })?;
+            Ok(AppCommandResponseDto::None)
+        }
+        AppCommandDto::PreviewRewindToZero => {
+            let clock = state.audio().stop(0.0)?;
+            run_backend_command(&app, state.inner(), |backend| {
+                if backend.preview_snapshot().audio.is_some() {
+                    backend.preview_apply_audio_clock(clock)
+                } else {
+                    backend.preview_rewind_to_zero()
+                }
+            })?;
+            Ok(AppCommandResponseDto::None)
+        }
+        AppCommandDto::PreviewSeek { position_seconds } => {
+            let snapshot = state.lock_backend()?.preview_snapshot();
+            if let Some(audio) = snapshot.audio.filter(|audio| audio.exists) {
+                let clock = state
+                    .audio()
+                    .seek(&audio, position_seconds, snapshot.is_playing)?;
+                run_backend_command(&app, state.inner(), |backend| {
+                    backend.preview_apply_audio_clock(clock)
+                })?;
+            } else {
+                run_backend_command(&app, state.inner(), |backend| {
+                    backend.preview_seek(position_seconds)
+                })?;
+            }
+            Ok(AppCommandResponseDto::None)
+        }
         AppCommandDto::ChooseNewProjectParentDirectory
         | AppCommandDto::CreateNewProject { .. }
-        | AppCommandDto::ChooseSequenceAudio
-        | AppCommandDto::ClearSequenceAudio
         | AppCommandDto::ExportActiveSequenceFseq { .. }
         | AppCommandDto::ReloadProject
         | AppCommandDto::ToggleProjectTree
-        | AppCommandDto::SetEffectPreviewEnabled { .. }
-        | AppCommandDto::SetEffectPreviewEffects { .. }
-        | AppCommandDto::OpenPreviewWindow
-        | AppCommandDto::PreviewPlay
-        | AppCommandDto::PreviewPause
-        | AppCommandDto::PreviewStop
-        | AppCommandDto::PreviewRewindToZero
-        | AppCommandDto::PreviewSeek { .. }
         | AppCommandDto::SetLiveOutputEnabled { .. } => {
             Err("this desktop command has not been rebuilt yet".to_string())
         }
@@ -175,6 +223,61 @@ fn open_project(app: AppHandle, state: State<'_, AppState>, path: PathBuf) -> Co
     run_backend_command(&app, state.inner(), |backend| backend.open_project(path))
 }
 
+fn choose_sequence_audio(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
+    let dialog = {
+        let backend = state.lock_backend()?;
+        backend
+            .active_sequence_audio_dialog()
+            .map_err(|error| error.to_string())?
+    };
+    let Some(path) = rfd::FileDialog::new()
+        .set_title("Choose Sequence Audio")
+        .set_directory(dialog.audio_directory)
+        .pick_file()
+    else {
+        return Ok(());
+    };
+    run_backend_command(&app, state.inner(), |backend| {
+        backend.set_active_sequence_audio(path)
+    })
+}
+
+fn preview_play(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
+    let (update, snapshot) = {
+        let mut backend = state.lock_backend()?;
+        backend
+            .prepare_preview_play()
+            .map_err(|error| error.to_string())?
+    };
+    jobs::handle_backend_update(&app, state.backend(), update)?;
+    if let Some(audio) = snapshot.audio.filter(|audio| audio.exists) {
+        let clock = state.audio().play(&audio, snapshot.position_seconds)?;
+        run_backend_command(&app, state.inner(), |backend| {
+            backend.preview_apply_audio_clock(clock)
+        })
+    } else {
+        state.audio().clear();
+        run_backend_command(&app, state.inner(), AppBackend::preview_play_silent)
+    }
+}
+
+fn open_preview_window(app: AppHandle) -> CommandResult<()> {
+    if let Some(window) = app.get_webview_window("preview") {
+        window.set_focus().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(
+        &app,
+        "preview",
+        WebviewUrl::App("index.html?view=preview".into()),
+    )
+    .title("Dawn Preview")
+    .inner_size(960.0, 720.0)
+    .build()
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
 fn run_backend_command(
     app: &AppHandle,
     state: &AppState,
@@ -186,20 +289,6 @@ fn run_backend_command(
         command(&mut backend).map_err(|error| error.to_string())?
     };
     jobs::handle_backend_update(app, backend, update)
-}
-
-fn run_backend_command_with_response<T>(
-    app: &AppHandle,
-    state: &AppState,
-    command: impl FnOnce(&mut AppBackend) -> BackendResult<(AppUpdate, T)>,
-) -> CommandResult<T> {
-    let backend = state.backend();
-    let (update, response) = {
-        let mut backend = state.lock_backend()?;
-        command(&mut backend).map_err(|error| error.to_string())?
-    };
-    jobs::handle_backend_update(app, backend, update)?;
-    Ok(response)
 }
 
 fn editor_view_mode(mode: EditorViewModeDto) -> EditorViewMode {
@@ -286,30 +375,57 @@ fn sequence_effect_preview_result_dto(
 
 #[specta::specta]
 #[tauri::command]
-pub(crate) fn get_preview_scene() -> CommandResult<PreviewSceneDto> {
-    Ok(PreviewSceneDto::default())
+pub(crate) fn get_preview_scene(state: State<'_, AppState>) -> CommandResult<PreviewSceneDto> {
+    let backend = state.lock_backend()?;
+    Ok(PreviewSceneDto::from(&backend.preview_snapshot().frame))
 }
 
 #[specta::specta]
 #[tauri::command]
-pub(crate) fn init_preview_transport(app: AppHandle) -> CommandResult<()> {
-    events::emit_backend_error(
-        &app,
-        "preview transport has not been rebuilt yet".to_string(),
-    );
-    Ok(())
+pub(crate) fn init_preview_transport(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let window = app
+        .get_webview_window("preview")
+        .ok_or_else(|| "preview window is not open".to_string())?;
+    let pixel_count = {
+        let backend = state.lock_backend()?;
+        preview_pixel_count(&backend.preview_snapshot().frame)
+    };
+    state
+        .lock_preview_transport()?
+        .init_window(&window, pixel_count)
 }
 
 #[specta::specta]
 #[tauri::command]
-pub(crate) fn dispose_preview_transport() -> CommandResult<()> {
+pub(crate) fn dispose_preview_transport(state: State<'_, AppState>) -> CommandResult<()> {
+    state.lock_preview_transport()?.dispose_window("preview");
     Ok(())
 }
 
 #[specta::specta]
 #[tauri::command]
 pub(crate) fn get_preview_transport_mode() -> CommandResult<PreviewTransportMode> {
-    Ok(PreviewTransportMode::Unsupported)
+    Ok(
+        match crate::preview_transport::PreviewTransportRuntime::mode() {
+            crate::preview_transport::PreviewTransportMode::Webview2Shared => {
+                PreviewTransportMode::Webview2Shared
+            }
+            crate::preview_transport::PreviewTransportMode::Unsupported => {
+                PreviewTransportMode::Unsupported
+            }
+        },
+    )
+}
+
+fn preview_pixel_count(frame: &dawn_backend::RenderedFrame) -> usize {
+    frame
+        .fixtures
+        .iter()
+        .map(|fixture| fixture.pixels.len())
+        .sum()
 }
 
 pub(crate) fn register_commands(

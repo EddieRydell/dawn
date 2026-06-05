@@ -1,12 +1,12 @@
 import { listen } from "@tauri-apps/api/event";
 
-import { ChevronLeft, ChevronRight, Crosshair, LoaderCircle, Music, Pause, Play, RadioTower, SkipBack, Square, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Crosshair, LoaderCircle, Music, Pause, Play, SkipBack, Square, X } from "lucide-react";
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { commands } from "../../../api";
 
-import type { AudioPlaybackStatus, SequenceDocumentDto, PreviewSnapshotDto, OutputReadoutDto } from "../../../bindings";
+import type { AudioPlaybackStatus, SequenceDocumentDto, PreviewSnapshotDto } from "../../../bindings";
 
 import { runRuntimeCommand } from "../../../store";
 
@@ -16,17 +16,15 @@ import { setGlobalMarkDisplayMode, useMarkDisplayMode, type MarkDisplayMode } fr
 export function SequenceTransportControls({
   document,
   preview,
-  liveOutput,
   effectPreviewEnabled,
   selectedEffectIds
 }: {
   document: SequenceDocumentDto;
-  preview: PreviewSnapshotDto;
-  liveOutput: OutputReadoutDto;
+  preview: LivePreview;
   effectPreviewEnabled: boolean;
   selectedEffectIds: number[];
 }) {
-  const livePreview = useSequencePreview(preview);
+  const livePreview = preview;
   const unsupported = document.durationSeconds <= 0;
   const audioStatus = useSequenceAudioStatus(livePreview);
   const timingSummary = previewTimingSummary(livePreview.timing);
@@ -90,14 +88,6 @@ export function SequenceTransportControls({
       </button>
       <button
         type="button"
-        className={liveOutput.enabled ? "active" : ""}
-        title={liveOutput.lastError ?? `Live output: ${liveOutput.status}`}
-        onClick={() => void runRuntimeCommand(() => commands.setLiveOutputEnabled(!liveOutput.enabled))}
-      >
-        <RadioTower size={15} />
-      </button>
-      <button
-        type="button"
         className={effectPreviewEnabled ? "active" : ""}
         title={effectPreviewEnabled ? "Stop previewing selected effect" : "Preview selected effect"}
         disabled={!effectPreviewEnabled && selectedEffectIds.length === 0}
@@ -140,7 +130,6 @@ export function SequenceTransportControls({
       <span className="sequence-time-readout">
         {formatSeconds(livePreview.positionSeconds)} / {formatSeconds(livePreview.durationSeconds || document.durationSeconds)} | Home {formatSeconds(livePreview.homeSeconds)}
         {document.audio ? ` | ${document.audio.exists ? document.audio.fileName : "Missing audio"}` : ""}
-        {liveOutput.enabled ? ` | Live ${liveOutput.status} (${liveOutput.activeUniverseCount})` : ""}
         {livePreview.previewUpdating ? <span className="sequence-preview-status">Updating preview</span> : null}
         {audioStatus !== null && <span className={`sequence-audio-status sequence-audio-status-${audioStatus.tone}`}>{audioStatus.label}</span>}
         {timingSummary !== null && <span className="sequence-timing-status">{timingSummary}</span>}
@@ -149,12 +138,16 @@ export function SequenceTransportControls({
   );
 }
 
-export function useSequencePreview(preview: PreviewSnapshotDto): LivePreview {
+export function useSequencePreview(preview: PreviewSnapshotDto | null): LivePreview | null {
   const [eventPreview, setEventPreview] = useState<PreviewStateEvent | null>(null);
-  const [animatedPositionSeconds, setAnimatedPositionSeconds] = useState(preview.positionSeconds);
-  const anchor = useRef({
-    preview,
-    positionSeconds: preview.positionSeconds,
+  const [animatedPositionSeconds, setAnimatedPositionSeconds] = useState(0);
+  const anchor = useRef<{
+    preview: LivePreview | null;
+    positionSeconds: number;
+    anchoredAt: number;
+  }>({
+    preview: null,
+    positionSeconds: 0,
     anchoredAt: 0
   });
 
@@ -180,11 +173,19 @@ export function useSequencePreview(preview: PreviewSnapshotDto): LivePreview {
     };
   }, []);
 
-  const livePreview = eventPreview ?? preview;
+  const livePreview = preview === null ? null : eventPreview ?? preview;
   const livePreviewRef = useRef(livePreview);
 
   useEffect(() => {
     livePreviewRef.current = livePreview;
+    if (livePreview === null) {
+      anchor.current = {
+        preview: null,
+        positionSeconds: 0,
+        anchoredAt: performance.now()
+      };
+      return;
+    }
     anchor.current = {
       preview: livePreview,
       positionSeconds: livePreview.positionSeconds,
@@ -197,6 +198,9 @@ export function useSequencePreview(preview: PreviewSnapshotDto): LivePreview {
     const tick = () => {
       const latest = livePreviewRef.current;
       const current = anchor.current;
+      if (latest === null || current.preview === null) {
+        return;
+      }
       if (!latest.isPlaying || !current.preview.isPlaying) {
         setAnimatedPositionSeconds(latest.positionSeconds);
         return;
@@ -209,7 +213,11 @@ export function useSequencePreview(preview: PreviewSnapshotDto): LivePreview {
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [livePreview.isPlaying, livePreview.positionSeconds]);
+  }, [livePreview?.isPlaying, livePreview?.positionSeconds]);
+
+  if (livePreview === null) {
+    return null;
+  }
 
   return livePreview.isPlaying
     ? {

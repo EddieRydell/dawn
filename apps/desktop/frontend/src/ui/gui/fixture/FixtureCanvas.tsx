@@ -82,7 +82,7 @@ export function FixtureCanvas({
         drag.current = null;
         if (!current) return;
         void runRuntimeCommand(() =>
-          commands.applyFixtureGuiEdit({
+          commands.applyFixtureDocumentEdit({
             type: "movePoint",
             objectKey: current.objectKey,
             pointIndex: current.pointIndex,

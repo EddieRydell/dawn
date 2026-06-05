@@ -2,7 +2,7 @@ use dawn_backend::AppView;
 use tauri::{AppHandle, Emitter};
 
 use crate::{
-    dto::{AppBackendChangedDto, AppSnapshotDto},
+    dto::{AppBackendChangedDto, AppSnapshotDto, PreviewStateEventDto},
     state::CommandResult,
 };
 
@@ -23,4 +23,12 @@ pub(crate) fn emit_app_snapshot(app: &AppHandle, snapshot: AppSnapshotDto) -> Co
 
 pub(crate) fn emit_backend_error(app: &AppHandle, message: String) {
     let _ = app.emit("app_backend_error", message);
+}
+
+pub(crate) fn emit_preview_state(
+    app: &AppHandle,
+    state: PreviewStateEventDto,
+) -> CommandResult<()> {
+    app.emit("preview_state_changed", state)
+        .map_err(|error| error.to_string())
 }

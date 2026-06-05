@@ -1,4 +1,5 @@
 use crate::editor::EditorView;
+use crate::preview::PreviewSnapshot;
 use crate::types::{ActiveDocumentView, RenderView, WorkspaceEntry};
 
 #[derive(Debug, Clone, Default)]
@@ -10,4 +11,6 @@ pub struct AppView {
     pub editor: EditorView,
     pub active_document: ActiveDocumentView,
     pub render: RenderView,
+    pub preview: Option<PreviewSnapshot>,
+    pub effect_preview_enabled: bool,
 }

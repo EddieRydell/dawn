@@ -89,7 +89,7 @@ export function LayoutCanvas({
         drag.current = null;
         if (!current) return;
         void runRuntimeCommand(() =>
-          commands.applyLayoutGuiEdit({
+          commands.applyLayoutDocumentEdit({
             type: "updatePlacementTransform",
             id: current.id,
             transform: denormalizeTransform(current.preview)

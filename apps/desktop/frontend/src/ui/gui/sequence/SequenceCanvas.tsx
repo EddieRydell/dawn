@@ -18,7 +18,7 @@ import { defaultMarkColor, drawSequenceMarks, committedMarkPreviews, markIndexAf
 
 import { sequencePreviewSignatures, targetsEqual } from "./sequencePreviewSignatures";
 
-import { buildSequenceClipLayout, constrainEffectLaneDelta, constrainEffectMoveDelta, constrainEffectResizeDelta, constrainMarkDelta, effectMovePreviews, effectResizePreviews, hitSequence, hitSequenceMark, markMovePreviews, markRefLookup, mergeSequenceSelection, MIN_EFFECT_DURATION_SECONDS, nextEffectSelection, nextMarkSelection, normalizedRect, selectedEffectId, selectionCount, selectionFromMarqueeEffects, selectionFromMarqueeMarks, sequenceHoverEqual, setMarkPreview, singleEffectSelectionFocus, singleSelectionFocus, selectionFromSingle, type MarkPreviewLookup, type SequenceContextMenu, type SequenceHover, type SequenceMarquee, type SequencePreview, type SequenceViewport } from "./sequenceSelection";
+import { buildSequenceClipLayout, constrainEffectLaneDelta, constrainEffectMoveDelta, constrainEffectResizeDelta, constrainMarkDelta, effectMovePreviews, effectResizePreviews, hitSequence, hitSequenceMark, markMovePreviews, markRefLookup, mergeSequenceSelection, MIN_EFFECT_DURATION_SECONDS, nextEffectSelection, nextMarkSelection, normalizedRect, selectedEffectId, selectionCount, selectionFromMarqueeEffects, selectionFromMarqueeMarks, sequenceHoverEqual, setMarkPreview, singleEffectSelectionFocus, selectionFromSingle, type MarkPreviewLookup, type SequenceContextMenu, type SequenceHover, type SequenceMarquee, type SequencePreview, type SequenceViewport } from "./sequenceSelection";
 
 const SEQUENCE_CANVAS = {
   leftGutterPx: 128,
@@ -72,6 +72,18 @@ type SequenceDragState =
   | { kind: "marquee"; state: SequenceMarquee }
   | { kind: "sequenceScrub" };
 
+type SequenceClipboard =
+  | {
+      type: "effects";
+      effects: Array<{
+        script: NonNullable<SequenceDocumentDto["effects"][number]["scriptSource"]>;
+        target: LayoutTargetDto;
+        scope: SequenceEffectScopeDto;
+        offsetSeconds: number;
+      }>;
+    }
+  | { type: "marks"; marks: Array<{ collectionKey: string; offsetSeconds: number }> };
+
 export function SequenceCanvas({
   document,
   previewPositionSeconds,
@@ -99,6 +111,7 @@ export function SequenceCanvas({
 }) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const drag = useRef<SequenceDragState>(null);
+  const sequenceClipboard = useRef<SequenceClipboard | null>(null);
   const sequenceSelectionRef = useRef<SequenceSelection>(sequenceSelection);
   const [preview, setPreview] = useState<SequencePreview | null>(null);
   const [groupPreview, setGroupPreview] = useState<SequencePreview[]>([]);
@@ -143,6 +156,85 @@ export function SequenceCanvas({
     sequenceSelectionRef.current = selection;
     setSequenceSelection(selection);
   }, [setSequenceSelection]);
+
+  const copySequenceSelection = useCallback((selection: Exclude<SequenceSelection, null>) => {
+    if (selection.type === "effects") {
+      const selectedEffects = document.effects.filter((effect) => selection.ids.includes(effect.id) && effect.scriptSource !== null);
+      if (selectedEffects.length === 0) {
+        sequenceClipboard.current = null;
+        return;
+      }
+      const firstStartSeconds = Math.min(...selectedEffects.map((effect) => effect.startSeconds));
+      sequenceClipboard.current = {
+        type: "effects",
+        effects: selectedEffects.map((effect) => ({
+          script: effect.scriptSource as NonNullable<typeof effect.scriptSource>,
+          target: effect.target,
+          scope: effect.scope,
+          offsetSeconds: effect.startSeconds - firstStartSeconds
+        }))
+      };
+      return;
+    }
+    const selectedMarks = selection.marks
+      .map((mark) => {
+        const timeSeconds = document.markCollections.find((collection) => collection.key === mark.collectionKey)?.marksSeconds[mark.index];
+        return timeSeconds === undefined ? null : { collectionKey: mark.collectionKey, timeSeconds };
+      })
+      .filter((mark): mark is { collectionKey: string; timeSeconds: number } => mark !== null);
+    if (selectedMarks.length === 0) {
+      sequenceClipboard.current = null;
+      return;
+    }
+    const firstTimeSeconds = Math.min(...selectedMarks.map((mark) => mark.timeSeconds));
+    sequenceClipboard.current = {
+      type: "marks",
+      marks: selectedMarks.map((mark) => ({
+        collectionKey: mark.collectionKey,
+        offsetSeconds: mark.timeSeconds - firstTimeSeconds
+      }))
+    };
+  }, [document.effects, document.markCollections]);
+
+  const deleteSequenceSelection = useCallback((selection: Exclude<SequenceSelection, null>) => {
+    updateSequenceSelection(null);
+    setSelected(null);
+    return commands.applySequenceDocumentEdit(
+      selection.type === "effects"
+        ? { type: "deleteEffects", ids: selection.ids }
+        : { type: "deleteMarks", marks: selection.marks }
+    );
+  }, [setSelected, updateSequenceSelection]);
+
+  const pasteSequenceClipboard = useCallback(async () => {
+    const clipboard = sequenceClipboard.current;
+    if (clipboard === null) return;
+    const anchorSeconds = selectedTimeSeconds ?? 0;
+    if (clipboard.type === "marks") {
+      for (const mark of clipboard.marks) {
+        await commands.applySequenceDocumentEdit({
+          type: "addMark",
+          collectionKey: mark.collectionKey,
+          timeSeconds: clamp(anchorSeconds + mark.offsetSeconds, 0, document.durationSeconds)
+        });
+      }
+      updateSequenceSelection(null);
+      setSelected(null);
+      return;
+    }
+    for (const effect of clipboard.effects) {
+      await commands.applySequenceDocumentEdit({
+        type: "addEffect",
+        script: effect.script,
+        target: effect.target,
+        scope: effect.scope,
+        startSeconds: clamp(anchorSeconds + effect.offsetSeconds, 0, document.durationSeconds),
+        markCollectionKey: activeMarkCollectionKey
+      });
+    }
+    updateSequenceSelection(null);
+    setSelected(null);
+  }, [activeMarkCollectionKey, document.durationSeconds, selectedTimeSeconds, setSelected, updateSequenceSelection]);
 
   useEffect(() => {
     sequenceSelectionRef.current = sequenceSelection;
@@ -591,7 +683,7 @@ export function SequenceCanvas({
     if (hasMarksParams && markCollectionKey === null) {
       const newCollectionKey = nextCollectionKey("Marks", document.markCollections);
       await runRuntimeCommand(() =>
-        commands.applySequenceGuiEdit({
+        commands.applySequenceDocumentEdit({
           type: "createMarkCollection",
           key: newCollectionKey,
           name: "Marks",
@@ -606,7 +698,7 @@ export function SequenceCanvas({
     if (target === undefined) return;
     const scope: SequenceEffectScopeDto = target.kind === "group" ? "wholeTarget" : "perFixture";
     await runRuntimeCommand(() =>
-      commands.applySequenceGuiEdit({
+      commands.applySequenceDocumentEdit({
         type: "addEffect",
         script: script.script,
         target,
@@ -621,7 +713,7 @@ export function SequenceCanvas({
     if (targetCollectionKey === null) {
       const newCollectionKey = nextCollectionKey("Marks", document.markCollections);
       await runRuntimeCommand(() =>
-        commands.applySequenceGuiEdit({
+        commands.applySequenceDocumentEdit({
           type: "createMarkCollection",
           key: newCollectionKey,
           name: "Marks",
@@ -639,7 +731,7 @@ export function SequenceCanvas({
     if (collectionKey === null) {
       const newCollectionKey = nextCollectionKey("Marks", document.markCollections);
       await runRuntimeCommand(() =>
-        commands.applySequenceGuiEdit({
+        commands.applySequenceDocumentEdit({
           type: "createMarkCollection",
           key: newCollectionKey,
           name: "Marks",
@@ -673,7 +765,7 @@ export function SequenceCanvas({
     });
     try {
       await runRuntimeCommand(() =>
-        commands.applySequenceGuiEdit({
+        commands.applySequenceDocumentEdit({
           type: "addMark",
           collectionKey,
           timeSeconds
@@ -689,13 +781,13 @@ export function SequenceCanvas({
     }
   };
   const deleteSelectedEffect = async (effectId: number) => {
-    await runRuntimeCommand(() => commands.applySequenceGuiEdit({ type: "deleteEffect", id: effectId }));
+    await runRuntimeCommand(() => commands.applySequenceDocumentEdit({ type: "deleteEffect", id: effectId }));
     setSelected(null);
     updateSequenceSelection(null);
   };
   const deleteContextMark = async (menu: Extract<SequenceContextMenu, { kind: "mark" }>) => {
     await runRuntimeCommand(() =>
-      commands.applySequenceGuiEdit({
+      commands.applySequenceDocumentEdit({
         type: "deleteMark",
         collectionKey: menu.collectionKey,
         index: menu.index
@@ -705,7 +797,7 @@ export function SequenceCanvas({
     updateSequenceSelection(null);
   };
   const retargetContextEffect = async (effectId: number, target: LayoutTargetDto) => {
-    await runRuntimeCommand(() => commands.applySequenceGuiEdit({ type: "retargetEffect", id: effectId, target }));
+    await runRuntimeCommand(() => commands.applySequenceDocumentEdit({ type: "retargetEffect", id: effectId, target }));
   };
   const markCollectionsForMenu = () => {
     if (activeMarkCollectionKey === null) return document.markCollections;
@@ -732,22 +824,15 @@ export function SequenceCanvas({
           const key = event.key.toLowerCase();
           if ((key === "c" || key === "x") && activeSelection !== null && selectionCount(activeSelection) > 0) {
             event.preventDefault();
-            const editType = key === "c" ? "copy" : "cut";
-            void commands.applySequenceSelectionEdit({ type: editType, selection: activeSelection }).then((result) => {
-              updateSequenceSelection(result.selection);
-              setSelected(singleSelectionFocus(result.selection));
-            });
+            copySequenceSelection(activeSelection);
+            if (key === "x") {
+              void runRuntimeCommand(() => deleteSequenceSelection(activeSelection));
+            }
             return;
           }
           if (key === "v") {
             event.preventDefault();
-            void commands.applySequenceSelectionEdit({
-              type: "paste",
-              anchor: { laneIndex: selectedLaneIndex as never, timeSeconds: selectedTimeSeconds as never }
-            }).then((result) => {
-              updateSequenceSelection(result.selection);
-              setSelected(singleSelectionFocus(result.selection));
-            });
+            void runRuntimeCommand(pasteSequenceClipboard);
             return;
           }
         }
@@ -768,7 +853,7 @@ export function SequenceCanvas({
           setMarkPreview(nextPreviews, selectedMark, { collectionKey: selectedMark.collectionKey, index: selectedMark.index, timeSeconds: nextTimeSeconds, committedIndex: nextIndex });
           setMarkPreviews(nextPreviews);
           void runRuntimeCommand(() =>
-            commands.applySequenceGuiEdit({
+            commands.applySequenceDocumentEdit({
               type: "moveMark",
               collectionKey: selectedMark.collectionKey,
               index: selectedMark.index,
@@ -786,10 +871,7 @@ export function SequenceCanvas({
         if ((event.key !== "Delete" && event.key !== "Backspace") || isTextEntryElement(event.target)) return;
         event.preventDefault();
         if (activeSelection !== null && selectionCount(activeSelection) > 1) {
-          void commands.applySequenceSelectionEdit({ type: "delete", selection: activeSelection }).then((result) => {
-            updateSequenceSelection(result.selection);
-            setSelected(null);
-          });
+          void runRuntimeCommand(() => deleteSequenceSelection(activeSelection));
           return;
         }
         if (focusedEffectId !== null) {
@@ -798,7 +880,7 @@ export function SequenceCanvas({
         }
         if (selectedMark === null) return;
         void runRuntimeCommand(() =>
-          commands.applySequenceGuiEdit({
+          commands.applySequenceDocumentEdit({
             type: "deleteMark",
             collectionKey: selectedMark.collectionKey,
             index: selectedMark.index
@@ -1024,13 +1106,16 @@ export function SequenceCanvas({
           const activeSelection = sequenceSelectionRef.current;
           if (activeSelection?.type === "marks" && activeSelection.marks.some((mark) => mark.collectionKey === current.collectionKey && mark.index === current.index)) {
             const constrainedDelta = constrainMarkDelta(document, activeSelection.marks, deltaSeconds);
-            void commands.applySequenceSelectionEdit({
-              type: "moveMarks",
-              marks: activeSelection.marks,
-              timeDeltaSeconds: constrainedDelta
-            })
-              .then((result) => {
-                updateSequenceSelection(result.selection);
+            const edits = [...markMovePreviews(document, activeSelection.marks, constrainedDelta).values()]
+              .flatMap((collection) => [...collection.values()])
+              .map((mark) => ({
+                collectionKey: mark.collectionKey,
+                index: mark.index,
+                timeSeconds: mark.timeSeconds
+              }));
+            void runRuntimeCommand(() => commands.applySequenceDocumentEdit({ type: "moveMarks", edits }))
+              .then(() => {
+                updateSequenceSelection(null);
                 setSelected(null);
               })
               .catch(() => {
@@ -1042,7 +1127,7 @@ export function SequenceCanvas({
           const collection = document.markCollections.find((candidate) => candidate.key === current.collectionKey);
           const nextIndex = collection === undefined ? current.index : markIndexAfterMove(collection, current.index, timeSeconds);
           void runRuntimeCommand(() =>
-            commands.applySequenceGuiEdit({
+            commands.applySequenceDocumentEdit({
               type: "moveMark",
               collectionKey: current.collectionKey,
               index: current.index,
@@ -1066,11 +1151,25 @@ export function SequenceCanvas({
           const rawLaneIndex = clamp(Math.floor((event.nativeEvent.offsetY - top + viewport.scrollY) / viewport.laneHeight), 0, document.lanes.length - 1);
           const laneDelta = current.resize === "none" ? constrainEffectLaneDelta(document, activeSelection.ids, rawLaneIndex - current.laneIndex) : 0;
           const edit = current.resize === "none"
-            ? { type: "moveEffects" as const, ids: activeSelection.ids, timeDeltaSeconds: constrainEffectMoveDelta(document, activeSelection.ids, deltaSeconds), laneDelta }
-            : { type: "resizeEffects" as const, ids: activeSelection.ids, edge: current.resize, timeDeltaSeconds: constrainEffectResizeDelta(document, activeSelection.ids, current.resize, deltaSeconds) };
-          void commands.applySequenceSelectionEdit(edit)
-            .then((result) => {
-              updateSequenceSelection(result.selection);
+            ? {
+                type: "moveEffects" as const,
+                edits: effectMovePreviews(document, activeSelection.ids, constrainEffectMoveDelta(document, activeSelection.ids, deltaSeconds), laneDelta).map((effect) => ({
+                  id: effect.id,
+                  startSeconds: effect.startSeconds,
+                  target: document.lanes[effect.laneIndex]?.target ?? null
+                }))
+              }
+            : {
+                type: "resizeEffects" as const,
+                edits: effectResizePreviews(document, activeSelection.ids, current.resize, constrainEffectResizeDelta(document, activeSelection.ids, current.resize, deltaSeconds)).map((effect) => ({
+                  id: effect.id,
+                  startSeconds: effect.startSeconds,
+                  durationSeconds: effect.durationSeconds
+                }))
+              };
+          void runRuntimeCommand(() => commands.applySequenceDocumentEdit(edit))
+            .then(() => {
+              updateSequenceSelection(null);
               setSelected(null);
             })
             .catch(() => {
@@ -1083,13 +1182,13 @@ export function SequenceCanvas({
         const committedPreview = preview;
         const edit = () =>
           current.resize === "none"
-            ? commands.applySequenceGuiEdit({
+            ? commands.applySequenceDocumentEdit({
                 type: "moveEffect",
                 id: committedPreview.id,
                 startSeconds: committedPreview.startSeconds,
                 target: document.lanes[committedPreview.laneIndex]?.target ?? null
               })
-            : commands.applySequenceGuiEdit({
+            : commands.applySequenceDocumentEdit({
                 type: "resizeEffect",
                 id: committedPreview.id,
                 startSeconds: committedPreview.startSeconds,

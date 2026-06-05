@@ -39,15 +39,10 @@ export const commands = {
   setActiveFile: (path: string) => dispatchNone({ type: "setActiveFile", path }),
   updateActiveText: (text: string) => dispatchNone({ type: "updateActiveText", text }),
   setActiveViewMode: (mode: "text" | "gui") => dispatchNone({ type: "setActiveViewMode", mode }),
-  applySequenceGuiEdit: (edit: Extract<AppCommandDto, { type: "applySequenceGuiEdit" }>["edit"]) =>
-    dispatchNone({ type: "applySequenceGuiEdit", edit }),
-  applySequenceSelectionEdit: async (edit: Extract<AppCommandDto, { type: "applySequenceSelectionEdit" }>["edit"]) => {
-    const response = await dispatch({ type: "applySequenceSelectionEdit", edit });
-    if (response.type !== "sequenceSelectionEditResult") {
-      throw new Error(`unexpected app command response: ${response.type}`);
-    }
-    return response.result;
-  },
+  applyActiveDocumentEdit: (edit: Extract<AppCommandDto, { type: "applyActiveDocumentEdit" }>["edit"]) =>
+    dispatchNone({ type: "applyActiveDocumentEdit", edit }),
+  applySequenceDocumentEdit: (edit: Extract<Extract<AppCommandDto, { type: "applyActiveDocumentEdit" }>["edit"], { type: "sequence" }>["edit"]) =>
+    dispatchNone({ type: "applyActiveDocumentEdit", edit: { type: "sequence", edit } }),
   chooseSequenceAudio: () => dispatchNone({ type: "chooseSequenceAudio" }),
   clearSequenceAudio: () => dispatchNone({ type: "clearSequenceAudio" }),
   exportActiveSequenceFseq: (stepMs: number) => dispatchNone({ type: "exportActiveSequenceFseq", stepMs }),
@@ -59,10 +54,10 @@ export const commands = {
   ) => unwrap(generatedCommands.requestSequenceEffectPreviews(path, objectKey, requestId, effects)),
   takeSequenceEffectPreviewResults: (path: string, objectKey: string) =>
     unwrap(generatedCommands.takeSequenceEffectPreviewResults(path, objectKey)),
-  applyLayoutGuiEdit: (edit: Extract<AppCommandDto, { type: "applyLayoutGuiEdit" }>["edit"]) =>
-    dispatchNone({ type: "applyLayoutGuiEdit", edit }),
-  applyFixtureGuiEdit: (edit: Extract<AppCommandDto, { type: "applyFixtureGuiEdit" }>["edit"]) =>
-    dispatchNone({ type: "applyFixtureGuiEdit", edit }),
+  applyLayoutDocumentEdit: (edit: Extract<Extract<AppCommandDto, { type: "applyActiveDocumentEdit" }>["edit"], { type: "layout" }>["edit"]) =>
+    dispatchNone({ type: "applyActiveDocumentEdit", edit: { type: "layout", edit } }),
+  applyFixtureDocumentEdit: (edit: Extract<Extract<AppCommandDto, { type: "applyActiveDocumentEdit" }>["edit"], { type: "fixture" }>["edit"]) =>
+    dispatchNone({ type: "applyActiveDocumentEdit", edit: { type: "fixture", edit } }),
   flushAutosave: () => dispatchNone({ type: "flushAutosave" }),
   reloadActiveBufferFromDisk: () => dispatchNone({ type: "reloadActiveBufferFromDisk" }),
   keepActiveBuffer: () => dispatchNone({ type: "keepActiveBuffer" }),

@@ -266,6 +266,13 @@ pub struct SequenceCurveLibraryItemDocument {
 }
 
 #[derive(Debug, Clone)]
+pub enum DocumentEdit {
+    Sequence(SequenceDocumentEdit),
+    Layout(LayoutDocumentEdit),
+    Fixture(FixtureDocumentEdit),
+}
+
+#[derive(Debug, Clone)]
 pub enum SequenceDocumentEdit {
     SetAudio {
         import: Option<String>,
@@ -372,6 +379,24 @@ pub enum SequenceDocumentEdit {
     PasteMarks {
         marks: Vec<SequenceMarkPasteDocumentEdit>,
         time_seconds: Option<f64>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum LayoutDocumentEdit {
+    UpdatePlacementTransform { id: FixtureId, transform: Transform },
+}
+
+#[derive(Debug, Clone)]
+pub enum FixtureDocumentEdit {
+    UpdateBulbDiameter {
+        object_key: String,
+        bulb_diameter: DistanceSpan,
+    },
+    MovePoint {
+        object_key: String,
+        point_index: usize,
+        point: Point3,
     },
 }
 
@@ -691,6 +716,23 @@ pub fn apply_layout_document_edit(
     })
 }
 
+pub fn apply_layout_document_edit_operation(
+    document: &mut LayoutDocument,
+    edit: LayoutDocumentEdit,
+) -> Result<(), String> {
+    match edit {
+        LayoutDocumentEdit::UpdatePlacementTransform { id, transform } => {
+            let placement = document
+                .fixtures
+                .iter_mut()
+                .find(|fixture| fixture.id == id)
+                .ok_or_else(|| format!("fixture placement `{id}` was not found"))?;
+            placement.transform = transform;
+        }
+    }
+    Ok(())
+}
+
 pub fn apply_fixture_document_edit(
     fs: &WorkspaceFs,
     path: Utf8PathBuf,
@@ -731,6 +773,44 @@ pub fn apply_fixture_document_edit(
         serialized_content: serialized,
         refreshed_document,
     })
+}
+
+pub fn apply_fixture_document_edit_operation(
+    document: &mut FixtureDocument,
+    edit: FixtureDocumentEdit,
+) -> Result<(), String> {
+    match edit {
+        FixtureDocumentEdit::UpdateBulbDiameter {
+            object_key,
+            bulb_diameter,
+        } => {
+            let fixture = document
+                .fixtures
+                .iter_mut()
+                .find(|fixture| fixture.object_key == object_key)
+                .ok_or_else(|| format!("fixture `{object_key}` was not found"))?;
+            fixture.bulb_diameter = bulb_diameter;
+        }
+        FixtureDocumentEdit::MovePoint {
+            object_key,
+            point_index,
+            point,
+        } => {
+            let fixture = document
+                .fixtures
+                .iter_mut()
+                .find(|fixture| fixture.object_key == object_key)
+                .ok_or_else(|| format!("fixture `{object_key}` was not found"))?;
+            let Geometry::Points { points } = &mut fixture.geometry else {
+                return Err("only point geometry can be edited in this milestone".to_string());
+            };
+            let target = points
+                .get_mut(point_index)
+                .ok_or_else(|| format!("point `{point_index}` was not found"))?;
+            *target = point;
+        }
+    }
+    Ok(())
 }
 
 fn refresh_fixture_document(

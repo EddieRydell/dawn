@@ -1,4 +1,4 @@
-import type { SequenceDocumentDto, SequenceEffectDto, SequenceMarkCollectionDto, SequenceMarkRefDto, SequenceSelectionDto } from "../../../bindings";
+import type { SequenceDocumentDto, SequenceEffectDto, SequenceMarkCollectionDto, SequenceMarkRefDto } from "../../../bindings";
 
 import { clamp, type GuiFocus, type SequenceSelection } from "../shared";
 
@@ -234,26 +234,19 @@ export function selectionFromSingle(selected: GuiFocus): SequenceSelection {
   return null;
 }
 
-export function singleSelectionFocus(selection: SequenceSelection): GuiFocus {
-  if (selection?.type === "effects") return singleEffectSelectionFocus(selection.ids);
-  if (selection?.type === "marks" && selection.marks.length === 1) {
-    const mark = selection.marks[0];
-    return mark === undefined ? null : { type: "mark", collectionKey: mark.collectionKey, index: mark.index };
-  }
-  return null;
-}
-
 export function singleEffectSelectionFocus(ids: number[]): GuiFocus {
   if (ids.length !== 1) return null;
   const id = ids[0];
   return id === undefined ? null : { type: "effect", id };
 }
 
-export function selectionCount(selection: SequenceSelectionDto) {
+type NonNullSequenceSelection = Exclude<SequenceSelection, null>;
+
+export function selectionCount(selection: NonNullSequenceSelection) {
   return selection.type === "effects" ? selection.ids.length : selection.marks.length;
 }
 
-export function selectionCompatibleWithFocusedItem(selection: SequenceSelectionDto, selected: GuiFocus) {
+export function selectionCompatibleWithFocusedItem(selection: NonNullSequenceSelection, selected: GuiFocus) {
   const effectId = selectedEffectId(selected);
   if (effectId !== null) return selection.type === "effects" && selection.ids.includes(effectId);
   if (selected?.type === "mark") {
@@ -263,7 +256,7 @@ export function selectionCompatibleWithFocusedItem(selection: SequenceSelectionD
   return true;
 }
 
-export function nextEffectSelection(current: SequenceSelection, id: number, shift: boolean, ctrl: boolean): SequenceSelectionDto {
+export function nextEffectSelection(current: SequenceSelection, id: number, shift: boolean, ctrl: boolean): NonNullSequenceSelection {
   if (current?.type !== "effects" || (!shift && !ctrl)) return { type: "effects", ids: [id] };
   const ids = new Set(current.ids);
   if (ctrl && ids.has(id)) ids.delete(id);
@@ -271,7 +264,7 @@ export function nextEffectSelection(current: SequenceSelection, id: number, shif
   return { type: "effects", ids: [...ids] };
 }
 
-export function nextMarkSelection(current: SequenceSelection, mark: SequenceMarkRefDto, shift: boolean, ctrl: boolean): SequenceSelectionDto {
+export function nextMarkSelection(current: SequenceSelection, mark: SequenceMarkRefDto, shift: boolean, ctrl: boolean): NonNullSequenceSelection {
   if (current?.type !== "marks" || (!shift && !ctrl)) return { type: "marks", marks: [mark] };
   const byCollection = markRefLookup(current.marks);
   if (ctrl && markLookupHas(byCollection, mark)) removeMarkRef(byCollection, mark);
@@ -279,7 +272,7 @@ export function nextMarkSelection(current: SequenceSelection, mark: SequenceMark
   return { type: "marks", marks: markRefsFromLookup(byCollection) };
 }
 
-export function mergeSequenceSelection(current: SequenceSelection, next: SequenceSelectionDto, shift: boolean, ctrl: boolean): SequenceSelection {
+export function mergeSequenceSelection(current: SequenceSelection, next: NonNullSequenceSelection, shift: boolean, ctrl: boolean): SequenceSelection {
   if ((!shift && !ctrl) || current?.type !== next.type) return next;
   if (next.type === "effects") {
     const ids = new Set(current.type === "effects" ? current.ids : []);
@@ -307,7 +300,7 @@ function rectsIntersect(left: { x: number; y: number; width: number; height: num
   return left.x <= right.x + right.width && left.x + left.width >= right.x && left.y <= right.y + right.height && left.y + left.height >= right.y;
 }
 
-export function selectionFromMarqueeEffects(clips: SequenceClipLayout[], marquee: SequenceMarquee): SequenceSelectionDto {
+export function selectionFromMarqueeEffects(clips: SequenceClipLayout[], marquee: SequenceMarquee): NonNullSequenceSelection {
   const box = normalizedRect(marquee.startX, marquee.startY, marquee.x, marquee.y);
   return { type: "effects", ids: clips.filter((clip) => rectsIntersect(box, clip.rect)).map((clip) => clip.effect.id) };
 }
@@ -321,7 +314,7 @@ export function selectionFromMarqueeMarks(
   audioStripHeight: number,
   canvasHeight: number,
   viewport: SequenceViewport
-): SequenceSelectionDto {
+): NonNullSequenceSelection {
   const box = normalizedRect(marquee.startX, marquee.startY, marquee.x, marquee.y);
   const y1 = mode === "strip" ? audioStripTop : audioStripTop;
   const y2 = mode === "strip" ? audioStripTop + audioStripHeight : canvasHeight;

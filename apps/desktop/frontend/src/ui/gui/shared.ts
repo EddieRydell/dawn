@@ -1,4 +1,4 @@
-import type { ActiveGuiDocumentDto, GeometryRenderBoundsDto, GeometryRenderPointDto, LayoutDocumentDto, LayoutFixturePlacementDto, Point3MetersDto, SequenceSelectionDto, TransformDto, PreviewSnapshotDto } from "../../bindings";
+import type { ActiveGuiDocumentDto, GeometryRenderBoundsDto, GeometryRenderPointDto, LayoutDocumentDto, LayoutFixturePlacementDto, Point3MetersDto, SequenceMarkRefDto, TransformDto, PreviewSnapshotDto } from "../../bindings";
 
 export type Point3 = { x: number; y: number; z: number };
 
@@ -48,7 +48,10 @@ export type LivePreview = PreviewSnapshotDto & { timing?: PreviewTiming };
 
 export type ReadyGuiDocumentDto = Exclude<ActiveGuiDocumentDto, { type: "blocked" }>;
 
-export type SequenceSelection = SequenceSelectionDto | null;
+export type SequenceSelection =
+  | { type: "effects"; ids: number[] }
+  | { type: "marks"; marks: SequenceMarkRefDto[] }
+  | null;
 
 export type GuiFocus =
   | { type: "effect"; id: number }

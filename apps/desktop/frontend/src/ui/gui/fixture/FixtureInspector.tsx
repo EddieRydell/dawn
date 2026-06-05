@@ -21,7 +21,7 @@ export function FixtureInspector({ document, selected }: { document: FixtureDocu
               defaultValue={fixture.bulbDiameterMeters}
               onBlur={(event) =>
                 void runRuntimeCommand(() =>
-                  commands.applyFixtureGuiEdit({
+                  commands.applyFixtureDocumentEdit({
                     type: "updateBulbDiameter",
                     objectKey: fixture.objectKey,
                     bulbDiameterMeters: Number(event.currentTarget.value)
