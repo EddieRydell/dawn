@@ -14,7 +14,7 @@ pub(crate) struct Preferences {
 }
 
 impl Preferences {
-    pub(crate) fn project_session(
+    pub(crate) fn session_for_project(
         &self,
         project_root: &Path,
     ) -> BackendResult<ProjectSessionPreferences> {
