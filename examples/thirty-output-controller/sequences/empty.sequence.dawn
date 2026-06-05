@@ -14,6 +14,13 @@ empty:
     name: Marks
     color: '#38bdf8'
     marks:
+    - 10s
+    - 11s
+    - 12s
+    - 13s
+    - 14s
+    - 17.56982686s
+    - 21.651008432s
     - 40.028816894s
     - 40.135611358s
     - 40.335068438s
@@ -935,7 +942,7 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 4
-    start: 45.924220329s
+    start: 45.928753988s
     duration: 1.85s
     target:
       type: group
@@ -953,7 +960,19 @@ empty:
         curve: curves.fire_gradient
       hue:
         type: curve
-        curve: curves.hue_warm_shift
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 18.0
+          - time: 0.35
+            value: 38.0
+          - time: 0.629
+            value: 95.023
+          - time: 0.7
+            value: 350.0
+          - time: 1.0
+            value: 330.0
       hue_mix:
         type: float
         value: 0.3

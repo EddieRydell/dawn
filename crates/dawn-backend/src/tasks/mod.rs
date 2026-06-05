@@ -1,11 +1,11 @@
 use dawn_language::{analysis::analyze_project_with_overlays, fs::WorkspaceFs};
 
 use crate::{
-    output, render,
+    documents, output, render,
     types::{
-        AnalysisTask, AnalysisTaskOutput, ExportFseqTask, ExportFseqTaskOutput,
-        RenderEffectPreviewTask, RenderEffectPreviewTaskOutput, RenderFrameTask,
-        RenderFrameTaskOutput,
+        ActiveGuiDocumentOutput, AnalysisTask, AnalysisTaskOutput, ExportFseqTask,
+        ExportFseqTaskOutput, RenderEffectPreviewTask, RenderEffectPreviewTaskOutput,
+        RenderFrameTask, RenderFrameTaskOutput,
     },
     BackendError, BackendErrorKind, BackendResult,
 };
@@ -20,7 +20,7 @@ pub enum BackendTask {
 
 #[derive(Debug, Clone)]
 pub enum BackendTaskOutput {
-    AnalyzeProject(AnalysisTaskOutput),
+    AnalyzeProject(Box<AnalysisTaskOutput>),
     RenderFrame(RenderFrameTaskOutput),
     RenderEffectPreviews(RenderEffectPreviewTaskOutput),
     ExportFseq(ExportFseqTaskOutput),
@@ -52,12 +52,32 @@ fn run_analysis(request: AnalysisTask) -> BackendResult<BackendTaskOutput> {
             ),
         )
     })?;
-    let analysis =
-        analyze_project_with_overlays(&fs, request.project_file.clone(), None, Vec::new());
-    Ok(BackendTaskOutput::AnalyzeProject(AnalysisTaskOutput {
-        id: request.id,
-        analysis,
-    }))
+    let analysis = analyze_project_with_overlays(
+        &fs,
+        request.project_file.clone(),
+        None,
+        request.overlays.clone(),
+    );
+    let active_gui_document = request.active_gui_document.map(|active| {
+        let document = documents::build_active_gui_document_from_analysis(
+            &fs,
+            active.cache_key.path.clone(),
+            &active.descriptor,
+            request.overlays,
+            &analysis,
+        );
+        ActiveGuiDocumentOutput {
+            cache_key: active.cache_key,
+            document: Box::new(document),
+        }
+    });
+    Ok(BackendTaskOutput::AnalyzeProject(Box::new(
+        AnalysisTaskOutput {
+            id: request.id,
+            analysis,
+            active_gui_document,
+        },
+    )))
 }
 
 fn run_export_fseq(mut task: ExportFseqTask) -> BackendResult<BackendTaskOutput> {

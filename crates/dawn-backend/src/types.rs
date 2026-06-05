@@ -1,8 +1,9 @@
 use camino::Utf8PathBuf;
 use dawn_language::{
-    analysis::ProjectAnalysis,
+    analysis::{ProjectAnalysis, ProjectOverlay},
     document::{
-        DocumentDescriptor, FixtureDocument, LayoutDocument, SequenceDocument, SequenceDocumentEdit,
+        DocumentDescriptor, DocumentViewId, FixtureDocument, LayoutDocument, SequenceDocument,
+        SequenceDocumentEdit,
     },
     model::{Point3, SequenceEffect, Transform},
     sequence_render::SequenceRenderCache,
@@ -17,12 +18,35 @@ pub struct AnalysisTask {
     pub id: AnalysisTaskId,
     pub project_root: Utf8PathBuf,
     pub project_file: Utf8PathBuf,
+    pub overlays: Vec<ProjectOverlay>,
+    pub active_gui_document: Option<ActiveGuiDocumentRequest>,
 }
 
 #[derive(Debug, Clone)]
 pub struct AnalysisTaskOutput {
     pub id: AnalysisTaskId,
     pub analysis: ProjectAnalysis,
+    pub active_gui_document: Option<ActiveGuiDocumentOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveGuiDocumentCacheKey {
+    pub project_root: Utf8PathBuf,
+    pub path: Utf8PathBuf,
+    pub view_id: DocumentViewId,
+    pub object_key: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActiveGuiDocumentRequest {
+    pub cache_key: ActiveGuiDocumentCacheKey,
+    pub descriptor: DocumentDescriptor,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActiveGuiDocumentOutput {
+    pub cache_key: ActiveGuiDocumentCacheKey,
+    pub document: Box<ActiveGuiDocument>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

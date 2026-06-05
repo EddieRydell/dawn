@@ -1,9 +1,11 @@
 use camino::Utf8PathBuf;
 use dawn_language::{
-    analysis::{DiagnosticCode, DiagnosticSeverity, ProjectDiagnostic, ProjectOverlay},
+    analysis::{
+        DiagnosticCode, DiagnosticSeverity, ProjectAnalysis, ProjectDiagnostic, ProjectOverlay,
+    },
     document::{
         self, DocumentDescriptor, DocumentEditOutcome, DocumentViewId, FixtureDocument,
-        LayoutDocument, SequenceDocument,
+        LayoutDocument,
     },
     fs::WorkspaceFs,
 };
@@ -21,12 +23,12 @@ pub(crate) fn inspect_active_document(
     document::inspect_document(fs, path, overlays).map_err(invalid_document_error)
 }
 
-pub(crate) fn get_active_gui_document(
+pub(crate) fn build_active_gui_document_from_analysis(
     fs: &WorkspaceFs,
     path: Utf8PathBuf,
-    project_path: Utf8PathBuf,
     descriptor: &DocumentDescriptor,
     overlays: Vec<ProjectOverlay>,
+    analysis: &ProjectAnalysis,
 ) -> ActiveGuiDocument {
     let Some(view_id) = preferred_gui_view(descriptor) else {
         return ActiveGuiDocument::Blocked(blocked(
@@ -42,16 +44,24 @@ pub(crate) fn get_active_gui_document(
     };
 
     match view_id {
-        DocumentViewId::Sequence => {
-            document::get_sequence_document(fs, path.clone(), &object_key, project_path, overlays)
-                .map(ActiveGuiDocument::Sequence)
-                .unwrap_or_else(|reason| ActiveGuiDocument::Blocked(blocked(&path, reason)))
-        }
-        DocumentViewId::Layout => {
-            document::get_layout_document(fs, path.clone(), &object_key, project_path, overlays)
-                .map(ActiveGuiDocument::Layout)
-                .unwrap_or_else(|reason| ActiveGuiDocument::Blocked(blocked(&path, reason)))
-        }
+        DocumentViewId::Sequence => document::get_sequence_document_with_analysis(
+            fs,
+            path.clone(),
+            &object_key,
+            overlays,
+            analysis,
+        )
+        .map(ActiveGuiDocument::Sequence)
+        .unwrap_or_else(|reason| ActiveGuiDocument::Blocked(blocked(&path, reason))),
+        DocumentViewId::Layout => document::get_layout_document_with_analysis(
+            fs,
+            path.clone(),
+            &object_key,
+            overlays,
+            analysis,
+        )
+        .map(ActiveGuiDocument::Layout)
+        .unwrap_or_else(|reason| ActiveGuiDocument::Blocked(blocked(&path, reason))),
         DocumentViewId::Fixture => {
             document::get_fixture_document(fs, path.clone(), Some(&object_key), overlays)
                 .map(ActiveGuiDocument::Fixture)
@@ -64,7 +74,7 @@ pub(crate) fn get_active_gui_document(
     }
 }
 
-pub(crate) fn apply_sequence_document_edit(
+pub(crate) fn apply_sequence_document_text_edit(
     fs: &WorkspaceFs,
     path: Utf8PathBuf,
     object_key: &str,
@@ -72,8 +82,8 @@ pub(crate) fn apply_sequence_document_edit(
     base_content: String,
     overlays: Vec<ProjectOverlay>,
     analysis: &dawn_language::analysis::ProjectAnalysis,
-) -> BackendResult<DocumentEditOutcome<SequenceDocument>> {
-    document::apply_sequence_document_edit(
+) -> BackendResult<String> {
+    document::apply_sequence_document_text_edit(
         fs,
         path,
         object_key,

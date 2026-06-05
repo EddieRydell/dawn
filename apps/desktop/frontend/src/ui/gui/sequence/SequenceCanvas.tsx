@@ -14,7 +14,7 @@ import { runRuntimeCommand } from "../../../store";
 
 import { clamp, formatSeconds, roundToNanosecond, type GuiFocus, type SequenceSelection } from "../shared";
 
-import { defaultMarkColor, drawSequenceMarks, committedMarkPreviews, markIndexAfterMove, nextCollectionKey, useMarkDisplayMode } from "./marks";
+import { defaultMarkColor, drawSequenceMarks, committedMarkPreviews, markIndexAfterMove, nextCollectionKey, useMarkDisplayMode, type PendingMark } from "./marks";
 
 import { sequencePreviewSignatures, targetsEqual } from "./sequencePreviewSignatures";
 
@@ -103,6 +103,7 @@ export function SequenceCanvas({
   const [preview, setPreview] = useState<SequencePreview | null>(null);
   const [groupPreview, setGroupPreview] = useState<SequencePreview[]>([]);
   const [markPreviews, setMarkPreviews] = useState<MarkPreviewLookup>(() => new Map());
+  const [pendingMarks, setPendingMarks] = useState<PendingMark[]>([]);
   const [sequenceContextMenu, setSequenceContextMenu] = useState<SequenceContextMenu | null>(null);
   const [hover, setHover] = useState<SequenceHover>(null);
   const [dragCursor, setDragCursor] = useState<"grabbing" | null>(null);
@@ -114,8 +115,10 @@ export function SequenceCanvas({
   const [previewImages, setPreviewImages] = useState<Map<number, SequencePreviewImage>>(() => new Map());
   const [previewRequestTick, setPreviewRequestTick] = useState(0);
   const previewImagesRef = useRef(previewImages);
+  const pendingMarksRef = useRef(pendingMarks);
   const inFlightPreviewSignatures = useRef<Set<string>>(new Set());
   const nextPreviewRequestId = useRef(1);
+  const nextPendingMarkId = useRef(1);
   const initializedViewportKey = useRef<string | null>(null);
   const left = SEQUENCE_CANVAS.leftGutterPx;
   const top = SEQUENCE_CANVAS.topPx;
@@ -150,6 +153,10 @@ export function SequenceCanvas({
   }, [previewImages]);
 
   useEffect(() => {
+    pendingMarksRef.current = pendingMarks;
+  }, [pendingMarks]);
+
+  useEffect(() => {
     effectPreviewSignaturesRef.current = effectPreviewSignatures;
   }, [effectPreviewSignatures]);
 
@@ -180,9 +187,18 @@ export function SequenceCanvas({
     };
   }, [document.durationSeconds, document.lanes.length, left]);
 
+  const effectivePreview = preview !== null && sequencePreviewCommitted(document, preview) ? null : preview;
+  const effectiveGroupPreview = useMemo(
+    () => groupPreview.length > 0 && groupPreview.every((candidate) => sequencePreviewCommitted(document, candidate)) ? [] : groupPreview,
+    [document, groupPreview]
+  );
+  const effectiveMarkPreviews = useMemo(
+    () => committedMarkPreviews(document.markCollections, markPreviews),
+    [document.markCollections, markPreviews]
+  );
   const visibleClips = useMemo(
-    () => buildSequenceClipLayout(document, groupPreview.length > 0 ? groupPreview : preview === null ? [] : [preview], viewport, left, top),
-    [document, groupPreview, left, preview, top, viewport]
+    () => buildSequenceClipLayout(document, effectiveGroupPreview.length > 0 ? effectiveGroupPreview : effectivePreview === null ? [] : [effectivePreview], viewport, left, top),
+    [document, effectiveGroupPreview, effectivePreview, left, top, viewport]
   );
   const visiblePreviewEffectIds = useMemo(() => {
     if (canvasSize.width <= 0 || canvasSize.height <= 0) return [];
@@ -218,6 +234,22 @@ export function SequenceCanvas({
     () => markRefLookup(sequenceSelection?.type === "marks" ? sequenceSelection.marks : []),
     [sequenceSelection]
   );
+  const visiblePendingMarks = useMemo(
+    () => pendingMarks.filter((mark) => visibleMarkCollectionKeys.has(mark.collectionKey)),
+    [pendingMarks, visibleMarkCollectionKeys]
+  );
+
+  useEffect(() => {
+    setPendingMarks((current) => {
+      const next = current.filter((mark) => {
+        const collection = document.markCollections.find((candidate) => candidate.key === mark.collectionKey);
+        if (collection === undefined) return true;
+        return markOccurrenceCount(collection.marksSeconds, mark.timeSeconds) < mark.occurrence;
+      });
+      pendingMarksRef.current = next;
+      return next;
+    });
+  }, [document.markCollections]);
 
   useEffect(() => {
     const target = canvas.current;
@@ -452,7 +484,8 @@ export function SequenceCanvas({
       rect.height,
       viewport.pxPerSecond,
       scrollXSeconds,
-      committedMarkPreviews(visibleMarkCollections, markPreviews)
+      effectiveMarkPreviews,
+      visiblePendingMarks
     );
 
     ctx.save();
@@ -543,7 +576,7 @@ export function SequenceCanvas({
     ctx.moveTo(left + 0.5, top);
     ctx.lineTo(left, rect.height);
     ctx.stroke();
-  }, [document, effectPreviewSignatures, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, selected, selectedEffectIds, selectedMarks, previewImages, previewPositionSeconds, previewHomeSeconds, selectedLaneIndex, selectedTimeSeconds, marquee, waveform.audio, visibleMarkCollections, mode, markPreviews, hover]);
+  }, [document, effectPreviewSignatures, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, selected, selectedEffectIds, selectedMarks, previewImages, previewPositionSeconds, previewHomeSeconds, selectedLaneIndex, selectedTimeSeconds, marquee, waveform.audio, visibleMarkCollections, mode, effectiveMarkPreviews, visiblePendingMarks, hover]);
 
   const seekFromCanvas = (event: MouseEvent<HTMLCanvasElement>) => {
     const x = event.nativeEvent.offsetX;
@@ -599,13 +632,7 @@ export function SequenceCanvas({
       setActiveMarkCollectionKey(targetCollectionKey);
       setVisibleMarkCollectionKeys(new Set([...visibleMarkCollectionKeys, targetCollectionKey]));
     }
-    await runRuntimeCommand(() =>
-      commands.applySequenceGuiEdit({
-        type: "addMark",
-        collectionKey: targetCollectionKey,
-        timeSeconds: menu.startSeconds
-      })
-    );
+    await addOptimisticMark(targetCollectionKey, menu.startSeconds);
   };
   const addMarkAtTime = async (timeSeconds: number) => {
     let collectionKey = activeMarkCollectionKey ?? document.markCollections[0]?.key ?? null;
@@ -623,19 +650,43 @@ export function SequenceCanvas({
       setActiveMarkCollectionKey(newCollectionKey);
       setVisibleMarkCollectionKeys(new Set([...visibleMarkCollectionKeys, newCollectionKey]));
     }
-    await runRuntimeCommand(() =>
-      commands.applySequenceGuiEdit({
-        type: "addMark",
-        collectionKey,
-        timeSeconds
-      })
-    );
-    const nextIndex = [...(document.markCollections.find((collection) => collection.key === collectionKey)?.marksSeconds ?? []), timeSeconds]
-      .map((markTimeSeconds, index) => ({ markTimeSeconds, index }))
-      .sort((leftMark, rightMark) => leftMark.markTimeSeconds - rightMark.markTimeSeconds || leftMark.index - rightMark.index)
-      .findIndex((mark) => mark.index === (document.markCollections.find((collection) => collection.key === collectionKey)?.marksSeconds.length ?? 0));
-    updateSequenceSelection({ type: "marks", marks: [{ collectionKey, index: Math.max(0, nextIndex) }] });
-    setSelected({ type: "mark", collectionKey, index: Math.max(0, nextIndex) });
+    await addOptimisticMark(collectionKey, timeSeconds);
+  };
+  const addOptimisticMark = async (collectionKey: string, rawTimeSeconds: number) => {
+    const timeSeconds = roundToNanosecond(clamp(rawTimeSeconds, 0, document.durationSeconds));
+    const collection = document.markCollections.find((candidate) => candidate.key === collectionKey);
+    if (collection === undefined) return;
+    const existingOccurrence = markOccurrenceCount(collection.marksSeconds, timeSeconds);
+    const pendingOccurrence = pendingMarksRef.current.filter((mark) => mark.collectionKey === collectionKey && mark.timeSeconds === timeSeconds).length;
+    const pending: PendingMark = {
+      id: nextPendingMarkId.current,
+      collectionKey,
+      color: collection.color,
+      timeSeconds,
+      occurrence: existingOccurrence + pendingOccurrence + 1
+    };
+    nextPendingMarkId.current += 1;
+    setPendingMarks((current) => {
+      const next = [...current, pending];
+      pendingMarksRef.current = next;
+      return next;
+    });
+    try {
+      await runRuntimeCommand(() =>
+        commands.applySequenceGuiEdit({
+          type: "addMark",
+          collectionKey,
+          timeSeconds
+        })
+      );
+    } catch (error) {
+      setPendingMarks((current) => {
+        const next = current.filter((mark) => mark.id !== pending.id);
+        pendingMarksRef.current = next;
+        return next;
+      });
+      throw error;
+    }
   };
   const deleteSelectedEffect = async (effectId: number) => {
     await runRuntimeCommand(() => commands.applySequenceGuiEdit({ type: "deleteEffect", id: effectId }));
@@ -723,10 +774,13 @@ export function SequenceCanvas({
               index: selectedMark.index,
               timeSeconds: nextTimeSeconds
             })
-          ).then(() => {
-            setSelected({ type: "mark", collectionKey: selectedMark.collectionKey, index: nextIndex });
-            setMarkPreviews(new Map());
-          });
+          )
+            .then(() => {
+              setSelected({ type: "mark", collectionKey: selectedMark.collectionKey, index: nextIndex });
+            })
+            .catch(() => {
+              setMarkPreviews(new Map());
+            });
           return;
         }
         if ((event.key !== "Delete" && event.key !== "Backspace") || isTextEntryElement(event.target)) return;
@@ -974,11 +1028,14 @@ export function SequenceCanvas({
               type: "moveMarks",
               marks: activeSelection.marks,
               timeDeltaSeconds: constrainedDelta
-            }).then((result) => {
-              updateSequenceSelection(result.selection);
-              setSelected(null);
-              setMarkPreviews(new Map());
-            });
+            })
+              .then((result) => {
+                updateSequenceSelection(result.selection);
+                setSelected(null);
+              })
+              .catch(() => {
+                setMarkPreviews(new Map());
+              });
             return;
           }
           const timeSeconds = clamp(current.originalTimeSeconds + deltaSeconds, 0, document.durationSeconds);
@@ -991,10 +1048,13 @@ export function SequenceCanvas({
               index: current.index,
               timeSeconds
             })
-          ).then(() => {
-            setSelected({ type: "mark", collectionKey: current.collectionKey, index: nextIndex });
-            setMarkPreviews(new Map());
-          });
+          )
+            .then(() => {
+              setSelected({ type: "mark", collectionKey: current.collectionKey, index: nextIndex });
+            })
+            .catch(() => {
+              setMarkPreviews(new Map());
+            });
           return;
         }
         if (!current || current.kind !== "sequence") return;
@@ -1008,12 +1068,15 @@ export function SequenceCanvas({
           const edit = current.resize === "none"
             ? { type: "moveEffects" as const, ids: activeSelection.ids, timeDeltaSeconds: constrainEffectMoveDelta(document, activeSelection.ids, deltaSeconds), laneDelta }
             : { type: "resizeEffects" as const, ids: activeSelection.ids, edge: current.resize, timeDeltaSeconds: constrainEffectResizeDelta(document, activeSelection.ids, current.resize, deltaSeconds) };
-          void commands.applySequenceSelectionEdit(edit).then((result) => {
-            updateSequenceSelection(result.selection);
-            setSelected(null);
-            setPreview(null);
-            setGroupPreview([]);
-          });
+          void commands.applySequenceSelectionEdit(edit)
+            .then((result) => {
+              updateSequenceSelection(result.selection);
+              setSelected(null);
+            })
+            .catch(() => {
+              setPreview(null);
+              setGroupPreview([]);
+            });
           return;
         }
         if (!preview) return;
@@ -1032,7 +1095,7 @@ export function SequenceCanvas({
                 startSeconds: committedPreview.startSeconds,
                 durationSeconds: committedPreview.durationSeconds
               });
-        void runRuntimeCommand(edit).finally(() => {
+        void runRuntimeCommand(edit).catch(() => {
           setPreview((currentPreview) => (currentPreview === committedPreview ? null : currentPreview));
           setGroupPreview([]);
         });
@@ -1458,6 +1521,22 @@ function nextAnimationFrame() {
 
 function previewRequestCancelled(request: { cancelled: boolean }) {
   return request.cancelled;
+}
+
+function markOccurrenceCount(marksSeconds: number[], timeSeconds: number) {
+  return marksSeconds.filter((markTimeSeconds) => roundToNanosecond(markTimeSeconds) === timeSeconds).length;
+}
+
+function sequencePreviewCommitted(document: SequenceDocumentDto, preview: SequencePreview) {
+  const effect = document.effects.find((candidate) => candidate.id === preview.id);
+  const lane = document.lanes[preview.laneIndex];
+  return (
+    effect !== undefined &&
+    lane !== undefined &&
+    Math.abs(effect.startSeconds - preview.startSeconds) <= 0.000000001 &&
+    Math.abs(effect.durationSeconds - preview.durationSeconds) <= 0.000000001 &&
+    targetsEqual(effect.target, lane.target)
+  );
 }
 
 function validPreviewImage(image: SequencePreviewImage | undefined, signature: string | undefined) {

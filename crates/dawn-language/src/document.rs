@@ -580,6 +580,17 @@ pub fn get_layout_document(
     let path = canonicalize_path(&fs.resolve(&path));
     let project_path = canonicalize_path(&fs.resolve(&project_path));
     let analysis = analyze_project_with_overlays(fs, project_path, None, overlays.clone());
+    get_layout_document_with_analysis(fs, path, object_key, overlays, &analysis)
+}
+
+pub fn get_layout_document_with_analysis(
+    fs: &WorkspaceFs,
+    path: Utf8PathBuf,
+    object_key: &str,
+    overlays: Vec<ProjectOverlay>,
+    analysis: &ProjectAnalysis,
+) -> Result<LayoutDocument, String> {
+    let path = canonicalize_path(&fs.resolve(&path));
     if let Some(diagnostic) = analysis.diagnostics.iter().find(|diagnostic| {
         diagnostic.severity == DiagnosticSeverity::Error
             && diagnostic.path == path
@@ -599,7 +610,7 @@ pub fn get_layout_document(
     let DawnObject::Layout(layout) = object else {
         return Err(format!("object `{object_key}` is not a layout"));
     };
-    let catalog = fixture_catalog_from_analysis(&analysis, &path);
+    let catalog = fixture_catalog_from_analysis(analysis, &path);
     let mut resolver = AnalysisImportResolver {
         files: &analysis.files,
         scripts: &analysis.scripts,
@@ -619,6 +630,18 @@ pub fn get_sequence_document(
 ) -> Result<SequenceDocument, String> {
     let path = canonicalize_path(&fs.resolve(&path));
     let project_path = canonicalize_path(&fs.resolve(&project_path));
+    let analysis = analyze_project_with_overlays(fs, project_path, None, overlays.clone());
+    get_sequence_document_with_analysis(fs, path, object_key, overlays, &analysis)
+}
+
+pub fn get_sequence_document_with_analysis(
+    fs: &WorkspaceFs,
+    path: Utf8PathBuf,
+    object_key: &str,
+    overlays: Vec<ProjectOverlay>,
+    analysis: &ProjectAnalysis,
+) -> Result<SequenceDocument, String> {
+    let path = canonicalize_path(&fs.resolve(&path));
     let text = read_text_with_overlays(fs, &path, &overlays)?;
     let file: DawnFile = parse_dawn_file(&text)?;
     let object = file
@@ -628,7 +651,6 @@ pub fn get_sequence_document(
         return Err(format!("object `{object_key}` is not a sequence"));
     };
 
-    let analysis = analyze_project_with_overlays(fs, project_path, None, overlays.clone());
     let layout = analysis
         .resolved
         .as_ref()
@@ -639,7 +661,7 @@ pub fn get_sequence_document(
         object_key,
         sequence,
         layout,
-        Some(&analysis),
+        Some(analysis),
         &overlays,
     ))
 }
@@ -741,6 +763,52 @@ pub fn apply_sequence_document_edit(
     overlays: Vec<ProjectOverlay>,
     analysis: &ProjectAnalysis,
 ) -> Result<DocumentEditOutcome<SequenceDocument>, String> {
+    let serialized = apply_sequence_document_text_edit(
+        fs,
+        path.clone(),
+        object_key,
+        edit,
+        base_content,
+        overlays,
+        analysis,
+    )?;
+    let path = canonicalize_path(&fs.resolve(&path));
+    let next_text: DawnFile = parse_dawn_file(&serialized)?;
+    let Some(DawnObject::Sequence(sequence)) = next_text.get(object_key) else {
+        return Err(format!(
+            "sequence object `{object_key}` was not found after edit"
+        ));
+    };
+    let refreshed_document = sequence_to_document(
+        fs,
+        &path,
+        object_key,
+        sequence,
+        analysis
+            .resolved
+            .as_ref()
+            .map(|project| &project.display.layout),
+        Some(analysis),
+        &[ProjectOverlay {
+            path: path.clone(),
+            content: serialized.clone(),
+        }],
+    );
+    Ok(DocumentEditOutcome {
+        serialized_content: serialized,
+        refreshed_document,
+    })
+}
+
+pub fn apply_sequence_document_text_edit(
+    fs: &WorkspaceFs,
+    path: Utf8PathBuf,
+    object_key: &str,
+    edit: SequenceDocumentEdit,
+    base_content: String,
+    overlays: Vec<ProjectOverlay>,
+    analysis: &ProjectAnalysis,
+) -> Result<String, String> {
     let path = canonicalize_path(&fs.resolve(&path));
     let file: DawnFile = parse_dawn_file(&base_content)?;
     let Some(DawnObject::Sequence(current_sequence)) = file.get(object_key) else {
@@ -770,31 +838,7 @@ pub fn apply_sequence_document_edit(
     if let Some(import) = import_to_add {
         serialized = ensure_top_level_import(&serialized, import)?;
     }
-    let next_text: DawnFile = parse_dawn_file(&serialized)?;
-    let Some(DawnObject::Sequence(sequence)) = next_text.get(object_key) else {
-        return Err(format!(
-            "sequence object `{object_key}` was not found after edit"
-        ));
-    };
-    let refreshed_document = sequence_to_document(
-        fs,
-        &path,
-        object_key,
-        sequence,
-        analysis
-            .resolved
-            .as_ref()
-            .map(|project| &project.display.layout),
-        Some(analysis),
-        &[ProjectOverlay {
-            path: path.clone(),
-            content: serialized.clone(),
-        }],
-    );
-    Ok(DocumentEditOutcome {
-        serialized_content: serialized,
-        refreshed_document,
-    })
+    Ok(serialized)
 }
 
 fn apply_sequence_edit_operation(

@@ -8,6 +8,14 @@ import { getMarkPreview, markPreviewEntries, setMarkPreview, type MarkPreviewLoo
 
 export type MarkDisplayMode = "overlay" | "strip" | "hidden";
 
+export type PendingMark = {
+  id: number;
+  collectionKey: string;
+  color: string;
+  timeSeconds: number;
+  occurrence: number;
+};
+
 const DEFAULT_MARK_COLORS = ["#38bdf8", "#f97316", "#22c55e", "#e879f9", "#facc15", "#ef4444"];
 
 const MARK_DRAWING = {
@@ -52,7 +60,8 @@ export function drawSequenceMarks(
   height: number,
   pxPerSecond: number,
   scrollXSeconds: number,
-  previews: MarkPreviewLookup
+  previews: MarkPreviewLookup,
+  pendingMarks: PendingMark[] = []
 ) {
   if (mode === "hidden") return;
   const y1 = audioStripTop;
@@ -89,6 +98,24 @@ export function drawSequenceMarks(
       }
     }
   }
+  for (const mark of pendingMarks) {
+    const x = left + (mark.timeSeconds - scrollXSeconds) * pxPerSecond;
+    if (x < left - MARK_DRAWING.cullPaddingPx || x > left + width + MARK_DRAWING.cullPaddingPx) continue;
+    ctx.strokeStyle = mark.color;
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = mode === "strip" ? 0.95 : 0.75;
+    ctx.beginPath();
+    ctx.moveTo(x + 0.5, y1);
+    ctx.lineTo(x + 0.5, y2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = MARK_DRAWING.selectedStroke;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x - MARK_DRAWING.selectedCapHalfWidthPx, y1 + 0.5);
+    ctx.lineTo(x + MARK_DRAWING.selectedCapHalfWidthPx, y1 + 0.5);
+    ctx.stroke();
+  }
   ctx.restore();
 }
 
@@ -100,11 +127,15 @@ export function committedMarkPreviews(collections: SequenceMarkCollectionDto[], 
       continue;
     }
     const collection = collections.find((candidate) => candidate.key === preview.collectionKey);
-    if (collection?.marksSeconds[preview.committedIndex] !== preview.timeSeconds) {
+    if (!markTimesEqual(collection?.marksSeconds[preview.committedIndex], preview.timeSeconds)) {
       setMarkPreview(next, preview, preview);
     }
   }
   return next;
+}
+
+function markTimesEqual(left: number | undefined, right: number) {
+  return left !== undefined && Math.abs(left - right) <= 0.000000001;
 }
 
 export function markIndexAfterMove(collection: SequenceMarkCollectionDto, index: number, timeSeconds: number) {

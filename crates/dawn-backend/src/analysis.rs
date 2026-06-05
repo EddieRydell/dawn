@@ -1,6 +1,6 @@
-use dawn_language::analysis::ProjectAnalysis;
+use dawn_language::analysis::{ProjectAnalysis, ProjectOverlay};
 
-use crate::types::{AnalysisTask, AnalysisTaskId, AnalysisTaskOutput};
+use crate::types::{ActiveGuiDocumentRequest, AnalysisTask, AnalysisTaskId, AnalysisTaskOutput};
 
 #[derive(Debug, Default)]
 pub(crate) struct Analysis {
@@ -14,6 +14,8 @@ impl Analysis {
         &mut self,
         project_root: camino::Utf8PathBuf,
         project_file: camino::Utf8PathBuf,
+        overlays: Vec<ProjectOverlay>,
+        active_gui_document: Option<ActiveGuiDocumentRequest>,
     ) -> AnalysisTask {
         let id = AnalysisTaskId(self.next_job_id);
         self.next_job_id = self.next_job_id.saturating_add(1);
@@ -22,14 +24,17 @@ impl Analysis {
             id,
             project_root,
             project_file,
+            overlays,
+            active_gui_document,
         }
     }
 
-    pub(crate) fn accept(&mut self, output: AnalysisTaskOutput) {
+    pub(crate) fn accept(&mut self, output: &AnalysisTaskOutput) -> bool {
         if self.latest_requested != Some(output.id) {
-            return;
+            return false;
         }
-        self.latest_accepted = Some(output.analysis);
+        self.latest_accepted = Some(output.analysis.clone());
+        true
     }
 
     pub(crate) fn snapshot(&self) -> Option<ProjectAnalysis> {
