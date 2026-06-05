@@ -3,18 +3,18 @@ use dawn_language::analysis::ProjectAnalysis;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct AnalysisJobId(pub u64);
+pub struct AnalysisTaskId(pub u64);
 
 #[derive(Debug, Clone)]
-pub struct AnalysisJobRequest {
-    pub id: AnalysisJobId,
+pub struct AnalysisTask {
+    pub id: AnalysisTaskId,
     pub project_root: Utf8PathBuf,
     pub project_file: Utf8PathBuf,
 }
 
 #[derive(Debug, Clone)]
-pub struct AnalysisJobResult {
-    pub id: AnalysisJobId,
+pub struct AnalysisTaskOutput {
+    pub id: AnalysisTaskId,
     pub analysis: ProjectAnalysis,
 }
 

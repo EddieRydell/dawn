@@ -9,9 +9,9 @@ use camino::Utf8PathBuf;
 use crate::{
     analysis, audio,
     editor::{self, EditorBufferSaveRequest},
-    jobs::{BackendJob, BackendJobResult},
     output, preferences, preview, project, render,
-    types::{AnalysisJobResult, EditorViewMode},
+    tasks::{BackendTask, BackendTaskOutput},
+    types::{AnalysisTaskOutput, EditorViewMode},
     view::AppView,
 };
 
@@ -55,9 +55,9 @@ impl Display for BackendError {
 impl Error for BackendError {}
 
 #[derive(Debug, Clone)]
-pub struct BackendUpdate {
+pub struct AppUpdate {
     pub view: AppView,
-    pub jobs: Vec<BackendJob>,
+    pub tasks: Vec<BackendTask>,
 }
 
 #[derive(Debug, Default)]
@@ -96,7 +96,7 @@ impl AppBackend {
         }
     }
 
-    pub fn open_project(&mut self, path: PathBuf) -> BackendResult<BackendUpdate> {
+    pub fn open_project(&mut self, path: PathBuf) -> BackendResult<AppUpdate> {
         self.project.open(path)?;
         self.analysis = analysis::Analysis::default();
 
@@ -112,49 +112,52 @@ impl AppBackend {
         self.preferences
             .remember_last_project(self.project.root()?)?;
 
-        Ok(BackendUpdate {
+        Ok(AppUpdate {
             view: self.view(),
-            jobs: vec![self.analyze_project_job()?],
+            tasks: vec![self.analyze_project_task()?],
         })
     }
 
-    pub fn complete_job(&mut self, result: BackendJobResult) -> BackendResult<BackendUpdate> {
-        match result {
-            BackendJobResult::AnalyzeProject(result) => self.complete_analysis(result),
+    pub fn complete_task(&mut self, output: BackendTaskOutput) -> BackendResult<AppUpdate> {
+        match output {
+            BackendTaskOutput::AnalyzeProject(output) => self.accept_analysis_output(output),
         }
     }
 
-    pub fn complete_analysis(&mut self, result: AnalysisJobResult) -> BackendResult<BackendUpdate> {
-        self.analysis.complete(result);
+    pub fn accept_analysis_output(
+        &mut self,
+        output: AnalysisTaskOutput,
+    ) -> BackendResult<AppUpdate> {
+        self.analysis.accept(output);
         Ok(self.idle_update())
     }
 
-    pub fn open_file(&mut self, path: Utf8PathBuf) -> BackendResult<BackendUpdate> {
+    pub fn open_file(&mut self, path: Utf8PathBuf) -> BackendResult<AppUpdate> {
         self.editor
             .open_file(path, |path| self.project.read_file_snapshot(path))?;
         self.persist_active_session()?;
         Ok(self.idle_update())
     }
 
-    pub fn close_file(&mut self, path: Utf8PathBuf) -> BackendResult<BackendUpdate> {
+    pub fn close_file(&mut self, path: Utf8PathBuf) -> BackendResult<AppUpdate> {
         self.editor.close_file(path)?;
         self.persist_active_session()?;
         Ok(self.idle_update())
     }
 
-    pub fn set_active_file(&mut self, path: Utf8PathBuf) -> BackendResult<BackendUpdate> {
+    pub fn set_active_file(&mut self, path: Utf8PathBuf) -> BackendResult<AppUpdate> {
         self.editor
             .set_active_file(path, |path| self.project.read_file_snapshot(path))?;
         self.persist_active_session()?;
         Ok(self.idle_update())
     }
 
-    pub fn update_active_text(&mut self, text: String) -> BackendResult<BackendUpdate> {
+    pub fn update_active_text(&mut self, text: String) -> BackendResult<AppUpdate> {
         self.editor.update_active_text(text)?;
         Ok(self.idle_update())
     }
 
-    pub fn save_active_file(&mut self) -> BackendResult<BackendUpdate> {
+    pub fn save_active_file(&mut self) -> BackendResult<AppUpdate> {
         let request = self.editor.active_save_request()?;
         if !request.dirty {
             return Ok(self.idle_update());
@@ -167,7 +170,7 @@ impl AppBackend {
         self.analysis_update()
     }
 
-    pub fn reload_active_file_from_disk(&mut self) -> BackendResult<BackendUpdate> {
+    pub fn reload_active_file_from_disk(&mut self) -> BackendResult<AppUpdate> {
         let request = self.editor.active_save_request()?;
         match self.project.read_file_snapshot(&request.path) {
             Ok(snapshot) => {
@@ -183,7 +186,7 @@ impl AppBackend {
         }
     }
 
-    pub fn keep_active_file(&mut self) -> BackendResult<BackendUpdate> {
+    pub fn keep_active_file(&mut self) -> BackendResult<AppUpdate> {
         let request = self.editor.active_save_request()?;
         let version = self
             .project
@@ -192,11 +195,7 @@ impl AppBackend {
         self.analysis_update()
     }
 
-    pub fn create_file(
-        &mut self,
-        parent: Utf8PathBuf,
-        name: String,
-    ) -> BackendResult<BackendUpdate> {
+    pub fn create_file(&mut self, parent: Utf8PathBuf, name: String) -> BackendResult<AppUpdate> {
         let path = self.project.create_file(&parent, &name)?;
         self.editor
             .open_file(path, |path| self.project.read_file_snapshot(path))?;
@@ -208,16 +207,12 @@ impl AppBackend {
         &mut self,
         parent: Utf8PathBuf,
         name: String,
-    ) -> BackendResult<BackendUpdate> {
+    ) -> BackendResult<AppUpdate> {
         self.project.create_directory(&parent, &name)?;
         self.analysis_update()
     }
 
-    pub fn rename_path(
-        &mut self,
-        path: Utf8PathBuf,
-        new_name: String,
-    ) -> BackendResult<BackendUpdate> {
+    pub fn rename_path(&mut self, path: Utf8PathBuf, new_name: String) -> BackendResult<AppUpdate> {
         self.save_affected_dirty_buffers(std::slice::from_ref(&path))?;
         let path_move = self.project.rename_path(&path, &new_name)?;
         self.editor
@@ -230,7 +225,7 @@ impl AppBackend {
         &mut self,
         paths: Vec<Utf8PathBuf>,
         new_parent: Utf8PathBuf,
-    ) -> BackendResult<BackendUpdate> {
+    ) -> BackendResult<AppUpdate> {
         self.save_affected_dirty_buffers(&paths)?;
         let path_moves = self.project.move_paths(&paths, &new_parent)?;
         self.editor.reconcile_moved_paths(&path_moves);
@@ -238,43 +233,40 @@ impl AppBackend {
         self.analysis_update()
     }
 
-    pub fn delete_path(&mut self, path: Utf8PathBuf) -> BackendResult<BackendUpdate> {
+    pub fn delete_path(&mut self, path: Utf8PathBuf) -> BackendResult<AppUpdate> {
         self.project.delete_path(&path)?;
         self.editor.reconcile_deleted_path(&path);
         self.persist_active_session()?;
         self.analysis_update()
     }
 
-    pub fn set_active_view_mode(
-        &mut self,
-        view_mode: EditorViewMode,
-    ) -> BackendResult<BackendUpdate> {
+    pub fn set_active_view_mode(&mut self, view_mode: EditorViewMode) -> BackendResult<AppUpdate> {
         self.editor.set_active_view_mode(view_mode)?;
         self.persist_active_session()?;
         Ok(self.idle_update())
     }
 
-    pub fn undo_active_edit(&mut self) -> BackendResult<BackendUpdate> {
+    pub fn undo_active_edit(&mut self) -> BackendResult<AppUpdate> {
         self.editor.undo_active_edit()?;
         Ok(self.idle_update())
     }
 
-    pub fn redo_active_edit(&mut self) -> BackendResult<BackendUpdate> {
+    pub fn redo_active_edit(&mut self) -> BackendResult<AppUpdate> {
         self.editor.redo_active_edit()?;
         Ok(self.idle_update())
     }
 
-    fn idle_update(&self) -> BackendUpdate {
-        BackendUpdate {
+    fn idle_update(&self) -> AppUpdate {
+        AppUpdate {
             view: self.view(),
-            jobs: Vec::new(),
+            tasks: Vec::new(),
         }
     }
 
-    fn analysis_update(&mut self) -> BackendResult<BackendUpdate> {
-        Ok(BackendUpdate {
+    fn analysis_update(&mut self) -> BackendResult<AppUpdate> {
+        Ok(AppUpdate {
             view: self.view(),
-            jobs: vec![self.analyze_project_job()?],
+            tasks: vec![self.analyze_project_task()?],
         })
     }
 
@@ -283,16 +275,16 @@ impl AppBackend {
             .set_session_for_project(self.project.root()?, self.editor.session_preferences())
     }
 
-    fn analyze_project_job(&mut self) -> BackendResult<BackendJob> {
-        let project_root = Utf8PathBuf::from_path_buf(self.project.root()?.to_path_buf())
-            .map_err(|path| {
-            BackendError::new(
-                BackendErrorKind::InvalidInput,
-                format!("project root '{}' is not valid UTF-8", path.display()),
-            )
-        })?;
+    fn analyze_project_task(&mut self) -> BackendResult<BackendTask> {
+        let project_root =
+            Utf8PathBuf::from_path_buf(self.project.root()?.to_path_buf()).map_err(|path| {
+                BackendError::new(
+                    BackendErrorKind::InvalidInput,
+                    format!("project root '{}' is not valid UTF-8", path.display()),
+                )
+            })?;
         let project_file = self.project.project_file()?.to_path_buf();
-        Ok(BackendJob::AnalyzeProject(
+        Ok(BackendTask::AnalyzeProject(
             self.analysis.request(project_root, project_file),
         ))
     }

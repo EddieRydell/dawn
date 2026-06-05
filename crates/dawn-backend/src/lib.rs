@@ -14,22 +14,20 @@ mod analysis;
 mod app_backend;
 mod audio;
 mod editor;
-mod jobs;
 mod output;
 mod preferences;
 mod preview;
 mod project;
 mod render;
+mod tasks;
 mod types;
 mod view;
 
-pub use app_backend::{AppBackend, BackendError, BackendErrorKind, BackendResult, BackendUpdate};
+pub use app_backend::{AppBackend, AppUpdate, BackendError, BackendErrorKind, BackendResult};
 pub use editor::{
     EditorBufferView, EditorTabView, EditorView, LoadedEditorTabView, Revision,
     UnloadedEditorTabView,
 };
-pub use jobs::{BackendJob, BackendJobResult};
-pub use types::{
-    AnalysisJobId, AnalysisJobRequest, AnalysisJobResult, EditorViewMode, FileVersion,
-};
+pub use tasks::{BackendTask, BackendTaskOutput};
+pub use types::{AnalysisTask, AnalysisTaskId, AnalysisTaskOutput, EditorViewMode, FileVersion};
 pub use view::AppView;

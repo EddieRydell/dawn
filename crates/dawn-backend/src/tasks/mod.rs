@@ -1,29 +1,29 @@
 use dawn_language::{analysis::analyze_project_with_overlays, fs::WorkspaceFs};
 
 use crate::{
-    types::{AnalysisJobRequest, AnalysisJobResult},
+    types::{AnalysisTask, AnalysisTaskOutput},
     BackendError, BackendErrorKind, BackendResult,
 };
 
 #[derive(Debug, Clone)]
-pub enum BackendJob {
-    AnalyzeProject(AnalysisJobRequest),
+pub enum BackendTask {
+    AnalyzeProject(AnalysisTask),
 }
 
 #[derive(Debug, Clone)]
-pub enum BackendJobResult {
-    AnalyzeProject(AnalysisJobResult),
+pub enum BackendTaskOutput {
+    AnalyzeProject(AnalysisTaskOutput),
 }
 
-impl BackendJob {
-    pub fn run(self) -> BackendResult<BackendJobResult> {
+impl BackendTask {
+    pub fn run(self) -> BackendResult<BackendTaskOutput> {
         match self {
             Self::AnalyzeProject(request) => run_analysis(request),
         }
     }
 }
 
-fn run_analysis(request: AnalysisJobRequest) -> BackendResult<BackendJobResult> {
+fn run_analysis(request: AnalysisTask) -> BackendResult<BackendTaskOutput> {
     let fs = WorkspaceFs::open(request.project_root.as_std_path()).map_err(|error| {
         BackendError::new(
             BackendErrorKind::Io,
@@ -35,7 +35,7 @@ fn run_analysis(request: AnalysisJobRequest) -> BackendResult<BackendJobResult> 
     })?;
     let analysis =
         analyze_project_with_overlays(&fs, request.project_file.clone(), None, Vec::new());
-    Ok(BackendJobResult::AnalyzeProject(AnalysisJobResult {
+    Ok(BackendTaskOutput::AnalyzeProject(AnalysisTaskOutput {
         id: request.id,
         analysis,
     }))
