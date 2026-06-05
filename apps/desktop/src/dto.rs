@@ -1,6 +1,7 @@
 use dawn_backend::{
     AppView, EditorTabView, EditorView, EditorViewMode as BackendEditorViewMode,
     LoadedEditorTabView, RenderedFixtureFrame, RenderedFrame, SequenceEffectPreviewResult,
+    WorkspaceEntry, WorkspaceEntryKind,
 };
 use dawn_language::analysis::{
     DiagnosticCode, DiagnosticSeverity, ProjectAnalysis, ProjectDiagnostic, TextRange,
@@ -175,7 +176,11 @@ impl From<AppView> for AppSnapshotDto {
             workspace: WorkspaceReadModelDto {
                 project_root: view.project_root,
                 project_tree_visible: true,
-                project_entries: Vec::new(),
+                project_entries: view
+                    .project_entries
+                    .into_iter()
+                    .map(WorkspaceEntryDto::from)
+                    .collect(),
             },
             editor: EditorReadModelDto::from(view.editor),
             active_document: ActiveDocumentReadModelDto::default(),
@@ -338,6 +343,30 @@ impl From<BackendEditorViewMode> for EditorViewModeDto {
         match mode {
             BackendEditorViewMode::Text => Self::Text,
             BackendEditorViewMode::Gui => Self::Gui,
+        }
+    }
+}
+
+impl From<WorkspaceEntry> for WorkspaceEntryDto {
+    fn from(entry: WorkspaceEntry) -> Self {
+        let parent = entry
+            .path
+            .parent()
+            .map(|path| path.to_slash_string())
+            .unwrap_or_default();
+        let name = entry
+            .path
+            .file_name()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| entry.path.to_slash_string());
+        Self {
+            path: entry.path.to_slash_string(),
+            kind: match entry.kind {
+                WorkspaceEntryKind::Directory => WorkspaceEntryKindDto::Directory,
+                WorkspaceEntryKind::File => WorkspaceEntryKindDto::File,
+            },
+            name,
+            parent,
         }
     }
 }

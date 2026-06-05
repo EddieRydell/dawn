@@ -95,6 +95,11 @@ impl AppBackend {
                 .project_file()
                 .ok()
                 .map(|path| path.as_str().replace('\\', "/")),
+            project_entries: self
+                .project
+                .project_entries()
+                .map(|entries| entries.to_vec())
+                .unwrap_or_default(),
             analysis: self.analysis.snapshot(),
             editor: self.editor.snapshot(),
             render: self.renderer.snapshot(),

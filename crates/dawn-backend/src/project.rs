@@ -8,9 +8,13 @@ use std::{
 };
 
 use camino::{Utf8Path, Utf8PathBuf};
+use dawn_language::fs::{WorkspaceEntry as LanguageWorkspaceEntry, WorkspaceFs};
 
 use crate::{
-    types::{FileVersion, ProjectFileMetadata, ProjectFileSnapshot, ProjectPathMove},
+    types::{
+        FileVersion, ProjectFileMetadata, ProjectFileSnapshot, ProjectPathMove, WorkspaceEntry,
+        WorkspaceEntryKind,
+    },
     BackendError, BackendErrorKind, BackendResult,
 };
 
@@ -25,6 +29,7 @@ pub(crate) struct Project {
 pub(crate) struct OpenProject {
     root: PathBuf,
     project_file: Utf8PathBuf,
+    project_entries: Vec<WorkspaceEntry>,
 }
 
 impl Project {
@@ -125,7 +130,12 @@ impl Project {
             ));
         };
 
-        self.active = Some(OpenProject { root, project_file });
+        let project_entries = list_project_entries(&root)?;
+        self.active = Some(OpenProject {
+            root,
+            project_file,
+            project_entries,
+        });
 
         Ok(())
     }
@@ -136,6 +146,10 @@ impl Project {
 
     pub(crate) fn project_file(&self) -> BackendResult<&Utf8Path> {
         Ok(&self.require_open()?.project_file)
+    }
+
+    pub(crate) fn project_entries(&self) -> BackendResult<&[WorkspaceEntry]> {
+        Ok(&self.require_open()?.project_entries)
     }
 
     pub(crate) fn file_metadata(
@@ -218,7 +232,7 @@ impl Project {
     }
 
     pub(crate) fn create_file(
-        &self,
+        &mut self,
         parent: &Utf8PathBuf,
         name: &str,
     ) -> BackendResult<Utf8PathBuf> {
@@ -239,10 +253,15 @@ impl Project {
                 format!("failed to create file '{}': {error}", path),
             )
         })?;
+        self.refresh_project_entries()?;
         Ok(path)
     }
 
-    pub(crate) fn create_directory(&self, parent: &Utf8PathBuf, name: &str) -> BackendResult<()> {
+    pub(crate) fn create_directory(
+        &mut self,
+        parent: &Utf8PathBuf,
+        name: &str,
+    ) -> BackendResult<()> {
         validate_file_name(name)?;
         self.require_directory_parent(parent)?;
         let path = parent.join(name);
@@ -259,11 +278,12 @@ impl Project {
                 format!("failed to create directory '{}': {error}", path),
             )
         })?;
+        self.refresh_project_entries()?;
         Ok(())
     }
 
     pub(crate) fn rename_path(
-        &self,
+        &mut self,
         path: &Utf8PathBuf,
         new_name: &str,
     ) -> BackendResult<ProjectPathMove> {
@@ -298,6 +318,7 @@ impl Project {
                 format!("failed to rename '{}' to '{}': {error}", path, new_path),
             )
         })?;
+        self.refresh_project_entries()?;
         Ok(ProjectPathMove {
             old_path: path.clone(),
             new_path,
@@ -305,7 +326,7 @@ impl Project {
     }
 
     pub(crate) fn move_paths(
-        &self,
+        &mut self,
         paths: &[Utf8PathBuf],
         new_parent: &Utf8PathBuf,
     ) -> BackendResult<Vec<ProjectPathMove>> {
@@ -396,10 +417,11 @@ impl Project {
             completed.push(planned_move.clone());
         }
 
+        self.refresh_project_entries()?;
         Ok(planned_moves)
     }
 
-    pub(crate) fn delete_path(&self, path: &Utf8PathBuf) -> BackendResult<()> {
+    pub(crate) fn delete_path(&mut self, path: &Utf8PathBuf) -> BackendResult<()> {
         self.reject_project_root_path(path, "delete")?;
         let resolved = self.resolve_project_path(path)?;
         let metadata = self.metadata_for_resolved_path(path, &resolved)?;
@@ -423,6 +445,7 @@ impl Project {
                 format!("path is not a file or directory: {path}"),
             ));
         }
+        self.refresh_project_entries()?;
         Ok(())
     }
 
@@ -430,6 +453,18 @@ impl Project {
         self.active
             .as_ref()
             .ok_or_else(|| BackendError::new(BackendErrorKind::NoProject, "project is not open"))
+    }
+
+    fn require_open_mut(&mut self) -> BackendResult<&mut OpenProject> {
+        self.active
+            .as_mut()
+            .ok_or_else(|| BackendError::new(BackendErrorKind::NoProject, "project is not open"))
+    }
+
+    fn refresh_project_entries(&mut self) -> BackendResult<()> {
+        let project = self.require_open_mut()?;
+        project.project_entries = list_project_entries(&project.root)?;
+        Ok(())
     }
 
     fn resolve_project_file(&self, path: &Utf8PathBuf) -> BackendResult<PathBuf> {
@@ -620,4 +655,43 @@ fn reject_nested_selected_paths(paths: &[(Utf8PathBuf, PathBuf)]) -> BackendResu
         }
     }
     Ok(())
+}
+
+fn list_project_entries(root: &Path) -> BackendResult<Vec<WorkspaceEntry>> {
+    let fs = WorkspaceFs::open(root).map_err(|error| {
+        BackendError::new(
+            BackendErrorKind::InvalidInput,
+            format!(
+                "failed to open project root '{}' for entry listing: {error}",
+                root.display()
+            ),
+        )
+    })?;
+    let entries = fs
+        .list_entries()
+        .map_err(|error| {
+            BackendError::new(
+                BackendErrorKind::Io,
+                format!(
+                    "failed to list project entries for '{}': {error}",
+                    root.display()
+                ),
+            )
+        })?
+        .into_iter()
+        .map(WorkspaceEntry::from)
+        .collect();
+    Ok(entries)
+}
+
+impl From<LanguageWorkspaceEntry> for WorkspaceEntry {
+    fn from(entry: LanguageWorkspaceEntry) -> Self {
+        Self {
+            path: entry.path,
+            kind: match entry.kind {
+                dawn_language::fs::WorkspaceEntryKind::Directory => WorkspaceEntryKind::Directory,
+                dawn_language::fs::WorkspaceEntryKind::File => WorkspaceEntryKind::File,
+            },
+        }
+    }
 }

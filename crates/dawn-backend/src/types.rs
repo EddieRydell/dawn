@@ -279,6 +279,18 @@ pub struct FileVersion {
     pub content_hash: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceEntry {
+    pub path: Utf8PathBuf,
+    pub kind: WorkspaceEntryKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceEntryKind {
+    Directory,
+    File,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ProjectFileMetadata {
     pub(crate) len: u64,

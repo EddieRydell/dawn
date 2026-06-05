@@ -37,6 +37,6 @@ pub use types::{
     RenderedFrame, RenderedFrameSource, RenderedFrameSourceKind, RenderedFrameStatus,
     RenderedPixelFrame, SequenceEffectPreview, SequenceEffectPreviewErrorResult,
     SequenceEffectPreviewReadyResult, SequenceEffectPreviewResult,
-    SequenceEffectPreviewUnavailableResult,
+    SequenceEffectPreviewUnavailableResult, WorkspaceEntry, WorkspaceEntryKind,
 };
 pub use view::AppView;
