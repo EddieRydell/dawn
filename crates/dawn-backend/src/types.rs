@@ -47,38 +47,6 @@ pub struct ActiveGuiDocumentOutput {
     pub document: Box<ActiveGuiDocument>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RenderTaskId(pub u64);
-
-#[derive(Debug, Clone)]
-pub struct RenderFrameTask {
-    pub id: RenderTaskId,
-    pub analysis: ProjectAnalysis,
-    pub document: SequenceDocument,
-    pub position_seconds: f64,
-    pub generation: u64,
-    pub cache: SequenceRenderCache,
-}
-
-#[derive(Debug, Clone)]
-pub struct RenderFrameTaskOutput {
-    pub id: RenderTaskId,
-    pub frame: RenderedFrame,
-    pub cache: SequenceRenderCache,
-}
-
-#[derive(Debug, Clone)]
-pub struct RenderEffectPreviewTask {
-    pub id: RenderTaskId,
-    pub path: Utf8PathBuf,
-    pub object_key: String,
-    pub request_id: u32,
-    pub analysis: ProjectAnalysis,
-    pub document: SequenceDocument,
-    pub effects: Vec<RenderEffectPreviewRequestEffect>,
-    pub cache: SequenceRenderCache,
-}
-
 #[derive(Debug, Clone)]
 pub struct RenderEffectPreviewRequestEffect {
     pub effect_id: u32,
@@ -86,13 +54,13 @@ pub struct RenderEffectPreviewRequestEffect {
 }
 
 #[derive(Debug, Clone)]
-pub struct RenderEffectPreviewTaskOutput {
-    pub id: RenderTaskId,
+pub struct EffectPreviewRequest {
     pub path: Utf8PathBuf,
     pub object_key: String,
     pub request_id: u32,
-    pub results: Vec<SequenceEffectPreviewResult>,
-    pub cache: SequenceRenderCache,
+    pub analysis: ProjectAnalysis,
+    pub document: SequenceDocument,
+    pub effects: Vec<RenderEffectPreviewRequestEffect>,
 }
 
 #[derive(Debug, Clone)]
@@ -147,6 +115,9 @@ pub struct ExportFseqTask {
     pub options: FseqExportOptions,
     pub cache: SequenceRenderCache,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RenderTaskId(pub u64);
 
 #[derive(Debug, Clone)]
 pub struct ExportFseqTaskOutput {

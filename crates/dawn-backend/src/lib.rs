@@ -16,9 +16,11 @@ mod app_backend;
 mod audio;
 mod document_editing;
 mod editor;
+mod effect_preview;
 mod output;
 mod preferences;
 mod preview;
+mod preview_render;
 mod project;
 mod render;
 mod tasks;
@@ -30,16 +32,19 @@ pub use editor::{
     EditorBufferView, EditorTabView, EditorView, LoadedEditorTabView, Revision,
     UnloadedEditorTabView,
 };
+pub use effect_preview::{EffectPreviewExecutor, EffectPreviewExecutorHandle, EffectPreviewKey};
 pub use preview::{
-    AudioPlaybackStatus, PreviewRenderTiming, PreviewSnapshot, PreviewSyncMode, SequenceKey,
+    AudioPlaybackStatus, PreviewFrameDemand, PreviewRenderTiming, PreviewSnapshot, SequenceKey,
+};
+pub use preview_render::{
+    PreviewFrameExecutor, PreviewFrameRenderOutput, PreviewFrameRenderTask, PreviewRenderMode,
 };
 pub use tasks::{BackendTask, BackendTaskOutput};
 pub use types::{
     ActiveDocumentView, ActiveGuiDocument, ActiveGuiDocumentBlocked, AnalysisTask, AnalysisTaskId,
-    AnalysisTaskOutput, EditorViewMode, ExportFseqTask, ExportFseqTaskOutput, FileVersion,
-    FseqExportMetadata, FseqExportOptions, FseqExportReport, PreviewAudioClock, PreviewHostState,
-    PreviewTickOutput, RenderEffectPreviewRequestEffect, RenderEffectPreviewTask,
-    RenderEffectPreviewTaskOutput, RenderFrameTask, RenderFrameTaskOutput, RenderTaskId,
+    AnalysisTaskOutput, EditorViewMode, EffectPreviewRequest, ExportFseqTask, ExportFseqTaskOutput,
+    FileVersion, FseqExportMetadata, FseqExportOptions, FseqExportReport, PreviewAudioClock,
+    PreviewHostState, PreviewTickOutput, RenderEffectPreviewRequestEffect, RenderTaskId,
     RenderView, RenderedFixtureFrame, RenderedFrame, RenderedFrameSource, RenderedFrameSourceKind,
     RenderedFrameStatus, RenderedPixelFrame, SequenceAudioDialog, SequenceEffectPreview,
     SequenceEffectPreviewErrorResult, SequenceEffectPreviewReadyResult,

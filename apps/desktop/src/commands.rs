@@ -301,7 +301,6 @@ fn editor_view_mode(mode: EditorViewModeDto) -> EditorViewMode {
 #[specta::specta]
 #[tauri::command]
 pub(crate) fn request_sequence_effect_previews(
-    app: AppHandle,
     state: State<'_, AppState>,
     path: String,
     object_key: String,
@@ -315,14 +314,19 @@ pub(crate) fn request_sequence_effect_previews(
             signature: effect.signature,
         })
         .collect();
-    run_backend_command(&app, state.inner(), |backend| {
-        backend.request_sequence_effect_previews(
-            Utf8PathBuf::from(path),
-            object_key,
-            request_id,
-            effects,
-        )
-    })
+    let request = {
+        let backend = state.lock_backend()?;
+        backend
+            .request_sequence_effect_previews(
+                Utf8PathBuf::from(path),
+                object_key,
+                request_id,
+                effects,
+            )
+            .map_err(|error| error.to_string())?
+    };
+    state.effect_preview().submit(request)?;
+    Ok(())
 }
 
 #[specta::specta]
@@ -332,12 +336,14 @@ pub(crate) fn take_sequence_effect_preview_results(
     path: String,
     object_key: String,
 ) -> CommandResult<SequenceEffectPreviewResultsDto> {
-    let batch = {
-        let mut backend = state.lock_backend()?;
+    let path = Utf8PathBuf::from(path);
+    {
+        let backend = state.lock_backend()?;
         backend
-            .take_sequence_effect_preview_results(Utf8PathBuf::from(path), object_key)
+            .validate_sequence_effect_preview_key(&path, &object_key)
             .map_err(|error| error.to_string())?
-    };
+    }
+    let batch = state.effect_preview().take_results(&path, &object_key);
     Ok(sequence_effect_preview_results_dto(batch))
 }
 

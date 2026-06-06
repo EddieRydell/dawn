@@ -14,18 +14,20 @@ import { BlockedGui } from "./BlockedGui";
 
 import { SequenceEditor } from "./sequence/SequenceEditor";
 
-import { handleSequencePlaybackShortcut } from "./sequence/SequenceTransportControls";
+import { handleSequencePlaybackShortcut, type SequencePreviewClock } from "./sequence/SequenceTransportControls";
 
 import { markSelectionConsumesKey } from "./sequence/sequenceSelection";
 
 export function GuiEditor({
   snapshot,
   livePreview,
+  previewClock,
   sequenceSelection,
   setSequenceSelection
 }: {
   snapshot: RuntimeUiState;
   livePreview: LivePreview | null;
+  previewClock: SequencePreviewClock | null;
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
 }) {
@@ -44,6 +46,7 @@ export function GuiEditor({
       key={editorKey}
       gui={gui}
       livePreview={livePreview}
+      previewClock={previewClock}
       sequenceSelection={sequenceSelection}
       setSequenceSelection={setSequenceSelection}
     />
@@ -53,11 +56,13 @@ export function GuiEditor({
 function GuiEditorInner({
   gui,
   livePreview,
+  previewClock,
   sequenceSelection,
   setSequenceSelection
 }: {
   gui: ReadyGuiDocumentDto;
   livePreview: LivePreview | null;
+  previewClock: SequencePreviewClock | null;
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
 }) {
@@ -77,11 +82,12 @@ function GuiEditorInner({
         }
       }}
     >
-      {gui.type === "sequence" && livePreview !== null && (
+      {gui.type === "sequence" && livePreview !== null && previewClock !== null && (
         <SequenceEditor
           key={`${gui.document.path}:${gui.document.objectKey}`}
           document={gui.document}
           preview={livePreview}
+          previewClock={previewClock}
           selected={selected}
           setSelected={setSelected}
           sequenceSelection={sequenceSelection}

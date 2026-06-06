@@ -5,11 +5,12 @@ import type { SequenceDocumentDto } from "../../../bindings";
 import type { GuiFocus, LivePreview, SequenceSelection } from "../shared";
 
 import { SequenceCanvas } from "./SequenceCanvas";
-import { handleSequencePlaybackShortcut } from "./SequenceTransportControls";
+import { handleSequencePlaybackShortcut, type SequencePreviewClock } from "./SequenceTransportControls";
 
 export function SequenceEditor({
   document,
   preview,
+  previewClock,
   selected,
   setSelected,
   sequenceSelection,
@@ -21,6 +22,7 @@ export function SequenceEditor({
 }: {
   document: SequenceDocumentDto;
   preview: LivePreview;
+  previewClock: SequencePreviewClock;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
   sequenceSelection: SequenceSelection;
@@ -41,6 +43,7 @@ export function SequenceEditor({
         document={document}
         previewPositionSeconds={livePreview.positionSeconds}
         previewHomeSeconds={livePreview.homeSeconds}
+        previewClock={previewClock}
         selected={selected}
         setSelected={setSelected}
         sequenceSelection={sequenceSelection}

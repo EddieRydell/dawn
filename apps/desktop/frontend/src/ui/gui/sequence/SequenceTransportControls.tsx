@@ -2,7 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 
 import { ChevronLeft, ChevronRight, Crosshair, LoaderCircle, Music, Pause, Play, SkipBack, Square, X } from "lucide-react";
 
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { commands } from "../../../api";
 
@@ -16,11 +16,13 @@ import { setGlobalMarkDisplayMode, useMarkDisplayMode, type MarkDisplayMode } fr
 export function SequenceTransportControls({
   document,
   preview,
+  previewClock,
   effectPreviewEnabled,
   selectedEffectIds
 }: {
   document: SequenceDocumentDto;
   preview: LivePreview;
+  previewClock: SequencePreviewClock;
   effectPreviewEnabled: boolean;
   selectedEffectIds: number[];
 }) {
@@ -34,7 +36,7 @@ export function SequenceTransportControls({
   const [mode, setMode] = useMarkDisplayMode();
   const selectedEffectIdsSignature = selectedEffectIds.join(",");
   const stepFrame = (direction: -1 | 1) => {
-    stepSequenceFrame(document, livePreview.positionSeconds, livePreview.durationSeconds, direction);
+    stepSequenceFrame(document, previewClock.currentPositionSeconds(), livePreview.durationSeconds, direction);
   };
   const setMarkMode = (nextMode: MarkDisplayMode) => {
     setGlobalMarkDisplayMode(nextMode);
@@ -138,9 +140,19 @@ export function SequenceTransportControls({
   );
 }
 
-export function useSequencePreview(preview: PreviewSnapshotDto | null): LivePreview | null {
+export type SequencePreviewClock = {
+  currentPositionSeconds: () => number;
+  currentHomeSeconds: () => number;
+  isPlaying: () => boolean;
+};
+
+export type SequencePreviewState = {
+  preview: LivePreview;
+  clock: SequencePreviewClock;
+};
+
+export function useSequencePreview(preview: PreviewSnapshotDto | null): SequencePreviewState | null {
   const [eventPreview, setEventPreview] = useState<PreviewStateEvent | null>(null);
-  const [animatedPositionSeconds, setAnimatedPositionSeconds] = useState(0);
   const anchor = useRef<{
     preview: LivePreview | null;
     positionSeconds: number;
@@ -162,7 +174,6 @@ export function useSequencePreview(preview: PreviewSnapshotDto | null): LivePrev
             positionSeconds: event.payload.positionSeconds,
             anchoredAt: performance.now()
           };
-          setAnimatedPositionSeconds(event.payload.positionSeconds);
           setEventPreview(event.payload);
         }
       });
@@ -175,6 +186,18 @@ export function useSequencePreview(preview: PreviewSnapshotDto | null): LivePrev
 
   const livePreview = preview === null ? null : eventPreview ?? preview;
   const livePreviewRef = useRef(livePreview);
+  const clock = useMemo<SequencePreviewClock>(() => ({
+    currentPositionSeconds: () => {
+      const latest = livePreviewRef.current;
+      const current = anchor.current;
+      if (latest === null || current.preview === null) return 0;
+      if (!latest.isPlaying || !current.preview.isPlaying) return latest.positionSeconds;
+      const elapsedSeconds = current.anchoredAt > 0 ? (performance.now() - current.anchoredAt) / 1000 : 0;
+      return clamp(current.positionSeconds + elapsedSeconds, 0, current.preview.durationSeconds);
+    },
+    currentHomeSeconds: () => livePreviewRef.current?.homeSeconds ?? 0,
+    isPlaying: () => livePreviewRef.current?.isPlaying ?? false
+  }), []);
 
   useEffect(() => {
     livePreviewRef.current = livePreview;
@@ -193,38 +216,14 @@ export function useSequencePreview(preview: PreviewSnapshotDto | null): LivePrev
     };
   }, [livePreview]);
 
-  useEffect(() => {
-    let frame = 0;
-    const tick = () => {
-      const latest = livePreviewRef.current;
-      const current = anchor.current;
-      if (latest === null || current.preview === null) {
-        return;
-      }
-      if (!latest.isPlaying || !current.preview.isPlaying) {
-        setAnimatedPositionSeconds(latest.positionSeconds);
-        return;
-      }
-      const elapsedSeconds = current.anchoredAt > 0 ? (performance.now() - current.anchoredAt) / 1000 : 0;
-      setAnimatedPositionSeconds(clamp(current.positionSeconds + elapsedSeconds, 0, current.preview.durationSeconds));
-      frame = window.requestAnimationFrame(tick);
-    };
-    frame = window.requestAnimationFrame(tick);
-    return () => {
-      window.cancelAnimationFrame(frame);
-    };
-  }, [livePreview?.isPlaying, livePreview?.positionSeconds]);
-
   if (livePreview === null) {
     return null;
   }
 
-  return livePreview.isPlaying
-    ? {
-        ...livePreview,
-        positionSeconds: animatedPositionSeconds
-      }
-    : livePreview;
+  return {
+    preview: livePreview,
+    clock
+  };
 }
 
 function useSequenceAudioStatus(preview: PreviewSnapshotDto) {

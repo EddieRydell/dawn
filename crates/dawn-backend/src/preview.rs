@@ -1,14 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-use dawn_language::analysis::ProjectAnalysis;
 use dawn_language::document::{SequenceAudioDocument, SequenceDocument};
 
-use dawn_language::sequence_render::{
-    empty_frame, OutputFrame, OutputFrameStatus, SequenceChangeImpact,
-    SequenceFrameEvaluationTiming, SequenceFrameEvaluator, SequenceRenderCache,
-};
+use dawn_language::sequence_render::empty_frame;
 
+use crate::preview_render::{PreviewFrameRenderOutput, PreviewFrameRenderTask, PreviewRenderMode};
 use crate::types::RenderedFrame;
 
 #[derive(Debug, Clone)]
@@ -85,9 +82,9 @@ pub struct PreviewSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PreviewSyncMode {
-    RenderNow,
-    DeferRender,
+pub enum PreviewFrameDemand {
+    Needed,
+    Deferred,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -104,38 +101,17 @@ pub struct PreviewRenderTiming {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub struct PreviewRenderRequest {
-    pub id: u64,
-    pub dirty_revision: u64,
-    pub generation: u64,
-    pub key: SequenceKey,
-    pub document: SequenceDocument,
-    pub position_seconds: f64,
-    pub status: String,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct PreviewRenderResult {
-    pub request: PreviewRenderRequest,
-    pub frame: OutputFrame,
-    pub timing: PreviewRenderTiming,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
 pub(crate) struct Preview {
     source: PreviewSource,
     transport: PreviewTransport,
     sequence_states: HashMap<SequenceKey, SequencePlaybackState>,
     effect_preview: Option<EffectPreviewState>,
-    render_cache: Option<SequenceFrameEvaluator>,
-    sequence_cache: SequenceRenderCache,
     last_render_timing: PreviewRenderTiming,
     generation: u64,
     dirty_revision: u64,
+    frame_needed: bool,
     next_deferred_render_id: u64,
-    pending_deferred_render: Option<PendingDeferredRender>,
+    render_in_flight: Option<PendingDeferredRender>,
     snapshot: PreviewSnapshot,
 }
 
@@ -153,13 +129,12 @@ impl Default for Preview {
             transport: PreviewTransport::Stopped,
             sequence_states: HashMap::new(),
             effect_preview: None,
-            render_cache: None,
-            sequence_cache: SequenceRenderCache::default(),
             last_render_timing: PreviewRenderTiming::default(),
             generation: 0,
             dirty_revision: 0,
+            frame_needed: false,
             next_deferred_render_id: 0,
-            pending_deferred_render: None,
+            render_in_flight: None,
             snapshot: PreviewSnapshot {
                 source_label: "No preview source".to_string(),
                 source_key: None,
@@ -200,38 +175,15 @@ impl Preview {
     pub fn sync_source(
         &mut self,
         source: Option<(SequenceKey, SequenceDocument)>,
-        analysis: Option<&ProjectAnalysis>,
-        mode: PreviewSyncMode,
+        demand: PreviewFrameDemand,
     ) {
         let next_key = source.as_ref().map(|(key, _)| key);
         let source_changed = self.current_key().as_ref() != next_key;
         if source_changed && self.is_playing() {
-            self.pause_current(analysis);
+            self.pause_current();
         }
         self.dirty_revision = self.dirty_revision.saturating_add(1);
-        self.pending_deferred_render = None;
-        if source_changed {
-            self.sequence_cache.clear();
-            self.render_cache = None;
-        } else if let (
-            Some(analysis),
-            PreviewSource::Sequence {
-                document: previous_document,
-                ..
-            },
-            Some((_, refreshed_document)),
-        ) = (analysis, &self.source, source.as_ref())
-        {
-            let impact =
-                SequenceChangeImpact::between(previous_document, refreshed_document, analysis);
-            if impact.requires_full_clear()
-                || !impact.invalidated_prepared_effect_ids().is_empty()
-                || !impact.invalidated_topology_effect_ids().is_empty()
-            {
-                self.sequence_cache.apply_change_impact(&impact);
-                self.render_cache = None;
-            }
-        }
+        self.frame_needed = false;
 
         match source {
             Some((key, document)) => {
@@ -246,20 +198,20 @@ impl Preview {
                 self.transport = PreviewTransport::Stopped;
             }
         }
-        match mode {
-            PreviewSyncMode::RenderNow => self.render(analysis, self.status_for_source()),
-            PreviewSyncMode::DeferRender => {
+        match demand {
+            PreviewFrameDemand::Needed => self.request_frame(self.status_for_source()),
+            PreviewFrameDemand::Deferred => {
                 self.refresh_snapshot_metadata(self.status_for_source());
                 self.snapshot.preview_updating = true;
             }
         }
     }
 
-    pub fn play(&mut self, analysis: Option<&ProjectAnalysis>) {
+    pub fn play(&mut self) {
         self.effect_preview = None;
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
             self.transport = PreviewTransport::Stopped;
-            self.render(analysis, "No sequence preview source");
+            self.request_frame("No sequence preview source");
             return;
         };
 
@@ -271,64 +223,60 @@ impl Preview {
             started_at: Instant::now(),
             started_position_seconds: state.position_seconds,
         };
-        self.render(analysis, "Playing");
+        self.request_frame("Playing");
     }
 
-    pub fn play_from_native_audio_clock(
-        &mut self,
-        position_seconds: f64,
-        analysis: Option<&ProjectAnalysis>,
-    ) {
+    pub fn play_from_native_audio_clock(&mut self, position_seconds: f64) {
         self.effect_preview = None;
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
             self.transport = PreviewTransport::Stopped;
-            self.render(analysis, "No sequence preview source");
+            self.request_frame("No sequence preview source");
             return;
         };
         let state = self.sequence_states.entry(key).or_default();
         state.position_seconds = clamp_position_seconds(position_seconds, duration_seconds);
         self.transport = PreviewTransport::NativeAudioPlaying;
-        self.render(analysis, "Playing");
+        self.request_frame("Playing");
     }
 
-    pub fn pause(&mut self, analysis: Option<&ProjectAnalysis>) {
-        self.pause_current(analysis);
-        self.render(analysis, "Paused");
+    pub fn pause(&mut self) {
+        self.pause_current();
+        self.request_frame("Paused");
     }
 
-    pub fn pause_at(&mut self, position_seconds: f64, analysis: Option<&ProjectAnalysis>) {
+    pub fn pause_at(&mut self, position_seconds: f64) {
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
-            self.render(analysis, "No active sequence");
+            self.request_frame("No active sequence");
             return;
         };
         let state = self.sequence_states.entry(key).or_default();
         state.position_seconds = clamp_position_seconds(position_seconds, duration_seconds);
         self.transport = PreviewTransport::Paused;
-        self.render(analysis, "Paused");
+        self.request_frame("Paused");
     }
 
-    pub fn stop(&mut self, analysis: Option<&ProjectAnalysis>) {
+    pub fn stop(&mut self) {
         self.capture_position();
         self.transport = PreviewTransport::Stopped;
         if let Some((key, duration_seconds)) = self.sequence_source_meta() {
             let state = self.sequence_states.entry(key).or_default();
             state.position_seconds = clamp_position_seconds(state.home_seconds, duration_seconds);
         }
-        self.render(analysis, "Stopped");
+        self.request_frame("Stopped");
     }
 
-    pub fn stop_native_audio(&mut self, analysis: Option<&ProjectAnalysis>) {
+    pub fn stop_native_audio(&mut self) {
         self.transport = PreviewTransport::Stopped;
         if let Some((key, duration_seconds)) = self.sequence_source_meta() {
             let state = self.sequence_states.entry(key).or_default();
             state.position_seconds = clamp_position_seconds(state.home_seconds, duration_seconds);
         }
-        self.render(analysis, "Stopped");
+        self.request_frame("Stopped");
     }
 
-    pub fn seek(&mut self, position_seconds: f64, analysis: Option<&ProjectAnalysis>) {
+    pub fn seek(&mut self, position_seconds: f64) {
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
-            self.render(analysis, "No active sequence");
+            self.request_frame("No active sequence");
             return;
         };
         let position_seconds = clamp_position_seconds(position_seconds, duration_seconds);
@@ -341,17 +289,12 @@ impl Preview {
                 started_position_seconds: position_seconds,
             };
         }
-        self.render(analysis, "Ready");
+        self.request_frame("Ready");
     }
 
-    pub fn seek_native_audio(
-        &mut self,
-        position_seconds: f64,
-        playing: bool,
-        analysis: Option<&ProjectAnalysis>,
-    ) {
+    pub fn seek_native_audio(&mut self, position_seconds: f64, playing: bool) {
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
-            self.render(analysis, "No active sequence");
+            self.request_frame("No active sequence");
             return;
         };
         let position_seconds = clamp_position_seconds(position_seconds, duration_seconds);
@@ -363,12 +306,12 @@ impl Preview {
         } else {
             PreviewTransport::Paused
         };
-        self.render(analysis, "Ready");
+        self.request_frame("Ready");
     }
 
-    pub fn set_sequence_playhead(&mut self, time_seconds: f64, analysis: Option<&ProjectAnalysis>) {
+    pub fn set_sequence_playhead(&mut self, time_seconds: f64) {
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
-            self.render(analysis, "No active sequence");
+            self.request_frame("No active sequence");
             return;
         };
         let position_seconds = clamp_position_seconds(time_seconds, duration_seconds);
@@ -381,36 +324,36 @@ impl Preview {
                 started_position_seconds: position_seconds,
             };
         }
-        self.render(analysis, "Sequence playhead moved");
+        self.request_frame("Sequence playhead moved");
     }
 
-    pub fn go_to_sequence_beginning(&mut self, analysis: Option<&ProjectAnalysis>) {
+    pub fn go_to_sequence_beginning(&mut self) {
         let Some((key, _)) = self.sequence_source_meta() else {
-            self.render(analysis, "No active sequence");
+            self.request_frame("No active sequence");
             return;
         };
         let state = self.sequence_states.entry(key).or_default();
         state.position_seconds = 0.0;
         state.home_seconds = 0.0;
         self.transport = PreviewTransport::Stopped;
-        self.render(analysis, "Sequence returned to beginning");
+        self.request_frame("Sequence returned to beginning");
     }
 
-    pub fn go_to_sequence_beginning_native_audio(&mut self, analysis: Option<&ProjectAnalysis>) {
+    pub fn go_to_sequence_beginning_native_audio(&mut self) {
         let Some((key, _)) = self.sequence_source_meta() else {
-            self.render(analysis, "No active sequence");
+            self.request_frame("No active sequence");
             return;
         };
         let state = self.sequence_states.entry(key).or_default();
         state.position_seconds = 0.0;
         state.home_seconds = 0.0;
         self.transport = PreviewTransport::Paused;
-        self.render(analysis, "Sequence returned to beginning");
+        self.request_frame("Sequence returned to beginning");
     }
 
-    pub fn tick(&mut self, analysis: Option<&ProjectAnalysis>) {
+    pub fn tick(&mut self) {
         if self.tick_clock() {
-            self.render(analysis, self.snapshot.status.clone());
+            self.demand_frame(self.snapshot.status.clone());
         }
     }
 
@@ -438,64 +381,81 @@ impl Preview {
         false
     }
 
-    pub fn render_current_frame(&mut self, analysis: Option<&ProjectAnalysis>) {
+    pub fn request_current_frame(&mut self) {
         let status = self.snapshot.status.clone();
-        self.render(analysis, status);
+        self.request_frame(status);
     }
 
-    pub fn begin_deferred_render(&mut self) -> Option<PreviewRenderRequest> {
-        if !self.snapshot.preview_updating || self.effect_preview.is_some() {
+    pub fn begin_frame_render(
+        &mut self,
+        analysis: Option<dawn_language::analysis::ProjectAnalysis>,
+    ) -> Option<PreviewFrameRenderTask> {
+        if !self.frame_needed {
+            return None;
+        }
+        if self.render_in_flight.is_some() {
             return None;
         }
         let pending = PendingDeferredRender {
             id: self.next_deferred_render_id,
             dirty_revision: self.dirty_revision,
         };
-        if self.pending_deferred_render == Some(pending) {
-            return None;
-        }
         let PreviewSource::Sequence { key, document } = self.source.clone() else {
             self.snapshot.preview_updating = false;
+            self.frame_needed = false;
             return None;
         };
         self.next_deferred_render_id = self.next_deferred_render_id.saturating_add(1);
-        self.pending_deferred_render = Some(pending);
-        self.generation = self.generation.saturating_add(1);
+        self.render_in_flight = Some(pending);
+        self.frame_needed = false;
+        self.snapshot.preview_updating = true;
         let position_seconds = self.current_position_seconds(&key, document.duration_seconds);
-        Some(PreviewRenderRequest {
+        let (mode, preview_seconds, effect_filter) = match self.effect_preview.as_ref() {
+            Some(effect_preview) => (
+                PreviewRenderMode::EffectPreview,
+                effect_preview.started_at.elapsed().as_secs_f64(),
+                effect_preview.ids.clone(),
+            ),
+            None => (PreviewRenderMode::Sequence, 0.0, HashSet::new()),
+        };
+        Some(PreviewFrameRenderTask {
             id: pending.id,
             dirty_revision: pending.dirty_revision,
             generation: self.generation,
             key,
+            analysis,
             document: *document,
             position_seconds,
+            preview_seconds,
+            effect_filter,
             status: self.snapshot.status.clone(),
+            mode,
         })
     }
 
-    pub fn complete_deferred_render(&mut self, result: PreviewRenderResult) -> bool {
+    pub fn complete_frame_render(&mut self, output: PreviewFrameRenderOutput) -> bool {
         let pending = PendingDeferredRender {
-            id: result.request.id,
-            dirty_revision: result.request.dirty_revision,
+            id: output.id,
+            dirty_revision: output.dirty_revision,
         };
-        if self.pending_deferred_render != Some(pending)
-            || self.dirty_revision != result.request.dirty_revision
-            || self.current_key().as_ref() != Some(&result.request.key)
-        {
+        if self.render_in_flight != Some(pending) {
             return false;
         }
-        self.pending_deferred_render = None;
-        self.last_render_timing = result.timing;
-        self.refresh_snapshot_metadata(result.request.status);
-        let frame_status =
-            status_from_frame(&result.frame.status).unwrap_or_else(|| self.snapshot.status.clone());
-        self.snapshot.frame = result.frame.into();
-        self.snapshot.status = frame_status;
-        self.snapshot.preview_updating = false;
+        self.render_in_flight = None;
+        if self.dirty_revision != output.dirty_revision
+            || self.current_key().as_ref() != Some(&output.key)
+        {
+            self.snapshot.preview_updating = self.frame_needed || self.render_in_flight.is_some();
+            return false;
+        }
+        self.last_render_timing = output.timing;
+        self.refresh_snapshot_metadata(output.status);
+        self.snapshot.frame = output.frame;
+        self.snapshot.preview_updating = self.frame_needed;
         true
     }
 
-    pub fn set_effect_preview_ids(&mut self, ids: Vec<u32>, analysis: Option<&ProjectAnalysis>) {
+    pub fn set_effect_preview_ids(&mut self, ids: Vec<u32>) {
         let ids = ids.into_iter().collect::<HashSet<_>>();
         self.effect_preview = if ids.is_empty() {
             None
@@ -506,23 +466,18 @@ impl Preview {
             })
         };
         let status = self.snapshot.status.clone();
-        self.render(analysis, status);
+        self.request_frame(status);
     }
 
-    pub fn clear_effect_preview(&mut self, analysis: Option<&ProjectAnalysis>) {
+    pub fn clear_effect_preview(&mut self) {
         self.effect_preview = None;
         let status = self.snapshot.status.clone();
-        self.render(analysis, status);
+        self.request_frame(status);
     }
 
-    pub fn render_at_native_audio_clock(
-        &mut self,
-        position_seconds: f64,
-        ended: bool,
-        analysis: Option<&ProjectAnalysis>,
-    ) {
+    pub fn render_at_native_audio_clock(&mut self, position_seconds: f64, ended: bool) {
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
-            self.render(analysis, "No active sequence");
+            self.request_frame("No active sequence");
             return;
         };
         let position_seconds = clamp_position_seconds(position_seconds, duration_seconds);
@@ -532,10 +487,10 @@ impl Preview {
             .position_seconds = position_seconds;
         if ended || position_seconds >= duration_seconds {
             self.transport = PreviewTransport::Stopped;
-            self.render(analysis, "Sequence playback complete");
+            self.request_frame("Sequence playback complete");
         } else {
             self.transport = PreviewTransport::NativeAudioPlaying;
-            self.render(analysis, "Playing");
+            self.demand_frame("Playing");
         }
     }
 
@@ -563,11 +518,11 @@ impl Preview {
         }
     }
 
-    fn pause_current(&mut self, analysis: Option<&ProjectAnalysis>) {
+    fn pause_current(&mut self) {
         self.capture_position();
         if self.is_playing() {
             self.transport = PreviewTransport::Paused;
-            self.render(analysis, "Paused");
+            self.request_frame("Paused");
         }
     }
 
@@ -583,66 +538,36 @@ impl Preview {
             .position_seconds = position_seconds;
     }
 
-    fn render(&mut self, analysis: Option<&ProjectAnalysis>, status: impl Into<String>) {
-        let render_started = Instant::now();
+    fn request_frame(&mut self, status: impl Into<String>) {
         self.last_render_timing = PreviewRenderTiming::default();
         self.dirty_revision = self.dirty_revision.saturating_add(1);
-        self.pending_deferred_render = None;
+        self.frame_needed = false;
         self.generation = self.generation.saturating_add(1);
         let status = status.into();
-        let (
-            source_label,
-            source_key,
-            position_seconds,
-            home_seconds,
-            duration_seconds,
-            audio,
-            frame,
-        ) = match self.source.clone() {
-            PreviewSource::None => (
-                "No preview source".to_string(),
-                None,
-                0.0,
-                0.0,
-                0.0,
-                None,
-                empty_frame(self.generation, status.clone()),
-            ),
-            PreviewSource::Sequence { key, document } => {
-                let duration_seconds = document.duration_seconds;
-                let position_seconds = self.current_position_seconds(&key, duration_seconds);
-                let home_seconds = self
-                    .sequence_states
-                    .get(&key)
-                    .map(|state| clamp_position_seconds(state.home_seconds, duration_seconds))
-                    .unwrap_or_default();
-                let effect_preview = self.effect_preview.clone();
-                let frame = match analysis {
-                    Some(analysis) => match effect_preview.as_ref() {
-                        Some(effect_preview) => self.render_effect_preview_frame(
-                            analysis,
-                            &document,
-                            effect_preview.started_at.elapsed().as_secs_f64(),
-                            &effect_preview.ids,
-                        ),
-                        None => self.render_sequence_frame(analysis, &document, position_seconds),
-                    },
-                    None => empty_frame(self.generation, "No project analysis"),
-                };
-                (
-                    format!("Sequence {}", document.object_key),
-                    Some(key),
-                    position_seconds,
-                    home_seconds,
-                    duration_seconds,
-                    document.audio,
-                    frame,
-                )
-            }
-        };
-        let frame_status = status_from_frame(&frame.status).unwrap_or(status);
+        let (source_label, source_key, position_seconds, home_seconds, duration_seconds, audio) =
+            match self.source.clone() {
+                PreviewSource::None => ("No preview source".to_string(), None, 0.0, 0.0, 0.0, None),
+                PreviewSource::Sequence { key, document } => {
+                    let duration_seconds = document.duration_seconds;
+                    let position_seconds = self.current_position_seconds(&key, duration_seconds);
+                    let home_seconds = self
+                        .sequence_states
+                        .get(&key)
+                        .map(|state| clamp_position_seconds(state.home_seconds, duration_seconds))
+                        .unwrap_or_default();
+                    (
+                        format!("Sequence {}", document.object_key),
+                        Some(key),
+                        position_seconds,
+                        home_seconds,
+                        duration_seconds,
+                        document.audio,
+                    )
+                }
+            };
         let (clock_source, audio_playback_status) =
             timing_status_for(audio.as_ref(), self.is_playing());
+        let has_source = source_key.is_some();
         self.snapshot = PreviewSnapshot {
             source_label,
             source_key,
@@ -655,10 +580,28 @@ impl Preview {
             clock_source,
             audio_playback_status,
             effect_preview_active: self.effect_preview.is_some(),
-            frame: frame.into(),
-            status: frame_status,
+            frame: if has_source {
+                self.snapshot.frame.clone()
+            } else {
+                empty_frame(self.generation, status.clone()).into()
+            },
+            status,
         };
-        self.last_render_timing.total_ms = elapsed_ms(render_started);
+        self.frame_needed = has_source;
+        self.snapshot.preview_updating = has_source || self.render_in_flight.is_some();
+    }
+
+    fn demand_frame(&mut self, status: impl Into<String>) {
+        if matches!(self.source, PreviewSource::None) {
+            self.refresh_snapshot_metadata(status);
+            self.frame_needed = false;
+            self.snapshot.preview_updating = false;
+            return;
+        }
+        self.generation = self.generation.saturating_add(1);
+        self.refresh_snapshot_metadata(status);
+        self.frame_needed = true;
+        self.snapshot.preview_updating = true;
     }
 
     fn refresh_snapshot_metadata(&mut self, status: impl Into<String>) {
@@ -758,107 +701,6 @@ impl Preview {
         match self.source {
             PreviewSource::None => "No sequence preview source",
             PreviewSource::Sequence { .. } => "Ready",
-        }
-    }
-
-    fn render_sequence_frame(
-        &mut self,
-        analysis: &ProjectAnalysis,
-        document: &SequenceDocument,
-        position_seconds: f64,
-    ) -> OutputFrame {
-        let generation = self.generation;
-        let mut render_timing = PreviewRenderTiming::default();
-        match self.cached_renderer(analysis, document) {
-            Ok((renderer, renderer_build_ms)) => {
-                let (frame, evaluation_timing) =
-                    renderer.evaluate_timed(position_seconds, generation);
-                render_timing =
-                    PreviewRenderTiming::from_evaluation(renderer_build_ms, evaluation_timing);
-                self.last_render_timing = render_timing;
-                frame
-            }
-            Err(message) => {
-                self.last_render_timing = render_timing;
-                empty_frame(generation, message)
-            }
-        }
-    }
-
-    fn render_effect_preview_frame(
-        &mut self,
-        analysis: &ProjectAnalysis,
-        document: &SequenceDocument,
-        preview_seconds: f64,
-        effect_filter: &HashSet<u32>,
-    ) -> OutputFrame {
-        let generation = self.generation;
-        let mut render_timing = PreviewRenderTiming::default();
-        match self.cached_renderer(analysis, document) {
-            Ok((renderer, renderer_build_ms)) => {
-                let (frame, evaluation_timing) = renderer.evaluate_effect_preview_filtered_timed(
-                    preview_seconds,
-                    generation,
-                    Some(effect_filter),
-                );
-                render_timing =
-                    PreviewRenderTiming::from_evaluation(renderer_build_ms, evaluation_timing);
-                self.last_render_timing = render_timing;
-                frame
-            }
-            Err(message) => {
-                self.last_render_timing = render_timing;
-                empty_frame(generation, message)
-            }
-        }
-    }
-
-    fn cached_renderer(
-        &mut self,
-        analysis: &ProjectAnalysis,
-        document: &SequenceDocument,
-    ) -> Result<(&mut SequenceFrameEvaluator, f64), String> {
-        let mut renderer_build_ms = 0.0;
-        if self.render_cache.is_none() {
-            let build_started = Instant::now();
-            let (renderer, _) = self.sequence_cache.build_evaluator(analysis, document)?;
-            self.render_cache = Some(renderer);
-            renderer_build_ms = elapsed_ms(build_started);
-        }
-        self.render_cache
-            .as_mut()
-            .map(|renderer| (renderer, renderer_build_ms))
-            .ok_or_else(|| "Sequence preview renderer was not prepared".to_string())
-    }
-}
-
-impl PreviewRenderTiming {
-    pub fn from_evaluation(
-        renderer_build_ms: f64,
-        evaluation: SequenceFrameEvaluationTiming,
-    ) -> Self {
-        Self {
-            total_ms: renderer_build_ms + evaluation.total_ms,
-            renderer_build_ms,
-            frame_evaluate_ms: evaluation.total_ms,
-            fixture_clone_ms: evaluation.fixture_clone_ms,
-            effect_loop_ms: evaluation.effect_loop_ms,
-            output_frame_ms: evaluation.output_frame_ms,
-            active_effects: evaluation.active_effects,
-            sampled_pixels: evaluation.sampled_pixels,
-        }
-    }
-}
-
-fn elapsed_ms(started: Instant) -> f64 {
-    started.elapsed().as_secs_f64() * 1000.0
-}
-
-fn status_from_frame(status: &OutputFrameStatus) -> Option<String> {
-    match status {
-        OutputFrameStatus::Live => None,
-        OutputFrameStatus::Idle(message) | OutputFrameStatus::Error(message) => {
-            Some(message.clone())
         }
     }
 }

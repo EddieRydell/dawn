@@ -17,6 +17,7 @@ import { clamp, formatSeconds, roundToNanosecond, type GuiFocus, type SequenceSe
 import { defaultMarkColor, drawSequenceMarks, committedMarkPreviews, markIndexAfterMove, nextCollectionKey, useMarkDisplayMode, type PendingMark } from "./marks";
 
 import { sequencePreviewSignatures, targetsEqual } from "./sequencePreviewSignatures";
+import type { SequencePreviewClock } from "./SequenceTransportControls";
 
 import { buildSequenceClipLayout, constrainEffectLaneDelta, constrainEffectMoveDelta, constrainEffectResizeDelta, constrainMarkDelta, effectMovePreviews, effectResizePreviews, hitSequence, hitSequenceMark, markMovePreviews, markRefLookup, mergeSequenceSelection, MIN_EFFECT_DURATION_SECONDS, nextEffectSelection, nextMarkSelection, normalizedRect, selectedEffectId, selectionCount, selectionFromMarqueeEffects, selectionFromMarqueeMarks, sequenceHoverEqual, setMarkPreview, singleEffectSelectionFocus, selectionFromSingle, type MarkPreviewLookup, type SequenceContextMenu, type SequenceHover, type SequenceMarquee, type SequencePreview, type SequenceViewport } from "./sequenceSelection";
 
@@ -39,6 +40,7 @@ const SEQUENCE_CANVAS = {
 
 const PREVIEW_REQUEST_THROTTLE_MS = 50;
 const PREVIEW_CANVAS_DECODE_CHUNK_SIZE = 2;
+const MAX_EFFECT_RASTER_BATCH = 64;
 
 const SEQUENCE_COLORS = {
   page: "#111214",
@@ -88,6 +90,7 @@ export function SequenceCanvas({
   document,
   previewPositionSeconds,
   previewHomeSeconds,
+  previewClock,
   selected,
   setSelected,
   sequenceSelection,
@@ -100,6 +103,7 @@ export function SequenceCanvas({
   document: SequenceDocumentDto;
   previewPositionSeconds: number;
   previewHomeSeconds: number;
+  previewClock: SequencePreviewClock;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
   sequenceSelection: SequenceSelection;
@@ -110,6 +114,7 @@ export function SequenceCanvas({
   setVisibleMarkCollectionKeys: (keys: Set<string>) => void;
 }) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
+  const baseCanvas = useRef<HTMLCanvasElement | null>(null);
   const drag = useRef<SequenceDragState>(null);
   const sequenceClipboard = useRef<SequenceClipboard | null>(null);
   const sequenceSelectionRef = useRef<SequenceSelection>(sequenceSelection);
@@ -130,6 +135,11 @@ export function SequenceCanvas({
   const previewImagesRef = useRef(previewImages);
   const pendingMarksRef = useRef(pendingMarks);
   const inFlightPreviewSignatures = useRef<Set<string>>(new Set());
+  const activePreviewRequest = useRef<{
+    key: string;
+    requestId: number;
+    signatures: Set<string>;
+  } | null>(null);
   const nextPreviewRequestId = useRef(1);
   const nextPendingMarkId = useRef(1);
   const initializedViewportKey = useRef<string | null>(null);
@@ -151,6 +161,7 @@ export function SequenceCanvas({
     () => [viewport.scrollXSeconds, viewport.scrollY, viewport.pxPerSecond, viewport.laneHeight, canvasSize.width, canvasSize.height].join(":"),
     [canvasSize.height, canvasSize.width, viewport.laneHeight, viewport.pxPerSecond, viewport.scrollXSeconds, viewport.scrollY]
   );
+  const previewRequestKey = `${document.path}:${document.objectKey}`;
 
   const updateSequenceSelection = useCallback((selection: SequenceSelection) => {
     sequenceSelectionRef.current = selection;
@@ -346,6 +357,7 @@ export function SequenceCanvas({
   useEffect(() => {
     const target = canvas.current;
     if (!target || canvasSize.width <= 0 || canvasSize.height <= 0 || prioritizedPreviewEffectIds.length === 0) return;
+    if (activePreviewRequest.current !== null) return;
 
     const missingEffects = prioritizedPreviewEffectIds
       .map((id) => ({ id, signature: effectPreviewSignatures.get(id) }))
@@ -355,31 +367,39 @@ export function SequenceCanvas({
         return !inFlightPreviewSignatures.current.has(effect.signature);
       });
     if (missingEffects.length === 0) return;
+    const batchEffects = missingEffects.slice(0, MAX_EFFECT_RASTER_BATCH);
 
     const request = { cancelled: false };
     const timeout = window.setTimeout(() => {
       if (previewRequestCancelled(request)) return;
-      inFlightPreviewSignatures.current.clear();
-      for (const effect of missingEffects) {
+      for (const effect of batchEffects) {
         inFlightPreviewSignatures.current.add(effect.signature);
       }
       const requestId = nextPreviewRequestId.current;
       nextPreviewRequestId.current += 1;
+      activePreviewRequest.current = {
+        key: previewRequestKey,
+        requestId,
+        signatures: new Set(batchEffects.map((effect) => effect.signature))
+      };
       void commands
         .requestSequenceEffectPreviews(
           document.path,
           document.objectKey,
           requestId,
-          missingEffects.map((effect) => ({ effectId: effect.id, signature: effect.signature }))
+          batchEffects.map((effect) => ({ effectId: effect.id, signature: effect.signature }))
         )
         .catch(() => {
           if (previewRequestCancelled(request)) return;
-          for (const effect of missingEffects) {
+          if (activePreviewRequest.current?.requestId === requestId) {
+            activePreviewRequest.current = null;
+          }
+          for (const effect of batchEffects) {
             inFlightPreviewSignatures.current.delete(effect.signature);
           }
           setPreviewImages((current) => {
             const next = new Map(current);
-            for (const effect of missingEffects) {
+            for (const effect of batchEffects) {
               if (effectPreviewSignaturesRef.current.get(effect.id) !== effect.signature) continue;
               next.set(effect.id, { signature: effect.signature, status: "unavailable" });
             }
@@ -395,12 +415,17 @@ export function SequenceCanvas({
       request.cancelled = true;
       window.clearTimeout(timeout);
     };
-  }, [canvasSize.height, canvasSize.width, document.objectKey, document.path, effectPreviewSignatures, previewRequestTick, previewViewportKey, prioritizedPreviewEffectIds]);
+  }, [canvasSize.height, canvasSize.width, document.objectKey, document.path, effectPreviewSignatures, previewRequestKey, previewRequestTick, previewViewportKey, prioritizedPreviewEffectIds]);
 
   const applyPreviewResults = useCallback(async (results: SequenceEffectPreviewResultDto[]) => {
     const ready: { preview: SequenceEffectPreviewDto; signature: string }[] = [];
     const unavailable: { effectId: number; signature: string }[] = [];
     for (const result of results) {
+      const activeRequest = activePreviewRequest.current;
+      if (activeRequest === null || result.requestId !== activeRequest.requestId || !activeRequest.signatures.has(result.signature)) {
+        continue;
+      }
+      activeRequest.signatures.delete(result.signature);
       inFlightPreviewSignatures.current.delete(result.signature);
       if (result.type === "ready") {
         const effectId = result.preview.effectId;
@@ -414,6 +439,9 @@ export function SequenceCanvas({
         if (effectPreviewSignaturesRef.current.get(result.effectId) !== result.signature) continue;
         unavailable.push({ effectId: result.effectId, signature: result.signature });
       }
+    }
+    if (activePreviewRequest.current !== null && activePreviewRequest.current.signatures.size === 0) {
+      activePreviewRequest.current = null;
     }
     if (unavailable.length > 0) {
       setPreviewImages((current) => {
@@ -460,7 +488,8 @@ export function SequenceCanvas({
     let cancelled = false;
     let polling = false;
     const poll = async () => {
-      if (polling || inFlightPreviewSignatures.current.size === 0) return;
+      const activeRequest = activePreviewRequest.current;
+      if (polling || activeRequest === null || activeRequest.key !== previewRequestKey) return;
       polling = true;
       try {
         const batch = await commands.takeSequenceEffectPreviewResults(document.path, document.objectKey);
@@ -478,16 +507,33 @@ export function SequenceCanvas({
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [applyPreviewResults, document.objectKey, document.path]);
+  }, [applyPreviewResults, document.objectKey, document.path, previewRequestKey]);
+
+  useEffect(() => {
+    const activeRequest = activePreviewRequest.current;
+    if (activeRequest === null) return;
+    for (const signature of activeRequest.signatures) {
+      inFlightPreviewSignatures.current.delete(signature);
+    }
+    activePreviewRequest.current = null;
+    setPreviewRequestTick((tick) => tick + 1);
+  }, [effectPreviewSignatures, previewRequestKey, previewViewportKey]);
 
   useEffect(() => {
     const target = canvas.current;
     if (!target) return;
+    let base = baseCanvas.current;
+    if (!base) {
+      base = window.document.createElement("canvas");
+      baseCanvas.current = base;
+    }
     const rect = target.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     target.width = Math.max(1, Math.floor(rect.width * dpr));
     target.height = Math.max(1, Math.floor(rect.height * dpr));
-    const ctx = target.getContext("2d");
+    base.width = target.width;
+    base.height = target.height;
+    const ctx = base.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, rect.width, rect.height);
@@ -588,7 +634,6 @@ export function SequenceCanvas({
       if (clip.rect.x + clip.rect.width < left || clip.rect.x > rect.width || clip.rect.y + clip.rect.height < top || clip.rect.y > rect.height) {
         continue;
       }
-      const hoverResize = hover?.kind === "effect" && hover.effectId === clip.effect.id ? hover.resize : null;
       ctx.fillStyle = SEQUENCE_COLORS.textFaint;
       ctx.fillRect(clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height);
       const previewImage = validPreviewImage(previewImages.get(clip.effect.id), effectPreviewSignatures.get(clip.effect.id));
@@ -604,14 +649,57 @@ export function SequenceCanvas({
         );
         ctx.restore();
       }
+      ctx.strokeStyle = SEQUENCE_COLORS.clipBorder;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(clip.rect.x + 0.5, clip.rect.y + 0.5, Math.max(0, clip.rect.width - 1), Math.max(0, clip.rect.height - 1));
+    }
+    ctx.restore();
+
+    const visible = target.getContext("2d");
+    if (!visible) return;
+    visible.setTransform(dpr, 0, 0, dpr, 0, 0);
+    visible.clearRect(0, 0, rect.width, rect.height);
+    visible.drawImage(base, 0, 0, rect.width, rect.height);
+  }, [document, effectPreviewSignatures, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, selected, selectedMarks, previewImages, selectedLaneIndex, waveform.audio, visibleMarkCollections, mode, effectiveMarkPreviews, visiblePendingMarks]);
+
+  useEffect(() => {
+    const target = canvas.current;
+    const base = baseCanvas.current;
+    if (!target || !base) return;
+    let frame = 0;
+    const drawOverlay = () => {
+      const rect = target.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const ctx = target.getContext("2d");
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, rect.width, rect.height);
+      ctx.drawImage(base, 0, 0, rect.width, rect.height);
+      ctx.font = "12px Inter, sans-serif";
+
+      const timelineWidth = Math.max(1, rect.width - left);
+      const maxScrollXSeconds = Math.max(0, document.durationSeconds - timelineWidth / viewport.pxPerSecond);
+      const scrollXSeconds = clamp(viewport.scrollXSeconds, 0, maxScrollXSeconds);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(left, top, timelineWidth, rect.height - top);
+    ctx.clip();
+    for (const clip of visibleClips) {
+      if (clip.rect.x + clip.rect.width < left || clip.rect.x > rect.width || clip.rect.y + clip.rect.height < top || clip.rect.y > rect.height) {
+        continue;
+      }
+      const hoverResize = hover?.kind === "effect" && hover.effectId === clip.effect.id ? hover.resize : null;
       if (hoverResize !== null) {
         ctx.fillStyle = SEQUENCE_COLORS.overlay;
         ctx.fillRect(clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height);
       }
       const clipSelected = selectedEffectIds.has(clip.effect.id) || (selected?.type === "effect" && selected.id === clip.effect.id);
-      ctx.strokeStyle = clipSelected ? SEQUENCE_COLORS.clipSelected : hoverResize !== null ? SEQUENCE_COLORS.clipHover : SEQUENCE_COLORS.clipBorder;
-      ctx.lineWidth = clipSelected || hoverResize !== null ? 2 : 1;
-      ctx.strokeRect(clip.rect.x + 0.5, clip.rect.y + 0.5, Math.max(0, clip.rect.width - 1), Math.max(0, clip.rect.height - 1));
+      if (clipSelected || hoverResize !== null) {
+        ctx.strokeStyle = clipSelected ? SEQUENCE_COLORS.clipSelected : SEQUENCE_COLORS.clipHover;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(clip.rect.x + 0.5, clip.rect.y + 0.5, Math.max(0, clip.rect.width - 1), Math.max(0, clip.rect.height - 1));
+      }
       if (hoverResize === "left" || hoverResize === "right") {
         const handleX = hoverResize === "left" ? clip.rect.x : clip.rect.x + clip.rect.width;
         ctx.fillStyle = SEQUENCE_COLORS.warning;
@@ -620,8 +708,8 @@ export function SequenceCanvas({
     }
     ctx.restore();
 
-    const playheadX = left + (clamp(previewPositionSeconds, 0, document.durationSeconds) - scrollXSeconds) * viewport.pxPerSecond;
-    const homeX = left + (clamp(previewHomeSeconds, 0, document.durationSeconds) - scrollXSeconds) * viewport.pxPerSecond;
+    const playheadX = left + (clamp(previewClock.currentPositionSeconds(), 0, document.durationSeconds) - scrollXSeconds) * viewport.pxPerSecond;
+    const homeX = left + (clamp(previewClock.currentHomeSeconds(), 0, document.durationSeconds) - scrollXSeconds) * viewport.pxPerSecond;
     if (homeX >= left && homeX <= rect.width) {
       ctx.strokeStyle = SEQUENCE_COLORS.accent;
       ctx.lineWidth = 1;
@@ -668,7 +756,15 @@ export function SequenceCanvas({
     ctx.moveTo(left + 0.5, top);
     ctx.lineTo(left, rect.height);
     ctx.stroke();
-  }, [document, effectPreviewSignatures, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, selected, selectedEffectIds, selectedMarks, previewImages, previewPositionSeconds, previewHomeSeconds, selectedLaneIndex, selectedTimeSeconds, marquee, waveform.audio, visibleMarkCollections, mode, effectiveMarkPreviews, visiblePendingMarks, hover]);
+      if (previewClock.isPlaying()) {
+        frame = window.requestAnimationFrame(drawOverlay);
+      }
+    };
+    drawOverlay();
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [document.durationSeconds, left, top, viewport, visibleClips, selected, selectedEffectIds, previewPositionSeconds, previewHomeSeconds, previewClock, selectedTimeSeconds, marquee, hover]);
 
   const seekFromCanvas = (event: MouseEvent<HTMLCanvasElement>) => {
     const x = event.nativeEvent.offsetX;

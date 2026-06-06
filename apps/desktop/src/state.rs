@@ -2,7 +2,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use dawn_backend::AppBackend;
 
-use crate::{audio_runtime::AudioRuntime, preview_transport::PreviewTransportRuntime};
+use crate::{
+    audio_runtime::AudioRuntime, effect_preview_runtime::EffectPreviewRuntime,
+    preview_transport::PreviewTransportRuntime,
+};
 
 pub(crate) type CommandResult<T> = Result<T, String>;
 
@@ -11,6 +14,7 @@ pub(crate) struct BackendState {
     backend: Arc<Mutex<AppBackend>>,
     audio: Arc<AudioRuntime>,
     preview_transport: Arc<Mutex<PreviewTransportRuntime>>,
+    effect_preview: Arc<EffectPreviewRuntime>,
 }
 
 impl Default for BackendState {
@@ -19,6 +23,7 @@ impl Default for BackendState {
             backend: Arc::new(Mutex::new(AppBackend::new())),
             audio: Arc::new(AudioRuntime::default()),
             preview_transport: Arc::new(Mutex::new(PreviewTransportRuntime::default())),
+            effect_preview: Arc::new(EffectPreviewRuntime::default()),
         }
     }
 }
@@ -30,6 +35,10 @@ impl BackendState {
 
     pub(crate) fn audio(&self) -> Arc<AudioRuntime> {
         Arc::clone(&self.audio)
+    }
+
+    pub(crate) fn effect_preview(&self) -> Arc<EffectPreviewRuntime> {
+        Arc::clone(&self.effect_preview)
     }
 
     pub(crate) fn lock_preview_transport(

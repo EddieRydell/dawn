@@ -14,14 +14,13 @@ use dawn_language::{
 use crate::{
     active_document, analysis, audio, document_editing,
     editor::{self, EditorBufferSaveRequest},
-    output, preferences, preview, project, render,
+    output, preferences, preview, preview_render, project, render,
     tasks::{BackendTask, BackendTaskOutput},
     types::{
         ActiveDocumentView, ActiveGuiDocument, ActiveGuiDocumentBlocked, ActiveGuiDocumentCacheKey,
-        ActiveGuiDocumentRequest, AnalysisTaskOutput, EditorViewMode, ExportFseqTaskOutput,
-        FseqExportOptions, PreviewAudioClock, PreviewHostState, PreviewTickOutput,
-        RenderEffectPreviewRequestEffect, RenderEffectPreviewTaskOutput, RenderFrameTaskOutput,
-        SequenceAudioDialog, SequenceEffectPreviewResultBatch,
+        ActiveGuiDocumentRequest, AnalysisTaskOutput, EditorViewMode, EffectPreviewRequest,
+        ExportFseqTaskOutput, FseqExportOptions, PreviewAudioClock, PreviewHostState,
+        PreviewTickOutput, RenderEffectPreviewRequestEffect, SequenceAudioDialog,
     },
     view::AppView,
 };
@@ -149,10 +148,6 @@ impl AppBackend {
     pub fn complete_task(&mut self, output: BackendTaskOutput) -> BackendResult<AppUpdate> {
         match output {
             BackendTaskOutput::AnalyzeProject(output) => self.accept_analysis_output(*output),
-            BackendTaskOutput::RenderFrame(output) => self.accept_render_frame_output(output),
-            BackendTaskOutput::RenderEffectPreviews(output) => {
-                self.accept_render_effect_previews_output(output)
-            }
             BackendTaskOutput::ExportFseq(output) => self.accept_export_fseq_output(output),
         }
     }
@@ -172,57 +167,18 @@ impl AppBackend {
                     });
                 }
             }
-            self.sync_preview_source_if_idle(preview::PreviewSyncMode::RenderNow);
+            self.sync_preview_source_if_idle(preview::PreviewFrameDemand::Needed);
         }
         Ok(self.idle_update())
     }
 
-    pub fn render_sequence_frame(
-        &mut self,
-        document: SequenceDocument,
-        position_seconds: f64,
-        generation: u64,
-    ) -> BackendResult<AppUpdate> {
-        let analysis = render::require_analysis(self.analysis.snapshot())?;
-        Ok(AppUpdate {
-            view: self.view(),
-            tasks: vec![BackendTask::RenderFrame(self.renderer.request_frame(
-                analysis,
-                document,
-                position_seconds,
-                generation,
-            ))],
-        })
-    }
-
-    pub fn render_effect_previews(
-        &mut self,
-        document: SequenceDocument,
-        effects: Vec<RenderEffectPreviewRequestEffect>,
-    ) -> BackendResult<AppUpdate> {
-        let analysis = render::require_analysis(self.analysis.snapshot())?;
-        Ok(AppUpdate {
-            view: self.view(),
-            tasks: vec![BackendTask::RenderEffectPreviews(
-                self.renderer.request_effect_previews(
-                    Utf8PathBuf::new(),
-                    String::new(),
-                    0,
-                    analysis,
-                    document,
-                    effects,
-                ),
-            )],
-        })
-    }
-
     pub fn request_sequence_effect_previews(
-        &mut self,
+        &self,
         path: Utf8PathBuf,
         object_key: String,
         request_id: u32,
         effects: Vec<RenderEffectPreviewRequestEffect>,
-    ) -> BackendResult<AppUpdate> {
+    ) -> BackendResult<EffectPreviewRequest> {
         let analysis = render::require_analysis(self.analysis.snapshot())?;
         let active = self.require_active_sequence_document()?;
         active_document::validate_sequence_preview_request(
@@ -232,41 +188,29 @@ impl AppBackend {
             &path,
             &object_key,
         )?;
-        Ok(AppUpdate {
-            view: self.view(),
-            tasks: vec![BackendTask::RenderEffectPreviews(
-                self.renderer.request_effect_previews(
-                    path,
-                    object_key,
-                    request_id,
-                    analysis,
-                    active.document,
-                    effects,
-                ),
-            )],
+        Ok(EffectPreviewRequest {
+            path,
+            object_key,
+            request_id,
+            analysis,
+            document: active.document,
+            effects,
         })
     }
 
-    pub fn take_sequence_effect_preview_results(
-        &mut self,
-        path: Utf8PathBuf,
-        object_key: String,
-    ) -> BackendResult<SequenceEffectPreviewResultBatch> {
+    pub fn validate_sequence_effect_preview_key(
+        &self,
+        path: &Utf8PathBuf,
+        object_key: &str,
+    ) -> BackendResult<()> {
         let active = self.require_active_sequence_document()?;
         active_document::validate_sequence_preview_request(
             &active.path,
             &active.object_key,
             &active.document,
-            &path,
-            &object_key,
-        )?;
-        Ok(self
-            .renderer
-            .take_effect_preview_results(&path, &object_key)
-            .unwrap_or(SequenceEffectPreviewResultBatch {
-                request_id: 0,
-                results: Vec::new(),
-            }))
+            path,
+            object_key,
+        )
     }
 
     pub fn export_fseq(
@@ -278,29 +222,11 @@ impl AppBackend {
         let analysis = render::require_analysis(self.analysis.snapshot())?;
         Ok(AppUpdate {
             view: self.view(),
-            tasks: vec![BackendTask::ExportFseq(self.renderer.request_export_fseq(
-                analysis,
-                document,
-                output_path,
-                options,
+            tasks: vec![BackendTask::ExportFseq(Box::new(
+                self.renderer
+                    .request_export_fseq(analysis, document, output_path, options),
             ))],
         })
-    }
-
-    pub fn accept_render_frame_output(
-        &mut self,
-        output: RenderFrameTaskOutput,
-    ) -> BackendResult<AppUpdate> {
-        self.renderer.accept_frame(output);
-        Ok(self.idle_update())
-    }
-
-    pub fn accept_render_effect_previews_output(
-        &mut self,
-        output: RenderEffectPreviewTaskOutput,
-    ) -> BackendResult<AppUpdate> {
-        self.renderer.accept_effect_previews(output);
-        Ok(self.idle_update())
     }
 
     pub fn accept_export_fseq_output(
@@ -322,7 +248,7 @@ impl AppBackend {
         {
             return self.analysis_update();
         }
-        self.sync_preview_source_if_idle(preview::PreviewSyncMode::RenderNow);
+        self.sync_preview_source_if_idle(preview::PreviewFrameDemand::Needed);
         Ok(self.idle_update())
     }
 
@@ -343,7 +269,7 @@ impl AppBackend {
         {
             return self.analysis_update();
         }
-        self.sync_preview_source_if_idle(preview::PreviewSyncMode::RenderNow);
+        self.sync_preview_source_if_idle(preview::PreviewFrameDemand::Needed);
         Ok(self.idle_update())
     }
 
@@ -484,11 +410,7 @@ impl AppBackend {
         edit: SequenceDocumentEdit,
     ) -> BackendResult<AppUpdate> {
         if matches!(&edit, SequenceDocumentEdit::SetAudio { .. }) {
-            self.preview.stop(
-                render::require_analysis(self.analysis.snapshot())
-                    .ok()
-                    .as_ref(),
-            );
+            self.preview.stop();
         }
         let active = self.require_active_sequence_document()?;
         let fs = self.project.workspace_fs()?;
@@ -504,14 +426,13 @@ impl AppBackend {
             &analysis,
         )?;
         let update = self.replace_active_text_and_save(serialized_content)?;
-        self.sync_preview_source_if_idle(preview::PreviewSyncMode::RenderNow);
+        self.sync_preview_source_if_idle(preview::PreviewFrameDemand::Needed);
         Ok(update)
     }
 
     pub fn prepare_preview_play(&mut self) -> BackendResult<(AppUpdate, preview::PreviewSnapshot)> {
-        self.sync_preview_source(preview::PreviewSyncMode::RenderNow);
-        self.preview
-            .clear_effect_preview(self.analysis.snapshot().as_ref());
+        self.sync_preview_source(preview::PreviewFrameDemand::Needed);
+        self.preview.clear_effect_preview();
         let snapshot = self.preview.snapshot();
         if snapshot.audio.as_ref().is_some_and(|audio| !audio.exists) {
             self.preview
@@ -522,33 +443,31 @@ impl AppBackend {
     }
 
     pub fn preview_play_silent(&mut self) -> BackendResult<AppUpdate> {
-        self.sync_preview_source(preview::PreviewSyncMode::RenderNow);
-        self.preview.play(self.analysis.snapshot().as_ref());
+        self.sync_preview_source(preview::PreviewFrameDemand::Needed);
+        self.preview.play();
         self.preview
             .set_timing_status("silent", preview::AudioPlaybackStatus::None);
         Ok(self.idle_update())
     }
 
     pub fn preview_pause(&mut self) -> BackendResult<AppUpdate> {
-        self.preview.pause(self.analysis.snapshot().as_ref());
+        self.preview.pause();
         Ok(self.idle_update())
     }
 
     pub fn preview_stop(&mut self) -> BackendResult<AppUpdate> {
-        self.preview.stop(self.analysis.snapshot().as_ref());
+        self.preview.stop();
         Ok(self.idle_update())
     }
 
     pub fn preview_rewind_to_zero(&mut self) -> BackendResult<AppUpdate> {
-        self.preview
-            .go_to_sequence_beginning(self.analysis.snapshot().as_ref());
+        self.preview.go_to_sequence_beginning();
         Ok(self.idle_update())
     }
 
     pub fn preview_seek(&mut self, position_seconds: f64) -> BackendResult<AppUpdate> {
         validate_position_seconds(position_seconds)?;
-        self.preview
-            .seek(position_seconds, self.analysis.snapshot().as_ref());
+        self.preview.seek(position_seconds);
         Ok(self.idle_update())
     }
 
@@ -557,26 +476,19 @@ impl AppBackend {
         clock: PreviewAudioClock,
     ) -> BackendResult<AppUpdate> {
         if clock.error.is_some() {
-            self.preview
-                .pause_at(clock.position_seconds, self.analysis.snapshot().as_ref());
+            self.preview.pause_at(clock.position_seconds);
             self.preview
                 .set_timing_status("nativeAudio", preview::AudioPlaybackStatus::Error);
             return Ok(self.idle_update());
         }
         if clock.status == preview::AudioPlaybackStatus::Playing || clock.ended {
-            self.preview.render_at_native_audio_clock(
-                clock.position_seconds,
-                clock.ended,
-                self.analysis.snapshot().as_ref(),
-            );
+            self.preview
+                .render_at_native_audio_clock(clock.position_seconds, clock.ended);
         } else if clock.status.is_loading() {
             self.preview.set_timing_status("nativeAudio", clock.status);
         } else {
-            self.preview.seek_native_audio(
-                clock.position_seconds,
-                false,
-                self.analysis.snapshot().as_ref(),
-            );
+            self.preview
+                .seek_native_audio(clock.position_seconds, false);
             self.preview.set_timing_status("nativeAudio", clock.status);
         }
         Ok(self.idle_update())
@@ -584,31 +496,26 @@ impl AppBackend {
 
     pub fn set_effect_preview_enabled(&mut self, enabled: bool) -> BackendResult<AppUpdate> {
         if enabled {
-            self.preview.pause(self.analysis.snapshot().as_ref());
+            self.preview.pause();
         } else {
-            self.preview
-                .clear_effect_preview(self.analysis.snapshot().as_ref());
+            self.preview.clear_effect_preview();
         }
         Ok(self.idle_update())
     }
 
     pub fn set_effect_preview_effects(&mut self, ids: Vec<u32>) -> BackendResult<AppUpdate> {
-        self.preview
-            .set_effect_preview_ids(ids, self.analysis.snapshot().as_ref());
+        self.preview.set_effect_preview_ids(ids);
         Ok(self.idle_update())
     }
 
-    pub fn preview_tick(
+    pub fn update_preview_clock(
         &mut self,
         audio_clock: Option<PreviewAudioClock>,
     ) -> BackendResult<PreviewTickOutput> {
         if let Some(clock) = audio_clock {
             let _ = self.preview_apply_audio_clock(clock)?;
-        } else if self.preview.snapshot_ref().preview_updating {
-            self.preview
-                .render_current_frame(self.analysis.snapshot().as_ref());
         } else {
-            self.preview.tick(self.analysis.snapshot().as_ref());
+            self.preview.tick();
         }
         let snapshot = self.preview.snapshot();
         Ok(PreviewTickOutput {
@@ -616,6 +523,17 @@ impl AppBackend {
             render_timing: self.preview.last_render_timing(),
             snapshot,
         })
+    }
+
+    pub fn begin_preview_frame_render(&mut self) -> Option<preview_render::PreviewFrameRenderTask> {
+        self.preview.begin_frame_render(self.analysis.snapshot())
+    }
+
+    pub fn complete_preview_frame_render(
+        &mut self,
+        output: preview_render::PreviewFrameRenderOutput,
+    ) -> bool {
+        self.preview.complete_frame_render(output)
     }
 
     pub fn preview_snapshot(&self) -> preview::PreviewSnapshot {
@@ -762,17 +680,16 @@ impl AppBackend {
         ))
     }
 
-    fn sync_preview_source(&mut self, mode: preview::PreviewSyncMode) {
+    fn sync_preview_source(&mut self, demand: preview::PreviewFrameDemand) {
         let source = self.active_sequence_preview_source();
-        self.preview
-            .sync_source(source, self.analysis.snapshot().as_ref(), mode);
+        self.preview.sync_source(source, demand);
     }
 
-    fn sync_preview_source_if_idle(&mut self, mode: preview::PreviewSyncMode) {
+    fn sync_preview_source_if_idle(&mut self, demand: preview::PreviewFrameDemand) {
         if self.preview.is_playing() {
             return;
         }
-        self.sync_preview_source(mode);
+        self.sync_preview_source(demand);
     }
 
     fn require_active_sequence_document(&self) -> BackendResult<ActiveSequenceDocument> {
@@ -863,11 +780,9 @@ impl AppBackend {
         let overlays = self.editor.dirty_overlays();
         let active_gui_document =
             self.active_gui_document_request(&project_root, overlays.clone())?;
-        Ok(BackendTask::AnalyzeProject(self.analysis.request(
-            project_root,
-            project_file,
-            overlays,
-            active_gui_document,
+        Ok(BackendTask::AnalyzeProject(Box::new(
+            self.analysis
+                .request(project_root, project_file, overlays, active_gui_document),
         )))
     }
 

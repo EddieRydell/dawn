@@ -1,42 +1,31 @@
 use dawn_language::{analysis::analyze_project_with_overlays, fs::WorkspaceFs};
 
 use crate::{
-    active_document, output, render,
+    active_document, output,
     types::{
         ActiveGuiDocumentOutput, AnalysisTask, AnalysisTaskOutput, ExportFseqTask,
-        ExportFseqTaskOutput, RenderEffectPreviewTask, RenderEffectPreviewTaskOutput,
-        RenderFrameTask, RenderFrameTaskOutput,
+        ExportFseqTaskOutput,
     },
     BackendError, BackendErrorKind, BackendResult,
 };
 
 #[derive(Debug, Clone)]
 pub enum BackendTask {
-    AnalyzeProject(AnalysisTask),
-    RenderFrame(RenderFrameTask),
-    RenderEffectPreviews(RenderEffectPreviewTask),
-    ExportFseq(ExportFseqTask),
+    AnalyzeProject(Box<AnalysisTask>),
+    ExportFseq(Box<ExportFseqTask>),
 }
 
 #[derive(Debug, Clone)]
 pub enum BackendTaskOutput {
     AnalyzeProject(Box<AnalysisTaskOutput>),
-    RenderFrame(RenderFrameTaskOutput),
-    RenderEffectPreviews(RenderEffectPreviewTaskOutput),
     ExportFseq(ExportFseqTaskOutput),
 }
 
 impl BackendTask {
     pub fn run(self) -> BackendResult<BackendTaskOutput> {
         match self {
-            Self::AnalyzeProject(request) => run_analysis(request),
-            Self::RenderFrame(task) => Ok(BackendTaskOutput::RenderFrame(
-                render::execute_render_frame(task),
-            )),
-            Self::RenderEffectPreviews(task) => Ok(BackendTaskOutput::RenderEffectPreviews(
-                render::execute_effect_previews(task),
-            )),
-            Self::ExportFseq(task) => run_export_fseq(task),
+            Self::AnalyzeProject(request) => run_analysis(*request),
+            Self::ExportFseq(task) => run_export_fseq(*task),
         }
     }
 }

@@ -50,7 +50,8 @@ export function EditorPane({ snapshot }: { snapshot: RuntimeUiState }) {
     () => (sequenceSelection?.type === "effects" ? sequenceSelection.ids : []),
     [sequenceSelection]
   );
-  const livePreview = useSequencePreview(snapshot.preview);
+  const livePreviewState = useSequencePreview(snapshot.preview);
+  const livePreview = livePreviewState?.preview ?? null;
 
   useEffect(() => {
     latestLocalText.current = localText;
@@ -172,10 +173,11 @@ export function EditorPane({ snapshot }: { snapshot: RuntimeUiState }) {
         ))}
       </div>
       <div className="editor-toolbar">
-        {activeSequenceDocument !== null && livePreview !== null && (
+        {activeSequenceDocument !== null && livePreviewState !== null && (
           <SequenceTransportControls
             document={activeSequenceDocument}
-            preview={livePreview}
+            preview={livePreviewState.preview}
+            previewClock={livePreviewState.clock}
             effectPreviewEnabled={snapshot.effectPreviewEnabled}
             selectedEffectIds={selectedEffectIds}
           />
@@ -216,6 +218,7 @@ export function EditorPane({ snapshot }: { snapshot: RuntimeUiState }) {
         <GuiEditor
           snapshot={snapshot}
           livePreview={livePreview}
+          previewClock={livePreviewState?.clock ?? null}
           sequenceSelection={sequenceSelection}
           setSequenceSelection={setSequenceSelection}
         />
