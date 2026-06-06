@@ -253,7 +253,8 @@ fn export_active_sequence_fseq(
     step_ms: u8,
 ) -> CommandResult<AppSnapshotDto> {
     let (analysis, document, default_name) = {
-        let model = lock_model(&state)?;
+        let mut model = lock_model(&state)?;
+        model.flush_autosave()?;
         let analysis = model
             .analysis
             .as_ref()

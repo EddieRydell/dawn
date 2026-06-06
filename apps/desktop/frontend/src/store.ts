@@ -3,11 +3,13 @@ import { create } from "zustand";
 import { commands } from "./api";
 import type { AppSnapshotDto } from "./bindings";
 
+type SnapshotApplySource = "event" | "command" | "hydrate";
+
 type AppStore = {
   snapshot: AppSnapshotDto | null;
   error: string | null;
   localText: string;
-  setSnapshot: (snapshot: AppSnapshotDto) => void;
+  setSnapshot: (snapshot: AppSnapshotDto, source?: SnapshotApplySource) => void;
   setError: (error: string | null) => void;
   setLocalText: (text: string) => void;
   hydrate: () => Promise<void>;
@@ -17,11 +19,12 @@ export const useAppStore = create<AppStore>((set) => ({
   snapshot: null,
   error: null,
   localText: "",
-  setSnapshot: (snapshot) => {
+  setSnapshot: (snapshot, source = "command") => {
     set({
       snapshot,
       localText: snapshot.activeBuffer?.text ?? ""
     });
+    void source;
   },
   setError: (error) => {
     set({ error });
@@ -31,13 +34,14 @@ export const useAppStore = create<AppStore>((set) => ({
   },
   hydrate: async () => {
     const snapshot = await commands.getSnapshot();
-    set({ snapshot, localText: snapshot.activeBuffer?.text ?? "", error: null });
+    useAppStore.getState().setSnapshot(snapshot, "hydrate");
+    set({ error: null });
   }
 }));
 
 export async function subscribeToSnapshots() {
   const disposeSnapshots = await listen<AppSnapshotDto>("app_snapshot_changed", (event) => {
-    useAppStore.getState().setSnapshot(event.payload);
+    useAppStore.getState().setSnapshot(event.payload, "event");
   });
   return () => {
     disposeSnapshots();
@@ -47,7 +51,7 @@ export async function subscribeToSnapshots() {
 export async function runSnapshotCommand(command: () => Promise<AppSnapshotDto>) {
   try {
     const snapshot = await command();
-    useAppStore.getState().setSnapshot(snapshot);
+    useAppStore.getState().setSnapshot(snapshot, "command");
     useAppStore.getState().setError(null);
     return snapshot;
   } catch (error) {

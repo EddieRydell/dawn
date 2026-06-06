@@ -40,6 +40,9 @@ pub(crate) fn register_main_window_layout_events(app: &AppHandle) -> CommandResu
         }
         WindowEvent::CloseRequested { .. } => {
             let state = app_for_event.state::<AppState>();
+            if let Ok(mut model) = lock_model(&state) {
+                let _ = model.flush_autosave();
+            }
             state.begin_shutdown();
             persist_window_layout(&app_for_event, WorkbenchWindow::Main);
             persist_window_layout(&app_for_event, WorkbenchWindow::Preview);

@@ -1,6 +1,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
+use dawn_app_core::app_model::CommandTiming;
 use dawn_app_core::dto::{GeometryRenderBoundsDto, GeometryRenderPointDto};
 use dawn_app_core::output_runtime::{
     empty_frame, OutputFrame, SequenceChangeImpact, SequenceFrameEvaluator, SequenceRenderCache,
@@ -75,6 +76,11 @@ pub struct PreviewTimingDto {
     pub event_emit_ms: f64,
     pub live_output_ms: f64,
     pub event_interval_ms: f64,
+    pub command_total_ms: f64,
+    pub command_model_lock_wait_ms: f64,
+    pub command_dispatch_ms: f64,
+    pub command_snapshot_ms: f64,
+    pub command_app_snapshot_emit_ms: f64,
     pub rendered_active_effects: u32,
     pub rendered_sampled_pixels: u32,
     pub has_sink: bool,
@@ -115,12 +121,29 @@ impl PreviewTimingDto {
             event_emit_ms: 0.0,
             live_output_ms: 0.0,
             event_interval_ms: 0.0,
+            command_total_ms: 0.0,
+            command_model_lock_wait_ms: 0.0,
+            command_dispatch_ms: 0.0,
+            command_snapshot_ms: 0.0,
+            command_app_snapshot_emit_ms: 0.0,
             rendered_active_effects: 0,
             rendered_sampled_pixels: 0,
             has_sink: false,
             published_frame: false,
             rendered_frame: false,
         }
+    }
+}
+
+impl From<CommandTiming> for PreviewTimingDto {
+    fn from(command: CommandTiming) -> Self {
+        let mut timing = Self::empty(0.0);
+        timing.command_total_ms = command.total_ms;
+        timing.command_model_lock_wait_ms = command.model_lock_wait_ms;
+        timing.command_dispatch_ms = command.dispatch_ms;
+        timing.command_snapshot_ms = command.snapshot_ms;
+        timing.command_app_snapshot_emit_ms = command.app_snapshot_emit_ms;
+        timing
     }
 }
 
@@ -274,6 +297,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                         let preview_snapshot_started = Instant::now();
                         let preview_snapshot = model.preview.snapshot();
                         timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
+                        record_model_timings(&mut timing, model.last_command_timing());
                         let audio_poll_started = Instant::now();
                         let audio_clock = if preview_snapshot.audio.is_some() {
                             lock_audio_runtime(&state)
@@ -367,6 +391,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                     let preview_snapshot_started = Instant::now();
                     snapshot = model.preview.snapshot();
                     timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
+                    record_model_timings(&mut timing, model.last_command_timing());
                     let analysis_clone_started = Instant::now();
                     analysis = model.analysis.clone();
                     timing.analysis_clone_ms += elapsed_ms(analysis_clone_started);
@@ -458,6 +483,14 @@ fn record_render_timing(timing: &mut PreviewTimingDto, render_timing: PreviewRen
     timing.frame_output_ms = render_timing.output_frame_ms;
     timing.rendered_active_effects = render_timing.active_effects;
     timing.rendered_sampled_pixels = render_timing.sampled_pixels;
+}
+
+fn record_model_timings(timing: &mut PreviewTimingDto, command: CommandTiming) {
+    timing.command_total_ms = command.total_ms;
+    timing.command_model_lock_wait_ms = command.model_lock_wait_ms;
+    timing.command_dispatch_ms = command.dispatch_ms;
+    timing.command_snapshot_ms = command.snapshot_ms;
+    timing.command_app_snapshot_emit_ms = command.app_snapshot_emit_ms;
 }
 
 fn elapsed_ms(started: Instant) -> f64 {

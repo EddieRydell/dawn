@@ -1,5 +1,7 @@
+use std::time::Instant;
+
 use dawn_app_core::actions::AppAction;
-use dawn_app_core::app_model::{AppModel, DispatchOutcome};
+use dawn_app_core::app_model::{AppModel, CommandTiming, DispatchOutcome};
 use dawn_app_core::dto::{AppSnapshotDto, PreviewSnapshotDto};
 use dawn_app_core::preview_session::{AudioPlaybackStatus, PreviewSnapshot};
 use dawn_project::document::SequenceAudioDocument;
@@ -16,10 +18,24 @@ pub(crate) fn dispatch(
     state: &State<'_, AppState>,
     action: AppAction,
 ) -> CommandResult<AppSnapshotDto> {
+    let total_started = Instant::now();
     let clear_audio_runtime = should_clear_audio_runtime_for_action(&action);
+    let model_lock_started = Instant::now();
     let mut model = lock_model(state)?;
+    let model_lock_wait_ms = elapsed_ms(model_lock_started);
+    let dispatch_started = Instant::now();
     let outcome = model.dispatch(action)?;
+    let dispatch_ms = elapsed_ms(dispatch_started);
+    let snapshot_started = Instant::now();
     let snapshot = model.snapshot_dto();
+    let snapshot_ms = elapsed_ms(snapshot_started);
+    let mut timing = CommandTiming {
+        total_ms: 0.0,
+        model_lock_wait_ms,
+        dispatch_ms,
+        snapshot_ms,
+        app_snapshot_emit_ms: 0.0,
+    };
     if outcome == DispatchOutcome::SnapshotChanged {
         if let Ok(mut watcher) = lock_filesystem_watcher(state) {
             let _ = watcher.sync_project_root(app, snapshot.project_root.clone());
@@ -30,9 +46,16 @@ pub(crate) fn dispatch(
             }
         }
         preload_active_preview_audio(state, &snapshot.preview);
+        let app_snapshot_emit_started = Instant::now();
         app.emit("app_snapshot_changed", &snapshot)
             .map_err(|error| error.to_string())?;
-        emit_preview_state_dto(app, &snapshot)?;
+        timing.app_snapshot_emit_ms = elapsed_ms(app_snapshot_emit_started);
+        timing.total_ms = elapsed_ms(total_started);
+        model.set_last_command_timing(timing);
+        emit_preview_state_dto_with_timing(app, &snapshot, timing)?;
+    } else {
+        timing.total_ms = elapsed_ms(total_started);
+        model.set_last_command_timing(timing);
     }
     Ok(snapshot)
 }
@@ -177,6 +200,14 @@ pub(crate) fn emit_preview_state_dto(
     app: &AppHandle,
     snapshot: &AppSnapshotDto,
 ) -> CommandResult<()> {
+    emit_preview_state_dto_with_timing(app, snapshot, PreviewTimingDto::empty(0.0))
+}
+
+pub(crate) fn emit_preview_state_dto_with_timing(
+    app: &AppHandle,
+    snapshot: &AppSnapshotDto,
+    timing: impl Into<PreviewTimingDto>,
+) -> CommandResult<()> {
     app.emit(
         "preview_state_changed",
         PreviewStateEventDto {
@@ -191,7 +222,7 @@ pub(crate) fn emit_preview_state_dto(
             clock_source: snapshot.preview.clock_source.clone(),
             audio_playback_status: snapshot.preview.audio_playback_status,
             status: snapshot.preview.status.clone(),
-            timing: PreviewTimingDto::empty(0.0),
+            timing: timing.into(),
         },
     )
     .map_err(|error| error.to_string())
@@ -227,4 +258,8 @@ pub(crate) fn valid_sequence_audio(snapshot: &PreviewSnapshot) -> Option<Sequenc
         .as_ref()
         .filter(|audio| audio.exists)
         .cloned()
+}
+
+fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1000.0
 }

@@ -741,16 +741,92 @@ pub fn apply_sequence_document_edit(
     overlays: Vec<ProjectOverlay>,
     analysis: &ProjectAnalysis,
 ) -> Result<DocumentEditOutcome<SequenceDocument>, String> {
+    let outcome = apply_sequence_document_edit_to_authored(
+        fs,
+        path.clone(),
+        object_key,
+        edit,
+        base_content.clone(),
+        overlays,
+        analysis,
+    )?;
+    serialize_sequence_document(
+        fs,
+        path,
+        object_key,
+        outcome.sequence,
+        base_content,
+        outcome.import_to_add.into_iter().collect(),
+        analysis,
+    )
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceAuthoredEditOutcome {
+    pub sequence: Sequence<Authored>,
+    pub refreshed_document: SequenceDocument,
+    pub import_to_add: Option<DawnImport>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceAuthoredEditInput {
+    pub path: Utf8PathBuf,
+    pub object_key: String,
+    pub sequence: Sequence<Authored>,
+    pub imports: Vec<DawnImport>,
+    pub edit: SequenceDocumentEdit,
+    pub base_content: String,
+    pub overlays: Vec<ProjectOverlay>,
+}
+
+pub fn apply_sequence_document_edit_to_authored(
+    fs: &WorkspaceFs,
+    path: Utf8PathBuf,
+    object_key: &str,
+    edit: SequenceDocumentEdit,
+    base_content: String,
+    overlays: Vec<ProjectOverlay>,
+    analysis: &ProjectAnalysis,
+) -> Result<SequenceAuthoredEditOutcome, String> {
     let path = canonicalize_path(&fs.resolve(&path));
     let file: DawnFile = parse_dawn_file(&base_content)?;
     let Some(DawnObject::Sequence(current_sequence)) = file.get(object_key) else {
         return Err(format!("sequence object `{object_key}` was not found"));
     };
-    let mut sequence = current_sequence.clone();
+    apply_sequence_document_edit_to_sequence(
+        fs,
+        SequenceAuthoredEditInput {
+            path,
+            object_key: object_key.to_string(),
+            sequence: current_sequence.clone(),
+            imports: file.imports.clone(),
+            edit,
+            base_content,
+            overlays,
+        },
+        analysis,
+    )
+}
+
+pub fn apply_sequence_document_edit_to_sequence(
+    fs: &WorkspaceFs,
+    input: SequenceAuthoredEditInput,
+    analysis: &ProjectAnalysis,
+) -> Result<SequenceAuthoredEditOutcome, String> {
+    let SequenceAuthoredEditInput {
+        path,
+        object_key,
+        mut sequence,
+        imports,
+        edit,
+        base_content,
+        overlays,
+    } = input;
+    let path = canonicalize_path(&fs.resolve(&path));
     let import_to_add = apply_sequence_edit_operation(
         fs,
         &path,
-        &file.imports,
+        &imports,
         analysis,
         &overlays,
         &mut sequence,
@@ -765,9 +841,41 @@ pub fn apply_sequence_document_edit(
             .map(|project| &project.display.layout),
     );
 
+    let refreshed_document = sequence_to_document(
+        fs,
+        &path,
+        &object_key,
+        &sequence,
+        analysis
+            .resolved
+            .as_ref()
+            .map(|project| &project.display.layout),
+        Some(analysis),
+        &[ProjectOverlay {
+            path: path.clone(),
+            content: base_content,
+        }],
+    );
+    Ok(SequenceAuthoredEditOutcome {
+        sequence,
+        refreshed_document,
+        import_to_add,
+    })
+}
+
+pub fn serialize_sequence_document(
+    fs: &WorkspaceFs,
+    path: Utf8PathBuf,
+    object_key: &str,
+    sequence: Sequence<Authored>,
+    base_content: String,
+    imports_to_add: Vec<DawnImport>,
+    analysis: &ProjectAnalysis,
+) -> Result<DocumentEditOutcome<SequenceDocument>, String> {
+    let path = canonicalize_path(&fs.resolve(&path));
     let object = DawnObject::Sequence(sequence);
     let mut serialized = replace_top_level_object(&base_content, object_key, &object)?;
-    if let Some(import) = import_to_add {
+    for import in imports_to_add {
         serialized = ensure_top_level_import(&serialized, import)?;
     }
     let next_text: DawnFile = parse_dawn_file(&serialized)?;

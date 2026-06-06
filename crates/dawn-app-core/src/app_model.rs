@@ -1,14 +1,19 @@
 use dawn_project::analysis::{ProjectAnalysis, ProjectDiagnostic};
 use dawn_project::document::{
-    DocumentDescriptor, DocumentViewId, FixtureDocument, LayoutDocument, SequenceDocument,
-    SequenceDocumentEdit, SequenceEffectMoveDocumentEdit, SequenceEffectResizeDocumentEdit,
-    SequenceMarkMoveDocumentEdit, SequenceMarkPasteDocumentEdit, SequenceMarkRefDocumentEdit,
+    DocumentDescriptor, DocumentViewId, FixtureDocument, LayoutDocument, SequenceAuthoredEditInput,
+    SequenceDocument, SequenceDocumentEdit, SequenceEffectMoveDocumentEdit,
+    SequenceEffectResizeDocumentEdit, SequenceMarkMoveDocumentEdit, SequenceMarkPasteDocumentEdit,
+    SequenceMarkRefDocumentEdit,
 };
-use dawn_project::fs::WorkspaceEntry;
-use dawn_project::model::{Authored, DawnObject, Geometry, SequenceEffect};
+use dawn_project::fs::{WorkspaceEntry, WorkspaceFs};
+use dawn_project::model::{Authored, DawnImport, DawnObject, Geometry, Sequence, SequenceEffect};
 use dawn_project::parse::parse_dawn_file_with_source_map;
 use dawn_project::path::Utf8PathBuf;
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
+use std::time::Duration;
 
 use crate::actions::AppAction;
 use crate::dto::AppSnapshotDto;
@@ -28,6 +33,7 @@ use crate::preview_session::{
 use crate::workspace::WorkspaceService;
 
 const MIN_EFFECT_DURATION_SECONDS: f64 = 0.000000001;
+const SEQUENCE_AUTOSAVE_DEBOUNCE: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DispatchOutcome {
@@ -164,6 +170,114 @@ fn mark_move_edits(
         .collect()
 }
 
+fn sequence_gui_edit_to_document_edit(edit: SequenceGuiEditDto) -> SequenceDocumentEdit {
+    match edit {
+        SequenceGuiEditDto::SetAudio { import } => SequenceDocumentEdit::SetAudio { import },
+        SequenceGuiEditDto::AddEffect {
+            script,
+            target,
+            scope,
+            start_seconds,
+            mark_collection_key,
+        } => SequenceDocumentEdit::AddEffect {
+            script: script.into(),
+            target: target.into(),
+            scope: scope.into(),
+            start_seconds,
+            mark_collection_key,
+        },
+        SequenceGuiEditDto::MoveEffect {
+            id,
+            start_seconds,
+            target,
+        } => SequenceDocumentEdit::MoveEffect {
+            id,
+            start_seconds,
+            target: target.map(Into::into),
+        },
+        SequenceGuiEditDto::ResizeEffect {
+            id,
+            start_seconds,
+            duration_seconds,
+        } => SequenceDocumentEdit::ResizeEffect {
+            id,
+            start_seconds,
+            duration_seconds,
+        },
+        SequenceGuiEditDto::ChangeEffectScript { id, script } => {
+            SequenceDocumentEdit::ChangeEffectScript {
+                id,
+                script: script.into(),
+            }
+        }
+        SequenceGuiEditDto::DeleteEffect { id } => SequenceDocumentEdit::DeleteEffect { id },
+        SequenceGuiEditDto::RetargetEffect { id, target } => SequenceDocumentEdit::RetargetEffect {
+            id,
+            target: target.into(),
+        },
+        SequenceGuiEditDto::SetEffectScope { id, scope } => SequenceDocumentEdit::SetEffectScope {
+            id,
+            scope: scope.into(),
+        },
+        SequenceGuiEditDto::UpdateEffectParam { id, name, value } => {
+            SequenceDocumentEdit::UpdateEffectParam {
+                id,
+                name,
+                value: value.into(),
+            }
+        }
+        SequenceGuiEditDto::LinkEffectCurveParam {
+            id,
+            name,
+            curve_path,
+            object_key,
+        } => SequenceDocumentEdit::LinkEffectCurveParam {
+            id,
+            name,
+            curve_path,
+            object_key,
+        },
+        SequenceGuiEditDto::UnlinkEffectCurveParam { id, name } => {
+            SequenceDocumentEdit::UnlinkEffectCurveParam { id, name }
+        }
+        SequenceGuiEditDto::CreateMarkCollection { key, name, color } => {
+            SequenceDocumentEdit::CreateMarkCollection { key, name, color }
+        }
+        SequenceGuiEditDto::RenameMarkCollection { key, name } => {
+            SequenceDocumentEdit::RenameMarkCollection { key, name }
+        }
+        SequenceGuiEditDto::DeleteMarkCollection { key } => {
+            SequenceDocumentEdit::DeleteMarkCollection { key }
+        }
+        SequenceGuiEditDto::SetMarkCollectionColor { key, color } => {
+            SequenceDocumentEdit::SetMarkCollectionColor { key, color }
+        }
+        SequenceGuiEditDto::AddMark {
+            collection_key,
+            time_seconds,
+        } => SequenceDocumentEdit::AddMark {
+            collection_key,
+            time_seconds,
+        },
+        SequenceGuiEditDto::MoveMark {
+            collection_key,
+            index,
+            time_seconds,
+        } => SequenceDocumentEdit::MoveMark {
+            collection_key,
+            index: index as usize,
+            time_seconds,
+        },
+        SequenceGuiEditDto::DeleteMark {
+            collection_key,
+            index,
+        } => SequenceDocumentEdit::DeleteMark {
+            collection_key,
+            index: index as usize,
+        },
+    }
+}
+
 #[derive(Debug)]
 pub struct AppModel {
     pub workspace: WorkspaceService,
@@ -178,6 +292,18 @@ pub struct AppModel {
     pub status: String,
     pub sequence_clipboard: Option<SequenceClipboard>,
     active_sequence_gui_document: Option<CachedActiveGuiDocument>,
+    sequence_gui_sessions: HashMap<SequenceKey, SequenceGuiSession>,
+    sequence_save_worker: SequenceSaveWorker,
+    last_command_timing: CommandTiming,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CommandTiming {
+    pub total_ms: f64,
+    pub model_lock_wait_ms: f64,
+    pub dispatch_ms: f64,
+    pub snapshot_ms: f64,
+    pub app_snapshot_emit_ms: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +318,58 @@ struct CachedActiveGuiDocument {
     object_key: String,
     view_mode: EditorViewMode,
     document: SequenceDocument,
+}
+
+#[derive(Debug, Clone)]
+struct SequenceGuiSession {
+    path: Utf8PathBuf,
+    sequence: Sequence<Authored>,
+    document: SequenceDocument,
+    base_content: String,
+    imports: Vec<DawnImport>,
+    pending_imports: Vec<DawnImport>,
+    edit_revision: u64,
+    saved_revision: u64,
+    undo_stack: Vec<SequenceGuiSnapshot>,
+    redo_stack: Vec<SequenceGuiSnapshot>,
+}
+
+#[derive(Debug, Clone)]
+struct SequenceGuiSnapshot {
+    sequence: Sequence<Authored>,
+    document: SequenceDocument,
+    imports: Vec<DawnImport>,
+    pending_imports: Vec<DawnImport>,
+}
+
+#[derive(Debug)]
+struct SequenceSaveWorker {
+    requests: Sender<SequenceSaveWorkerRequest>,
+    completions: Receiver<SequenceSaveCompletion>,
+}
+
+#[derive(Debug)]
+enum SequenceSaveWorkerRequest {
+    Save(Box<SequenceSaveRequest>),
+    Flush(Sender<()>),
+}
+
+#[derive(Debug, Clone)]
+struct SequenceSaveRequest {
+    fs: WorkspaceFs,
+    key: SequenceKey,
+    revision: u64,
+    sequence: Sequence<Authored>,
+    base_content: String,
+    imports_to_add: Vec<DawnImport>,
+    analysis: ProjectAnalysis,
+}
+
+#[derive(Debug)]
+struct SequenceSaveCompletion {
+    key: SequenceKey,
+    revision: u64,
+    result: Result<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -260,6 +438,104 @@ impl LiveOutputStatus {
     }
 }
 
+impl SequenceSaveWorker {
+    fn new() -> Self {
+        let (request_tx, request_rx) = mpsc::channel();
+        let (completion_tx, completion_rx) = mpsc::channel();
+        thread::spawn(move || sequence_save_worker_loop(request_rx, completion_tx));
+        Self {
+            requests: request_tx,
+            completions: completion_rx,
+        }
+    }
+
+    fn queue(&self, request: SequenceSaveRequest) -> Result<(), String> {
+        self.requests
+            .send(SequenceSaveWorkerRequest::Save(Box::new(request)))
+            .map_err(|_| "sequence autosave worker is not available".to_string())
+    }
+
+    fn flush(&self) -> Result<(), String> {
+        let (done_tx, done_rx) = mpsc::channel();
+        self.requests
+            .send(SequenceSaveWorkerRequest::Flush(done_tx))
+            .map_err(|_| "sequence autosave worker is not available".to_string())?;
+        done_rx
+            .recv()
+            .map_err(|_| "sequence autosave worker did not flush".to_string())
+    }
+}
+
+fn sequence_save_worker_loop(
+    requests: Receiver<SequenceSaveWorkerRequest>,
+    completions: Sender<SequenceSaveCompletion>,
+) {
+    let mut pending = HashMap::new();
+    while let Ok(request) = requests.recv() {
+        match request {
+            SequenceSaveWorkerRequest::Save(request) => {
+                let request = *request;
+                pending.insert(request.key.clone(), request);
+                loop {
+                    match requests.recv_timeout(SEQUENCE_AUTOSAVE_DEBOUNCE) {
+                        Ok(SequenceSaveWorkerRequest::Save(request)) => {
+                            let request = *request;
+                            pending.insert(request.key.clone(), request);
+                        }
+                        Ok(SequenceSaveWorkerRequest::Flush(done)) => {
+                            process_sequence_save_requests(&mut pending, &completions);
+                            let _ = done.send(());
+                            break;
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            process_sequence_save_requests(&mut pending, &completions);
+                            break;
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => {
+                            process_sequence_save_requests(&mut pending, &completions);
+                            return;
+                        }
+                    }
+                }
+            }
+            SequenceSaveWorkerRequest::Flush(done) => {
+                process_sequence_save_requests(&mut pending, &completions);
+                let _ = done.send(());
+            }
+        }
+    }
+}
+
+fn process_sequence_save_requests(
+    pending: &mut HashMap<SequenceKey, SequenceSaveRequest>,
+    completions: &Sender<SequenceSaveCompletion>,
+) {
+    let requests = std::mem::take(pending);
+    for request in requests.into_values() {
+        let result = dawn_project::document::serialize_sequence_document(
+            &request.fs,
+            request.key.path.clone(),
+            &request.key.object_key,
+            request.sequence,
+            request.base_content,
+            request.imports_to_add,
+            &request.analysis,
+        )
+        .and_then(|outcome| {
+            request
+                .fs
+                .write(&request.key.path, outcome.serialized_content.as_bytes())
+                .map_err(|error| error.to_string())?;
+            Ok(outcome.serialized_content)
+        });
+        let _ = completions.send(SequenceSaveCompletion {
+            key: request.key,
+            revision: request.revision,
+            result,
+        });
+    }
+}
+
 impl Default for AppModel {
     fn default() -> Self {
         let workbench_layout = load_workbench_layout();
@@ -277,6 +553,9 @@ impl Default for AppModel {
             status: "No project open".to_string(),
             sequence_clipboard: None,
             active_sequence_gui_document: None,
+            sequence_gui_sessions: HashMap::new(),
+            sequence_save_worker: SequenceSaveWorker::new(),
+            last_command_timing: CommandTiming::default(),
         };
         if let Some(path) = last_project_root {
             match model.open_project(path, false, true) {
@@ -313,7 +592,16 @@ impl AppModel {
         self.snapshot().into()
     }
 
+    pub fn set_last_command_timing(&mut self, timing: CommandTiming) {
+        self.last_command_timing = timing;
+    }
+
+    pub fn last_command_timing(&self) -> CommandTiming {
+        self.last_command_timing
+    }
+
     pub fn dispatch(&mut self, action: AppAction) -> Result<DispatchOutcome, String> {
+        self.drain_sequence_save_completions()?;
         match action {
             AppAction::OpenProject(path) => {
                 self.flush_autosave()?;
@@ -321,6 +609,7 @@ impl AppModel {
                 self.status = "Project opened".to_string();
             }
             AppAction::ReloadProject => {
+                self.flush_pending_sequence_saves()?;
                 let paths = self
                     .editors
                     .buffers()
@@ -338,7 +627,9 @@ impl AppModel {
                 self.persist_workbench_layout()?;
             }
             AppAction::CloseFile(path) => {
+                self.flush_pending_sequence_saves_for_path(&path)?;
                 self.editors.close_file(&path);
+                self.sequence_gui_sessions.retain(|key, _| key.path != path);
                 self.refresh_analysis()?;
                 self.sync_preview_source(PreviewSyncMode::RenderNow);
                 self.persist_workbench_layout()?;
@@ -358,37 +649,36 @@ impl AppModel {
                     return Ok(DispatchOutcome::NoSnapshotChange);
                 };
                 let mode = mode.into();
+                if mode == EditorViewMode::Text {
+                    self.flush_pending_sequence_saves_for_path(&path)?;
+                }
                 self.editors.set_view_mode(&path, mode);
                 self.invalidate_active_gui_document_cache();
                 self.sync_preview_source(PreviewSyncMode::RenderNow);
                 self.persist_workbench_layout()?;
             }
             AppAction::UpdateActiveText(text) => {
+                let path = self.active_path_for_gui_edit()?;
+                self.flush_pending_sequence_saves_for_path(&path)?;
                 self.ensure_active_buffer_not_conflicted()?;
                 self.editors.update_active_text(text);
+                self.sequence_gui_sessions.retain(|key, _| key.path != path);
                 self.refresh_analysis_after_memory_edit();
                 self.status = "Edited".to_string();
             }
             AppAction::UndoActiveEdit => {
-                if self.editors.undo_active_text_edit() {
-                    self.refresh_analysis_after_memory_edit();
-                    self.status = "Undo".to_string();
-                } else {
+                if !self.undo_active_edit()? {
                     return Ok(DispatchOutcome::NoSnapshotChange);
                 }
             }
             AppAction::RedoActiveEdit => {
-                if self.editors.redo_active_text_edit() {
-                    self.refresh_analysis_after_memory_edit();
-                    self.status = "Redo".to_string();
-                } else {
+                if !self.redo_active_edit()? {
                     return Ok(DispatchOutcome::NoSnapshotChange);
                 }
             }
             AppAction::ApplySequenceGuiEdit(edit) => {
                 self.apply_sequence_gui_edit(edit)?;
-                self.flush_autosave_without_analysis()?;
-                self.status = "Autosaved".to_string();
+                self.status = "Edited".to_string();
             }
             AppAction::ApplyLayoutGuiEdit(edit) => {
                 self.apply_layout_gui_edit(edit)?;
@@ -405,6 +695,7 @@ impl AppModel {
                 self.status = "Saved".to_string();
             }
             AppAction::FilesystemChanged(paths) => {
+                self.flush_pending_sequence_saves()?;
                 self.reconcile_filesystem_changes(paths)?;
                 self.status = "Filesystem refreshed".to_string();
             }
@@ -501,6 +792,7 @@ impl AppModel {
                 self.status = "Preview seeked".to_string();
             }
         }
+        self.drain_sequence_save_completions()?;
         Ok(DispatchOutcome::SnapshotChanged)
     }
 
@@ -628,20 +920,16 @@ impl AppModel {
         self.flush_autosave_with_preview_sync(true)
     }
 
-    fn flush_autosave_without_analysis(&mut self) -> Result<(), String> {
-        for buffer in self.editors.dirty_autosave_buffers() {
-            let version = self
-                .workspace
-                .write_text_file_with_version(buffer.path.clone(), &buffer.text)?;
-            self.editors.record_saved_version(&buffer.path, version);
-        }
-        Ok(())
-    }
-
     fn flush_autosave_with_preview_sync(&mut self, sync_preview: bool) -> Result<(), String> {
+        self.flush_pending_sequence_saves()?;
         let dirty_buffers = self.editors.dirty_autosave_buffers();
-        let had_dirty_buffers = !dirty_buffers.is_empty();
+        let had_dirty_buffers = dirty_buffers
+            .iter()
+            .any(|buffer| buffer.text != buffer.saved_text);
         for buffer in dirty_buffers {
+            if buffer.text == buffer.saved_text {
+                continue;
+            }
             let version = self
                 .workspace
                 .write_text_file_with_version(buffer.path.clone(), &buffer.text)?;
@@ -938,136 +1226,10 @@ impl AppModel {
             .get(&DocumentViewId::Sequence)
             .ok_or_else(|| "active document is not a sequence".to_string())?
             .clone();
-        let edit = match edit {
-            SequenceGuiEditDto::SetAudio { import } => SequenceDocumentEdit::SetAudio { import },
-            SequenceGuiEditDto::AddEffect {
-                script,
-                target,
-                scope,
-                start_seconds,
-                mark_collection_key,
-            } => SequenceDocumentEdit::AddEffect {
-                script: script.into(),
-                target: target.into(),
-                scope: scope.into(),
-                start_seconds,
-                mark_collection_key,
-            },
-            SequenceGuiEditDto::MoveEffect {
-                id,
-                start_seconds,
-                target,
-            } => SequenceDocumentEdit::MoveEffect {
-                id,
-                start_seconds,
-                target: target.map(Into::into),
-            },
-            SequenceGuiEditDto::ResizeEffect {
-                id,
-                start_seconds,
-                duration_seconds,
-            } => SequenceDocumentEdit::ResizeEffect {
-                id,
-                start_seconds,
-                duration_seconds,
-            },
-            SequenceGuiEditDto::ChangeEffectScript { id, script } => {
-                SequenceDocumentEdit::ChangeEffectScript {
-                    id,
-                    script: script.into(),
-                }
-            }
-            SequenceGuiEditDto::DeleteEffect { id } => SequenceDocumentEdit::DeleteEffect { id },
-            SequenceGuiEditDto::RetargetEffect { id, target } => {
-                SequenceDocumentEdit::RetargetEffect {
-                    id,
-                    target: target.into(),
-                }
-            }
-            SequenceGuiEditDto::SetEffectScope { id, scope } => {
-                SequenceDocumentEdit::SetEffectScope {
-                    id,
-                    scope: scope.into(),
-                }
-            }
-            SequenceGuiEditDto::UpdateEffectParam { id, name, value } => {
-                SequenceDocumentEdit::UpdateEffectParam {
-                    id,
-                    name,
-                    value: value.into(),
-                }
-            }
-            SequenceGuiEditDto::LinkEffectCurveParam {
-                id,
-                name,
-                curve_path,
-                object_key,
-            } => SequenceDocumentEdit::LinkEffectCurveParam {
-                id,
-                name,
-                curve_path,
-                object_key,
-            },
-            SequenceGuiEditDto::UnlinkEffectCurveParam { id, name } => {
-                SequenceDocumentEdit::UnlinkEffectCurveParam { id, name }
-            }
-            SequenceGuiEditDto::CreateMarkCollection { key, name, color } => {
-                SequenceDocumentEdit::CreateMarkCollection { key, name, color }
-            }
-            SequenceGuiEditDto::RenameMarkCollection { key, name } => {
-                SequenceDocumentEdit::RenameMarkCollection { key, name }
-            }
-            SequenceGuiEditDto::DeleteMarkCollection { key } => {
-                SequenceDocumentEdit::DeleteMarkCollection { key }
-            }
-            SequenceGuiEditDto::SetMarkCollectionColor { key, color } => {
-                SequenceDocumentEdit::SetMarkCollectionColor { key, color }
-            }
-            SequenceGuiEditDto::AddMark {
-                collection_key,
-                time_seconds,
-            } => SequenceDocumentEdit::AddMark {
-                collection_key,
-                time_seconds,
-            },
-            SequenceGuiEditDto::MoveMark {
-                collection_key,
-                index,
-                time_seconds,
-            } => SequenceDocumentEdit::MoveMark {
-                collection_key,
-                index: index as usize,
-                time_seconds,
-            },
-            SequenceGuiEditDto::DeleteMark {
-                collection_key,
-                index,
-            } => SequenceDocumentEdit::DeleteMark {
-                collection_key,
-                index: index as usize,
-            },
-        };
-        let analysis = self
-            .analysis
-            .as_ref()
-            .ok_or_else(|| "project analysis is not available".to_string())?;
-        let base_content = self.active_buffer_text()?;
-        let edit_overlays = self.editors.dirty_overlays();
-        let outcome = self.workspace.apply_sequence_edit(
-            path.clone(),
-            &object_key,
-            edit,
-            base_content,
-            edit_overlays,
-            analysis,
-        )?;
-        self.commit_active_sequence_gui_text(
-            path,
-            outcome.serialized_content,
-            outcome.refreshed_document,
-            PreviewSyncMode::DeferRender,
-        )?;
-        Ok(())
+        self.apply_sequence_document_edit_for_key(
+            SequenceKey { path, object_key },
+            sequence_gui_edit_to_document_edit(edit),
+        )
     }
 
     pub fn apply_sequence_selection_edit(
@@ -1154,7 +1316,6 @@ impl AppModel {
         };
 
         self.apply_sequence_document_edit(document_edit)?;
-        self.flush_autosave_without_analysis()?;
         let snapshot = self.snapshot_dto();
         Ok(SequenceSelectionEditResultDto {
             snapshot,
@@ -1175,28 +1336,326 @@ impl AppModel {
             .get(&DocumentViewId::Sequence)
             .ok_or_else(|| "active document is not a sequence".to_string())?
             .clone();
+        self.apply_sequence_document_edit_for_key(SequenceKey { path, object_key }, edit)
+    }
+
+    fn apply_sequence_document_edit_for_key(
+        &mut self,
+        key: SequenceKey,
+        edit: SequenceDocumentEdit,
+    ) -> Result<(), String> {
         let analysis = self
             .analysis
             .as_ref()
-            .ok_or_else(|| "project analysis is not available".to_string())?;
-        let outcome = self.workspace.apply_sequence_edit(
-            path.clone(),
-            &object_key,
-            edit,
-            self.active_buffer_text()?,
-            self.editors.dirty_overlays(),
-            analysis,
+            .ok_or_else(|| "project analysis is not available".to_string())?
+            .clone();
+        self.ensure_sequence_gui_session(&key)?;
+        let session = self
+            .sequence_gui_sessions
+            .get(&key)
+            .ok_or_else(|| "sequence GUI session is not available".to_string())?
+            .clone();
+        let outcome = self.workspace.apply_sequence_edit_to_sequence(
+            SequenceAuthoredEditInput {
+                path: key.path.clone(),
+                object_key: key.object_key.clone(),
+                sequence: session.sequence.clone(),
+                imports: session.imports.clone(),
+                edit,
+                base_content: session.base_content.clone(),
+                overlays: self.editors.dirty_overlays(),
+            },
+            &analysis,
         )?;
-        self.commit_active_sequence_gui_text(
-            path,
-            outcome.serialized_content,
-            outcome.refreshed_document,
+        let next_revision = session.edit_revision.saturating_add(1);
+        let next_snapshot = SequenceGuiSnapshot {
+            sequence: outcome.sequence.clone(),
+            document: outcome.refreshed_document.clone(),
+            imports: {
+                let mut imports = session.imports.clone();
+                if let Some(import) = outcome.import_to_add.clone() {
+                    imports.push(import);
+                }
+                imports
+            },
+            pending_imports: {
+                let mut imports = session.pending_imports.clone();
+                if let Some(import) = outcome.import_to_add.clone() {
+                    imports.push(import);
+                }
+                imports
+            },
+        };
+        let session = self
+            .sequence_gui_sessions
+            .get_mut(&key)
+            .ok_or_else(|| "sequence GUI session is not available".to_string())?;
+        session.undo_stack.push(SequenceGuiSnapshot {
+            sequence: session.sequence.clone(),
+            document: session.document.clone(),
+            imports: session.imports.clone(),
+            pending_imports: session.pending_imports.clone(),
+        });
+        session.redo_stack.clear();
+        session.sequence = next_snapshot.sequence;
+        session.document = next_snapshot.document.clone();
+        session.imports = next_snapshot.imports;
+        session.pending_imports = next_snapshot.pending_imports;
+        session.edit_revision = next_revision;
+        self.editors.mark_gui_edit_dirty(&key.path, next_revision);
+        self.queue_sequence_session_save(&key)?;
+        self.sync_preview_source_from_document(
+            key.path.clone(),
+            next_snapshot.document,
             PreviewSyncMode::DeferRender,
-        )
+        );
+        Ok(())
+    }
+
+    fn ensure_sequence_gui_session(&mut self, key: &SequenceKey) -> Result<(), String> {
+        if self.sequence_gui_sessions.contains_key(key) {
+            return Ok(());
+        }
+        let base_content = self.active_buffer_text()?;
+        let parsed =
+            parse_dawn_file_with_source_map(&base_content).map_err(|error| error.to_string())?;
+        let sequence = match parsed.file.get(&key.object_key) {
+            Some(DawnObject::Sequence(sequence)) => sequence.clone(),
+            _ => {
+                return Err(format!(
+                    "sequence object `{}` was not found",
+                    key.object_key
+                ))
+            }
+        };
+        let document = if let Some(document) =
+            self.cached_active_sequence_document(&key.path, &key.object_key, EditorViewMode::Gui)
+        {
+            document
+        } else {
+            self.workspace.sequence_document(
+                key.path.clone(),
+                &key.object_key,
+                self.editors.dirty_overlays(),
+            )?
+        };
+        self.sequence_gui_sessions.insert(
+            key.clone(),
+            SequenceGuiSession {
+                path: key.path.clone(),
+                sequence,
+                document,
+                base_content,
+                imports: parsed.file.imports,
+                pending_imports: Vec::new(),
+                edit_revision: 0,
+                saved_revision: 0,
+                undo_stack: Vec::new(),
+                redo_stack: Vec::new(),
+            },
+        );
+        Ok(())
+    }
+
+    fn queue_sequence_session_save(&self, key: &SequenceKey) -> Result<(), String> {
+        let session = self
+            .sequence_gui_sessions
+            .get(key)
+            .ok_or_else(|| "sequence GUI session is not available".to_string())?;
+        let analysis = self
+            .analysis
+            .as_ref()
+            .ok_or_else(|| "project analysis is not available".to_string())?
+            .clone();
+        self.sequence_save_worker.queue(SequenceSaveRequest {
+            fs: self.workspace.project_fs_clone()?,
+            key: key.clone(),
+            revision: session.edit_revision,
+            sequence: session.sequence.clone(),
+            base_content: session.base_content.clone(),
+            imports_to_add: session.pending_imports.clone(),
+            analysis,
+        })
+    }
+
+    fn drain_sequence_save_completions(&mut self) -> Result<(), String> {
+        let mut changed = false;
+        while let Ok(completion) = self.sequence_save_worker.completions.try_recv() {
+            let current_revision = self
+                .sequence_gui_sessions
+                .get(&completion.key)
+                .map(|session| session.edit_revision);
+            if current_revision != Some(completion.revision) {
+                continue;
+            }
+            match completion.result {
+                Ok(text) => {
+                    let version = self
+                        .workspace
+                        .file_version(&completion.key.path, &text)?
+                        .ok_or_else(|| "saved sequence file does not exist".to_string())?;
+                    if self.editors.complete_gui_edit_save(
+                        &completion.key.path,
+                        completion.revision,
+                        text.clone(),
+                        version,
+                    ) {
+                        if let Some(session) = self.sequence_gui_sessions.get_mut(&completion.key) {
+                            if session.edit_revision == completion.revision {
+                                session.base_content = text;
+                                session.pending_imports.clear();
+                                session.saved_revision = completion.revision;
+                            }
+                        }
+                        changed = true;
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        if changed {
+            self.refresh_analysis()?;
+        }
+        Ok(())
+    }
+
+    fn flush_pending_sequence_saves(&mut self) -> Result<(), String> {
+        self.sequence_save_worker.flush()?;
+        self.drain_sequence_save_completions()
+    }
+
+    fn flush_pending_sequence_saves_for_path(&mut self, path: &Utf8PathBuf) -> Result<(), String> {
+        if self
+            .sequence_gui_sessions
+            .values()
+            .any(|session| &session.path == path && session.edit_revision != session.saved_revision)
+        {
+            self.flush_pending_sequence_saves()?;
+        } else {
+            self.drain_sequence_save_completions()?;
+        }
+        Ok(())
+    }
+
+    fn undo_active_edit(&mut self) -> Result<bool, String> {
+        if self
+            .editors
+            .active_buffer()
+            .is_some_and(|buffer| buffer.view_mode == EditorViewMode::Gui)
+        {
+            return self.undo_active_sequence_gui_edit();
+        }
+        let path = self.active_path_for_gui_edit()?;
+        self.flush_pending_sequence_saves_for_path(&path)?;
+        if self.editors.undo_active_text_edit() {
+            self.refresh_analysis_after_memory_edit();
+            self.status = "Undo".to_string();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn redo_active_edit(&mut self) -> Result<bool, String> {
+        if self
+            .editors
+            .active_buffer()
+            .is_some_and(|buffer| buffer.view_mode == EditorViewMode::Gui)
+        {
+            return self.redo_active_sequence_gui_edit();
+        }
+        let path = self.active_path_for_gui_edit()?;
+        self.flush_pending_sequence_saves_for_path(&path)?;
+        if self.editors.redo_active_text_edit() {
+            self.refresh_analysis_after_memory_edit();
+            self.status = "Redo".to_string();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn undo_active_sequence_gui_edit(&mut self) -> Result<bool, String> {
+        let key = self.active_sequence_key()?;
+        self.ensure_sequence_gui_session(&key)?;
+        let Some(session) = self.sequence_gui_sessions.get_mut(&key) else {
+            return Ok(false);
+        };
+        let Some(previous) = session.undo_stack.pop() else {
+            return Ok(false);
+        };
+        session.redo_stack.push(SequenceGuiSnapshot {
+            sequence: session.sequence.clone(),
+            document: session.document.clone(),
+            imports: session.imports.clone(),
+            pending_imports: session.pending_imports.clone(),
+        });
+        session.sequence = previous.sequence;
+        session.document = previous.document.clone();
+        session.imports = previous.imports;
+        session.pending_imports = previous.pending_imports;
+        session.edit_revision = session.edit_revision.saturating_add(1);
+        let revision = session.edit_revision;
+        self.editors.mark_gui_edit_dirty(&key.path, revision);
+        self.queue_sequence_session_save(&key)?;
+        self.sync_preview_source_from_document(
+            key.path,
+            previous.document,
+            PreviewSyncMode::DeferRender,
+        );
+        self.status = "Undo".to_string();
+        Ok(true)
+    }
+
+    fn redo_active_sequence_gui_edit(&mut self) -> Result<bool, String> {
+        let key = self.active_sequence_key()?;
+        self.ensure_sequence_gui_session(&key)?;
+        let Some(session) = self.sequence_gui_sessions.get_mut(&key) else {
+            return Ok(false);
+        };
+        let Some(next) = session.redo_stack.pop() else {
+            return Ok(false);
+        };
+        session.undo_stack.push(SequenceGuiSnapshot {
+            sequence: session.sequence.clone(),
+            document: session.document.clone(),
+            imports: session.imports.clone(),
+            pending_imports: session.pending_imports.clone(),
+        });
+        session.sequence = next.sequence;
+        session.document = next.document.clone();
+        session.imports = next.imports;
+        session.pending_imports = next.pending_imports;
+        session.edit_revision = session.edit_revision.saturating_add(1);
+        let revision = session.edit_revision;
+        self.editors.mark_gui_edit_dirty(&key.path, revision);
+        self.queue_sequence_session_save(&key)?;
+        self.sync_preview_source_from_document(
+            key.path,
+            next.document,
+            PreviewSyncMode::DeferRender,
+        );
+        self.status = "Redo".to_string();
+        Ok(true)
+    }
+
+    fn active_sequence_key(&self) -> Result<SequenceKey, String> {
+        let path = self.active_path_for_gui_edit()?;
+        Ok(SequenceKey {
+            object_key: self.active_sequence_object_key()?,
+            path,
+        })
     }
 
     fn active_sequence_authored(&self) -> Result<dawn_project::model::Sequence<Authored>, String> {
         let object_key = self.active_sequence_object_key()?;
+        let path = self.active_path_for_gui_edit()?;
+        if let Some(session) = self.sequence_gui_sessions.get(&SequenceKey {
+            path: path.clone(),
+            object_key: object_key.clone(),
+        }) {
+            return Ok(session.sequence.clone());
+        }
         let parsed = parse_dawn_file_with_source_map(&self.active_buffer_text()?)
             .map_err(|error| error.to_string())?;
         match parsed.file.get(&object_key) {
@@ -1445,18 +1904,6 @@ impl AppModel {
     fn commit_active_gui_text(&mut self, text: String) -> Result<(), String> {
         self.editors.replace_active_text_from_edit(text);
         self.refresh_analysis_after_memory_edit();
-        Ok(())
-    }
-
-    fn commit_active_sequence_gui_text(
-        &mut self,
-        path: Utf8PathBuf,
-        text: String,
-        document: SequenceDocument,
-        mode: PreviewSyncMode,
-    ) -> Result<(), String> {
-        self.editors.replace_active_text_from_edit(text);
-        self.sync_preview_source_from_document(path, document, mode);
         Ok(())
     }
 

@@ -35,6 +35,11 @@ export type PreviewTiming = {
   eventEmitMs: number;
   liveOutputMs: number;
   eventIntervalMs: number;
+  commandTotalMs: number;
+  commandModelLockWaitMs: number;
+  commandDispatchMs: number;
+  commandSnapshotMs: number;
+  commandAppSnapshotEmitMs: number;
   renderedActiveEffects: number;
   renderedSampledPixels: number;
   hasSink: boolean;

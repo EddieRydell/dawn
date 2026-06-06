@@ -9,11 +9,14 @@ use dawn_project::document::{
     apply_fixture_document_edit as edit_fixture_document,
     apply_layout_document_edit as edit_layout_document,
     apply_sequence_document_edit as edit_sequence_document,
+    apply_sequence_document_edit_to_authored as edit_sequence_document_to_authored,
+    apply_sequence_document_edit_to_sequence as edit_sequence_document_to_sequence,
     get_fixture_document as inspect_fixture_document,
     get_layout_document as inspect_layout_document,
     get_sequence_document as inspect_sequence_document, inspect_document as inspect_dawn_document,
-    DocumentDescriptor, DocumentEditOutcome, FixtureDocument, LayoutDocument, SequenceDocument,
-    SequenceDocumentEdit,
+    serialize_sequence_document as serialize_sequence_document_edit, DocumentDescriptor,
+    DocumentEditOutcome, FixtureDocument, LayoutDocument, SequenceAuthoredEditInput,
+    SequenceAuthoredEditOutcome, SequenceDocument, SequenceDocumentEdit,
 };
 use dawn_project::fs::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFs};
 use dawn_project::path::{serialized_import_path, utf8_path, PathStringExt, Utf8PathBuf};
@@ -203,6 +206,58 @@ impl WorkspaceService {
             overlays,
             analysis,
         )
+    }
+
+    pub fn apply_sequence_edit_to_authored(
+        &self,
+        path: Utf8PathBuf,
+        object_key: &str,
+        edit: SequenceDocumentEdit,
+        base_content: String,
+        overlays: Vec<ProjectOverlay>,
+        analysis: &ProjectAnalysis,
+    ) -> Result<SequenceAuthoredEditOutcome, String> {
+        edit_sequence_document_to_authored(
+            self.project_fs()?,
+            path,
+            object_key,
+            edit,
+            base_content,
+            overlays,
+            analysis,
+        )
+    }
+
+    pub fn apply_sequence_edit_to_sequence(
+        &self,
+        input: SequenceAuthoredEditInput,
+        analysis: &ProjectAnalysis,
+    ) -> Result<SequenceAuthoredEditOutcome, String> {
+        edit_sequence_document_to_sequence(self.project_fs()?, input, analysis)
+    }
+
+    pub fn serialize_sequence_document(
+        &self,
+        path: Utf8PathBuf,
+        object_key: &str,
+        sequence: dawn_project::model::Sequence<dawn_project::model::Authored>,
+        base_content: String,
+        imports_to_add: Vec<dawn_project::model::DawnImport>,
+        analysis: &ProjectAnalysis,
+    ) -> Result<DocumentEditOutcome<SequenceDocument>, String> {
+        serialize_sequence_document_edit(
+            self.project_fs()?,
+            path,
+            object_key,
+            sequence,
+            base_content,
+            imports_to_add,
+            analysis,
+        )
+    }
+
+    pub fn project_fs_clone(&self) -> Result<WorkspaceFs, String> {
+        Ok(self.project_fs()?.clone())
     }
 
     pub fn read_file(&self, path: Utf8PathBuf) -> Result<String, String> {
