@@ -70,6 +70,7 @@ pub enum Expr {
     Int(i64),
     Bool(bool),
     Color(Color),
+    Array(Vec<Expr>),
     Ident(String),
     Unary {
         op: UnaryOp,
@@ -83,6 +84,14 @@ pub enum Expr {
     Call {
         name: String,
         args: Vec<Expr>,
+    },
+    CallValue {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+    },
+    Index {
+        array: Box<Expr>,
+        index: Box<Expr>,
     },
     Member {
         object: Box<Expr>,
@@ -106,6 +115,7 @@ pub enum BinaryOp {
     Subtract,
     Multiply,
     Divide,
+    Modulo,
     Less,
     LessEqual,
     Greater,

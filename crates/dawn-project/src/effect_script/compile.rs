@@ -7,6 +7,8 @@ use super::bytecode::{
     Instruction, IntSlot, MarkSearchInstruction, PixelSlot, RefSlot, RegisterCounts,
     UnaryFloatInstruction, ValueSlot,
 };
+use crate::model::ArrayElementType;
+
 use super::{binary_result_type, is_float_compatible, RuntimeValue, ScriptType};
 
 pub(super) fn compile_effect(effect: &EffectAst) -> BytecodeProgram {
@@ -28,6 +30,7 @@ struct Compiler<'a> {
     effect: &'a EffectAst,
     instructions: Vec<Instruction>,
     constants: Vec<RuntimeValue>,
+    array_values: Vec<Vec<ValueSlot>>,
     scopes: Vec<HashMap<String, Binding>>,
     registers: RegisterCounts,
 }
@@ -37,6 +40,7 @@ impl<'a> Compiler<'a> {
             effect,
             instructions: Vec::new(),
             constants: Vec::new(),
+            array_values: Vec::new(),
             scopes: vec![HashMap::new()],
             registers: RegisterCounts::default(),
         };
@@ -53,6 +57,7 @@ impl<'a> Compiler<'a> {
         BytecodeProgram {
             instructions: self.instructions,
             constants: self.constants,
+            array_values: self.array_values,
             registers: self.registers,
         }
     }
@@ -163,6 +168,7 @@ impl<'a> Compiler<'a> {
             Expr::Int(value) => self.load_constant(RuntimeValue::Int(*value)),
             Expr::Bool(value) => self.load_constant(RuntimeValue::Bool(*value)),
             Expr::Color(value) => self.load_constant(RuntimeValue::Color(*value)),
+            Expr::Array(items) => self.compile_array_literal(items),
             Expr::Ident(name) => match self.expect_binding(name) {
                 Binding::Context(context) => {
                     let dest = self.allocate_slot(context.value_type());
@@ -209,6 +215,8 @@ impl<'a> Compiler<'a> {
             }
             Expr::Binary { left, op, right } => self.compile_binary(left, *op, right),
             Expr::Call { name, args } => self.compile_call(name, args),
+            Expr::CallValue { callee, args } => self.compile_call_value(callee, args),
+            Expr::Index { array, index } => self.compile_index(array, index),
             Expr::Member { .. } | Expr::Qualified { .. } => {
                 unreachable!("sample type checker rejects generator expressions")
             }
@@ -254,7 +262,7 @@ impl<'a> Compiler<'a> {
                 let left = self.compile_expr(left);
                 let right = self.compile_expr(right);
                 let instruction = self.binary_instruction(left_type, op, right_type);
-                let result_type = match binary_result_type(left_type, op, right_type) {
+                let result_type = match binary_result_type(&left_type, op, &right_type) {
                     Some(result_type) => result_type,
                     None => unreachable!("type checker validates binary expression"),
                 };
@@ -330,6 +338,7 @@ impl<'a> Compiler<'a> {
                 BinaryInstruction::IntMultiply
             }
             (ScriptType::Int, BinaryOp::Divide, ScriptType::Int) => BinaryInstruction::IntDivide,
+            (ScriptType::Int, BinaryOp::Modulo, ScriptType::Int) => BinaryInstruction::IntModulo,
             (left, BinaryOp::Less, right) if is_float_compare(left, right) => {
                 BinaryInstruction::FloatLess
             }
@@ -368,10 +377,10 @@ impl<'a> Compiler<'a> {
             (ScriptType::Enum, BinaryOp::NotEqual, ScriptType::Enum) => {
                 BinaryInstruction::EnumNotEqual
             }
-            (ScriptType::Color, BinaryOp::Multiply, factor) if is_float_compatible(factor) => {
+            (ScriptType::Color, BinaryOp::Multiply, factor) if is_float_compatible(&factor) => {
                 BinaryInstruction::ColorMultiplyFloat
             }
-            (factor, BinaryOp::Multiply, ScriptType::Color) if is_float_compatible(factor) => {
+            (factor, BinaryOp::Multiply, ScriptType::Color) if is_float_compatible(&factor) => {
                 BinaryInstruction::FloatMultiplyColor
             }
             _ => unreachable!("type checker validates binary expression"),
@@ -383,6 +392,7 @@ impl<'a> Compiler<'a> {
             Expr::Int(_) => ScriptType::Int,
             Expr::Bool(_) => ScriptType::Bool,
             Expr::Color(_) => ScriptType::Color,
+            Expr::Array(items) => array_literal_type(items, |expr| self.expr_type(expr)),
             Expr::Ident(name) => match self.expect_binding(name) {
                 Binding::Context(context) => context.value_type(),
                 Binding::Constant(index) => self.constants[index].value_type(),
@@ -396,12 +406,21 @@ impl<'a> Compiler<'a> {
             Expr::Binary { left, op, right } => {
                 let left = self.expr_type(left);
                 let right = self.expr_type(right);
-                match binary_result_type(left, *op, right) {
+                match binary_result_type(&left, *op, &right) {
                     Some(result_type) => result_type,
                     None => unreachable!("type checker validates binary expression"),
                 }
             }
             Expr::Call { name, args } => self.call_type(name, args),
+            Expr::CallValue { callee, .. } => match self.expr_type(callee) {
+                ScriptType::CurveFloat => ScriptType::Float,
+                ScriptType::CurveColor => ScriptType::Color,
+                _ => unreachable!("type checker validates callable expression"),
+            },
+            Expr::Index { array, .. } => match self.expr_type(array) {
+                ScriptType::Array(element_type) => script_type_for_array_element(element_type),
+                _ => unreachable!("type checker validates array indexing"),
+            },
             Expr::Member { .. } | Expr::Qualified { .. } => {
                 unreachable!("sample type checker rejects generator expressions")
             }
@@ -524,6 +543,12 @@ impl<'a> Compiler<'a> {
                 let dest = self.allocate_float();
                 self.emit(Instruction::MarkAt(dest, marks, index, fallback));
                 ValueSlot::Float(dest)
+            }
+            BuiltinFunction::Len => {
+                let array = self.compile_expr(&args[0]).reference();
+                let dest = self.allocate_int();
+                self.emit(Instruction::ArrayLen(dest, array));
+                ValueSlot::Int(dest)
             }
             BuiltinFunction::MarkPrev
             | BuiltinFunction::MarkNext
@@ -676,6 +701,62 @@ impl<'a> Compiler<'a> {
             }
         }
     }
+
+    fn compile_array_literal(&mut self, items: &[Expr]) -> ValueSlot {
+        let value_type = self.expr_type(&Expr::Array(items.to_vec()));
+        let ScriptType::Array(element_type) = value_type else {
+            unreachable!("type checker validates array literal")
+        };
+        let values = items
+            .iter()
+            .map(|item| {
+                let value = self.compile_expr(item);
+                if element_type == ArrayElementType::Float && matches!(value, ValueSlot::Int(_)) {
+                    let dest = self.allocate_float();
+                    self.emit(Instruction::IntToFloat(dest, value.int()));
+                    ValueSlot::Float(dest)
+                } else {
+                    value
+                }
+            })
+            .collect::<Vec<_>>();
+        let slot = RefSlot(self.registers.refs);
+        self.registers.refs += 1;
+        let index = self.array_values.len();
+        self.array_values.push(values);
+        self.emit(Instruction::BuildArray(slot, element_type, index));
+        ValueSlot::Ref(slot, value_type)
+    }
+
+    fn compile_index(&mut self, array: &Expr, index: &Expr) -> ValueSlot {
+        let array_slot = self.compile_expr(array).reference();
+        let index_slot = self.compile_expr(index).int();
+        let ScriptType::Array(element_type) = self.expr_type(array) else {
+            unreachable!("type checker validates array indexing")
+        };
+        let dest = self.allocate_slot(script_type_for_array_element(element_type));
+        self.emit(Instruction::ArrayIndex(dest, array_slot, index_slot));
+        dest
+    }
+
+    fn compile_call_value(&mut self, callee: &Expr, args: &[Expr]) -> ValueSlot {
+        let callee_type = self.expr_type(callee);
+        let curve = self.compile_expr(callee).reference();
+        let amount = self.compile_float_arg(&args[0]);
+        match callee_type {
+            ScriptType::CurveFloat => {
+                let dest = self.allocate_float();
+                self.emit(Instruction::CallFloatCurveRef(dest, curve, amount));
+                ValueSlot::Float(dest)
+            }
+            ScriptType::CurveColor => {
+                let dest = self.allocate_color();
+                self.emit(Instruction::CallColorCurveRef(dest, curve, amount));
+                ValueSlot::Color(dest)
+            }
+            _ => unreachable!("type checker validates callable expressions"),
+        }
+    }
     fn compile_float_arg(&mut self, expr: &Expr) -> FloatSlot {
         let value = self.compile_expr(expr);
         match value {
@@ -748,6 +829,7 @@ impl<'a> Compiler<'a> {
             ScriptType::Marks
             | ScriptType::CurveFloat
             | ScriptType::CurveColor
+            | ScriptType::Array(_)
             | ScriptType::Enum
             | ScriptType::Flags => {
                 let slot = RefSlot(self.registers.refs);
@@ -819,8 +901,8 @@ impl<'a> Compiler<'a> {
     }
 }
 fn is_float_compare(left: ScriptType, right: ScriptType) -> bool {
-    is_float_compatible(left)
-        && is_float_compatible(right)
+    is_float_compatible(&left)
+        && is_float_compatible(&right)
         && (left == ScriptType::Float || right == ScriptType::Float)
 }
 
@@ -831,4 +913,46 @@ fn context_slot(context: BuiltinContext) -> ContextSlot {
         BuiltinContext::Fixture => ContextSlot::Fixture,
         BuiltinContext::Pixel => ContextSlot::Pixel,
     }
+}
+
+fn script_type_for_array_element(element_type: ArrayElementType) -> ScriptType {
+    match element_type {
+        ArrayElementType::Int => ScriptType::Int,
+        ArrayElementType::Float => ScriptType::Float,
+        ArrayElementType::Bool => ScriptType::Bool,
+        ArrayElementType::Color => ScriptType::Color,
+        ArrayElementType::CurveFloat => ScriptType::CurveFloat,
+        ArrayElementType::CurveColor => ScriptType::CurveColor,
+    }
+}
+
+fn array_literal_type(
+    items: &[Expr],
+    mut expr_type: impl FnMut(&Expr) -> ScriptType,
+) -> ScriptType {
+    let mut element_type = None;
+    for item in items {
+        let item_type = expr_type(item);
+        let item_element = match item_type {
+            ScriptType::Int => ArrayElementType::Int,
+            ScriptType::Float => ArrayElementType::Float,
+            ScriptType::Bool => ArrayElementType::Bool,
+            ScriptType::Color => ArrayElementType::Color,
+            ScriptType::CurveFloat => ArrayElementType::CurveFloat,
+            ScriptType::CurveColor => ArrayElementType::CurveColor,
+            _ => unreachable!("type checker validates array literal element types"),
+        };
+        element_type = match element_type {
+            None => Some(item_element),
+            Some(ArrayElementType::Float) if item_element == ArrayElementType::Int => {
+                Some(ArrayElementType::Float)
+            }
+            Some(ArrayElementType::Int) if item_element == ArrayElementType::Float => {
+                Some(ArrayElementType::Float)
+            }
+            Some(expected) if expected == item_element => Some(expected),
+            _ => unreachable!("type checker validates homogeneous arrays"),
+        };
+    }
+    ScriptType::Array(element_type.unwrap_or(ArrayElementType::Float))
 }

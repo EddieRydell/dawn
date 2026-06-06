@@ -799,10 +799,20 @@ enum EffectParamCacheValue {
     Flags(Vec<String>),
     Color(ColorCacheKey),
     Curve(CurveCacheKey),
+    Array(Vec<EffectParamArrayValueCacheKey>),
     Marks {
         collection_key: String,
         local_seconds: Option<Vec<F64CacheKey>>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum EffectParamArrayValueCacheKey {
+    Integer(u64),
+    Float(F64CacheKey),
+    Boolean(bool),
+    Color(ColorCacheKey),
+    Curve(CurveCacheKey),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1674,6 +1684,7 @@ enum RuntimeValueCacheKey {
     Color(ColorCacheKey),
     Marks(Vec<F64CacheKey>),
     Curve(CurveCacheKey),
+    Array(Vec<RuntimeValueCacheKey>),
     Enum(String),
     Flags(Vec<String>),
     Fixture(usize),
@@ -2264,6 +2275,12 @@ fn effect_param_cache_value(
         EffectParam::Flags { value } => EffectParamCacheValue::Flags(value.values.clone()),
         EffectParam::Color { value } => EffectParamCacheValue::Color(color_cache_key(*value)),
         EffectParam::Curve { curve } => EffectParamCacheValue::Curve(curve_cache_key(curve)),
+        EffectParam::Array { values, .. } => EffectParamCacheValue::Array(
+            values
+                .iter()
+                .map(effect_param_array_value_cache_key)
+                .collect(),
+        ),
         EffectParam::Marks { key } => {
             let mut local_seconds = mark_collections
                 .iter()
@@ -2282,6 +2299,28 @@ fn effect_param_cache_value(
                 collection_key: key.clone(),
                 local_seconds,
             }
+        }
+    }
+}
+
+fn effect_param_array_value_cache_key(
+    value: &dawn_project::model::EffectParamArrayValue<Resolved>,
+) -> EffectParamArrayValueCacheKey {
+    match value {
+        dawn_project::model::EffectParamArrayValue::Integer(value) => {
+            EffectParamArrayValueCacheKey::Integer(*value)
+        }
+        dawn_project::model::EffectParamArrayValue::Float(value) => {
+            EffectParamArrayValueCacheKey::Float(F64CacheKey(*value))
+        }
+        dawn_project::model::EffectParamArrayValue::Boolean(value) => {
+            EffectParamArrayValueCacheKey::Boolean(*value)
+        }
+        dawn_project::model::EffectParamArrayValue::Color(value) => {
+            EffectParamArrayValueCacheKey::Color(color_cache_key(*value))
+        }
+        dawn_project::model::EffectParamArrayValue::Curve(curve) => {
+            EffectParamArrayValueCacheKey::Curve(curve_cache_key(curve))
         }
     }
 }
@@ -2332,6 +2371,9 @@ fn runtime_value_cache_key(value: &RuntimeValue) -> RuntimeValueCacheKey {
             RuntimeValueCacheKey::Marks(values.iter().copied().map(F64CacheKey).collect())
         }
         RuntimeValue::Curve(curve) => RuntimeValueCacheKey::Curve(curve_cache_key(curve)),
+        RuntimeValue::Array(array) => {
+            RuntimeValueCacheKey::Array(array.values.iter().map(runtime_value_cache_key).collect())
+        }
         RuntimeValue::Enum(value) => RuntimeValueCacheKey::Enum(value.clone()),
         RuntimeValue::Flags(value) => RuntimeValueCacheKey::Flags(value.values.clone()),
         RuntimeValue::Fixture(value) => RuntimeValueCacheKey::Fixture(value.index),
@@ -3057,6 +3099,18 @@ pub fn runtime_value_from_param(
         EffectParam::Flags { value } => Some(RuntimeValue::Flags(value.clone())),
         EffectParam::Color { value } => Some(RuntimeValue::Color(*value)),
         EffectParam::Curve { curve } => Some(RuntimeValue::Curve(curve.clone())),
+        EffectParam::Array {
+            element_type,
+            values,
+        } => Some(RuntimeValue::Array(
+            dawn_project::effect_script::RuntimeArrayValue {
+                element_type: *element_type,
+                values: values
+                    .iter()
+                    .map(runtime_value_from_array_param)
+                    .collect::<Option<Vec<_>>>()?,
+            },
+        )),
         EffectParam::Marks { key } => {
             let mut marks = mark_collections
                 .iter()
@@ -3067,6 +3121,28 @@ pub fn runtime_value_from_param(
                 .collect::<Vec<_>>();
             marks.sort_by(f64::total_cmp);
             Some(RuntimeValue::Marks(marks))
+        }
+    }
+}
+
+fn runtime_value_from_array_param(
+    value: &dawn_project::model::EffectParamArrayValue<Resolved>,
+) -> Option<RuntimeValue> {
+    match value {
+        dawn_project::model::EffectParamArrayValue::Integer(value) => {
+            Some(RuntimeValue::Int(*value as i64))
+        }
+        dawn_project::model::EffectParamArrayValue::Float(value) => {
+            Some(RuntimeValue::Float(*value))
+        }
+        dawn_project::model::EffectParamArrayValue::Boolean(value) => {
+            Some(RuntimeValue::Bool(*value))
+        }
+        dawn_project::model::EffectParamArrayValue::Color(value) => {
+            Some(RuntimeValue::Color(*value))
+        }
+        dawn_project::model::EffectParamArrayValue::Curve(curve) => {
+            Some(RuntimeValue::Curve(curve.clone()))
         }
     }
 }

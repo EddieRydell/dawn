@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::model::ArrayElementType;
+
 use super::ast::{EffectAst, EffectEntrypoint, EmitEffectRef, EmitStmt, Expr, Stmt, UnaryOp};
 use super::builtins::{BuiltinConstant, BuiltinContext, BuiltinFunction};
 use super::{
@@ -39,7 +41,7 @@ struct TypeChecker<'a> {
     errors: Vec<ScriptDiagnostic>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Binding {
     value_type: ScriptType,
     mutable: bool,
@@ -196,7 +198,7 @@ impl<'a> TypeChecker<'a> {
         }
         for (label, expr) in [("start", &emit.start), ("duration", &emit.duration)] {
             let value_type = self.expr_type(expr);
-            if !is_float_compatible(value_type) {
+            if !is_float_compatible(&value_type) {
                 self.errors.push(ScriptDiagnostic {
                     range: None,
                     message: format!("emit {label} must be float"),
@@ -227,7 +229,7 @@ impl<'a> TypeChecker<'a> {
                 continue;
             };
             let actual = self.expr_type(&param.expr);
-            if !is_assignable(schema.value_type, actual) {
+            if !is_assignable(&schema.value_type, &actual) {
                 self.errors.push(ScriptDiagnostic {
                     range: None,
                     message: format!(
@@ -254,7 +256,7 @@ impl<'a> TypeChecker<'a> {
 
     fn check_let(&mut self, name: &str, value_type: ScriptType, expr: &Expr) {
         let actual = self.expr_type(expr);
-        if !is_assignable(value_type, actual) {
+        if !is_assignable(&value_type, &actual) {
             self.errors.push(ScriptDiagnostic {
                 range: None,
                 message: format!(
@@ -289,7 +291,7 @@ impl<'a> TypeChecker<'a> {
             });
             return;
         }
-        if !is_assignable(binding.value_type, actual) {
+        if !is_assignable(&binding.value_type, &actual) {
             self.errors.push(ScriptDiagnostic {
                 range: None,
                 message: format!(
@@ -306,6 +308,7 @@ impl<'a> TypeChecker<'a> {
             Expr::Int(_) => ScriptType::Int,
             Expr::Bool(_) => ScriptType::Bool,
             Expr::Color(_) => ScriptType::Color,
+            Expr::Array(items) => self.array_type(items),
             Expr::Ident(name) => self
                 .binding(name)
                 .map(|binding| binding.value_type)
@@ -319,7 +322,7 @@ impl<'a> TypeChecker<'a> {
             Expr::Unary { op, expr } => {
                 let inner = self.expr_type(expr);
                 match op {
-                    UnaryOp::Negate if is_float_compatible(inner) => inner,
+                    UnaryOp::Negate if is_float_compatible(&inner) => inner,
                     UnaryOp::Negate => {
                         self.errors.push(ScriptDiagnostic {
                             range: None,
@@ -340,7 +343,7 @@ impl<'a> TypeChecker<'a> {
             Expr::Binary { left, op, right } => {
                 let left = self.expr_type(left);
                 let right = self.expr_type(right);
-                match binary_result_type(left, *op, right) {
+                match binary_result_type(&left, *op, &right) {
                     Some(value_type) => value_type,
                     None => {
                         self.errors.push(ScriptDiagnostic {
@@ -352,6 +355,8 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Expr::Call { name, args } => self.call_type(name, args),
+            Expr::CallValue { callee, args } => self.call_value_type(callee, args),
+            Expr::Index { array, index } => self.index_type(array, index),
             Expr::Member { object, member } => self.member_type(object, member),
             Expr::Qualified { alias, name } => {
                 if self
@@ -367,6 +372,63 @@ impl<'a> TypeChecker<'a> {
                     });
                     ScriptType::Void
                 }
+            }
+        }
+    }
+
+    fn array_type(&mut self, items: &[Expr]) -> ScriptType {
+        let mut element_type = None;
+        for item in items {
+            let item_type = self.expr_type(item);
+            let Some(item_element) = array_element_type_for_script_type(&item_type) else {
+                self.errors.push(ScriptDiagnostic {
+                    range: None,
+                    message: format!("array literal cannot contain {item_type} values"),
+                });
+                return ScriptType::Void;
+            };
+            element_type = match element_type {
+                None => Some(item_element),
+                Some(ArrayElementType::Float) if item_element == ArrayElementType::Int => {
+                    Some(ArrayElementType::Float)
+                }
+                Some(ArrayElementType::Int) if item_element == ArrayElementType::Float => {
+                    Some(ArrayElementType::Float)
+                }
+                Some(expected) if expected == item_element => Some(expected),
+                Some(expected) => {
+                    self.errors.push(ScriptDiagnostic {
+                        range: None,
+                        message: format!(
+                            "array literal elements must all be {}, but found {}",
+                            array_element_label(expected),
+                            item_type
+                        ),
+                    });
+                    return ScriptType::Void;
+                }
+            };
+        }
+        ScriptType::Array(element_type.unwrap_or(ArrayElementType::Float))
+    }
+
+    fn index_type(&mut self, array: &Expr, index: &Expr) -> ScriptType {
+        let array_type = self.expr_type(array);
+        let index_type = self.expr_type(index);
+        if index_type != ScriptType::Int {
+            self.errors.push(ScriptDiagnostic {
+                range: None,
+                message: format!("array index must be int, but found {index_type}"),
+            });
+        }
+        match array_type {
+            ScriptType::Array(element_type) => script_type_for_array_element(element_type),
+            other => {
+                self.errors.push(ScriptDiagnostic {
+                    range: None,
+                    message: format!("cannot index {other}"),
+                });
+                ScriptType::Void
             }
         }
     }
@@ -400,7 +462,7 @@ impl<'a> TypeChecker<'a> {
             return match param_type {
                 ScriptType::CurveFloat | ScriptType::CurveColor => {
                     let arg_type = self.expr_type(arg);
-                    if !is_float_compatible(arg_type) {
+                    if !is_float_compatible(&arg_type) {
                         self.errors.push(ScriptDiagnostic {
                             range: None,
                             message: format!("curve parameter `{name}` expects a float argument"),
@@ -440,11 +502,45 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    fn call_value_type(&mut self, callee: &Expr, args: &[Expr]) -> ScriptType {
+        let callee_type = self.expr_type(callee);
+        let [arg] = args else {
+            self.errors.push(ScriptDiagnostic {
+                range: None,
+                message: "curve value calls expect one argument".to_string(),
+            });
+            return ScriptType::Void;
+        };
+        match callee_type {
+            ScriptType::CurveFloat | ScriptType::CurveColor => {
+                let arg_type = self.expr_type(arg);
+                if !is_float_compatible(&arg_type) {
+                    self.errors.push(ScriptDiagnostic {
+                        range: None,
+                        message: "curve value calls expect a float argument".to_string(),
+                    });
+                }
+                match callee_type {
+                    ScriptType::CurveFloat => ScriptType::Float,
+                    ScriptType::CurveColor => ScriptType::Color,
+                    _ => unreachable!(),
+                }
+            }
+            other => {
+                self.errors.push(ScriptDiagnostic {
+                    range: None,
+                    message: format!("`{other}` is not callable"),
+                });
+                ScriptType::Void
+            }
+        }
+    }
+
     fn binding(&self, name: &str) -> Option<Binding> {
         self.scopes
             .iter()
             .rev()
-            .find_map(|scope| scope.get(name).copied())
+            .find_map(|scope| scope.get(name).cloned())
     }
 
     fn push_scope(&mut self) {
@@ -480,5 +576,39 @@ fn readonly(value_type: ScriptType) -> Binding {
     Binding {
         value_type,
         mutable: false,
+    }
+}
+
+fn array_element_type_for_script_type(value_type: &ScriptType) -> Option<ArrayElementType> {
+    match value_type {
+        ScriptType::Int => Some(ArrayElementType::Int),
+        ScriptType::Float => Some(ArrayElementType::Float),
+        ScriptType::Bool => Some(ArrayElementType::Bool),
+        ScriptType::Color => Some(ArrayElementType::Color),
+        ScriptType::CurveFloat => Some(ArrayElementType::CurveFloat),
+        ScriptType::CurveColor => Some(ArrayElementType::CurveColor),
+        _ => None,
+    }
+}
+
+fn script_type_for_array_element(element_type: ArrayElementType) -> ScriptType {
+    match element_type {
+        ArrayElementType::Int => ScriptType::Int,
+        ArrayElementType::Float => ScriptType::Float,
+        ArrayElementType::Bool => ScriptType::Bool,
+        ArrayElementType::Color => ScriptType::Color,
+        ArrayElementType::CurveFloat => ScriptType::CurveFloat,
+        ArrayElementType::CurveColor => ScriptType::CurveColor,
+    }
+}
+
+fn array_element_label(element_type: ArrayElementType) -> &'static str {
+    match element_type {
+        ArrayElementType::Int => "int",
+        ArrayElementType::Float => "float",
+        ArrayElementType::Bool => "bool",
+        ArrayElementType::Color => "color",
+        ArrayElementType::CurveFloat => "curve<float>",
+        ArrayElementType::CurveColor => "curve<color>",
     }
 }

@@ -5,7 +5,7 @@ use super::bytecode::{
     MarkSearchInstruction, RefSlot, UnaryFloatInstruction, ValueSlot,
 };
 use super::params::{EffectSampleScratch, PreparedEffectParams, RefValue};
-use super::{FixtureContext, PixelContext, RuntimeError, RuntimeValue};
+use super::{FixtureContext, PixelContext, RuntimeError, RuntimeValue, ScriptType};
 
 const MAX_LOOP_ITERATIONS: usize = 4096;
 const INITIAL_RNG: u64 = 0x9e37_79b9_7f4a_7c15;
@@ -89,6 +89,18 @@ impl<'a> BytecodeVm<'a, '_> {
                         self.write_runtime(dest, &self.params.values[index])?;
                     }
                 }
+                Instruction::BuildArray(dest, element_type, values_index) => {
+                    let values = self.program.array_values[values_index]
+                        .iter()
+                        .map(|slot| self.runtime_from_slot(*slot))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    self.scratch.refs[dest.0] = RefValue::Local;
+                    self.scratch.ref_values[dest.0] =
+                        Some(RuntimeValue::Array(super::RuntimeArrayValue {
+                            element_type,
+                            values,
+                        }));
+                }
                 Instruction::Copy(dest, source) => self.copy(dest, source),
                 Instruction::IntToFloat(dest, source) => {
                     self.scratch.floats[dest.0] = self.scratch.ints[source.0] as f64;
@@ -171,6 +183,29 @@ impl<'a> BytecodeVm<'a, '_> {
                         .unwrap_or(fallback);
                     self.scratch.floats[dest.0] = value;
                 }
+                Instruction::ArrayLen(dest, array) => {
+                    self.scratch.ints[dest.0] = self.array(array)?.values.len() as i64;
+                }
+                Instruction::ArrayIndex(dest, array, index) => {
+                    let value = {
+                        let array = self.array(array)?;
+                        let index = self.scratch.ints[index.0];
+                        let index = usize::try_from(index)
+                            .map_err(|_| self.error("array index must not be negative"))?;
+                        array
+                            .values
+                            .get(index)
+                            .cloned()
+                            .ok_or_else(|| self.error("array index is out of range"))?
+                    };
+                    if matches!(dest, ValueSlot::Ref(_, _)) {
+                        let slot = dest.reference();
+                        self.scratch.refs[slot.0] = RefValue::Local;
+                        self.scratch.ref_values[slot.0] = Some(value);
+                    } else {
+                        self.write_runtime(dest, &value)?;
+                    }
+                }
                 Instruction::MarkSearch(dest, search, marks, time, fallback) => {
                     let marks = self.marks(marks)?;
                     let time = self.scratch.floats[time.0];
@@ -247,6 +282,14 @@ impl<'a> BytecodeVm<'a, '_> {
                     self.scratch.colors[dest.0] =
                         self.color_curve_param(index, self.scratch.floats[amount.0])?;
                 }
+                Instruction::CallFloatCurveRef(dest, curve, amount) => {
+                    self.scratch.floats[dest.0] =
+                        self.float_curve_ref(curve, self.scratch.floats[amount.0])?;
+                }
+                Instruction::CallColorCurveRef(dest, curve, amount) => {
+                    self.scratch.colors[dest.0] =
+                        self.color_curve_ref(curve, self.scratch.floats[amount.0])?;
+                }
                 Instruction::CurveFloatClamped(dest, index, amount, min, max) => {
                     let value = self.float_curve_param(index, self.scratch.floats[amount.0])?;
                     self.scratch.floats[dest.0] =
@@ -267,11 +310,7 @@ impl<'a> BytecodeVm<'a, '_> {
         Err(self.error("sample did not return"))
     }
 
-    fn write_runtime(
-        &mut self,
-        dest: ValueSlot,
-        value: &'a RuntimeValue,
-    ) -> Result<(), RuntimeError> {
+    fn write_runtime(&mut self, dest: ValueSlot, value: &RuntimeValue) -> Result<(), RuntimeError> {
         match (dest, value) {
             (ValueSlot::Float(slot), RuntimeValue::Float(value)) => {
                 self.scratch.floats[slot.0] = *value
@@ -299,6 +338,7 @@ impl<'a> BytecodeVm<'a, '_> {
 
     fn write_ref_source(&mut self, slot: RefSlot, value: RefValue) {
         self.scratch.refs[slot.0] = value;
+        self.scratch.ref_values[slot.0] = None;
     }
 
     fn write_context(&mut self, dest: ValueSlot, slot: ContextSlot) {
@@ -334,7 +374,8 @@ impl<'a> BytecodeVm<'a, '_> {
                 self.scratch.colors[dest.0] = self.scratch.colors[source.0]
             }
             (ValueSlot::Ref(dest, _), ValueSlot::Ref(source, _)) => {
-                self.scratch.refs[dest.0] = self.scratch.refs[source.0]
+                self.scratch.refs[dest.0] = self.scratch.refs[source.0];
+                self.scratch.ref_values[dest.0] = self.scratch.ref_values[source.0].clone();
             }
             (ValueSlot::Fixture(dest), ValueSlot::Fixture(source)) => {
                 self.scratch.fixtures[dest.0] = self.scratch.fixtures[source.0]
@@ -393,6 +434,18 @@ impl<'a> BytecodeVm<'a, '_> {
                     dest,
                     self.int(left)
                         .checked_div(right)
+                        .ok_or_else(|| self.error("integer overflow"))?,
+                );
+            }
+            BinaryInstruction::IntModulo => {
+                let right = self.int(right);
+                if right == 0 {
+                    return Err(self.error("integer modulo by zero"));
+                }
+                self.write_int_dest(
+                    dest,
+                    self.int(left)
+                        .checked_rem(right)
                         .ok_or_else(|| self.error("integer overflow"))?,
                 );
             }
@@ -486,12 +539,25 @@ impl<'a> BytecodeVm<'a, '_> {
         self.scratch.colors[slot.color().0]
     }
 
+    fn runtime_from_slot(&self, slot: ValueSlot) -> Result<RuntimeValue, RuntimeError> {
+        Ok(match slot {
+            ValueSlot::Float(slot) => RuntimeValue::Float(self.scratch.floats[slot.0]),
+            ValueSlot::Int(slot) => RuntimeValue::Int(self.scratch.ints[slot.0]),
+            ValueSlot::Bool(slot) => RuntimeValue::Bool(self.scratch.bools[slot.0]),
+            ValueSlot::Color(slot) => RuntimeValue::Color(self.scratch.colors[slot.0]),
+            ValueSlot::Ref(slot, value_type) => match value_type {
+                ScriptType::CurveFloat | ScriptType::CurveColor => {
+                    RuntimeValue::Curve(self.curve(slot)?.clone())
+                }
+                ScriptType::Array(_) => RuntimeValue::Array(self.array(slot)?.clone()),
+                other => return Err(self.error(&format!("cannot store {other} in array"))),
+            },
+            _ => return Err(self.error("cannot store context value in array")),
+        })
+    }
+
     fn marks(&self, slot: RefSlot) -> Result<&[f64], RuntimeError> {
-        let value = match self.scratch.refs[slot.0] {
-            RefValue::Param(index) => &self.params.values[index],
-            RefValue::Constant(index) => &self.program.constants[index],
-            RefValue::Unset => return Err(self.error("expected marks value")),
-        };
+        let value = self.ref_value(slot, "expected marks value")?;
         match value {
             RuntimeValue::Marks(value) => Ok(value),
             _ => Err(self.error("expected marks value")),
@@ -499,21 +565,36 @@ impl<'a> BytecodeVm<'a, '_> {
     }
 
     fn curve(&self, slot: RefSlot) -> Result<&Curve, RuntimeError> {
-        let value = match self.scratch.refs[slot.0] {
-            RefValue::Param(index) => &self.params.values[index],
-            RefValue::Constant(index) => &self.program.constants[index],
-            RefValue::Unset => return Err(self.error("expected curve value")),
-        };
+        let value = self.ref_value(slot, "expected curve value")?;
         match value {
             RuntimeValue::Curve(value) => Ok(value),
             _ => Err(self.error("expected curve value")),
         }
     }
 
+    fn array(&self, slot: RefSlot) -> Result<&super::RuntimeArrayValue, RuntimeError> {
+        let value = self.ref_value(slot, "expected array value")?;
+        match value {
+            RuntimeValue::Array(value) => Ok(value),
+            _ => Err(self.error("expected array value")),
+        }
+    }
+
+    fn ref_value(&self, slot: RefSlot, unset_message: &str) -> Result<&RuntimeValue, RuntimeError> {
+        match self.scratch.refs[slot.0] {
+            RefValue::Param(index) => Ok(&self.params.values[index]),
+            RefValue::Constant(index) => Ok(&self.program.constants[index]),
+            RefValue::Local => self.scratch.ref_values[slot.0]
+                .as_ref()
+                .ok_or_else(|| self.error(unset_message)),
+            RefValue::Unset => Err(self.error(unset_message)),
+        }
+    }
+
     fn curve_crossing(&self, slot: RefSlot, value: f64) -> Option<f64> {
         match self.scratch.refs[slot.0] {
             RefValue::Param(index) => self.curve_param_crossing(index, value),
-            RefValue::Constant(_) | RefValue::Unset => self
+            RefValue::Constant(_) | RefValue::Local | RefValue::Unset => self
                 .curve(slot)
                 .ok()
                 .and_then(|curve| curve_crossing(curve, value)),
@@ -539,6 +620,14 @@ impl<'a> BytecodeVm<'a, '_> {
         }
     }
 
+    fn float_curve_ref(&self, slot: RefSlot, amount: f64) -> Result<f64, RuntimeError> {
+        match self.curve(slot)?.evaluate(amount) {
+            Some(CurveValue::Float(value)) => Ok(value),
+            Some(CurveValue::Color(_)) => Err(self.error("expected float curve value")),
+            None => Err(self.error("curve has no points")),
+        }
+    }
+
     fn color_curve_param(&self, index: usize, amount: f64) -> Result<Color, RuntimeError> {
         let RuntimeValue::Curve(curve) = &self.params.values[index] else {
             return Err(self.error("expected curve parameter"));
@@ -550,13 +639,17 @@ impl<'a> BytecodeVm<'a, '_> {
         }
     }
 
+    fn color_curve_ref(&self, slot: RefSlot, amount: f64) -> Result<Color, RuntimeError> {
+        match self.curve(slot)?.evaluate(amount) {
+            Some(CurveValue::Color(value)) => Ok(value),
+            Some(CurveValue::Float(_)) => Err(self.error("expected color curve value")),
+            None => Err(self.error("curve has no points")),
+        }
+    }
+
     fn enum_value(&self, slot: ValueSlot) -> Result<&str, RuntimeError> {
         let slot = slot.reference();
-        let value = match self.scratch.refs[slot.0] {
-            RefValue::Param(index) => &self.params.values[index],
-            RefValue::Constant(index) => &self.program.constants[index],
-            RefValue::Unset => return Err(self.error("expected enum value")),
-        };
+        let value = self.ref_value(slot, "expected enum value")?;
         match value {
             RuntimeValue::Enum(value) => Ok(value),
             _ => Err(self.error("expected enum value")),

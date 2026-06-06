@@ -3,7 +3,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Color, Curve, EffectParam, Flags};
+use crate::model::{ArrayElementType, Color, Curve, EffectParam, EffectParamArrayValue, Flags};
 
 mod ast;
 mod builtins;
@@ -188,6 +188,7 @@ pub enum ScriptType {
     Marks,
     CurveFloat,
     CurveColor,
+    Array(ArrayElementType),
     Enum,
     Flags,
     Fixture,
@@ -201,7 +202,7 @@ pub enum ScriptType {
 
 impl ScriptType {
     pub fn matches_param(self, param: &EffectParam<crate::model::Resolved>) -> bool {
-        match (self, param) {
+        match (&self, param) {
             (Self::Float, EffectParam::Float { .. }) => true,
             (Self::Int, EffectParam::Integer { .. }) => true,
             (Self::Bool, EffectParam::Boolean { .. }) => true,
@@ -215,28 +216,61 @@ impl ScriptType {
             (Self::CurveColor, EffectParam::Curve { curve }) => {
                 curve.value_type == crate::model::CurveValueType::Color
             }
+            (
+                Self::Array(expected),
+                EffectParam::Array {
+                    element_type,
+                    values,
+                },
+            ) => {
+                *expected == *element_type
+                    && values
+                        .iter()
+                        .all(|value| array_param_value_matches(*expected, value))
+            }
             _ => false,
         }
     }
 }
 
-fn is_float_compatible(value_type: ScriptType) -> bool {
+fn array_param_value_matches(
+    expected: ArrayElementType,
+    value: &EffectParamArrayValue<crate::model::Resolved>,
+) -> bool {
+    match (expected, value) {
+        (ArrayElementType::Int, EffectParamArrayValue::Integer(_)) => true,
+        (ArrayElementType::Float, EffectParamArrayValue::Float(_))
+        | (ArrayElementType::Float, EffectParamArrayValue::Integer(_)) => true,
+        (ArrayElementType::Bool, EffectParamArrayValue::Boolean(_)) => true,
+        (ArrayElementType::Color, EffectParamArrayValue::Color(_)) => true,
+        (ArrayElementType::CurveFloat, EffectParamArrayValue::Curve(curve)) => {
+            curve.value_type == crate::model::CurveValueType::Float
+        }
+        (ArrayElementType::CurveColor, EffectParamArrayValue::Curve(curve)) => {
+            curve.value_type == crate::model::CurveValueType::Color
+        }
+        _ => false,
+    }
+}
+
+fn is_float_compatible(value_type: &ScriptType) -> bool {
     matches!(value_type, ScriptType::Float | ScriptType::Int)
 }
 
-fn is_assignable(expected: ScriptType, actual: ScriptType) -> bool {
-    expected == actual || (expected == ScriptType::Float && actual == ScriptType::Int)
+fn is_assignable(expected: &ScriptType, actual: &ScriptType) -> bool {
+    expected == actual || (*expected == ScriptType::Float && *actual == ScriptType::Int)
 }
 
-fn binary_result_type(left: ScriptType, op: BinaryOp, right: ScriptType) -> Option<ScriptType> {
+fn binary_result_type(left: &ScriptType, op: BinaryOp, right: &ScriptType) -> Option<ScriptType> {
     if matches!(op, BinaryOp::LogicalAnd | BinaryOp::LogicalOr) {
-        return (left == ScriptType::Bool && right == ScriptType::Bool).then_some(ScriptType::Bool);
+        return (*left == ScriptType::Bool && *right == ScriptType::Bool)
+            .then_some(ScriptType::Bool);
     }
 
     if matches!(op, BinaryOp::Equal | BinaryOp::NotEqual) {
         return ((is_float_compatible(left) && is_float_compatible(right))
-            || (left == ScriptType::Bool && right == ScriptType::Bool)
-            || (left == ScriptType::Enum && right == ScriptType::Enum))
+            || (*left == ScriptType::Bool && *right == ScriptType::Bool)
+            || (*left == ScriptType::Enum && *right == ScriptType::Enum))
             .then_some(ScriptType::Bool);
     }
 
@@ -275,6 +309,7 @@ fn binary_result_type(left: ScriptType, op: BinaryOp, right: ScriptType) -> Opti
         {
             Some(ScriptType::Color)
         }
+        (ScriptType::Int, BinaryOp::Modulo, ScriptType::Int) => Some(ScriptType::Int),
         _ => None,
     }
 }
@@ -289,6 +324,13 @@ impl fmt::Display for ScriptType {
             Self::Marks => "marks",
             Self::CurveFloat => "curve<float>",
             Self::CurveColor => "curve<color>",
+            Self::Array(element_type) => {
+                return write!(
+                    formatter,
+                    "array<{}>",
+                    array_element_type_label(*element_type)
+                )
+            }
             Self::Enum => "enum",
             Self::Flags => "flags",
             Self::Fixture => "Fixture",
@@ -302,6 +344,17 @@ impl fmt::Display for ScriptType {
     }
 }
 
+fn array_element_type_label(element_type: ArrayElementType) -> &'static str {
+    match element_type {
+        ArrayElementType::Int => "int",
+        ArrayElementType::Float => "float",
+        ArrayElementType::Bool => "bool",
+        ArrayElementType::Color => "color",
+        ArrayElementType::CurveFloat => "curve<float>",
+        ArrayElementType::CurveColor => "curve<color>",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeValue {
     Float(f64),
@@ -310,6 +363,7 @@ pub enum RuntimeValue {
     Color(Color),
     Marks(Vec<f64>),
     Curve(Curve),
+    Array(RuntimeArrayValue),
     Enum(String),
     Flags(Flags),
     Fixture(FixtureContext),
@@ -317,6 +371,12 @@ pub enum RuntimeValue {
     Target(GeneratorTarget),
     TargetItems(Vec<GeneratorTargetItem>),
     TargetItem(GeneratorTargetItem),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuntimeArrayValue {
+    pub element_type: ArrayElementType,
+    pub values: Vec<RuntimeValue>,
 }
 
 impl RuntimeValue {
@@ -331,6 +391,7 @@ impl RuntimeValue {
                 crate::model::CurveValueType::Float => ScriptType::CurveFloat,
                 crate::model::CurveValueType::Color => ScriptType::CurveColor,
             },
+            Self::Array(value) => ScriptType::Array(value.element_type),
             Self::Enum(_) => ScriptType::Enum,
             Self::Flags(_) => ScriptType::Flags,
             Self::Fixture(_) => ScriptType::Fixture,

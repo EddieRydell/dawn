@@ -1641,6 +1641,17 @@ pub enum CurveValueType {
     Color,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArrayElementType {
+    Int,
+    Float,
+    Bool,
+    Color,
+    CurveFloat,
+    CurveColor,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum CurveValue {
     Float(f64),
@@ -1809,9 +1820,27 @@ pub enum EffectParam<M: ModelMode = Authored> {
     Curve {
         curve: M::EffectParamCurve,
     },
+    Array {
+        element_type: ArrayElementType,
+        values: Vec<EffectParamArrayValue<M>>,
+    },
     Marks {
         key: String,
     },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+#[serde(bound(
+    serialize = "M::EffectParamCurve: Serialize",
+    deserialize = "M::EffectParamCurve: Deserialize<'de>"
+))]
+pub enum EffectParamArrayValue<M: ModelMode = Authored> {
+    Integer(u64),
+    Float(f64),
+    Boolean(bool),
+    Color(Color),
+    Curve(M::EffectParamCurve),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -69,6 +69,7 @@ pub(super) enum BuiltinFunction {
     Pixels,
     Sections,
     Count,
+    Len,
     Pick,
     CurveCrossing,
     MarkCount,
@@ -106,6 +107,7 @@ impl BuiltinFunction {
             "pixels" => Self::Pixels,
             "sections" => Self::Sections,
             "count" => Self::Count,
+            "len" => Self::Len,
             "pick" => Self::Pick,
             "curve_crossing" => Self::CurveCrossing,
             "mark_count" => Self::MarkCount,
@@ -139,24 +141,24 @@ impl BuiltinFunction {
     ) -> Option<ScriptType> {
         match (self, args) {
             (Self::Floor, [value])
-                if kind == EffectScriptKind::Generator && is_float_compatible(*value) =>
+                if kind == EffectScriptKind::Generator && is_float_compatible(value) =>
             {
                 Some(ScriptType::Int)
             }
             (Self::Sin | Self::Cos | Self::Abs | Self::Floor | Self::Srand, [value])
-                if is_float_compatible(*value) =>
+                if is_float_compatible(value) =>
             {
                 Some(ScriptType::Float)
             }
             (Self::Rand, []) => Some(ScriptType::Float),
             (Self::Rand, [seed, ScriptType::Int])
-                if kind == EffectScriptKind::Generator && is_float_compatible(*seed) =>
+                if kind == EffectScriptKind::Generator && is_float_compatible(seed) =>
             {
                 Some(ScriptType::Float)
             }
             (Self::PixelIndex | Self::PixelCount, [ScriptType::Pixel]) => Some(ScriptType::Int),
             (Self::PixelPosition, [ScriptType::Pixel]) => Some(ScriptType::Float),
-            (Self::SectionPosition, [ScriptType::Pixel, width]) if is_float_compatible(*width) => {
+            (Self::SectionPosition, [ScriptType::Pixel, width]) if is_float_compatible(width) => {
                 Some(ScriptType::Float)
             }
             (Self::Fixtures | Self::Pixels, [ScriptType::Target])
@@ -172,19 +174,20 @@ impl BuiltinFunction {
             (Self::Count, [ScriptType::TargetItems]) if kind == EffectScriptKind::Generator => {
                 Some(ScriptType::Int)
             }
+            (Self::Len, [ScriptType::Array(_)]) => Some(ScriptType::Int),
             (Self::Pick, [ScriptType::TargetItems, ScriptType::Int])
                 if kind == EffectScriptKind::Generator =>
             {
                 Some(ScriptType::TargetItem)
             }
             (Self::CurveCrossing, [ScriptType::CurveFloat, value, fallback])
-                if is_float_compatible(*value) && is_float_compatible(*fallback) =>
+                if is_float_compatible(value) && is_float_compatible(fallback) =>
             {
                 Some(ScriptType::Float)
             }
             (Self::MarkCount, [ScriptType::Marks]) => Some(ScriptType::Int),
             (Self::MarkAt, [ScriptType::Marks, ScriptType::Int, fallback])
-                if is_float_compatible(*fallback) =>
+                if is_float_compatible(fallback) =>
             {
                 Some(ScriptType::Float)
             }
@@ -195,42 +198,42 @@ impl BuiltinFunction {
                 | Self::MarkPhase
                 | Self::MarkElapsed,
                 [ScriptType::Marks, time, fallback],
-            ) if is_float_compatible(*time) && is_float_compatible(*fallback) => {
+            ) if is_float_compatible(time) && is_float_compatible(fallback) => {
                 Some(ScriptType::Float)
             }
             (Self::Min | Self::Max, [left, right])
-                if is_float_compatible(*left) && is_float_compatible(*right) =>
+                if is_float_compatible(left) && is_float_compatible(right) =>
             {
                 Some(ScriptType::Float)
             }
             (Self::Clamp | Self::Smoothstep | Self::Mix, [first, second, third])
-                if is_float_compatible(*first)
-                    && is_float_compatible(*second)
-                    && is_float_compatible(*third) =>
+                if is_float_compatible(first)
+                    && is_float_compatible(second)
+                    && is_float_compatible(third) =>
             {
                 Some(ScriptType::Float)
             }
             (Self::Rgb | Self::Hsv, [first, second, third])
-                if is_float_compatible(*first)
-                    && is_float_compatible(*second)
-                    && is_float_compatible(*third) =>
+                if is_float_compatible(first)
+                    && is_float_compatible(second)
+                    && is_float_compatible(third) =>
             {
                 Some(ScriptType::Color)
             }
             (Self::CurveFloatClamped, [ScriptType::CurveFloat, amount, min, max])
-                if is_float_compatible(*amount)
-                    && is_float_compatible(*min)
-                    && is_float_compatible(*max) =>
+                if is_float_compatible(amount)
+                    && is_float_compatible(min)
+                    && is_float_compatible(max) =>
             {
                 Some(ScriptType::Float)
             }
             (Self::CurveColorScaled, [ScriptType::CurveColor, amount, level])
-                if is_float_compatible(*amount) && is_float_compatible(*level) =>
+                if is_float_compatible(amount) && is_float_compatible(level) =>
             {
                 Some(ScriptType::Color)
             }
             (Self::Mix, [ScriptType::Color, ScriptType::Color, amount])
-                if is_float_compatible(*amount) =>
+                if is_float_compatible(amount) =>
             {
                 Some(ScriptType::Color)
             }

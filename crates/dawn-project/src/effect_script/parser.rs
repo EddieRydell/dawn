@@ -1,4 +1,4 @@
-use crate::model::{Color, Flags};
+use crate::model::{ArrayElementType, Color, Flags};
 
 use super::ast::{
     BinaryOp, EffectAst, EffectEntrypoint, EffectImport, EffectModuleAst, EffectVisibility,
@@ -512,6 +512,8 @@ impl Parser<'_> {
                 BinaryOp::Multiply
             } else if self.consume_symbol('/') {
                 BinaryOp::Divide
+            } else if self.consume_symbol('%') {
+                BinaryOp::Modulo
             } else {
                 break;
             };
@@ -559,49 +561,72 @@ impl Parser<'_> {
                 .map_err(|message| self.error_at(&token, &message)),
             TokenKind::Ident(name) if name == "true" => Ok(Expr::Bool(true)),
             TokenKind::Ident(name) if name == "false" => Ok(Expr::Bool(false)),
-            TokenKind::Ident(name) => {
-                if self.consume_symbol('(') {
-                    let mut args = Vec::new();
-                    if !self.at_symbol(')') {
-                        loop {
-                            args.push(self.expr()?);
-                            if !self.consume_symbol(',') {
-                                break;
-                            }
-                        }
-                    }
-                    self.symbol(')')?;
-                    Ok(Expr::Call {
-                        name: name.clone(),
-                        args,
-                    })
-                } else {
-                    Ok(Expr::Ident(name.clone()))
-                }
-            }
+            TokenKind::Ident(name) => Ok(Expr::Ident(name.clone())),
             TokenKind::Symbol('(') => {
                 let expr = self.expr()?;
                 self.symbol(')')?;
                 Ok(expr)
             }
-            _ => Err(self.error_at(&token, "expected expression")),
-        }?;
-        while self.consume_symbol('.') {
-            let member = self.identifier("member name")?;
-            expr = match expr {
-                Expr::Ident(alias)
-                    if alias != "item" && alias != "target" && alias != "timeline" =>
-                {
-                    Expr::Qualified {
-                        alias,
-                        name: member,
+            TokenKind::Symbol('[') => {
+                let mut items = Vec::new();
+                if !self.at_symbol(']') {
+                    loop {
+                        items.push(self.expr()?);
+                        if !self.consume_symbol(',') {
+                            break;
+                        }
                     }
                 }
-                _ => Expr::Member {
-                    object: Box::new(expr),
-                    member,
-                },
-            };
+                self.symbol(']')?;
+                Ok(Expr::Array(items))
+            }
+            _ => Err(self.error_at(&token, "expected expression")),
+        }?;
+        loop {
+            if self.consume_symbol('.') {
+                let member = self.identifier("member name")?;
+                expr = match expr {
+                    Expr::Ident(alias)
+                        if alias != "item" && alias != "target" && alias != "timeline" =>
+                    {
+                        Expr::Qualified {
+                            alias,
+                            name: member,
+                        }
+                    }
+                    _ => Expr::Member {
+                        object: Box::new(expr),
+                        member,
+                    },
+                };
+            } else if self.consume_symbol('[') {
+                let index = self.expr()?;
+                self.symbol(']')?;
+                expr = Expr::Index {
+                    array: Box::new(expr),
+                    index: Box::new(index),
+                };
+            } else if self.consume_symbol('(') {
+                let mut args = Vec::new();
+                if !self.at_symbol(')') {
+                    loop {
+                        args.push(self.expr()?);
+                        if !self.consume_symbol(',') {
+                            break;
+                        }
+                    }
+                }
+                self.symbol(')')?;
+                expr = match expr {
+                    Expr::Ident(name) => Expr::Call { name, args },
+                    _ => Expr::CallValue {
+                        callee: Box::new(expr),
+                        args,
+                    },
+                };
+            } else {
+                break;
+            }
         }
         Ok(expr)
     }
@@ -633,8 +658,8 @@ impl Parser<'_> {
         }
         let expr = self.expr()?;
         let value = params::eval_constant(&expr)?;
-        if is_assignable(value_type, value.value_type()) {
-            params::coerce_value(value, value_type).map_err(|error| ScriptDiagnostic {
+        if is_assignable(&value_type, &value.value_type()) {
+            params::coerce_value(value, &value_type).map_err(|error| ScriptDiagnostic {
                 range: None,
                 message: error.message,
             })
@@ -709,7 +734,36 @@ impl Parser<'_> {
                     _ => Err(self.error_here("curve value type must be float or color")),
                 }
             }
+            "array" => {
+                self.symbol('<')?;
+                let element_type = self.array_element_type()?;
+                self.symbol('>')?;
+                Ok(ScriptType::Array(element_type))
+            }
             _ => Err(self.error_here(&format!("unknown type `{name}`"))),
+        }
+    }
+
+    fn array_element_type(&mut self) -> Result<ArrayElementType, ScriptDiagnostic> {
+        let name = self.identifier("array element type")?;
+        match name.as_str() {
+            "int" => Ok(ArrayElementType::Int),
+            "float" => Ok(ArrayElementType::Float),
+            "bool" => Ok(ArrayElementType::Bool),
+            "color" => Ok(ArrayElementType::Color),
+            "curve" => {
+                self.symbol('<')?;
+                let inner = self.identifier("curve value type")?;
+                self.symbol('>')?;
+                match inner.as_str() {
+                    "float" => Ok(ArrayElementType::CurveFloat),
+                    "color" => Ok(ArrayElementType::CurveColor),
+                    _ => Err(self.error_here("array curve element type must be float or color")),
+                }
+            }
+            _ => Err(self.error_here(
+                "array element type must be int, float, bool, color, curve<float>, or curve<color>",
+            )),
         }
     }
 
@@ -794,6 +848,7 @@ impl Parser<'_> {
                         | "Target"
                         | "TargetItems"
                         | "TargetItem"
+                        | "array"
                 ) =>
             {
                 true

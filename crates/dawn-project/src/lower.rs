@@ -526,7 +526,33 @@ fn lower_effect_param(
         EffectParam::Curve { curve } => EffectParam::Curve {
             curve: resolve_curve(curve, source_path, resolver)?,
         },
+        EffectParam::Array {
+            element_type,
+            values,
+        } => EffectParam::Array {
+            element_type: *element_type,
+            values: values
+                .iter()
+                .map(|value| lower_effect_param_array_value(value, source_path, resolver))
+                .collect::<Result<Vec<_>, _>>()?,
+        },
         EffectParam::Marks { key } => EffectParam::Marks { key: key.clone() },
+    })
+}
+
+fn lower_effect_param_array_value(
+    value: &EffectParamArrayValue<Authored>,
+    source_path: &Utf8PathBuf,
+    resolver: &mut impl SymbolResolver,
+) -> Result<EffectParamArrayValue<Resolved>, LowerError> {
+    Ok(match value {
+        EffectParamArrayValue::Integer(value) => EffectParamArrayValue::Integer(*value),
+        EffectParamArrayValue::Float(value) => EffectParamArrayValue::Float(*value),
+        EffectParamArrayValue::Boolean(value) => EffectParamArrayValue::Boolean(*value),
+        EffectParamArrayValue::Color(value) => EffectParamArrayValue::Color(*value),
+        EffectParamArrayValue::Curve(curve) => {
+            EffectParamArrayValue::Curve(resolve_curve(curve, source_path, resolver)?)
+        }
     })
 }
 

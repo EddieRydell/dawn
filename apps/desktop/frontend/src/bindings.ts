@@ -328,9 +328,9 @@ export type SequenceEffectParamDto = {
 	curveSource: SequenceEffectParamCurveSourceDto | null,
 };
 
-export type SequenceEffectParamKindDto = "int" | "float" | "bool" | "color" | "enum" | "flags" | "floatCurve" | "colorCurve" | "marks";
+export type SequenceEffectParamKindDto = "int" | "float" | "bool" | "color" | "enum" | "flags" | "floatCurve" | "colorCurve" | "intArray" | "floatArray" | "boolArray" | "colorArray" | "floatCurveArray" | "colorCurveArray" | "marks";
 
-export type SequenceEffectParamValueDto = { type: "int"; value: number } | { type: "float"; value: number } | { type: "bool"; value: boolean } | { type: "color"; value: string } | { type: "enum"; value: string } | { type: "flags"; value: string[] } | { type: "floatCurve"; points: FloatCurvePointDto[] } | { type: "colorCurve"; points: ColorCurvePointDto[] } | { type: "marks"; key: string };
+export type SequenceEffectParamValueDto = { type: "int"; value: number } | { type: "float"; value: number } | { type: "bool"; value: boolean } | { type: "color"; value: string } | { type: "enum"; value: string } | { type: "flags"; value: string[] } | { type: "floatCurve"; points: FloatCurvePointDto[] } | { type: "colorCurve"; points: ColorCurvePointDto[] } | { type: "intArray"; values: number[] } | { type: "floatArray"; values: number[] } | { type: "boolArray"; values: boolean[] } | { type: "colorArray"; values: string[] } | { type: "floatCurveArray"; values: FloatCurvePointDto[][] } | { type: "colorCurveArray"; values: ColorCurvePointDto[][] } | { type: "marks"; key: string };
 
 export type SequenceEffectPreviewDto = {
 	effectId: number,

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
-import { ChevronRight, FlipHorizontal2, FlipVertical2, Link2Off, Minus } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronRight, FlipHorizontal2, FlipVertical2, Link2Off, Minus, Plus, Trash2 } from "lucide-react";
 
 import { commands } from "../../../../api";
 
@@ -125,6 +125,18 @@ export function EffectParamInput({
           render={(props) => <ColorCurveParamShell name={param.name} {...props} />}
         />
       );
+    case "intArray":
+      return <NumberArrayParam name={param.name} values={param.value.values} step={1} commit={(values) => commit({ type: "intArray", values: values.map((value) => Math.max(0, Math.round(value))) })} />;
+    case "floatArray":
+      return <NumberArrayParam name={param.name} values={param.value.values} step={0.05} commit={(values) => commit({ type: "floatArray", values })} />;
+    case "boolArray":
+      return <BoolArrayParam name={param.name} values={param.value.values} commit={(values) => commit({ type: "boolArray", values })} />;
+    case "colorArray":
+      return <ColorArrayParam name={param.name} values={param.value.values} commit={(values) => commit({ type: "colorArray", values })} />;
+    case "floatCurveArray":
+      return <FloatCurveArrayParam name={param.name} values={param.value.values} commit={(values) => commit({ type: "floatCurveArray", values })} />;
+    case "colorCurveArray":
+      return <ColorCurveArrayParam name={param.name} values={param.value.values} commit={(values) => commit({ type: "colorCurveArray", values })} />;
     case "marks":
       return (
         <label>
@@ -137,6 +149,139 @@ export function EffectParamInput({
         </label>
       );
   }
+}
+
+function NumberArrayParam({ name, values, step, commit }: { name: string; values: number[]; step: number; commit: (values: number[]) => Promise<void> }) {
+  return (
+    <ArrayShell
+      name={name}
+      count={values.length}
+      add={() => void commit([...values, values[values.length - 1] ?? 0])}
+      remove={(index) => void commit(values.filter((_, itemIndex) => itemIndex !== index))}
+      move={(from, to) => void commit(moveArrayItem(values, from, to))}
+      rows={values.map((value, index) => (
+        <input
+          key={`${index}:${value}`}
+          type="number"
+          step={step}
+          defaultValue={value}
+          onBlur={(event) => {
+            const next = Number(event.currentTarget.value);
+            if (Number.isFinite(next)) void commit(replaceAt(values, index, next));
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+          }}
+        />
+      ))}
+    />
+  );
+}
+
+function BoolArrayParam({ name, values, commit }: { name: string; values: boolean[]; commit: (values: boolean[]) => Promise<void> }) {
+  return (
+    <ArrayShell
+      name={name}
+      count={values.length}
+      add={() => void commit([...values, false])}
+      remove={(index) => void commit(values.filter((_, itemIndex) => itemIndex !== index))}
+      move={(from, to) => void commit(moveArrayItem(values, from, to))}
+      rows={values.map((value, index) => (
+        <label key={`${index}:${String(value)}`} className="effect-param-check array-check-row">
+          <input type="checkbox" checked={value} onChange={(event) => void commit(replaceAt(values, index, event.currentTarget.checked))} />
+          <span>{value ? "true" : "false"}</span>
+        </label>
+      ))}
+    />
+  );
+}
+
+function ColorArrayParam({ name, values, commit }: { name: string; values: string[]; commit: (values: string[]) => Promise<void> }) {
+  return (
+    <ArrayShell
+      name={name}
+      count={values.length}
+      add={() => void commit([...values, values[values.length - 1] ?? CURVE_EDITOR.defaultColor])}
+      remove={(index) => void commit(values.filter((_, itemIndex) => itemIndex !== index))}
+      move={(from, to) => void commit(moveArrayItem(values, from, to))}
+      rows={values.map((value, index) => (
+        <ColorField key={`${index}:${value}`} label={`#${index + 1}`} value={value} commit={(next) => commit(replaceAt(values, index, next))} />
+      ))}
+    />
+  );
+}
+
+function FloatCurveArrayParam({ name, values, commit }: { name: string; values: FloatCurvePointDto[][]; commit: (values: FloatCurvePointDto[][]) => Promise<void> }) {
+  return (
+    <ArrayShell
+      name={name}
+      count={values.length}
+      add={() => void commit([...values, values[values.length - 1] ?? [{ time: 0, value: 0 }]])}
+      remove={(index) => void commit(values.filter((_, itemIndex) => itemIndex !== index))}
+      move={(from, to) => void commit(moveArrayItem(values, from, to))}
+      rows={values.map((points, index) => (
+        <FloatCurveParam key={`${index}:${curvePointsSignature(points)}`} name={`#${index + 1}`} points={normalizeFloatCurvePoints(points)} commit={(next) => commit(replaceAt(values, index, next))} />
+      ))}
+    />
+  );
+}
+
+function ColorCurveArrayParam({ name, values, commit }: { name: string; values: ColorCurvePointDto[][]; commit: (values: ColorCurvePointDto[][]) => Promise<void> }) {
+  return (
+    <ArrayShell
+      name={name}
+      count={values.length}
+      add={() => void commit([...values, values[values.length - 1] ?? [{ time: 0, value: CURVE_EDITOR.defaultColor }]])}
+      remove={(index) => void commit(values.filter((_, itemIndex) => itemIndex !== index))}
+      move={(from, to) => void commit(moveArrayItem(values, from, to))}
+      rows={values.map((points, index) => (
+        <ColorCurveParam key={`${index}:${curvePointsSignature(points)}`} name={`#${index + 1}`} points={normalizeColorCurvePoints(points)} commit={(next) => commit(replaceAt(values, index, next))} />
+      ))}
+    />
+  );
+}
+
+function ArrayShell({
+  name,
+  count,
+  rows,
+  add,
+  remove,
+  move
+}: {
+  name: string;
+  count: number;
+  rows: ReactNode[];
+  add: () => void;
+  remove: (index: number) => void;
+  move: (from: number, to: number) => void;
+}) {
+  return (
+    <div className="effect-param-group array-param-editor">
+      <div className="array-param-header">
+        <div className="effect-param-name">{name}</div>
+        <button type="button" className="neutral-button" title="Add item" onClick={add}>
+          <Plus size={14} />
+        </button>
+      </div>
+      {rows.map((row, index) => (
+        <div key={index} className="array-param-row">
+          <div className="array-param-row-main">{row}</div>
+          <div className="array-param-actions">
+            <button type="button" className="neutral-button" title="Move up" disabled={index === 0} onClick={() => { move(index, index - 1); }}>
+              <ArrowUp size={14} />
+            </button>
+            <button type="button" className="neutral-button" title="Move down" disabled={index >= count - 1} onClick={() => { move(index, index + 1); }}>
+              <ArrowDown size={14} />
+            </button>
+            <button type="button" className="neutral-button" title="Remove item" onClick={() => { remove(index); }}>
+              <Trash2 size={14} />
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function NumberParam({
@@ -946,6 +1091,15 @@ function ColorCurveParam({
 
 function replaceAt<T>(items: T[], index: number, value: T) {
   return items.map((item, itemIndex) => (itemIndex === index ? value : item));
+}
+
+function moveArrayItem<T>(items: T[], from: number, to: number) {
+  if (to < 0 || to >= items.length) return items;
+  const next = [...items];
+  const [item] = next.splice(from, 1);
+  if (item === undefined) return items;
+  next.splice(to, 0, item);
+  return next;
 }
 
 function sortCurvePoints<T extends { time: number }>(points: T[]) {

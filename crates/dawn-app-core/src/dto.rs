@@ -14,9 +14,9 @@ use dawn_project::effect_script::{
 };
 use dawn_project::fs::{WorkspaceEntry, WorkspaceEntryKind};
 use dawn_project::model::{
-    Authored, ColorModel, Curve, CurveValue, CurveValueType, Distance, EffectParam, Geometry,
-    InlineOrRef, LayoutTargetKind, ObjectKind, Point3, Rotation3, Scale3, SequenceEffectScope,
-    Transform,
+    ArrayElementType, Authored, ColorModel, Curve, CurveValue, CurveValueType, Distance,
+    EffectParam, EffectParamArrayValue, Geometry, InlineOrRef, LayoutTargetKind, ObjectKind,
+    Point3, Rotation3, Scale3, SequenceEffectScope, Transform,
 };
 use dawn_project::path::PathStringExt;
 use dawn_project::render::{
@@ -481,6 +481,12 @@ pub enum SequenceEffectParamKindDto {
     Flags,
     FloatCurve,
     ColorCurve,
+    IntArray,
+    FloatArray,
+    BoolArray,
+    ColorArray,
+    FloatCurveArray,
+    ColorCurveArray,
     Marks,
 }
 
@@ -491,15 +497,51 @@ pub enum SequenceEffectParamKindDto {
     rename_all_fields = "camelCase"
 )]
 pub enum SequenceEffectParamValueDto {
-    Int { value: u32 },
-    Float { value: f64 },
-    Bool { value: bool },
-    Color { value: String },
-    Enum { value: String },
-    Flags { value: Vec<String> },
-    FloatCurve { points: Vec<FloatCurvePointDto> },
-    ColorCurve { points: Vec<ColorCurvePointDto> },
-    Marks { key: String },
+    Int {
+        value: u32,
+    },
+    Float {
+        value: f64,
+    },
+    Bool {
+        value: bool,
+    },
+    Color {
+        value: String,
+    },
+    Enum {
+        value: String,
+    },
+    Flags {
+        value: Vec<String>,
+    },
+    FloatCurve {
+        points: Vec<FloatCurvePointDto>,
+    },
+    ColorCurve {
+        points: Vec<ColorCurvePointDto>,
+    },
+    IntArray {
+        values: Vec<u32>,
+    },
+    FloatArray {
+        values: Vec<f64>,
+    },
+    BoolArray {
+        values: Vec<bool>,
+    },
+    ColorArray {
+        values: Vec<String>,
+    },
+    FloatCurveArray {
+        values: Vec<Vec<FloatCurvePointDto>>,
+    },
+    ColorCurveArray {
+        values: Vec<Vec<ColorCurvePointDto>>,
+    },
+    Marks {
+        key: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -1337,6 +1379,16 @@ fn param_kind_from_script_type(value_type: ScriptType) -> Option<SequenceEffectP
         ScriptType::Flags => Some(SequenceEffectParamKindDto::Flags),
         ScriptType::CurveFloat => Some(SequenceEffectParamKindDto::FloatCurve),
         ScriptType::CurveColor => Some(SequenceEffectParamKindDto::ColorCurve),
+        ScriptType::Array(ArrayElementType::Int) => Some(SequenceEffectParamKindDto::IntArray),
+        ScriptType::Array(ArrayElementType::Float) => Some(SequenceEffectParamKindDto::FloatArray),
+        ScriptType::Array(ArrayElementType::Bool) => Some(SequenceEffectParamKindDto::BoolArray),
+        ScriptType::Array(ArrayElementType::Color) => Some(SequenceEffectParamKindDto::ColorArray),
+        ScriptType::Array(ArrayElementType::CurveFloat) => {
+            Some(SequenceEffectParamKindDto::FloatCurveArray)
+        }
+        ScriptType::Array(ArrayElementType::CurveColor) => {
+            Some(SequenceEffectParamKindDto::ColorCurveArray)
+        }
         ScriptType::Marks => Some(SequenceEffectParamKindDto::Marks),
         ScriptType::Fixture
         | ScriptType::Pixel
@@ -1400,6 +1452,9 @@ fn param_value_from_resolved(
         (ScriptType::Marks, EffectParam::Marks { key }) => {
             Some(SequenceEffectParamValueDto::Marks { key: key.clone() })
         }
+        (ScriptType::Array(element_type), EffectParam::Array { values, .. }) => {
+            array_param_value_from_resolved(element_type, values)
+        }
         _ => None,
     }
 }
@@ -1454,7 +1509,124 @@ fn param_value_from_authored(
         (ScriptType::Marks, EffectParam::Marks { key }) => {
             Some(SequenceEffectParamValueDto::Marks { key: key.clone() })
         }
+        (ScriptType::Array(element_type), EffectParam::Array { values, .. }) => {
+            array_param_value_from_authored(element_type, values)
+        }
         _ => None,
+    }
+}
+
+fn array_param_value_from_resolved(
+    element_type: ArrayElementType,
+    values: &[EffectParamArrayValue<dawn_project::model::Resolved>],
+) -> Option<SequenceEffectParamValueDto> {
+    match element_type {
+        ArrayElementType::Int => Some(SequenceEffectParamValueDto::IntArray {
+            values: values
+                .iter()
+                .map(|value| match value {
+                    EffectParamArrayValue::Integer(value) => {
+                        Some((*value).min(u32::MAX as u64) as u32)
+                    }
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?,
+        }),
+        ArrayElementType::Float => Some(SequenceEffectParamValueDto::FloatArray {
+            values: values
+                .iter()
+                .map(|value| match value {
+                    EffectParamArrayValue::Float(value) if value.is_finite() => Some(*value),
+                    EffectParamArrayValue::Integer(value) => Some(*value as f64),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?,
+        }),
+        ArrayElementType::Bool => Some(SequenceEffectParamValueDto::BoolArray {
+            values: values
+                .iter()
+                .map(|value| match value {
+                    EffectParamArrayValue::Boolean(value) => Some(*value),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?,
+        }),
+        ArrayElementType::Color => Some(SequenceEffectParamValueDto::ColorArray {
+            values: values
+                .iter()
+                .map(|value| match value {
+                    EffectParamArrayValue::Color(value) => Some(value.to_hex()),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?,
+        }),
+        ArrayElementType::CurveFloat => Some(SequenceEffectParamValueDto::FloatCurveArray {
+            values: values
+                .iter()
+                .map(|value| match value {
+                    EffectParamArrayValue::Curve(curve)
+                        if curve.value_type == CurveValueType::Float =>
+                    {
+                        curve_to_float_points(curve)
+                    }
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?,
+        }),
+        ArrayElementType::CurveColor => Some(SequenceEffectParamValueDto::ColorCurveArray {
+            values: values
+                .iter()
+                .map(|value| match value {
+                    EffectParamArrayValue::Curve(curve)
+                        if curve.value_type == CurveValueType::Color =>
+                    {
+                        curve_to_color_points(curve)
+                    }
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?,
+        }),
+    }
+}
+
+fn array_param_value_from_authored(
+    element_type: ArrayElementType,
+    values: &[EffectParamArrayValue<Authored>],
+) -> Option<SequenceEffectParamValueDto> {
+    match element_type {
+        ArrayElementType::CurveFloat => Some(SequenceEffectParamValueDto::FloatCurveArray {
+            values: values
+                .iter()
+                .map(|value| match value {
+                    EffectParamArrayValue::Curve(InlineOrRef::Inline(curve))
+                        if curve.value_type == CurveValueType::Float =>
+                    {
+                        curve_to_float_points(curve)
+                    }
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?,
+        }),
+        ArrayElementType::CurveColor => Some(SequenceEffectParamValueDto::ColorCurveArray {
+            values: values
+                .iter()
+                .map(|value| match value {
+                    EffectParamArrayValue::Curve(InlineOrRef::Inline(curve))
+                        if curve.value_type == CurveValueType::Color =>
+                    {
+                        curve_to_color_points(curve)
+                    }
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?,
+        }),
+        _ => array_param_value_from_resolved(
+            element_type,
+            &values
+                .iter()
+                .map(authored_array_value_to_resolved)
+                .collect::<Option<Vec<_>>>()?,
+        ),
     }
 }
 
@@ -1462,39 +1634,63 @@ fn curve_to_param_value(curve: &Curve) -> Option<SequenceEffectParamValueDto> {
     match curve.value_type {
         dawn_project::model::CurveValueType::Float => {
             Some(SequenceEffectParamValueDto::FloatCurve {
-                points: curve
-                    .points
-                    .iter()
-                    .filter_map(|point| match point.value {
-                        CurveValue::Float(value) if point.time.is_finite() && value.is_finite() => {
-                            Some(FloatCurvePointDto {
-                                time: point.time,
-                                value,
-                            })
-                        }
-                        _ => None,
-                    })
-                    .collect(),
+                points: curve_to_float_points(curve)?,
             })
         }
         dawn_project::model::CurveValueType::Color => {
             Some(SequenceEffectParamValueDto::ColorCurve {
-                points: curve
-                    .points
-                    .iter()
-                    .filter_map(|point| match point.value {
-                        CurveValue::Color(value) if point.time.is_finite() => {
-                            Some(ColorCurvePointDto {
-                                time: point.time,
-                                value: value.to_hex(),
-                            })
-                        }
-                        _ => None,
-                    })
-                    .collect(),
+                points: curve_to_color_points(curve)?,
             })
         }
     }
+}
+
+fn curve_to_float_points(curve: &Curve) -> Option<Vec<FloatCurvePointDto>> {
+    curve
+        .points
+        .iter()
+        .map(|point| match point.value {
+            CurveValue::Float(value) if point.time.is_finite() && value.is_finite() => {
+                Some(FloatCurvePointDto {
+                    time: point.time,
+                    value,
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn curve_to_color_points(curve: &Curve) -> Option<Vec<ColorCurvePointDto>> {
+    curve
+        .points
+        .iter()
+        .map(|point| match point.value {
+            CurveValue::Color(value) if point.time.is_finite() => Some(ColorCurvePointDto {
+                time: point.time,
+                value: value.to_hex(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+fn authored_array_value_to_resolved(
+    value: &EffectParamArrayValue<Authored>,
+) -> Option<EffectParamArrayValue<dawn_project::model::Resolved>> {
+    Some(match value {
+        EffectParamArrayValue::Integer(value) => EffectParamArrayValue::Integer(*value),
+        EffectParamArrayValue::Float(value) if value.is_finite() => {
+            EffectParamArrayValue::Float(*value)
+        }
+        EffectParamArrayValue::Float(_) => return None,
+        EffectParamArrayValue::Boolean(value) => EffectParamArrayValue::Boolean(*value),
+        EffectParamArrayValue::Color(value) => EffectParamArrayValue::Color(*value),
+        EffectParamArrayValue::Curve(InlineOrRef::Inline(curve)) => {
+            EffectParamArrayValue::Curve(curve.clone())
+        }
+        EffectParamArrayValue::Curve(_) => return None,
+    })
 }
 
 fn param_value_options_match(value: &SequenceEffectParamValueDto, options: &[String]) -> bool {
@@ -1531,6 +1727,38 @@ impl From<SequenceEffectParamValueDto> for SequenceEffectParamEditValue {
                     .map(|point| SequenceEffectParamCurvePointEditValue {
                         time: point.time,
                         value: SequenceEffectParamCurveValueEditValue::Color(point.value),
+                    })
+                    .collect(),
+            ),
+            SequenceEffectParamValueDto::IntArray { values } => Self::IntArray(values),
+            SequenceEffectParamValueDto::FloatArray { values } => Self::FloatArray(values),
+            SequenceEffectParamValueDto::BoolArray { values } => Self::BoolArray(values),
+            SequenceEffectParamValueDto::ColorArray { values } => Self::ColorArray(values),
+            SequenceEffectParamValueDto::FloatCurveArray { values } => Self::FloatCurveArray(
+                values
+                    .into_iter()
+                    .map(|points| {
+                        points
+                            .into_iter()
+                            .map(|point| SequenceEffectParamCurvePointEditValue {
+                                time: point.time,
+                                value: SequenceEffectParamCurveValueEditValue::Float(point.value),
+                            })
+                            .collect()
+                    })
+                    .collect(),
+            ),
+            SequenceEffectParamValueDto::ColorCurveArray { values } => Self::ColorCurveArray(
+                values
+                    .into_iter()
+                    .map(|points| {
+                        points
+                            .into_iter()
+                            .map(|point| SequenceEffectParamCurvePointEditValue {
+                                time: point.time,
+                                value: SequenceEffectParamCurveValueEditValue::Color(point.value),
+                            })
+                            .collect()
                     })
                     .collect(),
             ),

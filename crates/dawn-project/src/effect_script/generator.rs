@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::model::{Color, CurveValue};
+use crate::model::{ArrayElementType, Color, CurveValue};
 
 use super::ast::{BinaryOp, EmitEffectRef, EmitStmt, Expr, Stmt, UnaryOp};
 use super::params::PreparedEffectParams;
@@ -258,6 +258,7 @@ impl GeneratorRuntime {
             Expr::Int(value) => Ok(RuntimeValue::Int(*value)),
             Expr::Bool(value) => Ok(RuntimeValue::Bool(*value)),
             Expr::Color(value) => Ok(RuntimeValue::Color(*value)),
+            Expr::Array(items) => self.array_literal(items),
             Expr::Ident(name) => self
                 .binding(name)
                 .ok_or_else(|| self.error(format!("unknown identifier `{name}`"))),
@@ -288,6 +289,8 @@ impl GeneratorRuntime {
                 self.binary(left, *op, right)
             }
             Expr::Call { name, args } => self.call(name, args),
+            Expr::CallValue { callee, args } => self.call_value(callee, args),
+            Expr::Index { array, index } => self.index(array, index),
             Expr::Member { object, member } => self.member(object, member),
             Expr::Qualified { .. } => Err(self.error("effect references are only valid in emit")),
         }
@@ -369,6 +372,12 @@ impl GeneratorRuntime {
                 };
                 Ok(RuntimeValue::Int(items.len() as i64))
             }
+            "len" => {
+                let RuntimeValue::Array(array) = self.eval(&args[0])? else {
+                    return Err(self.error("len expects array"));
+                };
+                Ok(RuntimeValue::Int(array.values.len() as i64))
+            }
             "pick" => {
                 let RuntimeValue::TargetItems(items) = self.eval(&args[0])? else {
                     return Err(self.error("pick expects TargetItems"));
@@ -397,6 +406,79 @@ impl GeneratorRuntime {
             ))),
             _ => Err(self.error(format!("unknown generator function `{name}`"))),
         }
+    }
+
+    fn array_literal(&mut self, items: &[Expr]) -> Result<RuntimeValue, RuntimeError> {
+        let mut values = Vec::with_capacity(items.len());
+        let mut element_type = None;
+        for item in items {
+            let value = self.eval(item)?;
+            let item_element = runtime_array_element_type(&value).ok_or_else(|| {
+                self.error(format!(
+                    "array literal cannot contain {}",
+                    value.value_type()
+                ))
+            })?;
+            element_type = match element_type {
+                None => Some(item_element),
+                Some(ArrayElementType::Float) if item_element == ArrayElementType::Int => {
+                    Some(ArrayElementType::Float)
+                }
+                Some(ArrayElementType::Int) if item_element == ArrayElementType::Float => {
+                    Some(ArrayElementType::Float)
+                }
+                Some(expected) if expected == item_element => Some(expected),
+                Some(expected) => {
+                    return Err(self.error(format!(
+                        "array literal elements must all be {}, but found {}",
+                        array_element_label(expected),
+                        value.value_type()
+                    )));
+                }
+            };
+            values.push(value);
+        }
+        let element_type = element_type.unwrap_or(ArrayElementType::Float);
+        let values = values
+            .into_iter()
+            .map(|value| match (element_type, value) {
+                (ArrayElementType::Float, RuntimeValue::Int(value)) => {
+                    RuntimeValue::Float(value as f64)
+                }
+                (_, value) => value,
+            })
+            .collect();
+        Ok(RuntimeValue::Array(super::RuntimeArrayValue {
+            element_type,
+            values,
+        }))
+    }
+
+    fn index(&mut self, array: &Expr, index: &Expr) -> Result<RuntimeValue, RuntimeError> {
+        let RuntimeValue::Array(array) = self.eval(array)? else {
+            return Err(self.error("indexing expects array"));
+        };
+        let index = usize::try_from(self.int(index)?)
+            .map_err(|_| self.error("array index must not be negative"))?;
+        array
+            .values
+            .get(index)
+            .cloned()
+            .ok_or_else(|| self.error("array index is out of range"))
+    }
+
+    fn call_value(&mut self, callee: &Expr, args: &[Expr]) -> Result<RuntimeValue, RuntimeError> {
+        let RuntimeValue::Curve(curve) = self.eval(callee)? else {
+            return Err(self.error("call expects curve value"));
+        };
+        let amount = self.float(&args[0])?;
+        curve
+            .evaluate(amount)
+            .map(|value| match value {
+                CurveValue::Float(value) => RuntimeValue::Float(value),
+                CurveValue::Color(value) => RuntimeValue::Color(value),
+            })
+            .ok_or_else(|| self.error("curve has no points"))
     }
 
     fn target_items(
@@ -447,7 +529,7 @@ impl GeneratorRuntime {
     ) -> Result<RuntimeValue, RuntimeError> {
         let left_type = left.value_type();
         let right_type = right.value_type();
-        let Some(result_type) = binary_result_type(left_type, op, right_type) else {
+        let Some(result_type) = binary_result_type(&left_type, op, &right_type) else {
             return Err(self.error("invalid binary expression"));
         };
         match result_type {
@@ -463,6 +545,13 @@ impl GeneratorRuntime {
                 BinaryOp::Subtract => self.value_int(&left)? - self.value_int(&right)?,
                 BinaryOp::Multiply => self.value_int(&left)? * self.value_int(&right)?,
                 BinaryOp::Divide => self.value_int(&left)? / self.value_int(&right)?,
+                BinaryOp::Modulo => {
+                    let right = self.value_int(&right)?;
+                    if right == 0 {
+                        return Err(self.error("integer modulo by zero"));
+                    }
+                    self.value_int(&left)? % right
+                }
                 _ => unreachable!(),
             })),
             ScriptType::Bool => Ok(RuntimeValue::Bool(match op {
@@ -684,6 +773,11 @@ impl<'a> GeneratorDependencyAnalyzer<'a> {
             | Expr::Bool(_)
             | Expr::Color(_)
             | Expr::Qualified { .. } => {}
+            Expr::Array(items) => {
+                for item in items {
+                    self.collect_deps(item, deps);
+                }
+            }
             Expr::Ident(name) => {
                 if self.param_names.contains(name.as_str()) {
                     deps.insert(name.clone());
@@ -704,6 +798,16 @@ impl<'a> GeneratorDependencyAnalyzer<'a> {
                     self.collect_deps(arg, deps);
                 }
             }
+            Expr::CallValue { callee, args } => {
+                self.collect_deps(callee, deps);
+                for arg in args {
+                    self.collect_deps(arg, deps);
+                }
+            }
+            Expr::Index { array, index } => {
+                self.collect_deps(array, deps);
+                self.collect_deps(index, deps);
+            }
             Expr::Member { object, .. } => self.collect_deps(object, deps),
         }
     }
@@ -715,6 +819,11 @@ impl<'a> GeneratorDependencyAnalyzer<'a> {
             | Expr::Bool(_)
             | Expr::Color(_)
             | Expr::Qualified { .. } => {}
+            Expr::Array(items) => {
+                for item in items {
+                    self.collect_identifiers(item, identifiers);
+                }
+            }
             Expr::Ident(name) => {
                 identifiers.insert(name.clone());
             }
@@ -728,6 +837,16 @@ impl<'a> GeneratorDependencyAnalyzer<'a> {
                 for arg in args {
                     self.collect_identifiers(arg, identifiers);
                 }
+            }
+            Expr::CallValue { callee, args } => {
+                self.collect_identifiers(callee, identifiers);
+                for arg in args {
+                    self.collect_identifiers(arg, identifiers);
+                }
+            }
+            Expr::Index { array, index } => {
+                self.collect_identifiers(array, identifiers);
+                self.collect_identifiers(index, identifiers);
             }
             Expr::Member { object, .. } => self.collect_identifiers(object, identifiers),
         }
@@ -863,5 +982,30 @@ fn values_equal(left: &RuntimeValue, right: &RuntimeValue) -> bool {
         (RuntimeValue::Bool(left), RuntimeValue::Bool(right)) => left == right,
         (RuntimeValue::Enum(left), RuntimeValue::Enum(right)) => left == right,
         _ => false,
+    }
+}
+
+fn runtime_array_element_type(value: &RuntimeValue) -> Option<ArrayElementType> {
+    match value {
+        RuntimeValue::Int(_) => Some(ArrayElementType::Int),
+        RuntimeValue::Float(_) => Some(ArrayElementType::Float),
+        RuntimeValue::Bool(_) => Some(ArrayElementType::Bool),
+        RuntimeValue::Color(_) => Some(ArrayElementType::Color),
+        RuntimeValue::Curve(curve) => match curve.value_type {
+            crate::model::CurveValueType::Float => Some(ArrayElementType::CurveFloat),
+            crate::model::CurveValueType::Color => Some(ArrayElementType::CurveColor),
+        },
+        _ => None,
+    }
+}
+
+fn array_element_label(element_type: ArrayElementType) -> &'static str {
+    match element_type {
+        ArrayElementType::Int => "int",
+        ArrayElementType::Float => "float",
+        ArrayElementType::Bool => "bool",
+        ArrayElementType::Color => "color",
+        ArrayElementType::CurveFloat => "curve<float>",
+        ArrayElementType::CurveColor => "curve<color>",
     }
 }

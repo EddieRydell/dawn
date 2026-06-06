@@ -418,6 +418,12 @@ pub enum SequenceEffectParamEditValue {
     Flags(Vec<String>),
     FloatCurve(Vec<SequenceEffectParamCurvePointEditValue>),
     ColorCurve(Vec<SequenceEffectParamCurvePointEditValue>),
+    IntArray(Vec<u32>),
+    FloatArray(Vec<f64>),
+    BoolArray(Vec<bool>),
+    ColorArray(Vec<String>),
+    FloatCurveArray(Vec<Vec<SequenceEffectParamCurvePointEditValue>>),
+    ColorCurveArray(Vec<Vec<SequenceEffectParamCurvePointEditValue>>),
     Marks(String),
 }
 
@@ -1704,7 +1710,37 @@ fn authored_param_to_resolved(param: &EffectParam<Authored>) -> Option<EffectPar
             curve: curve.clone(),
         },
         EffectParam::Curve { .. } => return None,
+        EffectParam::Array {
+            element_type,
+            values,
+        } => EffectParam::Array {
+            element_type: *element_type,
+            values: values
+                .iter()
+                .map(authored_array_value_to_resolved)
+                .collect::<Option<Vec<_>>>()?,
+        },
         EffectParam::Marks { key } => EffectParam::Marks { key: key.clone() },
+    })
+}
+
+fn authored_array_value_to_resolved(
+    value: &EffectParamArrayValue<Authored>,
+) -> Option<EffectParamArrayValue<Resolved>> {
+    Some(match value {
+        EffectParamArrayValue::Integer(value) => EffectParamArrayValue::Integer(*value),
+        EffectParamArrayValue::Float(value) if value.is_finite() => {
+            EffectParamArrayValue::Float(*value)
+        }
+        EffectParamArrayValue::Float(_) => return None,
+        EffectParamArrayValue::Boolean(value) => EffectParamArrayValue::Boolean(*value),
+        EffectParamArrayValue::Color(value) => EffectParamArrayValue::Color(*value),
+        EffectParamArrayValue::Curve(InlineOrRef::Inline(curve))
+            if curve.points.iter().all(|point| point.time.is_finite()) =>
+        {
+            EffectParamArrayValue::Curve(curve.clone())
+        }
+        EffectParamArrayValue::Curve(_) => return None,
     })
 }
 
@@ -1775,6 +1811,72 @@ fn param_edit_value_to_authored(
             validate_mark_collection_key(&key)?;
             Ok(EffectParam::Marks { key })
         }
+        (
+            ScriptType::Array(ArrayElementType::Int),
+            SequenceEffectParamEditValue::IntArray(values),
+        ) => Ok(EffectParam::Array {
+            element_type: ArrayElementType::Int,
+            values: values
+                .into_iter()
+                .map(|value| EffectParamArrayValue::Integer(value.into()))
+                .collect(),
+        }),
+        (
+            ScriptType::Array(ArrayElementType::Float),
+            SequenceEffectParamEditValue::FloatArray(values),
+        ) if values.iter().all(|value| value.is_finite()) => Ok(EffectParam::Array {
+            element_type: ArrayElementType::Float,
+            values: values
+                .into_iter()
+                .map(EffectParamArrayValue::Float)
+                .collect(),
+        }),
+        (
+            ScriptType::Array(ArrayElementType::Bool),
+            SequenceEffectParamEditValue::BoolArray(values),
+        ) => Ok(EffectParam::Array {
+            element_type: ArrayElementType::Bool,
+            values: values
+                .into_iter()
+                .map(EffectParamArrayValue::Boolean)
+                .collect(),
+        }),
+        (
+            ScriptType::Array(ArrayElementType::Color),
+            SequenceEffectParamEditValue::ColorArray(values),
+        ) => Ok(EffectParam::Array {
+            element_type: ArrayElementType::Color,
+            values: values
+                .into_iter()
+                .map(|value| Color::parse(&value).map(EffectParamArrayValue::Color))
+                .collect::<Result<Vec<_>, _>>()?,
+        }),
+        (
+            ScriptType::Array(ArrayElementType::CurveFloat),
+            SequenceEffectParamEditValue::FloatCurveArray(values),
+        ) => Ok(EffectParam::Array {
+            element_type: ArrayElementType::CurveFloat,
+            values: values
+                .into_iter()
+                .map(|points| {
+                    edit_points_to_curve(CurveValueType::Float, points)
+                        .map(|curve| EffectParamArrayValue::Curve(InlineOrRef::Inline(curve)))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        }),
+        (
+            ScriptType::Array(ArrayElementType::CurveColor),
+            SequenceEffectParamEditValue::ColorCurveArray(values),
+        ) => Ok(EffectParam::Array {
+            element_type: ArrayElementType::CurveColor,
+            values: values
+                .into_iter()
+                .map(|points| {
+                    edit_points_to_curve(CurveValueType::Color, points)
+                        .map(|curve| EffectParamArrayValue::Curve(InlineOrRef::Inline(curve)))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        }),
         _ => Err(format!(
             "`{}` expects a {} parameter value",
             schema.name, schema.value_type
@@ -2272,6 +2374,14 @@ fn runtime_value_to_authored_param(value: &RuntimeValue) -> EffectParam<Authored
         RuntimeValue::Curve(curve) => EffectParam::Curve {
             curve: InlineOrRef::Inline(curve.clone()),
         },
+        RuntimeValue::Array(array) => EffectParam::Array {
+            element_type: array.element_type,
+            values: array
+                .values
+                .iter()
+                .map(runtime_value_to_authored_array_value)
+                .collect(),
+        },
         RuntimeValue::Enum(value) => EffectParam::Enum {
             value: value.clone(),
         },
@@ -2321,6 +2431,10 @@ fn type_default_param(value_type: ScriptType, options: &[String]) -> EffectParam
                 }],
             }),
         },
+        ScriptType::Array(element_type) => EffectParam::Array {
+            element_type,
+            values: Vec::new(),
+        },
         ScriptType::Enum => EffectParam::Enum {
             value: options.first().cloned().unwrap_or_default(),
         },
@@ -2337,6 +2451,19 @@ fn type_default_param(value_type: ScriptType, options: &[String]) -> EffectParam
         | ScriptType::TargetItems
         | ScriptType::TargetItem
         | ScriptType::Void => unreachable!("context, generator, and void types are not params"),
+    }
+}
+
+fn runtime_value_to_authored_array_value(value: &RuntimeValue) -> EffectParamArrayValue<Authored> {
+    match value {
+        RuntimeValue::Float(value) => EffectParamArrayValue::Float(*value),
+        RuntimeValue::Int(value) => EffectParamArrayValue::Integer((*value).max(0) as u64),
+        RuntimeValue::Bool(value) => EffectParamArrayValue::Boolean(*value),
+        RuntimeValue::Color(value) => EffectParamArrayValue::Color(*value),
+        RuntimeValue::Curve(curve) => {
+            EffectParamArrayValue::Curve(InlineOrRef::Inline(curve.clone()))
+        }
+        _ => unreachable!("array param defaults can only contain scalar and curve values"),
     }
 }
 
@@ -2633,7 +2760,42 @@ fn lower_effect_param_document(
                 }
             },
         },
+        EffectParam::Array {
+            element_type,
+            values,
+        } => EffectParam::Array {
+            element_type: *element_type,
+            values: values
+                .iter()
+                .map(|value| lower_effect_param_array_value_document(source_path, value, resolver))
+                .collect::<Result<Vec<_>, _>>()?,
+        },
         EffectParam::Marks { key } => EffectParam::Marks { key: key.clone() },
+    })
+}
+
+fn lower_effect_param_array_value_document(
+    source_path: &Utf8PathBuf,
+    value: &EffectParamArrayValue<Authored>,
+    resolver: &mut AnalysisImportResolver<'_>,
+) -> Result<EffectParamArrayValue<Resolved>, String> {
+    Ok(match value {
+        EffectParamArrayValue::Integer(value) => EffectParamArrayValue::Integer(*value),
+        EffectParamArrayValue::Float(value) => EffectParamArrayValue::Float(*value),
+        EffectParamArrayValue::Boolean(value) => EffectParamArrayValue::Boolean(*value),
+        EffectParamArrayValue::Color(value) => EffectParamArrayValue::Color(*value),
+        EffectParamArrayValue::Curve(curve) => EffectParamArrayValue::Curve(match curve {
+            InlineOrRef::Inline(curve) => curve.clone(),
+            InlineOrRef::Ref(reference) => {
+                let resolved = resolver
+                    .resolve_object(source_path, reference, ObjectKind::Curve)
+                    .map_err(|error| error.to_string())?;
+                let DawnObject::Curve(curve) = resolved.object else {
+                    return Err(format!("reference `{}` is not a curve", reference.raw()));
+                };
+                curve
+            }
+        }),
     })
 }
 

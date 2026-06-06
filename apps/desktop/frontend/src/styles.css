@@ -970,6 +970,54 @@ button:focus-visible,
   color: #a8a29a;
 }
 
+.array-param-editor {
+  gap: 8px;
+}
+
+.array-param-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.array-param-header button,
+.array-param-actions button {
+  display: inline-grid;
+  width: 30px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+}
+
+.array-param-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: start;
+  padding: 6px;
+  border: 1px solid #2c3036;
+  border-radius: 6px;
+  background: #17181b;
+}
+
+.array-param-row-main {
+  min-width: 0;
+}
+
+.array-param-row-main > label {
+  margin: 0;
+}
+
+.array-param-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.array-check-row {
+  margin: 0;
+}
+
 .curve-source-shell {
   display: grid;
   gap: 7px;

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::model::{Color, Curve, CurveValue, CurveValueType};
+use crate::model::{ArrayElementType, Color, Curve, CurveValue, CurveValueType};
 
 use super::ast::Expr;
 use super::bytecode::{BytecodeProgram, BytecodeStats, RegisterCounts};
@@ -126,6 +126,7 @@ pub struct EffectSampleScratch {
     pub(super) bools: Vec<bool>,
     pub(super) colors: Vec<Color>,
     pub(super) refs: Vec<RefValue>,
+    pub(super) ref_values: Vec<Option<RuntimeValue>>,
     pub(super) fixtures: Vec<FixtureContext>,
     pub(super) pixels: Vec<PixelContext>,
 }
@@ -138,6 +139,7 @@ impl EffectSampleScratch {
             bools: vec![false; stats.bool_slots],
             colors: vec![Color::new(0, 0, 0); stats.color_slots],
             refs: vec![RefValue::Unset; stats.ref_slots],
+            ref_values: vec![None; stats.ref_slots],
             fixtures: vec![FixtureContext { index: 0 }; stats.fixture_slots],
             pixels: vec![PixelContext { index: 0, count: 0 }; stats.pixel_slots],
         }
@@ -149,6 +151,7 @@ impl EffectSampleScratch {
         self.bools.resize(counts.bools, false);
         self.colors.resize(counts.colors, Color::new(0, 0, 0));
         self.refs.resize(counts.refs, RefValue::Unset);
+        self.ref_values.resize(counts.refs, None);
         self.fixtures
             .resize(counts.fixtures, FixtureContext { index: 0 });
         self.pixels
@@ -171,6 +174,7 @@ impl PreparedEffectParams {
 pub(super) enum RefValue {
     Param(usize),
     Constant(usize),
+    Local,
     Unset,
 }
 
@@ -198,7 +202,7 @@ pub(super) fn prepare_params_with(
             .ok_or_else(|| RuntimeError {
                 message: format!("missing parameter `{}`", param.name),
             })?;
-        let value = coerce_value(value, param.value_type)?;
+        let value = coerce_value(value, &param.value_type)?;
         curve_crossings.push(match &value {
             RuntimeValue::Curve(curve) => CurveCrossingTable::from_curve(curve),
             _ => None,
@@ -218,6 +222,7 @@ pub(super) fn eval_constant(expr: &Expr) -> Result<RuntimeValue, ScriptDiagnosti
         Expr::Int(value) => Ok(RuntimeValue::Int(*value)),
         Expr::Bool(value) => Ok(RuntimeValue::Bool(*value)),
         Expr::Color(value) => Ok(RuntimeValue::Color(*value)),
+        Expr::Array(items) => eval_constant_array(items),
         _ => Err(ScriptDiagnostic {
             range: None,
             message: "parameter defaults must be literals in Dawn v1".to_string(),
@@ -225,18 +230,144 @@ pub(super) fn eval_constant(expr: &Expr) -> Result<RuntimeValue, ScriptDiagnosti
     }
 }
 
+fn eval_constant_array(items: &[Expr]) -> Result<RuntimeValue, ScriptDiagnostic> {
+    let mut values = Vec::with_capacity(items.len());
+    let mut element_type = None;
+    for item in items {
+        let value = eval_constant(item)?;
+        let item_type = match value.value_type() {
+            ScriptType::Int => ArrayElementType::Int,
+            ScriptType::Float => ArrayElementType::Float,
+            ScriptType::Bool => ArrayElementType::Bool,
+            ScriptType::Color => ArrayElementType::Color,
+            ScriptType::CurveFloat => ArrayElementType::CurveFloat,
+            ScriptType::CurveColor => ArrayElementType::CurveColor,
+            other => {
+                return Err(ScriptDiagnostic {
+                    range: None,
+                    message: format!("array literal cannot contain {other} values"),
+                });
+            }
+        };
+        element_type = match element_type {
+            None => Some(item_type),
+            Some(ArrayElementType::Float) if item_type == ArrayElementType::Int => {
+                Some(ArrayElementType::Float)
+            }
+            Some(ArrayElementType::Int) if item_type == ArrayElementType::Float => {
+                Some(ArrayElementType::Float)
+            }
+            Some(expected) if expected == item_type => Some(expected),
+            Some(expected) => {
+                return Err(ScriptDiagnostic {
+                    range: None,
+                    message: format!(
+                        "array literal elements must all be {}, but found {}",
+                        array_element_label(expected),
+                        array_element_label(item_type)
+                    ),
+                });
+            }
+        };
+        values.push(value);
+    }
+    Ok(RuntimeValue::Array(super::RuntimeArrayValue {
+        element_type: element_type.unwrap_or(ArrayElementType::Float),
+        values,
+    }))
+}
+
 pub(super) fn coerce_value(
     value: RuntimeValue,
-    expected: ScriptType,
+    expected: &ScriptType,
 ) -> Result<RuntimeValue, RuntimeError> {
     match (expected, value) {
         (ScriptType::Float, RuntimeValue::Int(value)) => Ok(RuntimeValue::Float(value as f64)),
-        (expected, value) if value.value_type() == expected => Ok(value),
+        (ScriptType::Array(expected), RuntimeValue::Array(value)) => {
+            coerce_array_value(value, *expected)
+        }
+        (expected, value) if value.value_type() == *expected => Ok(value),
         (expected, value) => Err(RuntimeError {
             message: format!(
                 "expected {expected} value, but found {}",
                 value.value_type()
             ),
         }),
+    }
+}
+
+fn coerce_array_value(
+    value: super::RuntimeArrayValue,
+    expected: ArrayElementType,
+) -> Result<RuntimeValue, RuntimeError> {
+    let mut values = Vec::with_capacity(value.values.len());
+    for item in value.values {
+        values.push(match expected {
+            ArrayElementType::Float => match item {
+                RuntimeValue::Int(value) => RuntimeValue::Float(value as f64),
+                RuntimeValue::Float(_) => item,
+                item => {
+                    return Err(RuntimeError {
+                        message: format!(
+                            "expected array<float> element, but found {}",
+                            item.value_type()
+                        ),
+                    });
+                }
+            },
+            ArrayElementType::Int if matches!(item, RuntimeValue::Int(_)) => item,
+            ArrayElementType::Bool if matches!(item, RuntimeValue::Bool(_)) => item,
+            ArrayElementType::Color if matches!(item, RuntimeValue::Color(_)) => item,
+            ArrayElementType::CurveFloat => match item {
+                RuntimeValue::Curve(curve) if curve.value_type == CurveValueType::Float => {
+                    RuntimeValue::Curve(curve)
+                }
+                item => {
+                    return Err(RuntimeError {
+                        message: format!(
+                            "expected array<curve<float>> element, but found {}",
+                            item.value_type()
+                        ),
+                    });
+                }
+            },
+            ArrayElementType::CurveColor => match item {
+                RuntimeValue::Curve(curve) if curve.value_type == CurveValueType::Color => {
+                    RuntimeValue::Curve(curve)
+                }
+                item => {
+                    return Err(RuntimeError {
+                        message: format!(
+                            "expected array<curve<color>> element, but found {}",
+                            item.value_type()
+                        ),
+                    });
+                }
+            },
+            expected => {
+                return Err(RuntimeError {
+                    message: format!(
+                        "expected array<{}> element, but found {}",
+                        array_element_label(expected),
+                        item.value_type()
+                    ),
+                });
+            }
+        });
+    }
+    Ok(RuntimeValue::Array(super::RuntimeArrayValue {
+        element_type: expected,
+        values,
+    }))
+}
+
+fn array_element_label(element_type: ArrayElementType) -> &'static str {
+    match element_type {
+        ArrayElementType::Int => "int",
+        ArrayElementType::Float => "float",
+        ArrayElementType::Bool => "bool",
+        ArrayElementType::Color => "color",
+        ArrayElementType::CurveFloat => "curve<float>",
+        ArrayElementType::CurveColor => "curve<color>",
     }
 }

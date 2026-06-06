@@ -1,3 +1,5 @@
+use crate::model::ArrayElementType;
+
 use super::{RuntimeValue, ScriptType};
 use std::collections::{HashSet, VecDeque};
 
@@ -5,6 +7,7 @@ use std::collections::{HashSet, VecDeque};
 pub(super) struct BytecodeProgram {
     pub(super) instructions: Vec<Instruction>,
     pub(super) constants: Vec<RuntimeValue>,
+    pub(super) array_values: Vec<Vec<ValueSlot>>,
     pub(super) registers: RegisterCounts,
 }
 
@@ -46,6 +49,7 @@ pub(super) enum Instruction {
     LoadConst(ValueSlot, usize),
     LoadContext(ValueSlot, ContextSlot),
     LoadParam(ValueSlot, usize),
+    BuildArray(RefSlot, ArrayElementType, usize),
     Copy(ValueSlot, ValueSlot),
     IntToFloat(FloatSlot, IntSlot),
     FloatUnary(FloatSlot, UnaryFloatInstruction, FloatSlot),
@@ -68,6 +72,8 @@ pub(super) enum Instruction {
     SectionPosition(FloatSlot, PixelSlot, FloatSlot),
     MarkCount(IntSlot, RefSlot),
     MarkAt(FloatSlot, RefSlot, IntSlot, FloatSlot),
+    ArrayLen(IntSlot, RefSlot),
+    ArrayIndex(ValueSlot, RefSlot, IntSlot),
     MarkSearch(
         FloatSlot,
         MarkSearchInstruction,
@@ -87,6 +93,8 @@ pub(super) enum Instruction {
     Hsv(ColorSlot, FloatSlot, FloatSlot, FloatSlot),
     CallFloatCurveParam(FloatSlot, usize, FloatSlot),
     CallColorCurveParam(ColorSlot, usize, FloatSlot),
+    CallFloatCurveRef(FloatSlot, RefSlot, FloatSlot),
+    CallColorCurveRef(ColorSlot, RefSlot, FloatSlot),
     CurveFloatClamped(FloatSlot, usize, FloatSlot, FloatSlot, FloatSlot),
     CurveColorScaled(ColorSlot, usize, FloatSlot, FloatSlot),
     ReturnColor(ColorSlot),
@@ -107,6 +115,7 @@ pub(super) enum BinaryInstruction {
     IntSubtract,
     IntMultiply,
     IntDivide,
+    IntModulo,
     FloatLess,
     FloatLessEqual,
     FloatGreater,
@@ -360,6 +369,7 @@ pub(super) fn specialize_for_params(
     compact_reachable(BytecodeProgram {
         instructions,
         constants,
+        array_values: program.array_values.clone(),
         registers: program.registers,
     })
 }
@@ -424,6 +434,7 @@ fn compact_reachable(program: BytecodeProgram) -> BytecodeProgram {
     BytecodeProgram {
         instructions,
         constants: program.constants,
+        array_values: program.array_values,
         registers: program.registers,
     }
 }
