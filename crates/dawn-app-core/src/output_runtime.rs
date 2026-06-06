@@ -27,11 +27,105 @@ const MAX_FLATTENED_GENERATED_CHILDREN: usize = 65_536;
 #[derive(Debug, Clone)]
 pub struct OutputFrame {
     pub source: OutputSourceMetadata,
+    pub topology_identity: OutputFrameTopologyIdentity,
     pub time_seconds: f64,
     pub generation: u64,
     pub status: OutputFrameStatus,
     pub bounds: GeometryRenderBounds,
     pub fixtures: Vec<OutputFixtureFrame>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct OutputFrameTopologyIdentity {
+    pub source: OutputSourceIdentity,
+    pub bounds: OutputFrameBoundsIdentity,
+    pub fixtures: Vec<OutputFixtureTopologyIdentity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct OutputSourceIdentity {
+    pub label: String,
+    pub kind: OutputSourceKind,
+    pub duration_nanoseconds: u64,
+    pub fps: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OutputFrameBoundsIdentity {
+    pub min_x_micrometers: i64,
+    pub min_y_micrometers: i64,
+    pub max_x_micrometers: i64,
+    pub max_y_micrometers: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct OutputFixtureTopologyIdentity {
+    pub id: FixtureId,
+    pub name: String,
+    pub pixel_count: usize,
+}
+
+impl OutputFrameTopologyIdentity {
+    pub fn from_frame_parts(
+        source: &OutputSourceMetadata,
+        bounds: GeometryRenderBounds,
+        fixtures: &[OutputFixtureFrame],
+    ) -> Self {
+        Self {
+            source: OutputSourceIdentity {
+                label: source.label.clone(),
+                kind: source.kind,
+                duration_nanoseconds: seconds_to_nanoseconds(source.duration_seconds),
+                fps: source.fps,
+            },
+            bounds: OutputFrameBoundsIdentity {
+                min_x_micrometers: bounds.min_x.as_micrometers(),
+                min_y_micrometers: bounds.min_y.as_micrometers(),
+                max_x_micrometers: bounds.max_x.as_micrometers(),
+                max_y_micrometers: bounds.max_y.as_micrometers(),
+            },
+            fixtures: fixtures
+                .iter()
+                .map(|fixture| OutputFixtureTopologyIdentity {
+                    id: fixture.id,
+                    name: fixture.name.clone(),
+                    pixel_count: fixture.pixels.len(),
+                })
+                .collect(),
+        }
+    }
+
+    pub fn stable_key(&self) -> String {
+        let mut key = format!(
+            "{:?}|{}|{}|{}|{}|{}|{}|{}|{}",
+            self.source.kind,
+            self.source.label,
+            self.source.duration_nanoseconds,
+            self.source.fps,
+            self.bounds.min_x_micrometers,
+            self.bounds.min_y_micrometers,
+            self.bounds.max_x_micrometers,
+            self.bounds.max_y_micrometers,
+            self.fixtures.len()
+        );
+        for fixture in &self.fixtures {
+            key.push_str(&format!(
+                "|{}:{}:{}",
+                fixture.id.0, fixture.name, fixture.pixel_count
+            ));
+        }
+        key
+    }
+}
+
+fn seconds_to_nanoseconds(seconds: f64) -> u64 {
+    if seconds.is_finite() && seconds > 0.0 {
+        (seconds * 1_000_000_000.0)
+            .round()
+            .clamp(0.0, u64::MAX as f64) as u64
+    } else {
+        0
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -42,7 +136,7 @@ pub struct OutputSourceMetadata {
     pub fps: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OutputSourceKind {
     Sequence,
     Empty,
@@ -243,6 +337,26 @@ impl SequenceRenderCache {
             analysis,
             document,
             &mut self.preparation,
+        )
+    }
+
+    pub fn build_evaluator_cancellable(
+        &mut self,
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+        is_cancelled: impl Fn() -> bool,
+    ) -> Result<
+        Option<(
+            SequenceFrameEvaluator,
+            SequenceFrameEvaluatorPreparationTiming,
+        )>,
+        String,
+    > {
+        SequenceFrameEvaluator::new_with_preparation_cache_cancellable(
+            analysis,
+            document,
+            &mut self.preparation,
+            is_cancelled,
         )
     }
 
@@ -819,13 +933,50 @@ impl SequenceFrameEvaluator {
         Self::new_filtered_timed_with_cache(analysis, document, None, Some(preparation_cache))
     }
 
+    pub(crate) fn new_with_preparation_cache_cancellable(
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+        preparation_cache: &mut SequencePreparationCache,
+        is_cancelled: impl Fn() -> bool,
+    ) -> Result<Option<(Self, SequenceFrameEvaluatorPreparationTiming)>, String> {
+        Self::new_filtered_timed_with_cache_cancellable(
+            analysis,
+            document,
+            None,
+            Some(preparation_cache),
+            &is_cancelled,
+        )
+    }
+
     fn new_filtered_timed_with_cache(
         analysis: &ProjectAnalysis,
         document: &SequenceDocument,
         effect_filter: Option<&HashSet<u32>>,
-        mut preparation_cache: Option<&mut SequencePreparationCache>,
+        preparation_cache: Option<&mut SequencePreparationCache>,
     ) -> Result<(Self, SequenceFrameEvaluatorPreparationTiming), String> {
+        Self::new_filtered_timed_with_cache_cancellable(
+            analysis,
+            document,
+            effect_filter,
+            preparation_cache,
+            &|| false,
+        )
+        .and_then(|result| {
+            result.ok_or_else(|| "Sequence preview renderer build was cancelled".to_string())
+        })
+    }
+
+    fn new_filtered_timed_with_cache_cancellable(
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+        effect_filter: Option<&HashSet<u32>>,
+        mut preparation_cache: Option<&mut SequencePreparationCache>,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> Result<Option<(Self, SequenceFrameEvaluatorPreparationTiming)>, String> {
         let total_started = Instant::now();
+        if is_cancelled() {
+            return Ok(None);
+        }
         let Some(project) = analysis.resolved.as_ref() else {
             return Err("Project must resolve before preview is available".to_string());
         };
@@ -870,6 +1021,9 @@ impl SequenceFrameEvaluator {
                 .map(|ids| ids.contains(&effect.id))
                 .unwrap_or(true)
         }) {
+            if is_cancelled() {
+                return Ok(None);
+            }
             let Some(render) = effect.render.as_ref() else {
                 continue;
             };
@@ -931,10 +1085,14 @@ impl SequenceFrameEvaluator {
                                             mark_collections: &document.mark_collections,
                                             fixture_templates: &fixture_templates,
                                             children,
+                                            is_cancelled,
                                         },
                                     )
                                 }
                                 None => {
+                                    if is_cancelled() {
+                                        return Ok(None);
+                                    }
                                     let topology = prepare_generated_topology(
                                         document,
                                         effect.start_seconds,
@@ -964,6 +1122,7 @@ impl SequenceFrameEvaluator {
                                                     mark_collections: &document.mark_collections,
                                                     fixture_templates: &fixture_templates,
                                                     children,
+                                                    is_cancelled,
                                                 },
                                             )
                                         }
@@ -1056,6 +1215,9 @@ impl SequenceFrameEvaluator {
                 }
             }
         }
+        if is_cancelled() {
+            return Ok(None);
+        }
 
         let source = OutputSourceMetadata {
             label: format!("Sequence {}", document.object_key),
@@ -1093,7 +1255,7 @@ impl SequenceFrameEvaluator {
             generator_parents,
         };
 
-        Ok((
+        Ok(Some((
             Self {
                 source,
                 bounds: render_plan.bounds,
@@ -1103,7 +1265,7 @@ impl SequenceFrameEvaluator {
                 authored_intervals_by_id,
             },
             timing,
-        ))
+        )))
     }
 
     pub fn evaluate(&mut self, time_seconds: f64, generation: u64) -> OutputFrame {
@@ -1115,6 +1277,26 @@ impl SequenceFrameEvaluator {
         time_seconds: f64,
         generation: u64,
     ) -> (OutputFrame, SequenceFrameEvaluationTiming) {
+        match self.evaluate_timed_cancellable(time_seconds, generation, || false) {
+            Some(result) => result,
+            None => (
+                self.output_frame(
+                    time_seconds,
+                    generation,
+                    OutputFrameStatus::Live,
+                    self.fixture_templates.clone(),
+                ),
+                SequenceFrameEvaluationTiming::default(),
+            ),
+        }
+    }
+
+    pub fn evaluate_timed_cancellable(
+        &mut self,
+        time_seconds: f64,
+        generation: u64,
+        is_cancelled: impl Fn() -> bool,
+    ) -> Option<(OutputFrame, SequenceFrameEvaluationTiming)> {
         let total_started = Instant::now();
         let clone_started = Instant::now();
         let mut fixtures = self.fixture_templates.clone();
@@ -1125,13 +1307,20 @@ impl SequenceFrameEvaluator {
         let effect_loop_started = Instant::now();
         if let Some(effect_indices) = self.effect_indices_for_time(time_seconds) {
             for effect_index in effect_indices.clone() {
+                if is_cancelled() {
+                    return None;
+                }
                 evaluate_prepared_effect_at_time(
                     &mut self.effects[effect_index],
                     time_seconds,
                     &mut fixtures,
                     &mut status,
                     &mut counters,
+                    &is_cancelled,
                 );
+                if is_cancelled() {
+                    return None;
+                }
             }
         }
         let effect_loop_ms = elapsed_ms(effect_loop_started);
@@ -1140,7 +1329,7 @@ impl SequenceFrameEvaluator {
         let frame = self.output_frame(time_seconds, generation, status, fixtures);
         let output_frame_ms = elapsed_ms(output_started);
         let total_ms = elapsed_ms(total_started);
-        (
+        Some((
             frame,
             SequenceFrameEvaluationTiming {
                 total_ms,
@@ -1153,7 +1342,7 @@ impl SequenceFrameEvaluator {
                 visited_prepared_effects: counters.visited_prepared_effects,
                 sampled_pixels: counters.sampled_pixels,
             },
-        )
+        ))
     }
 
     pub fn evaluate_effect_preview(
@@ -1180,6 +1369,32 @@ impl SequenceFrameEvaluator {
         generation: u64,
         effect_filter: Option<&HashSet<u32>>,
     ) -> (OutputFrame, SequenceFrameEvaluationTiming) {
+        match self.evaluate_effect_preview_filtered_timed_cancellable(
+            preview_seconds,
+            generation,
+            effect_filter,
+            || false,
+        ) {
+            Some(result) => result,
+            None => (
+                self.output_frame(
+                    preview_seconds,
+                    generation,
+                    OutputFrameStatus::Live,
+                    self.fixture_templates.clone(),
+                ),
+                SequenceFrameEvaluationTiming::default(),
+            ),
+        }
+    }
+
+    pub fn evaluate_effect_preview_filtered_timed_cancellable(
+        &mut self,
+        preview_seconds: f64,
+        generation: u64,
+        effect_filter: Option<&HashSet<u32>>,
+        is_cancelled: impl Fn() -> bool,
+    ) -> Option<(OutputFrame, SequenceFrameEvaluationTiming)> {
         let total_started = Instant::now();
         let clone_started = Instant::now();
         let mut fixtures = self.fixture_templates.clone();
@@ -1191,8 +1406,14 @@ impl SequenceFrameEvaluator {
         let preview_frame_times = self.preview_frame_times(preview_seconds, effect_filter);
         let mut visited_effect_indices = HashSet::new();
         for (preview_id, preview_frame_time) in preview_frame_times {
+            if is_cancelled() {
+                return None;
+            }
             if let Some(effect_indices) = self.effect_indices_for_time(preview_frame_time) {
                 for effect_index in effect_indices.clone() {
+                    if is_cancelled() {
+                        return None;
+                    }
                     if !visited_effect_indices.insert(effect_index) {
                         continue;
                     }
@@ -1212,6 +1433,7 @@ impl SequenceFrameEvaluator {
                         &mut fixtures,
                         &mut status,
                         &mut counters,
+                        &is_cancelled,
                     );
                 }
             }
@@ -1222,7 +1444,7 @@ impl SequenceFrameEvaluator {
         let frame = self.output_frame(preview_seconds, generation, status, fixtures);
         let output_frame_ms = elapsed_ms(output_started);
         let total_ms = elapsed_ms(total_started);
-        (
+        Some((
             frame,
             SequenceFrameEvaluationTiming {
                 total_ms,
@@ -1235,7 +1457,7 @@ impl SequenceFrameEvaluator {
                 visited_prepared_effects: counters.visited_prepared_effects,
                 sampled_pixels: counters.sampled_pixels,
             },
-        )
+        ))
     }
 
     pub fn prepared_effect_count(&self) -> usize {
@@ -1376,8 +1598,11 @@ impl SequenceFrameEvaluator {
         status: OutputFrameStatus,
         fixtures: Vec<OutputFixtureFrame>,
     ) -> OutputFrame {
+        let topology_identity =
+            OutputFrameTopologyIdentity::from_frame_parts(&self.source, self.bounds, &fixtures);
         OutputFrame {
             source: self.source.clone(),
+            topology_identity,
             time_seconds,
             generation,
             status,
@@ -1407,6 +1632,7 @@ fn evaluate_prepared_effect_at_time(
     fixtures: &mut [OutputFixtureFrame],
     status: &mut OutputFrameStatus,
     counters: &mut SequenceEffectEvaluationCounters,
+    is_cancelled: &dyn Fn() -> bool,
 ) {
     counters.visited_prepared_effects = counters.visited_prepared_effects.saturating_add(1);
     let local_seconds =
@@ -1415,7 +1641,14 @@ fn evaluate_prepared_effect_at_time(
         } else {
             time_seconds - effect.start_seconds
         };
-    sample_prepared_effect(effect, local_seconds, fixtures, status, counters);
+    sample_prepared_effect(
+        effect,
+        local_seconds,
+        fixtures,
+        status,
+        counters,
+        is_cancelled,
+    );
 }
 
 fn sample_prepared_effect(
@@ -1424,6 +1657,7 @@ fn sample_prepared_effect(
     fixtures: &mut [OutputFixtureFrame],
     status: &mut OutputFrameStatus,
     counters: &mut SequenceEffectEvaluationCounters,
+    is_cancelled: &dyn Fn() -> bool,
 ) {
     let progress = if effect.duration_seconds == 0.0 {
         0.0
@@ -1448,6 +1682,9 @@ fn sample_prepared_effect(
     }
     counters.active_prepared_effects = counters.active_prepared_effects.saturating_add(1);
     for pixel in target_pixels {
+        if is_cancelled() {
+            return;
+        }
         let output_pixel = &mut fixtures[pixel.fixture_index].pixels[pixel.pixel_index];
         match script.sample_prepared_with_scratch(
             progress,
@@ -2108,6 +2345,7 @@ struct GeneratedEffectTopologyInput<'a> {
     mark_collections: &'a [SequenceMarkCollectionDocument],
     fixture_templates: &'a [OutputFixtureFrame],
     children: Vec<GeneratedChildTopology>,
+    is_cancelled: &'a dyn Fn() -> bool,
 }
 
 fn prepare_generated_effects_from_topology(
@@ -2122,6 +2360,9 @@ fn prepare_generated_effects_from_topology(
     let mut effects = Vec::new();
     let mut stack = vec![input.generator_id];
     let mut child_count = 0;
+    if (input.is_cancelled)() {
+        return Ok(effects);
+    }
     flatten_generated_children(
         GeneratedChildFlattenInput {
             analysis: input.analysis,
@@ -2132,6 +2373,7 @@ fn prepare_generated_effects_from_topology(
             parent_params: &prepared_parent_params,
             fixture_templates: input.fixture_templates,
             children: input.children,
+            is_cancelled: input.is_cancelled,
         },
         &mut stack,
         &mut child_count,
@@ -2149,6 +2391,7 @@ struct GeneratedChildFlattenInput<'a> {
     parent_params: &'a PreparedEffectParams,
     fixture_templates: &'a [OutputFixtureFrame],
     children: Vec<GeneratedChildTopology>,
+    is_cancelled: &'a dyn Fn() -> bool,
 }
 
 fn flatten_generated_children(
@@ -2164,6 +2407,9 @@ fn flatten_generated_children(
         .map(|param| param.name.clone())
         .collect::<Vec<_>>();
     for child in input.children {
+        if (input.is_cancelled)() {
+            return Ok(());
+        }
         let child_ref = resolve_generated_child_effect(
             input.analysis,
             input.parent_path,
@@ -2251,6 +2497,7 @@ fn flatten_generated_children(
                         parent_params: &prepared_params,
                         fixture_templates: input.fixture_templates,
                         children: nested_children,
+                        is_cancelled: input.is_cancelled,
                     },
                     stack,
                     child_count,
@@ -2613,23 +2860,29 @@ pub fn runtime_value_from_param(
 }
 
 pub fn empty_frame(generation: u64, message: impl Into<String>) -> OutputFrame {
+    let source = OutputSourceMetadata {
+        label: "No preview source".to_string(),
+        kind: OutputSourceKind::Empty,
+        duration_seconds: 0.0,
+        fps: 0,
+    };
+    let bounds = GeometryRenderBounds {
+        min_x: Distance::from_micrometers(-5_000_000),
+        min_y: Distance::from_micrometers(-4_000_000),
+        max_x: Distance::from_micrometers(5_000_000),
+        max_y: Distance::from_micrometers(4_000_000),
+    };
+    let fixtures = Vec::new();
+    let topology_identity =
+        OutputFrameTopologyIdentity::from_frame_parts(&source, bounds, &fixtures);
     OutputFrame {
-        source: OutputSourceMetadata {
-            label: "No preview source".to_string(),
-            kind: OutputSourceKind::Empty,
-            duration_seconds: 0.0,
-            fps: 0,
-        },
+        source,
+        topology_identity,
         time_seconds: 0.0,
         generation,
         status: OutputFrameStatus::Idle(message.into()),
-        bounds: GeometryRenderBounds {
-            min_x: Distance::from_micrometers(-5_000_000),
-            min_y: Distance::from_micrometers(-4_000_000),
-            max_x: Distance::from_micrometers(5_000_000),
-            max_y: Distance::from_micrometers(4_000_000),
-        },
-        fixtures: Vec::new(),
+        bounds,
+        fixtures,
     }
 }
 
@@ -2644,13 +2897,14 @@ mod tests {
         Color, CurveValue, Distance, EffectParam, EffectScriptId, Resolved, SequenceEffectScope,
     };
     use dawn_project::path::{utf8_path, Utf8PathBuf};
-    use dawn_project::render::GeometryRenderBounds;
+    use dawn_project::render::{GeometryRenderBounds, GeometryRenderPoint};
 
     use dawn_project::effect_script::{GeneratorTarget, GeneratorTargetPixel};
 
     use super::{
         build_effect_indices_by_frame, generator_targets_for_scope, pixel_context_for_effect,
-        OutputFixtureFrame, OutputFrame, OutputFrameStatus, OutputSourceKind, OutputSourceMetadata,
+        OutputFixtureFrame, OutputFrame, OutputFrameBoundsIdentity, OutputFrameStatus,
+        OutputFrameTopologyIdentity, OutputPixelFrame, OutputSourceKind, OutputSourceMetadata,
         PreparedEffectRender, PreparedSequenceEffect, SequenceChangeImpact, SequenceFrameEvaluator,
         SequenceRenderCache,
     };
@@ -2931,6 +3185,78 @@ mod tests {
             .into_iter()
             .collect(),
         }
+    }
+
+    fn topology_fixture(pixel_count: usize) -> OutputFixtureFrame {
+        OutputFixtureFrame {
+            id: dawn_project::model::FixtureId(1),
+            name: "fixture".to_string(),
+            bulb_radius: dawn_project::model::DistanceSpan::from_micrometers(100_000),
+            pixels: (0..pixel_count)
+                .map(|index| OutputPixelFrame {
+                    position: GeometryRenderPoint {
+                        x: Distance::from_micrometers(index as i64),
+                        y: Distance::from_micrometers(0),
+                        z: Distance::from_micrometers(0),
+                    },
+                    color: Color::new(0, 0, 0),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn output_frame_topology_identity_tracks_source_pixel_count_and_bounds() {
+        let source = OutputSourceMetadata {
+            label: "Sequence one".to_string(),
+            kind: OutputSourceKind::Sequence,
+            duration_seconds: 1.0,
+            fps: 10,
+        };
+        let bounds = GeometryRenderBounds {
+            min_x: Distance::from_micrometers(0),
+            min_y: Distance::from_micrometers(0),
+            max_x: Distance::from_micrometers(1_000_000),
+            max_y: Distance::from_micrometers(1_000_000),
+        };
+        let base =
+            OutputFrameTopologyIdentity::from_frame_parts(&source, bounds, &[topology_fixture(2)]);
+
+        let mut changed_source = source.clone();
+        changed_source.label = "Sequence two".to_string();
+        assert_ne!(
+            base,
+            OutputFrameTopologyIdentity::from_frame_parts(
+                &changed_source,
+                bounds,
+                &[topology_fixture(2)]
+            )
+        );
+        assert_ne!(
+            base,
+            OutputFrameTopologyIdentity::from_frame_parts(&source, bounds, &[topology_fixture(3)])
+        );
+        let changed_bounds = GeometryRenderBounds {
+            max_x: Distance::from_micrometers(2_000_000),
+            ..bounds
+        };
+        assert_ne!(
+            base.bounds,
+            OutputFrameBoundsIdentity {
+                min_x_micrometers: changed_bounds.min_x.as_micrometers(),
+                min_y_micrometers: changed_bounds.min_y.as_micrometers(),
+                max_x_micrometers: changed_bounds.max_x.as_micrometers(),
+                max_y_micrometers: changed_bounds.max_y.as_micrometers()
+            }
+        );
+        assert_ne!(
+            base,
+            OutputFrameTopologyIdentity::from_frame_parts(
+                &source,
+                changed_bounds,
+                &[topology_fixture(2)]
+            )
+        );
     }
 
     #[test]

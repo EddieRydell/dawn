@@ -109,7 +109,11 @@ impl AudioRuntime {
         let mut inner = self.lock_inner()?;
         inner.poll_load_results();
         inner.ensure_active(audio, position_seconds)?;
-        if inner.active_data.is_some() {
+        if inner.status == AudioPlaybackStatus::LoadingToPlay {
+            inner.pending_play_seconds = None;
+            inner.position_seconds = position_seconds;
+            inner.status = AudioPlaybackStatus::Loading;
+        } else if inner.active_data.is_some() {
             inner.start(position_seconds)?;
         } else if inner.status.is_loading() {
             inner.pending_play_seconds = Some(position_seconds);

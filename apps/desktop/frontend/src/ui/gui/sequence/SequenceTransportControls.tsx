@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { commands } from "../../../api";
 
-import type { AppSnapshotDto, AudioPlaybackStatus, SequenceDocumentDto } from "../../../bindings";
+import type { AppSnapshotDto, AudioPlaybackStatus, PreviewTransportState, SequenceDocumentDto } from "../../../bindings";
 
 import { runSnapshotCommand } from "../../../store";
 
@@ -31,8 +31,9 @@ export function SequenceTransportControls({
   const audioStatus = useSequenceAudioStatus(livePreview);
   const timingSummary = previewTimingSummary(livePreview.timing);
   const audioLoading = isAudioLoadingStatus(livePreview.audioPlaybackStatus);
-  const audioQueued = livePreview.audioPlaybackStatus === "loading_to_play";
-  const playCommand = audioQueued || livePreview.isPlaying ? commands.previewPause : commands.previewPlay;
+  const audioQueued = livePreview.transportState === "loading_to_play";
+  const activePlayback = isActivePreviewPlayback(livePreview.transportState);
+  const playCommand = audioQueued || activePlayback ? commands.previewPause : commands.previewPlay;
   const [mode, setMode] = useMarkDisplayMode();
   const selectedEffectIdsSignature = selectedEffectIds.join(",");
   const stepFrame = (direction: -1 | 1) => {
@@ -56,11 +57,11 @@ export function SequenceTransportControls({
     >
       <button
         type="button"
-        title={audioQueued ? "Cancel queued playback" : audioLoading ? "Play when audio loads" : livePreview.isPlaying ? "Pause" : "Play"}
+        title={audioQueued ? "Cancel queued playback" : audioLoading ? "Play when audio loads" : activePlayback ? "Pause" : "Play"}
         disabled={unsupported}
         onClick={() => void runSnapshotCommand(playCommand)}
       >
-        {audioLoading ? <LoaderCircle className="sequence-loading-icon" size={15} /> : livePreview.isPlaying ? <Pause size={15} /> : <Play size={15} />}
+        {audioLoading ? <LoaderCircle className="sequence-loading-icon" size={15} /> : activePlayback ? <Pause size={15} /> : <Play size={15} />}
       </button>
       <button type="button" title="Stop" disabled={unsupported} onClick={() => void runSnapshotCommand(commands.previewStop)}>
         <Square size={14} />
@@ -197,7 +198,7 @@ export function useSequencePreview(preview: AppSnapshotDto["preview"]): LivePrev
     const tick = () => {
       const latest = livePreviewRef.current;
       const current = anchor.current;
-      if (!latest.isPlaying || !current.preview.isPlaying) {
+      if (!shouldAnimatePreviewPosition(latest.transportState) || !shouldAnimatePreviewPosition(current.preview.transportState)) {
         setAnimatedPositionSeconds(latest.positionSeconds);
         return;
       }
@@ -209,9 +210,9 @@ export function useSequencePreview(preview: AppSnapshotDto["preview"]): LivePrev
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [livePreview.isPlaying, livePreview.positionSeconds]);
+  }, [livePreview.transportState, livePreview.positionSeconds]);
 
-  return livePreview.isPlaying
+  return shouldAnimatePreviewPosition(livePreview.transportState)
     ? {
         ...livePreview,
         positionSeconds: animatedPositionSeconds
@@ -309,7 +310,7 @@ export function handleSequencePlaybackShortcut(
   if (event.key === " ") {
     event.preventDefault();
     event.stopPropagation();
-    void runSnapshotCommand(preview.audioPlaybackStatus === "loading_to_play" ? commands.previewPause : preview.isPlaying ? commands.previewStop : commands.previewPlay);
+    void runSnapshotCommand(preview.transportState === "loading_to_play" ? commands.previewPause : isActivePreviewPlayback(preview.transportState) ? commands.previewStop : commands.previewPlay);
   } else if (event.key.toLowerCase() === "s") {
     event.preventDefault();
     event.stopPropagation();
@@ -327,6 +328,14 @@ export function handleSequencePlaybackShortcut(
     event.stopPropagation();
     stepSequenceFrame(document, preview.positionSeconds, preview.durationSeconds, 1);
   }
+}
+
+function isActivePreviewPlayback(state: PreviewTransportState) {
+  return state === "playing" || state === "effect_preview";
+}
+
+function shouldAnimatePreviewPosition(state: PreviewTransportState) {
+  return state === "playing";
 }
 
 function stepSequenceFrame(document: SequenceDocumentDto, positionSeconds: number, previewDurationSeconds: number, direction: -1 | 1) {

@@ -258,7 +258,7 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 1
-    start: 39.831603309s
+    start: 39.809442678s
     duration: 1.85s
     target:
       type: group
@@ -590,13 +590,21 @@ empty:
         value: '#000000'
       accent:
         type: curve
-        curve: curves.cool_gradient
+        curve:
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#00a6ff'
+          - time: 1.0
+            value: '#3d00ff'
       hue:
         type: curve
         curve: curves.hue_cool_shift
       hue_mix:
         type: float
-        value: 0.4
+        value: 0.1
       offset_seconds:
         type: float
         value: -0.09

@@ -27,7 +27,7 @@ use specta::Type;
 
 use crate::app_model::{ActiveGuiDocument, AppSnapshot, LiveOutputSnapshot};
 use crate::editor_session::{BufferExternalState, EditorBuffer, EditorViewMode};
-use crate::preview_session::AudioPlaybackStatus;
+use crate::preview_session::{AudioPlaybackStatus, PreviewTransportState};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -746,15 +746,15 @@ pub struct TextPositionDto {
 #[serde(rename_all = "camelCase")]
 pub struct PreviewSnapshotDto {
     pub source_label: String,
-    pub is_playing: bool,
+    pub transport_state: PreviewTransportState,
     pub preview_updating: bool,
-    pub effect_preview_active: bool,
     pub position_seconds: f64,
     pub home_seconds: f64,
     pub duration_seconds: f64,
     pub audio: Option<SequenceAudioDto>,
     pub clock_source: String,
     pub audio_playback_status: AudioPlaybackStatus,
+    pub frame_topology_identity: String,
     pub status: String,
 }
 
@@ -796,15 +796,15 @@ impl From<AppSnapshot> for AppSnapshotDto {
             status: snapshot.status,
             preview: PreviewSnapshotDto {
                 source_label: snapshot.preview.source_label,
-                is_playing: snapshot.preview.is_playing,
+                transport_state: snapshot.preview.transport_state,
                 preview_updating: snapshot.preview.preview_updating,
-                effect_preview_active: snapshot.preview.effect_preview_active,
                 position_seconds: snapshot.preview.position_seconds,
                 home_seconds: snapshot.preview.home_seconds,
                 duration_seconds: snapshot.preview.duration_seconds,
                 audio: snapshot.preview.audio.map(SequenceAudioDto::from),
                 clock_source: snapshot.preview.clock_source,
                 audio_playback_status: snapshot.preview.audio_playback_status,
+                frame_topology_identity: snapshot.preview.frame.topology_identity.stable_key(),
                 status: snapshot.preview.status,
             },
             effect_preview_enabled: snapshot.workbench_layout.effect_preview_enabled,

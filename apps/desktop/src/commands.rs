@@ -7,6 +7,7 @@ use dawn_app_core::dto::{
     SequenceSelectionEditDto, SequenceSelectionEditResultDto,
 };
 use dawn_app_core::fseq_export::{export_fseq_file, FseqExportOptions};
+use dawn_app_core::preview_session::PreviewTransportState;
 use dawn_project::document::DocumentViewId;
 use dawn_project::path::{serialized_import_path, utf8_path, Utf8PathBuf};
 use tauri::{AppHandle, Manager, State};
@@ -511,15 +512,19 @@ async fn open_preview_window(app: AppHandle, state: State<'_, AppState>) -> Comm
 #[specta::specta]
 #[tauri::command]
 fn preview_play(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
-    let (audio, position_seconds, effect_preview_enabled) = {
+    let (audio, position_seconds, transport_state, effect_preview_enabled) = {
         let model = lock_model(&state)?;
         let snapshot = model.preview.snapshot();
         (
             valid_sequence_audio(&snapshot),
             snapshot.position_seconds,
+            snapshot.transport_state,
             model.workbench_layout.effect_preview_enabled,
         )
     };
+    if transport_state == PreviewTransportState::LoadingToPlay {
+        return preview_pause(app, state);
+    }
     if effect_preview_enabled {
         dispatch(&app, &state, AppAction::SetEffectPreviewEnabled(false))?;
     }
@@ -611,7 +616,10 @@ fn preview_seek(
     let (audio, playing) = {
         let model = lock_model(&state)?;
         let snapshot = model.preview.snapshot();
-        (valid_sequence_audio(&snapshot), snapshot.is_playing)
+        (
+            valid_sequence_audio(&snapshot),
+            snapshot.transport_state.should_animate_position(),
+        )
     };
     let Some(audio) = audio else {
         return dispatch(&app, &state, AppAction::PreviewSeek(position_seconds));

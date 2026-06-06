@@ -1,7 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { commands } from "../api";
-import type { AudioPlaybackStatus, GeometryRenderBoundsDto, PreviewSceneDto } from "../bindings";
+import type { AudioPlaybackStatus, GeometryRenderBoundsDto, PreviewSceneDto, PreviewTransportState } from "../bindings";
 import {
   disposePreviewTransport,
   getPreviewTransportMode,
@@ -12,11 +12,12 @@ import {
 
 type PreviewState = {
   sourceLabel: string;
-  isPlaying: boolean;
+  transportState: PreviewTransportState;
   previewUpdating: boolean;
   positionSeconds: number;
   durationSeconds: number;
   audioPlaybackStatus: AudioPlaybackStatus;
+  frameTopologyIdentity: string;
   status: string;
   timing: PreviewTiming;
 };
@@ -63,6 +64,7 @@ export function PreviewWindow() {
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const drag = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const latestFrame = useRef<SharedPreviewFrame | null>(null);
+  const sceneTopologyIdentity = useRef<string | null>(null);
   const drawHandle = useRef(0);
   const lastHudUpdate = useRef(0);
   const requestDrawRef = useRef<() => void>(() => {});
@@ -152,6 +154,17 @@ export function PreviewWindow() {
     requestDrawRef.current = requestDraw;
   }, [requestDraw]);
 
+  const reloadPreviewScene = useCallback(async () => {
+    await disposePreviewTransport();
+    const loadedScene = await commands.getPreviewScene();
+    sceneTopologyIdentity.current = loadedScene.topologyIdentity;
+    latestFrame.current = null;
+    previousFrameTelemetry.current = null;
+    setScene(loadedScene);
+    await initPreviewTransport();
+    requestDrawRef.current();
+  }, []);
+
   useEffect(() => {
     let disposeFrames: (() => void) | undefined;
     let disposeEvents: (() => void) | undefined;
@@ -165,6 +178,7 @@ export function PreviewWindow() {
         }
         const loadedScene = await commands.getPreviewScene();
         if (lifecycle.disposed) return;
+        sceneTopologyIdentity.current = loadedScene.topologyIdentity;
         setScene(loadedScene);
         await initPreviewTransport();
         disposeFrames = subscribePreviewFrames((message) => {
@@ -188,6 +202,14 @@ export function PreviewWindow() {
           requestDrawRef.current();
         });
         disposeEvents = await listen<PreviewState>("preview_state_changed", (event) => {
+          if (
+            event.payload.frameTopologyIdentity !== sceneTopologyIdentity.current &&
+            event.payload.frameTopologyIdentity.length > 0
+          ) {
+            void reloadPreviewScene().catch((reloadError: unknown) => {
+              setError(String(reloadError));
+            });
+          }
           setState(event.payload);
         });
       } catch (loadError) {
@@ -204,7 +226,7 @@ export function PreviewWindow() {
       }
       void disposePreviewTransport();
     };
-  }, []);
+  }, [reloadPreviewScene]);
 
   useEffect(() => {
     requestDraw();
@@ -282,7 +304,7 @@ export function PreviewWindow() {
           {formatNumber(state?.timing.liveOutputMs ?? 0)} ms
         </div>
         <div>
-          {formatSeconds(state?.positionSeconds ?? metrics.currentTimeSeconds)} | {state?.isPlaying === true ? "Playing" : "Stopped"} |{" "}
+          {formatSeconds(state?.positionSeconds ?? metrics.currentTimeSeconds)} | {previewTransportLabel(state?.transportState)} |{" "}
           {state?.previewUpdating === true ? "Updating preview" : previewAudioStatusLabel(state?.audioPlaybackStatus) ?? state?.status ?? error ?? "Ready"}
         </div>
       </div>
@@ -297,6 +319,7 @@ export function PreviewWindow() {
       </button>
     </div>
   );
+
 }
 
 function buildProjector(bounds: GeometryRenderBoundsDto, width: number, height: number, viewport: Viewport) {
@@ -356,5 +379,25 @@ function previewAudioStatusLabel(status: AudioPlaybackStatus | undefined) {
     case "none":
     case undefined:
       return null;
+  }
+}
+
+function previewTransportLabel(state: PreviewTransportState | undefined) {
+  switch (state) {
+    case "playing":
+      return "Playing";
+    case "effect_preview":
+      return "Effect preview";
+    case "loading_to_play":
+      return "Queued";
+    case "paused":
+      return "Paused";
+    case "ended":
+      return "Ended";
+    case "error":
+      return "Error";
+    case "stopped":
+    case undefined:
+      return "Stopped";
   }
 }

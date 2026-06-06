@@ -100,14 +100,12 @@ pub(crate) fn apply_audio_clock_to_model(
     }
     match clock.status {
         AudioPlaybackStatus::Loading => {
-            model.preview.pause_at(clock.position_seconds, analysis);
             model
                 .preview
                 .set_timing_status("nativeAudio", AudioPlaybackStatus::Loading);
             model.status = "Loading audio".to_string();
         }
         AudioPlaybackStatus::LoadingToPlay => {
-            model.preview.pause_at(clock.position_seconds, analysis);
             model
                 .preview
                 .set_timing_status("nativeAudio", AudioPlaybackStatus::LoadingToPlay);
@@ -132,14 +130,12 @@ pub(crate) fn apply_audio_clock_to_model(
             model.status = "Preview complete".to_string();
         }
         AudioPlaybackStatus::Missing => {
-            model.preview.pause_at(clock.position_seconds, analysis);
             model
                 .preview
                 .set_timing_status("silent", AudioPlaybackStatus::Missing);
             model.status = "Audio missing".to_string();
         }
         AudioPlaybackStatus::None => {
-            model.preview.pause_at(clock.position_seconds, analysis);
             model
                 .preview
                 .set_timing_status("silent", AudioPlaybackStatus::None);
@@ -171,7 +167,7 @@ pub(crate) fn preload_active_preview_audio(
         file_name: audio.file_name.clone(),
         exists: audio.exists,
     };
-    if !preview.is_playing
+    if !preview.transport_state.is_active_playback()
         && !matches!(
             preview.audio_playback_status,
             AudioPlaybackStatus::Loading
@@ -212,15 +208,15 @@ pub(crate) fn emit_preview_state_dto_with_timing(
         "preview_state_changed",
         PreviewStateEventDto {
             source_label: snapshot.preview.source_label.clone(),
-            is_playing: snapshot.preview.is_playing,
+            transport_state: snapshot.preview.transport_state,
             preview_updating: snapshot.preview.preview_updating,
-            effect_preview_active: snapshot.preview.effect_preview_active,
             position_seconds: snapshot.preview.position_seconds,
             home_seconds: snapshot.preview.home_seconds,
             duration_seconds: snapshot.preview.duration_seconds,
             audio: snapshot.preview.audio.clone(),
             clock_source: snapshot.preview.clock_source.clone(),
             audio_playback_status: snapshot.preview.audio_playback_status,
+            frame_topology_identity: snapshot.preview.frame_topology_identity.clone(),
             status: snapshot.preview.status.clone(),
             timing: timing.into(),
         },
@@ -237,15 +233,15 @@ pub(crate) fn emit_preview_state_snapshot(
         "preview_state_changed",
         PreviewStateEventDto {
             source_label: snapshot.source_label.clone(),
-            is_playing: snapshot.is_playing,
+            transport_state: snapshot.transport_state,
             preview_updating: snapshot.preview_updating,
-            effect_preview_active: snapshot.effect_preview_active,
             position_seconds: snapshot.position_seconds,
             home_seconds: snapshot.home_seconds,
             duration_seconds: snapshot.duration_seconds,
             audio: snapshot.audio.clone().map(Into::into),
             clock_source: snapshot.clock_source.clone(),
             audio_playback_status: snapshot.audio_playback_status,
+            frame_topology_identity: snapshot.frame.topology_identity.stable_key(),
             status: snapshot.status.clone(),
             timing,
         },
@@ -262,4 +258,86 @@ pub(crate) fn valid_sequence_audio(snapshot: &PreviewSnapshot) -> Option<Sequenc
 
 fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use dawn_app_core::app_model::AppModel;
+    use dawn_app_core::preview_session::{PreviewSyncMode, PreviewTransportState, SequenceKey};
+    use dawn_project::analysis::analyze_project;
+    use dawn_project::document::get_sequence_document;
+    use dawn_project::fs::WorkspaceFs;
+    use dawn_project::path::{utf8_path, Utf8PathBuf};
+
+    use super::*;
+
+    fn thirty_output_controller_project_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/thirty-output-controller/project.dawn")
+    }
+
+    fn thirty_output_controller_context() -> (WorkspaceFs, Utf8PathBuf, Utf8PathBuf) {
+        let project_path = thirty_output_controller_project_path();
+        let root = project_path
+            .parent()
+            .expect("thirty output controller project should have a parent");
+        let fs = WorkspaceFs::open(root).expect("thirty output controller root should open");
+        let project_path = utf8_path(
+            project_path
+                .strip_prefix(root)
+                .expect("project path should be under root"),
+        )
+        .expect("project path should be valid UTF-8");
+        let sequence_path = utf8_path(Path::new("sequences/empty.sequence.dawn"))
+            .expect("sequence path should be valid UTF-8");
+        (fs, project_path, sequence_path)
+    }
+
+    #[test]
+    fn loading_to_play_audio_clock_does_not_reschedule_preview_render() {
+        let (fs, project_path, sequence_path) = thirty_output_controller_context();
+        let analysis = analyze_project(&fs, project_path.clone(), "thirty_output_controller");
+        assert!(
+            analysis.diagnostics.is_empty(),
+            "{:?}",
+            analysis.diagnostics
+        );
+        let document = get_sequence_document(&fs, sequence_path, "empty", project_path, Vec::new())
+            .expect("thirty output controller sequence should load");
+        let key = SequenceKey {
+            path: document.path.clone().into(),
+            object_key: document.object_key.clone(),
+        };
+        let mut model = AppModel::default();
+        model.analysis = Some(analysis.clone());
+        model.preview.sync_source(
+            Some((key, document)),
+            Some(&analysis),
+            PreviewSyncMode::RenderNow,
+        );
+        let request = model
+            .begin_deferred_preview_render()
+            .expect("source sync should schedule preview render");
+
+        let clock = AudioClock {
+            position_seconds: 1.25,
+            ended: false,
+            status: AudioPlaybackStatus::LoadingToPlay,
+            error: None,
+        };
+        apply_audio_clock_to_model(&mut model, &clock, Some(&analysis));
+        apply_audio_clock_to_model(&mut model, &clock, Some(&analysis));
+
+        assert!(!request.cancellation.is_cancelled());
+        assert_eq!(
+            model.preview.snapshot().transport_state,
+            PreviewTransportState::LoadingToPlay
+        );
+        assert!(
+            model.begin_deferred_preview_render().is_none(),
+            "loading_to_play status updates should not create a new render request"
+        );
+    }
 }

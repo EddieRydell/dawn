@@ -202,6 +202,7 @@ export type Point3MetersDto = {
 
 export type PreviewSceneDto = {
 	generation: number,
+	topologyIdentity: string,
 	sourceLabel: string,
 	bounds: GeometryRenderBoundsDto,
 	pixelCount: number,
@@ -218,19 +219,21 @@ export type PreviewSceneFixtureDto = {
 
 export type PreviewSnapshotDto = {
 	sourceLabel: string,
-	isPlaying: boolean,
+	transportState: PreviewTransportState,
 	previewUpdating: boolean,
-	effectPreviewActive: boolean,
 	positionSeconds: number,
 	homeSeconds: number,
 	durationSeconds: number,
 	audio: SequenceAudioDto | null,
 	clockSource: string,
 	audioPlaybackStatus: AudioPlaybackStatus,
+	frameTopologyIdentity: string,
 	status: string,
 };
 
 export type PreviewTransportMode = "webview2_shared" | "unsupported";
+
+export type PreviewTransportState = "stopped" | "paused" | "loading_to_play" | "playing" | "effect_preview" | "ended" | "error";
 
 export type ProjectDiagnosticDto = {
 	path: string,
