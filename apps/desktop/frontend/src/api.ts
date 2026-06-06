@@ -1,6 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { commands as generatedCommands } from "./bindings";
-import type { AppSnapshotDto, SequenceEffectPreviewRequestEffectDto } from "./bindings";
+import type {
+  AppSnapshotDto,
+  SequenceEffectPreviewRequestEffectDto,
+  TerminalEventDto,
+  TerminalPanelLayoutDto,
+  TerminalProfileDto
+} from "./bindings";
 
 type GeneratedResult<T> = Promise<{ status: "ok"; data: T } | { status: "error"; error: string }>;
 
@@ -60,6 +66,17 @@ export const commands = {
   toggleProjectTree: () => unwrap(generatedCommands.toggleProjectTree()),
   setEffectPreviewEnabled: (enabled: boolean) => unwrap(generatedCommands.setEffectPreviewEnabled(enabled)),
   setEffectPreviewEffects: (ids: number[]) => unwrap(generatedCommands.setEffectPreviewEffects(ids)),
+  setTerminalPanelLayout: (layout: TerminalPanelLayoutDto) => unwrap(generatedCommands.setTerminalPanelLayout(layout)),
+  createTerminalSession: (
+    profile: TerminalProfileDto,
+    cols: number,
+    rows: number,
+    outputChannel: Parameters<typeof generatedCommands.createTerminalSession>[3]
+  ) => unwrap(generatedCommands.createTerminalSession(profile, cols, rows, outputChannel)),
+  writeTerminalInput: (sessionId: number, data: string) => unwrap(generatedCommands.writeTerminalInput(sessionId, data)),
+  resizeTerminalSession: (sessionId: number, cols: number, rows: number) =>
+    unwrap(generatedCommands.resizeTerminalSession(sessionId, cols, rows)),
+  killTerminalSession: (sessionId: number) => unwrap(generatedCommands.killTerminalSession(sessionId)),
   openPreviewWindow: () => unwrap(generatedCommands.openPreviewWindow()),
   previewPlay: () => unwrap(generatedCommands.previewPlay()),
   previewPause: () => unwrap(generatedCommands.previewPause()),
@@ -69,3 +86,5 @@ export const commands = {
   setLiveOutputEnabled: (enabled: boolean) => unwrap(generatedCommands.setLiveOutputEnabled(enabled)),
   getPreviewScene: () => unwrap(generatedCommands.getPreviewScene())
 };
+
+export type { TerminalEventDto, TerminalPanelLayoutDto, TerminalProfileDto };

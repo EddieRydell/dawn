@@ -43,6 +43,9 @@ pub(crate) fn register_main_window_layout_events(app: &AppHandle) -> CommandResu
             if let Ok(mut model) = lock_model(&state) {
                 let _ = model.flush_autosave();
             }
+            if let Ok(mut terminal_runtime) = crate::state::lock_terminal_runtime(&state) {
+                terminal_runtime.kill_all();
+            }
             state.begin_shutdown();
             persist_window_layout(&app_for_event, WorkbenchWindow::Main);
             persist_window_layout(&app_for_event, WorkbenchWindow::Preview);

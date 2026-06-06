@@ -458,7 +458,7 @@ empty:
         value: 50.0
       section_width_pixels:
         type: integer
-        value: 5
+        value: 1
       chase_position:
         type: curve
         curve: curves.ease_up
@@ -497,7 +497,7 @@ empty:
         value: 50.0
       section_width_pixels:
         type: integer
-        value: 5
+        value: 1
       chase_position:
         type: curve
         curve:
@@ -591,13 +591,13 @@ empty:
         value: 0.1
       section_width_pixels:
         type: integer
-        value: 18
+        value: 10
       section_edge_fade_pixels:
         type: float
         value: 0.0
       sections_per_mark:
         type: integer
-        value: 2
+        value: 4
       seed:
         type: float
         value: 40.0
@@ -924,7 +924,7 @@ empty:
         value: 25.0
       section_width_pixels:
         type: integer
-        value: 5
+        value: 1
       chase_position:
         type: curve
         curve: curves.soft_pulse
@@ -1021,6 +1021,9 @@ empty:
       base:
         type: color
         value: '#000000'
+      gradient_mode:
+        type: enum
+        value: per_pulse
       accent:
         type: curve
         curve: curves.fire_gradient
@@ -1041,13 +1044,16 @@ empty:
         value: 0.0
       chase_seconds:
         type: float
-        value: 0.2
+        value: 0.5
       pulse_overlap:
         type: float
-        value: 25.0
+        value: 70.0
       section_width_pixels:
         type: integer
         value: 1
+      alternate_direction:
+        type: bool
+        value: true
       chase_position:
         type: curve
         curve:
@@ -1107,7 +1113,7 @@ empty:
         value: through_effect
       pulse_overlap:
         type: float
-        value: 150.0
+        value: 80.0
       section_width_pixels:
         type: integer
         value: 1
@@ -1127,6 +1133,10 @@ empty:
           points:
           - time: 0.0
             value: 1.0
+          - time: 0.285
+            value: 0.122
+          - time: 0.516
+            value: 0.81
           - time: 1.0
             value: 0.0
     script: effects.Chase
@@ -1352,10 +1362,10 @@ empty:
         value: through_effect
       pulse_overlap:
         type: float
-        value: 120.0
+        value: 80.0
       section_width_pixels:
         type: integer
-        value: 5
+        value: 1
       chase_position:
         type: curve
         curve:
@@ -1397,10 +1407,10 @@ empty:
         value: through_effect
       pulse_overlap:
         type: float
-        value: 120.0
+        value: 100.0
       section_width_pixels:
         type: integer
-        value: 5
+        value: 1
       chase_position:
         type: curve
         curve:
@@ -1442,10 +1452,10 @@ empty:
         value: through_effect
       pulse_overlap:
         type: float
-        value: 120.0
+        value: 90.0
       section_width_pixels:
         type: integer
-        value: 5
+        value: 1
       chase_position:
         type: curve
         curve:
@@ -1536,10 +1546,10 @@ empty:
         value: through_effect
       pulse_overlap:
         type: float
-        value: 120.0
+        value: 80.0
       section_width_pixels:
         type: integer
-        value: 5
+        value: 1
       chase_position:
         type: curve
         curve:

@@ -22,6 +22,7 @@ mod new_project;
 mod preview;
 mod preview_transport;
 mod state;
+mod terminal_runtime;
 mod window_layout;
 
 pub use bindings::{check_bindings, export_bindings, specta_builder};

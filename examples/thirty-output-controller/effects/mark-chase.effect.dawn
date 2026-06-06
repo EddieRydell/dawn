@@ -3,6 +3,7 @@ use "./chase.effect.dawn" as effects;
 effect MarkChase {
   param marks beats;
   param color base = #000000;
+  param enum gradient_mode { through_effect, across_items, per_pulse } = per_pulse;
   param curve<color> accent;
   param curve<float> hue;
   param float hue_mix = 0.35;
@@ -10,11 +11,13 @@ effect MarkChase {
   param float chase_seconds = 0.5;
   param float pulse_overlap = 8.0;
   param int section_width_pixels = 5;
+  param bool alternate_direction = true;
   param curve<float> chase_position;
   param curve<float> pulse_shape;
 
   void generate(Timeline timeline, Target target, float duration) {
     int beat_count = mark_count(beats);
+    bool reverse = false;
     for (int beat = 0; beat < beat_count; beat = beat + 1) {
       float hit = mark_at(beats, beat, 0.0) + offset_seconds;
       if (hit >= 0.0 && hit < duration) {
@@ -24,12 +27,17 @@ effect MarkChase {
           duration: chase_seconds;
           params: {
             gradient: accent;
+            gradient_mode: gradient_mode;
             pulse_overlap: pulse_overlap;
             section_width_pixels: section_width_pixels;
+            reverse: reverse;
             chase_position: chase_position;
             pulse_shape: pulse_shape;
           };
         };
+        if (alternate_direction) {
+          reverse = !reverse;
+        }
       }
     }
   }

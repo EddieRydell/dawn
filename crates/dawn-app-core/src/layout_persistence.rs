@@ -7,6 +7,7 @@ use crate::editor_session::EditorSessionState;
 
 const DEFAULT_LEFT_PANE_WIDTH: f64 = 280.0;
 const DEFAULT_RIGHT_PANE_WIDTH: f64 = 360.0;
+const DEFAULT_TERMINAL_PANEL_WIDTH: f64 = 440.0;
 
 fn default_preview_window_open() -> bool {
     true
@@ -41,6 +42,8 @@ pub struct WorkbenchLayout {
     pub preview_window: WindowLayout,
     #[serde(default)]
     pub effect_preview_enabled: bool,
+    #[serde(default)]
+    pub terminal_panel: TerminalPanelLayout,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -49,6 +52,33 @@ pub enum InspectorTab {
     #[default]
     Diagnostics,
     Preview,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalPanelLayout {
+    pub visible: bool,
+    pub width_px: f64,
+    pub active_tab_index: u32,
+    pub tab_profiles: Vec<TerminalProfile>,
+}
+
+impl Default for TerminalPanelLayout {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            width_px: DEFAULT_TERMINAL_PANEL_WIDTH,
+            active_tab_index: 0,
+            tab_profiles: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TerminalProfile {
+    PowerShell,
+    Cmd,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +134,7 @@ impl Default for WorkbenchLayout {
             main_window: WindowLayout::main_default(),
             preview_window: WindowLayout::preview_default(),
             effect_preview_enabled: false,
+            terminal_panel: TerminalPanelLayout::default(),
         }
     }
 }
@@ -119,6 +150,7 @@ impl WorkbenchLayout {
             main_window: self.main_window.clone(),
             preview_window: self.preview_window.clone(),
             effect_preview_enabled: self.effect_preview_enabled,
+            terminal_panel: self.terminal_panel.clone(),
             ..Self::default()
         };
     }
