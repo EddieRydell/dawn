@@ -72,6 +72,8 @@ pub(super) enum Instruction {
         FloatSlot,
         FloatSlot,
     ),
+    CurveCrossing(FloatSlot, RefSlot, FloatSlot, FloatSlot),
+    CurveParamCrossing(FloatSlot, usize, FloatSlot, FloatSlot),
     Min(FloatSlot, FloatSlot, FloatSlot),
     Max(FloatSlot, FloatSlot, FloatSlot),
     Clamp(FloatSlot, FloatSlot, FloatSlot, FloatSlot),

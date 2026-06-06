@@ -166,9 +166,7 @@ impl BuiltinFunction {
                 Some(ScriptType::TargetItem)
             }
             (Self::CurveCrossing, [ScriptType::CurveFloat, value, fallback])
-                if kind == EffectScriptKind::Generator
-                    && is_float_compatible(*value)
-                    && is_float_compatible(*fallback) =>
+                if is_float_compatible(*value) && is_float_compatible(*fallback) =>
             {
                 Some(ScriptType::Float)
             }

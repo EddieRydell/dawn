@@ -29,16 +29,26 @@ type PreviewTiming = {
   targetFrameMs: number;
   sleepPlannedMs: number;
   loopElapsedMs: number;
+  loopTotalMs: number;
+  loopAccountedMs: number;
+  loopUnaccountedMs: number;
+  sleepActualMs: number;
   loopIntervalMs: number;
   previewTransportLockMs: number;
+  previewPublishLockMs: number;
   liveOutputLockMs: number;
   modelLockWaitMs: number;
   previewSnapshotMs: number;
-  analysisCloneMs: number;
+  analysisHandleMs: number;
   audioPollMs: number;
   audioApplyMs: number;
   modelUpdateMs: number;
   renderMs: number;
+  renderWallMs: number;
+  renderOverheadMs: number;
+  renderInvalidationMs: number;
+  renderCacheMs: number;
+  renderResultMs: number;
   rendererBuildMs: number;
   frameEvaluateMs: number;
   frameFixtureCloneMs: number;
@@ -47,7 +57,6 @@ type PreviewTiming = {
   publishMs: number;
   eventEmitMs: number;
   liveOutputMs: number;
-  eventIntervalMs: number;
   renderedActiveEffects: number;
   renderedSampledPixels: number;
   renderedFrame: boolean;
@@ -278,30 +287,39 @@ export function PreviewWindow() {
           {formatNumber(metrics.frontendIntervalMs)} ms
         </div>
         <div>
-          loop {formatNumber(state?.timing.loopElapsedMs ?? 0)} ms | interval {formatNumber(state?.timing.loopIntervalMs ?? 0)} ms | sleep{" "}
-          {formatNumber(state?.timing.sleepPlannedMs ?? 0)} ms | target frame {formatNumber(state?.timing.targetFrameMs ?? 0)} ms
+          loop total {formatNumber(state?.timing.loopTotalMs ?? 0)} ms | work {formatNumber(state?.timing.loopElapsedMs ?? 0)} ms | target{" "}
+          {formatNumber(state?.timing.targetFrameMs ?? 0)} ms | interval {formatNumber(state?.timing.loopIntervalMs ?? 0)} ms
         </div>
         <div>
-          model {formatNumber(state?.timing.modelUpdateMs ?? 0)} ms | audio {formatNumber(state?.timing.audioPollMs ?? 0)} ms | apply{" "}
-          {formatNumber(state?.timing.audioApplyMs ?? 0)} ms | render{" "}
-          {formatNumber(state?.timing.renderMs ?? 0)} ms | publish {formatNumber(state?.timing.publishMs ?? 0)} ms
+          accounted {formatNumber(state?.timing.loopAccountedMs ?? 0)} ms | unaccounted {formatNumber(state?.timing.loopUnaccountedMs ?? 0)} ms | sleep actual{" "}
+          {formatNumber(state?.timing.sleepActualMs ?? 0)} ms | sleep planned {formatNumber(state?.timing.sleepPlannedMs ?? 0)} ms
+        </div>
+        <div>
+          model {formatNumber(state?.timing.modelUpdateMs ?? 0)} ms | audio poll {formatNumber(state?.timing.audioPollMs ?? 0)} ms | audio apply{" "}
+          {formatNumber(state?.timing.audioApplyMs ?? 0)} ms | live output {formatNumber(state?.timing.liveOutputMs ?? 0)} ms
+        </div>
+        <div>
+          render wall {formatNumber(state?.timing.renderWallMs ?? 0)} ms | render eval {formatNumber(state?.timing.renderMs ?? 0)} ms | overhead{" "}
+          {formatNumber(state?.timing.renderOverheadMs ?? 0)} ms | effects {formatNumber(state?.timing.frameEffectLoopMs ?? 0)} ms
+        </div>
+        <div>
+          invalidation {formatNumber(state?.timing.renderInvalidationMs ?? 0)} ms | cache {formatNumber(state?.timing.renderCacheMs ?? 0)} ms | result{" "}
+          {formatNumber(state?.timing.renderResultMs ?? 0)} ms
         </div>
         <div>
           locks model {formatNumber(state?.timing.modelLockWaitMs ?? 0)} ms | transport{" "}
-          {formatNumber(state?.timing.previewTransportLockMs ?? 0)} ms | live lock {formatNumber(state?.timing.liveOutputLockMs ?? 0)} ms
+          {formatNumber(state?.timing.previewTransportLockMs ?? 0)} ms | publish lock {formatNumber(state?.timing.previewPublishLockMs ?? 0)} ms | live lock{" "}
+          {formatNumber(state?.timing.liveOutputLockMs ?? 0)} ms
         </div>
         <div>
-          clones analysis {formatNumber(state?.timing.analysisCloneMs ?? 0)} ms | snapshot{" "}
-          {formatNumber(state?.timing.previewSnapshotMs ?? 0)} ms | event emit {formatNumber(state?.timing.eventEmitMs ?? 0)} ms
+          analysis handle {formatNumber(state?.timing.analysisHandleMs ?? 0)} ms | snapshot{" "}
+          {formatNumber(state?.timing.previewSnapshotMs ?? 0)} ms | event emit prev {formatNumber(state?.timing.eventEmitMs ?? 0)} ms | publish{" "}
+          {formatNumber(state?.timing.publishMs ?? 0)} ms
         </div>
         <div>
-          frame build {formatNumber(state?.timing.rendererBuildMs ?? 0)} ms | eval {formatNumber(state?.timing.frameEvaluateMs ?? 0)} ms | clone{" "}
-          {formatNumber(state?.timing.frameFixtureCloneMs ?? 0)} ms | effects {formatNumber(state?.timing.frameEffectLoopMs ?? 0)} ms | output{" "}
-          {formatNumber(state?.timing.frameOutputMs ?? 0)} ms
-        </div>
-        <div>
-          active effects {state?.timing.renderedActiveEffects ?? 0} | sampled pixels {state?.timing.renderedSampledPixels ?? 0} | live output{" "}
-          {formatNumber(state?.timing.liveOutputMs ?? 0)} ms
+          build {formatNumber(state?.timing.rendererBuildMs ?? 0)} ms | fixture clone {formatNumber(state?.timing.frameFixtureCloneMs ?? 0)} ms | output{" "}
+          {formatNumber(state?.timing.frameOutputMs ?? 0)} ms | active effects {state?.timing.renderedActiveEffects ?? 0} | sampled pixels{" "}
+          {state?.timing.renderedSampledPixels ?? 0}
         </div>
         <div>
           {formatSeconds(state?.positionSeconds ?? metrics.currentTimeSeconds)} | {previewTransportLabel(state?.transportState)} |{" "}

@@ -1,4 +1,4 @@
-use crate::model::{Color, CurveValue};
+use crate::model::{Color, Curve, CurveValue};
 
 use super::bytecode::{
     stats_for_program, BinaryInstruction, BytecodeProgram, ContextSlot, FloatSlot, Instruction,
@@ -174,6 +174,18 @@ impl<'a> BytecodeVm<'a, '_> {
                     }
                     .unwrap_or(fallback);
                     self.scratch.floats[dest.0] = value;
+                }
+                Instruction::CurveCrossing(dest, curve, value, fallback) => {
+                    let value = self.scratch.floats[value.0];
+                    let fallback = self.scratch.floats[fallback.0];
+                    self.scratch.floats[dest.0] =
+                        self.curve_crossing(curve, value).unwrap_or(fallback);
+                }
+                Instruction::CurveParamCrossing(dest, index, value, fallback) => {
+                    let value = self.scratch.floats[value.0];
+                    let fallback = self.scratch.floats[fallback.0];
+                    self.scratch.floats[dest.0] =
+                        self.curve_param_crossing(index, value).unwrap_or(fallback);
                 }
                 Instruction::Min(dest, left, right) => {
                     self.scratch.floats[dest.0] =
@@ -464,6 +476,36 @@ impl<'a> BytecodeVm<'a, '_> {
         }
     }
 
+    fn curve(&self, slot: RefSlot) -> Result<&Curve, RuntimeError> {
+        let value = match self.scratch.refs[slot.0] {
+            RefValue::Param(index) => &self.params.values[index],
+            RefValue::Constant(index) => &self.program.constants[index],
+            RefValue::Unset => return Err(self.error("expected curve value")),
+        };
+        match value {
+            RuntimeValue::Curve(value) => Ok(value),
+            _ => Err(self.error("expected curve value")),
+        }
+    }
+
+    fn curve_crossing(&self, slot: RefSlot, value: f64) -> Option<f64> {
+        match self.scratch.refs[slot.0] {
+            RefValue::Param(index) => self.curve_param_crossing(index, value),
+            RefValue::Constant(_) | RefValue::Unset => self
+                .curve(slot)
+                .ok()
+                .and_then(|curve| curve_crossing(curve, value)),
+        }
+    }
+
+    fn curve_param_crossing(&self, index: usize, value: f64) -> Option<f64> {
+        self.params
+            .curve_crossings
+            .get(index)
+            .and_then(Option::as_ref)
+            .and_then(|table| table.crossing(value))
+    }
+
     fn enum_value(&self, slot: ValueSlot) -> Result<&str, RuntimeError> {
         let slot = slot.reference();
         let value = match self.scratch.refs[slot.0] {
@@ -568,4 +610,27 @@ fn mark_phase(marks: &[f64], time: f64) -> Option<f64> {
 
 fn mark_elapsed(marks: &[f64], time: f64) -> Option<f64> {
     mark_prev(marks, time).map(|previous| time - previous)
+}
+
+fn curve_crossing(curve: &Curve, value: f64) -> Option<f64> {
+    let mut previous = curve.points.first()?;
+    for point in &curve.points[1..] {
+        let CurveValue::Float(left) = previous.value else {
+            return None;
+        };
+        let CurveValue::Float(right) = point.value else {
+            return None;
+        };
+        if (left <= value && right >= value) || (left >= value && right <= value) {
+            let span = right - left;
+            let amount = if span.abs() < f64::EPSILON {
+                0.0
+            } else {
+                (value - left) / span
+            };
+            return Some(previous.time + (point.time - previous.time) * amount);
+        }
+        previous = point;
+    }
+    None
 }

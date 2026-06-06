@@ -52,7 +52,7 @@ pub(crate) fn dispatch(
         timing.app_snapshot_emit_ms = elapsed_ms(app_snapshot_emit_started);
         timing.total_ms = elapsed_ms(total_started);
         model.set_last_command_timing(timing);
-        emit_preview_state_dto_with_timing(app, &snapshot, timing)?;
+        emit_preview_state_dto_with_timing(app, &snapshot, PreviewTimingDto::empty(0.0))?;
     } else {
         timing.total_ms = elapsed_ms(total_started);
         model.set_last_command_timing(timing);
@@ -71,7 +71,7 @@ pub(crate) fn update_preview_from_audio_status(
 ) -> CommandResult<AppSnapshotDto> {
     let mut model = lock_model(state)?;
     let analysis = model.analysis.clone();
-    apply_audio_clock_to_model(&mut model, &clock, analysis.as_ref());
+    apply_audio_clock_to_model(&mut model, &clock, analysis.as_deref());
     emit_model_snapshot(app, &model)
 }
 
@@ -202,7 +202,7 @@ pub(crate) fn emit_preview_state_dto(
 pub(crate) fn emit_preview_state_dto_with_timing(
     app: &AppHandle,
     snapshot: &AppSnapshotDto,
-    timing: impl Into<PreviewTimingDto>,
+    timing: PreviewTimingDto,
 ) -> CommandResult<()> {
     app.emit(
         "preview_state_changed",
@@ -218,7 +218,7 @@ pub(crate) fn emit_preview_state_dto_with_timing(
             audio_playback_status: snapshot.preview.audio_playback_status,
             frame_topology_identity: snapshot.preview.frame_topology_identity.clone(),
             status: snapshot.preview.status.clone(),
-            timing: timing.into(),
+            timing,
         },
     )
     .map_err(|error| error.to_string())
@@ -311,7 +311,7 @@ mod tests {
             object_key: document.object_key.clone(),
         };
         let mut model = AppModel::default();
-        model.analysis = Some(analysis.clone());
+        model.analysis = Some(std::sync::Arc::new(analysis.clone()));
         model.preview.sync_source(
             Some((key, document)),
             Some(&analysis),

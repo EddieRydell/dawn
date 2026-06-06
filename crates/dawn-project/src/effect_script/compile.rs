@@ -524,6 +524,29 @@ impl<'a> Compiler<'a> {
                 self.emit(Instruction::MarkSearch(dest, search, marks, time, fallback));
                 ValueSlot::Float(dest)
             }
+            BuiltinFunction::CurveCrossing => {
+                if let Expr::Ident(name) = &args[0] {
+                    if let Some(Binding::Param {
+                        index,
+                        value_type: ScriptType::CurveFloat,
+                    }) = self.binding(name)
+                    {
+                        let value = self.compile_float_arg(&args[1]);
+                        let fallback = self.compile_float_arg(&args[2]);
+                        let dest = self.allocate_float();
+                        self.emit(Instruction::CurveParamCrossing(
+                            dest, index, value, fallback,
+                        ));
+                        return ValueSlot::Float(dest);
+                    }
+                }
+                let curve = self.compile_expr(&args[0]).reference();
+                let value = self.compile_float_arg(&args[1]);
+                let fallback = self.compile_float_arg(&args[2]);
+                let dest = self.allocate_float();
+                self.emit(Instruction::CurveCrossing(dest, curve, value, fallback));
+                ValueSlot::Float(dest)
+            }
             BuiltinFunction::Min => {
                 let left = self.compile_float_arg(&args[0]);
                 let right = self.compile_float_arg(&args[1]);
@@ -590,8 +613,7 @@ impl<'a> Compiler<'a> {
             | BuiltinFunction::Pixels
             | BuiltinFunction::Sections
             | BuiltinFunction::Count
-            | BuiltinFunction::Pick
-            | BuiltinFunction::CurveCrossing => {
+            | BuiltinFunction::Pick => {
                 unreachable!("sample compiler does not emit generator builtins")
             }
         }

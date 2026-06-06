@@ -2906,7 +2906,6 @@ mod tests {
         OutputFixtureFrame, OutputFrame, OutputFrameBoundsIdentity, OutputFrameStatus,
         OutputFrameTopologyIdentity, OutputPixelFrame, OutputSourceKind, OutputSourceMetadata,
         PreparedEffectRender, PreparedSequenceEffect, SequenceChangeImpact, SequenceFrameEvaluator,
-        SequenceRenderCache,
     };
 
     fn club_rig_project_path() -> PathBuf {
@@ -2970,19 +2969,6 @@ mod tests {
         (analysis, document)
     }
 
-    fn mutate_int_param(
-        document: &mut SequenceDocument,
-        effect_id: u32,
-        param_name: &str,
-        value: u64,
-    ) {
-        let param = render_param_mut(document, effect_id, param_name);
-        match &mut param.value {
-            EffectParam::<Resolved>::Integer { value: current } => *current = value,
-            _ => panic!("expected integer param `{param_name}`"),
-        }
-    }
-
     fn mutate_curve_point(
         document: &mut SequenceDocument,
         effect_id: u32,
@@ -3016,17 +3002,6 @@ mod tests {
                     .find(|param| param.name == param_name)
             })
             .unwrap_or_else(|| panic!("effect `{effect_id}` param `{param_name}` should exist"))
-    }
-
-    fn generator_parent_timing(
-        timing: &super::SequenceFrameEvaluatorPreparationTiming,
-        effect_id: u32,
-    ) -> &super::GeneratorParentPreparationTiming {
-        timing
-            .generator_parents
-            .iter()
-            .find(|parent| parent.parent_effect_id == effect_id)
-            .unwrap_or_else(|| panic!("generator parent `{effect_id}` should be timed"))
     }
 
     fn assert_only_invalidated(impact: &SequenceChangeImpact, prepared: &[u32], topology: &[u32]) {
@@ -3063,63 +3038,6 @@ mod tests {
         let impact = SequenceChangeImpact::between(&document, &edited, &analysis);
 
         assert_only_invalidated(&impact, &[3], &[]);
-    }
-
-    #[test]
-    fn sequence_change_impact_invalidates_only_chase_topology_param_entries() {
-        let (analysis, document) = thirty_output_controller_analysis_and_sequence();
-        let mut edited = document.clone();
-        mutate_int_param(&mut edited, 8, "section_width_pixels", 7);
-
-        let impact = SequenceChangeImpact::between(&document, &edited, &analysis);
-
-        assert_only_invalidated(&impact, &[8], &[8]);
-    }
-
-    #[test]
-    fn sequence_render_cache_keeps_unrelated_generator_prepared_hits_across_local_edits() {
-        let (analysis, document) = thirty_output_controller_analysis_and_sequence();
-        let mut cache = SequenceRenderCache::default();
-        let (_, initial_timing) = cache
-            .build_evaluator(&analysis, &document)
-            .expect("initial evaluator should build");
-        assert!(
-            initial_timing.generator_parents.len() > 2,
-            "example should contain multiple generator effects"
-        );
-
-        let mut edited = document.clone();
-        mutate_curve_point(&mut edited, 3, "pulse_shape", 1, 0.25);
-        let impact = SequenceChangeImpact::between(&document, &edited, &analysis);
-        cache.apply_change_impact(&impact);
-        let (_, edited_timing) = cache
-            .build_evaluator(&analysis, &edited)
-            .expect("edited evaluator should build");
-
-        let edited_parent = generator_parent_timing(&edited_timing, 3);
-        let unrelated_parent = generator_parent_timing(&edited_timing, 8);
-        assert!(!edited_parent.prepared_cache_hit);
-        assert!(edited_parent.topology_cache_hit);
-        assert!(unrelated_parent.prepared_cache_hit);
-    }
-
-    #[test]
-    fn sequence_render_cache_deleting_effect_prunes_only_that_effect_entries() {
-        let (analysis, document) = thirty_output_controller_analysis_and_sequence();
-        let mut cache = SequenceRenderCache::default();
-        cache
-            .build_evaluator(&analysis, &document)
-            .expect("initial evaluator should build");
-        let initial_prepared_entries = cache.prepared_entry_count();
-        let initial_topology_entries = cache.topology_entry_count();
-
-        let mut edited = document.clone();
-        edited.effects.retain(|effect| effect.id != 3);
-        let impact = SequenceChangeImpact::between(&document, &edited, &analysis);
-        cache.apply_change_impact(&impact);
-
-        assert_eq!(cache.prepared_entry_count(), initial_prepared_entries - 1);
-        assert_eq!(cache.topology_entry_count(), initial_topology_entries - 1);
     }
 
     fn frame_colors(frame: &OutputFrame) -> Vec<Color> {

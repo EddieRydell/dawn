@@ -266,25 +266,28 @@ function previewTimingSummary(timing: PreviewTiming | undefined) {
   const parts = [
     `fps ${timing.activeFps}/${timing.targetFps}`,
     `target ${formatMs(timing.targetFrameMs)}`,
-    `sleep ${formatMs(timing.sleepPlannedMs)}`,
+    `total ${formatMs(timing.loopTotalMs)}`,
+    `work ${formatMs(timing.loopElapsedMs)}`,
+    `unaccounted ${formatMs(timing.loopUnaccountedMs)}`,
+    `sleep ${formatMs(timing.sleepActualMs)}`,
     frameAudio === null ? null : `frame-audio ${formatSignedMs(frameAudio)}`,
     snapshotAudio === null ? null : `playhead-audio ${formatSignedMs(snapshotAudio)}`,
     `interval ${formatMs(timing.loopIntervalMs)}`,
-    `loop ${formatMs(timing.loopElapsedMs)}`,
     `model ${formatMs(timing.modelUpdateMs)}`,
     `model-lock ${formatMs(timing.modelLockWaitMs)}`,
-    `analysis-clone ${formatMs(timing.analysisCloneMs)}`,
-    `snapshot ${formatMs(timing.previewSnapshotMs)}`,
-    `audio ${formatMs(timing.audioPollMs)}`,
+    `analysis-handle ${formatMs(timing.analysisHandleMs)}`,
+    `audio-poll ${formatMs(timing.audioPollMs)}`,
     `apply ${formatMs(timing.audioApplyMs)}`,
-    `render ${formatMs(timing.renderMs)}`,
+    `render-wall ${formatMs(timing.renderWallMs)}`,
+    `render-eval ${formatMs(timing.renderMs)}`,
+    `render-overhead ${formatMs(timing.renderOverheadMs)}`,
+    `invalidation ${formatMs(timing.renderInvalidationMs)}`,
+    `cache ${formatMs(timing.renderCacheMs)}`,
+    `result ${formatMs(timing.renderResultMs)}`,
     `build ${formatMs(timing.rendererBuildMs)}`,
-    `eval ${formatMs(timing.frameEvaluateMs)}`,
-    `frame-clone ${formatMs(timing.frameFixtureCloneMs)}`,
     `effects ${formatMs(timing.frameEffectLoopMs)}`,
     `publish ${formatMs(timing.publishMs)}`,
-    `event-emit ${formatMs(timing.eventEmitMs)}`,
-    `event ${formatMs(timing.eventIntervalMs)}`
+    `live-output ${formatMs(timing.liveOutputMs)}`
   ].filter((part): part is string => part !== null);
   return ` | ${parts.join(" | ")}`;
 }

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::model::Color;
+use crate::model::{Color, Curve, CurveValue, CurveValueType};
 
 use super::ast::Expr;
 use super::bytecode::{BytecodeStats, RegisterCounts};
@@ -12,6 +12,62 @@ use super::{
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedEffectParams {
     pub(super) values: Vec<RuntimeValue>,
+    pub(super) curve_crossings: Vec<Option<CurveCrossingTable>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct CurveCrossingTable {
+    segments: Vec<CurveCrossingSegment>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CurveCrossingSegment {
+    time: f64,
+    value: f64,
+    min_value: f64,
+    max_value: f64,
+    inverse_slope: f64,
+}
+
+impl CurveCrossingTable {
+    fn from_curve(curve: &Curve) -> Option<Self> {
+        if curve.value_type != CurveValueType::Float {
+            return None;
+        }
+        let mut segments = Vec::with_capacity(curve.points.len().saturating_sub(1));
+        for pair in curve.points.windows(2) {
+            let left_point = &pair[0];
+            let right_point = &pair[1];
+            let CurveValue::Float(left) = left_point.value else {
+                return None;
+            };
+            let CurveValue::Float(right) = right_point.value else {
+                return None;
+            };
+            let span = right - left;
+            segments.push(CurveCrossingSegment {
+                time: left_point.time,
+                value: left,
+                min_value: left.min(right),
+                max_value: left.max(right),
+                inverse_slope: if span.abs() < f64::EPSILON {
+                    0.0
+                } else {
+                    (right_point.time - left_point.time) / span
+                },
+            });
+        }
+        Some(Self { segments })
+    }
+
+    pub(super) fn crossing(&self, value: f64) -> Option<f64> {
+        self.segments.iter().find_map(|segment| {
+            if value < segment.min_value || value > segment.max_value {
+                return None;
+            }
+            Some(segment.time + (value - segment.value) * segment.inverse_slope)
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +126,7 @@ pub(super) fn prepare_params_with(
     mut value_for: impl FnMut(&str) -> Option<RuntimeValue>,
 ) -> Result<PreparedEffectParams, RuntimeError> {
     let mut prepared = Vec::with_capacity(params.len());
+    let mut curve_crossings = Vec::with_capacity(params.len());
     for param in params {
         let value = value_for(&param.name)
             .or_else(|| {
@@ -81,9 +138,17 @@ pub(super) fn prepare_params_with(
             .ok_or_else(|| RuntimeError {
                 message: format!("missing parameter `{}`", param.name),
             })?;
-        prepared.push(coerce_value(value, param.value_type)?);
+        let value = coerce_value(value, param.value_type)?;
+        curve_crossings.push(match &value {
+            RuntimeValue::Curve(curve) => CurveCrossingTable::from_curve(curve),
+            _ => None,
+        });
+        prepared.push(value);
     }
-    Ok(PreparedEffectParams { values: prepared })
+    Ok(PreparedEffectParams {
+        values: prepared,
+        curve_crossings,
+    })
 }
 
 pub(super) fn eval_constant(expr: &Expr) -> Result<RuntimeValue, ScriptDiagnostic> {

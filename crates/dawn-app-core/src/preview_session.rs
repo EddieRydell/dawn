@@ -49,7 +49,7 @@ pub enum PreviewSource {
     None,
     Sequence {
         key: SequenceKey,
-        document: Box<SequenceDocument>,
+        document: Arc<SequenceDocument>,
     },
 }
 
@@ -102,7 +102,7 @@ pub struct PreviewSnapshot {
     pub audio: Option<SequenceAudioDocument>,
     pub clock_source: String,
     pub audio_playback_status: AudioPlaybackStatus,
-    pub frame: OutputFrame,
+    pub frame: Arc<OutputFrame>,
     pub status: String,
 }
 
@@ -120,6 +120,9 @@ pub struct PreviewRenderTiming {
     pub fixture_clone_ms: f64,
     pub effect_loop_ms: f64,
     pub output_frame_ms: f64,
+    pub render_invalidation_ms: f64,
+    pub render_cache_ms: f64,
+    pub render_result_ms: f64,
     pub active_effects: u32,
     pub sampled_pixels: u32,
 }
@@ -130,7 +133,7 @@ pub struct PreviewRenderRequest {
     pub dirty_revision: u64,
     pub generation: u64,
     pub key: SequenceKey,
-    pub document: SequenceDocument,
+    pub document: Arc<SequenceDocument>,
     pub kind: PreviewRenderKind,
     pub status: String,
     pub cancellation: PreviewCancellationToken,
@@ -140,6 +143,7 @@ pub struct PreviewRenderRequest {
 pub enum PreviewRenderKind {
     SequenceFrame {
         position_seconds: f64,
+        frame_index: u64,
     },
     EffectPreview {
         preview_seconds: f64,
@@ -189,6 +193,7 @@ pub struct PreviewSession {
     transport: PreviewTransport,
     sequence_states: HashMap<SequenceKey, SequencePlaybackState>,
     effect_preview: Option<EffectPreviewState>,
+    last_native_audio_frame_index: Option<u64>,
     last_render_timing: PreviewRenderTiming,
     generation: u64,
     dirty_revision: u64,
@@ -222,6 +227,7 @@ impl Default for PreviewSession {
             transport: PreviewTransport::Stopped,
             sequence_states: HashMap::new(),
             effect_preview: None,
+            last_native_audio_frame_index: None,
             last_render_timing: PreviewRenderTiming::default(),
             generation: 0,
             dirty_revision: 0,
@@ -238,7 +244,7 @@ impl Default for PreviewSession {
                 audio: None,
                 clock_source: "silent".to_string(),
                 audio_playback_status: AudioPlaybackStatus::None,
-                frame,
+                frame: Arc::new(frame),
                 status: "No sequence preview source".to_string(),
             },
         }
@@ -278,7 +284,7 @@ impl PreviewSession {
                 self.sequence_states.entry(key.clone()).or_default();
                 self.source = PreviewSource::Sequence {
                     key,
-                    document: Box::new(document),
+                    document: Arc::new(document),
                 };
             }
             None => {
@@ -326,6 +332,10 @@ impl PreviewSession {
         let state = self.sequence_states.entry(key).or_default();
         state.position_seconds = clamp_position_seconds(position_seconds, duration_seconds);
         self.transport = PreviewTransport::NativeAudioPlaying;
+        self.last_native_audio_frame_index = Some(sequence_frame_index(
+            state.position_seconds,
+            self.target_fps(),
+        ));
         self.schedule_render(analysis, "Playing");
     }
 
@@ -342,12 +352,14 @@ impl PreviewSession {
         let state = self.sequence_states.entry(key).or_default();
         state.position_seconds = clamp_position_seconds(position_seconds, duration_seconds);
         self.transport = PreviewTransport::Paused;
+        self.last_native_audio_frame_index = None;
         self.schedule_render(analysis, "Paused");
     }
 
     pub fn stop(&mut self, analysis: Option<&ProjectAnalysis>) {
         self.capture_position();
         self.transport = PreviewTransport::Stopped;
+        self.last_native_audio_frame_index = None;
         if let Some((key, duration_seconds)) = self.sequence_source_meta() {
             let state = self.sequence_states.entry(key).or_default();
             state.position_seconds = clamp_position_seconds(state.home_seconds, duration_seconds);
@@ -357,6 +369,7 @@ impl PreviewSession {
 
     pub fn stop_native_audio(&mut self, analysis: Option<&ProjectAnalysis>) {
         self.transport = PreviewTransport::Stopped;
+        self.last_native_audio_frame_index = None;
         if let Some((key, duration_seconds)) = self.sequence_source_meta() {
             let state = self.sequence_states.entry(key).or_default();
             state.position_seconds = clamp_position_seconds(state.home_seconds, duration_seconds);
@@ -401,6 +414,7 @@ impl PreviewSession {
         } else {
             PreviewTransport::Paused
         };
+        self.last_native_audio_frame_index = None;
         self.schedule_render(analysis, "Ready");
     }
 
@@ -522,14 +536,20 @@ impl PreviewSession {
                 preview_seconds: effect_preview.started_at.elapsed().as_secs_f64(),
                 ids: effect_preview.ids,
             },
-            None => PreviewRenderKind::SequenceFrame { position_seconds },
+            None => {
+                let frame_index = sequence_frame_index(position_seconds, document.frame_rate);
+                PreviewRenderKind::SequenceFrame {
+                    position_seconds: frame_start(frame_index, document.frame_rate),
+                    frame_index,
+                }
+            }
         };
         Some(PreviewRenderRequest {
             id: pending.id,
             dirty_revision: pending.dirty_revision,
             generation: self.generation,
             key,
-            document: *document,
+            document,
             kind,
             status: self.snapshot.status.clone(),
             cancellation: pending.cancellation.clone(),
@@ -556,7 +576,7 @@ impl PreviewSession {
         self.refresh_snapshot_metadata(result.request.status);
         let frame_status =
             status_from_frame(&result.frame.status).unwrap_or_else(|| self.snapshot.status.clone());
-        self.snapshot.frame = result.frame;
+        self.snapshot.frame = Arc::new(result.frame);
         self.snapshot.status = frame_status;
         self.snapshot.preview_updating = false;
         true
@@ -593,16 +613,22 @@ impl PreviewSession {
             return;
         };
         let position_seconds = clamp_position_seconds(position_seconds, duration_seconds);
+        let frame_index = sequence_frame_index(position_seconds, self.target_fps());
         self.sequence_states
             .entry(key)
             .or_default()
             .position_seconds = position_seconds;
         if ended || position_seconds >= duration_seconds {
             self.transport = PreviewTransport::Stopped;
+            self.last_native_audio_frame_index = None;
             self.schedule_render(analysis, "Sequence playback complete");
         } else {
             self.transport = PreviewTransport::NativeAudioPlaying;
-            self.schedule_render(analysis, "Playing");
+            self.refresh_snapshot_metadata("Playing");
+            if self.last_native_audio_frame_index != Some(frame_index) {
+                self.last_native_audio_frame_index = Some(frame_index);
+                self.schedule_render(analysis, "Playing");
+            }
         }
     }
 
@@ -693,7 +719,7 @@ impl PreviewSession {
                 0.0,
                 0.0,
                 None,
-                empty_frame(self.generation, status.clone()),
+                Arc::new(empty_frame(self.generation, status.clone())),
             ),
             PreviewSource::Sequence { key, document } => {
                 let duration_seconds = document.duration_seconds;
@@ -706,7 +732,7 @@ impl PreviewSession {
                 let frame = if analysis.is_some() {
                     self.snapshot.frame.clone()
                 } else {
-                    empty_frame(self.generation, "No project analysis")
+                    Arc::new(empty_frame(self.generation, "No project analysis"))
                 };
                 (
                     format!("Sequence {}", document.object_key),
@@ -714,7 +740,7 @@ impl PreviewSession {
                     position_seconds,
                     home_seconds,
                     duration_seconds,
-                    document.audio,
+                    document.audio.clone(),
                     frame,
                 )
             }
@@ -869,20 +895,19 @@ impl PreviewSession {
 }
 
 impl PreviewRenderTiming {
-    pub fn from_evaluation(
+    pub fn apply_evaluation(
+        &mut self,
         renderer_build_ms: f64,
         evaluation: SequenceFrameEvaluationTiming,
-    ) -> Self {
-        Self {
-            total_ms: renderer_build_ms + evaluation.total_ms,
-            renderer_build_ms,
-            frame_evaluate_ms: evaluation.total_ms,
-            fixture_clone_ms: evaluation.fixture_clone_ms,
-            effect_loop_ms: evaluation.effect_loop_ms,
-            output_frame_ms: evaluation.output_frame_ms,
-            active_effects: evaluation.active_effects,
-            sampled_pixels: evaluation.sampled_pixels,
-        }
+    ) {
+        self.total_ms = renderer_build_ms + evaluation.total_ms;
+        self.renderer_build_ms = renderer_build_ms;
+        self.frame_evaluate_ms = evaluation.total_ms;
+        self.fixture_clone_ms = evaluation.fixture_clone_ms;
+        self.effect_loop_ms = evaluation.effect_loop_ms;
+        self.output_frame_ms = evaluation.output_frame_ms;
+        self.active_effects = evaluation.active_effects;
+        self.sampled_pixels = evaluation.sampled_pixels;
     }
 }
 
@@ -918,6 +943,18 @@ fn clamp_position_seconds(position_seconds: f64, duration_seconds: f64) -> f64 {
         0.0
     } else {
         position_seconds.min(duration_seconds.max(0.0))
+    }
+}
+
+pub fn frame_start(frame_index: u64, frame_rate: u32) -> f64 {
+    frame_index as f64 / frame_rate.max(1) as f64
+}
+
+fn sequence_frame_index(position_seconds: f64, frame_rate: u32) -> u64 {
+    if !position_seconds.is_finite() || position_seconds <= 0.0 {
+        0
+    } else {
+        (position_seconds * frame_rate.max(1) as f64).floor() as u64
     }
 }
 
@@ -1057,5 +1094,62 @@ mod tests {
         };
         assert!(ids.contains(&23));
         assert!(first_request.cancellation.is_cancelled());
+    }
+
+    #[test]
+    fn native_audio_same_frame_ticks_do_not_reschedule_render() {
+        let (analysis, mut document, key) = club_rig_analysis_and_sequence(Vec::new());
+        document.frame_rate = 144;
+        let mut session = PreviewSession::default();
+        session.sync_source(
+            Some((key, document)),
+            Some(&analysis),
+            PreviewSyncMode::RenderNow,
+        );
+        session.play_from_native_audio_clock(0.001, Some(&analysis));
+        let request = session
+            .begin_deferred_render()
+            .expect("native audio play should schedule a preview render");
+
+        session.render_at_native_audio_clock(0.002, false, Some(&analysis));
+
+        assert!(!request.cancellation.is_cancelled());
+        assert!(session.begin_deferred_render().is_none());
+    }
+
+    #[test]
+    fn native_audio_frame_boundary_schedules_latest_frame_start() {
+        let (analysis, mut document, key) = club_rig_analysis_and_sequence(Vec::new());
+        document.frame_rate = 144;
+        let mut session = PreviewSession::default();
+        session.sync_source(
+            Some((key, document)),
+            Some(&analysis),
+            PreviewSyncMode::RenderNow,
+        );
+        session.play_from_native_audio_clock(0.001, Some(&analysis));
+        let first_request = session
+            .begin_deferred_render()
+            .expect("native audio play should schedule a preview render");
+
+        session.render_at_native_audio_clock((1.0 / 144.0) + 0.0001, false, Some(&analysis));
+        let second_request = session
+            .begin_deferred_render()
+            .expect("frame boundary should schedule the next preview render");
+
+        assert!(first_request.cancellation.is_cancelled());
+        let super::PreviewRenderKind::SequenceFrame {
+            position_seconds,
+            frame_index,
+        } = second_request.kind
+        else {
+            panic!("frame boundary should schedule a sequence frame render");
+        };
+        assert_eq!(frame_index, 1);
+        assert_eq!(position_seconds, super::frame_start(1, 144));
+
+        session.render_at_native_audio_clock((1.0 / 144.0) + 0.0002, false, Some(&analysis));
+        assert!(!second_request.cancellation.is_cancelled());
+        assert!(session.begin_deferred_render().is_none());
     }
 }

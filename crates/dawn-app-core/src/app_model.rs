@@ -12,6 +12,7 @@ use dawn_project::path::Utf8PathBuf;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -287,7 +288,7 @@ pub struct AppModel {
     pub live_output: LiveOutputSnapshot,
     pub project_root: Option<String>,
     pub project_entries: Vec<WorkspaceEntry>,
-    pub analysis: Option<ProjectAnalysis>,
+    pub analysis: Option<Arc<ProjectAnalysis>>,
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub status: String,
     pub sequence_clipboard: Option<SequenceClipboard>,
@@ -376,7 +377,6 @@ struct SequenceSaveCompletion {
 pub struct AppSnapshot {
     pub project_root: Option<String>,
     pub project_entries: Vec<WorkspaceEntry>,
-    pub analysis: Option<ProjectAnalysis>,
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub workbench_layout: WorkbenchLayout,
     pub preview: PreviewSnapshot,
@@ -574,7 +574,6 @@ impl AppModel {
         AppSnapshot {
             project_root: self.project_root.clone(),
             project_entries: self.project_entries.clone(),
-            analysis: self.analysis.clone(),
             diagnostics: self.diagnostics.clone(),
             workbench_layout: self.workbench_layout.clone(),
             preview: self.preview.snapshot(),
@@ -639,7 +638,7 @@ impl AppModel {
                 self.editors.set_active_file(path);
                 if active_changed {
                     self.invalidate_active_gui_document_cache();
-                    self.preview.pause(self.analysis.as_ref());
+                    self.preview.pause(self.analysis.as_deref());
                     self.sync_preview_source(PreviewSyncMode::RenderNow);
                     self.persist_workbench_layout()?;
                 }
@@ -751,9 +750,9 @@ impl AppModel {
                 self.workbench_layout.effect_preview_enabled = enabled;
                 save_workbench_layout(&self.workbench_layout)?;
                 if !enabled {
-                    self.preview.clear_effect_preview(self.analysis.as_ref());
+                    self.preview.clear_effect_preview(self.analysis.as_deref());
                 } else {
-                    self.preview.render_current_frame(self.analysis.as_ref());
+                    self.preview.render_current_frame(self.analysis.as_deref());
                 }
             }
             AppAction::SetEffectPreviewEffects(ids) => {
@@ -763,32 +762,33 @@ impl AppModel {
                     Vec::new()
                 };
                 self.preview
-                    .set_effect_preview_ids(ids, self.analysis.as_ref());
+                    .set_effect_preview_ids(ids, self.analysis.as_deref());
             }
             AppAction::PreviewPlay => {
                 if self.workbench_layout.effect_preview_enabled {
                     self.workbench_layout.effect_preview_enabled = false;
                     save_workbench_layout(&self.workbench_layout)?;
-                    self.preview.clear_effect_preview(self.analysis.as_ref());
+                    self.preview.clear_effect_preview(self.analysis.as_deref());
                 }
-                self.preview.play(self.analysis.as_ref());
+                self.preview.play(self.analysis.as_deref());
                 self.status = "Preview playing".to_string();
             }
             AppAction::PreviewPause => {
-                self.preview.pause(self.analysis.as_ref());
+                self.preview.pause(self.analysis.as_deref());
                 self.status = "Preview paused".to_string();
             }
             AppAction::PreviewStop => {
-                self.preview.stop(self.analysis.as_ref());
+                self.preview.stop(self.analysis.as_deref());
                 self.status = "Preview stopped".to_string();
             }
             AppAction::PreviewRewindToZero => {
                 self.preview
-                    .go_to_sequence_beginning(self.analysis.as_ref());
+                    .go_to_sequence_beginning(self.analysis.as_deref());
                 self.status = "Preview rewound".to_string();
             }
             AppAction::PreviewSeek(position_seconds) => {
-                self.preview.seek(position_seconds, self.analysis.as_ref());
+                self.preview
+                    .seek(position_seconds, self.analysis.as_deref());
                 self.status = "Preview seeked".to_string();
             }
         }
@@ -797,7 +797,7 @@ impl AppModel {
     }
 
     pub fn tick_preview(&mut self) {
-        self.preview.tick(self.analysis.as_ref());
+        self.preview.tick(self.analysis.as_deref());
     }
 
     pub fn tick_preview_clock(&mut self) {
@@ -805,7 +805,7 @@ impl AppModel {
     }
 
     pub fn render_preview_frame(&mut self) {
-        self.preview.render_current_frame(self.analysis.as_ref());
+        self.preview.render_current_frame(self.analysis.as_deref());
     }
 
     pub fn begin_deferred_preview_render(&mut self) -> Option<PreviewRenderRequest> {
@@ -900,7 +900,7 @@ impl AppModel {
         let overlays = self.editors.dirty_overlays();
         let analysis = self.workspace.analyze(overlays)?;
         self.diagnostics = analysis.diagnostics.clone();
-        self.analysis = Some(analysis);
+        self.analysis = Some(Arc::new(analysis));
         Ok(())
     }
 
@@ -1031,7 +1031,7 @@ impl AppModel {
         let source = self.active_sequence_source();
         self.cache_active_sequence_source(source.as_ref());
         self.preview
-            .sync_source(source, self.analysis.as_ref(), mode);
+            .sync_source(source, self.analysis.as_deref(), mode);
     }
 
     fn sync_preview_source_from_document(
@@ -1049,7 +1049,7 @@ impl AppModel {
         ));
         self.cache_active_sequence_source(source.as_ref());
         self.preview
-            .sync_source(source, self.analysis.as_ref(), mode);
+            .sync_source(source, self.analysis.as_deref(), mode);
     }
 
     fn cache_active_sequence_source(&mut self, source: Option<&(SequenceKey, SequenceDocument)>) {
@@ -1346,7 +1346,7 @@ impl AppModel {
     ) -> Result<(), String> {
         let analysis = self
             .analysis
-            .as_ref()
+            .as_deref()
             .ok_or_else(|| "project analysis is not available".to_string())?
             .clone();
         self.ensure_sequence_gui_session(&key)?;
@@ -1464,7 +1464,7 @@ impl AppModel {
             .ok_or_else(|| "sequence GUI session is not available".to_string())?;
         let analysis = self
             .analysis
-            .as_ref()
+            .as_deref()
             .ok_or_else(|| "project analysis is not available".to_string())?
             .clone();
         self.sequence_save_worker.queue(SequenceSaveRequest {

@@ -333,7 +333,7 @@ fn request_sequence_effect_previews(
     let model = lock_model(&state)?;
     let analysis = model
         .analysis
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| "project analysis is not available".to_string())?
         .clone();
     let request_path = path.clone();
@@ -550,7 +550,7 @@ fn preview_pause(app: AppHandle, state: State<'_, AppState>) -> CommandResult<Ap
     let analysis = model.analysis.clone();
     model
         .preview
-        .pause_at(clock.position_seconds, analysis.as_ref());
+        .pause_at(clock.position_seconds, analysis.as_deref());
     model.preview.set_timing_status("nativeAudio", clock.status);
     model.status = "Preview paused".to_string();
     emit_model_snapshot(&app, &model)
@@ -573,7 +573,7 @@ fn preview_stop(app: AppHandle, state: State<'_, AppState>) -> CommandResult<App
     let clock = lock_audio_runtime(&state)?.stop(home_seconds)?;
     let mut model = lock_model(&state)?;
     let analysis = model.analysis.clone();
-    model.preview.stop_native_audio(analysis.as_ref());
+    model.preview.stop_native_audio(analysis.as_deref());
     model.preview.set_timing_status("nativeAudio", clock.status);
     model.status = "Preview stopped".to_string();
     emit_model_snapshot(&app, &model)
@@ -597,7 +597,7 @@ fn preview_rewind_to_zero(
     let analysis = model.analysis.clone();
     model
         .preview
-        .go_to_sequence_beginning_native_audio(analysis.as_ref());
+        .go_to_sequence_beginning_native_audio(analysis.as_deref());
     model.preview.set_timing_status("nativeAudio", clock.status);
     model.status = "Preview rewound".to_string();
     emit_model_snapshot(&app, &model)
@@ -629,7 +629,7 @@ fn preview_seek(
     let analysis = model.analysis.clone();
     model
         .preview
-        .seek_native_audio(clock.position_seconds, playing, analysis.as_ref());
+        .seek_native_audio(clock.position_seconds, playing, analysis.as_deref());
     model.preview.set_timing_status("nativeAudio", clock.status);
     model.status = "Preview seeked".to_string();
     emit_model_snapshot(&app, &model)
@@ -643,7 +643,7 @@ fn set_live_output_enabled(
     enabled: bool,
 ) -> CommandResult<AppSnapshotDto> {
     let analysis = lock_model(&state)?.analysis.clone();
-    let snapshot = lock_live_output(&state)?.set_enabled(enabled, analysis.as_ref());
+    let snapshot = lock_live_output(&state)?.set_enabled(enabled, analysis);
     let mut model = lock_model(&state)?;
     model.set_live_output_snapshot(snapshot);
     emit_model_snapshot(&app, &model)

@@ -65,6 +65,8 @@ enum Command {
         #[arg(long)]
         synthetic_active_effects: Option<usize>,
         #[arg(long)]
+        isolate_effect_id: Option<u32>,
+        #[arg(long)]
         no_effect_breakdown: bool,
     },
     ExportFseq {
@@ -107,6 +109,7 @@ fn run() -> Result<ExitCode, String> {
             warmup,
             json,
             synthetic_active_effects,
+            isolate_effect_id,
             no_effect_breakdown,
         } => bench_effect(BenchEffectOptions {
             path: &project_path_or_directory,
@@ -119,6 +122,7 @@ fn run() -> Result<ExitCode, String> {
             warmup,
             json,
             synthetic_active_effects,
+            isolate_effect_id,
             no_effect_breakdown,
         }),
         Command::ExportFseq {
@@ -198,6 +202,7 @@ struct BenchEffectOptions<'a> {
     warmup: usize,
     json: bool,
     synthetic_active_effects: Option<usize>,
+    isolate_effect_id: Option<u32>,
     no_effect_breakdown: bool,
 }
 
@@ -258,8 +263,16 @@ fn bench_effect(options: BenchEffectOptions<'_>) -> Result<ExitCode, String> {
         Vec::new(),
     )?;
 
+    let mut benchmark_time_seconds = time_seconds;
     let document = if let Some(active_count) = options.synthetic_active_effects {
         synthetic_active_effect_document(&document, time_seconds, active_count)?
+    } else {
+        document
+    };
+    let document = if let Some(effect_id) = options.isolate_effect_id {
+        let isolated = isolated_effect_document(&document, effect_id, benchmark_time_seconds)?;
+        benchmark_time_seconds = isolated.time_seconds;
+        isolated.document
     } else {
         document
     };
@@ -268,10 +281,11 @@ fn bench_effect(options: BenchEffectOptions<'_>) -> Result<ExitCode, String> {
         input: &input,
         analysis: &analysis,
         document: &document,
-        time_seconds,
+        time_seconds: benchmark_time_seconds,
         iterations: options.iterations,
         warmup: options.warmup,
         synthetic_active_effects: options.synthetic_active_effects,
+        isolate_effect_id: options.isolate_effect_id,
         no_effect_breakdown: options.no_effect_breakdown,
     });
 
@@ -507,9 +521,11 @@ struct EffectBenchReport {
     iterations: usize,
     warmup: usize,
     synthetic_active_effects: Option<usize>,
+    isolate_effect_id: Option<u32>,
     no_effect_breakdown: bool,
     total_effects: usize,
     prepared_effects: usize,
+    prepare: PreparationTimingReport,
     active_effect_count: usize,
     rendered_active_prepared_effects: u32,
     visited_prepared_effects: u32,
@@ -521,8 +537,9 @@ struct EffectBenchReport {
 
 impl EffectBenchReport {
     fn run(input: EffectBenchRunInput<'_>) -> Self {
-        let mut evaluator = SequenceFrameEvaluator::new(input.analysis, input.document)
-            .expect("benchmark analysis must resolve before rendering");
+        let (mut evaluator, prepare_timing) =
+            SequenceFrameEvaluator::new_timed(input.analysis, input.document)
+                .expect("benchmark analysis must resolve before rendering");
         for generation in 0..input.warmup {
             black_box(evaluator.evaluate(input.time_seconds, generation as u64));
         }
@@ -577,9 +594,11 @@ impl EffectBenchReport {
             iterations: input.iterations,
             warmup: input.warmup,
             synthetic_active_effects: input.synthetic_active_effects,
+            isolate_effect_id: input.isolate_effect_id,
             no_effect_breakdown: input.no_effect_breakdown,
             total_effects: input.document.effects.len(),
             prepared_effects: evaluator.prepared_effect_count(),
+            prepare: PreparationTimingReport::from_timing(prepare_timing),
             active_effect_count,
             rendered_active_prepared_effects: last_evaluation_timing
                 .map(|timing| timing.active_prepared_effects)
@@ -603,6 +622,7 @@ struct EffectBenchRunInput<'a> {
     iterations: usize,
     warmup: usize,
     synthetic_active_effects: Option<usize>,
+    isolate_effect_id: Option<u32>,
     no_effect_breakdown: bool,
 }
 
@@ -829,6 +849,7 @@ struct SyntheticCaseDefinition {
     script_path: &'static str,
     script: &'static str,
     scope: SequenceEffectScope,
+    duration_seconds: f64,
     params: Vec<SequenceEffectParamDocument>,
 }
 
@@ -899,6 +920,20 @@ fn synthetic_effect_overlays(
             path: synthetic_overlay_path(input, "effects/synthetic-bench-mark-dense.effect.dawn")?,
             content: SYNTHETIC_MARK_DENSE_GENERATOR.to_string(),
         },
+        ProjectOverlay {
+            path: synthetic_overlay_path(
+                input,
+                "effects/synthetic-bench-nested-pulse.effect.dawn",
+            )?,
+            content: SYNTHETIC_NESTED_PULSE_GENERATOR.to_string(),
+        },
+        ProjectOverlay {
+            path: synthetic_overlay_path(
+                input,
+                "effects/synthetic-bench-mark-nested-overlap.effect.dawn",
+            )?,
+            content: SYNTHETIC_MARK_NESTED_OVERLAP_GENERATOR.to_string(),
+        },
     ])
 }
 
@@ -936,6 +971,8 @@ fn synthetic_effect_overlay_paths() -> Vec<&'static str> {
         "effects/synthetic-bench-dense-overlap.effect.dawn",
         "effects/synthetic-bench-per-fixture.effect.dawn",
         "effects/synthetic-bench-mark-dense.effect.dawn",
+        "effects/synthetic-bench-nested-pulse.effect.dawn",
+        "effects/synthetic-bench-mark-nested-overlap.effect.dawn",
     ]
 }
 
@@ -947,6 +984,7 @@ fn synthetic_case_definitions(case_kind: BenchCaseKindFilter) -> Vec<SyntheticCa
             script_path: "effects/synthetic-bench-constant-color.effect.dawn",
             script: "SyntheticConstantColor",
             scope: SequenceEffectScope::WholeTarget,
+            duration_seconds: 4.0,
             params: vec![param_color("color", Color::new(12, 48, 180))],
         },
         SyntheticCaseDefinition {
@@ -955,6 +993,7 @@ fn synthetic_case_definitions(case_kind: BenchCaseKindFilter) -> Vec<SyntheticCa
             script_path: "effects/synthetic-bench-curve-color.effect.dawn",
             script: "SyntheticCurveColor",
             scope: SequenceEffectScope::WholeTarget,
+            duration_seconds: 4.0,
             params: vec![param_color_curve("gradient")],
         },
         SyntheticCaseDefinition {
@@ -963,6 +1002,7 @@ fn synthetic_case_definitions(case_kind: BenchCaseKindFilter) -> Vec<SyntheticCa
             script_path: "effects/synthetic-bench-pixel-math.effect.dawn",
             script: "SyntheticPixelMath",
             scope: SequenceEffectScope::WholeTarget,
+            duration_seconds: 4.0,
             params: Vec::new(),
         },
         SyntheticCaseDefinition {
@@ -971,6 +1011,7 @@ fn synthetic_case_definitions(case_kind: BenchCaseKindFilter) -> Vec<SyntheticCa
             script_path: "effects/synthetic-bench-single-child.effect.dawn",
             script: "SyntheticSingleChild",
             scope: SequenceEffectScope::WholeTarget,
+            duration_seconds: 4.0,
             params: vec![param_color("color", Color::new(255, 80, 24))],
         },
         SyntheticCaseDefinition {
@@ -979,6 +1020,7 @@ fn synthetic_case_definitions(case_kind: BenchCaseKindFilter) -> Vec<SyntheticCa
             script_path: "effects/synthetic-bench-sequential-sections.effect.dawn",
             script: "SyntheticSequentialSections",
             scope: SequenceEffectScope::WholeTarget,
+            duration_seconds: 4.0,
             params: vec![param_integer("section_width_pixels", 8)],
         },
         SyntheticCaseDefinition {
@@ -987,6 +1029,7 @@ fn synthetic_case_definitions(case_kind: BenchCaseKindFilter) -> Vec<SyntheticCa
             script_path: "effects/synthetic-bench-dense-overlap.effect.dawn",
             script: "SyntheticDenseOverlappingSections",
             scope: SequenceEffectScope::WholeTarget,
+            duration_seconds: 4.0,
             params: vec![param_integer("section_width_pixels", 2)],
         },
         SyntheticCaseDefinition {
@@ -995,6 +1038,7 @@ fn synthetic_case_definitions(case_kind: BenchCaseKindFilter) -> Vec<SyntheticCa
             script_path: "effects/synthetic-bench-per-fixture.effect.dawn",
             script: "SyntheticPerFixtureSections",
             scope: SequenceEffectScope::PerFixture,
+            duration_seconds: 4.0,
             params: Vec::new(),
         },
         SyntheticCaseDefinition {
@@ -1003,10 +1047,25 @@ fn synthetic_case_definitions(case_kind: BenchCaseKindFilter) -> Vec<SyntheticCa
             script_path: "effects/synthetic-bench-mark-dense.effect.dawn",
             script: "SyntheticMarkDenseEmission",
             scope: SequenceEffectScope::WholeTarget,
+            duration_seconds: 4.0,
             params: vec![
                 param_marks("beats", "synthetic_marks"),
                 param_integer("section_width_pixels", 3),
                 param_integer("sections_per_mark", 6),
+            ],
+        },
+        SyntheticCaseDefinition {
+            name: "generator_mark_nested_long_overlap",
+            kind: BenchCaseKind::Generator,
+            script_path: "effects/synthetic-bench-mark-nested-overlap.effect.dawn",
+            script: "SyntheticMarkNestedLongOverlap",
+            scope: SequenceEffectScope::WholeTarget,
+            duration_seconds: 10.0,
+            params: vec![
+                param_marks("beats", "synthetic_marks"),
+                param_integer("section_width_pixels", 2),
+                param_integer("nested_sections", 12),
+                param_float("pulse_seconds", 5.0),
             ],
         },
     ];
@@ -1070,7 +1129,7 @@ fn synthetic_sequence_document(
     Ok(SequenceDocument {
         path: "synthetic-bench.sequence.dawn".to_string(),
         object_key: definition.name.to_string(),
-        duration_seconds: 4.0,
+        duration_seconds: definition.duration_seconds,
         frame_rate: 60,
         audio: None,
         mark_collections: vec![synthetic_mark_collection()],
@@ -1084,7 +1143,7 @@ fn synthetic_sequence_document(
             index: 0,
             id: 1,
             start_seconds: 0.0,
-            duration_seconds: 4.0,
+            duration_seconds: definition.duration_seconds,
             target: target_template.target.clone(),
             target_label: target_template.target_label.clone(),
             scope: definition.scope,
@@ -1143,6 +1202,14 @@ fn param_integer(name: &str, value: u64) -> SequenceEffectParamDocument {
     SequenceEffectParamDocument {
         name: name.to_string(),
         value: EffectParam::Integer { value },
+        curve_source: None,
+    }
+}
+
+fn param_float(name: &str, value: f64) -> SequenceEffectParamDocument {
+    SequenceEffectParamDocument {
+        name: name.to_string(),
+        value: EffectParam::Float { value },
         curve_source: None,
     }
 }
@@ -1340,6 +1407,65 @@ effect SyntheticMarkDenseEmission {
             };
           };
         }
+      }
+    }
+  }
+}
+"##;
+
+const SYNTHETIC_NESTED_PULSE_GENERATOR: &str = r##"
+use "./synthetic-bench-child.effect.dawn" as effects;
+
+effect SyntheticNestedPulse {
+  param int section_width_pixels = 2;
+  param int nested_sections = 12;
+
+  void generate(Timeline timeline, Target target, float duration) {
+    TargetItems items = sections(target, section_width_pixels);
+    int item_count = count(items);
+    for (int section = 0; section < nested_sections; section = section + 1) {
+      int choice = floor(rand(section, nested_sections) * item_count);
+      TargetItem item = pick(items, choice);
+      timeline.emit effects.SyntheticChild {
+        target: item.target;
+        start: 0.0;
+        duration: duration;
+        params: {
+          color: hsv(item.position * 360.0, 1.0, 1.0);
+        };
+      };
+    }
+  }
+}
+"##;
+
+const SYNTHETIC_MARK_NESTED_OVERLAP_GENERATOR: &str = r##"
+use "./synthetic-bench-nested-pulse.effect.dawn" as nested;
+
+effect SyntheticMarkNestedLongOverlap {
+  param marks beats;
+  param int section_width_pixels = 2;
+  param int nested_sections = 12;
+  param float pulse_seconds = 5.0;
+
+  void generate(Timeline timeline, Target target, float duration) {
+    TargetItems items = sections(target, section_width_pixels);
+    int item_count = count(items);
+    int beat_count = mark_count(beats);
+    for (int beat = 0; beat < beat_count; beat = beat + 1) {
+      float hit = mark_at(beats, beat, 0.0);
+      if (hit >= 0.0 && hit + pulse_seconds <= duration) {
+        int choice = floor(rand(beat, nested_sections) * item_count);
+        TargetItem item = pick(items, choice);
+        timeline.emit nested.SyntheticNestedPulse {
+          target: item.target;
+          start: hit;
+          duration: pulse_seconds;
+          params: {
+            section_width_pixels: section_width_pixels;
+            nested_sections: nested_sections;
+          };
+        };
       }
     }
   }
@@ -1567,6 +1693,72 @@ fn synthetic_active_effect_document(
     Ok(synthetic)
 }
 
+#[derive(Debug)]
+struct IsolatedEffectDocument {
+    document: SequenceDocument,
+    time_seconds: f64,
+}
+
+fn isolated_effect_document(
+    document: &SequenceDocument,
+    effect_id: u32,
+    time_seconds: f64,
+) -> Result<IsolatedEffectDocument, String> {
+    let source = document
+        .effects
+        .iter()
+        .find(|effect| effect.id == effect_id)
+        .ok_or_else(|| format!("effect id {effect_id} was not found"))?;
+    if source.render.is_none() {
+        return Err(format!("effect id {effect_id} is not renderable"));
+    }
+    let effect_end_seconds = source.start_seconds + source.duration_seconds;
+    if time_seconds < source.start_seconds || time_seconds >= effect_end_seconds {
+        return Err(format!(
+            "--time must fall within isolated effect id {effect_id}: {:.3}s <= time < {:.3}s",
+            source.start_seconds, effect_end_seconds
+        ));
+    }
+
+    let mut effect = source.clone();
+    effect.index = 0;
+    effect.start_seconds = 0.0;
+
+    let mark_collections = document
+        .mark_collections
+        .iter()
+        .map(|collection| SequenceMarkCollectionDocument {
+            key: collection.key.clone(),
+            name: collection.name.clone(),
+            color: collection.color.clone(),
+            marks_seconds: collection
+                .marks_seconds
+                .iter()
+                .copied()
+                .filter(|mark| *mark >= source.start_seconds && *mark < effect_end_seconds)
+                .map(|mark| mark - source.start_seconds)
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+
+    Ok(IsolatedEffectDocument {
+        document: SequenceDocument {
+            path: document.path.clone(),
+            object_key: format!("{}#effect-{effect_id}", document.object_key),
+            duration_seconds: source.duration_seconds,
+            frame_rate: document.frame_rate,
+            audio: None,
+            mark_collections,
+            lanes: document.lanes.clone(),
+            effect_scripts: document.effect_scripts.clone(),
+            curve_library: document.curve_library.clone(),
+            effects: vec![effect],
+            degraded: document.degraded,
+        },
+        time_seconds: time_seconds - source.start_seconds,
+    })
+}
+
 #[cfg(test)]
 fn active_target_pixel_samples(document: &SequenceDocument, time_seconds: f64) -> usize {
     document
@@ -1610,7 +1802,7 @@ fn hz_from_duration(duration: Duration) -> f64 {
 
 fn print_effect_bench_report(report: &EffectBenchReport) {
     println!(
-        "project={} sequence={} time={:.3}s iterations={} warmup={} synthetic_active_effects={} effect_breakdown={}",
+        "project={} sequence={} time={:.3}s iterations={} warmup={} synthetic_active_effects={} isolate_effect_id={} effect_breakdown={}",
         report.project_path,
         report.sequence,
         report.time_seconds,
@@ -1619,6 +1811,10 @@ fn print_effect_bench_report(report: &EffectBenchReport) {
         report
             .synthetic_active_effects
             .map(|count| count.to_string())
+            .unwrap_or_else(|| "none".to_string()),
+        report
+            .isolate_effect_id
+            .map(|id| id.to_string())
             .unwrap_or_else(|| "none".to_string()),
         if report.no_effect_breakdown {
             "disabled"
@@ -1646,6 +1842,35 @@ fn print_effect_bench_report(report: &EffectBenchReport) {
         report.bytecode.pixel_slots,
         report.bytecode.total_slots
     );
+    println!(
+        "prepare total={:.3}ms layout={:.3}ms authored_sample={:.3}ms generator_expand={:.3}ms timeline_index={:.3}ms generator_parents={}",
+        report.prepare.total_ms,
+        report.prepare.layout_template_ms,
+        report.prepare.authored_sample_ms,
+        report.prepare.generator_expansion_ms,
+        report.prepare.timeline_index_ms,
+        report.prepare.generator_parent_count
+    );
+    let mut generator_parents = report.prepare.generator_parents.iter().collect::<Vec<_>>();
+    generator_parents.sort_by(|left, right| {
+        right
+            .total_prepare_ms
+            .total_cmp(&left.total_prepare_ms)
+            .then(left.parent_effect_id.cmp(&right.parent_effect_id))
+    });
+    for parent in generator_parents.into_iter().take(5) {
+        println!(
+            "generator parent id={} script={} target_pixels={} emitted_children={} prepared_children={} prepared_cache_hit={} topology_cache_hit={} prepare={:.3}ms",
+            parent.parent_effect_id,
+            parent.script.effect_name,
+            parent.target_pixels,
+            parent.emitted_children,
+            parent.prepared_children,
+            parent.prepared_cache_hit,
+            parent.topology_cache_hit,
+            parent.total_prepare_ms
+        );
+    }
     print_timing_stats("whole frame", &report.whole_frame);
     if report.no_effect_breakdown {
         println!("per-effect timing=disabled");
@@ -1745,6 +1970,26 @@ fn print_synthetic_suite_report(report: &SyntheticSuiteReport) {
             case.rendered_active_prepared_effects,
             case.sampled_pixels
         );
+        let mut generator_parents = case.prepare.generator_parents.iter().collect::<Vec<_>>();
+        generator_parents.sort_by(|left, right| {
+            right
+                .total_prepare_ms
+                .total_cmp(&left.total_prepare_ms)
+                .then(left.parent_effect_id.cmp(&right.parent_effect_id))
+        });
+        for parent in generator_parents.into_iter().take(5) {
+            println!(
+                "  generator parent id={} script={} target_pixels={} emitted_children={} prepared_children={} prepared_cache_hit={} topology_cache_hit={} prepare={:.3}ms",
+                parent.parent_effect_id,
+                parent.script.effect_name,
+                parent.target_pixels,
+                parent.emitted_children,
+                parent.prepared_children,
+                parent.prepared_cache_hit,
+                parent.topology_cache_hit,
+                parent.total_prepare_ms
+            );
+        }
     }
 }
 

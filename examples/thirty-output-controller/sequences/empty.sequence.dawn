@@ -104,7 +104,7 @@ empty:
     - 134.033382466s
     - 134.170487116s
     - 134.313726777s
-    - 134.435539212s
+    - 134.453682803s
   effects:
   - id: 9
     start: 39.257519581s
@@ -432,7 +432,7 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 6
-    start: 41.948402751s
+    start: 41.946364641s
     duration: 0.529984768s
     target:
       type: group
@@ -461,27 +461,7 @@ empty:
         value: 5
       chase_position:
         type: curve
-        curve:
-          value_type: float
-          points:
-          - time: 0.0
-            value: 0.0
-          - time: 0.125
-            value: 0.016
-          - time: 0.25
-            value: 0.063
-          - time: 0.375
-            value: 0.141
-          - time: 0.5
-            value: 0.25
-          - time: 0.625
-            value: 0.391
-          - time: 0.75
-            value: 0.563
-          - time: 0.875
-            value: 0.766
-          - time: 1.0
-            value: 1.0
+        curve: curves.ease_up
       extend_to_start:
         type: bool
         value: false
@@ -494,8 +474,6 @@ empty:
           value_type: float
           points:
           - time: 0.0
-            value: 0.0
-          - time: 0.148
             value: 1.0
           - time: 1.0
             value: 0.0
@@ -555,7 +533,7 @@ empty:
     script: effects.Chase
   - id: 7
     start: 42.398476426s
-    duration: 0.30719621s
+    duration: 0.37404243s
     target:
       type: group
       name: All Outputs
@@ -704,10 +682,13 @@ empty:
             value: '#94ff66'
       gradient_mode:
         type: enum
-        value: through_effect
+        value: per_pulse
       pulse_overlap:
         type: float
         value: 80.0
+      section_width_pixels:
+        type: integer
+        value: 5
       chase_position:
         type: curve
         curve: curves.ease_down
@@ -765,7 +746,7 @@ empty:
         curve: curves.club_gradient
       gradient_mode:
         type: enum
-        value: through_effect
+        value: per_pulse
       pulse_overlap:
         type: float
         value: 60.0
@@ -804,13 +785,13 @@ empty:
         curve: curves.cool_gradient
       gradient_mode:
         type: enum
-        value: through_effect
+        value: per_pulse
       pulse_overlap:
         type: float
-        value: 25.0
+        value: 80.0
       section_width_pixels:
         type: integer
-        value: 5
+        value: 1
       chase_position:
         type: curve
         curve: curves.ease_down
@@ -851,13 +832,13 @@ empty:
             value: '#3d00ff'
       gradient_mode:
         type: enum
-        value: through_effect
+        value: per_pulse
       pulse_overlap:
         type: float
-        value: 25.0
+        value: 80.0
       section_width_pixels:
         type: integer
-        value: 5
+        value: 1
       chase_position:
         type: curve
         curve: curves.ease_up
@@ -898,13 +879,13 @@ empty:
             value: '#ff0000'
       gradient_mode:
         type: enum
-        value: through_effect
+        value: per_pulse
       pulse_overlap:
         type: float
-        value: 25.0
+        value: 80.0
       section_width_pixels:
         type: integer
-        value: 5
+        value: 1
       chase_position:
         type: curve
         curve: curves.ease_down
@@ -1027,7 +1008,7 @@ empty:
         value: 2.0
     script: effects.MarkPulse
   - id: 35
-    start: 64.711850721s
+    start: 64.807027982s
     duration: 3.34270785s
     target:
       type: group
@@ -1042,7 +1023,7 @@ empty:
         value: '#000000'
       accent:
         type: curve
-        curve: curves.club_gradient
+        curve: curves.fire_gradient
       hue:
         type: curve
         curve:
@@ -1066,7 +1047,7 @@ empty:
         value: 25.0
       section_width_pixels:
         type: integer
-        value: 5
+        value: 1
       chase_position:
         type: curve
         curve:
@@ -1097,14 +1078,6 @@ empty:
           points:
           - time: 0.0
             value: 1.0
-          - time: 0.179
-            value: 0.335
-          - time: 0.327
-            value: 0.672
-          - time: 0.427
-            value: 0.328
-          - time: 0.505
-            value: 0.708
           - time: 1.0
             value: 0.0
     script: effects.MarkChase
