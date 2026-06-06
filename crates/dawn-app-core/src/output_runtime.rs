@@ -1646,12 +1646,13 @@ struct SequenceEffectEvaluationCounters {
 
 #[derive(Debug, Default)]
 struct SequenceFrameSampleReuse {
+    effect_indices: HashMap<SampleReuseEffectKey, usize>,
     colors: HashMap<SampleReuseKey, Color>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct SampleReuseKey {
-    effect: SampleReuseEffectKey,
+    effect_index: usize,
     local_seconds: F64CacheKey,
     progress: F64CacheKey,
     pixel_index: usize,
@@ -1677,6 +1678,13 @@ enum RuntimeValueCacheKey {
     Flags(Vec<String>),
     Fixture(usize),
     Pixel { index: usize, count: usize },
+}
+
+impl SequenceFrameSampleReuse {
+    fn effect_index(&mut self, key: &SampleReuseEffectKey) -> usize {
+        let next_index = self.effect_indices.len();
+        *self.effect_indices.entry(key.clone()).or_insert(next_index)
+    }
 }
 
 fn evaluate_prepared_effect_at_time(
@@ -1724,6 +1732,7 @@ fn sample_prepared_effect(
     let PreparedEffectRender::Ready {
         script,
         target_pixels,
+        target_pixel_groups,
         prepared_params,
         sample_reuse_effect_key,
         scratch,
@@ -1738,34 +1747,48 @@ fn sample_prepared_effect(
         counters.active_authored_effects = counters.active_authored_effects.saturating_add(1);
     }
     counters.active_prepared_effects = counters.active_prepared_effects.saturating_add(1);
-    for pixel in target_pixels {
+    counters.sampled_pixels = counters
+        .sampled_pixels
+        .saturating_add(target_pixels.len().min(u32::MAX as usize) as u32);
+
+    let effect_index = sample_reuse.effect_index(sample_reuse_effect_key);
+    for group in target_pixel_groups {
         if is_cancelled() {
             return;
         }
-        let output_pixel = &mut fixtures[pixel.fixture_index].pixels[pixel.pixel_index];
         let cache_key = SampleReuseKey {
-            effect: (**sample_reuse_effect_key).clone(),
+            effect_index,
             local_seconds: F64CacheKey(local_seconds),
             progress: F64CacheKey(progress),
-            pixel_index: pixel.pixel_context.index,
-            pixel_count: pixel.pixel_context.count,
+            pixel_index: group.pixel_context.index,
+            pixel_count: group.pixel_context.count,
         };
         let sampled = match sample_reuse.colors.get(&cache_key).copied() {
             Some(color) => {
-                counters.sample_reuse_saved_evaluations =
-                    counters.sample_reuse_saved_evaluations.saturating_add(1);
+                counters.sample_reuse_saved_evaluations = counters
+                    .sample_reuse_saved_evaluations
+                    .saturating_add(group.output_pixel_indices.len().min(u32::MAX as usize) as u32);
                 counters.sample_reuse_group_hits =
                     counters.sample_reuse_group_hits.saturating_add(1);
                 Ok(color)
             }
             None => {
+                let pixel = &target_pixels[group.first_pixel_index];
                 counters.vm_sample_evaluations = counters.vm_sample_evaluations.saturating_add(1);
+                counters.sample_reuse_saved_evaluations =
+                    counters.sample_reuse_saved_evaluations.saturating_add(
+                        group
+                            .output_pixel_indices
+                            .len()
+                            .saturating_sub(1)
+                            .min(u32::MAX as usize) as u32,
+                    );
                 script
                     .sample_prepared_with_scratch(
                         progress,
                         local_seconds,
                         pixel.fixture_context,
-                        pixel.pixel_context,
+                        group.pixel_context,
                         prepared_params,
                         scratch,
                     )
@@ -1775,10 +1798,17 @@ fn sample_prepared_effect(
             }
         };
         match sampled {
-            Ok(color) => add_clamped(&mut output_pixel.color, color),
+            Ok(color) => {
+                for pixel_index in &group.output_pixel_indices {
+                    let pixel = &target_pixels[*pixel_index];
+                    add_clamped(
+                        &mut fixtures[pixel.fixture_index].pixels[pixel.pixel_index].color,
+                        color,
+                    );
+                }
+            }
             Err(error) => *status = OutputFrameStatus::Error(error.to_string()),
         }
-        counters.sampled_pixels = counters.sampled_pixels.saturating_add(1);
     }
 }
 
@@ -2127,13 +2157,13 @@ fn prepare_sample_render(input: SampleRenderPreparationInput<'_>) -> PreparedEff
         Ok(prepared_params) => {
             let sample_reuse_effect_key =
                 sample_reuse_effect_key(input.script_id, input.script_source, &prepared_params);
+            let target_pixels =
+                prepare_effect_pixels(input.scope, input.target_pixels, input.fixture_templates);
+            let target_pixel_groups = prepare_effect_pixel_groups(&target_pixels);
             PreparedEffectRender::Ready {
                 script: Box::new(input.script.clone()),
-                target_pixels: prepare_effect_pixels(
-                    input.scope,
-                    input.target_pixels,
-                    input.fixture_templates,
-                ),
+                target_pixels,
+                target_pixel_groups,
                 prepared_params: Box::new(prepared_params),
                 sample_reuse_effect_key: Box::new(sample_reuse_effect_key),
                 scratch: Box::new(EffectSampleScratch::new(input.script.bytecode_stats())),
@@ -2576,6 +2606,12 @@ fn flatten_generated_children(
                     child_ref.id.display_key(),
                     &prepared_params,
                 );
+                let target_pixels = prepare_effect_pixels(
+                    SequenceEffectScope::WholeTarget,
+                    &sequence_effect_pixels_for_generator_target(&child.target),
+                    input.fixture_templates,
+                );
+                let target_pixel_groups = prepare_effect_pixel_groups(&target_pixels);
                 effects.push(PreparedSequenceEffect {
                     id: input.parent_id,
                     start_seconds: input.parent_start_seconds + child.start_seconds,
@@ -2583,11 +2619,8 @@ fn flatten_generated_children(
                     authored: false,
                     render: PreparedEffectRender::Ready {
                         script: Box::new(child_ref.script.clone()),
-                        target_pixels: prepare_effect_pixels(
-                            SequenceEffectScope::WholeTarget,
-                            &sequence_effect_pixels_for_generator_target(&child.target),
-                            input.fixture_templates,
-                        ),
+                        target_pixels,
+                        target_pixel_groups,
                         prepared_params: Box::new(prepared_params),
                         sample_reuse_effect_key: Box::new(sample_reuse_effect_key),
                         scratch: Box::new(EffectSampleScratch::new(
@@ -2809,6 +2842,7 @@ enum PreparedEffectRender {
     Ready {
         script: Box<CompiledEffect>,
         target_pixels: Vec<PreparedEffectPixel>,
+        target_pixel_groups: Vec<PreparedEffectPixelGroup>,
         prepared_params: Box<PreparedEffectParams>,
         sample_reuse_effect_key: Box<SampleReuseEffectKey>,
         scratch: Box<EffectSampleScratch>,
@@ -2824,6 +2858,13 @@ struct PreparedEffectPixel {
     pixel_index: usize,
     fixture_context: FixtureContext,
     pixel_context: PixelContext,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedEffectPixelGroup {
+    first_pixel_index: usize,
+    pixel_context: PixelContext,
+    output_pixel_indices: Vec<usize>,
 }
 
 impl PreparedEffectRender {
@@ -2882,6 +2923,28 @@ fn prepare_effect_pixels(
             })
         })
         .collect()
+}
+
+fn prepare_effect_pixel_groups(
+    target_pixels: &[PreparedEffectPixel],
+) -> Vec<PreparedEffectPixelGroup> {
+    let mut group_indices_by_context: HashMap<(usize, usize), usize> = HashMap::new();
+    let mut groups: Vec<PreparedEffectPixelGroup> = Vec::new();
+    for (pixel_index, pixel) in target_pixels.iter().enumerate() {
+        let context = (pixel.pixel_context.index, pixel.pixel_context.count);
+        match group_indices_by_context.get(&context).copied() {
+            Some(group_index) => groups[group_index].output_pixel_indices.push(pixel_index),
+            None => {
+                group_indices_by_context.insert(context, groups.len());
+                groups.push(PreparedEffectPixelGroup {
+                    first_pixel_index: pixel_index,
+                    pixel_context: pixel.pixel_context,
+                    output_pixel_indices: vec![pixel_index],
+                });
+            }
+        }
+    }
+    groups
 }
 
 pub fn evaluate_sequence_frame(

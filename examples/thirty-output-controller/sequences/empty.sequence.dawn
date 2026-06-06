@@ -392,10 +392,10 @@ empty:
         value: per_pulse
       pulse_overlap:
         type: float
-        value: 10.0
+        value: 90.0
       section_width_pixels:
         type: integer
-        value: 5
+        value: 1
       chase_position:
         type: curve
         curve:
@@ -688,7 +688,7 @@ empty:
         value: 80.0
       section_width_pixels:
         type: integer
-        value: 5
+        value: 1
       chase_position:
         type: curve
         curve: curves.ease_down
@@ -752,7 +752,7 @@ empty:
         value: 60.0
       section_width_pixels:
         type: integer
-        value: 5
+        value: 1
       chase_position:
         type: curve
         curve: curves.ease_up
@@ -1083,7 +1083,7 @@ empty:
     script: effects.MarkChase
   - id: 20
     start: 128.836789387s
-    duration: 0.661261311s
+    duration: 0.747570248s
     target:
       type: group
       name: All Outputs
@@ -1107,21 +1107,13 @@ empty:
         value: through_effect
       pulse_overlap:
         type: float
-        value: 120.0
+        value: 150.0
       section_width_pixels:
         type: integer
-        value: 5
+        value: 1
       chase_position:
         type: curve
-        curve:
-          value_type: float
-          points:
-          - time: 0.0
-            value: 1.0
-          - time: 0.331
-            value: 0.308
-          - time: 1.0
-            value: 0.0
+        curve: curves.ease_down
       extend_to_start:
         type: bool
         value: false

@@ -12,8 +12,8 @@ effect Chase {
 
     float pixel_step = 1.0 / max(1.0, pixel_count(pixel) - 1.0);
     float pulse_radius = max(0.5, pulse_overlap) * pixel_step;
-    float travel_start = 0.0;
-    float travel_end = 1.0;
+    float travel_start = min(0.5, pulse_radius);
+    float travel_end = max(0.5, 1.0 - pulse_radius);
     if (extend_to_start) {
       travel_start = travel_start - pulse_radius;
     }

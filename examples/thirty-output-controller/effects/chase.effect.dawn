@@ -2,7 +2,7 @@ effect Chase {
   param curve<color> gradient;
   param enum gradient_mode { through_effect, across_items, per_pulse } = through_effect;
   param float pulse_overlap = 8.0;
-  param int section_width_pixels = 5;
+  param int section_width_pixels = 1;
   param curve<float> chase_position;
   param bool extend_to_start = false;
   param bool extend_to_end = false;
@@ -13,8 +13,16 @@ effect Chase {
     float item_count = max(1.0, floor((pixel_count(pixel) + width - 1.0) / width));
     float position = section_position(pixel, width);
 
-    float hit = curve_crossing(chase_position, position, position);
     float pulse_duration = max(0.000000001, max(1.0, pulse_overlap) / item_count);
+    float travel_start = 0.0;
+    float travel_end = max(0.0, 1.0 - pulse_duration);
+    if (extend_to_start) {
+      travel_start = 0.0 - pulse_duration;
+    }
+    if (extend_to_end) {
+      travel_end = 1.0;
+    }
+    float hit = mix(travel_start, travel_end, clamp(curve_crossing(chase_position, position, position), 0.0, 1.0));
     float pulse_progress = (progress - hit) / pulse_duration;
     float level = 0.0;
     if (pulse_progress >= 0.0 && pulse_progress <= 1.0) {
