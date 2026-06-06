@@ -26,7 +26,7 @@ pub use type_check::{type_check, type_check_with_imports, ImportedEffect};
 
 use ast::BinaryOp;
 pub use bytecode::BytecodeStats;
-use bytecode::{stats_for_program, BytecodeProgram};
+use bytecode::{specialize_for_params, stats_for_program, BytecodeProgram};
 pub use generator::{
     evaluate_generated_child_params, generator_topology_param_names, run_generator,
     run_generator_topology, GeneratedChildEffect, GeneratedChildEffectRef, GeneratedChildTopology,
@@ -83,14 +83,27 @@ impl CompiledEffect {
         &self,
         params: &BTreeMap<String, RuntimeValue>,
     ) -> Result<PreparedEffectParams, RuntimeError> {
-        params::prepare_params(&self.params, params)
+        self.specialize_prepared_params(params::prepare_params(&self.params, params)?)
     }
 
     pub fn prepare_params_with(
         &self,
         value_for: impl FnMut(&str) -> Option<RuntimeValue>,
     ) -> Result<PreparedEffectParams, RuntimeError> {
-        params::prepare_params_with(&self.params, value_for)
+        self.specialize_prepared_params(params::prepare_params_with(&self.params, value_for)?)
+    }
+
+    fn specialize_prepared_params(
+        &self,
+        prepared: PreparedEffectParams,
+    ) -> Result<PreparedEffectParams, RuntimeError> {
+        Ok(match &self.bytecode {
+            Some(bytecode) => {
+                let specialized = specialize_for_params(bytecode, prepared.values());
+                prepared.with_specialized_bytecode(specialized)
+            }
+            None => prepared,
+        })
     }
 
     pub fn sample_prepared(

@@ -1,3 +1,4 @@
+use super::bytecode::Instruction;
 use super::*;
 use crate::model::{CurvePoint, CurveValue, CurveValueType};
 
@@ -24,6 +25,22 @@ fn fade_curve() -> RuntimeValue {
             CurvePoint {
                 time: 1.0,
                 value: CurveValue::Float(1.0),
+            },
+        ],
+    })
+}
+
+fn color_curve() -> RuntimeValue {
+    RuntimeValue::Curve(Curve {
+        value_type: CurveValueType::Color,
+        points: vec![
+            CurvePoint {
+                time: 0.0,
+                value: CurveValue::Color(Color::new(0, 0, 0)),
+            },
+            CurvePoint {
+                time: 1.0,
+                value: CurveValue::Color(Color::new(100, 150, 200)),
             },
         ],
     })
@@ -87,6 +104,172 @@ return mix(rgb_color, mixed, abs(wave) * 0.0 + faded);
         .sample(0.0, 0.0, fixture(), pixel(), &params)
         .unwrap();
     assert_eq!(color, Color::new(255, 255, 255));
+}
+
+#[test]
+fn pixel_position_builtin_normalizes_fixture_pixel_context() {
+    let script = compile(
+        r##"
+effect PixelPosition {
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+float value = pixel_position(pixel) * 255.0;
+return rgb(value, value, value);
+  }
+}
+"##,
+    )
+    .unwrap();
+    let params = empty_params();
+    let prepared = script.prepare_params(&params).unwrap();
+
+    let first = script
+        .sample_prepared(
+            0.0,
+            0.0,
+            fixture(),
+            PixelContext { index: 0, count: 1 },
+            &prepared,
+        )
+        .unwrap();
+    let middle = script
+        .sample_prepared(
+            0.0,
+            0.0,
+            fixture(),
+            PixelContext { index: 2, count: 5 },
+            &prepared,
+        )
+        .unwrap();
+
+    assert_eq!(first, Color::new(0, 0, 0));
+    assert_eq!(middle, Color::new(128, 128, 128));
+}
+
+#[test]
+fn section_position_builtin_matches_ceil_section_math() {
+    let script = compile(
+        r##"
+effect SectionPosition {
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+float value = section_position(pixel, 5.0) * 255.0;
+return rgb(value, value, value);
+  }
+}
+"##,
+    )
+    .unwrap();
+    let params = empty_params();
+    let prepared = script.prepare_params(&params).unwrap();
+
+    let color = script
+        .sample_prepared(
+            0.0,
+            0.0,
+            fixture(),
+            PixelContext {
+                index: 6,
+                count: 12,
+            },
+            &prepared,
+        )
+        .unwrap();
+
+    assert_eq!(color, Color::new(128, 128, 128));
+}
+
+#[test]
+fn curve_specialized_builtins_evaluate_and_scale() {
+    let script = compile(
+        r##"
+effect Curves {
+  param curve<float> level;
+  param curve<color> gradient;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+float amount = curve_float_clamped(level, progress, 0.0, 0.5);
+return curve_color_scaled(gradient, progress, amount);
+  }
+}
+"##,
+    )
+    .unwrap();
+    let mut params = BTreeMap::new();
+    params.insert("level".to_string(), fade_curve());
+    params.insert("gradient".to_string(), color_curve());
+
+    let color = script
+        .sample(0.75, 0.0, fixture(), pixel(), &params)
+        .unwrap();
+
+    assert_eq!(color, Color::new(38, 57, 75));
+}
+
+#[test]
+fn curve_param_calls_compile_to_typed_instructions() {
+    let script = compile(
+        r##"
+effect TypedCurves {
+  param curve<float> level;
+  param curve<color> gradient;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+return gradient(progress) * level(progress);
+  }
+}
+"##,
+    )
+    .unwrap();
+    let instructions = &script.bytecode.as_ref().unwrap().instructions;
+
+    assert!(instructions
+        .iter()
+        .any(|instruction| matches!(instruction, Instruction::CallFloatCurveParam(..))));
+    assert!(instructions
+        .iter()
+        .any(|instruction| matches!(instruction, Instruction::CallColorCurveParam(..))));
+}
+
+#[test]
+fn enum_params_specialize_dead_branches_in_prepared_bytecode() {
+    let script = compile(
+        r##"
+effect EnumMode {
+  param enum mode { red, green, blue } = green;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+color value = #000000;
+if (mode == red) {
+  value = #ff0000;
+}
+if (mode == green) {
+  value = #00ff00;
+}
+if (mode == blue) {
+  value = #0000ff;
+}
+return value;
+  }
+}
+"##,
+    )
+    .unwrap();
+    let params = empty_params();
+    let prepared = script.prepare_params(&params).unwrap();
+    let original_len = script.bytecode.as_ref().unwrap().instructions.len();
+    let specialized_len = prepared
+        .specialized_bytecode
+        .as_ref()
+        .unwrap()
+        .instructions
+        .len();
+
+    assert!(specialized_len < original_len);
+    assert_eq!(
+        script
+            .sample_prepared(0.0, 0.0, fixture(), pixel(), &prepared)
+            .unwrap(),
+        Color::new(0, 255, 0)
+    );
 }
 
 #[test]

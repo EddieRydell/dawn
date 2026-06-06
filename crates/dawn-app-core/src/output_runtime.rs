@@ -178,6 +178,9 @@ pub struct SequenceFrameEvaluationTiming {
     pub active_prepared_effects: u32,
     pub visited_prepared_effects: u32,
     pub sampled_pixels: u32,
+    pub vm_sample_evaluations: u32,
+    pub sample_reuse_saved_evaluations: u32,
+    pub sample_reuse_group_hits: u32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1175,15 +1178,17 @@ impl SequenceFrameEvaluator {
                         start_seconds: effect.start_seconds,
                         duration_seconds: effect.duration_seconds,
                         authored: true,
-                        render: prepare_sample_render(
+                        render: prepare_sample_render(SampleRenderPreparationInput {
+                            script_id: script_id.clone(),
+                            script_source: render.script_source.clone(),
                             script,
-                            &render.params,
-                            &document.mark_collections,
-                            effect.start_seconds,
-                            effect.scope,
-                            &render.target_pixels,
-                            &fixture_templates,
-                        ),
+                            params: &render.params,
+                            mark_collections: &document.mark_collections,
+                            effect_start_seconds: effect.start_seconds,
+                            scope: effect.scope,
+                            target_pixels: &render.target_pixels,
+                            fixture_templates: &fixture_templates,
+                        }),
                     }];
                     if let Some(cache) = preparation_cache.as_deref_mut() {
                         cache.store(effect.id, cache_key, effect.start_seconds, &prepared);
@@ -1303,6 +1308,7 @@ impl SequenceFrameEvaluator {
         let fixture_clone_ms = elapsed_ms(clone_started);
         let mut status = OutputFrameStatus::Live;
         let mut counters = SequenceEffectEvaluationCounters::default();
+        let mut sample_reuse = SequenceFrameSampleReuse::default();
 
         let effect_loop_started = Instant::now();
         if let Some(effect_indices) = self.effect_indices_for_time(time_seconds) {
@@ -1316,6 +1322,7 @@ impl SequenceFrameEvaluator {
                     &mut fixtures,
                     &mut status,
                     &mut counters,
+                    &mut sample_reuse,
                     &is_cancelled,
                 );
                 if is_cancelled() {
@@ -1341,6 +1348,9 @@ impl SequenceFrameEvaluator {
                 active_prepared_effects: counters.active_prepared_effects,
                 visited_prepared_effects: counters.visited_prepared_effects,
                 sampled_pixels: counters.sampled_pixels,
+                vm_sample_evaluations: counters.vm_sample_evaluations,
+                sample_reuse_saved_evaluations: counters.sample_reuse_saved_evaluations,
+                sample_reuse_group_hits: counters.sample_reuse_group_hits,
             },
         ))
     }
@@ -1401,6 +1411,7 @@ impl SequenceFrameEvaluator {
         let fixture_clone_ms = elapsed_ms(clone_started);
         let mut status = OutputFrameStatus::Live;
         let mut counters = SequenceEffectEvaluationCounters::default();
+        let mut sample_reuse = SequenceFrameSampleReuse::default();
 
         let effect_loop_started = Instant::now();
         let preview_frame_times = self.preview_frame_times(preview_seconds, effect_filter);
@@ -1433,6 +1444,7 @@ impl SequenceFrameEvaluator {
                         &mut fixtures,
                         &mut status,
                         &mut counters,
+                        &mut sample_reuse,
                         &is_cancelled,
                     );
                 }
@@ -1456,6 +1468,9 @@ impl SequenceFrameEvaluator {
                 active_prepared_effects: counters.active_prepared_effects,
                 visited_prepared_effects: counters.visited_prepared_effects,
                 sampled_pixels: counters.sampled_pixels,
+                vm_sample_evaluations: counters.vm_sample_evaluations,
+                sample_reuse_saved_evaluations: counters.sample_reuse_saved_evaluations,
+                sample_reuse_group_hits: counters.sample_reuse_group_hits,
             },
         ))
     }
@@ -1624,6 +1639,44 @@ struct SequenceEffectEvaluationCounters {
     active_prepared_effects: u32,
     visited_prepared_effects: u32,
     sampled_pixels: u32,
+    vm_sample_evaluations: u32,
+    sample_reuse_saved_evaluations: u32,
+    sample_reuse_group_hits: u32,
+}
+
+#[derive(Debug, Default)]
+struct SequenceFrameSampleReuse {
+    colors: HashMap<SampleReuseKey, Color>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SampleReuseKey {
+    effect: SampleReuseEffectKey,
+    local_seconds: F64CacheKey,
+    progress: F64CacheKey,
+    pixel_index: usize,
+    pixel_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SampleReuseEffectKey {
+    script_id: EffectScriptId,
+    script_source: String,
+    prepared_params: Vec<RuntimeValueCacheKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum RuntimeValueCacheKey {
+    Float(F64CacheKey),
+    Int(i64),
+    Bool(bool),
+    Color(ColorCacheKey),
+    Marks(Vec<F64CacheKey>),
+    Curve(CurveCacheKey),
+    Enum(String),
+    Flags(Vec<String>),
+    Fixture(usize),
+    Pixel { index: usize, count: usize },
 }
 
 fn evaluate_prepared_effect_at_time(
@@ -1632,6 +1685,7 @@ fn evaluate_prepared_effect_at_time(
     fixtures: &mut [OutputFixtureFrame],
     status: &mut OutputFrameStatus,
     counters: &mut SequenceEffectEvaluationCounters,
+    sample_reuse: &mut SequenceFrameSampleReuse,
     is_cancelled: &dyn Fn() -> bool,
 ) {
     counters.visited_prepared_effects = counters.visited_prepared_effects.saturating_add(1);
@@ -1647,6 +1701,7 @@ fn evaluate_prepared_effect_at_time(
         fixtures,
         status,
         counters,
+        sample_reuse,
         is_cancelled,
     );
 }
@@ -1657,6 +1712,7 @@ fn sample_prepared_effect(
     fixtures: &mut [OutputFixtureFrame],
     status: &mut OutputFrameStatus,
     counters: &mut SequenceEffectEvaluationCounters,
+    sample_reuse: &mut SequenceFrameSampleReuse,
     is_cancelled: &dyn Fn() -> bool,
 ) {
     let progress = if effect.duration_seconds == 0.0 {
@@ -1669,6 +1725,7 @@ fn sample_prepared_effect(
         script,
         target_pixels,
         prepared_params,
+        sample_reuse_effect_key,
         scratch,
         ..
     } = &mut effect.render
@@ -1686,14 +1743,38 @@ fn sample_prepared_effect(
             return;
         }
         let output_pixel = &mut fixtures[pixel.fixture_index].pixels[pixel.pixel_index];
-        match script.sample_prepared_with_scratch(
-            progress,
-            local_seconds,
-            pixel.fixture_context,
-            pixel.pixel_context,
-            prepared_params,
-            scratch,
-        ) {
+        let cache_key = SampleReuseKey {
+            effect: (**sample_reuse_effect_key).clone(),
+            local_seconds: F64CacheKey(local_seconds),
+            progress: F64CacheKey(progress),
+            pixel_index: pixel.pixel_context.index,
+            pixel_count: pixel.pixel_context.count,
+        };
+        let sampled = match sample_reuse.colors.get(&cache_key).copied() {
+            Some(color) => {
+                counters.sample_reuse_saved_evaluations =
+                    counters.sample_reuse_saved_evaluations.saturating_add(1);
+                counters.sample_reuse_group_hits =
+                    counters.sample_reuse_group_hits.saturating_add(1);
+                Ok(color)
+            }
+            None => {
+                counters.vm_sample_evaluations = counters.vm_sample_evaluations.saturating_add(1);
+                script
+                    .sample_prepared_with_scratch(
+                        progress,
+                        local_seconds,
+                        pixel.fixture_context,
+                        pixel.pixel_context,
+                        prepared_params,
+                        scratch,
+                    )
+                    .inspect(|color| {
+                        sample_reuse.colors.insert(cache_key, *color);
+                    })
+            }
+        };
+        match sampled {
             Ok(color) => add_clamped(&mut output_pixel.color, color),
             Err(error) => *status = OutputFrameStatus::Error(error.to_string()),
         }
@@ -2024,24 +2105,54 @@ fn evenly_sample_indices(source_count: usize, max_count: usize) -> Vec<usize> {
         .collect()
 }
 
-fn prepare_sample_render(
-    script: &CompiledEffect,
-    params: &[SequenceEffectParamDocument],
-    mark_collections: &[SequenceMarkCollectionDocument],
+struct SampleRenderPreparationInput<'a> {
+    script_id: EffectScriptId,
+    script_source: String,
+    script: &'a CompiledEffect,
+    params: &'a [SequenceEffectParamDocument],
+    mark_collections: &'a [SequenceMarkCollectionDocument],
     effect_start_seconds: f64,
     scope: SequenceEffectScope,
-    target_pixels: &[dawn_project::document::SequenceEffectPixelDocument],
-    fixture_templates: &[OutputFixtureFrame],
-) -> PreparedEffectRender {
-    match prepare_params_from_document(script, params, mark_collections, effect_start_seconds) {
-        Ok(prepared_params) => PreparedEffectRender::Ready {
-            script: Box::new(script.clone()),
-            target_pixels: prepare_effect_pixels(scope, target_pixels, fixture_templates),
-            prepared_params,
-            scratch: Box::new(EffectSampleScratch::new(script.bytecode_stats())),
-            _bytecode_stats: script.bytecode_stats(),
-        },
+    target_pixels: &'a [dawn_project::document::SequenceEffectPixelDocument],
+    fixture_templates: &'a [OutputFixtureFrame],
+}
+
+fn prepare_sample_render(input: SampleRenderPreparationInput<'_>) -> PreparedEffectRender {
+    match prepare_params_from_document(
+        input.script,
+        input.params,
+        input.mark_collections,
+        input.effect_start_seconds,
+    ) {
+        Ok(prepared_params) => {
+            let sample_reuse_effect_key =
+                sample_reuse_effect_key(input.script_id, input.script_source, &prepared_params);
+            PreparedEffectRender::Ready {
+                script: Box::new(input.script.clone()),
+                target_pixels: prepare_effect_pixels(
+                    input.scope,
+                    input.target_pixels,
+                    input.fixture_templates,
+                ),
+                prepared_params: Box::new(prepared_params),
+                sample_reuse_effect_key: Box::new(sample_reuse_effect_key),
+                scratch: Box::new(EffectSampleScratch::new(input.script.bytecode_stats())),
+                _bytecode_stats: input.script.bytecode_stats(),
+            }
+        }
         Err(error) => PreparedEffectRender::BadParams(error),
+    }
+}
+
+fn sample_reuse_effect_key(
+    script_id: EffectScriptId,
+    script_source: String,
+    prepared_params: &PreparedEffectParams,
+) -> SampleReuseEffectKey {
+    SampleReuseEffectKey {
+        script_id,
+        script_source,
+        prepared_params: prepared_params_cache_key(prepared_params),
     }
 }
 
@@ -2170,6 +2281,37 @@ fn color_cache_key(color: Color) -> ColorCacheKey {
         red: color.red,
         green: color.green,
         blue: color.blue,
+    }
+}
+
+fn prepared_params_cache_key(params: &PreparedEffectParams) -> Vec<RuntimeValueCacheKey> {
+    params
+        .values()
+        .iter()
+        .map(runtime_value_cache_key)
+        .collect()
+}
+
+fn runtime_value_cache_key(value: &RuntimeValue) -> RuntimeValueCacheKey {
+    match value {
+        RuntimeValue::Float(value) => RuntimeValueCacheKey::Float(F64CacheKey(*value)),
+        RuntimeValue::Int(value) => RuntimeValueCacheKey::Int(*value),
+        RuntimeValue::Bool(value) => RuntimeValueCacheKey::Bool(*value),
+        RuntimeValue::Color(value) => RuntimeValueCacheKey::Color(color_cache_key(*value)),
+        RuntimeValue::Marks(values) => {
+            RuntimeValueCacheKey::Marks(values.iter().copied().map(F64CacheKey).collect())
+        }
+        RuntimeValue::Curve(curve) => RuntimeValueCacheKey::Curve(curve_cache_key(curve)),
+        RuntimeValue::Enum(value) => RuntimeValueCacheKey::Enum(value.clone()),
+        RuntimeValue::Flags(value) => RuntimeValueCacheKey::Flags(value.values.clone()),
+        RuntimeValue::Fixture(value) => RuntimeValueCacheKey::Fixture(value.index),
+        RuntimeValue::Pixel(value) => RuntimeValueCacheKey::Pixel {
+            index: value.index,
+            count: value.count,
+        },
+        RuntimeValue::Target(_) | RuntimeValue::TargetItems(_) | RuntimeValue::TargetItem(_) => {
+            unreachable!("sample params do not contain generator target values")
+        }
     }
 }
 
@@ -2429,6 +2571,11 @@ fn flatten_generated_children(
                     });
                 }
                 *child_count += 1;
+                let sample_reuse_effect_key = sample_reuse_effect_key(
+                    child_ref.id.clone(),
+                    child_ref.id.display_key(),
+                    &prepared_params,
+                );
                 effects.push(PreparedSequenceEffect {
                     id: input.parent_id,
                     start_seconds: input.parent_start_seconds + child.start_seconds,
@@ -2441,7 +2588,8 @@ fn flatten_generated_children(
                             &sequence_effect_pixels_for_generator_target(&child.target),
                             input.fixture_templates,
                         ),
-                        prepared_params,
+                        prepared_params: Box::new(prepared_params),
+                        sample_reuse_effect_key: Box::new(sample_reuse_effect_key),
                         scratch: Box::new(EffectSampleScratch::new(
                             child_ref.script.bytecode_stats(),
                         )),
@@ -2661,7 +2809,8 @@ enum PreparedEffectRender {
     Ready {
         script: Box<CompiledEffect>,
         target_pixels: Vec<PreparedEffectPixel>,
-        prepared_params: PreparedEffectParams,
+        prepared_params: Box<PreparedEffectParams>,
+        sample_reuse_effect_key: Box<SampleReuseEffectKey>,
         scratch: Box<EffectSampleScratch>,
         _bytecode_stats: BytecodeStats,
     },
@@ -3328,6 +3477,23 @@ mod tests {
         assert!(evaluator.prepared_effect_count() > document.effects.len());
         assert!(timing.visited_prepared_effects < evaluator.prepared_effect_count() as u32);
         assert!(timing.active_prepared_effects >= timing.active_authored_effects);
+    }
+
+    #[test]
+    fn per_fixture_sample_reuse_reduces_vm_evaluations_without_skipping_output_pixels() {
+        let (analysis, document) = thirty_output_controller_analysis_and_sequence();
+        let mut evaluator =
+            SequenceFrameEvaluator::new(&analysis, &document).expect("renderer should build");
+
+        let (_frame, timing) = evaluator.evaluate_timed(41.0, 1);
+
+        assert!(timing.sampled_pixels > 0);
+        assert!(timing.vm_sample_evaluations > 0);
+        assert!(timing.vm_sample_evaluations < timing.sampled_pixels);
+        assert_eq!(
+            timing.sampled_pixels,
+            timing.vm_sample_evaluations + timing.sample_reuse_saved_evaluations
+        );
     }
 
     #[test]

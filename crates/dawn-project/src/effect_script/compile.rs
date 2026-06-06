@@ -434,7 +434,15 @@ impl<'a> Compiler<'a> {
                     ScriptType::CurveColor => ScriptType::Color,
                     _ => unreachable!("checked above"),
                 });
-                self.emit(Instruction::CallCurveParam(dest, index, amount));
+                match dest {
+                    ValueSlot::Float(dest) => {
+                        self.emit(Instruction::CallFloatCurveParam(dest, index, amount));
+                    }
+                    ValueSlot::Color(dest) => {
+                        self.emit(Instruction::CallColorCurveParam(dest, index, amount));
+                    }
+                    _ => unreachable!("curve params return float or color"),
+                }
                 return dest;
             }
         }
@@ -489,6 +497,19 @@ impl<'a> Compiler<'a> {
                 let dest = self.allocate_int();
                 self.emit(Instruction::PixelCount(dest, pixel));
                 ValueSlot::Int(dest)
+            }
+            BuiltinFunction::PixelPosition => {
+                let pixel = self.compile_expr(&args[0]).pixel();
+                let dest = self.allocate_float();
+                self.emit(Instruction::PixelPosition(dest, pixel));
+                ValueSlot::Float(dest)
+            }
+            BuiltinFunction::SectionPosition => {
+                let pixel = self.compile_expr(&args[0]).pixel();
+                let width = self.compile_float_arg(&args[1]);
+                let dest = self.allocate_float();
+                self.emit(Instruction::SectionPosition(dest, pixel, width));
+                ValueSlot::Float(dest)
             }
             BuiltinFunction::MarkCount => {
                 let marks = self.compile_expr(&args[0]).reference();
@@ -607,6 +628,43 @@ impl<'a> Compiler<'a> {
                 let value = self.compile_float_arg(&args[2]);
                 let dest = self.allocate_color();
                 self.emit(Instruction::Hsv(dest, hue, saturation, value));
+                ValueSlot::Color(dest)
+            }
+            BuiltinFunction::CurveFloatClamped => {
+                let Expr::Ident(name) = &args[0] else {
+                    unreachable!("type checker validates curve builtin arguments")
+                };
+                let Some(Binding::Param {
+                    index,
+                    value_type: ScriptType::CurveFloat,
+                }) = self.binding(name)
+                else {
+                    unreachable!("type checker validates curve builtin arguments")
+                };
+                let amount = self.compile_float_arg(&args[1]);
+                let min = self.compile_float_arg(&args[2]);
+                let max = self.compile_float_arg(&args[3]);
+                let dest = self.allocate_float();
+                self.emit(Instruction::CurveFloatClamped(
+                    dest, index, amount, min, max,
+                ));
+                ValueSlot::Float(dest)
+            }
+            BuiltinFunction::CurveColorScaled => {
+                let Expr::Ident(name) = &args[0] else {
+                    unreachable!("type checker validates curve builtin arguments")
+                };
+                let Some(Binding::Param {
+                    index,
+                    value_type: ScriptType::CurveColor,
+                }) = self.binding(name)
+                else {
+                    unreachable!("type checker validates curve builtin arguments")
+                };
+                let amount = self.compile_float_arg(&args[1]);
+                let level = self.compile_float_arg(&args[2]);
+                let dest = self.allocate_color();
+                self.emit(Instruction::CurveColorScaled(dest, index, amount, level));
                 ValueSlot::Color(dest)
             }
             BuiltinFunction::Fixtures

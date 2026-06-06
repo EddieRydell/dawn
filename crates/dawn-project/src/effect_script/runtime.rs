@@ -39,6 +39,7 @@ pub(super) fn run_with_scratch<'a>(
     params: &'a PreparedEffectParams,
     scratch: &mut EffectSampleScratch,
 ) -> Result<Color, RuntimeError> {
+    let program = params.specialized_bytecode.as_ref().unwrap_or(program);
     scratch.resize_for(program.registers);
     BytecodeVm {
         program,
@@ -148,6 +149,15 @@ impl<'a> BytecodeVm<'a, '_> {
                 Instruction::PixelCount(dest, source) => {
                     self.scratch.ints[dest.0] = self.scratch.pixels[source.0].count as i64;
                 }
+                Instruction::PixelPosition(dest, source) => {
+                    let pixel = self.scratch.pixels[source.0];
+                    self.scratch.floats[dest.0] = pixel_position(pixel);
+                }
+                Instruction::SectionPosition(dest, source, width) => {
+                    let pixel = self.scratch.pixels[source.0];
+                    self.scratch.floats[dest.0] =
+                        section_position(pixel, self.scratch.floats[width.0]);
+                }
                 Instruction::MarkCount(dest, source) => {
                     self.scratch.ints[dest.0] = self.marks(source)?.len() as i64;
                 }
@@ -229,15 +239,27 @@ impl<'a> BytecodeVm<'a, '_> {
                         self.scratch.floats[value.0],
                     );
                 }
-                Instruction::CallCurveParam(dest, index, amount) => {
-                    let RuntimeValue::Curve(curve) = &self.params.values[index] else {
-                        return Err(self.error("expected curve parameter"));
+                Instruction::CallFloatCurveParam(dest, index, amount) => {
+                    self.scratch.floats[dest.0] =
+                        self.float_curve_param(index, self.scratch.floats[amount.0])?;
+                }
+                Instruction::CallColorCurveParam(dest, index, amount) => {
+                    self.scratch.colors[dest.0] =
+                        self.color_curve_param(index, self.scratch.floats[amount.0])?;
+                }
+                Instruction::CurveFloatClamped(dest, index, amount, min, max) => {
+                    let value = self.float_curve_param(index, self.scratch.floats[amount.0])?;
+                    self.scratch.floats[dest.0] =
+                        value.clamp(self.scratch.floats[min.0], self.scratch.floats[max.0]);
+                }
+                Instruction::CurveColorScaled(dest, index, amount, level) => {
+                    let level = self.scratch.floats[level.0];
+                    self.scratch.colors[dest.0] = if level <= 0.0 {
+                        Color::new(0, 0, 0)
+                    } else {
+                        self.color_curve_param(index, self.scratch.floats[amount.0])?
+                            .scale(level)
                     };
-                    match curve.evaluate(self.scratch.floats[amount.0]) {
-                        Some(CurveValue::Float(value)) => self.write_float_dest(dest, value),
-                        Some(CurveValue::Color(value)) => self.write_color_dest(dest, value),
-                        None => return Err(self.error("curve has no points")),
-                    }
                 }
                 Instruction::ReturnColor(source) => return Ok(self.scratch.colors[source.0]),
             }
@@ -506,6 +528,28 @@ impl<'a> BytecodeVm<'a, '_> {
             .and_then(|table| table.crossing(value))
     }
 
+    fn float_curve_param(&self, index: usize, amount: f64) -> Result<f64, RuntimeError> {
+        let RuntimeValue::Curve(curve) = &self.params.values[index] else {
+            return Err(self.error("expected curve parameter"));
+        };
+        match curve.evaluate(amount) {
+            Some(CurveValue::Float(value)) => Ok(value),
+            Some(CurveValue::Color(_)) => Err(self.error("expected float curve parameter")),
+            None => Err(self.error("curve has no points")),
+        }
+    }
+
+    fn color_curve_param(&self, index: usize, amount: f64) -> Result<Color, RuntimeError> {
+        let RuntimeValue::Curve(curve) = &self.params.values[index] else {
+            return Err(self.error("expected curve parameter"));
+        };
+        match curve.evaluate(amount) {
+            Some(CurveValue::Color(value)) => Ok(value),
+            Some(CurveValue::Float(_)) => Err(self.error("expected color curve parameter")),
+            None => Err(self.error("curve has no points")),
+        }
+    }
+
     fn enum_value(&self, slot: ValueSlot) -> Result<&str, RuntimeError> {
         let slot = slot.reference();
         let value = match self.scratch.refs[slot.0] {
@@ -545,6 +589,27 @@ fn seed_from_float(value: f64) -> u64 {
     seed ^= seed >> 27;
     seed = seed.wrapping_mul(0x94d0_49bb_1331_11eb);
     seed ^ (seed >> 31)
+}
+
+fn pixel_position(pixel: PixelContext) -> f64 {
+    if pixel.count <= 1 {
+        0.0
+    } else {
+        pixel.index as f64 / (pixel.count - 1) as f64
+    }
+}
+
+fn section_position(pixel: PixelContext, width: f64) -> f64 {
+    let width = width.floor().max(1.0);
+    let section_count = ((pixel.count as f64 + width - 1.0) / width)
+        .floor()
+        .max(1.0);
+    let section_index = (pixel.index as f64 / width).floor();
+    if section_count <= 1.0 {
+        0.0
+    } else {
+        section_index / (section_count - 1.0)
+    }
 }
 
 fn hsv_to_rgb(hue: f64, saturation: f64, value: f64) -> Color {

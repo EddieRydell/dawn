@@ -3,6 +3,6 @@ effect Pulse {
   param curve<float> pulse_shape;
 
   color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
-    return gradient(progress) * pulse_shape(progress);
+    return curve_color_scaled(gradient, progress, pulse_shape(progress));
   }
 }

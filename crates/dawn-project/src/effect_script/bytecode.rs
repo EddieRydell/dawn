@@ -1,4 +1,5 @@
 use super::{RuntimeValue, ScriptType};
+use std::collections::{HashSet, VecDeque};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct BytecodeProgram {
@@ -63,6 +64,8 @@ pub(super) enum Instruction {
     Rand(FloatSlot),
     PixelIndex(IntSlot, PixelSlot),
     PixelCount(IntSlot, PixelSlot),
+    PixelPosition(FloatSlot, PixelSlot),
+    SectionPosition(FloatSlot, PixelSlot, FloatSlot),
     MarkCount(IntSlot, RefSlot),
     MarkAt(FloatSlot, RefSlot, IntSlot, FloatSlot),
     MarkSearch(
@@ -82,7 +85,10 @@ pub(super) enum Instruction {
     MixColor(ColorSlot, ColorSlot, ColorSlot, FloatSlot),
     Rgb(ColorSlot, FloatSlot, FloatSlot, FloatSlot),
     Hsv(ColorSlot, FloatSlot, FloatSlot, FloatSlot),
-    CallCurveParam(ValueSlot, usize, FloatSlot),
+    CallFloatCurveParam(FloatSlot, usize, FloatSlot),
+    CallColorCurveParam(ColorSlot, usize, FloatSlot),
+    CurveFloatClamped(FloatSlot, usize, FloatSlot, FloatSlot, FloatSlot),
+    CurveColorScaled(ColorSlot, usize, FloatSlot, FloatSlot),
     ReturnColor(ColorSlot),
 }
 
@@ -250,5 +256,174 @@ pub(super) fn stats_for_program(program: &BytecodeProgram, param_slots: usize) -
         fixture_slots: program.registers.fixtures,
         pixel_slots: program.registers.pixels,
         total_slots: program.registers.total(),
+    }
+}
+
+pub(super) fn specialize_for_params(
+    program: &BytecodeProgram,
+    param_values: &[RuntimeValue],
+) -> BytecodeProgram {
+    let mut constants = program.constants.clone();
+    let mut instructions = program.instructions.clone();
+    let mut ref_sources = vec![RefSource::Unknown; program.registers.refs];
+    let mut bool_values = vec![None; program.registers.bools];
+
+    for (index, instruction_ref) in instructions.iter_mut().enumerate() {
+        let instruction = *instruction_ref;
+        match instruction {
+            Instruction::LoadConst(dest, constant_index) => match dest {
+                ValueSlot::Ref(slot, ScriptType::Enum) => {
+                    ref_sources[slot.0] = match &constants[constant_index] {
+                        RuntimeValue::Enum(value) => RefSource::EnumConstant(value.clone()),
+                        _ => RefSource::Unknown,
+                    };
+                }
+                ValueSlot::Bool(slot) => {
+                    bool_values[slot.0] = match constants[constant_index] {
+                        RuntimeValue::Bool(value) => Some(value),
+                        _ => None,
+                    };
+                }
+                _ => clear_dest(dest, &mut ref_sources, &mut bool_values),
+            },
+            Instruction::LoadParam(dest, param_index) => match dest {
+                ValueSlot::Ref(slot, ScriptType::Enum) => {
+                    ref_sources[slot.0] = match &param_values[param_index] {
+                        RuntimeValue::Enum(value) => RefSource::EnumParameterValue(value.clone()),
+                        _ => RefSource::Unknown,
+                    };
+                }
+                _ => clear_dest(dest, &mut ref_sources, &mut bool_values),
+            },
+            Instruction::Copy(dest, source) => match (dest, source) {
+                (
+                    ValueSlot::Ref(dest, ScriptType::Enum),
+                    ValueSlot::Ref(source, ScriptType::Enum),
+                ) => {
+                    ref_sources[dest.0] = ref_sources[source.0].clone();
+                }
+                (ValueSlot::Bool(dest), ValueSlot::Bool(source)) => {
+                    bool_values[dest.0] = bool_values[source.0];
+                }
+                (dest, _) => clear_dest(dest, &mut ref_sources, &mut bool_values),
+            },
+            Instruction::BoolNot(dest, source) => {
+                bool_values[dest.0] = bool_values[source.0].map(|value| !value);
+            }
+            Instruction::Binary(dest, op, left, right)
+                if matches!(
+                    op,
+                    BinaryInstruction::EnumEqual | BinaryInstruction::EnumNotEqual
+                ) =>
+            {
+                let known = enum_source_value(left, &ref_sources)
+                    .zip(enum_source_value(right, &ref_sources))
+                    .map(|(left, right)| match op {
+                        BinaryInstruction::EnumEqual => left == right,
+                        BinaryInstruction::EnumNotEqual => left != right,
+                        _ => unreachable!(),
+                    });
+                if let (ValueSlot::Bool(slot), Some(value)) = (dest, known) {
+                    bool_values[slot.0] = Some(value);
+                    let constant_index = constants.len();
+                    constants.push(RuntimeValue::Bool(value));
+                    *instruction_ref = Instruction::LoadConst(dest, constant_index);
+                } else {
+                    clear_dest(dest, &mut ref_sources, &mut bool_values);
+                }
+            }
+            Instruction::Binary(dest, _, _, _) => {
+                clear_dest(dest, &mut ref_sources, &mut bool_values)
+            }
+            Instruction::JumpIfFalse(condition, target) => {
+                if let Some(value) = bool_values[condition.0] {
+                    *instruction_ref = if value {
+                        Instruction::Jump(index + 1)
+                    } else {
+                        Instruction::Jump(target)
+                    };
+                }
+            }
+            Instruction::JumpIfTrue(condition, target) => {
+                if let Some(value) = bool_values[condition.0] {
+                    *instruction_ref = if value {
+                        Instruction::Jump(target)
+                    } else {
+                        Instruction::Jump(index + 1)
+                    };
+                }
+            }
+            _ => {}
+        }
+    }
+
+    compact_reachable(BytecodeProgram {
+        instructions,
+        constants,
+        registers: program.registers,
+    })
+}
+
+#[derive(Debug, Clone)]
+enum RefSource {
+    EnumParameterValue(String),
+    EnumConstant(String),
+    Unknown,
+}
+
+fn clear_dest(dest: ValueSlot, ref_sources: &mut [RefSource], bool_values: &mut [Option<bool>]) {
+    match dest {
+        ValueSlot::Ref(slot, _) => ref_sources[slot.0] = RefSource::Unknown,
+        ValueSlot::Bool(slot) => bool_values[slot.0] = None,
+        _ => {}
+    }
+}
+
+fn enum_source_value(slot: ValueSlot, ref_sources: &[RefSource]) -> Option<&str> {
+    match &ref_sources[slot.reference().0] {
+        RefSource::EnumParameterValue(value) | RefSource::EnumConstant(value) => Some(value),
+        RefSource::Unknown => None,
+    }
+}
+
+fn compact_reachable(program: BytecodeProgram) -> BytecodeProgram {
+    let mut reachable = HashSet::new();
+    let mut queue = VecDeque::from([0usize]);
+    while let Some(index) = queue.pop_front() {
+        if index >= program.instructions.len() || !reachable.insert(index) {
+            continue;
+        }
+        match program.instructions[index] {
+            Instruction::Jump(target) => queue.push_back(target),
+            Instruction::JumpIfFalse(_, target) | Instruction::JumpIfTrue(_, target) => {
+                queue.push_back(index + 1);
+                queue.push_back(target);
+            }
+            Instruction::ReturnColor(_) => {}
+            _ => queue.push_back(index + 1),
+        }
+    }
+
+    let mut remap = vec![usize::MAX; program.instructions.len() + 1];
+    let mut instructions = Vec::new();
+    for (index, instruction) in program.instructions.iter().copied().enumerate() {
+        if reachable.contains(&index) {
+            remap[index] = instructions.len();
+            instructions.push(instruction);
+        }
+    }
+    remap[program.instructions.len()] = instructions.len();
+    for instruction in &mut instructions {
+        match instruction {
+            Instruction::Jump(target)
+            | Instruction::JumpIfFalse(_, target)
+            | Instruction::JumpIfTrue(_, target) => *target = remap[*target],
+            _ => {}
+        }
+    }
+    BytecodeProgram {
+        instructions,
+        constants: program.constants,
+        registers: program.registers,
     }
 }

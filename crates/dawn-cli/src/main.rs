@@ -530,6 +530,9 @@ struct EffectBenchReport {
     rendered_active_prepared_effects: u32,
     visited_prepared_effects: u32,
     target_pixel_samples_per_frame: usize,
+    vm_sample_evaluations: u32,
+    sample_reuse_saved_evaluations: u32,
+    sample_reuse_group_hits: u32,
     bytecode: BytecodeAggregateReport,
     whole_frame: TimingStatsReport,
     effects: Vec<EffectBenchItemReport>,
@@ -607,6 +610,15 @@ impl EffectBenchReport {
                 .map(|timing| timing.visited_prepared_effects)
                 .unwrap_or(0),
             target_pixel_samples_per_frame,
+            vm_sample_evaluations: last_evaluation_timing
+                .map(|timing| timing.vm_sample_evaluations)
+                .unwrap_or(0),
+            sample_reuse_saved_evaluations: last_evaluation_timing
+                .map(|timing| timing.sample_reuse_saved_evaluations)
+                .unwrap_or(0),
+            sample_reuse_group_hits: last_evaluation_timing
+                .map(|timing| timing.sample_reuse_group_hits)
+                .unwrap_or(0),
             bytecode,
             whole_frame: TimingStatsReport::from_durations(whole_frame_samples),
             effects,
@@ -715,6 +727,9 @@ struct SyntheticCaseReport {
     visited_prepared_effects: u32,
     rendered_active_prepared_effects: u32,
     sampled_pixels: u32,
+    vm_sample_evaluations: u32,
+    sample_reuse_saved_evaluations: u32,
+    sample_reuse_group_hits: u32,
 }
 
 impl SyntheticCaseReport {
@@ -758,6 +773,9 @@ impl SyntheticCaseReport {
             visited_prepared_effects: last_evaluation_timing.visited_prepared_effects,
             rendered_active_prepared_effects: last_evaluation_timing.active_prepared_effects,
             sampled_pixels: last_evaluation_timing.sampled_pixels,
+            vm_sample_evaluations: last_evaluation_timing.vm_sample_evaluations,
+            sample_reuse_saved_evaluations: last_evaluation_timing.sample_reuse_saved_evaluations,
+            sample_reuse_group_hits: last_evaluation_timing.sample_reuse_group_hits,
         })
     }
 }
@@ -1823,13 +1841,16 @@ fn print_effect_bench_report(report: &EffectBenchReport) {
         }
     );
     println!(
-        "total effects={} prepared effects={} authored active effects={} prepared active effects={} visited prepared effects/frame={} target pixel samples/frame={} bytecode=instructions:{} constants:{} param_slots:{} registers=float:{} int:{} bool:{} color:{} ref:{} fixture:{} pixel:{} total:{}",
+        "total effects={} prepared effects={} authored active effects={} prepared active effects={} visited prepared effects/frame={} target pixel samples/frame={} vm sample evaluations/frame={} sample reuse saved/frame={} sample reuse group hits/frame={} bytecode=instructions:{} constants:{} param_slots:{} registers=float:{} int:{} bool:{} color:{} ref:{} fixture:{} pixel:{} total:{}",
         report.total_effects,
         report.prepared_effects,
         report.active_effect_count,
         report.rendered_active_prepared_effects,
         report.visited_prepared_effects,
         report.target_pixel_samples_per_frame,
+        report.vm_sample_evaluations,
+        report.sample_reuse_saved_evaluations,
+        report.sample_reuse_group_hits,
         report.bytecode.instruction_count,
         report.bytecode.constant_count,
         report.bytecode.param_slots,
@@ -1965,10 +1986,13 @@ fn print_synthetic_suite_report(report: &SyntheticSuiteReport) {
             case.prepare.generator_parent_count
         );
         println!(
-            "  render visited_prepared={} active_prepared={} sampled_pixels={}",
+            "  render visited_prepared={} active_prepared={} sampled_pixels={} vm_sample_evaluations={} sample_reuse_saved={} sample_reuse_group_hits={}",
             case.visited_prepared_effects,
             case.rendered_active_prepared_effects,
-            case.sampled_pixels
+            case.sampled_pixels,
+            case.vm_sample_evaluations,
+            case.sample_reuse_saved_evaluations,
+            case.sample_reuse_group_hits
         );
         let mut generator_parents = case.prepare.generator_parents.iter().collect::<Vec<_>>();
         generator_parents.sort_by(|left, right| {

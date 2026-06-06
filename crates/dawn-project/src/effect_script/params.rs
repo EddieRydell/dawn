@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::model::{Color, Curve, CurveValue, CurveValueType};
 
 use super::ast::Expr;
-use super::bytecode::{BytecodeStats, RegisterCounts};
+use super::bytecode::{BytecodeProgram, BytecodeStats, RegisterCounts};
 use super::{
     EffectParamSchema, FixtureContext, ParamDefault, PixelContext, RuntimeError, RuntimeValue,
     ScriptDiagnostic, ScriptType,
@@ -13,11 +13,19 @@ use super::{
 pub struct PreparedEffectParams {
     pub(super) values: Vec<RuntimeValue>,
     pub(super) curve_crossings: Vec<Option<CurveCrossingTable>>,
+    pub(super) specialized_bytecode: Option<BytecodeProgram>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct CurveCrossingTable {
     segments: Vec<CurveCrossingSegment>,
+    monotonic: Option<CurveMonotonicity>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CurveMonotonicity {
+    Increasing,
+    Decreasing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -35,6 +43,8 @@ impl CurveCrossingTable {
             return None;
         }
         let mut segments = Vec::with_capacity(curve.points.len().saturating_sub(1));
+        let mut direction = None;
+        let mut mixed = false;
         for pair in curve.points.windows(2) {
             let left_point = &pair[0];
             let right_point = &pair[1];
@@ -45,6 +55,22 @@ impl CurveCrossingTable {
                 return None;
             };
             let span = right - left;
+            let segment_direction = if span > 0.0 {
+                Some(CurveMonotonicity::Increasing)
+            } else if span < 0.0 {
+                Some(CurveMonotonicity::Decreasing)
+            } else {
+                None
+            };
+            direction = match (direction, segment_direction) {
+                (None, direction) => direction,
+                (Some(left), Some(right)) if left == right => Some(left),
+                (Some(left), None) => Some(left),
+                _ => {
+                    mixed = true;
+                    None
+                }
+            };
             segments.push(CurveCrossingSegment {
                 time: left_point.time,
                 value: left,
@@ -57,16 +83,39 @@ impl CurveCrossingTable {
                 },
             });
         }
-        Some(Self { segments })
+        let monotonic = (!mixed).then_some(direction).flatten();
+        Some(Self {
+            segments,
+            monotonic,
+        })
     }
 
     pub(super) fn crossing(&self, value: f64) -> Option<f64> {
+        if let Some(monotonic) = self.monotonic {
+            return self.monotonic_crossing(value, monotonic);
+        }
         self.segments.iter().find_map(|segment| {
             if value < segment.min_value || value > segment.max_value {
                 return None;
             }
             Some(segment.time + (value - segment.value) * segment.inverse_slope)
         })
+    }
+
+    fn monotonic_crossing(&self, value: f64, monotonic: CurveMonotonicity) -> Option<f64> {
+        let index = match monotonic {
+            CurveMonotonicity::Increasing => self
+                .segments
+                .partition_point(|segment| segment.max_value < value),
+            CurveMonotonicity::Decreasing => self
+                .segments
+                .partition_point(|segment| segment.min_value > value),
+        };
+        let segment = self.segments.get(index)?;
+        if value < segment.min_value || value > segment.max_value {
+            return None;
+        }
+        Some(segment.time + (value - segment.value) * segment.inverse_slope)
     }
 }
 
@@ -104,6 +153,17 @@ impl EffectSampleScratch {
             .resize(counts.fixtures, FixtureContext { index: 0 });
         self.pixels
             .resize(counts.pixels, PixelContext { index: 0, count: 0 });
+    }
+}
+
+impl PreparedEffectParams {
+    pub fn values(&self) -> &[RuntimeValue] {
+        &self.values
+    }
+
+    pub(super) fn with_specialized_bytecode(mut self, bytecode: BytecodeProgram) -> Self {
+        self.specialized_bytecode = Some(bytecode);
+        self
     }
 }
 
@@ -148,6 +208,7 @@ pub(super) fn prepare_params_with(
     Ok(PreparedEffectParams {
         values: prepared,
         curve_crossings,
+        specialized_bytecode: None,
     })
 }
 

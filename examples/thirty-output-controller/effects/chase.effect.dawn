@@ -11,18 +11,14 @@ effect Chase {
   color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
     float width = max(1.0, section_width_pixels);
     float item_count = max(1.0, floor((pixel_count(pixel) + width - 1.0) / width));
-    float item_index = floor(pixel_index(pixel) / width);
-    float position = 0.0;
-    if (item_count > 1.0) {
-      position = item_index / (item_count - 1.0);
-    }
+    float position = section_position(pixel, width);
 
     float hit = curve_crossing(chase_position, position, position);
     float pulse_duration = max(0.000000001, max(1.0, pulse_overlap) / item_count);
     float pulse_progress = (progress - hit) / pulse_duration;
     float level = 0.0;
     if (pulse_progress >= 0.0 && pulse_progress <= 1.0) {
-      level = clamp(pulse_shape(pulse_progress), 0.0, 1.0);
+      level = curve_float_clamped(pulse_shape, pulse_progress, 0.0, 1.0);
     }
 
     float gradient_position = pulse_progress;
@@ -36,6 +32,6 @@ effect Chase {
       gradient_position = pulse_progress;
     }
 
-    return gradient(clamp(gradient_position, 0.0, 1.0)) * level;
+    return curve_color_scaled(gradient, clamp(gradient_position, 0.0, 1.0), level);
   }
 }

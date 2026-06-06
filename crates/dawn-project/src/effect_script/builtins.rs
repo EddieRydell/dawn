@@ -63,6 +63,8 @@ pub(super) enum BuiltinFunction {
     Rand,
     PixelIndex,
     PixelCount,
+    PixelPosition,
+    SectionPosition,
     Fixtures,
     Pixels,
     Sections,
@@ -83,6 +85,8 @@ pub(super) enum BuiltinFunction {
     Mix,
     Rgb,
     Hsv,
+    CurveFloatClamped,
+    CurveColorScaled,
 }
 
 impl BuiltinFunction {
@@ -96,6 +100,8 @@ impl BuiltinFunction {
             "rand" => Self::Rand,
             "pixel_index" => Self::PixelIndex,
             "pixel_count" => Self::PixelCount,
+            "pixel_position" => Self::PixelPosition,
+            "section_position" => Self::SectionPosition,
             "fixtures" => Self::Fixtures,
             "pixels" => Self::Pixels,
             "sections" => Self::Sections,
@@ -116,6 +122,8 @@ impl BuiltinFunction {
             "mix" => Self::Mix,
             "rgb" => Self::Rgb,
             "hsv" => Self::Hsv,
+            "curve_float_clamped" => Self::CurveFloatClamped,
+            "curve_color_scaled" => Self::CurveColorScaled,
             _ => return None,
         })
     }
@@ -147,6 +155,10 @@ impl BuiltinFunction {
                 Some(ScriptType::Float)
             }
             (Self::PixelIndex | Self::PixelCount, [ScriptType::Pixel]) => Some(ScriptType::Int),
+            (Self::PixelPosition, [ScriptType::Pixel]) => Some(ScriptType::Float),
+            (Self::SectionPosition, [ScriptType::Pixel, width]) if is_float_compatible(*width) => {
+                Some(ScriptType::Float)
+            }
             (Self::Fixtures | Self::Pixels, [ScriptType::Target])
                 if kind == EffectScriptKind::Generator =>
             {
@@ -202,6 +214,18 @@ impl BuiltinFunction {
                 if is_float_compatible(*first)
                     && is_float_compatible(*second)
                     && is_float_compatible(*third) =>
+            {
+                Some(ScriptType::Color)
+            }
+            (Self::CurveFloatClamped, [ScriptType::CurveFloat, amount, min, max])
+                if is_float_compatible(*amount)
+                    && is_float_compatible(*min)
+                    && is_float_compatible(*max) =>
+            {
+                Some(ScriptType::Float)
+            }
+            (Self::CurveColorScaled, [ScriptType::CurveColor, amount, level])
+                if is_float_compatible(*amount) && is_float_compatible(*level) =>
             {
                 Some(ScriptType::Color)
             }
