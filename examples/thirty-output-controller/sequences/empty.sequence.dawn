@@ -46,13 +46,38 @@ empty:
     - 47.437699901s
     - 65.225202229s
     - 65.432116503s
-    - 65.63569345s
+    - 65.633927284s
     - 66.029498035s
-    - 66.636891549s
+    - 66.661215574s
     - 66.835462505s
     - 67.039039452s
     - 67.230935754s
     - 67.633083657s
+    - 69.60987545s
+    - 69.827953241s
+    - 69.935973082s
+    - 71.243144827s
+    - 71.436831689s
+    - 71.625365373s
+    - 71.804335756s
+    - 71.912264459s
+    - 72.036587397s
+    - 72.432781372s
+    - 73.046228317s
+    - 73.235772566s
+    - 73.435507365s
+    - 73.635242165s
+    - 74.036749874s
+    - 78.006470605s
+    - 78.210439749s
+    - 78.317819454s
+    - 78.43393934s
+    - 78.831409328s
+    - 79.431859918s
+    - 79.622735135s
+    - 79.824508045s
+    - 80.028319065s
+    - 80.440017325s
     - 129.635546594s
     - 129.769771226s
     - 129.902877318s
@@ -105,6 +130,19 @@ empty:
     - 134.170487116s
     - 134.313726777s
     - 134.453682803s
+  - key: marks_3
+    name: Marks3
+    color: '#22c55e'
+    marks:
+    - 65.635835518s
+    - 66.436516895s
+    - 67.232469383s
+    - 72.045537498s
+    - 72.833146669s
+    - 73.632947179s
+    - 78.449255399s
+    - 79.24335914s
+    - 80.044930941s
   effects:
   - id: 9
     start: 39.257519581s
@@ -1007,9 +1045,132 @@ empty:
         type: float
         value: 2.0
     script: effects.MarkPulse
+  - id: 37
+    start: 52.010062587s
+    duration: 0.814316055s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve: curves.cool_gradient
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      direction:
+        type: enum
+        value: outward
+      color_mode:
+        type: enum
+        value: through_effect
+      center_position:
+        type: float
+        value: 0.5
+      start_radius:
+        type: float
+        value: 0.0
+      end_radius:
+        type: float
+        value: 0.75
+      edge_width:
+        type: float
+        value: 0.5
+      glow_width:
+        type: float
+        value: 0.25
+      glow_level:
+        type: float
+        value: 0.35
+      mirror:
+        type: bool
+        value: false
+    script: effects.ImpactBurst
+  - id: 41
+    start: 64.805438567s
+    duration: 0.528362778s
+    target:
+      type: group
+      name: All Outputs
+    scope: whole_target
+    params:
+      gradient:
+        type: curve
+        curve: curves.cool_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Pulse
+  - id: 45
+    start: 64.831434319s
+    duration: 0.476371274s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      base:
+        type: color
+        value: '#000000'
+      palette:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.52
+            value: '#d9ffff'
+          - time: 1.0
+            value: '#000000'
+      color_mode:
+        type: enum
+        value: from_palette
+      sparkle_color:
+        type: color
+        value: '#ffffff'
+      density:
+        type: float
+        value: 0.28
+      shimmer_level:
+        type: float
+        value: 0.35
+      sparkle_level:
+        type: float
+        value: 1.0
+      wave_speed:
+        type: float
+        value: 1.0
+      wave_scale:
+        type: float
+        value: 100.0
+      sparkle_speed:
+        type: float
+        value: 8.0
+      sparkle_hold:
+        type: float
+        value: 0.35
+      section_width_pixels:
+        type: float
+        value: 1.0
+      seed:
+        type: float
+        value: 5.0
+    script: effects.ShimmerField
   - id: 35
-    start: 64.791167913s
-    duration: 3.34270785s
+    start: 64.943428748s
+    duration: 3.190447015s
     target:
       type: group
       name: All Outputs
@@ -1111,10 +1272,10 @@ empty:
             value: 0.0
       hue_mix:
         type: float
-        value: 0.35
+        value: 0.0
       offset_seconds:
         type: float
-        value: 0.0
+        value: -0.1
       chase_seconds:
         type: float
         value: 0.5
@@ -1132,56 +1293,146 @@ empty:
           points:
           - time: 0.0
             value: 1.0
+          - time: 0.068
+            value: 0.724
+          - time: 0.235
+            value: 0.371
+          - time: 0.421
+            value: 0.217
+          - time: 0.597
+            value: 0.1
+          - time: 0.738
+            value: 0.054
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.068
+            value: 0.276
+          - time: 0.235
+            value: 0.629
+          - time: 0.421
+            value: 0.783
+          - time: 0.597
+            value: 0.9
+          - time: 0.738
+            value: 0.946
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.068
+            value: 0.724
+          - time: 0.235
+            value: 0.371
+          - time: 0.421
+            value: 0.217
+          - time: 0.597
+            value: 0.1
+          - time: 0.738
+            value: 0.054
           - time: 1.0
             value: 0.0
         - value_type: float
           points:
           - time: 0.0
             value: 1.0
+          - time: 0.068
+            value: 0.724
+          - time: 0.235
+            value: 0.371
+          - time: 0.421
+            value: 0.217
+          - time: 0.597
+            value: 0.1
+          - time: 0.738
+            value: 0.054
           - time: 1.0
             value: 0.0
         - value_type: float
           points:
           - time: 0.0
             value: 1.0
+          - time: 0.068
+            value: 0.724
+          - time: 0.235
+            value: 0.371
+          - time: 0.421
+            value: 0.217
+          - time: 0.597
+            value: 0.1
+          - time: 0.738
+            value: 0.054
           - time: 1.0
             value: 0.0
         - value_type: float
           points:
           - time: 0.0
+            value: 0.0
+          - time: 0.068
+            value: 0.276
+          - time: 0.235
+            value: 0.629
+          - time: 0.421
+            value: 0.783
+          - time: 0.597
+            value: 0.9
+          - time: 0.738
+            value: 0.946
+          - time: 1.0
             value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.068
+            value: 0.724
+          - time: 0.235
+            value: 0.371
+          - time: 0.421
+            value: 0.217
+          - time: 0.597
+            value: 0.1
+          - time: 0.738
+            value: 0.054
           - time: 1.0
             value: 0.0
         - value_type: float
           points:
           - time: 0.0
-            value: 1.0
-          - time: 1.0
             value: 0.0
+          - time: 0.068
+            value: 0.276
+          - time: 0.235
+            value: 0.629
+          - time: 0.421
+            value: 0.783
+          - time: 0.597
+            value: 0.9
+          - time: 0.738
+            value: 0.946
+          - time: 1.0
+            value: 1.0
         - value_type: float
           points:
           - time: 0.0
-            value: 1.0
-          - time: 1.0
             value: 0.0
-        - value_type: float
-          points:
-          - time: 0.0
-            value: 1.0
+          - time: 0.068
+            value: 0.276
+          - time: 0.235
+            value: 0.629
+          - time: 0.421
+            value: 0.783
+          - time: 0.597
+            value: 0.9
+          - time: 0.738
+            value: 0.946
           - time: 1.0
-            value: 0.0
-        - value_type: float
-          points:
-          - time: 0.0
             value: 1.0
-          - time: 1.0
-            value: 0.0
-        - value_type: float
-          points:
-          - time: 0.0
-            value: 1.0
-          - time: 1.0
-            value: 0.0
       pulse_shape:
         type: curve
         curve:
@@ -1192,6 +1443,1392 @@ empty:
           - time: 1.0
             value: 0.0
     script: effects.MarkChase
+  - id: 46
+    start: 65.379859086s
+    duration: 2.274587244s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      beats:
+        type: marks
+        key: marks_3
+      base:
+        type: color
+        value: '#000000'
+      accent:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.299
+            value: '#ffffff'
+          - time: 0.959
+            value: '#000000'
+      hue:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      hue_mix:
+        type: float
+        value: 0.0
+      offset_seconds:
+        type: float
+        value: -0.1
+      decay_seconds:
+        type: float
+        value: 0.3
+      section_width_pixels:
+        type: integer
+        value: 10
+      section_edge_fade_pixels:
+        type: float
+        value: 0.0
+      sections_per_mark:
+        type: integer
+        value: 6
+      seed:
+        type: float
+        value: 4.0
+    script: effects.MarkPulse
+  - id: 48
+    start: 67.977857656s
+    duration: 0.525681511s
+    target:
+      type: group
+      name: All Outputs
+    scope: whole_target
+    params:
+      gradient:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Pulse
+  - id: 49
+    start: 67.986979166s
+    duration: 0.595613083s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve: curves.hot_pink_lime_gradient
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      direction:
+        type: enum
+        value: left_to_right
+      color_mode:
+        type: enum
+        value: through_effect
+      repeats:
+        type: float
+        value: 1.0
+      width:
+        type: float
+        value: 0.5
+      edge_width:
+        type: float
+        value: 0.1
+      background_level:
+        type: float
+        value: 0.0
+      section_width_pixels:
+        type: float
+        value: 1.0
+    script: effects.ScanSweep
+  - id: 53
+    start: 68.031259179s
+    duration: 3.051949479s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      base:
+        type: color
+        value: '#000000'
+      palette:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 1.0
+            value: '#ffffff'
+      color_mode:
+        type: enum
+        value: from_palette
+      sparkle_color:
+        type: color
+        value: '#ffffff'
+      density:
+        type: float
+        value: 0.1
+      shimmer_level:
+        type: float
+        value: 0.1
+      sparkle_level:
+        type: float
+        value: 1.0
+      wave_speed:
+        type: float
+        value: 1.0
+      wave_scale:
+        type: float
+        value: 1.0
+      sparkle_speed:
+        type: float
+        value: 1.0
+      sparkle_hold:
+        type: float
+        value: 1.0
+      section_width_pixels:
+        type: float
+        value: 1.0
+      seed:
+        type: float
+        value: 0.0
+    script: effects.ShimmerField
+  - id: 47
+    start: 68.47608011s
+    duration: 0.413182895s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve: curves.ghost_blue_gradient
+      gradient_mode:
+        type: enum
+        value: per_pulse
+      pulse_overlap:
+        type: float
+        value: 50.0
+      section_width_pixels:
+        type: integer
+        value: 1
+      chase_position:
+        type: curve
+        curve: curves.ease_down
+      reverse:
+        type: bool
+        value: false
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Chase
+  - id: 50
+    start: 68.668088585s
+    duration: 0.806464017s
+    target:
+      type: group
+      name: All Outputs
+    scope: whole_target
+    params:
+      gradient:
+        type: curve
+        curve: curves.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.303
+            value: 0.145
+          - time: 0.412
+            value: 0.715
+          - time: 1.0
+            value: 0.0
+    script: effects.Pulse
+  - id: 51
+    start: 68.968244213s
+    duration: 0.457320955s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+      position:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      color_mode:
+        type: enum
+        value: gradient_tail
+      head_color:
+        type: color
+        value: '#ffffff'
+      reverse:
+        type: bool
+        value: false
+      wrap:
+        type: bool
+        value: false
+      tail_width:
+        type: float
+        value: 0.18
+      head_width:
+        type: float
+        value: 0.035
+      sparkle_density:
+        type: float
+        value: 0.35
+      sparkle_speed:
+        type: float
+        value: 14.0
+      sparkle_gain:
+        type: float
+        value: 0.75
+      seed:
+        type: float
+        value: 0.0
+    script: effects.SparkleComet
+  - id: 52
+    start: 69.467207736s
+    duration: 0.82086222s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      beats:
+        type: marks
+        key: marks
+      base:
+        type: color
+        value: '#000000'
+      accent:
+        type: curve
+        curve: curves.ember_core_gradient
+      hue:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      hue_mix:
+        type: float
+        value: 0.0
+      offset_seconds:
+        type: float
+        value: -0.1
+      decay_seconds:
+        type: float
+        value: 0.25
+      section_width_pixels:
+        type: integer
+        value: 15
+      section_edge_fade_pixels:
+        type: float
+        value: 0.0
+      sections_per_mark:
+        type: integer
+        value: 7
+      seed:
+        type: float
+        value: 0.0
+    script: effects.MarkPulse
+  - id: 54
+    start: 70.150575038s
+    duration: 0.413182895s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve: curves.molten_gold_gradient
+      gradient_mode:
+        type: enum
+        value: per_pulse
+      pulse_overlap:
+        type: float
+        value: 50.0
+      section_width_pixels:
+        type: integer
+        value: 1
+      chase_position:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.437
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.937
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+      reverse:
+        type: bool
+        value: false
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Chase
+  - id: 55
+    start: 70.339972663s
+    duration: 0.747045154s
+    target:
+      type: group
+      name: All Outputs
+    scope: whole_target
+    params:
+      gradient:
+        type: curve
+        curve: curves.ember_core_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.303
+            value: 0.145
+          - time: 0.588
+            value: 0.027
+          - time: 1.0
+            value: 0.0
+    script: effects.Pulse
+  - id: 57
+    start: 70.679016549s
+    duration: 0.415800464s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve: curves.cyberpunk_gradient
+      gradient_mode:
+        type: enum
+        value: per_pulse
+      pulse_overlap:
+        type: float
+        value: 50.0
+      section_width_pixels:
+        type: integer
+        value: 1
+      chase_position:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+      reverse:
+        type: bool
+        value: false
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Chase
+  - id: 56
+    start: 70.685344802s
+    duration: 0.401673015s
+    target:
+      type: group
+      name: All Outputs
+    scope: whole_target
+    params:
+      gradient:
+        type: curve
+        curve: curves.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.389
+            value: 0.299
+          - time: 1.0
+            value: 0.0
+    script: effects.Pulse
+  - id: 58
+    start: 71.095301395s
+    duration: 3.296864625s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      beats:
+        type: marks
+        key: marks
+      base:
+        type: color
+        value: '#000000'
+      gradient_mode:
+        type: enum
+        value: per_pulse
+      gradients:
+        type: array
+        element_type: curve_color
+        values:
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#00ff2a'
+          - time: 1.0
+            value: '#00d5ff'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff7b00'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff007b'
+          - time: 1.0
+            value: '#e1ff00'
+      hue:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      hue_mix:
+        type: float
+        value: 0.0
+      offset_seconds:
+        type: float
+        value: -0.1
+      chase_seconds:
+        type: float
+        value: 0.5
+      pulse_overlap:
+        type: float
+        value: 70.0
+      section_width_pixels:
+        type: integer
+        value: 1
+      chase_positions:
+        type: array
+        element_type: curve_float
+        values:
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.068
+            value: 0.276
+          - time: 0.235
+            value: 0.629
+          - time: 0.421
+            value: 0.783
+          - time: 0.597
+            value: 0.9
+          - time: 0.738
+            value: 0.946
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.068
+            value: 0.724
+          - time: 0.235
+            value: 0.371
+          - time: 0.421
+            value: 0.217
+          - time: 0.597
+            value: 0.1
+          - time: 0.738
+            value: 0.054
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.068
+            value: 0.276
+          - time: 0.235
+            value: 0.629
+          - time: 0.421
+            value: 0.783
+          - time: 0.597
+            value: 0.9
+          - time: 0.738
+            value: 0.946
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.068
+            value: 0.724
+          - time: 0.235
+            value: 0.371
+          - time: 0.421
+            value: 0.217
+          - time: 0.597
+            value: 0.1
+          - time: 0.738
+            value: 0.054
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.068
+            value: 0.276
+          - time: 0.235
+            value: 0.629
+          - time: 0.421
+            value: 0.783
+          - time: 0.597
+            value: 0.9
+          - time: 0.738
+            value: 0.946
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.068
+            value: 0.276
+          - time: 0.235
+            value: 0.629
+          - time: 0.421
+            value: 0.783
+          - time: 0.597
+            value: 0.9
+          - time: 0.738
+            value: 0.946
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.MarkChase
+  - id: 60
+    start: 71.10323582s
+    duration: 0.401673015s
+    target:
+      type: group
+      name: All Outputs
+    scope: whole_target
+    params:
+      gradient:
+        type: curve
+        curve: curves.plasma_storm_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.389
+            value: 0.299
+          - time: 1.0
+            value: 0.0
+    script: effects.Pulse
+  - id: 59
+    start: 71.899886606s
+    duration: 2.274587244s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      beats:
+        type: marks
+        key: marks_3
+      base:
+        type: color
+        value: '#000000'
+      accent:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.299
+            value: '#ffffff'
+          - time: 0.959
+            value: '#000000'
+      hue:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      hue_mix:
+        type: float
+        value: 0.0
+      offset_seconds:
+        type: float
+        value: -0.1
+      decay_seconds:
+        type: float
+        value: 0.3
+      section_width_pixels:
+        type: integer
+        value: 10
+      section_edge_fade_pixels:
+        type: float
+        value: 0.0
+      sections_per_mark:
+        type: integer
+        value: 9
+      seed:
+        type: float
+        value: 7.0
+    script: effects.MarkPulse
+  - id: 61
+    start: 74.416021375s
+    duration: 0.525681511s
+    target:
+      type: group
+      name: All Outputs
+    scope: whole_target
+    params:
+      gradient:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Pulse
+  - id: 62
+    start: 74.425142885s
+    duration: 0.595613083s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve: curves.hot_pink_lime_gradient
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      direction:
+        type: enum
+        value: left_to_right
+      color_mode:
+        type: enum
+        value: through_effect
+      repeats:
+        type: float
+        value: 1.0
+      width:
+        type: float
+        value: 0.5
+      edge_width:
+        type: float
+        value: 0.1
+      background_level:
+        type: float
+        value: 0.0
+      section_width_pixels:
+        type: float
+        value: 1.0
+    script: effects.ScanSweep
+  - id: 63
+    start: 74.469422898s
+    duration: 3.061021274s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      base:
+        type: color
+        value: '#000000'
+      palette:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 1.0
+            value: '#ffffff'
+      color_mode:
+        type: enum
+        value: from_palette
+      sparkle_color:
+        type: color
+        value: '#ffffff'
+      density:
+        type: float
+        value: 0.1
+      shimmer_level:
+        type: float
+        value: 0.1
+      sparkle_level:
+        type: float
+        value: 1.0
+      wave_speed:
+        type: float
+        value: 1.0
+      wave_scale:
+        type: float
+        value: 1.0
+      sparkle_speed:
+        type: float
+        value: 1.0
+      sparkle_hold:
+        type: float
+        value: 1.0
+      section_width_pixels:
+        type: float
+        value: 1.0
+      seed:
+        type: float
+        value: 0.0
+    script: effects.ShimmerField
+  - id: 64
+    start: 74.914243829s
+    duration: 0.413182895s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve: curves.ghost_blue_gradient
+      gradient_mode:
+        type: enum
+        value: per_pulse
+      pulse_overlap:
+        type: float
+        value: 50.0
+      section_width_pixels:
+        type: integer
+        value: 1
+      chase_position:
+        type: curve
+        curve: curves.ease_down
+      reverse:
+        type: bool
+        value: false
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Chase
+  - id: 65
+    start: 75.106252304s
+    duration: 0.806464017s
+    target:
+      type: group
+      name: All Outputs
+    scope: whole_target
+    params:
+      gradient:
+        type: curve
+        curve: curves.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.303
+            value: 0.145
+          - time: 0.412
+            value: 0.715
+          - time: 1.0
+            value: 0.0
+    script: effects.Pulse
+  - id: 66
+    start: 75.406407932s
+    duration: 0.457320955s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+      position:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      color_mode:
+        type: enum
+        value: gradient_tail
+      head_color:
+        type: color
+        value: '#ffffff'
+      reverse:
+        type: bool
+        value: false
+      wrap:
+        type: bool
+        value: false
+      tail_width:
+        type: float
+        value: 0.18
+      head_width:
+        type: float
+        value: 0.035
+      sparkle_density:
+        type: float
+        value: 0.35
+      sparkle_speed:
+        type: float
+        value: 14.0
+      sparkle_gain:
+        type: float
+        value: 0.75
+      seed:
+        type: float
+        value: 0.0
+    script: effects.SparkleComet
+  - id: 72
+    start: 77.533465114s
+    duration: 3.296864625s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      beats:
+        type: marks
+        key: marks
+      base:
+        type: color
+        value: '#000000'
+      gradient_mode:
+        type: enum
+        value: per_pulse
+      gradients:
+        type: array
+        element_type: curve_color
+        values:
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#00ff2a'
+          - time: 1.0
+            value: '#00d5ff'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff7b00'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff007b'
+          - time: 1.0
+            value: '#e1ff00'
+      hue:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      hue_mix:
+        type: float
+        value: 0.0
+      offset_seconds:
+        type: float
+        value: -0.1
+      chase_seconds:
+        type: float
+        value: 0.5
+      pulse_overlap:
+        type: float
+        value: 70.0
+      section_width_pixels:
+        type: integer
+        value: 1
+      chase_positions:
+        type: array
+        element_type: curve_float
+        values:
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.068
+            value: 0.276
+          - time: 0.235
+            value: 0.629
+          - time: 0.421
+            value: 0.783
+          - time: 0.597
+            value: 0.9
+          - time: 0.738
+            value: 0.946
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.068
+            value: 0.724
+          - time: 0.235
+            value: 0.371
+          - time: 0.421
+            value: 0.217
+          - time: 0.597
+            value: 0.1
+          - time: 0.738
+            value: 0.054
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.068
+            value: 0.276
+          - time: 0.235
+            value: 0.629
+          - time: 0.421
+            value: 0.783
+          - time: 0.597
+            value: 0.9
+          - time: 0.738
+            value: 0.946
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.068
+            value: 0.724
+          - time: 0.235
+            value: 0.371
+          - time: 0.421
+            value: 0.217
+          - time: 0.597
+            value: 0.1
+          - time: 0.738
+            value: 0.054
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.068
+            value: 0.276
+          - time: 0.235
+            value: 0.629
+          - time: 0.421
+            value: 0.783
+          - time: 0.597
+            value: 0.9
+          - time: 0.738
+            value: 0.946
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.068
+            value: 0.276
+          - time: 0.235
+            value: 0.629
+          - time: 0.421
+            value: 0.783
+          - time: 0.597
+            value: 0.9
+          - time: 0.738
+            value: 0.946
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.MarkChase
+  - id: 73
+    start: 77.541399539s
+    duration: 0.646611489s
+    target:
+      type: group
+      name: All Outputs
+    scope: whole_target
+    params:
+      gradient:
+        type: curve
+        curve: curves.sodium_vapor_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.389
+            value: 0.299
+          - time: 1.0
+            value: 0.0
+    script: effects.Pulse
+  - id: 74
+    start: 78.338050325s
+    duration: 2.274587244s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      beats:
+        type: marks
+        key: marks_3
+      base:
+        type: color
+        value: '#000000'
+      accent:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.299
+            value: '#ffffff'
+          - time: 0.959
+            value: '#000000'
+      hue:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      hue_mix:
+        type: float
+        value: 0.0
+      offset_seconds:
+        type: float
+        value: -0.1
+      decay_seconds:
+        type: float
+        value: 0.3
+      section_width_pixels:
+        type: integer
+        value: 10
+      section_edge_fade_pixels:
+        type: float
+        value: 0.0
+      sections_per_mark:
+        type: integer
+        value: 9
+      seed:
+        type: float
+        value: 6.0
+    script: effects.MarkPulse
+  - id: 38
+    start: 128.832971742s
+    duration: 0.749629726s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      base:
+        type: color
+        value: '#000000'
+      palette:
+        type: curve
+        curve: curves.ghost_blue_gradient
+      color_mode:
+        type: enum
+        value: from_palette
+      sparkle_color:
+        type: color
+        value: '#ffffff'
+      density:
+        type: float
+        value: 0.28
+      shimmer_level:
+        type: float
+        value: 0.35
+      sparkle_level:
+        type: float
+        value: 1.0
+      wave_speed:
+        type: float
+        value: 4.0
+      wave_scale:
+        type: float
+        value: 18.0
+      sparkle_speed:
+        type: float
+        value: 2.0
+      sparkle_hold:
+        type: float
+        value: 0.35
+      section_width_pixels:
+        type: float
+        value: 1.0
+      seed:
+        type: float
+        value: 0.0
+    script: effects.ShimmerField
   - id: 20
     start: 128.836789387s
     duration: 0.747570248s
@@ -1286,6 +2923,85 @@ empty:
       seed:
         type: float
         value: 0.0
+    script: effects.MarkPulse
+  - id: 39
+    start: 129.567433419s
+    duration: 0.16539483s
+    target:
+      type: group
+      name: All Outputs
+    scope: whole_target
+    params:
+      gradient:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Pulse
+  - id: 67
+    start: 130.000823689s
+    duration: 1.387017984s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      beats:
+        type: marks
+        key: marks_3
+      base:
+        type: color
+        value: '#000000'
+      accent:
+        type: curve
+        curve:
+          value_type: color
+          points:
+          - time: 0.299
+            value: '#ffffff'
+          - time: 0.959
+            value: '#000000'
+      hue:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      hue_mix:
+        type: float
+        value: 0.0
+      offset_seconds:
+        type: float
+        value: -0.1
+      decay_seconds:
+        type: float
+        value: 0.3
+      section_width_pixels:
+        type: integer
+        value: 10
+      section_edge_fade_pixels:
+        type: float
+        value: 0.0
+      sections_per_mark:
+        type: integer
+        value: 6
+      seed:
+        type: float
+        value: 4.0
     script: effects.MarkPulse
   - id: 27
     start: 130.028308779s
@@ -1452,7 +3168,7 @@ empty:
         value: 0.0
     script: effects.MarkPulse
   - id: 29
-    start: 131.172172169s
+    start: 131.167636271s
     duration: 0.402976665s
     target:
       type: group
@@ -1464,7 +3180,7 @@ empty:
         curve: curves.cool_gradient
       gradient_mode:
         type: enum
-        value: through_effect
+        value: per_pulse
       pulse_overlap:
         type: float
         value: 80.0
@@ -1480,6 +3196,9 @@ empty:
             value: 1.0
           - time: 1.0
             value: 0.0
+      reverse:
+        type: bool
+        value: false
       extend_to_start:
         type: bool
         value: false
@@ -1509,7 +3228,7 @@ empty:
         curve: curves.club_gradient
       gradient_mode:
         type: enum
-        value: through_effect
+        value: per_pulse
       pulse_overlap:
         type: float
         value: 100.0
@@ -1525,6 +3244,9 @@ empty:
             value: 0.0
           - time: 1.0
             value: 1.0
+      reverse:
+        type: bool
+        value: false
       extend_to_start:
         type: bool
         value: false
@@ -1554,7 +3276,7 @@ empty:
         curve: curves.fire_gradient
       gradient_mode:
         type: enum
-        value: through_effect
+        value: per_pulse
       pulse_overlap:
         type: float
         value: 90.0
@@ -1570,6 +3292,9 @@ empty:
             value: 1.0
           - time: 1.0
             value: 0.0
+      reverse:
+        type: bool
+        value: false
       extend_to_start:
         type: bool
         value: false
@@ -1609,7 +3334,7 @@ empty:
         value: 120.0
       section_width_pixels:
         type: integer
-        value: 5
+        value: 1
       chase_position:
         type: curve
         curve:
@@ -1619,6 +3344,9 @@ empty:
             value: 1.0
           - time: 1.0
             value: 0.0
+      reverse:
+        type: bool
+        value: false
       extend_to_start:
         type: bool
         value: false
@@ -1645,10 +3373,10 @@ empty:
     params:
       gradient:
         type: curve
-        curve: curves.warm_gradient
+        curve: curves.toxic_sludge_gradient
       gradient_mode:
         type: enum
-        value: through_effect
+        value: per_pulse
       pulse_overlap:
         type: float
         value: 80.0
@@ -1664,6 +3392,9 @@ empty:
             value: 0.0
           - time: 1.0
             value: 1.0
+      reverse:
+        type: bool
+        value: false
       extend_to_start:
         type: bool
         value: false
@@ -1728,6 +3459,205 @@ empty:
         type: float
         value: 0.0
     script: effects.MarkPulse
+  - id: 40
+    start: 133.735190094s
+    duration: 1.113478018s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      beats:
+        type: marks
+        key: marks_2
+      base:
+        type: color
+        value: '#000000'
+      gradient_mode:
+        type: enum
+        value: per_pulse
+      gradients:
+        type: array
+        element_type: curve_color
+        values:
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.379
+            value: '#ff0000'
+          - time: 0.699
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff6600'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.379
+            value: '#00ffcc'
+          - time: 0.699
+            value: '#a6ff00'
+          - time: 1.0
+            value: '#ff6600'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.379
+            value: '#ff00f7'
+          - time: 0.699
+            value: '#0011ff'
+          - time: 1.0
+            value: '#ff6600'
+      hue:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      hue_mix:
+        type: float
+        value: 0.35
+      offset_seconds:
+        type: float
+        value: -0.08
+      chase_seconds:
+        type: float
+        value: 0.3
+      pulse_overlap:
+        type: float
+        value: 40.0
+      section_width_pixels:
+        type: integer
+        value: 1
+      chase_positions:
+        type: array
+        element_type: curve_float
+        values:
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.MarkChase
+  - id: 42
+    start: 134.66361564s
+    duration: 0.347789405s
+    target:
+      type: group
+      name: All Outputs
+    scope: whole_target
+    params:
+      gradient:
+        type: curve
+        curve: curves.electric_blue_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Pulse
+  - id: 43
+    start: 134.803019432s
+    duration: 0.668915995s
+    target:
+      type: group
+      name: All Outputs
+    scope: whole_target
+    params:
+      gradient:
+        type: curve
+        curve: curves.laser_magenta_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Pulse
+  - id: 44
+    start: 135.156399811s
+    duration: 0.581788626s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      gradient:
+        type: curve
+        curve: curves.molten_gold_gradient
+      gradient_mode:
+        type: enum
+        value: per_pulse
+      pulse_overlap:
+        type: float
+        value: 80.0
+      section_width_pixels:
+        type: integer
+        value: 1
+      chase_position:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      reverse:
+        type: bool
+        value: false
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.Chase
   - id: 15
     start: 135.518927819s
     duration: 2.159232927s

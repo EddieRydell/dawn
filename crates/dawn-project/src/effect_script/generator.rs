@@ -5,8 +5,8 @@ use crate::model::{ArrayElementType, Color, CurveValue};
 use super::ast::{BinaryOp, EmitEffectRef, EmitStmt, Expr, Stmt, UnaryOp};
 use super::params::PreparedEffectParams;
 use super::{
-    binary_result_type, GeneratorTarget, GeneratorTargetItem, RuntimeError, RuntimeValue,
-    ScriptType,
+    binary_result_type, GeneratorTarget, GeneratorTargetItem, RuntimeError, RuntimeMarks,
+    RuntimeValue, ScriptType,
 };
 
 const MAX_GENERATED_CHILDREN: usize = 4096;
@@ -347,7 +347,13 @@ impl GeneratorRuntime {
                 let RuntimeValue::Marks(marks) = self.eval(&args[0])? else {
                     return Err(self.error("mark_count expects marks"));
                 };
-                Ok(RuntimeValue::Int(marks.len() as i64))
+                Ok(RuntimeValue::Int(marks.windowed.len() as i64))
+            }
+            "mark_global_count" => {
+                let RuntimeValue::Marks(marks) = self.eval(&args[0])? else {
+                    return Err(self.error("mark_global_count expects marks"));
+                };
+                Ok(RuntimeValue::Int(marks.global.len() as i64))
             }
             "mark_at" => {
                 let RuntimeValue::Marks(marks) = self.eval(&args[0])? else {
@@ -355,13 +361,35 @@ impl GeneratorRuntime {
                 };
                 let index = self.int(&args[1])?;
                 let fallback = self.float(&args[2])?;
-                Ok(RuntimeValue::Float(
-                    usize::try_from(index)
-                        .ok()
-                        .and_then(|index| marks.get(index))
-                        .copied()
-                        .unwrap_or(fallback),
-                ))
+                Ok(RuntimeValue::Float(mark_at(
+                    &marks.windowed,
+                    index,
+                    fallback,
+                )))
+            }
+            "mark_global_at" => {
+                let RuntimeValue::Marks(marks) = self.eval(&args[0])? else {
+                    return Err(self.error("mark_global_at expects marks"));
+                };
+                let index = self.int(&args[1])?;
+                let fallback = self.float(&args[2])?;
+                Ok(RuntimeValue::Float(mark_at(&marks.global, index, fallback)))
+            }
+            "mark_prev" => self.mark_search(args, MarkSearchMode::Prev, MarkDomain::Windowed),
+            "mark_next" => self.mark_search(args, MarkSearchMode::Next, MarkDomain::Windowed),
+            "mark_nearest" => self.mark_search(args, MarkSearchMode::Nearest, MarkDomain::Windowed),
+            "mark_phase" => self.mark_search(args, MarkSearchMode::Phase, MarkDomain::Windowed),
+            "mark_elapsed" => self.mark_search(args, MarkSearchMode::Elapsed, MarkDomain::Windowed),
+            "mark_global_prev" => self.mark_search(args, MarkSearchMode::Prev, MarkDomain::Global),
+            "mark_global_next" => self.mark_search(args, MarkSearchMode::Next, MarkDomain::Global),
+            "mark_global_nearest" => {
+                self.mark_search(args, MarkSearchMode::Nearest, MarkDomain::Global)
+            }
+            "mark_global_phase" => {
+                self.mark_search(args, MarkSearchMode::Phase, MarkDomain::Global)
+            }
+            "mark_global_elapsed" => {
+                self.mark_search(args, MarkSearchMode::Elapsed, MarkDomain::Global)
             }
             "fixtures" => self.target_items(args, TargetItemsMode::Fixtures),
             "pixels" => self.target_items(args, TargetItemsMode::Pixels),
@@ -503,6 +531,29 @@ impl GeneratorRuntime {
             TargetItemsMode::Sections => section_items(&target, width),
         };
         Ok(RuntimeValue::TargetItems(items))
+    }
+
+    fn mark_search(
+        &mut self,
+        args: &[Expr],
+        mode: MarkSearchMode,
+        domain: MarkDomain,
+    ) -> Result<RuntimeValue, RuntimeError> {
+        let RuntimeValue::Marks(marks) = self.eval(&args[0])? else {
+            return Err(self.error("mark search expects marks"));
+        };
+        let time = self.float(&args[1])?;
+        let fallback = self.float(&args[2])?;
+        let marks = marks_for_domain(&marks, domain);
+        let value = match mode {
+            MarkSearchMode::Prev => mark_prev(marks, time),
+            MarkSearchMode::Next => mark_next(marks, time),
+            MarkSearchMode::Nearest => mark_nearest(marks, time),
+            MarkSearchMode::Phase => mark_phase(marks, time),
+            MarkSearchMode::Elapsed => mark_elapsed(marks, time),
+        }
+        .unwrap_or(fallback);
+        Ok(RuntimeValue::Float(value))
     }
 
     fn member(&mut self, object: &Expr, member: &str) -> Result<RuntimeValue, RuntimeError> {
@@ -858,6 +909,76 @@ enum TargetItemsMode {
     Fixtures,
     Pixels,
     Sections,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MarkDomain {
+    Windowed,
+    Global,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MarkSearchMode {
+    Prev,
+    Next,
+    Nearest,
+    Phase,
+    Elapsed,
+}
+
+fn marks_for_domain(marks: &RuntimeMarks, domain: MarkDomain) -> &[f64] {
+    match domain {
+        MarkDomain::Windowed => &marks.windowed,
+        MarkDomain::Global => &marks.global,
+    }
+}
+
+fn mark_at(marks: &[f64], index: i64, fallback: f64) -> f64 {
+    usize::try_from(index)
+        .ok()
+        .and_then(|index| marks.get(index))
+        .copied()
+        .unwrap_or(fallback)
+}
+
+fn mark_prev(marks: &[f64], time: f64) -> Option<f64> {
+    let index = marks.partition_point(|mark| *mark <= time);
+    index.checked_sub(1).map(|index| marks[index])
+}
+
+fn mark_next(marks: &[f64], time: f64) -> Option<f64> {
+    marks
+        .get(marks.partition_point(|mark| *mark <= time))
+        .copied()
+}
+
+fn mark_nearest(marks: &[f64], time: f64) -> Option<f64> {
+    let previous = mark_prev(marks, time);
+    let next = mark_next(marks, time);
+    match (previous, next) {
+        (Some(previous), Some(next)) if (time - previous) <= (next - time) => Some(previous),
+        (Some(_), Some(next)) => Some(next),
+        (Some(previous), None) => Some(previous),
+        (None, Some(next)) => Some(next),
+        (None, None) => None,
+    }
+}
+
+fn mark_phase(marks: &[f64], time: f64) -> Option<f64> {
+    let previous = mark_prev(marks, time)?;
+    if (time - previous).abs() < f64::EPSILON {
+        return Some(0.0);
+    }
+    let next = mark_next(marks, time)?;
+    let span = next - previous;
+    if span <= f64::EPSILON {
+        return None;
+    }
+    Some(((time - previous) / span).clamp(0.0, 1.0))
+}
+
+fn mark_elapsed(marks: &[f64], time: f64) -> Option<f64> {
+    mark_prev(marks, time).map(|previous| time - previous)
 }
 
 fn fixture_items(target: &GeneratorTarget) -> Vec<GeneratorTargetItem> {

@@ -2,7 +2,7 @@ use crate::model::{Color, Curve, CurveValue};
 
 use super::bytecode::{
     stats_for_program, BinaryInstruction, BytecodeProgram, ContextSlot, FloatSlot, Instruction,
-    MarkSearchInstruction, RefSlot, UnaryFloatInstruction, ValueSlot,
+    MarkDomain, MarkSearchInstruction, RefSlot, UnaryFloatInstruction, ValueSlot,
 };
 use super::params::{EffectSampleScratch, PreparedEffectParams, RefValue};
 use super::{FixtureContext, PixelContext, RuntimeError, RuntimeValue, ScriptType};
@@ -170,11 +170,11 @@ impl<'a> BytecodeVm<'a, '_> {
                     self.scratch.floats[dest.0] =
                         section_position(pixel, self.scratch.floats[width.0]);
                 }
-                Instruction::MarkCount(dest, source) => {
-                    self.scratch.ints[dest.0] = self.marks(source)?.len() as i64;
+                Instruction::MarkCount(dest, domain, source) => {
+                    self.scratch.ints[dest.0] = self.marks(source, domain)?.len() as i64;
                 }
-                Instruction::MarkAt(dest, marks, index, fallback) => {
-                    let marks = self.marks(marks)?;
+                Instruction::MarkAt(dest, domain, marks, index, fallback) => {
+                    let marks = self.marks(marks, domain)?;
                     let fallback = self.scratch.floats[fallback.0];
                     let value = usize::try_from(self.scratch.ints[index.0])
                         .ok()
@@ -206,8 +206,8 @@ impl<'a> BytecodeVm<'a, '_> {
                         self.write_runtime(dest, &value)?;
                     }
                 }
-                Instruction::MarkSearch(dest, search, marks, time, fallback) => {
-                    let marks = self.marks(marks)?;
+                Instruction::MarkSearch(dest, search, domain, marks, time, fallback) => {
+                    let marks = self.marks(marks, domain)?;
                     let time = self.scratch.floats[time.0];
                     let fallback = self.scratch.floats[fallback.0];
                     let value = match search {
@@ -556,10 +556,13 @@ impl<'a> BytecodeVm<'a, '_> {
         })
     }
 
-    fn marks(&self, slot: RefSlot) -> Result<&[f64], RuntimeError> {
+    fn marks(&self, slot: RefSlot, domain: MarkDomain) -> Result<&[f64], RuntimeError> {
         let value = self.ref_value(slot, "expected marks value")?;
         match value {
-            RuntimeValue::Marks(value) => Ok(value),
+            RuntimeValue::Marks(value) => Ok(match domain {
+                MarkDomain::Windowed => &value.windowed,
+                MarkDomain::Global => &value.global,
+            }),
             _ => Err(self.error("expected marks value")),
         }
     }

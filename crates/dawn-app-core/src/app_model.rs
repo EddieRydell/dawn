@@ -23,7 +23,9 @@ use crate::dto::{
     SequencePasteAnchorDto, SequenceResizeEdgeDto, SequenceSelectionDto, SequenceSelectionEditDto,
     SequenceSelectionEditResultDto,
 };
-use crate::editor_session::{BufferExternalState, EditorBuffer, EditorSession, EditorViewMode};
+use crate::editor_session::{
+    BufferExternalState, EditorBuffer, EditorSession, EditorViewMode, OpenFileOutcome,
+};
 use crate::layout_persistence::{
     load_workbench_layout, save_workbench_layout, WindowLayout, WorkbenchLayout,
 };
@@ -370,7 +372,13 @@ struct SequenceSaveRequest {
 struct SequenceSaveCompletion {
     key: SequenceKey,
     revision: u64,
-    result: Result<String, String>,
+    result: Result<SequenceSaveOutcome, String>,
+}
+
+#[derive(Debug)]
+enum SequenceSaveOutcome {
+    Saved(String),
+    Stale,
 }
 
 #[derive(Debug, Clone)]
@@ -512,22 +520,31 @@ fn process_sequence_save_requests(
 ) {
     let requests = std::mem::take(pending);
     for request in requests.into_values() {
-        let result = dawn_project::document::serialize_sequence_document(
-            &request.fs,
-            request.key.path.clone(),
-            &request.key.object_key,
-            request.sequence,
-            request.base_content,
-            request.imports_to_add,
-            &request.analysis,
-        )
-        .and_then(|outcome| {
-            request
-                .fs
-                .write(&request.key.path, outcome.serialized_content.as_bytes())
-                .map_err(|error| error.to_string())?;
-            Ok(outcome.serialized_content)
-        });
+        let result = match request.fs.read_to_string(&request.key.path) {
+            Ok(current_content) if current_content == request.base_content => {
+                dawn_project::document::serialize_sequence_document(
+                    &request.fs,
+                    request.key.path.clone(),
+                    &request.key.object_key,
+                    request.sequence,
+                    request.base_content,
+                    request.imports_to_add,
+                    &request.analysis,
+                )
+                .and_then(|outcome| {
+                    request
+                        .fs
+                        .write(&request.key.path, outcome.serialized_content.as_bytes())
+                        .map_err(|error| error.to_string())?;
+                    Ok(SequenceSaveOutcome::Saved(outcome.serialized_content))
+                })
+            }
+            Ok(_) => Ok(SequenceSaveOutcome::Stale),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(SequenceSaveOutcome::Stale)
+            }
+            Err(error) => Err(error.to_string()),
+        };
         let _ = completions.send(SequenceSaveCompletion {
             key: request.key,
             revision: request.revision,
@@ -620,7 +637,15 @@ impl AppModel {
             }
             AppAction::OpenFile(path) => {
                 let (text, disk_version) = self.workspace.read_file_with_version(path.clone())?;
-                self.editors.open_file(path, text, disk_version);
+                match self
+                    .editors
+                    .open_or_reconcile_file(path.clone(), text, disk_version)
+                {
+                    OpenFileOutcome::Opened | OpenFileOutcome::Activated => {}
+                    OpenFileOutcome::ReloadedFromDisk | OpenFileOutcome::MarkedChangedOnDisk => {
+                        self.invalidate_sequence_gui_state_for_path(&path);
+                    }
+                }
                 self.refresh_analysis()?;
                 self.sync_preview_source(PreviewSyncMode::RenderNow);
                 self.persist_workbench_layout()?;
@@ -635,10 +660,14 @@ impl AppModel {
             }
             AppAction::SetActiveFile(path) => {
                 let active_changed = self.editors.active_file() != Some(&path);
-                self.editors.set_active_file(path);
-                if active_changed {
+                self.editors.set_active_file(path.clone());
+                let reconciled = self.reconcile_open_buffer_from_disk(&path)?;
+                if active_changed || reconciled {
                     self.invalidate_active_gui_document_cache();
                     self.preview.pause(self.analysis.as_deref());
+                    if reconciled {
+                        self.refresh_analysis()?;
+                    }
                     self.sync_preview_source(PreviewSyncMode::RenderNow);
                     self.persist_workbench_layout()?;
                 }
@@ -694,7 +723,6 @@ impl AppModel {
                 self.status = "Saved".to_string();
             }
             AppAction::FilesystemChanged(paths) => {
-                self.flush_pending_sequence_saves()?;
                 self.reconcile_filesystem_changes(paths)?;
                 self.status = "Filesystem refreshed".to_string();
             }
@@ -953,6 +981,43 @@ impl AppModel {
         Ok(())
     }
 
+    fn reconcile_open_buffer_from_disk(&mut self, path: &Utf8PathBuf) -> Result<bool, String> {
+        let Some(buffer) = self
+            .editors
+            .buffers()
+            .into_iter()
+            .find(|buffer| &buffer.path == path)
+        else {
+            return Ok(false);
+        };
+
+        match self.workspace.read_file_with_version(buffer.path.clone()) {
+            Ok((disk_text, disk_version)) => {
+                if buffer.disk_version.as_ref() == Some(&disk_version) {
+                    return Ok(false);
+                }
+                self.invalidate_sequence_gui_state_for_path(&buffer.path);
+                if buffer.is_dirty() {
+                    self.editors
+                        .mark_external_state(&buffer.path, BufferExternalState::ChangedOnDisk);
+                } else {
+                    self.editors
+                        .replace_from_disk(&buffer.path, disk_text, disk_version, false);
+                }
+            }
+            Err(_) => {
+                self.invalidate_sequence_gui_state_for_path(&buffer.path);
+                if buffer.is_dirty() {
+                    self.editors
+                        .mark_external_state(&buffer.path, BufferExternalState::DeletedOnDisk);
+                } else {
+                    self.editors.close_file(&buffer.path);
+                }
+            }
+        }
+        Ok(true)
+    }
+
     fn reconcile_filesystem_changes(&mut self, paths: Vec<Utf8PathBuf>) -> Result<(), String> {
         let watched_paths = if paths.is_empty() {
             self.editors
@@ -973,6 +1038,7 @@ impl AppModel {
                     if buffer.disk_version.as_ref() == Some(&disk_version) {
                         continue;
                     }
+                    self.invalidate_sequence_gui_state_for_path(&buffer.path);
                     if buffer.is_dirty() {
                         self.editors
                             .mark_external_state(&buffer.path, BufferExternalState::ChangedOnDisk);
@@ -986,6 +1052,7 @@ impl AppModel {
                     }
                 }
                 Err(_) => {
+                    self.invalidate_sequence_gui_state_for_path(&buffer.path);
                     if buffer.is_dirty() {
                         self.editors
                             .mark_external_state(&buffer.path, BufferExternalState::DeletedOnDisk);
@@ -1002,10 +1069,23 @@ impl AppModel {
         Ok(())
     }
 
+    fn invalidate_sequence_gui_state_for_path(&mut self, path: &Utf8PathBuf) {
+        self.sequence_gui_sessions
+            .retain(|key, _| &key.path != path);
+        if self
+            .active_sequence_gui_document
+            .as_ref()
+            .is_some_and(|cached| &cached.path == path)
+        {
+            self.invalidate_active_gui_document_cache();
+        }
+    }
+
     fn reload_active_buffer_from_disk(&mut self) -> Result<(), String> {
         let Some(buffer) = self.editors.active_buffer().cloned() else {
             return Ok(());
         };
+        self.invalidate_sequence_gui_state_for_path(&buffer.path);
         match self.workspace.read_file_with_version(buffer.path.clone()) {
             Ok((text, disk_version)) => {
                 self.editors
@@ -1026,6 +1106,7 @@ impl AppModel {
         let Some(buffer) = self.editors.active_buffer().cloned() else {
             return Ok(());
         };
+        self.invalidate_sequence_gui_state_for_path(&buffer.path);
         let version = self
             .workspace
             .write_text_file_with_version(buffer.path.clone(), &buffer.text)?;
@@ -1498,7 +1579,7 @@ impl AppModel {
                 continue;
             }
             match completion.result {
-                Ok(text) => {
+                Ok(SequenceSaveOutcome::Saved(text)) => {
                     let version = self
                         .workspace
                         .file_version(&completion.key.path, &text)?
@@ -1518,6 +1599,14 @@ impl AppModel {
                         }
                         changed = true;
                     }
+                }
+                Ok(SequenceSaveOutcome::Stale) => {
+                    self.invalidate_sequence_gui_state_for_path(&completion.key.path);
+                    self.editors.mark_external_state(
+                        &completion.key.path,
+                        BufferExternalState::ChangedOnDisk,
+                    );
+                    changed = true;
                 }
                 Err(error) => return Err(error),
             }

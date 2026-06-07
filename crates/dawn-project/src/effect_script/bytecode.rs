@@ -70,13 +70,14 @@ pub(super) enum Instruction {
     PixelCount(IntSlot, PixelSlot),
     PixelPosition(FloatSlot, PixelSlot),
     SectionPosition(FloatSlot, PixelSlot, FloatSlot),
-    MarkCount(IntSlot, RefSlot),
-    MarkAt(FloatSlot, RefSlot, IntSlot, FloatSlot),
+    MarkCount(IntSlot, MarkDomain, RefSlot),
+    MarkAt(FloatSlot, MarkDomain, RefSlot, IntSlot, FloatSlot),
     ArrayLen(IntSlot, RefSlot),
     ArrayIndex(ValueSlot, RefSlot, IntSlot),
     MarkSearch(
         FloatSlot,
         MarkSearchInstruction,
+        MarkDomain,
         RefSlot,
         FloatSlot,
         FloatSlot,
@@ -143,6 +144,12 @@ pub(super) enum MarkSearchInstruction {
     Nearest,
     Phase,
     Elapsed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MarkDomain {
+    Windowed,
+    Global,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

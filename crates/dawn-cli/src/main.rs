@@ -1582,6 +1582,7 @@ impl EffectBenchItemReport {
             &render.params,
             &document.mark_collections,
             effect.start_seconds,
+            effect.duration_seconds,
         )
         .ok()?;
         let stats = script.bytecode_stats();

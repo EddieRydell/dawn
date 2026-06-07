@@ -361,7 +361,7 @@ pub enum RuntimeValue {
     Int(i64),
     Bool(bool),
     Color(Color),
-    Marks(Vec<f64>),
+    Marks(RuntimeMarks),
     Curve(Curve),
     Array(RuntimeArrayValue),
     Enum(String),
@@ -371,6 +371,12 @@ pub enum RuntimeValue {
     Target(GeneratorTarget),
     TargetItems(Vec<GeneratorTargetItem>),
     TargetItem(GeneratorTargetItem),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuntimeMarks {
+    pub windowed: Vec<f64>,
+    pub global: Vec<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

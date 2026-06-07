@@ -1,0 +1,52 @@
+effect SparkleComet {
+  param curve<color> gradient;
+  param curve<float> position;
+  param curve<float> intensity;
+  param enum color_mode { gradient_tail, bright_head, rainbow_hue } = gradient_tail;
+  param color head_color = #ffffff;
+  param bool reverse = false;
+  param bool wrap = false;
+  param float tail_width = 0.18;
+  param float head_width = 0.035;
+  param float sparkle_density = 0.35;
+  param float sparkle_speed = 14.0;
+  param float sparkle_gain = 0.75;
+  param float seed = 0.0;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    float pixel_position_value = pixel_position(pixel);
+    if (reverse) {
+      pixel_position_value = 1.0 - pixel_position_value;
+    }
+
+    float head = clamp(position(progress), 0.0, 1.0);
+    float distance = abs(pixel_position_value - head);
+    if (wrap) {
+      distance = min(distance, 1.0 - distance);
+    }
+
+    float trail = 1.0 - smoothstep(0.0, max(0.000000001, tail_width), distance);
+    float core = 1.0 - smoothstep(0.0, max(0.000000001, head_width), distance);
+
+    float bucket = floor(seconds * max(0.000000001, sparkle_speed) + pixel_index(pixel) * 0.13);
+    srand(seed + pixel_index(pixel) * 19.0 + bucket * 47.0);
+    float sparkle = 0.0;
+    if (rand() < clamp(sparkle_density, 0.0, 1.0)) {
+      sparkle = (sin(seconds * sparkle_speed * TAU + pixel_index(pixel)) + 1.0) * 0.5;
+    }
+
+    float level = max(trail, core);
+    level = max(level, sparkle * trail * clamp(sparkle_gain, 0.0, 1.0));
+    level = level * curve_float_clamped(intensity, progress, 0.0, 1.0);
+
+    color value = gradient(clamp(1.0 - distance / max(0.000000001, tail_width), 0.0, 1.0));
+    if (color_mode == bright_head) {
+      value = mix(value, head_color, core);
+    }
+    if (color_mode == rainbow_hue) {
+      value = hsv(pixel_position_value * 6.0 + progress * 6.0, 1.0, 1.0);
+    }
+
+    return value * clamp(level, 0.0, 1.0);
+  }
+}

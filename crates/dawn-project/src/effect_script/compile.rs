@@ -4,7 +4,7 @@ use super::ast::{BinaryOp, EffectAst, EffectEntrypoint, Expr, Stmt, UnaryOp};
 use super::builtins::{BuiltinConstant, BuiltinContext, BuiltinFunction};
 use super::bytecode::{
     BinaryInstruction, BoolSlot, BytecodeProgram, ColorSlot, ContextSlot, FixtureSlot, FloatSlot,
-    Instruction, IntSlot, MarkSearchInstruction, PixelSlot, RefSlot, RegisterCounts,
+    Instruction, IntSlot, MarkDomain, MarkSearchInstruction, PixelSlot, RefSlot, RegisterCounts,
     UnaryFloatInstruction, ValueSlot,
 };
 use crate::model::ArrayElementType;
@@ -530,18 +530,24 @@ impl<'a> Compiler<'a> {
                 self.emit(Instruction::SectionPosition(dest, pixel, width));
                 ValueSlot::Float(dest)
             }
-            BuiltinFunction::MarkCount => {
+            BuiltinFunction::MarkCount | BuiltinFunction::MarkGlobalCount => {
                 let marks = self.compile_expr(&args[0]).reference();
                 let dest = self.allocate_int();
-                self.emit(Instruction::MarkCount(dest, marks));
+                self.emit(Instruction::MarkCount(dest, mark_domain(function), marks));
                 ValueSlot::Int(dest)
             }
-            BuiltinFunction::MarkAt => {
+            BuiltinFunction::MarkAt | BuiltinFunction::MarkGlobalAt => {
                 let marks = self.compile_expr(&args[0]).reference();
                 let index = self.compile_expr(&args[1]).int();
                 let fallback = self.compile_float_arg(&args[2]);
                 let dest = self.allocate_float();
-                self.emit(Instruction::MarkAt(dest, marks, index, fallback));
+                self.emit(Instruction::MarkAt(
+                    dest,
+                    mark_domain(function),
+                    marks,
+                    index,
+                    fallback,
+                ));
                 ValueSlot::Float(dest)
             }
             BuiltinFunction::Len => {
@@ -554,20 +560,42 @@ impl<'a> Compiler<'a> {
             | BuiltinFunction::MarkNext
             | BuiltinFunction::MarkNearest
             | BuiltinFunction::MarkPhase
-            | BuiltinFunction::MarkElapsed => {
+            | BuiltinFunction::MarkElapsed
+            | BuiltinFunction::MarkGlobalPrev
+            | BuiltinFunction::MarkGlobalNext
+            | BuiltinFunction::MarkGlobalNearest
+            | BuiltinFunction::MarkGlobalPhase
+            | BuiltinFunction::MarkGlobalElapsed => {
                 let marks = self.compile_expr(&args[0]).reference();
                 let time = self.compile_float_arg(&args[1]);
                 let fallback = self.compile_float_arg(&args[2]);
                 let dest = self.allocate_float();
                 let search = match function {
-                    BuiltinFunction::MarkPrev => MarkSearchInstruction::Prev,
-                    BuiltinFunction::MarkNext => MarkSearchInstruction::Next,
-                    BuiltinFunction::MarkNearest => MarkSearchInstruction::Nearest,
-                    BuiltinFunction::MarkPhase => MarkSearchInstruction::Phase,
-                    BuiltinFunction::MarkElapsed => MarkSearchInstruction::Elapsed,
+                    BuiltinFunction::MarkPrev | BuiltinFunction::MarkGlobalPrev => {
+                        MarkSearchInstruction::Prev
+                    }
+                    BuiltinFunction::MarkNext | BuiltinFunction::MarkGlobalNext => {
+                        MarkSearchInstruction::Next
+                    }
+                    BuiltinFunction::MarkNearest | BuiltinFunction::MarkGlobalNearest => {
+                        MarkSearchInstruction::Nearest
+                    }
+                    BuiltinFunction::MarkPhase | BuiltinFunction::MarkGlobalPhase => {
+                        MarkSearchInstruction::Phase
+                    }
+                    BuiltinFunction::MarkElapsed | BuiltinFunction::MarkGlobalElapsed => {
+                        MarkSearchInstruction::Elapsed
+                    }
                     _ => unreachable!("matched above"),
                 };
-                self.emit(Instruction::MarkSearch(dest, search, marks, time, fallback));
+                self.emit(Instruction::MarkSearch(
+                    dest,
+                    search,
+                    mark_domain(function),
+                    marks,
+                    time,
+                    fallback,
+                ));
                 ValueSlot::Float(dest)
             }
             BuiltinFunction::CurveCrossing => {
@@ -904,6 +932,19 @@ fn is_float_compare(left: ScriptType, right: ScriptType) -> bool {
     is_float_compatible(&left)
         && is_float_compatible(&right)
         && (left == ScriptType::Float || right == ScriptType::Float)
+}
+
+fn mark_domain(function: BuiltinFunction) -> MarkDomain {
+    match function {
+        BuiltinFunction::MarkGlobalCount
+        | BuiltinFunction::MarkGlobalAt
+        | BuiltinFunction::MarkGlobalPrev
+        | BuiltinFunction::MarkGlobalNext
+        | BuiltinFunction::MarkGlobalNearest
+        | BuiltinFunction::MarkGlobalPhase
+        | BuiltinFunction::MarkGlobalElapsed => MarkDomain::Global,
+        _ => MarkDomain::Windowed,
+    }
 }
 
 fn context_slot(context: BuiltinContext) -> ContextSlot {

@@ -1,0 +1,48 @@
+use "./impact-burst.effect.dawn" as effects;
+
+effect MarkImpactBurst {
+  param marks beats;
+  param array<curve<color>> gradients;
+  param curve<float> intensity;
+  param enum direction { outward, inward } = outward;
+  param enum color_mode { through_effect, from_center, from_edge } = through_effect;
+  param float offset_seconds = 0.0;
+  param float burst_seconds = 0.45;
+  param float center_position = 0.5;
+  param float start_radius = 0.0;
+  param float end_radius = 0.75;
+  param float edge_width = 0.08;
+  param float glow_width = 0.25;
+  param float glow_level = 0.35;
+  param bool mirror = false;
+
+  void generate(Timeline timeline, Target target, float duration) {
+    int beat_count = mark_count(beats);
+    int gradient_count = len(gradients);
+    if (gradient_count > 0) {
+      for (int beat = 0; beat < beat_count; beat = beat + 1) {
+        float hit = mark_at(beats, beat, 0.0) + offset_seconds;
+        if (hit >= 0.0 && hit < duration) {
+          timeline.emit effects.ImpactBurst {
+            target: target;
+            start: hit;
+            duration: burst_seconds;
+            params: {
+              gradient: gradients[beat % gradient_count];
+              intensity: intensity;
+              direction: direction;
+              color_mode: color_mode;
+              center_position: center_position;
+              start_radius: start_radius;
+              end_radius: end_radius;
+              edge_width: edge_width;
+              glow_width: glow_width;
+              glow_level: glow_level;
+              mirror: mirror;
+            };
+          };
+        }
+      }
+    }
+  }
+}

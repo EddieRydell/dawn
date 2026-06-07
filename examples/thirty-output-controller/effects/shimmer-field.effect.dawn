@@ -1,0 +1,43 @@
+effect ShimmerField {
+  param color base = #000000;
+  param curve<color> palette;
+  param enum color_mode { from_palette, rainbow_hue, fixed_sparkle } = from_palette;
+  param color sparkle_color = #ffffff;
+  param float density = 0.28;
+  param float shimmer_level = 0.35;
+  param float sparkle_level = 1.0;
+  param float wave_speed = 4.0;
+  param float wave_scale = 18.0;
+  param float sparkle_speed = 8.0;
+  param float sparkle_hold = 0.35;
+  param float section_width_pixels = 1.0;
+  param float seed = 0.0;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    float width = max(1.0, section_width_pixels);
+    float section = floor(pixel_index(pixel) / width);
+    float position = section_position(pixel, width);
+
+    float wave = (sin(seconds * wave_speed + position * wave_scale) + 1.0) * 0.5;
+    float level = wave * clamp(shimmer_level, 0.0, 1.0);
+
+    float bucket = floor(seconds * max(0.000000001, sparkle_speed) + section * sparkle_hold);
+    srand(seed + section * 31.0 + bucket * 101.0);
+    float choice = rand();
+    float sparkle = 0.0;
+    if (choice < clamp(density, 0.0, 1.0)) {
+      sparkle = (sin(seconds * sparkle_speed * TAU + section) + 1.0) * 0.5;
+    }
+    level = max(level, sparkle * clamp(sparkle_level, 0.0, 1.0));
+
+    color accent = palette(clamp(position + progress, 0.0, 1.0));
+    if (color_mode == rainbow_hue) {
+      accent = hsv(position * 6.0 + progress * 6.0, 1.0, 1.0);
+    }
+    if (color_mode == fixed_sparkle) {
+      accent = sparkle_color;
+    }
+
+    return mix(base, accent, clamp(level, 0.0, 1.0));
+  }
+}

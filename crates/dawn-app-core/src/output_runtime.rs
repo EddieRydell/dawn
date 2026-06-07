@@ -11,7 +11,7 @@ use dawn_project::effect_script::{
     evaluate_generated_child_params, generator_topology_param_names, run_generator_topology,
     BytecodeStats, CompiledEffect, EffectSampleScratch, EffectScriptKind, FixtureContext,
     GeneratedChildEffectRef, GeneratedChildTopology, GeneratorTarget, GeneratorTargetPixel,
-    PixelContext, PreparedEffectParams, RuntimeError, RuntimeValue,
+    PixelContext, PreparedEffectParams, RuntimeError, RuntimeMarks, RuntimeValue,
 };
 use dawn_project::frame::{ceil_frame, floor_frame, frame_count, frame_start};
 use dawn_project::model::EffectScriptId;
@@ -802,7 +802,8 @@ enum EffectParamCacheValue {
     Array(Vec<EffectParamArrayValueCacheKey>),
     Marks {
         collection_key: String,
-        local_seconds: Option<Vec<F64CacheKey>>,
+        windowed_seconds: Option<Vec<F64CacheKey>>,
+        global_seconds: Option<Vec<F64CacheKey>>,
     },
 }
 
@@ -1092,6 +1093,7 @@ impl SequenceFrameEvaluator {
                                             parent_path: parent_path_for_render(render),
                                             parent_id: effect.id,
                                             parent_start_seconds: effect.start_seconds,
+                                            parent_duration_seconds: effect.duration_seconds,
                                             generator_id: script_id.clone(),
                                             generator: script,
                                             render,
@@ -1129,6 +1131,8 @@ impl SequenceFrameEvaluator {
                                                     parent_path: parent_path_for_render(render),
                                                     parent_id: effect.id,
                                                     parent_start_seconds: effect.start_seconds,
+                                                    parent_duration_seconds: effect
+                                                        .duration_seconds,
                                                     generator_id: script_id.clone(),
                                                     generator: script,
                                                     render,
@@ -1195,6 +1199,7 @@ impl SequenceFrameEvaluator {
                             params: &render.params,
                             mark_collections: &document.mark_collections,
                             effect_start_seconds: effect.start_seconds,
+                            effect_duration_seconds: effect.duration_seconds,
                             scope: effect.scope,
                             target_pixels: &render.target_pixels,
                             fixture_templates: &fixture_templates,
@@ -1682,13 +1687,19 @@ enum RuntimeValueCacheKey {
     Int(i64),
     Bool(bool),
     Color(ColorCacheKey),
-    Marks(Vec<F64CacheKey>),
+    Marks {
+        windowed: Vec<F64CacheKey>,
+        global: Vec<F64CacheKey>,
+    },
     Curve(CurveCacheKey),
     Array(Vec<RuntimeValueCacheKey>),
     Enum(String),
     Flags(Vec<String>),
     Fixture(usize),
-    Pixel { index: usize, count: usize },
+    Pixel {
+        index: usize,
+        count: usize,
+    },
 }
 
 impl SequenceFrameSampleReuse {
@@ -2029,6 +2040,7 @@ fn sample_effect_thumbnail_colors(
         &input.render.params,
         &input.document.mark_collections,
         input.effect.start_seconds,
+        input.effect.duration_seconds,
     ) {
         Ok(params) => params,
         Err(_) => return Ok(EffectThumbnailColorsResult::Ready(Vec::new())),
@@ -2153,6 +2165,7 @@ struct SampleRenderPreparationInput<'a> {
     params: &'a [SequenceEffectParamDocument],
     mark_collections: &'a [SequenceMarkCollectionDocument],
     effect_start_seconds: f64,
+    effect_duration_seconds: f64,
     scope: SequenceEffectScope,
     target_pixels: &'a [dawn_project::document::SequenceEffectPixelDocument],
     fixture_templates: &'a [OutputFixtureFrame],
@@ -2164,6 +2177,7 @@ fn prepare_sample_render(input: SampleRenderPreparationInput<'_>) -> PreparedEff
         input.params,
         input.mark_collections,
         input.effect_start_seconds,
+        input.effect_duration_seconds,
     ) {
         Ok(prepared_params) => {
             let sample_reuse_effect_key =
@@ -2241,6 +2255,7 @@ fn prepared_effect_cache_key_for_params(
                     &param.value,
                     &document.mark_collections,
                     effect_start_seconds,
+                    duration_seconds,
                 ),
             })
             .collect(),
@@ -2266,6 +2281,7 @@ fn effect_param_cache_value(
     param: &EffectParam<Resolved>,
     mark_collections: &[SequenceMarkCollectionDocument],
     effect_start_seconds: f64,
+    effect_duration_seconds: f64,
 ) -> EffectParamCacheValue {
     match param {
         EffectParam::Integer { value } => EffectParamCacheValue::Integer(*value),
@@ -2282,25 +2298,38 @@ fn effect_param_cache_value(
                 .collect(),
         ),
         EffectParam::Marks { key } => {
-            let mut local_seconds = mark_collections
+            let global_seconds = mark_collections
                 .iter()
                 .find(|collection| collection.key == *key)
                 .map(|collection| {
-                    collection
-                        .marks_seconds
-                        .iter()
-                        .map(|mark_seconds| F64CacheKey(*mark_seconds - effect_start_seconds))
-                        .collect::<Vec<_>>()
+                    sorted_local_mark_cache_keys(&collection.marks_seconds, effect_start_seconds)
                 });
-            if let Some(local_seconds) = local_seconds.as_mut() {
-                local_seconds.sort_by(|left, right| left.0.total_cmp(&right.0));
-            }
+            let windowed_seconds = global_seconds.as_ref().map(|marks| {
+                marks
+                    .iter()
+                    .copied()
+                    .filter(|mark| mark.0 >= 0.0 && mark.0 < effect_duration_seconds)
+                    .collect::<Vec<_>>()
+            });
             EffectParamCacheValue::Marks {
                 collection_key: key.clone(),
-                local_seconds,
+                windowed_seconds,
+                global_seconds,
             }
         }
     }
+}
+
+fn sorted_local_mark_cache_keys(
+    marks_seconds: &[f64],
+    effect_start_seconds: f64,
+) -> Vec<F64CacheKey> {
+    let mut marks = marks_seconds
+        .iter()
+        .map(|mark_seconds| F64CacheKey(*mark_seconds - effect_start_seconds))
+        .collect::<Vec<_>>();
+    marks.sort_by(|left, right| left.0.total_cmp(&right.0));
+    marks
 }
 
 fn effect_param_array_value_cache_key(
@@ -2367,9 +2396,10 @@ fn runtime_value_cache_key(value: &RuntimeValue) -> RuntimeValueCacheKey {
         RuntimeValue::Int(value) => RuntimeValueCacheKey::Int(*value),
         RuntimeValue::Bool(value) => RuntimeValueCacheKey::Bool(*value),
         RuntimeValue::Color(value) => RuntimeValueCacheKey::Color(color_cache_key(*value)),
-        RuntimeValue::Marks(values) => {
-            RuntimeValueCacheKey::Marks(values.iter().copied().map(F64CacheKey).collect())
-        }
+        RuntimeValue::Marks(values) => RuntimeValueCacheKey::Marks {
+            windowed: values.windowed.iter().copied().map(F64CacheKey).collect(),
+            global: values.global.iter().copied().map(F64CacheKey).collect(),
+        },
         RuntimeValue::Curve(curve) => RuntimeValueCacheKey::Curve(curve_cache_key(curve)),
         RuntimeValue::Array(array) => {
             RuntimeValueCacheKey::Array(array.values.iter().map(runtime_value_cache_key).collect())
@@ -2501,6 +2531,7 @@ fn prepare_generated_topology(
         &render.params,
         &document.mark_collections,
         parent_start_seconds,
+        parent_duration_seconds,
     )?;
     let param_names = generator
         .params
@@ -2553,6 +2584,7 @@ struct GeneratedEffectTopologyInput<'a> {
     parent_path: Utf8PathBuf,
     parent_id: u32,
     parent_start_seconds: f64,
+    parent_duration_seconds: f64,
     generator_id: EffectScriptId,
     generator: &'a CompiledEffect,
     render: &'a dawn_project::document::SequenceEffectRenderDocument,
@@ -2570,6 +2602,7 @@ fn prepare_generated_effects_from_topology(
         &input.render.params,
         input.mark_collections,
         input.parent_start_seconds,
+        input.parent_duration_seconds,
     )?;
     let mut effects = Vec::new();
     let mut stack = vec![input.generator_id];
@@ -3060,12 +3093,18 @@ pub fn runtime_params_from_document(
     params: &[SequenceEffectParamDocument],
     mark_collections: &[SequenceMarkCollectionDocument],
     effect_start_seconds: f64,
+    effect_duration_seconds: f64,
 ) -> BTreeMap<String, RuntimeValue> {
     params
         .iter()
         .filter_map(|param| {
-            runtime_value_from_param(&param.value, mark_collections, effect_start_seconds)
-                .map(|value| (param.name.clone(), value))
+            runtime_value_from_param(
+                &param.value,
+                mark_collections,
+                effect_start_seconds,
+                effect_duration_seconds,
+            )
+            .map(|value| (param.name.clone(), value))
         })
         .collect()
 }
@@ -3075,13 +3114,19 @@ pub fn prepare_params_from_document(
     params: &[SequenceEffectParamDocument],
     mark_collections: &[SequenceMarkCollectionDocument],
     effect_start_seconds: f64,
+    effect_duration_seconds: f64,
 ) -> Result<PreparedEffectParams, RuntimeError> {
     script.prepare_params_with(|name| {
         params
             .iter()
             .find(|param| param.name == name)
             .and_then(|param| {
-                runtime_value_from_param(&param.value, mark_collections, effect_start_seconds)
+                runtime_value_from_param(
+                    &param.value,
+                    mark_collections,
+                    effect_start_seconds,
+                    effect_duration_seconds,
+                )
             })
     })
 }
@@ -3090,6 +3135,7 @@ pub fn runtime_value_from_param(
     param: &EffectParam<Resolved>,
     mark_collections: &[SequenceMarkCollectionDocument],
     effect_start_seconds: f64,
+    effect_duration_seconds: f64,
 ) -> Option<RuntimeValue> {
     match param {
         EffectParam::Integer { value } => Some(RuntimeValue::Int(*value as i64)),
@@ -3112,17 +3158,29 @@ pub fn runtime_value_from_param(
             },
         )),
         EffectParam::Marks { key } => {
-            let mut marks = mark_collections
+            let global = mark_collections
                 .iter()
                 .find(|collection| collection.key == *key)?
                 .marks_seconds
                 .iter()
                 .map(|mark_seconds| *mark_seconds - effect_start_seconds)
                 .collect::<Vec<_>>();
-            marks.sort_by(f64::total_cmp);
-            Some(RuntimeValue::Marks(marks))
+            Some(RuntimeValue::Marks(runtime_marks(
+                global,
+                effect_duration_seconds,
+            )))
         }
     }
+}
+
+fn runtime_marks(mut global: Vec<f64>, effect_duration_seconds: f64) -> RuntimeMarks {
+    global.sort_by(f64::total_cmp);
+    let windowed = global
+        .iter()
+        .copied()
+        .filter(|mark| *mark >= 0.0 && *mark < effect_duration_seconds)
+        .collect();
+    RuntimeMarks { windowed, global }
 }
 
 fn runtime_value_from_array_param(

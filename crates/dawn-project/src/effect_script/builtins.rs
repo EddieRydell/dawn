@@ -79,6 +79,13 @@ pub(super) enum BuiltinFunction {
     MarkNearest,
     MarkPhase,
     MarkElapsed,
+    MarkGlobalCount,
+    MarkGlobalAt,
+    MarkGlobalPrev,
+    MarkGlobalNext,
+    MarkGlobalNearest,
+    MarkGlobalPhase,
+    MarkGlobalElapsed,
     Min,
     Max,
     Clamp,
@@ -117,6 +124,13 @@ impl BuiltinFunction {
             "mark_nearest" => Self::MarkNearest,
             "mark_phase" => Self::MarkPhase,
             "mark_elapsed" => Self::MarkElapsed,
+            "mark_global_count" => Self::MarkGlobalCount,
+            "mark_global_at" => Self::MarkGlobalAt,
+            "mark_global_prev" => Self::MarkGlobalPrev,
+            "mark_global_next" => Self::MarkGlobalNext,
+            "mark_global_nearest" => Self::MarkGlobalNearest,
+            "mark_global_phase" => Self::MarkGlobalPhase,
+            "mark_global_elapsed" => Self::MarkGlobalElapsed,
             "min" => Self::Min,
             "max" => Self::Max,
             "clamp" => Self::Clamp,
@@ -185,8 +199,8 @@ impl BuiltinFunction {
             {
                 Some(ScriptType::Float)
             }
-            (Self::MarkCount, [ScriptType::Marks]) => Some(ScriptType::Int),
-            (Self::MarkAt, [ScriptType::Marks, ScriptType::Int, fallback])
+            (Self::MarkCount | Self::MarkGlobalCount, [ScriptType::Marks]) => Some(ScriptType::Int),
+            (Self::MarkAt | Self::MarkGlobalAt, [ScriptType::Marks, ScriptType::Int, fallback])
                 if is_float_compatible(fallback) =>
             {
                 Some(ScriptType::Float)
@@ -196,7 +210,12 @@ impl BuiltinFunction {
                 | Self::MarkNext
                 | Self::MarkNearest
                 | Self::MarkPhase
-                | Self::MarkElapsed,
+                | Self::MarkElapsed
+                | Self::MarkGlobalPrev
+                | Self::MarkGlobalNext
+                | Self::MarkGlobalNearest
+                | Self::MarkGlobalPhase
+                | Self::MarkGlobalElapsed,
                 [ScriptType::Marks, time, fallback],
             ) if is_float_compatible(time) && is_float_compatible(fallback) => {
                 Some(ScriptType::Float)

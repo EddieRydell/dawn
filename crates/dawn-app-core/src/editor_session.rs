@@ -55,6 +55,14 @@ pub struct EditorBuffer {
     redo_stack: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenFileOutcome {
+    Opened,
+    Activated,
+    ReloadedFromDisk,
+    MarkedChangedOnDisk,
+}
+
 impl EditorBuffer {
     pub fn is_dirty(&self) -> bool {
         self.text != self.saved_text || self.gui_dirty_revision != self.gui_saved_revision
@@ -93,6 +101,35 @@ impl EditorSession {
             self.tab_order.push(path.clone());
         }
         self.active_file = Some(path);
+    }
+
+    pub fn open_or_reconcile_file(
+        &mut self,
+        path: Utf8PathBuf,
+        text: String,
+        disk_version: FileDiskVersion,
+    ) -> OpenFileOutcome {
+        let Some(buffer) = self.open_editors.get_mut(&path) else {
+            self.open_file(path, text, disk_version);
+            return OpenFileOutcome::Opened;
+        };
+
+        self.active_file = Some(path);
+        if buffer.disk_version.as_ref() == Some(&disk_version) {
+            return OpenFileOutcome::Activated;
+        }
+        if buffer.is_dirty() {
+            buffer.external_state = BufferExternalState::ChangedOnDisk;
+            return OpenFileOutcome::MarkedChangedOnDisk;
+        }
+
+        buffer.text = text.clone();
+        buffer.saved_text = text;
+        buffer.disk_version = Some(disk_version);
+        buffer.external_state = BufferExternalState::Current;
+        buffer.gui_dirty_revision = 0;
+        buffer.gui_saved_revision = 0;
+        OpenFileOutcome::ReloadedFromDisk
     }
 
     pub fn close_file(&mut self, path: &Utf8PathBuf) {
