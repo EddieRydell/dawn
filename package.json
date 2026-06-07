@@ -13,6 +13,7 @@
     "rust:test": "cargo test",
     "check": "pnpm bindings:check && pnpm typecheck && pnpm lint && pnpm knip && pnpm frontend:build && pnpm rust:fmt && pnpm rust:check && pnpm rust:clippy && pnpm rust:test",
     "ci": "pnpm check",
+    "baseline:thirty": "cargo run --release -p dawn-cli -- baseline examples/thirty-output-controller --json",
     "build": "pnpm generate-bindings && pnpm --dir apps/desktop/frontend build",
     "tauri": "pnpm generate-bindings && pnpm --dir apps/desktop exec tauri"
   },

@@ -1,0 +1,18 @@
+effect Wipe {
+  param curve<color> gradient;
+  param curve<float> position;
+  param float edge_width = 0.08;
+  param bool reverse = false;
+
+  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+    float pixel_position = pixel_position(pixel);
+    if (reverse) {
+      pixel_position = 1.0 - pixel_position;
+    }
+
+    float wipe = clamp(position(progress), 0.0, 1.0);
+    float edge = max(0.000000001, edge_width);
+    float level = clamp((wipe - pixel_position + edge) / edge, 0.0, 1.0);
+    return curve_color_scaled(gradient, pixel_position, level);
+  }
+}

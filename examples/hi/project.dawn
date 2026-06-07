@@ -1,0 +1,12 @@
+imports:
+  - from: displays/main.display.dawn
+    as: displays
+  - from: sequences/example.sequence.dawn
+    as: sequences
+
+hi:
+  type: project
+  name: Hi
+  display: displays.main
+  sequences:
+    - sequences.example

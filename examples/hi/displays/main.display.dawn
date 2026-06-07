@@ -1,0 +1,22 @@
+imports:
+  - from: ../layouts/main.layout.dawn
+    as: layouts
+  - from: ../patches/main.patch.dawn
+    as: patches
+
+main:
+  type: display
+  name: Hi
+  layout: layouts.main
+  patch: patches.main
+  controllers:
+    - name: OutputController
+      protocol: sacn
+      output:
+        type: linear_rgb
+        channel_order: grb
+        group: All Outputs
+        output_count: 30
+        pixels_per_output: 113
+        first_universe: 1
+        slots_per_universe: 510

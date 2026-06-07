@@ -7,8 +7,8 @@ use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 use dawn_app_core::fseq_export::{export_fseq_file, FseqExportOptions};
 use dawn_app_core::output_runtime::{
-    pixel_context_for_effect, prepare_params_from_document, SequenceFrameEvaluator,
-    SequenceFrameEvaluatorPreparationTiming,
+    pixel_context_for_effect, prepare_params_from_document, OutputFrameStatus,
+    SequenceFrameEvaluationTiming, SequenceFrameEvaluator, SequenceFrameEvaluatorPreparationTiming,
 };
 use dawn_project::analysis::{
     analyze_project_with_overlays, DiagnosticCode, DiagnosticSeverity, ProjectAnalysis,
@@ -69,6 +69,17 @@ enum Command {
         #[arg(long)]
         no_effect_breakdown: bool,
     },
+    Baseline {
+        project_path_or_directory: PathBuf,
+        #[arg(long)]
+        sequence: Option<String>,
+        #[arg(long, default_value_t = 30)]
+        iterations: usize,
+        #[arg(long, default_value_t = 5)]
+        warmup: usize,
+        #[arg(long)]
+        json: bool,
+    },
     ExportFseq {
         project_path_or_directory: PathBuf,
         #[arg(long)]
@@ -124,6 +135,19 @@ fn run() -> Result<ExitCode, String> {
             synthetic_active_effects,
             isolate_effect_id,
             no_effect_breakdown,
+        }),
+        Command::Baseline {
+            project_path_or_directory,
+            sequence,
+            iterations,
+            warmup,
+            json,
+        } => baseline(BaselineOptions {
+            path: &project_path_or_directory,
+            sequence: sequence.as_deref(),
+            iterations,
+            warmup,
+            json,
         }),
         Command::ExportFseq {
             project_path_or_directory,
@@ -204,6 +228,14 @@ struct BenchEffectOptions<'a> {
     synthetic_active_effects: Option<usize>,
     isolate_effect_id: Option<u32>,
     no_effect_breakdown: bool,
+}
+
+struct BaselineOptions<'a> {
+    path: &'a Path,
+    sequence: Option<&'a str>,
+    iterations: usize,
+    warmup: usize,
+    json: bool,
 }
 
 fn bench_effect(options: BenchEffectOptions<'_>) -> Result<ExitCode, String> {
@@ -295,6 +327,26 @@ fn bench_effect(options: BenchEffectOptions<'_>) -> Result<ExitCode, String> {
         println!();
     } else {
         print_effect_bench_report(&report);
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+fn baseline(options: BaselineOptions<'_>) -> Result<ExitCode, String> {
+    let report = BaselineReport::run(BaselineRunInput {
+        path: options.path,
+        sequence: options.sequence,
+        iterations: options.iterations,
+        warmup: options.warmup,
+        scenarios: baseline_scenarios(),
+    })?;
+
+    if options.json {
+        serde_json::to_writer_pretty(std::io::stdout(), &report)
+            .map_err(|error| error.to_string())?;
+        println!();
+    } else {
+        print_baseline_report(&report);
     }
 
     Ok(ExitCode::SUCCESS)
@@ -509,6 +561,343 @@ struct ProjectInput {
     root: Utf8PathBuf,
     project_file: Utf8PathBuf,
     project_path: Utf8PathBuf,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BaselineScenarioDefinition {
+    name: &'static str,
+    time_seconds: f64,
+}
+
+fn baseline_scenarios() -> Vec<BaselineScenarioDefinition> {
+    vec![
+        BaselineScenarioDefinition {
+            name: "idle_start",
+            time_seconds: 1.0,
+        },
+        BaselineScenarioDefinition {
+            name: "intro_build",
+            time_seconds: 14.5,
+        },
+        BaselineScenarioDefinition {
+            name: "drop1_entry",
+            time_seconds: 41.0,
+        },
+        BaselineScenarioDefinition {
+            name: "drop1_body",
+            time_seconds: 66.0,
+        },
+        BaselineScenarioDefinition {
+            name: "drop1_tail",
+            time_seconds: 80.0,
+        },
+        BaselineScenarioDefinition {
+            name: "breakdown_dense_marks",
+            time_seconds: 132.5,
+        },
+        BaselineScenarioDefinition {
+            name: "drop2_final",
+            time_seconds: 180.1,
+        },
+    ]
+}
+
+struct BaselineRunInput<'a> {
+    path: &'a Path,
+    sequence: Option<&'a str>,
+    iterations: usize,
+    warmup: usize,
+    scenarios: Vec<BaselineScenarioDefinition>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BaselineReport {
+    project_path: String,
+    project_root: String,
+    sequence: String,
+    iterations: usize,
+    warmup: usize,
+    project: BaselineProjectReport,
+    document: BaselineDocumentReport,
+    renderer: BaselineRendererReport,
+    scenarios: Vec<BaselineScenarioReport>,
+}
+
+impl BaselineReport {
+    fn run(input: BaselineRunInput<'_>) -> Result<Self, String> {
+        if input.iterations == 0 {
+            return Err("iterations must be greater than zero".to_string());
+        }
+        if input.scenarios.is_empty() {
+            return Err("baseline must include at least one scenario".to_string());
+        }
+
+        let project_input = project_input(input.path)?;
+        let fs = WorkspaceFs::open(&project_input.root).map_err(|error| error.to_string())?;
+        let ((analysis, analysis_last_run), project_wall_clock) =
+            timed_operation(input.iterations, input.warmup, || {
+                let analysis = analyze_project_with_overlays(
+                    &fs,
+                    project_input.project_file.clone(),
+                    None,
+                    Vec::new(),
+                );
+                let summary = ProjectAnalysisTimingReport {
+                    reachable_file_count: analysis.reachable_file_count(),
+                    object_count: analysis.object_count(),
+                };
+                Ok((analysis, summary))
+            })?;
+        if analysis.has_errors() {
+            print_human_report(&analysis);
+            return Err("baseline project analysis has errors".to_string());
+        }
+
+        let sequence_target = sequence_target(&analysis, input.sequence)?;
+        let sequence_path = sequence_target.path.clone();
+        let sequence_key = sequence_target.object_key.clone();
+        let (document, document_wall_clock) =
+            timed_operation(input.iterations, input.warmup, || {
+                get_sequence_document(
+                    &fs,
+                    sequence_path.clone(),
+                    &sequence_key,
+                    project_input.project_file.clone(),
+                    Vec::new(),
+                )
+            })?;
+
+        let ((mut evaluator, prepare_timing), prepare_wall_clock) =
+            timed_operation(input.iterations, input.warmup, || {
+                SequenceFrameEvaluator::new_timed(&analysis, &document)
+            })?;
+
+        let scenarios = input
+            .scenarios
+            .iter()
+            .map(|scenario| {
+                BaselineScenarioReport::run(
+                    &analysis,
+                    &document,
+                    &mut evaluator,
+                    *scenario,
+                    input.iterations,
+                    input.warmup,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Self {
+            project_path: display_path(&canonicalize_path(&project_input.project_path)),
+            project_root: display_path(&canonicalize_path(&project_input.root)),
+            sequence: document.object_key.clone(),
+            iterations: input.iterations,
+            warmup: input.warmup,
+            project: BaselineProjectReport {
+                analysis_wall_clock: project_wall_clock,
+                analysis_internal: AnalysisSummaryReport::from_analysis(&analysis),
+                analysis_last_run,
+            },
+            document: BaselineDocumentReport {
+                load_wall_clock: document_wall_clock,
+                path: document.path.clone(),
+                duration_seconds: document.duration_seconds,
+                frame_rate: document.frame_rate,
+                mark_collections: document.mark_collections.len(),
+                effects: document.effects.len(),
+                lanes: document.lanes.len(),
+                degraded: document.degraded,
+            },
+            renderer: BaselineRendererReport {
+                prepare_wall_clock,
+                prepare: PreparationTimingReport::from_timing(prepare_timing),
+                prepared_effects: evaluator.prepared_effect_count(),
+            },
+            scenarios,
+        })
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BaselineProjectReport {
+    analysis_wall_clock: TimingStatsReport,
+    analysis_last_run: ProjectAnalysisTimingReport,
+    analysis_internal: AnalysisSummaryReport,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectAnalysisTimingReport {
+    reachable_file_count: usize,
+    object_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AnalysisSummaryReport {
+    project_key: String,
+    resolved: bool,
+    error_count: usize,
+    warning_count: usize,
+    reachable_file_count: usize,
+    object_count: usize,
+}
+
+impl AnalysisSummaryReport {
+    fn from_analysis(analysis: &ProjectAnalysis) -> Self {
+        Self {
+            project_key: analysis.project_key.clone(),
+            resolved: analysis.is_resolved(),
+            error_count: analysis
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+                .count(),
+            warning_count: analysis
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Warning)
+                .count(),
+            reachable_file_count: analysis.reachable_file_count(),
+            object_count: analysis.object_count(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BaselineDocumentReport {
+    load_wall_clock: TimingStatsReport,
+    path: String,
+    duration_seconds: f64,
+    frame_rate: u32,
+    mark_collections: usize,
+    effects: usize,
+    lanes: usize,
+    degraded: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BaselineRendererReport {
+    prepare_wall_clock: TimingStatsReport,
+    prepare: PreparationTimingReport,
+    prepared_effects: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BaselineScenarioReport {
+    name: String,
+    time_seconds: f64,
+    status: String,
+    fixture_count: usize,
+    pixel_count: usize,
+    active_authored_effects: u32,
+    active_prepared_effects: u32,
+    visited_prepared_effects: u32,
+    sampled_pixels: u32,
+    vm_sample_evaluations: u32,
+    sample_reuse_saved_evaluations: u32,
+    sample_reuse_group_hits: u32,
+    bytecode: BytecodeAggregateReport,
+    frame_wall_clock: TimingStatsReport,
+    last_evaluation: EvaluationTimingReport,
+}
+
+impl BaselineScenarioReport {
+    fn run(
+        analysis: &ProjectAnalysis,
+        document: &SequenceDocument,
+        evaluator: &mut SequenceFrameEvaluator,
+        definition: BaselineScenarioDefinition,
+        iterations: usize,
+        warmup: usize,
+    ) -> Result<Self, String> {
+        for generation in 0..warmup {
+            black_box(evaluator.evaluate(definition.time_seconds, generation as u64));
+        }
+
+        let mut frame_samples = Vec::with_capacity(iterations);
+        let mut last_frame = None;
+        let mut last_timing = None;
+        for generation in 0..iterations {
+            let start = Instant::now();
+            let (frame, timing) =
+                evaluator.evaluate_timed(definition.time_seconds, generation as u64);
+            frame_samples.push(start.elapsed());
+            last_timing = Some(timing);
+            last_frame = Some(black_box(frame));
+        }
+
+        let frame = last_frame.ok_or_else(|| "baseline scenario did not render".to_string())?;
+        let timing = last_timing.unwrap_or_default();
+        let active_effects = document
+            .effects
+            .iter()
+            .filter(|effect| effect_is_active(effect, definition.time_seconds))
+            .collect::<Vec<_>>();
+
+        Ok(Self {
+            name: definition.name.to_string(),
+            time_seconds: definition.time_seconds,
+            status: output_status_label(&frame.status),
+            fixture_count: frame.fixtures.len(),
+            pixel_count: frame
+                .fixtures
+                .iter()
+                .map(|fixture| fixture.pixels.len())
+                .sum(),
+            active_authored_effects: timing.active_authored_effects,
+            active_prepared_effects: timing.active_prepared_effects,
+            visited_prepared_effects: timing.visited_prepared_effects,
+            sampled_pixels: timing.sampled_pixels,
+            vm_sample_evaluations: timing.vm_sample_evaluations,
+            sample_reuse_saved_evaluations: timing.sample_reuse_saved_evaluations,
+            sample_reuse_group_hits: timing.sample_reuse_group_hits,
+            bytecode: BytecodeAggregateReport::from_active_effects(analysis, &active_effects),
+            frame_wall_clock: TimingStatsReport::from_durations(frame_samples),
+            last_evaluation: EvaluationTimingReport::from_timing(timing),
+        })
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EvaluationTimingReport {
+    total_ms: f64,
+    fixture_clone_ms: f64,
+    effect_loop_ms: f64,
+    output_frame_ms: f64,
+    active_effects: u32,
+    active_authored_effects: u32,
+    active_prepared_effects: u32,
+    visited_prepared_effects: u32,
+    sampled_pixels: u32,
+    vm_sample_evaluations: u32,
+    sample_reuse_saved_evaluations: u32,
+    sample_reuse_group_hits: u32,
+}
+
+impl EvaluationTimingReport {
+    fn from_timing(timing: SequenceFrameEvaluationTiming) -> Self {
+        Self {
+            total_ms: timing.total_ms,
+            fixture_clone_ms: timing.fixture_clone_ms,
+            effect_loop_ms: timing.effect_loop_ms,
+            output_frame_ms: timing.output_frame_ms,
+            active_effects: timing.active_effects,
+            active_authored_effects: timing.active_authored_effects,
+            active_prepared_effects: timing.active_prepared_effects,
+            visited_prepared_effects: timing.visited_prepared_effects,
+            sampled_pixels: timing.sampled_pixels,
+            vm_sample_evaluations: timing.vm_sample_evaluations,
+            sample_reuse_saved_evaluations: timing.sample_reuse_saved_evaluations,
+            sample_reuse_group_hits: timing.sample_reuse_group_hits,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -1778,6 +2167,39 @@ fn isolated_effect_document(
     })
 }
 
+fn timed_operation<T>(
+    iterations: usize,
+    warmup: usize,
+    mut operation: impl FnMut() -> Result<T, String>,
+) -> Result<(T, TimingStatsReport), String> {
+    if iterations == 0 {
+        return Err("iterations must be greater than zero".to_string());
+    }
+    for _ in 0..warmup {
+        black_box(operation()?);
+    }
+
+    let mut samples = Vec::with_capacity(iterations);
+    let mut last = None;
+    for _ in 0..iterations {
+        let start = Instant::now();
+        let result = operation()?;
+        samples.push(start.elapsed());
+        last = Some(black_box(result));
+    }
+
+    let result = last.ok_or_else(|| "timed operation did not run".to_string())?;
+    Ok((result, TimingStatsReport::from_durations(samples)))
+}
+
+fn output_status_label(status: &OutputFrameStatus) -> String {
+    match status {
+        OutputFrameStatus::Live => "live".to_string(),
+        OutputFrameStatus::Idle(message) => format!("idle: {message}"),
+        OutputFrameStatus::Error(message) => format!("error: {message}"),
+    }
+}
+
 #[cfg(test)]
 fn active_target_pixel_samples(document: &SequenceDocument, time_seconds: f64) -> usize {
     document
@@ -1816,6 +2238,77 @@ fn hz_from_duration(duration: Duration) -> f64 {
         0.0
     } else {
         1.0 / seconds
+    }
+}
+
+fn print_baseline_report(report: &BaselineReport) {
+    println!(
+        "baseline project={} sequence={} iterations={} warmup={}",
+        report.project_path, report.sequence, report.iterations, report.warmup
+    );
+    println!(
+        "project key={} resolved={} reachable_files={} objects={} errors={} warnings={}",
+        report.project.analysis_internal.project_key,
+        report.project.analysis_internal.resolved,
+        report.project.analysis_internal.reachable_file_count,
+        report.project.analysis_internal.object_count,
+        report.project.analysis_internal.error_count,
+        report.project.analysis_internal.warning_count
+    );
+    print_timing_stats("analysis", &report.project.analysis_wall_clock);
+    println!(
+        "document path={} duration={:.3}s fps={} lanes={} marks={} effects={} degraded={}",
+        report.document.path,
+        report.document.duration_seconds,
+        report.document.frame_rate,
+        report.document.lanes,
+        report.document.mark_collections,
+        report.document.effects,
+        report.document.degraded
+    );
+    print_timing_stats("document load", &report.document.load_wall_clock);
+    println!(
+        "renderer prepared_effects={} generated_children={} generator_parents={}",
+        report.renderer.prepared_effects,
+        report.renderer.prepare.generated_child_count,
+        report.renderer.prepare.generator_parent_count
+    );
+    print_timing_stats("renderer prepare", &report.renderer.prepare_wall_clock);
+    println!(
+        "{:<24} {:>9} {:>8} {:>8} {:>8} {:>9} {:>9} {:>9} {:>10}",
+        "scenario",
+        "time",
+        "status",
+        "active",
+        "visited",
+        "pixels",
+        "samples",
+        "reuse",
+        "frame p50"
+    );
+    for scenario in &report.scenarios {
+        println!(
+            "{:<24} {:>8.3}s {:>8} {:>8} {:>8} {:>9} {:>9} {:>9} {:>9.3}ms",
+            scenario.name,
+            scenario.time_seconds,
+            scenario.status,
+            scenario.active_authored_effects,
+            scenario.visited_prepared_effects,
+            scenario.pixel_count,
+            scenario.vm_sample_evaluations,
+            scenario.sample_reuse_saved_evaluations,
+            scenario.frame_wall_clock.p50_ms
+        );
+        println!(
+            "  eval total={:.3}ms clone={:.3}ms effects={:.3}ms output={:.3}ms active_prepared={} sampled_pixels={} sample_reuse_group_hits={}",
+            scenario.last_evaluation.total_ms,
+            scenario.last_evaluation.fixture_clone_ms,
+            scenario.last_evaluation.effect_loop_ms,
+            scenario.last_evaluation.output_frame_ms,
+            scenario.active_prepared_effects,
+            scenario.sampled_pixels,
+            scenario.sample_reuse_group_hits
+        );
     }
 }
 
@@ -2211,6 +2704,14 @@ mod tests {
         (input, analysis)
     }
 
+    fn thirty_output_project_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("examples")
+            .join("thirty-output-controller")
+    }
+
     #[test]
     fn synthetic_active_effects_expand_one_source_to_requested_count() {
         let document = sequence_document(active_effect(3));
@@ -2315,5 +2816,65 @@ mod tests {
         assert!(first_case["prepare"]["timelineIndexMs"].is_number());
         assert!(first_case["wholeFrame"]["p50Ms"].is_number());
         assert!(first_case["sampledPixels"].is_number());
+    }
+
+    #[test]
+    fn baseline_scenarios_cover_thirty_output_controller_flow() {
+        let scenarios = baseline_scenarios();
+
+        assert!(scenarios
+            .iter()
+            .any(|scenario| scenario.name == "idle_start"));
+        assert!(scenarios
+            .iter()
+            .any(|scenario| scenario.name == "drop1_entry"));
+        assert!(scenarios
+            .iter()
+            .any(|scenario| scenario.name == "drop2_final"));
+        assert!(scenarios
+            .windows(2)
+            .all(|pair| pair[0].time_seconds < pair[1].time_seconds));
+    }
+
+    #[test]
+    fn baseline_report_includes_granular_metric_groups() {
+        let path = thirty_output_project_path();
+        let report = BaselineReport::run(BaselineRunInput {
+            path: &path,
+            sequence: None,
+            iterations: 1,
+            warmup: 0,
+            scenarios: vec![BaselineScenarioDefinition {
+                name: "drop1_entry",
+                time_seconds: 41.0,
+            }],
+        })
+        .unwrap();
+
+        assert_eq!(
+            report.project.analysis_internal.project_key,
+            "thirty_output_controller"
+        );
+        assert!(report.project.analysis_wall_clock.p50_ms >= 0.0);
+        assert_eq!(report.document.frame_rate, 144);
+        assert!(report.document.effects > 100);
+        assert!(report.renderer.prepared_effects > report.document.effects);
+        assert!(report.renderer.prepare.generated_child_count > 0);
+
+        let scenario = report
+            .scenarios
+            .first()
+            .expect("scenario should be reported");
+        assert_eq!(scenario.name, "drop1_entry");
+        assert_eq!(scenario.fixture_count, 30);
+        assert!(scenario.pixel_count > 0);
+        assert!(scenario.active_authored_effects > 0);
+        assert!(scenario.visited_prepared_effects > 0);
+        assert!(scenario.frame_wall_clock.p50_ms >= 0.0);
+        assert!(scenario.last_evaluation.total_ms >= 0.0);
+        assert!(
+            scenario.vm_sample_evaluations + scenario.sample_reuse_saved_evaluations
+                >= scenario.sampled_pixels
+        );
     }
 }

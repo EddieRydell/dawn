@@ -24,12 +24,12 @@ empty:
     - 41.333260645s
     - 41.433276411s
     - 42.725446822s
-    - 42.772205020s
+    - 42.77220502s
     - 42.804494547s
-    - 42.835235480s
+    - 42.83523548s
     - 42.937205402s
     - 43.135773896s
-    - 43.337243530s
+    - 43.33724353s
     - 43.434705724s
     - 43.632356105s
     - 43.738141873s
@@ -52,7 +52,7 @@ empty:
     - 67.039039452s
     - 67.230935754s
     - 67.633083657s
-    - 69.609875450s
+    - 69.60987545s
     - 69.827953241s
     - 69.935973082s
     - 71.243144827s
@@ -70,7 +70,7 @@ empty:
     - 78.006470605s
     - 78.210439749s
     - 78.317819454s
-    - 78.433939340s
+    - 78.43393934s
     - 78.831409328s
     - 79.431859918s
     - 79.622735135s
@@ -97,7 +97,7 @@ empty:
     - 132.835660335s
     - 132.970659303s
     - 133.103846126s
-    - 133.237032950s
+    - 133.23703295s
     - 133.365193856s
     - 133.501898822s
     - 133.634080462s
@@ -110,10 +110,10 @@ empty:
     - 136.159063357s
     - 136.297714925s
     - 136.427242018s
-    - 136.565313170s
+    - 136.56531317s
     - 136.696128624s
     - 136.823992292s
-    - 136.966979460s
+    - 136.96697946s
     - 137.098346997s
     - 137.232549299s
     - 137.366435539s
@@ -140,7 +140,7 @@ empty:
     - 72.833146669s
     - 73.632947179s
     - 78.449255399s
-    - 79.243359140s
+    - 79.24335914s
     - 80.044930941s
   - key: gen_intro_sparse_marks
     name: intro_sparse marks
@@ -154,23 +154,23 @@ empty:
     - 13.717794971s
     - 14.235890209s
     - 14.636434427s
-    - 15.034076150s
+    - 15.03407615s
     - 15.836615833s
     - 16.234257556s
     - 16.634801774s
     - 19.035164586s
     - 19.437160051s
     - 20.637341456s
-    - 21.034983180s
+    - 21.03498318s
     - 21.631445765s
     - 22.235164586s
     - 22.634257556s
     - 23.232171388s
     - 23.834438962s
-    - 24.234983180s
+    - 24.23498318s
     - 24.636978645s
     - 25.236343724s
-    - 25.632534200s
+    - 25.6325342s
     - 26.034529665s
     - 26.432171388s
   - key: gen_intro_build_a_fills
@@ -182,7 +182,7 @@ empty:
     - 16.633350527s
     - 17.837885674s
     - 20.637341456s
-    - 21.034983180s
+    - 21.03498318s
     - 21.632897012s
     - 22.236615833s
     - 22.634257556s
@@ -201,7 +201,7 @@ empty:
     marks:
     - 14.431808577s
     - 18.502556876s
-    - 20.016207670s
+    - 20.01620767s
     - 20.930493384s
     - 22.445595425s
     - 23.316343724s
@@ -215,7 +215,7 @@ empty:
     - 27.255028531s
     - 27.652670255s
     - 28.053214472s
-    - 28.453758690s
+    - 28.45375869s
     - 28.852851661s
     - 29.233078418s
     - 29.653940096s
@@ -231,7 +231,7 @@ empty:
     name: intro_build_b fills
     color: '#f97316'
     marks:
-    - 26.835618100s
+    - 26.8356181s
     - 27.236162318s
     - 27.633804041s
     - 28.034348259s
@@ -248,7 +248,7 @@ empty:
     - 31.634892477s
     - 32.033985447s
     - 32.431627171s
-    - 32.836525130s
+    - 32.83652513s
   - key: gen_intro_build_b_anchors
     name: intro_build_b anchors
     color: '#22c55e'
@@ -274,9 +274,9 @@ empty:
     - 34.254393611s
     - 34.432897012s
     - 34.653486581s
-    - 34.833441230s
+    - 34.83344123s
     - 35.054030799s
-    - 35.232534200s
+    - 35.2325342s
     - 35.454575017s
     - 35.634529665s
     - 35.853667987s
@@ -286,9 +286,9 @@ empty:
     - 36.632987715s
     - 36.833259824s
     - 37.030629438s
-    - 37.132216740s
+    - 37.13221674s
     - 37.233804041s
-    - 37.434076150s
+    - 37.43407615s
     - 37.535663452s
     - 37.651763225s
     - 38.831627171s
@@ -309,7 +309,7 @@ empty:
     - 34.634620368s
     - 34.834892477s
     - 35.035164586s
-    - 35.232534200s
+    - 35.2325342s
     - 35.435708803s
     - 35.634529665s
     - 35.834801774s
@@ -320,7 +320,7 @@ empty:
     - 36.833259824s
     - 36.934847125s
     - 37.032080685s
-    - 37.132216740s
+    - 37.13221674s
     - 37.233804041s
     - 37.332488849s
     - 37.435527397s
@@ -357,16 +357,16 @@ empty:
     - 50.625912885s
     - 50.840697465s
     - 50.955345992s
-    - 51.232534200s
+    - 51.2325342s
     - 51.635980912s
     - 52.051037602s
   - key: gen_drop1_bridge_fills
     name: drop1_bridge fills
     color: '#f97316'
     marks:
-    - 47.838067080s
+    - 47.83806708s
     - 47.941105629s
-    - 48.032534200s
+    - 48.0325342s
     - 48.113804041s
     - 48.240062545s
     - 48.434529665s
@@ -375,13 +375,13 @@ empty:
     - 49.238520595s
     - 49.437341456s
     - 49.633259824s
-    - 49.834983180s
+    - 49.83498318s
     - 50.035255289s
     - 50.231173656s
     - 50.432897012s
     - 50.506910617s
     - 50.627364132s
-    - 50.833441230s
+    - 50.83344123s
     - 50.955345992s
     - 51.032262091s
     - 51.142556876s
@@ -414,7 +414,7 @@ empty:
     - 54.352715606s
     - 54.731491116s
     - 54.851944631s
-    - 55.031899280s
+    - 55.03189928s
     - 55.253940096s
     - 55.541287035s
     - 55.735754155s
@@ -425,11 +425,11 @@ empty:
     - 56.735663452s
     - 56.853214472s
     - 57.037522862s
-    - 57.243599960s
+    - 57.24359996s
     - 57.631082953s
     - 57.841513792s
     - 57.951808577s
-    - 58.242058010s
+    - 58.24205801s
     - 58.453940096s
   - key: gen_drop1_mid_a_fills
     name: drop1_mid_a fills
@@ -437,10 +437,10 @@ empty:
     marks:
     - 52.731672522s
     - 52.834711071s
-    - 52.937749620s
+    - 52.93774962s
     - 53.133667987s
     - 53.335391343s
-    - 53.434076150s
+    - 53.43407615s
     - 53.631445765s
     - 53.738838055s
     - 53.933305175s
@@ -450,25 +450,25 @@ empty:
     - 54.635708803s
     - 54.732942363s
     - 54.834529665s
-    - 55.031899280s
+    - 55.03189928s
     - 55.235073883s
-    - 55.635618100s
+    - 55.6356181s
     - 55.735754155s
     - 55.936026264s
     - 56.031808577s
-    - 56.137749620s
+    - 56.13774962s
     - 56.236434427s
     - 56.435255289s
-    - 56.536842590s
+    - 56.53684259s
     - 56.735663452s
     - 56.834348259s
     - 56.938838055s
     - 57.037522862s
-    - 57.233441230s
+    - 57.23344123s
     - 57.631082953s
     - 57.935844858s
     - 58.030175924s
-    - 58.436525130s
+    - 58.43652513s
   - key: gen_drop1_mid_a_anchors
     name: drop1_mid_a anchors
     color: '#22c55e'
@@ -485,16 +485,16 @@ empty:
     name: drop1_mid_b marks
     color: '#38bdf8'
     marks:
-    - 58.835618100s
+    - 58.8356181s
     - 58.947364132s
     - 59.136026264s
-    - 59.434983180s
+    - 59.43498318s
     - 59.633804041s
     - 59.934212205s
     - 60.233169121s
-    - 60.433441230s
+    - 60.43344123s
     - 60.640969574s
-    - 60.832534200s
+    - 60.8325342s
     - 61.042965039s
     - 61.439155515s
     - 61.653940096s
@@ -512,11 +512,11 @@ empty:
     color: '#f97316'
     marks:
     - 58.571491116s
-    - 58.835618100s
+    - 58.8356181s
     - 58.935754155s
     - 59.136026264s
     - 59.228906082s
-    - 59.337749620s
+    - 59.33774962s
     - 59.433531933s
     - 59.630901547s
     - 59.733940096s
@@ -525,10 +525,10 @@ empty:
     - 60.137386808s
     - 60.231717874s
     - 60.430538735s
-    - 60.530674790s
-    - 60.638067080s
-    - 60.745459370s
-    - 60.832534200s
+    - 60.53067479s
+    - 60.63806708s
+    - 60.74545937s
+    - 60.8325342s
     - 60.912352794s
     - 61.040062545s
     - 61.439155515s
@@ -550,7 +550,7 @@ empty:
     color: '#22c55e'
     marks:
     - 59.239064812s
-    - 60.842692930s
+    - 60.84269293s
     - 61.653940096s
     - 62.439064812s
     - 63.253214472s
@@ -562,8 +562,8 @@ empty:
     - 81.042602227s
     - 81.435890209s
     - 81.630357329s
-    - 81.834983180s
-    - 82.039609030s
+    - 81.83498318s
+    - 82.03960903s
     - 82.235527397s
     - 82.453214472s
     - 82.637522862s
@@ -590,7 +590,7 @@ empty:
     - 87.837341456s
     - 88.031808577s
     - 88.237885674s
-    - 88.634076150s
+    - 88.63407615s
     - 88.853214472s
     - 90.035980912s
     - 90.168044404s
@@ -618,13 +618,13 @@ empty:
     - 85.233804041s
     - 85.431173656s
     - 85.629994518s
-    - 86.033441230s
+    - 86.03344123s
     - 86.274348259s
     - 86.431082953s
-    - 86.627001320s
+    - 86.62700132s
     - 86.834529665s
     - 87.030448032s
-    - 87.236525130s
+    - 87.23652513s
     - 87.834438962s
     - 88.031808577s
     - 88.236434427s
@@ -640,9 +640,9 @@ empty:
     - 80.851037602s
     - 81.641967307s
     - 82.453214472s
-    - 83.242692930s
+    - 83.24269293s
     - 84.051037602s
-    - 84.840516060s
+    - 84.84051606s
     - 85.651763225s
     - 86.444144178s
     - 87.251037602s
@@ -686,7 +686,7 @@ empty:
     - 103.317794971s
     - 103.835890209s
     - 104.236434427s
-    - 104.634076150s
+    - 104.63407615s
     - 105.435164586s
     - 105.835708803s
     - 106.234801774s
@@ -702,7 +702,7 @@ empty:
     - 104.236434427s
     - 104.636978645s
     - 105.040425357s
-    - 105.233441230s
+    - 105.23344123s
     - 105.436615833s
     - 105.835708803s
     - 106.236253021s
@@ -713,7 +713,7 @@ empty:
     - 107.645414019s
     - 107.836978645s
     - 108.636615833s
-    - 108.832534200s
+    - 108.8325342s
     - 109.034257556s
     - 109.632171388s
   - key: gen_build2_body_a_anchors
@@ -727,7 +727,7 @@ empty:
     color: '#38bdf8'
     marks:
     - 110.235890209s
-    - 110.634983180s
+    - 110.63498318s
     - 111.036978645s
     - 111.234348259s
     - 111.835164586s
@@ -736,8 +736,8 @@ empty:
     - 112.634801774s
     - 112.832171388s
     - 113.435890209s
-    - 113.834983180s
-    - 114.039609030s
+    - 113.83498318s
+    - 114.03960903s
     - 114.235527397s
     - 114.834892477s
     - 115.033713339s
@@ -758,7 +758,7 @@ empty:
     - 112.637704268s
     - 112.829268894s
     - 113.435890209s
-    - 113.834983180s
+    - 113.83498318s
     - 114.038157783s
     - 114.238429892s
     - 114.834892477s
@@ -772,7 +772,7 @@ empty:
     color: '#22c55e'
     marks:
     - 110.479699733s
-    - 112.042692930s
+    - 112.04269293s
     - 112.922148713s
     - 113.652126037s
     - 116.055391343s
@@ -801,24 +801,24 @@ empty:
     name: build2_roll_a fills
     color: '#f97316'
     marks:
-    - 116.435618100s
+    - 116.4356181s
     - 116.736026264s
     - 116.836162318s
     - 117.233804041s
     - 117.540017193s
     - 117.634348259s
-    - 118.033441230s
+    - 118.03344123s
     - 118.433985447s
     - 118.632806309s
     - 118.831627171s
     - 119.027545538s
     - 119.233622636s
-    - 119.430992250s
+    - 119.43099225s
     - 119.634166853s
     - 119.830085221s
     - 119.937477511s
     - 120.033259824s
-    - 120.234983180s
+    - 120.23498318s
     - 120.433804041s
     - 120.740017193s
     - 120.835799506s
@@ -826,11 +826,11 @@ empty:
     - 121.234892477s
     - 121.429359597s
     - 121.542556876s
-    - 121.632534200s
+    - 121.6325342s
     - 121.832806309s
     - 122.033078418s
     - 122.223191797s
-    - 122.339291570s
+    - 122.33929157s
     - 122.435073883s
   - key: gen_build2_roll_a_anchors
     name: build2_roll_a anchors
@@ -859,7 +859,7 @@ empty:
     - 124.253486581s
     - 124.431989982s
     - 124.654030799s
-    - 124.832534200s
+    - 124.8325342s
     - 125.054575017s
     - 125.233078418s
     - 125.455119234s
@@ -869,9 +869,9 @@ empty:
     - 126.231536468s
     - 126.433259824s
     - 126.534847125s
-    - 126.732216740s
+    - 126.73221674s
     - 126.833804041s
-    - 127.034076150s
+    - 127.03407615s
     - 127.134212205s
     - 127.251763225s
     - 128.433078418s
@@ -883,29 +883,29 @@ empty:
     - 122.832715606s
     - 123.031536468s
     - 123.231808577s
-    - 123.434983180s
+    - 123.43498318s
     - 123.632352794s
     - 123.836978645s
     - 124.032897012s
     - 124.234620368s
     - 124.431989982s
     - 124.636615833s
-    - 124.832534200s
+    - 124.8325342s
     - 125.034257556s
     - 125.233078418s
     - 125.433350527s
     - 125.632171388s
-    - 125.733758690s
+    - 125.73375869s
     - 125.832443497s
     - 126.032715606s
     - 126.231536468s
     - 126.433259824s
-    - 126.537749620s
+    - 126.53774962s
     - 126.633531933s
-    - 126.732216740s
+    - 126.73221674s
     - 126.835255289s
     - 126.932488849s
-    - 127.034076150s
+    - 127.03407615s
     - 127.132760958s
     - 127.232897012s
     - 127.417205402s
@@ -994,15 +994,15 @@ empty:
     - 144.237160051s
     - 144.331491116s
     - 144.451944631s
-    - 144.631899280s
+    - 144.63189928s
     - 144.852488849s
     - 145.135482046s
-    - 145.235618100s
+    - 145.2356181s
     - 145.335754155s
     - 145.536026264s
     - 145.631808577s
     - 145.736298373s
-    - 145.834983180s
+    - 145.83498318s
     - 146.032352794s
     - 146.135391343s
     - 146.334212205s
@@ -1010,7 +1010,7 @@ empty:
     - 146.652035334s
     - 146.842148713s
     - 147.036615833s
-    - 147.135300640s
+    - 147.13530064s
     - 147.231082953s
     - 147.441513792s
     - 147.554711071s
@@ -1022,11 +1022,11 @@ empty:
     marks:
     - 142.333123769s
     - 142.434711071s
-    - 142.537749620s
+    - 142.53774962s
     - 142.733667987s
     - 142.830901547s
     - 142.932488849s
-    - 143.034076150s
+    - 143.03407615s
     - 143.229994518s
     - 143.338838055s
     - 143.534756422s
@@ -1041,25 +1041,25 @@ empty:
     - 144.630448032s
     - 144.835073883s
     - 145.136933293s
-    - 145.235618100s
+    - 145.2356181s
     - 145.335754155s
     - 145.536026264s
     - 145.631808577s
-    - 145.737749620s
-    - 145.834983180s
+    - 145.73774962s
+    - 145.83498318s
     - 146.030901547s
-    - 146.136842590s
+    - 146.13684259s
     - 146.334212205s
     - 146.431445765s
     - 146.531581819s
     - 146.631717874s
-    - 146.833441230s
+    - 146.83344123s
     - 147.035164586s
-    - 147.135300640s
+    - 147.13530064s
     - 147.231082953s
     - 147.537296105s
     - 147.631627171s
-    - 148.036525130s
+    - 148.03652513s
   - key: gen_drop2_stage_a_anchors
     name: drop2_stage_a anchors
     color: '#22c55e'
@@ -1075,16 +1075,16 @@ empty:
     name: drop2_stage_b marks
     color: '#38bdf8'
     marks:
-    - 148.435618100s
+    - 148.4356181s
     - 148.535754155s
     - 148.736026264s
-    - 149.034983180s
+    - 149.03498318s
     - 149.233804041s
-    - 149.336842590s
+    - 149.33684259s
     - 149.532760958s
     - 149.734484314s
     - 149.836071615s
-    - 150.033441230s
+    - 150.03344123s
     - 150.242420822s
     - 150.431082953s
     - 150.642965039s
@@ -1105,11 +1105,11 @@ empty:
     color: '#f97316'
     marks:
     - 148.171491116s
-    - 148.435618100s
+    - 148.4356181s
     - 148.535754155s
     - 148.736026264s
     - 148.828906082s
-    - 148.937749620s
+    - 148.93774962s
     - 149.033531933s
     - 149.230901547s
     - 149.339745085s
@@ -1120,7 +1120,7 @@ empty:
     - 149.943463905s
     - 150.031989982s
     - 150.133577284s
-    - 150.238067080s
+    - 150.23806708s
     - 150.346910617s
     - 150.433985447s
     - 150.512352794s
@@ -1147,7 +1147,7 @@ empty:
     color: '#22c55e'
     marks:
     - 148.839064812s
-    - 150.442692930s
+    - 150.44269293s
     - 151.252488849s
     - 152.041967307s
     - 152.853214472s
@@ -1184,7 +1184,7 @@ empty:
     - 159.537658917s
     - 159.645051207s
     - 159.835164586s
-    - 160.032534200s
+    - 160.0325342s
     - 160.237160051s
     - 160.451944631s
     - 160.851037602s
@@ -1202,7 +1202,7 @@ empty:
     - 155.832624903s
     - 156.032897012s
     - 156.314438962s
-    - 156.433441230s
+    - 156.43344123s
     - 156.526321048s
     - 156.687409484s
     - 156.757069348s
@@ -1210,7 +1210,7 @@ empty:
     - 157.034257556s
     - 157.233078418s
     - 157.307092023s
-    - 157.431899280s
+    - 157.43189928s
     - 157.632171388s
     - 157.765686128s
     - 157.836797239s
@@ -1220,11 +1220,11 @@ empty:
     - 158.430357329s
     - 158.636434427s
     - 158.830901547s
-    - 159.034076150s
+    - 159.03407615s
     - 159.231445765s
     - 159.433169121s
     - 159.537658917s
-    - 159.633441230s
+    - 159.63344123s
     - 159.833713339s
     - 159.922239416s
     - 160.031082953s
@@ -1236,13 +1236,13 @@ empty:
     name: drop2_stage_c anchors
     color: '#22c55e'
     marks:
-    - 155.240516060s
+    - 155.24051606s
     - 156.051763225s
     - 156.841241683s
     - 157.652488849s
     - 158.441967307s
     - 159.251763225s
-    - 160.042692930s
+    - 160.04269293s
     - 160.851037602s
   - key: gen_drop2_stage_d_marks
     name: drop2_stage_d marks
@@ -1255,7 +1255,7 @@ empty:
     - 161.832080685s
     - 162.042511524s
     - 162.133940096s
-    - 162.234076150s
+    - 162.23407615s
     - 162.451763225s
     - 162.644779098s
     - 162.842148713s
@@ -1283,7 +1283,7 @@ empty:
     color: '#f97316'
     marks:
     - 161.089042137s
-    - 161.235618100s
+    - 161.2356181s
     - 161.327046672s
     - 161.431536468s
     - 161.631808577s
@@ -1292,8 +1292,8 @@ empty:
     - 162.133940096s
     - 162.232624903s
     - 162.434348259s
-    - 162.689767760s
-    - 162.833441230s
+    - 162.68976776s
+    - 162.83344123s
     - 162.926321048s
     - 163.087409484s
     - 163.229631706s
@@ -1326,7 +1326,7 @@ empty:
     name: drop2_stage_d anchors
     color: '#22c55e'
     marks:
-    - 161.640516060s
+    - 161.64051606s
     - 162.451763225s
     - 163.241241683s
     - 164.052488849s
@@ -1344,7 +1344,7 @@ empty:
     - 169.044779098s
     - 169.242148713s
     - 169.442420822s
-    - 169.632534200s
+    - 169.6325342s
     - 170.038883407s
     - 170.452488849s
     - 170.642602227s
@@ -1352,7 +1352,7 @@ empty:
     - 171.230357329s
     - 171.436434427s
     - 171.636706536s
-    - 171.834076150s
+    - 171.83407615s
     - 172.053214472s
     - 172.238974109s
     - 172.436343724s
@@ -1373,14 +1373,14 @@ empty:
     - 168.525232613s
     - 168.632624903s
     - 168.831445765s
-    - 169.079609030s
-    - 169.233441230s
+    - 169.07960903s
+    - 169.23344123s
     - 169.430810844s
-    - 169.525141910s
+    - 169.52514191s
     - 169.631082953s
     - 169.834257556s
     - 170.034529665s
-    - 170.144824450s
+    - 170.14482445s
     - 170.233350527s
     - 170.433622636s
     - 170.638248486s
@@ -1388,7 +1388,7 @@ empty:
     - 171.230357329s
     - 171.433531933s
     - 171.633804041s
-    - 171.834076150s
+    - 171.83407615s
     - 172.034348259s
     - 172.237522862s
     - 172.337658917s
@@ -1403,13 +1403,13 @@ empty:
     name: drop2_groove_a anchors
     color: '#22c55e'
     marks:
-    - 168.040516060s
+    - 168.04051606s
     - 168.851763225s
     - 169.641241683s
     - 170.452488849s
     - 171.241967307s
     - 172.053214472s
-    - 172.842692930s
+    - 172.84269293s
     - 173.651037602s
   - key: gen_drop2_groove_b_marks
     name: drop2_groove_b marks
@@ -1423,7 +1423,7 @@ empty:
     - 175.026819914s
     - 175.232897012s
     - 175.444779098s
-    - 175.643599960s
+    - 175.64359996s
     - 175.842420822s
     - 176.031082953s
     - 176.238611298s
@@ -1433,7 +1433,7 @@ empty:
     - 177.631808577s
     - 177.836434427s
     - 178.038157783s
-    - 178.234076150s
+    - 178.23407615s
     - 178.453214472s
     - 179.035164586s
     - 179.236887942s
@@ -1446,8 +1446,8 @@ empty:
     color: '#f97316'
     marks:
     - 173.931128304s
-    - 174.102375470s
-    - 174.286683860s
+    - 174.10237547s
+    - 174.28668386s
     - 174.433259824s
     - 174.630629438s
     - 174.832352794s
@@ -1483,7 +1483,7 @@ empty:
     name: drop2_groove_b anchors
     color: '#22c55e'
     marks:
-    - 174.440516060s
+    - 174.44051606s
     - 175.251763225s
     - 176.044144178s
     - 176.852488849s
@@ -1498,14 +1498,14 @@ empty:
     - 180.444325583s
     - 180.644597692s
     - 180.831808577s
-    - 181.045141910s
+    - 181.04514191s
     - 181.243962772s
     - 181.435527397s
     - 181.653214472s
     - 181.841876604s
-    - 182.043599960s
+    - 182.04359996s
     - 182.243872069s
-    - 182.432534200s
+    - 182.4325342s
     - 182.642965039s
     - 182.844688395s
     - 183.043509257s
@@ -1515,16 +1515,16 @@ empty:
     - 183.835890209s
     - 184.031808577s
     - 184.243690663s
-    - 184.439609030s
+    - 184.43960903s
     - 184.635527397s
     - 184.853214472s
     - 185.047681592s
     - 185.240697465s
     - 185.442420822s
-    - 185.632534200s
+    - 185.6325342s
     - 185.841513792s
     - 186.044688395s
-    - 186.242058010s
+    - 186.24205801s
     - 186.433622636s
   - key: gen_drop2_final_a_fills
     name: drop2_final_a fills
@@ -1534,12 +1534,12 @@ empty:
     - 180.434166853s
     - 180.635890209s
     - 180.831808577s
-    - 181.034983180s
+    - 181.03498318s
     - 181.235255289s
     - 181.435527397s
     - 181.634348259s
     - 181.834620368s
-    - 182.033441230s
+    - 182.03344123s
     - 182.233713339s
     - 182.429631706s
     - 182.638611298s
@@ -1547,7 +1547,7 @@ empty:
     - 183.033350527s
     - 183.232171388s
     - 183.435345992s
-    - 183.635618100s
+    - 183.6356181s
     - 183.832987715s
     - 184.030357329s
     - 184.236434427s
@@ -1555,9 +1555,9 @@ empty:
     - 184.635527397s
     - 184.837250753s
     - 185.034620368s
-    - 185.233441230s
+    - 185.23344123s
     - 185.436615833s
-    - 185.632534200s
+    - 185.6325342s
     - 185.837160051s
     - 186.035980912s
     - 186.233350527s
@@ -1568,7 +1568,7 @@ empty:
     marks:
     - 180.839064812s
     - 181.653214472s
-    - 182.442692930s
+    - 182.44269293s
     - 183.252488849s
     - 184.041967307s
     - 184.853214472s
@@ -1584,10 +1584,10 @@ empty:
     - 187.231808577s
     - 187.436434427s
     - 187.643962772s
-    - 187.844234880s
+    - 187.84423488s
     - 188.032897012s
     - 188.241876604s
-    - 188.443599960s
+    - 188.44359996s
     - 188.635164586s
     - 188.833985447s
     - 189.042965039s
@@ -1601,17 +1601,17 @@ empty:
     marks:
     - 186.472806309s
     - 186.636797239s
-    - 186.835618100s
+    - 186.8356181s
     - 186.921241683s
     - 187.038792704s
     - 187.231808577s
     - 187.314529665s
-    - 187.434983180s
+    - 187.43498318s
     - 187.636706536s
-    - 187.834076150s
+    - 187.83407615s
     - 188.032897012s
     - 188.236071615s
-    - 188.433441230s
+    - 188.43344123s
     - 188.635164586s
     - 188.836887942s
     - 188.916706536s
@@ -1626,12 +1626,12 @@ empty:
     marks:
     - 187.241967307s
     - 188.051763225s
-    - 188.842692930s
+    - 188.84269293s
     - 189.652488849s
   effects:
   - id: 76
-    start: 0.770000000s
-    duration: 12.967520000s
+    start: 0.77s
+    duration: 12.96752s
     target:
       type: group
       name: All Outputs
@@ -1672,8 +1672,8 @@ empty:
         value: 20.0
     script: effects.MarkPulse
   - id: 75
-    start: 0.850000000s
-    duration: 12.807520000s
+    start: 0.85s
+    duration: 12.80752s
     target:
       type: group
       name: All Outputs
@@ -1720,8 +1720,8 @@ empty:
         value: 20.0
     script: effects.ShimmerField
   - id: 77
-    start: 13.577520000s
-    duration: 12.960000000s
+    start: 13.57752s
+    duration: 12.96s
     target:
       type: group
       name: All Outputs
@@ -1762,8 +1762,8 @@ empty:
         value: 21.0
     script: effects.MarkPulse
   - id: 78
-    start: 13.577520000s
-    duration: 12.960000000s
+    start: 13.57752s
+    duration: 12.96s
     target:
       type: group
       name: All Outputs
@@ -1782,8 +1782,7 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - &id002
-          value_type: color
+        - value_type: color
           points:
           - time: 0.0
             value: '#ffffff'
@@ -1791,8 +1790,7 @@ empty:
             value: '#ff6600'
           - time: 1.0
             value: '#ff0000'
-        - &id003
-          value_type: color
+        - value_type: color
           points:
           - time: 0.0
             value: '#ffffff'
@@ -1828,8 +1826,7 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - &id004
-          value_type: float
+        - value_type: float
           points:
           - time: 0.0
             value: 0.0
@@ -1849,8 +1846,7 @@ empty:
             value: 0.984
           - time: 1.0
             value: 1.0
-        - &id005
-          value_type: float
+        - value_type: float
           points:
           - time: 0.0
             value: 1.0
@@ -1870,14 +1866,13 @@ empty:
             value: 0.016
           - time: 1.0
             value: 0.0
-        - &id006
-          value_type: float
+        - value_type: float
           points:
           - time: 0.0
             value: 0.0
           - time: 1.0
             value: 1.0
-      pulse_shape: &id001
+      pulse_shape:
         type: curve
         curve:
           value_type: float
@@ -1888,8 +1883,8 @@ empty:
             value: 0.0
     script: effects.MarkChase
   - id: 79
-    start: 13.677520000s
-    duration: 0.280000000s
+    start: 13.67752s
+    duration: 0.28s
     target:
       type: group
       name: All Outputs
@@ -1898,11 +1893,19 @@ empty:
       gradient:
         type: curve
         curve: curves.warm_gradient
-      pulse_shape: *id001
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   - id: 80
-    start: 26.377520000s
-    duration: 6.560000000s
+    start: 26.37752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -1943,8 +1946,8 @@ empty:
         value: 22.0
     script: effects.MarkPulse
   - id: 81
-    start: 26.377520000s
-    duration: 6.560000000s
+    start: 26.37752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -1963,8 +1966,22 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
       hue:
         type: curve
         curve:
@@ -1993,14 +2010,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 82
-    start: 26.477520000s
-    duration: 0.280000000s
+    start: 26.47752s
+    duration: 0.28s
     target:
       type: group
       name: All Outputs
@@ -2009,11 +2077,156 @@ empty:
       gradient:
         type: curve
         curve: curves.cool_gradient
-      pulse_shape: *id001
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
+  - id: 84
+    start: 32.77752s
+    duration: 6.138240914s
+    target:
+      type: group
+      name: All Outputs
+    scope: per_fixture
+    params:
+      beats:
+        type: marks
+        key: gen_intro_final_build_fills
+      base:
+        type: color
+        value: '#000000'
+      gradient_mode:
+        type: enum
+        value: per_pulse
+      gradients:
+        type: array
+        element_type: curve_color
+        values:
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#0bfecd'
+          - time: 1.0
+            value: '#ff00bb'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.553
+            value: '#a3ff66'
+          - time: 1.0
+            value: '#0011ff'
+      hue:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+      hue_mix:
+        type: float
+        value: 0.0
+      offset_seconds:
+        type: float
+        value: -0.1
+      chase_seconds:
+        type: float
+        value: 0.34
+      pulse_overlap:
+        type: float
+        value: 90.0
+      section_width_pixels:
+        type: integer
+        value: 1
+      chase_positions:
+        type: array
+        element_type: curve_float
+        values:
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
+    script: effects.MarkChase
   - id: 83
-    start: 32.777520000s
-    duration: 6.537480000s
+    start: 32.785784944s
+    duration: 6.138240914s
     target:
       type: group
       name: All Outputs
@@ -2053,83 +2266,9 @@ empty:
         type: float
         value: 23.0
     script: effects.MarkPulse
-  - id: 84
-    start: 32.777520000s
-    duration: 6.537480000s
-    target:
-      type: group
-      name: All Outputs
-    scope: per_fixture
-    params:
-      beats:
-        type: marks
-        key: gen_intro_final_build_fills
-      base:
-        type: color
-        value: '#000000'
-      gradient_mode:
-        type: enum
-        value: per_pulse
-      gradients:
-        type: array
-        element_type: curve_color
-        values:
-        - *id002
-        - *id003
-        - &id009
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-          - time: 0.45
-            value: '#00ffcc'
-          - time: 1.0
-            value: '#a6ff00'
-        - &id010
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-          - time: 0.45
-            value: '#ff00f7'
-          - time: 1.0
-            value: '#0011ff'
-      hue:
-        type: curve
-        curve:
-          value_type: float
-          points:
-          - time: 0.0
-            value: 1.0
-          - time: 1.0
-            value: 0.0
-      hue_mix:
-        type: float
-        value: 0.0
-      offset_seconds:
-        type: float
-        value: -0.1
-      chase_seconds:
-        type: float
-        value: 0.34
-      pulse_overlap:
-        type: float
-        value: 90.0
-      section_width_pixels:
-        type: integer
-        value: 1
-      chase_positions:
-        type: array
-        element_type: curve_float
-        values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
-    script: effects.MarkChase
   - id: 85
-    start: 37.785000000s
-    duration: 0.580000000s
+    start: 37.785s
+    duration: 0.58s
     target:
       type: group
       name: All Outputs
@@ -2138,7 +2277,7 @@ empty:
       gradient:
         type: curve
         curve: curves.hot_pink_lime_gradient
-      intensity: &id008
+      intensity:
         type: curve
         curve:
           value_type: float
@@ -2169,47 +2308,9 @@ empty:
         type: float
         value: 1.0
     script: effects.ScanSweep
-  - id: 152
-    start: 38.780000000s
-    duration: 0.340000000s
-    target:
-      type: group
-      name: All Outputs
-    scope: whole_target
-    params:
-      gradient:
-        type: curve
-        curve: curves.white_strobe_gradient
-      pulse_shape: &id007
-        type: curve
-        curve:
-          value_type: float
-          points:
-          - time: 0.0
-            value: 1.0
-          - time: 0.08
-            value: 1.0
-          - time: 0.22
-            value: 0.45
-          - time: 1.0
-            value: 0.0
-    script: effects.Pulse
-  - id: 86
-    start: 38.885000000s
-    duration: 0.280000000s
-    target:
-      type: group
-      name: All Outputs
-    scope: whole_target
-    params:
-      gradient:
-        type: curve
-        curve: curves.white_strobe_gradient
-      pulse_shape: *id007
-    script: effects.Pulse
   - id: 153
-    start: 39.080000000s
-    duration: 0.160000000s
+    start: 39.08s
+    duration: 0.16s
     target:
       type: group
       name: All Outputs
@@ -2218,7 +2319,15 @@ empty:
       gradient:
         type: curve
         curve: curves.fire_gradient
-      intensity: *id008
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
       direction:
         type: enum
         value: outward
@@ -3149,8 +3258,8 @@ empty:
         value: 2.0
     script: effects.MarkPulse
   - id: 87
-    start: 47.710000000s
-    duration: 4.427520000s
+    start: 47.71s
+    duration: 4.42752s
     target:
       type: group
       name: All Outputs
@@ -3191,8 +3300,8 @@ empty:
         value: 24.0
     script: effects.MarkPulse
   - id: 88
-    start: 47.710000000s
-    duration: 4.427520000s
+    start: 47.71s
+    duration: 4.42752s
     target:
       type: group
       name: All Outputs
@@ -3211,9 +3320,30 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
-        - *id009
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#00ffcc'
+          - time: 1.0
+            value: '#a6ff00'
       hue:
         type: curve
         curve:
@@ -3242,14 +3372,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 89
-    start: 51.977520000s
-    duration: 6.560000000s
+    start: 51.97752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -3290,8 +3471,8 @@ empty:
         value: 25.0
     script: effects.MarkPulse
   - id: 90
-    start: 51.977520000s
-    duration: 6.560000000s
+    start: 51.97752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -3310,9 +3491,30 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
-        - *id009
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#00ffcc'
+          - time: 1.0
+            value: '#a6ff00'
       hue:
         type: curve
         curve:
@@ -3341,10 +3543,61 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 37
     start: 52.010062587s
@@ -3395,8 +3648,8 @@ empty:
         value: false
     script: effects.ImpactBurst
   - id: 154
-    start: 52.030000000s
-    duration: 0.320000000s
+    start: 52.03s
+    duration: 0.32s
     target:
       type: group
       name: All Outputs
@@ -3405,11 +3658,19 @@ empty:
       gradient:
         type: curve
         curve: curves.cool_gradient
-      pulse_shape: *id001
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   - id: 91
-    start: 52.107520000s
-    duration: 3.100000000s
+    start: 52.10752s
+    duration: 3.1s
     target:
       type: group
       name: All Outputs
@@ -3456,8 +3717,8 @@ empty:
         value: 25.0
     script: effects.ShimmerField
   - id: 92
-    start: 53.307520000s
-    duration: 0.480000000s
+    start: 53.30752s
+    duration: 0.48s
     target:
       type: group
       name: All Outputs
@@ -3475,7 +3736,15 @@ empty:
             value: 0.0
           - time: 1.0
             value: 1.0
-      intensity: *id008
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
       color_mode:
         type: enum
         value: gradient_tail
@@ -3508,8 +3777,8 @@ empty:
         value: 0.0
     script: effects.SparkleComet
   - id: 93
-    start: 58.377520000s
-    duration: 6.492480000s
+    start: 58.37752s
+    duration: 6.49248s
     target:
       type: group
       name: All Outputs
@@ -3550,8 +3819,8 @@ empty:
         value: 26.0
     script: effects.MarkPulse
   - id: 94
-    start: 58.377520000s
-    duration: 6.492480000s
+    start: 58.37752s
+    duration: 6.49248s
     target:
       type: group
       name: All Outputs
@@ -3570,9 +3839,30 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
-        - *id009
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#00ffcc'
+          - time: 1.0
+            value: '#a6ff00'
       hue:
         type: curve
         curve:
@@ -3601,14 +3891,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 95
-    start: 58.507520000s
-    duration: 3.100000000s
+    start: 58.50752s
+    duration: 3.1s
     target:
       type: group
       name: All Outputs
@@ -3655,8 +3996,8 @@ empty:
         value: 26.0
     script: effects.ShimmerField
   - id: 96
-    start: 59.707520000s
-    duration: 0.480000000s
+    start: 59.70752s
+    duration: 0.48s
     target:
       type: group
       name: All Outputs
@@ -3674,7 +4015,15 @@ empty:
             value: 0.0
           - time: 1.0
             value: 1.0
-      intensity: *id008
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
       color_mode:
         type: enum
         value: gradient_tail
@@ -3707,8 +4056,8 @@ empty:
         value: 0.0
     script: effects.SparkleComet
   - id: 155
-    start: 60.350000000s
-    duration: 0.580000000s
+    start: 60.35s
+    duration: 0.58s
     target:
       type: group
       name: All Outputs
@@ -3717,7 +4066,15 @@ empty:
       gradient:
         type: curve
         curve: curves.plasma_storm_gradient
-      intensity: *id008
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
       direction:
         type: enum
         value: right_to_left
@@ -3741,8 +4098,8 @@ empty:
         value: 1.0
     script: effects.ScanSweep
   - id: 156
-    start: 64.200000000s
-    duration: 0.360000000s
+    start: 64.2s
+    duration: 0.36s
     target:
       type: group
       name: All Outputs
@@ -3751,7 +4108,19 @@ empty:
       gradient:
         type: curve
         curve: curves.white_strobe_gradient
-      pulse_shape: *id007
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.08
+            value: 1.0
+          - time: 0.22
+            value: 0.45
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   - id: 41
     start: 64.805438567s
@@ -5442,8 +5811,8 @@ empty:
         value: 6.0
     script: effects.MarkPulse
   - id: 97
-    start: 80.770000000s
-    duration: 9.767520000s
+    start: 80.77s
+    duration: 9.76752s
     target:
       type: group
       name: All Outputs
@@ -5484,8 +5853,8 @@ empty:
         value: 27.0
     script: effects.MarkPulse
   - id: 98
-    start: 80.770000000s
-    duration: 9.767520000s
+    start: 80.77s
+    duration: 9.76752s
     target:
       type: group
       name: All Outputs
@@ -5504,9 +5873,30 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
-        - *id009
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#00ffcc'
+          - time: 1.0
+            value: '#a6ff00'
       hue:
         type: curve
         curve:
@@ -5535,14 +5925,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 99
-    start: 80.900000000s
-    duration: 3.100000000s
+    start: 80.9s
+    duration: 3.1s
     target:
       type: group
       name: All Outputs
@@ -5589,8 +6030,8 @@ empty:
         value: 27.0
     script: effects.ShimmerField
   - id: 100
-    start: 82.100000000s
-    duration: 0.480000000s
+    start: 82.1s
+    duration: 0.48s
     target:
       type: group
       name: All Outputs
@@ -5608,7 +6049,15 @@ empty:
             value: 0.0
           - time: 1.0
             value: 1.0
-      intensity: *id008
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
       color_mode:
         type: enum
         value: gradient_tail
@@ -5641,8 +6090,8 @@ empty:
         value: 0.0
     script: effects.SparkleComet
   - id: 157
-    start: 90.430000000s
-    duration: 0.300000000s
+    start: 90.43s
+    duration: 0.3s
     target:
       type: group
       name: All Outputs
@@ -5651,11 +6100,19 @@ empty:
       gradient:
         type: curve
         curve: curves.ghost_blue_gradient
-      pulse_shape: *id001
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   - id: 101
-    start: 90.457520000s
-    duration: 6.400000000s
+    start: 90.45752s
+    duration: 6.4s
     target:
       type: group
       name: All Outputs
@@ -5702,8 +6159,8 @@ empty:
         value: 28.0
     script: effects.ShimmerField
   - id: 102
-    start: 96.777520000s
-    duration: 6.560000000s
+    start: 96.77752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -5744,8 +6201,8 @@ empty:
         value: 29.0
     script: effects.MarkPulse
   - id: 103
-    start: 96.777520000s
-    duration: 6.560000000s
+    start: 96.77752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -5764,8 +6221,22 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
       hue:
         type: curve
         curve:
@@ -5794,14 +6265,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 158
-    start: 96.860000000s
-    duration: 0.550000000s
+    start: 96.86s
+    duration: 0.55s
     target:
       type: group
       name: All Outputs
@@ -5810,7 +6332,15 @@ empty:
       gradient:
         type: curve
         curve: curves.ice_glass_gradient
-      intensity: *id008
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
       direction:
         type: enum
         value: inward
@@ -5840,8 +6370,8 @@ empty:
         value: false
     script: effects.ImpactBurst
   - id: 104
-    start: 96.877520000s
-    duration: 0.280000000s
+    start: 96.87752s
+    duration: 0.28s
     target:
       type: group
       name: All Outputs
@@ -5850,11 +6380,19 @@ empty:
       gradient:
         type: curve
         curve: curves.ice_glass_gradient
-      pulse_shape: *id001
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   - id: 105
-    start: 103.177520000s
-    duration: 6.560000000s
+    start: 103.17752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -5895,8 +6433,8 @@ empty:
         value: 30.0
     script: effects.MarkPulse
   - id: 106
-    start: 103.177520000s
-    duration: 6.560000000s
+    start: 103.17752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -5915,8 +6453,22 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
       hue:
         type: curve
         curve:
@@ -5945,14 +6497,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 107
-    start: 103.277520000s
-    duration: 0.280000000s
+    start: 103.27752s
+    duration: 0.28s
     target:
       type: group
       name: All Outputs
@@ -5961,11 +6564,19 @@ empty:
       gradient:
         type: curve
         curve: curves.warm_gradient
-      pulse_shape: *id001
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   - id: 108
-    start: 109.577520000s
-    duration: 6.560000000s
+    start: 109.57752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -6006,8 +6617,8 @@ empty:
         value: 31.0
     script: effects.MarkPulse
   - id: 109
-    start: 109.577520000s
-    duration: 6.560000000s
+    start: 109.57752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -6026,8 +6637,22 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
       hue:
         type: curve
         curve:
@@ -6056,14 +6681,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 110
-    start: 109.677520000s
-    duration: 0.280000000s
+    start: 109.67752s
+    duration: 0.28s
     target:
       type: group
       name: All Outputs
@@ -6072,11 +6748,19 @@ empty:
       gradient:
         type: curve
         curve: curves.cool_gradient
-      pulse_shape: *id001
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   - id: 111
-    start: 115.977520000s
-    duration: 6.560000000s
+    start: 115.97752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -6117,8 +6801,8 @@ empty:
         value: 32.0
     script: effects.MarkPulse
   - id: 112
-    start: 115.977520000s
-    duration: 6.560000000s
+    start: 115.97752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -6137,10 +6821,38 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
-        - *id009
-        - *id010
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#00ffcc'
+          - time: 1.0
+            value: '#a6ff00'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#ff00f7'
+          - time: 1.0
+            value: '#0011ff'
       hue:
         type: curve
         curve:
@@ -6169,14 +6881,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 113
-    start: 121.007520000s
-    duration: 0.580000000s
+    start: 121.00752s
+    duration: 0.58s
     target:
       type: group
       name: All Outputs
@@ -6185,7 +6948,15 @@ empty:
       gradient:
         type: curve
         curve: curves.hot_pink_lime_gradient
-      intensity: *id008
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
       direction:
         type: enum
         value: left_to_right
@@ -6209,8 +6980,8 @@ empty:
         value: 1.0
     script: effects.ScanSweep
   - id: 159
-    start: 121.200000000s
-    duration: 0.620000000s
+    start: 121.2s
+    duration: 0.62s
     target:
       type: group
       name: All Outputs
@@ -6219,7 +6990,15 @@ empty:
       gradient:
         type: curve
         curve: curves.hot_pink_lime_gradient
-      intensity: *id008
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
       direction:
         type: enum
         value: left_to_right
@@ -6243,8 +7022,8 @@ empty:
         value: 1.0
     script: effects.ScanSweep
   - id: 114
-    start: 122.107520000s
-    duration: 0.280000000s
+    start: 122.10752s
+    duration: 0.28s
     target:
       type: group
       name: All Outputs
@@ -6253,11 +7032,23 @@ empty:
       gradient:
         type: curve
         curve: curves.white_strobe_gradient
-      pulse_shape: *id007
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.08
+            value: 1.0
+          - time: 0.22
+            value: 0.45
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   - id: 115
-    start: 122.377520000s
-    duration: 6.522480000s
+    start: 122.37752s
+    duration: 6.52248s
     target:
       type: group
       name: All Outputs
@@ -6298,8 +7089,8 @@ empty:
         value: 33.0
     script: effects.MarkPulse
   - id: 116
-    start: 122.377520000s
-    duration: 6.522480000s
+    start: 122.37752s
+    duration: 6.52248s
     target:
       type: group
       name: All Outputs
@@ -6318,10 +7109,38 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
-        - *id009
-        - *id010
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#00ffcc'
+          - time: 1.0
+            value: '#a6ff00'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#ff00f7'
+          - time: 1.0
+            value: '#0011ff'
       hue:
         type: curve
         curve:
@@ -6350,14 +7169,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 117
-    start: 127.370000000s
-    duration: 0.580000000s
+    start: 127.37s
+    duration: 0.58s
     target:
       type: group
       name: All Outputs
@@ -6366,7 +7236,15 @@ empty:
       gradient:
         type: curve
         curve: curves.hot_pink_lime_gradient
-      intensity: *id008
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
       direction:
         type: enum
         value: left_to_right
@@ -6390,8 +7268,8 @@ empty:
         value: 1.0
     script: effects.ScanSweep
   - id: 160
-    start: 127.730000000s
-    duration: 0.320000000s
+    start: 127.73s
+    duration: 0.32s
     target:
       type: group
       name: All Outputs
@@ -6400,11 +7278,23 @@ empty:
       gradient:
         type: curve
         curve: curves.white_strobe_gradient
-      pulse_shape: *id007
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.08
+            value: 1.0
+          - time: 0.22
+            value: 0.45
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   - id: 161
-    start: 128.380000000s
-    duration: 0.300000000s
+    start: 128.38s
+    duration: 0.3s
     target:
       type: group
       name: All Outputs
@@ -6413,7 +7303,15 @@ empty:
       gradient:
         type: curve
         curve: curves.fire_gradient
-      intensity: *id008
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
       direction:
         type: enum
         value: outward
@@ -6443,8 +7341,8 @@ empty:
         value: false
     script: effects.ImpactBurst
   - id: 118
-    start: 128.470000000s
-    duration: 0.280000000s
+    start: 128.47s
+    duration: 0.28s
     target:
       type: group
       name: All Outputs
@@ -6453,7 +7351,19 @@ empty:
       gradient:
         type: curve
         curve: curves.white_strobe_gradient
-      pulse_shape: *id007
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.08
+            value: 1.0
+          - time: 0.22
+            value: 0.45
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   - id: 38
     start: 128.832971742s
@@ -6593,7 +7503,7 @@ empty:
         value: 0.0
       sections_per_mark:
         type: integer
-        value: 5
+        value: 10
       seed:
         type: float
         value: 0.0
@@ -6676,58 +7586,6 @@ empty:
       seed:
         type: float
         value: 4.0
-    script: effects.MarkPulse
-  - id: 27
-    start: 130.028308779s
-    duration: 0.305334368s
-    target:
-      type: group
-      name: All Outputs
-    scope: per_fixture
-    params:
-      beats:
-        type: marks
-        key: marks
-      base:
-        type: color
-        value: '#000000'
-      accent:
-        type: curve
-        curve:
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-      hue:
-        type: curve
-        curve:
-          value_type: float
-          points:
-          - time: 0.0
-            value: 0.0
-          - time: 1.0
-            value: 0.0
-      hue_mix:
-        type: float
-        value: 0.0
-      offset_seconds:
-        type: float
-        value: -0.08
-      decay_seconds:
-        type: float
-        value: 0.18
-      section_width_pixels:
-        type: integer
-        value: 1
-      section_edge_fade_pixels:
-        type: float
-        value: 0.0
-      sections_per_mark:
-        type: integer
-        value: 20
-      seed:
-        type: float
-        value: 1.0
     script: effects.MarkPulse
   - id: 34
     start: 130.862931348s
@@ -7387,8 +8245,8 @@ empty:
         value: 0.0
     script: effects.MarkPulse
   - id: 119
-    start: 137.610000000s
-    duration: 4.127520000s
+    start: 137.61s
+    duration: 4.12752s
     target:
       type: group
       name: All Outputs
@@ -7429,8 +8287,8 @@ empty:
         value: 34.0
     script: effects.MarkPulse
   - id: 120
-    start: 137.610000000s
-    duration: 4.127520000s
+    start: 137.61s
+    duration: 4.12752s
     target:
       type: group
       name: All Outputs
@@ -7449,9 +8307,30 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
-        - *id009
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#00ffcc'
+          - time: 1.0
+            value: '#a6ff00'
       hue:
         type: curve
         curve:
@@ -7480,14 +8359,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 121
-    start: 141.577520000s
-    duration: 6.560000000s
+    start: 141.57752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -7528,8 +8458,8 @@ empty:
         value: 35.0
     script: effects.MarkPulse
   - id: 122
-    start: 141.577520000s
-    duration: 6.560000000s
+    start: 141.57752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -7547,11 +8477,39 @@ empty:
       gradients:
         type: array
         element_type: curve_color
-        values: &id011
-        - *id002
-        - *id003
-        - *id009
-        - *id010
+        values:
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#00ffcc'
+          - time: 1.0
+            value: '#a6ff00'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#ff00f7'
+          - time: 1.0
+            value: '#0011ff'
         - value_type: color
           points:
           - time: 0.0
@@ -7590,14 +8548,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 123
-    start: 141.577520000s
-    duration: 6.560000000s
+    start: 141.57752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -7616,8 +8625,22 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
       hue:
         type: curve
         curve:
@@ -7646,14 +8669,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 124
-    start: 143.657520000s
-    duration: 0.280000000s
+    start: 143.65752s
+    duration: 0.28s
     target:
       type: group
       name: All Outputs
@@ -7662,11 +8736,19 @@ empty:
       gradient:
         type: curve
         curve: curves.electric_blue_gradient
-      pulse_shape: *id001
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   - id: 125
-    start: 147.977520000s
-    duration: 6.560000000s
+    start: 147.97752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -7707,8 +8789,8 @@ empty:
         value: 36.0
     script: effects.MarkPulse
   - id: 126
-    start: 147.977520000s
-    duration: 6.560000000s
+    start: 147.97752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -7726,7 +8808,49 @@ empty:
       gradients:
         type: array
         element_type: curve_color
-        values: *id011
+        values:
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#00ffcc'
+          - time: 1.0
+            value: '#a6ff00'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#ff00f7'
+          - time: 1.0
+            value: '#0011ff'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.25
+            value: '#ff1493'
+          - time: 0.6
+            value: '#ffea00'
+          - time: 1.0
+            value: '#39ff14'
       hue:
         type: curve
         curve:
@@ -7755,14 +8879,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 127
-    start: 147.977520000s
-    duration: 6.560000000s
+    start: 147.97752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -7781,8 +8956,22 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
       hue:
         type: curve
         curve:
@@ -7811,14 +9000,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 162
-    start: 149.750000000s
-    duration: 0.550000000s
+    start: 149.75s
+    duration: 0.55s
     target:
       type: group
       name: All Outputs
@@ -7827,7 +9067,15 @@ empty:
       gradient:
         type: curve
         curve: curves.cyberpunk_gradient
-      intensity: *id008
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
       direction:
         type: enum
         value: right_to_left
@@ -7851,8 +9099,8 @@ empty:
         value: 1.0
     script: effects.ScanSweep
   - id: 128
-    start: 150.057520000s
-    duration: 0.280000000s
+    start: 150.05752s
+    duration: 0.28s
     target:
       type: group
       name: All Outputs
@@ -7861,11 +9109,19 @@ empty:
       gradient:
         type: curve
         curve: curves.electric_blue_gradient
-      pulse_shape: *id001
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   - id: 163
-    start: 153.800000000s
-    duration: 0.300000000s
+    start: 153.8s
+    duration: 0.3s
     target:
       type: group
       name: All Outputs
@@ -7874,11 +9130,23 @@ empty:
       gradient:
         type: curve
         curve: curves.white_strobe_gradient
-      pulse_shape: *id007
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.08
+            value: 1.0
+          - time: 0.22
+            value: 0.45
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   - id: 129
-    start: 154.377520000s
-    duration: 6.560000000s
+    start: 154.37752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -7919,8 +9187,8 @@ empty:
         value: 37.0
     script: effects.MarkPulse
   - id: 130
-    start: 154.377520000s
-    duration: 6.560000000s
+    start: 154.37752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -7938,7 +9206,49 @@ empty:
       gradients:
         type: array
         element_type: curve_color
-        values: *id011
+        values:
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#00ffcc'
+          - time: 1.0
+            value: '#a6ff00'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#ff00f7'
+          - time: 1.0
+            value: '#0011ff'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.25
+            value: '#ff1493'
+          - time: 0.6
+            value: '#ffea00'
+          - time: 1.0
+            value: '#39ff14'
       hue:
         type: curve
         curve:
@@ -7967,14 +9277,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 131
-    start: 154.377520000s
-    duration: 6.560000000s
+    start: 154.37752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -7993,8 +9354,22 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
       hue:
         type: curve
         curve:
@@ -8023,14 +9398,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 164
-    start: 156.220000000s
-    duration: 0.460000000s
+    start: 156.22s
+    duration: 0.46s
     target:
       type: group
       name: All Outputs
@@ -8048,7 +9474,15 @@ empty:
             value: 0.0
           - time: 1.0
             value: 1.0
-      intensity: *id008
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
       color_mode:
         type: enum
         value: gradient_tail
@@ -8081,8 +9515,8 @@ empty:
         value: 0.0
     script: effects.SparkleComet
   - id: 132
-    start: 156.457520000s
-    duration: 0.280000000s
+    start: 156.45752s
+    duration: 0.28s
     target:
       type: group
       name: All Outputs
@@ -8091,11 +9525,19 @@ empty:
       gradient:
         type: curve
         curve: curves.electric_blue_gradient
-      pulse_shape: *id001
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   - id: 133
-    start: 160.777520000s
-    duration: 6.560000000s
+    start: 160.77752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -8136,8 +9578,8 @@ empty:
         value: 38.0
     script: effects.MarkPulse
   - id: 134
-    start: 160.777520000s
-    duration: 6.560000000s
+    start: 160.77752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -8155,7 +9597,49 @@ empty:
       gradients:
         type: array
         element_type: curve_color
-        values: *id011
+        values:
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#00ffcc'
+          - time: 1.0
+            value: '#a6ff00'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#ff00f7'
+          - time: 1.0
+            value: '#0011ff'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.25
+            value: '#ff1493'
+          - time: 0.6
+            value: '#ffea00'
+          - time: 1.0
+            value: '#39ff14'
       hue:
         type: curve
         curve:
@@ -8184,14 +9668,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 135
-    start: 160.777520000s
-    duration: 6.560000000s
+    start: 160.77752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -8210,8 +9745,22 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
       hue:
         type: curve
         curve:
@@ -8240,14 +9789,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 136
-    start: 162.857520000s
-    duration: 0.280000000s
+    start: 162.85752s
+    duration: 0.28s
     target:
       type: group
       name: All Outputs
@@ -8256,11 +9856,19 @@ empty:
       gradient:
         type: curve
         curve: curves.electric_blue_gradient
-      pulse_shape: *id001
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   - id: 165
-    start: 166.980000000s
-    duration: 0.420000000s
+    start: 166.98s
+    duration: 0.42s
     target:
       type: group
       name: All Outputs
@@ -8269,7 +9877,15 @@ empty:
       gradient:
         type: curve
         curve: curves.ghost_blue_gradient
-      intensity: *id008
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
       direction:
         type: enum
         value: inward
@@ -8299,8 +9915,8 @@ empty:
         value: false
     script: effects.ImpactBurst
   - id: 137
-    start: 167.177520000s
-    duration: 6.560000000s
+    start: 167.17752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -8341,8 +9957,8 @@ empty:
         value: 39.0
     script: effects.MarkPulse
   - id: 138
-    start: 167.177520000s
-    duration: 6.560000000s
+    start: 167.17752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -8361,9 +9977,30 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
-        - *id009
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#00ffcc'
+          - time: 1.0
+            value: '#a6ff00'
       hue:
         type: curve
         curve:
@@ -8392,14 +10029,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 139
-    start: 167.307520000s
-    duration: 3.100000000s
+    start: 167.30752s
+    duration: 3.1s
     target:
       type: group
       name: All Outputs
@@ -8446,8 +10134,8 @@ empty:
         value: 39.0
     script: effects.ShimmerField
   - id: 140
-    start: 168.507520000s
-    duration: 0.480000000s
+    start: 168.50752s
+    duration: 0.48s
     target:
       type: group
       name: All Outputs
@@ -8465,7 +10153,15 @@ empty:
             value: 0.0
           - time: 1.0
             value: 1.0
-      intensity: *id008
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
       color_mode:
         type: enum
         value: gradient_tail
@@ -8498,8 +10194,8 @@ empty:
         value: 0.0
     script: effects.SparkleComet
   - id: 166
-    start: 169.250000000s
-    duration: 0.300000000s
+    start: 169.25s
+    duration: 0.3s
     target:
       type: group
       name: All Outputs
@@ -8508,11 +10204,19 @@ empty:
       gradient:
         type: curve
         curve: curves.molten_gold_gradient
-      pulse_shape: *id001
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   - id: 141
-    start: 173.577520000s
-    duration: 6.560000000s
+    start: 173.57752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -8553,8 +10257,8 @@ empty:
         value: 40.0
     script: effects.MarkPulse
   - id: 142
-    start: 173.577520000s
-    duration: 6.560000000s
+    start: 173.57752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -8573,9 +10277,30 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
-        - *id009
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#00ffcc'
+          - time: 1.0
+            value: '#a6ff00'
       hue:
         type: curve
         curve:
@@ -8604,14 +10329,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 143
-    start: 173.707520000s
-    duration: 3.100000000s
+    start: 173.70752s
+    duration: 3.1s
     target:
       type: group
       name: All Outputs
@@ -8658,8 +10434,8 @@ empty:
         value: 40.0
     script: effects.ShimmerField
   - id: 167
-    start: 174.280000000s
-    duration: 0.550000000s
+    start: 174.28s
+    duration: 0.55s
     target:
       type: group
       name: All Outputs
@@ -8668,7 +10444,15 @@ empty:
       gradient:
         type: curve
         curve: curves.plasma_storm_gradient
-      intensity: *id008
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
       direction:
         type: enum
         value: left_to_right
@@ -8692,8 +10476,8 @@ empty:
         value: 1.0
     script: effects.ScanSweep
   - id: 144
-    start: 174.907520000s
-    duration: 0.480000000s
+    start: 174.90752s
+    duration: 0.48s
     target:
       type: group
       name: All Outputs
@@ -8711,7 +10495,15 @@ empty:
             value: 0.0
           - time: 1.0
             value: 1.0
-      intensity: *id008
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
       color_mode:
         type: enum
         value: gradient_tail
@@ -8744,8 +10536,8 @@ empty:
         value: 0.0
     script: effects.SparkleComet
   - id: 145
-    start: 179.977520000s
-    duration: 6.560000000s
+    start: 179.97752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -8786,8 +10578,8 @@ empty:
         value: 41.0
     script: effects.MarkPulse
   - id: 146
-    start: 179.977520000s
-    duration: 6.560000000s
+    start: 179.97752s
+    duration: 6.56s
     target:
       type: group
       name: All Outputs
@@ -8806,9 +10598,30 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
-        - *id009
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#00ffcc'
+          - time: 1.0
+            value: '#a6ff00'
       hue:
         type: curve
         curve:
@@ -8837,14 +10650,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 168
-    start: 180.030000000s
-    duration: 0.320000000s
+    start: 180.03s
+    duration: 0.32s
     target:
       type: group
       name: All Outputs
@@ -8853,11 +10717,19 @@ empty:
       gradient:
         type: curve
         curve: curves.sodium_vapor_gradient
-      pulse_shape: *id001
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   - id: 147
-    start: 180.107520000s
-    duration: 3.100000000s
+    start: 180.10752s
+    duration: 3.1s
     target:
       type: group
       name: All Outputs
@@ -8904,8 +10776,8 @@ empty:
         value: 41.0
     script: effects.ShimmerField
   - id: 148
-    start: 181.307520000s
-    duration: 0.480000000s
+    start: 181.30752s
+    duration: 0.48s
     target:
       type: group
       name: All Outputs
@@ -8923,7 +10795,15 @@ empty:
             value: 0.0
           - time: 1.0
             value: 1.0
-      intensity: *id008
+      intensity:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
       color_mode:
         type: enum
         value: gradient_tail
@@ -8956,8 +10836,8 @@ empty:
         value: 0.0
     script: effects.SparkleComet
   - id: 149
-    start: 186.377520000s
-    duration: 3.622480000s
+    start: 186.37752s
+    duration: 3.62248s
     target:
       type: group
       name: All Outputs
@@ -8998,8 +10878,8 @@ empty:
         value: 42.0
     script: effects.MarkPulse
   - id: 150
-    start: 186.377520000s
-    duration: 3.622480000s
+    start: 186.37752s
+    duration: 3.62248s
     target:
       type: group
       name: All Outputs
@@ -9018,10 +10898,38 @@ empty:
         type: array
         element_type: curve_color
         values:
-        - *id002
-        - *id003
-        - *id009
-        - *id010
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#ff6600'
+          - time: 1.0
+            value: '#ff0000'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.5
+            value: '#8000ff'
+          - time: 1.0
+            value: '#00ff66'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#00ffcc'
+          - time: 1.0
+            value: '#a6ff00'
+        - value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.45
+            value: '#ff00f7'
+          - time: 1.0
+            value: '#0011ff'
       hue:
         type: curve
         curve:
@@ -9050,14 +10958,65 @@ empty:
         type: array
         element_type: curve_float
         values:
-        - *id004
-        - *id005
-        - *id006
-      pulse_shape: *id001
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.125
+            value: 0.234
+          - time: 0.25
+            value: 0.438
+          - time: 0.375
+            value: 0.609
+          - time: 0.5
+            value: 0.75
+          - time: 0.625
+            value: 0.859
+          - time: 0.75
+            value: 0.938
+          - time: 0.875
+            value: 0.984
+          - time: 1.0
+            value: 1.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.125
+            value: 0.766
+          - time: 0.25
+            value: 0.563
+          - time: 0.375
+            value: 0.391
+          - time: 0.5
+            value: 0.25
+          - time: 0.625
+            value: 0.141
+          - time: 0.75
+            value: 0.063
+          - time: 0.875
+            value: 0.016
+          - time: 1.0
+            value: 0.0
+        - value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 1.0
+            value: 1.0
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 1.0
+            value: 0.0
     script: effects.MarkChase
   - id: 151
-    start: 189.650000000s
-    duration: 0.280000000s
+    start: 189.65s
+    duration: 0.28s
     target:
       type: group
       name: All Outputs
@@ -9066,6 +11025,18 @@ empty:
       gradient:
         type: curve
         curve: curves.white_strobe_gradient
-      pulse_shape: *id007
+      pulse_shape:
+        type: curve
+        curve:
+          value_type: float
+          points:
+          - time: 0.0
+            value: 1.0
+          - time: 0.08
+            value: 1.0
+          - time: 0.22
+            value: 0.45
+          - time: 1.0
+            value: 0.0
     script: effects.Pulse
   automation_clips: []
