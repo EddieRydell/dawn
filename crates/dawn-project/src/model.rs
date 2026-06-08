@@ -139,6 +139,36 @@ pub type FixtureDefinitionKey = DefinitionKey<FixtureDefinitionName>;
 pub type CurveDefinitionKey = DefinitionKey<CurveDefinitionName>;
 pub type EffectDefinitionKey = DefinitionKey<EffectDefinitionName>;
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResolvedSymbolRef<K> {
+    pub key: K,
+    pub reference: SymbolRef,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ResolvedInlineOrRef<T, K> {
+    Ref(ResolvedSymbolRef<K>),
+    Inline(T),
+}
+
+impl<T, K> ResolvedInlineOrRef<T, K> {
+    pub fn value(&self) -> Option<&T> {
+        match self {
+            Self::Inline(value) => Some(value),
+            Self::Ref(_) => None,
+        }
+    }
+
+    pub fn symbol_ref(&self) -> Option<&ResolvedSymbolRef<K>> {
+        match self {
+            Self::Ref(reference) => Some(reference),
+            Self::Inline(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EffectDefinition<M: ModelMode = Authored> {
     pub source: M::EffectDefinitionSource,
@@ -162,11 +192,44 @@ pub struct ResolvedEffectDefinitionSource {
     pub effect_name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResolvedAssetPath {
+    pub path: Utf8PathBuf,
+    pub source: AssetPath,
+}
+
+#[derive(Debug, Clone)]
+pub enum ResolvedSourceFile {
+    Dawn {
+        imports: Vec<DawnImport>,
+        objects: IndexMap<String, ResolvedSourceObject>,
+    },
+    Effect {
+        text: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum ResolvedSourceObject {
+    Project(ProjectDefinitionKey),
+    Display(DisplayDefinitionKey),
+    Controller(ControllerDefinitionKey),
+    Layout(LayoutDefinitionKey),
+    Fixture(FixtureDefinitionKey),
+    Patch(PatchDefinitionKey),
+    Sequence(SequenceDefinitionKey),
+    Curve(CurveDefinitionKey),
+    Unused(DawnObject<Authored>),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct NoProjectStores;
 
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedStores {
+    pub root_project: Option<ProjectDefinitionKey>,
+    pub source_files: IndexMap<Utf8PathBuf, ResolvedSourceFile>,
     pub displays: IndexMap<DisplayDefinitionKey, ResolvedObject<Display<Resolved>>>,
     pub sequences: IndexMap<SequenceDefinitionKey, ResolvedObject<Sequence<Resolved>>>,
     pub controllers: IndexMap<ControllerDefinitionKey, ResolvedObject<Controller>>,
@@ -332,24 +395,24 @@ impl ModelMode for Authored {
 
 impl ModelMode for Resolved {
     type ProjectStores = ResolvedStores;
-    type ProjectDisplay = Display<Resolved>;
-    type ProjectSequence = Sequence<Resolved>;
-    type DisplayController = Controller;
-    type DisplayPatch = Patch<Resolved>;
-    type DisplayLayout = Layout<Resolved>;
+    type ProjectDisplay = ResolvedInlineOrRef<Display<Resolved>, DisplayDefinitionKey>;
+    type ProjectSequence = ResolvedInlineOrRef<Sequence<Resolved>, SequenceDefinitionKey>;
+    type DisplayController = ResolvedInlineOrRef<Controller, ControllerDefinitionKey>;
+    type DisplayPatch = ResolvedInlineOrRef<Patch<Resolved>, PatchDefinitionKey>;
+    type DisplayLayout = ResolvedInlineOrRef<Layout<Resolved>, LayoutDefinitionKey>;
     type LayoutFixture = FixturePlacement<Resolved>;
     type LayoutGroup = Group<Resolved>;
-    type FixturePlacementFixture = Fixture;
+    type FixturePlacementFixture = ResolvedInlineOrRef<Fixture, FixtureDefinitionKey>;
     type GroupMember = FixtureId;
     type PatchRoute = Route<Resolved>;
     type RouteFixture = FixtureId;
-    type RouteController = ControllerDefinitionKey;
-    type SequenceAudio = Option<Utf8PathBuf>;
+    type RouteController = ResolvedSymbolRef<ControllerDefinitionKey>;
+    type SequenceAudio = Option<ResolvedAssetPath>;
     type EffectTargetGroup = GroupInstantiationId;
     type EffectTargetFixture = FixtureId;
-    type SequenceEffectScript = EffectDefinitionKey;
-    type EffectParamCurve = Curve;
-    type AutomationClipCurve = Curve;
+    type SequenceEffectScript = ResolvedSymbolRef<EffectDefinitionKey>;
+    type EffectParamCurve = ResolvedInlineOrRef<Curve, CurveDefinitionKey>;
+    type AutomationClipCurve = ResolvedInlineOrRef<Curve, CurveDefinitionKey>;
     type AutomationClipTarget = SequenceEffectId;
     type SequenceEffectId = SequenceEffectId;
     type EffectDefinitionSource = ResolvedEffectDefinitionSource;
@@ -1397,7 +1460,9 @@ impl Layout<Resolved> {
 
 impl Display<Resolved> {
     pub fn controller(&self, index: ControllerIndex) -> Option<&Controller> {
-        self.controllers.get(index.0)
+        self.controllers
+            .get(index.0)
+            .and_then(ResolvedInlineOrRef::value)
     }
 }
 

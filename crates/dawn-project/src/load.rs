@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use indexmap::IndexMap;
+
 use crate::diagnostics::{
     DiagnosticSeverity, ProjectDiagnostic, ProjectDiagnosticKind, ProjectLoadResult,
 };
@@ -12,7 +14,8 @@ use crate::lower::{
 };
 use crate::model::{
     AuthoredEffectDefinitionSource, DawnFile, DawnImport, DawnObject, DawnProject,
-    EffectDefinition, NoCompiledEffect, ObjectKind, SymbolRef,
+    EffectDefinition, NoCompiledEffect, ObjectKind, ProjectDefinitionKey, ResolvedSourceFile,
+    ResolvedSourceObject, ResolvedStores, SymbolRef,
 };
 use crate::parse::{parse_dawn_file_with_source_map, DawnParseDiagnostic, YamlSourceMap};
 use crate::path::{canonicalize_path, resolve_import_path, Utf8PathBuf};
@@ -45,30 +48,45 @@ fn load_project_fallible(
     project_key: &str,
 ) -> Result<DawnProject, LoadFailure> {
     let project_path = canonicalize_path(&fs.resolve(&project_path));
-    let file = load_dawn_file(fs, &project_path)?.file;
     let mut loader = FsImportLoader::new(fs.clone());
+    let file = load_dawn_file(fs, &project_path)?;
+    loader.files.insert(project_path.clone(), file.clone());
+    let root_project = ProjectDefinitionKey::new(project_path.clone(), project_key.to_string());
 
-    lower_project(&file, project_key, &project_path, &mut loader).map_err(|error| {
+    let lowered = lower_project(&file.file, project_key, &project_path, &mut loader);
+    let mut project = lowered.map_err(|error| {
         if loader.diagnostics.is_empty() {
             LoadFailure {
                 diagnostics: lower_error_diagnostics(&project_path, &error),
             }
         } else {
             LoadFailure {
-                diagnostics: loader.diagnostics,
+                diagnostics: loader.diagnostics.clone(),
             }
         }
-    })
+    })?;
+    project.stores.root_project = Some(root_project);
+    project.stores.source_files =
+        loader.source_files(project.stores.root_project.as_ref(), &project.stores);
+    Ok(project)
 }
 
 #[derive(Debug, Clone)]
 struct LoadedDawnFile {
     file: DawnFile,
+    source: LoadedSourceFile,
     _source_map: Option<YamlSourceMap>,
 }
+
+#[derive(Debug, Clone)]
+enum LoadedSourceFile {
+    Dawn,
+    Effect { text: String },
+}
+
 struct FsImportLoader {
     fs: WorkspaceFs,
-    files: HashMap<Utf8PathBuf, DawnFile>,
+    files: IndexMap<Utf8PathBuf, LoadedDawnFile>,
     diagnostics: Vec<ProjectDiagnostic>,
 }
 
@@ -76,7 +94,7 @@ impl FsImportLoader {
     fn new(fs: WorkspaceFs) -> Self {
         Self {
             fs,
-            files: HashMap::new(),
+            files: IndexMap::new(),
             diagnostics: Vec::new(),
         }
     }
@@ -85,7 +103,7 @@ impl FsImportLoader {
         if !self.files.contains_key(path) {
             match load_dawn_file(&self.fs, path) {
                 Ok(file) => {
-                    self.files.insert(path.clone(), file.file);
+                    self.files.insert(path.clone(), file);
                 }
                 Err(failure) => {
                     self.diagnostics.extend(failure.diagnostics.clone());
@@ -103,7 +121,38 @@ impl FsImportLoader {
                 )],
             });
         };
-        Ok(file)
+        Ok(&file.file)
+    }
+
+    fn source_files(
+        &self,
+        root_project: Option<&ProjectDefinitionKey>,
+        stores: &ResolvedStores,
+    ) -> IndexMap<Utf8PathBuf, ResolvedSourceFile> {
+        self.files
+            .iter()
+            .map(|(path, loaded)| {
+                let source = match &loaded.source {
+                    LoadedSourceFile::Dawn => ResolvedSourceFile::Dawn {
+                        imports: loaded.file.imports.clone(),
+                        objects: loaded
+                            .file
+                            .iter()
+                            .map(|(name, object)| {
+                                (
+                                    name.clone(),
+                                    source_object_slot(path, name, object, root_project, stores),
+                                )
+                            })
+                            .collect(),
+                    },
+                    LoadedSourceFile::Effect { text } => {
+                        ResolvedSourceFile::Effect { text: text.clone() }
+                    }
+                };
+                (path.clone(), source)
+            })
+            .collect()
     }
 
     fn import_paths_for_alias(
@@ -255,6 +304,7 @@ fn load_dawn_file(fs: &WorkspaceFs, path: &Utf8PathBuf) -> Result<LoadedDawnFile
     parse_dawn_file_with_source_map(&text)
         .map(|parsed| LoadedDawnFile {
             file: parsed.file,
+            source: LoadedSourceFile::Dawn,
             _source_map: Some(parsed.source_map),
         })
         .map_err(|source| LoadFailure {
@@ -343,9 +393,120 @@ fn load_effect_file(path: &Utf8PathBuf, text: String) -> Result<LoadedDawnFile, 
     }
     Ok(LoadedDawnFile {
         file,
+        source: LoadedSourceFile::Effect { text },
         _source_map: None,
     })
 }
+
+fn source_object_slot(
+    path: &Utf8PathBuf,
+    name: &str,
+    object: &DawnObject<crate::model::Authored>,
+    root_project: Option<&ProjectDefinitionKey>,
+    stores: &ResolvedStores,
+) -> ResolvedSourceObject {
+    match object {
+        DawnObject::Project(_) => {
+            let key = ProjectDefinitionKey::new(path.clone(), name.to_string());
+            if root_project.is_some_and(|root| root == &key) {
+                ResolvedSourceObject::Project(key)
+            } else {
+                ResolvedSourceObject::Unused(object.clone())
+            }
+        }
+        DawnObject::Display(_) => source_store_slot(
+            path,
+            name,
+            object,
+            &stores.displays,
+            ResolvedSourceObject::Display,
+        ),
+        DawnObject::Controller(_) => source_store_slot(
+            path,
+            name,
+            object,
+            &stores.controllers,
+            ResolvedSourceObject::Controller,
+        ),
+        DawnObject::Layout(_) => source_store_slot(
+            path,
+            name,
+            object,
+            &stores.layouts,
+            ResolvedSourceObject::Layout,
+        ),
+        DawnObject::Fixture(_) => source_store_slot(
+            path,
+            name,
+            object,
+            &stores.fixture_definitions,
+            ResolvedSourceObject::Fixture,
+        ),
+        DawnObject::Patch(_) => source_store_slot(
+            path,
+            name,
+            object,
+            &stores.patches,
+            ResolvedSourceObject::Patch,
+        ),
+        DawnObject::Sequence(_) => source_store_slot(
+            path,
+            name,
+            object,
+            &stores.sequences,
+            ResolvedSourceObject::Sequence,
+        ),
+        DawnObject::Curve(_) => source_store_slot(
+            path,
+            name,
+            object,
+            &stores.curves,
+            ResolvedSourceObject::Curve,
+        ),
+        DawnObject::Effect(_) => ResolvedSourceObject::Unused(object.clone()),
+    }
+}
+
+fn source_store_slot<K, V>(
+    path: &Utf8PathBuf,
+    name: &str,
+    object: &DawnObject<crate::model::Authored>,
+    store: &IndexMap<K, V>,
+    make_slot: impl FnOnce(K) -> ResolvedSourceObject,
+) -> ResolvedSourceObject
+where
+    K: Clone + Eq + std::hash::Hash,
+    K: FromDefinitionKey,
+{
+    let key = K::from_definition_parts(path.clone(), name.to_string());
+    if store.contains_key(&key) {
+        make_slot(key)
+    } else {
+        ResolvedSourceObject::Unused(object.clone())
+    }
+}
+
+trait FromDefinitionKey {
+    fn from_definition_parts(path: Utf8PathBuf, name: String) -> Self;
+}
+
+macro_rules! impl_from_definition_key {
+    ($type:ty) => {
+        impl FromDefinitionKey for $type {
+            fn from_definition_parts(path: Utf8PathBuf, name: String) -> Self {
+                Self::new(path, name)
+            }
+        }
+    };
+}
+
+impl_from_definition_key!(crate::model::DisplayDefinitionKey);
+impl_from_definition_key!(crate::model::ControllerDefinitionKey);
+impl_from_definition_key!(crate::model::LayoutDefinitionKey);
+impl_from_definition_key!(crate::model::FixtureDefinitionKey);
+impl_from_definition_key!(crate::model::PatchDefinitionKey);
+impl_from_definition_key!(crate::model::SequenceDefinitionKey);
+impl_from_definition_key!(crate::model::CurveDefinitionKey);
 
 fn first_project_diagnostic_message(diagnostics: &[ProjectDiagnostic]) -> String {
     diagnostics

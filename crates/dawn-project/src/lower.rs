@@ -259,30 +259,34 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
         &mut self,
         value: &InlineOrRef<Display<Authored>>,
         source_path: &Utf8PathBuf,
-    ) -> Result<Display<Resolved>, LowerError> {
+    ) -> Result<ResolvedInlineOrRef<Display<Resolved>, DisplayDefinitionKey>, LowerError> {
         match value {
-            InlineOrRef::Inline(display) => self.lower_display(display, source_path),
+            InlineOrRef::Inline(display) => self
+                .lower_display(display, source_path)
+                .map(ResolvedInlineOrRef::Inline),
             InlineOrRef::Ref(reference) => {
                 let resolved = self.resolve_import(source_path, reference, ObjectKind::Display)?;
                 let key = Self::display_key(resolved.source_path.clone(), resolved.symbol.clone());
-                if let Some(existing) = self.stores.displays.get(&key) {
-                    return Ok(existing.value.clone());
-                }
-                let DawnObject::Display(display) = resolved.object else {
-                    unreachable!("resolved import kind was checked");
-                };
-                let lowered = self.lower_display(&display, &resolved.source_path)?;
-                self.stores.displays.insert(
-                    key,
-                    ResolvedObject {
-                        value: lowered.clone(),
-                        provenance: ResolvedProvenance::Named {
-                            path: resolved.source_path,
-                            symbol: resolved.symbol,
+                if !self.stores.displays.contains_key(&key) {
+                    let DawnObject::Display(display) = resolved.object else {
+                        unreachable!("resolved import kind was checked");
+                    };
+                    let lowered = self.lower_display(&display, &resolved.source_path)?;
+                    self.stores.displays.insert(
+                        key.clone(),
+                        ResolvedObject {
+                            value: lowered,
+                            provenance: ResolvedProvenance::Named {
+                                path: resolved.source_path,
+                                symbol: resolved.symbol,
+                            },
                         },
-                    },
-                );
-                Ok(lowered)
+                    );
+                }
+                Ok(ResolvedInlineOrRef::Ref(ResolvedSymbolRef {
+                    key,
+                    reference: reference.clone(),
+                }))
             }
         }
     }
@@ -292,30 +296,34 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
         value: &InlineOrRef<Sequence<Authored>>,
         source_path: &Utf8PathBuf,
         layout: &Layout<Resolved>,
-    ) -> Result<Sequence<Resolved>, LowerError> {
+    ) -> Result<ResolvedInlineOrRef<Sequence<Resolved>, SequenceDefinitionKey>, LowerError> {
         match value {
-            InlineOrRef::Inline(sequence) => self.lower_sequence(sequence, source_path, layout),
+            InlineOrRef::Inline(sequence) => self
+                .lower_sequence(sequence, source_path, layout)
+                .map(ResolvedInlineOrRef::Inline),
             InlineOrRef::Ref(reference) => {
                 let resolved = self.resolve_import(source_path, reference, ObjectKind::Sequence)?;
                 let key = Self::sequence_key(resolved.source_path.clone(), resolved.symbol.clone());
-                if let Some(existing) = self.stores.sequences.get(&key) {
-                    return Ok(existing.value.clone());
-                }
-                let DawnObject::Sequence(sequence) = resolved.object else {
-                    unreachable!("resolved import kind was checked");
-                };
-                let lowered = self.lower_sequence(&sequence, &resolved.source_path, layout)?;
-                self.stores.sequences.insert(
-                    key,
-                    ResolvedObject {
-                        value: lowered.clone(),
-                        provenance: ResolvedProvenance::Named {
-                            path: resolved.source_path,
-                            symbol: resolved.symbol,
+                if !self.stores.sequences.contains_key(&key) {
+                    let DawnObject::Sequence(sequence) = resolved.object else {
+                        unreachable!("resolved import kind was checked");
+                    };
+                    let lowered = self.lower_sequence(&sequence, &resolved.source_path, layout)?;
+                    self.stores.sequences.insert(
+                        key.clone(),
+                        ResolvedObject {
+                            value: lowered,
+                            provenance: ResolvedProvenance::Named {
+                                path: resolved.source_path,
+                                symbol: resolved.symbol,
+                            },
                         },
-                    },
-                );
-                Ok(lowered)
+                    );
+                }
+                Ok(ResolvedInlineOrRef::Ref(ResolvedSymbolRef {
+                    key,
+                    reference: reference.clone(),
+                }))
             }
         }
     }
@@ -324,31 +332,44 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
         &mut self,
         value: &InlineOrRef<Controller>,
         source_path: &Utf8PathBuf,
-    ) -> Result<(Controller, Option<ControllerDefinitionKey>), LowerError> {
+    ) -> Result<
+        (
+            ResolvedInlineOrRef<Controller, ControllerDefinitionKey>,
+            Option<ControllerDefinitionKey>,
+        ),
+        LowerError,
+    > {
         match value {
-            InlineOrRef::Inline(controller) => Ok((controller.clone(), None)),
+            InlineOrRef::Inline(controller) => {
+                Ok((ResolvedInlineOrRef::Inline(controller.clone()), None))
+            }
             InlineOrRef::Ref(reference) => {
                 let resolved =
                     self.resolve_import(source_path, reference, ObjectKind::Controller)?;
                 let key =
                     Self::controller_key(resolved.source_path.clone(), resolved.symbol.clone());
-                if let Some(existing) = self.stores.controllers.get(&key) {
-                    return Ok((existing.value.clone(), Some(key)));
-                }
-                let DawnObject::Controller(controller) = resolved.object else {
-                    unreachable!("resolved import kind was checked");
-                };
-                self.stores.controllers.insert(
-                    key.clone(),
-                    ResolvedObject {
-                        value: controller.clone(),
-                        provenance: ResolvedProvenance::Named {
-                            path: resolved.source_path,
-                            symbol: resolved.symbol,
+                if !self.stores.controllers.contains_key(&key) {
+                    let DawnObject::Controller(controller) = resolved.object else {
+                        unreachable!("resolved import kind was checked");
+                    };
+                    self.stores.controllers.insert(
+                        key.clone(),
+                        ResolvedObject {
+                            value: controller,
+                            provenance: ResolvedProvenance::Named {
+                                path: resolved.source_path,
+                                symbol: resolved.symbol,
+                            },
                         },
-                    },
-                );
-                Ok((controller, Some(key)))
+                    );
+                }
+                Ok((
+                    ResolvedInlineOrRef::Ref(ResolvedSymbolRef {
+                        key: key.clone(),
+                        reference: reference.clone(),
+                    }),
+                    Some(key),
+                ))
             }
         }
     }
@@ -357,7 +378,7 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
         &mut self,
         reference: &SymbolRef,
         source_path: &Utf8PathBuf,
-    ) -> Result<ControllerDefinitionKey, LowerError> {
+    ) -> Result<ResolvedSymbolRef<ControllerDefinitionKey>, LowerError> {
         let resolved = self.resolve_import(source_path, reference, ObjectKind::Controller)?;
         let key = Self::controller_key(resolved.source_path.clone(), resolved.symbol.clone());
         if !self.stores.controllers.contains_key(&key) {
@@ -375,7 +396,10 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
                 },
             );
         }
-        Ok(key)
+        Ok(ResolvedSymbolRef {
+            key,
+            reference: reference.clone(),
+        })
     }
 
     fn lower_patch_ref(
@@ -384,33 +408,39 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
         source_path: &Utf8PathBuf,
         fixtures: &HashMap<FixtureId, FixturePlacement<Resolved>>,
         display_controllers: &HashSet<ControllerDefinitionKey>,
-    ) -> Result<Patch<Resolved>, LowerError> {
+    ) -> Result<ResolvedInlineOrRef<Patch<Resolved>, PatchDefinitionKey>, LowerError> {
         match value {
-            InlineOrRef::Inline(patch) => {
-                self.lower_patch(patch, source_path, fixtures, display_controllers)
-            }
+            InlineOrRef::Inline(patch) => self
+                .lower_patch(patch, source_path, fixtures, display_controllers)
+                .map(ResolvedInlineOrRef::Inline),
             InlineOrRef::Ref(reference) => {
                 let resolved = self.resolve_import(source_path, reference, ObjectKind::Patch)?;
                 let key = Self::patch_key(resolved.source_path.clone(), resolved.symbol.clone());
-                if let Some(existing) = self.stores.patches.get(&key) {
-                    return Ok(existing.value.clone());
-                }
-                let DawnObject::Patch(patch) = resolved.object else {
-                    unreachable!("resolved import kind was checked");
-                };
-                let lowered =
-                    self.lower_patch(&patch, &resolved.source_path, fixtures, display_controllers)?;
-                self.stores.patches.insert(
-                    key,
-                    ResolvedObject {
-                        value: lowered.clone(),
-                        provenance: ResolvedProvenance::Named {
-                            path: resolved.source_path,
-                            symbol: resolved.symbol,
+                if !self.stores.patches.contains_key(&key) {
+                    let DawnObject::Patch(patch) = resolved.object else {
+                        unreachable!("resolved import kind was checked");
+                    };
+                    let lowered = self.lower_patch(
+                        &patch,
+                        &resolved.source_path,
+                        fixtures,
+                        display_controllers,
+                    )?;
+                    self.stores.patches.insert(
+                        key.clone(),
+                        ResolvedObject {
+                            value: lowered,
+                            provenance: ResolvedProvenance::Named {
+                                path: resolved.source_path,
+                                symbol: resolved.symbol,
+                            },
                         },
-                    },
-                );
-                Ok(lowered)
+                    );
+                }
+                Ok(ResolvedInlineOrRef::Ref(ResolvedSymbolRef {
+                    key,
+                    reference: reference.clone(),
+                }))
             }
         }
     }
@@ -419,30 +449,34 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
         &mut self,
         value: &InlineOrRef<Layout<Authored>>,
         source_path: &Utf8PathBuf,
-    ) -> Result<Layout<Resolved>, LowerError> {
+    ) -> Result<ResolvedInlineOrRef<Layout<Resolved>, LayoutDefinitionKey>, LowerError> {
         match value {
-            InlineOrRef::Inline(layout) => self.lower_layout(layout, source_path),
+            InlineOrRef::Inline(layout) => self
+                .lower_layout(layout, source_path)
+                .map(ResolvedInlineOrRef::Inline),
             InlineOrRef::Ref(reference) => {
                 let resolved = self.resolve_import(source_path, reference, ObjectKind::Layout)?;
                 let key = Self::layout_key(resolved.source_path.clone(), resolved.symbol.clone());
-                if let Some(existing) = self.stores.layouts.get(&key) {
-                    return Ok(existing.value.clone());
-                }
-                let DawnObject::Layout(layout) = resolved.object else {
-                    unreachable!("resolved import kind was checked");
-                };
-                let lowered = self.lower_layout(&layout, &resolved.source_path)?;
-                self.stores.layouts.insert(
-                    key,
-                    ResolvedObject {
-                        value: lowered.clone(),
-                        provenance: ResolvedProvenance::Named {
-                            path: resolved.source_path,
-                            symbol: resolved.symbol,
+                if !self.stores.layouts.contains_key(&key) {
+                    let DawnObject::Layout(layout) = resolved.object else {
+                        unreachable!("resolved import kind was checked");
+                    };
+                    let lowered = self.lower_layout(&layout, &resolved.source_path)?;
+                    self.stores.layouts.insert(
+                        key.clone(),
+                        ResolvedObject {
+                            value: lowered,
+                            provenance: ResolvedProvenance::Named {
+                                path: resolved.source_path,
+                                symbol: resolved.symbol,
+                            },
                         },
-                    },
-                );
-                Ok(lowered)
+                    );
+                }
+                Ok(ResolvedInlineOrRef::Ref(ResolvedSymbolRef {
+                    key,
+                    reference: reference.clone(),
+                }))
             }
         }
     }
@@ -451,29 +485,31 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
         &mut self,
         value: &InlineOrRef<Fixture>,
         source_path: &Utf8PathBuf,
-    ) -> Result<Fixture, LowerError> {
+    ) -> Result<ResolvedInlineOrRef<Fixture, FixtureDefinitionKey>, LowerError> {
         match value {
-            InlineOrRef::Inline(fixture) => Ok(fixture.clone()),
+            InlineOrRef::Inline(fixture) => Ok(ResolvedInlineOrRef::Inline(fixture.clone())),
             InlineOrRef::Ref(reference) => {
                 let resolved = self.resolve_import(source_path, reference, ObjectKind::Fixture)?;
                 let key = Self::fixture_key(resolved.source_path.clone(), resolved.symbol.clone());
-                if let Some(existing) = self.stores.fixture_definitions.get(&key) {
-                    return Ok(existing.value.clone());
-                }
-                let DawnObject::Fixture(fixture) = resolved.object else {
-                    unreachable!("resolved import kind was checked");
-                };
-                self.stores.fixture_definitions.insert(
-                    key,
-                    ResolvedObject {
-                        value: fixture.clone(),
-                        provenance: ResolvedProvenance::Named {
-                            path: resolved.source_path,
-                            symbol: resolved.symbol,
+                if !self.stores.fixture_definitions.contains_key(&key) {
+                    let DawnObject::Fixture(fixture) = resolved.object else {
+                        unreachable!("resolved import kind was checked");
+                    };
+                    self.stores.fixture_definitions.insert(
+                        key.clone(),
+                        ResolvedObject {
+                            value: fixture,
+                            provenance: ResolvedProvenance::Named {
+                                path: resolved.source_path,
+                                symbol: resolved.symbol,
+                            },
                         },
-                    },
-                );
-                Ok(fixture)
+                    );
+                }
+                Ok(ResolvedInlineOrRef::Ref(ResolvedSymbolRef {
+                    key,
+                    reference: reference.clone(),
+                }))
             }
         }
     }
@@ -482,29 +518,31 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
         &mut self,
         value: &InlineOrRef<Curve>,
         source_path: &Utf8PathBuf,
-    ) -> Result<Curve, LowerError> {
+    ) -> Result<ResolvedInlineOrRef<Curve, CurveDefinitionKey>, LowerError> {
         match value {
-            InlineOrRef::Inline(curve) => Ok(curve.clone()),
+            InlineOrRef::Inline(curve) => Ok(ResolvedInlineOrRef::Inline(curve.clone())),
             InlineOrRef::Ref(reference) => {
                 let resolved = self.resolve_import(source_path, reference, ObjectKind::Curve)?;
                 let key = Self::curve_key(resolved.source_path.clone(), resolved.symbol.clone());
-                if let Some(existing) = self.stores.curves.get(&key) {
-                    return Ok(existing.value.clone());
-                }
-                let DawnObject::Curve(curve) = resolved.object else {
-                    unreachable!("resolved import kind was checked");
-                };
-                self.stores.curves.insert(
-                    key,
-                    ResolvedObject {
-                        value: curve.clone(),
-                        provenance: ResolvedProvenance::Named {
-                            path: resolved.source_path,
-                            symbol: resolved.symbol,
+                if !self.stores.curves.contains_key(&key) {
+                    let DawnObject::Curve(curve) = resolved.object else {
+                        unreachable!("resolved import kind was checked");
+                    };
+                    self.stores.curves.insert(
+                        key.clone(),
+                        ResolvedObject {
+                            value: curve,
+                            provenance: ResolvedProvenance::Named {
+                                path: resolved.source_path,
+                                symbol: resolved.symbol,
+                            },
                         },
-                    },
-                );
-                Ok(curve)
+                    );
+                }
+                Ok(ResolvedInlineOrRef::Ref(ResolvedSymbolRef {
+                    key,
+                    reference: reference.clone(),
+                }))
             }
         }
     }
@@ -525,7 +563,8 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
         }
 
         let layout = self.lower_layout_ref(&display.layout, source_path)?;
-        let fixture_lookup = layout
+        let layout_value = resolved_inline_or_ref_value(&layout, &self.stores.layouts)?;
+        let fixture_lookup = layout_value
             .fixtures
             .iter()
             .map(|fixture| (fixture.id, fixture.clone()))
@@ -650,7 +689,7 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
                 return Err(LowerError::UnknownFixture { id: route.fixture });
             }
             let controller = self.lower_controller_reference(&route.controller, source_path)?;
-            if !display_controllers.contains(&controller) {
+            if !display_controllers.contains(&controller.key) {
                 return Err(LowerError::DisplayDoesNotUseController {
                     reference: route.controller.raw().to_string(),
                 });
@@ -713,10 +752,11 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
                 id: clip.curve.id,
                 curve: self.lower_curve_ref(&clip.curve.curve, source_path)?,
             };
-            if curve.curve.value_type != CurveValueType::Float {
+            let curve_value = resolved_inline_or_ref_value(&curve.curve, &self.stores.curves)?;
+            if curve_value.value_type != CurveValueType::Float {
                 return Err(LowerError::AutomationCurveType {
                     id: clip.id,
-                    actual: curve.curve.value_type,
+                    actual: curve_value.value_type,
                 });
             }
             automation_clips.push(AutomationClip {
@@ -784,7 +824,7 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
         &mut self,
         reference: &SymbolRef,
         source_path: &Utf8PathBuf,
-    ) -> Result<EffectDefinitionKey, LowerError> {
+    ) -> Result<ResolvedSymbolRef<EffectDefinitionKey>, LowerError> {
         let resolved = self.resolve_import(source_path, reference, ObjectKind::Effect)?;
         let DawnObject::Effect(effect) = resolved.object else {
             return Err(LowerError::WrongImportedObjectKind {
@@ -820,7 +860,10 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
         )?;
         let key = Self::effect_key(resolved.source_path.clone(), resolved.symbol.clone());
         self.store_compiled_effect_definition(key.clone(), resolved.source_path, compiled);
-        Ok(key)
+        Ok(ResolvedSymbolRef {
+            key,
+            reference: reference.clone(),
+        })
     }
 
     fn compile_effect_module(
@@ -1038,9 +1081,11 @@ pub fn lower_project(
 
     let mut ctx = LowerCtx::new(resolver);
     let display = ctx.lower_display_ref(&project.display, source_path)?;
+    let display_value = resolved_inline_or_ref_value(&display, &ctx.stores.displays)?;
+    let layout = resolved_inline_or_ref_value(&display_value.layout, &ctx.stores.layouts)?.clone();
     let mut sequences = Vec::with_capacity(project.sequences.len());
     for sequence in &project.sequences {
-        sequences.push(ctx.lower_sequence_ref(sequence, source_path, &display.layout)?);
+        sequences.push(ctx.lower_sequence_ref(sequence, source_path, &layout)?);
     }
 
     Ok(Project {
@@ -1066,9 +1111,33 @@ fn resolve_path(
     source_path: &Utf8PathBuf,
     import_path: &Utf8PathBuf,
     raw: &str,
-) -> Result<Utf8PathBuf, LowerError> {
-    let _ = raw;
-    Ok(resolve_import_path(source_path, import_path))
+) -> Result<ResolvedAssetPath, LowerError> {
+    Ok(ResolvedAssetPath {
+        path: resolve_import_path(source_path, import_path),
+        source: AssetPath::new(raw).map_err(|message| LowerError::Import {
+            reference: import_path.to_string(),
+            message,
+        })?,
+    })
+}
+
+fn resolved_inline_or_ref_value<'a, T, K>(
+    value: &'a ResolvedInlineOrRef<T, K>,
+    store: &'a IndexMap<K, ResolvedObject<T>>,
+) -> Result<&'a T, LowerError>
+where
+    K: std::hash::Hash + Eq,
+{
+    match value {
+        ResolvedInlineOrRef::Inline(value) => Ok(value),
+        ResolvedInlineOrRef::Ref(reference) => store
+            .get(&reference.key)
+            .map(|object| &object.value)
+            .ok_or_else(|| LowerError::Import {
+                reference: reference.reference.raw().to_string(),
+                message: "resolved store entry was not found".to_string(),
+            }),
+    }
 }
 
 fn first_script_diagnostic_message(

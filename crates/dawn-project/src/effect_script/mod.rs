@@ -184,10 +184,10 @@ impl ScriptType {
             (Self::Enum, EffectParam::Enum { .. }) => true,
             (Self::Flags, EffectParam::Flags { .. }) => true,
             (Self::CurveFloat, EffectParam::Curve { curve }) => {
-                curve.curve.value_type == crate::model::CurveValueType::Float
+                resolved_curve_value_type(&curve.curve) == Some(crate::model::CurveValueType::Float)
             }
             (Self::CurveColor, EffectParam::Curve { curve }) => {
-                curve.curve.value_type == crate::model::CurveValueType::Color
+                resolved_curve_value_type(&curve.curve) == Some(crate::model::CurveValueType::Color)
             }
             (
                 Self::Array(expected),
@@ -217,12 +217,24 @@ fn array_param_value_matches(
         (ArrayElementType::Bool, EffectParamArrayValue::Boolean(_)) => true,
         (ArrayElementType::Color, EffectParamArrayValue::Color(_)) => true,
         (ArrayElementType::CurveFloat, EffectParamArrayValue::Curve(curve)) => {
-            curve.curve.value_type == crate::model::CurveValueType::Float
+            resolved_curve_value_type(&curve.curve) == Some(crate::model::CurveValueType::Float)
         }
         (ArrayElementType::CurveColor, EffectParamArrayValue::Curve(curve)) => {
-            curve.curve.value_type == crate::model::CurveValueType::Color
+            resolved_curve_value_type(&curve.curve) == Some(crate::model::CurveValueType::Color)
         }
         _ => false,
+    }
+}
+
+fn resolved_curve_value_type(
+    curve: &crate::model::ResolvedInlineOrRef<
+        crate::model::Curve,
+        crate::model::CurveDefinitionKey,
+    >,
+) -> Option<crate::model::CurveValueType> {
+    match curve {
+        crate::model::ResolvedInlineOrRef::Inline(curve) => Some(curve.value_type),
+        crate::model::ResolvedInlineOrRef::Ref(_) => None,
     }
 }
 

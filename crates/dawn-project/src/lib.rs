@@ -18,6 +18,7 @@ mod lower;
 mod model;
 mod parse;
 mod path;
+mod save;
 
 pub use diagnostics::{
     DiagnosticSeverity, ProjectDiagnostic, ProjectDiagnosticKind, ProjectLoadResult, TextPosition,
@@ -31,8 +32,9 @@ pub use model::{
     CurveValueType, DawnProject, Display, Distance, DistanceSpan, EffectParam,
     EffectParamArrayValue, EffectTarget, Fixture, FixtureId, FixturePlacement, Flags, Geometry,
     Group, GroupInstantiationId, Layout, LayoutTargetKind, LayoutTargetRef, ObjectKind, Patch,
-    Point3, Project, Protocol, RgbChannelOrder, Rotation3, Route, Scale3, Sequence,
-    SequenceEffect, SequenceEffectId, SequenceEffectScope, SequenceMarkCollection, Time, TimeSpan,
-    Transform, Universe,
+    Point3, Project, Protocol, RgbChannelOrder, Rotation3, Route, Scale3, Sequence, SequenceEffect,
+    SequenceEffectId, SequenceEffectScope, SequenceMarkCollection, Time, TimeSpan, Transform,
+    Universe,
 };
 pub use path::Utf8PathBuf;
+pub use save::{save_project, ProjectSaveResult};
