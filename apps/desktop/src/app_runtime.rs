@@ -2,9 +2,9 @@ use std::time::Instant;
 
 use dawn_app_core::actions::AppAction;
 use dawn_app_core::app_model::{AppModel, CommandTiming, DispatchOutcome};
+use dawn_app_core::document::SequenceAudioDocument;
 use dawn_app_core::dto::{AppSnapshotDto, PreviewSnapshotDto};
 use dawn_app_core::preview_session::{AudioPlaybackStatus, PreviewSnapshot};
-use dawn_project::document::SequenceAudioDocument;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::audio_runtime::AudioClock;
@@ -79,18 +79,18 @@ pub(crate) fn update_preview_from_audio_status(
     clock: AudioClock,
 ) -> CommandResult<AppSnapshotDto> {
     let mut model = lock_model(state)?;
-    let analysis = model.analysis.clone();
-    apply_audio_clock_to_model(&mut model, &clock, analysis.as_deref());
+    let project = model.project.clone();
+    apply_audio_clock_to_model(&mut model, &clock, project.as_deref());
     emit_model_snapshot(app, &model)
 }
 
 pub(crate) fn apply_audio_clock_to_model(
     model: &mut AppModel,
     clock: &AudioClock,
-    analysis: Option<&dawn_project::analysis::ProjectAnalysis>,
+    project: Option<&dawn_project::DawnProject>,
 ) {
     if let Some(error) = &clock.error {
-        model.preview.pause_at(clock.position_seconds, analysis);
+        model.preview.pause_at(clock.position_seconds, project);
         model
             .preview
             .set_timing_status("nativeAudio", AudioPlaybackStatus::Error);
@@ -100,7 +100,7 @@ pub(crate) fn apply_audio_clock_to_model(
     if clock.ended {
         model
             .preview
-            .render_at_native_audio_clock(clock.position_seconds, true, analysis);
+            .render_at_native_audio_clock(clock.position_seconds, true, project);
         model
             .preview
             .set_timing_status("nativeAudio", AudioPlaybackStatus::Ended);
@@ -123,7 +123,7 @@ pub(crate) fn apply_audio_clock_to_model(
         AudioPlaybackStatus::Playing => {
             model
                 .preview
-                .play_from_native_audio_clock(clock.position_seconds, analysis);
+                .play_from_native_audio_clock(clock.position_seconds, project);
             model
                 .preview
                 .set_timing_status("nativeAudio", AudioPlaybackStatus::Playing);
@@ -132,7 +132,7 @@ pub(crate) fn apply_audio_clock_to_model(
         AudioPlaybackStatus::Ended => {
             model
                 .preview
-                .render_at_native_audio_clock(clock.position_seconds, true, analysis);
+                .render_at_native_audio_clock(clock.position_seconds, true, project);
             model
                 .preview
                 .set_timing_status("nativeAudio", AudioPlaybackStatus::Ended);
@@ -151,7 +151,7 @@ pub(crate) fn apply_audio_clock_to_model(
             model.status = "Preview ready".to_string();
         }
         AudioPlaybackStatus::Ready | AudioPlaybackStatus::Error => {
-            model.preview.pause_at(clock.position_seconds, analysis);
+            model.preview.pause_at(clock.position_seconds, project);
             model.preview.set_timing_status("nativeAudio", clock.status);
             model.status = "Preview ready".to_string();
         }
@@ -275,10 +275,8 @@ mod tests {
 
     use dawn_app_core::app_model::AppModel;
     use dawn_app_core::preview_session::{PreviewSyncMode, PreviewTransportState, SequenceKey};
-    use dawn_project::analysis::analyze_project;
-    use dawn_project::document::get_sequence_document;
-    use dawn_project::WorkspaceFs;
-    use dawn_project::{utf8_path, Utf8PathBuf};
+    use dawn_app_core::workspace::WorkspaceService;
+    use dawn_project::Utf8PathBuf;
 
     use super::*;
 
@@ -287,43 +285,36 @@ mod tests {
             .join("../../examples/thirty-output-controller/project.dawn")
     }
 
-    fn thirty_output_controller_context() -> (WorkspaceFs, Utf8PathBuf, Utf8PathBuf) {
-        let project_path = thirty_output_controller_project_path();
-        let root = project_path
-            .parent()
-            .expect("thirty output controller project should have a parent");
-        let fs = WorkspaceFs::open(root).expect("thirty output controller root should open");
-        let project_path = utf8_path(
-            project_path
-                .strip_prefix(root)
-                .expect("project path should be under root"),
-        )
-        .expect("project path should be valid UTF-8");
-        let sequence_path = utf8_path(Path::new("sequences/empty.sequence.dawn"))
-            .expect("sequence path should be valid UTF-8");
-        (fs, project_path, sequence_path)
-    }
-
     #[test]
     fn loading_to_play_audio_clock_does_not_reschedule_preview_render() {
-        let (fs, project_path, sequence_path) = thirty_output_controller_context();
-        let analysis = analyze_project(&fs, project_path.clone(), "thirty_output_controller");
-        assert!(
-            analysis.diagnostics.is_empty(),
-            "{:?}",
-            analysis.diagnostics
-        );
-        let document = get_sequence_document(&fs, sequence_path, "empty", project_path, Vec::new())
+        let mut workspace = WorkspaceService::default();
+        workspace
+            .open_project(
+                std::fs::canonicalize(thirty_output_controller_project_path())
+                    .expect("thirty output controller project path should exist"),
+            )
+            .expect("thirty output controller project should open");
+        let result = workspace.load_project();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let project = result
+            .project
+            .expect("thirty output controller should load");
+        let document = workspace
+            .sequence_document(
+                &project,
+                Utf8PathBuf::from("sequences/empty.sequence.dawn"),
+                "empty",
+            )
             .expect("thirty output controller sequence should load");
         let key = SequenceKey {
             path: document.path.clone().into(),
             object_key: document.object_key.clone(),
         };
         let mut model = AppModel::default();
-        model.analysis = Some(std::sync::Arc::new(analysis.clone()));
+        model.project = Some(std::sync::Arc::new(project.clone()));
         model.preview.sync_source(
             Some((key, document)),
-            Some(&analysis),
+            Some(&project),
             PreviewSyncMode::RenderNow,
         );
         let request = model
@@ -336,8 +327,8 @@ mod tests {
             status: AudioPlaybackStatus::LoadingToPlay,
             error: None,
         };
-        apply_audio_clock_to_model(&mut model, &clock, Some(&analysis));
-        apply_audio_clock_to_model(&mut model, &clock, Some(&analysis));
+        apply_audio_clock_to_model(&mut model, &clock, Some(&project));
+        apply_audio_clock_to_model(&mut model, &clock, Some(&project));
 
         assert!(!request.cancellation.is_cancelled());
         assert_eq!(

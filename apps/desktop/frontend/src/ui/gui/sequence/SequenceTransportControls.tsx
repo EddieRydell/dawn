@@ -275,7 +275,7 @@ function previewTimingSummary(timing: PreviewTiming | undefined) {
     `interval ${formatMs(timing.loopIntervalMs)}`,
     `model ${formatMs(timing.modelUpdateMs)}`,
     `model-lock ${formatMs(timing.modelLockWaitMs)}`,
-    `analysis-handle ${formatMs(timing.analysisHandleMs)}`,
+    `project-snapshot ${formatMs(timing.projectSnapshotMs)}`,
     `audio-poll ${formatMs(timing.audioPollMs)}`,
     `apply ${formatMs(timing.audioApplyMs)}`,
     `render-wall ${formatMs(timing.renderWallMs)}`,

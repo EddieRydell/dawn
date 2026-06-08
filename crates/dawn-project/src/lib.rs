@@ -24,8 +24,11 @@ pub use diagnostics::{
     DiagnosticSeverity, ProjectDiagnostic, ProjectDiagnosticKind, TextPosition, TextRange,
 };
 pub use effect_script::{
-    lex, parse_module, EffectAst, EffectModuleAst, EffectParamSchema, EffectScriptKind,
-    EffectVisibility, ParamDefault, RuntimeValue, ScriptDiagnostic, ScriptType, Token,
+    lex, parse_module, BytecodeStats, CompiledEffect, EffectAst, EffectModuleAst,
+    EffectParamSchema, EffectSampleScratch, EffectScriptKind, EffectVisibility, FixtureContext,
+    GeneratedChildEffectRef, GeneratedChildTopology, GeneratorTarget, GeneratorTargetPixel,
+    ParamDefault, PixelContext, PreparedEffectParams, RuntimeArrayValue, RuntimeError,
+    RuntimeMarks, RuntimeValue, ScriptDiagnostic, ScriptType, Token,
 };
 pub use fs::WorkspaceFs;
 pub use fs::{WorkspaceEntry, WorkspaceEntryKind};

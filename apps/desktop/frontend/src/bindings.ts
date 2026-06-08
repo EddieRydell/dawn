@@ -198,7 +198,7 @@ export type LiveOutputSnapshotDto = {
 	lastError: string | null,
 };
 
-export type ObjectKindDto = "project" | "display" | "controller" | "layout" | "fixture" | "patch" | "sequence" | "curve";
+export type ObjectKindDto = "project" | "display" | "controller" | "layout" | "fixture" | "patch" | "sequence" | "curve" | "effect";
 
 export type Point3MetersDto = {
 	xMeters: number,

@@ -16,26 +16,7 @@ pub enum Authored {}
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub enum Resolved {}
 
-pub type AuthoredProject = Project<Authored>;
 pub type DawnProject = Project<Resolved>;
-pub type ResolvedProject = DawnProject;
-
-macro_rules! resolved_id {
-    ($name:ident) => {
-        #[derive(
-            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize,
-        )]
-        #[serde(transparent)]
-        pub struct $name(pub u32);
-    };
-}
-
-resolved_id!(DisplayId);
-resolved_id!(SequenceId);
-resolved_id!(ControllerId);
-resolved_id!(PatchId);
-resolved_id!(LayoutId);
-resolved_id!(FixtureDefinitionId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
 #[serde(transparent)]
@@ -48,23 +29,6 @@ pub struct GroupInstantiationId(pub u32);
 impl fmt::Display for GroupInstantiationId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}", self.0)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
-#[serde(transparent)]
-pub struct ResolvedRef<Id>(pub Id);
-
-impl<Id> ResolvedRef<Id> {
-    pub fn new(id: Id) -> Self {
-        Self(id)
-    }
-
-    pub fn id(self) -> Id
-    where
-        Id: Copy,
-    {
-        self.0
     }
 }
 
@@ -436,14 +400,6 @@ impl fmt::Display for FixtureId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct ControllerIndex(pub usize);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[serde(transparent)]
-pub struct GroupIndex(pub usize);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[serde(transparent)]
-pub struct SequenceEffectIndex(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Time {
@@ -1172,8 +1128,6 @@ macro_rules! string_ref {
 }
 
 string_ref!(ObjectName);
-string_ref!(GroupRef);
-string_ref!(ControllerRef);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SymbolRef {
@@ -1496,7 +1450,6 @@ fn default_bulb_diameter() -> DistanceSpan {
 pub const DEFAULT_BULB_DIAMETER: DistanceSpan = DistanceSpan {
     micrometers: 10_000,
 };
-pub const MIN_BULB_DIAMETER: DistanceSpan = DistanceSpan { micrometers: 1_000 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]

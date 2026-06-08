@@ -2,24 +2,24 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
-use dawn_project::analysis::ProjectAnalysis;
-use dawn_project::document::{
-    SequenceDocument, SequenceEffectParamDocument, SequenceEffectPixelDocument,
+use crate::document::geometry_render_plan;
+use crate::document::{
+    GeometryRenderBounds, GeometryRenderPoint, SequenceDocument, SequenceEffectDocument,
+    SequenceEffectParamDocument, SequenceEffectPixelDocument, SequenceEffectRenderDocument,
     SequenceMarkCollectionDocument,
 };
-use dawn_project::frame::{ceil_frame, floor_frame, frame_count, frame_start};
-use dawn_project::render::{layout_render_plan, GeometryRenderBounds, GeometryRenderPoint};
-use dawn_project::EffectScriptId;
+
 use dawn_project::{
-    evaluate_generated_child_params, generator_topology_param_names, run_generator_topology,
+    resolve_import_path, DawnProject, EffectDefinitionKey, RuntimeArrayValue, Utf8PathBuf,
+};
+use dawn_project::{
     BytecodeStats, CompiledEffect, EffectSampleScratch, EffectScriptKind, FixtureContext,
     GeneratedChildEffectRef, GeneratedChildTopology, GeneratorTarget, GeneratorTargetPixel,
     PixelContext, PreparedEffectParams, RuntimeError, RuntimeMarks, RuntimeValue,
 };
-use dawn_project::{resolve_import_path, Utf8PathBuf};
 use dawn_project::{
     Color, Curve, CurveValue, CurveValueType, Distance, DistanceSpan, EffectParam, FixtureId,
-    Resolved, SequenceEffectScope, Time, TimeSpan,
+    Layout, Resolved, ResolvedInlineOrRef, SequenceEffectScope, Time, TimeSpan,
 };
 
 const MAX_FLATTENED_GENERATED_CHILDREN: usize = 65_536;
@@ -128,6 +128,95 @@ fn seconds_to_nanoseconds(seconds: f64) -> u64 {
     }
 }
 
+fn output_fixture_templates(project: &DawnProject) -> Result<Vec<OutputFixtureFrame>, String> {
+    let layout = active_layout(project)?;
+    layout
+        .fixtures
+        .iter()
+        .map(|fixture| {
+            let fixture_definition = match &fixture.fixture {
+                ResolvedInlineOrRef::Inline(fixture) => fixture,
+                ResolvedInlineOrRef::Ref(reference) => project
+                    .stores
+                    .fixture_definitions
+                    .get(&reference.key)
+                    .map(|fixture| &fixture.value)
+                    .ok_or_else(|| {
+                        format!("fixture `{}` was not found", reference.key.display_key())
+                    })?,
+            };
+            let render_plan = geometry_render_plan(fixture_definition);
+            Ok(OutputFixtureFrame {
+                id: fixture.id,
+                name: fixture
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| fixture.id.to_string()),
+                bulb_radius: render_plan.bulb_radius,
+                pixels: render_plan
+                    .emitters
+                    .iter()
+                    .map(|position| OutputPixelFrame {
+                        position: *position,
+                        color: Color::new(0, 0, 0),
+                    })
+                    .collect(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()
+}
+
+fn output_bounds(fixtures: &[OutputFixtureFrame]) -> GeometryRenderBounds {
+    let mut points = fixtures
+        .iter()
+        .flat_map(|fixture| fixture.pixels.iter().map(|pixel| pixel.position));
+    let Some(first) = points.next() else {
+        return GeometryRenderBounds {
+            min_x: Distance::ZERO,
+            min_y: Distance::ZERO,
+            max_x: Distance::ZERO,
+            max_y: Distance::ZERO,
+        };
+    };
+    let mut min_x = first.x;
+    let mut min_y = first.y;
+    let mut max_x = first.x;
+    let mut max_y = first.y;
+    for point in points {
+        min_x = min_x.min(point.x);
+        min_y = min_y.min(point.y);
+        max_x = max_x.max(point.x);
+        max_y = max_y.max(point.y);
+    }
+    GeometryRenderBounds {
+        min_x,
+        min_y,
+        max_x,
+        max_y,
+    }
+}
+
+fn active_layout(project: &DawnProject) -> Result<&Layout<Resolved>, String> {
+    let display = match &project.display {
+        ResolvedInlineOrRef::Inline(display) => display,
+        ResolvedInlineOrRef::Ref(reference) => project
+            .stores
+            .displays
+            .get(&reference.key)
+            .map(|display| &display.value)
+            .ok_or_else(|| format!("display `{}` was not found", reference.key.display_key()))?,
+    };
+    match &display.layout {
+        ResolvedInlineOrRef::Inline(layout) => Ok(layout),
+        ResolvedInlineOrRef::Ref(reference) => project
+            .stores
+            .layouts
+            .get(&reference.key)
+            .map(|layout| &layout.value)
+            .ok_or_else(|| format!("layout `{}` was not found", reference.key.display_key())),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct OutputSourceMetadata {
     pub label: String,
@@ -199,7 +288,7 @@ pub struct SequenceFrameEvaluatorPreparationTiming {
 #[derive(Debug, Clone)]
 pub struct GeneratorParentPreparationTiming {
     pub parent_effect_id: u32,
-    pub script_id: EffectScriptId,
+    pub script_id: EffectDefinitionKey,
     pub target_pixels: usize,
     pub emitted_children: usize,
     pub prepared_children: usize,
@@ -327,7 +416,7 @@ impl SequenceRenderCache {
 
     pub fn build_evaluator(
         &mut self,
-        analysis: &ProjectAnalysis,
+        project: &DawnProject,
         document: &SequenceDocument,
     ) -> Result<
         (
@@ -336,16 +425,12 @@ impl SequenceRenderCache {
         ),
         String,
     > {
-        SequenceFrameEvaluator::new_with_preparation_cache(
-            analysis,
-            document,
-            &mut self.preparation,
-        )
+        SequenceFrameEvaluator::new_with_preparation_cache(project, document, &mut self.preparation)
     }
 
     pub fn build_evaluator_cancellable(
         &mut self,
-        analysis: &ProjectAnalysis,
+        project: &DawnProject,
         document: &SequenceDocument,
         is_cancelled: impl Fn() -> bool,
     ) -> Result<
@@ -356,7 +441,7 @@ impl SequenceRenderCache {
         String,
     > {
         SequenceFrameEvaluator::new_with_preparation_cache_cancellable(
-            analysis,
+            project,
             document,
             &mut self.preparation,
             is_cancelled,
@@ -365,14 +450,14 @@ impl SequenceRenderCache {
 
     pub fn effect_thumbnail(
         &mut self,
-        analysis: &ProjectAnalysis,
+        project: &DawnProject,
         document: &SequenceDocument,
-        effect: &dawn_project::document::SequenceEffectDocument,
+        effect: &SequenceEffectDocument,
         max_columns: usize,
         max_rows: usize,
     ) -> Result<Option<SequenceEffectThumbnail>, String> {
         match self.effect_thumbnail_cancellable(
-            analysis,
+            project,
             document,
             effect,
             max_columns,
@@ -387,15 +472,15 @@ impl SequenceRenderCache {
 
     pub fn effect_thumbnail_cancellable(
         &mut self,
-        analysis: &ProjectAnalysis,
+        project: &DawnProject,
         document: &SequenceDocument,
-        effect: &dawn_project::document::SequenceEffectDocument,
+        effect: &SequenceEffectDocument,
         max_columns: usize,
         max_rows: usize,
         is_cancelled: impl Fn() -> bool,
     ) -> Result<SequenceEffectThumbnailResult, String> {
         sequence_effect_thumbnail(
-            analysis,
+            project,
             document,
             effect,
             max_columns,
@@ -430,7 +515,7 @@ impl SequenceChangeImpact {
     pub fn between(
         previous: &SequenceDocument,
         refreshed: &SequenceDocument,
-        analysis: &ProjectAnalysis,
+        project: &DawnProject,
     ) -> Self {
         let active_effect_ids = refreshed
             .effects
@@ -460,13 +545,13 @@ impl SequenceChangeImpact {
         for effect in &refreshed.effects {
             let Some(previous_effect) = previous_effects.get(&effect.id) else {
                 invalidated_prepared_effect_ids.insert(effect.id);
-                if is_generator_effect(analysis, effect) {
+                if is_generator_effect(project, effect) {
                     invalidated_topology_effect_ids.insert(effect.id);
                 }
                 continue;
             };
             let impact =
-                effect_change_impact(previous, refreshed, previous_effect, effect, analysis);
+                effect_change_impact(previous, refreshed, previous_effect, effect, project);
             if impact.invalidate_prepared {
                 invalidated_prepared_effect_ids.insert(effect.id);
             }
@@ -529,7 +614,7 @@ struct SequenceEffectThumbnailCacheKey {
     duration_nanoseconds: u64,
     frame_rate: u32,
     scope: SequenceEffectScope,
-    script_id: EffectScriptId,
+    script_id: EffectDefinitionKey,
     script_source: String,
     params: Vec<PreparedEffectParamCacheKey>,
     target_pixels: Vec<PreparedEffectPixelCacheKey>,
@@ -557,9 +642,9 @@ fn sequence_source_requires_full_clear(
 fn effect_change_impact(
     previous_document: &SequenceDocument,
     refreshed_document: &SequenceDocument,
-    previous: &dawn_project::document::SequenceEffectDocument,
-    refreshed: &dawn_project::document::SequenceEffectDocument,
-    analysis: &ProjectAnalysis,
+    previous: &SequenceEffectDocument,
+    refreshed: &SequenceEffectDocument,
+    project: &DawnProject,
 ) -> EffectChangeImpact {
     let mut impact = EffectChangeImpact::default();
     if previous.index != refreshed.index
@@ -601,14 +686,14 @@ fn effect_change_impact(
                 refreshed,
                 previous_render,
                 refreshed_render,
-                analysis,
+                project,
             ) {
                 impact.invalidate_topology = true;
             }
         }
         (None, Some(_)) | (Some(_), None) => {
             impact.invalidate_prepared = true;
-            if is_generator_effect(analysis, previous) || is_generator_effect(analysis, refreshed) {
+            if is_generator_effect(project, previous) || is_generator_effect(project, refreshed) {
                 impact.invalidate_topology = true;
             }
         }
@@ -619,8 +704,8 @@ fn effect_change_impact(
 }
 
 fn render_shape_changed(
-    previous: Option<&dawn_project::document::SequenceEffectRenderDocument>,
-    refreshed: Option<&dawn_project::document::SequenceEffectRenderDocument>,
+    previous: Option<&SequenceEffectRenderDocument>,
+    refreshed: Option<&SequenceEffectRenderDocument>,
 ) -> bool {
     match (previous, refreshed) {
         (Some(previous), Some(refreshed)) => {
@@ -637,30 +722,29 @@ fn render_shape_changed(
 fn generator_topology_key_changed(
     previous_document: &SequenceDocument,
     refreshed_document: &SequenceDocument,
-    previous: &dawn_project::document::SequenceEffectDocument,
-    refreshed: &dawn_project::document::SequenceEffectDocument,
-    previous_render: &dawn_project::document::SequenceEffectRenderDocument,
-    refreshed_render: &dawn_project::document::SequenceEffectRenderDocument,
-    analysis: &ProjectAnalysis,
+    previous: &SequenceEffectDocument,
+    refreshed: &SequenceEffectDocument,
+    previous_render: &SequenceEffectRenderDocument,
+    refreshed_render: &SequenceEffectRenderDocument,
+    project: &DawnProject,
 ) -> bool {
-    let script_id = refreshed_render.script.to_script_id();
-    let Some(script) = analysis.compiled_script_for_id(&script_id) else {
+    let script_id = refreshed_render.script.clone();
+    let Some(script) = project
+        .stores
+        .effect_definitions
+        .get(&script_id)
+        .map(|effect| &effect.value.compiled)
+    else {
         return false;
     };
-    if script.kind != EffectScriptKind::Generator {
+    if script.kind() != EffectScriptKind::Generator {
         return false;
     }
     let topology_param_names = script
-        .generator_statements()
-        .map(|statements| {
-            let param_names = script
-                .params
-                .iter()
-                .map(|param| param.name.clone())
-                .collect::<Vec<_>>();
-            generator_topology_param_names(statements, &param_names)
-        })
-        .unwrap_or_default();
+        .params()
+        .iter()
+        .map(|param| param.name.clone())
+        .collect::<BTreeSet<_>>();
     let previous_key = prepared_effect_cache_key_for_params(
         previous_document,
         previous.start_seconds,
@@ -680,15 +764,18 @@ fn generator_topology_key_changed(
     previous_key != refreshed_key
 }
 
-fn is_generator_effect(
-    analysis: &ProjectAnalysis,
-    effect: &dawn_project::document::SequenceEffectDocument,
-) -> bool {
+fn is_generator_effect(project: &DawnProject, effect: &SequenceEffectDocument) -> bool {
     effect
         .render
         .as_ref()
-        .and_then(|render| analysis.compiled_script_for_id(&render.script.to_script_id()))
-        .is_some_and(|script| script.kind == EffectScriptKind::Generator)
+        .and_then(|render| {
+            project
+                .stores
+                .effect_definitions
+                .get(&render.script)
+                .map(|effect| &effect.value.compiled)
+        })
+        .is_some_and(|script| script.kind() == EffectScriptKind::Generator)
 }
 
 fn changed_mark_collection_keys(
@@ -741,7 +828,7 @@ fn effects_referencing_mark_collection(
 }
 
 fn effect_references_mark_collection(
-    effect: &dawn_project::document::SequenceEffectDocument,
+    effect: &SequenceEffectDocument,
     collection_key: &str,
 ) -> bool {
     effect_params_reference_mark_collection(&effect.params, collection_key)
@@ -776,7 +863,7 @@ struct GeneratorTopologyCacheEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct PreparedEffectCacheKey {
-    script_id: EffectScriptId,
+    script_id: EffectDefinitionKey,
     script_source: String,
     scope: SequenceEffectScope,
     duration_seconds: F64CacheKey,
@@ -799,6 +886,7 @@ enum EffectParamCacheValue {
     Flags(Vec<String>),
     Color(ColorCacheKey),
     Curve(CurveCacheKey),
+    CurveRef(String),
     Array(Vec<EffectParamArrayValueCacheKey>),
     Marks {
         collection_key: String,
@@ -814,6 +902,7 @@ enum EffectParamArrayValueCacheKey {
     Boolean(bool),
     Color(ColorCacheKey),
     Curve(CurveCacheKey),
+    CurveRef(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -882,42 +971,42 @@ pub struct SequenceFrameEvaluator {
 }
 
 impl SequenceFrameEvaluator {
-    pub fn new(analysis: &ProjectAnalysis, document: &SequenceDocument) -> Result<Self, String> {
-        Self::new_filtered(analysis, document, None)
+    pub fn new(project: &DawnProject, document: &SequenceDocument) -> Result<Self, String> {
+        Self::new_filtered(project, document, None)
     }
 
     pub fn new_timed(
-        analysis: &ProjectAnalysis,
+        project: &DawnProject,
         document: &SequenceDocument,
     ) -> Result<(Self, SequenceFrameEvaluatorPreparationTiming), String> {
-        Self::new_filtered_timed(analysis, document, None)
+        Self::new_filtered_timed(project, document, None)
     }
 
     pub fn new_filtered(
-        analysis: &ProjectAnalysis,
+        project: &DawnProject,
         document: &SequenceDocument,
         effect_filter: Option<&HashSet<u32>>,
     ) -> Result<Self, String> {
-        Self::new_filtered_timed(analysis, document, effect_filter)
+        Self::new_filtered_timed(project, document, effect_filter)
             .map(|(evaluator, _timing)| evaluator)
     }
 
     pub fn new_filtered_timed(
-        analysis: &ProjectAnalysis,
+        project: &DawnProject,
         document: &SequenceDocument,
         effect_filter: Option<&HashSet<u32>>,
     ) -> Result<(Self, SequenceFrameEvaluatorPreparationTiming), String> {
-        Self::new_filtered_timed_with_cache(analysis, document, effect_filter, None)
+        Self::new_filtered_timed_with_cache(project, document, effect_filter, None)
     }
 
     pub fn new_filtered_with_preparation_cache(
-        analysis: &ProjectAnalysis,
+        project: &DawnProject,
         document: &SequenceDocument,
         effect_filter: Option<&HashSet<u32>>,
         preparation_cache: &mut SequencePreparationCache,
     ) -> Result<Self, String> {
         Self::new_filtered_timed_with_preparation_cache(
-            analysis,
+            project,
             document,
             effect_filter,
             preparation_cache,
@@ -926,13 +1015,13 @@ impl SequenceFrameEvaluator {
     }
 
     pub fn new_filtered_timed_with_preparation_cache(
-        analysis: &ProjectAnalysis,
+        project: &DawnProject,
         document: &SequenceDocument,
         effect_filter: Option<&HashSet<u32>>,
         preparation_cache: &mut SequencePreparationCache,
     ) -> Result<(Self, SequenceFrameEvaluatorPreparationTiming), String> {
         Self::new_filtered_timed_with_cache(
-            analysis,
+            project,
             document,
             effect_filter,
             Some(preparation_cache),
@@ -940,21 +1029,21 @@ impl SequenceFrameEvaluator {
     }
 
     pub(crate) fn new_with_preparation_cache(
-        analysis: &ProjectAnalysis,
+        project: &DawnProject,
         document: &SequenceDocument,
         preparation_cache: &mut SequencePreparationCache,
     ) -> Result<(Self, SequenceFrameEvaluatorPreparationTiming), String> {
-        Self::new_filtered_timed_with_cache(analysis, document, None, Some(preparation_cache))
+        Self::new_filtered_timed_with_cache(project, document, None, Some(preparation_cache))
     }
 
     pub(crate) fn new_with_preparation_cache_cancellable(
-        analysis: &ProjectAnalysis,
+        project: &DawnProject,
         document: &SequenceDocument,
         preparation_cache: &mut SequencePreparationCache,
         is_cancelled: impl Fn() -> bool,
     ) -> Result<Option<(Self, SequenceFrameEvaluatorPreparationTiming)>, String> {
         Self::new_filtered_timed_with_cache_cancellable(
-            analysis,
+            project,
             document,
             None,
             Some(preparation_cache),
@@ -963,13 +1052,13 @@ impl SequenceFrameEvaluator {
     }
 
     fn new_filtered_timed_with_cache(
-        analysis: &ProjectAnalysis,
+        project: &DawnProject,
         document: &SequenceDocument,
         effect_filter: Option<&HashSet<u32>>,
         preparation_cache: Option<&mut SequencePreparationCache>,
     ) -> Result<(Self, SequenceFrameEvaluatorPreparationTiming), String> {
         Self::new_filtered_timed_with_cache_cancellable(
-            analysis,
+            project,
             document,
             effect_filter,
             preparation_cache,
@@ -981,7 +1070,7 @@ impl SequenceFrameEvaluator {
     }
 
     fn new_filtered_timed_with_cache_cancellable(
-        analysis: &ProjectAnalysis,
+        project: &DawnProject,
         document: &SequenceDocument,
         effect_filter: Option<&HashSet<u32>>,
         mut preparation_cache: Option<&mut SequencePreparationCache>,
@@ -991,29 +1080,9 @@ impl SequenceFrameEvaluator {
         if is_cancelled() {
             return Ok(None);
         }
-        let Some(project) = analysis.resolved.as_ref() else {
-            return Err("Project must resolve before preview is available".to_string());
-        };
         let layout_started = Instant::now();
-        let render_plan = layout_render_plan(&project.display.layout.fixtures);
-        let fixture_templates = render_plan
-            .fixtures
-            .iter()
-            .zip(project.display.layout.fixtures.iter())
-            .map(|(plan, fixture)| OutputFixtureFrame {
-                id: fixture.id,
-                name: fixture.name.clone(),
-                bulb_radius: plan.bulb_radius,
-                pixels: plan
-                    .emitters
-                    .iter()
-                    .map(|position| OutputPixelFrame {
-                        position: *position,
-                        color: Color::new(0, 0, 0),
-                    })
-                    .collect(),
-            })
-            .collect::<Vec<_>>();
+        let fixture_templates = output_fixture_templates(project)?;
+        let bounds = output_bounds(&fixture_templates);
         let layout_template_ms = elapsed_ms(layout_started);
 
         let mut effects = Vec::new();
@@ -1048,9 +1117,14 @@ impl SequenceFrameEvaluator {
                 effect.scope,
                 render,
             );
-            let script_id = render.script.to_script_id();
-            match analysis.compiled_script_for_id(&script_id) {
-                Some(script) if script.kind == EffectScriptKind::Generator => {
+            let script_id = render.script.clone();
+            match project
+                .stores
+                .effect_definitions
+                .get(&script_id)
+                .map(|effect| &effect.value.compiled)
+            {
+                Some(script) if script.kind() == EffectScriptKind::Generator => {
                     generator_parent_count += 1;
                     let generator_started = Instant::now();
                     let mut prepared_cache_hit = false;
@@ -1064,16 +1138,10 @@ impl SequenceFrameEvaluator {
                         }
                         None => {
                             let topology_param_names = script
-                                .generator_statements()
-                                .map(|statements| {
-                                    let param_names = script
-                                        .params
-                                        .iter()
-                                        .map(|param| param.name.clone())
-                                        .collect::<Vec<_>>();
-                                    generator_topology_param_names(statements, &param_names)
-                                })
-                                .unwrap_or_default();
+                                .params()
+                                .iter()
+                                .map(|param| param.name.clone())
+                                .collect::<BTreeSet<_>>();
                             let topology_cache_key = prepared_effect_cache_key_for_params(
                                 document,
                                 effect.start_seconds,
@@ -1089,7 +1157,7 @@ impl SequenceFrameEvaluator {
                                     topology_cache_hit = true;
                                     prepare_generated_effects_from_topology(
                                         GeneratedEffectTopologyInput {
-                                            analysis,
+                                            project,
                                             parent_path: parent_path_for_render(render),
                                             parent_id: effect.id,
                                             parent_start_seconds: effect.start_seconds,
@@ -1127,7 +1195,7 @@ impl SequenceFrameEvaluator {
                                             }
                                             prepare_generated_effects_from_topology(
                                                 GeneratedEffectTopologyInput {
-                                                    analysis,
+                                                    project,
                                                     parent_path: parent_path_for_render(render),
                                                     parent_id: effect.id,
                                                     parent_start_seconds: effect.start_seconds,
@@ -1278,7 +1346,7 @@ impl SequenceFrameEvaluator {
         Ok(Some((
             Self {
                 source,
-                bounds: render_plan.bounds,
+                bounds,
                 fixture_templates,
                 effects,
                 effect_indices_by_frame,
@@ -1676,7 +1744,7 @@ struct SampleReuseKey {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SampleReuseEffectKey {
-    script_id: EffectScriptId,
+    script_id: EffectDefinitionKey,
     script_source: String,
     prepared_params: Vec<RuntimeValueCacheKey>,
 }
@@ -1902,9 +1970,9 @@ enum EffectThumbnailColorsResult {
 }
 
 fn sequence_effect_thumbnail(
-    analysis: &ProjectAnalysis,
+    project: &DawnProject,
     document: &SequenceDocument,
-    effect: &dawn_project::document::SequenceEffectDocument,
+    effect: &SequenceEffectDocument,
     max_columns: usize,
     max_rows: usize,
     cache: &mut SequenceRenderCache,
@@ -1933,7 +2001,7 @@ fn sequence_effect_thumbnail(
         duration_nanoseconds: duration.as_nanoseconds(),
         frame_rate: document.frame_rate,
         scope: effect.scope,
-        script_id: render.script.to_script_id(),
+        script_id: render.script.clone(),
         script_source: render.script_source.clone(),
         params: prepared_effect_cache_key(
             document,
@@ -1963,16 +2031,21 @@ fn sequence_effect_thumbnail(
         return Ok(SequenceEffectThumbnailResult::Cancelled);
     }
 
-    let Some(script) = analysis.compiled_script_for_id(&render.script.to_script_id()) else {
+    let Some(script) = project
+        .stores
+        .effect_definitions
+        .get(&render.script)
+        .map(|effect| &effect.value.compiled)
+    else {
         return Ok(SequenceEffectThumbnailResult::Unavailable);
     };
     let sampled_frame_indices = evenly_sample_indices(
         total_preview_frames(duration, document.frame_rate),
         max_columns,
     );
-    let colors = if script.kind == EffectScriptKind::Generator {
+    let colors = if script.kind() == EffectScriptKind::Generator {
         generator_effect_thumbnail_colors(GeneratorEffectThumbnailInput {
-            analysis,
+            project,
             document,
             effect,
             render,
@@ -2023,8 +2096,8 @@ fn sequence_effect_thumbnail(
 struct SampleEffectThumbnailInput<'a> {
     script: &'a CompiledEffect,
     document: &'a SequenceDocument,
-    effect: &'a dawn_project::document::SequenceEffectDocument,
-    render: &'a dawn_project::document::SequenceEffectRenderDocument,
+    effect: &'a SequenceEffectDocument,
+    render: &'a SequenceEffectRenderDocument,
     duration: TimeSpan,
     source_pixel_count: usize,
     sampled_pixel_indices: &'a [usize],
@@ -2087,10 +2160,10 @@ fn sample_effect_thumbnail_colors(
 }
 
 struct GeneratorEffectThumbnailInput<'a> {
-    analysis: &'a ProjectAnalysis,
+    project: &'a DawnProject,
     document: &'a SequenceDocument,
-    effect: &'a dawn_project::document::SequenceEffectDocument,
-    render: &'a dawn_project::document::SequenceEffectRenderDocument,
+    effect: &'a SequenceEffectDocument,
+    render: &'a SequenceEffectRenderDocument,
     duration: TimeSpan,
     sampled_pixel_indices: &'a [usize],
     sampled_frame_indices: &'a [usize],
@@ -2106,7 +2179,7 @@ fn generator_effect_thumbnail_colors(
     }
     let filter = [input.effect.id].into_iter().collect();
     let (mut evaluator, _) = SequenceFrameEvaluator::new_filtered_timed_with_preparation_cache(
-        input.analysis,
+        input.project,
         input.document,
         Some(&filter),
         &mut input.cache.preparation,
@@ -2133,7 +2206,7 @@ fn generator_effect_thumbnail_colors(
 }
 
 fn total_preview_frames(duration: TimeSpan, frame_rate: u32) -> usize {
-    frame_count(duration, frame_rate).max(1)
+    frame_count(duration.as_seconds_f64(), frame_rate).max(1)
 }
 
 fn local_seconds_for_frame(frame_index: usize, frame_rate: u32, duration: TimeSpan) -> f64 {
@@ -2159,7 +2232,7 @@ fn evenly_sample_indices(source_count: usize, max_count: usize) -> Vec<usize> {
 }
 
 struct SampleRenderPreparationInput<'a> {
-    script_id: EffectScriptId,
+    script_id: EffectDefinitionKey,
     script_source: String,
     script: &'a CompiledEffect,
     params: &'a [SequenceEffectParamDocument],
@@ -2167,7 +2240,7 @@ struct SampleRenderPreparationInput<'a> {
     effect_start_seconds: f64,
     effect_duration_seconds: f64,
     scope: SequenceEffectScope,
-    target_pixels: &'a [dawn_project::document::SequenceEffectPixelDocument],
+    target_pixels: &'a [SequenceEffectPixelDocument],
     fixture_templates: &'a [OutputFixtureFrame],
 }
 
@@ -2200,7 +2273,7 @@ fn prepare_sample_render(input: SampleRenderPreparationInput<'_>) -> PreparedEff
 }
 
 fn sample_reuse_effect_key(
-    script_id: EffectScriptId,
+    script_id: EffectDefinitionKey,
     script_source: String,
     prepared_params: &PreparedEffectParams,
 ) -> SampleReuseEffectKey {
@@ -2216,7 +2289,7 @@ fn prepared_effect_cache_key(
     effect_start_seconds: f64,
     duration_seconds: f64,
     scope: SequenceEffectScope,
-    render: &dawn_project::document::SequenceEffectRenderDocument,
+    render: &SequenceEffectRenderDocument,
 ) -> PreparedEffectCacheKey {
     prepared_effect_cache_key_for_params(
         document,
@@ -2233,11 +2306,11 @@ fn prepared_effect_cache_key_for_params(
     effect_start_seconds: f64,
     duration_seconds: f64,
     scope: SequenceEffectScope,
-    render: &dawn_project::document::SequenceEffectRenderDocument,
+    render: &SequenceEffectRenderDocument,
     included_params: Option<&BTreeSet<String>>,
 ) -> PreparedEffectCacheKey {
     PreparedEffectCacheKey {
-        script_id: render.script.to_script_id(),
+        script_id: render.script.clone(),
         script_source: render.script_source.clone(),
         scope,
         duration_seconds: F64CacheKey(duration_seconds),
@@ -2271,9 +2344,7 @@ fn prepared_effect_cache_key_for_params(
     }
 }
 
-fn parent_path_for_render(
-    render: &dawn_project::document::SequenceEffectRenderDocument,
-) -> Utf8PathBuf {
+fn parent_path_for_render(render: &SequenceEffectRenderDocument) -> Utf8PathBuf {
     Utf8PathBuf::from(&render.script.path)
 }
 
@@ -2290,7 +2361,7 @@ fn effect_param_cache_value(
         EffectParam::Enum { value } => EffectParamCacheValue::Enum(value.clone()),
         EffectParam::Flags { value } => EffectParamCacheValue::Flags(value.values.clone()),
         EffectParam::Color { value } => EffectParamCacheValue::Color(color_cache_key(*value)),
-        EffectParam::Curve { curve } => EffectParamCacheValue::Curve(curve_cache_key(curve)),
+        EffectParam::Curve { curve } => effect_param_curve_cache_value(curve),
         EffectParam::Array { values, .. } => EffectParamCacheValue::Array(
             values
                 .iter()
@@ -2349,7 +2420,31 @@ fn effect_param_array_value_cache_key(
             EffectParamArrayValueCacheKey::Color(color_cache_key(*value))
         }
         dawn_project::EffectParamArrayValue::Curve(curve) => {
+            effect_param_array_curve_cache_key(curve)
+        }
+    }
+}
+
+fn effect_param_curve_cache_value(
+    curve: &dawn_project::CurveUse<Resolved>,
+) -> EffectParamCacheValue {
+    match &curve.curve {
+        ResolvedInlineOrRef::Inline(curve) => EffectParamCacheValue::Curve(curve_cache_key(curve)),
+        ResolvedInlineOrRef::Ref(reference) => {
+            EffectParamCacheValue::CurveRef(reference.key.display_key())
+        }
+    }
+}
+
+fn effect_param_array_curve_cache_key(
+    curve: &dawn_project::CurveUse<Resolved>,
+) -> EffectParamArrayValueCacheKey {
+    match &curve.curve {
+        ResolvedInlineOrRef::Inline(curve) => {
             EffectParamArrayValueCacheKey::Curve(curve_cache_key(curve))
+        }
+        ResolvedInlineOrRef::Ref(reference) => {
+            EffectParamArrayValueCacheKey::CurveRef(reference.key.display_key())
         }
     }
 }
@@ -2371,6 +2466,20 @@ fn curve_cache_key(curve: &Curve) -> CurveCacheKey {
                 },
             })
             .collect(),
+    }
+}
+
+fn inline_curve_for_runtime(
+    curve: &dawn_project::CurveUse<Resolved>,
+) -> Result<&Curve, RuntimeError> {
+    match &curve.curve {
+        ResolvedInlineOrRef::Inline(curve) => Ok(curve),
+        ResolvedInlineOrRef::Ref(reference) => Err(RuntimeError {
+            message: format!(
+                "curve reference `{}` reached runtime without being resolved",
+                reference.key.display_key()
+            ),
+        }),
     }
 }
 
@@ -2464,7 +2573,7 @@ fn build_effect_indices_by_frame(
 ) -> Vec<Vec<usize>> {
     let sequence_duration =
         TimeSpan::try_from_seconds_f64_rounded(duration_seconds.max(0.0)).unwrap_or(TimeSpan::ZERO);
-    let frame_count = frame_count(sequence_duration, frame_rate);
+    let frame_count = frame_count(sequence_duration.as_seconds_f64(), frame_rate);
     let mut indices_by_frame = vec![Vec::new(); frame_count];
     if frame_count == 0 {
         return indices_by_frame;
@@ -2518,13 +2627,46 @@ fn time_from_seconds_clamped(seconds: f64) -> Time {
     Time::try_from_seconds_f64_rounded(seconds.max(0.0)).unwrap_or(Time::ZERO)
 }
 
+fn floor_frame(time: Time, frame_rate: u32) -> u64 {
+    if frame_rate == 0 {
+        return 0;
+    }
+    (time.as_seconds_f64() * f64::from(frame_rate))
+        .floor()
+        .max(0.0) as u64
+}
+
+fn ceil_frame(time: Time, frame_rate: u32) -> u64 {
+    if frame_rate == 0 {
+        return 0;
+    }
+    (time.as_seconds_f64() * f64::from(frame_rate))
+        .ceil()
+        .max(0.0) as u64
+}
+
+fn frame_count(duration_seconds: f64, frame_rate: u32) -> usize {
+    if frame_rate == 0 || !duration_seconds.is_finite() || duration_seconds <= 0.0 {
+        return 0;
+    }
+    (duration_seconds * f64::from(frame_rate)).ceil() as usize
+}
+
+fn frame_start(frame_index: u64, frame_rate: u32) -> Time {
+    if frame_rate == 0 {
+        return Time::ZERO;
+    }
+    Time::try_from_seconds_f64_rounded(frame_index as f64 / f64::from(frame_rate))
+        .unwrap_or(Time::ZERO)
+}
+
 fn prepare_generated_topology(
     document: &SequenceDocument,
     parent_start_seconds: f64,
     parent_duration_seconds: f64,
     parent_scope: SequenceEffectScope,
     generator: &CompiledEffect,
-    render: &dawn_project::document::SequenceEffectRenderDocument,
+    render: &SequenceEffectRenderDocument,
 ) -> Result<Vec<GeneratedChildTopology>, RuntimeError> {
     let prepared_params = prepare_params_from_document(
         generator,
@@ -2533,11 +2675,6 @@ fn prepare_generated_topology(
         parent_start_seconds,
         parent_duration_seconds,
     )?;
-    let param_names = generator
-        .params
-        .iter()
-        .map(|param| param.name.clone())
-        .collect::<Vec<_>>();
     let target = GeneratorTarget {
         pixels: render
             .target_pixels
@@ -2550,17 +2687,10 @@ fn prepare_generated_topology(
             .collect(),
     };
     let targets = generator_targets_for_scope(parent_scope, target);
-    let statements = generator
-        .generator_statements()
-        .ok_or_else(|| RuntimeError {
-            message: format!("effect `{}` is not a generator effect", generator.name),
-        })?;
     let mut children = Vec::new();
     for target in targets {
-        children.extend(run_generator_topology(
-            statements,
+        children.extend(generator.generator_topology(
             &prepared_params,
-            &param_names,
             target,
             parent_duration_seconds,
         )?);
@@ -2580,14 +2710,14 @@ fn prepare_generated_topology(
 }
 
 struct GeneratedEffectTopologyInput<'a> {
-    analysis: &'a ProjectAnalysis,
+    project: &'a DawnProject,
     parent_path: Utf8PathBuf,
     parent_id: u32,
     parent_start_seconds: f64,
     parent_duration_seconds: f64,
-    generator_id: EffectScriptId,
+    generator_id: EffectDefinitionKey,
     generator: &'a CompiledEffect,
-    render: &'a dawn_project::document::SequenceEffectRenderDocument,
+    render: &'a SequenceEffectRenderDocument,
     mark_collections: &'a [SequenceMarkCollectionDocument],
     fixture_templates: &'a [OutputFixtureFrame],
     children: Vec<GeneratedChildTopology>,
@@ -2612,7 +2742,7 @@ fn prepare_generated_effects_from_topology(
     }
     flatten_generated_children(
         GeneratedChildFlattenInput {
-            analysis: input.analysis,
+            project: input.project,
             parent_path: &input.parent_path,
             parent_id: input.parent_id,
             parent_start_seconds: input.parent_start_seconds,
@@ -2630,7 +2760,7 @@ fn prepare_generated_effects_from_topology(
 }
 
 struct GeneratedChildFlattenInput<'a> {
-    analysis: &'a ProjectAnalysis,
+    project: &'a DawnProject,
     parent_path: &'a Utf8PathBuf,
     parent_id: u32,
     parent_start_seconds: f64,
@@ -2643,30 +2773,25 @@ struct GeneratedChildFlattenInput<'a> {
 
 fn flatten_generated_children(
     input: GeneratedChildFlattenInput<'_>,
-    stack: &mut Vec<EffectScriptId>,
+    stack: &mut Vec<EffectDefinitionKey>,
     child_count: &mut usize,
     effects: &mut Vec<PreparedSequenceEffect>,
 ) -> Result<(), RuntimeError> {
-    let param_names = input
-        .parent_script
-        .params
-        .iter()
-        .map(|param| param.name.clone())
-        .collect::<Vec<_>>();
     for child in input.children {
         if (input.is_cancelled)() {
             return Ok(());
         }
         let child_ref = resolve_generated_child_effect(
-            input.analysis,
+            input.project,
             input.parent_path,
             input.parent_script,
             &child.effect,
         )?;
-        let emitted_params =
-            evaluate_generated_child_params(&child, input.parent_params, &param_names)?;
+        let emitted_params = input
+            .parent_script
+            .generator_child_params(&child, input.parent_params)?;
         let prepared_params = child_ref.script.prepare_params(&emitted_params)?;
-        match child_ref.script.kind {
+        match child_ref.script.kind() {
             EffectScriptKind::Sample => {
                 if *child_count >= MAX_FLATTENED_GENERATED_CHILDREN {
                     return Err(RuntimeError {
@@ -2712,40 +2837,23 @@ fn flatten_generated_children(
                 {
                     let mut cycle = stack[cycle_start..]
                         .iter()
-                        .map(EffectScriptId::display_key)
+                        .map(EffectDefinitionKey::display_key)
                         .collect::<Vec<_>>();
                     cycle.push(child_ref.id.display_key());
                     return Err(RuntimeError {
                         message: format!("generator cycle detected: {}", cycle.join(" -> ")),
                     });
                 }
-                let statements =
-                    child_ref
-                        .script
-                        .generator_statements()
-                        .ok_or_else(|| RuntimeError {
-                            message: format!(
-                                "effect `{}` is not a generator effect",
-                                child_ref.script.name
-                            ),
-                        })?;
-                let child_param_names = child_ref
-                    .script
-                    .params
-                    .iter()
-                    .map(|param| param.name.clone())
-                    .collect::<Vec<_>>();
                 let nested_children = prepare_child_generator_topology(
-                    statements,
+                    child_ref.script,
                     &prepared_params,
-                    &child_param_names,
                     child.target,
                     child.duration_seconds,
                 )?;
                 stack.push(child_ref.id.clone());
                 flatten_generated_children(
                     GeneratedChildFlattenInput {
-                        analysis: input.analysis,
+                        project: input.project,
                         parent_path: &child_ref.id.path,
                         parent_id: input.parent_id,
                         parent_start_seconds: input.parent_start_seconds + child.start_seconds,
@@ -2767,12 +2875,12 @@ fn flatten_generated_children(
 }
 
 struct ResolvedGeneratedChildEffect<'a> {
-    id: EffectScriptId,
+    id: EffectDefinitionKey,
     script: &'a CompiledEffect,
 }
 
 fn resolve_generated_child_effect<'a>(
-    analysis: &'a ProjectAnalysis,
+    project: &'a DawnProject,
     parent_path: &Utf8PathBuf,
     parent_script: &CompiledEffect,
     child: &GeneratedChildEffectRef,
@@ -2780,29 +2888,31 @@ fn resolve_generated_child_effect<'a>(
     let (child_path, child_name) = match child {
         GeneratedChildEffectRef::Local { name } => (parent_path.clone(), name.clone()),
         GeneratedChildEffectRef::Imported { alias, name } => {
-            let import = parent_script
-                .imports
-                .iter()
-                .find(|import| import.alias == *alias)
-                .ok_or_else(|| RuntimeError {
-                    message: format!("generator import alias `{alias}` was not found"),
-                })?;
+            let import =
+                parent_script
+                    .import_path_for_alias(alias)
+                    .ok_or_else(|| RuntimeError {
+                        message: format!("generator import alias `{alias}` was not found"),
+                    })?;
             (
-                resolve_import_path(parent_path, &Utf8PathBuf::from(import.path.clone())),
+                resolve_import_path(parent_path, &Utf8PathBuf::from(import)),
                 name.clone(),
             )
         }
     };
-    let child_id = EffectScriptId::new(child_path, child_name.clone());
-    let child_script = analysis
-        .compiled_script_for_id(&child_id)
+    let child_id = EffectDefinitionKey::new(child_path, child_name.clone());
+    let child_script = project
+        .stores
+        .effect_definitions
+        .get(&child_id)
+        .map(|effect| &effect.value.compiled)
         .ok_or_else(|| RuntimeError {
             message: format!(
                 "compiled child script `{}` was not found",
                 child_id.display_key()
             ),
         })?;
-    if child_script.name != child_name {
+    if child_script.name() != child_name {
         return Err(RuntimeError {
             message: format!(
                 "compiled child script `{}` did not match emitted effect `{child_name}`",
@@ -2817,19 +2927,12 @@ fn resolve_generated_child_effect<'a>(
 }
 
 fn prepare_child_generator_topology(
-    statements: &[dawn_project::Stmt],
+    generator: &CompiledEffect,
     prepared_params: &PreparedEffectParams,
-    param_names: &[String],
     target: GeneratorTarget,
     duration_seconds: f64,
 ) -> Result<Vec<GeneratedChildTopology>, RuntimeError> {
-    let mut children = run_generator_topology(
-        statements,
-        prepared_params,
-        param_names,
-        target,
-        duration_seconds,
-    )?;
+    let mut children = generator.generator_topology(prepared_params, target, duration_seconds)?;
     scale_generated_children_to_duration(&mut children, duration_seconds);
     Ok(children)
 }
@@ -2853,17 +2956,15 @@ fn scale_generated_children_to_duration(
 
 fn sequence_effect_pixels_for_generator_target(
     target: &GeneratorTarget,
-) -> Vec<dawn_project::document::SequenceEffectPixelDocument> {
+) -> Vec<SequenceEffectPixelDocument> {
     target
         .pixels
         .iter()
-        .map(
-            |pixel| dawn_project::document::SequenceEffectPixelDocument {
-                fixture_index: pixel.fixture_index,
-                pixel_index: pixel.pixel_index,
-                pixel_count: pixel.pixel_count,
-            },
-        )
+        .map(|pixel| SequenceEffectPixelDocument {
+            fixture_index: pixel.fixture_index,
+            pixel_index: pixel.pixel_index,
+            pixel_count: pixel.pixel_count,
+        })
         .collect()
 }
 
@@ -2923,7 +3024,7 @@ enum PreparedEffectRender {
         scratch: Box<EffectSampleScratch>,
         _bytecode_stats: BytecodeStats,
     },
-    MissingScript(EffectScriptId),
+    MissingScript(EffectDefinitionKey),
     BadParams(RuntimeError),
 }
 
@@ -2970,7 +3071,7 @@ impl PreparedEffectRender {
 
 fn prepare_effect_pixels(
     scope: SequenceEffectScope,
-    target_pixels: &[dawn_project::document::SequenceEffectPixelDocument],
+    target_pixels: &[SequenceEffectPixelDocument],
     fixture_templates: &[OutputFixtureFrame],
 ) -> Vec<PreparedEffectPixel> {
     let target_pixel_count = target_pixels.len();
@@ -3023,38 +3124,38 @@ fn prepare_effect_pixel_groups(
 }
 
 pub fn evaluate_sequence_frame(
-    analysis: &ProjectAnalysis,
+    project: &DawnProject,
     document: &SequenceDocument,
     time_seconds: f64,
     generation: u64,
 ) -> OutputFrame {
-    match SequenceFrameEvaluator::new(analysis, document) {
+    match SequenceFrameEvaluator::new(project, document) {
         Ok(mut evaluator) => evaluator.evaluate(time_seconds, generation),
         Err(message) => empty_frame(generation, message),
     }
 }
 
 pub fn evaluate_sequence_frame_filtered(
-    analysis: &ProjectAnalysis,
+    project: &DawnProject,
     document: &SequenceDocument,
     time_seconds: f64,
     generation: u64,
     effect_filter: Option<&HashSet<u32>>,
 ) -> OutputFrame {
-    match SequenceFrameEvaluator::new_filtered(analysis, document, effect_filter) {
+    match SequenceFrameEvaluator::new_filtered(project, document, effect_filter) {
         Ok(mut evaluator) => evaluator.evaluate(time_seconds, generation),
         Err(message) => empty_frame(generation, message),
     }
 }
 
 pub fn evaluate_sequence_effect_preview_frame(
-    analysis: &ProjectAnalysis,
+    project: &DawnProject,
     document: &SequenceDocument,
     preview_seconds: f64,
     generation: u64,
     effect_filter: &HashSet<u32>,
 ) -> OutputFrame {
-    match SequenceFrameEvaluator::new_filtered(analysis, document, Some(effect_filter)) {
+    match SequenceFrameEvaluator::new_filtered(project, document, Some(effect_filter)) {
         Ok(mut evaluator) => evaluator.evaluate_effect_preview(preview_seconds, generation),
         Err(message) => empty_frame(generation, message),
     }
@@ -3094,19 +3195,19 @@ pub fn runtime_params_from_document(
     mark_collections: &[SequenceMarkCollectionDocument],
     effect_start_seconds: f64,
     effect_duration_seconds: f64,
-) -> BTreeMap<String, RuntimeValue> {
-    params
-        .iter()
-        .filter_map(|param| {
-            runtime_value_from_param(
-                &param.value,
-                mark_collections,
-                effect_start_seconds,
-                effect_duration_seconds,
-            )
-            .map(|value| (param.name.clone(), value))
-        })
-        .collect()
+) -> Result<BTreeMap<String, RuntimeValue>, RuntimeError> {
+    let mut values = BTreeMap::new();
+    for param in params {
+        if let Some(value) = runtime_value_from_param(
+            &param.value,
+            mark_collections,
+            effect_start_seconds,
+            effect_duration_seconds,
+        )? {
+            values.insert(param.name.clone(), value);
+        }
+    }
+    Ok(values)
 }
 
 pub fn prepare_params_from_document(
@@ -3116,19 +3217,13 @@ pub fn prepare_params_from_document(
     effect_start_seconds: f64,
     effect_duration_seconds: f64,
 ) -> Result<PreparedEffectParams, RuntimeError> {
-    script.prepare_params_with(|name| {
-        params
-            .iter()
-            .find(|param| param.name == name)
-            .and_then(|param| {
-                runtime_value_from_param(
-                    &param.value,
-                    mark_collections,
-                    effect_start_seconds,
-                    effect_duration_seconds,
-                )
-            })
-    })
+    let values = runtime_params_from_document(
+        params,
+        mark_collections,
+        effect_start_seconds,
+        effect_duration_seconds,
+    )?;
+    script.prepare_params(&values)
 }
 
 pub fn runtime_value_from_param(
@@ -3136,37 +3231,49 @@ pub fn runtime_value_from_param(
     mark_collections: &[SequenceMarkCollectionDocument],
     effect_start_seconds: f64,
     effect_duration_seconds: f64,
-) -> Option<RuntimeValue> {
+) -> Result<Option<RuntimeValue>, RuntimeError> {
     match param {
-        EffectParam::Integer { value } => Some(RuntimeValue::Int(*value as i64)),
-        EffectParam::Float { value } => Some(RuntimeValue::Float(*value)),
-        EffectParam::Boolean { value } => Some(RuntimeValue::Bool(*value)),
-        EffectParam::Enum { value } => Some(RuntimeValue::Enum(value.clone())),
-        EffectParam::Flags { value } => Some(RuntimeValue::Flags(value.clone())),
-        EffectParam::Color { value } => Some(RuntimeValue::Color(*value)),
-        EffectParam::Curve { curve } => Some(RuntimeValue::Curve(curve.clone())),
+        EffectParam::Integer { value } => Ok(Some(RuntimeValue::Int(*value as i64))),
+        EffectParam::Float { value } => Ok(Some(RuntimeValue::Float(*value))),
+        EffectParam::Boolean { value } => Ok(Some(RuntimeValue::Bool(*value))),
+        EffectParam::Enum { value } => Ok(Some(RuntimeValue::Enum(value.clone()))),
+        EffectParam::Flags { value } => Ok(Some(RuntimeValue::Flags(value.clone()))),
+        EffectParam::Color { value } => Ok(Some(RuntimeValue::Color(*value))),
+        EffectParam::Curve { curve } => Ok(Some(RuntimeValue::Curve(
+            inline_curve_for_runtime(curve)?.clone(),
+        ))),
         EffectParam::Array {
             element_type,
             values,
-        } => Some(RuntimeValue::Array(dawn_project::RuntimeArrayValue {
-            element_type: *element_type,
-            values: values
-                .iter()
-                .map(runtime_value_from_array_param)
-                .collect::<Option<Vec<_>>>()?,
-        })),
+        } => {
+            let mut runtime_values = Vec::new();
+            for value in values {
+                let Some(value) = runtime_value_from_array_param(value)? else {
+                    return Ok(None);
+                };
+                runtime_values.push(value);
+            }
+            Ok(Some(RuntimeValue::Array(RuntimeArrayValue {
+                element_type: *element_type,
+                values: runtime_values,
+            })))
+        }
         EffectParam::Marks { key } => {
-            let global = mark_collections
+            let Some(collection) = mark_collections
                 .iter()
-                .find(|collection| collection.key == *key)?
+                .find(|collection| collection.key == *key)
+            else {
+                return Ok(None);
+            };
+            let global = collection
                 .marks_seconds
                 .iter()
                 .map(|mark_seconds| *mark_seconds - effect_start_seconds)
                 .collect::<Vec<_>>();
-            Some(RuntimeValue::Marks(runtime_marks(
+            Ok(Some(RuntimeValue::Marks(runtime_marks(
                 global,
                 effect_duration_seconds,
-            )))
+            ))))
         }
     }
 }
@@ -3183,17 +3290,17 @@ fn runtime_marks(mut global: Vec<f64>, effect_duration_seconds: f64) -> RuntimeM
 
 fn runtime_value_from_array_param(
     value: &dawn_project::EffectParamArrayValue<Resolved>,
-) -> Option<RuntimeValue> {
+) -> Result<Option<RuntimeValue>, RuntimeError> {
     match value {
         dawn_project::EffectParamArrayValue::Integer(value) => {
-            Some(RuntimeValue::Int(*value as i64))
+            Ok(Some(RuntimeValue::Int(*value as i64)))
         }
-        dawn_project::EffectParamArrayValue::Float(value) => Some(RuntimeValue::Float(*value)),
-        dawn_project::EffectParamArrayValue::Boolean(value) => Some(RuntimeValue::Bool(*value)),
-        dawn_project::EffectParamArrayValue::Color(value) => Some(RuntimeValue::Color(*value)),
-        dawn_project::EffectParamArrayValue::Curve(curve) => {
-            Some(RuntimeValue::Curve(curve.clone()))
-        }
+        dawn_project::EffectParamArrayValue::Float(value) => Ok(Some(RuntimeValue::Float(*value))),
+        dawn_project::EffectParamArrayValue::Boolean(value) => Ok(Some(RuntimeValue::Bool(*value))),
+        dawn_project::EffectParamArrayValue::Color(value) => Ok(Some(RuntimeValue::Color(*value))),
+        dawn_project::EffectParamArrayValue::Curve(curve) => Ok(Some(RuntimeValue::Curve(
+            inline_curve_for_runtime(curve)?.clone(),
+        ))),
     }
 }
 
@@ -3228,14 +3335,15 @@ pub fn empty_frame(generation: u64, message: impl Into<String>) -> OutputFrame {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use dawn_project::analysis::{analyze_project, ProjectAnalysis};
-    use dawn_project::document::{get_sequence_document, SequenceDocument};
-    use dawn_project::render::{GeometryRenderBounds, GeometryRenderPoint};
-    use dawn_project::WorkspaceFs;
-    use dawn_project::{utf8_path, Utf8PathBuf};
-    use dawn_project::{
-        Color, CurveValue, Distance, EffectParam, EffectScriptId, Resolved, SequenceEffectScope,
+    use crate::document::{
+        GeometryRenderBounds, GeometryRenderPoint, SequenceDocument, SequenceEffectParamDocument,
     };
+    use crate::workspace::WorkspaceService;
+    use dawn_project::{
+        Color, CurveValue, Distance, EffectDefinitionKey, EffectParam, Resolved,
+        ResolvedInlineOrRef, SequenceEffectScope,
+    };
+    use dawn_project::{DawnProject, Utf8PathBuf};
 
     use dawn_project::{GeneratorTarget, GeneratorTargetPixel};
 
@@ -3246,65 +3354,45 @@ mod tests {
         PreparedEffectRender, PreparedSequenceEffect, SequenceChangeImpact, SequenceFrameEvaluator,
     };
 
-    fn club_rig_project_path() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/club-rig/project.dawn")
+    fn christmas_house_project_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/christmas-house/project.dawn")
     }
 
-    fn club_rig_context() -> (WorkspaceFs, Utf8PathBuf, Utf8PathBuf) {
-        let project_path = club_rig_project_path();
-        let root = project_path
-            .parent()
-            .expect("club rig project should have a parent");
-        let fs = WorkspaceFs::open(root).expect("club rig root should open");
-        let project_path = utf8_path(
-            project_path
-                .strip_prefix(root)
-                .expect("project path should be under root"),
+    fn load_sequence(
+        project_path: PathBuf,
+        sequence_path: Utf8PathBuf,
+        object_key: &str,
+    ) -> (DawnProject, SequenceDocument) {
+        let mut workspace = WorkspaceService::default();
+        workspace
+            .open_project(
+                std::fs::canonicalize(&project_path).expect("example project path should exist"),
+            )
+            .expect("example project should open");
+        let result = workspace.load_project();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let project = result.project.expect("example project should load");
+        let document = workspace
+            .sequence_document(&project, sequence_path, object_key)
+            .expect("example sequence should load");
+        (project, document)
+    }
+
+    fn christmas_house_project_and_sequence() -> (DawnProject, SequenceDocument) {
+        load_sequence(
+            christmas_house_project_path(),
+            Utf8PathBuf::from("sequences/christmas.sequence.dawn"),
+            "christmas",
         )
-        .expect("project path should be valid UTF-8");
-        let sequence_path = utf8_path(Path::new("sequences/opening.sequence.dawn"))
-            .expect("sequence path should be valid UTF-8");
-        (fs, project_path, sequence_path)
     }
 
-    fn club_rig_analysis_and_sequence() -> (ProjectAnalysis, SequenceDocument) {
-        let (fs, project_path, sequence_path) = club_rig_context();
-        let analysis = analyze_project(&fs, project_path.clone(), "club_rig");
-        assert!(
-            analysis.diagnostics.is_empty(),
-            "{:?}",
-            analysis.diagnostics
-        );
-        let document =
-            get_sequence_document(&fs, sequence_path, "opening", project_path, Vec::new())
-                .expect("club rig sequence should load");
-        (analysis, document)
-    }
-
-    fn thirty_output_controller_analysis_and_sequence() -> (ProjectAnalysis, SequenceDocument) {
-        let project_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../examples/thirty-output-controller/project.dawn");
-        let root = project_path
-            .parent()
-            .expect("thirty output controller project should have a parent");
-        let fs = WorkspaceFs::open(root).expect("thirty output controller root should open");
-        let project_path = utf8_path(
-            project_path
-                .strip_prefix(root)
-                .expect("project path should be under root"),
+    fn thirty_output_controller_project_and_sequence() -> (DawnProject, SequenceDocument) {
+        load_sequence(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/thirty-output-controller/project.dawn"),
+            Utf8PathBuf::from("sequences/empty.sequence.dawn"),
+            "empty",
         )
-        .expect("project path should be valid UTF-8");
-        let sequence_path = utf8_path(Path::new("sequences/empty.sequence.dawn"))
-            .expect("sequence path should be valid UTF-8");
-        let analysis = analyze_project(&fs, project_path.clone(), "thirty_output_controller");
-        assert!(
-            analysis.diagnostics.is_empty(),
-            "{:?}",
-            analysis.diagnostics
-        );
-        let document = get_sequence_document(&fs, sequence_path, "empty", project_path, Vec::new())
-            .expect("thirty output controller sequence should load");
-        (analysis, document)
     }
 
     fn mutate_curve_point(
@@ -3317,6 +3405,9 @@ mod tests {
         let param = render_param_mut(document, effect_id, param_name);
         match &mut param.value {
             EffectParam::<Resolved>::Curve { curve } => {
+                let ResolvedInlineOrRef::Inline(curve) = &mut curve.curve else {
+                    panic!("expected inline curve param `{param_name}`");
+                };
                 curve.points[point_index].value = CurveValue::Float(value);
             }
             _ => panic!("expected curve param `{param_name}`"),
@@ -3327,7 +3418,7 @@ mod tests {
         document: &'a mut SequenceDocument,
         effect_id: u32,
         param_name: &str,
-    ) -> &'a mut dawn_project::document::SequenceEffectParamDocument {
+    ) -> &'a mut SequenceEffectParamDocument {
         document
             .effects
             .iter_mut()
@@ -3369,11 +3460,11 @@ mod tests {
 
     #[test]
     fn sequence_change_impact_invalidates_only_chase_pulse_shape_prepared_entries() {
-        let (analysis, document) = thirty_output_controller_analysis_and_sequence();
+        let (project, document) = thirty_output_controller_project_and_sequence();
         let mut edited = document.clone();
         mutate_curve_point(&mut edited, 3, "pulse_shape", 1, 0.25);
 
-        let impact = SequenceChangeImpact::between(&document, &edited, &analysis);
+        let impact = SequenceChangeImpact::between(&document, &edited, &project);
 
         assert_only_invalidated(&impact, &[3], &[]);
     }
@@ -3404,7 +3495,7 @@ mod tests {
             start_seconds,
             duration_seconds,
             authored,
-            render: PreparedEffectRender::MissingScript(EffectScriptId::new(
+            render: PreparedEffectRender::MissingScript(EffectDefinitionKey::new(
                 Utf8PathBuf::from("missing.effect.dawn"),
                 "Missing",
             )),
@@ -3655,9 +3746,9 @@ mod tests {
 
     #[test]
     fn generator_heavy_sequence_visits_only_indexed_prepared_children() {
-        let (analysis, document) = thirty_output_controller_analysis_and_sequence();
+        let (project, document) = thirty_output_controller_project_and_sequence();
         let mut evaluator =
-            SequenceFrameEvaluator::new(&analysis, &document).expect("renderer should build");
+            SequenceFrameEvaluator::new(&project, &document).expect("renderer should build");
 
         let (first_frame, timing) = evaluator.evaluate_timed(41.0, 1);
         let second_frame = evaluator.evaluate(41.0, 2);
@@ -3670,11 +3761,11 @@ mod tests {
 
     #[test]
     fn per_fixture_sample_reuse_reduces_vm_evaluations_without_skipping_output_pixels() {
-        let (analysis, document) = thirty_output_controller_analysis_and_sequence();
+        let (project, document) = christmas_house_project_and_sequence();
         let mut evaluator =
-            SequenceFrameEvaluator::new(&analysis, &document).expect("renderer should build");
+            SequenceFrameEvaluator::new(&project, &document).expect("renderer should build");
 
-        let (_frame, timing) = evaluator.evaluate_timed(41.0, 1);
+        let (_frame, timing) = evaluator.evaluate_timed(1.0, 1);
 
         assert!(timing.sampled_pixels > 0);
         assert!(timing.vm_sample_evaluations > 0);
@@ -3687,9 +3778,9 @@ mod tests {
 
     #[test]
     fn reusable_sequence_evaluator_updates_frame_output_over_time() {
-        let (analysis, document) = club_rig_analysis_and_sequence();
+        let (project, document) = christmas_house_project_and_sequence();
         let mut evaluator =
-            SequenceFrameEvaluator::new(&analysis, &document).expect("renderer should build");
+            SequenceFrameEvaluator::new(&project, &document).expect("renderer should build");
 
         let first = evaluator.evaluate(2.0, 1);
         let second = evaluator.evaluate(6.0, 2);
@@ -3701,11 +3792,11 @@ mod tests {
 
     #[test]
     fn selected_effect_preview_filters_the_reusable_evaluator() {
-        let (analysis, document) = club_rig_analysis_and_sequence();
+        let (project, document) = christmas_house_project_and_sequence();
         let mut evaluator =
-            SequenceFrameEvaluator::new(&analysis, &document).expect("renderer should build");
+            SequenceFrameEvaluator::new(&project, &document).expect("renderer should build");
         let first_ids = [1].into_iter().collect();
-        let second_ids = [23].into_iter().collect();
+        let second_ids = [2].into_iter().collect();
 
         let first = evaluator.evaluate_effect_preview_filtered(1.0, 1, Some(&first_ids));
         let second = evaluator.evaluate_effect_preview_filtered(1.0, 2, Some(&second_ids));

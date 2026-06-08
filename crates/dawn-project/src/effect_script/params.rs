@@ -120,7 +120,7 @@ impl CurveCrossingTable {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct EffectSampleScratch {
+pub struct EffectSampleScratch {
     pub(super) floats: Vec<f64>,
     pub(super) ints: Vec<i64>,
     pub(super) bools: Vec<bool>,
@@ -132,7 +132,7 @@ pub(super) struct EffectSampleScratch {
 }
 
 impl EffectSampleScratch {
-    pub(super) fn new(stats: BytecodeStats) -> Self {
+    pub fn new(stats: BytecodeStats) -> Self {
         Self {
             floats: vec![0.0; stats.float_slots],
             ints: vec![0; stats.int_slots],

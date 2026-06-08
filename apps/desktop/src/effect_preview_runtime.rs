@@ -3,9 +3,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use dawn_app_core::document::SequenceDocument;
 use dawn_app_core::output_runtime::{SequenceEffectThumbnailResult, SequenceRenderCache};
-use dawn_project::analysis::ProjectAnalysis;
-use dawn_project::document::SequenceDocument;
+use dawn_project::DawnProject;
 
 use crate::effect_previews::{
     preview_max_columns, preview_max_rows, sequence_effect_preview_dto,
@@ -54,7 +54,7 @@ impl EffectPreviewRuntime {
         object_key: String,
         request_id: u32,
         effects: Vec<SequenceEffectPreviewRequestEffectDto>,
-        analysis: ProjectAnalysis,
+        project: Arc<DawnProject>,
         document: SequenceDocument,
     ) -> Result<(), String> {
         let key = SequencePreviewDocumentKey::new(path, object_key);
@@ -67,7 +67,7 @@ impl EffectPreviewRuntime {
                 key,
                 request_id,
                 effects,
-                analysis,
+                project,
                 document,
             })
             .map_err(|_| "effect preview worker is not available".to_string())
@@ -92,7 +92,7 @@ struct EffectPreviewJob {
     key: SequencePreviewDocumentKey,
     request_id: u32,
     effects: Vec<SequenceEffectPreviewRequestEffectDto>,
-    analysis: ProjectAnalysis,
+    project: Arc<DawnProject>,
     document: SequenceDocument,
 }
 
@@ -160,7 +160,7 @@ fn process_job(
             continue;
         };
         let result = cache.effect_thumbnail_cancellable(
-            &job.analysis,
+            &job.project,
             &job.document,
             effect,
             preview_max_columns(),

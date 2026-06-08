@@ -39,7 +39,7 @@ type PreviewTiming = {
   liveOutputLockMs: number;
   modelLockWaitMs: number;
   previewSnapshotMs: number;
-  analysisHandleMs: number;
+  projectSnapshotMs: number;
   audioPollMs: number;
   audioApplyMs: number;
   modelUpdateMs: number;
@@ -312,7 +312,7 @@ export function PreviewWindow() {
           {formatNumber(state?.timing.liveOutputLockMs ?? 0)} ms
         </div>
         <div>
-          analysis handle {formatNumber(state?.timing.analysisHandleMs ?? 0)} ms | snapshot{" "}
+          project snapshot {formatNumber(state?.timing.projectSnapshotMs ?? 0)} ms | snapshot{" "}
           {formatNumber(state?.timing.previewSnapshotMs ?? 0)} ms | event emit prev {formatNumber(state?.timing.eventEmitMs ?? 0)} ms | publish{" "}
           {formatNumber(state?.timing.publishMs ?? 0)} ms
         </div>

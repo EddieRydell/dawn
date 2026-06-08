@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::fmt;
 use std::net::SocketAddr;
 
-use dawn_project::analysis::ProjectAnalysis;
 use dawn_project::{
-    Color, ColorModel, Controller, ControllerIndex, ControllerOutput, FixtureIndex, Protocol,
-    RgbChannelOrder,
+    Color, ColorModel, Controller, ControllerOutput, DawnProject, Display, FixturePlacement,
+    Layout, Patch, Protocol, Resolved, ResolvedInlineOrRef, RgbChannelOrder,
 };
 
+use crate::document::geometry_render_plan;
 use crate::output_runtime::OutputFrame;
 
 pub const DMX_UNIVERSE_CHANNELS: usize = 512;
@@ -34,7 +34,7 @@ impl ControllerOutputPlan {
         let mut outputs = self.blackout_buffers();
         for (universe_plan, output) in self.universes.iter().zip(outputs.iter_mut()) {
             for route in &universe_plan.routes {
-                let Some(fixture) = frame.fixtures.get(route.fixture_index.0) else {
+                let Some(fixture) = frame.fixtures.get(route.fixture_index) else {
                     continue;
                 };
                 let bytes = fixture_rgb_bytes(fixture, route.channel_order);
@@ -88,7 +88,7 @@ pub struct ControllerUniversePlan {
 
 #[derive(Debug, Clone)]
 struct ControllerRoutePlan {
-    fixture_index: FixtureIndex,
+    fixture_index: usize,
     channel_order: RgbChannelOrder,
     fixture_channel_offset: usize,
     start_channel: usize,
@@ -173,44 +173,27 @@ pub enum ControllerOutputError {
 impl fmt::Display for ControllerOutputError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ProjectNotResolved => write!(formatter, "project must resolve before live output is available"),
-            Self::UnsupportedProtocol {
-                controller,
-                protocol,
-            } => write!(
+            Self::ProjectNotResolved => write!(formatter, "project must load before live output is available"),
+            Self::UnsupportedProtocol { controller, protocol } => write!(
                 formatter,
                 "controller `{controller}` uses unsupported live-output protocol `{protocol:?}`"
             ),
             Self::MissingDestination { controller } => {
                 write!(formatter, "controller `{controller}` is missing a destination")
             }
-            Self::MissingUniverse {
-                controller,
-                universe,
-            } => write!(
+            Self::MissingUniverse { controller, universe } => write!(
                 formatter,
                 "controller `{controller}` does not declare universe `{universe}`"
             ),
-            Self::InvalidUniverseId {
-                controller,
-                universe,
-            } => write!(
+            Self::InvalidUniverseId { controller, universe } => write!(
                 formatter,
                 "controller `{controller}` universe `{universe}` is outside the E1.31 universe range"
             ),
-            Self::InvalidUniverseRange {
-                controller,
-                universe,
-                start,
-                end,
-            } => write!(
+            Self::InvalidUniverseRange { controller, universe, start, end } => write!(
                 formatter,
                 "controller `{controller}` universe `{universe}` range `{start}..{end}` is outside DMX channels 1..512"
             ),
-            Self::UnsupportedColorModel {
-                fixture,
-                color_model,
-            } => write!(
+            Self::UnsupportedColorModel { fixture, color_model } => write!(
                 formatter,
                 "fixture `{fixture}` uses unsupported live-output color model `{color_model:?}`"
             ),
@@ -226,46 +209,26 @@ impl fmt::Display for ControllerOutputError {
                 formatter,
                 "fixture `{fixture}` route on `{controller}` universe `{universe}` uses channels `{start}..{end}`, outside declared range `{range_start}..{range_end}`"
             ),
-            Self::RouteOverlap {
-                fixture,
-                controller,
-                universe,
-                channel,
-            } => write!(
+            Self::RouteOverlap { fixture, controller, universe, channel } => write!(
                 formatter,
                 "fixture `{fixture}` overlaps another route on `{controller}` universe `{universe}` at channel `{channel}`"
             ),
-            Self::RouteTargetsLinearController {
-                fixture,
-                controller,
-            } => write!(
+            Self::RouteTargetsLinearController { fixture, controller } => write!(
                 formatter,
                 "fixture `{fixture}` route targets linear RGB controller `{controller}`"
             ),
             Self::MissingGroup { controller, group } => {
                 write!(formatter, "controller `{controller}` references unknown group `{group}`")
             }
-            Self::LinearGroupCountMismatch {
-                controller,
-                group,
-                expected,
-                actual,
-            } => write!(
+            Self::LinearGroupCountMismatch { controller, group, expected, actual } => write!(
                 formatter,
                 "controller `{controller}` linear RGB group `{group}` has {actual} fixtures, expected {expected}"
             ),
-            Self::LinearFixturePixelCountMismatch {
-                fixture,
-                expected,
-                actual,
-            } => write!(
+            Self::LinearFixturePixelCountMismatch { fixture, expected, actual } => write!(
                 formatter,
                 "fixture `{fixture}` has {actual} pixels, expected {expected} for linear RGB output"
             ),
-            Self::InvalidLinearOutputConfig {
-                controller,
-                message,
-            } => write!(
+            Self::InvalidLinearOutputConfig { controller, message } => write!(
                 formatter,
                 "controller `{controller}` has invalid linear RGB output config: {message}"
             ),
@@ -276,15 +239,15 @@ impl fmt::Display for ControllerOutputError {
 impl std::error::Error for ControllerOutputError {}
 
 pub fn build_output_plan(
-    analysis: &ProjectAnalysis,
+    project: &DawnProject,
 ) -> Result<ControllerOutputPlan, ControllerOutputError> {
-    build_output_plan_for(analysis, ControllerOutputPurpose::Live)
+    build_output_plan_for(project, ControllerOutputPurpose::Live)
 }
 
 pub fn build_fseq_output_plan(
-    analysis: &ProjectAnalysis,
+    project: &DawnProject,
 ) -> Result<ControllerOutputPlan, ControllerOutputError> {
-    build_output_plan_for(analysis, ControllerOutputPurpose::Fseq)
+    build_output_plan_for(project, ControllerOutputPurpose::Fseq)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -294,21 +257,22 @@ enum ControllerOutputPurpose {
 }
 
 fn build_output_plan_for(
-    analysis: &ProjectAnalysis,
+    project: &DawnProject,
     purpose: ControllerOutputPurpose,
 ) -> Result<ControllerOutputPlan, ControllerOutputError> {
-    let project = analysis
-        .resolved
-        .as_ref()
-        .ok_or(ControllerOutputError::ProjectNotResolved)?;
-    let mut universes: HashMap<UniverseKey, ControllerUniverseBuilder> = HashMap::new();
-    let mut occupancy: HashMap<UniverseKey, Vec<bool>> = HashMap::new();
+    let display = active_display(project)?;
+    let layout = resolved_layout(project, &display.layout)?;
+    let patch = resolved_patch(project, &display.patch)?;
+    let mut universes = HashMap::new();
+    let mut occupancy = HashMap::new();
 
-    for (controller_index, controller) in project.display.controllers.iter().enumerate() {
+    for controller_ref in &display.controllers {
+        let (controller_name, controller) = resolved_controller(project, controller_ref)?;
         if let ControllerOutput::LinearRgb { .. } = &controller.output {
             add_linear_rgb_controller(
-                analysis,
-                ControllerIndex(controller_index),
+                project,
+                layout,
+                controller_name,
                 controller,
                 &mut universes,
                 purpose,
@@ -316,54 +280,57 @@ fn build_output_plan_for(
         }
     }
 
-    for route in &project.display.patch.routes {
+    for route in &patch.routes {
+        let controller_name = route.controller.key.name.as_str();
         let controller = project
-            .display
-            .controller(route.controller)
+            .stores
+            .controllers
+            .get(&route.controller.key)
+            .map(|controller| &controller.value)
             .ok_or(ControllerOutputError::ProjectNotResolved)?;
-        let fixture = project
-            .display
-            .layout
-            .fixture(route.fixture)
+        let fixture_index = layout
+            .fixtures
+            .iter()
+            .position(|fixture| fixture.id == route.fixture)
             .ok_or(ControllerOutputError::ProjectNotResolved)?;
+        let fixture = &layout.fixtures[fixture_index];
         let ControllerOutput::PatchedDmx {
             channel_order,
             universes: declared_universes,
         } = &controller.output
         else {
             return Err(ControllerOutputError::RouteTargetsLinearController {
-                fixture: fixture.name.clone(),
-                controller: controller.name.clone(),
+                fixture: fixture_name(fixture),
+                controller: controller_name.to_string(),
             });
         };
         if purpose == ControllerOutputPurpose::Live {
-            validate_live_controller(controller)?;
+            validate_live_controller(controller_name, controller)?;
         }
         let destination = controller
             .destination
             .map(|destination| destination.socket_addr());
         let universe_index =
-            controller_universe_index(&controller.name, declared_universes, route.universe)?;
-
-        if fixture.fixture.color_model != ColorModel::Rgb {
+            controller_universe_index(controller_name, declared_universes, route.universe)?;
+        let fixture_definition = fixture_fixture(project, fixture)?;
+        if fixture_definition.color_model != ColorModel::Rgb {
             return Err(ControllerOutputError::UnsupportedColorModel {
-                fixture: fixture.name.clone(),
-                color_model: fixture.fixture.color_model,
+                fixture: fixture_name(fixture),
+                color_model: fixture_definition.color_model,
             });
         }
-        let pixel_count = fixture_pixel_count(route.fixture, analysis)?;
-        let channel_count = pixel_count * RGB_CHANNELS_PER_PIXEL;
+        let channel_count = fixture_pixel_count(project, fixture)? * RGB_CHANNELS_PER_PIXEL;
         add_route_segments(RouteSegmentInput {
             universes: &mut universes,
             occupancy: &mut occupancy,
-            controller_index: route.controller,
-            controller_name: &controller.name,
+            controller_key: controller_name.to_string(),
+            controller_name,
             destination,
             declared_universes,
             start_universe_index: universe_index,
             start: route.start,
-            fixture_index: route.fixture,
-            fixture_name: &fixture.name,
+            fixture_index,
+            fixture_name: &fixture_name(fixture),
             channel_order: *channel_order,
             channel_count,
         })?;
@@ -390,16 +357,13 @@ fn build_output_plan_for(
 }
 
 fn add_linear_rgb_controller(
-    analysis: &ProjectAnalysis,
-    controller_index: ControllerIndex,
+    project: &DawnProject,
+    layout: &Layout<Resolved>,
+    controller_name: &str,
     controller: &Controller,
     universes: &mut HashMap<UniverseKey, ControllerUniverseBuilder>,
     purpose: ControllerOutputPurpose,
 ) -> Result<(), ControllerOutputError> {
-    let project = analysis
-        .resolved
-        .as_ref()
-        .ok_or(ControllerOutputError::ProjectNotResolved)?;
     let ControllerOutput::LinearRgb {
         channel_order,
         group,
@@ -411,44 +375,30 @@ fn add_linear_rgb_controller(
     else {
         return Ok(());
     };
-    if *output_count == 0 {
-        return Err(ControllerOutputError::InvalidLinearOutputConfig {
-            controller: controller.name.clone(),
-            message: "output_count must be greater than zero",
-        });
-    }
-    if *pixels_per_output == 0 {
-        return Err(ControllerOutputError::InvalidLinearOutputConfig {
-            controller: controller.name.clone(),
-            message: "pixels_per_output must be greater than zero",
-        });
-    }
-    if *slots_per_universe == 0 || *slots_per_universe > DMX_UNIVERSE_CHANNELS {
-        return Err(ControllerOutputError::InvalidLinearOutputConfig {
-            controller: controller.name.clone(),
-            message: "slots_per_universe must be in 1..512",
-        });
-    }
+    validate_linear_config(
+        controller_name,
+        *output_count,
+        *pixels_per_output,
+        *slots_per_universe,
+    )?;
     if purpose == ControllerOutputPurpose::Live {
-        validate_live_controller(controller)?;
+        validate_live_controller(controller_name, controller)?;
     }
     let destination = controller
         .destination
         .map(|destination| destination.socket_addr());
-    let group = project
-        .display
-        .layout
+    let group = layout
         .groups
         .iter()
-        .find(|candidate| candidate.name == *group)
+        .find(|candidate| candidate.id == *group)
         .ok_or_else(|| ControllerOutputError::MissingGroup {
-            controller: controller.name.clone(),
-            group: group.clone(),
+            controller: controller_name.to_string(),
+            group: group.to_string(),
         })?;
     if group.members.len() != *output_count {
         return Err(ControllerOutputError::LinearGroupCountMismatch {
-            controller: controller.name.clone(),
-            group: group.name.clone(),
+            controller: controller_name.to_string(),
+            group: group.id.to_string(),
             expected: *output_count,
             actual: group.members.len(),
         });
@@ -456,12 +406,12 @@ fn add_linear_rgb_controller(
     let fixture_channels = pixels_per_output
         .checked_mul(RGB_CHANNELS_PER_PIXEL)
         .ok_or_else(|| ControllerOutputError::InvalidLinearOutputConfig {
-            controller: controller.name.clone(),
+            controller: controller_name.to_string(),
             message: "pixels_per_output is too large",
         })?;
     let total_slots = output_count.checked_mul(fixture_channels).ok_or_else(|| {
         ControllerOutputError::InvalidLinearOutputConfig {
-            controller: controller.name.clone(),
+            controller: controller_name.to_string(),
             message: "output_count is too large",
         }
     })?;
@@ -469,32 +419,34 @@ fn add_linear_rgb_controller(
     let last_universe = first_universe
         .checked_add(universe_count.saturating_sub(1) as u32)
         .ok_or_else(|| ControllerOutputError::InvalidLinearOutputConfig {
-            controller: controller.name.clone(),
+            controller: controller_name.to_string(),
             message: "derived universe range is too large",
         })?;
     if *first_universe == 0 || last_universe > u16::MAX as u32 {
         return Err(ControllerOutputError::InvalidUniverseId {
-            controller: controller.name.clone(),
+            controller: controller_name.to_string(),
             universe: last_universe,
         });
     }
 
-    for (output_index, fixture_index) in group.members.iter().copied().enumerate() {
-        let fixture = project
-            .display
-            .layout
-            .fixture(fixture_index)
+    for (output_index, fixture_id) in group.members.iter().copied().enumerate() {
+        let fixture_index = layout
+            .fixtures
+            .iter()
+            .position(|fixture| fixture.id == fixture_id)
             .ok_or(ControllerOutputError::ProjectNotResolved)?;
-        if fixture.fixture.color_model != ColorModel::Rgb {
+        let fixture = &layout.fixtures[fixture_index];
+        let fixture_definition = fixture_fixture(project, fixture)?;
+        if fixture_definition.color_model != ColorModel::Rgb {
             return Err(ControllerOutputError::UnsupportedColorModel {
-                fixture: fixture.name.clone(),
-                color_model: fixture.fixture.color_model,
+                fixture: fixture_name(fixture),
+                color_model: fixture_definition.color_model,
             });
         }
-        let actual_pixels = fixture_pixel_count(fixture_index, analysis)?;
+        let actual_pixels = fixture_pixel_count(project, fixture)?;
         if actual_pixels != *pixels_per_output {
             return Err(ControllerOutputError::LinearFixturePixelCountMismatch {
-                fixture: fixture.name.clone(),
+                fixture: fixture_name(fixture),
                 expected: *pixels_per_output,
                 actual: actual_pixels,
             });
@@ -511,13 +463,13 @@ fn add_linear_rgb_controller(
             let segment_channels = remaining.min(universe_slots - start_channel);
             let universe = first_universe + universe_offset as u32;
             let key = UniverseKey {
-                controller: controller_index,
+                controller: controller_name.to_string(),
                 universe,
             };
             universes
                 .entry(key)
                 .or_insert_with(|| ControllerUniverseBuilder {
-                    controller_name: controller.name.clone(),
+                    controller_name: controller_name.to_string(),
                     destination,
                     universe: universe as u16,
                     channel_count: universe_slots,
@@ -540,16 +492,46 @@ fn add_linear_rgb_controller(
     Ok(())
 }
 
-fn validate_live_controller(controller: &Controller) -> Result<(), ControllerOutputError> {
+fn validate_linear_config(
+    controller_name: &str,
+    output_count: usize,
+    pixels_per_output: usize,
+    slots_per_universe: usize,
+) -> Result<(), ControllerOutputError> {
+    if output_count == 0 {
+        return Err(ControllerOutputError::InvalidLinearOutputConfig {
+            controller: controller_name.to_string(),
+            message: "output_count must be greater than zero",
+        });
+    }
+    if pixels_per_output == 0 {
+        return Err(ControllerOutputError::InvalidLinearOutputConfig {
+            controller: controller_name.to_string(),
+            message: "pixels_per_output must be greater than zero",
+        });
+    }
+    if slots_per_universe == 0 || slots_per_universe > DMX_UNIVERSE_CHANNELS {
+        return Err(ControllerOutputError::InvalidLinearOutputConfig {
+            controller: controller_name.to_string(),
+            message: "slots_per_universe must be in 1..512",
+        });
+    }
+    Ok(())
+}
+
+fn validate_live_controller(
+    controller_name: &str,
+    controller: &Controller,
+) -> Result<(), ControllerOutputError> {
     if controller.protocol != Protocol::Sacn {
         return Err(ControllerOutputError::UnsupportedProtocol {
-            controller: controller.name.clone(),
+            controller: controller_name.to_string(),
             protocol: controller.protocol,
         });
     }
     if controller.destination.is_none() {
         return Err(ControllerOutputError::MissingDestination {
-            controller: controller.name.clone(),
+            controller: controller_name.to_string(),
         });
     }
     Ok(())
@@ -558,13 +540,13 @@ fn validate_live_controller(controller: &Controller) -> Result<(), ControllerOut
 struct RouteSegmentInput<'a> {
     universes: &'a mut HashMap<UniverseKey, ControllerUniverseBuilder>,
     occupancy: &'a mut HashMap<UniverseKey, Vec<bool>>,
-    controller_index: ControllerIndex,
+    controller_key: String,
     controller_name: &'a str,
     destination: Option<SocketAddr>,
     declared_universes: &'a [dawn_project::Universe],
     start_universe_index: usize,
     start: u32,
-    fixture_index: FixtureIndex,
+    fixture_index: usize,
     fixture_name: &'a str,
     channel_order: RgbChannelOrder,
     channel_count: usize,
@@ -608,13 +590,13 @@ fn add_route_segments(input: RouteSegmentInput<'_>) -> Result<(), ControllerOutp
         let available = usize::from(universe.range.end) - channel + 1;
         let segment_channels = remaining.min(available);
         let key = UniverseKey {
-            controller: input.controller_index,
+            controller: input.controller_key.clone(),
             universe: universe.id,
         };
         let channel_count = universe_channel_count(universe);
         let used = input
             .occupancy
-            .entry(key)
+            .entry(key.clone())
             .or_insert_with(|| vec![false; channel_count]);
         let start_channel = channel - usize::from(universe.range.start);
         for offset in 0..segment_channels {
@@ -706,6 +688,94 @@ fn universe_channel_count(universe: &dawn_project::Universe) -> usize {
     usize::from(universe.range.end - universe.range.start + 1)
 }
 
+fn active_display(project: &DawnProject) -> Result<&Display<Resolved>, ControllerOutputError> {
+    match &project.display {
+        ResolvedInlineOrRef::Inline(display) => Ok(display),
+        ResolvedInlineOrRef::Ref(reference) => project
+            .stores
+            .displays
+            .get(&reference.key)
+            .map(|display| &display.value)
+            .ok_or(ControllerOutputError::ProjectNotResolved),
+    }
+}
+
+fn resolved_layout<'a>(
+    project: &'a DawnProject,
+    layout: &'a ResolvedInlineOrRef<Layout<Resolved>, dawn_project::LayoutDefinitionKey>,
+) -> Result<&'a Layout<Resolved>, ControllerOutputError> {
+    match layout {
+        ResolvedInlineOrRef::Inline(layout) => Ok(layout),
+        ResolvedInlineOrRef::Ref(reference) => project
+            .stores
+            .layouts
+            .get(&reference.key)
+            .map(|layout| &layout.value)
+            .ok_or(ControllerOutputError::ProjectNotResolved),
+    }
+}
+
+fn resolved_patch<'a>(
+    project: &'a DawnProject,
+    patch: &'a ResolvedInlineOrRef<Patch<Resolved>, dawn_project::PatchDefinitionKey>,
+) -> Result<&'a Patch<Resolved>, ControllerOutputError> {
+    match patch {
+        ResolvedInlineOrRef::Inline(patch) => Ok(patch),
+        ResolvedInlineOrRef::Ref(reference) => project
+            .stores
+            .patches
+            .get(&reference.key)
+            .map(|patch| &patch.value)
+            .ok_or(ControllerOutputError::ProjectNotResolved),
+    }
+}
+
+fn resolved_controller<'a>(
+    project: &'a DawnProject,
+    controller: &'a ResolvedInlineOrRef<Controller, dawn_project::ControllerDefinitionKey>,
+) -> Result<(&'a str, &'a Controller), ControllerOutputError> {
+    match controller {
+        ResolvedInlineOrRef::Inline(controller) => Ok(("inline", controller)),
+        ResolvedInlineOrRef::Ref(reference) => project
+            .stores
+            .controllers
+            .get(&reference.key)
+            .map(|controller| (reference.key.name.as_str(), &controller.value))
+            .ok_or(ControllerOutputError::ProjectNotResolved),
+    }
+}
+
+fn fixture_name(fixture: &FixturePlacement<Resolved>) -> String {
+    fixture
+        .name
+        .clone()
+        .unwrap_or_else(|| fixture.id.to_string())
+}
+
+fn fixture_fixture<'a>(
+    project: &'a DawnProject,
+    fixture: &'a FixturePlacement<Resolved>,
+) -> Result<&'a dawn_project::Fixture, ControllerOutputError> {
+    match &fixture.fixture {
+        ResolvedInlineOrRef::Inline(fixture) => Ok(fixture),
+        ResolvedInlineOrRef::Ref(reference) => project
+            .stores
+            .fixture_definitions
+            .get(&reference.key)
+            .map(|fixture| &fixture.value)
+            .ok_or(ControllerOutputError::ProjectNotResolved),
+    }
+}
+
+fn fixture_pixel_count(
+    project: &DawnProject,
+    fixture: &FixturePlacement<Resolved>,
+) -> Result<usize, ControllerOutputError> {
+    Ok(geometry_render_plan(fixture_fixture(project, fixture)?)
+        .emitters
+        .len())
+}
+
 fn fixture_rgb_bytes(
     fixture: &crate::output_runtime::OutputFixtureFrame,
     channel_order: RgbChannelOrder,
@@ -726,27 +796,6 @@ fn ordered_rgb_bytes(color: Color, channel_order: RgbChannelOrder) -> [u8; RGB_C
         RgbChannelOrder::Brg => [color.blue, color.red, color.green],
         RgbChannelOrder::Bgr => [color.blue, color.green, color.red],
     }
-}
-
-fn fixture_pixel_count(
-    fixture_index: FixtureIndex,
-    analysis: &ProjectAnalysis,
-) -> Result<usize, ControllerOutputError> {
-    let project = analysis
-        .resolved
-        .as_ref()
-        .ok_or(ControllerOutputError::ProjectNotResolved)?;
-    let fixture = project
-        .display
-        .layout
-        .fixture(fixture_index)
-        .ok_or(ControllerOutputError::ProjectNotResolved)?;
-    Ok(dawn_project::render::geometry_render_plan(
-        &fixture.fixture.geometry,
-        fixture.fixture.bulb_diameter,
-    )
-    .emitters
-    .len())
 }
 
 pub fn encode_e131_data_packet(frame: &ControllerUniverseFrame, sequence: u8) -> Vec<u8> {
@@ -800,8 +849,8 @@ struct ControllerUniverseBuilder {
     routes: Vec<ControllerRoutePlan>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct UniverseKey {
-    controller: ControllerIndex,
+    controller: String,
     universe: u32,
 }

@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use dawn_project::{
-    canonicalize_path, load_project, resolve_import_path, save_project, utf8_path, Curve,
-    CurveDefinitionKey, CurveUse, DawnFile, DawnObject, DawnProject, EffectDefinitionKey,
-    EffectParam, EffectParamArrayValue, EffectTarget, Fixture, FixtureDefinitionKey, Geometry,
-    Layout, LayoutDefinitionKey, LayoutTargetKind, ObjectKind, PathStringExt, ProjectDiagnostic,
-    ProjectLoadResult, ProjectSaveResult, Resolved, ResolvedInlineOrRef, ResolvedProvenance,
-    ResolvedSourceFile, ResolvedSourceObject, ResolvedSymbolRef, Sequence, SequenceDefinitionKey,
-    SequenceEffect, Utf8PathBuf, WorkspaceEntry, WorkspaceEntryKind, WorkspaceFs,
+    canonicalize_path, load_project, save_project, utf8_path, Curve, CurveDefinitionKey, DawnFile,
+    DawnObject, DawnProject, EffectDefinitionKey, EffectParam, EffectTarget, Fixture,
+    FixtureDefinitionKey, Geometry, Layout, LayoutDefinitionKey, LayoutTargetKind, ObjectKind,
+    PathStringExt, ProjectDiagnostic, ProjectLoadResult, ProjectSaveResult, Resolved,
+    ResolvedInlineOrRef, ResolvedSourceFile, ResolvedSourceObject, ResolvedSymbolRef, Sequence,
+    SequenceDefinitionKey, SequenceEffect, Utf8PathBuf, WorkspaceEntry, WorkspaceEntryKind,
+    WorkspaceFs,
 };
 
 use crate::document::{
@@ -20,8 +20,8 @@ use crate::document::{
     LayoutDocument, LayoutFixturePlacement, LayoutTargetDocument, ResolvedLayoutFixture,
     SequenceAudioDocument, SequenceCurveLibraryItemDocument, SequenceDocument,
     SequenceEffectDocument, SequenceEffectParamCurveSourceDocument, SequenceEffectParamDocument,
-    SequenceEffectRenderDocument, SequenceEffectScriptDocument, SequenceEffectScriptParamDocument,
-    SequenceLaneDocument, SequenceMarkCollectionDocument,
+    SequenceEffectPixelDocument, SequenceEffectRenderDocument, SequenceEffectScriptDocument,
+    SequenceEffectScriptParamDocument, SequenceLaneDocument, SequenceMarkCollectionDocument,
 };
 use crate::editor_session::FileDiskVersion;
 
@@ -598,8 +598,23 @@ fn sequence_effect_document(
     effect: &SequenceEffect<Resolved>,
 ) -> SequenceEffectDocument {
     let script_source = effect_script_reference(&effect.script);
-    let render = effect_script_text(project, &effect.script)
-        .map(|script_source| SequenceEffectRenderDocument { script_source });
+    let params = effect
+        .params
+        .iter()
+        .map(|(name, value)| SequenceEffectParamDocument {
+            name: name.clone(),
+            value: value.clone(),
+            curve_source: effect_param_curve_source(value),
+        })
+        .collect::<Vec<_>>();
+    let render = effect_script_text(project, &effect.script).map(|script_source| {
+        SequenceEffectRenderDocument {
+            script: effect.script.key.clone(),
+            script_source,
+            params: params.clone(),
+            target_pixels: sequence_effect_target_pixels(project, &effect.target),
+        }
+    });
     SequenceEffectDocument {
         index,
         id: effect.id.0,
@@ -610,17 +625,67 @@ fn sequence_effect_document(
         scope: effect.scope,
         script: effect.script.reference.raw().to_string(),
         script_source,
-        params: effect
-            .params
-            .iter()
-            .map(|(name, value)| SequenceEffectParamDocument {
-                name: name.clone(),
-                value: value.clone(),
-                curve_source: effect_param_curve_source(value),
-            })
-            .collect(),
+        params,
         render,
     }
+}
+
+fn sequence_effect_target_pixels(
+    project: &DawnProject,
+    target: &EffectTarget<Resolved>,
+) -> Vec<SequenceEffectPixelDocument> {
+    let Some(layout) = active_layout(project) else {
+        return Vec::new();
+    };
+    match target {
+        EffectTarget::Fixture { id } => layout
+            .fixtures
+            .iter()
+            .position(|fixture| fixture.id == *id)
+            .and_then(|fixture_index| {
+                layout
+                    .fixtures
+                    .get(fixture_index)
+                    .map(|fixture| target_pixels_for_fixture(project, fixture_index, fixture))
+            })
+            .unwrap_or_default(),
+        EffectTarget::Group { id } => layout
+            .groups
+            .iter()
+            .find(|group| group.id == *id)
+            .into_iter()
+            .flat_map(|group| {
+                group.members.iter().flat_map(|member_id| {
+                    layout
+                        .fixtures
+                        .iter()
+                        .position(|fixture| fixture.id == *member_id)
+                        .and_then(|fixture_index| {
+                            layout.fixtures.get(fixture_index).map(|fixture| {
+                                target_pixels_for_fixture(project, fixture_index, fixture)
+                            })
+                        })
+                        .unwrap_or_default()
+                })
+            })
+            .collect(),
+    }
+}
+
+fn target_pixels_for_fixture(
+    project: &DawnProject,
+    fixture_index: usize,
+    fixture: &dawn_project::FixturePlacement<Resolved>,
+) -> Vec<SequenceEffectPixelDocument> {
+    let (_, _, fixture_definition) = resolved_fixture(project, &fixture.fixture);
+    let pixel_count = geometry_render_plan(&fixture_definition).emitters.len();
+    (0..pixel_count)
+        .map(|pixel_index| SequenceEffectPixelDocument {
+            fixture_index,
+            pixel_index,
+            pixel_count,
+        })
+        .collect()
 }
 
 fn target_document(target: &EffectTarget<Resolved>) -> LayoutTargetDocument {
@@ -998,7 +1063,7 @@ fn moved_path(
     Some(new_path.join(relative))
 }
 
-fn serialized_import_path(importing_path: &Utf8PathBuf, imported_path: &Utf8PathBuf) -> String {
+pub fn serialized_import_path(importing_path: &Utf8PathBuf, imported_path: &Utf8PathBuf) -> String {
     if imported_path.is_absolute() {
         return imported_path.to_slash_string();
     }

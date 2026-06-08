@@ -13,15 +13,6 @@ const MAX_GENERATED_CHILDREN: usize = 4096;
 const MAX_GENERATOR_LOOP_ITERATIONS: usize = 16384;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct GeneratedChildEffect {
-    pub effect: GeneratedChildEffectRef,
-    pub target: GeneratorTarget,
-    pub start_seconds: f64,
-    pub duration_seconds: f64,
-    pub params: BTreeMap<String, RuntimeValue>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct GeneratedChildTopology {
     pub effect: GeneratedChildEffectRef,
     pub target: GeneratorTarget,
@@ -41,29 +32,6 @@ struct GeneratedChildParamExpr {
 pub enum GeneratedChildEffectRef {
     Local { name: String },
     Imported { alias: String, name: String },
-}
-
-#[cfg(test)]
-pub fn run_generator(
-    statements: &[Stmt],
-    params: &PreparedEffectParams,
-    param_names: &[String],
-    target: GeneratorTarget,
-    duration_seconds: f64,
-) -> Result<Vec<GeneratedChildEffect>, RuntimeError> {
-    run_generator_topology(statements, params, param_names, target, duration_seconds)?
-        .into_iter()
-        .map(|child| {
-            let emitted_params = evaluate_generated_child_params(&child, params, param_names)?;
-            Ok(GeneratedChildEffect {
-                effect: child.effect,
-                target: child.target,
-                start_seconds: child.start_seconds,
-                duration_seconds: child.duration_seconds,
-                params: emitted_params,
-            })
-        })
-        .collect()
 }
 
 pub fn run_generator_topology(

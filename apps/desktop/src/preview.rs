@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use dawn_app_core::document::SequenceDocument;
 use dawn_app_core::dto::{GeometryRenderBoundsDto, GeometryRenderPointDto};
 use dawn_app_core::output_runtime::{
     empty_frame, OutputFrame, SequenceChangeImpact, SequenceFrameEvaluator, SequenceRenderCache,
@@ -10,8 +11,7 @@ use dawn_app_core::preview_session::{
     AudioPlaybackStatus, PreviewRenderKind, PreviewRenderRequest, PreviewRenderResult,
     PreviewRenderTiming, PreviewSnapshot, PreviewTransportState, SequenceKey,
 };
-use dawn_project::analysis::ProjectAnalysis;
-use dawn_project::document::SequenceDocument;
+use dawn_project::DawnProject;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
@@ -67,7 +67,7 @@ pub struct PreviewTimingDto {
     pub live_output_lock_ms: f64,
     pub model_lock_wait_ms: f64,
     pub preview_snapshot_ms: f64,
-    pub analysis_handle_ms: f64,
+    pub project_snapshot_ms: f64,
     pub audio_poll_ms: f64,
     pub audio_apply_ms: f64,
     pub model_update_ms: f64,
@@ -116,7 +116,7 @@ impl PreviewTimingDto {
             live_output_lock_ms: 0.0,
             model_lock_wait_ms: 0.0,
             preview_snapshot_ms: 0.0,
-            analysis_handle_ms: 0.0,
+            project_snapshot_ms: 0.0,
             audio_poll_ms: 0.0,
             audio_apply_ms: 0.0,
             model_update_ms: 0.0,
@@ -175,15 +175,15 @@ struct DeferredPreviewRenderer {
 impl DeferredPreviewRenderer {
     fn render(
         &mut self,
-        analysis: Option<&ProjectAnalysis>,
+        project: Option<&DawnProject>,
         request: PreviewRenderRequest,
     ) -> Option<PreviewRenderResult> {
         let mut timing = PreviewRenderTiming::default();
         if request.cancellation.is_cancelled() {
             return None;
         }
-        let Some(analysis) = analysis else {
-            let frame = empty_frame(request.generation, "No project analysis");
+        let Some(project) = project else {
+            let frame = empty_frame(request.generation, "No project");
             return Some(PreviewRenderResult {
                 request,
                 frame,
@@ -191,10 +191,10 @@ impl DeferredPreviewRenderer {
             });
         };
         let invalidation_started = Instant::now();
-        self.apply_request_cache_invalidation(analysis, &request);
+        self.apply_request_cache_invalidation(project, &request);
         timing.render_invalidation_ms = elapsed_ms(invalidation_started);
         let cache_started = Instant::now();
-        let cached_renderer = self.cached_renderer(analysis, &request.document, &request);
+        let cached_renderer = self.cached_renderer(project, &request.document, &request);
         timing.render_cache_ms = elapsed_ms(cache_started);
         let frame = match cached_renderer {
             Ok(Some((renderer, renderer_build_ms))) => {
@@ -239,7 +239,7 @@ impl DeferredPreviewRenderer {
 
     fn apply_request_cache_invalidation(
         &mut self,
-        analysis: &ProjectAnalysis,
+        project: &DawnProject,
         request: &PreviewRenderRequest,
     ) {
         if self.previous_key.as_ref() != Some(&request.key) {
@@ -253,7 +253,7 @@ impl DeferredPreviewRenderer {
         if Arc::ptr_eq(previous_document, &request.document) {
             return;
         }
-        let impact = SequenceChangeImpact::between(previous_document, &request.document, analysis);
+        let impact = SequenceChangeImpact::between(previous_document, &request.document, project);
         if impact.requires_full_clear()
             || !impact.invalidated_prepared_effect_ids().is_empty()
             || !impact.invalidated_topology_effect_ids().is_empty()
@@ -265,7 +265,7 @@ impl DeferredPreviewRenderer {
 
     fn cached_renderer(
         &mut self,
-        analysis: &ProjectAnalysis,
+        project: &DawnProject,
         document: &SequenceDocument,
         request: &PreviewRenderRequest,
     ) -> Result<Option<(&mut SequenceFrameEvaluator, f64)>, String> {
@@ -274,7 +274,7 @@ impl DeferredPreviewRenderer {
             let build_started = Instant::now();
             let Some((renderer, _)) =
                 self.sequence_cache
-                    .build_evaluator_cancellable(analysis, document, || {
+                    .build_evaluator_cancellable(project, document, || {
                         request.cancellation.is_cancelled()
                     })?
             else {
@@ -335,7 +335,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             timing.audio_position_seconds =
                 audio_clock.as_ref().map(|clock| clock.position_seconds);
             let model_lock_started = Instant::now();
-            let (mut snapshot, mut target_fps, mut analysis, deferred_request) =
+            let (mut snapshot, mut target_fps, mut project, deferred_request) =
                 match lock_model(&state) {
                     Ok(mut model) => {
                         timing.model_lock_wait_ms = elapsed_ms(model_lock_started);
@@ -347,11 +347,11 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                             if !should_apply_audio_clock_to_model(&preview_snapshot, clock) {
                                 model.tick_preview();
                             } else {
-                                let analysis_handle_started = Instant::now();
-                                let analysis = model.analysis.clone();
-                                timing.analysis_handle_ms += elapsed_ms(analysis_handle_started);
+                                let project_snapshot_started = Instant::now();
+                                let project = model.project.clone();
+                                timing.project_snapshot_ms += elapsed_ms(project_snapshot_started);
                                 let apply_started = Instant::now();
-                                apply_audio_clock_to_model(&mut model, clock, analysis.as_deref());
+                                apply_audio_clock_to_model(&mut model, clock, project.as_deref());
                                 timing.audio_apply_ms = elapsed_ms(apply_started);
                             }
                         } else {
@@ -367,13 +367,13 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                         };
                         timing.rendered_frame = deferred_request.is_some();
                         timing.model_update_ms = model_started.elapsed().as_secs_f64() * 1000.0;
-                        let analysis_handle_started = Instant::now();
-                        let analysis = model.analysis.clone();
-                        timing.analysis_handle_ms += elapsed_ms(analysis_handle_started);
+                        let project_snapshot_started = Instant::now();
+                        let project = model.project.clone();
+                        timing.project_snapshot_ms += elapsed_ms(project_snapshot_started);
                         (
                             snapshot,
                             model.preview_target_fps(),
-                            analysis,
+                            project,
                             deferred_request,
                         )
                     }
@@ -384,7 +384,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                 };
             if let Some(request) = deferred_request {
                 let render_started = Instant::now();
-                let result = deferred_renderer.render(analysis.as_deref(), request);
+                let result = deferred_renderer.render(project.as_deref(), request);
                 timing.render_wall_ms = elapsed_ms(render_started);
                 if let Some(result) = result {
                     record_render_timing(&mut timing, result.timing);
@@ -398,9 +398,9 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                         let preview_snapshot_started = Instant::now();
                         snapshot = model.preview.snapshot();
                         timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
-                        let analysis_handle_started = Instant::now();
-                        analysis = model.analysis.clone();
-                        timing.analysis_handle_ms += elapsed_ms(analysis_handle_started);
+                        let project_snapshot_started = Instant::now();
+                        project = model.project.clone();
+                        timing.project_snapshot_ms += elapsed_ms(project_snapshot_started);
                         target_fps = model.preview_target_fps();
                         timing.model_update_ms += elapsed_ms(model_started);
                     }
@@ -439,7 +439,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             }
             if live_output_enabled {
                 let live_output_started = Instant::now();
-                publish_live_output_frame(&app, &state, analysis.clone(), &snapshot.frame);
+                publish_live_output_frame(&app, &state, project.clone(), &snapshot.frame);
                 timing.live_output_ms = elapsed_ms(live_output_started);
             }
 
@@ -538,11 +538,11 @@ fn should_apply_audio_clock_to_model(
 fn publish_live_output_frame(
     app: &AppHandle,
     state: &State<'_, AppState>,
-    analysis: Option<Arc<ProjectAnalysis>>,
+    project: Option<Arc<DawnProject>>,
     frame: &OutputFrame,
 ) {
     let snapshot = match lock_live_output(state) {
-        Ok(mut runtime) => runtime.send_frame(analysis, frame),
+        Ok(mut runtime) => runtime.send_frame(project, frame),
         Err(_) => return,
     };
     let Ok(mut model) = lock_model(state) else {

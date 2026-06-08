@@ -7,14 +7,14 @@ use dawn_app_core::controller_output::{
     build_output_plan, encode_e131_data_packet, ControllerOutputPlan,
 };
 use dawn_app_core::output_runtime::OutputFrame;
-use dawn_project::analysis::ProjectAnalysis;
+use dawn_project::DawnProject;
 
 #[derive(Debug, Default)]
 pub(crate) struct LiveOutputRuntime {
     enabled: bool,
     socket: Option<UdpSocket>,
     plan: Option<ControllerOutputPlan>,
-    plan_analysis: Option<Arc<ProjectAnalysis>>,
+    plan_project: Option<Arc<DawnProject>>,
     sequence_counters: HashMap<UniverseSequenceKey, u8>,
     snapshot: LiveOutputSnapshot,
 }
@@ -31,16 +31,16 @@ impl LiveOutputRuntime {
     pub(crate) fn set_enabled(
         &mut self,
         enabled: bool,
-        analysis: Option<Arc<ProjectAnalysis>>,
+        project: Option<Arc<DawnProject>>,
     ) -> LiveOutputSnapshot {
         if enabled {
-            match self.enable(analysis) {
+            match self.enable(project) {
                 Ok(()) => {}
                 Err(error) => {
                     self.enabled = true;
                     self.socket = None;
                     self.plan = None;
-                    self.plan_analysis = None;
+                    self.plan_project = None;
                     self.snapshot = LiveOutputSnapshot {
                         enabled: true,
                         status: LiveOutputStatus::Error,
@@ -57,17 +57,17 @@ impl LiveOutputRuntime {
 
     pub(crate) fn send_frame(
         &mut self,
-        analysis: Option<Arc<ProjectAnalysis>>,
+        project: Option<Arc<DawnProject>>,
         frame: &OutputFrame,
     ) -> LiveOutputSnapshot {
         if !self.enabled {
             return self.snapshot();
         }
-        let Some(analysis) = analysis else {
-            self.set_error("project analysis is not available".to_string(), 0);
+        let Some(project) = project else {
+            self.set_error("project is not available".to_string(), 0);
             return self.snapshot();
         };
-        let active_universe_count = match self.ensure_plan(analysis) {
+        let active_universe_count = match self.ensure_plan(project) {
             Ok(active_universe_count) => active_universe_count,
             Err(error) => {
                 self.set_error(error, 0);
@@ -93,22 +93,22 @@ impl LiveOutputRuntime {
         self.snapshot()
     }
 
-    fn ensure_plan(&mut self, analysis: Arc<ProjectAnalysis>) -> Result<usize, String> {
+    fn ensure_plan(&mut self, project: Arc<DawnProject>) -> Result<usize, String> {
         if self
-            .plan_analysis
+            .plan_project
             .as_ref()
-            .is_none_or(|cached| !Arc::ptr_eq(cached, &analysis))
+            .is_none_or(|cached| !Arc::ptr_eq(cached, &project))
         {
-            let plan = match build_output_plan(&analysis) {
+            let plan = match build_output_plan(&project) {
                 Ok(plan) => plan,
                 Err(error) => {
                     self.plan = None;
-                    self.plan_analysis = None;
+                    self.plan_project = None;
                     return Err(error.to_string());
                 }
             };
             self.plan = Some(plan);
-            self.plan_analysis = Some(analysis.clone());
+            self.plan_project = Some(project.clone());
         }
         let Some(plan) = self.plan.as_ref() else {
             return Err("live output plan is not available".to_string());
@@ -116,15 +116,15 @@ impl LiveOutputRuntime {
         Ok(plan.active_universe_count())
     }
 
-    fn enable(&mut self, analysis: Option<Arc<ProjectAnalysis>>) -> Result<(), String> {
-        let analysis = analysis.ok_or_else(|| "project analysis is not available".to_string())?;
-        let plan = build_output_plan(&analysis).map_err(|error| error.to_string())?;
+    fn enable(&mut self, project: Option<Arc<DawnProject>>) -> Result<(), String> {
+        let project = project.ok_or_else(|| "project is not available".to_string())?;
+        let plan = build_output_plan(&project).map_err(|error| error.to_string())?;
         let active_universe_count = plan.active_universe_count();
         let socket = UdpSocket::bind("0.0.0.0:0").map_err(|error| error.to_string())?;
         self.enabled = true;
         self.socket = Some(socket);
         self.plan = Some(plan);
-        self.plan_analysis = Some(analysis);
+        self.plan_project = Some(project);
         self.sequence_counters.clear();
         self.snapshot = LiveOutputSnapshot {
             enabled: true,
@@ -144,7 +144,7 @@ impl LiveOutputRuntime {
         self.enabled = false;
         self.socket = None;
         self.plan = None;
-        self.plan_analysis = None;
+        self.plan_project = None;
         self.sequence_counters.clear();
         self.snapshot = LiveOutputSnapshot {
             enabled: false,
@@ -207,70 +207,62 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
 
-    use dawn_project::analysis::analyze_project;
-    use dawn_project::utf8_path;
-    use dawn_project::WorkspaceFs;
+    use dawn_app_core::workspace::WorkspaceService;
 
     use super::LiveOutputRuntime;
 
     #[test]
-    fn output_plan_is_reused_until_analysis_handle_changes() {
+    fn output_plan_is_reused_until_project_handle_changes() {
         let project_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../examples/thirty-output-controller/project.dawn");
-        let root = project_path
-            .parent()
-            .expect("thirty output controller project should have a parent");
-        let fs = WorkspaceFs::open(root).expect("thirty output controller root should open");
-        let relative_project_path = utf8_path(
-            project_path
-                .strip_prefix(root)
-                .expect("project path should be under root"),
-        )
-        .expect("project path should be valid UTF-8");
-        let analysis = Arc::new(analyze_project(
-            &fs,
-            relative_project_path,
-            "thirty_output_controller",
-        ));
-        assert!(
-            analysis.diagnostics.is_empty(),
-            "{:?}",
-            analysis.diagnostics
+        let mut workspace = WorkspaceService::default();
+        workspace
+            .open_project(
+                std::fs::canonicalize(project_path)
+                    .expect("thirty output controller project path should exist"),
+            )
+            .expect("thirty output controller project should open");
+        let result = workspace.load_project();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let project = Arc::new(
+            result
+                .project
+                .expect("thirty output controller should load"),
         );
         let mut runtime = LiveOutputRuntime::default();
 
         let active_universes = runtime
-            .ensure_plan(analysis.clone())
-            .expect("analysis should build a live-output plan");
+            .ensure_plan(project.clone())
+            .expect("project should build a live-output plan");
         let cached = runtime
-            .plan_analysis
+            .plan_project
             .as_ref()
-            .expect("plan analysis should be cached")
+            .expect("plan project should be cached")
             .clone();
         let reused_active_universes = runtime
-            .ensure_plan(analysis.clone())
-            .expect("same analysis handle should reuse the cached plan");
+            .ensure_plan(project.clone())
+            .expect("same project handle should reuse the cached plan");
 
         assert_eq!(active_universes, reused_active_universes);
         assert!(Arc::ptr_eq(
             runtime
-                .plan_analysis
+                .plan_project
                 .as_ref()
-                .expect("plan analysis should remain cached"),
+                .expect("plan project should remain cached"),
             &cached
         ));
 
-        let new_analysis = Arc::new((*analysis).clone());
+        let new_project = Arc::new((*project).clone());
         runtime
-            .ensure_plan(new_analysis.clone())
-            .expect("new analysis handle should rebuild the live-output plan");
+            .ensure_plan(new_project.clone())
+            .expect("new project handle should rebuild the live-output plan");
 
         assert!(Arc::ptr_eq(
             runtime
-                .plan_analysis
+                .plan_project
                 .as_ref()
-                .expect("plan analysis should be updated"),
-            &new_analysis
+                .expect("plan project should be updated"),
+            &new_project
         ));
     }
 }

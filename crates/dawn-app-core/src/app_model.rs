@@ -56,8 +56,7 @@ pub struct AppModel {
     pub live_output: LiveOutputSnapshot,
     pub project_root: Option<String>,
     pub project_entries: Vec<WorkspaceEntry>,
-    pub project: Option<DawnProject>,
-    pub analysis: Option<Arc<DawnProject>>,
+    pub project: Option<Arc<DawnProject>>,
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub status: String,
     pub sequence_clipboard: Option<SequenceClipboard>,
@@ -174,7 +173,6 @@ impl Default for AppModel {
             project_root: None,
             project_entries: Vec::new(),
             project: None,
-            analysis: None,
             diagnostics: Vec::new(),
             status: "No project open".to_string(),
             sequence_clipboard: None,
@@ -272,7 +270,7 @@ impl AppModel {
                 let reconciled = self.reconcile_open_buffer_from_disk(&path)?;
                 if active_changed || reconciled {
                     self.invalidate_active_gui_document_cache();
-                    self.preview.pause(self.analysis.as_deref());
+                    self.preview.pause(self.project.as_deref());
                     if reconciled {
                         self.reload_project_model();
                     }
@@ -382,9 +380,9 @@ impl AppModel {
                 self.workbench_layout.effect_preview_enabled = enabled;
                 save_workbench_layout(&self.workbench_layout)?;
                 if !enabled {
-                    self.preview.clear_effect_preview(self.analysis.as_deref());
+                    self.preview.clear_effect_preview(self.project.as_deref());
                 } else {
-                    self.preview.render_current_frame(self.analysis.as_deref());
+                    self.preview.render_current_frame(self.project.as_deref());
                 }
             }
             AppAction::SetEffectPreviewEffects(ids) => {
@@ -394,7 +392,7 @@ impl AppModel {
                     Vec::new()
                 };
                 self.preview
-                    .set_effect_preview_ids(ids, self.analysis.as_deref());
+                    .set_effect_preview_ids(ids, self.project.as_deref());
             }
             AppAction::SetTerminalPanelLayout(layout) => {
                 if !layout.width_px.is_finite() || layout.width_px < 260.0 {
@@ -406,25 +404,24 @@ impl AppModel {
                 save_workbench_layout(&self.workbench_layout)?;
             }
             AppAction::PreviewPlay => {
-                self.preview.play(self.analysis.as_deref());
+                self.preview.play(self.project.as_deref());
                 self.status = "Preview playing".to_string();
             }
             AppAction::PreviewPause => {
-                self.preview.pause(self.analysis.as_deref());
+                self.preview.pause(self.project.as_deref());
                 self.status = "Preview paused".to_string();
             }
             AppAction::PreviewStop => {
-                self.preview.stop(self.analysis.as_deref());
+                self.preview.stop(self.project.as_deref());
                 self.status = "Preview stopped".to_string();
             }
             AppAction::PreviewRewindToZero => {
                 self.preview
-                    .go_to_sequence_beginning(self.analysis.as_deref());
+                    .go_to_sequence_beginning(self.project.as_deref());
                 self.status = "Preview rewound".to_string();
             }
             AppAction::PreviewSeek(position_seconds) => {
-                self.preview
-                    .seek(position_seconds, self.analysis.as_deref());
+                self.preview.seek(position_seconds, self.project.as_deref());
                 self.status = "Preview seeked".to_string();
             }
         }
@@ -432,7 +429,7 @@ impl AppModel {
     }
 
     pub fn tick_preview(&mut self) {
-        self.preview.tick(self.analysis.as_deref());
+        self.preview.tick(self.project.as_deref());
     }
 
     pub fn tick_preview_clock(&mut self) {
@@ -440,7 +437,7 @@ impl AppModel {
     }
 
     pub fn render_preview_frame(&mut self) {
-        self.preview.render_current_frame(self.analysis.as_deref());
+        self.preview.render_current_frame(self.project.as_deref());
     }
 
     pub fn begin_deferred_preview_render(&mut self) -> Option<PreviewRenderRequest> {
@@ -530,17 +527,11 @@ impl AppModel {
         Ok(())
     }
 
-    pub fn refresh_analysis(&mut self) -> Result<(), String> {
-        self.reload_project_model();
-        Ok(())
-    }
-
     fn reload_project_model(&mut self) {
         self.invalidate_active_gui_document_cache();
         let result = self.workspace.load_project();
         self.diagnostics = result.diagnostics;
-        self.project = result.project;
-        self.analysis = self.project.clone().map(Arc::new);
+        self.project = result.project.map(Arc::new);
     }
 
     pub fn flush_autosave(&mut self) -> Result<(), String> {
@@ -592,7 +583,6 @@ impl AppModel {
                 .ok_or_else(|| format!("saved file `{path}` does not exist"))?;
             self.editors.mark_saved(&path, text, version);
         }
-        self.reload_project_model();
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         Ok(())
     }
@@ -733,7 +723,7 @@ impl AppModel {
         let source = self.active_sequence_source();
         self.cache_active_sequence_source(source.as_ref());
         self.preview
-            .sync_source(source, self.analysis.as_deref(), mode);
+            .sync_source(source, self.project.as_deref(), mode);
     }
 
     fn cache_active_sequence_source(&mut self, source: Option<&(SequenceKey, SequenceDocument)>) {
@@ -897,9 +887,7 @@ impl AppModel {
         self.ensure_dirty_text_saved_for_gui()?;
         self.push_gui_undo_snapshot()?;
         let (path, object_key) = self.active_object_key(DocumentViewId::Sequence)?;
-        let Some(project) = self.project.as_mut() else {
-            return Err("project did not load; GUI edits are unavailable".to_string());
-        };
+        let project = self.project_mut()?;
         let store_path = canonical_store_path(project, &path);
         let project_snapshot = project.clone();
         let sequence = sequence_mut(project, &path, &object_key)?;
@@ -931,10 +919,7 @@ impl AppModel {
             | SequenceSelectionEditDto::Delete { selection } => {
                 self.push_gui_undo_snapshot()?;
                 let (path, object_key) = self.active_object_key(DocumentViewId::Sequence)?;
-                let project = self
-                    .project
-                    .as_mut()
-                    .ok_or_else(|| "project did not load".to_string())?;
+                let project = self.project_mut()?;
                 let sequence = sequence_mut(project, &path, &object_key)?;
                 delete_selection(sequence, &selection);
                 resulting_selection = Some(selection_empty_like(&selection));
@@ -943,12 +928,10 @@ impl AppModel {
             SequenceSelectionEditDto::Paste { anchor } => {
                 self.push_gui_undo_snapshot()?;
                 let (path, object_key) = self.active_object_key(DocumentViewId::Sequence)?;
-                let project = self
-                    .project
-                    .as_mut()
-                    .ok_or_else(|| "project did not load".to_string())?;
+                let clipboard = self.sequence_clipboard.clone();
+                let project = self.project_mut()?;
                 let sequence = sequence_mut(project, &path, &object_key)?;
-                let selection = paste_clipboard(sequence, self.sequence_clipboard.clone(), anchor)?;
+                let selection = paste_clipboard(sequence, clipboard, anchor)?;
                 copied_count = selection_count(&selection);
                 resulting_selection = Some(selection);
                 self.status = format!("Pasted {copied_count}");
@@ -960,10 +943,7 @@ impl AppModel {
             } => {
                 self.push_gui_undo_snapshot()?;
                 let (path, object_key) = self.active_object_key(DocumentViewId::Sequence)?;
-                let project = self
-                    .project
-                    .as_mut()
-                    .ok_or_else(|| "project did not load".to_string())?;
+                let project = self.project_mut()?;
                 let sequence = sequence_mut(project, &path, &object_key)?;
                 move_effects(sequence, &document, &ids, time_delta_seconds, lane_delta)?;
                 resulting_selection = Some(SequenceSelectionDto::Effects { ids });
@@ -975,10 +955,7 @@ impl AppModel {
             } => {
                 self.push_gui_undo_snapshot()?;
                 let (path, object_key) = self.active_object_key(DocumentViewId::Sequence)?;
-                let project = self
-                    .project
-                    .as_mut()
-                    .ok_or_else(|| "project did not load".to_string())?;
+                let project = self.project_mut()?;
                 let sequence = sequence_mut(project, &path, &object_key)?;
                 resize_effects(sequence, &ids, edge, time_delta_seconds)?;
                 resulting_selection = Some(SequenceSelectionDto::Effects { ids });
@@ -989,10 +966,7 @@ impl AppModel {
             } => {
                 self.push_gui_undo_snapshot()?;
                 let (path, object_key) = self.active_object_key(DocumentViewId::Sequence)?;
-                let project = self
-                    .project
-                    .as_mut()
-                    .ok_or_else(|| "project did not load".to_string())?;
+                let project = self.project_mut()?;
                 let sequence = sequence_mut(project, &path, &object_key)?;
                 move_marks(sequence, &marks, time_delta_seconds)?;
                 resulting_selection = Some(SequenceSelectionDto::Marks { marks });
@@ -1012,7 +986,7 @@ impl AppModel {
             .project
             .as_ref()
             .ok_or_else(|| "project did not load; GUI edits are unavailable".to_string())?;
-        self.gui_undo_stack.push(project.clone());
+        self.gui_undo_stack.push((**project).clone());
         self.gui_redo_stack.clear();
         Ok(())
     }
@@ -1026,8 +1000,8 @@ impl AppModel {
             let Some(previous) = self.gui_undo_stack.pop() else {
                 return Ok(false);
             };
-            if let Some(current) = self.project.replace(previous) {
-                self.gui_redo_stack.push(current);
+            if let Some(current) = self.project.replace(Arc::new(previous)) {
+                self.gui_redo_stack.push((*current).clone());
             }
             self.save_project_and_refresh_buffers()?;
             self.status = "Undo".to_string();
@@ -1052,8 +1026,8 @@ impl AppModel {
             let Some(next) = self.gui_redo_stack.pop() else {
                 return Ok(false);
             };
-            if let Some(current) = self.project.replace(next) {
-                self.gui_undo_stack.push(current);
+            if let Some(current) = self.project.replace(Arc::new(next)) {
+                self.gui_undo_stack.push((*current).clone());
             }
             self.save_project_and_refresh_buffers()?;
             self.status = "Redo".to_string();
@@ -1140,9 +1114,7 @@ impl AppModel {
         self.ensure_dirty_text_saved_for_gui()?;
         self.push_gui_undo_snapshot()?;
         let (path, object_key) = self.active_object_key(DocumentViewId::Layout)?;
-        let Some(project) = self.project.as_mut() else {
-            return Err("project did not load; GUI edits are unavailable".to_string());
-        };
+        let project = self.project_mut()?;
         let layout = layout_mut(project, &path, &object_key)?;
         match edit {
             LayoutGuiEditDto::UpdatePlacementTransform { id, transform } => {
@@ -1165,9 +1137,7 @@ impl AppModel {
         self.ensure_dirty_text_saved_for_gui()?;
         self.push_gui_undo_snapshot()?;
         let path = self.active_path_for_gui_edit()?;
-        let Some(project) = self.project.as_mut() else {
-            return Err("project did not load; GUI edits are unavailable".to_string());
-        };
+        let project = self.project_mut()?;
         match edit {
             FixtureGuiEditDto::UpdateBulbDiameter {
                 object_key,
@@ -1223,6 +1193,13 @@ impl AppModel {
             .active_file()
             .cloned()
             .ok_or_else(|| "no active document".to_string())
+    }
+
+    fn project_mut(&mut self) -> Result<&mut DawnProject, String> {
+        self.project
+            .as_mut()
+            .map(Arc::make_mut)
+            .ok_or_else(|| "project did not load; GUI edits are unavailable".to_string())
     }
 
     fn ensure_active_buffer_not_conflicted(&self) -> Result<(), String> {

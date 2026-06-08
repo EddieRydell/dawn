@@ -2,7 +2,6 @@
 members = [
   "apps/desktop",
   "crates/dawn-app-core",
-  "crates/dawn-cli",
   "crates/dawn-project",
 ]
 resolver = "2"

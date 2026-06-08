@@ -3,8 +3,8 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use dawn_project::analysis::ProjectAnalysis;
-use dawn_project::document::SequenceDocument;
+use crate::document::SequenceDocument;
+use dawn_project::DawnProject;
 
 use crate::controller_output::{
     build_fseq_output_plan, ControllerOutputError, ControllerOutputPlan,
@@ -114,17 +114,17 @@ impl From<std::io::Error> for FseqExportError {
 }
 
 pub fn export_fseq_file(
-    analysis: &ProjectAnalysis,
+    project: &DawnProject,
     document: &SequenceDocument,
     path: impl AsRef<Path>,
     options: FseqExportOptions,
 ) -> Result<FseqExportReport, FseqExportError> {
     let file = File::create(path)?;
-    export_fseq(analysis, document, file, options)
+    export_fseq(project, document, file, options)
 }
 
 pub fn export_fseq(
-    analysis: &ProjectAnalysis,
+    project: &DawnProject,
     document: &SequenceDocument,
     writer: impl Write,
     options: FseqExportOptions,
@@ -134,7 +134,7 @@ pub fn export_fseq(
         return Err(FseqExportError::InvalidDuration(document.duration_seconds));
     }
 
-    let plan = build_fseq_output_plan(analysis)?;
+    let plan = build_fseq_output_plan(project)?;
     let channel_count = plan.channel_count();
     if channel_count == 0 {
         return Err(FseqExportError::NoOutputChannels);
@@ -166,7 +166,7 @@ pub fn export_fseq(
     )?;
     write_frames(
         &mut writer,
-        analysis,
+        project,
         document,
         &plan,
         frame_count,
@@ -259,14 +259,14 @@ fn write_header(
 
 fn write_frames(
     writer: &mut impl Write,
-    analysis: &ProjectAnalysis,
+    project: &DawnProject,
     document: &SequenceDocument,
     plan: &ControllerOutputPlan,
     frame_count: u64,
     step_ms: u8,
 ) -> Result<(), FseqExportError> {
     let mut evaluator =
-        SequenceFrameEvaluator::new(analysis, document).map_err(FseqExportError::Evaluation)?;
+        SequenceFrameEvaluator::new(project, document).map_err(FseqExportError::Evaluation)?;
     for frame_index in 0..frame_count {
         let time_seconds = frame_index as f64 * f64::from(step_ms) / 1000.0;
         let frame = evaluator.evaluate(time_seconds, frame_index);

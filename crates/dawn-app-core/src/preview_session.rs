@@ -5,8 +5,8 @@ use std::sync::{
 };
 use std::time::Instant;
 
-use dawn_project::analysis::ProjectAnalysis;
-use dawn_project::document::{SequenceAudioDocument, SequenceDocument};
+use crate::document::{SequenceAudioDocument, SequenceDocument};
+use dawn_project::DawnProject;
 use dawn_project::Utf8PathBuf;
 
 use crate::output_runtime::{
@@ -267,13 +267,13 @@ impl PreviewSession {
     pub fn sync_source(
         &mut self,
         source: Option<(SequenceKey, SequenceDocument)>,
-        analysis: Option<&ProjectAnalysis>,
+        project: Option<&DawnProject>,
         mode: PreviewSyncMode,
     ) {
         let next_key = source.as_ref().map(|(key, _)| key);
         let source_changed = self.current_key().as_ref() != next_key;
         if source_changed && self.is_playing() {
-            self.pause_current(analysis);
+            self.pause_current(project);
         }
         self.dirty_revision = self.dirty_revision.saturating_add(1);
         if let Some(pending) = self.pending_deferred_render.take() {
@@ -294,16 +294,16 @@ impl PreviewSession {
         }
         match mode {
             PreviewSyncMode::RenderNow | PreviewSyncMode::DeferRender => {
-                self.schedule_render(analysis, self.status_for_source())
+                self.schedule_render(project, self.status_for_source())
             }
         }
     }
 
-    pub fn play(&mut self, analysis: Option<&ProjectAnalysis>) {
+    pub fn play(&mut self, project: Option<&DawnProject>) {
         self.effect_preview = None;
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
             self.transport = PreviewTransport::Stopped;
-            self.schedule_render(analysis, "No sequence preview source");
+            self.schedule_render(project, "No sequence preview source");
             return;
         };
 
@@ -315,18 +315,18 @@ impl PreviewSession {
             started_at: Instant::now(),
             started_position_seconds: state.position_seconds,
         };
-        self.schedule_render(analysis, "Playing");
+        self.schedule_render(project, "Playing");
     }
 
     pub fn play_from_native_audio_clock(
         &mut self,
         position_seconds: f64,
-        analysis: Option<&ProjectAnalysis>,
+        project: Option<&DawnProject>,
     ) {
         self.effect_preview = None;
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
             self.transport = PreviewTransport::Stopped;
-            self.schedule_render(analysis, "No sequence preview source");
+            self.schedule_render(project, "No sequence preview source");
             return;
         };
         let state = self.sequence_states.entry(key).or_default();
@@ -336,27 +336,27 @@ impl PreviewSession {
             state.position_seconds,
             self.target_fps(),
         ));
-        self.schedule_render(analysis, "Playing");
+        self.schedule_render(project, "Playing");
     }
 
-    pub fn pause(&mut self, analysis: Option<&ProjectAnalysis>) {
-        self.pause_current(analysis);
-        self.schedule_render(analysis, "Paused");
+    pub fn pause(&mut self, project: Option<&DawnProject>) {
+        self.pause_current(project);
+        self.schedule_render(project, "Paused");
     }
 
-    pub fn pause_at(&mut self, position_seconds: f64, analysis: Option<&ProjectAnalysis>) {
+    pub fn pause_at(&mut self, position_seconds: f64, project: Option<&DawnProject>) {
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
-            self.schedule_render(analysis, "No active sequence");
+            self.schedule_render(project, "No active sequence");
             return;
         };
         let state = self.sequence_states.entry(key).or_default();
         state.position_seconds = clamp_position_seconds(position_seconds, duration_seconds);
         self.transport = PreviewTransport::Paused;
         self.last_native_audio_frame_index = None;
-        self.schedule_render(analysis, "Paused");
+        self.schedule_render(project, "Paused");
     }
 
-    pub fn stop(&mut self, analysis: Option<&ProjectAnalysis>) {
+    pub fn stop(&mut self, project: Option<&DawnProject>) {
         self.capture_position();
         self.transport = PreviewTransport::Stopped;
         self.last_native_audio_frame_index = None;
@@ -364,22 +364,22 @@ impl PreviewSession {
             let state = self.sequence_states.entry(key).or_default();
             state.position_seconds = clamp_position_seconds(state.home_seconds, duration_seconds);
         }
-        self.schedule_render(analysis, "Stopped");
+        self.schedule_render(project, "Stopped");
     }
 
-    pub fn stop_native_audio(&mut self, analysis: Option<&ProjectAnalysis>) {
+    pub fn stop_native_audio(&mut self, project: Option<&DawnProject>) {
         self.transport = PreviewTransport::Stopped;
         self.last_native_audio_frame_index = None;
         if let Some((key, duration_seconds)) = self.sequence_source_meta() {
             let state = self.sequence_states.entry(key).or_default();
             state.position_seconds = clamp_position_seconds(state.home_seconds, duration_seconds);
         }
-        self.schedule_render(analysis, "Stopped");
+        self.schedule_render(project, "Stopped");
     }
 
-    pub fn seek(&mut self, position_seconds: f64, analysis: Option<&ProjectAnalysis>) {
+    pub fn seek(&mut self, position_seconds: f64, project: Option<&DawnProject>) {
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
-            self.schedule_render(analysis, "No active sequence");
+            self.schedule_render(project, "No active sequence");
             return;
         };
         let position_seconds = clamp_position_seconds(position_seconds, duration_seconds);
@@ -392,17 +392,17 @@ impl PreviewSession {
                 started_position_seconds: position_seconds,
             };
         }
-        self.schedule_render(analysis, "Ready");
+        self.schedule_render(project, "Ready");
     }
 
     pub fn seek_native_audio(
         &mut self,
         position_seconds: f64,
         playing: bool,
-        analysis: Option<&ProjectAnalysis>,
+        project: Option<&DawnProject>,
     ) {
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
-            self.schedule_render(analysis, "No active sequence");
+            self.schedule_render(project, "No active sequence");
             return;
         };
         let position_seconds = clamp_position_seconds(position_seconds, duration_seconds);
@@ -415,12 +415,12 @@ impl PreviewSession {
             PreviewTransport::Paused
         };
         self.last_native_audio_frame_index = None;
-        self.schedule_render(analysis, "Ready");
+        self.schedule_render(project, "Ready");
     }
 
-    pub fn set_sequence_playhead(&mut self, time_seconds: f64, analysis: Option<&ProjectAnalysis>) {
+    pub fn set_sequence_playhead(&mut self, time_seconds: f64, project: Option<&DawnProject>) {
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
-            self.schedule_render(analysis, "No active sequence");
+            self.schedule_render(project, "No active sequence");
             return;
         };
         let position_seconds = clamp_position_seconds(time_seconds, duration_seconds);
@@ -433,36 +433,36 @@ impl PreviewSession {
                 started_position_seconds: position_seconds,
             };
         }
-        self.schedule_render(analysis, "Sequence playhead moved");
+        self.schedule_render(project, "Sequence playhead moved");
     }
 
-    pub fn go_to_sequence_beginning(&mut self, analysis: Option<&ProjectAnalysis>) {
+    pub fn go_to_sequence_beginning(&mut self, project: Option<&DawnProject>) {
         let Some((key, _)) = self.sequence_source_meta() else {
-            self.schedule_render(analysis, "No active sequence");
+            self.schedule_render(project, "No active sequence");
             return;
         };
         let state = self.sequence_states.entry(key).or_default();
         state.position_seconds = 0.0;
         state.home_seconds = 0.0;
         self.transport = PreviewTransport::Stopped;
-        self.schedule_render(analysis, "Sequence returned to beginning");
+        self.schedule_render(project, "Sequence returned to beginning");
     }
 
-    pub fn go_to_sequence_beginning_native_audio(&mut self, analysis: Option<&ProjectAnalysis>) {
+    pub fn go_to_sequence_beginning_native_audio(&mut self, project: Option<&DawnProject>) {
         let Some((key, _)) = self.sequence_source_meta() else {
-            self.schedule_render(analysis, "No active sequence");
+            self.schedule_render(project, "No active sequence");
             return;
         };
         let state = self.sequence_states.entry(key).or_default();
         state.position_seconds = 0.0;
         state.home_seconds = 0.0;
         self.transport = PreviewTransport::Paused;
-        self.schedule_render(analysis, "Sequence returned to beginning");
+        self.schedule_render(project, "Sequence returned to beginning");
     }
 
-    pub fn tick(&mut self, analysis: Option<&ProjectAnalysis>) {
+    pub fn tick(&mut self, project: Option<&DawnProject>) {
         if self.tick_clock() {
-            self.schedule_render(analysis, self.snapshot.status.clone());
+            self.schedule_render(project, self.snapshot.status.clone());
         }
     }
 
@@ -490,9 +490,9 @@ impl PreviewSession {
         false
     }
 
-    pub fn render_current_frame(&mut self, analysis: Option<&ProjectAnalysis>) {
+    pub fn render_current_frame(&mut self, project: Option<&DawnProject>) {
         let status = self.snapshot.status.clone();
-        self.schedule_render(analysis, status);
+        self.schedule_render(project, status);
     }
 
     pub fn begin_deferred_render(&mut self) -> Option<PreviewRenderRequest> {
@@ -582,7 +582,7 @@ impl PreviewSession {
         true
     }
 
-    pub fn set_effect_preview_ids(&mut self, ids: Vec<u32>, analysis: Option<&ProjectAnalysis>) {
+    pub fn set_effect_preview_ids(&mut self, ids: Vec<u32>, project: Option<&DawnProject>) {
         let ids = ids.into_iter().collect::<HashSet<_>>();
         self.effect_preview = if ids.is_empty() {
             None
@@ -593,23 +593,23 @@ impl PreviewSession {
             })
         };
         let status = self.snapshot.status.clone();
-        self.schedule_render(analysis, status);
+        self.schedule_render(project, status);
     }
 
-    pub fn clear_effect_preview(&mut self, analysis: Option<&ProjectAnalysis>) {
+    pub fn clear_effect_preview(&mut self, project: Option<&DawnProject>) {
         self.effect_preview = None;
         let status = self.snapshot.status.clone();
-        self.schedule_render(analysis, status);
+        self.schedule_render(project, status);
     }
 
     pub fn render_at_native_audio_clock(
         &mut self,
         position_seconds: f64,
         ended: bool,
-        analysis: Option<&ProjectAnalysis>,
+        project: Option<&DawnProject>,
     ) {
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
-            self.schedule_render(analysis, "No active sequence");
+            self.schedule_render(project, "No active sequence");
             return;
         };
         let position_seconds = clamp_position_seconds(position_seconds, duration_seconds);
@@ -621,13 +621,13 @@ impl PreviewSession {
         if ended || position_seconds >= duration_seconds {
             self.transport = PreviewTransport::Stopped;
             self.last_native_audio_frame_index = None;
-            self.schedule_render(analysis, "Sequence playback complete");
+            self.schedule_render(project, "Sequence playback complete");
         } else {
             self.transport = PreviewTransport::NativeAudioPlaying;
             self.refresh_snapshot_metadata("Playing");
             if self.last_native_audio_frame_index != Some(frame_index) {
                 self.last_native_audio_frame_index = Some(frame_index);
-                self.schedule_render(analysis, "Playing");
+                self.schedule_render(project, "Playing");
             }
         }
     }
@@ -675,11 +675,11 @@ impl PreviewSession {
         }
     }
 
-    fn pause_current(&mut self, analysis: Option<&ProjectAnalysis>) {
+    fn pause_current(&mut self, project: Option<&DawnProject>) {
         self.capture_position();
         if self.is_playing() {
             self.transport = PreviewTransport::Paused;
-            self.schedule_render(analysis, "Paused");
+            self.schedule_render(project, "Paused");
         }
     }
 
@@ -695,7 +695,7 @@ impl PreviewSession {
             .position_seconds = position_seconds;
     }
 
-    fn schedule_render(&mut self, analysis: Option<&ProjectAnalysis>, status: impl Into<String>) {
+    fn schedule_render(&mut self, project: Option<&DawnProject>, status: impl Into<String>) {
         self.last_render_timing = PreviewRenderTiming::default();
         self.dirty_revision = self.dirty_revision.saturating_add(1);
         if let Some(pending) = self.pending_deferred_render.take() {
@@ -729,10 +729,10 @@ impl PreviewSession {
                     .get(&key)
                     .map(|state| clamp_position_seconds(state.home_seconds, duration_seconds))
                     .unwrap_or_default();
-                let frame = if analysis.is_some() {
+                let frame = if project.is_some() {
                     self.snapshot.frame.clone()
                 } else {
-                    Arc::new(empty_frame(self.generation, "No project analysis"))
+                    Arc::new(empty_frame(self.generation, "No project"))
                 };
                 (
                     format!("Sequence {}", document.object_key),
@@ -762,7 +762,7 @@ impl PreviewSession {
             frame,
             status: frame_status,
         };
-        if matches!(self.source, PreviewSource::Sequence { .. }) && analysis.is_some() {
+        if matches!(self.source, PreviewSource::Sequence { .. }) && project.is_some() {
             self.pending_deferred_render = Some(PendingDeferredRender {
                 id: self.next_deferred_render_id,
                 dirty_revision: self.dirty_revision,
@@ -962,98 +962,67 @@ fn sequence_frame_index(position_seconds: f64, frame_rate: u32) -> u64 {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use dawn_project::analysis::{analyze_project_with_overlays, ProjectAnalysis, ProjectOverlay};
-    use dawn_project::document::{get_sequence_document, SequenceDocument};
-    use dawn_project::WorkspaceFs;
-    use dawn_project::{canonicalize_path, utf8_path, Utf8PathBuf};
+    use crate::document::SequenceDocument;
+    use crate::workspace::WorkspaceService;
+    use dawn_project::{DawnProject, Utf8PathBuf};
 
     use super::{PreviewSession, PreviewSyncMode, SequenceKey};
 
-    fn club_rig_project_path() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/club-rig/project.dawn")
+    fn christmas_house_project_path() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/christmas-house/project.dawn")
     }
 
-    fn club_rig_context() -> (WorkspaceFs, Utf8PathBuf, Utf8PathBuf) {
-        let project_path = club_rig_project_path();
-        let root = project_path
-            .parent()
-            .expect("club rig project should have a parent");
-        let fs = WorkspaceFs::open(root).expect("club rig root should open");
-        let project_path = utf8_path(
-            project_path
-                .strip_prefix(root)
-                .expect("project path should be under root"),
-        )
-        .expect("project path should be valid UTF-8");
-        let sequence_path = utf8_path(Path::new("sequences/opening.sequence.dawn"))
-            .expect("sequence path should be valid UTF-8");
-        (fs, project_path, sequence_path)
-    }
-
-    fn club_rig_analysis_and_sequence(
-        overlays: Vec<ProjectOverlay>,
-    ) -> (ProjectAnalysis, SequenceDocument, SequenceKey) {
-        let (fs, project_path, sequence_path) = club_rig_context();
-        let analysis = analyze_project_with_overlays(
-            &fs,
-            project_path.clone(),
-            Some("club_rig"),
-            overlays.clone(),
-        );
-        assert!(
-            analysis.diagnostics.is_empty(),
-            "{:?}",
-            analysis.diagnostics
-        );
-        let document = get_sequence_document(
-            &fs,
-            sequence_path.clone(),
-            "opening",
-            project_path,
-            overlays,
-        )
-        .expect("club rig sequence should load");
+    fn christmas_house_project_and_sequence() -> (DawnProject, SequenceDocument, SequenceKey) {
+        let mut workspace = WorkspaceService::default();
+        workspace
+            .open_project(
+                std::fs::canonicalize(christmas_house_project_path())
+                    .expect("christmas house project path should exist"),
+            )
+            .expect("christmas house project should open");
+        let result = workspace.load_project();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let project = result.project.expect("christmas house project should load");
+        let document = workspace
+            .sequence_document(
+                &project,
+                Utf8PathBuf::from("sequences/christmas.sequence.dawn"),
+                "christmas",
+            )
+            .expect("christmas house sequence should load");
         let key = SequenceKey {
             path: document.path.clone().into(),
             object_key: document.object_key.clone(),
         };
-        (analysis, document, key)
+        (project, document, key)
     }
 
-    fn edited_sequence_overlay() -> ProjectOverlay {
-        let (fs, _, sequence_path) = club_rig_context();
-        let sequence_path = canonicalize_path(&fs.resolve(&sequence_path));
-        let content = fs
-            .read_to_string(&sequence_path)
-            .expect("club rig sequence should read")
-            .replace("value: '#66e3ff'", "value: '#0000ff'");
-        ProjectOverlay {
-            path: sequence_path,
-            content,
-        }
+    fn edited_sequence_document(document: &SequenceDocument) -> SequenceDocument {
+        let mut edited = document.clone();
+        edited.frame_rate = edited.frame_rate.saturating_add(1);
+        edited
     }
 
     #[test]
     fn sequence_source_refresh_schedules_latest_deferred_render() {
-        let (analysis, document, key) = club_rig_analysis_and_sequence(Vec::new());
+        let (project, document, key) = christmas_house_project_and_sequence();
         let mut session = PreviewSession::default();
         session.sync_source(
             Some((key.clone(), document)),
-            Some(&analysis),
+            Some(&project),
             PreviewSyncMode::RenderNow,
         );
-        session.seek(2.0, Some(&analysis));
+        session.seek(2.0, Some(&project));
         let first_request = session
             .begin_deferred_render()
             .expect("initial source should schedule preview render");
 
-        let overlay = edited_sequence_overlay();
-        let (edited_analysis, edited_document, edited_key) =
-            club_rig_analysis_and_sequence(vec![overlay]);
+        let edited_document = edited_sequence_document(&first_request.document);
+        let edited_key = key.clone();
         assert_eq!(key, edited_key);
         session.sync_source(
             Some((edited_key, edited_document)),
-            Some(&edited_analysis),
+            Some(&project),
             PreviewSyncMode::RenderNow,
         );
         let edited_request = session
@@ -1068,15 +1037,15 @@ mod tests {
 
     #[test]
     fn effect_preview_id_changes_schedule_effect_preview_render() {
-        let (analysis, document, key) = club_rig_analysis_and_sequence(Vec::new());
+        let (project, document, key) = christmas_house_project_and_sequence();
         let mut session = PreviewSession::default();
         session.sync_source(
             Some((key, document)),
-            Some(&analysis),
+            Some(&project),
             PreviewSyncMode::RenderNow,
         );
 
-        session.set_effect_preview_ids(vec![1], Some(&analysis));
+        session.set_effect_preview_ids(vec![1], Some(&project));
         let first_request = session
             .begin_deferred_render()
             .expect("first effect selection should schedule preview render");
@@ -1085,7 +1054,7 @@ mod tests {
         };
         assert!(ids.contains(&1));
 
-        session.set_effect_preview_ids(vec![23], Some(&analysis));
+        session.set_effect_preview_ids(vec![23], Some(&project));
         let second_request = session
             .begin_deferred_render()
             .expect("second effect selection should schedule preview render");
@@ -1098,20 +1067,20 @@ mod tests {
 
     #[test]
     fn native_audio_same_frame_ticks_do_not_reschedule_render() {
-        let (analysis, mut document, key) = club_rig_analysis_and_sequence(Vec::new());
+        let (project, mut document, key) = christmas_house_project_and_sequence();
         document.frame_rate = 144;
         let mut session = PreviewSession::default();
         session.sync_source(
             Some((key, document)),
-            Some(&analysis),
+            Some(&project),
             PreviewSyncMode::RenderNow,
         );
-        session.play_from_native_audio_clock(0.001, Some(&analysis));
+        session.play_from_native_audio_clock(0.001, Some(&project));
         let request = session
             .begin_deferred_render()
             .expect("native audio play should schedule a preview render");
 
-        session.render_at_native_audio_clock(0.002, false, Some(&analysis));
+        session.render_at_native_audio_clock(0.002, false, Some(&project));
 
         assert!(!request.cancellation.is_cancelled());
         assert!(session.begin_deferred_render().is_none());
@@ -1119,20 +1088,20 @@ mod tests {
 
     #[test]
     fn native_audio_frame_boundary_schedules_latest_frame_start() {
-        let (analysis, mut document, key) = club_rig_analysis_and_sequence(Vec::new());
+        let (project, mut document, key) = christmas_house_project_and_sequence();
         document.frame_rate = 144;
         let mut session = PreviewSession::default();
         session.sync_source(
             Some((key, document)),
-            Some(&analysis),
+            Some(&project),
             PreviewSyncMode::RenderNow,
         );
-        session.play_from_native_audio_clock(0.001, Some(&analysis));
+        session.play_from_native_audio_clock(0.001, Some(&project));
         let first_request = session
             .begin_deferred_render()
             .expect("native audio play should schedule a preview render");
 
-        session.render_at_native_audio_clock((1.0 / 144.0) + 0.0001, false, Some(&analysis));
+        session.render_at_native_audio_clock((1.0 / 144.0) + 0.0001, false, Some(&project));
         let second_request = session
             .begin_deferred_render()
             .expect("frame boundary should schedule the next preview render");
@@ -1148,7 +1117,7 @@ mod tests {
         assert_eq!(frame_index, 1);
         assert_eq!(position_seconds, super::frame_start(1, 144));
 
-        session.render_at_native_audio_clock((1.0 / 144.0) + 0.0002, false, Some(&analysis));
+        session.render_at_native_audio_clock((1.0 / 144.0) + 0.0002, false, Some(&project));
         assert!(!second_request.cancellation.is_cancelled());
         assert!(session.begin_deferred_render().is_none());
     }

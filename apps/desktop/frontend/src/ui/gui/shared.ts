@@ -26,7 +26,7 @@ export type PreviewTiming = {
   liveOutputLockMs: number;
   modelLockWaitMs: number;
   previewSnapshotMs: number;
-  analysisHandleMs: number;
+  projectSnapshotMs: number;
   audioPollMs: number;
   audioApplyMs: number;
   modelUpdateMs: number;

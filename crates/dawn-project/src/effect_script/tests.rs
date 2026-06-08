@@ -586,14 +586,9 @@ effect Chase {
             .collect(),
     };
 
-    let emitted = run_generator(
-        generator.generator_statements().unwrap(),
-        &prepared,
-        &[],
-        target,
-        1.0,
-    )
-    .unwrap();
+    let emitted = generator
+        .generator_topology(&prepared, target, 1.0)
+        .unwrap();
 
     assert_eq!(emitted.len(), 3);
     assert_eq!(emitted[0].target.pixels.len(), 2);

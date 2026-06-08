@@ -10,7 +10,6 @@ mod ast;
 mod builtins;
 mod bytecode;
 mod compile;
-#[cfg(test)]
 mod generator;
 mod lexer;
 mod params;
@@ -34,12 +33,11 @@ pub use parser::parse_module;
 use type_check::type_check;
 pub(crate) use type_check::{type_check_with_imports, ImportedEffect};
 
-#[cfg(test)]
-use generator::run_generator;
-
 use ast::BinaryOp;
+pub use bytecode::BytecodeStats;
 use bytecode::{specialize_for_params, BytecodeProgram};
-pub use params::PreparedEffectParams;
+pub use generator::{GeneratedChildEffectRef, GeneratedChildTopology};
+pub use params::{EffectSampleScratch, PreparedEffectParams};
 
 #[derive(Debug, Clone)]
 pub struct ScriptDiagnostic {
@@ -59,8 +57,34 @@ pub struct CompiledEffect {
 }
 
 impl CompiledEffect {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn kind(&self) -> EffectScriptKind {
+        self.kind
+    }
+
+    pub fn params(&self) -> &[EffectParamSchema] {
+        &self.params
+    }
+
+    pub fn import_path_for_alias(&self, alias: &str) -> Option<&str> {
+        self.imports
+            .iter()
+            .find(|import| import.alias == alias)
+            .map(|import| import.path.as_str())
+    }
+
     pub fn param(&self, name: &str) -> Option<&EffectParamSchema> {
         self.params.iter().find(|param| param.name == name)
+    }
+
+    pub fn bytecode_stats(&self) -> BytecodeStats {
+        self.bytecode
+            .as_ref()
+            .map(|bytecode| bytecode::stats_for_program(bytecode, self.params.len()))
+            .unwrap_or_default()
     }
 
     pub fn sample(
@@ -116,9 +140,70 @@ impl CompiledEffect {
         runtime::run(bytecode, progress, seconds, fixture, pixel, params)
     }
 
-    #[cfg(test)]
-    fn generator_statements(&self) -> Option<&[Stmt]> {
-        self.generator.as_deref()
+    pub fn sample_prepared_with_scratch(
+        &self,
+        progress: f64,
+        seconds: f64,
+        fixture: FixtureContext,
+        pixel: PixelContext,
+        params: &PreparedEffectParams,
+        scratch: &mut EffectSampleScratch,
+    ) -> Result<Color, RuntimeError> {
+        let bytecode = self.bytecode.as_ref().ok_or_else(|| RuntimeError {
+            message: format!("effect `{}` is not a sample effect", self.name),
+        })?;
+        runtime::run_with_scratch(bytecode, progress, seconds, fixture, pixel, params, scratch)
+    }
+
+    pub fn generator_topology(
+        &self,
+        params: &PreparedEffectParams,
+        target: GeneratorTarget,
+        duration_seconds: f64,
+    ) -> Result<Vec<GeneratedChildTopology>, RuntimeError> {
+        let statements = self.generator.as_deref().ok_or_else(|| RuntimeError {
+            message: format!("effect `{}` is not a generator effect", self.name),
+        })?;
+        let param_names = self
+            .params
+            .iter()
+            .map(|param| param.name.clone())
+            .collect::<Vec<_>>();
+        let mut children = generator::run_generator_topology(
+            statements,
+            params,
+            &param_names,
+            target,
+            duration_seconds,
+        )?;
+        scale_generated_children_to_duration(&mut children, duration_seconds);
+        Ok(children)
+    }
+
+    pub fn generator_child_params(
+        &self,
+        child: &GeneratedChildTopology,
+        params: &PreparedEffectParams,
+    ) -> Result<BTreeMap<String, RuntimeValue>, RuntimeError> {
+        let param_names = self
+            .params
+            .iter()
+            .map(|param| param.name.clone())
+            .collect::<Vec<_>>();
+        generator::evaluate_generated_child_params(child, params, &param_names)
+    }
+}
+
+fn scale_generated_children_to_duration(
+    children: &mut [GeneratedChildTopology],
+    duration_seconds: f64,
+) {
+    if duration_seconds <= 0.0 {
+        return;
+    }
+    for child in children {
+        child.start_seconds *= duration_seconds;
+        child.duration_seconds *= duration_seconds;
     }
 }
 

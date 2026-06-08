@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use dawn_project::{
-    ColorModel, Curve, CurveValueType, Distance, DistanceSpan, EffectParam, EffectScriptKind,
-    Fixture, FixtureId, Geometry, LayoutTargetKind, ObjectKind, SequenceEffectScope, Transform,
+    ColorModel, Curve, CurveValueType, Distance, DistanceSpan, EffectDefinitionKey, EffectParam,
+    EffectScriptKind, Fixture, FixtureId, Geometry, LayoutTargetKind, ObjectKind, Point3,
+    SequenceEffectScope, Transform,
 };
 
 #[derive(Debug, Clone)]
@@ -111,7 +112,17 @@ pub struct SequenceEffectDocument {
 
 #[derive(Debug, Clone)]
 pub struct SequenceEffectRenderDocument {
+    pub script: EffectDefinitionKey,
     pub script_source: String,
+    pub params: Vec<SequenceEffectParamDocument>,
+    pub target_pixels: Vec<SequenceEffectPixelDocument>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SequenceEffectPixelDocument {
+    pub fixture_index: usize,
+    pub pixel_index: usize,
+    pub pixel_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -251,15 +262,8 @@ pub fn geometry_render_plan(fixture: &Fixture) -> GeometryRenderPlan {
 
 fn geometry_emitters(geometry: &Geometry) -> Vec<GeometryRenderPoint> {
     match geometry {
-        Geometry::Points { points } | Geometry::Lines { points, .. } => points
-            .iter()
-            .copied()
-            .map(|point| GeometryRenderPoint {
-                x: point.x,
-                y: point.y,
-                z: point.z,
-            })
-            .collect(),
+        Geometry::Points { points } => points.iter().copied().map(render_point).collect(),
+        Geometry::Lines { points, pixels } => line_emitters(points, *pixels),
         Geometry::Arc {
             center,
             radius,
@@ -288,6 +292,88 @@ fn geometry_emitters(geometry: &Geometry) -> Vec<GeometryRenderPoint> {
                 .collect()
         }
     }
+}
+
+fn line_emitters(points: &[Point3], pixels: u32) -> Vec<GeometryRenderPoint> {
+    let count = pixels.max(1);
+    match points {
+        [] => Vec::new(),
+        [point] => vec![render_point(*point); count as usize],
+        points => {
+            let segment_lengths = points
+                .windows(2)
+                .map(|window| point_distance_meters(window[0], window[1]))
+                .collect::<Vec<_>>();
+            let total_length = segment_lengths.iter().sum::<f64>();
+            (0..count)
+                .map(|index| {
+                    let amount = if count == 1 {
+                        0.0
+                    } else {
+                        f64::from(index) / f64::from(count - 1)
+                    };
+                    point_along_line(points, &segment_lengths, total_length, amount)
+                })
+                .collect()
+        }
+    }
+}
+
+fn point_distance_meters(left: Point3, right: Point3) -> f64 {
+    let dx = right.x.as_meters_f64() - left.x.as_meters_f64();
+    let dy = right.y.as_meters_f64() - left.y.as_meters_f64();
+    let dz = right.z.as_meters_f64() - left.z.as_meters_f64();
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
+fn point_along_line(
+    points: &[Point3],
+    segment_lengths: &[f64],
+    total_length: f64,
+    amount: f64,
+) -> GeometryRenderPoint {
+    if total_length <= f64::EPSILON {
+        return render_point(points[0]);
+    }
+    let mut remaining = total_length * amount.clamp(0.0, 1.0);
+    for (segment_index, segment_length) in segment_lengths.iter().copied().enumerate() {
+        if remaining <= segment_length || segment_index == segment_lengths.len() - 1 {
+            let segment_amount = if segment_length <= f64::EPSILON {
+                0.0
+            } else {
+                remaining / segment_length
+            };
+            return interpolate_point(
+                points[segment_index],
+                points[segment_index + 1],
+                segment_amount,
+            );
+        }
+        remaining -= segment_length;
+    }
+    render_point(points[points.len() - 1])
+}
+
+fn render_point(point: Point3) -> GeometryRenderPoint {
+    GeometryRenderPoint {
+        x: point.x,
+        y: point.y,
+        z: point.z,
+    }
+}
+
+fn interpolate_point(start: Point3, end: Point3, amount: f64) -> GeometryRenderPoint {
+    let amount = amount.clamp(0.0, 1.0);
+    GeometryRenderPoint {
+        x: interpolate_distance(start.x, end.x, amount),
+        y: interpolate_distance(start.y, end.y, amount),
+        z: interpolate_distance(start.z, end.z, amount),
+    }
+}
+
+fn interpolate_distance(start: Distance, end: Distance, amount: f64) -> Distance {
+    let meters = start.as_meters_f64() + (end.as_meters_f64() - start.as_meters_f64()) * amount;
+    Distance::try_from_meters_f64_truncated(meters).unwrap_or(Distance::ZERO)
 }
 
 fn geometry_guides(geometry: &Geometry) -> Vec<GeometryRenderGuide> {

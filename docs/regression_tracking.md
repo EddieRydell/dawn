@@ -15,31 +15,13 @@ pnpm check
 This currently runs generated binding checks, TypeScript typecheck/lint/knip/build, Rust fmt/check,
 Rust clippy, and Rust tests.
 
-Run the performance baseline separately:
-
-```powershell
-pnpm baseline:thirty
-```
-
-This currently expands to:
-
-```powershell
-cargo run --release -p dawn-cli -- baseline examples/thirty-output-controller --json
-```
-
-The baseline is intentionally observational. It produces JSON for comparison and CI artifacts, but
-does not yet fail on timing thresholds. Local machine load, compiler state, and thermal behavior can
-move timing numbers enough that hard assertions would be noisy.
+The previous CLI baseline command has been retired. Runtime regressions are currently guarded
+through `pnpm check` and focused Rust/desktop checks.
 
 ## Thirty Output Release Baseline
 
-Measured on June 7, 2026 on the local Windows development machine with:
-
-```powershell
-pnpm baseline:thirty
-```
-
-The run used `iterations=30` and `warmup=5`.
+Measured on June 7, 2026 on the local Windows development machine. The run used `iterations=30`
+and `warmup=5`.
 
 ### Project And Document
 
@@ -92,23 +74,19 @@ good canaries for render-path refactors.
 
 ## Regression Classes To Protect
 
-### Project Analysis
+### Project Loading
 
 Risk: refactors can change import resolution, project-key inference, diagnostics, source ranges,
-object indexing, script analysis, or overlay behavior.
+object indexing, or effect script compilation.
 
 Current coverage:
 
 - `pnpm check`
-- `crates/dawn-project/tests/analysis.rs`
-- `dawn baseline` analysis timing and project shape
-- `dawn analyze examples/thirty-output-controller --json`
 
 Useful future checks:
 
-- Store normalized analysis JSON for `examples/thirty-output-controller` and compare reachable
+- Store normalized project JSON for `examples/thirty-output-controller` and compare reachable
   files, object counts, diagnostics, script IDs, and default object keys.
-- Add a CLI comparison mode that reports semantic deltas between two baseline JSON files.
 - Keep invalid/synthetic Dawn documents in temporary directories so realistic examples stay clean.
 
 ### Document Editing And Serialization
@@ -119,8 +97,7 @@ GUI workflow.
 
 Current coverage:
 
-- `crates/dawn-project/tests/analysis.rs` exercises several layout, fixture, and sequence edit
-  paths.
+- Rust tests exercise several layout, fixture, and sequence edit paths.
 - `pnpm check`
 
 Useful future checks:
@@ -261,10 +238,9 @@ Useful future checks:
 ## Refactor Policy
 
 - Keep behavior-preserving refactors separate from behavior changes.
-- Prefer one subsystem at a time: analysis, document edits, app model, rendering, preview, frontend.
+- Prefer one subsystem at a time: project loading, document edits, app model, rendering, preview,
+  frontend.
 - Run `pnpm check` for every refactor.
-- Run `pnpm baseline:thirty` for refactors touching analysis, document loading, rendering,
-  generated effects, output runtime, preview source construction, or sequence documents.
 - Compare JSON before and after. Timing movement needs judgment; shape/count/fingerprint movement
   should be treated as a behavior change unless intentionally explained.
 - Do not add fallbacks or compatibility shims to hide regressions. Fail clearly when contracts break.

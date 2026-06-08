@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use dawn_app_core::actions::AppAction;
 use dawn_app_core::app_model::ActiveGuiDocument;
+use dawn_app_core::document::DocumentViewId;
 use dawn_app_core::dto::{
     AppSnapshotDto, EditorViewModeDto, FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto,
     SequenceSelectionEditDto, SequenceSelectionEditResultDto, TerminalEventDto,
@@ -9,8 +10,8 @@ use dawn_app_core::dto::{
 };
 use dawn_app_core::fseq_export::{export_fseq_file, FseqExportOptions};
 use dawn_app_core::preview_session::PreviewTransportState;
-use dawn_project::document::DocumentViewId;
-use dawn_project::{serialized_import_path, utf8_path, Utf8PathBuf};
+use dawn_app_core::workspace::serialized_import_path;
+use dawn_project::{utf8_path, DiagnosticSeverity, Utf8PathBuf};
 use tauri::{ipc::Channel, AppHandle, Manager, State};
 
 use crate::app_runtime::{
@@ -254,16 +255,20 @@ fn export_active_sequence_fseq(
     state: State<'_, AppState>,
     step_ms: u8,
 ) -> CommandResult<AppSnapshotDto> {
-    let (analysis, document, default_name) = {
+    let (project, document, default_name) = {
         let mut model = lock_model(&state)?;
         model.flush_autosave()?;
-        let analysis = model
-            .analysis
+        let project = model
+            .project
             .as_ref()
-            .ok_or_else(|| "project analysis is not available".to_string())?
+            .ok_or_else(|| "project is not available".to_string())?
             .clone();
-        if analysis.has_errors() {
-            return Err("project has analysis errors".to_string());
+        if model
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
+        {
+            return Err("project has errors".to_string());
         }
         let snapshot = model.snapshot();
         if matches!(
@@ -277,10 +282,7 @@ fn export_active_sequence_fseq(
             .active_file()
             .cloned()
             .ok_or_else(|| "no active sequence file is selected".to_string())?;
-        let overlays = model.editors.dirty_overlays();
-        let descriptor = model
-            .workspace
-            .inspect_document(path.clone(), overlays.clone())?;
+        let descriptor = model.workspace.inspect_document(&project, path.clone())?;
         let object_key = descriptor
             .default_object_keys
             .get(&DocumentViewId::Sequence)
@@ -288,9 +290,9 @@ fn export_active_sequence_fseq(
             .ok_or_else(|| "active document is not a sequence".to_string())?;
         let document = model
             .workspace
-            .sequence_document(path, &object_key, overlays)?;
+            .sequence_document(&project, path, &object_key)?;
         let default_name = format!("{}.fseq", document.object_key);
-        (analysis, document, default_name)
+        (project, document, default_name)
     };
 
     let Some(output_path) = rfd::FileDialog::new()
@@ -303,7 +305,7 @@ fn export_active_sequence_fseq(
     };
 
     let report = export_fseq_file(
-        &analysis,
+        &project,
         &document,
         &output_path,
         FseqExportOptions {
@@ -332,10 +334,10 @@ fn request_sequence_effect_previews(
     effects: Vec<SequenceEffectPreviewRequestEffectDto>,
 ) -> CommandResult<()> {
     let model = lock_model(&state)?;
-    let analysis = model
-        .analysis
-        .as_deref()
-        .ok_or_else(|| "project analysis is not available".to_string())?
+    let project = model
+        .project
+        .as_ref()
+        .ok_or_else(|| "project is not available".to_string())?
         .clone();
     let request_path = path.clone();
     let request_object_key = object_key.clone();
@@ -348,7 +350,7 @@ fn request_sequence_effect_previews(
         request_object_key,
         request_id,
         effects,
-        analysis,
+        project,
         document,
     )
 }
@@ -605,10 +607,10 @@ fn preview_pause(app: AppHandle, state: State<'_, AppState>) -> CommandResult<Ap
     }
     let clock = lock_audio_runtime(&state)?.pause()?;
     let mut model = lock_model(&state)?;
-    let analysis = model.analysis.clone();
+    let project = model.project.clone();
     model
         .preview
-        .pause_at(clock.position_seconds, analysis.as_deref());
+        .pause_at(clock.position_seconds, project.as_deref());
     model.preview.set_timing_status("nativeAudio", clock.status);
     model.status = "Preview paused".to_string();
     emit_model_snapshot(&app, &model)
@@ -630,8 +632,8 @@ fn preview_stop(app: AppHandle, state: State<'_, AppState>) -> CommandResult<App
     }
     let clock = lock_audio_runtime(&state)?.stop(home_seconds)?;
     let mut model = lock_model(&state)?;
-    let analysis = model.analysis.clone();
-    model.preview.stop_native_audio(analysis.as_deref());
+    let project = model.project.clone();
+    model.preview.stop_native_audio(project.as_deref());
     model.preview.set_timing_status("nativeAudio", clock.status);
     model.status = "Preview stopped".to_string();
     emit_model_snapshot(&app, &model)
@@ -652,10 +654,10 @@ fn preview_rewind_to_zero(
     }
     let clock = lock_audio_runtime(&state)?.stop(0.0)?;
     let mut model = lock_model(&state)?;
-    let analysis = model.analysis.clone();
+    let project = model.project.clone();
     model
         .preview
-        .go_to_sequence_beginning_native_audio(analysis.as_deref());
+        .go_to_sequence_beginning_native_audio(project.as_deref());
     model.preview.set_timing_status("nativeAudio", clock.status);
     model.status = "Preview rewound".to_string();
     emit_model_snapshot(&app, &model)
@@ -684,10 +686,10 @@ fn preview_seek(
     };
     let clock = lock_audio_runtime(&state)?.seek(&audio, position_seconds, playing)?;
     let mut model = lock_model(&state)?;
-    let analysis = model.analysis.clone();
+    let project = model.project.clone();
     model
         .preview
-        .seek_native_audio(clock.position_seconds, playing, analysis.as_deref());
+        .seek_native_audio(clock.position_seconds, playing, project.as_deref());
     model.preview.set_timing_status("nativeAudio", clock.status);
     model.status = "Preview seeked".to_string();
     emit_model_snapshot(&app, &model)
@@ -700,8 +702,8 @@ fn set_live_output_enabled(
     state: State<'_, AppState>,
     enabled: bool,
 ) -> CommandResult<AppSnapshotDto> {
-    let analysis = lock_model(&state)?.analysis.clone();
-    let snapshot = lock_live_output(&state)?.set_enabled(enabled, analysis);
+    let project = lock_model(&state)?.project.clone();
+    let snapshot = lock_live_output(&state)?.set_enabled(enabled, project);
     let mut model = lock_model(&state)?;
     model.set_live_output_snapshot(snapshot);
     emit_model_snapshot(&app, &model)
