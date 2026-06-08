@@ -1,12 +1,6 @@
 use crate::path::Utf8PathBuf;
 
 #[derive(Debug, Clone)]
-pub struct ProjectLoadResult {
-    pub project: Option<crate::model::DawnProject>,
-    pub diagnostics: Vec<ProjectDiagnostic>,
-}
-
-#[derive(Debug, Clone)]
 pub struct ProjectDiagnostic {
     pub severity: DiagnosticSeverity,
     pub file: Utf8PathBuf,

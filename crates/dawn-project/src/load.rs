@@ -2,9 +2,7 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
-use crate::diagnostics::{
-    DiagnosticSeverity, ProjectDiagnostic, ProjectDiagnosticKind, ProjectLoadResult,
-};
+use crate::diagnostics::{DiagnosticSeverity, ProjectDiagnostic, ProjectDiagnosticKind};
 use crate::effect_script::{
     lex as lex_effect_script, parse_module as parse_effect_module, EffectEntrypoint,
 };
@@ -23,6 +21,12 @@ use crate::path::{canonicalize_path, resolve_import_path, Utf8PathBuf};
 #[derive(Debug)]
 struct LoadFailure {
     diagnostics: Vec<ProjectDiagnostic>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectLoadResult {
+    pub project: Option<DawnProject>,
+    pub diagnostics: Vec<ProjectDiagnostic>,
 }
 
 pub fn load_project(

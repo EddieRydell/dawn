@@ -21,11 +21,10 @@ mod path;
 mod save;
 
 pub use diagnostics::{
-    DiagnosticSeverity, ProjectDiagnostic, ProjectDiagnosticKind, ProjectLoadResult, TextPosition,
-    TextRange,
+    DiagnosticSeverity, ProjectDiagnostic, ProjectDiagnosticKind, TextPosition, TextRange,
 };
 pub use fs::WorkspaceFs;
-pub use load::load_project;
+pub use load::{load_project, ProjectLoadResult};
 pub use model::{
     ArrayElementType, AutomationClip, ChannelRange, Color, ColorModel, Controller,
     ControllerDestination, ControllerOutput, Curve, CurvePoint, CurveUse, CurveValue,
