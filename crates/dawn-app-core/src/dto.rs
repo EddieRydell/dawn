@@ -1,26 +1,24 @@
-use dawn_project::analysis::{DiagnosticSeverity, ProjectDiagnostic, TextRange};
-use dawn_project::document::{
-    default_sequence_effect_param, DocumentDescriptor, DocumentObjectDescriptor, DocumentViewId,
-    EffectScriptReferenceDocument, FixtureDefinitionDocument, FixtureDocument, LayoutDocument,
-    LayoutFixturePlacement, ResolvedLayoutFixture, SequenceAudioDocument,
+use crate::document::{
+    DocumentDescriptor, DocumentObjectDescriptor, DocumentViewId, EffectScriptReferenceDocument,
+    FixtureDefinitionDocument, FixtureDocument, GeometryRenderBounds, GeometryRenderGuide,
+    GeometryRenderPlan, GeometryRenderPoint, LayoutDocument, LayoutFixturePlacement,
+    LayoutTargetDocument, ResolvedLayoutFixture, SequenceAudioDocument,
     SequenceCurveLibraryItemDocument, SequenceDocument, SequenceEffectDocument,
-    SequenceEffectParamCurvePointEditValue, SequenceEffectParamCurveSourceDocument,
-    SequenceEffectParamCurveValueEditValue, SequenceEffectParamEditValue,
+    SequenceEffectParamCurveSourceDocument, SequenceEffectParamDocument,
     SequenceEffectScriptDocument, SequenceEffectScriptParamDocument, SequenceLaneDocument,
-};
-use dawn_project::render::{
-    GeometryRenderBounds, GeometryRenderGuide, GeometryRenderPlan, GeometryRenderPoint,
+    SequenceMarkCollectionDocument,
 };
 use dawn_project::PathStringExt;
 use dawn_project::{
     lex as lex_effect_script, parse_module as parse_effect_module, EffectParamSchema,
-    EffectScriptKind, EffectVisibility, ScriptType,
+    EffectScriptKind, EffectVisibility, ParamDefault, RuntimeValue, ScriptType,
 };
 use dawn_project::{
     ArrayElementType, Authored, ColorModel, Curve, CurveValue, CurveValueType, Distance,
     EffectParam, EffectParamArrayValue, Geometry, InlineOrRef, LayoutTargetKind, ObjectKind,
     Point3, Rotation3, Scale3, SequenceEffectScope, Transform,
 };
+use dawn_project::{DiagnosticSeverity, ProjectDiagnostic, TextRange};
 use dawn_project::{WorkspaceEntry, WorkspaceEntryKind};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -134,6 +132,7 @@ pub enum ObjectKindDto {
     Patch,
     Sequence,
     Curve,
+    Effect,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -1020,6 +1019,7 @@ impl From<ObjectKind> for ObjectKindDto {
             ObjectKind::Patch => Self::Patch,
             ObjectKind::Sequence => Self::Sequence,
             ObjectKind::Curve => Self::Curve,
+            ObjectKind::Effect => Self::Effect,
         }
     }
 }
@@ -1050,7 +1050,7 @@ impl From<ActiveGuiDocument> for ActiveGuiDocumentDto {
     }
 }
 
-impl From<LayoutTargetDto> for dawn_project::document::LayoutTargetDocument {
+impl From<LayoutTargetDto> for LayoutTargetDocument {
     fn from(target: LayoutTargetDto) -> Self {
         Self {
             kind: match target.kind {
@@ -1062,8 +1062,8 @@ impl From<LayoutTargetDto> for dawn_project::document::LayoutTargetDocument {
     }
 }
 
-impl From<dawn_project::document::LayoutTargetDocument> for LayoutTargetDto {
-    fn from(target: dawn_project::document::LayoutTargetDocument) -> Self {
+impl From<LayoutTargetDocument> for LayoutTargetDto {
+    fn from(target: LayoutTargetDocument) -> Self {
         Self {
             kind: match target.kind {
                 LayoutTargetKind::Group => LayoutTargetKindDto::Group,
@@ -1186,8 +1186,8 @@ impl From<SequenceEffectParamCurveSourceDocument> for SequenceEffectParamCurveSo
     }
 }
 
-impl From<dawn_project::document::SequenceMarkCollectionDocument> for SequenceMarkCollectionDto {
-    fn from(collection: dawn_project::document::SequenceMarkCollectionDocument) -> Self {
+impl From<SequenceMarkCollectionDocument> for SequenceMarkCollectionDto {
+    fn from(collection: SequenceMarkCollectionDocument) -> Self {
         Self {
             key: collection.key,
             name: collection.name,
@@ -1297,7 +1297,7 @@ impl SequenceEffectDto {
 fn sequence_effect_params_from_source(
     script: &str,
     script_source: &str,
-    params: &[dawn_project::document::SequenceEffectParamDocument],
+    params: &[SequenceEffectParamDocument],
     mark_collection_key: Option<&str>,
 ) -> Vec<SequenceEffectParamDto> {
     let Some(schemas) = effect_param_schemas_from_source(script, script_source) else {
@@ -1404,8 +1404,45 @@ fn default_param_value(
     schema: &dawn_project::EffectParamSchema,
     mark_collection_key: Option<&str>,
 ) -> Option<SequenceEffectParamValueDto> {
-    let value = default_sequence_effect_param(schema, mark_collection_key);
-    param_value_from_authored(schema.value_type, &value)
+    match schema.default.as_ref() {
+        Some(ParamDefault::Value(value)) => runtime_value_to_param_value(value),
+        None if schema.value_type == ScriptType::Marks => {
+            mark_collection_key.map(|key| SequenceEffectParamValueDto::Marks {
+                key: key.to_string(),
+            })
+        }
+        None => None,
+    }
+}
+
+fn runtime_value_to_param_value(value: &RuntimeValue) -> Option<SequenceEffectParamValueDto> {
+    Some(match value {
+        RuntimeValue::Int(value) => SequenceEffectParamValueDto::Int {
+            value: (*value).clamp(0, i64::from(u32::MAX)) as u32,
+        },
+        RuntimeValue::Float(value) if value.is_finite() => {
+            SequenceEffectParamValueDto::Float { value: *value }
+        }
+        RuntimeValue::Float(_) => return None,
+        RuntimeValue::Bool(value) => SequenceEffectParamValueDto::Bool { value: *value },
+        RuntimeValue::Color(value) => SequenceEffectParamValueDto::Color {
+            value: value.to_hex(),
+        },
+        RuntimeValue::Enum(value) => SequenceEffectParamValueDto::Enum {
+            value: value.clone(),
+        },
+        RuntimeValue::Flags(value) => SequenceEffectParamValueDto::Flags {
+            value: value.values.clone(),
+        },
+        RuntimeValue::Marks(_) => return None,
+        RuntimeValue::Curve(curve) => curve_to_param_value(curve)?,
+        RuntimeValue::Array(_) => return None,
+        RuntimeValue::Fixture(_)
+        | RuntimeValue::Pixel(_)
+        | RuntimeValue::Target(_)
+        | RuntimeValue::TargetItems(_)
+        | RuntimeValue::TargetItem(_) => return None,
+    })
 }
 
 fn param_value_from_resolved(
@@ -1440,14 +1477,16 @@ fn param_value_from_resolved(
             })
         }
         (ScriptType::CurveFloat, EffectParam::Curve { curve })
-            if curve.value_type == dawn_project::CurveValueType::Float =>
+            if resolved_curve_use_inline_curve(curve)
+                .is_some_and(|curve| curve.value_type == dawn_project::CurveValueType::Float) =>
         {
-            curve_to_param_value(curve)
+            curve_to_param_value(resolved_curve_use_inline_curve(curve)?)
         }
         (ScriptType::CurveColor, EffectParam::Curve { curve })
-            if curve.value_type == dawn_project::CurveValueType::Color =>
+            if resolved_curve_use_inline_curve(curve)
+                .is_some_and(|curve| curve.value_type == dawn_project::CurveValueType::Color) =>
         {
-            curve_to_param_value(curve)
+            curve_to_param_value(resolved_curve_use_inline_curve(curve)?)
         }
         (ScriptType::Marks, EffectParam::Marks { key }) => {
             Some(SequenceEffectParamValueDto::Marks { key: key.clone() })
@@ -1490,18 +1529,18 @@ fn param_value_from_authored(
                 value: value.values.clone(),
             })
         }
-        (
-            ScriptType::CurveFloat,
-            EffectParam::Curve {
-                curve: InlineOrRef::Inline(curve),
-            },
-        ) if curve.value_type == dawn_project::CurveValueType::Float => curve_to_param_value(curve),
-        (
-            ScriptType::CurveColor,
-            EffectParam::Curve {
-                curve: InlineOrRef::Inline(curve),
-            },
-        ) if curve.value_type == dawn_project::CurveValueType::Color => curve_to_param_value(curve),
+        (ScriptType::CurveFloat, EffectParam::Curve { curve })
+            if authored_curve_use_inline_curve(curve)
+                .is_some_and(|curve| curve.value_type == dawn_project::CurveValueType::Float) =>
+        {
+            curve_to_param_value(authored_curve_use_inline_curve(curve)?)
+        }
+        (ScriptType::CurveColor, EffectParam::Curve { curve })
+            if authored_curve_use_inline_curve(curve)
+                .is_some_and(|curve| curve.value_type == dawn_project::CurveValueType::Color) =>
+        {
+            curve_to_param_value(authored_curve_use_inline_curve(curve)?)
+        }
         (ScriptType::Marks, EffectParam::Marks { key }) => {
             Some(SequenceEffectParamValueDto::Marks { key: key.clone() })
         }
@@ -1561,9 +1600,10 @@ fn array_param_value_from_resolved(
                 .iter()
                 .map(|value| match value {
                     EffectParamArrayValue::Curve(curve)
-                        if curve.value_type == CurveValueType::Float =>
+                        if resolved_curve_use_inline_curve(curve)
+                            .is_some_and(|curve| curve.value_type == CurveValueType::Float) =>
                     {
-                        curve_to_float_points(curve)
+                        curve_to_float_points(resolved_curve_use_inline_curve(curve)?)
                     }
                     _ => None,
                 })
@@ -1574,9 +1614,10 @@ fn array_param_value_from_resolved(
                 .iter()
                 .map(|value| match value {
                     EffectParamArrayValue::Curve(curve)
-                        if curve.value_type == CurveValueType::Color =>
+                        if resolved_curve_use_inline_curve(curve)
+                            .is_some_and(|curve| curve.value_type == CurveValueType::Color) =>
                     {
-                        curve_to_color_points(curve)
+                        curve_to_color_points(resolved_curve_use_inline_curve(curve)?)
                     }
                     _ => None,
                 })
@@ -1594,10 +1635,11 @@ fn array_param_value_from_authored(
             values: values
                 .iter()
                 .map(|value| match value {
-                    EffectParamArrayValue::Curve(InlineOrRef::Inline(curve))
-                        if curve.value_type == CurveValueType::Float =>
+                    EffectParamArrayValue::Curve(curve)
+                        if authored_curve_use_inline_curve(curve)
+                            .is_some_and(|curve| curve.value_type == CurveValueType::Float) =>
                     {
-                        curve_to_float_points(curve)
+                        curve_to_float_points(authored_curve_use_inline_curve(curve)?)
                     }
                     _ => None,
                 })
@@ -1607,10 +1649,11 @@ fn array_param_value_from_authored(
             values: values
                 .iter()
                 .map(|value| match value {
-                    EffectParamArrayValue::Curve(InlineOrRef::Inline(curve))
-                        if curve.value_type == CurveValueType::Color =>
+                    EffectParamArrayValue::Curve(curve)
+                        if authored_curve_use_inline_curve(curve)
+                            .is_some_and(|curve| curve.value_type == CurveValueType::Color) =>
                     {
-                        curve_to_color_points(curve)
+                        curve_to_color_points(authored_curve_use_inline_curve(curve)?)
                     }
                     _ => None,
                 })
@@ -1678,11 +1721,31 @@ fn authored_array_value_to_resolved(
         EffectParamArrayValue::Float(_) => return None,
         EffectParamArrayValue::Boolean(value) => EffectParamArrayValue::Boolean(*value),
         EffectParamArrayValue::Color(value) => EffectParamArrayValue::Color(*value),
-        EffectParamArrayValue::Curve(InlineOrRef::Inline(curve)) => {
-            EffectParamArrayValue::Curve(curve.clone())
+        EffectParamArrayValue::Curve(curve) => {
+            EffectParamArrayValue::Curve(dawn_project::CurveUse {
+                id: curve.id,
+                curve: dawn_project::ResolvedInlineOrRef::Inline(
+                    authored_curve_use_inline_curve(curve)?.clone(),
+                ),
+            })
         }
-        EffectParamArrayValue::Curve(_) => return None,
     })
+}
+
+fn resolved_curve_use_inline_curve(
+    curve: &dawn_project::CurveUse<dawn_project::Resolved>,
+) -> Option<&Curve> {
+    match &curve.curve {
+        dawn_project::ResolvedInlineOrRef::Inline(curve) => Some(curve),
+        dawn_project::ResolvedInlineOrRef::Ref(_) => None,
+    }
+}
+
+fn authored_curve_use_inline_curve(curve: &dawn_project::CurveUse<Authored>) -> Option<&Curve> {
+    match &curve.curve {
+        InlineOrRef::Inline(curve) => Some(curve),
+        InlineOrRef::Ref(_) => None,
+    }
 }
 
 fn param_value_options_match(value: &SequenceEffectParamValueDto, options: &[String]) -> bool {
@@ -1692,70 +1755,6 @@ fn param_value_options_match(value: &SequenceEffectParamValueDto, options: &[Str
             value.iter().all(|flag| options.contains(flag))
         }
         _ => true,
-    }
-}
-
-impl From<SequenceEffectParamValueDto> for SequenceEffectParamEditValue {
-    fn from(value: SequenceEffectParamValueDto) -> Self {
-        match value {
-            SequenceEffectParamValueDto::Int { value } => Self::Integer(value.into()),
-            SequenceEffectParamValueDto::Float { value } => Self::Float(value),
-            SequenceEffectParamValueDto::Bool { value } => Self::Boolean(value),
-            SequenceEffectParamValueDto::Color { value } => Self::Color(value),
-            SequenceEffectParamValueDto::Enum { value } => Self::Enum(value),
-            SequenceEffectParamValueDto::Flags { value } => Self::Flags(value),
-            SequenceEffectParamValueDto::FloatCurve { points } => Self::FloatCurve(
-                points
-                    .into_iter()
-                    .map(|point| SequenceEffectParamCurvePointEditValue {
-                        time: point.time,
-                        value: SequenceEffectParamCurveValueEditValue::Float(point.value),
-                    })
-                    .collect(),
-            ),
-            SequenceEffectParamValueDto::ColorCurve { points } => Self::ColorCurve(
-                points
-                    .into_iter()
-                    .map(|point| SequenceEffectParamCurvePointEditValue {
-                        time: point.time,
-                        value: SequenceEffectParamCurveValueEditValue::Color(point.value),
-                    })
-                    .collect(),
-            ),
-            SequenceEffectParamValueDto::IntArray { values } => Self::IntArray(values),
-            SequenceEffectParamValueDto::FloatArray { values } => Self::FloatArray(values),
-            SequenceEffectParamValueDto::BoolArray { values } => Self::BoolArray(values),
-            SequenceEffectParamValueDto::ColorArray { values } => Self::ColorArray(values),
-            SequenceEffectParamValueDto::FloatCurveArray { values } => Self::FloatCurveArray(
-                values
-                    .into_iter()
-                    .map(|points| {
-                        points
-                            .into_iter()
-                            .map(|point| SequenceEffectParamCurvePointEditValue {
-                                time: point.time,
-                                value: SequenceEffectParamCurveValueEditValue::Float(point.value),
-                            })
-                            .collect()
-                    })
-                    .collect(),
-            ),
-            SequenceEffectParamValueDto::ColorCurveArray { values } => Self::ColorCurveArray(
-                values
-                    .into_iter()
-                    .map(|points| {
-                        points
-                            .into_iter()
-                            .map(|point| SequenceEffectParamCurvePointEditValue {
-                                time: point.time,
-                                value: SequenceEffectParamCurveValueEditValue::Color(point.value),
-                            })
-                            .collect()
-                    })
-                    .collect(),
-            ),
-            SequenceEffectParamValueDto::Marks { key } => Self::Marks(key),
-        }
     }
 }
 
@@ -2054,13 +2053,13 @@ impl From<EditorBuffer> for EditorBufferDto {
 impl From<ProjectDiagnostic> for ProjectDiagnosticDto {
     fn from(diagnostic: ProjectDiagnostic) -> Self {
         Self {
-            path: diagnostic.path.to_slash_string(),
+            path: diagnostic.file.to_slash_string(),
             range: diagnostic.range.map(TextRangeDto::from),
             severity: match diagnostic.severity {
                 DiagnosticSeverity::Error => DiagnosticSeverityDto::Error,
                 DiagnosticSeverity::Warning => DiagnosticSeverityDto::Warning,
             },
-            code: format!("{:?}", diagnostic.code),
+            code: format!("{:?}", diagnostic.kind),
             message: diagnostic.message,
         }
     }

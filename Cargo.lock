@@ -899,8 +899,11 @@ dependencies = [
  "camino",
  "dawn-project",
  "dirs",
+ "indexmap 2.14.0",
+ "pathdiff",
  "serde",
  "serde_json",
+ "serde_yaml",
  "specta",
 ]
 

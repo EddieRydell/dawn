@@ -23,17 +23,27 @@ mod save;
 pub use diagnostics::{
     DiagnosticSeverity, ProjectDiagnostic, ProjectDiagnosticKind, TextPosition, TextRange,
 };
+pub use effect_script::{
+    lex, parse_module, EffectAst, EffectModuleAst, EffectParamSchema, EffectScriptKind,
+    EffectVisibility, ParamDefault, RuntimeValue, ScriptDiagnostic, ScriptType, Token,
+};
 pub use fs::WorkspaceFs;
+pub use fs::{WorkspaceEntry, WorkspaceEntryKind};
 pub use load::{load_project, ProjectLoadResult};
 pub use model::{
-    ArrayElementType, AutomationClip, ChannelRange, Color, ColorModel, Controller,
-    ControllerDestination, ControllerOutput, Curve, CurvePoint, CurveUse, CurveValue,
-    CurveValueType, DawnProject, Display, Distance, DistanceSpan, EffectParam,
-    EffectParamArrayValue, EffectTarget, Fixture, FixtureId, FixturePlacement, Flags, Geometry,
-    Group, GroupInstantiationId, Layout, LayoutTargetKind, LayoutTargetRef, ObjectKind, Patch,
-    Point3, Project, Protocol, RgbChannelOrder, Rotation3, Route, Scale3, Sequence, SequenceEffect,
-    SequenceEffectId, SequenceEffectScope, SequenceMarkCollection, Time, TimeSpan, Transform,
-    Universe,
+    ArrayElementType, AssetPath, Authored, AutomationClip, ChannelRange, Color, ColorModel,
+    Controller, ControllerDefinitionKey, ControllerDestination, ControllerOutput, Curve,
+    CurveDefinitionKey, CurvePoint, CurveUse, CurveValue, CurveValueType, DawnFile, DawnImport,
+    DawnObject, DawnProject, DefinitionKey, Display, DisplayDefinitionKey, Distance, DistanceSpan,
+    EffectDefinition, EffectDefinitionKey, EffectParam, EffectParamArrayValue, EffectTarget,
+    Fixture, FixtureDefinitionKey, FixtureId, FixturePlacement, Flags, Geometry, Group,
+    GroupInstantiationId, InlineOrRef, Layout, LayoutDefinitionKey, LayoutTargetKind,
+    LayoutTargetRef, ObjectKind, Patch, PatchDefinitionKey, Point3, Project, ProjectDefinitionKey,
+    Protocol, Resolved, ResolvedAssetPath, ResolvedEffectDefinitionSource, ResolvedInlineOrRef,
+    ResolvedObject, ResolvedProvenance, ResolvedSourceFile, ResolvedSourceObject, ResolvedStores,
+    ResolvedSymbolRef, RgbChannelOrder, Rotation3, Route, Scale3, Sequence, SequenceDefinitionKey,
+    SequenceEffect, SequenceEffectId, SequenceEffectScope, SequenceMarkCollection, SymbolRef, Time,
+    TimeSpan, Transform, Universe,
 };
-pub use path::Utf8PathBuf;
+pub use path::{canonicalize_path, resolve_import_path, utf8_path, PathStringExt, Utf8PathBuf};
 pub use save::{save_project, ProjectSaveResult};

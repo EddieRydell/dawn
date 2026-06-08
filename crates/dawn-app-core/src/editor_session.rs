@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use dawn_project::analysis::ProjectOverlay;
 use dawn_project::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
@@ -49,8 +48,6 @@ pub struct EditorBuffer {
     pub disk_version: Option<FileDiskVersion>,
     pub external_state: BufferExternalState,
     pub view_mode: EditorViewMode,
-    gui_dirty_revision: u64,
-    gui_saved_revision: u64,
     undo_stack: Vec<String>,
     redo_stack: Vec<String>,
 }
@@ -65,7 +62,7 @@ pub enum OpenFileOutcome {
 
 impl EditorBuffer {
     pub fn is_dirty(&self) -> bool {
-        self.text != self.saved_text || self.gui_dirty_revision != self.gui_saved_revision
+        self.text != self.saved_text
     }
 
     pub fn is_conflicted(&self) -> bool {
@@ -92,8 +89,6 @@ impl EditorSession {
                     disk_version: Some(disk_version),
                     external_state: BufferExternalState::Current,
                     view_mode: EditorViewMode::Text,
-                    gui_dirty_revision: 0,
-                    gui_saved_revision: 0,
                     undo_stack: Vec::new(),
                     redo_stack: Vec::new(),
                 },
@@ -127,8 +122,6 @@ impl EditorSession {
         buffer.saved_text = text;
         buffer.disk_version = Some(disk_version);
         buffer.external_state = BufferExternalState::Current;
-        buffer.gui_dirty_revision = 0;
-        buffer.gui_saved_revision = 0;
         OpenFileOutcome::ReloadedFromDisk
     }
 
@@ -162,19 +155,6 @@ impl EditorSession {
     }
 
     pub fn update_active_text(&mut self, text: String) {
-        if let Some(buffer) = self.active_buffer_mut() {
-            if buffer.is_conflicted() {
-                return;
-            }
-            if buffer.text == text {
-                return;
-            }
-            buffer.record_snapshot();
-            buffer.text = text;
-        }
-    }
-
-    pub fn replace_active_text_from_edit(&mut self, text: String) {
         if let Some(buffer) = self.active_buffer_mut() {
             if buffer.is_conflicted() {
                 return;
@@ -280,8 +260,6 @@ impl EditorSession {
                     disk_version: Some(disk_version),
                     external_state: BufferExternalState::Current,
                     view_mode,
-                    gui_dirty_revision: 0,
-                    gui_saved_revision: 0,
                     undo_stack: Vec::new(),
                     redo_stack: Vec::new(),
                 },
@@ -304,8 +282,8 @@ impl EditorSession {
             buffer.saved_text = saved_text;
             buffer.disk_version = Some(disk_version);
             buffer.external_state = BufferExternalState::Current;
-            buffer.gui_dirty_revision = 0;
-            buffer.gui_saved_revision = 0;
+            buffer.undo_stack.clear();
+            buffer.redo_stack.clear();
         }
     }
 
@@ -314,35 +292,7 @@ impl EditorSession {
             buffer.saved_text = buffer.text.clone();
             buffer.disk_version = Some(disk_version);
             buffer.external_state = BufferExternalState::Current;
-            buffer.gui_saved_revision = buffer.gui_dirty_revision;
         }
-    }
-
-    pub fn mark_gui_edit_dirty(&mut self, path: &Utf8PathBuf, revision: u64) {
-        if let Some(buffer) = self.open_editors.get_mut(path) {
-            buffer.gui_dirty_revision = revision;
-        }
-    }
-
-    pub fn complete_gui_edit_save(
-        &mut self,
-        path: &Utf8PathBuf,
-        revision: u64,
-        text: String,
-        disk_version: FileDiskVersion,
-    ) -> bool {
-        let Some(buffer) = self.open_editors.get_mut(path) else {
-            return false;
-        };
-        if buffer.gui_dirty_revision != revision {
-            return false;
-        }
-        buffer.text = text.clone();
-        buffer.saved_text = text;
-        buffer.disk_version = Some(disk_version);
-        buffer.external_state = BufferExternalState::Current;
-        buffer.gui_saved_revision = revision;
-        true
     }
 
     pub fn replace_from_disk(
@@ -360,8 +310,10 @@ impl EditorSession {
             buffer.saved_text = text;
             buffer.disk_version = Some(disk_version);
             buffer.external_state = BufferExternalState::Current;
-            buffer.gui_dirty_revision = 0;
-            buffer.gui_saved_revision = 0;
+            if !preserve_undo {
+                buffer.undo_stack.clear();
+                buffer.redo_stack.clear();
+            }
         }
     }
 
@@ -369,17 +321,6 @@ impl EditorSession {
         if let Some(buffer) = self.open_editors.get_mut(path) {
             buffer.external_state = state;
         }
-    }
-
-    pub fn dirty_overlays(&self) -> Vec<ProjectOverlay> {
-        self.open_editors
-            .values()
-            .filter(|buffer| buffer.text != buffer.saved_text)
-            .map(|buffer| ProjectOverlay {
-                path: buffer.path.clone(),
-                content: buffer.text.clone(),
-            })
-            .collect()
     }
 
     pub fn dirty_buffers(&self) -> Vec<EditorBuffer> {

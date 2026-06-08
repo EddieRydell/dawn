@@ -21,13 +21,15 @@ mod type_check;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use ast::EffectEntrypoint;
 pub use ast::EffectVisibility;
-pub(crate) use ast::{EffectAst, EffectEntrypoint};
+pub use ast::{EffectAst, EffectModuleAst};
 pub(crate) use ast::{EffectImport, Stmt};
-pub(crate) use lexer::lex;
+pub use lexer::lex;
+pub use lexer::Token;
 #[cfg(test)]
 use parser::parse;
-pub(crate) use parser::parse_module;
+pub use parser::parse_module;
 #[cfg(test)]
 use type_check::type_check;
 pub(crate) use type_check::{type_check_with_imports, ImportedEffect};
@@ -40,9 +42,9 @@ use bytecode::{specialize_for_params, BytecodeProgram};
 pub use params::PreparedEffectParams;
 
 #[derive(Debug, Clone)]
-pub(crate) struct ScriptDiagnostic {
-    pub(crate) range: Option<TextRange>,
-    pub(crate) message: String,
+pub struct ScriptDiagnostic {
+    pub range: Option<TextRange>,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
