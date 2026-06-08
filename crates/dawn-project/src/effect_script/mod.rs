@@ -211,10 +211,10 @@ impl ScriptType {
             (Self::Enum, EffectParam::Enum { .. }) => true,
             (Self::Flags, EffectParam::Flags { .. }) => true,
             (Self::CurveFloat, EffectParam::Curve { curve }) => {
-                curve.value_type == crate::model::CurveValueType::Float
+                curve.curve.value_type == crate::model::CurveValueType::Float
             }
             (Self::CurveColor, EffectParam::Curve { curve }) => {
-                curve.value_type == crate::model::CurveValueType::Color
+                curve.curve.value_type == crate::model::CurveValueType::Color
             }
             (
                 Self::Array(expected),
@@ -244,10 +244,10 @@ fn array_param_value_matches(
         (ArrayElementType::Bool, EffectParamArrayValue::Boolean(_)) => true,
         (ArrayElementType::Color, EffectParamArrayValue::Color(_)) => true,
         (ArrayElementType::CurveFloat, EffectParamArrayValue::Curve(curve)) => {
-            curve.value_type == crate::model::CurveValueType::Float
+            curve.curve.value_type == crate::model::CurveValueType::Float
         }
         (ArrayElementType::CurveColor, EffectParamArrayValue::Curve(curve)) => {
-            curve.value_type == crate::model::CurveValueType::Color
+            curve.curve.value_type == crate::model::CurveValueType::Color
         }
         _ => false,
     }

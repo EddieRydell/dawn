@@ -1,4 +1,5 @@
 use std::fmt;
+use std::marker::PhantomData;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 
@@ -6,6 +7,7 @@ use indexmap::IndexMap;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::effect_script::{CompiledEffect, EffectParamSchema, EffectScriptKind};
 use crate::path::{PathStringExt, Utf8PathBuf};
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -35,7 +37,162 @@ impl EffectScriptId {
 }
 
 pub type AuthoredProject = Project<Authored>;
-pub type ResolvedProject = Project<Resolved>;
+pub type DawnProject = Project<Resolved>;
+pub type ResolvedProject = DawnProject;
+
+macro_rules! resolved_id {
+    ($name:ident) => {
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize,
+        )]
+        #[serde(transparent)]
+        pub struct $name(pub u32);
+    };
+}
+
+resolved_id!(DisplayId);
+resolved_id!(SequenceId);
+resolved_id!(ControllerId);
+resolved_id!(PatchId);
+resolved_id!(LayoutId);
+resolved_id!(FixtureDefinitionId);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct SequenceEffectId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct GroupInstantiationId(pub u32);
+
+impl fmt::Display for GroupInstantiationId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct ResolvedRef<Id>(pub Id);
+
+impl<Id> ResolvedRef<Id> {
+    pub fn new(id: Id) -> Self {
+        Self(id)
+    }
+
+    pub fn id(self) -> Id
+    where
+        Id: Copy,
+    {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ResolvedProvenance {
+    Inline,
+    Named {
+        path: Utf8PathBuf,
+        symbol: String,
+    },
+    ExternalEffect {
+        path: Utf8PathBuf,
+        effect_name: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedObject<T> {
+    pub value: T,
+    pub provenance: ResolvedProvenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DefinitionKey<Name> {
+    pub path: Utf8PathBuf,
+    pub name: String,
+    #[serde(skip)]
+    marker: PhantomData<Name>,
+}
+
+impl<Name> DefinitionKey<Name> {
+    pub fn new(path: Utf8PathBuf, name: impl Into<String>) -> Self {
+        Self {
+            path,
+            name: name.into(),
+            marker: PhantomData,
+        }
+    }
+
+    pub fn display_key(&self) -> String {
+        format!("{}#{}", self.path.to_slash_string(), self.name)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+pub enum ProjectDefinitionName {}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+pub enum DisplayDefinitionName {}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+pub enum SequenceDefinitionName {}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+pub enum ControllerDefinitionName {}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+pub enum PatchDefinitionName {}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+pub enum LayoutDefinitionName {}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+pub enum FixtureDefinitionName {}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+pub enum CurveDefinitionName {}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+pub enum EffectDefinitionName {}
+
+pub type ProjectDefinitionKey = DefinitionKey<ProjectDefinitionName>;
+pub type DisplayDefinitionKey = DefinitionKey<DisplayDefinitionName>;
+pub type SequenceDefinitionKey = DefinitionKey<SequenceDefinitionName>;
+pub type ControllerDefinitionKey = DefinitionKey<ControllerDefinitionName>;
+pub type PatchDefinitionKey = DefinitionKey<PatchDefinitionName>;
+pub type LayoutDefinitionKey = DefinitionKey<LayoutDefinitionName>;
+pub type FixtureDefinitionKey = DefinitionKey<FixtureDefinitionName>;
+pub type CurveDefinitionKey = DefinitionKey<CurveDefinitionName>;
+pub type EffectDefinitionKey = DefinitionKey<EffectDefinitionName>;
+
+#[derive(Debug, Clone)]
+pub struct EffectDefinition {
+    pub source: EffectDefinitionSource,
+    pub schema: Vec<EffectParamSchema>,
+    pub kind: EffectScriptKind,
+    pub compiled: CompiledEffect,
+}
+
+#[derive(Debug, Clone)]
+pub enum EffectDefinitionSource {
+    Inline {
+        sequence: SequenceId,
+        effect: SequenceEffectId,
+    },
+    External {
+        path: Utf8PathBuf,
+        effect_name: String,
+    },
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NoProjectStores;
+
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedStores {
+    pub displays: IndexMap<DisplayDefinitionKey, ResolvedObject<Display<Resolved>>>,
+    pub sequences: IndexMap<SequenceDefinitionKey, ResolvedObject<Sequence<Resolved>>>,
+    pub controllers: IndexMap<ControllerDefinitionKey, ResolvedObject<Controller>>,
+    pub patches: IndexMap<PatchDefinitionKey, ResolvedObject<Patch<Resolved>>>,
+    pub layouts: IndexMap<LayoutDefinitionKey, ResolvedObject<Layout<Resolved>>>,
+    pub fixture_definitions: IndexMap<FixtureDefinitionKey, ResolvedObject<Fixture>>,
+    pub curves: IndexMap<CurveDefinitionKey, ResolvedObject<Curve>>,
+    pub effect_definitions: IndexMap<EffectDefinitionKey, ResolvedObject<EffectDefinition>>,
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -138,14 +295,17 @@ impl Serialize for DawnFile {
 }
 
 pub trait ModelMode {
+    type ProjectStores: fmt::Debug + Clone + Default;
     type ProjectDisplay: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
     type ProjectSequence: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
     type DisplayController: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
     type DisplayPatch: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
     type DisplayLayout: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
     type LayoutFixture: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type LayoutGroup: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
     type FixturePlacementFixture: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
     type GroupMember: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type PatchRoute: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
     type RouteFixture: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
     type RouteController: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
     type SequenceAudio: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
@@ -155,46 +315,55 @@ pub trait ModelMode {
     type EffectParamCurve: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
     type AutomationClipCurve: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
     type AutomationClipTarget: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type SequenceEffectId: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
 }
 
 impl ModelMode for Authored {
+    type ProjectStores = NoProjectStores;
     type ProjectDisplay = InlineOrRef<Display<Authored>>;
     type ProjectSequence = InlineOrRef<Sequence<Authored>>;
     type DisplayController = InlineOrRef<Controller>;
     type DisplayPatch = InlineOrRef<Patch<Authored>>;
     type DisplayLayout = InlineOrRef<Layout<Authored>>;
     type LayoutFixture = FixturePlacement<Authored>;
+    type LayoutGroup = Group<Authored>;
     type FixturePlacementFixture = InlineOrRef<Fixture>;
     type GroupMember = FixtureId;
+    type PatchRoute = Route<Authored>;
     type RouteFixture = FixtureId;
-    type RouteController = ControllerRef;
+    type RouteController = SymbolRef;
     type SequenceAudio = Option<AssetPath>;
-    type EffectTargetGroup = GroupRef;
+    type EffectTargetGroup = GroupInstantiationId;
     type EffectTargetFixture = FixtureId;
     type SequenceEffectScript = InlineScriptOrRef;
     type EffectParamCurve = InlineOrRef<Curve>;
     type AutomationClipCurve = InlineOrRef<Curve>;
     type AutomationClipTarget = u32;
+    type SequenceEffectId = u32;
 }
 
 impl ModelMode for Resolved {
+    type ProjectStores = ResolvedStores;
     type ProjectDisplay = Display<Resolved>;
     type ProjectSequence = Sequence<Resolved>;
     type DisplayController = Controller;
     type DisplayPatch = Patch<Resolved>;
     type DisplayLayout = Layout<Resolved>;
     type LayoutFixture = FixturePlacement<Resolved>;
+    type LayoutGroup = Group<Resolved>;
     type FixturePlacementFixture = Fixture;
-    type GroupMember = FixtureIndex;
-    type RouteFixture = FixtureIndex;
-    type RouteController = ControllerIndex;
+    type GroupMember = FixtureId;
+    type PatchRoute = Route<Resolved>;
+    type RouteFixture = FixtureId;
+    type RouteController = ControllerDefinitionKey;
     type SequenceAudio = Option<Utf8PathBuf>;
-    type EffectTargetGroup = GroupIndex;
-    type EffectTargetFixture = FixtureIndex;
+    type EffectTargetGroup = GroupInstantiationId;
+    type EffectTargetFixture = FixtureId;
     type SequenceEffectScript = ScriptSource;
     type EffectParamCurve = Curve;
     type AutomationClipCurve = Curve;
-    type AutomationClipTarget = SequenceEffectIndex;
+    type AutomationClipTarget = SequenceEffectId;
+    type SequenceEffectId = SequenceEffectId;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -1154,10 +1323,11 @@ pub fn validate_identifier(value: &str, label: &str) -> Result<(), String> {
     deserialize = "M::ProjectDisplay: Deserialize<'de>, M::ProjectSequence: Deserialize<'de>"
 ))]
 pub struct Project<M: ModelMode = Authored> {
-    pub name: String,
     pub display: M::ProjectDisplay,
     #[serde(default)]
     pub sequences: Vec<M::ProjectSequence>,
+    #[serde(skip)]
+    pub stores: M::ProjectStores,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1167,7 +1337,6 @@ pub struct Project<M: ModelMode = Authored> {
     deserialize = "M::DisplayController: Deserialize<'de>, M::DisplayPatch: Deserialize<'de>, M::DisplayLayout: Deserialize<'de>"
 ))]
 pub struct Display<M: ModelMode = Authored> {
-    pub name: String,
     #[serde(default)]
     pub controllers: Vec<M::DisplayController>,
     pub patch: M::DisplayPatch,
@@ -1177,7 +1346,6 @@ pub struct Display<M: ModelMode = Authored> {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Controller {
-    pub name: String,
     pub protocol: Protocol,
     #[serde(default)]
     pub destination: Option<ControllerDestination>,
@@ -1250,7 +1418,7 @@ pub enum ControllerOutput {
     },
     LinearRgb {
         channel_order: RgbChannelOrder,
-        group: String,
+        group: GroupInstantiationId,
         output_count: usize,
         pixels_per_output: usize,
         first_universe: u32,
@@ -1268,28 +1436,21 @@ pub struct Universe {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[serde(bound(
-    serialize = "M::LayoutFixture: Serialize, Group<M>: Serialize",
-    deserialize = "M::LayoutFixture: Deserialize<'de>, Group<M>: Deserialize<'de>"
+    serialize = "M::LayoutFixture: Serialize, M::LayoutGroup: Serialize",
+    deserialize = "M::LayoutFixture: Deserialize<'de>, M::LayoutGroup: Deserialize<'de>"
 ))]
 pub struct Layout<M: ModelMode = Authored> {
-    pub name: String,
     #[serde(default)]
     pub target_order: Vec<LayoutTargetRef>,
     #[serde(default)]
     pub fixtures: Vec<M::LayoutFixture>,
     #[serde(default)]
-    pub groups: Vec<Group<M>>,
+    pub groups: Vec<M::LayoutGroup>,
 }
 
 impl Layout<Resolved> {
     pub fn fixture(&self, index: FixtureIndex) -> Option<&FixturePlacement<Resolved>> {
         self.fixtures.get(index.0)
-    }
-
-    pub fn group_members(&self, index: GroupIndex) -> Option<&[FixtureIndex]> {
-        self.groups
-            .get(index.0)
-            .map(|group| group.members.as_slice())
     }
 }
 
@@ -1307,7 +1468,8 @@ impl Display<Resolved> {
 ))]
 pub struct FixturePlacement<M: ModelMode = Authored> {
     pub id: FixtureId,
-    pub name: String,
+    #[serde(default)]
+    pub name: Option<String>,
     pub fixture: M::FixturePlacementFixture,
     pub transform: Transform,
 }
@@ -1315,7 +1477,6 @@ pub struct FixturePlacement<M: ModelMode = Authored> {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fixture {
-    pub name: String,
     pub color_model: ColorModel,
     #[serde(default = "default_bulb_diameter")]
     pub bulb_diameter: DistanceSpan,
@@ -1436,7 +1597,9 @@ pub enum Geometry {
     deserialize = "M::GroupMember: Deserialize<'de>"
 ))]
 pub struct Group<M: ModelMode = Authored> {
-    pub name: String,
+    pub id: GroupInstantiationId,
+    #[serde(default)]
+    pub name: Option<String>,
     pub members: Vec<M::GroupMember>,
 }
 
@@ -1452,18 +1615,18 @@ pub enum LayoutTargetKind {
 pub struct LayoutTargetRef {
     #[serde(rename = "type")]
     pub kind: LayoutTargetKind,
-    pub name: String,
+    pub id: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[serde(bound(
-    serialize = "Route<M>: Serialize",
-    deserialize = "Route<M>: Deserialize<'de>"
+    serialize = "M::PatchRoute: Serialize",
+    deserialize = "M::PatchRoute: Deserialize<'de>"
 ))]
 pub struct Patch<M: ModelMode = Authored> {
     #[serde(default)]
-    pub routes: Vec<Route<M>>,
+    pub routes: Vec<M::PatchRoute>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1514,7 +1677,7 @@ pub struct SequenceMarkCollection {
     deserialize = "M::EffectTargetGroup: Deserialize<'de>, M::EffectTargetFixture: Deserialize<'de>"
 ))]
 pub enum EffectTarget<M: ModelMode = Authored> {
-    Group { name: M::EffectTargetGroup },
+    Group { id: M::EffectTargetGroup },
     Fixture { id: M::EffectTargetFixture },
 }
 
@@ -1528,11 +1691,11 @@ pub enum SequenceEffectScope {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[serde(bound(
-    serialize = "EffectTarget<M>: Serialize, M::SequenceEffectScript: Serialize, EffectParam<M>: Serialize",
-    deserialize = "EffectTarget<M>: Deserialize<'de>, M::SequenceEffectScript: Deserialize<'de>, EffectParam<M>: Deserialize<'de>"
+    serialize = "M::SequenceEffectId: Serialize, EffectTarget<M>: Serialize, M::SequenceEffectScript: Serialize, EffectParam<M>: Serialize",
+    deserialize = "M::SequenceEffectId: Deserialize<'de>, EffectTarget<M>: Deserialize<'de>, M::SequenceEffectScript: Deserialize<'de>, EffectParam<M>: Deserialize<'de>"
 ))]
 pub struct SequenceEffect<M: ModelMode = Authored> {
-    pub id: u32,
+    pub id: M::SequenceEffectId,
     pub start: Time,
     pub duration: TimeSpan,
     pub target: EffectTarget<M>,
@@ -1818,7 +1981,7 @@ pub enum EffectParam<M: ModelMode = Authored> {
         value: Color,
     },
     Curve {
-        curve: M::EffectParamCurve,
+        curve: CurveUse<M>,
     },
     Array {
         element_type: ArrayElementType,
@@ -1840,7 +2003,18 @@ pub enum EffectParamArrayValue<M: ModelMode = Authored> {
     Float(f64),
     Boolean(bool),
     Color(Color),
-    Curve(M::EffectParamCurve),
+    Curve(CurveUse<M>),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[serde(bound(
+    serialize = "M::EffectParamCurve: Serialize",
+    deserialize = "M::EffectParamCurve: Deserialize<'de>"
+))]
+pub struct CurveUse<M: ModelMode = Authored> {
+    pub id: u32,
+    pub curve: M::EffectParamCurve,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1853,12 +2027,12 @@ pub struct AutomationClip<M: ModelMode = Authored> {
     pub id: u32,
     pub start: Time,
     pub duration: TimeSpan,
-    pub curve: M::AutomationClipCurve,
+    pub curve: CurveUse<M>,
     #[serde(default)]
     pub targets: Vec<M::AutomationClipTarget>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjectKind {
     Project,

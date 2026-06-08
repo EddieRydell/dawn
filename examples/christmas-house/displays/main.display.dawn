@@ -1,22 +1,22 @@
 imports:
-  - from: ../layouts/house.layout.dawn
-    as: layouts
-  - from: ../patches/main.patch.dawn
-    as: patches
-
+- from: ../layouts/house.layout.dawn
+  as: layouts
+- from: ../patches/main.patch.dawn
+  as: patches
 main:
   type: display
-  name: Christmas House
   layout: layouts.house
   patch: patches.main
   controllers:
-    - name: HouseController
-      protocol: artnet
-      output:
-        type: patched_dmx
-        channel_order: rgb
-        universes:
-          - id: 1
-            range: "1..510"
-          - id: 2
-            range: "1..510"
+  - house_controller
+house_controller:
+  type: controller
+  protocol: artnet
+  output:
+    type: patched_dmx
+    channel_order: rgb
+    universes:
+    - id: 1
+      range: 1..510
+    - id: 2
+      range: 1..510

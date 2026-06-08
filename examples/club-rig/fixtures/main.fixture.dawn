@@ -1,6 +1,5 @@
 pixel_bar_50:
   type: fixture
-  name: PixelBar
   color_model: rgb
   bulb_diameter: 0.01
   geometry:
@@ -13,10 +12,8 @@ pixel_bar_50:
       y: -0.5760780953968638
       z: 0.0
     pixels: 50
-
 spot_rgb:
   type: fixture
-  name: Spot
   color_model: rgb
   bulb_diameter: 0.01
   geometry:
@@ -25,10 +22,8 @@ spot_rgb:
     - x: 0.0
       y: 0.0
       z: 0.0
-
 pixel_bar_50_copy_1:
   type: fixture
-  name: PixelBar Copy
   color_model: rgb
   bulb_diameter: 0.01
   geometry:
@@ -37,7 +32,7 @@ pixel_bar_50_copy_1:
     - x: 1.4939326608987447
       y: 1.500960881975596
       z: 0.0
-    - x: 0.00006896633554343001
+    - x: 6.896633554343001e-05
       y: -0.004024654473253064
       z: 0.0
     pixels: 50

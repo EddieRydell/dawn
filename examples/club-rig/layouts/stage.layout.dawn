@@ -1,49 +1,47 @@
 imports:
-  - from: ../fixtures/main.fixture.dawn
-    as: fixtures
-
+- from: ../fixtures/main.fixture.dawn
+  as: fixtures
 stage:
   type: layout
-  name: stage
   target_order:
   - type: group
-    name: WallBars
+    id: 1
   - type: group
-    name: Movers
+    id: 2
   - type: fixture
-    name: Bar 01
+    id: 1
   - type: fixture
-    name: Bar 02
+    id: 2
   - type: fixture
-    name: Bar 03
+    id: 3
   - type: fixture
-    name: Bar 04
+    id: 4
   - type: fixture
-    name: Spot 01
+    id: 5
   - type: fixture
-    name: Spot 02
+    id: 6
   - type: fixture
-    name: Spot 03
+    id: 7
   - type: fixture
-    name: Spot 04
+    id: 8
   - type: fixture
-    name: Pixelbar
+    id: 9
   - type: fixture
-    name: Spot
+    id: 10
   - type: fixture
-    name: Pixelbar 2
+    id: 11
   - type: fixture
-    name: Spot 2
+    id: 12
   - type: fixture
-    name: Bar 02 Copy
+    id: 13
   - type: fixture
-    name: Fixture
+    id: 16
   - type: fixture
-    name: Fixture 2
+    id: 15
   - type: fixture
-    name: Fixture 3
+    id: 16
   - type: fixture
-    name: Fixture 4
+    id: 17
   fixtures:
   - id: 1
     name: Bar 01
@@ -345,13 +343,15 @@ stage:
         y: 1.0
         z: 1.0
   groups:
-  - name: WallBars
+  - id: 1
+    name: WallBars
     members:
     - 1
     - 2
     - 3
     - 4
-  - name: Movers
+  - id: 2
+    name: Movers
     members:
     - 5
     - 6

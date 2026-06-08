@@ -1,9 +1,8 @@
 imports:
-  - from: ../effects
-    as: effects
-  - from: ../curves
-    as: curves
-
+- from: ../effects
+  as: effects
+- from: ../curves
+  as: curves
 example:
   type: sequence
   duration: 120s

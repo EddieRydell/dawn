@@ -1,43 +1,41 @@
 imports:
-  - from: ../fixtures/house.fixture.dawn
-    as: fixtures
-
+- from: ../fixtures/house.fixture.dawn
+  as: fixtures
 house:
   type: layout
-  name: Christmas House
   target_order:
   - type: group
-    name: House Lines
+    id: 1
   - type: group
-    name: Windows
+    id: 2
   - type: group
-    name: Yard
+    id: 3
   - type: group
-    name: Accents
+    id: 4
   - type: fixture
-    name: Roof Left
+    id: 1
   - type: fixture
-    name: Roof Right
+    id: 2
   - type: fixture
-    name: Front Gutter
+    id: 3
   - type: fixture
-    name: Left Window
+    id: 4
   - type: fixture
-    name: Right Window
+    id: 5
   - type: fixture
-    name: Front Door
+    id: 6
   - type: fixture
-    name: Porch Rail
+    id: 7
   - type: fixture
-    name: Wreath
+    id: 8
   - type: fixture
-    name: Left Tree
+    id: 9
   - type: fixture
-    name: Right Tree
+    id: 10
   - type: fixture
-    name: Front Bushes
+    id: 11
   - type: fixture
-    name: Star
+    id: 12
   fixtures:
   - id: 1
     name: Roof Left
@@ -232,23 +230,27 @@ house:
         y: 1.0
         z: 1.0
   groups:
-  - name: House Lines
+  - id: 1
+    name: House Lines
     members:
     - 1
     - 2
     - 3
     - 6
     - 7
-  - name: Windows
+  - id: 2
+    name: Windows
     members:
     - 4
     - 5
-  - name: Yard
+  - id: 3
+    name: Yard
     members:
     - 9
     - 10
     - 11
-  - name: Accents
+  - id: 4
+    name: Accents
     members:
     - 8
     - 12

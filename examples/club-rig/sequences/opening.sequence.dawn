@@ -1,9 +1,8 @@
 imports:
-  - from: ../effects
-    as: effects
-  - from: ../curves
-    as: curves
-
+- from: ../effects
+  as: effects
+- from: ../curves
+  as: curves
 opening:
   type: sequence
   duration: 200s
@@ -69,7 +68,9 @@ opening:
         value: 0.5
       fade:
         type: curve
-        curve: curves.fade_in
+        curve:
+          id: 1
+          curve: curves.fade_in
     script: effects.Pulse
   - id: 1
     start: 4.283s
@@ -90,7 +91,9 @@ opening:
         value: 0.5
       fade:
         type: curve
-        curve: curves.fade_in
+        curve:
+          id: 1
+          curve: curves.fade_in
     script: effects.Pulse
   - id: 24
     start: 11.7s
@@ -115,7 +118,7 @@ opening:
     duration: 4.35s
     target:
       type: group
-      name: WallBars
+      id: 1
     scope: whole_target
     params:
       beats:
@@ -151,7 +154,7 @@ opening:
     duration: 1.8s
     target:
       type: group
-      name: WallBars
+      id: 1
     scope: whole_target
     params:
       beats:
@@ -186,6 +189,8 @@ opening:
   - id: 101
     start: 0s
     duration: 8s
-    curve: curves.fade_in
+    curve:
+      id: 1
+      curve: curves.fade_in
     targets:
     - 1

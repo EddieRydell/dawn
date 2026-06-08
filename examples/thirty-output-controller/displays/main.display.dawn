@@ -1,23 +1,23 @@
 imports:
-  - from: ../layouts/outputs.layout.dawn
-    as: layouts
-  - from: ../patches/outputs.patch.dawn
-    as: patches
-
+- from: ../layouts/outputs.layout.dawn
+  as: layouts
+- from: ../patches/outputs.patch.dawn
+  as: patches
 main:
   type: display
-  name: 30 Output Controller
   layout: layouts.outputs
   patch: patches.outputs
   controllers:
-    - name: OutputController
-      protocol: sacn
-      destination: "192.168.7.2:5568"
-      output:
-        type: linear_rgb
-        channel_order: grb
-        group: All Outputs
-        output_count: 30
-        pixels_per_output: 113
-        first_universe: 1
-        slots_per_universe: 510
+  - output_controller
+output_controller:
+  type: controller
+  protocol: sacn
+  destination: 192.168.7.2:5568
+  output:
+    type: linear_rgb
+    channel_order: grb
+    group: 1
+    output_count: 30
+    pixels_per_output: 113
+    first_universe: 1
+    slots_per_universe: 510

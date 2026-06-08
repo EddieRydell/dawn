@@ -9,7 +9,7 @@ use crate::lower::{
     lower_project, select_referenced_object, LowerError, ResolvedEffectImport, ResolvedImport,
     SymbolResolver,
 };
-use crate::model::{DawnFile, ObjectKind, ResolvedProject, SymbolRef};
+use crate::model::{DawnFile, DawnProject, ObjectKind, SymbolRef};
 use crate::parse::{parse_dawn_file_with_source_map, DawnParseDiagnostic};
 use crate::path::{canonicalize_path, resolve_import_path, Utf8PathBuf};
 
@@ -60,7 +60,7 @@ pub fn load_project(
     fs: &WorkspaceFs,
     project_path: Utf8PathBuf,
     project_key: &str,
-) -> Result<ResolvedProject, LoadProjectError> {
+) -> Result<DawnProject, LoadProjectError> {
     let project_path = canonicalize_path(&fs.resolve(&project_path));
     let file = load_dawn_file(fs, &project_path)?;
     let mut loader = FsImportLoader::new(fs.clone());
@@ -141,6 +141,7 @@ impl SymbolResolver for FsImportLoader {
             let object = select_referenced_object(file, reference)?;
             return Ok(ResolvedImport {
                 source_path: source_path.clone(),
+                symbol: reference.name().as_str().to_string(),
                 object,
             });
         }
@@ -159,6 +160,7 @@ impl SymbolResolver for FsImportLoader {
             if let Some(object) = file.get(reference.name().as_str()) {
                 matches.push(ResolvedImport {
                     source_path: import_path,
+                    symbol: reference.name().as_str().to_string(),
                     object: object.clone(),
                 });
             }
@@ -183,9 +185,17 @@ impl SymbolResolver for FsImportLoader {
                 if effect_name != reference.name().as_str() {
                     continue;
                 }
+                let source =
+                    std::fs::read_to_string(import_path.as_std_path()).map_err(|error| {
+                        LowerError::Import {
+                            reference: reference.raw().to_string(),
+                            message: error.to_string(),
+                        }
+                    })?;
                 matches.push(ResolvedEffectImport {
                     source_path: import_path.clone(),
                     effect_name,
+                    source,
                 });
             }
         }

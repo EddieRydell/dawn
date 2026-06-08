@@ -7,11 +7,22 @@ use serde::de::DeserializeOwned;
 use yaml_rust2::parser::{Event, MarkedEventReceiver, Parser};
 use yaml_rust2::scanner::Marker;
 
-use crate::analysis::{TextPosition, TextRange};
 use crate::model::{
     Authored, Controller, Curve, DawnFile, DawnImport, DawnObject, Display, Fixture, Layout, Patch,
     Project, Sequence,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TextRange {
+    pub start: TextPosition,
+    pub end: TextPosition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TextPosition {
+    pub line: u32,
+    pub character: u32,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum YamlPathSegment {

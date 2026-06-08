@@ -1,7 +1,6 @@
 imports:
-  - from: ../effects
-    as: effects
-
+- from: ../effects
+  as: effects
 christmas:
   type: sequence
   duration: 45s
@@ -32,7 +31,7 @@ christmas:
     duration: 45s
     target:
       type: group
-      name: House Lines
+      id: 1
     scope: per_fixture
     params:
       first:
@@ -53,7 +52,7 @@ christmas:
     duration: 45s
     target:
       type: group
-      name: Windows
+      id: 2
     scope: whole_target
     params:
       low:
@@ -71,7 +70,7 @@ christmas:
     duration: 45s
     target:
       type: group
-      name: Yard
+      id: 3
     scope: whole_target
     params:
       base:
@@ -95,7 +94,7 @@ christmas:
     duration: 45s
     target:
       type: group
-      name: Accents
+      id: 4
     scope: per_fixture
     params:
       low:
@@ -119,23 +118,27 @@ christmas:
       intensity:
         type: curve
         curve:
-          value_type: float
-          points:
-          - time: 0.0
-            value: 1.0
-          - time: 1.0
-            value: 0.0
+          id: 1
+          curve:
+            value_type: float
+            points:
+            - time: 0.0
+              value: 1.0
+            - time: 1.0
+              value: 0.0
       gradient:
         type: curve
         curve:
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-          - time: 0.231
-            value: '#ff7a7a'
-          - time: 0.448
-            value: '#ff0000'
+          id: 2
+          curve:
+            value_type: color
+            points:
+            - time: 0.0
+              value: '#ffffff'
+            - time: 0.231
+              value: '#ff7a7a'
+            - time: 0.448
+              value: '#ff0000'
       spatial_offset:
         type: float
         value: 0.0
