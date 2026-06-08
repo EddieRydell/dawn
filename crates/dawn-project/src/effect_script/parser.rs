@@ -9,6 +9,7 @@ use super::params;
 use super::{
     is_assignable, EffectParamSchema, ParamDefault, RuntimeValue, ScriptDiagnostic, ScriptType,
 };
+#[cfg(test)]
 pub fn parse(tokens: &[Token]) -> Result<EffectAst, Vec<ScriptDiagnostic>> {
     if tokens.is_empty() {
         return Err(vec![ScriptDiagnostic {
@@ -79,6 +80,7 @@ impl Parser<'_> {
         Ok(EffectModuleAst { imports, effects })
     }
 
+    #[cfg(test)]
     fn effect(&mut self) -> Result<EffectAst, ScriptDiagnostic> {
         let mut imports = Vec::new();
         while self.at_keyword("use") {

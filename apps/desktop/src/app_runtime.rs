@@ -277,8 +277,8 @@ mod tests {
     use dawn_app_core::preview_session::{PreviewSyncMode, PreviewTransportState, SequenceKey};
     use dawn_project::analysis::analyze_project;
     use dawn_project::document::get_sequence_document;
-    use dawn_project::fs::WorkspaceFs;
-    use dawn_project::path::{utf8_path, Utf8PathBuf};
+    use dawn_project::WorkspaceFs;
+    use dawn_project::{utf8_path, Utf8PathBuf};
 
     use super::*;
 

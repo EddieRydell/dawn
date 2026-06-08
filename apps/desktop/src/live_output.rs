@@ -208,8 +208,8 @@ mod tests {
     use std::sync::Arc;
 
     use dawn_project::analysis::analyze_project;
-    use dawn_project::fs::WorkspaceFs;
-    use dawn_project::path::utf8_path;
+    use dawn_project::utf8_path;
+    use dawn_project::WorkspaceFs;
 
     use super::LiveOutputRuntime;
 

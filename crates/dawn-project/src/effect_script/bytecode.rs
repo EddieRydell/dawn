@@ -12,36 +12,18 @@ pub(super) struct BytecodeProgram {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct BytecodeStats {
-    pub instruction_count: usize,
-    pub constant_count: usize,
-    pub param_slots: usize,
-    pub float_slots: usize,
-    pub int_slots: usize,
-    pub bool_slots: usize,
-    pub color_slots: usize,
-    pub ref_slots: usize,
-    pub fixture_slots: usize,
-    pub pixel_slots: usize,
-    pub total_slots: usize,
-}
-
-impl BytecodeStats {
-    pub fn instruction_count(&self) -> usize {
-        self.instruction_count
-    }
-
-    pub fn constant_count(&self) -> usize {
-        self.constant_count
-    }
-
-    pub fn param_slots(&self) -> usize {
-        self.param_slots
-    }
-
-    pub fn total_slots(&self) -> usize {
-        self.total_slots
-    }
+pub(super) struct BytecodeStats {
+    pub(super) instruction_count: usize,
+    pub(super) constant_count: usize,
+    pub(super) param_slots: usize,
+    pub(super) float_slots: usize,
+    pub(super) int_slots: usize,
+    pub(super) bool_slots: usize,
+    pub(super) color_slots: usize,
+    pub(super) ref_slots: usize,
+    pub(super) fixture_slots: usize,
+    pub(super) pixel_slots: usize,
+    pub(super) total_slots: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -571,7 +571,6 @@ effect Chase {
         &[ImportedEffect {
             alias: Some("effects"),
             name: &pulse.name,
-            kind: pulse.kind,
             params: &pulse.params,
         }],
     )
@@ -637,7 +636,6 @@ effect BadGenerator {
         &[ImportedEffect {
             alias: Some("effects"),
             name: &pulse.name,
-            kind: pulse.kind,
             params: &pulse.params,
         }],
     )

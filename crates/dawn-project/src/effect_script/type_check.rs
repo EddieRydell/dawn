@@ -8,6 +8,7 @@ use super::{
     binary_result_type, is_assignable, is_float_compatible, EffectParamSchema, EffectScriptKind,
     ScriptDiagnostic, ScriptType,
 };
+#[cfg(test)]
 pub fn type_check(effect: &EffectAst) -> Result<(), Vec<ScriptDiagnostic>> {
     type_check_with_imports(effect, &[])
 }
@@ -16,7 +17,6 @@ pub fn type_check(effect: &EffectAst) -> Result<(), Vec<ScriptDiagnostic>> {
 pub struct ImportedEffect<'a> {
     pub alias: Option<&'a str>,
     pub name: &'a str,
-    pub kind: EffectScriptKind,
     pub params: &'a [EffectParamSchema],
 }
 

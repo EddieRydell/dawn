@@ -19,14 +19,14 @@ use dawn_project::document::{
     SequenceEffectParamDocument, SequenceEffectPixelDocument, SequenceEffectRenderDocument,
     SequenceLaneDocument, SequenceMarkCollectionDocument,
 };
-use dawn_project::effect_script::{EffectSampleScratch, FixtureContext};
-use dawn_project::fs::WorkspaceFs;
-use dawn_project::model::{
+use dawn_project::render::layout_render_plan;
+use dawn_project::WorkspaceFs;
+use dawn_project::{canonicalize_path, utf8_path, PathStringExt};
+use dawn_project::{
     Color, Curve, CurvePoint, CurveValue, CurveValueType, DawnObject, EffectParam, EffectScriptId,
     LayoutTargetKind, SequenceEffectScope,
 };
-use dawn_project::path::{canonicalize_path, utf8_path, PathStringExt};
-use dawn_project::render::layout_render_plan;
+use dawn_project::{EffectSampleScratch, FixtureContext};
 use serde::Serialize;
 
 #[derive(Debug, Parser)]
@@ -2634,8 +2634,8 @@ mod tests {
     use dawn_project::document::{
         LayoutTargetDocument, SequenceEffectPixelDocument, SequenceEffectRenderDocument,
     };
-    use dawn_project::model::LayoutTargetKind;
-    use dawn_project::model::SequenceEffectScope;
+    use dawn_project::LayoutTargetKind;
+    use dawn_project::SequenceEffectScope;
 
     fn active_effect(target_pixels: usize) -> SequenceEffectDocument {
         SequenceEffectDocument {

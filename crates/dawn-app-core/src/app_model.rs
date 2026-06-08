@@ -5,10 +5,10 @@ use dawn_project::document::{
     SequenceEffectResizeDocumentEdit, SequenceMarkMoveDocumentEdit, SequenceMarkPasteDocumentEdit,
     SequenceMarkRefDocumentEdit,
 };
-use dawn_project::fs::{WorkspaceEntry, WorkspaceFs};
-use dawn_project::model::{Authored, DawnImport, DawnObject, Geometry, Sequence, SequenceEffect};
 use dawn_project::parse::parse_dawn_file_with_source_map;
-use dawn_project::path::Utf8PathBuf;
+use dawn_project::Utf8PathBuf;
+use dawn_project::{Authored, DawnImport, DawnObject, Geometry, Sequence, SequenceEffect};
+use dawn_project::{WorkspaceEntry, WorkspaceFs};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -1745,7 +1745,7 @@ impl AppModel {
         })
     }
 
-    fn active_sequence_authored(&self) -> Result<dawn_project::model::Sequence<Authored>, String> {
+    fn active_sequence_authored(&self) -> Result<dawn_project::Sequence<Authored>, String> {
         let object_key = self.active_sequence_object_key()?;
         let path = self.active_path_for_gui_edit()?;
         if let Some(session) = self.sequence_gui_sessions.get(&SequenceKey {
@@ -1791,7 +1791,7 @@ impl AppModel {
 
     fn copy_sequence_selection(
         &mut self,
-        sequence: &dawn_project::model::Sequence<Authored>,
+        sequence: &dawn_project::Sequence<Authored>,
         document: &SequenceDocument,
         selection: &SequenceSelectionDto,
     ) -> Result<u32, String> {
@@ -1912,7 +1912,7 @@ impl AppModel {
         )?;
         match edit {
             LayoutGuiEditDto::UpdatePlacementTransform { id, transform } => {
-                let id = dawn_project::model::FixtureId(id);
+                let id = dawn_project::FixtureId(id);
                 let placement = document
                     .fixtures
                     .iter_mut()
@@ -1950,10 +1950,8 @@ impl AppModel {
                     .find(|fixture| fixture.object_key == object_key)
                     .ok_or_else(|| format!("fixture `{object_key}` was not found"))?;
                 fixture.bulb_diameter =
-                    dawn_project::model::DistanceSpan::try_from_meters_f64_truncated(
-                        bulb_diameter_meters,
-                    )
-                    .map_err(str::to_string)?;
+                    dawn_project::DistanceSpan::try_from_meters_f64_truncated(bulb_diameter_meters)
+                        .map_err(str::to_string)?;
             }
             FixtureGuiEditDto::MovePoint {
                 object_key,

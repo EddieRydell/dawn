@@ -7,38 +7,27 @@ use serde::de::DeserializeOwned;
 use yaml_rust2::parser::{Event, MarkedEventReceiver, Parser};
 use yaml_rust2::scanner::Marker;
 
+use crate::diagnostics::{ProjectDiagnosticKind, TextPosition, TextRange};
 use crate::model::{
     Authored, Controller, Curve, DawnFile, DawnImport, DawnObject, Display, Fixture, Layout, Patch,
     Project, Sequence,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TextRange {
-    pub start: TextPosition,
-    pub end: TextPosition,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TextPosition {
-    pub line: u32,
-    pub character: u32,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum YamlPathSegment {
+pub(crate) enum YamlPathSegment {
     Field(String),
     Index(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct YamlPath(Vec<YamlPathSegment>);
+pub(crate) struct YamlPath(Vec<YamlPathSegment>);
 
 impl YamlPath {
-    pub fn root() -> Self {
+    pub(crate) fn root() -> Self {
         Self(Vec::new())
     }
 
-    pub fn field(mut self, field: impl Into<String>) -> Self {
+    pub(crate) fn field(mut self, field: impl Into<String>) -> Self {
         self.0.push(YamlPathSegment::Field(field.into()));
         self
     }
@@ -57,26 +46,26 @@ impl YamlPath {
 }
 
 #[derive(Debug, Clone)]
-pub struct YamlSourceRange {
-    pub key_range: Option<TextRange>,
-    pub value_range: TextRange,
+struct YamlSourceRange {
+    key_range: Option<TextRange>,
+    value_range: TextRange,
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct YamlSourceMap {
+pub(crate) struct YamlSourceMap {
     ranges: HashMap<YamlPath, YamlSourceRange>,
 }
 
 impl YamlSourceMap {
-    pub fn value_range(&self, path: YamlPath) -> Option<TextRange> {
+    pub(crate) fn value_range(&self, path: YamlPath) -> Option<TextRange> {
         self.ranges.get(&path).map(|range| range.value_range)
     }
 
-    pub fn key_range(&self, path: YamlPath) -> Option<TextRange> {
+    pub(crate) fn key_range(&self, path: YamlPath) -> Option<TextRange> {
         self.ranges.get(&path).and_then(|range| range.key_range)
     }
 
-    pub fn entry_range(&self, path: YamlPath) -> Option<TextRange> {
+    pub(crate) fn entry_range(&self, path: YamlPath) -> Option<TextRange> {
         self.value_range(path.clone())
             .or_else(|| self.key_range(path))
     }
@@ -99,15 +88,16 @@ impl YamlSourceMap {
 }
 
 #[derive(Debug, Clone)]
-pub struct ParsedDawnFile {
-    pub file: DawnFile,
-    pub source_map: YamlSourceMap,
+pub(crate) struct ParsedDawnFile {
+    pub(crate) file: DawnFile,
+    pub(crate) source_map: YamlSourceMap,
 }
 
 #[derive(Debug, Clone)]
-pub struct DawnParseDiagnostic {
-    pub message: String,
-    pub range: Option<TextRange>,
+pub(crate) struct DawnParseDiagnostic {
+    pub(crate) message: String,
+    pub(crate) range: Option<TextRange>,
+    pub(crate) kind: ProjectDiagnosticKind,
 }
 
 impl fmt::Display for DawnParseDiagnostic {
@@ -118,13 +108,16 @@ impl fmt::Display for DawnParseDiagnostic {
 
 impl Error for DawnParseDiagnostic {}
 
-pub fn parse_dawn_file_with_source_map(text: &str) -> Result<ParsedDawnFile, DawnParseDiagnostic> {
+pub(crate) fn parse_dawn_file_with_source_map(
+    text: &str,
+) -> Result<ParsedDawnFile, DawnParseDiagnostic> {
     let source_map = build_source_map(text)?;
     let raw =
         serde_yaml::from_str::<IndexMap<String, serde_yaml::Value>>(text).map_err(|error| {
             DawnParseDiagnostic {
                 message: error.to_string(),
                 range: yaml_error_range(&error),
+                kind: ProjectDiagnosticKind::DawnSyntax,
             }
         })?;
 
@@ -165,6 +158,7 @@ fn deserialize_object_at_path(
     let object_type = object_type(&value).ok_or_else(|| DawnParseDiagnostic {
         message: "missing field `type`".to_string(),
         range: source_map.entry_range(base_path.clone()),
+        kind: ProjectDiagnosticKind::DawnSchema,
     })?;
     let value = object_body(value);
     match object_type.as_str() {
@@ -189,6 +183,7 @@ fn deserialize_object_at_path(
         other => Err(DawnParseDiagnostic {
             message: format!("unknown Dawn object type `{other}`"),
             range: source_map.entry_range(base_path.field("type")),
+            kind: ProjectDiagnosticKind::DawnSchema,
         }),
     }
 }
@@ -218,6 +213,7 @@ fn deserialize_at_path<T: DeserializeOwned>(
         DawnParseDiagnostic {
             message: error.inner().to_string(),
             range: source_map.entry_range(path),
+            kind: ProjectDiagnosticKind::DawnSchema,
         }
     })
 }
@@ -248,6 +244,7 @@ fn build_source_map(text: &str) -> Result<YamlSourceMap, DawnParseDiagnostic> {
         .map_err(|error| DawnParseDiagnostic {
             message: error.to_string(),
             range: Some(marker_range(error.marker())),
+            kind: ProjectDiagnosticKind::DawnSyntax,
         })?;
 
     let mut builder = SourceMapBuilder {
@@ -299,6 +296,7 @@ impl SourceMapBuilder {
                         return Err(DawnParseDiagnostic {
                             message: "mapping keys must be scalars".to_string(),
                             range: Some(marker_range(&key_marker)),
+                            kind: ProjectDiagnosticKind::DawnSyntax,
                         });
                     };
                     let child_path = path.push_field(key);
@@ -329,6 +327,7 @@ impl SourceMapBuilder {
             | Event::SequenceEnd => Err(DawnParseDiagnostic {
                 message: "unexpected YAML parser event".to_string(),
                 range: Some(range),
+                kind: ProjectDiagnosticKind::DawnSyntax,
             }),
         }
     }
@@ -338,6 +337,7 @@ impl SourceMapBuilder {
             return Err(DawnParseDiagnostic {
                 message: "unexpected end of YAML events".to_string(),
                 range: None,
+                kind: ProjectDiagnosticKind::DawnSyntax,
             });
         };
         self.cursor += 1;

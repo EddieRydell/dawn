@@ -1,9 +1,11 @@
-use super::{ScriptDiagnostic, SourcePosition, SourceRange};
+use crate::diagnostics::{TextPosition, TextRange};
+
+use super::ScriptDiagnostic;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub(super) kind: TokenKind,
-    pub(super) range: SourceRange,
+    pub(super) range: TextRange,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -66,7 +68,7 @@ impl<'a> Lexer<'a> {
                 self.bump();
                 self.tokens.push(Token {
                     kind: TokenKind::Symbol(character),
-                    range: SourceRange {
+                    range: TextRange {
                         start,
                         end: self.position(),
                     },
@@ -82,7 +84,7 @@ impl<'a> Lexer<'a> {
         let position = self.position();
         self.tokens.push(Token {
             kind: TokenKind::Eof,
-            range: SourceRange {
+            range: TextRange {
                 start: position,
                 end: position,
             },
@@ -102,7 +104,7 @@ impl<'a> Lexer<'a> {
         }
         self.tokens.push(Token {
             kind: TokenKind::Ident(value),
-            range: SourceRange {
+            range: TextRange {
                 start,
                 end: self.position(),
             },
@@ -135,7 +137,7 @@ impl<'a> Lexer<'a> {
         }
         self.tokens.push(Token {
             kind: TokenKind::Number(value),
-            range: SourceRange {
+            range: TextRange {
                 start,
                 end: self.position(),
             },
@@ -158,7 +160,7 @@ impl<'a> Lexer<'a> {
         }
         self.tokens.push(Token {
             kind: TokenKind::Color(value),
-            range: SourceRange {
+            range: TextRange {
                 start,
                 end: self.position(),
             },
@@ -174,7 +176,7 @@ impl<'a> Lexer<'a> {
                 self.bump();
                 self.tokens.push(Token {
                     kind: TokenKind::String(value),
-                    range: SourceRange {
+                    range: TextRange {
                         start,
                         end: self.position(),
                     },
@@ -186,7 +188,7 @@ impl<'a> Lexer<'a> {
             }
         }
         self.errors.push(ScriptDiagnostic {
-            range: Some(SourceRange {
+            range: Some(TextRange {
                 start,
                 end: self.position(),
             }),
@@ -194,17 +196,17 @@ impl<'a> Lexer<'a> {
         });
     }
 
-    fn single_char_range(&mut self) -> SourceRange {
+    fn single_char_range(&mut self) -> TextRange {
         let start = self.position();
         self.bump();
-        SourceRange {
+        TextRange {
             start,
             end: self.position(),
         }
     }
 
-    fn position(&self) -> SourcePosition {
-        SourcePosition {
+    fn position(&self) -> TextPosition {
+        TextPosition {
             line: self.line,
             character: self.character,
         }

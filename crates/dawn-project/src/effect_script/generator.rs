@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::model::{ArrayElementType, Color, CurveValue};
 
@@ -43,6 +43,7 @@ pub enum GeneratedChildEffectRef {
     Imported { alias: String, name: String },
 }
 
+#[cfg(test)]
 pub fn run_generator(
     statements: &[Stmt],
     params: &PreparedEffectParams,
@@ -97,13 +98,6 @@ pub fn evaluate_generated_child_params(
         .iter()
         .map(|param| Ok((param.name.clone(), runtime.eval(&param.expr)?)))
         .collect()
-}
-
-pub fn generator_topology_param_names(
-    statements: &[Stmt],
-    param_names: &[String],
-) -> BTreeSet<String> {
-    GeneratorDependencyAnalyzer::new(param_names).analyze(statements)
 }
 
 struct GeneratorRuntime {
@@ -709,197 +703,6 @@ impl GeneratorRuntime {
     fn error(&self, message: impl Into<String>) -> RuntimeError {
         RuntimeError {
             message: message.into(),
-        }
-    }
-}
-
-struct GeneratorDependencyAnalyzer<'a> {
-    param_names: HashSet<&'a str>,
-    local_deps: HashMap<String, BTreeSet<String>>,
-    topology_params: BTreeSet<String>,
-    emit_param_exprs: Vec<Expr>,
-}
-
-impl<'a> GeneratorDependencyAnalyzer<'a> {
-    fn new(param_names: &'a [String]) -> Self {
-        Self {
-            param_names: param_names.iter().map(String::as_str).collect(),
-            local_deps: HashMap::new(),
-            topology_params: BTreeSet::new(),
-            emit_param_exprs: Vec::new(),
-        }
-    }
-
-    fn analyze(mut self, statements: &[Stmt]) -> BTreeSet<String> {
-        self.visit_statements(statements);
-        for expr in self.emit_param_exprs.clone() {
-            if self.expr_uses_sample_derived_local(&expr) {
-                self.topology_params.extend(self.expr_deps(&expr));
-            }
-        }
-        self.topology_params
-    }
-
-    fn visit_statements(&mut self, statements: &[Stmt]) {
-        for statement in statements {
-            self.visit_statement(statement);
-        }
-    }
-
-    fn visit_statement(&mut self, statement: &Stmt) {
-        match statement {
-            Stmt::Let { name, expr, .. } => {
-                let deps = self.expr_deps(expr);
-                self.local_deps.insert(name.clone(), deps);
-            }
-            Stmt::Assign { name, expr } => {
-                let deps = self.expr_deps(expr);
-                self.local_deps.insert(name.clone(), deps);
-            }
-            Stmt::Expr(expr) | Stmt::Return(expr) => {
-                self.expr_deps(expr);
-            }
-            Stmt::For {
-                name,
-                initializer,
-                condition,
-                update,
-                body,
-                ..
-            } => {
-                self.add_topology_expr(initializer);
-                self.local_deps
-                    .insert(name.clone(), self.expr_deps(initializer));
-                self.add_topology_expr(condition);
-                self.visit_statement(update);
-                if let Stmt::Assign { expr, .. } = update.as_ref() {
-                    self.add_topology_expr(expr);
-                }
-                self.visit_statements(body);
-            }
-            Stmt::If {
-                condition,
-                then_body,
-                else_body,
-            } => {
-                self.add_topology_expr(condition);
-                self.visit_statements(then_body);
-                self.visit_statements(else_body);
-            }
-            Stmt::Emit(emit) => {
-                self.add_topology_expr(&emit.target);
-                self.add_topology_expr(&emit.start);
-                self.add_topology_expr(&emit.duration);
-                self.emit_param_exprs
-                    .extend(emit.params.iter().map(|param| param.expr.clone()));
-            }
-        }
-    }
-
-    fn add_topology_expr(&mut self, expr: &Expr) {
-        self.topology_params.extend(self.expr_deps(expr));
-    }
-
-    fn expr_uses_sample_derived_local(&self, expr: &Expr) -> bool {
-        let mut identifiers = BTreeSet::new();
-        self.collect_identifiers(expr, &mut identifiers);
-        identifiers.into_iter().any(|name| {
-            self.local_deps
-                .get(&name)
-                .map(|deps| deps.iter().any(|dep| !self.topology_params.contains(dep)))
-                .unwrap_or(false)
-        })
-    }
-
-    fn expr_deps(&self, expr: &Expr) -> BTreeSet<String> {
-        let mut deps = BTreeSet::new();
-        self.collect_deps(expr, &mut deps);
-        deps
-    }
-
-    fn collect_deps(&self, expr: &Expr, deps: &mut BTreeSet<String>) {
-        match expr {
-            Expr::Float(_)
-            | Expr::Int(_)
-            | Expr::Bool(_)
-            | Expr::Color(_)
-            | Expr::Qualified { .. } => {}
-            Expr::Array(items) => {
-                for item in items {
-                    self.collect_deps(item, deps);
-                }
-            }
-            Expr::Ident(name) => {
-                if self.param_names.contains(name.as_str()) {
-                    deps.insert(name.clone());
-                } else if let Some(local_deps) = self.local_deps.get(name) {
-                    deps.extend(local_deps.iter().cloned());
-                }
-            }
-            Expr::Unary { expr, .. } => self.collect_deps(expr, deps),
-            Expr::Binary { left, right, .. } => {
-                self.collect_deps(left, deps);
-                self.collect_deps(right, deps);
-            }
-            Expr::Call { name, args } => {
-                if self.param_names.contains(name.as_str()) {
-                    deps.insert(name.clone());
-                }
-                for arg in args {
-                    self.collect_deps(arg, deps);
-                }
-            }
-            Expr::CallValue { callee, args } => {
-                self.collect_deps(callee, deps);
-                for arg in args {
-                    self.collect_deps(arg, deps);
-                }
-            }
-            Expr::Index { array, index } => {
-                self.collect_deps(array, deps);
-                self.collect_deps(index, deps);
-            }
-            Expr::Member { object, .. } => self.collect_deps(object, deps),
-        }
-    }
-
-    fn collect_identifiers(&self, expr: &Expr, identifiers: &mut BTreeSet<String>) {
-        match expr {
-            Expr::Float(_)
-            | Expr::Int(_)
-            | Expr::Bool(_)
-            | Expr::Color(_)
-            | Expr::Qualified { .. } => {}
-            Expr::Array(items) => {
-                for item in items {
-                    self.collect_identifiers(item, identifiers);
-                }
-            }
-            Expr::Ident(name) => {
-                identifiers.insert(name.clone());
-            }
-            Expr::Unary { expr, .. } => self.collect_identifiers(expr, identifiers),
-            Expr::Binary { left, right, .. } => {
-                self.collect_identifiers(left, identifiers);
-                self.collect_identifiers(right, identifiers);
-            }
-            Expr::Call { name, args } => {
-                identifiers.insert(name.clone());
-                for arg in args {
-                    self.collect_identifiers(arg, identifiers);
-                }
-            }
-            Expr::CallValue { callee, args } => {
-                self.collect_identifiers(callee, identifiers);
-                for arg in args {
-                    self.collect_identifiers(arg, identifiers);
-                }
-            }
-            Expr::Index { array, index } => {
-                self.collect_identifiers(array, identifiers);
-                self.collect_identifiers(index, identifiers);
-            }
-            Expr::Member { object, .. } => self.collect_identifiers(object, identifiers),
         }
     }
 }

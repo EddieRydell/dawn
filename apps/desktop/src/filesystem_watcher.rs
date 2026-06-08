@@ -4,7 +4,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::Duration;
 
 use dawn_app_core::actions::AppAction;
-use dawn_project::path::{utf8_path, Utf8PathBuf};
+use dawn_project::{utf8_path, Utf8PathBuf};
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use tauri::{AppHandle, Manager};
 

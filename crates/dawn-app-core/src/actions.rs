@@ -4,7 +4,7 @@ use crate::dto::{
     EditorViewModeDto, FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto,
     TerminalPanelLayoutDto,
 };
-use dawn_project::path::Utf8PathBuf;
+use dawn_project::Utf8PathBuf;
 
 #[derive(Debug, Clone)]
 pub enum AppAction {

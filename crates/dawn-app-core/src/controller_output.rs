@@ -3,7 +3,7 @@ use std::fmt;
 use std::net::SocketAddr;
 
 use dawn_project::analysis::ProjectAnalysis;
-use dawn_project::model::{
+use dawn_project::{
     Color, ColorModel, Controller, ControllerIndex, ControllerOutput, FixtureIndex, Protocol,
     RgbChannelOrder,
 };
@@ -561,7 +561,7 @@ struct RouteSegmentInput<'a> {
     controller_index: ControllerIndex,
     controller_name: &'a str,
     destination: Option<SocketAddr>,
-    declared_universes: &'a [dawn_project::model::Universe],
+    declared_universes: &'a [dawn_project::Universe],
     start_universe_index: usize,
     start: u32,
     fixture_index: FixtureIndex,
@@ -662,7 +662,7 @@ fn add_route_segments(input: RouteSegmentInput<'_>) -> Result<(), ControllerOutp
 
 fn controller_universe_index(
     controller_name: &str,
-    universes: &[dawn_project::model::Universe],
+    universes: &[dawn_project::Universe],
     universe_id: u32,
 ) -> Result<usize, ControllerOutputError> {
     for (index, universe) in universes.iter().enumerate() {
@@ -679,7 +679,7 @@ fn controller_universe_index(
 
 fn validate_universe(
     controller_name: &str,
-    universe: &dawn_project::model::Universe,
+    universe: &dawn_project::Universe,
 ) -> Result<(), ControllerOutputError> {
     if universe.id == 0 || universe.id > u16::MAX as u32 {
         return Err(ControllerOutputError::InvalidUniverseId {
@@ -702,7 +702,7 @@ fn validate_universe(
     Ok(())
 }
 
-fn universe_channel_count(universe: &dawn_project::model::Universe) -> usize {
+fn universe_channel_count(universe: &dawn_project::Universe) -> usize {
     usize::from(universe.range.end - universe.range.start + 1)
 }
 

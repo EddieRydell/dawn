@@ -10,7 +10,7 @@ use dawn_app_core::dto::{
 use dawn_app_core::fseq_export::{export_fseq_file, FseqExportOptions};
 use dawn_app_core::preview_session::PreviewTransportState;
 use dawn_project::document::DocumentViewId;
-use dawn_project::path::{serialized_import_path, utf8_path, Utf8PathBuf};
+use dawn_project::{serialized_import_path, utf8_path, Utf8PathBuf};
 use tauri::{ipc::Channel, AppHandle, Manager, State};
 
 use crate::app_runtime::{

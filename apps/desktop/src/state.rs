@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use dawn_app_core::app_model::AppModel;
-use dawn_project::path::Utf8PathBuf;
+use dawn_project::Utf8PathBuf;
 use tauri::State;
 
 use crate::audio_runtime::AudioRuntime;

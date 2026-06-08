@@ -1,8 +1,8 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt;
 
+use crate::diagnostics::{
+    DiagnosticSeverity, ProjectDiagnostic, ProjectDiagnosticKind, ProjectLoadResult,
+};
 use crate::effect_script::{
     lex as lex_effect_script, parse_module as parse_effect_module, EffectEntrypoint,
 };
@@ -14,66 +14,62 @@ use crate::model::{
     AuthoredEffectDefinitionSource, DawnFile, DawnImport, DawnObject, DawnProject,
     EffectDefinition, NoCompiledEffect, ObjectKind, SymbolRef,
 };
-use crate::parse::{parse_dawn_file_with_source_map, DawnParseDiagnostic};
+use crate::parse::{parse_dawn_file_with_source_map, DawnParseDiagnostic, YamlSourceMap};
 use crate::path::{canonicalize_path, resolve_import_path, Utf8PathBuf};
 
 #[derive(Debug)]
-pub enum LoadProjectError {
-    Io {
-        path: Utf8PathBuf,
-        source: std::io::Error,
-    },
-    Yaml {
-        path: Utf8PathBuf,
-        source: DawnParseDiagnostic,
-    },
-    Lower(LowerError),
-}
-
-impl fmt::Display for LoadProjectError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io { path, source } => {
-                write!(formatter, "failed to read `{}`: {source}", path)
-            }
-            Self::Yaml { path, source } => {
-                write!(formatter, "failed to parse `{}`: {source}", path)
-            }
-            Self::Lower(error) => write!(formatter, "{error}"),
-        }
-    }
-}
-
-impl Error for LoadProjectError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Io { source, .. } => Some(source),
-            Self::Yaml { source, .. } => Some(source),
-            Self::Lower(source) => Some(source),
-        }
-    }
-}
-
-impl From<LowerError> for LoadProjectError {
-    fn from(error: LowerError) -> Self {
-        Self::Lower(error)
-    }
+struct LoadFailure {
+    diagnostics: Vec<ProjectDiagnostic>,
 }
 
 pub fn load_project(
     fs: &WorkspaceFs,
     project_path: Utf8PathBuf,
     project_key: &str,
-) -> Result<DawnProject, LoadProjectError> {
+) -> ProjectLoadResult {
+    match load_project_fallible(fs, project_path, project_key) {
+        Ok(project) => ProjectLoadResult {
+            project: Some(project),
+            diagnostics: Vec::new(),
+        },
+        Err(failure) => ProjectLoadResult {
+            project: None,
+            diagnostics: failure.diagnostics,
+        },
+    }
+}
+
+fn load_project_fallible(
+    fs: &WorkspaceFs,
+    project_path: Utf8PathBuf,
+    project_key: &str,
+) -> Result<DawnProject, LoadFailure> {
     let project_path = canonicalize_path(&fs.resolve(&project_path));
-    let file = load_dawn_file(fs, &project_path)?;
+    let file = load_dawn_file(fs, &project_path)?.file;
     let mut loader = FsImportLoader::new(fs.clone());
 
-    lower_project(&file, project_key, &project_path, &mut loader).map_err(LoadProjectError::Lower)
+    lower_project(&file, project_key, &project_path, &mut loader).map_err(|error| {
+        if loader.diagnostics.is_empty() {
+            LoadFailure {
+                diagnostics: lower_error_diagnostics(&project_path, &error),
+            }
+        } else {
+            LoadFailure {
+                diagnostics: loader.diagnostics,
+            }
+        }
+    })
+}
+
+#[derive(Debug, Clone)]
+struct LoadedDawnFile {
+    file: DawnFile,
+    _source_map: Option<YamlSourceMap>,
 }
 struct FsImportLoader {
     fs: WorkspaceFs,
     files: HashMap<Utf8PathBuf, DawnFile>,
+    diagnostics: Vec<ProjectDiagnostic>,
 }
 
 impl FsImportLoader {
@@ -81,17 +77,33 @@ impl FsImportLoader {
         Self {
             fs,
             files: HashMap::new(),
+            diagnostics: Vec::new(),
         }
     }
 
-    fn load_cached(&mut self, path: &Utf8PathBuf) -> Result<&DawnFile, LoadProjectError> {
-        match self.files.entry(path.clone()) {
-            Entry::Occupied(entry) => Ok(entry.into_mut()),
-            Entry::Vacant(entry) => {
-                let file = load_dawn_file(&self.fs, path)?;
-                Ok(entry.insert(file))
+    fn load_cached(&mut self, path: &Utf8PathBuf) -> Result<&DawnFile, LoadFailure> {
+        if !self.files.contains_key(path) {
+            match load_dawn_file(&self.fs, path) {
+                Ok(file) => {
+                    self.files.insert(path.clone(), file.file);
+                }
+                Err(failure) => {
+                    self.diagnostics.extend(failure.diagnostics.clone());
+                    return Err(failure);
+                }
             }
         }
+        let Some(file) = self.files.get(path) else {
+            return Err(LoadFailure {
+                diagnostics: vec![project_diagnostic(
+                    path.clone(),
+                    None,
+                    "loaded file was not cached".to_string(),
+                    ProjectDiagnosticKind::Io,
+                )],
+            });
+        };
+        Ok(file)
     }
 
     fn import_paths_for_alias(
@@ -105,7 +117,7 @@ impl FsImportLoader {
             .load_cached(source_path)
             .map_err(|error| LowerError::Import {
                 reference: reference.raw().to_string(),
-                message: error.to_string(),
+                message: first_project_diagnostic_message(&error.diagnostics),
             })?;
         let imports = file
             .imports
@@ -141,7 +153,7 @@ impl SymbolResolver for FsImportLoader {
                 .load_cached(source_path)
                 .map_err(|error| LowerError::Import {
                     reference: reference.raw().to_string(),
-                    message: error.to_string(),
+                    message: first_project_diagnostic_message(&error.diagnostics),
                 })?;
             let object = select_referenced_object(file, reference)?;
             return Ok(ResolvedImport {
@@ -160,7 +172,7 @@ impl SymbolResolver for FsImportLoader {
                 .load_cached(&import_path)
                 .map_err(|error| LowerError::Import {
                     reference: reference.raw().to_string(),
-                    message: error.to_string(),
+                    message: first_project_diagnostic_message(&error.diagnostics),
                 })?;
             if let Some(object) = file.get(reference.name().as_str()) {
                 matches.push(ResolvedImport {
@@ -194,7 +206,7 @@ impl SymbolResolver for FsImportLoader {
                 .load_cached(&import_path)
                 .map_err(|error| LowerError::Import {
                     reference: reference.to_string(),
-                    message: error.to_string(),
+                    message: first_project_diagnostic_message(&error.diagnostics),
                 })?;
             for (symbol, object) in file {
                 let DawnObject::Effect(effect) = object else {
@@ -228,21 +240,25 @@ impl SymbolResolver for FsImportLoader {
     }
 }
 
-pub fn load_dawn_file(fs: &WorkspaceFs, path: &Utf8PathBuf) -> Result<DawnFile, LoadProjectError> {
-    let text = fs
-        .read_to_string(path)
-        .map_err(|source| LoadProjectError::Io {
-            path: path.clone(),
-            source,
-        })?;
+fn load_dawn_file(fs: &WorkspaceFs, path: &Utf8PathBuf) -> Result<LoadedDawnFile, LoadFailure> {
+    let text = fs.read_to_string(path).map_err(|source| LoadFailure {
+        diagnostics: vec![project_diagnostic(
+            path.clone(),
+            None,
+            format!("failed to read `{path}`: {source}"),
+            ProjectDiagnosticKind::Io,
+        )],
+    })?;
     if is_effect_dawn_path(path) {
-        return load_effect_file(path, text).map_err(LoadProjectError::Lower);
+        return load_effect_file(path, text);
     }
     parse_dawn_file_with_source_map(&text)
-        .map(|parsed| parsed.file)
-        .map_err(|source| LoadProjectError::Yaml {
-            path: path.clone(),
-            source,
+        .map(|parsed| LoadedDawnFile {
+            file: parsed.file,
+            _source_map: Some(parsed.source_map),
+        })
+        .map_err(|source| LoadFailure {
+            diagnostics: vec![parse_diagnostic(path.clone(), source)],
         })
 }
 
@@ -289,14 +305,12 @@ fn import_targets(
     Ok(paths)
 }
 
-fn load_effect_file(path: &Utf8PathBuf, text: String) -> Result<DawnFile, LowerError> {
-    let tokens = lex_effect_script(&text).map_err(|diagnostics| LowerError::Import {
-        reference: path.to_string(),
-        message: first_script_diagnostic(diagnostics, "effect file did not produce tokens"),
+fn load_effect_file(path: &Utf8PathBuf, text: String) -> Result<LoadedDawnFile, LoadFailure> {
+    let tokens = lex_effect_script(&text).map_err(|diagnostics| LoadFailure {
+        diagnostics: script_diagnostics(path, diagnostics),
     })?;
-    let module = parse_effect_module(&tokens).map_err(|diagnostics| LowerError::Import {
-        reference: path.to_string(),
-        message: first_script_diagnostic(diagnostics, "effect file did not declare an effect"),
+    let module = parse_effect_module(&tokens).map_err(|diagnostics| LoadFailure {
+        diagnostics: script_diagnostics(path, diagnostics),
     })?;
     let imports = module
         .imports
@@ -327,17 +341,86 @@ fn load_effect_file(path: &Utf8PathBuf, text: String) -> Result<DawnFile, LowerE
             }),
         );
     }
-    Ok(file)
+    Ok(LoadedDawnFile {
+        file,
+        _source_map: None,
+    })
 }
 
-fn first_script_diagnostic(
-    diagnostics: Vec<crate::effect_script::ScriptDiagnostic>,
-    empty_message: &str,
-) -> String {
+fn first_project_diagnostic_message(diagnostics: &[ProjectDiagnostic]) -> String {
     diagnostics
         .first()
         .map(|diagnostic| diagnostic.message.clone())
-        .unwrap_or_else(|| empty_message.to_string())
+        .unwrap_or_else(|| "project did not load".to_string())
+}
+
+fn parse_diagnostic(path: Utf8PathBuf, diagnostic: DawnParseDiagnostic) -> ProjectDiagnostic {
+    project_diagnostic(path, diagnostic.range, diagnostic.message, diagnostic.kind)
+}
+
+fn script_diagnostics(
+    path: &Utf8PathBuf,
+    diagnostics: Vec<crate::effect_script::ScriptDiagnostic>,
+) -> Vec<ProjectDiagnostic> {
+    if diagnostics.is_empty() {
+        return vec![project_diagnostic(
+            path.clone(),
+            None,
+            "effect script did not compile".to_string(),
+            ProjectDiagnosticKind::EffectScript,
+        )];
+    }
+    diagnostics
+        .into_iter()
+        .map(|diagnostic| {
+            project_diagnostic(
+                path.clone(),
+                diagnostic.range,
+                diagnostic.message,
+                ProjectDiagnosticKind::EffectScript,
+            )
+        })
+        .collect()
+}
+
+fn lower_error_diagnostics(
+    source_path: &Utf8PathBuf,
+    error: &LowerError,
+) -> Vec<ProjectDiagnostic> {
+    match error {
+        LowerError::Import { .. } => vec![project_diagnostic(
+            source_path.clone(),
+            None,
+            error.to_string(),
+            ProjectDiagnosticKind::Import,
+        )],
+        LowerError::EffectCompile {
+            source_path,
+            diagnostics,
+            ..
+        } => script_diagnostics(source_path, diagnostics.clone()),
+        _ => vec![project_diagnostic(
+            source_path.clone(),
+            None,
+            error.to_string(),
+            ProjectDiagnosticKind::Lower,
+        )],
+    }
+}
+
+fn project_diagnostic(
+    file: Utf8PathBuf,
+    range: Option<crate::diagnostics::TextRange>,
+    message: String,
+    kind: ProjectDiagnosticKind,
+) -> ProjectDiagnostic {
+    ProjectDiagnostic {
+        severity: DiagnosticSeverity::Error,
+        file,
+        range,
+        message,
+        kind,
+    }
 }
 
 fn single_match<T>(mut matches: Vec<T>, reference: &SymbolRef) -> Result<T, LowerError> {

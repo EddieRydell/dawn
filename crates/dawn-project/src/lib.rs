@@ -10,6 +10,7 @@
     )
 )]
 
+mod diagnostics;
 mod effect_script;
 mod fs;
 mod load;
@@ -18,15 +19,20 @@ mod model;
 mod parse;
 mod path;
 
-pub use effect_script::{
-    compile, compile_ast, compile_module, compile_module_with_imports, compile_with_imports,
-    BytecodeStats, CompiledEffect, EffectParamSchema, EffectScriptKind, EffectVisibility,
-    FixtureContext, GeneratorTarget, GeneratorTargetItem, GeneratorTargetPixel, ImportedEffect,
-    ParamDefault, PixelContext, PreparedEffectParams, RuntimeArrayValue, RuntimeError,
-    RuntimeMarks, RuntimeValue, ScriptDiagnostic, ScriptType, SourcePosition, SourceRange,
+pub use diagnostics::{
+    DiagnosticSeverity, ProjectDiagnostic, ProjectDiagnosticKind, ProjectLoadResult, TextPosition,
+    TextRange,
 };
-pub use fs::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFs};
-pub use load::{load_dawn_file, load_project, LoadProjectError};
-pub use model::*;
-pub use parse::{DawnParseDiagnostic, TextPosition, TextRange};
-pub use path::{Utf8Path, Utf8PathBuf};
+pub use fs::WorkspaceFs;
+pub use load::load_project;
+pub use model::{
+    ArrayElementType, AutomationClip, ChannelRange, Color, ColorModel, Controller,
+    ControllerDestination, ControllerOutput, Curve, CurvePoint, CurveUse, CurveValue,
+    CurveValueType, DawnProject, Display, Distance, DistanceSpan, EffectParam,
+    EffectParamArrayValue, EffectTarget, Fixture, FixtureId, FixturePlacement, Flags, Geometry,
+    Group, GroupInstantiationId, Layout, LayoutTargetKind, LayoutTargetRef, ObjectKind, Patch,
+    Point3, Project, Protocol, RgbChannelOrder, Rotation3, Route, Scale3, Sequence,
+    SequenceEffect, SequenceEffectId, SequenceEffectScope, SequenceMarkCollection, Time, TimeSpan,
+    Transform, Universe,
+};
+pub use path::Utf8PathBuf;

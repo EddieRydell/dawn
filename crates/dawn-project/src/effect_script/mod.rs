@@ -3,12 +3,14 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::diagnostics::TextRange;
 use crate::model::{ArrayElementType, Color, Curve, EffectParam, EffectParamArrayValue, Flags};
 
 mod ast;
 mod builtins;
 mod bytecode;
 mod compile;
+#[cfg(test)]
 mod generator;
 mod lexer;
 mod params;
@@ -19,41 +21,37 @@ mod type_check;
 #[cfg(test)]
 mod tests;
 
-pub use ast::{EffectAst, EffectEntrypoint, EffectImport, EffectVisibility, Stmt};
-pub use lexer::lex;
-pub use parser::{parse, parse_module};
-pub use type_check::{type_check, type_check_with_imports, ImportedEffect};
+pub use ast::EffectVisibility;
+pub(crate) use ast::{EffectAst, EffectEntrypoint};
+pub(crate) use ast::{EffectImport, Stmt};
+pub(crate) use lexer::lex;
+#[cfg(test)]
+use parser::parse;
+pub(crate) use parser::parse_module;
+#[cfg(test)]
+use type_check::type_check;
+pub(crate) use type_check::{type_check_with_imports, ImportedEffect};
+
+#[cfg(test)]
+use generator::run_generator;
 
 use ast::BinaryOp;
-pub use bytecode::BytecodeStats;
-use bytecode::{specialize_for_params, stats_for_program, BytecodeProgram};
-pub use params::{EffectSampleScratch, PreparedEffectParams};
+use bytecode::{specialize_for_params, BytecodeProgram};
+pub use params::PreparedEffectParams;
 
 #[derive(Debug, Clone)]
-pub struct ScriptDiagnostic {
-    pub range: Option<SourceRange>,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SourceRange {
-    pub start: SourcePosition,
-    pub end: SourcePosition,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SourcePosition {
-    pub line: u32,
-    pub character: u32,
+pub(crate) struct ScriptDiagnostic {
+    pub(crate) range: Option<TextRange>,
+    pub(crate) message: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledEffect {
-    pub name: String,
-    pub visibility: EffectVisibility,
-    pub kind: EffectScriptKind,
-    pub imports: Vec<EffectImport>,
-    pub params: Vec<EffectParamSchema>,
+    pub(crate) name: String,
+    pub(crate) visibility: EffectVisibility,
+    pub(crate) kind: EffectScriptKind,
+    pub(crate) imports: Vec<EffectImport>,
+    pub(crate) params: Vec<EffectParamSchema>,
     bytecode: Option<BytecodeProgram>,
     generator: Option<Vec<Stmt>>,
 }
@@ -116,29 +114,8 @@ impl CompiledEffect {
         runtime::run(bytecode, progress, seconds, fixture, pixel, params)
     }
 
-    pub fn sample_prepared_with_scratch(
-        &self,
-        progress: f64,
-        seconds: f64,
-        fixture: FixtureContext,
-        pixel: PixelContext,
-        params: &PreparedEffectParams,
-        scratch: &mut EffectSampleScratch,
-    ) -> Result<Color, RuntimeError> {
-        let bytecode = self.bytecode.as_ref().ok_or_else(|| RuntimeError {
-            message: format!("effect `{}` is not a sample effect", self.name),
-        })?;
-        runtime::run_with_scratch(bytecode, progress, seconds, fixture, pixel, params, scratch)
-    }
-
-    pub fn bytecode_stats(&self) -> BytecodeStats {
-        self.bytecode
-            .as_ref()
-            .map(|bytecode| stats_for_program(bytecode, self.params.len()))
-            .unwrap_or_default()
-    }
-
-    pub fn generator_statements(&self) -> Option<&[Stmt]> {
+    #[cfg(test)]
+    fn generator_statements(&self) -> Option<&[Stmt]> {
         self.generator.as_deref()
     }
 }
@@ -441,33 +418,16 @@ impl fmt::Display for RuntimeError {
 
 impl std::error::Error for RuntimeError {}
 
-pub fn compile(text: &str) -> Result<CompiledEffect, Vec<ScriptDiagnostic>> {
+#[cfg(test)]
+fn compile(text: &str) -> Result<CompiledEffect, Vec<ScriptDiagnostic>> {
     let tokens = lex(text)?;
     let effect = parse(&tokens)?;
     type_check(&effect)?;
     Ok(compile_ast(effect))
 }
 
-pub fn compile_module(text: &str) -> Result<Vec<CompiledEffect>, Vec<ScriptDiagnostic>> {
-    let tokens = lex(text)?;
-    let module = parse_module(&tokens)?;
-    let imports = module
-        .effects
-        .iter()
-        .map(|effect| ImportedEffect {
-            alias: None,
-            name: effect.name.as_str(),
-            kind: kind_for_entrypoint(&effect.entrypoint),
-            params: &effect.params,
-        })
-        .collect::<Vec<_>>();
-    for effect in &module.effects {
-        type_check_with_imports(effect, &imports)?;
-    }
-    Ok(module.effects.into_iter().map(compile_ast).collect())
-}
-
-pub fn compile_with_imports(
+#[cfg(test)]
+fn compile_with_imports(
     text: &str,
     imports: &[ImportedEffect<'_>],
 ) -> Result<CompiledEffect, Vec<ScriptDiagnostic>> {
@@ -477,7 +437,7 @@ pub fn compile_with_imports(
     Ok(compile_ast(effect))
 }
 
-pub fn compile_module_with_imports(
+pub(crate) fn compile_module_with_imports(
     text: &str,
     imports: &[ImportedEffect<'_>],
 ) -> Result<Vec<CompiledEffect>, Vec<ScriptDiagnostic>> {
@@ -488,7 +448,6 @@ pub fn compile_module_with_imports(
         available.push(ImportedEffect {
             alias: None,
             name: effect.name.as_str(),
-            kind: kind_for_entrypoint(&effect.entrypoint),
             params: &effect.params,
         });
     }
@@ -498,7 +457,7 @@ pub fn compile_module_with_imports(
     Ok(module.effects.into_iter().map(compile_ast).collect())
 }
 
-pub fn compile_ast(effect: EffectAst) -> CompiledEffect {
+pub(crate) fn compile_ast(effect: EffectAst) -> CompiledEffect {
     let kind = kind_for_entrypoint(&effect.entrypoint);
     let bytecode = if kind == EffectScriptKind::Sample {
         Some(compile::compile_effect(&effect))

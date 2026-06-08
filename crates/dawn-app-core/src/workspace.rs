@@ -18,8 +18,8 @@ use dawn_project::document::{
     DocumentEditOutcome, FixtureDocument, LayoutDocument, SequenceAuthoredEditInput,
     SequenceAuthoredEditOutcome, SequenceDocument, SequenceDocumentEdit,
 };
-use dawn_project::fs::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFs};
-use dawn_project::path::{serialized_import_path, utf8_path, PathStringExt, Utf8PathBuf};
+use dawn_project::{serialized_import_path, utf8_path, PathStringExt, Utf8PathBuf};
+use dawn_project::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFs};
 
 use crate::editor_session::FileDiskVersion;
 
@@ -240,9 +240,9 @@ impl WorkspaceService {
         &self,
         path: Utf8PathBuf,
         object_key: &str,
-        sequence: dawn_project::model::Sequence<dawn_project::model::Authored>,
+        sequence: dawn_project::Sequence<dawn_project::Authored>,
         base_content: String,
-        imports_to_add: Vec<dawn_project::model::DawnImport>,
+        imports_to_add: Vec<dawn_project::DawnImport>,
         analysis: &ProjectAnalysis,
     ) -> Result<DocumentEditOutcome<SequenceDocument>, String> {
         serialize_sequence_document_edit(

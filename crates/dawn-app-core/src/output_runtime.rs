@@ -7,20 +7,20 @@ use dawn_project::document::{
     SequenceDocument, SequenceEffectParamDocument, SequenceEffectPixelDocument,
     SequenceMarkCollectionDocument,
 };
-use dawn_project::effect_script::{
+use dawn_project::frame::{ceil_frame, floor_frame, frame_count, frame_start};
+use dawn_project::render::{layout_render_plan, GeometryRenderBounds, GeometryRenderPoint};
+use dawn_project::EffectScriptId;
+use dawn_project::{
     evaluate_generated_child_params, generator_topology_param_names, run_generator_topology,
     BytecodeStats, CompiledEffect, EffectSampleScratch, EffectScriptKind, FixtureContext,
     GeneratedChildEffectRef, GeneratedChildTopology, GeneratorTarget, GeneratorTargetPixel,
     PixelContext, PreparedEffectParams, RuntimeError, RuntimeMarks, RuntimeValue,
 };
-use dawn_project::frame::{ceil_frame, floor_frame, frame_count, frame_start};
-use dawn_project::model::EffectScriptId;
-use dawn_project::model::{
+use dawn_project::{resolve_import_path, Utf8PathBuf};
+use dawn_project::{
     Color, Curve, CurveValue, CurveValueType, Distance, DistanceSpan, EffectParam, FixtureId,
     Resolved, SequenceEffectScope, Time, TimeSpan,
 };
-use dawn_project::path::{resolve_import_path, Utf8PathBuf};
-use dawn_project::render::{layout_render_plan, GeometryRenderBounds, GeometryRenderPoint};
 
 const MAX_FLATTENED_GENERATED_CHILDREN: usize = 65_536;
 
@@ -2333,22 +2333,22 @@ fn sorted_local_mark_cache_keys(
 }
 
 fn effect_param_array_value_cache_key(
-    value: &dawn_project::model::EffectParamArrayValue<Resolved>,
+    value: &dawn_project::EffectParamArrayValue<Resolved>,
 ) -> EffectParamArrayValueCacheKey {
     match value {
-        dawn_project::model::EffectParamArrayValue::Integer(value) => {
+        dawn_project::EffectParamArrayValue::Integer(value) => {
             EffectParamArrayValueCacheKey::Integer(*value)
         }
-        dawn_project::model::EffectParamArrayValue::Float(value) => {
+        dawn_project::EffectParamArrayValue::Float(value) => {
             EffectParamArrayValueCacheKey::Float(F64CacheKey(*value))
         }
-        dawn_project::model::EffectParamArrayValue::Boolean(value) => {
+        dawn_project::EffectParamArrayValue::Boolean(value) => {
             EffectParamArrayValueCacheKey::Boolean(*value)
         }
-        dawn_project::model::EffectParamArrayValue::Color(value) => {
+        dawn_project::EffectParamArrayValue::Color(value) => {
             EffectParamArrayValueCacheKey::Color(color_cache_key(*value))
         }
-        dawn_project::model::EffectParamArrayValue::Curve(curve) => {
+        dawn_project::EffectParamArrayValue::Curve(curve) => {
             EffectParamArrayValueCacheKey::Curve(curve_cache_key(curve))
         }
     }
@@ -2817,7 +2817,7 @@ fn resolve_generated_child_effect<'a>(
 }
 
 fn prepare_child_generator_topology(
-    statements: &[dawn_project::effect_script::Stmt],
+    statements: &[dawn_project::Stmt],
     prepared_params: &PreparedEffectParams,
     param_names: &[String],
     target: GeneratorTarget,
@@ -3148,15 +3148,13 @@ pub fn runtime_value_from_param(
         EffectParam::Array {
             element_type,
             values,
-        } => Some(RuntimeValue::Array(
-            dawn_project::effect_script::RuntimeArrayValue {
-                element_type: *element_type,
-                values: values
-                    .iter()
-                    .map(runtime_value_from_array_param)
-                    .collect::<Option<Vec<_>>>()?,
-            },
-        )),
+        } => Some(RuntimeValue::Array(dawn_project::RuntimeArrayValue {
+            element_type: *element_type,
+            values: values
+                .iter()
+                .map(runtime_value_from_array_param)
+                .collect::<Option<Vec<_>>>()?,
+        })),
         EffectParam::Marks { key } => {
             let global = mark_collections
                 .iter()
@@ -3184,22 +3182,16 @@ fn runtime_marks(mut global: Vec<f64>, effect_duration_seconds: f64) -> RuntimeM
 }
 
 fn runtime_value_from_array_param(
-    value: &dawn_project::model::EffectParamArrayValue<Resolved>,
+    value: &dawn_project::EffectParamArrayValue<Resolved>,
 ) -> Option<RuntimeValue> {
     match value {
-        dawn_project::model::EffectParamArrayValue::Integer(value) => {
+        dawn_project::EffectParamArrayValue::Integer(value) => {
             Some(RuntimeValue::Int(*value as i64))
         }
-        dawn_project::model::EffectParamArrayValue::Float(value) => {
-            Some(RuntimeValue::Float(*value))
-        }
-        dawn_project::model::EffectParamArrayValue::Boolean(value) => {
-            Some(RuntimeValue::Bool(*value))
-        }
-        dawn_project::model::EffectParamArrayValue::Color(value) => {
-            Some(RuntimeValue::Color(*value))
-        }
-        dawn_project::model::EffectParamArrayValue::Curve(curve) => {
+        dawn_project::EffectParamArrayValue::Float(value) => Some(RuntimeValue::Float(*value)),
+        dawn_project::EffectParamArrayValue::Boolean(value) => Some(RuntimeValue::Bool(*value)),
+        dawn_project::EffectParamArrayValue::Color(value) => Some(RuntimeValue::Color(*value)),
+        dawn_project::EffectParamArrayValue::Curve(curve) => {
             Some(RuntimeValue::Curve(curve.clone()))
         }
     }
@@ -3238,14 +3230,14 @@ mod tests {
 
     use dawn_project::analysis::{analyze_project, ProjectAnalysis};
     use dawn_project::document::{get_sequence_document, SequenceDocument};
-    use dawn_project::fs::WorkspaceFs;
-    use dawn_project::model::{
+    use dawn_project::render::{GeometryRenderBounds, GeometryRenderPoint};
+    use dawn_project::WorkspaceFs;
+    use dawn_project::{utf8_path, Utf8PathBuf};
+    use dawn_project::{
         Color, CurveValue, Distance, EffectParam, EffectScriptId, Resolved, SequenceEffectScope,
     };
-    use dawn_project::path::{utf8_path, Utf8PathBuf};
-    use dawn_project::render::{GeometryRenderBounds, GeometryRenderPoint};
 
-    use dawn_project::effect_script::{GeneratorTarget, GeneratorTargetPixel};
+    use dawn_project::{GeneratorTarget, GeneratorTargetPixel};
 
     use super::{
         build_effect_indices_by_frame, generator_targets_for_scope, pixel_context_for_effect,
@@ -3453,9 +3445,9 @@ mod tests {
 
     fn topology_fixture(pixel_count: usize) -> OutputFixtureFrame {
         OutputFixtureFrame {
-            id: dawn_project::model::FixtureId(1),
+            id: dawn_project::FixtureId(1),
             name: "fixture".to_string(),
-            bulb_radius: dawn_project::model::DistanceSpan::from_micrometers(100_000),
+            bulb_radius: dawn_project::DistanceSpan::from_micrometers(100_000),
             pixels: (0..pixel_count)
                 .map(|index| OutputPixelFrame {
                     position: GeometryRenderPoint {

@@ -85,6 +85,6 @@ pub(crate) fn preview_max_rows() -> usize {
     PREVIEW_MAX_ROWS
 }
 
-fn pack_rgb(color: dawn_project::model::Color) -> u32 {
+fn pack_rgb(color: dawn_project::Color) -> u32 {
     ((color.red as u32) << 16) | ((color.green as u32) << 8) | color.blue as u32
 }

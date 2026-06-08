@@ -55,7 +55,8 @@ pub enum LowerError {
     },
     EffectCompile {
         reference: String,
-        message: String,
+        source_path: Utf8PathBuf,
+        diagnostics: Vec<crate::effect_script::ScriptDiagnostic>,
     },
     DuplicateFixtureId {
         id: FixtureId,
@@ -127,10 +128,15 @@ impl fmt::Display for LowerError {
                     "failed to resolve reference `{reference}`: {message}"
                 )
             }
-            Self::EffectCompile { reference, message } => {
+            Self::EffectCompile {
+                reference,
+                diagnostics,
+                ..
+            } => {
                 write!(
                     formatter,
-                    "failed to compile effect `{reference}`: {message}"
+                    "failed to compile effect `{reference}`: {}",
+                    first_script_diagnostic_message(diagnostics)
                 )
             }
             Self::DuplicateFixtureId { id } => write!(formatter, "duplicate fixture id `{id}`"),
@@ -806,7 +812,12 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
                 effect.clone(),
             );
         }
-        let compiled = select_compiled_effect(compiled, &resolved.symbol, reference.raw())?;
+        let compiled = select_compiled_effect(
+            compiled,
+            &resolved.symbol,
+            reference.raw(),
+            &resolved.source_path,
+        )?;
         let key = Self::effect_key(resolved.source_path.clone(), resolved.symbol.clone());
         self.store_compiled_effect_definition(key.clone(), resolved.source_path, compiled);
         Ok(key)
@@ -824,7 +835,11 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
         if !self.compiling_effect_modules.insert(source_path.clone()) {
             return Err(LowerError::EffectCompile {
                 reference: reference.to_string(),
-                message: format!("effect import cycle involving `{source_path}`"),
+                source_path: source_path.clone(),
+                diagnostics: vec![crate::effect_script::ScriptDiagnostic {
+                    range: None,
+                    message: format!("effect import cycle involving `{source_path}`"),
+                }],
             });
         }
         let compiled = self.compile_uncached_effect_module(source_path, source, reference);
@@ -844,12 +859,14 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
         let tokens =
             lex_effect_script(source).map_err(|diagnostics| LowerError::EffectCompile {
                 reference: reference.to_string(),
-                message: first_script_diagnostic(diagnostics),
+                source_path: source_path.clone(),
+                diagnostics,
             })?;
         let module =
             parse_effect_module(&tokens).map_err(|diagnostics| LowerError::EffectCompile {
                 reference: reference.to_string(),
-                message: first_script_diagnostic(diagnostics),
+                source_path: source_path.clone(),
+                diagnostics,
             })?;
         let mut imported_by_alias = Vec::new();
         for import in &module.imports {
@@ -863,7 +880,6 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
                 imports_with_alias.push(ImportedEffect {
                     alias: Some(alias.as_str()),
                     name: effect.name.as_str(),
-                    kind: effect.kind,
                     params: &effect.params,
                 });
             }
@@ -871,7 +887,8 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
         compile_effect_script_module(source, &imports_with_alias).map_err(|diagnostics| {
             LowerError::EffectCompile {
                 reference: reference.to_string(),
-                message: first_script_diagnostic(diagnostics),
+                source_path: source_path.clone(),
+                diagnostics,
             }
         })
     }
@@ -908,7 +925,12 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
                     effect.clone(),
                 );
             }
-            compiled.push(select_compiled_effect(module, &resolved.symbol, reference)?);
+            compiled.push(select_compiled_effect(
+                module,
+                &resolved.symbol,
+                reference,
+                &resolved.source_path,
+            )?);
         }
         Ok(compiled)
     }
@@ -1049,7 +1071,9 @@ fn resolve_path(
     Ok(resolve_import_path(source_path, import_path))
 }
 
-fn first_script_diagnostic(diagnostics: Vec<crate::effect_script::ScriptDiagnostic>) -> String {
+fn first_script_diagnostic_message(
+    diagnostics: &[crate::effect_script::ScriptDiagnostic],
+) -> String {
     diagnostics
         .first()
         .map(|diagnostic| diagnostic.message.clone())
@@ -1060,6 +1084,7 @@ fn select_compiled_effect(
     mut compiled: Vec<CompiledEffect>,
     effect_name: &str,
     reference: &str,
+    source_path: &Utf8PathBuf,
 ) -> Result<CompiledEffect, LowerError> {
     let Some(index) = compiled
         .iter()
@@ -1067,7 +1092,11 @@ fn select_compiled_effect(
     else {
         return Err(LowerError::EffectCompile {
             reference: reference.to_string(),
-            message: format!("compiled module did not contain effect `{effect_name}`"),
+            source_path: source_path.clone(),
+            diagnostics: vec![crate::effect_script::ScriptDiagnostic {
+                range: None,
+                message: format!("compiled module did not contain effect `{effect_name}`"),
+            }],
         });
     };
     Ok(compiled.remove(index))

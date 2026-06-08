@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use dawn_project::analysis::ProjectAnalysis;
 use dawn_project::document::{SequenceAudioDocument, SequenceDocument};
-use dawn_project::path::Utf8PathBuf;
+use dawn_project::Utf8PathBuf;
 
 use crate::output_runtime::{
     empty_frame, OutputFrame, OutputFrameStatus, SequenceFrameEvaluationTiming,
@@ -964,8 +964,8 @@ mod tests {
 
     use dawn_project::analysis::{analyze_project_with_overlays, ProjectAnalysis, ProjectOverlay};
     use dawn_project::document::{get_sequence_document, SequenceDocument};
-    use dawn_project::fs::WorkspaceFs;
-    use dawn_project::path::{canonicalize_path, utf8_path, Utf8PathBuf};
+    use dawn_project::WorkspaceFs;
+    use dawn_project::{canonicalize_path, utf8_path, Utf8PathBuf};
 
     use super::{PreviewSession, PreviewSyncMode, SequenceKey};
 
