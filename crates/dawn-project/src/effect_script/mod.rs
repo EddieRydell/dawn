@@ -19,18 +19,14 @@ mod type_check;
 #[cfg(test)]
 mod tests;
 
-pub use ast::{EffectAst, EffectEntrypoint, EffectImport, EffectModuleAst, EffectVisibility, Stmt};
-pub use lexer::{lex, Token};
+pub use ast::{EffectAst, EffectEntrypoint, EffectImport, EffectVisibility, Stmt};
+pub use lexer::lex;
 pub use parser::{parse, parse_module};
 pub use type_check::{type_check, type_check_with_imports, ImportedEffect};
 
 use ast::BinaryOp;
 pub use bytecode::BytecodeStats;
 use bytecode::{specialize_for_params, stats_for_program, BytecodeProgram};
-pub use generator::{
-    evaluate_generated_child_params, generator_topology_param_names, run_generator,
-    run_generator_topology, GeneratedChildEffect, GeneratedChildEffectRef, GeneratedChildTopology,
-};
 pub use params::{EffectSampleScratch, PreparedEffectParams};
 
 #[derive(Debug, Clone)]

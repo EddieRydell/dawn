@@ -21,15 +21,6 @@ pub fn resolve_import_path(source_path: &Utf8Path, import_path: &Utf8Path) -> Ut
     canonicalize_path(&resolved)
 }
 
-pub fn serialized_import_path(source_path: &Utf8Path, target_path: &Utf8Path) -> String {
-    let source_parent = source_path.parent().unwrap_or_else(|| Utf8Path::new(""));
-    let relative = pathdiff::diff_paths(target_path.as_std_path(), source_parent.as_std_path())
-        .and_then(|path| Utf8PathBuf::from_path_buf(path).ok())
-        .filter(|path| path.is_relative())
-        .unwrap_or_else(|| target_path.to_path_buf());
-    slash_path(&relative)
-}
-
 pub fn slash_path(path: &Utf8Path) -> String {
     path.as_str().replace('\\', "/")
 }

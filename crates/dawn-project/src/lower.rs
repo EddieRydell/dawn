@@ -5,8 +5,8 @@ use std::fmt;
 use indexmap::IndexMap;
 
 use crate::effect_script::{
-    compile as compile_effect_script, compile_module as compile_effect_script_module,
-    CompiledEffect,
+    compile_module_with_imports as compile_effect_script_module, lex as lex_effect_script,
+    parse_module as parse_effect_module, CompiledEffect, EffectVisibility, ImportedEffect,
 };
 use crate::model::*;
 use crate::path::{resolve_import_path, Utf8PathBuf};
@@ -18,13 +18,6 @@ pub struct ResolvedImport {
     pub object: DawnObject<Authored>,
 }
 
-#[derive(Debug, Clone)]
-pub struct ResolvedEffectImport {
-    pub source_path: Utf8PathBuf,
-    pub effect_name: String,
-    pub source: String,
-}
-
 pub trait SymbolResolver {
     fn resolve_object(
         &mut self,
@@ -33,11 +26,12 @@ pub trait SymbolResolver {
         expected: ObjectKind,
     ) -> Result<ResolvedImport, LowerError>;
 
-    fn resolve_effect(
+    fn resolve_effect_alias(
         &mut self,
         source_path: &Utf8PathBuf,
-        reference: &SymbolRef,
-    ) -> Result<ResolvedEffectImport, LowerError>;
+        alias: &str,
+        reference: &str,
+    ) -> Result<Vec<ResolvedImport>, LowerError>;
 }
 
 #[derive(Debug, Clone)]
@@ -190,6 +184,8 @@ impl Error for LowerError {}
 struct LowerCtx<'a, R: SymbolResolver> {
     resolver: &'a mut R,
     stores: ResolvedStores,
+    effect_module_cache: HashMap<Utf8PathBuf, Vec<CompiledEffect>>,
+    compiling_effect_modules: HashSet<Utf8PathBuf>,
 }
 
 impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
@@ -197,6 +193,8 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
         Self {
             resolver,
             stores: ResolvedStores::default(),
+            effect_module_cache: HashMap::new(),
+            compiling_effect_modules: HashSet::new(),
         }
     }
 
@@ -772,61 +770,175 @@ impl<'a, R: SymbolResolver> LowerCtx<'a, R> {
             target,
             scope: effect.scope,
             params,
-            script: self.lower_effect_definition_ref(&effect.script, source_path, effect.id)?,
+            script: self.lower_effect_definition_ref(&effect.script, source_path)?,
         })
     }
 
     fn lower_effect_definition_ref(
         &mut self,
-        script: &InlineScriptOrRef,
+        reference: &SymbolRef,
         source_path: &Utf8PathBuf,
-        effect_id: u32,
-    ) -> Result<ScriptSource, LowerError> {
-        match script {
-            InlineScriptOrRef::Inline { inline } => {
-                compile_effect_script(inline).map_err(|diagnostics| LowerError::EffectCompile {
-                    reference: format!("effect {effect_id}"),
-                    message: first_script_diagnostic(diagnostics),
-                })?;
-                Ok(ScriptSource::Inline(inline.clone()))
-            }
-            InlineScriptOrRef::Ref(reference) => {
-                let resolved = self.resolver.resolve_effect(source_path, reference)?;
-                let compiled =
-                    compile_effect_script_module(&resolved.source).map_err(|diagnostics| {
-                        LowerError::EffectCompile {
-                            reference: reference.raw().to_string(),
-                            message: first_script_diagnostic(diagnostics),
-                        }
-                    })?;
-                let compiled =
-                    select_compiled_effect(compiled, &resolved.effect_name, reference.raw())?;
-                let key =
-                    Self::effect_key(resolved.source_path.clone(), resolved.effect_name.clone());
-                self.stores
-                    .effect_definitions
-                    .entry(key)
-                    .or_insert_with(|| ResolvedObject {
-                        value: EffectDefinition {
-                            source: EffectDefinitionSource::External {
-                                path: resolved.source_path.clone(),
-                                effect_name: resolved.effect_name.clone(),
-                            },
-                            schema: compiled.params.clone(),
-                            kind: compiled.kind,
-                            compiled,
-                        },
-                        provenance: ResolvedProvenance::ExternalEffect {
-                            path: resolved.source_path.clone(),
-                            effect_name: resolved.effect_name.clone(),
-                        },
-                    });
-                Ok(ScriptSource::External(EffectScriptId::new(
-                    resolved.source_path,
-                    resolved.effect_name,
-                )))
+    ) -> Result<EffectDefinitionKey, LowerError> {
+        let resolved = self.resolve_import(source_path, reference, ObjectKind::Effect)?;
+        let DawnObject::Effect(effect) = resolved.object else {
+            return Err(LowerError::WrongImportedObjectKind {
+                reference: reference.raw().to_string(),
+                expected: ObjectKind::Effect,
+                actual: resolved.object.kind(),
+            });
+        };
+        if effect.visibility == EffectVisibility::Internal {
+            return Err(LowerError::Import {
+                reference: reference.raw().to_string(),
+                message: "internal effects cannot be used as sequence scripts".to_string(),
+            });
+        }
+        let compiled = self.compile_effect_module(
+            &resolved.source_path,
+            &effect.source.text,
+            reference.raw(),
+        )?;
+        for effect in &compiled {
+            let key = Self::effect_key(resolved.source_path.clone(), effect.name.clone());
+            self.store_compiled_effect_definition(
+                key,
+                resolved.source_path.clone(),
+                effect.clone(),
+            );
+        }
+        let compiled = select_compiled_effect(compiled, &resolved.symbol, reference.raw())?;
+        let key = Self::effect_key(resolved.source_path.clone(), resolved.symbol.clone());
+        self.store_compiled_effect_definition(key.clone(), resolved.source_path, compiled);
+        Ok(key)
+    }
+
+    fn compile_effect_module(
+        &mut self,
+        source_path: &Utf8PathBuf,
+        source: &str,
+        reference: &str,
+    ) -> Result<Vec<CompiledEffect>, LowerError> {
+        if let Some(compiled) = self.effect_module_cache.get(source_path) {
+            return Ok(compiled.clone());
+        }
+        if !self.compiling_effect_modules.insert(source_path.clone()) {
+            return Err(LowerError::EffectCompile {
+                reference: reference.to_string(),
+                message: format!("effect import cycle involving `{source_path}`"),
+            });
+        }
+        let compiled = self.compile_uncached_effect_module(source_path, source, reference);
+        self.compiling_effect_modules.remove(source_path);
+        let compiled = compiled?;
+        self.effect_module_cache
+            .insert(source_path.clone(), compiled.clone());
+        Ok(compiled)
+    }
+
+    fn compile_uncached_effect_module(
+        &mut self,
+        source_path: &Utf8PathBuf,
+        source: &str,
+        reference: &str,
+    ) -> Result<Vec<CompiledEffect>, LowerError> {
+        let tokens =
+            lex_effect_script(source).map_err(|diagnostics| LowerError::EffectCompile {
+                reference: reference.to_string(),
+                message: first_script_diagnostic(diagnostics),
+            })?;
+        let module =
+            parse_effect_module(&tokens).map_err(|diagnostics| LowerError::EffectCompile {
+                reference: reference.to_string(),
+                message: first_script_diagnostic(diagnostics),
+            })?;
+        let mut imported_by_alias = Vec::new();
+        for import in &module.imports {
+            let imported_compiled =
+                self.resolve_effect_import(source_path, &import.alias, reference)?;
+            imported_by_alias.push((import.alias.clone(), imported_compiled));
+        }
+        let mut imports_with_alias = Vec::new();
+        for (alias, effects) in &imported_by_alias {
+            for effect in effects {
+                imports_with_alias.push(ImportedEffect {
+                    alias: Some(alias.as_str()),
+                    name: effect.name.as_str(),
+                    kind: effect.kind,
+                    params: &effect.params,
+                });
             }
         }
+        compile_effect_script_module(source, &imports_with_alias).map_err(|diagnostics| {
+            LowerError::EffectCompile {
+                reference: reference.to_string(),
+                message: first_script_diagnostic(diagnostics),
+            }
+        })
+    }
+
+    fn resolve_effect_import(
+        &mut self,
+        source_path: &Utf8PathBuf,
+        alias: &str,
+        reference: &str,
+    ) -> Result<Vec<CompiledEffect>, LowerError> {
+        let mut compiled = Vec::new();
+        for resolved in self
+            .resolver
+            .resolve_effect_alias(source_path, alias, reference)?
+        {
+            let actual = resolved.object.kind();
+            let DawnObject::Effect(effect) = resolved.object else {
+                return Err(LowerError::WrongImportedObjectKind {
+                    reference: reference.to_string(),
+                    expected: ObjectKind::Effect,
+                    actual,
+                });
+            };
+            if effect.visibility != EffectVisibility::Addable {
+                continue;
+            }
+            let module =
+                self.compile_effect_module(&resolved.source_path, &effect.source.text, reference)?;
+            for effect in &module {
+                let key = Self::effect_key(resolved.source_path.clone(), effect.name.clone());
+                self.store_compiled_effect_definition(
+                    key,
+                    resolved.source_path.clone(),
+                    effect.clone(),
+                );
+            }
+            compiled.push(select_compiled_effect(module, &resolved.symbol, reference)?);
+        }
+        Ok(compiled)
+    }
+
+    fn store_compiled_effect_definition(
+        &mut self,
+        key: EffectDefinitionKey,
+        source_path: Utf8PathBuf,
+        compiled: CompiledEffect,
+    ) {
+        let effect_name = compiled.name.clone();
+        self.stores
+            .effect_definitions
+            .entry(key)
+            .or_insert_with(|| ResolvedObject {
+                value: EffectDefinition {
+                    source: ResolvedEffectDefinitionSource {
+                        path: source_path.clone(),
+                        effect_name: compiled.name.clone(),
+                    },
+                    schema: compiled.params.clone(),
+                    kind: compiled.kind,
+                    visibility: compiled.visibility,
+                    compiled,
+                },
+                provenance: ResolvedProvenance::ExternalEffect {
+                    path: source_path,
+                    effect_name,
+                },
+            });
     }
 
     fn lower_effect_param(

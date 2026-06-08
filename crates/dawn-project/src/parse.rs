@@ -43,11 +43,6 @@ impl YamlPath {
         self
     }
 
-    pub fn index(mut self, index: usize) -> Self {
-        self.0.push(YamlPathSegment::Index(index));
-        self
-    }
-
     fn push_field(&self, field: String) -> Self {
         let mut next = self.clone();
         next.0.push(YamlPathSegment::Field(field));

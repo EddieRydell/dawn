@@ -7,7 +7,7 @@ use indexmap::IndexMap;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::effect_script::{CompiledEffect, EffectParamSchema, EffectScriptKind};
+use crate::effect_script::{CompiledEffect, EffectParamSchema, EffectScriptKind, EffectVisibility};
 use crate::path::{PathStringExt, Utf8PathBuf};
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -15,26 +15,6 @@ pub enum Authored {}
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 pub enum Resolved {}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EffectScriptId {
-    pub path: Utf8PathBuf,
-    pub effect_name: String,
-}
-
-impl EffectScriptId {
-    pub fn new(path: Utf8PathBuf, effect_name: impl Into<String>) -> Self {
-        Self {
-            path,
-            effect_name: effect_name.into(),
-        }
-    }
-
-    pub fn display_key(&self) -> String {
-        format!("{}#{}", self.path.to_slash_string(), self.effect_name)
-    }
-}
 
 pub type AuthoredProject = Project<Authored>;
 pub type DawnProject = Project<Resolved>;
@@ -160,23 +140,26 @@ pub type CurveDefinitionKey = DefinitionKey<CurveDefinitionName>;
 pub type EffectDefinitionKey = DefinitionKey<EffectDefinitionName>;
 
 #[derive(Debug, Clone)]
-pub struct EffectDefinition {
-    pub source: EffectDefinitionSource,
+pub struct EffectDefinition<M: ModelMode = Authored> {
+    pub source: M::EffectDefinitionSource,
     pub schema: Vec<EffectParamSchema>,
     pub kind: EffectScriptKind,
-    pub compiled: CompiledEffect,
+    pub visibility: EffectVisibility,
+    pub compiled: M::EffectDefinitionCompiled,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NoCompiledEffect;
+
+#[derive(Debug, Clone)]
+pub struct AuthoredEffectDefinitionSource {
+    pub text: String,
 }
 
 #[derive(Debug, Clone)]
-pub enum EffectDefinitionSource {
-    Inline {
-        sequence: SequenceId,
-        effect: SequenceEffectId,
-    },
-    External {
-        path: Utf8PathBuf,
-        effect_name: String,
-    },
+pub struct ResolvedEffectDefinitionSource {
+    pub path: Utf8PathBuf,
+    pub effect_name: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -191,7 +174,8 @@ pub struct ResolvedStores {
     pub layouts: IndexMap<LayoutDefinitionKey, ResolvedObject<Layout<Resolved>>>,
     pub fixture_definitions: IndexMap<FixtureDefinitionKey, ResolvedObject<Fixture>>,
     pub curves: IndexMap<CurveDefinitionKey, ResolvedObject<Curve>>,
-    pub effect_definitions: IndexMap<EffectDefinitionKey, ResolvedObject<EffectDefinition>>,
+    pub effect_definitions:
+        IndexMap<EffectDefinitionKey, ResolvedObject<EffectDefinition<Resolved>>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -316,6 +300,8 @@ pub trait ModelMode {
     type AutomationClipCurve: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
     type AutomationClipTarget: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
     type SequenceEffectId: fmt::Debug + Clone + Serialize + for<'de> Deserialize<'de>;
+    type EffectDefinitionSource: fmt::Debug + Clone;
+    type EffectDefinitionCompiled: fmt::Debug + Clone;
 }
 
 impl ModelMode for Authored {
@@ -335,11 +321,13 @@ impl ModelMode for Authored {
     type SequenceAudio = Option<AssetPath>;
     type EffectTargetGroup = GroupInstantiationId;
     type EffectTargetFixture = FixtureId;
-    type SequenceEffectScript = InlineScriptOrRef;
+    type SequenceEffectScript = SymbolRef;
     type EffectParamCurve = InlineOrRef<Curve>;
     type AutomationClipCurve = InlineOrRef<Curve>;
     type AutomationClipTarget = u32;
     type SequenceEffectId = u32;
+    type EffectDefinitionSource = AuthoredEffectDefinitionSource;
+    type EffectDefinitionCompiled = NoCompiledEffect;
 }
 
 impl ModelMode for Resolved {
@@ -359,11 +347,13 @@ impl ModelMode for Resolved {
     type SequenceAudio = Option<Utf8PathBuf>;
     type EffectTargetGroup = GroupInstantiationId;
     type EffectTargetFixture = FixtureId;
-    type SequenceEffectScript = ScriptSource;
+    type SequenceEffectScript = EffectDefinitionKey;
     type EffectParamCurve = Curve;
     type AutomationClipCurve = Curve;
     type AutomationClipTarget = SequenceEffectId;
     type SequenceEffectId = SequenceEffectId;
+    type EffectDefinitionSource = ResolvedEffectDefinitionSource;
+    type EffectDefinitionCompiled = CompiledEffect;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -1096,6 +1086,8 @@ pub enum DawnObject<M: ModelMode = Authored> {
     Patch(Patch<M>),
     Sequence(Sequence<M>),
     Curve(Curve),
+    #[serde(skip)]
+    Effect(EffectDefinition<M>),
 }
 
 macro_rules! string_ref {
@@ -1199,57 +1191,6 @@ impl<T> InlineOrRef<T> {
         match self {
             Self::Inline(value) => Some(value),
             Self::Ref(_) => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InlineScriptOrRef {
-    Inline { inline: String },
-    Ref(SymbolRef),
-}
-
-impl<'de> Deserialize<'de> for InlineScriptOrRef {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = serde_yaml::Value::deserialize(deserializer)?;
-        match value {
-            serde_yaml::Value::String(raw) => match SymbolRef::new(raw.clone()) {
-                Ok(reference) => Ok(Self::Ref(reference)),
-                Err(_) => Ok(Self::Inline { inline: raw }),
-            },
-            other => {
-                #[derive(Deserialize)]
-                #[serde(deny_unknown_fields)]
-                struct Inline {
-                    inline: String,
-                }
-                let inline = Inline::deserialize(other)
-                    .map_err(|error| de::Error::custom(error.to_string()))?;
-                Ok(Self::Inline {
-                    inline: inline.inline,
-                })
-            }
-        }
-    }
-}
-
-impl Serialize for InlineScriptOrRef {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            Self::Inline { inline } => {
-                #[derive(Serialize)]
-                struct Inline<'a> {
-                    inline: &'a str,
-                }
-                Inline { inline }.serialize(serializer)
-            }
-            Self::Ref(reference) => reference.serialize(serializer),
         }
     }
 }
@@ -1706,13 +1647,6 @@ pub struct SequenceEffect<M: ModelMode = Authored> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(tag = "type", content = "value", rename_all = "snake_case")]
-pub enum ScriptSource {
-    Inline(String),
-    External(EffectScriptId),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct Flags {
     pub values: Vec<String>,
@@ -2043,6 +1977,7 @@ pub enum ObjectKind {
     Patch,
     Sequence,
     Curve,
+    Effect,
 }
 
 impl fmt::Display for ObjectKind {
@@ -2056,6 +1991,7 @@ impl fmt::Display for ObjectKind {
             Self::Patch => "patch",
             Self::Sequence => "sequence",
             Self::Curve => "curve",
+            Self::Effect => "effect",
         })
     }
 }
@@ -2071,6 +2007,7 @@ impl<M: ModelMode> DawnObject<M> {
             Self::Patch(_) => ObjectKind::Patch,
             Self::Sequence(_) => ObjectKind::Sequence,
             Self::Curve(_) => ObjectKind::Curve,
+            Self::Effect(_) => ObjectKind::Effect,
         }
     }
 }
