@@ -8,7 +8,7 @@ use dawn_app_core::dto::{
     SequenceSelectionEditDto, SequenceSelectionEditResultDto,
 };
 use dawn_app_core::fseq_export::{export_fseq_file, FseqExportOptions};
-use dawn_app_core::preview_session::PreviewTransportState;
+use dawn_app_core::preview_session::PlaybackTransportState;
 use dawn_app_core::workspace::serialized_import_path;
 use dawn_project::{utf8_path, DiagnosticSeverity, Utf8PathBuf};
 use tauri::{AppHandle, Manager, State};
@@ -481,7 +481,7 @@ fn preview_play(app: AppHandle, state: State<'_, AppState>) -> CommandResult<App
             model.workbench_layout.effect_preview_enabled,
         )
     };
-    if transport_state == PreviewTransportState::LoadingToPlay {
+    if transport_state == PlaybackTransportState::LoadingToPlay {
         return preview_pause(app, state);
     }
     if effect_preview_enabled {

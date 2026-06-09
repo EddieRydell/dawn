@@ -1,6 +1,6 @@
 import type { KeyboardEvent } from "react";
 
-import type { SequenceDocumentDto } from "../../../bindings";
+import type { SequenceEditorDocumentDto } from "../../../bindings";
 
 import type { GuiFocus, LivePreview, SequenceSelection } from "../shared";
 
@@ -19,7 +19,7 @@ export function SequenceEditor({
   visibleMarkCollectionKeys,
   setVisibleMarkCollectionKeys
 }: {
-  document: SequenceDocumentDto;
+  document: SequenceEditorDocumentDto;
   preview: LivePreview;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;

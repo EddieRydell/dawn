@@ -1,4 +1,4 @@
-import type { SequenceDocumentDto, SequenceEffectDto, SequenceEffectScopeDto, SequenceEffectScriptDto } from "../../../bindings";
+import type { SequenceEditorDocumentDto, SequenceEffectDto, SequenceEffectScopeDto, SequenceEffectScriptDto } from "../../../bindings";
 import { commands } from "../../../api";
 import { runSnapshotCommand } from "../../../store";
 import { InspectorScrollArea, Readout } from "../InspectorScrollArea";
@@ -28,7 +28,7 @@ export function SequenceInspector({
   visibleMarkCollectionKeys,
   setVisibleMarkCollectionKeys
 }: {
-  document: SequenceDocumentDto;
+  document: SequenceEditorDocumentDto;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
   sequenceSelection: SequenceSelection;

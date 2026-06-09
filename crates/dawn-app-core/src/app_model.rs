@@ -13,7 +13,7 @@ use dawn_project::{
 
 use crate::actions::AppAction;
 use crate::document::{
-    DocumentDescriptor, DocumentViewId, FixtureDocument, LayoutDocument, SequenceDocument,
+    DocumentDescriptor, DocumentViewId, FixtureDocument, LayoutDocument, SequenceEditorDocument,
 };
 use crate::dto::AppSnapshotDto;
 use crate::dto::{
@@ -29,7 +29,7 @@ use crate::layout_persistence::{
     load_workbench_layout, save_workbench_layout, WindowLayout, WorkbenchLayout,
 };
 use crate::preview_session::{
-    PreviewRenderRequest, PreviewRenderResult, PreviewSession, PreviewSnapshot, PreviewSyncMode,
+    PlaybackRenderRequest, PlaybackRenderResult, PlaybackSession, PreviewSnapshot, PreviewSyncMode,
     SequenceKey,
 };
 use crate::workspace::WorkspaceService;
@@ -53,7 +53,7 @@ pub struct AppModel {
     pub workspace: WorkspaceService,
     pub editors: EditorSession,
     pub workbench_layout: WorkbenchLayout,
-    pub preview: PreviewSession,
+    pub preview: PlaybackSession,
     pub live_output: LiveOutputSnapshot,
     pub project_root: Option<String>,
     pub project_entries: Vec<WorkspaceEntry>,
@@ -118,7 +118,7 @@ struct CachedActiveGuiDocument {
     path: Utf8PathBuf,
     object_key: String,
     view_mode: EditorViewMode,
-    document: SequenceDocument,
+    document: SequenceEditorDocument,
 }
 
 #[derive(Debug, Clone)]
@@ -139,7 +139,7 @@ pub struct AppSnapshot {
 
 #[derive(Debug, Clone)]
 pub enum ActiveGuiDocument {
-    Sequence(SequenceDocument),
+    Sequence(SequenceEditorDocument),
     Layout(LayoutDocument),
     Fixture(FixtureDocument),
     Blocked {
@@ -194,7 +194,7 @@ impl Default for AppModel {
             workspace: WorkspaceService::default(),
             editors: EditorSession::default(),
             workbench_layout,
-            preview: PreviewSession::default(),
+            preview: PlaybackSession::default(),
             live_output: LiveOutputSnapshot::default(),
             project_root: None,
             project_entries: Vec::new(),
@@ -463,11 +463,11 @@ impl AppModel {
         self.preview.render_current_frame(self.project.as_deref());
     }
 
-    pub fn begin_deferred_preview_render(&mut self) -> Option<PreviewRenderRequest> {
+    pub fn begin_deferred_preview_render(&mut self) -> Option<PlaybackRenderRequest> {
         self.preview.begin_deferred_render()
     }
 
-    pub fn complete_deferred_preview_render(&mut self, result: PreviewRenderResult) -> bool {
+    pub fn complete_deferred_preview_render(&mut self, result: PlaybackRenderResult) -> bool {
         self.preview.complete_deferred_render(result)
     }
 
@@ -907,7 +907,10 @@ impl AppModel {
             .sync_source(source, self.project.as_deref(), mode);
     }
 
-    fn cache_active_sequence_source(&mut self, source: Option<&(SequenceKey, SequenceDocument)>) {
+    fn cache_active_sequence_source(
+        &mut self,
+        source: Option<&(SequenceKey, SequenceEditorDocument)>,
+    ) {
         let Some((key, document)) = source else {
             self.invalidate_active_gui_document_cache();
             return;
@@ -1037,7 +1040,7 @@ impl AppModel {
         path: &Utf8PathBuf,
         object_key: &str,
         view_mode: EditorViewMode,
-    ) -> Option<SequenceDocument> {
+    ) -> Option<SequenceEditorDocument> {
         let cached = self.active_sequence_gui_document.as_ref()?;
         if cached.path == *path && cached.object_key == object_key && cached.view_mode == view_mode
         {
@@ -1209,7 +1212,7 @@ impl AppModel {
         }
     }
 
-    fn active_sequence_document(&self) -> Result<SequenceDocument, String> {
+    fn active_sequence_document(&self) -> Result<SequenceEditorDocument, String> {
         let path = self.active_path_for_gui_edit()?;
         let object_key = self.active_sequence_object_key()?;
         let project = self
@@ -1226,7 +1229,7 @@ impl AppModel {
 
     fn copy_sequence_selection(
         &mut self,
-        document: &SequenceDocument,
+        document: &SequenceEditorDocument,
         selection: &SequenceSelectionDto,
     ) -> Result<u32, String> {
         match selection {
@@ -1380,7 +1383,7 @@ impl AppModel {
         Ok(())
     }
 
-    fn active_sequence_source(&self) -> Option<(SequenceKey, SequenceDocument)> {
+    fn active_sequence_source(&self) -> Option<(SequenceKey, SequenceEditorDocument)> {
         let path = self.editors.active_file()?.clone();
         let project = self.project.as_ref()?;
         let descriptor = self
@@ -1856,7 +1859,7 @@ fn paste_clipboard(
 
 fn move_effects(
     sequence: &mut Sequence<dawn_project::Resolved>,
-    document: &SequenceDocument,
+    document: &SequenceEditorDocument,
     ids: &[u32],
     time_delta_seconds: f64,
     lane_delta: i32,

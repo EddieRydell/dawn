@@ -1,4 +1,4 @@
-import type { SequenceDocumentDto, SequenceEffectDto, SequenceMarkCollectionDto, SequenceMarkRefDto, SequenceSelectionDto } from "../../../bindings";
+import type { SequenceEditorDocumentDto, SequenceEffectDto, SequenceMarkCollectionDto, SequenceMarkRefDto, SequenceSelectionDto } from "../../../bindings";
 
 import { clamp, type GuiFocus, type SequenceSelection } from "../shared";
 
@@ -66,7 +66,7 @@ export type SequenceMarkHit = {
 };
 
 export function buildSequenceClipLayout(
-  document: SequenceDocumentDto,
+  document: SequenceEditorDocumentDto,
   previews: SequencePreview[],
   viewport: SequenceViewport,
   left: number,
@@ -338,7 +338,7 @@ export function selectionFromMarqueeMarks(
   return { type: "marks", marks };
 }
 
-export function constrainEffectMoveDelta(document: SequenceDocumentDto, ids: number[], deltaSeconds: number) {
+export function constrainEffectMoveDelta(document: SequenceEditorDocumentDto, ids: number[], deltaSeconds: number) {
   let minDelta = -Infinity;
   let maxDelta = Infinity;
   for (const effect of document.effects.filter((candidate) => ids.includes(candidate.id))) {
@@ -348,7 +348,7 @@ export function constrainEffectMoveDelta(document: SequenceDocumentDto, ids: num
   return clamp(deltaSeconds, minDelta, maxDelta);
 }
 
-export function constrainEffectLaneDelta(document: SequenceDocumentDto, ids: number[], laneDelta: number) {
+export function constrainEffectLaneDelta(document: SequenceEditorDocumentDto, ids: number[], laneDelta: number) {
   let minDelta = -Infinity;
   let maxDelta = Infinity;
   for (const effect of document.effects.filter((candidate) => ids.includes(candidate.id))) {
@@ -360,7 +360,7 @@ export function constrainEffectLaneDelta(document: SequenceDocumentDto, ids: num
   return Math.trunc(clamp(laneDelta, minDelta, maxDelta));
 }
 
-export function effectMovePreviews(document: SequenceDocumentDto, ids: number[], deltaSeconds: number, laneDelta: number): SequencePreview[] {
+export function effectMovePreviews(document: SequenceEditorDocumentDto, ids: number[], deltaSeconds: number, laneDelta: number): SequencePreview[] {
   return document.effects
     .filter((effect) => ids.includes(effect.id))
     .map((effect) => {
@@ -374,7 +374,7 @@ export function effectMovePreviews(document: SequenceDocumentDto, ids: number[],
     });
 }
 
-export function effectResizePreviews(document: SequenceDocumentDto, ids: number[], edge: "left" | "right", deltaSeconds: number): SequencePreview[] {
+export function effectResizePreviews(document: SequenceEditorDocumentDto, ids: number[], edge: "left" | "right", deltaSeconds: number): SequencePreview[] {
   return document.effects
     .filter((effect) => ids.includes(effect.id))
     .map((effect) => {
@@ -393,7 +393,7 @@ export function effectResizePreviews(document: SequenceDocumentDto, ids: number[
     });
 }
 
-export function constrainEffectResizeDelta(document: SequenceDocumentDto, ids: number[], edge: "left" | "right", deltaSeconds: number) {
+export function constrainEffectResizeDelta(document: SequenceEditorDocumentDto, ids: number[], edge: "left" | "right", deltaSeconds: number) {
   let minDelta = -Infinity;
   let maxDelta = Infinity;
   for (const effect of document.effects.filter((candidate) => ids.includes(candidate.id))) {
@@ -408,7 +408,7 @@ export function constrainEffectResizeDelta(document: SequenceDocumentDto, ids: n
   return clamp(deltaSeconds, minDelta, maxDelta);
 }
 
-export function constrainMarkDelta(document: SequenceDocumentDto, marks: SequenceMarkRefDto[], deltaSeconds: number) {
+export function constrainMarkDelta(document: SequenceEditorDocumentDto, marks: SequenceMarkRefDto[], deltaSeconds: number) {
   let minDelta = -Infinity;
   let maxDelta = Infinity;
   for (const mark of marks) {
@@ -421,7 +421,7 @@ export function constrainMarkDelta(document: SequenceDocumentDto, marks: Sequenc
   return clamp(deltaSeconds, minDelta, maxDelta);
 }
 
-export function markMovePreviews(document: SequenceDocumentDto, marks: SequenceMarkRefDto[], deltaSeconds: number): MarkPreviewLookup {
+export function markMovePreviews(document: SequenceEditorDocumentDto, marks: SequenceMarkRefDto[], deltaSeconds: number): MarkPreviewLookup {
   const previews: MarkPreviewLookup = new Map();
   for (const mark of marks) {
     const collection = document.markCollections.find((candidate) => candidate.key === mark.collectionKey);

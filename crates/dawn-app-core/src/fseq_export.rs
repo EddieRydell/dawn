@@ -3,13 +3,13 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use crate::document::SequenceDocument;
+use crate::document::SequenceEditorDocument;
 use dawn_project::DawnProject;
 
 use crate::controller_output::{
     build_fseq_output_plan, ControllerOutputError, ControllerOutputPlan,
 };
-use crate::output_runtime::SequenceFrameEvaluator;
+use crate::output_runtime::SequenceRenderPlan;
 
 const FSEQ_IDENTIFIER: &[u8; 4] = b"PSEQ";
 const FSEQ_STANDARD_HEADER_LENGTH: usize = 32;
@@ -115,7 +115,7 @@ impl From<std::io::Error> for FseqExportError {
 
 pub fn export_fseq_file(
     project: &DawnProject,
-    document: &SequenceDocument,
+    document: &SequenceEditorDocument,
     path: impl AsRef<Path>,
     options: FseqExportOptions,
 ) -> Result<FseqExportReport, FseqExportError> {
@@ -125,7 +125,7 @@ pub fn export_fseq_file(
 
 pub fn export_fseq(
     project: &DawnProject,
-    document: &SequenceDocument,
+    document: &SequenceEditorDocument,
     writer: impl Write,
     options: FseqExportOptions,
 ) -> Result<FseqExportReport, FseqExportError> {
@@ -201,7 +201,7 @@ fn frame_count(duration_seconds: f64, step_ms: u8) -> Result<u64, FseqExportErro
 }
 
 fn variable_headers(
-    document: &SequenceDocument,
+    document: &SequenceEditorDocument,
     metadata: &FseqExportMetadata,
 ) -> Result<Vec<u8>, FseqExportError> {
     let mut headers = Vec::new();
@@ -260,16 +260,16 @@ fn write_header(
 fn write_frames(
     writer: &mut impl Write,
     project: &DawnProject,
-    document: &SequenceDocument,
+    document: &SequenceEditorDocument,
     plan: &ControllerOutputPlan,
     frame_count: u64,
     step_ms: u8,
 ) -> Result<(), FseqExportError> {
     let mut evaluator =
-        SequenceFrameEvaluator::new(project, document).map_err(FseqExportError::Evaluation)?;
+        SequenceRenderPlan::new(project, document).map_err(FseqExportError::Evaluation)?;
     for frame_index in 0..frame_count {
         let time_seconds = frame_index as f64 * f64::from(step_ms) / 1000.0;
-        let frame = evaluator.evaluate(time_seconds, frame_index);
+        let frame = evaluator.render_frame(time_seconds, frame_index);
         let bytes = plan.frame_channel_bytes(&frame);
         writer.write_all(&bytes)?;
     }

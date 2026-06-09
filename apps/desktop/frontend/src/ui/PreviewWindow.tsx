@@ -1,7 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { commands } from "../api";
-import type { AudioPlaybackStatus, GeometryRenderBoundsDto, PreviewSceneDto, PreviewTransportState } from "../bindings";
+import type { AudioPlaybackStatus, GeometryRenderBoundsDto, PreviewSceneDto, PlaybackTransportState } from "../bindings";
 import {
   disposePreviewTransport,
   getPreviewTransportMode,
@@ -12,7 +12,7 @@ import {
 
 type PreviewState = {
   sourceLabel: string;
-  transportState: PreviewTransportState;
+  transportState: PlaybackTransportState;
   previewUpdating: boolean;
   positionSeconds: number;
   durationSeconds: number;
@@ -323,7 +323,7 @@ export function PreviewWindow() {
         </div>
         <div>
           {formatSeconds(state?.positionSeconds ?? metrics.currentTimeSeconds)} | {previewTransportLabel(state?.transportState)} |{" "}
-          {state?.previewUpdating === true ? "Updating preview" : previewAudioStatusLabel(state?.audioPlaybackStatus) ?? state?.status ?? error ?? "Ready"}
+          {previewAudioStatusLabel(state?.audioPlaybackStatus) ?? state?.status ?? error ?? "Ready"}
         </div>
       </div>
       <button
@@ -400,12 +400,12 @@ function previewAudioStatusLabel(status: AudioPlaybackStatus | undefined) {
   }
 }
 
-function previewTransportLabel(state: PreviewTransportState | undefined) {
+function previewTransportLabel(state: PlaybackTransportState | undefined) {
   switch (state) {
     case "playing":
       return "Playing";
-    case "effect_preview":
-      return "Effect preview";
+    case "selected_effects":
+      return "Selected effects";
     case "loading_to_play":
       return "Queued";
     case "paused":

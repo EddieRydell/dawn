@@ -5,12 +5,12 @@ use std::sync::{
 };
 use std::time::Instant;
 
-use crate::document::{SequenceAudioDocument, SequenceDocument};
+use crate::document::{SequenceAudioDocument, SequenceEditorDocument};
 use dawn_project::DawnProject;
 use dawn_project::Utf8PathBuf;
 
 use crate::output_runtime::{
-    empty_frame, OutputFrame, OutputFrameStatus, SequenceFrameEvaluationTiming,
+    empty_frame, OutputFrame, OutputFrameStatus, SequenceFrameRenderTiming,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -49,7 +49,7 @@ pub enum PreviewSource {
     None,
     Sequence {
         key: SequenceKey,
-        document: Arc<SequenceDocument>,
+        document: Arc<SequenceEditorDocument>,
     },
 }
 
@@ -66,19 +66,19 @@ pub enum PreviewTransport {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
-pub enum PreviewTransportState {
+pub enum PlaybackTransportState {
     Stopped,
     Paused,
     LoadingToPlay,
     Playing,
-    EffectPreview,
+    SelectedEffects,
     Ended,
     Error,
 }
 
-impl PreviewTransportState {
+impl PlaybackTransportState {
     pub fn is_active_playback(self) -> bool {
-        matches!(self, Self::Playing | Self::EffectPreview)
+        matches!(self, Self::Playing | Self::SelectedEffects)
     }
 
     pub fn should_animate_position(self) -> bool {
@@ -86,7 +86,7 @@ impl PreviewTransportState {
     }
 
     pub fn should_publish_continuously(self) -> bool {
-        matches!(self, Self::Playing | Self::EffectPreview)
+        matches!(self, Self::Playing | Self::SelectedEffects)
     }
 }
 
@@ -94,7 +94,7 @@ impl PreviewTransportState {
 pub struct PreviewSnapshot {
     pub source_label: String,
     pub source_key: Option<SequenceKey>,
-    pub transport_state: PreviewTransportState,
+    pub transport_state: PlaybackTransportState,
     pub preview_updating: bool,
     pub position_seconds: f64,
     pub home_seconds: f64,
@@ -113,7 +113,7 @@ pub enum PreviewSyncMode {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-pub struct PreviewRenderTiming {
+pub struct PlaybackRenderTiming {
     pub total_ms: f64,
     pub renderer_build_ms: f64,
     pub frame_evaluate_ms: f64,
@@ -128,24 +128,24 @@ pub struct PreviewRenderTiming {
 }
 
 #[derive(Debug, Clone)]
-pub struct PreviewRenderRequest {
+pub struct PlaybackRenderRequest {
     pub id: u64,
     pub dirty_revision: u64,
     pub generation: u64,
     pub key: SequenceKey,
-    pub document: Arc<SequenceDocument>,
-    pub kind: PreviewRenderKind,
+    pub document: Arc<SequenceEditorDocument>,
+    pub kind: PlaybackRenderMode,
     pub status: String,
     pub cancellation: PreviewCancellationToken,
 }
 
 #[derive(Debug, Clone)]
-pub enum PreviewRenderKind {
-    SequenceFrame {
+pub enum PlaybackRenderMode {
+    FullSequenceFrame {
         position_seconds: f64,
         frame_index: u64,
     },
-    EffectPreview {
+    SelectedEffects {
         preview_seconds: f64,
         ids: HashSet<u32>,
     },
@@ -175,10 +175,10 @@ impl PreviewCancellationToken {
 }
 
 #[derive(Debug, Clone)]
-pub struct PreviewRenderResult {
-    pub request: PreviewRenderRequest,
+pub struct PlaybackRenderResult {
+    pub request: PlaybackRenderRequest,
     pub frame: OutputFrame,
-    pub timing: PreviewRenderTiming,
+    pub timing: PlaybackRenderTiming,
 }
 
 #[derive(Debug, Clone)]
@@ -188,13 +188,13 @@ struct EffectPreviewState {
 }
 
 #[derive(Debug, Clone)]
-pub struct PreviewSession {
+pub struct PlaybackSession {
     source: PreviewSource,
     transport: PreviewTransport,
     sequence_states: HashMap<SequenceKey, SequencePlaybackState>,
     effect_preview: Option<EffectPreviewState>,
     last_native_audio_frame_index: Option<u64>,
-    last_render_timing: PreviewRenderTiming,
+    last_render_timing: PlaybackRenderTiming,
     generation: u64,
     dirty_revision: u64,
     next_deferred_render_id: u64,
@@ -219,7 +219,7 @@ impl PartialEq for PendingDeferredRender {
     }
 }
 
-impl Default for PreviewSession {
+impl Default for PlaybackSession {
     fn default() -> Self {
         let frame = empty_frame(0, "No sequence preview source");
         Self {
@@ -228,7 +228,7 @@ impl Default for PreviewSession {
             sequence_states: HashMap::new(),
             effect_preview: None,
             last_native_audio_frame_index: None,
-            last_render_timing: PreviewRenderTiming::default(),
+            last_render_timing: PlaybackRenderTiming::default(),
             generation: 0,
             dirty_revision: 0,
             next_deferred_render_id: 0,
@@ -236,7 +236,7 @@ impl Default for PreviewSession {
             snapshot: PreviewSnapshot {
                 source_label: "No preview source".to_string(),
                 source_key: None,
-                transport_state: PreviewTransportState::Stopped,
+                transport_state: PlaybackTransportState::Stopped,
                 preview_updating: false,
                 position_seconds: 0.0,
                 home_seconds: 0.0,
@@ -251,12 +251,12 @@ impl Default for PreviewSession {
     }
 }
 
-impl PreviewSession {
+impl PlaybackSession {
     pub fn snapshot(&self) -> PreviewSnapshot {
         self.snapshot.clone()
     }
 
-    pub fn last_render_timing(&self) -> PreviewRenderTiming {
+    pub fn last_render_timing(&self) -> PlaybackRenderTiming {
         self.last_render_timing
     }
 
@@ -266,7 +266,7 @@ impl PreviewSession {
 
     pub fn sync_source(
         &mut self,
-        source: Option<(SequenceKey, SequenceDocument)>,
+        source: Option<(SequenceKey, SequenceEditorDocument)>,
         project: Option<&DawnProject>,
         mode: PreviewSyncMode,
     ) {
@@ -495,7 +495,7 @@ impl PreviewSession {
         self.schedule_render(project, status);
     }
 
-    pub fn begin_deferred_render(&mut self) -> Option<PreviewRenderRequest> {
+    pub fn begin_deferred_render(&mut self) -> Option<PlaybackRenderRequest> {
         if !self.snapshot.preview_updating {
             return None;
         }
@@ -532,19 +532,19 @@ impl PreviewSession {
         }
         let position_seconds = self.current_position_seconds(&key, document.duration_seconds);
         let kind = match self.effect_preview.clone() {
-            Some(effect_preview) => PreviewRenderKind::EffectPreview {
+            Some(effect_preview) => PlaybackRenderMode::SelectedEffects {
                 preview_seconds: effect_preview.started_at.elapsed().as_secs_f64(),
                 ids: effect_preview.ids,
             },
             None => {
                 let frame_index = sequence_frame_index(position_seconds, document.frame_rate);
-                PreviewRenderKind::SequenceFrame {
+                PlaybackRenderMode::FullSequenceFrame {
                     position_seconds: frame_start(frame_index, document.frame_rate),
                     frame_index,
                 }
             }
         };
-        Some(PreviewRenderRequest {
+        Some(PlaybackRenderRequest {
             id: pending.id,
             dirty_revision: pending.dirty_revision,
             generation: self.generation,
@@ -556,7 +556,7 @@ impl PreviewSession {
         })
     }
 
-    pub fn complete_deferred_render(&mut self, result: PreviewRenderResult) -> bool {
+    pub fn complete_deferred_render(&mut self, result: PlaybackRenderResult) -> bool {
         let pending = PendingDeferredRender {
             id: result.request.id,
             dirty_revision: result.request.dirty_revision,
@@ -650,20 +650,20 @@ impl PreviewSession {
         )
     }
 
-    pub fn transport_state(&self) -> PreviewTransportState {
+    pub fn transport_state(&self) -> PlaybackTransportState {
         if self.effect_preview.is_some() {
-            return PreviewTransportState::EffectPreview;
+            return PlaybackTransportState::SelectedEffects;
         }
         match self.snapshot.audio_playback_status {
-            AudioPlaybackStatus::LoadingToPlay => PreviewTransportState::LoadingToPlay,
-            AudioPlaybackStatus::Ended => PreviewTransportState::Ended,
-            AudioPlaybackStatus::Error => PreviewTransportState::Error,
+            AudioPlaybackStatus::LoadingToPlay => PlaybackTransportState::LoadingToPlay,
+            AudioPlaybackStatus::Ended => PlaybackTransportState::Ended,
+            AudioPlaybackStatus::Error => PlaybackTransportState::Error,
             _ => match self.transport {
                 PreviewTransport::Playing { .. } | PreviewTransport::NativeAudioPlaying => {
-                    PreviewTransportState::Playing
+                    PlaybackTransportState::Playing
                 }
-                PreviewTransport::Paused => PreviewTransportState::Paused,
-                PreviewTransport::Stopped => PreviewTransportState::Stopped,
+                PreviewTransport::Paused => PlaybackTransportState::Paused,
+                PreviewTransport::Stopped => PlaybackTransportState::Stopped,
             },
         }
     }
@@ -696,7 +696,7 @@ impl PreviewSession {
     }
 
     fn schedule_render(&mut self, project: Option<&DawnProject>, status: impl Into<String>) {
-        self.last_render_timing = PreviewRenderTiming::default();
+        self.last_render_timing = PlaybackRenderTiming::default();
         self.dirty_revision = self.dirty_revision.saturating_add(1);
         if let Some(pending) = self.pending_deferred_render.take() {
             pending.cancellation.cancel();
@@ -780,7 +780,7 @@ impl PreviewSession {
             PreviewSource::None => {
                 self.snapshot.source_label = "No preview source".to_string();
                 self.snapshot.source_key = None;
-                self.snapshot.transport_state = PreviewTransportState::Stopped;
+                self.snapshot.transport_state = PlaybackTransportState::Stopped;
                 self.snapshot.preview_updating = false;
                 self.snapshot.position_seconds = 0.0;
                 self.snapshot.home_seconds = 0.0;
@@ -816,20 +816,20 @@ impl PreviewSession {
     fn transport_state_for(
         &self,
         audio_playback_status: AudioPlaybackStatus,
-    ) -> PreviewTransportState {
+    ) -> PlaybackTransportState {
         if self.effect_preview.is_some() {
-            return PreviewTransportState::EffectPreview;
+            return PlaybackTransportState::SelectedEffects;
         }
         match audio_playback_status {
-            AudioPlaybackStatus::LoadingToPlay => PreviewTransportState::LoadingToPlay,
-            AudioPlaybackStatus::Ended => PreviewTransportState::Ended,
-            AudioPlaybackStatus::Error => PreviewTransportState::Error,
+            AudioPlaybackStatus::LoadingToPlay => PlaybackTransportState::LoadingToPlay,
+            AudioPlaybackStatus::Ended => PlaybackTransportState::Ended,
+            AudioPlaybackStatus::Error => PlaybackTransportState::Error,
             _ => match self.transport {
                 PreviewTransport::Playing { .. } | PreviewTransport::NativeAudioPlaying => {
-                    PreviewTransportState::Playing
+                    PlaybackTransportState::Playing
                 }
-                PreviewTransport::Paused => PreviewTransportState::Paused,
-                PreviewTransport::Stopped => PreviewTransportState::Stopped,
+                PreviewTransport::Paused => PlaybackTransportState::Paused,
+                PreviewTransport::Stopped => PlaybackTransportState::Stopped,
             },
         }
     }
@@ -894,11 +894,11 @@ impl PreviewSession {
     }
 }
 
-impl PreviewRenderTiming {
+impl PlaybackRenderTiming {
     pub fn apply_evaluation(
         &mut self,
         renderer_build_ms: f64,
-        evaluation: SequenceFrameEvaluationTiming,
+        evaluation: SequenceFrameRenderTiming,
     ) {
         self.total_ms = renderer_build_ms + evaluation.total_ms;
         self.renderer_build_ms = renderer_build_ms;
@@ -962,17 +962,18 @@ fn sequence_frame_index(position_seconds: f64, frame_rate: u32) -> u64 {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use crate::document::SequenceDocument;
+    use crate::document::SequenceEditorDocument;
     use crate::workspace::WorkspaceService;
     use dawn_project::{DawnProject, Utf8PathBuf};
 
-    use super::{PreviewSession, PreviewSyncMode, SequenceKey};
+    use super::{PlaybackSession, PreviewSyncMode, SequenceKey};
 
     fn christmas_house_project_path() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/christmas-house/project.dawn")
     }
 
-    fn christmas_house_project_and_sequence() -> (DawnProject, SequenceDocument, SequenceKey) {
+    fn christmas_house_project_and_sequence() -> (DawnProject, SequenceEditorDocument, SequenceKey)
+    {
         let mut workspace = WorkspaceService::default();
         workspace
             .open_project(
@@ -997,7 +998,7 @@ mod tests {
         (project, document, key)
     }
 
-    fn edited_sequence_document(document: &SequenceDocument) -> SequenceDocument {
+    fn edited_sequence_document(document: &SequenceEditorDocument) -> SequenceEditorDocument {
         let mut edited = document.clone();
         edited.frame_rate = edited.frame_rate.saturating_add(1);
         edited
@@ -1006,7 +1007,7 @@ mod tests {
     #[test]
     fn sequence_source_refresh_schedules_latest_deferred_render() {
         let (project, document, key) = christmas_house_project_and_sequence();
-        let mut session = PreviewSession::default();
+        let mut session = PlaybackSession::default();
         session.sync_source(
             Some((key.clone(), document)),
             Some(&project),
@@ -1038,7 +1039,7 @@ mod tests {
     #[test]
     fn effect_preview_id_changes_schedule_effect_preview_render() {
         let (project, document, key) = christmas_house_project_and_sequence();
-        let mut session = PreviewSession::default();
+        let mut session = PlaybackSession::default();
         session.sync_source(
             Some((key, document)),
             Some(&project),
@@ -1049,7 +1050,7 @@ mod tests {
         let first_request = session
             .begin_deferred_render()
             .expect("first effect selection should schedule preview render");
-        let super::PreviewRenderKind::EffectPreview { ids, .. } = &first_request.kind else {
+        let super::PlaybackRenderMode::SelectedEffects { ids, .. } = &first_request.kind else {
             panic!("effect preview selection should schedule an effect preview render");
         };
         assert!(ids.contains(&1));
@@ -1058,7 +1059,7 @@ mod tests {
         let second_request = session
             .begin_deferred_render()
             .expect("second effect selection should schedule preview render");
-        let super::PreviewRenderKind::EffectPreview { ids, .. } = &second_request.kind else {
+        let super::PlaybackRenderMode::SelectedEffects { ids, .. } = &second_request.kind else {
             panic!("effect preview selection should schedule an effect preview render");
         };
         assert!(ids.contains(&23));
@@ -1069,7 +1070,7 @@ mod tests {
     fn native_audio_same_frame_ticks_do_not_reschedule_render() {
         let (project, mut document, key) = christmas_house_project_and_sequence();
         document.frame_rate = 144;
-        let mut session = PreviewSession::default();
+        let mut session = PlaybackSession::default();
         session.sync_source(
             Some((key, document)),
             Some(&project),
@@ -1090,7 +1091,7 @@ mod tests {
     fn native_audio_frame_boundary_schedules_latest_frame_start() {
         let (project, mut document, key) = christmas_house_project_and_sequence();
         document.frame_rate = 144;
-        let mut session = PreviewSession::default();
+        let mut session = PlaybackSession::default();
         session.sync_source(
             Some((key, document)),
             Some(&project),
@@ -1107,7 +1108,7 @@ mod tests {
             .expect("frame boundary should schedule the next preview render");
 
         assert!(first_request.cancellation.is_cancelled());
-        let super::PreviewRenderKind::SequenceFrame {
+        let super::PlaybackRenderMode::FullSequenceFrame {
             position_seconds,
             frame_index,
         } = second_request.kind

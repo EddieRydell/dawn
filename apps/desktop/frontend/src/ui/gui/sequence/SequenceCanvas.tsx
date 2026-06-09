@@ -8,7 +8,7 @@ import { Trash2 } from "lucide-react";
 
 import { commands } from "../../../api";
 
-import type { LayoutTargetDto, SequenceAudioDto, SequenceDocumentDto, SequenceEffectScopeDto, SequenceEffectScriptDto } from "../../../bindings";
+import type { LayoutTargetDto, SequenceAudioDto, SequenceEditorDocumentDto, SequenceEffectScopeDto, SequenceEffectScriptDto } from "../../../bindings";
 
 import { runSnapshotCommand } from "../../../store";
 
@@ -82,7 +82,7 @@ export function SequenceCanvas({
   visibleMarkCollectionKeys,
   setVisibleMarkCollectionKeys
 }: {
-  document: SequenceDocumentDto;
+  document: SequenceEditorDocumentDto;
   previewPositionSeconds: number;
   previewHomeSeconds: number;
   selected: GuiFocus;

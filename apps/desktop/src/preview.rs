@@ -2,14 +2,14 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use dawn_app_core::document::SequenceDocument;
+use dawn_app_core::document::SequenceEditorDocument;
 use dawn_app_core::dto::{GeometryRenderBoundsDto, GeometryRenderPointDto};
 use dawn_app_core::output_runtime::{
-    empty_frame, OutputFrame, SequenceChangeImpact, SequenceFrameEvaluator, SequenceRenderCache,
+    empty_frame, OutputFrame, SequenceChangeImpact, SequenceRenderPlan, SequenceRenderPlanCache,
 };
 use dawn_app_core::preview_session::{
-    AudioPlaybackStatus, PreviewRenderKind, PreviewRenderRequest, PreviewRenderResult,
-    PreviewRenderTiming, PreviewSnapshot, PreviewTransportState, SequenceKey,
+    AudioPlaybackStatus, PlaybackRenderMode, PlaybackRenderRequest, PlaybackRenderResult,
+    PlaybackRenderTiming, PlaybackTransportState, PreviewSnapshot, SequenceKey,
 };
 use dawn_project::DawnProject;
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,7 @@ const PREVIEW_STATE_EVENT_INTERVAL: Duration = Duration::from_millis(33);
 #[serde(rename_all = "camelCase")]
 pub struct PreviewStateEventDto {
     pub source_label: String,
-    pub transport_state: PreviewTransportState,
+    pub transport_state: PlaybackTransportState,
     pub preview_updating: bool,
     pub position_seconds: f64,
     pub home_seconds: f64,
@@ -166,25 +166,25 @@ pub struct PreviewSceneFixtureDto {
 
 #[derive(Debug, Default)]
 struct DeferredPreviewRenderer {
-    sequence_cache: SequenceRenderCache,
-    render_cache: Option<SequenceFrameEvaluator>,
+    sequence_cache: SequenceRenderPlanCache,
+    render_cache: Option<SequenceRenderPlan>,
     previous_key: Option<SequenceKey>,
-    previous_document: Option<Arc<SequenceDocument>>,
+    previous_document: Option<Arc<SequenceEditorDocument>>,
 }
 
 impl DeferredPreviewRenderer {
     fn render(
         &mut self,
         project: Option<&DawnProject>,
-        request: PreviewRenderRequest,
-    ) -> Option<PreviewRenderResult> {
-        let mut timing = PreviewRenderTiming::default();
+        request: PlaybackRenderRequest,
+    ) -> Option<PlaybackRenderResult> {
+        let mut timing = PlaybackRenderTiming::default();
         if request.cancellation.is_cancelled() {
             return None;
         }
         let Some(project) = project else {
             let frame = empty_frame(request.generation, "No project");
-            return Some(PreviewRenderResult {
+            return Some(PlaybackRenderResult {
                 request,
                 frame,
                 timing,
@@ -199,17 +199,17 @@ impl DeferredPreviewRenderer {
         let frame = match cached_renderer {
             Ok(Some((renderer, renderer_build_ms))) => {
                 let evaluated = match &request.kind {
-                    PreviewRenderKind::SequenceFrame {
+                    PlaybackRenderMode::FullSequenceFrame {
                         position_seconds, ..
-                    } => renderer.evaluate_timed_cancellable(
+                    } => renderer.render_frame_timed_cancellable(
                         *position_seconds,
                         request.generation,
                         || request.cancellation.is_cancelled(),
                     ),
-                    PreviewRenderKind::EffectPreview {
+                    PlaybackRenderMode::SelectedEffects {
                         preview_seconds,
                         ids,
-                    } => renderer.evaluate_effect_preview_filtered_timed_cancellable(
+                    } => renderer.render_selected_effects_frame_timed_cancellable(
                         *preview_seconds,
                         request.generation,
                         Some(ids),
@@ -230,7 +230,7 @@ impl DeferredPreviewRenderer {
         self.previous_key = Some(request.key.clone());
         self.previous_document = Some(request.document.clone());
         timing.render_result_ms = elapsed_ms(result_started);
-        Some(PreviewRenderResult {
+        Some(PlaybackRenderResult {
             request,
             frame,
             timing,
@@ -240,7 +240,7 @@ impl DeferredPreviewRenderer {
     fn apply_request_cache_invalidation(
         &mut self,
         project: &DawnProject,
-        request: &PreviewRenderRequest,
+        request: &PlaybackRenderRequest,
     ) {
         if self.previous_key.as_ref() != Some(&request.key) {
             self.sequence_cache.clear();
@@ -266,9 +266,9 @@ impl DeferredPreviewRenderer {
     fn cached_renderer(
         &mut self,
         project: &DawnProject,
-        document: &SequenceDocument,
-        request: &PreviewRenderRequest,
-    ) -> Result<Option<(&mut SequenceFrameEvaluator, f64)>, String> {
+        document: &SequenceEditorDocument,
+        request: &PlaybackRenderRequest,
+    ) -> Result<Option<(&mut SequenceRenderPlan, f64)>, String> {
         let mut renderer_build_ms = 0.0;
         if self.render_cache.is_none() {
             let build_started = Instant::now();
@@ -488,7 +488,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
     });
 }
 
-fn record_render_timing(timing: &mut PreviewTimingDto, render_timing: PreviewRenderTiming) {
+fn record_render_timing(timing: &mut PreviewTimingDto, render_timing: PlaybackRenderTiming) {
     timing.render_ms = render_timing.total_ms;
     timing.renderer_build_ms = render_timing.renderer_build_ms;
     timing.frame_evaluate_ms = render_timing.frame_evaluate_ms;
@@ -677,7 +677,7 @@ fn persist_preview_window_open(app: &AppHandle, open: bool) {
 #[derive(Debug, Clone, PartialEq)]
 struct PreviewEventIdentity {
     source_label: String,
-    transport_state: PreviewTransportState,
+    transport_state: PlaybackTransportState,
     preview_updating: bool,
     position_seconds: f64,
     home_seconds: f64,

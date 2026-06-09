@@ -18,10 +18,10 @@ use crate::document::{
     geometry_render_plan, geometry_summary, DocumentDescriptor, DocumentObjectDescriptor,
     DocumentViewId, EffectScriptReferenceDocument, FixtureDefinitionDocument, FixtureDocument,
     LayoutDocument, LayoutFixturePlacement, LayoutTargetDocument, ResolvedLayoutFixture,
-    SequenceAudioDocument, SequenceCurveLibraryItemDocument, SequenceDocument,
+    SequenceAudioDocument, SequenceCurveLibraryItemDocument, SequenceEditorDocument,
     SequenceEffectDocument, SequenceEffectParamCurveSourceDocument, SequenceEffectParamDocument,
-    SequenceEffectPixelDocument, SequenceEffectRenderDocument, SequenceEffectScriptDocument,
-    SequenceEffectScriptParamDocument, SequenceLaneDocument, SequenceMarkCollectionDocument,
+    SequenceEffectScriptDocument, SequenceEffectScriptParamDocument, SequenceLaneDocument,
+    SequenceMarkCollectionDocument,
 };
 use crate::editor_session::FileDiskVersion;
 
@@ -178,7 +178,7 @@ impl WorkspaceService {
         project: &DawnProject,
         path: Utf8PathBuf,
         object_key: &str,
-    ) -> Result<SequenceDocument, String> {
+    ) -> Result<SequenceEditorDocument, String> {
         let source_path = self.canonical_project_path(&path)?;
         let key = SequenceDefinitionKey::new(source_path.clone(), object_key.to_string());
         let sequence = project
@@ -481,9 +481,9 @@ fn sequence_document(
     path: &Utf8PathBuf,
     object_key: &str,
     sequence: &Sequence<Resolved>,
-) -> SequenceDocument {
+) -> SequenceEditorDocument {
     let lanes = sequence_lanes(project);
-    SequenceDocument {
+    SequenceEditorDocument {
         path: path.to_slash_string(),
         object_key: object_key.to_string(),
         duration_seconds: sequence.duration.as_seconds_f64(),
@@ -610,14 +610,6 @@ fn sequence_effect_document(
             curve_source: effect_param_curve_source(value),
         })
         .collect::<Vec<_>>();
-    let render = effect_script_text(project, &effect.script).map(|script_source| {
-        SequenceEffectRenderDocument {
-            script: effect.script.key.clone(),
-            script_source,
-            params: params.clone(),
-            target_pixels: sequence_effect_target_pixels(project, &effect.target),
-        }
-    });
     SequenceEffectDocument {
         index,
         id: effect.id.0,
@@ -628,67 +620,9 @@ fn sequence_effect_document(
         scope: effect.scope,
         script: effect.script.reference.raw().to_string(),
         script_source,
+        script_text: effect_script_text(project, &effect.script),
         params,
-        render,
     }
-}
-
-fn sequence_effect_target_pixels(
-    project: &DawnProject,
-    target: &EffectTarget<Resolved>,
-) -> Vec<SequenceEffectPixelDocument> {
-    let Some(layout) = active_layout(project) else {
-        return Vec::new();
-    };
-    match target {
-        EffectTarget::Fixture { id } => layout
-            .fixtures
-            .iter()
-            .position(|fixture| fixture.id == *id)
-            .and_then(|fixture_index| {
-                layout
-                    .fixtures
-                    .get(fixture_index)
-                    .map(|fixture| target_pixels_for_fixture(project, fixture_index, fixture))
-            })
-            .unwrap_or_default(),
-        EffectTarget::Group { id } => layout
-            .groups
-            .iter()
-            .find(|group| group.id == *id)
-            .into_iter()
-            .flat_map(|group| {
-                group.members.iter().flat_map(|member_id| {
-                    layout
-                        .fixtures
-                        .iter()
-                        .position(|fixture| fixture.id == *member_id)
-                        .and_then(|fixture_index| {
-                            layout.fixtures.get(fixture_index).map(|fixture| {
-                                target_pixels_for_fixture(project, fixture_index, fixture)
-                            })
-                        })
-                        .unwrap_or_default()
-                })
-            })
-            .collect(),
-    }
-}
-
-fn target_pixels_for_fixture(
-    project: &DawnProject,
-    fixture_index: usize,
-    fixture: &dawn_project::FixturePlacement<Resolved>,
-) -> Vec<SequenceEffectPixelDocument> {
-    let (_, _, fixture_definition) = resolved_fixture(project, &fixture.fixture);
-    let pixel_count = geometry_render_plan(&fixture_definition).emitters.len();
-    (0..pixel_count)
-        .map(|pixel_index| SequenceEffectPixelDocument {
-            fixture_index,
-            pixel_index,
-            pixel_count,
-        })
-        .collect()
 }
 
 fn target_document(target: &EffectTarget<Resolved>) -> LayoutTargetDocument {

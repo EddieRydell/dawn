@@ -372,7 +372,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use dawn_app_core::app_model::AppModel;
-    use dawn_app_core::preview_session::{PreviewSyncMode, PreviewTransportState, SequenceKey};
+    use dawn_app_core::preview_session::{PlaybackTransportState, PreviewSyncMode, SequenceKey};
     use dawn_app_core::workspace::WorkspaceService;
     use dawn_project::Utf8PathBuf;
 
@@ -431,7 +431,7 @@ mod tests {
         assert!(!request.cancellation.is_cancelled());
         assert_eq!(
             model.preview.snapshot().transport_state,
-            PreviewTransportState::LoadingToPlay
+            PlaybackTransportState::LoadingToPlay
         );
         assert!(
             model.begin_deferred_preview_render().is_none(),

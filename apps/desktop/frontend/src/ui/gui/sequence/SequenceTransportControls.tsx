@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { commands } from "../../../api";
 
-import type { AppSnapshotDto, AudioPlaybackStatus, PreviewTransportState, SequenceDocumentDto } from "../../../bindings";
+import type { AppSnapshotDto, AudioPlaybackStatus, PlaybackTransportState, SequenceEditorDocumentDto } from "../../../bindings";
 
 import { runSnapshotCommand } from "../../../store";
 
@@ -20,7 +20,7 @@ export function SequenceTransportControls({
   effectPreviewEnabled,
   selectedEffectIds
 }: {
-  document: SequenceDocumentDto;
+  document: SequenceEditorDocumentDto;
   preview: AppSnapshotDto["preview"];
   liveOutput: AppSnapshotDto["liveOutput"];
   effectPreviewEnabled: boolean;
@@ -142,7 +142,6 @@ export function SequenceTransportControls({
         {formatSeconds(livePreview.positionSeconds)} / {formatSeconds(livePreview.durationSeconds || document.durationSeconds)} | Home {formatSeconds(livePreview.homeSeconds)}
         {document.audio ? ` | ${document.audio.exists ? document.audio.fileName : "Missing audio"}` : ""}
         {liveOutput.enabled ? ` | Live ${liveOutput.status} (${liveOutput.activeUniverseCount})` : ""}
-        {livePreview.previewUpdating ? <span className="sequence-preview-status">Updating preview</span> : null}
         {audioStatus !== null && <span className={`sequence-audio-status sequence-audio-status-${audioStatus.tone}`}>{audioStatus.label}</span>}
         {timingSummary !== null && <span className="sequence-timing-status">{timingSummary}</span>}
       </span>
@@ -305,7 +304,7 @@ function isEditableShortcutTarget(target: EventTarget | null) {
 
 export function handleSequencePlaybackShortcut(
   event: KeyboardEvent<HTMLElement>,
-  document: SequenceDocumentDto,
+  document: SequenceEditorDocumentDto,
   preview: AppSnapshotDto["preview"],
   unsupported: boolean
 ) {
@@ -333,15 +332,15 @@ export function handleSequencePlaybackShortcut(
   }
 }
 
-function isActivePreviewPlayback(state: PreviewTransportState) {
-  return state === "playing" || state === "effect_preview";
+function isActivePreviewPlayback(state: PlaybackTransportState) {
+  return state === "playing" || state === "selected_effects";
 }
 
-function shouldAnimatePreviewPosition(state: PreviewTransportState) {
+function shouldAnimatePreviewPosition(state: PlaybackTransportState) {
   return state === "playing";
 }
 
-function stepSequenceFrame(document: SequenceDocumentDto, positionSeconds: number, previewDurationSeconds: number, direction: -1 | 1) {
+function stepSequenceFrame(document: SequenceEditorDocumentDto, positionSeconds: number, previewDurationSeconds: number, direction: -1 | 1) {
   const frameSeconds = 1 / Math.max(1, document.frameRate);
   const nextPositionSeconds = clamp(positionSeconds + direction * frameSeconds, 0, previewDurationSeconds || document.durationSeconds);
   void runSnapshotCommand(() => commands.previewSeek(nextPositionSeconds));

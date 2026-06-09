@@ -48,7 +48,7 @@ export const commands = {
 };
 
 /* Types */
-export type ActiveGuiDocumentDto = { type: "sequence"; document: SequenceDocumentDto } | { type: "layout"; document: LayoutDocumentDto } | { type: "fixture"; document: FixtureDocumentDto } | { type: "blocked"; reason: string; diagnostics: ProjectDiagnosticDto[] };
+export type ActiveGuiDocumentDto = { type: "sequence"; document: SequenceEditorDocumentDto } | { type: "layout"; document: LayoutDocumentDto } | { type: "fixture"; document: FixtureDocumentDto } | { type: "blocked"; reason: string; diagnostics: ProjectDiagnosticDto[] };
 
 export type AppSnapshotDto = {
 	projectRoot: string | null,
@@ -192,6 +192,8 @@ export type LiveOutputSnapshotDto = {
 
 export type ObjectKindDto = "project" | "display" | "controller" | "layout" | "fixture" | "patch" | "sequence" | "curve" | "effect";
 
+export type PlaybackTransportState = "stopped" | "paused" | "loading_to_play" | "playing" | "selected_effects" | "ended" | "error";
+
 export type Point3MetersDto = {
 	xMeters: number,
 	yMeters: number,
@@ -217,7 +219,7 @@ export type PreviewSceneFixtureDto = {
 
 export type PreviewSnapshotDto = {
 	sourceLabel: string,
-	transportState: PreviewTransportState,
+	transportState: PlaybackTransportState,
 	previewUpdating: boolean,
 	positionSeconds: number,
 	homeSeconds: number,
@@ -230,8 +232,6 @@ export type PreviewSnapshotDto = {
 };
 
 export type PreviewTransportMode = "webview2_shared" | "unsupported";
-
-export type PreviewTransportState = "stopped" | "paused" | "loading_to_play" | "playing" | "effect_preview" | "ended" | "error";
 
 export type ProjectDiagnosticDto = {
 	path: string,
@@ -282,7 +282,7 @@ export type SequenceCurveLibraryPointsDto = { type: "float"; points: FloatCurveP
 
 export type SequenceCurveValueTypeDto = "float" | "color";
 
-export type SequenceDocumentDto = {
+export type SequenceEditorDocumentDto = {
 	path: string,
 	objectKey: string,
 	durationSeconds: number,

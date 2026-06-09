@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use dawn_project::{
-    ColorModel, Curve, CurveValueType, Distance, DistanceSpan, EffectDefinitionKey, EffectParam,
-    EffectScriptKind, Fixture, FixtureId, Geometry, LayoutTargetKind, ObjectKind, Point3,
-    SequenceEffectScope, Transform,
+    ColorModel, Curve, CurveValueType, Distance, DistanceSpan, EffectParam, EffectScriptKind,
+    Fixture, FixtureId, Geometry, LayoutTargetKind, ObjectKind, Point3, SequenceEffectScope,
+    Transform,
 };
 
 #[derive(Debug, Clone)]
@@ -29,7 +29,7 @@ pub enum DocumentViewId {
 }
 
 #[derive(Debug, Clone)]
-pub struct SequenceDocument {
+pub struct SequenceEditorDocument {
     pub path: String,
     pub object_key: String,
     pub duration_seconds: f64,
@@ -106,23 +106,8 @@ pub struct SequenceEffectDocument {
     pub scope: SequenceEffectScope,
     pub script: String,
     pub script_source: Option<EffectScriptReferenceDocument>,
+    pub script_text: Option<String>,
     pub params: Vec<SequenceEffectParamDocument>,
-    pub render: Option<SequenceEffectRenderDocument>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SequenceEffectRenderDocument {
-    pub script: EffectDefinitionKey,
-    pub script_source: String,
-    pub params: Vec<SequenceEffectParamDocument>,
-    pub target_pixels: Vec<SequenceEffectPixelDocument>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SequenceEffectPixelDocument {
-    pub fixture_index: usize,
-    pub pixel_index: usize,
-    pub pixel_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -143,7 +128,7 @@ pub enum SequenceEffectParamCurveSourceDocument {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LayoutTargetDocument {
     pub kind: LayoutTargetKind,
     pub name: String,

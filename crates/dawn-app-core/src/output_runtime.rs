@@ -4,13 +4,14 @@ use std::time::Instant;
 
 use crate::document::geometry_render_plan;
 use crate::document::{
-    GeometryRenderBounds, GeometryRenderPoint, SequenceDocument, SequenceEffectDocument,
-    SequenceEffectParamDocument, SequenceEffectPixelDocument, SequenceEffectRenderDocument,
+    EffectScriptReferenceDocument, GeometryRenderBounds, GeometryRenderPoint, LayoutTargetDocument,
+    SequenceEditorDocument, SequenceEffectDocument, SequenceEffectParamDocument,
     SequenceMarkCollectionDocument,
 };
 
 use dawn_project::{
-    resolve_import_path, DawnProject, EffectDefinitionKey, RuntimeArrayValue, Utf8PathBuf,
+    resolve_import_path, DawnProject, EffectDefinitionKey, PathStringExt, RuntimeArrayValue,
+    Utf8PathBuf,
 };
 use dawn_project::{
     BytecodeStats, CompiledEffect, EffectSampleScratch, EffectScriptKind, FixtureContext,
@@ -19,7 +20,8 @@ use dawn_project::{
 };
 use dawn_project::{
     Color, Curve, CurveValue, CurveValueType, Distance, DistanceSpan, EffectParam, FixtureId,
-    Layout, Resolved, ResolvedInlineOrRef, SequenceEffectScope, Time, TimeSpan,
+    Layout, LayoutTargetKind, Resolved, ResolvedInlineOrRef, SequenceEffectScope, Time, TimeSpan,
+    Transform,
 };
 
 const MAX_FLATTENED_GENERATED_CHILDREN: usize = 65_536;
@@ -156,14 +158,86 @@ fn output_fixture_templates(project: &DawnProject) -> Result<Vec<OutputFixtureFr
                 pixels: render_plan
                     .emitters
                     .iter()
-                    .map(|position| OutputPixelFrame {
-                        position: *position,
-                        color: Color::new(0, 0, 0),
+                    .map(|position| {
+                        Ok(OutputPixelFrame {
+                            position: transform_render_point(*position, fixture.transform)?,
+                            color: Color::new(0, 0, 0),
+                        })
                     })
-                    .collect(),
+                    .collect::<Result<Vec<_>, String>>()?,
             })
         })
         .collect::<Result<Vec<_>, String>>()
+}
+
+fn render_pixels_for_fixture(
+    fixture_index: usize,
+    fixtures: &[OutputFixtureFrame],
+) -> Vec<SequenceRenderPixel> {
+    let Some(fixture) = fixtures.get(fixture_index) else {
+        return Vec::new();
+    };
+    let pixel_count = fixture.pixels.len();
+    (0..pixel_count)
+        .map(|pixel_index| SequenceRenderPixel {
+            fixture_index,
+            pixel_index,
+            pixel_count,
+        })
+        .collect()
+}
+
+fn output_frame_rgb(frame: &OutputFrame) -> Vec<u8> {
+    frame
+        .fixtures
+        .iter()
+        .flat_map(|fixture| {
+            fixture
+                .pixels
+                .iter()
+                .flat_map(|pixel| [pixel.color.red, pixel.color.green, pixel.color.blue])
+        })
+        .collect()
+}
+
+fn transform_render_point(
+    point: GeometryRenderPoint,
+    transform: Transform,
+) -> Result<GeometryRenderPoint, String> {
+    let mut x = point.x.as_meters_f64() * transform.scale.x;
+    let mut y = point.y.as_meters_f64() * transform.scale.y;
+    let mut z = point.z.as_meters_f64() * transform.scale.z;
+
+    let rotation_x = transform.rotation.x.to_radians();
+    let (sin_x, cos_x) = rotation_x.sin_cos();
+    let rotated_y = y * cos_x - z * sin_x;
+    let rotated_z = y * sin_x + z * cos_x;
+    y = rotated_y;
+    z = rotated_z;
+
+    let rotation_y = transform.rotation.y.to_radians();
+    let (sin_y, cos_y) = rotation_y.sin_cos();
+    let rotated_x = x * cos_y + z * sin_y;
+    let rotated_z = -x * sin_y + z * cos_y;
+    x = rotated_x;
+    z = rotated_z;
+
+    let rotation_z = transform.rotation.z.to_radians();
+    let (sin_z, cos_z) = rotation_z.sin_cos();
+    let rotated_x = x * cos_z - y * sin_z;
+    let rotated_y = x * sin_z + y * cos_z;
+    x = rotated_x + transform.position.x.as_meters_f64();
+    y = rotated_y + transform.position.y.as_meters_f64();
+    z += transform.position.z.as_meters_f64();
+
+    Ok(GeometryRenderPoint {
+        x: Distance::try_from_meters_f64_truncated(x)
+            .map_err(|error| format!("layout transform produced invalid x coordinate: {error}"))?,
+        y: Distance::try_from_meters_f64_truncated(y)
+            .map_err(|error| format!("layout transform produced invalid y coordinate: {error}"))?,
+        z: Distance::try_from_meters_f64_truncated(z)
+            .map_err(|error| format!("layout transform produced invalid z coordinate: {error}"))?,
+    })
 }
 
 fn output_bounds(fixtures: &[OutputFixtureFrame]) -> GeometryRenderBounds {
@@ -252,12 +326,134 @@ pub struct OutputPixelFrame {
     pub color: Color,
 }
 
+#[derive(Debug, Clone)]
+pub struct OutputGeometryModel {
+    pub geometry_id: String,
+    pub bounds: GeometryRenderBounds,
+    pub fixtures: Vec<OutputFixtureFrame>,
+    target_pixels_by_target: HashMap<LayoutTargetDocument, Vec<SequenceRenderPixel>>,
+}
+
+impl OutputGeometryModel {
+    pub fn from_project(project: &DawnProject) -> Result<Self, String> {
+        let layout = active_layout(project)?;
+        let fixtures = output_fixture_templates(project)?;
+        let bounds = output_bounds(&fixtures);
+        let mut target_pixels_by_target = HashMap::new();
+        for (fixture_index, fixture) in layout.fixtures.iter().enumerate() {
+            let pixels = render_pixels_for_fixture(fixture_index, &fixtures);
+            target_pixels_by_target.insert(
+                LayoutTargetDocument {
+                    kind: LayoutTargetKind::Fixture,
+                    name: fixture.id.to_string(),
+                },
+                pixels.clone(),
+            );
+            if let Some(name) = fixture.name.as_ref() {
+                target_pixels_by_target.insert(
+                    LayoutTargetDocument {
+                        kind: LayoutTargetKind::Fixture,
+                        name: name.clone(),
+                    },
+                    pixels,
+                );
+            }
+        }
+        for group in &layout.groups {
+            let pixels = group
+                .members
+                .iter()
+                .flat_map(|member_id| {
+                    layout
+                        .fixtures
+                        .iter()
+                        .position(|fixture| fixture.id == *member_id)
+                        .map(|fixture_index| render_pixels_for_fixture(fixture_index, &fixtures))
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<_>>();
+            target_pixels_by_target.insert(
+                LayoutTargetDocument {
+                    kind: LayoutTargetKind::Group,
+                    name: group.id.to_string(),
+                },
+                pixels.clone(),
+            );
+            if let Some(name) = group.name.as_ref() {
+                target_pixels_by_target.insert(
+                    LayoutTargetDocument {
+                        kind: LayoutTargetKind::Group,
+                        name: name.clone(),
+                    },
+                    pixels,
+                );
+            }
+        }
+        let source = OutputSourceMetadata {
+            label: "Geometry".to_string(),
+            kind: OutputSourceKind::Empty,
+            duration_seconds: 0.0,
+            fps: 0,
+        };
+        let geometry_id =
+            OutputFrameTopologyIdentity::from_frame_parts(&source, bounds, &fixtures).stable_key();
+        Ok(Self {
+            geometry_id,
+            bounds,
+            fixtures,
+            target_pixels_by_target,
+        })
+    }
+
+    fn target_pixels(&self, target: &LayoutTargetDocument) -> Vec<SequenceRenderPixel> {
+        self.target_pixels_by_target
+            .iter()
+            .find(|(candidate, _)| candidate.kind == target.kind && candidate.name == target.name)
+            .map(|(_, pixels)| pixels.clone())
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceRenderEffect {
+    pub script: EffectDefinitionKey,
+    pub script_source: String,
+    pub params: Vec<SequenceEffectParamDocument>,
+    pub target_pixels: Vec<SequenceRenderPixel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SequenceRenderPixel {
+    pub fixture_index: usize,
+    pub pixel_index: usize,
+    pub pixel_count: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderedOutputFrame {
+    pub geometry_id: String,
+    pub generation: u64,
+    pub status: OutputFrameStatus,
+    pub rgb: Vec<u8>,
+}
+
+impl RenderedOutputFrame {
+    pub fn from_output_frame(frame: &OutputFrame) -> Self {
+        Self {
+            geometry_id: frame.topology_identity.stable_key(),
+            generation: frame.generation,
+            status: frame.status.clone(),
+            rgb: output_frame_rgb(frame),
+        }
+    }
+}
+
 pub trait OutputSink {
     fn write_frame(&self, frame: OutputFrame);
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-pub struct SequenceFrameEvaluationTiming {
+pub struct SequenceFrameRenderTiming {
     pub total_ms: f64,
     pub fixture_clone_ms: f64,
     pub effect_loop_ms: f64,
@@ -273,7 +469,7 @@ pub struct SequenceFrameEvaluationTiming {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct SequenceFrameEvaluatorPreparationTiming {
+pub struct SequenceRenderPlanBuildTiming {
     pub total_ms: f64,
     pub layout_template_ms: f64,
     pub authored_sample_ms: f64,
@@ -385,11 +581,11 @@ impl SequencePreparationCache {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct SequenceRenderCache {
+pub struct SequenceRenderPlanCache {
     preparation: SequencePreparationCache,
 }
 
-impl SequenceRenderCache {
+impl SequenceRenderPlanCache {
     pub fn clear(&mut self) {
         self.preparation.clear();
     }
@@ -411,30 +607,18 @@ impl SequenceRenderCache {
     pub fn build_evaluator(
         &mut self,
         project: &DawnProject,
-        document: &SequenceDocument,
-    ) -> Result<
-        (
-            SequenceFrameEvaluator,
-            SequenceFrameEvaluatorPreparationTiming,
-        ),
-        String,
-    > {
-        SequenceFrameEvaluator::new_with_preparation_cache(project, document, &mut self.preparation)
+        document: &SequenceEditorDocument,
+    ) -> Result<(SequenceRenderPlan, SequenceRenderPlanBuildTiming), String> {
+        SequenceRenderPlan::new_with_preparation_cache(project, document, &mut self.preparation)
     }
 
     pub fn build_evaluator_cancellable(
         &mut self,
         project: &DawnProject,
-        document: &SequenceDocument,
+        document: &SequenceEditorDocument,
         is_cancelled: impl Fn() -> bool,
-    ) -> Result<
-        Option<(
-            SequenceFrameEvaluator,
-            SequenceFrameEvaluatorPreparationTiming,
-        )>,
-        String,
-    > {
-        SequenceFrameEvaluator::new_with_preparation_cache_cancellable(
+    ) -> Result<Option<(SequenceRenderPlan, SequenceRenderPlanBuildTiming)>, String> {
+        SequenceRenderPlan::new_with_preparation_cache_cancellable(
             project,
             document,
             &mut self.preparation,
@@ -461,8 +645,8 @@ pub struct SequenceChangeImpact {
 
 impl SequenceChangeImpact {
     pub fn between(
-        previous: &SequenceDocument,
-        refreshed: &SequenceDocument,
+        previous: &SequenceEditorDocument,
+        refreshed: &SequenceEditorDocument,
         project: &DawnProject,
     ) -> Self {
         let active_effect_ids = refreshed
@@ -472,6 +656,7 @@ impl SequenceChangeImpact {
             .collect::<HashSet<_>>();
         let mut invalidated_prepared_effect_ids = HashSet::new();
         let mut invalidated_topology_effect_ids = HashSet::new();
+        let geometry = OutputGeometryModel::from_project(project).ok();
         let previous_effects = previous
             .effects
             .iter()
@@ -493,13 +678,24 @@ impl SequenceChangeImpact {
         for effect in &refreshed.effects {
             let Some(previous_effect) = previous_effects.get(&effect.id) else {
                 invalidated_prepared_effect_ids.insert(effect.id);
-                if is_generator_effect(project, effect) {
+                if geometry
+                    .as_ref()
+                    .and_then(|geometry| sequence_render_effect(project, geometry, effect))
+                    .as_ref()
+                    .is_some_and(|render| is_generator_render(project, render))
+                {
                     invalidated_topology_effect_ids.insert(effect.id);
                 }
                 continue;
             };
-            let impact =
-                effect_change_impact(previous, refreshed, previous_effect, effect, project);
+            let impact = effect_change_impact(
+                previous,
+                refreshed,
+                previous_effect,
+                effect,
+                project,
+                geometry.as_ref(),
+            );
             if impact.invalidate_prepared {
                 invalidated_prepared_effect_ids.insert(effect.id);
             }
@@ -543,8 +739,8 @@ struct EffectChangeImpact {
 }
 
 fn sequence_source_requires_full_clear(
-    previous: &SequenceDocument,
-    refreshed: &SequenceDocument,
+    previous: &SequenceEditorDocument,
+    refreshed: &SequenceEditorDocument,
 ) -> bool {
     previous.path != refreshed.path
         || previous.object_key != refreshed.object_key
@@ -553,11 +749,12 @@ fn sequence_source_requires_full_clear(
 }
 
 fn effect_change_impact(
-    previous_document: &SequenceDocument,
-    refreshed_document: &SequenceDocument,
+    previous_document: &SequenceEditorDocument,
+    refreshed_document: &SequenceEditorDocument,
     previous: &SequenceEffectDocument,
     refreshed: &SequenceEffectDocument,
     project: &DawnProject,
+    geometry: Option<&OutputGeometryModel>,
 ) -> EffectChangeImpact {
     let mut impact = EffectChangeImpact::default();
     if previous.index != refreshed.index
@@ -567,12 +764,15 @@ fn effect_change_impact(
         || previous.scope != refreshed.scope
         || previous.script != refreshed.script
         || previous.script_source != refreshed.script_source
-        || render_shape_changed(previous.render.as_ref(), refreshed.render.as_ref())
     {
         impact.invalidate_prepared = true;
+        impact.invalidate_topology = true;
     }
-
-    match (previous.render.as_ref(), refreshed.render.as_ref()) {
+    let previous_render =
+        geometry.and_then(|geometry| sequence_render_effect(project, geometry, previous));
+    let refreshed_render =
+        geometry.and_then(|geometry| sequence_render_effect(project, geometry, refreshed));
+    match (previous_render.as_ref(), refreshed_render.as_ref()) {
         (Some(previous_render), Some(refreshed_render)) => {
             let previous_prepared_key = prepared_effect_cache_key(
                 previous_document,
@@ -591,7 +791,6 @@ fn effect_change_impact(
             if previous_prepared_key != refreshed_prepared_key {
                 impact.invalidate_prepared = true;
             }
-
             if generator_topology_key_changed(
                 previous_document,
                 refreshed_document,
@@ -604,48 +803,36 @@ fn effect_change_impact(
                 impact.invalidate_topology = true;
             }
         }
-        (None, Some(_)) | (Some(_), None) => {
+        (None, Some(refreshed_render)) => {
             impact.invalidate_prepared = true;
-            if is_generator_effect(project, previous) || is_generator_effect(project, refreshed) {
+            if is_generator_render(project, refreshed_render) {
+                impact.invalidate_topology = true;
+            }
+        }
+        (Some(previous_render), None) => {
+            impact.invalidate_prepared = true;
+            if is_generator_render(project, previous_render) {
                 impact.invalidate_topology = true;
             }
         }
         (None, None) => {}
     }
-
     impact
 }
 
-fn render_shape_changed(
-    previous: Option<&SequenceEffectRenderDocument>,
-    refreshed: Option<&SequenceEffectRenderDocument>,
-) -> bool {
-    match (previous, refreshed) {
-        (Some(previous), Some(refreshed)) => {
-            previous.script != refreshed.script
-                || previous.script_source != refreshed.script_source
-                || previous.target_pixels.len() != refreshed.target_pixels.len()
-                || previous.params.len() != refreshed.params.len()
-        }
-        (None, None) => false,
-        (None, Some(_)) | (Some(_), None) => true,
-    }
-}
-
 fn generator_topology_key_changed(
-    previous_document: &SequenceDocument,
-    refreshed_document: &SequenceDocument,
+    previous_document: &SequenceEditorDocument,
+    refreshed_document: &SequenceEditorDocument,
     previous: &SequenceEffectDocument,
     refreshed: &SequenceEffectDocument,
-    previous_render: &SequenceEffectRenderDocument,
-    refreshed_render: &SequenceEffectRenderDocument,
+    previous_render: &SequenceRenderEffect,
+    refreshed_render: &SequenceRenderEffect,
     project: &DawnProject,
 ) -> bool {
-    let script_id = refreshed_render.script.clone();
     let Some(script) = project
         .stores
         .effect_definitions
-        .get(&script_id)
+        .get(&refreshed_render.script)
         .map(|effect| &effect.value.compiled)
     else {
         return false;
@@ -677,23 +864,18 @@ fn generator_topology_key_changed(
     previous_key != refreshed_key
 }
 
-fn is_generator_effect(project: &DawnProject, effect: &SequenceEffectDocument) -> bool {
-    effect
-        .render
-        .as_ref()
-        .and_then(|render| {
-            project
-                .stores
-                .effect_definitions
-                .get(&render.script)
-                .map(|effect| &effect.value.compiled)
-        })
+fn is_generator_render(project: &DawnProject, render: &SequenceRenderEffect) -> bool {
+    project
+        .stores
+        .effect_definitions
+        .get(&render.script)
+        .map(|effect| &effect.value.compiled)
         .is_some_and(|script| script.kind() == EffectScriptKind::Generator)
 }
 
 fn changed_mark_collection_keys(
-    previous: &SequenceDocument,
-    refreshed: &SequenceDocument,
+    previous: &SequenceEditorDocument,
+    refreshed: &SequenceEditorDocument,
 ) -> HashSet<String> {
     let previous_collections = previous
         .mark_collections
@@ -727,8 +909,8 @@ fn changed_mark_collection_keys(
 }
 
 fn effects_referencing_mark_collection(
-    previous: &SequenceDocument,
-    refreshed: &SequenceDocument,
+    previous: &SequenceEditorDocument,
+    refreshed: &SequenceEditorDocument,
     collection_key: &str,
 ) -> HashSet<u32> {
     previous
@@ -745,9 +927,6 @@ fn effect_references_mark_collection(
     collection_key: &str,
 ) -> bool {
     effect_params_reference_mark_collection(&effect.params, collection_key)
-        || effect.render.as_ref().is_some_and(|render| {
-            effect_params_reference_mark_collection(&render.params, collection_key)
-        })
 }
 
 fn effect_params_reference_mark_collection(
@@ -874,7 +1053,7 @@ impl Hash for F64CacheKey {
 }
 
 #[derive(Debug, Clone)]
-pub struct SequenceFrameEvaluator {
+pub struct SequenceRenderPlan {
     source: OutputSourceMetadata,
     bounds: GeometryRenderBounds,
     fixture_templates: Vec<OutputFixtureFrame>,
@@ -883,21 +1062,21 @@ pub struct SequenceFrameEvaluator {
     authored_intervals_by_id: HashMap<u32, EffectInterval>,
 }
 
-impl SequenceFrameEvaluator {
-    pub fn new(project: &DawnProject, document: &SequenceDocument) -> Result<Self, String> {
+impl SequenceRenderPlan {
+    pub fn new(project: &DawnProject, document: &SequenceEditorDocument) -> Result<Self, String> {
         Self::new_filtered(project, document, None)
     }
 
     pub fn new_timed(
         project: &DawnProject,
-        document: &SequenceDocument,
-    ) -> Result<(Self, SequenceFrameEvaluatorPreparationTiming), String> {
+        document: &SequenceEditorDocument,
+    ) -> Result<(Self, SequenceRenderPlanBuildTiming), String> {
         Self::new_filtered_timed(project, document, None)
     }
 
     pub fn new_filtered(
         project: &DawnProject,
-        document: &SequenceDocument,
+        document: &SequenceEditorDocument,
         effect_filter: Option<&HashSet<u32>>,
     ) -> Result<Self, String> {
         Self::new_filtered_timed(project, document, effect_filter)
@@ -906,15 +1085,15 @@ impl SequenceFrameEvaluator {
 
     pub fn new_filtered_timed(
         project: &DawnProject,
-        document: &SequenceDocument,
+        document: &SequenceEditorDocument,
         effect_filter: Option<&HashSet<u32>>,
-    ) -> Result<(Self, SequenceFrameEvaluatorPreparationTiming), String> {
+    ) -> Result<(Self, SequenceRenderPlanBuildTiming), String> {
         Self::new_filtered_timed_with_cache(project, document, effect_filter, None)
     }
 
     pub fn new_filtered_with_preparation_cache(
         project: &DawnProject,
-        document: &SequenceDocument,
+        document: &SequenceEditorDocument,
         effect_filter: Option<&HashSet<u32>>,
         preparation_cache: &mut SequencePreparationCache,
     ) -> Result<Self, String> {
@@ -929,10 +1108,10 @@ impl SequenceFrameEvaluator {
 
     pub fn new_filtered_timed_with_preparation_cache(
         project: &DawnProject,
-        document: &SequenceDocument,
+        document: &SequenceEditorDocument,
         effect_filter: Option<&HashSet<u32>>,
         preparation_cache: &mut SequencePreparationCache,
-    ) -> Result<(Self, SequenceFrameEvaluatorPreparationTiming), String> {
+    ) -> Result<(Self, SequenceRenderPlanBuildTiming), String> {
         Self::new_filtered_timed_with_cache(
             project,
             document,
@@ -943,18 +1122,18 @@ impl SequenceFrameEvaluator {
 
     pub(crate) fn new_with_preparation_cache(
         project: &DawnProject,
-        document: &SequenceDocument,
+        document: &SequenceEditorDocument,
         preparation_cache: &mut SequencePreparationCache,
-    ) -> Result<(Self, SequenceFrameEvaluatorPreparationTiming), String> {
+    ) -> Result<(Self, SequenceRenderPlanBuildTiming), String> {
         Self::new_filtered_timed_with_cache(project, document, None, Some(preparation_cache))
     }
 
     pub(crate) fn new_with_preparation_cache_cancellable(
         project: &DawnProject,
-        document: &SequenceDocument,
+        document: &SequenceEditorDocument,
         preparation_cache: &mut SequencePreparationCache,
         is_cancelled: impl Fn() -> bool,
-    ) -> Result<Option<(Self, SequenceFrameEvaluatorPreparationTiming)>, String> {
+    ) -> Result<Option<(Self, SequenceRenderPlanBuildTiming)>, String> {
         Self::new_filtered_timed_with_cache_cancellable(
             project,
             document,
@@ -966,10 +1145,10 @@ impl SequenceFrameEvaluator {
 
     fn new_filtered_timed_with_cache(
         project: &DawnProject,
-        document: &SequenceDocument,
+        document: &SequenceEditorDocument,
         effect_filter: Option<&HashSet<u32>>,
         preparation_cache: Option<&mut SequencePreparationCache>,
-    ) -> Result<(Self, SequenceFrameEvaluatorPreparationTiming), String> {
+    ) -> Result<(Self, SequenceRenderPlanBuildTiming), String> {
         Self::new_filtered_timed_with_cache_cancellable(
             project,
             document,
@@ -984,18 +1163,19 @@ impl SequenceFrameEvaluator {
 
     fn new_filtered_timed_with_cache_cancellable(
         project: &DawnProject,
-        document: &SequenceDocument,
+        document: &SequenceEditorDocument,
         effect_filter: Option<&HashSet<u32>>,
         mut preparation_cache: Option<&mut SequencePreparationCache>,
         is_cancelled: &dyn Fn() -> bool,
-    ) -> Result<Option<(Self, SequenceFrameEvaluatorPreparationTiming)>, String> {
+    ) -> Result<Option<(Self, SequenceRenderPlanBuildTiming)>, String> {
         let total_started = Instant::now();
         if is_cancelled() {
             return Ok(None);
         }
         let layout_started = Instant::now();
-        let fixture_templates = output_fixture_templates(project)?;
-        let bounds = output_bounds(&fixture_templates);
+        let geometry = OutputGeometryModel::from_project(project)?;
+        let fixture_templates = geometry.fixtures.clone();
+        let bounds = geometry.bounds;
         let layout_template_ms = elapsed_ms(layout_started);
 
         let mut effects = Vec::new();
@@ -1020,7 +1200,7 @@ impl SequenceFrameEvaluator {
             if is_cancelled() {
                 return Ok(None);
             }
-            let Some(render) = effect.render.as_ref() else {
+            let Some(render) = sequence_render_effect(project, &geometry, effect) else {
                 continue;
             };
             let cache_key = prepared_effect_cache_key(
@@ -1028,7 +1208,7 @@ impl SequenceFrameEvaluator {
                 effect.start_seconds,
                 effect.duration_seconds,
                 effect.scope,
-                render,
+                &render,
             );
             let script_id = render.script.clone();
             match project
@@ -1060,7 +1240,7 @@ impl SequenceFrameEvaluator {
                                 effect.start_seconds,
                                 effect.duration_seconds,
                                 effect.scope,
-                                render,
+                                &render,
                                 Some(&topology_param_names),
                             );
                             let prepared = match preparation_cache.as_deref().and_then(|cache| {
@@ -1071,13 +1251,13 @@ impl SequenceFrameEvaluator {
                                     prepare_generated_effects_from_topology(
                                         GeneratedEffectTopologyInput {
                                             project,
-                                            parent_path: parent_path_for_render(render),
+                                            parent_path: parent_path_for_render(&render),
                                             parent_id: effect.id,
                                             parent_start_seconds: effect.start_seconds,
                                             parent_duration_seconds: effect.duration_seconds,
                                             generator_id: script_id.clone(),
                                             generator: script,
-                                            render,
+                                            render: &render,
                                             mark_collections: &document.mark_collections,
                                             fixture_templates: &fixture_templates,
                                             children,
@@ -1095,7 +1275,7 @@ impl SequenceFrameEvaluator {
                                         effect.duration_seconds,
                                         effect.scope,
                                         script,
-                                        render,
+                                        &render,
                                     );
                                     match topology {
                                         Ok(children) => {
@@ -1109,14 +1289,14 @@ impl SequenceFrameEvaluator {
                                             prepare_generated_effects_from_topology(
                                                 GeneratedEffectTopologyInput {
                                                     project,
-                                                    parent_path: parent_path_for_render(render),
+                                                    parent_path: parent_path_for_render(&render),
                                                     parent_id: effect.id,
                                                     parent_start_seconds: effect.start_seconds,
                                                     parent_duration_seconds: effect
                                                         .duration_seconds,
                                                     generator_id: script_id.clone(),
                                                     generator: script,
-                                                    render,
+                                                    render: &render,
                                                     mark_collections: &document.mark_collections,
                                                     fixture_templates: &fixture_templates,
                                                     children,
@@ -1244,7 +1424,7 @@ impl SequenceFrameEvaluator {
             })
             .collect();
 
-        let timing = SequenceFrameEvaluatorPreparationTiming {
+        let timing = SequenceRenderPlanBuildTiming {
             total_ms: elapsed_ms(total_started),
             layout_template_ms,
             authored_sample_ms,
@@ -1269,16 +1449,16 @@ impl SequenceFrameEvaluator {
         )))
     }
 
-    pub fn evaluate(&mut self, time_seconds: f64, generation: u64) -> OutputFrame {
-        self.evaluate_timed(time_seconds, generation).0
+    pub fn render_frame(&mut self, time_seconds: f64, generation: u64) -> OutputFrame {
+        self.render_frame_timed(time_seconds, generation).0
     }
 
-    pub fn evaluate_timed(
+    pub fn render_frame_timed(
         &mut self,
         time_seconds: f64,
         generation: u64,
-    ) -> (OutputFrame, SequenceFrameEvaluationTiming) {
-        match self.evaluate_timed_cancellable(time_seconds, generation, || false) {
+    ) -> (OutputFrame, SequenceFrameRenderTiming) {
+        match self.render_frame_timed_cancellable(time_seconds, generation, || false) {
             Some(result) => result,
             None => (
                 self.output_frame(
@@ -1287,17 +1467,17 @@ impl SequenceFrameEvaluator {
                     OutputFrameStatus::Live,
                     self.fixture_templates.clone(),
                 ),
-                SequenceFrameEvaluationTiming::default(),
+                SequenceFrameRenderTiming::default(),
             ),
         }
     }
 
-    pub fn evaluate_timed_cancellable(
+    pub fn render_frame_timed_cancellable(
         &mut self,
         time_seconds: f64,
         generation: u64,
         is_cancelled: impl Fn() -> bool,
-    ) -> Option<(OutputFrame, SequenceFrameEvaluationTiming)> {
+    ) -> Option<(OutputFrame, SequenceFrameRenderTiming)> {
         let total_started = Instant::now();
         let clone_started = Instant::now();
         let mut fixtures = self.fixture_templates.clone();
@@ -1334,7 +1514,7 @@ impl SequenceFrameEvaluator {
         let total_ms = elapsed_ms(total_started);
         Some((
             frame,
-            SequenceFrameEvaluationTiming {
+            SequenceFrameRenderTiming {
                 total_ms,
                 fixture_clone_ms,
                 effect_loop_ms,
@@ -1351,31 +1531,27 @@ impl SequenceFrameEvaluator {
         ))
     }
 
-    pub fn evaluate_effect_preview(
-        &mut self,
-        preview_seconds: f64,
-        generation: u64,
-    ) -> OutputFrame {
-        self.evaluate_effect_preview_filtered(preview_seconds, generation, None)
+    pub fn render_effects_frame(&mut self, preview_seconds: f64, generation: u64) -> OutputFrame {
+        self.render_selected_effects_frame(preview_seconds, generation, None)
     }
 
-    pub fn evaluate_effect_preview_filtered(
+    pub fn render_selected_effects_frame(
         &mut self,
         preview_seconds: f64,
         generation: u64,
         effect_filter: Option<&HashSet<u32>>,
     ) -> OutputFrame {
-        self.evaluate_effect_preview_filtered_timed(preview_seconds, generation, effect_filter)
+        self.render_selected_effects_frame_timed(preview_seconds, generation, effect_filter)
             .0
     }
 
-    pub fn evaluate_effect_preview_filtered_timed(
+    pub fn render_selected_effects_frame_timed(
         &mut self,
         preview_seconds: f64,
         generation: u64,
         effect_filter: Option<&HashSet<u32>>,
-    ) -> (OutputFrame, SequenceFrameEvaluationTiming) {
-        match self.evaluate_effect_preview_filtered_timed_cancellable(
+    ) -> (OutputFrame, SequenceFrameRenderTiming) {
+        match self.render_selected_effects_frame_timed_cancellable(
             preview_seconds,
             generation,
             effect_filter,
@@ -1389,18 +1565,18 @@ impl SequenceFrameEvaluator {
                     OutputFrameStatus::Live,
                     self.fixture_templates.clone(),
                 ),
-                SequenceFrameEvaluationTiming::default(),
+                SequenceFrameRenderTiming::default(),
             ),
         }
     }
 
-    pub fn evaluate_effect_preview_filtered_timed_cancellable(
+    pub fn render_selected_effects_frame_timed_cancellable(
         &mut self,
         preview_seconds: f64,
         generation: u64,
         effect_filter: Option<&HashSet<u32>>,
         is_cancelled: impl Fn() -> bool,
-    ) -> Option<(OutputFrame, SequenceFrameEvaluationTiming)> {
+    ) -> Option<(OutputFrame, SequenceFrameRenderTiming)> {
         let total_started = Instant::now();
         let clone_started = Instant::now();
         let mut fixtures = self.fixture_templates.clone();
@@ -1454,7 +1630,7 @@ impl SequenceFrameEvaluator {
         let total_ms = elapsed_ms(total_started);
         Some((
             frame,
-            SequenceFrameEvaluationTiming {
+            SequenceFrameRenderTiming {
                 total_ms,
                 fixture_clone_ms,
                 effect_loop_ms,
@@ -1733,7 +1909,7 @@ struct SampleRenderPreparationInput<'a> {
     effect_start_seconds: f64,
     effect_duration_seconds: f64,
     scope: SequenceEffectScope,
-    target_pixels: &'a [SequenceEffectPixelDocument],
+    target_pixels: &'a [SequenceRenderPixel],
     fixture_templates: &'a [OutputFixtureFrame],
 }
 
@@ -1777,12 +1953,50 @@ fn sample_reuse_effect_key(
     }
 }
 
+fn sequence_render_effect(
+    project: &DawnProject,
+    geometry: &OutputGeometryModel,
+    effect: &SequenceEffectDocument,
+) -> Option<SequenceRenderEffect> {
+    let script = effect.script_source.as_ref()?;
+    let script_id = effect_definition_key(project, script);
+    let script_source = effect
+        .script_text
+        .clone()
+        .unwrap_or_else(|| script_id.display_key());
+    let render = SequenceRenderEffect {
+        script: script_id,
+        script_source,
+        params: effect.params.clone(),
+        target_pixels: geometry.target_pixels(&effect.target),
+    };
+    Some(render)
+}
+
+fn effect_definition_key(
+    project: &DawnProject,
+    script: &EffectScriptReferenceDocument,
+) -> EffectDefinitionKey {
+    project
+        .stores
+        .effect_definitions
+        .keys()
+        .find(|key| key.path.to_slash_string() == script.path && key.name == script.effect_name)
+        .cloned()
+        .unwrap_or_else(|| {
+            EffectDefinitionKey::new(
+                Utf8PathBuf::from(script.path.as_str()),
+                script.effect_name.clone(),
+            )
+        })
+}
+
 fn prepared_effect_cache_key(
-    document: &SequenceDocument,
+    document: &SequenceEditorDocument,
     effect_start_seconds: f64,
     duration_seconds: f64,
     scope: SequenceEffectScope,
-    render: &SequenceEffectRenderDocument,
+    render: &SequenceRenderEffect,
 ) -> PreparedEffectCacheKey {
     prepared_effect_cache_key_for_params(
         document,
@@ -1795,11 +2009,11 @@ fn prepared_effect_cache_key(
 }
 
 fn prepared_effect_cache_key_for_params(
-    document: &SequenceDocument,
+    document: &SequenceEditorDocument,
     effect_start_seconds: f64,
     duration_seconds: f64,
     scope: SequenceEffectScope,
-    render: &SequenceEffectRenderDocument,
+    render: &SequenceRenderEffect,
     included_params: Option<&BTreeSet<String>>,
 ) -> PreparedEffectCacheKey {
     PreparedEffectCacheKey {
@@ -1837,7 +2051,7 @@ fn prepared_effect_cache_key_for_params(
     }
 }
 
-fn parent_path_for_render(render: &SequenceEffectRenderDocument) -> Utf8PathBuf {
+fn parent_path_for_render(render: &SequenceRenderEffect) -> Utf8PathBuf {
     Utf8PathBuf::from(&render.script.path)
 }
 
@@ -2146,12 +2360,12 @@ fn frame_count(duration_seconds: f64, frame_rate: u32) -> usize {
 }
 
 fn prepare_generated_topology(
-    document: &SequenceDocument,
+    document: &SequenceEditorDocument,
     parent_start_seconds: f64,
     parent_duration_seconds: f64,
     parent_scope: SequenceEffectScope,
     generator: &CompiledEffect,
-    render: &SequenceEffectRenderDocument,
+    render: &SequenceRenderEffect,
 ) -> Result<Vec<GeneratedChildTopology>, RuntimeError> {
     let prepared_params = prepare_params_from_document(
         generator,
@@ -2202,7 +2416,7 @@ struct GeneratedEffectTopologyInput<'a> {
     parent_duration_seconds: f64,
     generator_id: EffectDefinitionKey,
     generator: &'a CompiledEffect,
-    render: &'a SequenceEffectRenderDocument,
+    render: &'a SequenceRenderEffect,
     mark_collections: &'a [SequenceMarkCollectionDocument],
     fixture_templates: &'a [OutputFixtureFrame],
     children: Vec<GeneratedChildTopology>,
@@ -2441,11 +2655,11 @@ fn scale_generated_children_to_duration(
 
 fn sequence_effect_pixels_for_generator_target(
     target: &GeneratorTarget,
-) -> Vec<SequenceEffectPixelDocument> {
+) -> Vec<SequenceRenderPixel> {
     target
         .pixels
         .iter()
-        .map(|pixel| SequenceEffectPixelDocument {
+        .map(|pixel| SequenceRenderPixel {
             fixture_index: pixel.fixture_index,
             pixel_index: pixel.pixel_index,
             pixel_count: pixel.pixel_count,
@@ -2543,7 +2757,7 @@ impl PreparedEffectRender {
 
 fn prepare_effect_pixels(
     scope: SequenceEffectScope,
-    target_pixels: &[SequenceEffectPixelDocument],
+    target_pixels: &[SequenceRenderPixel],
     fixture_templates: &[OutputFixtureFrame],
 ) -> Vec<PreparedEffectPixel> {
     let target_pixel_count = target_pixels.len();
@@ -2595,40 +2809,40 @@ fn prepare_effect_pixel_groups(
     groups
 }
 
-pub fn evaluate_sequence_frame(
+pub fn render_sequence_frame(
     project: &DawnProject,
-    document: &SequenceDocument,
+    document: &SequenceEditorDocument,
     time_seconds: f64,
     generation: u64,
 ) -> OutputFrame {
-    match SequenceFrameEvaluator::new(project, document) {
-        Ok(mut evaluator) => evaluator.evaluate(time_seconds, generation),
+    match SequenceRenderPlan::new(project, document) {
+        Ok(mut evaluator) => evaluator.render_frame(time_seconds, generation),
         Err(message) => empty_frame(generation, message),
     }
 }
 
-pub fn evaluate_sequence_frame_filtered(
+pub fn render_sequence_frame_filtered(
     project: &DawnProject,
-    document: &SequenceDocument,
+    document: &SequenceEditorDocument,
     time_seconds: f64,
     generation: u64,
     effect_filter: Option<&HashSet<u32>>,
 ) -> OutputFrame {
-    match SequenceFrameEvaluator::new_filtered(project, document, effect_filter) {
-        Ok(mut evaluator) => evaluator.evaluate(time_seconds, generation),
+    match SequenceRenderPlan::new_filtered(project, document, effect_filter) {
+        Ok(mut evaluator) => evaluator.render_frame(time_seconds, generation),
         Err(message) => empty_frame(generation, message),
     }
 }
 
-pub fn evaluate_sequence_effect_preview_frame(
+pub fn render_sequence_selected_effects_frame(
     project: &DawnProject,
-    document: &SequenceDocument,
+    document: &SequenceEditorDocument,
     preview_seconds: f64,
     generation: u64,
     effect_filter: &HashSet<u32>,
 ) -> OutputFrame {
-    match SequenceFrameEvaluator::new_filtered(project, document, Some(effect_filter)) {
-        Ok(mut evaluator) => evaluator.evaluate_effect_preview(preview_seconds, generation),
+    match SequenceRenderPlan::new_filtered(project, document, Some(effect_filter)) {
+        Ok(mut evaluator) => evaluator.render_effects_frame(preview_seconds, generation),
         Err(message) => empty_frame(generation, message),
     }
 }
@@ -2808,7 +3022,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use crate::document::{
-        GeometryRenderBounds, GeometryRenderPoint, SequenceDocument, SequenceEffectParamDocument,
+        GeometryRenderBounds, GeometryRenderPoint, SequenceEditorDocument,
+        SequenceEffectParamDocument,
     };
     use crate::workspace::WorkspaceService;
     use dawn_project::{
@@ -2823,7 +3038,7 @@ mod tests {
         build_effect_indices_by_frame, generator_targets_for_scope, pixel_context_for_effect,
         OutputFixtureFrame, OutputFrame, OutputFrameBoundsIdentity, OutputFrameStatus,
         OutputFrameTopologyIdentity, OutputPixelFrame, OutputSourceKind, OutputSourceMetadata,
-        PreparedEffectRender, PreparedSequenceEffect, SequenceChangeImpact, SequenceFrameEvaluator,
+        PreparedEffectRender, PreparedSequenceEffect, SequenceChangeImpact, SequenceRenderPlan,
     };
 
     fn christmas_house_project_path() -> PathBuf {
@@ -2834,7 +3049,7 @@ mod tests {
         project_path: PathBuf,
         sequence_path: Utf8PathBuf,
         object_key: &str,
-    ) -> (DawnProject, SequenceDocument) {
+    ) -> (DawnProject, SequenceEditorDocument) {
         let mut workspace = WorkspaceService::default();
         workspace
             .open_project(
@@ -2850,7 +3065,7 @@ mod tests {
         (project, document)
     }
 
-    fn christmas_house_project_and_sequence() -> (DawnProject, SequenceDocument) {
+    fn christmas_house_project_and_sequence() -> (DawnProject, SequenceEditorDocument) {
         load_sequence(
             christmas_house_project_path(),
             Utf8PathBuf::from("sequences/christmas.sequence.dawn"),
@@ -2858,7 +3073,7 @@ mod tests {
         )
     }
 
-    fn thirty_output_controller_project_and_sequence() -> (DawnProject, SequenceDocument) {
+    fn thirty_output_controller_project_and_sequence() -> (DawnProject, SequenceEditorDocument) {
         load_sequence(
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../examples/thirty-output-controller/project.dawn"),
@@ -2868,7 +3083,7 @@ mod tests {
     }
 
     fn mutate_curve_point(
-        document: &mut SequenceDocument,
+        document: &mut SequenceEditorDocument,
         effect_id: u32,
         param_name: &str,
         point_index: usize,
@@ -2887,7 +3102,7 @@ mod tests {
     }
 
     fn render_param_mut<'a>(
-        document: &'a mut SequenceDocument,
+        document: &'a mut SequenceEditorDocument,
         effect_id: u32,
         param_name: &str,
     ) -> &'a mut SequenceEffectParamDocument {
@@ -2895,9 +3110,8 @@ mod tests {
             .effects
             .iter_mut()
             .find(|effect| effect.id == effect_id)
-            .and_then(|effect| effect.render.as_mut())
-            .and_then(|render| {
-                render
+            .and_then(|effect| {
+                effect
                     .params
                     .iter_mut()
                     .find(|param| param.name == param_name)
@@ -2974,7 +3188,7 @@ mod tests {
         }
     }
 
-    fn evaluator_for_effects(effects: Vec<PreparedSequenceEffect>) -> SequenceFrameEvaluator {
+    fn evaluator_for_effects(effects: Vec<PreparedSequenceEffect>) -> SequenceRenderPlan {
         let source = OutputSourceMetadata {
             label: "Test".to_string(),
             kind: OutputSourceKind::Sequence,
@@ -2983,7 +3197,7 @@ mod tests {
         };
         let effect_indices_by_frame =
             build_effect_indices_by_frame(&effects, source.duration_seconds, source.fps);
-        SequenceFrameEvaluator {
+        SequenceRenderPlan {
             source,
             bounds: GeometryRenderBounds {
                 min_x: Distance::from_micrometers(0),
@@ -3171,7 +3385,7 @@ mod tests {
             bad_effect(2, 2.0, 0.2, true),
         ]);
 
-        let (frame, timing) = evaluator.evaluate_timed(0.55, 0);
+        let (frame, timing) = evaluator.render_frame_timed(0.55, 0);
 
         assert!(matches!(frame.status, OutputFrameStatus::Error(_)));
         assert_eq!(timing.visited_prepared_effects, 1);
@@ -3181,8 +3395,8 @@ mod tests {
     fn prepared_timeline_index_preserves_effect_boundaries() {
         let mut evaluator = evaluator_for_effects(vec![bad_effect(1, 0.5, 0.2, true)]);
 
-        let (at_start, at_start_timing) = evaluator.evaluate_timed(0.5, 0);
-        let (at_end, at_end_timing) = evaluator.evaluate_timed(0.7, 0);
+        let (at_start, at_start_timing) = evaluator.render_frame_timed(0.5, 0);
+        let (at_end, at_end_timing) = evaluator.render_frame_timed(0.7, 0);
 
         assert!(matches!(at_start.status, OutputFrameStatus::Error(_)));
         assert_eq!(at_start_timing.visited_prepared_effects, 1);
@@ -3194,7 +3408,7 @@ mod tests {
     fn generated_children_are_indexed_by_their_own_interval() {
         let mut evaluator = evaluator_for_effects(vec![bad_effect(1, 1.2, 0.4, false)]);
 
-        let (frame, timing) = evaluator.evaluate_timed(1.3, 0);
+        let (frame, timing) = evaluator.render_frame_timed(1.3, 0);
 
         assert!(matches!(frame.status, OutputFrameStatus::Error(_)));
         assert_eq!(timing.visited_prepared_effects, 1);
@@ -3204,9 +3418,9 @@ mod tests {
     fn bad_prepared_renders_surface_errors_only_during_indexed_interval() {
         let mut evaluator = evaluator_for_effects(vec![bad_effect(1, 0.5, 0.2, true)]);
 
-        let (before, before_timing) = evaluator.evaluate_timed(0.4, 0);
-        let (during, during_timing) = evaluator.evaluate_timed(0.55, 0);
-        let (after, after_timing) = evaluator.evaluate_timed(0.8, 0);
+        let (before, before_timing) = evaluator.render_frame_timed(0.4, 0);
+        let (during, during_timing) = evaluator.render_frame_timed(0.55, 0);
+        let (after, after_timing) = evaluator.render_frame_timed(0.8, 0);
 
         assert!(matches!(before.status, OutputFrameStatus::Live));
         assert_eq!(before_timing.visited_prepared_effects, 0);
@@ -3220,10 +3434,10 @@ mod tests {
     fn generator_heavy_sequence_visits_only_indexed_prepared_children() {
         let (project, document) = thirty_output_controller_project_and_sequence();
         let mut evaluator =
-            SequenceFrameEvaluator::new(&project, &document).expect("renderer should build");
+            SequenceRenderPlan::new(&project, &document).expect("renderer should build");
 
-        let (first_frame, timing) = evaluator.evaluate_timed(41.0, 1);
-        let second_frame = evaluator.evaluate(41.0, 2);
+        let (first_frame, timing) = evaluator.render_frame_timed(41.0, 1);
+        let second_frame = evaluator.render_frame(41.0, 2);
 
         assert_eq!(frame_colors(&first_frame), frame_colors(&second_frame));
         assert!(evaluator.prepared_effect_count() > document.effects.len());
@@ -3235,9 +3449,9 @@ mod tests {
     fn per_fixture_sample_reuse_reduces_vm_evaluations_without_skipping_output_pixels() {
         let (project, document) = christmas_house_project_and_sequence();
         let mut evaluator =
-            SequenceFrameEvaluator::new(&project, &document).expect("renderer should build");
+            SequenceRenderPlan::new(&project, &document).expect("renderer should build");
 
-        let (_frame, timing) = evaluator.evaluate_timed(1.0, 1);
+        let (_frame, timing) = evaluator.render_frame_timed(1.0, 1);
 
         assert!(timing.sampled_pixels > 0);
         assert!(timing.vm_sample_evaluations > 0);
@@ -3252,10 +3466,10 @@ mod tests {
     fn reusable_sequence_evaluator_updates_frame_output_over_time() {
         let (project, document) = christmas_house_project_and_sequence();
         let mut evaluator =
-            SequenceFrameEvaluator::new(&project, &document).expect("renderer should build");
+            SequenceRenderPlan::new(&project, &document).expect("renderer should build");
 
-        let first = evaluator.evaluate(2.0, 1);
-        let second = evaluator.evaluate(6.0, 2);
+        let first = evaluator.render_frame(2.0, 1);
+        let second = evaluator.render_frame(6.0, 2);
 
         assert_ne!(frame_colors(&first), frame_colors(&second));
         assert!(lit_pixel_count(&first) > 0);
@@ -3266,12 +3480,12 @@ mod tests {
     fn selected_effect_preview_filters_the_reusable_evaluator() {
         let (project, document) = christmas_house_project_and_sequence();
         let mut evaluator =
-            SequenceFrameEvaluator::new(&project, &document).expect("renderer should build");
+            SequenceRenderPlan::new(&project, &document).expect("renderer should build");
         let first_ids = [1].into_iter().collect();
         let second_ids = [2].into_iter().collect();
 
-        let first = evaluator.evaluate_effect_preview_filtered(1.0, 1, Some(&first_ids));
-        let second = evaluator.evaluate_effect_preview_filtered(1.0, 2, Some(&second_ids));
+        let first = evaluator.render_selected_effects_frame(1.0, 1, Some(&first_ids));
+        let second = evaluator.render_selected_effects_frame(1.0, 2, Some(&second_ids));
 
         assert_ne!(frame_colors(&first), frame_colors(&second));
         assert!(lit_pixel_count(&first) > 0);

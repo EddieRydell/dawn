@@ -3,7 +3,7 @@ use crate::document::{
     FixtureDefinitionDocument, FixtureDocument, GeometryRenderBounds, GeometryRenderGuide,
     GeometryRenderPlan, GeometryRenderPoint, LayoutDocument, LayoutFixturePlacement,
     LayoutTargetDocument, ResolvedLayoutFixture, SequenceAudioDocument,
-    SequenceCurveLibraryItemDocument, SequenceDocument, SequenceEffectDocument,
+    SequenceCurveLibraryItemDocument, SequenceEditorDocument, SequenceEffectDocument,
     SequenceEffectParamCurveSourceDocument, SequenceEffectParamDocument,
     SequenceEffectScriptDocument, SequenceEffectScriptParamDocument, SequenceLaneDocument,
     SequenceMarkCollectionDocument,
@@ -25,7 +25,7 @@ use specta::Type;
 
 use crate::app_model::{ActiveGuiDocument, AppSnapshot, LiveOutputSnapshot};
 use crate::editor_session::{BufferExternalState, EditorBuffer, EditorViewMode};
-use crate::preview_session::{AudioPlaybackStatus, PreviewTransportState};
+use crate::preview_session::{AudioPlaybackStatus, PlaybackTransportState};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -141,7 +141,7 @@ pub enum ObjectKindDto {
 )]
 pub enum ActiveGuiDocumentDto {
     Sequence {
-        document: SequenceDocumentDto,
+        document: SequenceEditorDocumentDto,
     },
     Layout {
         document: LayoutDocumentDto,
@@ -395,7 +395,7 @@ pub struct Scale3Dto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SequenceDocumentDto {
+pub struct SequenceEditorDocumentDto {
     pub path: String,
     pub object_key: String,
     pub duration_seconds: f64,
@@ -787,7 +787,7 @@ pub struct TextPositionDto {
 #[serde(rename_all = "camelCase")]
 pub struct PreviewSnapshotDto {
     pub source_label: String,
-    pub transport_state: PreviewTransportState,
+    pub transport_state: PlaybackTransportState,
     pub preview_updating: bool,
     pub position_seconds: f64,
     pub home_seconds: f64,
@@ -1004,8 +1004,8 @@ impl From<SequenceEffectScope> for SequenceEffectScopeDto {
     }
 }
 
-impl From<SequenceDocument> for SequenceDocumentDto {
-    fn from(document: SequenceDocument) -> Self {
+impl From<SequenceEditorDocument> for SequenceEditorDocumentDto {
+    fn from(document: SequenceEditorDocument) -> Self {
         let mark_collection_key = document
             .mark_collections
             .first()
@@ -1180,12 +1180,12 @@ impl SequenceEffectDto {
         let script = effect.script;
         let script_source = effect.script_source.map(EffectScriptReferenceDto::from);
         let params = effect
-            .render
+            .script_text
             .as_ref()
-            .map(|script_source| {
+            .map(|script_text| {
                 sequence_effect_params_from_source(
                     &script,
-                    &script_source.script_source,
+                    script_text,
                     &effect.params,
                     mark_collection_key,
                 )
