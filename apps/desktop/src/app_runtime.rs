@@ -11,7 +11,7 @@ use crate::audio_runtime::AudioClock;
 use crate::preview::{PreviewStateEventDto, PreviewTimingDto};
 use crate::state::{
     lock_audio_runtime, lock_filesystem_watcher, lock_model, lock_project_autosave_runtime,
-    lock_terminal_runtime, AppState, CommandResult,
+    AppState, CommandResult,
 };
 
 pub(crate) fn dispatch(
@@ -26,10 +26,6 @@ pub(crate) fn dispatch(
         drain_project_autosave_completions(app, state)?;
     }
     let clear_audio_runtime = should_clear_audio_runtime_for_action(&action);
-    let clear_terminal_runtime = should_clear_terminal_runtime_for_action(&action);
-    if clear_terminal_runtime {
-        lock_terminal_runtime(state)?.kill_all();
-    }
     let model_lock_started = Instant::now();
     let mut model = lock_model(state)?;
     let model_lock_wait_ms = elapsed_ms(model_lock_started);
@@ -90,10 +86,6 @@ fn should_flush_project_autosave_before_action(action: &AppAction) -> bool {
 }
 
 fn should_clear_audio_runtime_for_action(action: &AppAction) -> bool {
-    matches!(action, AppAction::OpenProject(_))
-}
-
-fn should_clear_terminal_runtime_for_action(action: &AppAction) -> bool {
     matches!(action, AppAction::OpenProject(_))
 }
 

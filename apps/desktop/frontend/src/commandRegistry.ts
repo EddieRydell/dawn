@@ -9,7 +9,6 @@ export type CommandId =
   | "edit.undo"
   | "edit.redo"
   | "view.toggleProjectTree"
-  | "view.toggleTerminal"
   | "view.openPreviewWindow"
   | "project.reload";
 
@@ -79,26 +78,6 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
       await runSnapshotCommand(commands.toggleProjectTree);
     }
   },
-  "view.toggleTerminal": {
-    id: "view.toggleTerminal",
-    label: "Terminal",
-    shortcut: "Ctrl+`",
-    run: async () => {
-      const snapshot = useAppStore.getState().snapshot;
-      if (!snapshot || snapshot.projectRoot === null) return;
-      const layout = snapshot.terminalPanelLayout;
-      const updated = await commands.setTerminalPanelLayout({
-        ...layout,
-        visible: !layout.visible,
-        tabProfiles: layout.tabProfiles.length > 0 ? layout.tabProfiles : ["powerShell"]
-      });
-      useAppStore.getState().setSnapshot(updated);
-      useAppStore.getState().setError(null);
-      if (!layout.visible) {
-        window.dispatchEvent(new CustomEvent("dawn:terminal-open"));
-      }
-    }
-  },
   "view.openPreviewWindow": {
     id: "view.openPreviewWindow",
     label: "Preview Window",
@@ -119,7 +98,6 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
 
 export function installGlobalShortcuts() {
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.target instanceof Element && event.target.closest(".terminal-panel")) return;
     const ctrl = event.ctrlKey || event.metaKey;
     if (!ctrl) return;
     const active = useAppStore.getState().snapshot;
@@ -137,11 +115,9 @@ export function installGlobalShortcuts() {
           ? commandRegistry["file.save"]
           : key === "b"
             ? commandRegistry["view.toggleProjectTree"]
-            : key === "`"
-              ? commandRegistry["view.toggleTerminal"]
-              : key === "r"
-                ? commandRegistry["project.reload"]
-                : null;
+            : key === "r"
+              ? commandRegistry["project.reload"]
+              : null;
     if (command) {
       event.preventDefault();
       void command.run();

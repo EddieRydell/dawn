@@ -5,14 +5,13 @@ use dawn_app_core::app_model::ActiveGuiDocument;
 use dawn_app_core::document::DocumentViewId;
 use dawn_app_core::dto::{
     AppSnapshotDto, EditorViewModeDto, FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto,
-    SequenceSelectionEditDto, SequenceSelectionEditResultDto, TerminalEventDto,
-    TerminalPanelLayoutDto, TerminalProfileDto,
+    SequenceSelectionEditDto, SequenceSelectionEditResultDto,
 };
 use dawn_app_core::fseq_export::{export_fseq_file, FseqExportOptions};
 use dawn_app_core::preview_session::PreviewTransportState;
 use dawn_app_core::workspace::serialized_import_path;
 use dawn_project::{utf8_path, DiagnosticSeverity, Utf8PathBuf};
-use tauri::{ipc::Channel, AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::app_runtime::{
     dispatch, emit_model_snapshot, flush_autosave_blocking, preload_active_preview_audio,
@@ -28,7 +27,7 @@ use crate::preview::{
 use crate::preview_transport::{PreviewTransportMode, PreviewTransportRuntime};
 use crate::state::{
     lock_audio_runtime, lock_effect_preview_runtime, lock_live_output, lock_model,
-    lock_preview_transport, lock_terminal_runtime, project_path, AppState, CommandResult,
+    lock_preview_transport, project_path, AppState, CommandResult,
 };
 
 #[specta::specta]
@@ -510,63 +509,6 @@ fn set_effect_preview_effects(
 
 #[specta::specta]
 #[tauri::command]
-fn set_terminal_panel_layout(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    layout: TerminalPanelLayoutDto,
-) -> CommandResult<AppSnapshotDto> {
-    dispatch(&app, &state, AppAction::SetTerminalPanelLayout(layout))
-}
-
-#[specta::specta]
-#[tauri::command]
-fn create_terminal_session(
-    state: State<'_, AppState>,
-    profile: TerminalProfileDto,
-    cols: u16,
-    rows: u16,
-    output_channel: Channel<TerminalEventDto>,
-) -> CommandResult<u32> {
-    let project_root = {
-        let model = lock_model(&state)?;
-        model
-            .project_root
-            .as_ref()
-            .map(PathBuf::from)
-            .ok_or_else(|| "no project is open".to_string())?
-    };
-    lock_terminal_runtime(&state)?.create_session(profile, project_root, cols, rows, output_channel)
-}
-
-#[specta::specta]
-#[tauri::command]
-fn write_terminal_input(
-    state: State<'_, AppState>,
-    session_id: u32,
-    data: String,
-) -> CommandResult<()> {
-    lock_terminal_runtime(&state)?.write_input(session_id, data)
-}
-
-#[specta::specta]
-#[tauri::command]
-fn resize_terminal_session(
-    state: State<'_, AppState>,
-    session_id: u32,
-    cols: u16,
-    rows: u16,
-) -> CommandResult<()> {
-    lock_terminal_runtime(&state)?.resize_session(session_id, cols, rows)
-}
-
-#[specta::specta]
-#[tauri::command]
-fn kill_terminal_session(state: State<'_, AppState>, session_id: u32) -> CommandResult<()> {
-    lock_terminal_runtime(&state)?.kill_session(session_id)
-}
-
-#[specta::specta]
-#[tauri::command]
 async fn open_preview_window(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
     open_or_focus_preview_window(app, state)
 }
@@ -784,11 +726,6 @@ pub(crate) fn register_commands(
         toggle_project_tree,
         set_effect_preview_enabled,
         set_effect_preview_effects,
-        set_terminal_panel_layout,
-        create_terminal_session,
-        write_terminal_input,
-        resize_terminal_session,
-        kill_terminal_session,
         open_preview_window,
         preview_play,
         preview_pause,

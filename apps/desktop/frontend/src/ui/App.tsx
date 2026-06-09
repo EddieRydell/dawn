@@ -7,7 +7,6 @@ import { ExportFseqDialog } from "./ExportFseqDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { ProjectTree } from "./ProjectTree";
 import { StatusBar } from "./StatusBar";
-import { TerminalPanel } from "./TerminalPanel";
 import { TitleBar } from "./TitleBar";
 
 export function App() {
@@ -37,7 +36,6 @@ export function App() {
       <main className="workbench">
         {snapshot.projectTreeVisible ? <ProjectTree snapshot={snapshot} /> : null}
         <EditorPane snapshot={snapshot} />
-        <TerminalPanel key={snapshot.projectRoot ?? "no-project"} snapshot={snapshot} />
       </main>
       <StatusBar snapshot={snapshot} />
       <NewProjectDialog />

@@ -42,9 +42,6 @@ pub(crate) fn register_main_window_layout_events(app: &AppHandle) -> CommandResu
         WindowEvent::CloseRequested { .. } => {
             let state = app_for_event.state::<AppState>();
             let _ = flush_autosave_blocking(&app_for_event, &state);
-            if let Ok(mut terminal_runtime) = crate::state::lock_terminal_runtime(&state) {
-                terminal_runtime.kill_all();
-            }
             state.begin_shutdown();
             persist_window_layout(&app_for_event, WorkbenchWindow::Main);
             persist_window_layout(&app_for_event, WorkbenchWindow::Preview);

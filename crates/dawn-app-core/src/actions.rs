@@ -1,9 +1,6 @@
 use std::path::PathBuf;
 
-use crate::dto::{
-    EditorViewModeDto, FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto,
-    TerminalPanelLayoutDto,
-};
+use crate::dto::{EditorViewModeDto, FixtureGuiEditDto, LayoutGuiEditDto, SequenceGuiEditDto};
 use dawn_project::Utf8PathBuf;
 
 #[derive(Debug, Clone)]
@@ -31,7 +28,6 @@ pub enum AppAction {
     ToggleProjectTree,
     SetEffectPreviewEnabled(bool),
     SetEffectPreviewEffects(Vec<u32>),
-    SetTerminalPanelLayout(TerminalPanelLayoutDto),
     PreviewPlay,
     PreviewPause,
     PreviewStop,

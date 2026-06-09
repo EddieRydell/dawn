@@ -426,15 +426,6 @@ impl AppModel {
                 self.preview
                     .set_effect_preview_ids(ids, self.project.as_deref());
             }
-            AppAction::SetTerminalPanelLayout(layout) => {
-                if !layout.width_px.is_finite() || layout.width_px < 260.0 {
-                    return Err(
-                        "terminal panel width must be finite and at least 260px".to_string()
-                    );
-                }
-                self.workbench_layout.terminal_panel = layout.into();
-                save_workbench_layout(&self.workbench_layout)?;
-            }
             AppAction::PreviewPlay => {
                 self.preview.play(self.project.as_deref());
                 self.status = "Preview playing".to_string();

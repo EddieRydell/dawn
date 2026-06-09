@@ -25,7 +25,6 @@ use specta::Type;
 
 use crate::app_model::{ActiveGuiDocument, AppSnapshot, LiveOutputSnapshot};
 use crate::editor_session::{BufferExternalState, EditorBuffer, EditorViewMode};
-use crate::layout_persistence::{TerminalPanelLayout, TerminalProfile};
 use crate::preview_session::{AudioPlaybackStatus, PreviewTransportState};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -44,7 +43,6 @@ pub struct AppSnapshotDto {
     pub preview: PreviewSnapshotDto,
     pub effect_preview_enabled: bool,
     pub live_output: LiveOutputSnapshotDto,
-    pub terminal_panel_layout: TerminalPanelLayoutDto,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -810,43 +808,6 @@ pub struct LiveOutputSnapshotDto {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub enum TerminalProfileDto {
-    PowerShell,
-    Cmd,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct TerminalPanelLayoutDto {
-    pub visible: bool,
-    pub width_px: f64,
-    pub active_tab_index: u32,
-    pub tab_profiles: Vec<TerminalProfileDto>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum TerminalEventDto {
-    Output {
-        session_id: u32,
-        data: String,
-    },
-    Exited {
-        session_id: u32,
-        exit_code: Option<i32>,
-    },
-    Error {
-        session_id: u32,
-        message: String,
-    },
-}
-
 impl From<AppSnapshot> for AppSnapshotDto {
     fn from(snapshot: AppSnapshot) -> Self {
         Self {
@@ -889,55 +850,6 @@ impl From<AppSnapshot> for AppSnapshotDto {
             },
             effect_preview_enabled: snapshot.workbench_layout.effect_preview_enabled,
             live_output: snapshot.live_output.into(),
-            terminal_panel_layout: snapshot.workbench_layout.terminal_panel.into(),
-        }
-    }
-}
-
-impl From<TerminalPanelLayout> for TerminalPanelLayoutDto {
-    fn from(layout: TerminalPanelLayout) -> Self {
-        Self {
-            visible: layout.visible,
-            width_px: layout.width_px,
-            active_tab_index: layout.active_tab_index,
-            tab_profiles: layout
-                .tab_profiles
-                .into_iter()
-                .map(TerminalProfileDto::from)
-                .collect(),
-        }
-    }
-}
-
-impl From<TerminalPanelLayoutDto> for TerminalPanelLayout {
-    fn from(layout: TerminalPanelLayoutDto) -> Self {
-        Self {
-            visible: layout.visible,
-            width_px: layout.width_px,
-            active_tab_index: layout.active_tab_index,
-            tab_profiles: layout
-                .tab_profiles
-                .into_iter()
-                .map(TerminalProfile::from)
-                .collect(),
-        }
-    }
-}
-
-impl From<TerminalProfile> for TerminalProfileDto {
-    fn from(profile: TerminalProfile) -> Self {
-        match profile {
-            TerminalProfile::PowerShell => Self::PowerShell,
-            TerminalProfile::Cmd => Self::Cmd,
-        }
-    }
-}
-
-impl From<TerminalProfileDto> for TerminalProfile {
-    fn from(profile: TerminalProfileDto) -> Self {
-        match profile {
-            TerminalProfileDto::PowerShell => Self::PowerShell,
-            TerminalProfileDto::Cmd => Self::Cmd,
         }
     }
 }
