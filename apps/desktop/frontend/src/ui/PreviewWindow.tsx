@@ -1,7 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { commands } from "../api";
-import type { AudioPlaybackStatus, GeometryRenderBoundsDto, PreviewSceneDto, PlaybackTransportState } from "../bindings";
+import type { GeometryRenderBoundsDto, PreviewSceneDto, SequenceKeyDto } from "../bindings";
 import {
   disposePreviewTransport,
   getPreviewTransportMode,
@@ -10,19 +10,18 @@ import {
   type SharedPreviewFrame
 } from "../previewTransport";
 
-type PreviewState = {
+type SequenceRenderState = {
   sourceLabel: string;
-  transportState: PlaybackTransportState;
-  previewUpdating: boolean;
+  sourceKey: SequenceKeyDto | null;
+  renderGeneration: number;
+  renderDirtyRevision: number;
+  renderUpdating: boolean;
   positionSeconds: number;
-  durationSeconds: number;
-  audioPlaybackStatus: AudioPlaybackStatus;
   geometryIdentity: string;
-  status: string;
-  timing: PreviewTiming;
+  timing: SequenceRenderTiming;
 };
 
-type PreviewTiming = {
+type SequenceRenderTiming = {
   backendSeconds: number;
   targetFps: number;
   activeFps: number;
@@ -34,11 +33,11 @@ type PreviewTiming = {
   loopUnaccountedMs: number;
   sleepActualMs: number;
   loopIntervalMs: number;
-  previewTransportLockMs: number;
-  previewPublishLockMs: number;
+  previewWindowTransportLockMs: number;
+  previewWindowPublishLockMs: number;
   liveOutputLockMs: number;
   modelLockWaitMs: number;
-  previewSnapshotMs: number;
+  sequenceTransportSnapshotMs: number;
   projectSnapshotMs: number;
   audioPollMs: number;
   audioApplyMs: number;
@@ -79,7 +78,7 @@ export function PreviewWindow() {
   const requestDrawRef = useRef<() => void>(() => {});
   const previousFrameTelemetry = useRef<{ receivedAt: number; backendSeconds: number; currentTimeSeconds: number } | null>(null);
   const [scene, setScene] = useState<PreviewSceneDto | null>(null);
-  const [state, setState] = useState<PreviewState | null>(null);
+  const [state, setState] = useState<SequenceRenderState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport>({ scale: 1, panX: 0, panY: 0 });
   const [metrics, setMetrics] = useState({
@@ -164,7 +163,6 @@ export function PreviewWindow() {
   }, [requestDraw]);
 
   const reloadPreviewScene = useCallback(async () => {
-    await disposePreviewTransport();
     const loadedScene = await commands.getPreviewScene();
     sceneTopologyIdentity.current = loadedScene.topologyIdentity;
     latestFrame.current = null;
@@ -210,7 +208,7 @@ export function PreviewWindow() {
           fpsSamples.current = [...fpsSamples.current.filter((sample) => now - sample < 1000), now];
           requestDrawRef.current();
         });
-        disposeEvents = await listen<PreviewState>("preview_state_changed", (event) => {
+        disposeEvents = await listen<SequenceRenderState>("sequence_render_state_changed", (event) => {
           if (
             event.payload.geometryIdentity !== sceneTopologyIdentity.current &&
             event.payload.geometryIdentity.length > 0
@@ -278,7 +276,7 @@ export function PreviewWindow() {
         }}
       />
       <div className="preview-hud">
-        <div>{state?.sourceLabel ?? scene?.sourceLabel ?? "No preview source"}</div>
+        <div>{state?.sourceLabel ?? scene?.sourceLabel ?? "No sequence source"}</div>
         <div>
           {metrics.fps} fps | backend {formatNumber(metrics.backendSeconds)} s | target {state?.timing.activeFps ?? 0}/{state?.timing.targetFps ?? 0} fps
         </div>
@@ -308,12 +306,12 @@ export function PreviewWindow() {
         </div>
         <div>
           locks model {formatNumber(state?.timing.modelLockWaitMs ?? 0)} ms | transport{" "}
-          {formatNumber(state?.timing.previewTransportLockMs ?? 0)} ms | publish lock {formatNumber(state?.timing.previewPublishLockMs ?? 0)} ms | live lock{" "}
+          {formatNumber(state?.timing.previewWindowTransportLockMs ?? 0)} ms | publish lock {formatNumber(state?.timing.previewWindowPublishLockMs ?? 0)} ms | live lock{" "}
           {formatNumber(state?.timing.liveOutputLockMs ?? 0)} ms
         </div>
         <div>
           project snapshot {formatNumber(state?.timing.projectSnapshotMs ?? 0)} ms | snapshot{" "}
-          {formatNumber(state?.timing.previewSnapshotMs ?? 0)} ms | event emit prev {formatNumber(state?.timing.eventEmitMs ?? 0)} ms | publish{" "}
+          {formatNumber(state?.timing.sequenceTransportSnapshotMs ?? 0)} ms | event emit prev {formatNumber(state?.timing.eventEmitMs ?? 0)} ms | publish{" "}
           {formatNumber(state?.timing.publishMs ?? 0)} ms
         </div>
         <div>
@@ -322,8 +320,7 @@ export function PreviewWindow() {
           {state?.timing.renderedSampledPixels ?? 0}
         </div>
         <div>
-          {formatSeconds(state?.positionSeconds ?? metrics.currentTimeSeconds)} | {previewTransportLabel(state?.transportState)} |{" "}
-          {previewAudioStatusLabel(state?.audioPlaybackStatus) ?? state?.status ?? error ?? "Ready"}
+          render {formatSeconds(state?.positionSeconds ?? metrics.currentTimeSeconds)} | {renderLabel(state)} | {error ?? "Ready"}
         </div>
       </div>
       <button
@@ -378,44 +375,10 @@ function formatSeconds(value: number) {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
-function previewAudioStatusLabel(status: AudioPlaybackStatus | undefined) {
-  switch (status) {
-    case "loading":
-      return "Loading audio...";
-    case "loading_to_play":
-      return "Loading audio - will play";
-    case "ready":
-      return "Audio ready";
-    case "playing":
-      return "Audio playing";
-    case "missing":
-      return "Audio missing";
-    case "error":
-      return "Audio error";
-    case "ended":
-      return "Audio ended";
-    case "none":
-    case undefined:
-      return null;
-  }
-}
-
-function previewTransportLabel(state: PlaybackTransportState | undefined) {
-  switch (state) {
-    case "playing":
-      return "Playing";
-    case "selected_effects":
-      return "Selected effects";
-    case "loading_to_play":
-      return "Queued";
-    case "paused":
-      return "Paused";
-    case "ended":
-      return "Ended";
-    case "error":
-      return "Error";
-    case "stopped":
-    case undefined:
-      return "Stopped";
-  }
+function renderLabel(state: SequenceRenderState | null) {
+  if (state === null) return "No render event";
+  if (state.renderUpdating) return "Updating";
+  if (state.timing.renderedFrame) return "Rendered";
+  if (state.timing.publishedFrame) return "Published";
+  return "Idle";
 }

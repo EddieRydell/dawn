@@ -8,7 +8,7 @@ import { runSnapshotCommand } from "../../../store";
 
 import { denormalizeTransform, drawSpatialCanvas, nearestPlacement, normalizeBounds, normalizePoint, normalizeTransform, round6, unproject, type GuiFocus, type Transform } from "../shared";
 
-type LayoutDragState = { kind: "layout"; id: number; startX: number; startY: number; original: Transform; preview: Transform } | null;
+type LayoutDragState = { kind: "layout"; id: number; startX: number; startY: number; original: Transform; draft: Transform } | null;
 
 export function LayoutCanvas({
   document,
@@ -27,7 +27,7 @@ export function LayoutCanvas({
   useEffect(() => {
     drawSpatialCanvas(canvas.current, viewport, (ctx, project) => {
       for (const fixture of document.fixtures) {
-        const transform = drag.current?.kind === "layout" && drag.current.id === fixture.id ? drag.current.preview : normalizeTransform(fixture.transform);
+        const transform = drag.current?.kind === "layout" && drag.current.id === fixture.id ? drag.current.draft : normalizeTransform(fixture.transform);
         const center = project(transform.position);
         ctx.fillStyle = selected?.type === "placement" && selected.id === fixture.id ? "#6abf8a" : "#d6a35a";
         ctx.beginPath();
@@ -67,14 +67,14 @@ export function LayoutCanvas({
           startX: world.x,
           startY: world.y,
           original: normalizeTransform(hit.transform),
-          preview: normalizeTransform(hit.transform)
+          draft: normalizeTransform(hit.transform)
         };
       }}
       onMouseMove={(event) => {
         const current = drag.current;
         if (!current) return;
         const world = unproject(event.nativeEvent.offsetX, event.nativeEvent.offsetY, canvas.current, viewport);
-        current.preview = {
+        current.draft = {
           ...current.original,
           position: {
             ...current.original.position,
@@ -92,7 +92,7 @@ export function LayoutCanvas({
           commands.applyLayoutGuiEdit({
             type: "updatePlacementTransform",
             id: current.id,
-            transform: denormalizeTransform(current.preview)
+            transform: denormalizeTransform(current.draft)
           })
         );
       }}

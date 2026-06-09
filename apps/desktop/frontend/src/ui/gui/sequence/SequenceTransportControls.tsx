@@ -1,43 +1,41 @@
 import { listen } from "@tauri-apps/api/event";
 
-import { ChevronLeft, ChevronRight, Crosshair, LoaderCircle, Music, Pause, Play, RadioTower, SkipBack, Square, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Crosshair, Music, Pause, Play, RadioTower, SkipBack, Square, X } from "lucide-react";
 
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { commands } from "../../../api";
 
-import type { AppSnapshotDto, AudioPlaybackStatus, PlaybackTransportState, SequenceEditorDocumentDto } from "../../../bindings";
+import type { AppSnapshotDto, SequenceTransportState, SequenceEditorDocumentDto } from "../../../bindings";
 
 import { runSnapshotCommand } from "../../../store";
 
-import { clamp, formatMs, formatSeconds, formatSignedMs, type LivePreview, type PreviewStateEvent, type PreviewTiming } from "../shared";
+import { clamp, formatMs, formatSeconds, formatSignedMs, type SequenceRenderEvent, type SequenceRenderTiming, type SequenceTransportSnapshot } from "../shared";
 import { setGlobalMarkDisplayMode, useMarkDisplayMode, type MarkDisplayMode } from "./marks";
 
 export function SequenceTransportControls({
   document,
-  preview,
+  transport,
   liveOutput,
   effectPreviewEnabled,
   selectedEffectIds
 }: {
   document: SequenceEditorDocumentDto;
-  preview: AppSnapshotDto["preview"];
+  transport: AppSnapshotDto["sequenceTransport"];
   liveOutput: AppSnapshotDto["liveOutput"];
   effectPreviewEnabled: boolean;
   selectedEffectIds: number[];
 }) {
-  const livePreview = useSequencePreview(preview);
+  const liveTransport = useSequenceTransport(transport);
   const unsupported = document.durationSeconds <= 0;
-  const audioStatus = useSequenceAudioStatus(livePreview);
-  const timingSummary = previewTimingSummary(livePreview.timing);
-  const audioLoading = isAudioLoadingStatus(livePreview.audioPlaybackStatus);
-  const audioQueued = livePreview.transportState === "loading_to_play";
-  const activePlayback = isActivePreviewPlayback(livePreview.transportState);
-  const playCommand = audioQueued || activePlayback ? commands.previewPause : commands.previewPlay;
+  const audioStatus = useSequenceAudioStatus(liveTransport);
+  const timingSummary = renderTimingSummary(liveTransport.timing);
+  const activePlayback = isActiveSequenceTransportPlayback(liveTransport.transportState);
+  const playCommand = activePlayback ? commands.sequenceTransportPause : commands.sequenceTransportPlay;
   const [mode, setMode] = useMarkDisplayMode();
   const selectedEffectIdsSignature = selectedEffectIds.join(",");
   const stepFrame = (direction: -1 | 1) => {
-    stepSequenceFrame(document, livePreview.positionSeconds, livePreview.durationSeconds, direction);
+    stepSequenceFrame(document, liveTransport.positionSeconds, liveTransport.durationSeconds, direction);
   };
   const setMarkMode = (nextMode: MarkDisplayMode) => {
     setGlobalMarkDisplayMode(nextMode);
@@ -52,21 +50,21 @@ export function SequenceTransportControls({
       className="sequence-toolbar"
       aria-label="Sequence transport"
       onKeyDownCapture={(event) => {
-        handleSequencePlaybackShortcut(event, document, livePreview, unsupported);
+        handleSequencePlaybackShortcut(event, document, liveTransport, unsupported);
       }}
     >
       <button
         type="button"
-        title={audioQueued ? "Cancel queued playback" : audioLoading ? "Play when audio loads" : activePlayback ? "Pause" : "Play"}
+        title={activePlayback ? "Pause" : "Play"}
         disabled={unsupported}
         onClick={() => void runSnapshotCommand(playCommand)}
       >
-        {audioLoading ? <LoaderCircle className="sequence-loading-icon" size={15} /> : activePlayback ? <Pause size={15} /> : <Play size={15} />}
+        {activePlayback ? <Pause size={15} /> : <Play size={15} />}
       </button>
-      <button type="button" title="Stop" disabled={unsupported} onClick={() => void runSnapshotCommand(commands.previewStop)}>
+      <button type="button" title="Stop" disabled={unsupported} onClick={() => void runSnapshotCommand(commands.sequenceTransportStop)}>
         <Square size={14} />
       </button>
-      <button type="button" title="Rewind to zero" disabled={unsupported} onClick={() => void runSnapshotCommand(commands.previewRewindToZero)}>
+      <button type="button" title="Rewind to zero" disabled={unsupported} onClick={() => void runSnapshotCommand(commands.sequenceTransportRewindToZero)}>
         <SkipBack size={15} />
       </button>
       <button
@@ -139,7 +137,7 @@ export function SequenceTransportControls({
         <option value="hidden">Hidden</option>
       </select>
       <span className="sequence-time-readout">
-        {formatSeconds(livePreview.positionSeconds)} / {formatSeconds(livePreview.durationSeconds || document.durationSeconds)} | Home {formatSeconds(livePreview.homeSeconds)}
+        {formatSeconds(liveTransport.positionSeconds)} / {formatSeconds(liveTransport.durationSeconds || document.durationSeconds)} | Home {formatSeconds(liveTransport.homeSeconds)}
         {document.audio ? ` | ${document.audio.exists ? document.audio.fileName : "Missing audio"}` : ""}
         {liveOutput.enabled ? ` | Live ${liveOutput.status} (${liveOutput.activeUniverseCount})` : ""}
         {audioStatus !== null && <span className={`sequence-audio-status sequence-audio-status-${audioStatus.tone}`}>{audioStatus.label}</span>}
@@ -149,28 +147,27 @@ export function SequenceTransportControls({
   );
 }
 
-export function useSequencePreview(preview: AppSnapshotDto["preview"]): LivePreview {
-  const [eventPreview, setEventPreview] = useState<PreviewStateEvent | null>(null);
-  const [animatedPositionSeconds, setAnimatedPositionSeconds] = useState(preview.positionSeconds);
+export function useSequenceTransport(transport: AppSnapshotDto["sequenceTransport"]): SequenceTransportSnapshot {
+  const [renderEvent, setRenderEvent] = useState<SequenceRenderEvent | null>(null);
+  const [animatedPositionSeconds, setAnimatedPositionSeconds] = useState(transport.positionSeconds);
+  const snapshotRef = useRef(transport);
   const anchor = useRef({
-    preview,
-    positionSeconds: preview.positionSeconds,
+    transport,
+    positionSeconds: transport.positionSeconds,
     anchoredAt: 0
   });
+
+  useEffect(() => {
+    snapshotRef.current = transport;
+  }, [transport]);
 
   useEffect(() => {
     let dispose: (() => void) | undefined;
     let disposed = false;
     void (async () => {
-      dispose = await listen<PreviewStateEvent>("preview_state_changed", (event) => {
+      dispose = await listen<SequenceRenderEvent>("sequence_render_state_changed", (event) => {
         if (!disposed) {
-          anchor.current = {
-            preview: event.payload,
-            positionSeconds: event.payload.positionSeconds,
-            anchoredAt: performance.now()
-          };
-          setAnimatedPositionSeconds(event.payload.positionSeconds);
-          setEventPreview(event.payload);
+          setRenderEvent(renderEventMatchesSnapshot(event.payload, snapshotRef.current) ? event.payload : null);
         }
       });
     })();
@@ -180,85 +177,73 @@ export function useSequencePreview(preview: AppSnapshotDto["preview"]): LivePrev
     };
   }, []);
 
-  const livePreview = eventPreview ?? preview;
-  const livePreviewRef = useRef(livePreview);
+  const liveTransport: SequenceTransportSnapshot = useMemo(() => {
+    const matchingRenderTiming = renderEvent !== null && renderEventMatchesSnapshot(renderEvent, transport) ? renderEvent.timing : null;
+    return matchingRenderTiming === null
+      ? transport
+      : {
+          ...transport,
+          timing: matchingRenderTiming
+        };
+  }, [transport, renderEvent]);
+  const liveTransportRef = useRef(liveTransport);
 
   useEffect(() => {
-    livePreviewRef.current = livePreview;
+    liveTransportRef.current = liveTransport;
+  }, [liveTransport]);
+
+  useEffect(() => {
     anchor.current = {
-      preview: livePreview,
-      positionSeconds: livePreview.positionSeconds,
+      transport,
+      positionSeconds: transport.positionSeconds,
       anchoredAt: performance.now()
     };
-  }, [livePreview]);
+  }, [transport]);
 
   useEffect(() => {
     let frame = 0;
     const tick = () => {
-      const latest = livePreviewRef.current;
+      const latest = liveTransportRef.current;
       const current = anchor.current;
-      if (!shouldAnimatePreviewPosition(latest) || !shouldAnimatePreviewPosition(current.preview)) {
+      if (!shouldAnimateTransportPosition(latest) || !shouldAnimateTransportPosition(current.transport)) {
         setAnimatedPositionSeconds(latest.positionSeconds);
         return;
       }
-      const elapsedSeconds = previewExtrapolationSeconds(current.preview, current.anchoredAt);
-      setAnimatedPositionSeconds(clamp(current.positionSeconds + elapsedSeconds, 0, current.preview.durationSeconds));
+      const elapsedSeconds = transportExtrapolationSeconds(current.anchoredAt);
+      setAnimatedPositionSeconds(clamp(current.positionSeconds + elapsedSeconds, 0, current.transport.durationSeconds));
       frame = window.requestAnimationFrame(tick);
     };
     frame = window.requestAnimationFrame(tick);
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [livePreview.transportState, livePreview.positionSeconds]);
+  }, [liveTransport.transportState, liveTransport.positionSeconds]);
 
-  return shouldAnimatePreviewPosition(livePreview)
+  return shouldAnimateTransportPosition(liveTransport)
     ? {
-        ...livePreview,
+        ...liveTransport,
         positionSeconds: animatedPositionSeconds
       }
-    : livePreview;
+    : liveTransport;
 }
 
-function useSequenceAudioStatus(preview: AppSnapshotDto["preview"]) {
-  const [loadedNoticeVisible, setLoadedNoticeVisible] = useState(false);
-  const previousStatus = useRef(preview.audioPlaybackStatus);
-
-  useEffect(() => {
-    if (isAudioLoadingStatus(previousStatus.current) && !isAudioLoadingStatus(preview.audioPlaybackStatus)) {
-      setLoadedNoticeVisible(true);
-    }
-    previousStatus.current = preview.audioPlaybackStatus;
-  }, [preview.audioPlaybackStatus]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setLoadedNoticeVisible(false);
-    }, 2500);
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [loadedNoticeVisible]);
-
-  switch (preview.audioPlaybackStatus) {
-    case "loading":
-      return { label: "Loading audio...", tone: "loading" };
-    case "loading_to_play":
-      return { label: "Loading audio - will play", tone: "loading" };
+function useSequenceAudioStatus(transport: AppSnapshotDto["sequenceTransport"]) {
+  switch (transport.audioPlaybackStatus) {
     case "playing":
       return { label: "Audio playing", tone: "ready" };
     case "ready":
-      return preview.audio !== null ? { label: "Audio ready", tone: "ready" } : null;
+      return transport.audio !== null ? { label: "Audio ready", tone: "ready" } : null;
     case "missing":
       return { label: "Audio missing", tone: "error" };
     case "error":
       return { label: "Audio error", tone: "error" };
     case "ended":
     case "none":
-      return loadedNoticeVisible ? { label: "Audio loaded", tone: "ready" } : null;
+      return null;
   }
 }
 
-function previewTimingSummary(timing: PreviewTiming | undefined) {
+function renderTimingSummary(timing: SequenceRenderTiming | undefined) {
   if (timing === undefined || timing.backendSeconds === 0) return null;
   const frameAudio = timing.renderBufferMinusAudioMs;
   const snapshotAudio = timing.snapshotMinusAudioMs;
@@ -291,10 +276,6 @@ function previewTimingSummary(timing: PreviewTiming | undefined) {
   return ` | ${parts.join(" | ")}`;
 }
 
-function isAudioLoadingStatus(status: AudioPlaybackStatus) {
-  return status === "loading" || status === "loading_to_play";
-}
-
 function isEditableShortcutTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
@@ -305,7 +286,7 @@ function isEditableShortcutTarget(target: EventTarget | null) {
 export function handleSequencePlaybackShortcut(
   event: KeyboardEvent<HTMLElement>,
   document: SequenceEditorDocumentDto,
-  preview: AppSnapshotDto["preview"],
+  transport: AppSnapshotDto["sequenceTransport"],
   unsupported: boolean
 ) {
   if (unsupported || isEditableShortcutTarget(event.target)) return;
@@ -313,46 +294,55 @@ export function handleSequencePlaybackShortcut(
     event.preventDefault();
     event.stopPropagation();
     if (event.repeat) return;
-    void runSnapshotCommand(preview.transportState === "loading_to_play" ? commands.previewPause : isActivePreviewPlayback(preview.transportState) ? commands.previewStop : commands.previewPlay);
+    void runSnapshotCommand(isActiveSequenceTransportPlayback(transport.transportState) ? commands.sequenceTransportStop : commands.sequenceTransportPlay);
   } else if (event.key.toLowerCase() === "s") {
     event.preventDefault();
     event.stopPropagation();
-    void runSnapshotCommand(commands.previewStop);
+    void runSnapshotCommand(commands.sequenceTransportStop);
   } else if (event.key === "Home") {
     event.preventDefault();
     event.stopPropagation();
-    void runSnapshotCommand(commands.previewRewindToZero);
+    void runSnapshotCommand(commands.sequenceTransportRewindToZero);
   } else if (event.key === "ArrowLeft") {
     event.preventDefault();
     event.stopPropagation();
-    stepSequenceFrame(document, preview.positionSeconds, preview.durationSeconds, -1);
+    stepSequenceFrame(document, transport.positionSeconds, transport.durationSeconds, -1);
   } else if (event.key === "ArrowRight") {
     event.preventDefault();
     event.stopPropagation();
-    stepSequenceFrame(document, preview.positionSeconds, preview.durationSeconds, 1);
+    stepSequenceFrame(document, transport.positionSeconds, transport.durationSeconds, 1);
   }
 }
 
-function isActivePreviewPlayback(state: PlaybackTransportState) {
-  return state === "playing" || state === "selected_effects";
+function isActiveSequenceTransportPlayback(state: SequenceTransportState) {
+  return state === "playing";
 }
 
-function shouldAnimatePreviewPosition(preview: LivePreview) {
-  return preview.transportState === "playing";
+function shouldAnimateTransportPosition(transport: SequenceTransportSnapshot) {
+  return transport.transportState === "playing";
 }
 
-function previewExtrapolationSeconds(preview: LivePreview, anchoredAt: number) {
-  const elapsedSeconds = anchoredAt > 0 ? (performance.now() - anchoredAt) / 1000 : 0;
-  if (preview.clockSource !== "nativeAudio" || preview.audioPlaybackStatus !== "playing") {
-    return elapsedSeconds;
-  }
-  const activeFps = Math.max(1, preview.timing?.activeFps ?? 1);
-  const maxNativeExtrapolationSeconds = Math.max(0.05, Math.min(0.1, 1 / activeFps));
-  return Math.min(elapsedSeconds, maxNativeExtrapolationSeconds);
+function transportExtrapolationSeconds(anchoredAt: number) {
+  return anchoredAt > 0 ? (performance.now() - anchoredAt) / 1000 : 0;
 }
 
-function stepSequenceFrame(document: SequenceEditorDocumentDto, positionSeconds: number, previewDurationSeconds: number, direction: -1 | 1) {
+function renderEventMatchesSnapshot(event: SequenceRenderEvent, snapshot: AppSnapshotDto["sequenceTransport"]) {
+  return (
+    event.sourceLabel === snapshot.sourceLabel &&
+    event.renderGeneration === snapshot.renderGeneration &&
+    event.renderDirtyRevision === snapshot.renderDirtyRevision &&
+    event.geometryIdentity === snapshot.geometryIdentity &&
+    sequenceKeyMatches(event.sourceKey, snapshot.sourceKey)
+  );
+}
+
+function sequenceKeyMatches(left: AppSnapshotDto["sequenceTransport"]["sourceKey"], right: AppSnapshotDto["sequenceTransport"]["sourceKey"]) {
+  if (left === null || right === null) return left === right;
+  return left.path === right.path && left.objectKey === right.objectKey;
+}
+
+function stepSequenceFrame(document: SequenceEditorDocumentDto, positionSeconds: number, transportDurationSeconds: number, direction: -1 | 1) {
   const frameSeconds = 1 / Math.max(1, document.frameRate);
-  const nextPositionSeconds = clamp(positionSeconds + direction * frameSeconds, 0, previewDurationSeconds || document.durationSeconds);
-  void runSnapshotCommand(() => commands.previewSeek(nextPositionSeconds));
+  const nextPositionSeconds = clamp(positionSeconds + direction * frameSeconds, 0, transportDurationSeconds || document.durationSeconds);
+  void runSnapshotCommand(() => commands.sequenceTransportSeek(nextPositionSeconds));
 }

@@ -3,12 +3,14 @@ use std::time::Instant;
 use dawn_app_core::actions::AppAction;
 use dawn_app_core::app_model::{AppModel, CommandTiming, DispatchOutcome};
 use dawn_app_core::document::SequenceAudioDocument;
-use dawn_app_core::dto::{AppSnapshotDto, EditorViewModeDto, PreviewSnapshotDto};
-use dawn_app_core::preview_session::{AudioPlaybackStatus, PreviewSnapshot};
+use dawn_app_core::dto::{AppSnapshotDto, EditorViewModeDto, SequenceTransportSnapshotDto};
+use dawn_app_core::sequence_transport_session::{
+    AudioPlaybackStatus, NativeAudioClockProjection, SequenceTransportSnapshot,
+};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::audio_runtime::AudioClock;
-use crate::preview::{PreviewStateEventDto, PreviewTimingDto};
+use crate::sequence_runtime::{SequenceRenderEventDto, SequenceRenderTimingDto};
 use crate::state::{
     lock_audio_runtime, lock_filesystem_watcher, lock_model, lock_project_autosave_runtime,
     AppState, CommandResult,
@@ -52,14 +54,13 @@ pub(crate) fn dispatch(
                 runtime.clear();
             }
         }
-        preload_active_preview_audio(state, &snapshot.preview);
+        preload_active_sequence_audio(state, &snapshot.sequence_transport);
         let app_snapshot_emit_started = Instant::now();
         app.emit("app_snapshot_changed", &snapshot)
             .map_err(|error| error.to_string())?;
         timing.app_snapshot_emit_ms = elapsed_ms(app_snapshot_emit_started);
         timing.total_ms = elapsed_ms(total_started);
         model.set_last_command_timing(timing);
-        emit_preview_state_dto_with_timing(app, &snapshot, PreviewTimingDto::empty(0.0))?;
     } else {
         timing.total_ms = elapsed_ms(total_started);
         model.set_last_command_timing(timing);
@@ -171,7 +172,7 @@ fn complete_project_autosave(
     }
 }
 
-pub(crate) fn update_preview_from_audio_status(
+pub(crate) fn update_sequence_transport_from_audio_status(
     app: &AppHandle,
     state: &State<'_, AppState>,
     clock: AudioClock,
@@ -188,80 +189,41 @@ pub(crate) fn apply_audio_clock_to_model(
     project: Option<&dawn_project::DawnProject>,
 ) {
     if let Some(error) = &clock.error {
-        model.preview.pause_at(clock.position_seconds, project);
-        model
-            .preview
-            .set_timing_status("nativeAudio", AudioPlaybackStatus::Error);
+        model.sequence_transport.apply_native_audio_clock(
+            NativeAudioClockProjection {
+                position_seconds: clock.position_seconds,
+                status: AudioPlaybackStatus::Error,
+                ended: false,
+            },
+            project,
+        );
         model.status = format!("Audio error: {error}");
         return;
     }
-    if clock.ended {
-        model
-            .preview
-            .render_at_native_audio_clock(clock.position_seconds, true, project);
-        model
-            .preview
-            .set_timing_status("nativeAudio", AudioPlaybackStatus::Ended);
-        model.status = "Preview complete".to_string();
-        return;
+    model.sequence_transport.apply_native_audio_clock(
+        NativeAudioClockProjection {
+            position_seconds: clock.position_seconds,
+            status: clock.status,
+            ended: clock.ended,
+        },
+        project,
+    );
+    model.status = match clock.status {
+        AudioPlaybackStatus::Playing => "Sequence playing",
+        AudioPlaybackStatus::Ended => "Sequence complete",
+        AudioPlaybackStatus::Missing => "Audio missing",
+        AudioPlaybackStatus::Error => "Audio error",
+        AudioPlaybackStatus::None | AudioPlaybackStatus::Ready => "Sequence ready",
     }
-    match clock.status {
-        AudioPlaybackStatus::Loading => {
-            model
-                .preview
-                .set_timing_status("nativeAudio", AudioPlaybackStatus::Loading);
-            model.status = "Loading audio".to_string();
-        }
-        AudioPlaybackStatus::LoadingToPlay => {
-            model
-                .preview
-                .set_timing_status("nativeAudio", AudioPlaybackStatus::LoadingToPlay);
-            model.status = "Loading audio - will play".to_string();
-        }
-        AudioPlaybackStatus::Playing => {
-            model
-                .preview
-                .play_from_native_audio_clock(clock.position_seconds, project);
-            model
-                .preview
-                .set_timing_status("nativeAudio", AudioPlaybackStatus::Playing);
-            model.status = "Preview playing".to_string();
-        }
-        AudioPlaybackStatus::Ended => {
-            model
-                .preview
-                .render_at_native_audio_clock(clock.position_seconds, true, project);
-            model
-                .preview
-                .set_timing_status("nativeAudio", AudioPlaybackStatus::Ended);
-            model.status = "Preview complete".to_string();
-        }
-        AudioPlaybackStatus::Missing => {
-            model
-                .preview
-                .set_timing_status("silent", AudioPlaybackStatus::Missing);
-            model.status = "Audio missing".to_string();
-        }
-        AudioPlaybackStatus::None => {
-            model
-                .preview
-                .set_timing_status("silent", AudioPlaybackStatus::None);
-            model.status = "Preview ready".to_string();
-        }
-        AudioPlaybackStatus::Ready | AudioPlaybackStatus::Error => {
-            model.preview.pause_at(clock.position_seconds, project);
-            model.preview.set_timing_status("nativeAudio", clock.status);
-            model.status = "Preview ready".to_string();
-        }
-    }
+    .to_string();
 }
 
-pub(crate) fn preload_active_preview_audio(
+pub(crate) fn preload_active_sequence_audio(
     state: &State<'_, AppState>,
-    preview: &PreviewSnapshotDto,
+    transport: &SequenceTransportSnapshotDto,
 ) {
-    let Some(audio) = preview.audio.as_ref() else {
-        if preview.source_label != "No preview source" {
+    let Some(audio) = transport.audio.as_ref() else {
+        if transport.source_label != "No sequence source" {
             if let Ok(runtime) = lock_audio_runtime(state) {
                 runtime.clear();
             }
@@ -274,14 +236,7 @@ pub(crate) fn preload_active_preview_audio(
         file_name: audio.file_name.clone(),
         exists: audio.exists,
     };
-    if !preview.transport_state.is_active_playback()
-        && !matches!(
-            preview.audio_playback_status,
-            AudioPlaybackStatus::Loading
-                | AudioPlaybackStatus::LoadingToPlay
-                | AudioPlaybackStatus::Playing
-        )
-    {
+    if transport.audio_playback_status != AudioPlaybackStatus::Playing {
         if let Ok(runtime) = lock_audio_runtime(state) {
             let _clock = runtime.preload(&audio);
         }
@@ -295,67 +250,32 @@ pub(crate) fn emit_model_snapshot(
     let snapshot = model.snapshot_dto();
     app.emit("app_snapshot_changed", &snapshot)
         .map_err(|error| error.to_string())?;
-    emit_preview_state_dto(app, &snapshot)?;
     Ok(snapshot)
 }
 
-pub(crate) fn emit_preview_state_dto(
+pub(crate) fn emit_sequence_render_snapshot(
     app: &AppHandle,
-    snapshot: &AppSnapshotDto,
-) -> CommandResult<()> {
-    emit_preview_state_dto_with_timing(app, snapshot, PreviewTimingDto::empty(0.0))
-}
-
-pub(crate) fn emit_preview_state_dto_with_timing(
-    app: &AppHandle,
-    snapshot: &AppSnapshotDto,
-    timing: PreviewTimingDto,
-) -> CommandResult<()> {
-    app.emit(
-        "preview_state_changed",
-        PreviewStateEventDto {
-            source_label: snapshot.preview.source_label.clone(),
-            transport_state: snapshot.preview.transport_state,
-            preview_updating: snapshot.preview.preview_updating,
-            position_seconds: snapshot.preview.position_seconds,
-            home_seconds: snapshot.preview.home_seconds,
-            duration_seconds: snapshot.preview.duration_seconds,
-            audio: snapshot.preview.audio.clone(),
-            clock_source: snapshot.preview.clock_source.clone(),
-            audio_playback_status: snapshot.preview.audio_playback_status,
-            geometry_identity: snapshot.preview.geometry_identity.clone(),
-            status: snapshot.preview.status.clone(),
-            timing,
-        },
-    )
-    .map_err(|error| error.to_string())
-}
-
-pub(crate) fn emit_preview_state_snapshot(
-    app: &AppHandle,
-    snapshot: &PreviewSnapshot,
-    timing: PreviewTimingDto,
+    snapshot: &SequenceTransportSnapshot,
+    timing: SequenceRenderTimingDto,
 ) {
     let _ = app.emit(
-        "preview_state_changed",
-        PreviewStateEventDto {
+        "sequence_render_state_changed",
+        SequenceRenderEventDto {
             source_label: snapshot.source_label.clone(),
-            transport_state: snapshot.transport_state,
-            preview_updating: snapshot.preview_updating,
-            position_seconds: snapshot.position_seconds,
-            home_seconds: snapshot.home_seconds,
-            duration_seconds: snapshot.duration_seconds,
-            audio: snapshot.audio.clone().map(Into::into),
-            clock_source: snapshot.clock_source.clone(),
-            audio_playback_status: snapshot.audio_playback_status,
+            source_key: snapshot.source_key.clone().map(Into::into),
+            render_generation: saturating_u32(snapshot.render_generation),
+            render_dirty_revision: saturating_u32(snapshot.render_dirty_revision),
+            render_updating: snapshot.render_updating,
+            position_seconds: snapshot.frame.time_seconds,
             geometry_identity: snapshot.geometry.geometry_id.clone(),
-            status: snapshot.status.clone(),
             timing,
         },
     );
 }
 
-pub(crate) fn valid_sequence_audio(snapshot: &PreviewSnapshot) -> Option<SequenceAudioDocument> {
+pub(crate) fn sequence_transport_audio(
+    snapshot: &SequenceTransportSnapshot,
+) -> Option<SequenceAudioDocument> {
     snapshot
         .audio
         .as_ref()
@@ -367,75 +287,6 @@ fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
 }
 
-#[cfg(test)]
-mod tests {
-    use std::path::{Path, PathBuf};
-
-    use dawn_app_core::app_model::AppModel;
-    use dawn_app_core::preview_session::{PlaybackTransportState, PreviewSyncMode, SequenceKey};
-    use dawn_app_core::workspace::WorkspaceService;
-    use dawn_project::Utf8PathBuf;
-
-    use super::*;
-
-    fn thirty_output_controller_project_path() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../examples/thirty-output-controller/project.dawn")
-    }
-
-    #[test]
-    fn loading_to_play_audio_clock_does_not_reschedule_preview_render() {
-        let mut workspace = WorkspaceService::default();
-        workspace
-            .open_project(
-                std::fs::canonicalize(thirty_output_controller_project_path())
-                    .expect("thirty output controller project path should exist"),
-            )
-            .expect("thirty output controller project should open");
-        let result = workspace.load_project();
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        let project = result
-            .project
-            .expect("thirty output controller should load");
-        let document = workspace
-            .sequence_document(
-                &project,
-                Utf8PathBuf::from("sequences/empty.sequence.dawn"),
-                "empty",
-            )
-            .expect("thirty output controller sequence should load");
-        let key = SequenceKey {
-            path: document.path.clone().into(),
-            object_key: document.object_key.clone(),
-        };
-        let mut model = AppModel::default();
-        model.project = Some(std::sync::Arc::new(project.clone()));
-        model.preview.sync_source(
-            Some((key, document)),
-            Some(&project),
-            PreviewSyncMode::RenderNow,
-        );
-        let request = model
-            .begin_deferred_preview_render()
-            .expect("source sync should schedule preview render");
-
-        let clock = AudioClock {
-            position_seconds: 1.25,
-            ended: false,
-            status: AudioPlaybackStatus::LoadingToPlay,
-            error: None,
-        };
-        apply_audio_clock_to_model(&mut model, &clock, Some(&project));
-        apply_audio_clock_to_model(&mut model, &clock, Some(&project));
-
-        assert!(!request.cancellation.is_cancelled());
-        assert_eq!(
-            model.preview.snapshot().transport_state,
-            PlaybackTransportState::LoadingToPlay
-        );
-        assert!(
-            model.begin_deferred_preview_render().is_none(),
-            "loading_to_play status updates should not create a new render request"
-        );
-    }
+fn saturating_u32(value: u64) -> u32 {
+    value.min(u32::MAX as u64) as u32
 }

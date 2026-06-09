@@ -4,7 +4,7 @@ import type { SequenceMarkCollectionDto } from "../../../bindings";
 
 import type { GuiFocus } from "../shared";
 
-import { getMarkPreview, markPreviewEntries, setMarkPreview, type MarkPreviewLookup, type MarkRefLookup } from "./sequenceSelection";
+import { getMarkDraft, markDraftEntries, setMarkDraft, type MarkDraftLookup, type MarkRefLookup } from "./sequenceSelection";
 
 export type MarkDisplayMode = "overlay" | "strip" | "hidden";
 
@@ -52,7 +52,7 @@ export function drawSequenceMarks(
   height: number,
   pxPerSecond: number,
   scrollXSeconds: number,
-  previews: MarkPreviewLookup
+  drafts: MarkDraftLookup
 ) {
   if (mode === "hidden") return;
   const y1 = audioStripTop;
@@ -64,8 +64,8 @@ export function drawSequenceMarks(
   for (const collection of collections) {
     for (const [index, timeSeconds] of collection.marksSeconds.entries()) {
       const mark = { collectionKey: collection.key, index };
-      const preview = getMarkPreview(previews, mark);
-      const drawnTimeSeconds = preview?.timeSeconds ?? timeSeconds;
+      const draft = getMarkDraft(drafts, mark);
+      const drawnTimeSeconds = draft?.timeSeconds ?? timeSeconds;
       const x = left + (drawnTimeSeconds - scrollXSeconds) * pxPerSecond;
       if (x < left - MARK_DRAWING.cullPaddingPx || x > left + width + MARK_DRAWING.cullPaddingPx) continue;
       const isSelected =
@@ -92,16 +92,16 @@ export function drawSequenceMarks(
   ctx.restore();
 }
 
-export function committedMarkPreviews(collections: SequenceMarkCollectionDto[], previews: MarkPreviewLookup) {
-  const next: MarkPreviewLookup = new Map();
-  for (const preview of markPreviewEntries(previews)) {
-    if (preview.committedIndex === undefined) {
-      setMarkPreview(next, preview, preview);
+export function committedMarkDrafts(collections: SequenceMarkCollectionDto[], drafts: MarkDraftLookup) {
+  const next: MarkDraftLookup = new Map();
+  for (const draft of markDraftEntries(drafts)) {
+    if (draft.committedIndex === undefined) {
+      setMarkDraft(next, draft, draft);
       continue;
     }
-    const collection = collections.find((candidate) => candidate.key === preview.collectionKey);
-    if (collection?.marksSeconds[preview.committedIndex] !== preview.timeSeconds) {
-      setMarkPreview(next, preview, preview);
+    const collection = collections.find((candidate) => candidate.key === draft.collectionKey);
+    if (collection?.marksSeconds[draft.committedIndex] !== draft.timeSeconds) {
+      setMarkDraft(next, draft, draft);
     }
   }
   return next;

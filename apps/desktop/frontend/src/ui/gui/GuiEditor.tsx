@@ -14,7 +14,7 @@ import { BlockedGui } from "./BlockedGui";
 
 import { SequenceEditor } from "./sequence/SequenceEditor";
 
-import { useSequencePreview, handleSequencePlaybackShortcut } from "./sequence/SequenceTransportControls";
+import { useSequenceTransport, handleSequencePlaybackShortcut } from "./sequence/SequenceTransportControls";
 
 import { markSelectionConsumesKey } from "./sequence/sequenceSelection";
 
@@ -66,14 +66,14 @@ function GuiEditorInner({
   const [visibleMarkCollectionKeys, setVisibleMarkCollectionKeys] = useState<Set<string>>(() =>
     new Set(gui.type === "sequence" ? gui.document.markCollections.map((collection) => collection.key) : [])
   );
-  const livePreview = useSequencePreview(snapshot.preview);
+  const sequenceTransport = useSequenceTransport(snapshot.sequenceTransport);
 
   return (
     <div
       className="gui-editor-shell"
       onKeyDownCapture={(event) => {
         if (gui.type === "sequence" && !markSelectionConsumesKey(selected, event.key)) {
-          handleSequencePlaybackShortcut(event, gui.document, livePreview, gui.document.durationSeconds <= 0);
+          handleSequencePlaybackShortcut(event, gui.document, sequenceTransport, gui.document.durationSeconds <= 0);
         }
       }}
     >
@@ -81,7 +81,7 @@ function GuiEditorInner({
         <SequenceEditor
           key={`${gui.document.path}:${gui.document.objectKey}`}
           document={gui.document}
-          preview={livePreview}
+          transport={sequenceTransport}
           selected={selected}
           setSelected={setSelected}
           sequenceSelection={sequenceSelection}

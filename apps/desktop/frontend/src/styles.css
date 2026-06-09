@@ -504,10 +504,6 @@ button:focus-visible,
   opacity: 0.45;
 }
 
-.sequence-loading-icon {
-  animation: sequence-loading-spin 900ms linear infinite;
-}
-
 .sequence-time-readout {
   min-width: 0;
   overflow: hidden;
@@ -534,16 +530,6 @@ button:focus-visible,
   font-weight: 600;
 }
 
-.sequence-preview-status {
-  margin-left: 8px;
-  color: #f0c46b;
-  font-weight: 600;
-}
-
-.sequence-audio-status-loading {
-  color: #f0c46b;
-}
-
 .sequence-audio-status-ready {
   color: #6abf8a;
 }
@@ -556,16 +542,6 @@ button:focus-visible,
   margin-left: 8px;
   color: #9ba4b0;
   font-variant-numeric: tabular-nums;
-}
-
-@keyframes sequence-loading-spin {
-  from {
-    transform: rotate(0deg);
-  }
-
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .sequence-toolbar:focus,
@@ -1453,7 +1429,7 @@ button:focus-visible,
   padding: 0 9px;
 }
 
-.new-project-preview {
+.new-project-path {
   display: grid;
   gap: 5px;
   min-width: 0;
@@ -1464,11 +1440,11 @@ button:focus-visible,
   font-size: 12px;
 }
 
-.new-project-preview span {
+.new-project-path span {
   color: #a8a29a;
 }
 
-.new-project-preview strong {
+.new-project-path strong {
   min-width: 0;
   overflow-wrap: anywhere;
   color: #ebe7df;

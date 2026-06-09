@@ -4,7 +4,7 @@ export type Point3 = { x: number; y: number; z: number };
 
 export type Transform = { position: Point3; rotation: Point3; scale: Point3 };
 
-export type PreviewTiming = {
+export type SequenceRenderTiming = {
   backendSeconds: number;
   targetFps: number;
   activeFps: number;
@@ -21,11 +21,11 @@ export type PreviewTiming = {
   loopAccountedMs: number;
   loopUnaccountedMs: number;
   sleepActualMs: number;
-  previewTransportLockMs: number;
-  previewPublishLockMs: number;
+  previewWindowTransportLockMs: number;
+  previewWindowPublishLockMs: number;
   liveOutputLockMs: number;
   modelLockWaitMs: number;
-  previewSnapshotMs: number;
+  sequenceTransportSnapshotMs: number;
   projectSnapshotMs: number;
   audioPollMs: number;
   audioApplyMs: number;
@@ -51,9 +51,18 @@ export type PreviewTiming = {
   renderedFrame: boolean;
 };
 
-export type PreviewStateEvent = AppSnapshotDto["preview"] & { timing: PreviewTiming };
+export type SequenceRenderEvent = {
+  sourceLabel: string;
+  sourceKey: AppSnapshotDto["sequenceTransport"]["sourceKey"];
+  renderGeneration: number;
+  renderDirtyRevision: number;
+  renderUpdating: boolean;
+  positionSeconds: number;
+  geometryIdentity: string;
+  timing: SequenceRenderTiming;
+};
 
-export type LivePreview = AppSnapshotDto["preview"] & { timing?: PreviewTiming };
+export type SequenceTransportSnapshot = AppSnapshotDto["sequenceTransport"] & { timing?: SequenceRenderTiming };
 
 export type ReadyGuiDocumentDto = Exclude<ActiveGuiDocumentDto, { type: "blocked" }>;
 

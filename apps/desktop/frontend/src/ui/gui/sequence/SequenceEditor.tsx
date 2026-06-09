@@ -2,14 +2,14 @@ import type { KeyboardEvent } from "react";
 
 import type { SequenceEditorDocumentDto } from "../../../bindings";
 
-import type { GuiFocus, LivePreview, SequenceSelection } from "../shared";
+import type { GuiFocus, SequenceSelection, SequenceTransportSnapshot } from "../shared";
 
 import { SequenceCanvas } from "./SequenceCanvas";
 import { handleSequencePlaybackShortcut } from "./SequenceTransportControls";
 
 export function SequenceEditor({
   document,
-  preview,
+  transport,
   selected,
   setSelected,
   sequenceSelection,
@@ -20,7 +20,7 @@ export function SequenceEditor({
   setVisibleMarkCollectionKeys
 }: {
   document: SequenceEditorDocumentDto;
-  preview: LivePreview;
+  transport: SequenceTransportSnapshot;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
   sequenceSelection: SequenceSelection;
@@ -30,17 +30,17 @@ export function SequenceEditor({
   visibleMarkCollectionKeys: Set<string>;
   setVisibleMarkCollectionKeys: (keys: Set<string>) => void;
 }) {
-  const livePreview = preview;
+  const liveTransport = transport;
   const unsupported = document.durationSeconds <= 0;
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    handleSequencePlaybackShortcut(event, document, livePreview, unsupported);
+    handleSequencePlaybackShortcut(event, document, liveTransport, unsupported);
   };
   return (
     <div className="sequence-editor" tabIndex={-1} onKeyDown={handleKeyDown}>
       <SequenceCanvas
         document={document}
-        previewPositionSeconds={livePreview.positionSeconds}
-        previewHomeSeconds={livePreview.homeSeconds}
+        playheadSeconds={liveTransport.positionSeconds}
+        homeSeconds={liveTransport.homeSeconds}
         selected={selected}
         setSelected={setSelected}
         sequenceSelection={sequenceSelection}

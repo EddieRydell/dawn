@@ -19,5 +19,5 @@ pub mod editor_session;
 pub mod fseq_export;
 pub mod layout_persistence;
 pub mod output_runtime;
-pub mod preview_session;
+pub mod sequence_transport_session;
 pub mod workspace;

@@ -6,11 +6,11 @@ import { markIndexAfterMove, type MarkDisplayMode } from "./marks";
 
 import { targetsEqual } from "./sequenceTargets";
 
-export type SequencePreview = { id: number; startSeconds: number; durationSeconds: number; laneIndex: number };
+export type SequenceDraft = { id: number; startSeconds: number; durationSeconds: number; laneIndex: number };
 
-export type MarkPreview = { collectionKey: string; index: number; timeSeconds: number; committedIndex?: number };
+export type MarkDraft = { collectionKey: string; index: number; timeSeconds: number; committedIndex?: number };
 
-export type MarkPreviewLookup = Map<string, Map<number, MarkPreview>>;
+export type MarkDraftLookup = Map<string, Map<number, MarkDraft>>;
 
 export type MarkRefLookup = Map<string, Set<number>>;
 
@@ -67,29 +67,29 @@ export type SequenceMarkHit = {
 
 export function buildSequenceClipLayout(
   document: SequenceEditorDocumentDto,
-  previews: SequencePreview[],
+  drafts: SequenceDraft[],
   viewport: SequenceViewport,
   left: number,
   top: number
 ): SequenceClipLayout[] {
   const clips = document.effects.map((effect): SequenceClip => {
-    const activePreview = previews.find((preview) => preview.id === effect.id) ?? null;
-    if (activePreview === null) {
+    const activeDraft = drafts.find((draft) => draft.id === effect.id) ?? null;
+    if (activeDraft === null) {
       return {
         effect,
         laneIndex: Math.max(0, document.lanes.findIndex((lane) => targetsEqual(lane.target, effect.target)))
       };
     }
-    const previewLane = document.lanes[activePreview.laneIndex];
+    const draftLane = document.lanes[activeDraft.laneIndex];
     return {
       effect: {
         ...effect,
-        startSeconds: activePreview.startSeconds,
-        durationSeconds: activePreview.durationSeconds,
-        target: previewLane?.target ?? effect.target,
-        targetLabel: previewLane?.label ?? effect.targetLabel
+        startSeconds: activeDraft.startSeconds,
+        durationSeconds: activeDraft.durationSeconds,
+        target: draftLane?.target ?? effect.target,
+        targetLabel: draftLane?.label ?? effect.targetLabel
       },
-      laneIndex: activePreview.laneIndex
+      laneIndex: activeDraft.laneIndex
     };
   });
 
@@ -360,7 +360,7 @@ export function constrainEffectLaneDelta(document: SequenceEditorDocumentDto, id
   return Math.trunc(clamp(laneDelta, minDelta, maxDelta));
 }
 
-export function effectMovePreviews(document: SequenceEditorDocumentDto, ids: number[], deltaSeconds: number, laneDelta: number): SequencePreview[] {
+export function effectMoveDrafts(document: SequenceEditorDocumentDto, ids: number[], deltaSeconds: number, laneDelta: number): SequenceDraft[] {
   return document.effects
     .filter((effect) => ids.includes(effect.id))
     .map((effect) => {
@@ -374,7 +374,7 @@ export function effectMovePreviews(document: SequenceEditorDocumentDto, ids: num
     });
 }
 
-export function effectResizePreviews(document: SequenceEditorDocumentDto, ids: number[], edge: "left" | "right", deltaSeconds: number): SequencePreview[] {
+export function effectResizeDrafts(document: SequenceEditorDocumentDto, ids: number[], edge: "left" | "right", deltaSeconds: number): SequenceDraft[] {
   return document.effects
     .filter((effect) => ids.includes(effect.id))
     .map((effect) => {
@@ -421,21 +421,21 @@ export function constrainMarkDelta(document: SequenceEditorDocumentDto, marks: S
   return clamp(deltaSeconds, minDelta, maxDelta);
 }
 
-export function markMovePreviews(document: SequenceEditorDocumentDto, marks: SequenceMarkRefDto[], deltaSeconds: number): MarkPreviewLookup {
-  const previews: MarkPreviewLookup = new Map();
+export function markMoveDrafts(document: SequenceEditorDocumentDto, marks: SequenceMarkRefDto[], deltaSeconds: number): MarkDraftLookup {
+  const drafts: MarkDraftLookup = new Map();
   for (const mark of marks) {
     const collection = document.markCollections.find((candidate) => candidate.key === mark.collectionKey);
     const timeSeconds = collection?.marksSeconds[mark.index];
     if (collection === undefined || timeSeconds === undefined) continue;
     const nextTimeSeconds = clamp(timeSeconds + deltaSeconds, 0, document.durationSeconds);
-    setMarkPreview(previews, mark, {
+    setMarkDraft(drafts, mark, {
       collectionKey: mark.collectionKey,
       index: mark.index,
       timeSeconds: nextTimeSeconds,
       committedIndex: markIndexAfterMove(collection, mark.index, nextTimeSeconds)
     });
   }
-  return previews;
+  return drafts;
 }
 
 export function markSelectionConsumesKey(selected: GuiFocus, key: string) {
@@ -477,16 +477,16 @@ function markRefsFromLookup(lookup: MarkRefLookup): SequenceMarkRefDto[] {
   return marks;
 }
 
-export function getMarkPreview(lookup: MarkPreviewLookup, mark: SequenceMarkRefDto): MarkPreview | undefined {
+export function getMarkDraft(lookup: MarkDraftLookup, mark: SequenceMarkRefDto): MarkDraft | undefined {
   return lookup.get(mark.collectionKey)?.get(mark.index);
 }
 
-export function setMarkPreview(lookup: MarkPreviewLookup, mark: SequenceMarkRefDto, preview: MarkPreview) {
-  const collection = lookup.get(mark.collectionKey) ?? new Map<number, MarkPreview>();
-  collection.set(mark.index, preview);
+export function setMarkDraft(lookup: MarkDraftLookup, mark: SequenceMarkRefDto, draft: MarkDraft) {
+  const collection = lookup.get(mark.collectionKey) ?? new Map<number, MarkDraft>();
+  collection.set(mark.index, draft);
   lookup.set(mark.collectionKey, collection);
 }
 
-export function markPreviewEntries(lookup: MarkPreviewLookup): MarkPreview[] {
+export function markDraftEntries(lookup: MarkDraftLookup): MarkDraft[] {
   return [...lookup.values()].flatMap((collection) => [...collection.values()]);
 }

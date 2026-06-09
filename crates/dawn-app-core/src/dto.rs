@@ -25,7 +25,7 @@ use specta::Type;
 
 use crate::app_model::{ActiveGuiDocument, AppSnapshot, LiveOutputSnapshot};
 use crate::editor_session::{BufferExternalState, EditorBuffer, EditorViewMode};
-use crate::preview_session::{AudioPlaybackStatus, PlaybackTransportState};
+use crate::sequence_transport_session::{AudioPlaybackStatus, SequenceKey, SequenceTransportState};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -40,7 +40,7 @@ pub struct AppSnapshotDto {
     pub active_gui_document: Option<ActiveGuiDocumentDto>,
     pub diagnostics: Vec<ProjectDiagnosticDto>,
     pub status: String,
-    pub preview: PreviewSnapshotDto,
+    pub sequence_transport: SequenceTransportSnapshotDto,
     pub effect_preview_enabled: bool,
     pub live_output: LiveOutputSnapshotDto,
 }
@@ -785,10 +785,13 @@ pub struct TextPositionDto {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct PreviewSnapshotDto {
+pub struct SequenceTransportSnapshotDto {
     pub source_label: String,
-    pub transport_state: PlaybackTransportState,
-    pub preview_updating: bool,
+    pub source_key: Option<SequenceKeyDto>,
+    pub render_generation: u32,
+    pub render_dirty_revision: u32,
+    pub transport_state: SequenceTransportState,
+    pub render_updating: bool,
     pub position_seconds: f64,
     pub home_seconds: f64,
     pub duration_seconds: f64,
@@ -797,6 +800,13 @@ pub struct PreviewSnapshotDto {
     pub audio_playback_status: AudioPlaybackStatus,
     pub geometry_identity: String,
     pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceKeyDto {
+    pub path: String,
+    pub object_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -835,18 +845,29 @@ impl From<AppSnapshot> for AppSnapshotDto {
                 .map(ProjectDiagnosticDto::from)
                 .collect(),
             status: snapshot.status,
-            preview: PreviewSnapshotDto {
-                source_label: snapshot.preview.source_label,
-                transport_state: snapshot.preview.transport_state,
-                preview_updating: snapshot.preview.preview_updating,
-                position_seconds: snapshot.preview.position_seconds,
-                home_seconds: snapshot.preview.home_seconds,
-                duration_seconds: snapshot.preview.duration_seconds,
-                audio: snapshot.preview.audio.map(SequenceAudioDto::from),
-                clock_source: snapshot.preview.clock_source,
-                audio_playback_status: snapshot.preview.audio_playback_status,
-                geometry_identity: snapshot.preview.geometry.geometry_id.clone(),
-                status: snapshot.preview.status,
+            sequence_transport: SequenceTransportSnapshotDto {
+                source_label: snapshot.sequence_transport.source_label,
+                source_key: snapshot
+                    .sequence_transport
+                    .source_key
+                    .map(SequenceKeyDto::from),
+                render_generation: saturating_u32(snapshot.sequence_transport.render_generation),
+                render_dirty_revision: saturating_u32(
+                    snapshot.sequence_transport.render_dirty_revision,
+                ),
+                transport_state: snapshot.sequence_transport.transport_state,
+                render_updating: snapshot.sequence_transport.render_updating,
+                position_seconds: snapshot.sequence_transport.position_seconds,
+                home_seconds: snapshot.sequence_transport.home_seconds,
+                duration_seconds: snapshot.sequence_transport.duration_seconds,
+                audio: snapshot
+                    .sequence_transport
+                    .audio
+                    .map(SequenceAudioDto::from),
+                clock_source: snapshot.sequence_transport.clock_source,
+                audio_playback_status: snapshot.sequence_transport.audio_playback_status,
+                geometry_identity: snapshot.sequence_transport.geometry.geometry_id.clone(),
+                status: snapshot.sequence_transport.status,
             },
             effect_preview_enabled: snapshot.workbench_layout.effect_preview_enabled,
             live_output: snapshot.live_output.into(),
@@ -861,6 +882,15 @@ impl From<LiveOutputSnapshot> for LiveOutputSnapshotDto {
             status: snapshot.status.label().to_string(),
             active_universe_count: snapshot.active_universe_count.min(u32::MAX as usize) as u32,
             last_error: snapshot.last_error,
+        }
+    }
+}
+
+impl From<SequenceKey> for SequenceKeyDto {
+    fn from(key: SequenceKey) -> Self {
+        Self {
+            path: key.path.to_slash_string(),
+            object_key: key.object_key,
         }
     }
 }
@@ -1785,6 +1815,10 @@ fn validate_finite(value: f64, label: &'static str) -> Result<(), &'static str> 
     } else {
         Err(label)
     }
+}
+
+fn saturating_u32(value: u64) -> u32 {
+    value.min(u32::MAX as u64) as u32
 }
 
 impl From<WorkspaceEntry> for WorkspaceEntryDto {

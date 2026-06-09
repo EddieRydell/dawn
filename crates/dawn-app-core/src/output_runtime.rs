@@ -10,8 +10,8 @@ use crate::document::{
 };
 
 use dawn_project::{
-    resolve_import_path, DawnProject, EffectDefinitionKey, PathStringExt, RuntimeArrayValue,
-    Utf8PathBuf,
+    resolve_import_path, CurveUse, DawnProject, EffectDefinitionKey, PathStringExt,
+    RuntimeArrayValue, Utf8PathBuf,
 };
 use dawn_project::{
     BytecodeStats, CompiledEffect, EffectSampleScratch, EffectScriptKind, FixtureContext,
@@ -25,6 +25,11 @@ use dawn_project::{
 };
 
 const MAX_FLATTENED_GENERATED_CHILDREN: usize = 65_536;
+const DIAGNOSTIC_RED: Color = Color {
+    red: 255,
+    green: 0,
+    blue: 0,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OutputGeometryIdentity {
@@ -350,6 +355,14 @@ impl OutputGeometryModel {
             .find(|(candidate, _)| candidate.kind == target.kind && candidate.name == target.name)
             .map(|(_, pixels)| pixels.clone())
             .ok_or_else(|| format!("target `{:?} {}` was not found", target.kind, target.name))
+    }
+
+    fn all_pixels(&self) -> Vec<SequenceRenderPixel> {
+        self.fixtures
+            .iter()
+            .enumerate()
+            .flat_map(|(fixture_index, _)| render_pixels_for_fixture(fixture_index, &self.fixtures))
+            .collect()
     }
 }
 
@@ -907,7 +920,6 @@ enum EffectParamCacheValue {
     Flags(Vec<String>),
     Color(ColorCacheKey),
     Curve(CurveCacheKey),
-    CurveRef(String),
     Array(Vec<EffectParamArrayValueCacheKey>),
     Marks {
         collection_key: String,
@@ -923,7 +935,6 @@ enum EffectParamArrayValueCacheKey {
     Boolean(bool),
     Color(ColorCacheKey),
     Curve(CurveCacheKey),
-    CurveRef(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1085,7 +1096,7 @@ impl SequenceRenderPlan {
             &|| false,
         )
         .and_then(|result| {
-            result.ok_or_else(|| "Sequence preview renderer build was cancelled".to_string())
+            result.ok_or_else(|| "Sequence renderer build was cancelled".to_string())
         })
     }
 
@@ -1127,7 +1138,19 @@ impl SequenceRenderPlan {
             if is_cancelled() {
                 return Ok(None);
             }
-            let render = sequence_render_effect(project, &geometry, effect)?;
+            let render = match sequence_render_effect(project, &geometry, effect) {
+                Ok(render) => render,
+                Err(error) => {
+                    effects.push(diagnostic_prepared_effect(
+                        effect,
+                        error.message,
+                        &error.diagnostic_pixels,
+                        effect.scope,
+                        &fixture_templates,
+                    ));
+                    continue;
+                }
+            };
             let cache_key = prepared_effect_cache_key(
                 document,
                 effect.start_seconds,
@@ -1168,72 +1191,105 @@ impl SequenceRenderPlan {
                                 &render,
                                 Some(&topology_param_names),
                             );
-                            let prepared = match preparation_cache.as_deref().and_then(|cache| {
-                                cache.generator_topology(effect.id, &topology_cache_key)
-                            }) {
-                                Some(children) => {
-                                    topology_cache_hit = true;
-                                    prepare_generated_effects_from_topology(
-                                        GeneratedEffectTopologyInput {
-                                            project,
-                                            parent_path: parent_path_for_render(&render),
-                                            parent_id: effect.id,
-                                            parent_start_seconds: effect.start_seconds,
-                                            parent_duration_seconds: effect.duration_seconds,
-                                            generator_id: script_id.clone(),
-                                            generator: script,
-                                            render: &render,
-                                            mark_collections: &document.mark_collections,
-                                            fixture_templates: &fixture_templates,
-                                            children,
-                                            is_cancelled,
-                                        },
-                                    )
-                                }
-                                None => {
-                                    if is_cancelled() {
-                                        return Ok(None);
+                            let prepared_result =
+                                match preparation_cache.as_deref().and_then(|cache| {
+                                    cache.generator_topology(effect.id, &topology_cache_key)
+                                }) {
+                                    Some(children) => {
+                                        topology_cache_hit = true;
+                                        prepare_generated_effects_from_topology(
+                                            GeneratedEffectTopologyInput {
+                                                project,
+                                                parent_path: parent_path_for_render(&render),
+                                                parent_id: effect.id,
+                                                parent_start_seconds: effect.start_seconds,
+                                                parent_duration_seconds: effect.duration_seconds,
+                                                generator_id: script_id.clone(),
+                                                generator: script,
+                                                render: &render,
+                                                mark_collections: &document.mark_collections,
+                                                fixture_templates: &fixture_templates,
+                                                children,
+                                                is_cancelled,
+                                            },
+                                        )
                                     }
-                                    let topology = prepare_generated_topology(
-                                        document,
-                                        effect.start_seconds,
-                                        effect.duration_seconds,
-                                        effect.scope,
-                                        script,
-                                        &render,
-                                    );
-                                    match topology {
-                                        Ok(children) => {
-                                            if let Some(cache) = preparation_cache.as_deref_mut() {
-                                                cache.store_generator_topology(
-                                                    effect.id,
-                                                    topology_cache_key,
-                                                    &children,
-                                                );
-                                            }
-                                            prepare_generated_effects_from_topology(
-                                                GeneratedEffectTopologyInput {
-                                                    project,
-                                                    parent_path: parent_path_for_render(&render),
-                                                    parent_id: effect.id,
-                                                    parent_start_seconds: effect.start_seconds,
-                                                    parent_duration_seconds: effect
-                                                        .duration_seconds,
-                                                    generator_id: script_id.clone(),
-                                                    generator: script,
-                                                    render: &render,
-                                                    mark_collections: &document.mark_collections,
-                                                    fixture_templates: &fixture_templates,
-                                                    children,
-                                                    is_cancelled,
-                                                },
-                                            )
+                                    None => {
+                                        if is_cancelled() {
+                                            return Ok(None);
                                         }
-                                        Err(error) => Err(error),
+                                        let topology = prepare_generated_topology(
+                                            project,
+                                            document,
+                                            effect.start_seconds,
+                                            effect.duration_seconds,
+                                            effect.scope,
+                                            script,
+                                            &render,
+                                        );
+                                        match topology {
+                                            Ok(children) => {
+                                                if let Some(cache) =
+                                                    preparation_cache.as_deref_mut()
+                                                {
+                                                    cache.store_generator_topology(
+                                                        effect.id,
+                                                        topology_cache_key,
+                                                        &children,
+                                                    );
+                                                }
+                                                prepare_generated_effects_from_topology(
+                                                    GeneratedEffectTopologyInput {
+                                                        project,
+                                                        parent_path: parent_path_for_render(
+                                                            &render,
+                                                        ),
+                                                        parent_id: effect.id,
+                                                        parent_start_seconds: effect.start_seconds,
+                                                        parent_duration_seconds: effect
+                                                            .duration_seconds,
+                                                        generator_id: script_id.clone(),
+                                                        generator: script,
+                                                        render: &render,
+                                                        mark_collections: &document
+                                                            .mark_collections,
+                                                        fixture_templates: &fixture_templates,
+                                                        children,
+                                                        is_cancelled,
+                                                    },
+                                                )
+                                            }
+                                            Err(error) => Err(error),
+                                        }
                                     }
+                                };
+                            let prepared = match prepared_result {
+                                Ok(prepared) => prepared,
+                                Err(error) => {
+                                    let prepared = vec![diagnostic_prepared_effect(
+                                        effect,
+                                        error.to_string(),
+                                        &render.target_pixels,
+                                        effect.scope,
+                                        &fixture_templates,
+                                    )];
+                                    generator_expansion_ms += elapsed_ms(generator_started);
+                                    let child_count = prepared_generated_child_count(&prepared);
+                                    generated_child_count += child_count;
+                                    generator_parents.push(GeneratorParentPreparationTiming {
+                                        parent_effect_id: effect.id,
+                                        script_id: script_id.clone(),
+                                        target_pixels: render.target_pixels.len(),
+                                        emitted_children: child_count,
+                                        prepared_children: child_count,
+                                        prepared_cache_hit,
+                                        topology_cache_hit,
+                                        total_prepare_ms: elapsed_ms(generator_started),
+                                    });
+                                    effects.extend(prepared);
+                                    continue;
                                 }
-                            }
-                            .map_err(|error| error.to_string())?;
+                            };
                             if let Some(cache) = preparation_cache.as_deref_mut() {
                                 cache.store(effect.id, cache_key, effect.start_seconds, &prepared);
                             }
@@ -1270,7 +1326,8 @@ impl SequenceRenderPlan {
                         start_seconds: effect.start_seconds,
                         duration_seconds: effect.duration_seconds,
                         authored: true,
-                        render: prepare_sample_render(SampleRenderPreparationInput {
+                        render: match prepare_sample_render(SampleRenderPreparationInput {
+                            project,
                             script_id: script_id.clone(),
                             script_source: render.script_source.clone(),
                             script,
@@ -1281,8 +1338,15 @@ impl SequenceRenderPlan {
                             scope: effect.scope,
                             target_pixels: &render.target_pixels,
                             fixture_templates: &fixture_templates,
-                        })
-                        .map_err(|error| error.to_string())?,
+                        }) {
+                            Ok(render) => render,
+                            Err(error) => diagnostic_render(
+                                error.to_string(),
+                                &render.target_pixels,
+                                effect.scope,
+                                &fixture_templates,
+                            ),
+                        },
                     }];
                     if let Some(cache) = preparation_cache.as_deref_mut() {
                         cache.store(effect.id, cache_key, effect.start_seconds, &prepared);
@@ -1291,9 +1355,15 @@ impl SequenceRenderPlan {
                     effects.extend(prepared);
                 }
                 None => {
-                    return Err(format!(
-                        "compiled script `{}` was not found",
-                        script_id.display_key()
+                    effects.push(diagnostic_prepared_effect(
+                        effect,
+                        format!(
+                            "compiled script `{}` was not found",
+                            script_id.display_key()
+                        ),
+                        &render.target_pixels,
+                        effect.scope,
+                        &fixture_templates,
                     ));
                 }
             }
@@ -1463,6 +1533,7 @@ impl SequenceRenderPlan {
         let mut status = OutputFrameStatus::Live;
         let mut counters = SequenceEffectEvaluationCounters::default();
         let mut sample_reuse = SequenceFrameSampleReuse::default();
+        let mut diagnostic_pixels = Vec::new();
 
         let effect_loop_started = Instant::now();
         match mode {
@@ -1472,14 +1543,18 @@ impl SequenceRenderPlan {
                         if is_cancelled() {
                             return None;
                         }
+                        let mut context = PreparedEffectEvaluationContext {
+                            fixtures: &mut fixtures,
+                            status: &mut status,
+                            counters: &mut counters,
+                            sample_reuse: &mut sample_reuse,
+                            diagnostic_pixels: &mut diagnostic_pixels,
+                            is_cancelled: &is_cancelled,
+                        };
                         evaluate_prepared_effect_at_time(
                             &mut self.effects[effect_index],
                             time_seconds,
-                            &mut fixtures,
-                            &mut status,
-                            &mut counters,
-                            &mut sample_reuse,
-                            &is_cancelled,
+                            &mut context,
                         );
                         if is_cancelled() {
                             return None;
@@ -1515,14 +1590,18 @@ impl SequenceRenderPlan {
                             {
                                 continue;
                             }
+                            let mut context = PreparedEffectEvaluationContext {
+                                fixtures: &mut fixtures,
+                                status: &mut status,
+                                counters: &mut counters,
+                                sample_reuse: &mut sample_reuse,
+                                diagnostic_pixels: &mut diagnostic_pixels,
+                                is_cancelled: &is_cancelled,
+                            };
                             evaluate_prepared_effect_at_time(
                                 effect,
                                 preview_frame_time,
-                                &mut fixtures,
-                                &mut status,
-                                &mut counters,
-                                &mut sample_reuse,
-                                &is_cancelled,
+                                &mut context,
                             );
                         }
                     }
@@ -1530,6 +1609,7 @@ impl SequenceRenderPlan {
             }
         }
         let effect_loop_ms = elapsed_ms(effect_loop_started);
+        apply_diagnostic_pixels(&mut fixtures, &diagnostic_pixels);
 
         let output_started = Instant::now();
         let frame = self.rendered_frame(mode.time_seconds(), generation, status, fixtures);
@@ -1684,6 +1764,15 @@ struct SampleReuseEffectKey {
     prepared_params: Vec<RuntimeValueCacheKey>,
 }
 
+struct PreparedEffectEvaluationContext<'a> {
+    fixtures: &'a mut [OutputFixtureFrame],
+    status: &'a mut OutputFrameStatus,
+    counters: &'a mut SequenceEffectEvaluationCounters,
+    sample_reuse: &'a mut SequenceFrameSampleReuse,
+    diagnostic_pixels: &'a mut Vec<PreparedEffectPixel>,
+    is_cancelled: &'a dyn Fn() -> bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum RuntimeValueCacheKey {
     Float(F64CacheKey),
@@ -1715,44 +1804,36 @@ impl SequenceFrameSampleReuse {
 fn evaluate_prepared_effect_at_time(
     effect: &mut PreparedSequenceEffect,
     time_seconds: f64,
-    fixtures: &mut [OutputFixtureFrame],
-    status: &mut OutputFrameStatus,
-    counters: &mut SequenceEffectEvaluationCounters,
-    sample_reuse: &mut SequenceFrameSampleReuse,
-    is_cancelled: &dyn Fn() -> bool,
+    context: &mut PreparedEffectEvaluationContext<'_>,
 ) {
-    counters.visited_prepared_effects = counters.visited_prepared_effects.saturating_add(1);
+    context.counters.visited_prepared_effects =
+        context.counters.visited_prepared_effects.saturating_add(1);
     let local_seconds =
         if time_seconds < effect.start_seconds || time_seconds >= effect.end_seconds() {
             return;
         } else {
             time_seconds - effect.start_seconds
         };
-    sample_prepared_effect(
-        effect,
-        local_seconds,
-        fixtures,
-        status,
-        counters,
-        sample_reuse,
-        is_cancelled,
-    );
+    sample_prepared_effect(effect, local_seconds, context);
 }
 
 fn sample_prepared_effect(
     effect: &mut PreparedSequenceEffect,
     local_seconds: f64,
-    fixtures: &mut [OutputFixtureFrame],
-    status: &mut OutputFrameStatus,
-    counters: &mut SequenceEffectEvaluationCounters,
-    sample_reuse: &mut SequenceFrameSampleReuse,
-    is_cancelled: &dyn Fn() -> bool,
+    context: &mut PreparedEffectEvaluationContext<'_>,
 ) {
     let progress = if effect.duration_seconds == 0.0 {
         0.0
     } else {
         (local_seconds / effect.duration_seconds).clamp(0.0, 1.0)
     };
+
+    if effect.authored {
+        context.counters.active_authored_effects =
+            context.counters.active_authored_effects.saturating_add(1);
+    }
+    context.counters.active_prepared_effects =
+        context.counters.active_prepared_effects.saturating_add(1);
 
     let PreparedEffectRender::Ready {
         script,
@@ -1762,19 +1843,28 @@ fn sample_prepared_effect(
         sample_reuse_effect_key,
         scratch,
         ..
-    } = &mut effect.render;
+    } = &mut effect.render
+    else {
+        let PreparedEffectRender::Error {
+            message,
+            diagnostic_pixels: pixels,
+        } = &effect.render
+        else {
+            unreachable!("prepared effect render variants are exhaustive")
+        };
+        *context.status = OutputFrameStatus::Error(message.clone());
+        context.diagnostic_pixels.extend(pixels.iter().cloned());
+        return;
+    };
 
-    if effect.authored {
-        counters.active_authored_effects = counters.active_authored_effects.saturating_add(1);
-    }
-    counters.active_prepared_effects = counters.active_prepared_effects.saturating_add(1);
-    counters.sampled_pixels = counters
+    context.counters.sampled_pixels = context
+        .counters
         .sampled_pixels
         .saturating_add(target_pixels.len().min(u32::MAX as usize) as u32);
 
-    let effect_index = sample_reuse.effect_index(sample_reuse_effect_key);
+    let effect_index = context.sample_reuse.effect_index(sample_reuse_effect_key);
     for group in target_pixel_groups {
-        if is_cancelled() {
+        if (context.is_cancelled)() {
             return;
         }
         let cache_key = SampleReuseKey {
@@ -1784,20 +1874,24 @@ fn sample_prepared_effect(
             pixel_index: group.pixel_context.index,
             pixel_count: group.pixel_context.count,
         };
-        let sampled = match sample_reuse.colors.get(&cache_key).copied() {
+        let sampled = match context.sample_reuse.colors.get(&cache_key).copied() {
             Some(color) => {
-                counters.sample_reuse_saved_evaluations = counters
+                context.counters.sample_reuse_saved_evaluations = context
+                    .counters
                     .sample_reuse_saved_evaluations
                     .saturating_add(group.output_pixel_indices.len().min(u32::MAX as usize) as u32);
-                counters.sample_reuse_group_hits =
-                    counters.sample_reuse_group_hits.saturating_add(1);
+                context.counters.sample_reuse_group_hits =
+                    context.counters.sample_reuse_group_hits.saturating_add(1);
                 Ok(color)
             }
             None => {
                 let pixel = &target_pixels[group.first_pixel_index];
-                counters.vm_sample_evaluations = counters.vm_sample_evaluations.saturating_add(1);
-                counters.sample_reuse_saved_evaluations =
-                    counters.sample_reuse_saved_evaluations.saturating_add(
+                context.counters.vm_sample_evaluations =
+                    context.counters.vm_sample_evaluations.saturating_add(1);
+                context.counters.sample_reuse_saved_evaluations = context
+                    .counters
+                    .sample_reuse_saved_evaluations
+                    .saturating_add(
                         group
                             .output_pixel_indices
                             .len()
@@ -1814,7 +1908,7 @@ fn sample_prepared_effect(
                         scratch,
                     )
                     .inspect(|color| {
-                        sample_reuse.colors.insert(cache_key, *color);
+                        context.sample_reuse.colors.insert(cache_key, *color);
                     })
             }
         };
@@ -1823,17 +1917,24 @@ fn sample_prepared_effect(
                 for pixel_index in &group.output_pixel_indices {
                     let pixel = &target_pixels[*pixel_index];
                     add_clamped(
-                        &mut fixtures[pixel.fixture_index].pixels[pixel.pixel_index].color,
+                        &mut context.fixtures[pixel.fixture_index].pixels[pixel.pixel_index].color,
                         color,
                     );
                 }
             }
-            Err(error) => *status = OutputFrameStatus::Error(error.to_string()),
+            Err(error) => {
+                *context.status = OutputFrameStatus::Error(error.to_string());
+                context
+                    .diagnostic_pixels
+                    .extend(target_pixels.iter().cloned());
+                return;
+            }
         }
     }
 }
 
 struct SampleRenderPreparationInput<'a> {
+    project: &'a DawnProject,
     script_id: EffectDefinitionKey,
     script_source: String,
     script: &'a CompiledEffect,
@@ -1850,6 +1951,7 @@ fn prepare_sample_render(
     input: SampleRenderPreparationInput<'_>,
 ) -> Result<PreparedEffectRender, RuntimeError> {
     let prepared_params = prepare_params_from_document(
+        input.project,
         input.script,
         input.params,
         input.mark_collections,
@@ -1888,22 +1990,43 @@ fn sequence_render_effect(
     project: &DawnProject,
     geometry: &OutputGeometryModel,
     effect: &SequenceEffectDocument,
-) -> Result<SequenceRenderEffect, String> {
+) -> Result<SequenceRenderEffect, EffectDiagnostic> {
+    let target_pixels =
+        geometry
+            .target_pixels(&effect.target)
+            .map_err(|message| EffectDiagnostic {
+                message,
+                diagnostic_pixels: geometry.all_pixels(),
+            })?;
     let script = effect
         .script_source
         .as_ref()
-        .ok_or_else(|| format!("effect `{}` is missing a script binding", effect.id))?;
+        .ok_or_else(|| EffectDiagnostic {
+            message: format!("effect `{}` is missing a script binding", effect.id),
+            diagnostic_pixels: target_pixels.clone(),
+        })?;
     let script_id = effect_definition_key(project, script);
     let script_source = effect
         .script_text
         .clone()
         .unwrap_or_else(|| script_id.display_key());
+    let params =
+        resolve_effect_params(project, &effect.params).map_err(|error| EffectDiagnostic {
+            message: error.to_string(),
+            diagnostic_pixels: target_pixels.clone(),
+        })?;
     Ok(SequenceRenderEffect {
         script: script_id,
         script_source,
-        params: effect.params.clone(),
-        target_pixels: geometry.target_pixels(&effect.target)?,
+        params,
+        target_pixels,
     })
+}
+
+#[derive(Debug, Clone)]
+struct EffectDiagnostic {
+    message: String,
+    diagnostic_pixels: Vec<SequenceRenderPixel>,
 }
 
 fn effect_definition_key(
@@ -2070,9 +2193,7 @@ fn effect_param_curve_cache_value(
 ) -> EffectParamCacheValue {
     match &curve.curve {
         ResolvedInlineOrRef::Inline(curve) => EffectParamCacheValue::Curve(curve_cache_key(curve)),
-        ResolvedInlineOrRef::Ref(reference) => {
-            EffectParamCacheValue::CurveRef(reference.key.display_key())
-        }
+        ResolvedInlineOrRef::Ref(_) => unreachable!("curve refs are resolved before cache keying"),
     }
 }
 
@@ -2083,9 +2204,7 @@ fn effect_param_array_curve_cache_key(
         ResolvedInlineOrRef::Inline(curve) => {
             EffectParamArrayValueCacheKey::Curve(curve_cache_key(curve))
         }
-        ResolvedInlineOrRef::Ref(reference) => {
-            EffectParamArrayValueCacheKey::CurveRef(reference.key.display_key())
-        }
+        ResolvedInlineOrRef::Ref(_) => unreachable!("curve refs are resolved before cache keying"),
     }
 }
 
@@ -2109,17 +2228,93 @@ fn curve_cache_key(curve: &Curve) -> CurveCacheKey {
     }
 }
 
-fn inline_curve_for_runtime(
-    curve: &dawn_project::CurveUse<Resolved>,
-) -> Result<&Curve, RuntimeError> {
+fn curve_for_runtime<'a>(
+    project: &'a DawnProject,
+    curve: &'a dawn_project::CurveUse<Resolved>,
+) -> Result<&'a Curve, RuntimeError> {
     match &curve.curve {
         ResolvedInlineOrRef::Inline(curve) => Ok(curve),
-        ResolvedInlineOrRef::Ref(reference) => Err(RuntimeError {
-            message: format!(
-                "curve reference `{}` reached runtime without being resolved",
-                reference.key.display_key()
-            ),
+        ResolvedInlineOrRef::Ref(reference) => project
+            .stores
+            .curves
+            .get(&reference.key)
+            .map(|curve| &curve.value)
+            .ok_or_else(|| RuntimeError {
+                message: format!("curve `{}` was not found", reference.key.display_key()),
+            }),
+    }
+}
+
+fn resolve_effect_params(
+    project: &DawnProject,
+    params: &[SequenceEffectParamDocument],
+) -> Result<Vec<SequenceEffectParamDocument>, RuntimeError> {
+    params
+        .iter()
+        .map(|param| {
+            Ok(SequenceEffectParamDocument {
+                name: param.name.clone(),
+                value: resolve_effect_param_value(project, &param.value)?,
+                curve_source: param.curve_source.clone(),
+            })
+        })
+        .collect()
+}
+
+fn resolve_effect_param_value(
+    project: &DawnProject,
+    param: &EffectParam<Resolved>,
+) -> Result<EffectParam<Resolved>, RuntimeError> {
+    match param {
+        EffectParam::Curve { curve } => Ok(EffectParam::Curve {
+            curve: resolve_curve_use(project, curve)?,
         }),
+        EffectParam::Array {
+            element_type,
+            values,
+        } => Ok(EffectParam::Array {
+            element_type: *element_type,
+            values: values
+                .iter()
+                .map(|value| resolve_effect_param_array_value(project, value))
+                .collect::<Result<Vec<_>, _>>()?,
+        }),
+        _ => Ok(param.clone()),
+    }
+}
+
+fn resolve_effect_param_array_value(
+    project: &DawnProject,
+    value: &dawn_project::EffectParamArrayValue<Resolved>,
+) -> Result<dawn_project::EffectParamArrayValue<Resolved>, RuntimeError> {
+    match value {
+        dawn_project::EffectParamArrayValue::Curve(curve) => Ok(
+            dawn_project::EffectParamArrayValue::Curve(resolve_curve_use(project, curve)?),
+        ),
+        _ => Ok(value.clone()),
+    }
+}
+
+fn resolve_curve_use(
+    project: &DawnProject,
+    curve: &CurveUse<Resolved>,
+) -> Result<CurveUse<Resolved>, RuntimeError> {
+    match &curve.curve {
+        ResolvedInlineOrRef::Inline(_) => Ok(curve.clone()),
+        ResolvedInlineOrRef::Ref(reference) => {
+            let resolved = project
+                .stores
+                .curves
+                .get(&reference.key)
+                .map(|curve| curve.value.clone())
+                .ok_or_else(|| RuntimeError {
+                    message: format!("curve `{}` was not found", reference.key.display_key()),
+                })?;
+            Ok(CurveUse {
+                id: curve.id,
+                curve: ResolvedInlineOrRef::Inline(resolved),
+            })
+        }
     }
 }
 
@@ -2293,6 +2488,7 @@ fn frame_count(duration_seconds: f64, frame_rate: u32) -> usize {
 }
 
 fn prepare_generated_topology(
+    project: &DawnProject,
     document: &SequenceEditorDocument,
     parent_start_seconds: f64,
     parent_duration_seconds: f64,
@@ -2301,6 +2497,7 @@ fn prepare_generated_topology(
     render: &SequenceRenderEffect,
 ) -> Result<Vec<GeneratedChildTopology>, RuntimeError> {
     let prepared_params = prepare_params_from_document(
+        project,
         generator,
         &render.params,
         &document.mark_collections,
@@ -2360,6 +2557,7 @@ fn prepare_generated_effects_from_topology(
     input: GeneratedEffectTopologyInput<'_>,
 ) -> Result<Vec<PreparedSequenceEffect>, RuntimeError> {
     let prepared_parent_params = prepare_params_from_document(
+        input.project,
         input.generator,
         &input.render.params,
         input.mark_collections,
@@ -2656,6 +2854,10 @@ enum PreparedEffectRender {
         scratch: Box<EffectSampleScratch>,
         _bytecode_stats: BytecodeStats,
     },
+    Error {
+        message: String,
+        diagnostic_pixels: Vec<PreparedEffectPixel>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -2727,6 +2929,49 @@ fn prepare_effect_pixel_groups(
     groups
 }
 
+fn diagnostic_prepared_effect(
+    effect: &SequenceEffectDocument,
+    message: String,
+    diagnostic_pixels: &[SequenceRenderPixel],
+    scope: SequenceEffectScope,
+    fixture_templates: &[OutputFixtureFrame],
+) -> PreparedSequenceEffect {
+    PreparedSequenceEffect {
+        id: effect.id,
+        start_seconds: effect.start_seconds,
+        duration_seconds: effect.duration_seconds,
+        authored: true,
+        render: diagnostic_render(message, diagnostic_pixels, scope, fixture_templates),
+    }
+}
+
+fn diagnostic_render(
+    message: String,
+    diagnostic_pixels: &[SequenceRenderPixel],
+    scope: SequenceEffectScope,
+    fixture_templates: &[OutputFixtureFrame],
+) -> PreparedEffectRender {
+    PreparedEffectRender::Error {
+        message,
+        diagnostic_pixels: prepare_effect_pixels(scope, diagnostic_pixels, fixture_templates),
+    }
+}
+
+fn apply_diagnostic_pixels(
+    fixtures: &mut [OutputFixtureFrame],
+    diagnostic_pixels: &[PreparedEffectPixel],
+) {
+    for pixel in diagnostic_pixels {
+        let Some(fixture) = fixtures.get_mut(pixel.fixture_index) else {
+            continue;
+        };
+        let Some(output_pixel) = fixture.pixels.get_mut(pixel.pixel_index) else {
+            continue;
+        };
+        output_pixel.color = DIAGNOSTIC_RED;
+    }
+}
+
 pub fn render_sequence_frame(
     project: &DawnProject,
     document: &SequenceEditorDocument,
@@ -2735,11 +2980,7 @@ pub fn render_sequence_frame(
 ) -> RenderedOutputFrame {
     match SequenceRenderPlan::new(project, document) {
         Ok(mut evaluator) => evaluator.render_frame(time_seconds, generation),
-        Err(message) => {
-            let geometry =
-                OutputGeometryModel::from_project(project).unwrap_or_else(|_| empty_geometry());
-            empty_frame(&geometry, generation, message)
-        }
+        Err(message) => diagnostic_frame_from_project(project, generation, message),
     }
 }
 
@@ -2752,11 +2993,7 @@ pub fn render_sequence_frame_filtered(
 ) -> RenderedOutputFrame {
     match SequenceRenderPlan::new_filtered(project, document, effect_filter) {
         Ok(mut evaluator) => evaluator.render_frame(time_seconds, generation),
-        Err(message) => {
-            let geometry =
-                OutputGeometryModel::from_project(project).unwrap_or_else(|_| empty_geometry());
-            empty_frame(&geometry, generation, message)
-        }
+        Err(message) => diagnostic_frame_from_project(project, generation, message),
     }
 }
 
@@ -2769,11 +3006,7 @@ pub fn render_sequence_selected_effects_frame(
 ) -> RenderedOutputFrame {
     match SequenceRenderPlan::new_filtered(project, document, Some(effect_filter)) {
         Ok(mut evaluator) => evaluator.render_effects_frame(preview_seconds, generation),
-        Err(message) => {
-            let geometry =
-                OutputGeometryModel::from_project(project).unwrap_or_else(|_| empty_geometry());
-            empty_frame(&geometry, generation, message)
-        }
+        Err(message) => diagnostic_frame_from_project(project, generation, message),
     }
 }
 
@@ -2807,6 +3040,7 @@ fn elapsed_ms(started: Instant) -> f64 {
 }
 
 pub fn runtime_params_from_document(
+    project: &DawnProject,
     params: &[SequenceEffectParamDocument],
     mark_collections: &[SequenceMarkCollectionDocument],
     effect_start_seconds: f64,
@@ -2815,6 +3049,7 @@ pub fn runtime_params_from_document(
     let mut values = BTreeMap::new();
     for param in params {
         if let Some(value) = runtime_value_from_param(
+            project,
             &param.value,
             mark_collections,
             effect_start_seconds,
@@ -2827,6 +3062,7 @@ pub fn runtime_params_from_document(
 }
 
 pub fn prepare_params_from_document(
+    project: &DawnProject,
     script: &CompiledEffect,
     params: &[SequenceEffectParamDocument],
     mark_collections: &[SequenceMarkCollectionDocument],
@@ -2834,6 +3070,7 @@ pub fn prepare_params_from_document(
     effect_duration_seconds: f64,
 ) -> Result<PreparedEffectParams, RuntimeError> {
     let values = runtime_params_from_document(
+        project,
         params,
         mark_collections,
         effect_start_seconds,
@@ -2843,6 +3080,7 @@ pub fn prepare_params_from_document(
 }
 
 pub fn runtime_value_from_param(
+    project: &DawnProject,
     param: &EffectParam<Resolved>,
     mark_collections: &[SequenceMarkCollectionDocument],
     effect_start_seconds: f64,
@@ -2856,7 +3094,7 @@ pub fn runtime_value_from_param(
         EffectParam::Flags { value } => Ok(Some(RuntimeValue::Flags(value.clone()))),
         EffectParam::Color { value } => Ok(Some(RuntimeValue::Color(*value))),
         EffectParam::Curve { curve } => Ok(Some(RuntimeValue::Curve(
-            inline_curve_for_runtime(curve)?.clone(),
+            curve_for_runtime(project, curve)?.clone(),
         ))),
         EffectParam::Array {
             element_type,
@@ -2864,7 +3102,7 @@ pub fn runtime_value_from_param(
         } => {
             let mut runtime_values = Vec::new();
             for value in values {
-                let Some(value) = runtime_value_from_array_param(value)? else {
+                let Some(value) = runtime_value_from_array_param(project, value)? else {
                     return Ok(None);
                 };
                 runtime_values.push(value);
@@ -2905,6 +3143,7 @@ fn runtime_marks(mut global: Vec<f64>, effect_duration_seconds: f64) -> RuntimeM
 }
 
 fn runtime_value_from_array_param(
+    project: &DawnProject,
     value: &dawn_project::EffectParamArrayValue<Resolved>,
 ) -> Result<Option<RuntimeValue>, RuntimeError> {
     match value {
@@ -2915,7 +3154,7 @@ fn runtime_value_from_array_param(
         dawn_project::EffectParamArrayValue::Boolean(value) => Ok(Some(RuntimeValue::Bool(*value))),
         dawn_project::EffectParamArrayValue::Color(value) => Ok(Some(RuntimeValue::Color(*value))),
         dawn_project::EffectParamArrayValue::Curve(curve) => Ok(Some(RuntimeValue::Curve(
-            inline_curve_for_runtime(curve)?.clone(),
+            curve_for_runtime(project, curve)?.clone(),
         ))),
     }
 }
@@ -2947,6 +3186,35 @@ pub fn empty_frame(
         generation,
         status: OutputFrameStatus::Idle(message.into()),
         rgb: vec![0; geometry_pixel_count(geometry) * 3],
+    }
+}
+
+fn diagnostic_frame_from_project(
+    project: &DawnProject,
+    generation: u64,
+    message: String,
+) -> RenderedOutputFrame {
+    match OutputGeometryModel::from_project(project) {
+        Ok(geometry) => diagnostic_frame(&geometry, generation, message),
+        Err(error) => empty_frame(&empty_geometry(), generation, error),
+    }
+}
+
+fn diagnostic_frame(
+    geometry: &OutputGeometryModel,
+    generation: u64,
+    message: String,
+) -> RenderedOutputFrame {
+    RenderedOutputFrame {
+        geometry_id: geometry.geometry_id.clone(),
+        time_seconds: 0.0,
+        generation,
+        status: OutputFrameStatus::Error(message),
+        rgb: vec![255, 0, 0]
+            .into_iter()
+            .cycle()
+            .take(geometry_pixel_count(geometry) * 3)
+            .collect(),
     }
 }
 

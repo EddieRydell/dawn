@@ -8,20 +8,20 @@ use dawn_app_core::dto::{
     SequenceSelectionEditDto, SequenceSelectionEditResultDto,
 };
 use dawn_app_core::fseq_export::{export_fseq_file, FseqExportOptions};
-use dawn_app_core::preview_session::PlaybackTransportState;
 use dawn_app_core::workspace::serialized_import_path;
 use dawn_project::{utf8_path, DiagnosticSeverity, Utf8PathBuf};
 use tauri::{AppHandle, Manager, State};
 
 use crate::app_runtime::{
-    dispatch, emit_model_snapshot, flush_autosave_blocking, preload_active_preview_audio,
-    schedule_project_autosave, update_preview_from_audio_status, valid_sequence_audio,
+    dispatch, emit_model_snapshot, flush_autosave_blocking, preload_active_sequence_audio,
+    schedule_project_autosave, sequence_transport_audio,
+    update_sequence_transport_from_audio_status,
 };
 use crate::new_project::{create_starter_project, STARTER_SEQUENCE_PATH};
-use crate::preview::{
+use crate::preview_transport::{PreviewTransportMode, PreviewTransportRuntime};
+use crate::preview_window::{
     open_or_focus_preview_window, preview_pixel_count, preview_scene_from_geometry, PreviewSceneDto,
 };
-use crate::preview_transport::{PreviewTransportMode, PreviewTransportRuntime};
 use crate::state::{
     lock_audio_runtime, lock_live_output, lock_model, lock_preview_transport, project_path,
     AppState, CommandResult,
@@ -34,7 +34,7 @@ fn get_snapshot(state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
     let mut model = lock_model(&state)?;
     model.set_live_output_snapshot(live_output);
     let snapshot = model.snapshot_dto();
-    preload_active_preview_audio(&state, &snapshot.preview);
+    preload_active_sequence_audio(&state, &snapshot.sequence_transport);
     Ok(snapshot)
 }
 
@@ -470,128 +470,111 @@ async fn open_preview_window(app: AppHandle, state: State<'_, AppState>) -> Comm
 
 #[specta::specta]
 #[tauri::command]
-fn preview_play(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
-    let (audio, position_seconds, transport_state, effect_preview_enabled) = {
+fn sequence_transport_play(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<AppSnapshotDto> {
+    let (audio, position_seconds, effect_preview_enabled) = {
         let model = lock_model(&state)?;
-        let snapshot = model.preview.snapshot();
+        let snapshot = model.sequence_transport.snapshot();
         (
-            valid_sequence_audio(&snapshot),
+            sequence_transport_audio(&snapshot),
             snapshot.position_seconds,
-            snapshot.transport_state,
             model.workbench_layout.effect_preview_enabled,
         )
     };
-    if transport_state == PlaybackTransportState::LoadingToPlay {
-        return preview_pause(app, state);
-    }
     if effect_preview_enabled {
         dispatch(&app, &state, AppAction::SetEffectPreviewEnabled(false))?;
     }
     let Some(audio) = audio else {
-        return dispatch(&app, &state, AppAction::PreviewPlay);
+        return dispatch(&app, &state, AppAction::SequenceTransportPlay);
     };
     let clock = lock_audio_runtime(&state)?.play(&audio, position_seconds)?;
-    update_preview_from_audio_status(&app, &state, clock)
+    update_sequence_transport_from_audio_status(&app, &state, clock)
 }
 
 #[specta::specta]
 #[tauri::command]
-fn preview_pause(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
-    let has_audio = {
-        let model = lock_model(&state)?;
-        valid_sequence_audio(&model.preview.snapshot()).is_some()
-    };
-    if !has_audio {
-        return dispatch(&app, &state, AppAction::PreviewPause);
-    }
-    let clock = lock_audio_runtime(&state)?.pause()?;
-    let mut model = lock_model(&state)?;
-    let project = model.project.clone();
-    model
-        .preview
-        .pause_at(clock.position_seconds, project.as_deref());
-    model.preview.set_timing_status("nativeAudio", clock.status);
-    model.status = "Preview paused".to_string();
-    emit_model_snapshot(&app, &model)
-}
-
-#[specta::specta]
-#[tauri::command]
-fn preview_stop(app: AppHandle, state: State<'_, AppState>) -> CommandResult<AppSnapshotDto> {
-    let (has_audio, home_seconds) = {
-        let model = lock_model(&state)?;
-        let snapshot = model.preview.snapshot();
-        (
-            valid_sequence_audio(&snapshot).is_some(),
-            snapshot.home_seconds,
-        )
-    };
-    if !has_audio {
-        return dispatch(&app, &state, AppAction::PreviewStop);
-    }
-    let clock = lock_audio_runtime(&state)?.stop(home_seconds)?;
-    let mut model = lock_model(&state)?;
-    let project = model.project.clone();
-    model.preview.stop_native_audio(project.as_deref());
-    model.preview.set_timing_status("nativeAudio", clock.status);
-    model.status = "Preview stopped".to_string();
-    emit_model_snapshot(&app, &model)
-}
-
-#[specta::specta]
-#[tauri::command]
-fn preview_rewind_to_zero(
+fn sequence_transport_pause(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<AppSnapshotDto> {
     let has_audio = {
         let model = lock_model(&state)?;
-        valid_sequence_audio(&model.preview.snapshot()).is_some()
+        sequence_transport_audio(&model.sequence_transport.snapshot()).is_some()
     };
     if !has_audio {
-        return dispatch(&app, &state, AppAction::PreviewRewindToZero);
+        return dispatch(&app, &state, AppAction::SequenceTransportPause);
     }
-    let clock = lock_audio_runtime(&state)?.stop(0.0)?;
-    let mut model = lock_model(&state)?;
-    let project = model.project.clone();
-    model
-        .preview
-        .go_to_sequence_beginning_native_audio(project.as_deref());
-    model.preview.set_timing_status("nativeAudio", clock.status);
-    model.status = "Preview rewound".to_string();
-    emit_model_snapshot(&app, &model)
+    let clock = lock_audio_runtime(&state)?.pause()?;
+    update_sequence_transport_from_audio_status(&app, &state, clock)
 }
 
 #[specta::specta]
 #[tauri::command]
-fn preview_seek(
+fn sequence_transport_stop(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<AppSnapshotDto> {
+    let (has_audio, home_seconds) = {
+        let model = lock_model(&state)?;
+        let snapshot = model.sequence_transport.snapshot();
+        (
+            sequence_transport_audio(&snapshot).is_some(),
+            snapshot.home_seconds,
+        )
+    };
+    if !has_audio {
+        return dispatch(&app, &state, AppAction::SequenceTransportStop);
+    }
+    let clock = lock_audio_runtime(&state)?.stop(home_seconds)?;
+    update_sequence_transport_from_audio_status(&app, &state, clock)
+}
+
+#[specta::specta]
+#[tauri::command]
+fn sequence_transport_rewind_to_zero(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<AppSnapshotDto> {
+    let has_audio = {
+        let model = lock_model(&state)?;
+        sequence_transport_audio(&model.sequence_transport.snapshot()).is_some()
+    };
+    if !has_audio {
+        return dispatch(&app, &state, AppAction::SequenceTransportRewindToZero);
+    }
+    let clock = lock_audio_runtime(&state)?.stop(0.0)?;
+    update_sequence_transport_from_audio_status(&app, &state, clock)
+}
+
+#[specta::specta]
+#[tauri::command]
+fn sequence_transport_seek(
     app: AppHandle,
     state: State<'_, AppState>,
     position_seconds: f64,
 ) -> CommandResult<AppSnapshotDto> {
     if !position_seconds.is_finite() || position_seconds < 0.0 {
-        return Err("preview seek seconds must be finite and non-negative".to_string());
+        return Err("sequence transport seek seconds must be finite and non-negative".to_string());
     }
     let (audio, playing) = {
         let model = lock_model(&state)?;
-        let snapshot = model.preview.snapshot();
+        let snapshot = model.sequence_transport.snapshot();
         (
-            valid_sequence_audio(&snapshot),
+            sequence_transport_audio(&snapshot),
             snapshot.transport_state.should_animate_position(),
         )
     };
     let Some(audio) = audio else {
-        return dispatch(&app, &state, AppAction::PreviewSeek(position_seconds));
+        return dispatch(
+            &app,
+            &state,
+            AppAction::SequenceTransportSeek(position_seconds),
+        );
     };
     let clock = lock_audio_runtime(&state)?.seek(&audio, position_seconds, playing)?;
-    let mut model = lock_model(&state)?;
-    let project = model.project.clone();
-    model
-        .preview
-        .seek_native_audio(position_seconds, playing, project.as_deref());
-    model.preview.set_timing_status("nativeAudio", clock.status);
-    model.status = "Preview seeked".to_string();
-    emit_model_snapshot(&app, &model)
+    update_sequence_transport_from_audio_status(&app, &state, clock)
 }
 
 #[specta::specta]
@@ -611,7 +594,7 @@ fn set_live_output_enabled(
 #[specta::specta]
 #[tauri::command]
 fn get_preview_scene(state: State<'_, AppState>) -> CommandResult<PreviewSceneDto> {
-    let snapshot = lock_model(&state)?.preview.snapshot();
+    let snapshot = lock_model(&state)?.sequence_transport.snapshot();
     Ok(preview_scene_from_geometry(
         &snapshot.geometry,
         snapshot.frame.generation,
@@ -631,7 +614,8 @@ fn init_preview_transport(app: AppHandle, state: State<'_, AppState>) -> Command
     let Some(window) = app.get_webview_window("preview") else {
         return Err("preview window is not open".to_string());
     };
-    let pixel_count = preview_pixel_count(&lock_model(&state)?.preview.snapshot().geometry);
+    let pixel_count =
+        preview_pixel_count(&lock_model(&state)?.sequence_transport.snapshot().geometry);
     lock_preview_transport(&state)?.init_window(&window, pixel_count)
 }
 
@@ -681,11 +665,11 @@ pub(crate) fn register_commands(
         set_effect_preview_enabled,
         set_effect_preview_effects,
         open_preview_window,
-        preview_play,
-        preview_pause,
-        preview_stop,
-        preview_rewind_to_zero,
-        preview_seek,
+        sequence_transport_play,
+        sequence_transport_pause,
+        sequence_transport_stop,
+        sequence_transport_rewind_to_zero,
+        sequence_transport_seek,
         set_live_output_enabled,
         get_preview_scene,
         init_preview_transport,

@@ -159,7 +159,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
         {activeSequenceDocument !== null && (
           <SequenceTransportControls
             document={activeSequenceDocument}
-            preview={snapshot.preview}
+            transport={snapshot.sequenceTransport}
             liveOutput={snapshot.liveOutput}
             effectPreviewEnabled={snapshot.effectPreviewEnabled}
             selectedEffectIds={selectedEffectIds}

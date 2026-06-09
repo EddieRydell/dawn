@@ -17,16 +17,16 @@ mod commands;
 mod filesystem_watcher;
 mod live_output;
 mod new_project;
-mod preview;
 mod preview_transport;
+mod preview_window;
 mod project_autosave;
+mod sequence_runtime;
 mod state;
 mod window_layout;
 
 pub use bindings::{check_bindings, export_bindings, specta_builder};
-pub use preview::{
-    PreviewSceneDto, PreviewSceneFixtureDto, PreviewStateEventDto, PreviewTimingDto,
-};
+pub use preview_window::{PreviewSceneDto, PreviewSceneFixtureDto};
+pub use sequence_runtime::{SequenceRenderEventDto, SequenceRenderTimingDto};
 use tauri::Manager;
 
 pub fn run() -> Result<(), tauri::Error> {
@@ -40,7 +40,7 @@ pub fn run() -> Result<(), tauri::Error> {
                 .map_err(std::io::Error::other)?;
             window_layout::register_main_window_layout_events(app.handle())
                 .map_err(std::io::Error::other)?;
-            preview::start_preview_worker(app.handle().clone());
+            sequence_runtime::start_sequence_runtime(app.handle().clone());
             let state = app.state::<state::AppState>();
             if let Ok(model) = state::lock_model(&state) {
                 let root = model.snapshot_dto().project_root;
@@ -49,7 +49,7 @@ pub fn run() -> Result<(), tauri::Error> {
                     let _ = watcher.sync_project_root(app.handle(), root);
                 }
             }
-            preview::open_preview_window_on_startup(app.handle().clone(), state)
+            preview_window::open_preview_window_on_startup(app.handle().clone(), state)
                 .map_err(std::io::Error::other)?;
             Ok(())
         })

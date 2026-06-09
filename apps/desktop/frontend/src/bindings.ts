@@ -35,11 +35,11 @@ export const commands = {
 	setEffectPreviewEnabled: (enabled: boolean) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("set_effect_preview_enabled", { enabled })),
 	setEffectPreviewEffects: (ids: number[]) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("set_effect_preview_effects", { ids })),
 	openPreviewWindow: () => typedError<null, string>(__TAURI_INVOKE("open_preview_window")),
-	previewPlay: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_play")),
-	previewPause: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_pause")),
-	previewStop: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_stop")),
-	previewRewindToZero: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_rewind_to_zero")),
-	previewSeek: (positionSeconds: number) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("preview_seek", { positionSeconds })),
+	sequenceTransportPlay: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("sequence_transport_play")),
+	sequenceTransportPause: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("sequence_transport_pause")),
+	sequenceTransportStop: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("sequence_transport_stop")),
+	sequenceTransportRewindToZero: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("sequence_transport_rewind_to_zero")),
+	sequenceTransportSeek: (positionSeconds: number) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("sequence_transport_seek", { positionSeconds })),
 	setLiveOutputEnabled: (enabled: boolean) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("set_live_output_enabled", { enabled })),
 	getPreviewScene: () => typedError<PreviewSceneDto, string>(__TAURI_INVOKE("get_preview_scene")),
 	initPreviewTransport: () => typedError<null, string>(__TAURI_INVOKE("init_preview_transport")),
@@ -61,12 +61,12 @@ export type AppSnapshotDto = {
 	activeGuiDocument: ActiveGuiDocumentDto | null,
 	diagnostics: ProjectDiagnosticDto[],
 	status: string,
-	preview: PreviewSnapshotDto,
+	sequenceTransport: SequenceTransportSnapshotDto,
 	effectPreviewEnabled: boolean,
 	liveOutput: LiveOutputSnapshotDto,
 };
 
-export type AudioPlaybackStatus = "none" | "missing" | "loading" | "loading_to_play" | "ready" | "playing" | "ended" | "error";
+export type AudioPlaybackStatus = "none" | "missing" | "ready" | "playing" | "ended" | "error";
 
 export type BufferExternalStateDto = "current" | "changedOnDisk" | "deletedOnDisk";
 
@@ -192,8 +192,6 @@ export type LiveOutputSnapshotDto = {
 
 export type ObjectKindDto = "project" | "display" | "controller" | "layout" | "fixture" | "patch" | "sequence" | "curve" | "effect";
 
-export type PlaybackTransportState = "stopped" | "paused" | "loading_to_play" | "playing" | "selected_effects" | "ended" | "error";
-
 export type Point3MetersDto = {
 	xMeters: number,
 	yMeters: number,
@@ -215,20 +213,6 @@ export type PreviewSceneFixtureDto = {
 	bulbRadiusMeters: number,
 	firstPixelIndex: number,
 	pixels: GeometryRenderPointDto[],
-};
-
-export type PreviewSnapshotDto = {
-	sourceLabel: string,
-	transportState: PlaybackTransportState,
-	previewUpdating: boolean,
-	positionSeconds: number,
-	homeSeconds: number,
-	durationSeconds: number,
-	audio: SequenceAudioDto | null,
-	clockSource: string,
-	audioPlaybackStatus: AudioPlaybackStatus,
-	geometryIdentity: string,
-	status: string,
 };
 
 export type PreviewTransportMode = "webview2_shared" | "unsupported";
@@ -343,6 +327,11 @@ export type SequenceEffectScriptParamDto = {
 
 export type SequenceGuiEditDto = { type: "setAudio"; import: string | null } | { type: "addEffect"; script: EffectScriptReferenceDto; target: LayoutTargetDto; scope: SequenceEffectScopeDto; startSeconds: number; markCollectionKey: string | null } | { type: "moveEffect"; id: number; startSeconds: number; target: LayoutTargetDto | null } | { type: "resizeEffect"; id: number; startSeconds: number; durationSeconds: number } | { type: "changeEffectScript"; id: number; script: EffectScriptReferenceDto } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTargetDto } | { type: "setEffectScope"; id: number; scope: SequenceEffectScopeDto } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValueDto } | { type: "linkEffectCurveParam"; id: number; name: string; curvePath: string; objectKey: string } | { type: "unlinkEffectCurveParam"; id: number; name: string } | { type: "createMarkCollection"; key: string; name: string; color: string } | { type: "renameMarkCollection"; key: string; name: string } | { type: "deleteMarkCollection"; key: string } | { type: "setMarkCollectionColor"; key: string; color: string } | { type: "addMark"; collectionKey: string; timeSeconds: number } | { type: "moveMark"; collectionKey: string; index: number; timeSeconds: number } | { type: "deleteMark"; collectionKey: string; index: number };
 
+export type SequenceKeyDto = {
+	path: string,
+	objectKey: string,
+};
+
 export type SequenceLaneDto = {
 	target: LayoutTargetDto,
 	label: string,
@@ -377,6 +366,25 @@ export type SequenceSelectionEditResultDto = {
 	copiedCount: number,
 	skippedCount: number,
 };
+
+export type SequenceTransportSnapshotDto = {
+	sourceLabel: string,
+	sourceKey: SequenceKeyDto | null,
+	renderGeneration: number,
+	renderDirtyRevision: number,
+	transportState: SequenceTransportState,
+	renderUpdating: boolean,
+	positionSeconds: number,
+	homeSeconds: number,
+	durationSeconds: number,
+	audio: SequenceAudioDto | null,
+	clockSource: string,
+	audioPlaybackStatus: AudioPlaybackStatus,
+	geometryIdentity: string,
+	status: string,
+};
+
+export type SequenceTransportState = "stopped" | "paused" | "playing" | "selected_effects" | "ended" | "error";
 
 export type TextPositionDto = {
 	line: number,

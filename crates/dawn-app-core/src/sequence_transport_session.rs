@@ -19,18 +19,10 @@ use crate::output_runtime::{
 pub enum AudioPlaybackStatus {
     None,
     Missing,
-    Loading,
-    LoadingToPlay,
     Ready,
     Playing,
     Ended,
     Error,
-}
-
-impl AudioPlaybackStatus {
-    pub fn is_loading(self) -> bool {
-        matches!(self, Self::Loading | Self::LoadingToPlay)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -46,7 +38,7 @@ pub struct SequencePlaybackState {
 }
 
 #[derive(Debug, Clone)]
-pub enum PreviewSource {
+pub enum SequenceTransportSource {
     None,
     Sequence {
         key: SequenceKey,
@@ -55,10 +47,9 @@ pub enum PreviewSource {
 }
 
 #[derive(Debug, Clone)]
-pub enum PreviewTransport {
+pub enum SequenceTransport {
     Stopped,
     Paused,
-    NativeAudioPlaying,
     Playing {
         started_at: Instant,
         started_position_seconds: f64,
@@ -67,17 +58,16 @@ pub enum PreviewTransport {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
-pub enum PlaybackTransportState {
+pub enum SequenceTransportState {
     Stopped,
     Paused,
-    LoadingToPlay,
     Playing,
     SelectedEffects,
     Ended,
     Error,
 }
 
-impl PlaybackTransportState {
+impl SequenceTransportState {
     pub fn is_active_playback(self) -> bool {
         matches!(self, Self::Playing | Self::SelectedEffects)
     }
@@ -92,11 +82,13 @@ impl PlaybackTransportState {
 }
 
 #[derive(Debug, Clone)]
-pub struct PreviewSnapshot {
+pub struct SequenceTransportSnapshot {
     pub source_label: String,
     pub source_key: Option<SequenceKey>,
-    pub transport_state: PlaybackTransportState,
-    pub preview_updating: bool,
+    pub render_generation: u64,
+    pub render_dirty_revision: u64,
+    pub transport_state: SequenceTransportState,
+    pub render_updating: bool,
     pub position_seconds: f64,
     pub home_seconds: f64,
     pub duration_seconds: f64,
@@ -109,7 +101,7 @@ pub struct PreviewSnapshot {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PreviewSyncMode {
+pub enum SequenceTransportSyncMode {
     RenderNow,
     DeferRender,
 }
@@ -138,7 +130,7 @@ pub struct PlaybackRenderRequest {
     pub document: Arc<SequenceEditorDocument>,
     pub kind: PlaybackRenderMode,
     pub status: String,
-    pub cancellation: PreviewCancellationToken,
+    pub cancellation: RenderCancellationToken,
 }
 
 #[derive(Debug, Clone)]
@@ -148,17 +140,17 @@ pub enum PlaybackRenderMode {
         frame_index: u64,
     },
     SelectedEffects {
-        preview_seconds: f64,
+        effect_elapsed_seconds: f64,
         ids: HashSet<u32>,
     },
 }
 
 #[derive(Debug, Clone)]
-pub struct PreviewCancellationToken {
+pub struct RenderCancellationToken {
     cancelled: Arc<AtomicBool>,
 }
 
-impl Default for PreviewCancellationToken {
+impl Default for RenderCancellationToken {
     fn default() -> Self {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
@@ -166,7 +158,7 @@ impl Default for PreviewCancellationToken {
     }
 }
 
-impl PreviewCancellationToken {
+impl RenderCancellationToken {
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Relaxed);
     }
@@ -184,6 +176,13 @@ pub struct PlaybackRenderResult {
     pub timing: PlaybackRenderTiming,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAudioClockProjection {
+    pub position_seconds: f64,
+    pub status: AudioPlaybackStatus,
+    pub ended: bool,
+}
+
 #[derive(Debug, Clone)]
 struct EffectPreviewState {
     ids: HashSet<u32>,
@@ -191,9 +190,9 @@ struct EffectPreviewState {
 }
 
 #[derive(Debug, Clone)]
-pub struct PlaybackSession {
-    source: PreviewSource,
-    transport: PreviewTransport,
+pub struct SequenceTransportSession {
+    source: SequenceTransportSource,
+    transport: SequenceTransport,
     sequence_states: HashMap<SequenceKey, SequencePlaybackState>,
     effect_preview: Option<EffectPreviewState>,
     last_native_audio_frame_index: Option<u64>,
@@ -202,7 +201,7 @@ pub struct PlaybackSession {
     dirty_revision: u64,
     next_deferred_render_id: u64,
     pending_deferred_render: Option<PendingDeferredRender>,
-    snapshot: PreviewSnapshot,
+    snapshot: SequenceTransportSnapshot,
 }
 
 #[derive(Debug, Clone)]
@@ -210,7 +209,7 @@ struct PendingDeferredRender {
     id: u64,
     dirty_revision: u64,
     generation: u64,
-    cancellation: PreviewCancellationToken,
+    cancellation: RenderCancellationToken,
     started: bool,
 }
 
@@ -222,13 +221,13 @@ impl PartialEq for PendingDeferredRender {
     }
 }
 
-impl Default for PlaybackSession {
+impl Default for SequenceTransportSession {
     fn default() -> Self {
         let geometry = Arc::new(empty_geometry());
-        let frame = empty_frame(&geometry, 0, "No sequence preview source");
+        let frame = empty_frame(&geometry, 0, "No sequence source");
         Self {
-            source: PreviewSource::None,
-            transport: PreviewTransport::Stopped,
+            source: SequenceTransportSource::None,
+            transport: SequenceTransport::Stopped,
             sequence_states: HashMap::new(),
             effect_preview: None,
             last_native_audio_frame_index: None,
@@ -237,11 +236,13 @@ impl Default for PlaybackSession {
             dirty_revision: 0,
             next_deferred_render_id: 0,
             pending_deferred_render: None,
-            snapshot: PreviewSnapshot {
-                source_label: "No preview source".to_string(),
+            snapshot: SequenceTransportSnapshot {
+                source_label: "No sequence source".to_string(),
                 source_key: None,
-                transport_state: PlaybackTransportState::Stopped,
-                preview_updating: false,
+                render_generation: 0,
+                render_dirty_revision: 0,
+                transport_state: SequenceTransportState::Stopped,
+                render_updating: false,
                 position_seconds: 0.0,
                 home_seconds: 0.0,
                 duration_seconds: 0.0,
@@ -250,14 +251,14 @@ impl Default for PlaybackSession {
                 audio_playback_status: AudioPlaybackStatus::None,
                 geometry,
                 frame: Arc::new(frame),
-                status: "No sequence preview source".to_string(),
+                status: "No sequence source".to_string(),
             },
         }
     }
 }
 
-impl PlaybackSession {
-    pub fn snapshot(&self) -> PreviewSnapshot {
+impl SequenceTransportSession {
+    pub fn snapshot(&self) -> SequenceTransportSnapshot {
         self.snapshot.clone()
     }
 
@@ -273,7 +274,7 @@ impl PlaybackSession {
         &mut self,
         source: Option<(SequenceKey, SequenceEditorDocument)>,
         project: Option<&DawnProject>,
-        mode: PreviewSyncMode,
+        mode: SequenceTransportSyncMode,
     ) {
         let next_key = source.as_ref().map(|(key, _)| key);
         let source_changed = self.current_key().as_ref() != next_key;
@@ -287,18 +288,18 @@ impl PlaybackSession {
         match source {
             Some((key, document)) => {
                 self.sequence_states.entry(key.clone()).or_default();
-                self.source = PreviewSource::Sequence {
+                self.source = SequenceTransportSource::Sequence {
                     key,
                     document: Arc::new(document),
                 };
             }
             None => {
-                self.source = PreviewSource::None;
-                self.transport = PreviewTransport::Stopped;
+                self.source = SequenceTransportSource::None;
+                self.transport = SequenceTransport::Stopped;
             }
         }
         match mode {
-            PreviewSyncMode::RenderNow | PreviewSyncMode::DeferRender => {
+            SequenceTransportSyncMode::RenderNow | SequenceTransportSyncMode::DeferRender => {
                 self.schedule_render(project, self.status_for_source())
             }
         }
@@ -307,8 +308,8 @@ impl PlaybackSession {
     pub fn play(&mut self, project: Option<&DawnProject>) {
         self.effect_preview = None;
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
-            self.transport = PreviewTransport::Stopped;
-            self.schedule_render(project, "No sequence preview source");
+            self.transport = SequenceTransport::Stopped;
+            self.schedule_render(project, "No sequence source");
             return;
         };
 
@@ -316,31 +317,10 @@ impl PlaybackSession {
         if state.position_seconds >= duration_seconds {
             state.position_seconds = clamp_position_seconds(state.home_seconds, duration_seconds);
         }
-        self.transport = PreviewTransport::Playing {
+        self.transport = SequenceTransport::Playing {
             started_at: Instant::now(),
             started_position_seconds: state.position_seconds,
         };
-        self.schedule_render(project, "Playing");
-    }
-
-    pub fn play_from_native_audio_clock(
-        &mut self,
-        position_seconds: f64,
-        project: Option<&DawnProject>,
-    ) {
-        self.effect_preview = None;
-        let Some((key, duration_seconds)) = self.sequence_source_meta() else {
-            self.transport = PreviewTransport::Stopped;
-            self.schedule_render(project, "No sequence preview source");
-            return;
-        };
-        let state = self.sequence_states.entry(key).or_default();
-        state.position_seconds = clamp_position_seconds(position_seconds, duration_seconds);
-        self.transport = PreviewTransport::NativeAudioPlaying;
-        self.last_native_audio_frame_index = Some(sequence_frame_index(
-            state.position_seconds,
-            self.target_fps(),
-        ));
         self.schedule_render(project, "Playing");
     }
 
@@ -356,24 +336,14 @@ impl PlaybackSession {
         };
         let state = self.sequence_states.entry(key).or_default();
         state.position_seconds = clamp_position_seconds(position_seconds, duration_seconds);
-        self.transport = PreviewTransport::Paused;
+        self.transport = SequenceTransport::Paused;
         self.last_native_audio_frame_index = None;
         self.schedule_render(project, "Paused");
     }
 
     pub fn stop(&mut self, project: Option<&DawnProject>) {
         self.capture_position();
-        self.transport = PreviewTransport::Stopped;
-        self.last_native_audio_frame_index = None;
-        if let Some((key, duration_seconds)) = self.sequence_source_meta() {
-            let state = self.sequence_states.entry(key).or_default();
-            state.position_seconds = clamp_position_seconds(state.home_seconds, duration_seconds);
-        }
-        self.schedule_render(project, "Stopped");
-    }
-
-    pub fn stop_native_audio(&mut self, project: Option<&DawnProject>) {
-        self.transport = PreviewTransport::Stopped;
+        self.transport = SequenceTransport::Stopped;
         self.last_native_audio_frame_index = None;
         if let Some((key, duration_seconds)) = self.sequence_source_meta() {
             let state = self.sequence_states.entry(key).or_default();
@@ -392,34 +362,11 @@ impl PlaybackSession {
         state.position_seconds = position_seconds;
         state.home_seconds = position_seconds;
         if self.is_playing() {
-            self.transport = PreviewTransport::Playing {
+            self.transport = SequenceTransport::Playing {
                 started_at: Instant::now(),
                 started_position_seconds: position_seconds,
             };
         }
-        self.schedule_render(project, "Ready");
-    }
-
-    pub fn seek_native_audio(
-        &mut self,
-        position_seconds: f64,
-        playing: bool,
-        project: Option<&DawnProject>,
-    ) {
-        let Some((key, duration_seconds)) = self.sequence_source_meta() else {
-            self.schedule_render(project, "No active sequence");
-            return;
-        };
-        let position_seconds = clamp_position_seconds(position_seconds, duration_seconds);
-        let state = self.sequence_states.entry(key).or_default();
-        state.position_seconds = position_seconds;
-        state.home_seconds = position_seconds;
-        self.transport = if playing {
-            PreviewTransport::NativeAudioPlaying
-        } else {
-            PreviewTransport::Paused
-        };
-        self.last_native_audio_frame_index = None;
         self.schedule_render(project, "Ready");
     }
 
@@ -433,7 +380,7 @@ impl PlaybackSession {
         state.position_seconds = position_seconds;
         state.home_seconds = position_seconds;
         if self.is_playing() {
-            self.transport = PreviewTransport::Playing {
+            self.transport = SequenceTransport::Playing {
                 started_at: Instant::now(),
                 started_position_seconds: position_seconds,
             };
@@ -449,19 +396,7 @@ impl PlaybackSession {
         let state = self.sequence_states.entry(key).or_default();
         state.position_seconds = 0.0;
         state.home_seconds = 0.0;
-        self.transport = PreviewTransport::Stopped;
-        self.schedule_render(project, "Sequence returned to beginning");
-    }
-
-    pub fn go_to_sequence_beginning_native_audio(&mut self, project: Option<&DawnProject>) {
-        let Some((key, _)) = self.sequence_source_meta() else {
-            self.schedule_render(project, "No active sequence");
-            return;
-        };
-        let state = self.sequence_states.entry(key).or_default();
-        state.position_seconds = 0.0;
-        state.home_seconds = 0.0;
-        self.transport = PreviewTransport::Paused;
+        self.transport = SequenceTransport::Stopped;
         self.schedule_render(project, "Sequence returned to beginning");
     }
 
@@ -476,7 +411,7 @@ impl PlaybackSession {
             self.refresh_snapshot_metadata("Previewing selected effect");
             return true;
         }
-        if !self.is_playing() || matches!(self.transport, PreviewTransport::NativeAudioPlaying) {
+        if !self.is_playing() {
             return false;
         }
         if let Some((key, duration_seconds)) = self.sequence_source_meta() {
@@ -485,7 +420,7 @@ impl PlaybackSession {
             let state = self.sequence_states.entry(key).or_default();
             state.position_seconds = position_seconds;
             if position_seconds >= duration_seconds {
-                self.transport = PreviewTransport::Stopped;
+                self.transport = SequenceTransport::Stopped;
                 self.refresh_snapshot_metadata("Sequence playback complete");
             } else {
                 self.refresh_snapshot_metadata("Playing");
@@ -501,7 +436,7 @@ impl PlaybackSession {
     }
 
     pub fn begin_deferred_render(&mut self) -> Option<PlaybackRenderRequest> {
-        if !self.snapshot.preview_updating {
+        if !self.snapshot.render_updating {
             return None;
         }
         let pending = PendingDeferredRender {
@@ -522,8 +457,8 @@ impl PlaybackSession {
         {
             return None;
         }
-        let PreviewSource::Sequence { key, document } = self.source.clone() else {
-            self.snapshot.preview_updating = false;
+        let SequenceTransportSource::Sequence { key, document } = self.source.clone() else {
+            self.snapshot.render_updating = false;
             return None;
         };
         self.next_deferred_render_id = self.next_deferred_render_id.saturating_add(1);
@@ -538,7 +473,7 @@ impl PlaybackSession {
         let position_seconds = self.current_position_seconds(&key, document.duration_seconds);
         let kind = match self.effect_preview.clone() {
             Some(effect_preview) => PlaybackRenderMode::SelectedEffects {
-                preview_seconds: effect_preview.started_at.elapsed().as_secs_f64(),
+                effect_elapsed_seconds: effect_preview.started_at.elapsed().as_secs_f64(),
                 ids: effect_preview.ids,
             },
             None => {
@@ -584,7 +519,7 @@ impl PlaybackSession {
         self.snapshot.geometry = Arc::new(result.geometry);
         self.snapshot.frame = Arc::new(result.frame);
         self.snapshot.status = frame_status;
-        self.snapshot.preview_updating = false;
+        self.snapshot.render_updating = false;
         true
     }
 
@@ -608,83 +543,135 @@ impl PlaybackSession {
         self.schedule_render(project, status);
     }
 
-    pub fn render_at_native_audio_clock(
+    pub fn apply_native_audio_clock(
         &mut self,
-        position_seconds: f64,
-        ended: bool,
+        clock: NativeAudioClockProjection,
         project: Option<&DawnProject>,
     ) {
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
             self.schedule_render(project, "No active sequence");
             return;
         };
-        let position_seconds = clamp_position_seconds(position_seconds, duration_seconds);
+        self.effect_preview = None;
+        let position_seconds = clamp_position_seconds(clock.position_seconds, duration_seconds);
         let frame_index = sequence_frame_index(position_seconds, self.target_fps());
         self.sequence_states
-            .entry(key)
+            .entry(key.clone())
             .or_default()
             .position_seconds = position_seconds;
-        if ended || position_seconds >= duration_seconds {
-            self.transport = PreviewTransport::Stopped;
+        self.snapshot.clock_source = "nativeAudio".to_string();
+        self.snapshot.audio_playback_status = clock.status;
+        if clock.ended || position_seconds >= duration_seconds {
+            self.transport = SequenceTransport::Stopped;
             self.last_native_audio_frame_index = None;
-            self.schedule_render(project, "Sequence playback complete");
-        } else {
-            self.transport = PreviewTransport::NativeAudioPlaying;
-            self.refresh_snapshot_metadata("Playing");
-            if self.last_native_audio_frame_index != Some(frame_index) {
-                self.last_native_audio_frame_index = Some(frame_index);
-                self.schedule_render(project, "Playing");
+            self.schedule_render_with_audio_status(
+                project,
+                "Sequence playback complete",
+                "nativeAudio",
+                AudioPlaybackStatus::Ended,
+            );
+            return;
+        }
+        match clock.status {
+            AudioPlaybackStatus::Ended => {
+                self.transport = SequenceTransport::Stopped;
+                self.last_native_audio_frame_index = None;
+                self.schedule_render_with_audio_status(
+                    project,
+                    "Sequence playback complete",
+                    "nativeAudio",
+                    AudioPlaybackStatus::Ended,
+                );
+            }
+            AudioPlaybackStatus::Playing => {
+                self.transport = SequenceTransport::Paused;
+                self.refresh_snapshot_metadata_with_audio_status(
+                    "Playing",
+                    "nativeAudio",
+                    AudioPlaybackStatus::Playing,
+                );
+                if self.last_native_audio_frame_index != Some(frame_index) {
+                    self.last_native_audio_frame_index = Some(frame_index);
+                    self.schedule_render_with_audio_status(
+                        project,
+                        "Playing",
+                        "nativeAudio",
+                        AudioPlaybackStatus::Playing,
+                    );
+                }
+            }
+            AudioPlaybackStatus::Ready => {
+                self.transport = SequenceTransport::Paused;
+                self.last_native_audio_frame_index = None;
+                self.schedule_render_with_audio_status(
+                    project,
+                    "Ready",
+                    "nativeAudio",
+                    AudioPlaybackStatus::Ready,
+                );
+            }
+            AudioPlaybackStatus::Missing => {
+                self.transport = SequenceTransport::Stopped;
+                self.last_native_audio_frame_index = None;
+                self.refresh_snapshot_metadata_with_audio_status(
+                    "Audio missing",
+                    "silent",
+                    AudioPlaybackStatus::Missing,
+                );
+            }
+            AudioPlaybackStatus::None => {
+                self.transport = SequenceTransport::Stopped;
+                self.last_native_audio_frame_index = None;
+                self.refresh_snapshot_metadata_with_audio_status(
+                    "Ready",
+                    "silent",
+                    AudioPlaybackStatus::None,
+                );
+            }
+            AudioPlaybackStatus::Error => {
+                self.transport = SequenceTransport::Paused;
+                self.last_native_audio_frame_index = None;
+                self.schedule_render_with_audio_status(
+                    project,
+                    "Audio error",
+                    "nativeAudio",
+                    AudioPlaybackStatus::Error,
+                );
             }
         }
     }
 
-    pub fn set_timing_status(
-        &mut self,
-        clock_source: impl Into<String>,
-        audio_playback_status: AudioPlaybackStatus,
-    ) {
-        let clock_source = clock_source.into();
-        self.snapshot.clock_source = clock_source;
-        self.snapshot.audio_playback_status = audio_playback_status;
-        self.snapshot.transport_state = self.transport_state();
-    }
-
     pub fn is_playing(&self) -> bool {
-        matches!(
-            self.transport,
-            PreviewTransport::Playing { .. } | PreviewTransport::NativeAudioPlaying
-        )
+        matches!(self.transport, SequenceTransport::Playing { .. })
     }
 
-    pub fn transport_state(&self) -> PlaybackTransportState {
+    pub fn transport_state(&self) -> SequenceTransportState {
         if self.effect_preview.is_some() {
-            return PlaybackTransportState::SelectedEffects;
+            return SequenceTransportState::SelectedEffects;
         }
         match self.snapshot.audio_playback_status {
-            AudioPlaybackStatus::LoadingToPlay => PlaybackTransportState::LoadingToPlay,
-            AudioPlaybackStatus::Ended => PlaybackTransportState::Ended,
-            AudioPlaybackStatus::Error => PlaybackTransportState::Error,
+            AudioPlaybackStatus::Playing => SequenceTransportState::Playing,
+            AudioPlaybackStatus::Ended => SequenceTransportState::Ended,
+            AudioPlaybackStatus::Error => SequenceTransportState::Error,
             _ => match self.transport {
-                PreviewTransport::Playing { .. } | PreviewTransport::NativeAudioPlaying => {
-                    PlaybackTransportState::Playing
-                }
-                PreviewTransport::Paused => PlaybackTransportState::Paused,
-                PreviewTransport::Stopped => PlaybackTransportState::Stopped,
+                SequenceTransport::Playing { .. } => SequenceTransportState::Playing,
+                SequenceTransport::Paused => SequenceTransportState::Paused,
+                SequenceTransport::Stopped => SequenceTransportState::Stopped,
             },
         }
     }
 
     pub fn target_fps(&self) -> u32 {
         match &self.source {
-            PreviewSource::Sequence { document, .. } => document.frame_rate.max(1),
-            PreviewSource::None => 30,
+            SequenceTransportSource::Sequence { document, .. } => document.frame_rate.max(1),
+            SequenceTransportSource::None => 30,
         }
     }
 
     fn pause_current(&mut self, project: Option<&DawnProject>) {
         self.capture_position();
         if self.is_playing() {
-            self.transport = PreviewTransport::Paused;
+            self.transport = SequenceTransport::Paused;
             self.schedule_render(project, "Paused");
         }
     }
@@ -719,11 +706,11 @@ impl PlaybackSession {
             geometry,
             frame,
         ) = match self.source.clone() {
-            PreviewSource::None => {
+            SequenceTransportSource::None => {
                 let geometry = Arc::new(empty_geometry());
                 let frame = Arc::new(empty_frame(&geometry, self.generation, status.clone()));
                 (
-                    "No preview source".to_string(),
+                    "No sequence source".to_string(),
                     None,
                     0.0,
                     0.0,
@@ -733,7 +720,7 @@ impl PlaybackSession {
                     frame,
                 )
             }
-            PreviewSource::Sequence { key, document } => {
+            SequenceTransportSource::Sequence { key, document } => {
                 let duration_seconds = document.duration_seconds;
                 let position_seconds = self.current_position_seconds(&key, duration_seconds);
                 let home_seconds = self
@@ -774,12 +761,14 @@ impl PlaybackSession {
         };
         let frame_status = status_from_frame(&frame.status).unwrap_or(status);
         let (clock_source, audio_playback_status) =
-            timing_status_for(audio.as_ref(), self.is_playing());
-        self.snapshot = PreviewSnapshot {
+            timing_status_for(audio.as_ref(), self.snapshot.audio_playback_status);
+        self.snapshot = SequenceTransportSnapshot {
             source_label,
             source_key,
+            render_generation: self.generation,
+            render_dirty_revision: self.dirty_revision,
             transport_state: self.transport_state_for(audio_playback_status),
-            preview_updating: false,
+            render_updating: false,
             position_seconds,
             home_seconds,
             duration_seconds,
@@ -790,26 +779,39 @@ impl PlaybackSession {
             frame,
             status: frame_status,
         };
-        if matches!(self.source, PreviewSource::Sequence { .. }) && project.is_some() {
+        if matches!(self.source, SequenceTransportSource::Sequence { .. }) && project.is_some() {
             self.pending_deferred_render = Some(PendingDeferredRender {
                 id: self.next_deferred_render_id,
                 dirty_revision: self.dirty_revision,
                 generation: self.generation,
-                cancellation: PreviewCancellationToken::default(),
+                cancellation: RenderCancellationToken::default(),
                 started: false,
             });
-            self.snapshot.preview_updating = true;
+            self.snapshot.render_updating = true;
         }
+    }
+
+    fn schedule_render_with_audio_status(
+        &mut self,
+        project: Option<&DawnProject>,
+        status: impl Into<String>,
+        clock_source: impl Into<String>,
+        audio_playback_status: AudioPlaybackStatus,
+    ) {
+        self.schedule_render(project, status);
+        self.snapshot.clock_source = clock_source.into();
+        self.snapshot.audio_playback_status = audio_playback_status;
+        self.snapshot.transport_state = self.transport_state_for(audio_playback_status);
     }
 
     fn refresh_snapshot_metadata(&mut self, status: impl Into<String>) {
         let status = status.into();
         match &self.source {
-            PreviewSource::None => {
-                self.snapshot.source_label = "No preview source".to_string();
+            SequenceTransportSource::None => {
+                self.snapshot.source_label = "No sequence source".to_string();
                 self.snapshot.source_key = None;
-                self.snapshot.transport_state = PlaybackTransportState::Stopped;
-                self.snapshot.preview_updating = false;
+                self.snapshot.transport_state = SequenceTransportState::Stopped;
+                self.snapshot.render_updating = false;
                 self.snapshot.position_seconds = 0.0;
                 self.snapshot.home_seconds = 0.0;
                 self.snapshot.duration_seconds = 0.0;
@@ -818,7 +820,7 @@ impl PlaybackSession {
                 self.snapshot.audio_playback_status = AudioPlaybackStatus::None;
                 self.snapshot.status = status;
             }
-            PreviewSource::Sequence { key, document } => {
+            SequenceTransportSource::Sequence { key, document } => {
                 let duration_seconds = document.duration_seconds;
                 self.snapshot.source_label = format!("Sequence {}", document.object_key);
                 self.snapshot.source_key = Some(key.clone());
@@ -831,8 +833,10 @@ impl PlaybackSession {
                     .unwrap_or_default();
                 self.snapshot.duration_seconds = duration_seconds;
                 self.snapshot.audio = document.audio.clone();
-                let (clock_source, audio_playback_status) =
-                    timing_status_for(self.snapshot.audio.as_ref(), self.is_playing());
+                let (clock_source, audio_playback_status) = timing_status_for(
+                    self.snapshot.audio.as_ref(),
+                    self.snapshot.audio_playback_status,
+                );
                 self.snapshot.clock_source = clock_source;
                 self.snapshot.audio_playback_status = audio_playback_status;
                 self.snapshot.transport_state = self.transport_state_for(audio_playback_status);
@@ -841,23 +845,33 @@ impl PlaybackSession {
         }
     }
 
+    fn refresh_snapshot_metadata_with_audio_status(
+        &mut self,
+        status: impl Into<String>,
+        clock_source: impl Into<String>,
+        audio_playback_status: AudioPlaybackStatus,
+    ) {
+        self.refresh_snapshot_metadata(status);
+        self.snapshot.clock_source = clock_source.into();
+        self.snapshot.audio_playback_status = audio_playback_status;
+        self.snapshot.transport_state = self.transport_state_for(audio_playback_status);
+    }
+
     fn transport_state_for(
         &self,
         audio_playback_status: AudioPlaybackStatus,
-    ) -> PlaybackTransportState {
+    ) -> SequenceTransportState {
         if self.effect_preview.is_some() {
-            return PlaybackTransportState::SelectedEffects;
+            return SequenceTransportState::SelectedEffects;
         }
         match audio_playback_status {
-            AudioPlaybackStatus::LoadingToPlay => PlaybackTransportState::LoadingToPlay,
-            AudioPlaybackStatus::Ended => PlaybackTransportState::Ended,
-            AudioPlaybackStatus::Error => PlaybackTransportState::Error,
+            AudioPlaybackStatus::Playing => SequenceTransportState::Playing,
+            AudioPlaybackStatus::Ended => SequenceTransportState::Ended,
+            AudioPlaybackStatus::Error => SequenceTransportState::Error,
             _ => match self.transport {
-                PreviewTransport::Playing { .. } | PreviewTransport::NativeAudioPlaying => {
-                    PlaybackTransportState::Playing
-                }
-                PreviewTransport::Paused => PlaybackTransportState::Paused,
-                PreviewTransport::Stopped => PlaybackTransportState::Stopped,
+                SequenceTransport::Playing { .. } => SequenceTransportState::Playing,
+                SequenceTransport::Paused => SequenceTransportState::Paused,
+                SequenceTransport::Stopped => SequenceTransportState::Stopped,
             },
         }
     }
@@ -875,19 +889,11 @@ impl PlaybackSession {
 
     fn playing_position_seconds(&self) -> f64 {
         match self.transport {
-            PreviewTransport::NativeAudioPlaying => self
-                .current_key()
-                .and_then(|key| {
-                    self.sequence_states
-                        .get(&key)
-                        .map(|state| state.position_seconds)
-                })
-                .unwrap_or_default(),
-            PreviewTransport::Playing {
+            SequenceTransport::Playing {
                 started_at,
                 started_position_seconds,
             } => started_position_seconds + started_at.elapsed().as_secs_f64(),
-            PreviewTransport::Stopped | PreviewTransport::Paused => self
+            SequenceTransport::Stopped | SequenceTransport::Paused => self
                 .current_key()
                 .and_then(|key| {
                     self.sequence_states
@@ -900,24 +906,24 @@ impl PlaybackSession {
 
     fn sequence_source_meta(&self) -> Option<(SequenceKey, f64)> {
         match &self.source {
-            PreviewSource::Sequence { key, document } => {
+            SequenceTransportSource::Sequence { key, document } => {
                 Some((key.clone(), document.duration_seconds))
             }
-            PreviewSource::None => None,
+            SequenceTransportSource::None => None,
         }
     }
 
     fn current_key(&self) -> Option<SequenceKey> {
         match &self.source {
-            PreviewSource::Sequence { key, .. } => Some(key.clone()),
-            PreviewSource::None => None,
+            SequenceTransportSource::Sequence { key, .. } => Some(key.clone()),
+            SequenceTransportSource::None => None,
         }
     }
 
     fn status_for_source(&self) -> &'static str {
         match self.source {
-            PreviewSource::None => "No sequence preview source",
-            PreviewSource::Sequence { .. } => "Ready",
+            SequenceTransportSource::None => "No sequence source",
+            SequenceTransportSource::Sequence { .. } => "Ready",
         }
     }
 }
@@ -950,19 +956,25 @@ fn status_from_frame(status: &OutputFrameStatus) -> Option<String> {
 
 fn timing_status_for(
     audio: Option<&SequenceAudioDocument>,
-    is_playing: bool,
+    current_status: AudioPlaybackStatus,
 ) -> (String, AudioPlaybackStatus) {
     match audio {
         Some(audio) if audio.exists => (
             "nativeAudio".to_string(),
-            if is_playing {
-                AudioPlaybackStatus::Playing
-            } else {
-                AudioPlaybackStatus::Ready
-            },
+            native_audio_status(current_status),
         ),
         Some(_) => ("silent".to_string(), AudioPlaybackStatus::Missing),
         None => ("silent".to_string(), AudioPlaybackStatus::None),
+    }
+}
+
+fn native_audio_status(current_status: AudioPlaybackStatus) -> AudioPlaybackStatus {
+    match current_status {
+        AudioPlaybackStatus::Ready
+        | AudioPlaybackStatus::Playing
+        | AudioPlaybackStatus::Ended
+        | AudioPlaybackStatus::Error => current_status,
+        AudioPlaybackStatus::None | AudioPlaybackStatus::Missing => AudioPlaybackStatus::Ready,
     }
 }
 
@@ -994,7 +1006,10 @@ mod tests {
     use crate::workspace::WorkspaceService;
     use dawn_project::{DawnProject, Utf8PathBuf};
 
-    use super::{PlaybackSession, PreviewSyncMode, SequenceKey};
+    use super::{
+        AudioPlaybackStatus, NativeAudioClockProjection, SequenceKey, SequenceTransportSession,
+        SequenceTransportSyncMode,
+    };
 
     fn christmas_house_project_path() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/christmas-house/project.dawn")
@@ -1035,16 +1050,16 @@ mod tests {
     #[test]
     fn sequence_source_refresh_schedules_latest_deferred_render() {
         let (project, document, key) = christmas_house_project_and_sequence();
-        let mut session = PlaybackSession::default();
+        let mut session = SequenceTransportSession::default();
         session.sync_source(
             Some((key.clone(), document)),
             Some(&project),
-            PreviewSyncMode::RenderNow,
+            SequenceTransportSyncMode::RenderNow,
         );
         session.seek(2.0, Some(&project));
         let first_request = session
             .begin_deferred_render()
-            .expect("initial source should schedule preview render");
+            .expect("initial source should schedule sequence render");
 
         let edited_document = edited_sequence_document(&first_request.document);
         let edited_key = key.clone();
@@ -1052,11 +1067,11 @@ mod tests {
         session.sync_source(
             Some((edited_key, edited_document)),
             Some(&project),
-            PreviewSyncMode::RenderNow,
+            SequenceTransportSyncMode::RenderNow,
         );
         let edited_request = session
             .begin_deferred_render()
-            .expect("edited source should schedule preview render");
+            .expect("edited source should schedule sequence render");
 
         assert_ne!(first_request.dirty_revision, edited_request.dirty_revision);
         assert_ne!(first_request.generation, edited_request.generation);
@@ -1067,17 +1082,17 @@ mod tests {
     #[test]
     fn effect_preview_id_changes_schedule_effect_preview_render() {
         let (project, document, key) = christmas_house_project_and_sequence();
-        let mut session = PlaybackSession::default();
+        let mut session = SequenceTransportSession::default();
         session.sync_source(
             Some((key, document)),
             Some(&project),
-            PreviewSyncMode::RenderNow,
+            SequenceTransportSyncMode::RenderNow,
         );
 
         session.set_effect_preview_ids(vec![1], Some(&project));
         let first_request = session
             .begin_deferred_render()
-            .expect("first effect selection should schedule preview render");
+            .expect("first effect selection should schedule effect preview render");
         let super::PlaybackRenderMode::SelectedEffects { ids, .. } = &first_request.kind else {
             panic!("effect preview selection should schedule an effect preview render");
         };
@@ -1086,7 +1101,7 @@ mod tests {
         session.set_effect_preview_ids(vec![23], Some(&project));
         let second_request = session
             .begin_deferred_render()
-            .expect("second effect selection should schedule preview render");
+            .expect("second effect selection should schedule effect preview render");
         let super::PlaybackRenderMode::SelectedEffects { ids, .. } = &second_request.kind else {
             panic!("effect preview selection should schedule an effect preview render");
         };
@@ -1098,18 +1113,32 @@ mod tests {
     fn native_audio_same_frame_ticks_do_not_reschedule_render() {
         let (project, mut document, key) = christmas_house_project_and_sequence();
         document.frame_rate = 144;
-        let mut session = PlaybackSession::default();
+        let mut session = SequenceTransportSession::default();
         session.sync_source(
             Some((key, document)),
             Some(&project),
-            PreviewSyncMode::RenderNow,
+            SequenceTransportSyncMode::RenderNow,
         );
-        session.play_from_native_audio_clock(0.001, Some(&project));
+        session.apply_native_audio_clock(
+            NativeAudioClockProjection {
+                position_seconds: 0.001,
+                status: AudioPlaybackStatus::Playing,
+                ended: false,
+            },
+            Some(&project),
+        );
         let request = session
             .begin_deferred_render()
-            .expect("native audio play should schedule a preview render");
+            .expect("native audio play should schedule a sequence render");
 
-        session.render_at_native_audio_clock(0.002, false, Some(&project));
+        session.apply_native_audio_clock(
+            NativeAudioClockProjection {
+                position_seconds: 0.002,
+                status: AudioPlaybackStatus::Playing,
+                ended: false,
+            },
+            Some(&project),
+        );
 
         assert!(!request.cancellation.is_cancelled());
         assert!(session.begin_deferred_render().is_none());
@@ -1119,21 +1148,35 @@ mod tests {
     fn native_audio_frame_boundary_schedules_latest_frame_start() {
         let (project, mut document, key) = christmas_house_project_and_sequence();
         document.frame_rate = 144;
-        let mut session = PlaybackSession::default();
+        let mut session = SequenceTransportSession::default();
         session.sync_source(
             Some((key, document)),
             Some(&project),
-            PreviewSyncMode::RenderNow,
+            SequenceTransportSyncMode::RenderNow,
         );
-        session.play_from_native_audio_clock(0.001, Some(&project));
+        session.apply_native_audio_clock(
+            NativeAudioClockProjection {
+                position_seconds: 0.001,
+                status: AudioPlaybackStatus::Playing,
+                ended: false,
+            },
+            Some(&project),
+        );
         let first_request = session
             .begin_deferred_render()
-            .expect("native audio play should schedule a preview render");
+            .expect("native audio play should schedule a sequence render");
 
-        session.render_at_native_audio_clock((1.0 / 144.0) + 0.0001, false, Some(&project));
+        session.apply_native_audio_clock(
+            NativeAudioClockProjection {
+                position_seconds: (1.0 / 144.0) + 0.0001,
+                status: AudioPlaybackStatus::Playing,
+                ended: false,
+            },
+            Some(&project),
+        );
         let second_request = session
             .begin_deferred_render()
-            .expect("frame boundary should schedule the next preview render");
+            .expect("frame boundary should schedule the next sequence render");
 
         assert!(first_request.cancellation.is_cancelled());
         let super::PlaybackRenderMode::FullSequenceFrame {
@@ -1146,7 +1189,14 @@ mod tests {
         assert_eq!(frame_index, 1);
         assert_eq!(position_seconds, super::frame_start(1, 144));
 
-        session.render_at_native_audio_clock((1.0 / 144.0) + 0.0002, false, Some(&project));
+        session.apply_native_audio_clock(
+            NativeAudioClockProjection {
+                position_seconds: (1.0 / 144.0) + 0.0002,
+                status: AudioPlaybackStatus::Playing,
+                ended: false,
+            },
+            Some(&project),
+        );
         assert!(!second_request.cancellation.is_cancelled());
         assert!(session.begin_deferred_render().is_none());
     }

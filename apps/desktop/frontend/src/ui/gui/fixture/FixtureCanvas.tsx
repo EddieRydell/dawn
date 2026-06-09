@@ -9,7 +9,7 @@ import { runSnapshotCommand } from "../../../store";
 import { denormalizePoint, drawSpatialCanvas, nearestPoint, normalizeBounds, normalizePoint, round6, unproject, type GuiFocus, type Point3 } from "../shared";
 import { BlockedGui } from "../BlockedGui";
 
-type FixturePointDragState = { kind: "fixturePoint"; objectKey: string; pointIndex: number; preview: Point3 } | null;
+type FixturePointDragState = { kind: "fixturePoint"; objectKey: string; pointIndex: number; draft: Point3 } | null;
 
 export function FixtureCanvas({
   document,
@@ -41,7 +41,7 @@ export function FixtureCanvas({
       }
       fixture.renderPlan.emitters.forEach((point, index) => {
         const normalizedPoint = normalizePoint(point);
-        const projected = project(drag.current?.kind === "fixturePoint" && drag.current.pointIndex === index ? drag.current.preview : normalizedPoint);
+        const projected = project(drag.current?.kind === "fixturePoint" && drag.current.pointIndex === index ? drag.current.draft : normalizedPoint);
         ctx.fillStyle = selected?.type === "point" && selected.index === index ? "#6abf8a" : "#d6a35a";
         ctx.beginPath();
         ctx.arc(projected.x, projected.y, 6, 0, Math.PI * 2);
@@ -68,13 +68,13 @@ export function FixtureCanvas({
         const point = points[index];
         if (point === undefined) return;
         setSelected({ type: "point", index });
-        drag.current = { kind: "fixturePoint", objectKey: fixture.objectKey, pointIndex: index, preview: point };
+        drag.current = { kind: "fixturePoint", objectKey: fixture.objectKey, pointIndex: index, draft: point };
       }}
       onMouseMove={(event) => {
         const current = drag.current;
         if (!current) return;
         const world = unproject(event.nativeEvent.offsetX, event.nativeEvent.offsetY, canvas.current, renderBounds);
-        current.preview = { x: round6(world.x), y: round6(world.y), z: current.preview.z };
+        current.draft = { x: round6(world.x), y: round6(world.y), z: current.draft.z };
         render((value) => value + 1);
       }}
       onMouseUp={() => {
@@ -86,7 +86,7 @@ export function FixtureCanvas({
             type: "movePoint",
             objectKey: current.objectKey,
             pointIndex: current.pointIndex,
-            point: denormalizePoint(current.preview)
+            point: denormalizePoint(current.draft)
           })
         );
       }}

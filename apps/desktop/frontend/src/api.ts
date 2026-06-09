@@ -53,11 +53,11 @@ export const commands = {
   setEffectPreviewEnabled: (enabled: boolean) => unwrap(generatedCommands.setEffectPreviewEnabled(enabled)),
   setEffectPreviewEffects: (ids: number[]) => unwrap(generatedCommands.setEffectPreviewEffects(ids)),
   openPreviewWindow: () => unwrap(generatedCommands.openPreviewWindow()),
-  previewPlay: () => unwrap(generatedCommands.previewPlay()),
-  previewPause: () => unwrap(generatedCommands.previewPause()),
-  previewStop: () => unwrap(generatedCommands.previewStop()),
-  previewRewindToZero: () => unwrap(generatedCommands.previewRewindToZero()),
-  previewSeek: (positionSeconds: number) => unwrap(generatedCommands.previewSeek(positionSeconds)),
+  sequenceTransportPlay: () => unwrap(generatedCommands.sequenceTransportPlay()),
+  sequenceTransportPause: () => unwrap(generatedCommands.sequenceTransportPause()),
+  sequenceTransportStop: () => unwrap(generatedCommands.sequenceTransportStop()),
+  sequenceTransportRewindToZero: () => unwrap(generatedCommands.sequenceTransportRewindToZero()),
+  sequenceTransportSeek: (positionSeconds: number) => unwrap(generatedCommands.sequenceTransportSeek(positionSeconds)),
   setLiveOutputEnabled: (enabled: boolean) => unwrap(generatedCommands.setLiveOutputEnabled(enabled)),
   getPreviewScene: () => unwrap(generatedCommands.getPreviewScene())
 };

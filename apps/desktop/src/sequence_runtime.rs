@@ -3,50 +3,44 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use dawn_app_core::document::SequenceEditorDocument;
-use dawn_app_core::dto::{GeometryRenderBoundsDto, GeometryRenderPointDto};
+use dawn_app_core::dto::SequenceKeyDto;
 use dawn_app_core::output_runtime::{
-    empty_frame, empty_geometry, geometry_pixel_count, OutputGeometryModel, RenderedOutputFrame,
-    SequenceChangeImpact, SequenceRenderPlan, SequenceRenderPlanCache,
+    empty_frame, empty_geometry, OutputGeometryModel, RenderedOutputFrame, SequenceChangeImpact,
+    SequenceRenderPlan, SequenceRenderPlanCache,
 };
-use dawn_app_core::preview_session::{
+use dawn_app_core::sequence_transport_session::{
     AudioPlaybackStatus, PlaybackRenderMode, PlaybackRenderRequest, PlaybackRenderResult,
-    PlaybackRenderTiming, PlaybackTransportState, PreviewSnapshot, SequenceKey,
+    PlaybackRenderTiming, SequenceKey, SequenceTransportSnapshot, SequenceTransportState,
 };
 use dawn_project::DawnProject;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::app_runtime::{apply_audio_clock_to_model, emit_preview_state_snapshot};
+use crate::app_runtime::{apply_audio_clock_to_model, emit_sequence_render_snapshot};
 use crate::audio_runtime::AudioClock;
 use crate::state::{
     lock_audio_runtime, lock_live_output, lock_model, lock_preview_transport, AppState,
-    CommandResult,
 };
-use crate::window_layout::{persist_window_layout, WorkbenchWindow};
 
-const PREVIEW_STATE_EVENT_INTERVAL: Duration = Duration::from_millis(33);
+const SEQUENCE_STATE_EVENT_INTERVAL: Duration = Duration::from_millis(33);
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct PreviewStateEventDto {
+pub struct SequenceRenderEventDto {
     pub source_label: String,
-    pub transport_state: PlaybackTransportState,
-    pub preview_updating: bool,
+    pub source_key: Option<SequenceKeyDto>,
+    pub render_generation: u32,
+    pub render_dirty_revision: u32,
+    pub render_updating: bool,
     pub position_seconds: f64,
-    pub home_seconds: f64,
-    pub duration_seconds: f64,
-    pub audio: Option<dawn_app_core::dto::SequenceAudioDto>,
-    pub clock_source: String,
-    pub audio_playback_status: AudioPlaybackStatus,
     pub geometry_identity: String,
-    pub status: String,
-    pub timing: PreviewTimingDto,
+    pub timing: SequenceRenderTimingDto,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct PreviewTimingDto {
+pub struct SequenceRenderTimingDto {
     pub backend_seconds: f64,
     pub target_fps: u32,
     pub active_fps: u32,
@@ -63,11 +57,11 @@ pub struct PreviewTimingDto {
     pub loop_accounted_ms: f64,
     pub loop_unaccounted_ms: f64,
     pub sleep_actual_ms: f64,
-    pub preview_transport_lock_ms: f64,
-    pub preview_publish_lock_ms: f64,
+    pub preview_window_transport_lock_ms: f64,
+    pub preview_window_publish_lock_ms: f64,
     pub live_output_lock_ms: f64,
     pub model_lock_wait_ms: f64,
-    pub preview_snapshot_ms: f64,
+    pub sequence_transport_snapshot_ms: f64,
     pub project_snapshot_ms: f64,
     pub audio_poll_ms: f64,
     pub audio_apply_ms: f64,
@@ -93,7 +87,7 @@ pub struct PreviewTimingDto {
     pub rendered_frame: bool,
 }
 
-impl PreviewTimingDto {
+impl SequenceRenderTimingDto {
     pub(crate) fn empty(backend_seconds: f64) -> Self {
         Self {
             backend_seconds,
@@ -112,11 +106,11 @@ impl PreviewTimingDto {
             loop_accounted_ms: 0.0,
             loop_unaccounted_ms: 0.0,
             sleep_actual_ms: 0.0,
-            preview_transport_lock_ms: 0.0,
-            preview_publish_lock_ms: 0.0,
+            preview_window_transport_lock_ms: 0.0,
+            preview_window_publish_lock_ms: 0.0,
             live_output_lock_ms: 0.0,
             model_lock_wait_ms: 0.0,
-            preview_snapshot_ms: 0.0,
+            sequence_transport_snapshot_ms: 0.0,
             project_snapshot_ms: 0.0,
             audio_poll_ms: 0.0,
             audio_apply_ms: 0.0,
@@ -144,36 +138,15 @@ impl PreviewTimingDto {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct PreviewSceneDto {
-    pub generation: u32,
-    pub topology_identity: String,
-    pub source_label: String,
-    pub bounds: GeometryRenderBoundsDto,
-    pub pixel_count: u32,
-    pub fixtures: Vec<PreviewSceneFixtureDto>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct PreviewSceneFixtureDto {
-    pub id: u32,
-    pub name: String,
-    pub bulb_radius_meters: f64,
-    pub first_pixel_index: u32,
-    pub pixels: Vec<GeometryRenderPointDto>,
-}
-
 #[derive(Debug, Default)]
-struct DeferredPreviewRenderer {
+struct DeferredSequenceRenderer {
     sequence_cache: SequenceRenderPlanCache,
     render_cache: Option<SequenceRenderPlan>,
     previous_key: Option<SequenceKey>,
     previous_document: Option<Arc<SequenceEditorDocument>>,
 }
 
-impl DeferredPreviewRenderer {
+impl DeferredSequenceRenderer {
     fn render(
         &mut self,
         project: Option<&DawnProject>,
@@ -210,10 +183,10 @@ impl DeferredPreviewRenderer {
                         || request.cancellation.is_cancelled(),
                     ),
                     PlaybackRenderMode::SelectedEffects {
-                        preview_seconds,
+                        effect_elapsed_seconds,
                         ids,
                     } => renderer.render_selected_effects_frame_timed_cancellable(
-                        *preview_seconds,
+                        *effect_elapsed_seconds,
                         request.generation,
                         Some(ids),
                         || request.cancellation.is_cancelled(),
@@ -299,15 +272,15 @@ impl DeferredPreviewRenderer {
     }
 }
 
-pub(crate) fn start_preview_worker(app: AppHandle) {
+pub(crate) fn start_sequence_runtime(app: AppHandle) {
     thread::spawn(move || {
         let worker_started = Instant::now();
         let sleeper = spin_sleep::SpinSleeper::default();
-        let mut deferred_renderer = DeferredPreviewRenderer::default();
+        let mut deferred_renderer = DeferredSequenceRenderer::default();
         let mut last_published_generation: Option<u64> = None;
         let mut had_sink = false;
-        let mut last_event_at = Instant::now() - PREVIEW_STATE_EVENT_INTERVAL;
-        let mut last_event_identity: Option<PreviewEventIdentity> = None;
+        let mut last_event_at = Instant::now() - SEQUENCE_STATE_EVENT_INTERVAL;
+        let mut last_event_identity: Option<SequenceRenderEventIdentity> = None;
         let mut last_event_emit_ms = 0.0;
         let mut previous_loop_started = worker_started;
         loop {
@@ -316,14 +289,15 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             let loop_interval_ms =
                 started.duration_since(previous_loop_started).as_secs_f64() * 1000.0;
             previous_loop_started = started;
-            let mut timing = PreviewTimingDto::empty(worker_started.elapsed().as_secs_f64());
+            let mut timing = SequenceRenderTimingDto::empty(worker_started.elapsed().as_secs_f64());
             timing.loop_interval_ms = loop_interval_ms;
 
-            let preview_transport_lock_started = Instant::now();
+            let preview_window_transport_lock_started = Instant::now();
             let has_sink = lock_preview_transport(&state)
                 .map(|runtime| runtime.has_sinks())
                 .unwrap_or(false);
-            timing.preview_transport_lock_ms = elapsed_ms(preview_transport_lock_started);
+            timing.preview_window_transport_lock_ms =
+                elapsed_ms(preview_window_transport_lock_started);
             let live_output_lock_started = Instant::now();
             let live_output_enabled = lock_live_output(&state)
                 .map(|runtime| runtime.enabled())
@@ -349,12 +323,16 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                     Ok(mut model) => {
                         timing.model_lock_wait_ms = elapsed_ms(model_lock_started);
                         let model_started = Instant::now();
-                        let preview_snapshot_started = Instant::now();
-                        let preview_snapshot = model.preview.snapshot();
-                        timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
+                        let sequence_transport_snapshot_started = Instant::now();
+                        let sequence_transport_snapshot = model.sequence_transport.snapshot();
+                        timing.sequence_transport_snapshot_ms +=
+                            elapsed_ms(sequence_transport_snapshot_started);
                         if let Some(clock) = audio_clock.as_ref() {
-                            if !should_apply_audio_clock_to_model(&preview_snapshot, clock) {
-                                model.tick_preview();
+                            if !should_apply_audio_clock_to_model(
+                                &sequence_transport_snapshot,
+                                clock,
+                            ) {
+                                model.tick_sequence_transport();
                             } else {
                                 let project_snapshot_started = Instant::now();
                                 let project = model.project.clone();
@@ -364,13 +342,14 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                                 timing.audio_apply_ms = elapsed_ms(apply_started);
                             }
                         } else {
-                            model.tick_preview();
+                            model.tick_sequence_transport();
                         };
-                        let preview_snapshot_started = Instant::now();
-                        let snapshot = model.preview.snapshot();
-                        timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
-                        let deferred_request = if snapshot.preview_updating {
-                            model.begin_deferred_preview_render()
+                        let sequence_transport_snapshot_started = Instant::now();
+                        let snapshot = model.sequence_transport.snapshot();
+                        timing.sequence_transport_snapshot_ms +=
+                            elapsed_ms(sequence_transport_snapshot_started);
+                        let deferred_request = if snapshot.render_updating {
+                            model.begin_deferred_sequence_render()
                         } else {
                             None
                         };
@@ -381,7 +360,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                         timing.project_snapshot_ms += elapsed_ms(project_snapshot_started);
                         (
                             snapshot,
-                            model.preview_target_fps(),
+                            model.sequence_transport_target_fps(),
                             project,
                             deferred_request,
                         )
@@ -403,14 +382,15 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                     if let Ok(mut model) = lock_model(&state) {
                         timing.model_lock_wait_ms += elapsed_ms(model_lock_started);
                         let model_started = Instant::now();
-                        let _completed = model.complete_deferred_preview_render(result);
-                        let preview_snapshot_started = Instant::now();
-                        snapshot = model.preview.snapshot();
-                        timing.preview_snapshot_ms += elapsed_ms(preview_snapshot_started);
+                        let _completed = model.complete_deferred_sequence_render(result);
+                        let sequence_transport_snapshot_started = Instant::now();
+                        snapshot = model.sequence_transport.snapshot();
+                        timing.sequence_transport_snapshot_ms +=
+                            elapsed_ms(sequence_transport_snapshot_started);
                         let project_snapshot_started = Instant::now();
                         project = model.project.clone();
                         timing.project_snapshot_ms += elapsed_ms(project_snapshot_started);
-                        target_fps = model.preview_target_fps();
+                        target_fps = model.sequence_transport_target_fps();
                         timing.model_update_ms += elapsed_ms(model_started);
                     }
                 }
@@ -430,9 +410,10 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                 && (snapshot.transport_state.should_publish_continuously()
                     || last_published_generation != Some(frame_generation));
             if should_publish_frame {
-                let preview_publish_lock_started = Instant::now();
+                let preview_window_publish_lock_started = Instant::now();
                 if let Ok(mut runtime) = lock_preview_transport(&state) {
-                    timing.preview_publish_lock_ms = elapsed_ms(preview_publish_lock_started);
+                    timing.preview_window_publish_lock_ms =
+                        elapsed_ms(preview_window_publish_lock_started);
                     let publish_started = Instant::now();
                     runtime.publish_frame(
                         &snapshot.frame,
@@ -443,7 +424,8 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                     timing.published_frame = true;
                     last_published_generation = Some(frame_generation);
                 } else {
-                    timing.preview_publish_lock_ms = elapsed_ms(preview_publish_lock_started);
+                    timing.preview_window_publish_lock_ms =
+                        elapsed_ms(preview_window_publish_lock_started);
                 }
             }
             if live_output_enabled {
@@ -458,20 +440,14 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
                 timing.live_output_ms = elapsed_ms(live_output_started);
             }
 
-            let event_identity = PreviewEventIdentity::from(&snapshot);
+            let event_identity = SequenceRenderEventIdentity::from(&snapshot);
             let should_emit_event = if snapshot.transport_state.should_publish_continuously() {
                 last_event_identity.as_ref() != Some(&event_identity)
-                    || last_event_at.elapsed() >= PREVIEW_STATE_EVENT_INTERVAL
+                    || last_event_at.elapsed() >= SEQUENCE_STATE_EVENT_INTERVAL
             } else {
                 last_event_identity.as_ref() != Some(&event_identity)
             };
-            let fps = if has_sink || live_output_enabled {
-                target_fps.max(1)
-            } else if snapshot.transport_state.should_publish_continuously() {
-                target_fps.clamp(1, 30)
-            } else {
-                10
-            };
+            let fps = sequence_runtime_fps(&snapshot, target_fps, live_output_enabled);
             let target = Duration::from_secs_f64(1.0 / fps as f64);
             let target_deadline = started + target;
             let elapsed_before_event = started.elapsed();
@@ -494,7 +470,7 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             timing.loop_unaccounted_ms = (timing.loop_total_ms - timing.loop_accounted_ms).max(0.0);
             if should_emit_event {
                 let event_emit_started = Instant::now();
-                emit_preview_state_snapshot(&app, &snapshot, timing);
+                emit_sequence_render_snapshot(&app, &snapshot, timing);
                 last_event_emit_ms = elapsed_ms(event_emit_started);
                 last_event_at = Instant::now();
                 last_event_identity = Some(event_identity);
@@ -503,7 +479,19 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
     });
 }
 
-fn record_render_timing(timing: &mut PreviewTimingDto, render_timing: PlaybackRenderTiming) {
+fn sequence_runtime_fps(
+    snapshot: &SequenceTransportSnapshot,
+    target_fps: u32,
+    live_output_enabled: bool,
+) -> u32 {
+    if snapshot.transport_state.is_active_playback() || live_output_enabled {
+        target_fps.max(1)
+    } else {
+        10
+    }
+}
+
+fn record_render_timing(timing: &mut SequenceRenderTimingDto, render_timing: PlaybackRenderTiming) {
     timing.render_ms = render_timing.total_ms;
     timing.renderer_build_ms = render_timing.renderer_build_ms;
     timing.frame_evaluate_ms = render_timing.frame_evaluate_ms;
@@ -517,14 +505,14 @@ fn record_render_timing(timing: &mut PreviewTimingDto, render_timing: PlaybackRe
     timing.render_result_ms = render_timing.render_result_ms;
 }
 
-fn accounted_loop_ms(timing: &PreviewTimingDto) -> f64 {
-    timing.preview_transport_lock_ms
+fn accounted_loop_ms(timing: &SequenceRenderTimingDto) -> f64 {
+    timing.preview_window_transport_lock_ms
         + timing.live_output_lock_ms
         + timing.audio_poll_ms
         + timing.model_lock_wait_ms
         + timing.model_update_ms
         + timing.render_wall_ms
-        + timing.preview_publish_lock_ms
+        + timing.preview_window_publish_lock_ms
         + timing.publish_ms
         + timing.live_output_ms
         + timing.event_emit_ms
@@ -536,18 +524,15 @@ fn elapsed_ms(started: Instant) -> f64 {
 }
 
 fn should_apply_audio_clock_to_model(
-    preview_snapshot: &PreviewSnapshot,
+    sequence_transport_snapshot: &SequenceTransportSnapshot,
     clock: &AudioClock,
 ) -> bool {
-    preview_snapshot.transport_state.is_active_playback()
+    sequence_transport_snapshot.transport_state == SequenceTransportState::Playing
         || matches!(
             clock.status,
-            AudioPlaybackStatus::LoadingToPlay
-                | AudioPlaybackStatus::Playing
-                | AudioPlaybackStatus::Ended
+            AudioPlaybackStatus::Playing | AudioPlaybackStatus::Ended
         )
         || clock.ended
-        || preview_snapshot.audio_playback_status == AudioPlaybackStatus::LoadingToPlay
 }
 
 fn publish_live_output_frame(
@@ -571,160 +556,31 @@ fn publish_live_output_frame(
     }
 }
 
-pub(crate) fn preview_pixel_count(geometry: &OutputGeometryModel) -> usize {
-    geometry_pixel_count(geometry)
-}
-
-pub(crate) fn preview_scene_from_geometry(
-    geometry: &OutputGeometryModel,
-    generation: u64,
-    source_label: String,
-) -> PreviewSceneDto {
-    let mut first_pixel_index = 0usize;
-    let fixtures = geometry
-        .fixtures
-        .iter()
-        .map(|fixture| {
-            let pixels = fixture
-                .pixels
-                .iter()
-                .map(|pixel| pixel.position.into())
-                .collect::<Vec<_>>();
-            let dto = PreviewSceneFixtureDto {
-                id: fixture.id.0,
-                name: fixture.name.clone(),
-                bulb_radius_meters: fixture.bulb_radius.as_meters_f64(),
-                first_pixel_index: first_pixel_index.min(u32::MAX as usize) as u32,
-                pixels,
-            };
-            first_pixel_index = first_pixel_index.saturating_add(fixture.pixels.len());
-            dto
-        })
-        .collect::<Vec<_>>();
-    PreviewSceneDto {
-        generation: generation.min(u32::MAX as u64) as u32,
-        topology_identity: geometry.geometry_id.clone(),
-        source_label,
-        bounds: geometry.bounds.into(),
-        pixel_count: first_pixel_index.min(u32::MAX as usize) as u32,
-        fixtures,
-    }
-}
-
-pub(crate) fn open_or_focus_preview_window(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> CommandResult<()> {
-    open_preview_window(app, state, true)
-}
-
-pub(crate) fn open_preview_window_on_startup(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> CommandResult<()> {
-    let should_open = lock_model(&state)?.workbench_layout.preview_window_open;
-    if should_open {
-        open_preview_window(app, state, false)?;
-    }
-    Ok(())
-}
-
-fn open_preview_window(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    focus: bool,
-) -> CommandResult<()> {
-    if let Some(window) = app.get_webview_window("preview") {
-        window.show().map_err(|error| error.to_string())?;
-        if focus {
-            window.set_focus().map_err(|error| error.to_string())?;
-        }
-        return Ok(());
-    }
-
-    let layout = {
-        let mut model = lock_model(&state)?;
-        model.set_preview_window_open(true)?;
-        model.workbench_layout.preview_window.clone()
-    };
-    let window =
-        WebviewWindowBuilder::new(&app, "preview", WebviewUrl::App("/?view=preview".into()))
-            .title("Dawn Preview")
-            .position(layout.x, layout.y)
-            .inner_size(layout.width, layout.height)
-            .build()
-            .map_err(|error| error.to_string())?;
-    if layout.maximized {
-        window.maximize().map_err(|error| error.to_string())?;
-    }
-    let app_for_event = app.clone();
-    window.on_window_event(move |event| match event {
-        WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
-            persist_window_layout(&app_for_event, WorkbenchWindow::Preview);
-        }
-        WindowEvent::CloseRequested { .. } => {
-            persist_window_layout(&app_for_event, WorkbenchWindow::Preview);
-            let state = app_for_event.state::<AppState>();
-            if !state.is_shutting_down() {
-                persist_preview_window_open(&app_for_event, false);
-            }
-        }
-        WindowEvent::Destroyed => {
-            persist_window_layout(&app_for_event, WorkbenchWindow::Preview);
-        }
-        _ => {}
-    });
-    if focus {
-        window.set_focus().map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
-fn persist_preview_window_open(app: &AppHandle, open: bool) {
-    let state = app.state::<AppState>();
-    if let Ok(mut model) = lock_model(&state) {
-        let _ = model.set_preview_window_open(open);
-    };
-}
-
 #[derive(Debug, Clone, PartialEq)]
-struct PreviewEventIdentity {
+struct SequenceRenderEventIdentity {
     source_label: String,
-    transport_state: PlaybackTransportState,
-    preview_updating: bool,
+    source_key: Option<SequenceKey>,
+    render_generation: u64,
+    render_dirty_revision: u64,
+    render_updating: bool,
     position_seconds: f64,
-    home_seconds: f64,
-    duration_seconds: f64,
-    audio_path: Option<String>,
-    audio_exists: bool,
-    clock_source: String,
-    audio_playback_status: AudioPlaybackStatus,
     geometry_identity: String,
-    status: String,
 }
 
-impl From<&PreviewSnapshot> for PreviewEventIdentity {
-    fn from(snapshot: &PreviewSnapshot) -> Self {
+impl From<&SequenceTransportSnapshot> for SequenceRenderEventIdentity {
+    fn from(snapshot: &SequenceTransportSnapshot) -> Self {
         Self {
             source_label: snapshot.source_label.clone(),
-            transport_state: snapshot.transport_state,
-            preview_updating: snapshot.preview_updating,
+            source_key: snapshot.source_key.clone(),
+            render_generation: snapshot.render_generation,
+            render_dirty_revision: snapshot.render_dirty_revision,
+            render_updating: snapshot.render_updating,
             position_seconds: if snapshot.transport_state.should_publish_continuously() {
                 0.0
             } else {
-                snapshot.position_seconds
+                snapshot.frame.time_seconds
             },
-            home_seconds: snapshot.home_seconds,
-            duration_seconds: snapshot.duration_seconds,
-            audio_path: snapshot
-                .audio
-                .as_ref()
-                .map(|audio| audio.resolved_path.clone()),
-            audio_exists: snapshot.audio.as_ref().is_some_and(|audio| audio.exists),
-            clock_source: snapshot.clock_source.clone(),
-            audio_playback_status: snapshot.audio_playback_status,
             geometry_identity: snapshot.geometry.geometry_id.clone(),
-            status: snapshot.status.clone(),
         }
     }
 }

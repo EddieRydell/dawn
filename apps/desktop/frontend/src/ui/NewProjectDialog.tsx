@@ -26,7 +26,7 @@ export function NewProjectDialog() {
   }, []);
 
   const nameError = validateDirectoryName(directoryName);
-  const previewPath = useMemo(() => {
+  const projectPath = useMemo(() => {
     if (parentPath === "" || directoryName === "") return "";
     return `${parentPath.replace(/[\\/]+$/, "")}/${directoryName}`;
   }, [directoryName, parentPath]);
@@ -91,9 +91,9 @@ export function NewProjectDialog() {
                 </button>
               </div>
             </label>
-            <div className="new-project-preview">
+            <div className="new-project-path">
               <span>New project will be created in:</span>
-              <strong>{previewPath === "" ? "-" : previewPath}</strong>
+              <strong>{projectPath === "" ? "-" : projectPath}</strong>
             </div>
             {(nameError !== null || error !== null) && (
               <div className="new-project-error">{error ?? nameError}</div>

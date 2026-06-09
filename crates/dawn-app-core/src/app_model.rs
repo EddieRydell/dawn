@@ -28,9 +28,9 @@ use crate::editor_session::{
 use crate::layout_persistence::{
     load_workbench_layout, save_workbench_layout, WindowLayout, WorkbenchLayout,
 };
-use crate::preview_session::{
-    PlaybackRenderRequest, PlaybackRenderResult, PlaybackSession, PreviewSnapshot, PreviewSyncMode,
-    SequenceKey,
+use crate::sequence_transport_session::{
+    PlaybackRenderRequest, PlaybackRenderResult, SequenceKey, SequenceTransportSession,
+    SequenceTransportSnapshot, SequenceTransportSyncMode,
 };
 use crate::workspace::WorkspaceService;
 
@@ -53,7 +53,7 @@ pub struct AppModel {
     pub workspace: WorkspaceService,
     pub editors: EditorSession,
     pub workbench_layout: WorkbenchLayout,
-    pub preview: PlaybackSession,
+    pub sequence_transport: SequenceTransportSession,
     pub live_output: LiveOutputSnapshot,
     pub project_root: Option<String>,
     pub project_entries: Vec<WorkspaceEntry>,
@@ -127,7 +127,7 @@ pub struct AppSnapshot {
     pub project_entries: Vec<WorkspaceEntry>,
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub workbench_layout: WorkbenchLayout,
-    pub preview: PreviewSnapshot,
+    pub sequence_transport: SequenceTransportSnapshot,
     pub live_output: LiveOutputSnapshot,
     pub tabs: Vec<EditorBuffer>,
     pub active_file: Option<Utf8PathBuf>,
@@ -194,7 +194,7 @@ impl Default for AppModel {
             workspace: WorkspaceService::default(),
             editors: EditorSession::default(),
             workbench_layout,
-            preview: PlaybackSession::default(),
+            sequence_transport: SequenceTransportSession::default(),
             live_output: LiveOutputSnapshot::default(),
             project_root: None,
             project_entries: Vec::new(),
@@ -230,7 +230,7 @@ impl AppModel {
             project_entries: self.project_entries.clone(),
             diagnostics: self.diagnostics.clone(),
             workbench_layout: self.workbench_layout.clone(),
-            preview: self.preview.snapshot(),
+            sequence_transport: self.sequence_transport.snapshot(),
             live_output: self.live_output.clone(),
             tabs: self.editors.tabs(),
             active_file: self.editors.active_file().cloned(),
@@ -284,14 +284,14 @@ impl AppModel {
                     }
                 }
                 self.reload_project_model();
-                self.sync_preview_source(PreviewSyncMode::RenderNow);
+                self.sync_sequence_transport_source(SequenceTransportSyncMode::RenderNow);
                 self.persist_workbench_layout()?;
             }
             AppAction::CloseFile(path) => {
                 self.editors.close_file(&path);
                 self.invalidate_sequence_gui_state_for_path(&path);
                 self.reload_project_model();
-                self.sync_preview_source(PreviewSyncMode::RenderNow);
+                self.sync_sequence_transport_source(SequenceTransportSyncMode::RenderNow);
                 self.persist_workbench_layout()?;
             }
             AppAction::SetActiveFile(path) => {
@@ -300,11 +300,11 @@ impl AppModel {
                 let reconciled = self.reconcile_open_buffer_from_disk(&path)?;
                 if active_changed || reconciled {
                     self.invalidate_active_gui_document_cache();
-                    self.preview.pause(self.project.as_deref());
+                    self.sequence_transport.pause(self.project.as_deref());
                     if reconciled {
                         self.reload_project_model();
                     }
-                    self.sync_preview_source(PreviewSyncMode::RenderNow);
+                    self.sync_sequence_transport_source(SequenceTransportSyncMode::RenderNow);
                     self.persist_workbench_layout()?;
                 }
             }
@@ -315,7 +315,7 @@ impl AppModel {
                 self.ensure_dirty_text_saved_for_gui()?;
                 self.editors.set_view_mode(&path, mode.into());
                 self.invalidate_active_gui_document_cache();
-                self.sync_preview_source(PreviewSyncMode::RenderNow);
+                self.sync_sequence_transport_source(SequenceTransportSyncMode::RenderNow);
                 self.persist_workbench_layout()?;
             }
             AppAction::UpdateActiveText(text) => {
@@ -324,7 +324,7 @@ impl AppModel {
                 self.editors.update_active_text(text);
                 self.invalidate_sequence_gui_state_for_path(&path);
                 self.reload_project_model();
-                self.sync_preview_source(PreviewSyncMode::RenderNow);
+                self.sync_sequence_transport_source(SequenceTransportSyncMode::RenderNow);
                 self.status = "Edited".to_string();
             }
             AppAction::UndoActiveEdit => {
@@ -375,7 +375,7 @@ impl AppModel {
                 let (text, disk_version) = self.workspace.read_file_with_version(path.clone())?;
                 self.editors.open_file(path, text, disk_version);
                 self.reload_project_model();
-                self.sync_preview_source(PreviewSyncMode::RenderNow);
+                self.sync_sequence_transport_source(SequenceTransportSyncMode::RenderNow);
                 self.persist_workbench_layout()?;
             }
             AppAction::CreateDirectory { parent, name } => {
@@ -383,7 +383,7 @@ impl AppModel {
                 self.workspace.create_directory(parent, &name)?;
                 self.refresh_project_entries()?;
                 self.reload_project_model();
-                self.sync_preview_source(PreviewSyncMode::RenderNow);
+                self.sync_sequence_transport_source(SequenceTransportSyncMode::RenderNow);
             }
             AppAction::RenamePath { path, new_name } => {
                 self.flush_autosave()?;
@@ -391,7 +391,7 @@ impl AppModel {
                 self.refresh_project_entries()?;
                 self.editors.reconcile_moved_paths(&moves);
                 self.reload_project_model();
-                self.sync_preview_source(PreviewSyncMode::RenderNow);
+                self.sync_sequence_transport_source(SequenceTransportSyncMode::RenderNow);
                 self.persist_workbench_layout()?;
             }
             AppAction::DeletePath(path) => {
@@ -400,7 +400,7 @@ impl AppModel {
                 self.refresh_project_entries()?;
                 self.editors.reconcile_deleted_path(&path);
                 self.reload_project_model();
-                self.sync_preview_source(PreviewSyncMode::RenderNow);
+                self.sync_sequence_transport_source(SequenceTransportSyncMode::RenderNow);
                 self.persist_workbench_layout()?;
             }
             AppAction::ToggleProjectTree => {
@@ -412,9 +412,11 @@ impl AppModel {
                 self.workbench_layout.effect_preview_enabled = enabled;
                 save_workbench_layout(&self.workbench_layout)?;
                 if !enabled {
-                    self.preview.clear_effect_preview(self.project.as_deref());
+                    self.sequence_transport
+                        .clear_effect_preview(self.project.as_deref());
                 } else {
-                    self.preview.render_current_frame(self.project.as_deref());
+                    self.sequence_transport
+                        .render_current_frame(self.project.as_deref());
                 }
             }
             AppAction::SetEffectPreviewEffects(ids) => {
@@ -423,56 +425,58 @@ impl AppModel {
                 } else {
                     Vec::new()
                 };
-                self.preview
+                self.sequence_transport
                     .set_effect_preview_ids(ids, self.project.as_deref());
             }
-            AppAction::PreviewPlay => {
-                self.preview.play(self.project.as_deref());
-                self.status = "Preview playing".to_string();
+            AppAction::SequenceTransportPlay => {
+                self.sequence_transport.play(self.project.as_deref());
+                self.status = "Sequence playing".to_string();
             }
-            AppAction::PreviewPause => {
-                self.preview.pause(self.project.as_deref());
-                self.status = "Preview paused".to_string();
+            AppAction::SequenceTransportPause => {
+                self.sequence_transport.pause(self.project.as_deref());
+                self.status = "Sequence paused".to_string();
             }
-            AppAction::PreviewStop => {
-                self.preview.stop(self.project.as_deref());
-                self.status = "Preview stopped".to_string();
+            AppAction::SequenceTransportStop => {
+                self.sequence_transport.stop(self.project.as_deref());
+                self.status = "Sequence stopped".to_string();
             }
-            AppAction::PreviewRewindToZero => {
-                self.preview
+            AppAction::SequenceTransportRewindToZero => {
+                self.sequence_transport
                     .go_to_sequence_beginning(self.project.as_deref());
-                self.status = "Preview rewound".to_string();
+                self.status = "Sequence rewound".to_string();
             }
-            AppAction::PreviewSeek(position_seconds) => {
-                self.preview.seek(position_seconds, self.project.as_deref());
-                self.status = "Preview seeked".to_string();
+            AppAction::SequenceTransportSeek(position_seconds) => {
+                self.sequence_transport
+                    .seek(position_seconds, self.project.as_deref());
+                self.status = "Sequence seeked".to_string();
             }
         }
         Ok(DispatchOutcome::SnapshotChanged)
     }
 
-    pub fn tick_preview(&mut self) {
-        self.preview.tick(self.project.as_deref());
+    pub fn tick_sequence_transport(&mut self) {
+        self.sequence_transport.tick(self.project.as_deref());
     }
 
-    pub fn tick_preview_clock(&mut self) {
-        self.preview.tick_clock();
+    pub fn tick_sequence_transport_clock(&mut self) {
+        self.sequence_transport.tick_clock();
     }
 
-    pub fn render_preview_frame(&mut self) {
-        self.preview.render_current_frame(self.project.as_deref());
+    pub fn render_sequence_transport_frame(&mut self) {
+        self.sequence_transport
+            .render_current_frame(self.project.as_deref());
     }
 
-    pub fn begin_deferred_preview_render(&mut self) -> Option<PlaybackRenderRequest> {
-        self.preview.begin_deferred_render()
+    pub fn begin_deferred_sequence_render(&mut self) -> Option<PlaybackRenderRequest> {
+        self.sequence_transport.begin_deferred_render()
     }
 
-    pub fn complete_deferred_preview_render(&mut self, result: PlaybackRenderResult) -> bool {
-        self.preview.complete_deferred_render(result)
+    pub fn complete_deferred_sequence_render(&mut self, result: PlaybackRenderResult) -> bool {
+        self.sequence_transport.complete_deferred_render(result)
     }
 
-    pub fn preview_target_fps(&self) -> u32 {
-        self.preview.target_fps()
+    pub fn sequence_transport_target_fps(&self) -> u32 {
+        self.sequence_transport.target_fps()
     }
 
     pub fn set_live_output_snapshot(&mut self, snapshot: LiveOutputSnapshot) {
@@ -503,7 +507,7 @@ impl AppModel {
         self.workspace.open_project(&path)?;
         self.refresh_project_entries()?;
         self.editors.clear();
-        self.preview.reset();
+        self.sequence_transport.reset();
         if restore_editor_session {
             self.restore_editor_session();
         }
@@ -512,7 +516,7 @@ impl AppModel {
         self.project_saved_revision = 0;
         self.project_save_in_flight_revision = None;
         self.deferred_filesystem_change_paths.clear();
-        self.sync_preview_source(PreviewSyncMode::RenderNow);
+        self.sync_sequence_transport_source(SequenceTransportSyncMode::RenderNow);
         if remember {
             self.workbench_layout.last_project_root = Some(path);
             self.persist_workbench_layout()?;
@@ -583,7 +587,7 @@ impl AppModel {
         }
         if had_dirty_buffers {
             self.reload_project_model();
-            self.sync_preview_source(PreviewSyncMode::RenderNow);
+            self.sync_sequence_transport_source(SequenceTransportSyncMode::RenderNow);
         }
         Ok(())
     }
@@ -713,7 +717,7 @@ impl AppModel {
 
     fn mark_project_changed(&mut self) {
         self.project_dirty_revision = self.project_dirty_revision.saturating_add(1);
-        self.sync_preview_source(PreviewSyncMode::RenderNow);
+        self.sync_sequence_transport_source(SequenceTransportSyncMode::RenderNow);
         self.status = "Saving".to_string();
     }
 
@@ -881,7 +885,7 @@ impl AppModel {
         }
         self.refresh_project_entries()?;
         self.reload_project_model();
-        self.sync_preview_source(PreviewSyncMode::RenderNow);
+        self.sync_sequence_transport_source(SequenceTransportSyncMode::RenderNow);
         Ok(())
     }
 
@@ -896,14 +900,14 @@ impl AppModel {
         self.editors.record_saved_version(&buffer.path, version);
         self.refresh_project_entries()?;
         self.reload_project_model();
-        self.sync_preview_source(PreviewSyncMode::RenderNow);
+        self.sync_sequence_transport_source(SequenceTransportSyncMode::RenderNow);
         Ok(())
     }
 
-    fn sync_preview_source(&mut self, mode: PreviewSyncMode) {
+    fn sync_sequence_transport_source(&mut self, mode: SequenceTransportSyncMode) {
         let source = self.active_sequence_source();
         self.cache_active_sequence_source(source.as_ref());
-        self.preview
+        self.sequence_transport
             .sync_source(source, self.project.as_deref(), mode);
     }
 
@@ -1178,7 +1182,7 @@ impl AppModel {
         }
         if self.editors.undo_active_text_edit() {
             self.reload_project_model();
-            self.sync_preview_source(PreviewSyncMode::RenderNow);
+            self.sync_sequence_transport_source(SequenceTransportSyncMode::RenderNow);
             self.status = "Undo".to_string();
             Ok(true)
         } else {
@@ -1204,7 +1208,7 @@ impl AppModel {
         }
         if self.editors.redo_active_text_edit() {
             self.reload_project_model();
-            self.sync_preview_source(PreviewSyncMode::RenderNow);
+            self.sync_sequence_transport_source(SequenceTransportSyncMode::RenderNow);
             self.status = "Redo".to_string();
             Ok(true)
         } else {

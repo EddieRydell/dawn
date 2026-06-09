@@ -14,11 +14,11 @@ import { runSnapshotCommand } from "../../../store";
 
 import { clamp, formatSeconds, roundToNanosecond, type GuiFocus, type SequenceSelection } from "../shared";
 
-import { defaultMarkColor, drawSequenceMarks, committedMarkPreviews, markIndexAfterMove, nextCollectionKey, useMarkDisplayMode } from "./marks";
+import { defaultMarkColor, drawSequenceMarks, committedMarkDrafts, markIndexAfterMove, nextCollectionKey, useMarkDisplayMode } from "./marks";
 
 import { targetsEqual } from "./sequenceTargets";
 
-import { buildSequenceClipLayout, constrainEffectLaneDelta, constrainEffectMoveDelta, constrainEffectResizeDelta, constrainMarkDelta, effectMovePreviews, effectResizePreviews, hitSequence, hitSequenceMark, markMovePreviews, markRefLookup, mergeSequenceSelection, MIN_EFFECT_DURATION_SECONDS, nextEffectSelection, nextMarkSelection, normalizedRect, selectedEffectId, selectionCount, selectionFromMarqueeEffects, selectionFromMarqueeMarks, sequenceHoverEqual, setMarkPreview, singleEffectSelectionFocus, singleSelectionFocus, selectionFromSingle, type MarkPreviewLookup, type SequenceContextMenu, type SequenceHover, type SequenceMarquee, type SequencePreview, type SequenceViewport } from "./sequenceSelection";
+import { buildSequenceClipLayout, constrainEffectLaneDelta, constrainEffectMoveDelta, constrainEffectResizeDelta, constrainMarkDelta, effectMoveDrafts, effectResizeDrafts, hitSequence, hitSequenceMark, markMoveDrafts, markRefLookup, mergeSequenceSelection, MIN_EFFECT_DURATION_SECONDS, nextEffectSelection, nextMarkSelection, normalizedRect, selectedEffectId, selectionCount, selectionFromMarqueeEffects, selectionFromMarqueeMarks, sequenceHoverEqual, setMarkDraft, singleEffectSelectionFocus, singleSelectionFocus, selectionFromSingle, type MarkDraftLookup, type SequenceContextMenu, type SequenceHover, type SequenceMarquee, type SequenceDraft, type SequenceViewport } from "./sequenceSelection";
 
 const SEQUENCE_CANVAS = {
   leftGutterPx: 128,
@@ -71,8 +71,8 @@ type SequenceDragState =
 
 export function SequenceCanvas({
   document,
-  previewPositionSeconds,
-  previewHomeSeconds,
+  playheadSeconds,
+  homeSeconds,
   selected,
   setSelected,
   sequenceSelection,
@@ -83,8 +83,8 @@ export function SequenceCanvas({
   setVisibleMarkCollectionKeys
 }: {
   document: SequenceEditorDocumentDto;
-  previewPositionSeconds: number;
-  previewHomeSeconds: number;
+  playheadSeconds: number;
+  homeSeconds: number;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
   sequenceSelection: SequenceSelection;
@@ -97,9 +97,9 @@ export function SequenceCanvas({
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const drag = useRef<SequenceDragState>(null);
   const sequenceSelectionRef = useRef<SequenceSelection>(sequenceSelection);
-  const [preview, setPreview] = useState<SequencePreview | null>(null);
-  const [groupPreview, setGroupPreview] = useState<SequencePreview[]>([]);
-  const [markPreviews, setMarkPreviews] = useState<MarkPreviewLookup>(() => new Map());
+  const [draft, setDraft] = useState<SequenceDraft | null>(null);
+  const [groupDraft, setGroupDraft] = useState<SequenceDraft[]>([]);
+  const [markDrafts, setMarkDrafts] = useState<MarkDraftLookup>(() => new Map());
   const [sequenceContextMenu, setSequenceContextMenu] = useState<SequenceContextMenu | null>(null);
   const [hover, setHover] = useState<SequenceHover>(null);
   const [dragCursor, setDragCursor] = useState<"grabbing" | null>(null);
@@ -159,8 +159,8 @@ export function SequenceCanvas({
   }, [document.durationSeconds, document.lanes.length, left]);
 
   const visibleClips = useMemo(
-    () => buildSequenceClipLayout(document, groupPreview.length > 0 ? groupPreview : preview === null ? [] : [preview], viewport, left, top),
-    [document, groupPreview, left, preview, top, viewport]
+    () => buildSequenceClipLayout(document, groupDraft.length > 0 ? groupDraft : draft === null ? [] : [draft], viewport, left, top),
+    [document, groupDraft, left, draft, top, viewport]
   );
   const selectedEffectIds = useMemo(() => new Set<number>(sequenceSelection?.type === "effects" ? sequenceSelection.ids : []), [sequenceSelection]);
   const selectedMarks = useMemo(
@@ -264,7 +264,7 @@ export function SequenceCanvas({
       rect.height,
       viewport.pxPerSecond,
       scrollXSeconds,
-      committedMarkPreviews(visibleMarkCollections, markPreviews)
+      committedMarkDrafts(visibleMarkCollections, markDrafts)
     );
 
     ctx.save();
@@ -294,8 +294,8 @@ export function SequenceCanvas({
     }
     ctx.restore();
 
-    const playheadX = left + (clamp(previewPositionSeconds, 0, document.durationSeconds) - scrollXSeconds) * viewport.pxPerSecond;
-    const homeX = left + (clamp(previewHomeSeconds, 0, document.durationSeconds) - scrollXSeconds) * viewport.pxPerSecond;
+    const playheadX = left + (clamp(playheadSeconds, 0, document.durationSeconds) - scrollXSeconds) * viewport.pxPerSecond;
+    const homeX = left + (clamp(homeSeconds, 0, document.durationSeconds) - scrollXSeconds) * viewport.pxPerSecond;
     if (homeX >= left && homeX <= rect.width) {
       ctx.strokeStyle = SEQUENCE_COLORS.accent;
       ctx.lineWidth = 1;
@@ -342,13 +342,13 @@ export function SequenceCanvas({
     ctx.moveTo(left + 0.5, top);
     ctx.lineTo(left, rect.height);
     ctx.stroke();
-  }, [document, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, selected, selectedEffectIds, selectedMarks, previewPositionSeconds, previewHomeSeconds, selectedLaneIndex, selectedTimeSeconds, marquee, waveform.audio, visibleMarkCollections, mode, markPreviews, hover]);
+  }, [document, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, selected, selectedEffectIds, selectedMarks, playheadSeconds, homeSeconds, selectedLaneIndex, selectedTimeSeconds, marquee, waveform.audio, visibleMarkCollections, mode, markDrafts, hover]);
 
   const seekFromCanvas = (event: MouseEvent<HTMLCanvasElement>) => {
     const x = event.nativeEvent.offsetX;
     if (x < left) return;
     const positionSeconds = clamp(Math.round((viewport.scrollXSeconds + (x - left) / viewport.pxPerSecond) / SEQUENCE_CANVAS.scrubStepSeconds) * SEQUENCE_CANVAS.scrubStepSeconds, 0, document.durationSeconds);
-    void runSnapshotCommand(() => commands.previewSeek(positionSeconds));
+    void runSnapshotCommand(() => commands.sequenceTransportSeek(positionSeconds));
   };
   const timeFromCanvasX = (x: number) => clamp(roundToNanosecond(viewport.scrollXSeconds + (x - left) / viewport.pxPerSecond), 0, document.durationSeconds);
   const addEffectFromContextMenu = async (script: SequenceEffectScriptDto, menu: SequenceContextMenu) => {
@@ -512,9 +512,9 @@ export function SequenceCanvas({
           const deltaSeconds = (event.key === "ArrowLeft" ? -1 : 1) * (event.shiftKey ? SEQUENCE_CANVAS.shiftedNudgeSeconds : SEQUENCE_CANVAS.nudgeSeconds);
           const nextTimeSeconds = clamp(timeSeconds + deltaSeconds, 0, document.durationSeconds);
           const nextIndex = markIndexAfterMove(collection, selectedMark.index, nextTimeSeconds);
-          const nextPreviews: MarkPreviewLookup = new Map();
-          setMarkPreview(nextPreviews, selectedMark, { collectionKey: selectedMark.collectionKey, index: selectedMark.index, timeSeconds: nextTimeSeconds, committedIndex: nextIndex });
-          setMarkPreviews(nextPreviews);
+          const nextDrafts: MarkDraftLookup = new Map();
+          setMarkDraft(nextDrafts, selectedMark, { collectionKey: selectedMark.collectionKey, index: selectedMark.index, timeSeconds: nextTimeSeconds, committedIndex: nextIndex });
+          setMarkDrafts(nextDrafts);
           void runSnapshotCommand(() =>
             commands.applySequenceGuiEdit({
               type: "moveMark",
@@ -524,7 +524,7 @@ export function SequenceCanvas({
             })
           ).then(() => {
             setSelected({ type: "mark", collectionKey: selectedMark.collectionKey, index: nextIndex });
-            setMarkPreviews(new Map());
+            setMarkDrafts(new Map());
           });
           return;
         }
@@ -586,7 +586,7 @@ export function SequenceCanvas({
         event.currentTarget.focus();
         const x = event.nativeEvent.offsetX;
         const y = event.nativeEvent.offsetY;
-        setMarkPreviews(new Map());
+        setMarkDrafts(new Map());
         if (x >= left && y < top) {
           drag.current = { kind: "sequenceScrub" };
           seekFromCanvas(event);
@@ -621,7 +621,7 @@ export function SequenceCanvas({
             laneIndex: hit.laneIndex,
             resize: hit.resize
           };
-          setPreview({
+          setDraft({
             id: hit.effect.id,
             startSeconds: hit.effect.startSeconds,
             durationSeconds: hit.effect.durationSeconds,
@@ -694,14 +694,14 @@ export function SequenceCanvas({
           const activeSelection = sequenceSelectionRef.current;
           if (activeSelection?.type === "marks" && activeSelection.marks.length > 1 && activeSelection.marks.some((mark) => mark.collectionKey === current.collectionKey && mark.index === current.index)) {
             const constrainedDelta = constrainMarkDelta(document, activeSelection.marks, deltaSeconds);
-            setMarkPreviews(markMovePreviews(document, activeSelection.marks, constrainedDelta));
+            setMarkDrafts(markMoveDrafts(document, activeSelection.marks, constrainedDelta));
           } else {
-            const nextPreviews: MarkPreviewLookup = new Map();
-            setMarkPreview(nextPreviews, { collectionKey: current.collectionKey, index: current.index }, { collectionKey: current.collectionKey, index: current.index, timeSeconds, committedIndex });
-            setMarkPreviews(nextPreviews);
+            const nextDrafts: MarkDraftLookup = new Map();
+            setMarkDraft(nextDrafts, { collectionKey: current.collectionKey, index: current.index }, { collectionKey: current.collectionKey, index: current.index, timeSeconds, committedIndex });
+            setMarkDrafts(nextDrafts);
           }
-          setPreview(null);
-          setGroupPreview([]);
+          setDraft(null);
+          setGroupDraft([]);
           return;
         }
         if (!current) {
@@ -735,22 +735,22 @@ export function SequenceCanvas({
           if (current.resize === "none") {
             const constrainedDelta = constrainEffectMoveDelta(document, activeEffectSelection.ids, deltaSeconds);
             const laneDelta = constrainEffectLaneDelta(document, activeEffectSelection.ids, laneIndex - current.laneIndex);
-            setGroupPreview(effectMovePreviews(document, activeEffectSelection.ids, constrainedDelta, laneDelta));
+            setGroupDraft(effectMoveDrafts(document, activeEffectSelection.ids, constrainedDelta, laneDelta));
           } else {
             const constrainedDelta = constrainEffectResizeDelta(document, activeEffectSelection.ids, current.resize, deltaSeconds);
-            setGroupPreview(effectResizePreviews(document, activeEffectSelection.ids, current.resize, constrainedDelta));
+            setGroupDraft(effectResizeDrafts(document, activeEffectSelection.ids, current.resize, constrainedDelta));
           }
-          setPreview(null);
+          setDraft(null);
           return;
         }
-        setGroupPreview([]);
+        setGroupDraft([]);
         if (current.resize === "left") {
           const startSeconds = clamp(current.originalStartSeconds + deltaSeconds, 0, effect.startSeconds + effect.durationSeconds - MIN_EFFECT_DURATION_SECONDS);
-          setPreview({ id: effect.id, startSeconds, durationSeconds: effect.startSeconds + effect.durationSeconds - startSeconds, laneIndex });
+          setDraft({ id: effect.id, startSeconds, durationSeconds: effect.startSeconds + effect.durationSeconds - startSeconds, laneIndex });
         } else if (current.resize === "right") {
-          setPreview({ id: effect.id, startSeconds: effect.startSeconds, durationSeconds: Math.max(MIN_EFFECT_DURATION_SECONDS, effect.durationSeconds + deltaSeconds), laneIndex });
+          setDraft({ id: effect.id, startSeconds: effect.startSeconds, durationSeconds: Math.max(MIN_EFFECT_DURATION_SECONDS, effect.durationSeconds + deltaSeconds), laneIndex });
         } else {
-          setPreview({ id: effect.id, startSeconds: clamp(current.originalStartSeconds + deltaSeconds, 0, Math.max(0, document.durationSeconds - effect.durationSeconds)), durationSeconds: effect.durationSeconds, laneIndex });
+          setDraft({ id: effect.id, startSeconds: clamp(current.originalStartSeconds + deltaSeconds, 0, Math.max(0, document.durationSeconds - effect.durationSeconds)), durationSeconds: effect.durationSeconds, laneIndex });
         }
       }}
       onMouseUp={(event) => {
@@ -776,7 +776,7 @@ export function SequenceCanvas({
             }).then((result) => {
               updateSequenceSelection(result.selection);
               setSelected(null);
-              setMarkPreviews(new Map());
+              setMarkDrafts(new Map());
             });
             return;
           }
@@ -792,7 +792,7 @@ export function SequenceCanvas({
             })
           ).then(() => {
             setSelected({ type: "mark", collectionKey: current.collectionKey, index: nextIndex });
-            setMarkPreviews(new Map());
+            setMarkDrafts(new Map());
           });
           return;
         }
@@ -810,30 +810,30 @@ export function SequenceCanvas({
           void commands.applySequenceSelectionEdit(edit).then((result) => {
             updateSequenceSelection(result.selection);
             setSelected(null);
-            setPreview(null);
-            setGroupPreview([]);
+            setDraft(null);
+            setGroupDraft([]);
           });
           return;
         }
-        if (!preview) return;
-        const committedPreview = preview;
+        if (!draft) return;
+        const committedDraft = draft;
         const edit = () =>
           current.resize === "none"
             ? commands.applySequenceGuiEdit({
                 type: "moveEffect",
-                id: committedPreview.id,
-                startSeconds: committedPreview.startSeconds,
-                target: document.lanes[committedPreview.laneIndex]?.target ?? null
+                id: committedDraft.id,
+                startSeconds: committedDraft.startSeconds,
+                target: document.lanes[committedDraft.laneIndex]?.target ?? null
               })
             : commands.applySequenceGuiEdit({
                 type: "resizeEffect",
-                id: committedPreview.id,
-                startSeconds: committedPreview.startSeconds,
-                durationSeconds: committedPreview.durationSeconds
+                id: committedDraft.id,
+                startSeconds: committedDraft.startSeconds,
+                durationSeconds: committedDraft.durationSeconds
               });
         void runSnapshotCommand(edit).finally(() => {
-          setPreview((currentPreview) => (currentPreview === committedPreview ? null : currentPreview));
-          setGroupPreview([]);
+          setDraft((currentDraft) => (currentDraft === committedDraft ? null : currentDraft));
+          setGroupDraft([]);
         });
       }}
       onMouseLeave={() => {
@@ -918,7 +918,7 @@ export function SequenceCanvas({
               <ContextMenu.Item
                 className="menu-item"
                 onSelect={() => {
-                  void runSnapshotCommand(() => commands.previewSeek(sequenceContextMenu.startSeconds));
+                  void runSnapshotCommand(() => commands.sequenceTransportSeek(sequenceContextMenu.startSeconds));
                 }}
               >
                 Set Playhead Here
