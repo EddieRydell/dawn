@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { commands as generatedCommands } from "./bindings";
-import type { AppSnapshotDto, SequenceEffectPreviewRequestEffectDto } from "./bindings";
+import type { AppSnapshotDto } from "./bindings";
 
 type GeneratedResult<T> = Promise<{ status: "ok"; data: T } | { status: "error"; error: string }>;
 
@@ -37,14 +37,6 @@ export const commands = {
   chooseSequenceAudio: () => unwrap(generatedCommands.chooseSequenceAudio()),
   clearSequenceAudio: () => unwrap(generatedCommands.clearSequenceAudio()),
   exportActiveSequenceFseq: (stepMs: number) => unwrap(generatedCommands.exportActiveSequenceFseq(stepMs)),
-  requestSequenceEffectPreviews: (
-    path: string,
-    objectKey: string,
-    requestId: number,
-    effects: SequenceEffectPreviewRequestEffectDto[]
-  ) => unwrap(generatedCommands.requestSequenceEffectPreviews(path, objectKey, requestId, effects)),
-  takeSequenceEffectPreviewResults: (path: string, objectKey: string) =>
-    unwrap(generatedCommands.takeSequenceEffectPreviewResults(path, objectKey)),
   applyLayoutGuiEdit: (edit: Parameters<typeof generatedCommands.applyLayoutGuiEdit>[0]) =>
     unwrap(generatedCommands.applyLayoutGuiEdit(edit)),
   applyFixtureGuiEdit: (edit: Parameters<typeof generatedCommands.applyFixtureGuiEdit>[0]) =>

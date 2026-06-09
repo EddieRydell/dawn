@@ -6,7 +6,6 @@ use dawn_project::Utf8PathBuf;
 use tauri::State;
 
 use crate::audio_runtime::AudioRuntime;
-use crate::effect_preview_runtime::EffectPreviewRuntime;
 use crate::filesystem_watcher::FilesystemWatcherRuntime;
 use crate::live_output::LiveOutputRuntime;
 use crate::preview_transport::PreviewTransportRuntime;
@@ -15,7 +14,6 @@ use crate::project_autosave::ProjectAutosaveRuntime;
 pub(crate) struct AppState {
     pub(crate) model: Mutex<AppModel>,
     audio_runtime: Mutex<AudioRuntime>,
-    effect_preview_runtime: Mutex<EffectPreviewRuntime>,
     preview_transport: Mutex<PreviewTransportRuntime>,
     live_output: Mutex<LiveOutputRuntime>,
     filesystem_watcher: Mutex<FilesystemWatcherRuntime>,
@@ -28,7 +26,6 @@ impl Default for AppState {
         Self {
             model: Mutex::new(AppModel::default()),
             audio_runtime: Mutex::new(AudioRuntime::default()),
-            effect_preview_runtime: Mutex::new(EffectPreviewRuntime::default()),
             preview_transport: Mutex::new(PreviewTransportRuntime::default()),
             live_output: Mutex::new(LiveOutputRuntime::default()),
             filesystem_watcher: Mutex::new(FilesystemWatcherRuntime::default()),
@@ -66,15 +63,6 @@ pub(crate) fn lock_audio_runtime<'a>(
         .audio_runtime
         .lock()
         .map_err(|_| "audio runtime lock is poisoned".to_string())
-}
-
-pub(crate) fn lock_effect_preview_runtime<'a>(
-    state: &'a State<'_, AppState>,
-) -> CommandResult<MutexGuard<'a, EffectPreviewRuntime>> {
-    state
-        .effect_preview_runtime
-        .lock()
-        .map_err(|_| "effect preview runtime lock is poisoned".to_string())
 }
 
 pub(crate) fn lock_preview_transport<'a>(

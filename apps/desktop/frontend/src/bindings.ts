@@ -21,8 +21,6 @@ export const commands = {
 	chooseSequenceAudio: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("choose_sequence_audio")),
 	clearSequenceAudio: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("clear_sequence_audio")),
 	exportActiveSequenceFseq: (stepMs: number) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("export_active_sequence_fseq", { stepMs })),
-	requestSequenceEffectPreviews: (path: string, objectKey: string, requestId: number, effects: SequenceEffectPreviewRequestEffectDto[]) => typedError<null, string>(__TAURI_INVOKE("request_sequence_effect_previews", { path, objectKey, requestId, effects })),
-	takeSequenceEffectPreviewResults: (path: string, objectKey: string) => typedError<SequenceEffectPreviewResultsDto, string>(__TAURI_INVOKE("take_sequence_effect_preview_results", { path, objectKey })),
 	applyLayoutGuiEdit: (edit: LayoutGuiEditDto) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("apply_layout_gui_edit", { edit })),
 	applyFixtureGuiEdit: (edit: FixtureGuiEditDto) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("apply_fixture_gui_edit", { edit })),
 	flushAutosave: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("flush_autosave")),
@@ -325,52 +323,6 @@ export type SequenceEffectParamDto = {
 export type SequenceEffectParamKindDto = "int" | "float" | "bool" | "color" | "enum" | "flags" | "floatCurve" | "colorCurve" | "intArray" | "floatArray" | "boolArray" | "colorArray" | "floatCurveArray" | "colorCurveArray" | "marks";
 
 export type SequenceEffectParamValueDto = { type: "int"; value: number } | { type: "float"; value: number } | { type: "bool"; value: boolean } | { type: "color"; value: string } | { type: "enum"; value: string } | { type: "flags"; value: string[] } | { type: "floatCurve"; points: FloatCurvePointDto[] } | { type: "colorCurve"; points: ColorCurvePointDto[] } | { type: "intArray"; values: number[] } | { type: "floatArray"; values: number[] } | { type: "boolArray"; values: boolean[] } | { type: "colorArray"; values: string[] } | { type: "floatCurveArray"; values: FloatCurvePointDto[][] } | { type: "colorCurveArray"; values: ColorCurvePointDto[][] } | { type: "marks"; key: string };
-
-export type SequenceEffectPreviewDto = {
-	effectId: number,
-	durationSeconds: number,
-	sourcePixelCount: number,
-	sampledPixelIndices: number[],
-	columns: number,
-	rows: number,
-	colors: number[],
-};
-
-export type SequenceEffectPreviewErrorResultDto = {
-	requestId: number,
-	effectId: number,
-	signature: string,
-	message: string,
-};
-
-export type SequenceEffectPreviewReadyResultDto = {
-	requestId: number,
-	signature: string,
-	preview: SequenceEffectPreviewDto,
-};
-
-export type SequenceEffectPreviewRequestEffectDto = {
-	effectId: number,
-	signature: string,
-};
-
-export type SequenceEffectPreviewResultDto = {
-	type: "ready",
-} & SequenceEffectPreviewReadyResultDto | {
-	type: "unavailable",
-} & SequenceEffectPreviewUnavailableResultDto | {
-	type: "error",
-} & SequenceEffectPreviewErrorResultDto;
-
-export type SequenceEffectPreviewResultsDto = {
-	results: SequenceEffectPreviewResultDto[],
-};
-
-export type SequenceEffectPreviewUnavailableResultDto = {
-	requestId: number,
-	effectId: number,
-	signature: string,
-};
 
 export type SequenceEffectScopeDto = "perFixture" | "wholeTarget";
 

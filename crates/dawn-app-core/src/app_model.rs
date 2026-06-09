@@ -1047,22 +1047,6 @@ impl AppModel {
         }
     }
 
-    pub fn cached_sequence_document_for_preview_request(
-        &self,
-        path: &Utf8PathBuf,
-        object_key: &str,
-    ) -> Result<SequenceDocument, String> {
-        let cached = self
-            .active_sequence_gui_document
-            .as_ref()
-            .ok_or_else(|| "sequence preview request does not match active sequence".to_string())?;
-        if cached.path == *path && cached.object_key == object_key {
-            Ok(cached.document.clone())
-        } else {
-            Err("sequence preview request does not match active sequence".to_string())
-        }
-    }
-
     fn apply_sequence_gui_edit(&mut self, edit: SequenceGuiEditDto) -> Result<(), String> {
         self.ensure_active_buffer_not_conflicted()?;
         self.ensure_dirty_text_saved_for_gui()?;

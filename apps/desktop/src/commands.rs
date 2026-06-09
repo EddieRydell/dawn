@@ -17,17 +17,14 @@ use crate::app_runtime::{
     dispatch, emit_model_snapshot, flush_autosave_blocking, preload_active_preview_audio,
     schedule_project_autosave, update_preview_from_audio_status, valid_sequence_audio,
 };
-use crate::effect_previews::{
-    SequenceEffectPreviewRequestEffectDto, SequenceEffectPreviewResultsDto,
-};
 use crate::new_project::{create_starter_project, STARTER_SEQUENCE_PATH};
 use crate::preview::{
     open_or_focus_preview_window, preview_pixel_count, preview_scene_from_frame, PreviewSceneDto,
 };
 use crate::preview_transport::{PreviewTransportMode, PreviewTransportRuntime};
 use crate::state::{
-    lock_audio_runtime, lock_effect_preview_runtime, lock_live_output, lock_model,
-    lock_preview_transport, project_path, AppState, CommandResult,
+    lock_audio_runtime, lock_live_output, lock_model, lock_preview_transport, project_path,
+    AppState, CommandResult,
 };
 
 #[specta::specta]
@@ -323,48 +320,6 @@ fn export_active_sequence_fseq(
     );
     emit_model_snapshot(&app, &model)?;
     Ok(model.snapshot_dto())
-}
-
-#[specta::specta]
-#[tauri::command]
-fn request_sequence_effect_previews(
-    state: State<'_, AppState>,
-    path: String,
-    object_key: String,
-    request_id: u32,
-    effects: Vec<SequenceEffectPreviewRequestEffectDto>,
-) -> CommandResult<()> {
-    let model = lock_model(&state)?;
-    let project = model
-        .project
-        .as_ref()
-        .ok_or_else(|| "project is not available".to_string())?
-        .clone();
-    let request_path = path.clone();
-    let request_object_key = object_key.clone();
-    let document =
-        model.cached_sequence_document_for_preview_request(&project_path(path), &object_key)?;
-    drop(model);
-
-    lock_effect_preview_runtime(&state)?.request(
-        request_path,
-        request_object_key,
-        request_id,
-        effects,
-        project,
-        document,
-    )
-}
-
-#[specta::specta]
-#[tauri::command]
-fn take_sequence_effect_preview_results(
-    state: State<'_, AppState>,
-    path: String,
-    object_key: String,
-) -> CommandResult<SequenceEffectPreviewResultsDto> {
-    let results = lock_effect_preview_runtime(&state)?.take_results(path, object_key)?;
-    Ok(SequenceEffectPreviewResultsDto { results })
 }
 
 #[specta::specta]
@@ -711,8 +666,6 @@ pub(crate) fn register_commands(
         choose_sequence_audio,
         clear_sequence_audio,
         export_active_sequence_fseq,
-        request_sequence_effect_previews,
-        take_sequence_effect_preview_results,
         apply_layout_gui_edit,
         apply_fixture_gui_edit,
         flush_autosave,

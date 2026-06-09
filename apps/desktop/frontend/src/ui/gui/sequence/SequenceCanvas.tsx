@@ -8,7 +8,7 @@ import { Trash2 } from "lucide-react";
 
 import { commands } from "../../../api";
 
-import type { LayoutTargetDto, SequenceAudioDto, SequenceDocumentDto, SequenceEffectPreviewDto, SequenceEffectPreviewResultDto, SequenceEffectScopeDto, SequenceEffectScriptDto } from "../../../bindings";
+import type { LayoutTargetDto, SequenceAudioDto, SequenceDocumentDto, SequenceEffectScopeDto, SequenceEffectScriptDto } from "../../../bindings";
 
 import { runSnapshotCommand } from "../../../store";
 
@@ -16,7 +16,7 @@ import { clamp, formatSeconds, roundToNanosecond, type GuiFocus, type SequenceSe
 
 import { defaultMarkColor, drawSequenceMarks, committedMarkPreviews, markIndexAfterMove, nextCollectionKey, useMarkDisplayMode } from "./marks";
 
-import { sequencePreviewSignatures, targetsEqual } from "./sequencePreviewSignatures";
+import { targetsEqual } from "./sequenceTargets";
 
 import { buildSequenceClipLayout, constrainEffectLaneDelta, constrainEffectMoveDelta, constrainEffectResizeDelta, constrainMarkDelta, effectMovePreviews, effectResizePreviews, hitSequence, hitSequenceMark, markMovePreviews, markRefLookup, mergeSequenceSelection, MIN_EFFECT_DURATION_SECONDS, nextEffectSelection, nextMarkSelection, normalizedRect, selectedEffectId, selectionCount, selectionFromMarqueeEffects, selectionFromMarqueeMarks, sequenceHoverEqual, setMarkPreview, singleEffectSelectionFocus, singleSelectionFocus, selectionFromSingle, type MarkPreviewLookup, type SequenceContextMenu, type SequenceHover, type SequenceMarquee, type SequencePreview, type SequenceViewport } from "./sequenceSelection";
 
@@ -36,9 +36,6 @@ const SEQUENCE_CANVAS = {
   nudgeSeconds: 0.001,
   shiftedNudgeSeconds: 0.01
 } as const;
-
-const PREVIEW_REQUEST_THROTTLE_MS = 50;
-const PREVIEW_CANVAS_DECODE_CHUNK_SIZE = 2;
 
 const SEQUENCE_COLORS = {
   page: "#111214",
@@ -111,11 +108,6 @@ export function SequenceCanvas({
   const [marquee, setMarquee] = useState<SequenceMarquee | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [viewport, setViewport] = useState<SequenceViewport>({ pxPerSecond: SEQUENCE_CANVAS.initialPxPerSecond, laneHeight: SEQUENCE_CANVAS.initialLaneHeightPx, scrollXSeconds: 0, scrollY: 0 });
-  const [previewImages, setPreviewImages] = useState<Map<number, SequencePreviewImage>>(() => new Map());
-  const [previewRequestTick, setPreviewRequestTick] = useState(0);
-  const previewImagesRef = useRef(previewImages);
-  const inFlightPreviewSignatures = useRef<Set<string>>(new Set());
-  const nextPreviewRequestId = useRef(1);
   const initializedViewportKey = useRef<string | null>(null);
   const left = SEQUENCE_CANVAS.leftGutterPx;
   const top = SEQUENCE_CANVAS.topPx;
@@ -123,18 +115,12 @@ export function SequenceCanvas({
   const audioStripHeight = top - audioStripTop;
   const waveform = useSequenceWaveform(document.audio);
   const [mode] = useMarkDisplayMode();
-  const effectPreviewSignatures = useMemo(() => sequencePreviewSignatures(document), [document]);
-  const effectPreviewSignaturesRef = useRef(effectPreviewSignatures);
   const visibleMarkCollections = useMemo(
     () => document.markCollections.filter((collection) => visibleMarkCollectionKeys.has(collection.key)),
     [document.markCollections, visibleMarkCollectionKeys]
   );
   const canvasCursor =
     dragCursor ?? (hover === null ? undefined : hover.kind === "mark" ? "pointer" : hover.resize === "none" ? "grab" : "ew-resize");
-  const previewViewportKey = useMemo(
-    () => [viewport.scrollXSeconds, viewport.scrollY, viewport.pxPerSecond, viewport.laneHeight, canvasSize.width, canvasSize.height].join(":"),
-    [canvasSize.height, canvasSize.width, viewport.laneHeight, viewport.pxPerSecond, viewport.scrollXSeconds, viewport.scrollY]
-  );
 
   const updateSequenceSelection = useCallback((selection: SequenceSelection) => {
     sequenceSelectionRef.current = selection;
@@ -144,14 +130,6 @@ export function SequenceCanvas({
   useEffect(() => {
     sequenceSelectionRef.current = sequenceSelection;
   }, [sequenceSelection]);
-
-  useEffect(() => {
-    previewImagesRef.current = previewImages;
-  }, [previewImages]);
-
-  useEffect(() => {
-    effectPreviewSignaturesRef.current = effectPreviewSignatures;
-  }, [effectPreviewSignatures]);
 
   useEffect(() => {
     const target = canvas.current;
@@ -184,177 +162,11 @@ export function SequenceCanvas({
     () => buildSequenceClipLayout(document, groupPreview.length > 0 ? groupPreview : preview === null ? [] : [preview], viewport, left, top),
     [document, groupPreview, left, preview, top, viewport]
   );
-  const visiblePreviewEffectIds = useMemo(() => {
-    if (canvasSize.width <= 0 || canvasSize.height <= 0) return [];
-    const ids: number[] = [];
-    const seen = new Set<number>();
-    for (const clip of visibleClips
-      .filter(
-        (clip) =>
-          clip.rect.x + clip.rect.width >= left &&
-          clip.rect.x <= canvasSize.width &&
-          clip.rect.y + clip.rect.height >= top &&
-          clip.rect.y <= canvasSize.height
-      )
-      .sort((leftClip, rightClip) => leftClip.rect.y - rightClip.rect.y || leftClip.rect.x - rightClip.rect.x)) {
-      if (seen.has(clip.effect.id)) continue;
-      seen.add(clip.effect.id);
-      ids.push(clip.effect.id);
-    }
-    return ids;
-  }, [canvasSize.height, canvasSize.width, left, top, visibleClips]);
-  const prioritizedPreviewEffectIds = useMemo(() => {
-    const ids = [...visiblePreviewEffectIds];
-    const seen = new Set(ids);
-    for (const effect of document.effects) {
-      if (seen.has(effect.id)) continue;
-      seen.add(effect.id);
-      ids.push(effect.id);
-    }
-    return ids;
-  }, [document.effects, visiblePreviewEffectIds]);
   const selectedEffectIds = useMemo(() => new Set<number>(sequenceSelection?.type === "effects" ? sequenceSelection.ids : []), [sequenceSelection]);
   const selectedMarks = useMemo(
     () => markRefLookup(sequenceSelection?.type === "marks" ? sequenceSelection.marks : []),
     [sequenceSelection]
   );
-
-  useEffect(() => {
-    const target = canvas.current;
-    if (!target || canvasSize.width <= 0 || canvasSize.height <= 0 || prioritizedPreviewEffectIds.length === 0) return;
-
-    const missingEffects = prioritizedPreviewEffectIds
-      .map((id) => ({ id, signature: effectPreviewSignatures.get(id) }))
-      .filter((effect): effect is { id: number; signature: string } => {
-        if (effect.signature === undefined) return false;
-        if (previewImagesRef.current.get(effect.id)?.signature === effect.signature) return false;
-        return !inFlightPreviewSignatures.current.has(effect.signature);
-      });
-    if (missingEffects.length === 0) return;
-
-    const request = { cancelled: false };
-    const timeout = window.setTimeout(() => {
-      if (previewRequestCancelled(request)) return;
-      inFlightPreviewSignatures.current.clear();
-      for (const effect of missingEffects) {
-        inFlightPreviewSignatures.current.add(effect.signature);
-      }
-      const requestId = nextPreviewRequestId.current;
-      nextPreviewRequestId.current += 1;
-      void commands
-        .requestSequenceEffectPreviews(
-          document.path,
-          document.objectKey,
-          requestId,
-          missingEffects.map((effect) => ({ effectId: effect.id, signature: effect.signature }))
-        )
-        .catch(() => {
-          if (previewRequestCancelled(request)) return;
-          for (const effect of missingEffects) {
-            inFlightPreviewSignatures.current.delete(effect.signature);
-          }
-          setPreviewImages((current) => {
-            const next = new Map(current);
-            for (const effect of missingEffects) {
-              if (effectPreviewSignaturesRef.current.get(effect.id) !== effect.signature) continue;
-              next.set(effect.id, { signature: effect.signature, status: "unavailable" });
-            }
-            return next;
-          });
-        })
-        .finally(() => {
-          setPreviewRequestTick((tick) => tick + 1);
-        });
-    }, PREVIEW_REQUEST_THROTTLE_MS);
-
-    return () => {
-      request.cancelled = true;
-      window.clearTimeout(timeout);
-    };
-  }, [canvasSize.height, canvasSize.width, document.objectKey, document.path, effectPreviewSignatures, previewRequestTick, previewViewportKey, prioritizedPreviewEffectIds]);
-
-  const applyPreviewResults = useCallback(async (results: SequenceEffectPreviewResultDto[]) => {
-    const ready: { preview: SequenceEffectPreviewDto; signature: string }[] = [];
-    const unavailable: { effectId: number; signature: string }[] = [];
-    for (const result of results) {
-      inFlightPreviewSignatures.current.delete(result.signature);
-      if (result.type === "ready") {
-        const effectId = result.preview.effectId;
-        if (effectPreviewSignaturesRef.current.get(effectId) !== result.signature) continue;
-        ready.push({ preview: result.preview, signature: result.signature });
-      } else if (result.type === "unavailable") {
-        if (effectPreviewSignaturesRef.current.get(result.effectId) !== result.signature) continue;
-        unavailable.push({ effectId: result.effectId, signature: result.signature });
-      } else {
-        console.error(result.message);
-        if (effectPreviewSignaturesRef.current.get(result.effectId) !== result.signature) continue;
-        unavailable.push({ effectId: result.effectId, signature: result.signature });
-      }
-    }
-    if (unavailable.length > 0) {
-      setPreviewImages((current) => {
-        const next = new Map(current);
-        for (const result of unavailable) {
-          if (effectPreviewSignaturesRef.current.get(result.effectId) !== result.signature) continue;
-          next.set(result.effectId, { signature: result.signature, status: "unavailable" });
-        }
-        return next;
-      });
-    }
-    for (let index = 0; index < ready.length; index += PREVIEW_CANVAS_DECODE_CHUNK_SIZE) {
-      const chunk = ready.slice(index, index + PREVIEW_CANVAS_DECODE_CHUNK_SIZE);
-      const decoded = chunk.flatMap((result) => {
-        if (effectPreviewSignaturesRef.current.get(result.preview.effectId) !== result.signature) return [];
-        return [{
-          effectId: result.preview.effectId,
-          signature: result.signature,
-          canvas: previewCanvasFromRaster(result.preview)
-        }];
-      });
-      if (decoded.length > 0) {
-        setPreviewImages((current) => {
-          const next = new Map(current);
-          for (const image of decoded) {
-            if (effectPreviewSignaturesRef.current.get(image.effectId) !== image.signature) continue;
-            next.set(image.effectId, {
-              signature: image.signature,
-              status: "ready",
-              canvas: image.canvas
-            });
-          }
-          return next;
-        });
-      }
-      if (index + PREVIEW_CANVAS_DECODE_CHUNK_SIZE < ready.length) {
-        await nextAnimationFrame();
-      }
-    }
-    setPreviewRequestTick((tick) => tick + 1);
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    let polling = false;
-    const poll = async () => {
-      if (polling || inFlightPreviewSignatures.current.size === 0) return;
-      polling = true;
-      try {
-        const batch = await commands.takeSequenceEffectPreviewResults(document.path, document.objectKey);
-        if (!cancelled && batch.results.length > 0) {
-          await applyPreviewResults(batch.results);
-        }
-      } finally {
-        polling = false;
-      }
-    };
-    const interval = window.setInterval(() => void poll(), PREVIEW_REQUEST_THROTTLE_MS);
-    void poll();
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [applyPreviewResults, document.objectKey, document.path]);
 
   useEffect(() => {
     const target = canvas.current;
@@ -466,19 +278,6 @@ export function SequenceCanvas({
       const hoverResize = hover?.kind === "effect" && hover.effectId === clip.effect.id ? hover.resize : null;
       ctx.fillStyle = SEQUENCE_COLORS.textFaint;
       ctx.fillRect(clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height);
-      const previewImage = validPreviewImage(previewImages.get(clip.effect.id), effectPreviewSignatures.get(clip.effect.id));
-      if (previewImage?.status === "ready") {
-        ctx.save();
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(
-          previewImage.canvas,
-          clip.rect.x + 1,
-          clip.rect.y + 1,
-          Math.max(0, clip.rect.width - 2),
-          Math.max(0, clip.rect.height - 2)
-        );
-        ctx.restore();
-      }
       if (hoverResize !== null) {
         ctx.fillStyle = SEQUENCE_COLORS.overlay;
         ctx.fillRect(clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height);
@@ -543,7 +342,7 @@ export function SequenceCanvas({
     ctx.moveTo(left + 0.5, top);
     ctx.lineTo(left, rect.height);
     ctx.stroke();
-  }, [document, effectPreviewSignatures, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, selected, selectedEffectIds, selectedMarks, previewImages, previewPositionSeconds, previewHomeSeconds, selectedLaneIndex, selectedTimeSeconds, marquee, waveform.audio, visibleMarkCollections, mode, markPreviews, hover]);
+  }, [document, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, selected, selectedEffectIds, selectedMarks, previewPositionSeconds, previewHomeSeconds, selectedLaneIndex, selectedTimeSeconds, marquee, waveform.audio, visibleMarkCollections, mode, markPreviews, hover]);
 
   const seekFromCanvas = (event: MouseEvent<HTMLCanvasElement>) => {
     const x = event.nativeEvent.offsetX;
@@ -1193,10 +992,6 @@ export function SequenceCanvas({
   );
 }
 
-export type SequencePreviewImage = {
-  signature: string;
-} & ({ status: "ready"; canvas: HTMLCanvasElement } | { status: "unavailable" });
-
 type WaveformAudio = { durationSeconds: number; sampleRate: number; levels: WaveformLevel[] };
 
 type WaveformLevel = { samplesPerPeak: number; mins: Float32Array; maxes: Float32Array };
@@ -1424,45 +1219,6 @@ function formatTimelineSeconds(value: number, intervalSeconds: number) {
     return `${minutes}:${String(seconds).padStart(2, "0")}.${String(milliseconds).padStart(3, "0")}`;
   }
   return formatSeconds(value);
-}
-
-function previewCanvasFromRaster(raster: SequenceEffectPreviewDto) {
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, raster.columns);
-  canvas.height = Math.max(1, raster.rows);
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return canvas;
-  const image = ctx.createImageData(canvas.width, canvas.height);
-  for (let row = 0; row < raster.rows; row += 1) {
-    for (let column = 0; column < raster.columns; column += 1) {
-      const sourceIndex = row * raster.columns + column;
-      const color = raster.colors[sourceIndex] ?? 0;
-      const targetIndex = sourceIndex * 4;
-      image.data[targetIndex] = (color >> 16) & 0xff;
-      image.data[targetIndex + 1] = (color >> 8) & 0xff;
-      image.data[targetIndex + 2] = color & 0xff;
-      image.data[targetIndex + 3] = 0xff;
-    }
-  }
-  ctx.putImageData(image, 0, 0);
-  return canvas;
-}
-
-function nextAnimationFrame() {
-  return new Promise<void>((resolve) => {
-    window.requestAnimationFrame(() => {
-      resolve();
-    });
-  });
-}
-
-function previewRequestCancelled(request: { cancelled: boolean }) {
-  return request.cancelled;
-}
-
-function validPreviewImage(image: SequencePreviewImage | undefined, signature: string | undefined) {
-  if (image === undefined || signature === undefined) return undefined;
-  return image.signature === signature ? image : undefined;
 }
 
 function isTextEntryElement(target: EventTarget | null) {

@@ -4,7 +4,7 @@ import { clamp, type GuiFocus, type SequenceSelection } from "../shared";
 
 import { markIndexAfterMove, type MarkDisplayMode } from "./marks";
 
-import { targetsEqual } from "./sequencePreviewSignatures";
+import { targetsEqual } from "./sequenceTargets";
 
 export type SequencePreview = { id: number; startSeconds: number; durationSeconds: number; laneIndex: number };
 

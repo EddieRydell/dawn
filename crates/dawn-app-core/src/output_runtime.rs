@@ -387,13 +387,11 @@ impl SequencePreparationCache {
 #[derive(Debug, Clone, Default)]
 pub struct SequenceRenderCache {
     preparation: SequencePreparationCache,
-    effect_thumbnails: HashMap<SequenceEffectThumbnailCacheKey, SequenceEffectThumbnail>,
 }
 
 impl SequenceRenderCache {
     pub fn clear(&mut self) {
         self.preparation.clear();
-        self.effect_thumbnails.clear();
     }
 
     pub fn apply_change_impact(&mut self, impact: &SequenceChangeImpact) {
@@ -403,15 +401,11 @@ impl SequenceRenderCache {
         }
         for effect_id in &impact.invalidated_prepared_effect_ids {
             self.preparation.remove_prepared(*effect_id);
-            self.effect_thumbnails
-                .retain(|key, _| key.effect_id != *effect_id);
         }
         for effect_id in &impact.invalidated_topology_effect_ids {
             self.preparation.remove_topology(*effect_id);
         }
         self.preparation.prune(&impact.active_effect_ids);
-        self.effect_thumbnails
-            .retain(|key, _| impact.active_effect_ids.contains(&key.effect_id));
     }
 
     pub fn build_evaluator(
@@ -448,58 +442,12 @@ impl SequenceRenderCache {
         )
     }
 
-    pub fn effect_thumbnail(
-        &mut self,
-        project: &DawnProject,
-        document: &SequenceDocument,
-        effect: &SequenceEffectDocument,
-        max_columns: usize,
-        max_rows: usize,
-    ) -> Result<Option<SequenceEffectThumbnail>, String> {
-        match self.effect_thumbnail_cancellable(
-            project,
-            document,
-            effect,
-            max_columns,
-            max_rows,
-            || false,
-        )? {
-            SequenceEffectThumbnailResult::Ready(thumbnail) => Ok(Some(thumbnail)),
-            SequenceEffectThumbnailResult::Unavailable
-            | SequenceEffectThumbnailResult::Cancelled => Ok(None),
-        }
-    }
-
-    pub fn effect_thumbnail_cancellable(
-        &mut self,
-        project: &DawnProject,
-        document: &SequenceDocument,
-        effect: &SequenceEffectDocument,
-        max_columns: usize,
-        max_rows: usize,
-        is_cancelled: impl Fn() -> bool,
-    ) -> Result<SequenceEffectThumbnailResult, String> {
-        sequence_effect_thumbnail(
-            project,
-            document,
-            effect,
-            max_columns,
-            max_rows,
-            self,
-            &is_cancelled,
-        )
-    }
-
     pub fn prepared_entry_count(&self) -> usize {
         self.preparation.prepared_entry_count()
     }
 
     pub fn topology_entry_count(&self) -> usize {
         self.preparation.topology_entry_count()
-    }
-
-    pub fn thumbnail_entry_count(&self) -> usize {
-        self.effect_thumbnails.len()
     }
 }
 
@@ -586,41 +534,6 @@ impl SequenceChangeImpact {
     pub fn requires_full_clear(&self) -> bool {
         self.clear_all
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct SequenceEffectThumbnail {
-    pub effect_id: u32,
-    pub duration_seconds: f64,
-    pub source_pixel_count: u32,
-    pub sampled_pixel_indices: Vec<u32>,
-    pub columns: u32,
-    pub rows: u32,
-    pub colors: Vec<Color>,
-}
-
-#[derive(Debug, Clone)]
-pub enum SequenceEffectThumbnailResult {
-    Ready(SequenceEffectThumbnail),
-    Unavailable,
-    Cancelled,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct SequenceEffectThumbnailCacheKey {
-    sequence_path: String,
-    object_key: String,
-    effect_id: u32,
-    duration_nanoseconds: u64,
-    frame_rate: u32,
-    scope: SequenceEffectScope,
-    script_id: EffectDefinitionKey,
-    script_source: String,
-    params: Vec<PreparedEffectParamCacheKey>,
-    target_pixels: Vec<PreparedEffectPixelCacheKey>,
-    sampled_pixel_indices: Vec<usize>,
-    max_columns: usize,
-    max_rows: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1562,97 +1475,6 @@ impl SequenceFrameEvaluator {
         self.effects.len()
     }
 
-    pub fn evaluate_generator_effect_thumbnail(
-        &mut self,
-        effect_id: u32,
-        local_seconds_by_column: &[f64],
-        sampled_pixels_by_row: &[SequenceEffectPixelDocument],
-    ) -> Result<Vec<Color>, String> {
-        match self.evaluate_generator_effect_thumbnail_cancellable(
-            effect_id,
-            local_seconds_by_column,
-            sampled_pixels_by_row,
-            || false,
-        )? {
-            EffectThumbnailColorsResult::Ready(colors) => Ok(colors),
-            EffectThumbnailColorsResult::Cancelled => Ok(Vec::new()),
-        }
-    }
-
-    fn evaluate_generator_effect_thumbnail_cancellable(
-        &mut self,
-        effect_id: u32,
-        local_seconds_by_column: &[f64],
-        sampled_pixels_by_row: &[SequenceEffectPixelDocument],
-        is_cancelled: impl Fn() -> bool,
-    ) -> Result<EffectThumbnailColorsResult, String> {
-        let interval = self
-            .authored_intervals_by_id
-            .get(&effect_id)
-            .ok_or_else(|| format!("sequence effect `{effect_id}` was not found"))?;
-        if interval.duration_seconds <= 0.0 {
-            return Err(format!(
-                "sequence effect `{effect_id}` must have a positive duration"
-            ));
-        }
-
-        let mut row_indices_by_pixel = HashMap::new();
-        for (row_index, pixel) in sampled_pixels_by_row.iter().enumerate() {
-            if self
-                .fixture_templates
-                .get(pixel.fixture_index)
-                .and_then(|fixture| fixture.pixels.get(pixel.pixel_index))
-                .is_none()
-            {
-                return Err(format!(
-                    "sequence effect `{effect_id}` references an unavailable preview pixel"
-                ));
-            }
-            row_indices_by_pixel.insert((pixel.fixture_index, pixel.pixel_index), row_index);
-        }
-
-        let columns = local_seconds_by_column.len();
-        let rows = sampled_pixels_by_row.len();
-        let mut colors = vec![Color::new(0, 0, 0); columns * rows];
-
-        for (column_index, local_seconds) in local_seconds_by_column.iter().copied().enumerate() {
-            if is_cancelled() {
-                return Ok(EffectThumbnailColorsResult::Cancelled);
-            }
-            if !local_seconds.is_finite() || local_seconds < 0.0 {
-                return Err(format!(
-                    "sequence effect `{effect_id}` has an invalid preview sample time"
-                ));
-            }
-            let sequence_seconds = interval.start_seconds + local_seconds;
-            let Some(effect_indices) = self.effect_indices_for_time(sequence_seconds).cloned()
-            else {
-                continue;
-            };
-
-            for effect_index in effect_indices {
-                let effect = &mut self.effects[effect_index];
-                if effect.id != effect_id {
-                    continue;
-                }
-                sample_prepared_effect_thumbnail_column(
-                    effect,
-                    sequence_seconds,
-                    column_index,
-                    columns,
-                    &row_indices_by_pixel,
-                    &mut colors,
-                    &is_cancelled,
-                )?;
-                if is_cancelled() {
-                    return Ok(EffectThumbnailColorsResult::Cancelled);
-                }
-            }
-        }
-
-        Ok(EffectThumbnailColorsResult::Ready(colors))
-    }
-
     fn effect_indices_for_time(&self, time_seconds: f64) -> Option<&Vec<usize>> {
         if !time_seconds.is_finite() || time_seconds < 0.0 {
             return None;
@@ -1900,335 +1722,6 @@ fn sample_prepared_effect(
             Err(error) => *status = OutputFrameStatus::Error(error.to_string()),
         }
     }
-}
-
-fn sample_prepared_effect_thumbnail_column(
-    effect: &mut PreparedSequenceEffect,
-    sequence_seconds: f64,
-    column_index: usize,
-    columns: usize,
-    row_indices_by_pixel: &HashMap<(usize, usize), usize>,
-    colors: &mut [Color],
-    is_cancelled: impl Fn() -> bool,
-) -> Result<(), String> {
-    let local_seconds =
-        if sequence_seconds < effect.start_seconds || sequence_seconds >= effect.end_seconds() {
-            return Ok(());
-        } else {
-            sequence_seconds - effect.start_seconds
-        };
-    let progress = if effect.duration_seconds == 0.0 {
-        0.0
-    } else {
-        (local_seconds / effect.duration_seconds).clamp(0.0, 1.0)
-    };
-
-    let PreparedEffectRender::Ready {
-        script,
-        target_pixels,
-        prepared_params,
-        scratch,
-        ..
-    } = &mut effect.render
-    else {
-        return Err(effect.render.error_message());
-    };
-
-    for pixel in target_pixels {
-        if is_cancelled() {
-            return Ok(());
-        }
-        let Some(row_index) = row_indices_by_pixel
-            .get(&(pixel.fixture_index, pixel.pixel_index))
-            .copied()
-        else {
-            continue;
-        };
-        let target_index = row_index
-            .checked_mul(columns)
-            .and_then(|row_start| row_start.checked_add(column_index))
-            .ok_or_else(|| "effect thumbnail raster dimensions overflowed".to_string())?;
-        let color = script
-            .sample_prepared_with_scratch(
-                progress,
-                local_seconds,
-                pixel.fixture_context,
-                pixel.pixel_context,
-                prepared_params,
-                scratch,
-            )
-            .map_err(|error| error.to_string())?;
-        add_clamped(&mut colors[target_index], color);
-    }
-
-    Ok(())
-}
-
-enum EffectThumbnailColorsResult {
-    Ready(Vec<Color>),
-    Cancelled,
-}
-
-fn sequence_effect_thumbnail(
-    project: &DawnProject,
-    document: &SequenceDocument,
-    effect: &SequenceEffectDocument,
-    max_columns: usize,
-    max_rows: usize,
-    cache: &mut SequenceRenderCache,
-    is_cancelled: impl Fn() -> bool,
-) -> Result<SequenceEffectThumbnailResult, String> {
-    let Some(render) = &effect.render else {
-        return Ok(SequenceEffectThumbnailResult::Unavailable);
-    };
-    if document.frame_rate == 0 || effect.duration_seconds == 0.0 || render.target_pixels.is_empty()
-    {
-        return Ok(SequenceEffectThumbnailResult::Unavailable);
-    }
-
-    let duration =
-        TimeSpan::try_from_seconds_f64_rounded(effect.duration_seconds).map_err(str::to_string)?;
-    if duration == TimeSpan::ZERO {
-        return Ok(SequenceEffectThumbnailResult::Unavailable);
-    }
-
-    let source_pixel_count = render.target_pixels.len();
-    let sampled_pixel_indices = evenly_sample_indices(source_pixel_count, max_rows);
-    let cache_key = SequenceEffectThumbnailCacheKey {
-        sequence_path: document.path.clone(),
-        object_key: document.object_key.clone(),
-        effect_id: effect.id,
-        duration_nanoseconds: duration.as_nanoseconds(),
-        frame_rate: document.frame_rate,
-        scope: effect.scope,
-        script_id: render.script.clone(),
-        script_source: render.script_source.clone(),
-        params: prepared_effect_cache_key(
-            document,
-            effect.start_seconds,
-            effect.duration_seconds,
-            effect.scope,
-            render,
-        )
-        .params,
-        target_pixels: render
-            .target_pixels
-            .iter()
-            .map(|pixel| PreparedEffectPixelCacheKey {
-                fixture_index: pixel.fixture_index,
-                pixel_index: pixel.pixel_index,
-                pixel_count: pixel.pixel_count,
-            })
-            .collect(),
-        sampled_pixel_indices: sampled_pixel_indices.clone(),
-        max_columns,
-        max_rows,
-    };
-    if let Some(thumbnail) = cache.effect_thumbnails.get(&cache_key).cloned() {
-        return Ok(SequenceEffectThumbnailResult::Ready(thumbnail));
-    }
-    if is_cancelled() {
-        return Ok(SequenceEffectThumbnailResult::Cancelled);
-    }
-
-    let Some(script) = project
-        .stores
-        .effect_definitions
-        .get(&render.script)
-        .map(|effect| &effect.value.compiled)
-    else {
-        return Ok(SequenceEffectThumbnailResult::Unavailable);
-    };
-    let sampled_frame_indices = evenly_sample_indices(
-        total_preview_frames(duration, document.frame_rate),
-        max_columns,
-    );
-    let colors = if script.kind() == EffectScriptKind::Generator {
-        generator_effect_thumbnail_colors(GeneratorEffectThumbnailInput {
-            project,
-            document,
-            effect,
-            render,
-            duration,
-            sampled_pixel_indices: &sampled_pixel_indices,
-            sampled_frame_indices: &sampled_frame_indices,
-            cache,
-            is_cancelled: &is_cancelled,
-        })?
-    } else {
-        sample_effect_thumbnail_colors(SampleEffectThumbnailInput {
-            script,
-            document,
-            effect,
-            render,
-            duration,
-            source_pixel_count,
-            sampled_pixel_indices: &sampled_pixel_indices,
-            sampled_frame_indices: &sampled_frame_indices,
-            is_cancelled: &is_cancelled,
-        })?
-    };
-    let colors = match colors {
-        EffectThumbnailColorsResult::Ready(colors) => colors,
-        EffectThumbnailColorsResult::Cancelled => {
-            return Ok(SequenceEffectThumbnailResult::Cancelled);
-        }
-    };
-    if colors.len() != sampled_frame_indices.len() * sampled_pixel_indices.len() {
-        return Ok(SequenceEffectThumbnailResult::Unavailable);
-    }
-    let thumbnail = SequenceEffectThumbnail {
-        effect_id: effect.id,
-        duration_seconds: effect.duration_seconds,
-        source_pixel_count: source_pixel_count.min(u32::MAX as usize) as u32,
-        sampled_pixel_indices: sampled_pixel_indices
-            .iter()
-            .map(|index| (*index).min(u32::MAX as usize) as u32)
-            .collect(),
-        columns: sampled_frame_indices.len().min(u32::MAX as usize) as u32,
-        rows: sampled_pixel_indices.len().min(u32::MAX as usize) as u32,
-        colors,
-    };
-    cache.effect_thumbnails.insert(cache_key, thumbnail.clone());
-    Ok(SequenceEffectThumbnailResult::Ready(thumbnail))
-}
-
-struct SampleEffectThumbnailInput<'a> {
-    script: &'a CompiledEffect,
-    document: &'a SequenceDocument,
-    effect: &'a SequenceEffectDocument,
-    render: &'a SequenceEffectRenderDocument,
-    duration: TimeSpan,
-    source_pixel_count: usize,
-    sampled_pixel_indices: &'a [usize],
-    sampled_frame_indices: &'a [usize],
-    is_cancelled: &'a dyn Fn() -> bool,
-}
-
-fn sample_effect_thumbnail_colors(
-    input: SampleEffectThumbnailInput<'_>,
-) -> Result<EffectThumbnailColorsResult, String> {
-    let prepared_params = match prepare_params_from_document(
-        input.script,
-        &input.render.params,
-        &input.document.mark_collections,
-        input.effect.start_seconds,
-        input.effect.duration_seconds,
-    ) {
-        Ok(params) => params,
-        Err(_) => return Ok(EffectThumbnailColorsResult::Ready(Vec::new())),
-    };
-    let mut colors =
-        Vec::with_capacity(input.sampled_frame_indices.len() * input.sampled_pixel_indices.len());
-    for target_pixel_index in input.sampled_pixel_indices {
-        if (input.is_cancelled)() {
-            return Ok(EffectThumbnailColorsResult::Cancelled);
-        }
-        let Some(pixel) = input.render.target_pixels.get(*target_pixel_index) else {
-            return Ok(EffectThumbnailColorsResult::Ready(Vec::new()));
-        };
-        for frame_index in input.sampled_frame_indices {
-            if (input.is_cancelled)() {
-                return Ok(EffectThumbnailColorsResult::Cancelled);
-            }
-            let local_seconds =
-                local_seconds_for_frame(*frame_index, input.document.frame_rate, input.duration);
-            let progress = (local_seconds / input.effect.duration_seconds).clamp(0.0, 1.0);
-            let pixel_context = pixel_context_for_effect(
-                input.effect.scope,
-                *target_pixel_index,
-                input.source_pixel_count,
-                pixel.pixel_index,
-                pixel.pixel_count,
-            );
-            let color = match input.script.sample_prepared(
-                progress,
-                local_seconds,
-                FixtureContext {
-                    index: pixel.fixture_index,
-                },
-                pixel_context,
-                &prepared_params,
-            ) {
-                Ok(color) => color,
-                Err(_) => return Ok(EffectThumbnailColorsResult::Ready(Vec::new())),
-            };
-            colors.push(color);
-        }
-    }
-    Ok(EffectThumbnailColorsResult::Ready(colors))
-}
-
-struct GeneratorEffectThumbnailInput<'a> {
-    project: &'a DawnProject,
-    document: &'a SequenceDocument,
-    effect: &'a SequenceEffectDocument,
-    render: &'a SequenceEffectRenderDocument,
-    duration: TimeSpan,
-    sampled_pixel_indices: &'a [usize],
-    sampled_frame_indices: &'a [usize],
-    cache: &'a mut SequenceRenderCache,
-    is_cancelled: &'a dyn Fn() -> bool,
-}
-
-fn generator_effect_thumbnail_colors(
-    input: GeneratorEffectThumbnailInput<'_>,
-) -> Result<EffectThumbnailColorsResult, String> {
-    if (input.is_cancelled)() {
-        return Ok(EffectThumbnailColorsResult::Cancelled);
-    }
-    let filter = [input.effect.id].into_iter().collect();
-    let (mut evaluator, _) = SequenceFrameEvaluator::new_filtered_timed_with_preparation_cache(
-        input.project,
-        input.document,
-        Some(&filter),
-        &mut input.cache.preparation,
-    )?;
-    let local_seconds_by_column = input
-        .sampled_frame_indices
-        .iter()
-        .map(|frame_index| {
-            local_seconds_for_frame(*frame_index, input.document.frame_rate, input.duration)
-        })
-        .collect::<Vec<_>>();
-    let sampled_pixels_by_row = input
-        .sampled_pixel_indices
-        .iter()
-        .map(|target_pixel_index| input.render.target_pixels.get(*target_pixel_index).cloned())
-        .collect::<Option<Vec<_>>>()
-        .ok_or_else(|| "effect thumbnail references an unavailable target pixel".to_string())?;
-    evaluator.evaluate_generator_effect_thumbnail_cancellable(
-        input.effect.id,
-        &local_seconds_by_column,
-        &sampled_pixels_by_row,
-        input.is_cancelled,
-    )
-}
-
-fn total_preview_frames(duration: TimeSpan, frame_rate: u32) -> usize {
-    frame_count(duration.as_seconds_f64(), frame_rate).max(1)
-}
-
-fn local_seconds_for_frame(frame_index: usize, frame_rate: u32, duration: TimeSpan) -> f64 {
-    let local_nanoseconds = frame_start(frame_index as u64, frame_rate)
-        .as_nanoseconds()
-        .min(duration.as_nanoseconds().saturating_sub(1));
-    local_nanoseconds as f64 / 1_000_000_000.0
-}
-
-fn evenly_sample_indices(source_count: usize, max_count: usize) -> Vec<usize> {
-    if source_count == 0 || max_count == 0 {
-        return Vec::new();
-    }
-    let count = source_count.min(max_count);
-    if count == 1 {
-        return vec![0];
-    }
-    (0..count)
-        .map(|index| {
-            ((index as f64) * ((source_count - 1) as f64) / ((count - 1) as f64)).round() as usize
-        })
-        .collect()
 }
 
 struct SampleRenderPreparationInput<'a> {
@@ -2652,14 +2145,6 @@ fn frame_count(duration_seconds: f64, frame_rate: u32) -> usize {
     (duration_seconds * f64::from(frame_rate)).ceil() as usize
 }
 
-fn frame_start(frame_index: u64, frame_rate: u32) -> Time {
-    if frame_rate == 0 {
-        return Time::ZERO;
-    }
-    Time::try_from_seconds_f64_rounded(frame_index as f64 / f64::from(frame_rate))
-        .unwrap_or(Time::ZERO)
-}
-
 fn prepare_generated_topology(
     document: &SequenceDocument,
     parent_start_seconds: f64,
@@ -3052,19 +2537,6 @@ impl PreparedEffectRender {
                 script_id.display_key()
             )),
             Self::BadParams(error) => OutputFrameStatus::Error(error.to_string()),
-        }
-    }
-
-    fn error_message(&self) -> String {
-        match self {
-            Self::Ready { .. } => "effect render is ready".to_string(),
-            Self::MissingScript(script_id) => {
-                format!(
-                    "compiled script `{}` was not found",
-                    script_id.display_key()
-                )
-            }
-            Self::BadParams(error) => error.to_string(),
         }
     }
 }
