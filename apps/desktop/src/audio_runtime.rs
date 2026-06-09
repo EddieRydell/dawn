@@ -6,7 +6,8 @@ use std::time::SystemTime;
 
 use dawn_app_core::document::SequenceAudioDocument;
 use dawn_app_core::preview_session::AudioPlaybackStatus;
-use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle};
+use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
+use kira::sound::FromFileError;
 use kira::sound::PlaybackState;
 use kira::{AudioManager, AudioManagerSettings, DefaultBackend, Tween};
 
@@ -29,7 +30,7 @@ struct AudioKey {
 struct LoadResult {
     generation: u64,
     key: AudioKey,
-    result: Result<StaticSoundData, String>,
+    result: Result<(), String>,
 }
 
 pub struct AudioRuntime {
@@ -42,8 +43,8 @@ struct AudioRuntimeInner {
     receiver: mpsc::Receiver<LoadResult>,
     generation: u64,
     active_key: Option<AudioKey>,
-    active_data: Option<StaticSoundData>,
-    handle: Option<StaticSoundHandle>,
+    stream_ready: bool,
+    handle: Option<StreamingSoundHandle<FromFileError>>,
     pending_play_seconds: Option<f64>,
     position_seconds: f64,
     ended: bool,
@@ -63,7 +64,7 @@ impl Default for AudioRuntime {
                 receiver,
                 generation: 0,
                 active_key: None,
-                active_data: None,
+                stream_ready: false,
                 handle: None,
                 pending_play_seconds: None,
                 position_seconds: 0.0,
@@ -77,7 +78,7 @@ impl Default for AudioRuntime {
                 receiver,
                 generation: 0,
                 active_key: None,
-                active_data: None,
+                stream_ready: false,
                 handle: None,
                 pending_play_seconds: None,
                 position_seconds: 0.0,
@@ -113,7 +114,7 @@ impl AudioRuntime {
             inner.pending_play_seconds = None;
             inner.position_seconds = position_seconds;
             inner.status = AudioPlaybackStatus::Loading;
-        } else if inner.active_data.is_some() {
+        } else if inner.is_ready_to_play() {
             inner.start(position_seconds)?;
         } else if inner.status.is_loading() {
             inner.pending_play_seconds = Some(position_seconds);
@@ -128,10 +129,10 @@ impl AudioRuntime {
         inner.poll_load_results();
         let position_seconds = inner.current_position_seconds();
         inner.pending_play_seconds = None;
-        inner.stop_handle();
+        inner.pause_handle();
         inner.position_seconds = position_seconds;
         inner.ended = false;
-        inner.status = if inner.active_data.is_some() {
+        inner.status = if inner.is_ready_to_play() {
             AudioPlaybackStatus::Ready
         } else if inner.active_key.is_some() {
             AudioPlaybackStatus::Loading
@@ -150,7 +151,7 @@ impl AudioRuntime {
         inner.stop_handle();
         inner.position_seconds = position_seconds;
         inner.ended = false;
-        inner.status = if inner.active_data.is_some() {
+        inner.status = if inner.stream_ready {
             AudioPlaybackStatus::Ready
         } else if inner.active_key.is_some() {
             AudioPlaybackStatus::Loading
@@ -171,7 +172,20 @@ impl AudioRuntime {
         let mut inner = self.lock_inner()?;
         inner.poll_load_results();
         inner.ensure_active(audio, position_seconds)?;
-        if playing && inner.active_data.is_some() {
+        if let Some(handle) = inner.handle.as_mut() {
+            handle.seek_to(position_seconds);
+            if playing {
+                handle.resume(Tween::default());
+                inner.status = AudioPlaybackStatus::Playing;
+            } else {
+                handle.pause(Tween::default());
+                inner.status = AudioPlaybackStatus::Ready;
+            }
+            inner.pending_play_seconds = None;
+            inner.position_seconds = position_seconds;
+            inner.ended = false;
+            inner.error = None;
+        } else if playing && inner.stream_ready {
             inner.start(position_seconds)?;
         } else {
             inner.pending_play_seconds = if playing && inner.status.is_loading() {
@@ -182,7 +196,7 @@ impl AudioRuntime {
             inner.stop_handle();
             inner.position_seconds = position_seconds;
             inner.ended = false;
-            if inner.active_data.is_some() {
+            if inner.stream_ready {
                 inner.status = AudioPlaybackStatus::Ready;
             } else if inner.pending_play_seconds.is_some() {
                 inner.status = AudioPlaybackStatus::LoadingToPlay;
@@ -248,7 +262,7 @@ impl AudioRuntimeInner {
         self.generation = self.generation.saturating_add(1);
         self.stop_handle();
         self.active_key = Some(key.clone());
-        self.active_data = None;
+        self.stream_ready = false;
         self.pending_play_seconds = None;
         self.position_seconds = position_seconds;
         self.ended = false;
@@ -261,12 +275,14 @@ impl AudioRuntimeInner {
     fn spawn_loader(&self, key: AudioKey, generation: u64) {
         let sender = self.sender.clone();
         thread::spawn(move || {
-            let result = StaticSoundData::from_file(&key.path).map_err(|error| {
-                format!(
-                    "failed to load audio file `{}`: {error}",
-                    key.path.display()
-                )
-            });
+            let result = StreamingSoundData::from_file(&key.path)
+                .map(|_| ())
+                .map_err(|error| {
+                    format!(
+                        "failed to prepare audio stream `{}`: {error}",
+                        key.path.display()
+                    )
+                });
             let _ = sender.send(LoadResult {
                 generation,
                 key,
@@ -282,14 +298,14 @@ impl AudioRuntimeInner {
                 continue;
             }
             match result.result {
-                Ok(data) => {
-                    self.active_data = Some(data);
+                Ok(()) => {
+                    self.stream_ready = true;
                     self.error = None;
                     self.ended = false;
                     if let Some(position_seconds) = self.pending_play_seconds.take() {
                         if let Err(error) = self.start(position_seconds) {
                             self.stop_handle();
-                            self.active_data = None;
+                            self.stream_ready = false;
                             self.status = AudioPlaybackStatus::Error;
                             self.error = Some(error);
                         }
@@ -299,7 +315,7 @@ impl AudioRuntimeInner {
                 }
                 Err(error) => {
                     self.stop_handle();
-                    self.active_data = None;
+                    self.stream_ready = false;
                     self.pending_play_seconds = None;
                     self.status = AudioPlaybackStatus::Error;
                     self.error = Some(error);
@@ -310,13 +326,32 @@ impl AudioRuntimeInner {
     }
 
     fn start(&mut self, position_seconds: f64) -> Result<(), String> {
-        self.stop_handle();
-        let Some(data) = self.active_data.clone() else {
+        if let Some(handle) = self.handle.as_mut() {
+            handle.seek_to(position_seconds);
+            handle.resume(Tween::default());
+            self.pending_play_seconds = None;
+            self.position_seconds = position_seconds;
+            self.ended = false;
+            self.status = AudioPlaybackStatus::Playing;
+            self.error = None;
+            return Ok(());
+        }
+        if !self.stream_ready {
             self.position_seconds = position_seconds;
             self.pending_play_seconds = Some(position_seconds);
             self.status = AudioPlaybackStatus::LoadingToPlay;
             return Ok(());
-        };
+        }
+        let key = self
+            .active_key
+            .as_ref()
+            .ok_or_else(|| "native audio stream is not prepared".to_string())?;
+        let data = StreamingSoundData::from_file(&key.path).map_err(|error| {
+            format!(
+                "failed to prepare audio stream `{}`: {error}",
+                key.path.display()
+            )
+        })?;
         let handle = self
             .manager
             .as_mut()
@@ -332,10 +367,20 @@ impl AudioRuntimeInner {
         Ok(())
     }
 
+    fn pause_handle(&mut self) {
+        if let Some(handle) = self.handle.as_mut() {
+            handle.pause(Tween::default());
+        }
+    }
+
     fn stop_handle(&mut self) {
         if let Some(mut handle) = self.handle.take() {
             handle.stop(Tween::default());
         }
+    }
+
+    fn is_ready_to_play(&self) -> bool {
+        self.stream_ready || self.handle.is_some()
     }
 
     fn current_position_seconds(&self) -> f64 {
@@ -347,19 +392,36 @@ impl AudioRuntimeInner {
 
     fn clock(&mut self) -> AudioClock {
         let position_seconds = self.current_position_seconds();
-        if let Some(handle) = &self.handle {
-            match handle.state() {
+        let stream_error = self.handle.as_mut().and_then(|handle| handle.pop_error());
+        if let Some(error) = stream_error {
+            self.handle = None;
+            self.pending_play_seconds = None;
+            self.position_seconds = position_seconds;
+            self.ended = false;
+            self.status = AudioPlaybackStatus::Error;
+            self.error = Some(format!("audio stream decode error: {error}"));
+            return AudioClock {
+                position_seconds: self.position_seconds,
+                ended: self.ended,
+                status: self.status,
+                error: self.error.clone(),
+            };
+        }
+        if let Some(state) = self.handle.as_ref().map(|handle| handle.state()) {
+            match state {
                 PlaybackState::Stopped => {
                     self.handle = None;
+                    self.pending_play_seconds = None;
                     self.position_seconds = position_seconds;
                     self.ended = true;
-                    self.pending_play_seconds = None;
                     self.status = AudioPlaybackStatus::Ended;
                 }
                 state if state.is_advancing() => {
                     self.position_seconds = position_seconds;
                     self.ended = false;
-                    self.status = AudioPlaybackStatus::Playing;
+                    if self.status != AudioPlaybackStatus::Ready {
+                        self.status = AudioPlaybackStatus::Playing;
+                    }
                 }
                 _ => {
                     self.position_seconds = position_seconds;
@@ -378,7 +440,7 @@ impl AudioRuntimeInner {
         self.generation = self.generation.saturating_add(1);
         self.stop_handle();
         self.active_key = None;
-        self.active_data = None;
+        self.stream_ready = false;
         self.pending_play_seconds = None;
         self.position_seconds = 0.0;
         self.ended = false;

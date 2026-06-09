@@ -588,7 +588,7 @@ fn preview_seek(
     let project = model.project.clone();
     model
         .preview
-        .seek_native_audio(clock.position_seconds, playing, project.as_deref());
+        .seek_native_audio(position_seconds, playing, project.as_deref());
     model.preview.set_timing_status("nativeAudio", clock.status);
     model.status = "Preview seeked".to_string();
     emit_model_snapshot(&app, &model)
