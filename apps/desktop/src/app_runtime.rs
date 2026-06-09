@@ -3,15 +3,15 @@ use std::time::Instant;
 use dawn_app_core::actions::AppAction;
 use dawn_app_core::app_model::{AppModel, CommandTiming, DispatchOutcome};
 use dawn_app_core::document::SequenceAudioDocument;
-use dawn_app_core::dto::{AppSnapshotDto, PreviewSnapshotDto};
+use dawn_app_core::dto::{AppSnapshotDto, EditorViewModeDto, PreviewSnapshotDto};
 use dawn_app_core::preview_session::{AudioPlaybackStatus, PreviewSnapshot};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::audio_runtime::AudioClock;
 use crate::preview::{PreviewStateEventDto, PreviewTimingDto};
 use crate::state::{
-    lock_audio_runtime, lock_filesystem_watcher, lock_model, lock_terminal_runtime, AppState,
-    CommandResult,
+    lock_audio_runtime, lock_filesystem_watcher, lock_model, lock_project_autosave_runtime,
+    lock_terminal_runtime, AppState, CommandResult,
 };
 
 pub(crate) fn dispatch(
@@ -20,6 +20,11 @@ pub(crate) fn dispatch(
     action: AppAction,
 ) -> CommandResult<AppSnapshotDto> {
     let total_started = Instant::now();
+    if should_flush_project_autosave_before_action(&action) {
+        flush_project_autosave_worker(app, state)?;
+    } else {
+        drain_project_autosave_completions(app, state)?;
+    }
     let clear_audio_runtime = should_clear_audio_runtime_for_action(&action);
     let clear_terminal_runtime = should_clear_terminal_runtime_for_action(&action);
     if clear_terminal_runtime {
@@ -41,7 +46,8 @@ pub(crate) fn dispatch(
         snapshot_ms,
         app_snapshot_emit_ms: 0.0,
     };
-    if outcome == DispatchOutcome::SnapshotChanged {
+    let snapshot_changed = outcome == DispatchOutcome::SnapshotChanged;
+    if snapshot_changed {
         if let Ok(mut watcher) = lock_filesystem_watcher(state) {
             let _ = watcher.sync_project_root(app, snapshot.project_root.clone());
         }
@@ -62,7 +68,25 @@ pub(crate) fn dispatch(
         timing.total_ms = elapsed_ms(total_started);
         model.set_last_command_timing(timing);
     }
+    drop(model);
+    if snapshot_changed {
+        schedule_project_autosave(app, state)?;
+    }
     Ok(snapshot)
+}
+
+fn should_flush_project_autosave_before_action(action: &AppAction) -> bool {
+    matches!(
+        action,
+        AppAction::OpenProject(_)
+            | AppAction::ReloadProject
+            | AppAction::FlushAutosave
+            | AppAction::CreateFile { .. }
+            | AppAction::CreateDirectory { .. }
+            | AppAction::RenamePath { .. }
+            | AppAction::DeletePath(_)
+            | AppAction::SetActiveViewMode(EditorViewModeDto::Text)
+    )
 }
 
 fn should_clear_audio_runtime_for_action(action: &AppAction) -> bool {
@@ -71,6 +95,88 @@ fn should_clear_audio_runtime_for_action(action: &AppAction) -> bool {
 
 fn should_clear_terminal_runtime_for_action(action: &AppAction) -> bool {
     matches!(action, AppAction::OpenProject(_))
+}
+
+pub(crate) fn schedule_project_autosave(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> CommandResult<()> {
+    drain_project_autosave_completions(app, state)?;
+    let job = {
+        let mut model = lock_model(state)?;
+        model.begin_project_autosave_job()
+    };
+    if let Some(job) = job {
+        lock_project_autosave_runtime(state)?.request(job)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn flush_autosave_blocking(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> CommandResult<()> {
+    flush_project_autosave_worker(app, state)?;
+    let mut model = lock_model(state)?;
+    model.flush_autosave()
+}
+
+fn flush_project_autosave_worker(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> CommandResult<()> {
+    loop {
+        drain_project_autosave_completions(app, state)?;
+        let job = {
+            let mut model = lock_model(state)?;
+            if !model.has_pending_project_autosave() {
+                return Ok(());
+            }
+            model.begin_project_autosave_job()
+        };
+        if let Some(job) = job {
+            lock_project_autosave_runtime(state)?.request(job)?;
+        }
+        let completion = lock_project_autosave_runtime(state)?.complete()?;
+        complete_project_autosave(app, state, completion, true)?;
+    }
+}
+
+fn drain_project_autosave_completions(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+) -> CommandResult<()> {
+    loop {
+        let completion = lock_project_autosave_runtime(state)?.try_complete()?;
+        let Some(completion) = completion else {
+            return Ok(());
+        };
+        complete_project_autosave(app, state, completion, false)?;
+    }
+}
+
+fn complete_project_autosave(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    completion: dawn_app_core::app_model::ProjectAutosaveCompletion,
+    propagate_error: bool,
+) -> CommandResult<()> {
+    let result = {
+        let mut model = lock_model(state)?;
+        let result = model.complete_project_autosave(completion);
+        let _ = emit_model_snapshot(app, &model);
+        result
+    };
+    match result {
+        Ok(should_schedule_next) => {
+            if should_schedule_next {
+                schedule_project_autosave(app, state)?;
+            }
+            Ok(())
+        }
+        Err(error) if propagate_error => Err(error),
+        Err(_) => Ok(()),
+    }
 }
 
 pub(crate) fn update_preview_from_audio_status(

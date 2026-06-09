@@ -287,6 +287,24 @@ impl EditorSession {
         }
     }
 
+    pub fn mark_project_autosave_written(
+        &mut self,
+        path: &Utf8PathBuf,
+        saved_text: String,
+        disk_version: FileDiskVersion,
+    ) {
+        if let Some(buffer) = self.open_editors.get_mut(path) {
+            if buffer.is_dirty() || buffer.is_conflicted() {
+                buffer.external_state = BufferExternalState::ChangedOnDisk;
+                return;
+            }
+            buffer.text = saved_text.clone();
+            buffer.saved_text = saved_text;
+            buffer.disk_version = Some(disk_version);
+            buffer.external_state = BufferExternalState::Current;
+        }
+    }
+
     pub fn record_saved_version(&mut self, path: &Utf8PathBuf, disk_version: FileDiskVersion) {
         if let Some(buffer) = self.open_editors.get_mut(path) {
             buffer.saved_text = buffer.text.clone();

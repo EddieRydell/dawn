@@ -15,8 +15,8 @@ use dawn_project::{utf8_path, DiagnosticSeverity, Utf8PathBuf};
 use tauri::{ipc::Channel, AppHandle, Manager, State};
 
 use crate::app_runtime::{
-    dispatch, emit_model_snapshot, preload_active_preview_audio, update_preview_from_audio_status,
-    valid_sequence_audio,
+    dispatch, emit_model_snapshot, flush_autosave_blocking, preload_active_preview_audio,
+    schedule_project_autosave, update_preview_from_audio_status, valid_sequence_audio,
 };
 use crate::effect_previews::{
     SequenceEffectPreviewRequestEffectDto, SequenceEffectPreviewResultsDto,
@@ -180,6 +180,8 @@ fn apply_sequence_selection_edit(
     let mut model = lock_model(&state)?;
     let result = model.apply_sequence_selection_edit(edit)?;
     emit_model_snapshot(&app, &model)?;
+    drop(model);
+    schedule_project_autosave(&app, &state)?;
     Ok(result)
 }
 
@@ -256,8 +258,8 @@ fn export_active_sequence_fseq(
     step_ms: u8,
 ) -> CommandResult<AppSnapshotDto> {
     let (project, document, default_name) = {
-        let mut model = lock_model(&state)?;
-        model.flush_autosave()?;
+        flush_autosave_blocking(&app, &state)?;
+        let model = lock_model(&state)?;
         let project = model
             .project
             .as_ref()

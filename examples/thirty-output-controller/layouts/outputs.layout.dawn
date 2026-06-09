@@ -72,241 +72,481 @@ outputs:
     fixture: fixtures.vertical_113
     transform:
       position:
+        x: 0
+        y: 0
+        z: 0
+      rotation:
         x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 2
     name: Output 02
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 0.35
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 3
     name: Output 03
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 0.7
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 4
     name: Output 04
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 1.05
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 5
     name: Output 05
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 1.4
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 6
     name: Output 06
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 1.75
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 7
     name: Output 07
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 2.1
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 8
     name: Output 08
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 2.45
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 9
     name: Output 09
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 2.8
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 10
     name: Output 10
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 3.15
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 11
     name: Output 11
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 3.5
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 12
     name: Output 12
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 3.85
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 13
     name: Output 13
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 4.2
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 14
     name: Output 14
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 4.55
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 15
     name: Output 15
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 4.9
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 16
     name: Output 16
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 5.25
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 17
     name: Output 17
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 5.6
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 18
     name: Output 18
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 5.95
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 19
     name: Output 19
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 6.3
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 20
     name: Output 20
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 6.65
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 21
     name: Output 21
     fixture: fixtures.vertical_113
     transform:
       position:
-        x: 7.0
+        x: 7
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 22
     name: Output 22
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 7.35
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 23
     name: Output 23
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 7.7
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 24
     name: Output 24
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 8.05
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 25
     name: Output 25
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 8.4
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 26
     name: Output 26
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 8.75
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 27
     name: Output 27
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 9.1
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 28
     name: Output 28
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 9.45
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 29
     name: Output 29
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 9.8
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   - id: 30
     name: Output 30
     fixture: fixtures.vertical_113
     transform:
       position:
         x: 10.15
+        y: 0
+        z: 0
+      rotation:
+        x: 0.0
         y: 0.0
         z: 0.0
+      scale:
+        x: 1.0
+        y: 1.0
+        z: 1.0
   groups:
   - id: 1
     name: All Outputs

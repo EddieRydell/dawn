@@ -5,10 +5,10 @@ imports:
   as: patches
 main:
   type: display
-  layout: layouts.outputs
-  patch: patches.outputs
   controllers:
   - output_controller
+  patch: patches.outputs
+  layout: layouts.outputs
 output_controller:
   type: controller
   protocol: sacn

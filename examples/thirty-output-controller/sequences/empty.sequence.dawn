@@ -1907,7 +1907,7 @@ empty:
               value: 0.0
     script: effects.MarkChase
   - id: 79
-    start: 13.67752s
+    start: 13.685784945s
     duration: 0.28s
     target:
       type: group

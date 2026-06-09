@@ -1,2 +1,3 @@
 outputs:
   type: patch
+  routes: []

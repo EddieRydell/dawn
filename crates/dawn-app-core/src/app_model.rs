@@ -6,9 +6,9 @@ use dawn_project::{
     AssetPath, Curve, CurveDefinitionKey, CurvePoint, CurveUse, CurveValue, CurveValueType,
     DawnProject, DistanceSpan, EffectDefinitionKey, EffectParam, EffectParamArrayValue,
     EffectTarget, Fixture, FixtureDefinitionKey, FixtureId, Flags, Geometry, LayoutDefinitionKey,
-    PathStringExt, ProjectDiagnostic, ResolvedAssetPath, ResolvedInlineOrRef, ResolvedSymbolRef,
-    Sequence, SequenceDefinitionKey, SequenceEffect, SequenceEffectId, SequenceMarkCollection,
-    SymbolRef, Time, TimeSpan, Utf8PathBuf, WorkspaceEntry,
+    PathStringExt, ProjectDiagnostic, ProjectSaveResult, ResolvedAssetPath, ResolvedInlineOrRef,
+    ResolvedSymbolRef, Sequence, SequenceDefinitionKey, SequenceEffect, SequenceEffectId,
+    SequenceMarkCollection, SymbolRef, Time, TimeSpan, Utf8PathBuf, WorkspaceEntry,
 };
 
 use crate::actions::AppAction;
@@ -22,7 +22,8 @@ use crate::dto::{
     SequenceSelectionEditResultDto,
 };
 use crate::editor_session::{
-    BufferExternalState, EditorBuffer, EditorSession, EditorViewMode, OpenFileOutcome,
+    BufferExternalState, EditorBuffer, EditorSession, EditorViewMode, FileDiskVersion,
+    OpenFileOutcome,
 };
 use crate::layout_persistence::{
     load_workbench_layout, save_workbench_layout, WindowLayout, WorkbenchLayout,
@@ -63,7 +64,32 @@ pub struct AppModel {
     active_sequence_gui_document: Option<CachedActiveGuiDocument>,
     gui_undo_stack: Vec<DawnProject>,
     gui_redo_stack: Vec<DawnProject>,
+    project_dirty_revision: u64,
+    project_saved_revision: u64,
+    project_save_in_flight_revision: Option<u64>,
+    deferred_filesystem_change_paths: Vec<Utf8PathBuf>,
     last_command_timing: CommandTiming,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectAutosaveJob {
+    pub revision: u64,
+    pub workspace: WorkspaceService,
+    pub project: Arc<DawnProject>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectAutosaveCompletion {
+    pub revision: u64,
+    pub result: Result<ProjectSaveResult, String>,
+    pub saved_file_versions: Vec<ProjectAutosaveSavedFile>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectAutosaveSavedFile {
+    pub path: Utf8PathBuf,
+    pub text: String,
+    pub disk_version: FileDiskVersion,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -179,6 +205,10 @@ impl Default for AppModel {
             active_sequence_gui_document: None,
             gui_undo_stack: Vec::new(),
             gui_redo_stack: Vec::new(),
+            project_dirty_revision: 0,
+            project_saved_revision: 0,
+            project_save_in_flight_revision: None,
+            deferred_filesystem_change_paths: Vec::new(),
             last_command_timing: CommandTiming::default(),
         };
         if let Some(path) = last_project_root {
@@ -309,21 +339,23 @@ impl AppModel {
             }
             AppAction::ApplySequenceGuiEdit(edit) => {
                 self.apply_sequence_gui_edit(edit)?;
-                self.status = "Autosaved".to_string();
             }
             AppAction::ApplyLayoutGuiEdit(edit) => {
                 self.apply_layout_gui_edit(edit)?;
-                self.status = "Autosaved".to_string();
             }
             AppAction::ApplyFixtureGuiEdit(edit) => {
                 self.apply_fixture_gui_edit(edit)?;
-                self.status = "Autosaved".to_string();
             }
             AppAction::FlushAutosave => {
                 self.flush_autosave()?;
                 self.status = "Saved".to_string();
             }
             AppAction::FilesystemChanged(paths) => {
+                if self.has_pending_project_autosave() {
+                    self.defer_filesystem_changes(paths);
+                    self.status = "Filesystem refresh pending save".to_string();
+                    return Ok(DispatchOutcome::SnapshotChanged);
+                }
                 self.reconcile_filesystem_changes(paths)?;
                 self.reload_project_model();
                 self.status = "Filesystem refreshed".to_string();
@@ -485,6 +517,10 @@ impl AppModel {
             self.restore_editor_session();
         }
         self.reload_project_model();
+        self.project_dirty_revision = 0;
+        self.project_saved_revision = 0;
+        self.project_save_in_flight_revision = None;
+        self.deferred_filesystem_change_paths.clear();
         self.sync_preview_source(PreviewSyncMode::RenderNow);
         if remember {
             self.workbench_layout.last_project_root = Some(path);
@@ -535,6 +571,12 @@ impl AppModel {
     }
 
     pub fn flush_autosave(&mut self) -> Result<(), String> {
+        self.flush_text_autosave()?;
+        self.flush_project_autosave()?;
+        Ok(())
+    }
+
+    fn flush_text_autosave(&mut self) -> Result<(), String> {
         let dirty_buffers = self.editors.dirty_autosave_buffers();
         let had_dirty_buffers = dirty_buffers
             .iter()
@@ -555,8 +597,72 @@ impl AppModel {
         Ok(())
     }
 
+    pub fn has_pending_project_autosave(&self) -> bool {
+        self.project_dirty_revision > self.project_saved_revision
+            || self.project_save_in_flight_revision.is_some()
+    }
+
+    pub fn begin_project_autosave_job(&mut self) -> Option<ProjectAutosaveJob> {
+        if self.project_dirty_revision <= self.project_saved_revision {
+            return None;
+        }
+        let revision = self.project_dirty_revision;
+        if self
+            .project_save_in_flight_revision
+            .is_some_and(|in_flight| in_flight >= revision)
+        {
+            return None;
+        }
+        let project = self.project.as_ref()?.clone();
+        self.project_save_in_flight_revision = Some(revision);
+        Some(ProjectAutosaveJob {
+            revision,
+            workspace: self.workspace.clone(),
+            project,
+        })
+    }
+
+    pub fn complete_project_autosave(
+        &mut self,
+        completion: ProjectAutosaveCompletion,
+    ) -> Result<bool, String> {
+        if self.project_save_in_flight_revision != Some(completion.revision) {
+            return Ok(false);
+        }
+        self.project_save_in_flight_revision = None;
+
+        match completion.result {
+            Ok(result) => {
+                if !result.diagnostics.is_empty() {
+                    self.diagnostics = result.diagnostics;
+                    self.status = "Project autosave failed".to_string();
+                    return Err("project save failed".to_string());
+                }
+                self.project_saved_revision = self.project_saved_revision.max(completion.revision);
+                for saved_file in &completion.saved_file_versions {
+                    self.editors.mark_project_autosave_written(
+                        &saved_file.path,
+                        saved_file.text.clone(),
+                        saved_file.disk_version.clone(),
+                    );
+                }
+                if completion.revision == self.project_dirty_revision {
+                    self.status = "Autosaved".to_string();
+                    self.reconcile_deferred_filesystem_changes(&completion.saved_file_versions)?;
+                } else {
+                    self.status = "Saving".to_string();
+                }
+            }
+            Err(error) => {
+                self.status = format!("Project autosave failed: {error}");
+                return Err(error);
+            }
+        }
+        Ok(self.project_dirty_revision > self.project_saved_revision)
+    }
+
     fn ensure_dirty_text_saved_for_gui(&mut self) -> Result<(), String> {
-        self.flush_autosave()?;
+        self.flush_text_autosave()?;
         if self.project.is_none() {
             self.reload_project_model();
         }
@@ -566,25 +672,109 @@ impl AppModel {
         Ok(())
     }
 
-    fn save_project_and_refresh_buffers(&mut self) -> Result<(), String> {
+    fn flush_project_autosave(&mut self) -> Result<(), String> {
+        if self.project_dirty_revision <= self.project_saved_revision {
+            return Ok(());
+        }
         let Some(project) = self.project.as_ref() else {
             return Err("project did not load; GUI edits are unavailable".to_string());
         };
+        let revision = self.project_dirty_revision;
         let result = self.workspace.save_project(project)?;
         if !result.diagnostics.is_empty() {
             self.diagnostics = result.diagnostics;
             return Err("project save failed".to_string());
         }
-        for path in result.written_files {
-            let text = self.workspace.read_file(path.clone())?;
-            let version = self
-                .workspace
-                .file_version(&path, &text)?
-                .ok_or_else(|| format!("saved file `{path}` does not exist"))?;
-            self.editors.mark_saved(&path, text, version);
+        let saved_files = self.project_saved_files(&result.written_files)?;
+        self.project_saved_revision = revision;
+        self.project_save_in_flight_revision = None;
+        for saved_file in &saved_files {
+            self.editors.mark_project_autosave_written(
+                &saved_file.path,
+                saved_file.text.clone(),
+                saved_file.disk_version.clone(),
+            );
         }
-        self.sync_preview_source(PreviewSyncMode::RenderNow);
+        self.reconcile_deferred_filesystem_changes(&saved_files)?;
         Ok(())
+    }
+
+    pub fn project_saved_files(
+        &self,
+        paths: &[Utf8PathBuf],
+    ) -> Result<Vec<ProjectAutosaveSavedFile>, String> {
+        paths
+            .iter()
+            .map(|path| {
+                let text = self.workspace.read_file(path.clone())?;
+                let disk_version = self
+                    .workspace
+                    .file_version(path, &text)?
+                    .ok_or_else(|| format!("saved file `{path}` does not exist"))?;
+                Ok(ProjectAutosaveSavedFile {
+                    path: path.clone(),
+                    text,
+                    disk_version,
+                })
+            })
+            .collect()
+    }
+
+    fn mark_project_changed(&mut self) {
+        self.project_dirty_revision = self.project_dirty_revision.saturating_add(1);
+        self.sync_preview_source(PreviewSyncMode::RenderNow);
+        self.status = "Saving".to_string();
+    }
+
+    fn defer_filesystem_changes(&mut self, paths: Vec<Utf8PathBuf>) {
+        if paths.is_empty() {
+            self.deferred_filesystem_change_paths.clear();
+            return;
+        }
+        for path in paths {
+            if !self.deferred_filesystem_change_paths.contains(&path) {
+                self.deferred_filesystem_change_paths.push(path);
+            }
+        }
+    }
+
+    fn reconcile_deferred_filesystem_changes(
+        &mut self,
+        saved_files: &[ProjectAutosaveSavedFile],
+    ) -> Result<(), String> {
+        if self.deferred_filesystem_change_paths.is_empty()
+            || self.project_dirty_revision > self.project_saved_revision
+        {
+            return Ok(());
+        }
+        let paths = std::mem::take(&mut self.deferred_filesystem_change_paths)
+            .into_iter()
+            .filter(|path| !self.path_matches_saved_file(path, saved_files))
+            .collect::<Vec<_>>();
+        if paths.is_empty() {
+            return Ok(());
+        }
+        self.reconcile_filesystem_changes(paths)?;
+        self.reload_project_model();
+        Ok(())
+    }
+
+    fn path_matches_saved_file(
+        &self,
+        path: &Utf8PathBuf,
+        saved_files: &[ProjectAutosaveSavedFile],
+    ) -> bool {
+        saved_files.iter().any(|saved_file| {
+            if !buffer_matches_any_path(&saved_file.path, std::slice::from_ref(path)) {
+                return false;
+            }
+            self.workspace
+                .file_version(&saved_file.path, &saved_file.text)
+                .ok()
+                .flatten()
+                .as_ref()
+                == Some(&saved_file.disk_version)
+        })
     }
 
     fn reconcile_open_buffer_from_disk(&mut self, path: &Utf8PathBuf) -> Result<bool, String> {
@@ -892,7 +1082,8 @@ impl AppModel {
         let project_snapshot = project.clone();
         let sequence = sequence_mut(project, &path, &object_key)?;
         apply_sequence_edit(&project_snapshot, &store_path, sequence, edit)?;
-        self.save_project_and_refresh_buffers()
+        self.mark_project_changed();
+        Ok(())
     }
 
     pub fn apply_sequence_selection_edit(
@@ -972,7 +1163,7 @@ impl AppModel {
                 resulting_selection = Some(SequenceSelectionDto::Marks { marks });
             }
         }
-        self.save_project_and_refresh_buffers()?;
+        self.mark_project_changed();
         Ok(SequenceSelectionEditResultDto {
             snapshot: self.snapshot_dto(),
             selection: resulting_selection,
@@ -1003,7 +1194,7 @@ impl AppModel {
             if let Some(current) = self.project.replace(Arc::new(previous)) {
                 self.gui_redo_stack.push((*current).clone());
             }
-            self.save_project_and_refresh_buffers()?;
+            self.mark_project_changed();
             self.status = "Undo".to_string();
             return Ok(true);
         }
@@ -1029,7 +1220,7 @@ impl AppModel {
             if let Some(current) = self.project.replace(Arc::new(next)) {
                 self.gui_undo_stack.push((*current).clone());
             }
-            self.save_project_and_refresh_buffers()?;
+            self.mark_project_changed();
             self.status = "Redo".to_string();
             return Ok(true);
         }
@@ -1129,7 +1320,8 @@ impl AppModel {
                     .map_err(|error: &'static str| error.to_string())?;
             }
         }
-        self.save_project_and_refresh_buffers()
+        self.mark_project_changed();
+        Ok(())
     }
 
     fn apply_fixture_gui_edit(&mut self, edit: FixtureGuiEditDto) -> Result<(), String> {
@@ -1165,7 +1357,8 @@ impl AppModel {
                     .map_err(|error: &'static str| error.to_string())?;
             }
         }
-        self.save_project_and_refresh_buffers()
+        self.mark_project_changed();
+        Ok(())
     }
 
     fn active_object_key(&self, view: DocumentViewId) -> Result<(Utf8PathBuf, String), String> {

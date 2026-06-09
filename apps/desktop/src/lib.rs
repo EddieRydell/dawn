@@ -21,6 +21,7 @@ mod live_output;
 mod new_project;
 mod preview;
 mod preview_transport;
+mod project_autosave;
 mod state;
 mod terminal_runtime;
 mod window_layout;

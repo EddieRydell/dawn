@@ -10,6 +10,7 @@ use crate::effect_preview_runtime::EffectPreviewRuntime;
 use crate::filesystem_watcher::FilesystemWatcherRuntime;
 use crate::live_output::LiveOutputRuntime;
 use crate::preview_transport::PreviewTransportRuntime;
+use crate::project_autosave::ProjectAutosaveRuntime;
 use crate::terminal_runtime::TerminalRuntime;
 
 pub(crate) struct AppState {
@@ -20,6 +21,7 @@ pub(crate) struct AppState {
     live_output: Mutex<LiveOutputRuntime>,
     filesystem_watcher: Mutex<FilesystemWatcherRuntime>,
     terminal_runtime: Mutex<TerminalRuntime>,
+    project_autosave: Mutex<ProjectAutosaveRuntime>,
     shutting_down: AtomicBool,
 }
 
@@ -33,6 +35,7 @@ impl Default for AppState {
             live_output: Mutex::new(LiveOutputRuntime::default()),
             filesystem_watcher: Mutex::new(FilesystemWatcherRuntime::default()),
             terminal_runtime: Mutex::new(TerminalRuntime::default()),
+            project_autosave: Mutex::new(ProjectAutosaveRuntime::default()),
             shutting_down: AtomicBool::new(false),
         }
     }
@@ -111,6 +114,15 @@ pub(crate) fn lock_terminal_runtime<'a>(
         .terminal_runtime
         .lock()
         .map_err(|_| "terminal runtime lock is poisoned".to_string())
+}
+
+pub(crate) fn lock_project_autosave_runtime<'a>(
+    state: &'a State<'_, AppState>,
+) -> CommandResult<MutexGuard<'a, ProjectAutosaveRuntime>> {
+    state
+        .project_autosave
+        .lock()
+        .map_err(|_| "project autosave runtime lock is poisoned".to_string())
 }
 
 pub(crate) fn project_path(path: String) -> Utf8PathBuf {

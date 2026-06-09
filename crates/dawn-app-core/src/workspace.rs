@@ -7,11 +7,11 @@ use std::time::UNIX_EPOCH;
 use dawn_project::{
     canonicalize_path, load_project, save_project, utf8_path, Curve, CurveDefinitionKey, DawnFile,
     DawnObject, DawnProject, EffectDefinitionKey, EffectParam, EffectTarget, Fixture,
-    FixtureDefinitionKey, Geometry, Layout, LayoutDefinitionKey, LayoutTargetKind, ObjectKind,
-    PathStringExt, ProjectDiagnostic, ProjectLoadResult, ProjectSaveResult, Resolved,
-    ResolvedInlineOrRef, ResolvedSourceFile, ResolvedSourceObject, ResolvedSymbolRef, Sequence,
-    SequenceDefinitionKey, SequenceEffect, Utf8PathBuf, WorkspaceEntry, WorkspaceEntryKind,
-    WorkspaceFs,
+    FixtureDefinitionKey, FixtureId, Geometry, GroupInstantiationId, Layout, LayoutDefinitionKey,
+    LayoutTargetKind, ObjectKind, PathStringExt, ProjectDiagnostic, ProjectLoadResult,
+    ProjectSaveResult, Resolved, ResolvedInlineOrRef, ResolvedSourceFile, ResolvedSourceObject,
+    ResolvedSymbolRef, Sequence, SequenceDefinitionKey, SequenceEffect, Utf8PathBuf,
+    WorkspaceEntry, WorkspaceEntryKind, WorkspaceFs,
 };
 
 use crate::document::{
@@ -25,7 +25,7 @@ use crate::document::{
 };
 use crate::editor_session::FileDiskVersion;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct WorkspaceService {
     root_path: Option<PathBuf>,
     root_display: Option<String>,
@@ -188,7 +188,7 @@ impl WorkspaceService {
             .ok_or_else(|| format!("sequence `{object_key}` was not found"))?;
         Ok(sequence_document(
             project,
-            &source_path,
+            &path,
             object_key,
             &sequence.value,
         ))
@@ -478,13 +478,13 @@ impl WorkspaceService {
 
 fn sequence_document(
     project: &DawnProject,
-    source_path: &Utf8PathBuf,
+    path: &Utf8PathBuf,
     object_key: &str,
     sequence: &Sequence<Resolved>,
 ) -> SequenceDocument {
-    let lanes = sequence_lanes(project, sequence);
+    let lanes = sequence_lanes(project);
     SequenceDocument {
-        path: source_path.to_slash_string(),
+        path: path.to_slash_string(),
         object_key: object_key.to_string(),
         duration_seconds: sequence.duration.as_seconds_f64(),
         frame_rate: sequence.frame_rate,
@@ -558,38 +558,41 @@ fn sequence_document(
     }
 }
 
-fn sequence_lanes(
-    project: &DawnProject,
-    sequence: &Sequence<Resolved>,
-) -> Vec<SequenceLaneDocument> {
-    let mut lanes = Vec::new();
-    for effect in &sequence.effects {
-        let target = target_document(&effect.target);
-        if !lanes
+fn sequence_lanes(project: &DawnProject) -> Vec<SequenceLaneDocument> {
+    let Some(layout) = active_layout(project) else {
+        return Vec::new();
+    };
+    layout
+        .target_order
+        .iter()
+        .map(|target| SequenceLaneDocument {
+            target: LayoutTargetDocument {
+                kind: target.kind,
+                name: target.id.to_string(),
+            },
+            label: layout_target_label(layout, target),
+        })
+        .collect()
+}
+
+fn layout_target_label(
+    layout: &Layout<Resolved>,
+    target: &dawn_project::LayoutTargetRef,
+) -> String {
+    match target.kind {
+        LayoutTargetKind::Group => layout
+            .groups
             .iter()
-            .any(|lane: &SequenceLaneDocument| lane.target == target)
-        {
-            lanes.push(SequenceLaneDocument {
-                label: target.name.clone(),
-                target,
-            });
-        }
+            .find(|group| group.id == GroupInstantiationId(target.id))
+            .and_then(|group| group.name.clone())
+            .unwrap_or_else(|| target.id.to_string()),
+        LayoutTargetKind::Fixture => layout
+            .fixtures
+            .iter()
+            .find(|fixture| fixture.id == FixtureId(target.id))
+            .and_then(|fixture| fixture.name.clone())
+            .unwrap_or_else(|| target.id.to_string()),
     }
-    if lanes.is_empty() {
-        if let Some(layout) = active_layout(project) {
-            for target in &layout.target_order {
-                let kind = target.kind;
-                lanes.push(SequenceLaneDocument {
-                    target: LayoutTargetDocument {
-                        kind,
-                        name: target.id.to_string(),
-                    },
-                    label: target.id.to_string(),
-                });
-            }
-        }
-    }
-    lanes
 }
 
 fn sequence_effect_document(
