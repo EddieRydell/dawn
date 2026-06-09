@@ -10,7 +10,8 @@ use dawn_project::DawnProject;
 use dawn_project::Utf8PathBuf;
 
 use crate::output_runtime::{
-    empty_frame, OutputFrame, OutputFrameStatus, SequenceFrameRenderTiming,
+    empty_frame, empty_geometry, OutputFrameStatus, OutputGeometryModel, RenderedOutputFrame,
+    SequenceFrameRenderTiming,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
@@ -102,7 +103,8 @@ pub struct PreviewSnapshot {
     pub audio: Option<SequenceAudioDocument>,
     pub clock_source: String,
     pub audio_playback_status: AudioPlaybackStatus,
-    pub frame: Arc<OutputFrame>,
+    pub geometry: Arc<OutputGeometryModel>,
+    pub frame: Arc<RenderedOutputFrame>,
     pub status: String,
 }
 
@@ -117,9 +119,9 @@ pub struct PlaybackRenderTiming {
     pub total_ms: f64,
     pub renderer_build_ms: f64,
     pub frame_evaluate_ms: f64,
-    pub fixture_clone_ms: f64,
+    pub render_buffer_clone_ms: f64,
     pub effect_loop_ms: f64,
-    pub output_frame_ms: f64,
+    pub rgb_buffer_ms: f64,
     pub render_invalidation_ms: f64,
     pub render_cache_ms: f64,
     pub render_result_ms: f64,
@@ -177,7 +179,8 @@ impl PreviewCancellationToken {
 #[derive(Debug, Clone)]
 pub struct PlaybackRenderResult {
     pub request: PlaybackRenderRequest,
-    pub frame: OutputFrame,
+    pub geometry: OutputGeometryModel,
+    pub frame: RenderedOutputFrame,
     pub timing: PlaybackRenderTiming,
 }
 
@@ -221,7 +224,8 @@ impl PartialEq for PendingDeferredRender {
 
 impl Default for PlaybackSession {
     fn default() -> Self {
-        let frame = empty_frame(0, "No sequence preview source");
+        let geometry = Arc::new(empty_geometry());
+        let frame = empty_frame(&geometry, 0, "No sequence preview source");
         Self {
             source: PreviewSource::None,
             transport: PreviewTransport::Stopped,
@@ -244,6 +248,7 @@ impl Default for PlaybackSession {
                 audio: None,
                 clock_source: "silent".to_string(),
                 audio_playback_status: AudioPlaybackStatus::None,
+                geometry,
                 frame: Arc::new(frame),
                 status: "No sequence preview source".to_string(),
             },
@@ -576,6 +581,7 @@ impl PlaybackSession {
         self.refresh_snapshot_metadata(result.request.status);
         let frame_status =
             status_from_frame(&result.frame.status).unwrap_or_else(|| self.snapshot.status.clone());
+        self.snapshot.geometry = Arc::new(result.geometry);
         self.snapshot.frame = Arc::new(result.frame);
         self.snapshot.status = frame_status;
         self.snapshot.preview_updating = false;
@@ -710,17 +716,23 @@ impl PlaybackSession {
             home_seconds,
             duration_seconds,
             audio,
+            geometry,
             frame,
         ) = match self.source.clone() {
-            PreviewSource::None => (
-                "No preview source".to_string(),
-                None,
-                0.0,
-                0.0,
-                0.0,
-                None,
-                Arc::new(empty_frame(self.generation, status.clone())),
-            ),
+            PreviewSource::None => {
+                let geometry = Arc::new(empty_geometry());
+                let frame = Arc::new(empty_frame(&geometry, self.generation, status.clone()));
+                (
+                    "No preview source".to_string(),
+                    None,
+                    0.0,
+                    0.0,
+                    0.0,
+                    None,
+                    geometry,
+                    frame,
+                )
+            }
             PreviewSource::Sequence { key, document } => {
                 let duration_seconds = document.duration_seconds;
                 let position_seconds = self.current_position_seconds(&key, duration_seconds);
@@ -729,10 +741,24 @@ impl PlaybackSession {
                     .get(&key)
                     .map(|state| clamp_position_seconds(state.home_seconds, duration_seconds))
                     .unwrap_or_default();
-                let frame = if project.is_some() {
+                let geometry = project
+                    .and_then(|project| OutputGeometryModel::from_project(project).ok())
+                    .map(Arc::new)
+                    .unwrap_or_else(|| Arc::new(empty_geometry()));
+                let frame = if project.is_some()
+                    && self.snapshot.frame.geometry_id == geometry.geometry_id
+                {
                     self.snapshot.frame.clone()
                 } else {
-                    Arc::new(empty_frame(self.generation, "No project"))
+                    Arc::new(empty_frame(
+                        &geometry,
+                        self.generation,
+                        if project.is_some() {
+                            status.as_str()
+                        } else {
+                            "No project"
+                        },
+                    ))
                 };
                 (
                     format!("Sequence {}", document.object_key),
@@ -741,6 +767,7 @@ impl PlaybackSession {
                     home_seconds,
                     duration_seconds,
                     document.audio.clone(),
+                    geometry,
                     frame,
                 )
             }
@@ -759,6 +786,7 @@ impl PlaybackSession {
             audio,
             clock_source,
             audio_playback_status,
+            geometry,
             frame,
             status: frame_status,
         };
@@ -903,9 +931,9 @@ impl PlaybackRenderTiming {
         self.total_ms = renderer_build_ms + evaluation.total_ms;
         self.renderer_build_ms = renderer_build_ms;
         self.frame_evaluate_ms = evaluation.total_ms;
-        self.fixture_clone_ms = evaluation.fixture_clone_ms;
+        self.render_buffer_clone_ms = evaluation.render_buffer_clone_ms;
         self.effect_loop_ms = evaluation.effect_loop_ms;
-        self.output_frame_ms = evaluation.output_frame_ms;
+        self.rgb_buffer_ms = evaluation.rgb_buffer_ms;
         self.active_effects = evaluation.active_effects;
         self.sampled_pixels = evaluation.sampled_pixels;
     }

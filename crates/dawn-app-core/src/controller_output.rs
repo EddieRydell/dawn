@@ -3,12 +3,12 @@ use std::fmt;
 use std::net::SocketAddr;
 
 use dawn_project::{
-    Color, ColorModel, Controller, ControllerOutput, DawnProject, Display, FixturePlacement,
-    Layout, Patch, Protocol, Resolved, ResolvedInlineOrRef, RgbChannelOrder,
+    ColorModel, Controller, ControllerOutput, DawnProject, Display, FixturePlacement, Layout,
+    Patch, Protocol, Resolved, ResolvedInlineOrRef, RgbChannelOrder,
 };
 
 use crate::document::geometry_render_plan;
-use crate::output_runtime::OutputFrame;
+use crate::output_runtime::{OutputGeometryModel, RenderedOutputFrame};
 
 pub const DMX_UNIVERSE_CHANNELS: usize = 512;
 const RGB_CHANNELS_PER_PIXEL: usize = 3;
@@ -30,28 +30,29 @@ impl ControllerOutputPlan {
         self.universes.len()
     }
 
-    pub fn frame_buffers(&self, frame: &OutputFrame) -> Vec<ControllerUniverseFrame> {
+    pub fn frame_buffers(&self, frame: &RenderedOutputFrame) -> Vec<ControllerUniverseFrame> {
         let mut outputs = self.blackout_buffers();
         for (universe_plan, output) in self.universes.iter().zip(outputs.iter_mut()) {
             for route in &universe_plan.routes {
-                let Some(fixture) = frame.fixtures.get(route.fixture_index) else {
-                    continue;
-                };
-                let bytes = fixture_rgb_bytes(fixture, route.channel_order);
                 for offset in 0..route.channel_count {
                     let source_channel = route.fixture_channel_offset + offset;
                     let output_channel = route.start_channel + offset;
-                    let Some(value) = bytes.get(source_channel) else {
+                    let Some(value) = ordered_frame_channel(
+                        &frame.rgb,
+                        route.rgb_offset,
+                        source_channel,
+                        route.channel_order,
+                    ) else {
                         continue;
                     };
-                    output.data[output_channel] = *value;
+                    output.data[output_channel] = value;
                 }
             }
         }
         outputs
     }
 
-    pub fn frame_channel_bytes(&self, frame: &OutputFrame) -> Vec<u8> {
+    pub fn frame_channel_bytes(&self, frame: &RenderedOutputFrame) -> Vec<u8> {
         self.frame_buffers(frame)
             .into_iter()
             .flat_map(|buffer| buffer.data)
@@ -88,7 +89,7 @@ pub struct ControllerUniversePlan {
 
 #[derive(Debug, Clone)]
 struct ControllerRoutePlan {
-    fixture_index: usize,
+    rgb_offset: usize,
     channel_order: RgbChannelOrder,
     fixture_channel_offset: usize,
     start_channel: usize,
@@ -240,14 +241,16 @@ impl std::error::Error for ControllerOutputError {}
 
 pub fn build_output_plan(
     project: &DawnProject,
+    geometry: &OutputGeometryModel,
 ) -> Result<ControllerOutputPlan, ControllerOutputError> {
-    build_output_plan_for(project, ControllerOutputPurpose::Live)
+    build_output_plan_for(project, geometry, ControllerOutputPurpose::Live)
 }
 
 pub fn build_fseq_output_plan(
     project: &DawnProject,
+    geometry: &OutputGeometryModel,
 ) -> Result<ControllerOutputPlan, ControllerOutputError> {
-    build_output_plan_for(project, ControllerOutputPurpose::Fseq)
+    build_output_plan_for(project, geometry, ControllerOutputPurpose::Fseq)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,6 +261,7 @@ enum ControllerOutputPurpose {
 
 fn build_output_plan_for(
     project: &DawnProject,
+    geometry: &OutputGeometryModel,
     purpose: ControllerOutputPurpose,
 ) -> Result<ControllerOutputPlan, ControllerOutputError> {
     let display = active_display(project)?;
@@ -275,6 +279,7 @@ fn build_output_plan_for(
                 controller_name,
                 controller,
                 &mut universes,
+                geometry,
                 purpose,
             )?;
         }
@@ -329,7 +334,7 @@ fn build_output_plan_for(
             declared_universes,
             start_universe_index: universe_index,
             start: route.start,
-            fixture_index,
+            rgb_offset: fixture_rgb_offset(geometry, fixture_index)?,
             fixture_name: &fixture_name(fixture),
             channel_order: *channel_order,
             channel_count,
@@ -362,6 +367,7 @@ fn add_linear_rgb_controller(
     controller_name: &str,
     controller: &Controller,
     universes: &mut HashMap<UniverseKey, ControllerUniverseBuilder>,
+    geometry: &OutputGeometryModel,
     purpose: ControllerOutputPurpose,
 ) -> Result<(), ControllerOutputError> {
     let ControllerOutput::LinearRgb {
@@ -477,7 +483,7 @@ fn add_linear_rgb_controller(
                 })
                 .routes
                 .push(ControllerRoutePlan {
-                    fixture_index,
+                    rgb_offset: fixture_rgb_offset(geometry, fixture_index)?,
                     channel_order: *channel_order,
                     fixture_channel_offset: fixture_offset,
                     start_channel,
@@ -546,7 +552,7 @@ struct RouteSegmentInput<'a> {
     declared_universes: &'a [dawn_project::Universe],
     start_universe_index: usize,
     start: u32,
-    fixture_index: usize,
+    rgb_offset: usize,
     fixture_name: &'a str,
     channel_order: RgbChannelOrder,
     channel_count: usize,
@@ -623,7 +629,7 @@ fn add_route_segments(input: RouteSegmentInput<'_>) -> Result<(), ControllerOutp
             })
             .routes
             .push(ControllerRoutePlan {
-                fixture_index: input.fixture_index,
+                rgb_offset: input.rgb_offset,
                 channel_order: input.channel_order,
                 fixture_channel_offset,
                 start_channel,
@@ -776,26 +782,39 @@ fn fixture_pixel_count(
         .len())
 }
 
-fn fixture_rgb_bytes(
-    fixture: &crate::output_runtime::OutputFixtureFrame,
-    channel_order: RgbChannelOrder,
-) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(fixture.pixels.len() * RGB_CHANNELS_PER_PIXEL);
-    for pixel in &fixture.pixels {
-        bytes.extend(ordered_rgb_bytes(pixel.color, channel_order));
-    }
-    bytes
+fn fixture_rgb_offset(
+    geometry: &OutputGeometryModel,
+    fixture_index: usize,
+) -> Result<usize, ControllerOutputError> {
+    let pixel_offset = geometry
+        .fixtures
+        .iter()
+        .take(fixture_index)
+        .map(|fixture| fixture.pixels.len())
+        .sum::<usize>();
+    pixel_offset
+        .checked_mul(RGB_CHANNELS_PER_PIXEL)
+        .ok_or(ControllerOutputError::ProjectNotResolved)
 }
 
-fn ordered_rgb_bytes(color: Color, channel_order: RgbChannelOrder) -> [u8; RGB_CHANNELS_PER_PIXEL] {
-    match channel_order {
-        RgbChannelOrder::Rgb => [color.red, color.green, color.blue],
-        RgbChannelOrder::Rbg => [color.red, color.blue, color.green],
-        RgbChannelOrder::Grb => [color.green, color.red, color.blue],
-        RgbChannelOrder::Gbr => [color.green, color.blue, color.red],
-        RgbChannelOrder::Brg => [color.blue, color.red, color.green],
-        RgbChannelOrder::Bgr => [color.blue, color.green, color.red],
-    }
+fn ordered_frame_channel(
+    rgb: &[u8],
+    fixture_rgb_offset: usize,
+    fixture_channel_offset: usize,
+    channel_order: RgbChannelOrder,
+) -> Option<u8> {
+    let pixel_offset = fixture_channel_offset / RGB_CHANNELS_PER_PIXEL;
+    let channel = fixture_channel_offset % RGB_CHANNELS_PER_PIXEL;
+    let source_pixel_offset = fixture_rgb_offset.checked_add(pixel_offset.checked_mul(3)?)?;
+    let ordered_channel = match channel_order {
+        RgbChannelOrder::Rgb => channel,
+        RgbChannelOrder::Rbg => [0, 2, 1][channel],
+        RgbChannelOrder::Grb => [1, 0, 2][channel],
+        RgbChannelOrder::Gbr => [1, 2, 0][channel],
+        RgbChannelOrder::Brg => [2, 0, 1][channel],
+        RgbChannelOrder::Bgr => [2, 1, 0][channel],
+    };
+    rgb.get(source_pixel_offset + ordered_channel).copied()
 }
 
 pub fn encode_e131_data_packet(frame: &ControllerUniverseFrame, sequence: u8) -> Vec<u8> {

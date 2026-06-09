@@ -197,11 +197,11 @@ export function useSequencePreview(preview: AppSnapshotDto["preview"]): LivePrev
     const tick = () => {
       const latest = livePreviewRef.current;
       const current = anchor.current;
-      if (!shouldAnimatePreviewPosition(latest.transportState) || !shouldAnimatePreviewPosition(current.preview.transportState)) {
+      if (!shouldAnimatePreviewPosition(latest) || !shouldAnimatePreviewPosition(current.preview)) {
         setAnimatedPositionSeconds(latest.positionSeconds);
         return;
       }
-      const elapsedSeconds = current.anchoredAt > 0 ? (performance.now() - current.anchoredAt) / 1000 : 0;
+      const elapsedSeconds = previewExtrapolationSeconds(current.preview, current.anchoredAt);
       setAnimatedPositionSeconds(clamp(current.positionSeconds + elapsedSeconds, 0, current.preview.durationSeconds));
       frame = window.requestAnimationFrame(tick);
     };
@@ -211,7 +211,7 @@ export function useSequencePreview(preview: AppSnapshotDto["preview"]): LivePrev
     };
   }, [livePreview.transportState, livePreview.positionSeconds]);
 
-  return shouldAnimatePreviewPosition(livePreview.transportState)
+  return shouldAnimatePreviewPosition(livePreview)
     ? {
         ...livePreview,
         positionSeconds: animatedPositionSeconds
@@ -260,7 +260,7 @@ function useSequenceAudioStatus(preview: AppSnapshotDto["preview"]) {
 
 function previewTimingSummary(timing: PreviewTiming | undefined) {
   if (timing === undefined || timing.backendSeconds === 0) return null;
-  const frameAudio = timing.frameMinusAudioMs;
+  const frameAudio = timing.renderBufferMinusAudioMs;
   const snapshotAudio = timing.snapshotMinusAudioMs;
   const parts = [
     `fps ${timing.activeFps}/${timing.targetFps}`,
@@ -312,6 +312,7 @@ export function handleSequencePlaybackShortcut(
   if (event.key === " ") {
     event.preventDefault();
     event.stopPropagation();
+    if (event.repeat) return;
     void runSnapshotCommand(preview.transportState === "loading_to_play" ? commands.previewPause : isActivePreviewPlayback(preview.transportState) ? commands.previewStop : commands.previewPlay);
   } else if (event.key.toLowerCase() === "s") {
     event.preventDefault();
@@ -336,8 +337,18 @@ function isActivePreviewPlayback(state: PlaybackTransportState) {
   return state === "playing" || state === "selected_effects";
 }
 
-function shouldAnimatePreviewPosition(state: PlaybackTransportState) {
-  return state === "playing";
+function shouldAnimatePreviewPosition(preview: LivePreview) {
+  return preview.transportState === "playing";
+}
+
+function previewExtrapolationSeconds(preview: LivePreview, anchoredAt: number) {
+  const elapsedSeconds = anchoredAt > 0 ? (performance.now() - anchoredAt) / 1000 : 0;
+  if (preview.clockSource !== "nativeAudio" || preview.audioPlaybackStatus !== "playing") {
+    return elapsedSeconds;
+  }
+  const activeFps = Math.max(1, preview.timing?.activeFps ?? 1);
+  const maxNativeExtrapolationSeconds = Math.max(0.05, Math.min(0.1, 1 / activeFps));
+  return Math.min(elapsedSeconds, maxNativeExtrapolationSeconds);
 }
 
 function stepSequenceFrame(document: SequenceEditorDocumentDto, positionSeconds: number, previewDurationSeconds: number, direction: -1 | 1) {

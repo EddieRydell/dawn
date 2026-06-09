@@ -227,7 +227,7 @@ export type PreviewSnapshotDto = {
 	audio: SequenceAudioDto | null,
 	clockSource: string,
 	audioPlaybackStatus: AudioPlaybackStatus,
-	frameTopologyIdentity: string,
+	geometryIdentity: string,
 	status: string,
 };
 

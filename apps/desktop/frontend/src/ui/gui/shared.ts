@@ -13,9 +13,9 @@ export type PreviewTiming = {
   loopIntervalMs: number;
   audioPositionSeconds: number | null;
   snapshotPositionSeconds: number;
-  framePositionSeconds: number;
+  renderBufferPositionSeconds: number;
   snapshotMinusAudioMs: number | null;
-  frameMinusAudioMs: number | null;
+  renderBufferMinusAudioMs: number | null;
   loopElapsedMs: number;
   loopTotalMs: number;
   loopAccountedMs: number;
@@ -38,9 +38,9 @@ export type PreviewTiming = {
   renderResultMs: number;
   rendererBuildMs: number;
   frameEvaluateMs: number;
-  frameFixtureCloneMs: number;
+  renderBufferCloneMs: number;
   frameEffectLoopMs: number;
-  frameOutputMs: number;
+  rgbBufferMs: number;
   publishMs: number;
   eventEmitMs: number;
   liveOutputMs: number;

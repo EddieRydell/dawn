@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 use dawn_app_core::document::SequenceEditorDocument;
 use dawn_app_core::dto::{GeometryRenderBoundsDto, GeometryRenderPointDto};
 use dawn_app_core::output_runtime::{
-    empty_frame, OutputFrame, SequenceChangeImpact, SequenceRenderPlan, SequenceRenderPlanCache,
+    empty_frame, empty_geometry, geometry_pixel_count, OutputGeometryModel, RenderedOutputFrame,
+    SequenceChangeImpact, SequenceRenderPlan, SequenceRenderPlanCache,
 };
 use dawn_app_core::preview_session::{
     AudioPlaybackStatus, PlaybackRenderMode, PlaybackRenderRequest, PlaybackRenderResult,
@@ -38,7 +39,7 @@ pub struct PreviewStateEventDto {
     pub audio: Option<dawn_app_core::dto::SequenceAudioDto>,
     pub clock_source: String,
     pub audio_playback_status: AudioPlaybackStatus,
-    pub frame_topology_identity: String,
+    pub geometry_identity: String,
     pub status: String,
     pub timing: PreviewTimingDto,
 }
@@ -54,9 +55,9 @@ pub struct PreviewTimingDto {
     pub loop_interval_ms: f64,
     pub audio_position_seconds: Option<f64>,
     pub snapshot_position_seconds: f64,
-    pub frame_position_seconds: f64,
+    pub render_buffer_position_seconds: f64,
     pub snapshot_minus_audio_ms: Option<f64>,
-    pub frame_minus_audio_ms: Option<f64>,
+    pub render_buffer_minus_audio_ms: Option<f64>,
     pub loop_elapsed_ms: f64,
     pub loop_total_ms: f64,
     pub loop_accounted_ms: f64,
@@ -79,9 +80,9 @@ pub struct PreviewTimingDto {
     pub render_result_ms: f64,
     pub renderer_build_ms: f64,
     pub frame_evaluate_ms: f64,
-    pub frame_fixture_clone_ms: f64,
+    pub render_buffer_clone_ms: f64,
     pub frame_effect_loop_ms: f64,
-    pub frame_output_ms: f64,
+    pub rgb_buffer_ms: f64,
     pub publish_ms: f64,
     pub event_emit_ms: f64,
     pub live_output_ms: f64,
@@ -103,9 +104,9 @@ impl PreviewTimingDto {
             loop_interval_ms: 0.0,
             audio_position_seconds: None,
             snapshot_position_seconds: 0.0,
-            frame_position_seconds: 0.0,
+            render_buffer_position_seconds: 0.0,
             snapshot_minus_audio_ms: None,
-            frame_minus_audio_ms: None,
+            render_buffer_minus_audio_ms: None,
             loop_elapsed_ms: 0.0,
             loop_total_ms: 0.0,
             loop_accounted_ms: 0.0,
@@ -128,9 +129,9 @@ impl PreviewTimingDto {
             render_result_ms: 0.0,
             renderer_build_ms: 0.0,
             frame_evaluate_ms: 0.0,
-            frame_fixture_clone_ms: 0.0,
+            render_buffer_clone_ms: 0.0,
             frame_effect_loop_ms: 0.0,
-            frame_output_ms: 0.0,
+            rgb_buffer_ms: 0.0,
             publish_ms: 0.0,
             event_emit_ms: 0.0,
             live_output_ms: 0.0,
@@ -183,9 +184,11 @@ impl DeferredPreviewRenderer {
             return None;
         }
         let Some(project) = project else {
-            let frame = empty_frame(request.generation, "No project");
+            let geometry = empty_geometry();
+            let frame = empty_frame(&geometry, request.generation, "No project");
             return Some(PlaybackRenderResult {
                 request,
+                geometry,
                 frame,
                 timing,
             });
@@ -218,10 +221,15 @@ impl DeferredPreviewRenderer {
                 };
                 let (frame, evaluation_timing) = evaluated?;
                 timing.apply_evaluation(renderer_build_ms, evaluation_timing);
-                frame
+                (renderer.geometry().clone(), frame)
             }
             Ok(None) => return None,
-            Err(message) => empty_frame(request.generation, message),
+            Err(message) => {
+                let geometry =
+                    OutputGeometryModel::from_project(project).unwrap_or_else(|_| empty_geometry());
+                let frame = empty_frame(&geometry, request.generation, message);
+                (geometry, frame)
+            }
         };
         if request.cancellation.is_cancelled() {
             return None;
@@ -232,7 +240,8 @@ impl DeferredPreviewRenderer {
         timing.render_result_ms = elapsed_ms(result_started);
         Some(PlaybackRenderResult {
             request,
-            frame,
+            geometry: frame.0,
+            frame: frame.1,
             timing,
         })
     }
@@ -410,11 +419,11 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             let frame_generation = snapshot.frame.generation;
             timing.backend_seconds = backend_seconds as f64;
             timing.snapshot_position_seconds = snapshot.position_seconds;
-            timing.frame_position_seconds = snapshot.frame.time_seconds;
+            timing.render_buffer_position_seconds = snapshot.frame.time_seconds;
             if let Some(audio_seconds) = timing.audio_position_seconds {
                 timing.snapshot_minus_audio_ms =
                     Some((snapshot.position_seconds - audio_seconds) * 1000.0);
-                timing.frame_minus_audio_ms =
+                timing.render_buffer_minus_audio_ms =
                     Some((snapshot.frame.time_seconds - audio_seconds) * 1000.0);
             }
             let should_publish_frame = has_sink
@@ -439,7 +448,13 @@ pub(crate) fn start_preview_worker(app: AppHandle) {
             }
             if live_output_enabled {
                 let live_output_started = Instant::now();
-                publish_live_output_frame(&app, &state, project.clone(), &snapshot.frame);
+                publish_live_output_frame(
+                    &app,
+                    &state,
+                    project.clone(),
+                    &snapshot.geometry,
+                    &snapshot.frame,
+                );
                 timing.live_output_ms = elapsed_ms(live_output_started);
             }
 
@@ -492,9 +507,9 @@ fn record_render_timing(timing: &mut PreviewTimingDto, render_timing: PlaybackRe
     timing.render_ms = render_timing.total_ms;
     timing.renderer_build_ms = render_timing.renderer_build_ms;
     timing.frame_evaluate_ms = render_timing.frame_evaluate_ms;
-    timing.frame_fixture_clone_ms = render_timing.fixture_clone_ms;
+    timing.render_buffer_clone_ms = render_timing.render_buffer_clone_ms;
     timing.frame_effect_loop_ms = render_timing.effect_loop_ms;
-    timing.frame_output_ms = render_timing.output_frame_ms;
+    timing.rgb_buffer_ms = render_timing.rgb_buffer_ms;
     timing.rendered_active_effects = render_timing.active_effects;
     timing.rendered_sampled_pixels = render_timing.sampled_pixels;
     timing.render_invalidation_ms = render_timing.render_invalidation_ms;
@@ -539,10 +554,11 @@ fn publish_live_output_frame(
     app: &AppHandle,
     state: &State<'_, AppState>,
     project: Option<Arc<DawnProject>>,
-    frame: &OutputFrame,
+    geometry: &OutputGeometryModel,
+    frame: &RenderedOutputFrame,
 ) {
     let snapshot = match lock_live_output(state) {
-        Ok(mut runtime) => runtime.send_frame(project, frame),
+        Ok(mut runtime) => runtime.send_frame(project, geometry, frame),
         Err(_) => return,
     };
     let Ok(mut model) = lock_model(state) else {
@@ -555,20 +571,17 @@ fn publish_live_output_frame(
     }
 }
 
-pub(crate) fn preview_pixel_count(frame: &OutputFrame) -> usize {
-    frame
-        .fixtures
-        .iter()
-        .map(|fixture| fixture.pixels.len())
-        .sum()
+pub(crate) fn preview_pixel_count(geometry: &OutputGeometryModel) -> usize {
+    geometry_pixel_count(geometry)
 }
 
-pub(crate) fn preview_scene_from_frame(
-    frame: &OutputFrame,
+pub(crate) fn preview_scene_from_geometry(
+    geometry: &OutputGeometryModel,
+    generation: u64,
     source_label: String,
 ) -> PreviewSceneDto {
     let mut first_pixel_index = 0usize;
-    let fixtures = frame
+    let fixtures = geometry
         .fixtures
         .iter()
         .map(|fixture| {
@@ -589,10 +602,10 @@ pub(crate) fn preview_scene_from_frame(
         })
         .collect::<Vec<_>>();
     PreviewSceneDto {
-        generation: frame.generation.min(u32::MAX as u64) as u32,
-        topology_identity: frame.topology_identity.stable_key(),
+        generation: generation.min(u32::MAX as u64) as u32,
+        topology_identity: geometry.geometry_id.clone(),
         source_label,
-        bounds: frame.bounds.into(),
+        bounds: geometry.bounds.into(),
         pixel_count: first_pixel_index.min(u32::MAX as usize) as u32,
         fixtures,
     }
@@ -686,7 +699,7 @@ struct PreviewEventIdentity {
     audio_exists: bool,
     clock_source: String,
     audio_playback_status: AudioPlaybackStatus,
-    frame_topology_identity: String,
+    geometry_identity: String,
     status: String,
 }
 
@@ -710,7 +723,7 @@ impl From<&PreviewSnapshot> for PreviewEventIdentity {
             audio_exists: snapshot.audio.as_ref().is_some_and(|audio| audio.exists),
             clock_source: snapshot.clock_source.clone(),
             audio_playback_status: snapshot.audio_playback_status,
-            frame_topology_identity: snapshot.frame.topology_identity.stable_key(),
+            geometry_identity: snapshot.geometry.geometry_id.clone(),
             status: snapshot.status.clone(),
         }
     }

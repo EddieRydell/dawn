@@ -6,7 +6,7 @@ use dawn_app_core::app_model::{LiveOutputSnapshot, LiveOutputStatus};
 use dawn_app_core::controller_output::{
     build_output_plan, encode_e131_data_packet, ControllerOutputPlan,
 };
-use dawn_app_core::output_runtime::OutputFrame;
+use dawn_app_core::output_runtime::{OutputGeometryModel, RenderedOutputFrame};
 use dawn_project::DawnProject;
 
 #[derive(Debug, Default)]
@@ -15,6 +15,7 @@ pub(crate) struct LiveOutputRuntime {
     socket: Option<UdpSocket>,
     plan: Option<ControllerOutputPlan>,
     plan_project: Option<Arc<DawnProject>>,
+    plan_geometry_id: Option<String>,
     sequence_counters: HashMap<UniverseSequenceKey, u8>,
     snapshot: LiveOutputSnapshot,
 }
@@ -41,6 +42,7 @@ impl LiveOutputRuntime {
                     self.socket = None;
                     self.plan = None;
                     self.plan_project = None;
+                    self.plan_geometry_id = None;
                     self.snapshot = LiveOutputSnapshot {
                         enabled: true,
                         status: LiveOutputStatus::Error,
@@ -58,7 +60,8 @@ impl LiveOutputRuntime {
     pub(crate) fn send_frame(
         &mut self,
         project: Option<Arc<DawnProject>>,
-        frame: &OutputFrame,
+        geometry: &OutputGeometryModel,
+        frame: &RenderedOutputFrame,
     ) -> LiveOutputSnapshot {
         if !self.enabled {
             return self.snapshot();
@@ -67,7 +70,7 @@ impl LiveOutputRuntime {
             self.set_error("project is not available".to_string(), 0);
             return self.snapshot();
         };
-        let active_universe_count = match self.ensure_plan(project) {
+        let active_universe_count = match self.ensure_plan(project, geometry) {
             Ok(active_universe_count) => active_universe_count,
             Err(error) => {
                 self.set_error(error, 0);
@@ -93,22 +96,29 @@ impl LiveOutputRuntime {
         self.snapshot()
     }
 
-    fn ensure_plan(&mut self, project: Arc<DawnProject>) -> Result<usize, String> {
+    fn ensure_plan(
+        &mut self,
+        project: Arc<DawnProject>,
+        geometry: &OutputGeometryModel,
+    ) -> Result<usize, String> {
         if self
             .plan_project
             .as_ref()
             .is_none_or(|cached| !Arc::ptr_eq(cached, &project))
+            || self.plan_geometry_id.as_deref() != Some(geometry.geometry_id.as_str())
         {
-            let plan = match build_output_plan(&project) {
+            let plan = match build_output_plan(&project, geometry) {
                 Ok(plan) => plan,
                 Err(error) => {
                     self.plan = None;
                     self.plan_project = None;
+                    self.plan_geometry_id = None;
                     return Err(error.to_string());
                 }
             };
             self.plan = Some(plan);
             self.plan_project = Some(project.clone());
+            self.plan_geometry_id = Some(geometry.geometry_id.clone());
         }
         let Some(plan) = self.plan.as_ref() else {
             return Err("live output plan is not available".to_string());
@@ -118,13 +128,16 @@ impl LiveOutputRuntime {
 
     fn enable(&mut self, project: Option<Arc<DawnProject>>) -> Result<(), String> {
         let project = project.ok_or_else(|| "project is not available".to_string())?;
-        let plan = build_output_plan(&project).map_err(|error| error.to_string())?;
+        let geometry =
+            OutputGeometryModel::from_project(&project).map_err(|error| error.to_string())?;
+        let plan = build_output_plan(&project, &geometry).map_err(|error| error.to_string())?;
         let active_universe_count = plan.active_universe_count();
         let socket = UdpSocket::bind("0.0.0.0:0").map_err(|error| error.to_string())?;
         self.enabled = true;
         self.socket = Some(socket);
         self.plan = Some(plan);
         self.plan_project = Some(project);
+        self.plan_geometry_id = Some(geometry.geometry_id.clone());
         self.sequence_counters.clear();
         self.snapshot = LiveOutputSnapshot {
             enabled: true,
@@ -145,6 +158,7 @@ impl LiveOutputRuntime {
         self.socket = None;
         self.plan = None;
         self.plan_project = None;
+        self.plan_geometry_id = None;
         self.sequence_counters.clear();
         self.snapshot = LiveOutputSnapshot {
             enabled: false,
@@ -229,10 +243,12 @@ mod tests {
                 .project
                 .expect("thirty output controller should load"),
         );
+        let geometry = dawn_app_core::output_runtime::OutputGeometryModel::from_project(&project)
+            .expect("project geometry should build");
         let mut runtime = LiveOutputRuntime::default();
 
         let active_universes = runtime
-            .ensure_plan(project.clone())
+            .ensure_plan(project.clone(), &geometry)
             .expect("project should build a live-output plan");
         let cached = runtime
             .plan_project
@@ -240,7 +256,7 @@ mod tests {
             .expect("plan project should be cached")
             .clone();
         let reused_active_universes = runtime
-            .ensure_plan(project.clone())
+            .ensure_plan(project.clone(), &geometry)
             .expect("same project handle should reuse the cached plan");
 
         assert_eq!(active_universes, reused_active_universes);
@@ -253,8 +269,11 @@ mod tests {
         ));
 
         let new_project = Arc::new((*project).clone());
+        let new_geometry =
+            dawn_app_core::output_runtime::OutputGeometryModel::from_project(&new_project)
+                .expect("new project geometry should build");
         runtime
-            .ensure_plan(new_project.clone())
+            .ensure_plan(new_project.clone(), &new_geometry)
             .expect("new project handle should rebuild the live-output plan");
 
         assert!(Arc::ptr_eq(

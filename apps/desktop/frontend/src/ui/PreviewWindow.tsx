@@ -17,7 +17,7 @@ type PreviewState = {
   positionSeconds: number;
   durationSeconds: number;
   audioPlaybackStatus: AudioPlaybackStatus;
-  frameTopologyIdentity: string;
+  geometryIdentity: string;
   status: string;
   timing: PreviewTiming;
 };
@@ -51,9 +51,9 @@ type PreviewTiming = {
   renderResultMs: number;
   rendererBuildMs: number;
   frameEvaluateMs: number;
-  frameFixtureCloneMs: number;
+  renderBufferCloneMs: number;
   frameEffectLoopMs: number;
-  frameOutputMs: number;
+  rgbBufferMs: number;
   publishMs: number;
   eventEmitMs: number;
   liveOutputMs: number;
@@ -212,8 +212,8 @@ export function PreviewWindow() {
         });
         disposeEvents = await listen<PreviewState>("preview_state_changed", (event) => {
           if (
-            event.payload.frameTopologyIdentity !== sceneTopologyIdentity.current &&
-            event.payload.frameTopologyIdentity.length > 0
+            event.payload.geometryIdentity !== sceneTopologyIdentity.current &&
+            event.payload.geometryIdentity.length > 0
           ) {
             void reloadPreviewScene().catch((reloadError: unknown) => {
               setError(String(reloadError));
@@ -317,8 +317,8 @@ export function PreviewWindow() {
           {formatNumber(state?.timing.publishMs ?? 0)} ms
         </div>
         <div>
-          build {formatNumber(state?.timing.rendererBuildMs ?? 0)} ms | fixture clone {formatNumber(state?.timing.frameFixtureCloneMs ?? 0)} ms | output{" "}
-          {formatNumber(state?.timing.frameOutputMs ?? 0)} ms | active effects {state?.timing.renderedActiveEffects ?? 0} | sampled pixels{" "}
+          build {formatNumber(state?.timing.rendererBuildMs ?? 0)} ms | buffer clone {formatNumber(state?.timing.renderBufferCloneMs ?? 0)} ms | RGB{" "}
+          {formatNumber(state?.timing.rgbBufferMs ?? 0)} ms | active effects {state?.timing.renderedActiveEffects ?? 0} | sampled pixels{" "}
           {state?.timing.renderedSampledPixels ?? 0}
         </div>
         <div>

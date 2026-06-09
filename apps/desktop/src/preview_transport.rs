@@ -1,6 +1,6 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use dawn_app_core::output_runtime::OutputFrame;
+use dawn_app_core::output_runtime::RenderedOutputFrame;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -47,7 +47,12 @@ impl PreviewTransportRuntime {
         self.platform.has_sinks()
     }
 
-    pub fn publish_frame(&mut self, frame: &OutputFrame, playing: bool, backend_seconds: f32) {
+    pub fn publish_frame(
+        &mut self,
+        frame: &RenderedOutputFrame,
+        playing: bool,
+        backend_seconds: f32,
+    ) {
         if !self.has_sinks() {
             return;
         }
@@ -76,24 +81,11 @@ fn write_slice(bytes: &mut [u8], offset: usize, src: &[u8]) -> bool {
     true
 }
 
-fn write_frame_rgb(frame: &OutputFrame, pixel_count: usize, dest: &mut [u8]) -> usize {
-    let mut written_pixels = 0usize;
-    for fixture in &frame.fixtures {
-        for pixel in &fixture.pixels {
-            if written_pixels >= pixel_count {
-                return written_pixels * 3;
-            }
-            let offset = written_pixels * 3;
-            let Some(dst) = dest.get_mut(offset..offset + 3) else {
-                return offset;
-            };
-            dst[0] = pixel.color.red;
-            dst[1] = pixel.color.green;
-            dst[2] = pixel.color.blue;
-            written_pixels += 1;
-        }
-    }
-    written_pixels * 3
+fn write_frame_rgb(frame: &RenderedOutputFrame, pixel_count: usize, dest: &mut [u8]) -> usize {
+    let max_len = pixel_count.saturating_mul(3).min(dest.len());
+    let written = frame.rgb.len().min(max_len);
+    dest[..written].copy_from_slice(&frame.rgb[..written]);
+    written
 }
 
 #[cfg(not(windows))]
@@ -119,7 +111,7 @@ impl PlatformRuntime {
     fn publish_frame(
         &mut self,
         _seq: u32,
-        _frame: &OutputFrame,
+        _frame: &RenderedOutputFrame,
         _playing: bool,
         _backend_seconds: f32,
     ) {
@@ -139,11 +131,11 @@ mod windows_platform {
     use windows_core::Interface;
 
     use super::{
-        frame_payload_bytes, write_frame_rgb, write_slice, OutputFrame, PreviewTransportMode,
-        FRAME_HEADER_LEN, FRAME_MAGIC, FRAME_OFFSET_BACKEND_SECONDS, FRAME_OFFSET_CURRENT_TIME,
-        FRAME_OFFSET_LATEST_SEQ, FRAME_OFFSET_LATEST_SLOT, FRAME_OFFSET_PAYLOAD_BYTES,
-        FRAME_OFFSET_PIXEL_COUNT, FRAME_OFFSET_PLAYING, FRAME_OFFSET_SLOT_COUNT, FRAME_SLOT_COUNT,
-        FRAME_VERSION,
+        frame_payload_bytes, write_frame_rgb, write_slice, PreviewTransportMode,
+        RenderedOutputFrame, FRAME_HEADER_LEN, FRAME_MAGIC, FRAME_OFFSET_BACKEND_SECONDS,
+        FRAME_OFFSET_CURRENT_TIME, FRAME_OFFSET_LATEST_SEQ, FRAME_OFFSET_LATEST_SLOT,
+        FRAME_OFFSET_PAYLOAD_BYTES, FRAME_OFFSET_PIXEL_COUNT, FRAME_OFFSET_PLAYING,
+        FRAME_OFFSET_SLOT_COUNT, FRAME_SLOT_COUNT, FRAME_VERSION,
     };
 
     #[derive(Default)]
@@ -186,7 +178,7 @@ mod windows_platform {
         pub(super) fn publish_frame(
             &mut self,
             seq: u32,
-            frame: &OutputFrame,
+            frame: &RenderedOutputFrame,
             playing: bool,
             backend_seconds: f32,
         ) {

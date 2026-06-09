@@ -795,7 +795,7 @@ pub struct PreviewSnapshotDto {
     pub audio: Option<SequenceAudioDto>,
     pub clock_source: String,
     pub audio_playback_status: AudioPlaybackStatus,
-    pub frame_topology_identity: String,
+    pub geometry_identity: String,
     pub status: String,
 }
 
@@ -845,7 +845,7 @@ impl From<AppSnapshot> for AppSnapshotDto {
                 audio: snapshot.preview.audio.map(SequenceAudioDto::from),
                 clock_source: snapshot.preview.clock_source,
                 audio_playback_status: snapshot.preview.audio_playback_status,
-                frame_topology_identity: snapshot.preview.frame.topology_identity.stable_key(),
+                geometry_identity: snapshot.preview.geometry.geometry_id.clone(),
                 status: snapshot.preview.status,
             },
             effect_preview_enabled: snapshot.workbench_layout.effect_preview_enabled,

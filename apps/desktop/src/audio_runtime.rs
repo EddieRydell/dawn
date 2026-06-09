@@ -43,14 +43,44 @@ struct AudioRuntimeInner {
     receiver: mpsc::Receiver<LoadResult>,
     generation: u64,
     active_key: Option<AudioKey>,
-    stream_ready: bool,
+    asset_state: AssetState,
     handle: Option<StreamingSoundHandle<FromFileError>>,
-    pending_play_seconds: Option<f64>,
+    transport_intent: TransportIntent,
     position_seconds: f64,
     ended: bool,
     status: AudioPlaybackStatus,
     error: Option<String>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum AssetState {
+    Empty,
+    Loading,
+    Ready,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TransportIntent {
+    None,
+    PlayWhenReady {
+        position_seconds: f64,
+    },
+    Seek {
+        position_seconds: f64,
+        playback: SeekPlayback,
+    },
+    Pause {
+        position_seconds: f64,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SeekPlayback {
+    Playing,
+    Paused,
+}
+
+const SEEK_SETTLED_TOLERANCE_SECONDS: f64 = 0.1;
 
 impl Default for AudioRuntime {
     fn default() -> Self {
@@ -64,9 +94,9 @@ impl Default for AudioRuntime {
                 receiver,
                 generation: 0,
                 active_key: None,
-                stream_ready: false,
+                asset_state: AssetState::Empty,
                 handle: None,
-                pending_play_seconds: None,
+                transport_intent: TransportIntent::None,
                 position_seconds: 0.0,
                 ended: false,
                 status: AudioPlaybackStatus::None,
@@ -78,9 +108,9 @@ impl Default for AudioRuntime {
                 receiver,
                 generation: 0,
                 active_key: None,
-                stream_ready: false,
+                asset_state: AssetState::Empty,
                 handle: None,
-                pending_play_seconds: None,
+                transport_intent: TransportIntent::None,
                 position_seconds: 0.0,
                 ended: false,
                 status: AudioPlaybackStatus::Error,
@@ -111,13 +141,15 @@ impl AudioRuntime {
         inner.poll_load_results();
         inner.ensure_active(audio, position_seconds)?;
         if inner.status == AudioPlaybackStatus::LoadingToPlay {
-            inner.pending_play_seconds = None;
+            inner.transport_intent = TransportIntent::None;
             inner.position_seconds = position_seconds;
             inner.status = AudioPlaybackStatus::Loading;
-        } else if inner.is_ready_to_play() {
-            inner.start(position_seconds)?;
+        } else if inner.handle.is_some() {
+            inner.play_handle(position_seconds)?;
+        } else if inner.asset_state == AssetState::Ready {
+            inner.start_stream(position_seconds)?;
         } else if inner.status.is_loading() {
-            inner.pending_play_seconds = Some(position_seconds);
+            inner.transport_intent = TransportIntent::PlayWhenReady { position_seconds };
             inner.position_seconds = position_seconds;
             inner.status = AudioPlaybackStatus::LoadingToPlay;
         }
@@ -128,8 +160,8 @@ impl AudioRuntime {
         let mut inner = self.lock_inner()?;
         inner.poll_load_results();
         let position_seconds = inner.current_position_seconds();
-        inner.pending_play_seconds = None;
-        inner.pause_handle();
+        inner.transport_intent = TransportIntent::None;
+        inner.pause_handle(position_seconds);
         inner.position_seconds = position_seconds;
         inner.ended = false;
         inner.status = if inner.is_ready_to_play() {
@@ -147,11 +179,11 @@ impl AudioRuntime {
         validate_position_seconds(position_seconds)?;
         let mut inner = self.lock_inner()?;
         inner.poll_load_results();
-        inner.pending_play_seconds = None;
+        inner.transport_intent = TransportIntent::None;
         inner.stop_handle();
         inner.position_seconds = position_seconds;
         inner.ended = false;
-        inner.status = if inner.stream_ready {
+        inner.status = if inner.asset_state == AssetState::Ready {
             AudioPlaybackStatus::Ready
         } else if inner.active_key.is_some() {
             AudioPlaybackStatus::Loading
@@ -177,28 +209,38 @@ impl AudioRuntime {
             if playing {
                 handle.resume(Tween::default());
                 inner.status = AudioPlaybackStatus::Playing;
+                inner.transport_intent = TransportIntent::Seek {
+                    position_seconds,
+                    playback: SeekPlayback::Playing,
+                };
             } else {
                 handle.pause(Tween::default());
                 inner.status = AudioPlaybackStatus::Ready;
+                inner.transport_intent = TransportIntent::Seek {
+                    position_seconds,
+                    playback: SeekPlayback::Paused,
+                };
             }
-            inner.pending_play_seconds = None;
             inner.position_seconds = position_seconds;
             inner.ended = false;
             inner.error = None;
-        } else if playing && inner.stream_ready {
-            inner.start(position_seconds)?;
+        } else if playing && inner.asset_state == AssetState::Ready {
+            inner.start_stream(position_seconds)?;
         } else {
-            inner.pending_play_seconds = if playing && inner.status.is_loading() {
-                Some(position_seconds)
+            inner.transport_intent = if playing && inner.status.is_loading() {
+                TransportIntent::PlayWhenReady { position_seconds }
             } else {
-                None
+                TransportIntent::None
             };
             inner.stop_handle();
             inner.position_seconds = position_seconds;
             inner.ended = false;
-            if inner.stream_ready {
+            if inner.asset_state == AssetState::Ready {
                 inner.status = AudioPlaybackStatus::Ready;
-            } else if inner.pending_play_seconds.is_some() {
+            } else if matches!(
+                inner.transport_intent,
+                TransportIntent::PlayWhenReady { .. }
+            ) {
                 inner.status = AudioPlaybackStatus::LoadingToPlay;
             }
         }
@@ -234,7 +276,7 @@ fn validate_position_seconds(position_seconds: f64) -> Result<(), String> {
 
 impl AudioRuntimeInner {
     fn preload(&mut self, audio: &SequenceAudioDocument) -> Result<(), String> {
-        self.pending_play_seconds = None;
+        self.transport_intent = TransportIntent::None;
         self.ensure_active(audio, 0.0)
     }
 
@@ -262,8 +304,8 @@ impl AudioRuntimeInner {
         self.generation = self.generation.saturating_add(1);
         self.stop_handle();
         self.active_key = Some(key.clone());
-        self.stream_ready = false;
-        self.pending_play_seconds = None;
+        self.asset_state = AssetState::Loading;
+        self.transport_intent = TransportIntent::None;
         self.position_seconds = position_seconds;
         self.ended = false;
         self.status = AudioPlaybackStatus::Loading;
@@ -299,13 +341,15 @@ impl AudioRuntimeInner {
             }
             match result.result {
                 Ok(()) => {
-                    self.stream_ready = true;
+                    self.asset_state = AssetState::Ready;
                     self.error = None;
                     self.ended = false;
-                    if let Some(position_seconds) = self.pending_play_seconds.take() {
-                        if let Err(error) = self.start(position_seconds) {
+                    if let TransportIntent::PlayWhenReady { position_seconds } =
+                        self.transport_intent
+                    {
+                        if let Err(error) = self.start_stream(position_seconds) {
                             self.stop_handle();
-                            self.stream_ready = false;
+                            self.asset_state = AssetState::Empty;
                             self.status = AudioPlaybackStatus::Error;
                             self.error = Some(error);
                         }
@@ -315,8 +359,8 @@ impl AudioRuntimeInner {
                 }
                 Err(error) => {
                     self.stop_handle();
-                    self.stream_ready = false;
-                    self.pending_play_seconds = None;
+                    self.asset_state = AssetState::Empty;
+                    self.transport_intent = TransportIntent::None;
                     self.status = AudioPlaybackStatus::Error;
                     self.error = Some(error);
                     self.ended = false;
@@ -325,20 +369,38 @@ impl AudioRuntimeInner {
         }
     }
 
-    fn start(&mut self, position_seconds: f64) -> Result<(), String> {
+    fn play_handle(&mut self, position_seconds: f64) -> Result<(), String> {
+        if self.is_same_logical_position(position_seconds) {
+            if let Some(handle) = self.handle.as_mut() {
+                handle.resume(Tween::default());
+            }
+            self.transport_intent = TransportIntent::None;
+            self.ended = false;
+            self.status = AudioPlaybackStatus::Playing;
+            self.error = None;
+            return Ok(());
+        }
         if let Some(handle) = self.handle.as_mut() {
             handle.seek_to(position_seconds);
             handle.resume(Tween::default());
-            self.pending_play_seconds = None;
+            self.transport_intent = TransportIntent::Seek {
+                position_seconds,
+                playback: SeekPlayback::Playing,
+            };
             self.position_seconds = position_seconds;
             self.ended = false;
             self.status = AudioPlaybackStatus::Playing;
             self.error = None;
             return Ok(());
         }
-        if !self.stream_ready {
+
+        self.start_stream(position_seconds)
+    }
+
+    fn start_stream(&mut self, position_seconds: f64) -> Result<(), String> {
+        if self.asset_state != AssetState::Ready {
             self.position_seconds = position_seconds;
-            self.pending_play_seconds = Some(position_seconds);
+            self.transport_intent = TransportIntent::PlayWhenReady { position_seconds };
             self.status = AudioPlaybackStatus::LoadingToPlay;
             return Ok(());
         }
@@ -359,7 +421,7 @@ impl AudioRuntimeInner {
             .play(data.start_position(position_seconds))
             .map_err(|error| format!("failed to start native audio: {error:?}"))?;
         self.handle = Some(handle);
-        self.pending_play_seconds = None;
+        self.transport_intent = TransportIntent::None;
         self.position_seconds = position_seconds;
         self.ended = false;
         self.status = AudioPlaybackStatus::Playing;
@@ -367,9 +429,10 @@ impl AudioRuntimeInner {
         Ok(())
     }
 
-    fn pause_handle(&mut self) {
+    fn pause_handle(&mut self, position_seconds: f64) {
         if let Some(handle) = self.handle.as_mut() {
             handle.pause(Tween::default());
+            self.transport_intent = TransportIntent::Pause { position_seconds };
         }
     }
 
@@ -380,10 +443,17 @@ impl AudioRuntimeInner {
     }
 
     fn is_ready_to_play(&self) -> bool {
-        self.stream_ready || self.handle.is_some()
+        self.asset_state == AssetState::Ready || self.handle.is_some()
     }
 
     fn current_position_seconds(&self) -> f64 {
+        match self.transport_intent {
+            TransportIntent::Seek {
+                position_seconds, ..
+            }
+            | TransportIntent::Pause { position_seconds } => return position_seconds,
+            TransportIntent::None | TransportIntent::PlayWhenReady { .. } => {}
+        }
         self.handle
             .as_ref()
             .map(|handle| handle.position())
@@ -391,11 +461,12 @@ impl AudioRuntimeInner {
     }
 
     fn clock(&mut self) -> AudioClock {
+        let handle_position_seconds = self.handle.as_ref().map(|handle| handle.position());
         let position_seconds = self.current_position_seconds();
         let stream_error = self.handle.as_mut().and_then(|handle| handle.pop_error());
         if let Some(error) = stream_error {
             self.handle = None;
-            self.pending_play_seconds = None;
+            self.transport_intent = TransportIntent::None;
             self.position_seconds = position_seconds;
             self.ended = false;
             self.status = AudioPlaybackStatus::Error;
@@ -411,11 +482,12 @@ impl AudioRuntimeInner {
             match state {
                 PlaybackState::Stopped => {
                     self.handle = None;
-                    self.pending_play_seconds = None;
+                    self.transport_intent = TransportIntent::None;
                     self.position_seconds = position_seconds;
                     self.ended = true;
                     self.status = AudioPlaybackStatus::Ended;
                 }
+                _ if self.reconcile_transport_intent(state, handle_position_seconds) => {}
                 state if state.is_advancing() => {
                     self.position_seconds = position_seconds;
                     self.ended = false;
@@ -440,13 +512,67 @@ impl AudioRuntimeInner {
         self.generation = self.generation.saturating_add(1);
         self.stop_handle();
         self.active_key = None;
-        self.stream_ready = false;
-        self.pending_play_seconds = None;
+        self.asset_state = AssetState::Empty;
+        self.transport_intent = TransportIntent::None;
         self.position_seconds = 0.0;
         self.ended = false;
         self.status = AudioPlaybackStatus::None;
         self.error = None;
         while self.receiver.try_recv().is_ok() {}
+    }
+
+    fn reconcile_transport_intent(
+        &mut self,
+        state: PlaybackState,
+        handle_position_seconds: Option<f64>,
+    ) -> bool {
+        match self.transport_intent {
+            TransportIntent::None | TransportIntent::PlayWhenReady { .. } => false,
+            TransportIntent::Pause { position_seconds } => {
+                self.position_seconds = position_seconds;
+                self.ended = false;
+                self.status = AudioPlaybackStatus::Ready;
+                if !state.is_advancing() {
+                    self.transport_intent = TransportIntent::None;
+                }
+                true
+            }
+            TransportIntent::Seek {
+                position_seconds,
+                playback,
+            } => {
+                let settled = handle_position_seconds
+                    .map(|handle_position_seconds| {
+                        (handle_position_seconds - position_seconds).abs()
+                            <= SEEK_SETTLED_TOLERANCE_SECONDS
+                    })
+                    .unwrap_or(false);
+                if settled {
+                    self.transport_intent = TransportIntent::None;
+                    self.position_seconds = handle_position_seconds.unwrap_or(position_seconds);
+                    self.ended = false;
+                    self.status = match playback {
+                        SeekPlayback::Playing if state.is_advancing() => {
+                            AudioPlaybackStatus::Playing
+                        }
+                        SeekPlayback::Playing => AudioPlaybackStatus::Playing,
+                        SeekPlayback::Paused => AudioPlaybackStatus::Ready,
+                    };
+                } else {
+                    self.position_seconds = position_seconds;
+                    self.ended = false;
+                    self.status = match playback {
+                        SeekPlayback::Playing => AudioPlaybackStatus::Playing,
+                        SeekPlayback::Paused => AudioPlaybackStatus::Ready,
+                    };
+                }
+                true
+            }
+        }
+    }
+
+    fn is_same_logical_position(&self, position_seconds: f64) -> bool {
+        (position_seconds - self.position_seconds).abs() <= SEEK_SETTLED_TOLERANCE_SECONDS
     }
 }
 

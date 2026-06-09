@@ -19,7 +19,7 @@ use crate::app_runtime::{
 };
 use crate::new_project::{create_starter_project, STARTER_SEQUENCE_PATH};
 use crate::preview::{
-    open_or_focus_preview_window, preview_pixel_count, preview_scene_from_frame, PreviewSceneDto,
+    open_or_focus_preview_window, preview_pixel_count, preview_scene_from_geometry, PreviewSceneDto,
 };
 use crate::preview_transport::{PreviewTransportMode, PreviewTransportRuntime};
 use crate::state::{
@@ -612,8 +612,9 @@ fn set_live_output_enabled(
 #[tauri::command]
 fn get_preview_scene(state: State<'_, AppState>) -> CommandResult<PreviewSceneDto> {
     let snapshot = lock_model(&state)?.preview.snapshot();
-    Ok(preview_scene_from_frame(
-        &snapshot.frame,
+    Ok(preview_scene_from_geometry(
+        &snapshot.geometry,
+        snapshot.frame.generation,
         snapshot.source_label,
     ))
 }
@@ -630,7 +631,7 @@ fn init_preview_transport(app: AppHandle, state: State<'_, AppState>) -> Command
     let Some(window) = app.get_webview_window("preview") else {
         return Err("preview window is not open".to_string());
     };
-    let pixel_count = preview_pixel_count(&lock_model(&state)?.preview.snapshot().frame);
+    let pixel_count = preview_pixel_count(&lock_model(&state)?.preview.snapshot().geometry);
     lock_preview_transport(&state)?.init_window(&window, pixel_count)
 }
 

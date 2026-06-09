@@ -134,7 +134,9 @@ pub fn export_fseq(
         return Err(FseqExportError::InvalidDuration(document.duration_seconds));
     }
 
-    let plan = build_fseq_output_plan(project)?;
+    let mut evaluator =
+        SequenceRenderPlan::new(project, document).map_err(FseqExportError::Evaluation)?;
+    let plan = build_fseq_output_plan(project, evaluator.geometry())?;
     let channel_count = plan.channel_count();
     if channel_count == 0 {
         return Err(FseqExportError::NoOutputChannels);
@@ -166,8 +168,7 @@ pub fn export_fseq(
     )?;
     write_frames(
         &mut writer,
-        project,
-        document,
+        &mut evaluator,
         &plan,
         frame_count,
         options.step_ms,
@@ -259,14 +260,11 @@ fn write_header(
 
 fn write_frames(
     writer: &mut impl Write,
-    project: &DawnProject,
-    document: &SequenceEditorDocument,
+    evaluator: &mut SequenceRenderPlan,
     plan: &ControllerOutputPlan,
     frame_count: u64,
     step_ms: u8,
 ) -> Result<(), FseqExportError> {
-    let mut evaluator =
-        SequenceRenderPlan::new(project, document).map_err(FseqExportError::Evaluation)?;
     for frame_index in 0..frame_count {
         let time_seconds = frame_index as f64 * f64::from(step_ms) / 1000.0;
         let frame = evaluator.render_frame(time_seconds, frame_index);
