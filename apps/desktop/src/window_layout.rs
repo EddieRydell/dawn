@@ -9,14 +9,12 @@ use crate::state::{lock_model, AppState, CommandResult};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WorkbenchWindow {
     Main,
-    Preview,
 }
 
 impl WorkbenchWindow {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Main => "main",
-            Self::Preview => "preview",
         }
     }
 }
@@ -44,12 +42,6 @@ pub(crate) fn register_main_window_layout_events(app: &AppHandle) -> CommandResu
             let _ = flush_autosave_blocking(&app_for_event, &state);
             state.begin_shutdown();
             persist_window_layout(&app_for_event, WorkbenchWindow::Main);
-            persist_window_layout(&app_for_event, WorkbenchWindow::Preview);
-            if let Some(preview) =
-                app_for_event.get_webview_window(WorkbenchWindow::Preview.label())
-            {
-                let _ = preview.close();
-            }
         }
         _ => {}
     });
@@ -68,9 +60,6 @@ pub(crate) fn persist_window_layout(app: &AppHandle, target: WorkbenchWindow) {
         match target {
             WorkbenchWindow::Main => {
                 let _ = model.set_main_window_layout(layout);
-            }
-            WorkbenchWindow::Preview => {
-                let _ = model.set_preview_window_layout(layout);
             }
         }
     };

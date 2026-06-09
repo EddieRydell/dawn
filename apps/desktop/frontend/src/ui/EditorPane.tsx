@@ -7,7 +7,7 @@ import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { RefreshCw, Save, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent } from "react";
 import { commands } from "../api";
 import type { AppSnapshotDto, ProjectDiagnosticDto, SequenceSelectionDto, TextRangeDto } from "../bindings";
 import { commandRegistry } from "../commandRegistry";
@@ -41,10 +41,6 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
       setPathSelection({ path: activePath, selection });
     },
     [activePath]
-  );
-  const selectedEffectIds = useMemo(
-    () => (sequenceSelection?.type === "effects" ? sequenceSelection.ids : []),
-    [sequenceSelection]
   );
 
   useEffect(() => {
@@ -161,8 +157,6 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
             document={activeSequenceDocument}
             transport={snapshot.sequenceTransport}
             liveOutput={snapshot.liveOutput}
-            effectPreviewEnabled={snapshot.effectPreviewEnabled}
-            selectedEffectIds={selectedEffectIds}
           />
         )}
         <div className="segmented-control">

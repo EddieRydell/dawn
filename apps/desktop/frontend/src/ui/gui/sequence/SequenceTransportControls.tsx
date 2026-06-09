@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 
-import { ChevronLeft, ChevronRight, Crosshair, Music, Pause, Play, RadioTower, SkipBack, Square, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Music, Pause, Play, RadioTower, SkipBack, Square, X } from "lucide-react";
 
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
@@ -16,15 +16,11 @@ import { setGlobalMarkDisplayMode, useMarkDisplayMode, type MarkDisplayMode } fr
 export function SequenceTransportControls({
   document,
   transport,
-  liveOutput,
-  effectPreviewEnabled,
-  selectedEffectIds
+  liveOutput
 }: {
   document: SequenceEditorDocumentDto;
   transport: AppSnapshotDto["sequenceTransport"];
   liveOutput: AppSnapshotDto["liveOutput"];
-  effectPreviewEnabled: boolean;
-  selectedEffectIds: number[];
 }) {
   const liveTransport = useSequenceTransport(transport);
   const unsupported = document.durationSeconds <= 0;
@@ -33,7 +29,6 @@ export function SequenceTransportControls({
   const activePlayback = isActiveSequenceTransportPlayback(liveTransport.transportState);
   const playCommand = activePlayback ? commands.sequenceTransportPause : commands.sequenceTransportPlay;
   const [mode, setMode] = useMarkDisplayMode();
-  const selectedEffectIdsSignature = selectedEffectIds.join(",");
   const stepFrame = (direction: -1 | 1) => {
     stepSequenceFrame(document, liveTransport.positionSeconds, liveTransport.durationSeconds, direction);
   };
@@ -41,10 +36,6 @@ export function SequenceTransportControls({
     setGlobalMarkDisplayMode(nextMode);
     setMode(nextMode);
   };
-  useEffect(() => {
-    if (!effectPreviewEnabled) return;
-    void runSnapshotCommand(() => commands.setEffectPreviewEffects(selectedEffectIds));
-  }, [effectPreviewEnabled, selectedEffectIds, selectedEffectIdsSignature]);
   return (
     <div
       className="sequence-toolbar"
@@ -94,20 +85,6 @@ export function SequenceTransportControls({
         onClick={() => void runSnapshotCommand(() => commands.setLiveOutputEnabled(!liveOutput.enabled))}
       >
         <RadioTower size={15} />
-      </button>
-      <button
-        type="button"
-        className={effectPreviewEnabled ? "active" : ""}
-        title={effectPreviewEnabled ? "Stop previewing selected effect" : "Preview selected effect"}
-        disabled={!effectPreviewEnabled && selectedEffectIds.length === 0}
-        onClick={() => {
-          const enabled = !effectPreviewEnabled;
-          void runSnapshotCommand(() => commands.setEffectPreviewEnabled(enabled)).then(() => {
-            if (enabled) void runSnapshotCommand(() => commands.setEffectPreviewEffects(selectedEffectIds));
-          });
-        }}
-      >
-        <Crosshair size={15} />
       </button>
       <button
         type="button"
@@ -270,7 +247,6 @@ function renderTimingSummary(timing: SequenceRenderTiming | undefined) {
     `result ${formatMs(timing.renderResultMs)}`,
     `build ${formatMs(timing.rendererBuildMs)}`,
     `effects ${formatMs(timing.frameEffectLoopMs)}`,
-    `publish ${formatMs(timing.publishMs)}`,
     `live-output ${formatMs(timing.liveOutputMs)}`
   ].filter((part): part is string => part !== null);
   return ` | ${parts.join(" | ")}`;

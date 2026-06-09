@@ -26,8 +26,6 @@ pub enum AppAction {
     RenamePath { path: Utf8PathBuf, new_name: String },
     DeletePath(Utf8PathBuf),
     ToggleProjectTree,
-    SetEffectPreviewEnabled(bool),
-    SetEffectPreviewEffects(Vec<u32>),
     SequenceTransportPlay,
     SequenceTransportPause,
     SequenceTransportStop,

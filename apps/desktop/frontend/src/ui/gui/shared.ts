@@ -21,8 +21,6 @@ export type SequenceRenderTiming = {
   loopAccountedMs: number;
   loopUnaccountedMs: number;
   sleepActualMs: number;
-  previewWindowTransportLockMs: number;
-  previewWindowPublishLockMs: number;
   liveOutputLockMs: number;
   modelLockWaitMs: number;
   sequenceTransportSnapshotMs: number;
@@ -41,13 +39,10 @@ export type SequenceRenderTiming = {
   renderBufferCloneMs: number;
   frameEffectLoopMs: number;
   rgbBufferMs: number;
-  publishMs: number;
   eventEmitMs: number;
   liveOutputMs: number;
   renderedActiveEffects: number;
   renderedSampledPixels: number;
-  hasSink: boolean;
-  publishedFrame: boolean;
   renderedFrame: boolean;
 };
 

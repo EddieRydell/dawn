@@ -9,7 +9,6 @@ export type CommandId =
   | "edit.undo"
   | "edit.redo"
   | "view.toggleProjectTree"
-  | "view.openPreviewWindow"
   | "project.reload";
 
 export type CommandDefinition = {
@@ -76,14 +75,6 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     shortcut: "Ctrl+B",
     run: async () => {
       await runSnapshotCommand(commands.toggleProjectTree);
-    }
-  },
-  "view.openPreviewWindow": {
-    id: "view.openPreviewWindow",
-    label: "Preview Window",
-    run: async () => {
-      await commands.openPreviewWindow();
-      useAppStore.getState().setError(null);
     }
   },
   "project.reload": {

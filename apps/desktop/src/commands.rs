@@ -10,21 +10,16 @@ use dawn_app_core::dto::{
 use dawn_app_core::fseq_export::{export_fseq_file, FseqExportOptions};
 use dawn_app_core::workspace::serialized_import_path;
 use dawn_project::{utf8_path, DiagnosticSeverity, Utf8PathBuf};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 use crate::app_runtime::{
     dispatch, emit_model_snapshot, flush_autosave_blocking, preload_active_sequence_audio,
-    schedule_project_autosave, sequence_transport_audio,
+    schedule_project_autosave, sequence_transport_audio, update_sequence_transport_from_audio_seek,
     update_sequence_transport_from_audio_status,
 };
 use crate::new_project::{create_starter_project, STARTER_SEQUENCE_PATH};
-use crate::preview_transport::{PreviewTransportMode, PreviewTransportRuntime};
-use crate::preview_window::{
-    open_or_focus_preview_window, preview_pixel_count, preview_scene_from_geometry, PreviewSceneDto,
-};
 use crate::state::{
-    lock_audio_runtime, lock_live_output, lock_model, lock_preview_transport, project_path,
-    AppState, CommandResult,
+    lock_audio_runtime, lock_live_output, lock_model, project_path, AppState, CommandResult,
 };
 
 #[specta::specta]
@@ -444,48 +439,18 @@ fn toggle_project_tree(
 
 #[specta::specta]
 #[tauri::command]
-fn set_effect_preview_enabled(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    enabled: bool,
-) -> CommandResult<AppSnapshotDto> {
-    dispatch(&app, &state, AppAction::SetEffectPreviewEnabled(enabled))
-}
-
-#[specta::specta]
-#[tauri::command]
-fn set_effect_preview_effects(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    ids: Vec<u32>,
-) -> CommandResult<AppSnapshotDto> {
-    dispatch(&app, &state, AppAction::SetEffectPreviewEffects(ids))
-}
-
-#[specta::specta]
-#[tauri::command]
-async fn open_preview_window(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
-    open_or_focus_preview_window(app, state)
-}
-
-#[specta::specta]
-#[tauri::command]
 fn sequence_transport_play(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> CommandResult<AppSnapshotDto> {
-    let (audio, position_seconds, effect_preview_enabled) = {
+    let (audio, position_seconds) = {
         let model = lock_model(&state)?;
         let snapshot = model.sequence_transport.snapshot();
         (
             sequence_transport_audio(&snapshot),
             snapshot.position_seconds,
-            model.workbench_layout.effect_preview_enabled,
         )
     };
-    if effect_preview_enabled {
-        dispatch(&app, &state, AppAction::SetEffectPreviewEnabled(false))?;
-    }
     let Some(audio) = audio else {
         return dispatch(&app, &state, AppAction::SequenceTransportPlay);
     };
@@ -574,7 +539,7 @@ fn sequence_transport_seek(
         );
     };
     let clock = lock_audio_runtime(&state)?.seek(&audio, position_seconds, playing)?;
-    update_sequence_transport_from_audio_status(&app, &state, clock)
+    update_sequence_transport_from_audio_seek(&app, &state, clock, position_seconds)
 }
 
 #[specta::specta]
@@ -589,45 +554,6 @@ fn set_live_output_enabled(
     let mut model = lock_model(&state)?;
     model.set_live_output_snapshot(snapshot);
     emit_model_snapshot(&app, &model)
-}
-
-#[specta::specta]
-#[tauri::command]
-fn get_preview_scene(state: State<'_, AppState>) -> CommandResult<PreviewSceneDto> {
-    let snapshot = lock_model(&state)?.sequence_transport.snapshot();
-    Ok(preview_scene_from_geometry(
-        &snapshot.geometry,
-        snapshot.frame.generation,
-        snapshot.source_label,
-    ))
-}
-
-#[specta::specta]
-#[tauri::command]
-fn get_preview_transport_mode() -> CommandResult<PreviewTransportMode> {
-    Ok(PreviewTransportRuntime::mode())
-}
-
-#[specta::specta]
-#[tauri::command]
-fn init_preview_transport(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
-    let Some(window) = app.get_webview_window("preview") else {
-        return Err("preview window is not open".to_string());
-    };
-    let pixel_count =
-        preview_pixel_count(&lock_model(&state)?.sequence_transport.snapshot().geometry);
-    lock_preview_transport(&state)?.init_window(&window, pixel_count)
-}
-
-#[specta::specta]
-#[tauri::command]
-fn dispose_preview_transport(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
-    let label = app
-        .get_webview_window("preview")
-        .map(|window| window.label().to_string())
-        .unwrap_or_else(|| "preview".to_string());
-    lock_preview_transport(&state)?.dispose_window(&label);
-    Ok(())
 }
 
 pub(crate) fn register_commands(
@@ -662,18 +588,11 @@ pub(crate) fn register_commands(
         delete_path,
         reload_project,
         toggle_project_tree,
-        set_effect_preview_enabled,
-        set_effect_preview_effects,
-        open_preview_window,
         sequence_transport_play,
         sequence_transport_pause,
         sequence_transport_stop,
         sequence_transport_rewind_to_zero,
         sequence_transport_seek,
-        set_live_output_enabled,
-        get_preview_scene,
-        init_preview_transport,
-        dispose_preview_transport,
-        get_preview_transport_mode
+        set_live_output_enabled
     ])
 }

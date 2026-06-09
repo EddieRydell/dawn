@@ -998,65 +998,18 @@ pub struct SequenceRenderPlan {
     geometry: OutputGeometryModel,
     effects: Vec<PreparedSequenceEffect>,
     effect_indices_by_frame: Vec<Vec<usize>>,
-    authored_intervals_by_id: HashMap<u32, EffectInterval>,
 }
 
 impl SequenceRenderPlan {
     pub fn new(project: &DawnProject, document: &SequenceEditorDocument) -> Result<Self, String> {
-        Self::new_filtered(project, document, None)
+        Self::new_timed(project, document).map(|(evaluator, _timing)| evaluator)
     }
 
     pub fn new_timed(
         project: &DawnProject,
         document: &SequenceEditorDocument,
     ) -> Result<(Self, SequenceRenderPlanBuildTiming), String> {
-        Self::new_filtered_timed(project, document, None)
-    }
-
-    pub fn new_filtered(
-        project: &DawnProject,
-        document: &SequenceEditorDocument,
-        effect_filter: Option<&HashSet<u32>>,
-    ) -> Result<Self, String> {
-        Self::new_filtered_timed(project, document, effect_filter)
-            .map(|(evaluator, _timing)| evaluator)
-    }
-
-    pub fn new_filtered_timed(
-        project: &DawnProject,
-        document: &SequenceEditorDocument,
-        effect_filter: Option<&HashSet<u32>>,
-    ) -> Result<(Self, SequenceRenderPlanBuildTiming), String> {
-        Self::new_filtered_timed_with_cache(project, document, effect_filter, None)
-    }
-
-    pub fn new_filtered_with_preparation_cache(
-        project: &DawnProject,
-        document: &SequenceEditorDocument,
-        effect_filter: Option<&HashSet<u32>>,
-        preparation_cache: &mut SequencePreparationCache,
-    ) -> Result<Self, String> {
-        Self::new_filtered_timed_with_preparation_cache(
-            project,
-            document,
-            effect_filter,
-            preparation_cache,
-        )
-        .map(|(evaluator, _timing)| evaluator)
-    }
-
-    pub fn new_filtered_timed_with_preparation_cache(
-        project: &DawnProject,
-        document: &SequenceEditorDocument,
-        effect_filter: Option<&HashSet<u32>>,
-        preparation_cache: &mut SequencePreparationCache,
-    ) -> Result<(Self, SequenceRenderPlanBuildTiming), String> {
-        Self::new_filtered_timed_with_cache(
-            project,
-            document,
-            effect_filter,
-            Some(preparation_cache),
-        )
+        Self::new_timed_with_cache(project, document, None)
     }
 
     pub(crate) fn new_with_preparation_cache(
@@ -1064,7 +1017,7 @@ impl SequenceRenderPlan {
         document: &SequenceEditorDocument,
         preparation_cache: &mut SequencePreparationCache,
     ) -> Result<(Self, SequenceRenderPlanBuildTiming), String> {
-        Self::new_filtered_timed_with_cache(project, document, None, Some(preparation_cache))
+        Self::new_timed_with_cache(project, document, Some(preparation_cache))
     }
 
     pub(crate) fn new_with_preparation_cache_cancellable(
@@ -1073,37 +1026,28 @@ impl SequenceRenderPlan {
         preparation_cache: &mut SequencePreparationCache,
         is_cancelled: impl Fn() -> bool,
     ) -> Result<Option<(Self, SequenceRenderPlanBuildTiming)>, String> {
-        Self::new_filtered_timed_with_cache_cancellable(
+        Self::new_timed_with_cache_cancellable(
             project,
             document,
-            None,
             Some(preparation_cache),
             &is_cancelled,
         )
     }
 
-    fn new_filtered_timed_with_cache(
+    fn new_timed_with_cache(
         project: &DawnProject,
         document: &SequenceEditorDocument,
-        effect_filter: Option<&HashSet<u32>>,
         preparation_cache: Option<&mut SequencePreparationCache>,
     ) -> Result<(Self, SequenceRenderPlanBuildTiming), String> {
-        Self::new_filtered_timed_with_cache_cancellable(
-            project,
-            document,
-            effect_filter,
-            preparation_cache,
-            &|| false,
-        )
-        .and_then(|result| {
-            result.ok_or_else(|| "Sequence renderer build was cancelled".to_string())
-        })
+        Self::new_timed_with_cache_cancellable(project, document, preparation_cache, &|| false)
+            .and_then(|result| {
+                result.ok_or_else(|| "Sequence renderer build was cancelled".to_string())
+            })
     }
 
-    fn new_filtered_timed_with_cache_cancellable(
+    fn new_timed_with_cache_cancellable(
         project: &DawnProject,
         document: &SequenceEditorDocument,
-        effect_filter: Option<&HashSet<u32>>,
         mut preparation_cache: Option<&mut SequencePreparationCache>,
         is_cancelled: &dyn Fn() -> bool,
     ) -> Result<Option<(Self, SequenceRenderPlanBuildTiming)>, String> {
@@ -1130,11 +1074,7 @@ impl SequenceRenderPlan {
                 .collect::<HashSet<_>>();
             cache.prune(&active_effect_ids);
         }
-        for effect in document.effects.iter().filter(|effect| {
-            effect_filter
-                .map(|ids| ids.contains(&effect.id))
-                .unwrap_or(true)
-        }) {
+        for effect in &document.effects {
             if is_cancelled() {
                 return Ok(None);
             }
@@ -1322,7 +1262,6 @@ impl SequenceRenderPlan {
                         continue;
                     }
                     let prepared = vec![PreparedSequenceEffect {
-                        id: effect.id,
                         start_seconds: effect.start_seconds,
                         duration_seconds: effect.duration_seconds,
                         authored: true,
@@ -1382,20 +1321,6 @@ impl SequenceRenderPlan {
         let effect_indices_by_frame =
             build_effect_indices_by_frame(&effects, source.duration_seconds, source.fps);
         let timeline_index_ms = elapsed_ms(timeline_started);
-        let authored_intervals_by_id = document
-            .effects
-            .iter()
-            .map(|effect| {
-                (
-                    effect.id,
-                    EffectInterval {
-                        start_seconds: effect.start_seconds,
-                        duration_seconds: effect.duration_seconds,
-                    },
-                )
-            })
-            .collect();
-
         let timing = SequenceRenderPlanBuildTiming {
             total_ms: elapsed_ms(total_started),
             layout_template_ms,
@@ -1414,7 +1339,6 @@ impl SequenceRenderPlan {
                 geometry,
                 effects,
                 effect_indices_by_frame,
-                authored_intervals_by_id,
             },
             timing,
         )))
@@ -1453,76 +1377,12 @@ impl SequenceRenderPlan {
         generation: u64,
         is_cancelled: impl Fn() -> bool,
     ) -> Option<(RenderedOutputFrame, SequenceFrameRenderTiming)> {
-        self.render_timed_cancellable(
-            FrameRenderMode::FullSequence { time_seconds },
-            generation,
-            is_cancelled,
-        )
-    }
-
-    pub fn render_effects_frame(
-        &mut self,
-        preview_seconds: f64,
-        generation: u64,
-    ) -> RenderedOutputFrame {
-        self.render_selected_effects_frame(preview_seconds, generation, None)
-    }
-
-    pub fn render_selected_effects_frame(
-        &mut self,
-        preview_seconds: f64,
-        generation: u64,
-        effect_filter: Option<&HashSet<u32>>,
-    ) -> RenderedOutputFrame {
-        self.render_selected_effects_frame_timed(preview_seconds, generation, effect_filter)
-            .0
-    }
-
-    pub fn render_selected_effects_frame_timed(
-        &mut self,
-        preview_seconds: f64,
-        generation: u64,
-        effect_filter: Option<&HashSet<u32>>,
-    ) -> (RenderedOutputFrame, SequenceFrameRenderTiming) {
-        match self.render_selected_effects_frame_timed_cancellable(
-            preview_seconds,
-            generation,
-            effect_filter,
-            || false,
-        ) {
-            Some(result) => result,
-            None => (
-                self.rendered_frame(
-                    preview_seconds,
-                    generation,
-                    OutputFrameStatus::Live,
-                    self.geometry.fixtures.clone(),
-                ),
-                SequenceFrameRenderTiming::default(),
-            ),
-        }
-    }
-
-    pub fn render_selected_effects_frame_timed_cancellable(
-        &mut self,
-        preview_seconds: f64,
-        generation: u64,
-        effect_filter: Option<&HashSet<u32>>,
-        is_cancelled: impl Fn() -> bool,
-    ) -> Option<(RenderedOutputFrame, SequenceFrameRenderTiming)> {
-        self.render_timed_cancellable(
-            FrameRenderMode::SelectedEffects {
-                preview_seconds,
-                effect_filter,
-            },
-            generation,
-            is_cancelled,
-        )
+        self.render_timed_cancellable(time_seconds, generation, is_cancelled)
     }
 
     fn render_timed_cancellable(
         &mut self,
-        mode: FrameRenderMode<'_>,
+        time_seconds: f64,
         generation: u64,
         is_cancelled: impl Fn() -> bool,
     ) -> Option<(RenderedOutputFrame, SequenceFrameRenderTiming)> {
@@ -1536,75 +1396,26 @@ impl SequenceRenderPlan {
         let mut diagnostic_pixels = Vec::new();
 
         let effect_loop_started = Instant::now();
-        match mode {
-            FrameRenderMode::FullSequence { time_seconds } => {
-                if let Some(effect_indices) = self.effect_indices_for_time(time_seconds) {
-                    for effect_index in effect_indices.clone() {
-                        if is_cancelled() {
-                            return None;
-                        }
-                        let mut context = PreparedEffectEvaluationContext {
-                            fixtures: &mut fixtures,
-                            status: &mut status,
-                            counters: &mut counters,
-                            sample_reuse: &mut sample_reuse,
-                            diagnostic_pixels: &mut diagnostic_pixels,
-                            is_cancelled: &is_cancelled,
-                        };
-                        evaluate_prepared_effect_at_time(
-                            &mut self.effects[effect_index],
-                            time_seconds,
-                            &mut context,
-                        );
-                        if is_cancelled() {
-                            return None;
-                        }
-                    }
+        if let Some(effect_indices) = self.effect_indices_for_time(time_seconds) {
+            for effect_index in effect_indices.clone() {
+                if is_cancelled() {
+                    return None;
                 }
-            }
-            FrameRenderMode::SelectedEffects {
-                preview_seconds,
-                effect_filter,
-            } => {
-                let preview_frame_times = self.preview_frame_times(preview_seconds, effect_filter);
-                let mut visited_effect_indices = HashSet::new();
-                for (preview_id, preview_frame_time) in preview_frame_times {
-                    if is_cancelled() {
-                        return None;
-                    }
-                    if let Some(effect_indices) = self.effect_indices_for_time(preview_frame_time) {
-                        for effect_index in effect_indices.clone() {
-                            if is_cancelled() {
-                                return None;
-                            }
-                            if !visited_effect_indices.insert(effect_index) {
-                                continue;
-                            }
-                            let effect = &mut self.effects[effect_index];
-                            if effect.id != preview_id {
-                                continue;
-                            }
-                            if effect_filter
-                                .map(|ids| !ids.contains(&effect.id))
-                                .unwrap_or(false)
-                            {
-                                continue;
-                            }
-                            let mut context = PreparedEffectEvaluationContext {
-                                fixtures: &mut fixtures,
-                                status: &mut status,
-                                counters: &mut counters,
-                                sample_reuse: &mut sample_reuse,
-                                diagnostic_pixels: &mut diagnostic_pixels,
-                                is_cancelled: &is_cancelled,
-                            };
-                            evaluate_prepared_effect_at_time(
-                                effect,
-                                preview_frame_time,
-                                &mut context,
-                            );
-                        }
-                    }
+                let mut context = PreparedEffectEvaluationContext {
+                    fixtures: &mut fixtures,
+                    status: &mut status,
+                    counters: &mut counters,
+                    sample_reuse: &mut sample_reuse,
+                    diagnostic_pixels: &mut diagnostic_pixels,
+                    is_cancelled: &is_cancelled,
+                };
+                evaluate_prepared_effect_at_time(
+                    &mut self.effects[effect_index],
+                    time_seconds,
+                    &mut context,
+                );
+                if is_cancelled() {
+                    return None;
                 }
             }
         }
@@ -1612,7 +1423,7 @@ impl SequenceRenderPlan {
         apply_diagnostic_pixels(&mut fixtures, &diagnostic_pixels);
 
         let output_started = Instant::now();
-        let frame = self.rendered_frame(mode.time_seconds(), generation, status, fixtures);
+        let frame = self.rendered_frame(time_seconds, generation, status, fixtures);
         let rgb_buffer_ms = elapsed_ms(output_started);
         let total_ms = elapsed_ms(total_started);
         Some((
@@ -1647,33 +1458,6 @@ impl SequenceRenderPlan {
             .get(usize::try_from(frame_index).ok()?)
     }
 
-    fn preview_frame_times(
-        &self,
-        preview_seconds: f64,
-        effect_filter: Option<&HashSet<u32>>,
-    ) -> Vec<(u32, f64)> {
-        let ids = match effect_filter {
-            Some(ids) => ids.iter().copied().collect::<Vec<_>>(),
-            None => self
-                .authored_intervals_by_id
-                .keys()
-                .copied()
-                .collect::<Vec<_>>(),
-        };
-        ids.into_iter()
-            .filter_map(|id| {
-                let interval = self.authored_intervals_by_id.get(&id)?;
-                (interval.duration_seconds > 0.0).then(|| {
-                    (
-                        id,
-                        interval.start_seconds
-                            + preview_seconds.rem_euclid(interval.duration_seconds),
-                    )
-                })
-            })
-            .collect()
-    }
-
     fn rendered_frame(
         &self,
         time_seconds: f64,
@@ -1691,28 +1475,6 @@ impl SequenceRenderPlan {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum FrameRenderMode<'a> {
-    FullSequence {
-        time_seconds: f64,
-    },
-    SelectedEffects {
-        preview_seconds: f64,
-        effect_filter: Option<&'a HashSet<u32>>,
-    },
-}
-
-impl FrameRenderMode<'_> {
-    fn time_seconds(self) -> f64 {
-        match self {
-            Self::FullSequence { time_seconds } => time_seconds,
-            Self::SelectedEffects {
-                preview_seconds, ..
-            } => preview_seconds,
-        }
-    }
-}
-
 fn rgb_from_fixtures(fixtures: &[OutputFixtureFrame]) -> Vec<u8> {
     fixtures
         .iter()
@@ -1723,12 +1485,6 @@ fn rgb_from_fixtures(fixtures: &[OutputFixtureFrame]) -> Vec<u8> {
                 .flat_map(|pixel| [pixel.color.red, pixel.color.green, pixel.color.blue])
         })
         .collect()
-}
-
-#[derive(Debug, Clone, Copy)]
-struct EffectInterval {
-    start_seconds: f64,
-    duration_seconds: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -2643,7 +2399,6 @@ fn flatten_generated_children(
                 );
                 let target_pixel_groups = prepare_effect_pixel_groups(&target_pixels);
                 effects.push(PreparedSequenceEffect {
-                    id: input.parent_id,
                     start_seconds: input.parent_start_seconds + child.start_seconds,
                     duration_seconds: child.duration_seconds,
                     authored: false,
@@ -2830,7 +2585,6 @@ fn same_generator_target_fixture(target: &GeneratorTarget, fixture_index: usize)
 
 #[derive(Debug, Clone)]
 struct PreparedSequenceEffect {
-    id: u32,
     start_seconds: f64,
     duration_seconds: f64,
     authored: bool,
@@ -2937,7 +2691,6 @@ fn diagnostic_prepared_effect(
     fixture_templates: &[OutputFixtureFrame],
 ) -> PreparedSequenceEffect {
     PreparedSequenceEffect {
-        id: effect.id,
         start_seconds: effect.start_seconds,
         duration_seconds: effect.duration_seconds,
         authored: true,
@@ -2980,32 +2733,6 @@ pub fn render_sequence_frame(
 ) -> RenderedOutputFrame {
     match SequenceRenderPlan::new(project, document) {
         Ok(mut evaluator) => evaluator.render_frame(time_seconds, generation),
-        Err(message) => diagnostic_frame_from_project(project, generation, message),
-    }
-}
-
-pub fn render_sequence_frame_filtered(
-    project: &DawnProject,
-    document: &SequenceEditorDocument,
-    time_seconds: f64,
-    generation: u64,
-    effect_filter: Option<&HashSet<u32>>,
-) -> RenderedOutputFrame {
-    match SequenceRenderPlan::new_filtered(project, document, effect_filter) {
-        Ok(mut evaluator) => evaluator.render_frame(time_seconds, generation),
-        Err(message) => diagnostic_frame_from_project(project, generation, message),
-    }
-}
-
-pub fn render_sequence_selected_effects_frame(
-    project: &DawnProject,
-    document: &SequenceEditorDocument,
-    preview_seconds: f64,
-    generation: u64,
-    effect_filter: &HashSet<u32>,
-) -> RenderedOutputFrame {
-    match SequenceRenderPlan::new_filtered(project, document, Some(effect_filter)) {
-        Ok(mut evaluator) => evaluator.render_effects_frame(preview_seconds, generation),
         Err(message) => diagnostic_frame_from_project(project, generation, message),
     }
 }
@@ -3516,23 +3243,6 @@ mod tests {
     }
 
     #[test]
-    fn generator_heavy_sequence_visits_only_indexed_prepared_children() {
-        let (project, document) = thirty_output_controller_project_and_sequence();
-        let effect_filter = [78].into_iter().collect();
-        let mut evaluator =
-            SequenceRenderPlan::new_filtered(&project, &document, Some(&effect_filter))
-                .expect("filtered generator renderer should build");
-
-        let (first_frame, timing) = evaluator.render_frame_timed(14.0, 1);
-        let second_frame = evaluator.render_frame(14.0, 2);
-
-        assert_eq!(frame_colors(&first_frame), frame_colors(&second_frame));
-        assert!(evaluator.prepared_effect_count() > effect_filter.len());
-        assert!(timing.visited_prepared_effects < evaluator.prepared_effect_count() as u32);
-        assert!(timing.active_prepared_effects >= timing.active_authored_effects);
-    }
-
-    #[test]
     fn per_fixture_sample_reuse_reduces_vm_evaluations_without_skipping_output_pixels() {
         let (project, document) = christmas_house_project_and_sequence();
         let mut evaluator =
@@ -3557,22 +3267,6 @@ mod tests {
 
         let first = evaluator.render_frame(2.0, 1);
         let second = evaluator.render_frame(6.0, 2);
-
-        assert_ne!(frame_colors(&first), frame_colors(&second));
-        assert!(lit_pixel_count(&first) > 0);
-        assert!(lit_pixel_count(&second) > 0);
-    }
-
-    #[test]
-    fn selected_effect_preview_filters_the_reusable_evaluator() {
-        let (project, document) = christmas_house_project_and_sequence();
-        let mut evaluator =
-            SequenceRenderPlan::new(&project, &document).expect("renderer should build");
-        let first_ids = [1].into_iter().collect();
-        let second_ids = [2].into_iter().collect();
-
-        let first = evaluator.render_selected_effects_frame(1.0, 1, Some(&first_ids));
-        let second = evaluator.render_selected_effects_frame(1.0, 2, Some(&second_ids));
 
         assert_ne!(frame_colors(&first), frame_colors(&second));
         assert!(lit_pixel_count(&first) > 0);

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -62,14 +62,13 @@ pub enum SequenceTransportState {
     Stopped,
     Paused,
     Playing,
-    SelectedEffects,
     Ended,
     Error,
 }
 
 impl SequenceTransportState {
     pub fn is_active_playback(self) -> bool {
-        matches!(self, Self::Playing | Self::SelectedEffects)
+        matches!(self, Self::Playing)
     }
 
     pub fn should_animate_position(self) -> bool {
@@ -77,7 +76,7 @@ impl SequenceTransportState {
     }
 
     pub fn should_publish_continuously(self) -> bool {
-        matches!(self, Self::Playing | Self::SelectedEffects)
+        matches!(self, Self::Playing)
     }
 }
 
@@ -139,10 +138,6 @@ pub enum PlaybackRenderMode {
         position_seconds: f64,
         frame_index: u64,
     },
-    SelectedEffects {
-        effect_elapsed_seconds: f64,
-        ids: HashSet<u32>,
-    },
 }
 
 #[derive(Debug, Clone)]
@@ -184,17 +179,10 @@ pub struct NativeAudioClockProjection {
 }
 
 #[derive(Debug, Clone)]
-struct EffectPreviewState {
-    ids: HashSet<u32>,
-    started_at: Instant,
-}
-
-#[derive(Debug, Clone)]
 pub struct SequenceTransportSession {
     source: SequenceTransportSource,
     transport: SequenceTransport,
     sequence_states: HashMap<SequenceKey, SequencePlaybackState>,
-    effect_preview: Option<EffectPreviewState>,
     last_native_audio_frame_index: Option<u64>,
     last_render_timing: PlaybackRenderTiming,
     generation: u64,
@@ -229,7 +217,6 @@ impl Default for SequenceTransportSession {
             source: SequenceTransportSource::None,
             transport: SequenceTransport::Stopped,
             sequence_states: HashMap::new(),
-            effect_preview: None,
             last_native_audio_frame_index: None,
             last_render_timing: PlaybackRenderTiming::default(),
             generation: 0,
@@ -306,7 +293,6 @@ impl SequenceTransportSession {
     }
 
     pub fn play(&mut self, project: Option<&DawnProject>) {
-        self.effect_preview = None;
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
             self.transport = SequenceTransport::Stopped;
             self.schedule_render(project, "No sequence source");
@@ -370,6 +356,14 @@ impl SequenceTransportSession {
         self.schedule_render(project, "Ready");
     }
 
+    pub fn set_playhead_home(&mut self, position_seconds: f64) {
+        let Some((key, duration_seconds)) = self.sequence_source_meta() else {
+            return;
+        };
+        let state = self.sequence_states.entry(key).or_default();
+        state.home_seconds = clamp_position_seconds(position_seconds, duration_seconds);
+    }
+
     pub fn set_sequence_playhead(&mut self, time_seconds: f64, project: Option<&DawnProject>) {
         let Some((key, duration_seconds)) = self.sequence_source_meta() else {
             self.schedule_render(project, "No active sequence");
@@ -407,10 +401,6 @@ impl SequenceTransportSession {
     }
 
     pub fn tick_clock(&mut self) -> bool {
-        if self.effect_preview.is_some() {
-            self.refresh_snapshot_metadata("Previewing selected effect");
-            return true;
-        }
         if !self.is_playing() {
             return false;
         }
@@ -471,18 +461,10 @@ impl SequenceTransportSession {
             });
         }
         let position_seconds = self.current_position_seconds(&key, document.duration_seconds);
-        let kind = match self.effect_preview.clone() {
-            Some(effect_preview) => PlaybackRenderMode::SelectedEffects {
-                effect_elapsed_seconds: effect_preview.started_at.elapsed().as_secs_f64(),
-                ids: effect_preview.ids,
-            },
-            None => {
-                let frame_index = sequence_frame_index(position_seconds, document.frame_rate);
-                PlaybackRenderMode::FullSequenceFrame {
-                    position_seconds: frame_start(frame_index, document.frame_rate),
-                    frame_index,
-                }
-            }
+        let frame_index = sequence_frame_index(position_seconds, document.frame_rate);
+        let kind = PlaybackRenderMode::FullSequenceFrame {
+            position_seconds: frame_start(frame_index, document.frame_rate),
+            frame_index,
         };
         Some(PlaybackRenderRequest {
             id: pending.id,
@@ -523,26 +505,6 @@ impl SequenceTransportSession {
         true
     }
 
-    pub fn set_effect_preview_ids(&mut self, ids: Vec<u32>, project: Option<&DawnProject>) {
-        let ids = ids.into_iter().collect::<HashSet<_>>();
-        self.effect_preview = if ids.is_empty() {
-            None
-        } else {
-            Some(EffectPreviewState {
-                ids,
-                started_at: Instant::now(),
-            })
-        };
-        let status = self.snapshot.status.clone();
-        self.schedule_render(project, status);
-    }
-
-    pub fn clear_effect_preview(&mut self, project: Option<&DawnProject>) {
-        self.effect_preview = None;
-        let status = self.snapshot.status.clone();
-        self.schedule_render(project, status);
-    }
-
     pub fn apply_native_audio_clock(
         &mut self,
         clock: NativeAudioClockProjection,
@@ -552,7 +514,6 @@ impl SequenceTransportSession {
             self.schedule_render(project, "No active sequence");
             return;
         };
-        self.effect_preview = None;
         let position_seconds = clamp_position_seconds(clock.position_seconds, duration_seconds);
         let frame_index = sequence_frame_index(position_seconds, self.target_fps());
         self.sequence_states
@@ -646,9 +607,6 @@ impl SequenceTransportSession {
     }
 
     pub fn transport_state(&self) -> SequenceTransportState {
-        if self.effect_preview.is_some() {
-            return SequenceTransportState::SelectedEffects;
-        }
         match self.snapshot.audio_playback_status {
             AudioPlaybackStatus::Playing => SequenceTransportState::Playing,
             AudioPlaybackStatus::Ended => SequenceTransportState::Ended,
@@ -861,9 +819,6 @@ impl SequenceTransportSession {
         &self,
         audio_playback_status: AudioPlaybackStatus,
     ) -> SequenceTransportState {
-        if self.effect_preview.is_some() {
-            return SequenceTransportState::SelectedEffects;
-        }
         match audio_playback_status {
             AudioPlaybackStatus::Playing => SequenceTransportState::Playing,
             AudioPlaybackStatus::Ended => SequenceTransportState::Ended,
@@ -1080,36 +1035,6 @@ mod tests {
     }
 
     #[test]
-    fn effect_preview_id_changes_schedule_effect_preview_render() {
-        let (project, document, key) = christmas_house_project_and_sequence();
-        let mut session = SequenceTransportSession::default();
-        session.sync_source(
-            Some((key, document)),
-            Some(&project),
-            SequenceTransportSyncMode::RenderNow,
-        );
-
-        session.set_effect_preview_ids(vec![1], Some(&project));
-        let first_request = session
-            .begin_deferred_render()
-            .expect("first effect selection should schedule effect preview render");
-        let super::PlaybackRenderMode::SelectedEffects { ids, .. } = &first_request.kind else {
-            panic!("effect preview selection should schedule an effect preview render");
-        };
-        assert!(ids.contains(&1));
-
-        session.set_effect_preview_ids(vec![23], Some(&project));
-        let second_request = session
-            .begin_deferred_render()
-            .expect("second effect selection should schedule effect preview render");
-        let super::PlaybackRenderMode::SelectedEffects { ids, .. } = &second_request.kind else {
-            panic!("effect preview selection should schedule an effect preview render");
-        };
-        assert!(ids.contains(&23));
-        assert!(first_request.cancellation.is_cancelled());
-    }
-
-    #[test]
     fn native_audio_same_frame_ticks_do_not_reschedule_render() {
         let (project, mut document, key) = christmas_house_project_and_sequence();
         document.frame_rate = 144;
@@ -1182,10 +1107,7 @@ mod tests {
         let super::PlaybackRenderMode::FullSequenceFrame {
             position_seconds,
             frame_index,
-        } = second_request.kind
-        else {
-            panic!("frame boundary should schedule a sequence frame render");
-        };
+        } = second_request.kind;
         assert_eq!(frame_index, 1);
         assert_eq!(position_seconds, super::frame_start(1, 144));
 

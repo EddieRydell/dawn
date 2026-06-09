@@ -32,19 +32,12 @@ export const commands = {
 	deletePath: (path: string) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("delete_path", { path })),
 	reloadProject: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("reload_project")),
 	toggleProjectTree: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("toggle_project_tree")),
-	setEffectPreviewEnabled: (enabled: boolean) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("set_effect_preview_enabled", { enabled })),
-	setEffectPreviewEffects: (ids: number[]) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("set_effect_preview_effects", { ids })),
-	openPreviewWindow: () => typedError<null, string>(__TAURI_INVOKE("open_preview_window")),
 	sequenceTransportPlay: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("sequence_transport_play")),
 	sequenceTransportPause: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("sequence_transport_pause")),
 	sequenceTransportStop: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("sequence_transport_stop")),
 	sequenceTransportRewindToZero: () => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("sequence_transport_rewind_to_zero")),
 	sequenceTransportSeek: (positionSeconds: number) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("sequence_transport_seek", { positionSeconds })),
 	setLiveOutputEnabled: (enabled: boolean) => typedError<AppSnapshotDto, string>(__TAURI_INVOKE("set_live_output_enabled", { enabled })),
-	getPreviewScene: () => typedError<PreviewSceneDto, string>(__TAURI_INVOKE("get_preview_scene")),
-	initPreviewTransport: () => typedError<null, string>(__TAURI_INVOKE("init_preview_transport")),
-	disposePreviewTransport: () => typedError<null, string>(__TAURI_INVOKE("dispose_preview_transport")),
-	getPreviewTransportMode: () => typedError<PreviewTransportMode, string>(__TAURI_INVOKE("get_preview_transport_mode")),
 };
 
 /* Types */
@@ -62,7 +55,6 @@ export type AppSnapshotDto = {
 	diagnostics: ProjectDiagnosticDto[],
 	status: string,
 	sequenceTransport: SequenceTransportSnapshotDto,
-	effectPreviewEnabled: boolean,
 	liveOutput: LiveOutputSnapshotDto,
 };
 
@@ -197,25 +189,6 @@ export type Point3MetersDto = {
 	yMeters: number,
 	zMeters: number,
 };
-
-export type PreviewSceneDto = {
-	generation: number,
-	topologyIdentity: string,
-	sourceLabel: string,
-	bounds: GeometryRenderBoundsDto,
-	pixelCount: number,
-	fixtures: PreviewSceneFixtureDto[],
-};
-
-export type PreviewSceneFixtureDto = {
-	id: number,
-	name: string,
-	bulbRadiusMeters: number,
-	firstPixelIndex: number,
-	pixels: GeometryRenderPointDto[],
-};
-
-export type PreviewTransportMode = "webview2_shared" | "unsupported";
 
 export type ProjectDiagnosticDto = {
 	path: string,
@@ -384,7 +357,7 @@ export type SequenceTransportSnapshotDto = {
 	status: string,
 };
 
-export type SequenceTransportState = "stopped" | "paused" | "playing" | "selected_effects" | "ended" | "error";
+export type SequenceTransportState = "stopped" | "paused" | "playing" | "ended" | "error";
 
 export type TextPositionDto = {
 	line: number,

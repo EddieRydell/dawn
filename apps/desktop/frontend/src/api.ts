@@ -50,14 +50,10 @@ export const commands = {
   deletePath: (path: string) => unwrap(generatedCommands.deletePath(path)),
   reloadProject: () => unwrap(generatedCommands.reloadProject()),
   toggleProjectTree: () => unwrap(generatedCommands.toggleProjectTree()),
-  setEffectPreviewEnabled: (enabled: boolean) => unwrap(generatedCommands.setEffectPreviewEnabled(enabled)),
-  setEffectPreviewEffects: (ids: number[]) => unwrap(generatedCommands.setEffectPreviewEffects(ids)),
-  openPreviewWindow: () => unwrap(generatedCommands.openPreviewWindow()),
   sequenceTransportPlay: () => unwrap(generatedCommands.sequenceTransportPlay()),
   sequenceTransportPause: () => unwrap(generatedCommands.sequenceTransportPause()),
   sequenceTransportStop: () => unwrap(generatedCommands.sequenceTransportStop()),
   sequenceTransportRewindToZero: () => unwrap(generatedCommands.sequenceTransportRewindToZero()),
   sequenceTransportSeek: (positionSeconds: number) => unwrap(generatedCommands.sequenceTransportSeek(positionSeconds)),
-  setLiveOutputEnabled: (enabled: boolean) => unwrap(generatedCommands.setLiveOutputEnabled(enabled)),
-  getPreviewScene: () => unwrap(generatedCommands.getPreviewScene())
+  setLiveOutputEnabled: (enabled: boolean) => unwrap(generatedCommands.setLiveOutputEnabled(enabled))
 };

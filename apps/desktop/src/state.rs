@@ -8,13 +8,11 @@ use tauri::State;
 use crate::audio_runtime::AudioRuntime;
 use crate::filesystem_watcher::FilesystemWatcherRuntime;
 use crate::live_output::LiveOutputRuntime;
-use crate::preview_transport::PreviewTransportRuntime;
 use crate::project_autosave::ProjectAutosaveRuntime;
 
 pub(crate) struct AppState {
     pub(crate) model: Mutex<AppModel>,
     audio_runtime: Mutex<AudioRuntime>,
-    preview_transport: Mutex<PreviewTransportRuntime>,
     live_output: Mutex<LiveOutputRuntime>,
     filesystem_watcher: Mutex<FilesystemWatcherRuntime>,
     project_autosave: Mutex<ProjectAutosaveRuntime>,
@@ -26,7 +24,6 @@ impl Default for AppState {
         Self {
             model: Mutex::new(AppModel::default()),
             audio_runtime: Mutex::new(AudioRuntime::default()),
-            preview_transport: Mutex::new(PreviewTransportRuntime::default()),
             live_output: Mutex::new(LiveOutputRuntime::default()),
             filesystem_watcher: Mutex::new(FilesystemWatcherRuntime::default()),
             project_autosave: Mutex::new(ProjectAutosaveRuntime::default()),
@@ -38,10 +35,6 @@ impl Default for AppState {
 impl AppState {
     pub(crate) fn begin_shutdown(&self) {
         self.shutting_down.store(true, Ordering::Relaxed);
-    }
-
-    pub(crate) fn is_shutting_down(&self) -> bool {
-        self.shutting_down.load(Ordering::Relaxed)
     }
 }
 
@@ -63,15 +56,6 @@ pub(crate) fn lock_audio_runtime<'a>(
         .audio_runtime
         .lock()
         .map_err(|_| "audio runtime lock is poisoned".to_string())
-}
-
-pub(crate) fn lock_preview_transport<'a>(
-    state: &'a State<'_, AppState>,
-) -> CommandResult<MutexGuard<'a, PreviewTransportRuntime>> {
-    state
-        .preview_transport
-        .lock()
-        .map_err(|_| "preview transport lock is poisoned".to_string())
 }
 
 pub(crate) fn lock_live_output<'a>(

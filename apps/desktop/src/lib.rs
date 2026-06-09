@@ -17,15 +17,12 @@ mod commands;
 mod filesystem_watcher;
 mod live_output;
 mod new_project;
-mod preview_transport;
-mod preview_window;
 mod project_autosave;
 mod sequence_runtime;
 mod state;
 mod window_layout;
 
 pub use bindings::{check_bindings, export_bindings, specta_builder};
-pub use preview_window::{PreviewSceneDto, PreviewSceneFixtureDto};
 pub use sequence_runtime::{SequenceRenderEventDto, SequenceRenderTimingDto};
 use tauri::Manager;
 
@@ -49,8 +46,6 @@ pub fn run() -> Result<(), tauri::Error> {
                     let _ = watcher.sync_project_root(app.handle(), root);
                 }
             }
-            preview_window::open_preview_window_on_startup(app.handle().clone(), state)
-                .map_err(std::io::Error::other)?;
             Ok(())
         })
         .run(tauri::generate_context!())

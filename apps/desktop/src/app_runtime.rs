@@ -183,6 +183,19 @@ pub(crate) fn update_sequence_transport_from_audio_status(
     emit_model_snapshot(app, &model)
 }
 
+pub(crate) fn update_sequence_transport_from_audio_seek(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    clock: AudioClock,
+    home_seconds: f64,
+) -> CommandResult<AppSnapshotDto> {
+    let mut model = lock_model(state)?;
+    let project = model.project.clone();
+    model.sequence_transport.set_playhead_home(home_seconds);
+    apply_audio_clock_to_model(&mut model, &clock, project.as_deref());
+    emit_model_snapshot(app, &model)
+}
+
 pub(crate) fn apply_audio_clock_to_model(
     model: &mut AppModel,
     clock: &AudioClock,

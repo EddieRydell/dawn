@@ -408,26 +408,6 @@ impl AppModel {
                     !self.workbench_layout.project_tree_visible;
                 save_workbench_layout(&self.workbench_layout)?;
             }
-            AppAction::SetEffectPreviewEnabled(enabled) => {
-                self.workbench_layout.effect_preview_enabled = enabled;
-                save_workbench_layout(&self.workbench_layout)?;
-                if !enabled {
-                    self.sequence_transport
-                        .clear_effect_preview(self.project.as_deref());
-                } else {
-                    self.sequence_transport
-                        .render_current_frame(self.project.as_deref());
-                }
-            }
-            AppAction::SetEffectPreviewEffects(ids) => {
-                let ids = if self.workbench_layout.effect_preview_enabled {
-                    ids
-                } else {
-                    Vec::new()
-                };
-                self.sequence_transport
-                    .set_effect_preview_ids(ids, self.project.as_deref());
-            }
             AppAction::SequenceTransportPlay => {
                 self.sequence_transport.play(self.project.as_deref());
                 self.status = "Sequence playing".to_string();
@@ -485,16 +465,6 @@ impl AppModel {
 
     pub fn set_main_window_layout(&mut self, layout: WindowLayout) -> Result<(), String> {
         self.workbench_layout.main_window = layout;
-        save_workbench_layout(&self.workbench_layout)
-    }
-
-    pub fn set_preview_window_layout(&mut self, layout: WindowLayout) -> Result<(), String> {
-        self.workbench_layout.preview_window = layout;
-        save_workbench_layout(&self.workbench_layout)
-    }
-
-    pub fn set_preview_window_open(&mut self, open: bool) -> Result<(), String> {
-        self.workbench_layout.preview_window_open = open;
         save_workbench_layout(&self.workbench_layout)
     }
 

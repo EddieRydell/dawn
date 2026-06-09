@@ -41,7 +41,6 @@ pub struct AppSnapshotDto {
     pub diagnostics: Vec<ProjectDiagnosticDto>,
     pub status: String,
     pub sequence_transport: SequenceTransportSnapshotDto,
-    pub effect_preview_enabled: bool,
     pub live_output: LiveOutputSnapshotDto,
 }
 
@@ -869,7 +868,6 @@ impl From<AppSnapshot> for AppSnapshotDto {
                 geometry_identity: snapshot.sequence_transport.geometry.geometry_id.clone(),
                 status: snapshot.sequence_transport.status,
             },
-            effect_preview_enabled: snapshot.workbench_layout.effect_preview_enabled,
             live_output: snapshot.live_output.into(),
         }
     }

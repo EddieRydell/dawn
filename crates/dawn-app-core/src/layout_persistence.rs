@@ -8,16 +8,8 @@ use crate::editor_session::EditorSessionState;
 const DEFAULT_LEFT_PANE_WIDTH: f64 = 280.0;
 const DEFAULT_RIGHT_PANE_WIDTH: f64 = 360.0;
 
-fn default_preview_window_open() -> bool {
-    true
-}
-
 fn default_main_window_layout() -> WindowLayout {
     WindowLayout::main_default()
-}
-
-fn default_preview_window_layout() -> WindowLayout {
-    WindowLayout::preview_default()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,14 +25,8 @@ pub struct WorkbenchLayout {
     pub last_project_root: Option<PathBuf>,
     #[serde(default)]
     pub editor_session: EditorSessionState,
-    #[serde(default = "default_preview_window_open")]
-    pub preview_window_open: bool,
     #[serde(default = "default_main_window_layout")]
     pub main_window: WindowLayout,
-    #[serde(default = "default_preview_window_layout")]
-    pub preview_window: WindowLayout,
-    #[serde(default)]
-    pub effect_preview_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -48,7 +34,6 @@ pub struct WorkbenchLayout {
 pub enum InspectorTab {
     #[default]
     Diagnostics,
-    Preview,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,22 +57,6 @@ impl WindowLayout {
             maximized: false,
         }
     }
-
-    pub fn preview_default() -> Self {
-        Self {
-            x: 80.0,
-            y: 80.0,
-            width: 720.0,
-            height: 480.0,
-            maximized: false,
-        }
-    }
-}
-
-impl Default for WindowLayout {
-    fn default() -> Self {
-        Self::preview_default()
-    }
 }
 
 impl Default for WorkbenchLayout {
@@ -100,10 +69,7 @@ impl Default for WorkbenchLayout {
             active_inspector_tab: InspectorTab::Diagnostics,
             last_project_root: None,
             editor_session: EditorSessionState::default(),
-            preview_window_open: true,
             main_window: WindowLayout::main_default(),
-            preview_window: WindowLayout::preview_default(),
-            effect_preview_enabled: false,
         }
     }
 }
@@ -115,10 +81,7 @@ impl WorkbenchLayout {
         *self = Self {
             last_project_root,
             editor_session,
-            preview_window_open: self.preview_window_open,
             main_window: self.main_window.clone(),
-            preview_window: self.preview_window.clone(),
-            effect_preview_enabled: self.effect_preview_enabled,
             ..Self::default()
         };
     }

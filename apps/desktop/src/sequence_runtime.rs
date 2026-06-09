@@ -19,9 +19,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::app_runtime::{apply_audio_clock_to_model, emit_sequence_render_snapshot};
 use crate::audio_runtime::AudioClock;
-use crate::state::{
-    lock_audio_runtime, lock_live_output, lock_model, lock_preview_transport, AppState,
-};
+use crate::state::{lock_audio_runtime, lock_live_output, lock_model, AppState};
 
 const SEQUENCE_STATE_EVENT_INTERVAL: Duration = Duration::from_millis(33);
 
@@ -57,8 +55,6 @@ pub struct SequenceRenderTimingDto {
     pub loop_accounted_ms: f64,
     pub loop_unaccounted_ms: f64,
     pub sleep_actual_ms: f64,
-    pub preview_window_transport_lock_ms: f64,
-    pub preview_window_publish_lock_ms: f64,
     pub live_output_lock_ms: f64,
     pub model_lock_wait_ms: f64,
     pub sequence_transport_snapshot_ms: f64,
@@ -77,13 +73,10 @@ pub struct SequenceRenderTimingDto {
     pub render_buffer_clone_ms: f64,
     pub frame_effect_loop_ms: f64,
     pub rgb_buffer_ms: f64,
-    pub publish_ms: f64,
     pub event_emit_ms: f64,
     pub live_output_ms: f64,
     pub rendered_active_effects: u32,
     pub rendered_sampled_pixels: u32,
-    pub has_sink: bool,
-    pub published_frame: bool,
     pub rendered_frame: bool,
 }
 
@@ -106,8 +99,6 @@ impl SequenceRenderTimingDto {
             loop_accounted_ms: 0.0,
             loop_unaccounted_ms: 0.0,
             sleep_actual_ms: 0.0,
-            preview_window_transport_lock_ms: 0.0,
-            preview_window_publish_lock_ms: 0.0,
             live_output_lock_ms: 0.0,
             model_lock_wait_ms: 0.0,
             sequence_transport_snapshot_ms: 0.0,
@@ -126,13 +117,10 @@ impl SequenceRenderTimingDto {
             render_buffer_clone_ms: 0.0,
             frame_effect_loop_ms: 0.0,
             rgb_buffer_ms: 0.0,
-            publish_ms: 0.0,
             event_emit_ms: 0.0,
             live_output_ms: 0.0,
             rendered_active_effects: 0,
             rendered_sampled_pixels: 0,
-            has_sink: false,
-            published_frame: false,
             rendered_frame: false,
         }
     }
@@ -174,24 +162,14 @@ impl DeferredSequenceRenderer {
         timing.render_cache_ms = elapsed_ms(cache_started);
         let frame = match cached_renderer {
             Ok(Some((renderer, renderer_build_ms))) => {
-                let evaluated = match &request.kind {
-                    PlaybackRenderMode::FullSequenceFrame {
-                        position_seconds, ..
-                    } => renderer.render_frame_timed_cancellable(
-                        *position_seconds,
-                        request.generation,
-                        || request.cancellation.is_cancelled(),
-                    ),
-                    PlaybackRenderMode::SelectedEffects {
-                        effect_elapsed_seconds,
-                        ids,
-                    } => renderer.render_selected_effects_frame_timed_cancellable(
-                        *effect_elapsed_seconds,
-                        request.generation,
-                        Some(ids),
-                        || request.cancellation.is_cancelled(),
-                    ),
-                };
+                let PlaybackRenderMode::FullSequenceFrame {
+                    position_seconds, ..
+                } = request.kind;
+                let evaluated = renderer.render_frame_timed_cancellable(
+                    position_seconds,
+                    request.generation,
+                    || request.cancellation.is_cancelled(),
+                );
                 let (frame, evaluation_timing) = evaluated?;
                 timing.apply_evaluation(renderer_build_ms, evaluation_timing);
                 (renderer.geometry().clone(), frame)
@@ -277,8 +255,6 @@ pub(crate) fn start_sequence_runtime(app: AppHandle) {
         let worker_started = Instant::now();
         let sleeper = spin_sleep::SpinSleeper::default();
         let mut deferred_renderer = DeferredSequenceRenderer::default();
-        let mut last_published_generation: Option<u64> = None;
-        let mut had_sink = false;
         let mut last_event_at = Instant::now() - SEQUENCE_STATE_EVENT_INTERVAL;
         let mut last_event_identity: Option<SequenceRenderEventIdentity> = None;
         let mut last_event_emit_ms = 0.0;
@@ -292,23 +268,12 @@ pub(crate) fn start_sequence_runtime(app: AppHandle) {
             let mut timing = SequenceRenderTimingDto::empty(worker_started.elapsed().as_secs_f64());
             timing.loop_interval_ms = loop_interval_ms;
 
-            let preview_window_transport_lock_started = Instant::now();
-            let has_sink = lock_preview_transport(&state)
-                .map(|runtime| runtime.has_sinks())
-                .unwrap_or(false);
-            timing.preview_window_transport_lock_ms =
-                elapsed_ms(preview_window_transport_lock_started);
             let live_output_lock_started = Instant::now();
             let live_output_enabled = lock_live_output(&state)
                 .map(|runtime| runtime.enabled())
                 .unwrap_or(false);
             timing.live_output_lock_ms = elapsed_ms(live_output_lock_started);
-            if has_sink && !had_sink {
-                last_published_generation = None;
-            }
-            had_sink = has_sink;
 
-            timing.has_sink = has_sink;
             timing.event_emit_ms = last_event_emit_ms;
             let audio_poll_started = Instant::now();
             let audio_clock = lock_audio_runtime(&state)
@@ -382,7 +347,7 @@ pub(crate) fn start_sequence_runtime(app: AppHandle) {
                     if let Ok(mut model) = lock_model(&state) {
                         timing.model_lock_wait_ms += elapsed_ms(model_lock_started);
                         let model_started = Instant::now();
-                        let _completed = model.complete_deferred_sequence_render(result);
+                        let _ = model.complete_deferred_sequence_render(result);
                         let sequence_transport_snapshot_started = Instant::now();
                         snapshot = model.sequence_transport.snapshot();
                         timing.sequence_transport_snapshot_ms +=
@@ -396,7 +361,6 @@ pub(crate) fn start_sequence_runtime(app: AppHandle) {
                 }
             }
             let backend_seconds = worker_started.elapsed().as_secs_f32();
-            let frame_generation = snapshot.frame.generation;
             timing.backend_seconds = backend_seconds as f64;
             timing.snapshot_position_seconds = snapshot.position_seconds;
             timing.render_buffer_position_seconds = snapshot.frame.time_seconds;
@@ -405,28 +369,6 @@ pub(crate) fn start_sequence_runtime(app: AppHandle) {
                     Some((snapshot.position_seconds - audio_seconds) * 1000.0);
                 timing.render_buffer_minus_audio_ms =
                     Some((snapshot.frame.time_seconds - audio_seconds) * 1000.0);
-            }
-            let should_publish_frame = has_sink
-                && (snapshot.transport_state.should_publish_continuously()
-                    || last_published_generation != Some(frame_generation));
-            if should_publish_frame {
-                let preview_window_publish_lock_started = Instant::now();
-                if let Ok(mut runtime) = lock_preview_transport(&state) {
-                    timing.preview_window_publish_lock_ms =
-                        elapsed_ms(preview_window_publish_lock_started);
-                    let publish_started = Instant::now();
-                    runtime.publish_frame(
-                        &snapshot.frame,
-                        snapshot.transport_state.should_publish_continuously(),
-                        backend_seconds,
-                    );
-                    timing.publish_ms = publish_started.elapsed().as_secs_f64() * 1000.0;
-                    timing.published_frame = true;
-                    last_published_generation = Some(frame_generation);
-                } else {
-                    timing.preview_window_publish_lock_ms =
-                        elapsed_ms(preview_window_publish_lock_started);
-                }
             }
             if live_output_enabled {
                 let live_output_started = Instant::now();
@@ -506,14 +448,11 @@ fn record_render_timing(timing: &mut SequenceRenderTimingDto, render_timing: Pla
 }
 
 fn accounted_loop_ms(timing: &SequenceRenderTimingDto) -> f64 {
-    timing.preview_window_transport_lock_ms
-        + timing.live_output_lock_ms
+    timing.live_output_lock_ms
         + timing.audio_poll_ms
         + timing.model_lock_wait_ms
         + timing.model_update_ms
         + timing.render_wall_ms
-        + timing.preview_window_publish_lock_ms
-        + timing.publish_ms
         + timing.live_output_ms
         + timing.event_emit_ms
         + timing.sleep_actual_ms
