@@ -25,12 +25,6 @@ use dawn_project::{
 };
 
 const MAX_FLATTENED_GENERATED_CHILDREN: usize = 65_536;
-const DIAGNOSTIC_RED: Color = Color {
-    red: 255,
-    green: 0,
-    blue: 0,
-};
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OutputGeometryIdentity {
     pub bounds: OutputGeometryBoundsIdentity,
@@ -1357,8 +1351,10 @@ impl SequenceRenderPlan {
         time_seconds: f64,
         generation: u64,
     ) -> (RenderedOutputFrame, SequenceFrameRenderTiming) {
-        match self.render_frame_timed_cancellable(time_seconds, generation, || false) {
-            Some(result) => result,
+        match self
+            .render_frame_timed_cancellable_with_diagnostics(time_seconds, generation, || false)
+        {
+            Some((frame, timing, _diagnostics)) => (frame, timing),
             None => (
                 self.rendered_frame(
                     time_seconds,
@@ -1380,20 +1376,52 @@ impl SequenceRenderPlan {
         self.render_timed_cancellable(time_seconds, generation, is_cancelled)
     }
 
+    pub(crate) fn render_frame_timed_with_diagnostics(
+        &mut self,
+        time_seconds: f64,
+        generation: u64,
+    ) -> (RenderedOutputFrame, SequenceFrameRenderTiming, Vec<String>) {
+        match self
+            .render_frame_timed_cancellable_with_diagnostics(time_seconds, generation, || false)
+        {
+            Some(result) => result,
+            None => (
+                self.rendered_frame(
+                    time_seconds,
+                    generation,
+                    OutputFrameStatus::Live,
+                    self.geometry.fixtures.clone(),
+                ),
+                SequenceFrameRenderTiming::default(),
+                Vec::new(),
+            ),
+        }
+    }
+
     fn render_timed_cancellable(
         &mut self,
         time_seconds: f64,
         generation: u64,
         is_cancelled: impl Fn() -> bool,
     ) -> Option<(RenderedOutputFrame, SequenceFrameRenderTiming)> {
+        self.render_frame_timed_cancellable_with_diagnostics(time_seconds, generation, is_cancelled)
+            .map(|(frame, timing, _diagnostics)| (frame, timing))
+    }
+
+    fn render_frame_timed_cancellable_with_diagnostics(
+        &mut self,
+        time_seconds: f64,
+        generation: u64,
+        is_cancelled: impl Fn() -> bool,
+    ) -> Option<(RenderedOutputFrame, SequenceFrameRenderTiming, Vec<String>)> {
         let total_started = Instant::now();
         let clone_started = Instant::now();
         let mut fixtures = self.geometry.fixtures.clone();
         let render_buffer_clone_ms = elapsed_ms(clone_started);
-        let mut status = OutputFrameStatus::Live;
+        let status = OutputFrameStatus::Live;
         let mut counters = SequenceEffectEvaluationCounters::default();
         let mut sample_reuse = SequenceFrameSampleReuse::default();
-        let mut diagnostic_pixels = Vec::new();
+        let mut diagnostics = Vec::new();
 
         let effect_loop_started = Instant::now();
         if let Some(effect_indices) = self.effect_indices_for_time(time_seconds) {
@@ -1403,10 +1431,9 @@ impl SequenceRenderPlan {
                 }
                 let mut context = PreparedEffectEvaluationContext {
                     fixtures: &mut fixtures,
-                    status: &mut status,
                     counters: &mut counters,
                     sample_reuse: &mut sample_reuse,
-                    diagnostic_pixels: &mut diagnostic_pixels,
+                    diagnostics: &mut diagnostics,
                     is_cancelled: &is_cancelled,
                 };
                 evaluate_prepared_effect_at_time(
@@ -1420,7 +1447,6 @@ impl SequenceRenderPlan {
             }
         }
         let effect_loop_ms = elapsed_ms(effect_loop_started);
-        apply_diagnostic_pixels(&mut fixtures, &diagnostic_pixels);
 
         let output_started = Instant::now();
         let frame = self.rendered_frame(time_seconds, generation, status, fixtures);
@@ -1442,6 +1468,7 @@ impl SequenceRenderPlan {
                 sample_reuse_saved_evaluations: counters.sample_reuse_saved_evaluations,
                 sample_reuse_group_hits: counters.sample_reuse_group_hits,
             },
+            diagnostics,
         ))
     }
 
@@ -1522,10 +1549,9 @@ struct SampleReuseEffectKey {
 
 struct PreparedEffectEvaluationContext<'a> {
     fixtures: &'a mut [OutputFixtureFrame],
-    status: &'a mut OutputFrameStatus,
     counters: &'a mut SequenceEffectEvaluationCounters,
     sample_reuse: &'a mut SequenceFrameSampleReuse,
-    diagnostic_pixels: &'a mut Vec<PreparedEffectPixel>,
+    diagnostics: &'a mut Vec<String>,
     is_cancelled: &'a dyn Fn() -> bool,
 }
 
@@ -1601,15 +1627,10 @@ fn sample_prepared_effect(
         ..
     } = &mut effect.render
     else {
-        let PreparedEffectRender::Error {
-            message,
-            diagnostic_pixels: pixels,
-        } = &effect.render
-        else {
+        let PreparedEffectRender::Error { message } = &effect.render else {
             unreachable!("prepared effect render variants are exhaustive")
         };
-        *context.status = OutputFrameStatus::Error(message.clone());
-        context.diagnostic_pixels.extend(pixels.iter().cloned());
+        context.diagnostics.push(message.clone());
         return;
     };
 
@@ -1679,10 +1700,7 @@ fn sample_prepared_effect(
                 }
             }
             Err(error) => {
-                *context.status = OutputFrameStatus::Error(error.to_string());
-                context
-                    .diagnostic_pixels
-                    .extend(target_pixels.iter().cloned());
+                context.diagnostics.push(error.to_string());
                 return;
             }
         }
@@ -2610,7 +2628,6 @@ enum PreparedEffectRender {
     },
     Error {
         message: String,
-        diagnostic_pixels: Vec<PreparedEffectPixel>,
     },
 }
 
@@ -2700,41 +2717,11 @@ fn diagnostic_prepared_effect(
 
 fn diagnostic_render(
     message: String,
-    diagnostic_pixels: &[SequenceRenderPixel],
-    scope: SequenceEffectScope,
-    fixture_templates: &[OutputFixtureFrame],
+    _diagnostic_pixels: &[SequenceRenderPixel],
+    _scope: SequenceEffectScope,
+    _fixture_templates: &[OutputFixtureFrame],
 ) -> PreparedEffectRender {
-    PreparedEffectRender::Error {
-        message,
-        diagnostic_pixels: prepare_effect_pixels(scope, diagnostic_pixels, fixture_templates),
-    }
-}
-
-fn apply_diagnostic_pixels(
-    fixtures: &mut [OutputFixtureFrame],
-    diagnostic_pixels: &[PreparedEffectPixel],
-) {
-    for pixel in diagnostic_pixels {
-        let Some(fixture) = fixtures.get_mut(pixel.fixture_index) else {
-            continue;
-        };
-        let Some(output_pixel) = fixture.pixels.get_mut(pixel.pixel_index) else {
-            continue;
-        };
-        output_pixel.color = DIAGNOSTIC_RED;
-    }
-}
-
-pub fn render_sequence_frame(
-    project: &DawnProject,
-    document: &SequenceEditorDocument,
-    time_seconds: f64,
-    generation: u64,
-) -> RenderedOutputFrame {
-    match SequenceRenderPlan::new(project, document) {
-        Ok(mut evaluator) => evaluator.render_frame(time_seconds, generation),
-        Err(message) => diagnostic_frame_from_project(project, generation, message),
-    }
+    PreparedEffectRender::Error { message }
 }
 
 pub fn pixel_context_for_effect(
@@ -2913,35 +2900,6 @@ pub fn empty_frame(
         generation,
         status: OutputFrameStatus::Idle(message.into()),
         rgb: vec![0; geometry_pixel_count(geometry) * 3],
-    }
-}
-
-fn diagnostic_frame_from_project(
-    project: &DawnProject,
-    generation: u64,
-    message: String,
-) -> RenderedOutputFrame {
-    match OutputGeometryModel::from_project(project) {
-        Ok(geometry) => diagnostic_frame(&geometry, generation, message),
-        Err(error) => empty_frame(&empty_geometry(), generation, error),
-    }
-}
-
-fn diagnostic_frame(
-    geometry: &OutputGeometryModel,
-    generation: u64,
-    message: String,
-) -> RenderedOutputFrame {
-    RenderedOutputFrame {
-        geometry_id: geometry.geometry_id.clone(),
-        time_seconds: 0.0,
-        generation,
-        status: OutputFrameStatus::Error(message),
-        rgb: vec![255, 0, 0]
-            .into_iter()
-            .cycle()
-            .take(geometry_pixel_count(geometry) * 3)
-            .collect(),
     }
 }
 

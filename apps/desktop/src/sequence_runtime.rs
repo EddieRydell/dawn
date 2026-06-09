@@ -2,12 +2,11 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use dawn_app_core::document::SequenceEditorDocument;
 use dawn_app_core::dto::SequenceKeyDto;
 use dawn_app_core::output_runtime::{
-    empty_frame, empty_geometry, OutputGeometryModel, RenderedOutputFrame, SequenceChangeImpact,
-    SequenceRenderPlan, SequenceRenderPlanCache,
+    empty_frame, empty_geometry, OutputGeometryModel, RenderedOutputFrame,
 };
+use dawn_app_core::renderer::{render_sequence_frame, RenderFrameInput};
 use dawn_app_core::sequence_transport_session::{
     AudioPlaybackStatus, PlaybackRenderMode, PlaybackRenderRequest, PlaybackRenderResult,
     PlaybackRenderTiming, SequenceKey, SequenceTransportSnapshot, SequenceTransportState,
@@ -127,12 +126,7 @@ impl SequenceRenderTimingDto {
 }
 
 #[derive(Debug, Default)]
-struct DeferredSequenceRenderer {
-    sequence_cache: SequenceRenderPlanCache,
-    render_cache: Option<SequenceRenderPlan>,
-    previous_key: Option<SequenceKey>,
-    previous_document: Option<Arc<SequenceEditorDocument>>,
-}
+struct DeferredSequenceRenderer;
 
 impl DeferredSequenceRenderer {
     fn render(
@@ -140,10 +134,10 @@ impl DeferredSequenceRenderer {
         project: Option<&DawnProject>,
         request: PlaybackRenderRequest,
     ) -> Option<PlaybackRenderResult> {
-        let mut timing = PlaybackRenderTiming::default();
         if request.cancellation.is_cancelled() {
             return None;
         }
+        let mut timing = PlaybackRenderTiming::default();
         let Some(project) = project else {
             let geometry = empty_geometry();
             let frame = empty_frame(&geometry, request.generation, "No project");
@@ -154,99 +148,40 @@ impl DeferredSequenceRenderer {
                 timing,
             });
         };
-        let invalidation_started = Instant::now();
-        self.apply_request_cache_invalidation(project, &request);
-        timing.render_invalidation_ms = elapsed_ms(invalidation_started);
-        let cache_started = Instant::now();
-        let cached_renderer = self.cached_renderer(project, &request.document, &request);
-        timing.render_cache_ms = elapsed_ms(cache_started);
-        let frame = match cached_renderer {
-            Ok(Some((renderer, renderer_build_ms))) => {
-                let PlaybackRenderMode::FullSequenceFrame {
-                    position_seconds, ..
-                } = request.kind;
-                let evaluated = renderer.render_frame_timed_cancellable(
-                    position_seconds,
-                    request.generation,
-                    || request.cancellation.is_cancelled(),
-                );
-                let (frame, evaluation_timing) = evaluated?;
-                timing.apply_evaluation(renderer_build_ms, evaluation_timing);
-                (renderer.geometry().clone(), frame)
-            }
-            Ok(None) => return None,
-            Err(message) => {
+        let PlaybackRenderMode::FullSequenceFrame {
+            position_seconds, ..
+        } = request.kind;
+        let output = match render_sequence_frame(RenderFrameInput {
+            project,
+            sequence: &request.document,
+            time_seconds: position_seconds,
+            generation: request.generation,
+        }) {
+            Ok(output) => output,
+            Err(error) => {
                 let geometry =
                     OutputGeometryModel::from_project(project).unwrap_or_else(|_| empty_geometry());
-                let frame = empty_frame(&geometry, request.generation, message);
-                (geometry, frame)
+                let frame = empty_frame(&geometry, request.generation, error.to_string());
+                return Some(PlaybackRenderResult {
+                    request,
+                    geometry,
+                    frame,
+                    timing,
+                });
             }
         };
+        timing.apply_evaluation(output.timing.build.total_ms, output.timing.frame);
         if request.cancellation.is_cancelled() {
             return None;
         }
         let result_started = Instant::now();
-        self.previous_key = Some(request.key.clone());
-        self.previous_document = Some(request.document.clone());
         timing.render_result_ms = elapsed_ms(result_started);
         Some(PlaybackRenderResult {
             request,
-            geometry: frame.0,
-            frame: frame.1,
+            geometry: output.geometry,
+            frame: output.frame,
             timing,
         })
-    }
-
-    fn apply_request_cache_invalidation(
-        &mut self,
-        project: &DawnProject,
-        request: &PlaybackRenderRequest,
-    ) {
-        if self.previous_key.as_ref() != Some(&request.key) {
-            self.sequence_cache.clear();
-            self.render_cache = None;
-            return;
-        }
-        let Some(previous_document) = self.previous_document.as_ref() else {
-            return;
-        };
-        if Arc::ptr_eq(previous_document, &request.document) {
-            return;
-        }
-        let impact = SequenceChangeImpact::between(previous_document, &request.document, project);
-        if impact.requires_full_clear()
-            || !impact.invalidated_prepared_effect_ids().is_empty()
-            || !impact.invalidated_topology_effect_ids().is_empty()
-        {
-            self.sequence_cache.apply_change_impact(&impact);
-            self.render_cache = None;
-        }
-    }
-
-    fn cached_renderer(
-        &mut self,
-        project: &DawnProject,
-        document: &SequenceEditorDocument,
-        request: &PlaybackRenderRequest,
-    ) -> Result<Option<(&mut SequenceRenderPlan, f64)>, String> {
-        let mut renderer_build_ms = 0.0;
-        if self.render_cache.is_none() {
-            let build_started = Instant::now();
-            let Some((renderer, _)) =
-                self.sequence_cache
-                    .build_evaluator_cancellable(project, document, || {
-                        request.cancellation.is_cancelled()
-                    })?
-            else {
-                return Ok(None);
-            };
-            self.render_cache = Some(renderer);
-            renderer_build_ms = elapsed_ms(build_started);
-        }
-        Ok(self
-            .render_cache
-            .as_mut()
-            .map(|renderer| (renderer, renderer_build_ms)))
     }
 }
 
@@ -254,7 +189,7 @@ pub(crate) fn start_sequence_runtime(app: AppHandle) {
     thread::spawn(move || {
         let worker_started = Instant::now();
         let sleeper = spin_sleep::SpinSleeper::default();
-        let mut deferred_renderer = DeferredSequenceRenderer::default();
+        let mut deferred_renderer = DeferredSequenceRenderer;
         let mut last_event_at = Instant::now() - SEQUENCE_STATE_EVENT_INTERVAL;
         let mut last_event_identity: Option<SequenceRenderEventIdentity> = None;
         let mut last_event_emit_ms = 0.0;

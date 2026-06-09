@@ -17,6 +17,8 @@ pub(crate) struct LiveOutputRuntime {
     plan_project: Option<Arc<DawnProject>>,
     plan_geometry_id: Option<String>,
     sequence_counters: HashMap<UniverseSequenceKey, u8>,
+    sent_frame_count: u64,
+    sent_packet_count: u64,
     snapshot: LiveOutputSnapshot,
 }
 
@@ -83,7 +85,8 @@ impl LiveOutputRuntime {
         };
         let buffers = plan.frame_buffers(frame);
         match self.send_buffers(buffers) {
-            Ok(()) => {
+            Ok(packet_count) => {
+                self.record_send(packet_count);
                 self.snapshot = LiveOutputSnapshot {
                     enabled: true,
                     status: LiveOutputStatus::Sending,
@@ -139,6 +142,8 @@ impl LiveOutputRuntime {
         self.plan_project = Some(project);
         self.plan_geometry_id = Some(geometry.geometry_id.clone());
         self.sequence_counters.clear();
+        self.sent_frame_count = 0;
+        self.sent_packet_count = 0;
         self.snapshot = LiveOutputSnapshot {
             enabled: true,
             status: LiveOutputStatus::Ready,
@@ -160,6 +165,8 @@ impl LiveOutputRuntime {
         self.plan_project = None;
         self.plan_geometry_id = None;
         self.sequence_counters.clear();
+        self.sent_frame_count = 0;
+        self.sent_packet_count = 0;
         self.snapshot = LiveOutputSnapshot {
             enabled: false,
             status: LiveOutputStatus::Disabled,
@@ -177,16 +184,24 @@ impl LiveOutputRuntime {
         };
     }
 
+    fn record_send(&mut self, packet_count: usize) {
+        self.sent_frame_count = self.sent_frame_count.saturating_add(1);
+        self.sent_packet_count = self
+            .sent_packet_count
+            .saturating_add(packet_count.min(u64::MAX as usize) as u64);
+    }
+
     fn send_buffers(
         &mut self,
         buffers: Vec<dawn_app_core::controller_output::ControllerUniverseFrame>,
-    ) -> Result<(), String> {
+    ) -> Result<usize, String> {
         if buffers.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
         if self.socket.is_none() {
             self.socket = Some(UdpSocket::bind("0.0.0.0:0").map_err(|error| error.to_string())?);
         }
+        let packet_count = buffers.len();
         for buffer in buffers {
             let destination = buffer
                 .destination
@@ -206,7 +221,7 @@ impl LiveOutputRuntime {
                 .send_to(&packet, destination)
                 .map_err(|error| error.to_string())?;
         }
-        Ok(())
+        Ok(packet_count)
     }
 }
 

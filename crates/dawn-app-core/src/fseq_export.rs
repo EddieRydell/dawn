@@ -9,7 +9,8 @@ use dawn_project::DawnProject;
 use crate::controller_output::{
     build_fseq_output_plan, ControllerOutputError, ControllerOutputPlan,
 };
-use crate::output_runtime::SequenceRenderPlan;
+use crate::output_runtime::OutputGeometryModel;
+use crate::renderer::{render_sequence_frame, RenderError, RenderFrameInput};
 
 const FSEQ_IDENTIFIER: &[u8; 4] = b"PSEQ";
 const FSEQ_STANDARD_HEADER_LENGTH: usize = 32;
@@ -113,6 +114,12 @@ impl From<std::io::Error> for FseqExportError {
     }
 }
 
+impl From<RenderError> for FseqExportError {
+    fn from(error: RenderError) -> Self {
+        Self::Evaluation(error.to_string())
+    }
+}
+
 pub fn export_fseq_file(
     project: &DawnProject,
     document: &SequenceEditorDocument,
@@ -134,9 +141,9 @@ pub fn export_fseq(
         return Err(FseqExportError::InvalidDuration(document.duration_seconds));
     }
 
-    let mut evaluator =
-        SequenceRenderPlan::new(project, document).map_err(FseqExportError::Evaluation)?;
-    let plan = build_fseq_output_plan(project, evaluator.geometry())?;
+    let geometry =
+        OutputGeometryModel::from_project(project).map_err(FseqExportError::Evaluation)?;
+    let plan = build_fseq_output_plan(project, &geometry)?;
     let channel_count = plan.channel_count();
     if channel_count == 0 {
         return Err(FseqExportError::NoOutputChannels);
@@ -168,7 +175,8 @@ pub fn export_fseq(
     )?;
     write_frames(
         &mut writer,
-        &mut evaluator,
+        project,
+        document,
         &plan,
         frame_count,
         options.step_ms,
@@ -260,14 +268,21 @@ fn write_header(
 
 fn write_frames(
     writer: &mut impl Write,
-    evaluator: &mut SequenceRenderPlan,
+    project: &DawnProject,
+    document: &SequenceEditorDocument,
     plan: &ControllerOutputPlan,
     frame_count: u64,
     step_ms: u8,
 ) -> Result<(), FseqExportError> {
     for frame_index in 0..frame_count {
         let time_seconds = frame_index as f64 * f64::from(step_ms) / 1000.0;
-        let frame = evaluator.render_frame(time_seconds, frame_index);
+        let frame = render_sequence_frame(RenderFrameInput {
+            project,
+            sequence: document,
+            time_seconds,
+            generation: frame_index,
+        })?
+        .frame;
         let bytes = plan.frame_channel_bytes(&frame);
         writer.write_all(&bytes)?;
     }
