@@ -4,7 +4,8 @@ use super::ast::{
 };
 use super::diagnostic::Diagnostic;
 use super::lexer::{lex, Keyword, TextSpan, Token, TokenKind};
-use super::types::{Color, Identifier, Type, Value};
+use super::types::{Identifier, Type, Value};
+use crate::values::Color;
 
 pub(crate) fn parse_module(source: &str) -> Result<Module, Vec<Diagnostic>> {
     let mut parser = Parser::new(source);

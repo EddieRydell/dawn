@@ -1,6 +1,5 @@
-use crate::effect::{EffectInst, EffectInstID};
-use crate::effect_dsl::Curve;
-use crate::model::{DawnDuration, DawnTime};
+use crate::effect::{CurveInst, EffectInst, EffectInstID};
+use crate::values::{Color, DawnDuration, DawnTime};
 
 pub struct Sequence {
     pub duration: DawnDuration,
@@ -12,9 +11,13 @@ pub struct Sequence {
 }
 
 pub struct MarkCollection {
-    pub key: String,
-    pub display_color: String,
+    pub key: MarkCollectionKey,
+    pub display_color: Color,
     pub marks: Vec<DawnTime>,
+}
+
+pub struct MarkCollectionKey {
+    pub name: String,
 }
 
 pub struct AutomationClip {
@@ -22,14 +25,12 @@ pub struct AutomationClip {
     pub targets: Vec<EffectInstID>,
     pub start_time: DawnTime,
     pub duration: DawnDuration,
-    pub curve: Curve,
+    pub curve: CurveInst,
 }
 
-pub struct AutomationClipID(u32);
-
+pub struct AutomationClipID(pub u32);
 
 pub enum SequenceAudio {
     None,
     File(String),
 }
-

@@ -526,8 +526,8 @@ fn type_of_value(value: &Value) -> Type {
             .points
             .first()
             .map(|point| match point.value {
-                super::types::CurveValue::Float(_) => Type::curve(Type::Float),
-                super::types::CurveValue::Color(_) => Type::curve(Type::Color),
+                crate::values::CurveValue::Float(_) => Type::curve(Type::Float),
+                crate::values::CurveValue::Color(_) => Type::curve(Type::Color),
             })
             .unwrap_or_else(|| Type::curve(Type::Void)),
         Value::Array(items) => items

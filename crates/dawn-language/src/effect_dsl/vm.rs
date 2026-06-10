@@ -1,7 +1,8 @@
 use super::ast::{BinaryOp, Block, Expr, ExprKind, Stmt, UnaryOp};
 use super::bytecode::BytecodeFunction;
-use super::types::{Color, Curve, CurveValue, Identifier, Marks, Type, Value};
+use super::types::{Identifier, Type, Value};
 use super::{CompiledEffect, ParamDecl};
+use crate::values::{Color, Curve, CurveValue, Marks};
 use indexmap::IndexMap;
 
 const LOOP_ITERATION_LIMIT: usize = 100_000;
@@ -338,7 +339,7 @@ impl<'a> Vm<'a> {
                 Value::Array(items) => i64::try_from(items.len())
                     .map(Value::Int)
                     .map_err(|_| RuntimeError::new("array length exceeds int range")),
-                Value::Marks(marks) => i64::try_from(marks.seconds.len())
+                Value::Marks(marks) => i64::try_from(marks.marks.len())
                     .map(Value::Int)
                     .map_err(|_| RuntimeError::new("mark count exceeds int range")),
                 _ => Err(RuntimeError::new("len requires array or marks")),
@@ -351,7 +352,7 @@ impl<'a> Vm<'a> {
             "mark_elapsed" => Ok(Value::Float(mark_elapsed(args, self.context)?)),
             "mark_phase" => Ok(Value::Float(mark_phase(args, self.context)?)),
             "mark_global_count" => Ok(Value::Int(
-                i64::try_from(self.context.global_marks.seconds.len())
+                i64::try_from(self.context.global_marks.marks.len())
                     .map_err(|_| RuntimeError::new("mark count exceeds int range"))?,
             )),
             "mark_global_at" => Ok(Value::Float(mark_at_from(
@@ -435,9 +436,7 @@ fn default_value(ty: &Type) -> Value {
             green: 0,
             blue: 0,
         }),
-        Type::Marks => Value::Marks(Marks {
-            seconds: Vec::new(),
-        }),
+        Type::Marks => Value::Marks(Marks { marks: Vec::new() }),
         Type::Curve(_) => Value::Curve(Curve { points: Vec::new() }),
         Type::Array(_) => Value::Array(Vec::new()),
         Type::Enum(options) => options
@@ -689,7 +688,7 @@ fn mark_source<'a>(args: &'a [Value], context: &'a RunContext) -> Result<&'a Mar
 }
 
 fn mark_count(args: &[Value], context: &RunContext) -> Result<i64, RuntimeError> {
-    i64::try_from(mark_source(args, context)?.seconds.len())
+    i64::try_from(mark_source(args, context)?.marks.len())
         .map_err(|_| RuntimeError::new("mark count exceeds int range"))
 }
 
@@ -724,7 +723,11 @@ fn mark_prev(args: &[Value], context: &RunContext) -> Result<f64, RuntimeError> 
 fn mark_at_from(marks: &Marks, index: i64, fallback: f64) -> Result<f64, RuntimeError> {
     let index =
         usize::try_from(index).map_err(|_| RuntimeError::new("mark index cannot be negative"))?;
-    Ok(marks.seconds.get(index).copied().unwrap_or(fallback))
+    Ok(marks
+        .marks
+        .get(index)
+        .map(|mark| mark.as_seconds_f64())
+        .unwrap_or(fallback))
 }
 
 fn mark_prev_index(args: &[Value], context: &RunContext) -> Result<i64, RuntimeError> {
@@ -739,8 +742,8 @@ fn mark_next_index(args: &[Value], context: &RunContext) -> Result<i64, RuntimeE
 
 fn prev_index(marks: &Marks, seconds: f64) -> Result<i64, RuntimeError> {
     let mut previous = -1;
-    for (index, mark) in marks.seconds.iter().enumerate() {
-        if *mark <= seconds {
+    for (index, mark) in marks.marks.iter().enumerate() {
+        if mark.as_seconds_f64() <= seconds {
             previous = i64::try_from(index)
                 .map_err(|_| RuntimeError::new("mark index exceeds int range"))?;
         }
@@ -749,8 +752,8 @@ fn prev_index(marks: &Marks, seconds: f64) -> Result<i64, RuntimeError> {
 }
 
 fn next_index(marks: &Marks, seconds: f64) -> Result<i64, RuntimeError> {
-    for (index, mark) in marks.seconds.iter().enumerate() {
-        if *mark > seconds {
+    for (index, mark) in marks.marks.iter().enumerate() {
+        if mark.as_seconds_f64() > seconds {
             return i64::try_from(index)
                 .map_err(|_| RuntimeError::new("mark index exceeds int range"));
         }

@@ -1,3 +1,5 @@
+use crate::values::{Color, Curve, Marks};
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Identifier(String);
 
@@ -59,35 +61,6 @@ pub enum Value {
     Curve(Curve),
     Array(Vec<Value>),
     Enum(Identifier),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct Color {
-    pub red: u8,
-    pub green: u8,
-    pub blue: u8,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Curve {
-    pub points: Vec<CurvePoint>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Marks {
-    pub seconds: Vec<f64>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct CurvePoint {
-    pub position: f64,
-    pub value: CurveValue,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum CurveValue {
-    Float(f64),
-    Color(Color),
 }
 
 impl Type {

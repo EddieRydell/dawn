@@ -17,8 +17,9 @@ pub use vm::{RunContext, RuntimeError};
 pub(crate) mod lexer;
 pub mod types;
 
+pub use crate::values::{Color, Curve, CurvePoint, CurveValue, Marks};
 pub use ast::ParamDecl;
-pub use types::{Color, Curve, CurvePoint, CurveValue, Identifier, Marks, Type, Value};
+pub use types::{Identifier, Type, Value};
 
 pub fn compile_effects(source: &str) -> Result<Vec<CompiledEffect>, Vec<Diagnostic>> {
     let module = parse_module(source)?;

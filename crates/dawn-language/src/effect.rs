@@ -1,6 +1,6 @@
 use crate::effect_dsl::types::{Identifier, Value};
 use crate::effect_dsl::CompiledEffect;
-use crate::model::{DawnDuration, DawnTime};
+use crate::values::{Curve, DawnDuration, DawnTime};
 use camino::Utf8PathBuf;
 use indexmap::IndexMap;
 
@@ -13,7 +13,7 @@ pub struct EffectInst {
     pub param_overrides: IndexMap<Identifier, Value>,
 }
 
-pub struct EffectInstID(u32);
+pub struct EffectInstID(pub u32);
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct EffectDefinitionKey {
@@ -46,5 +46,35 @@ impl EffectDefinitionStore {
     }
 }
 
+pub struct CurveInst {
+    pub id: CurveInstID,
+    pub definition: CurveDefinitionKey,
+}
+
+pub struct CurveInstID(pub u32);
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct CurveDefinitionKey {
+    pub source_path: Utf8PathBuf,
+    pub curve_name: String,
+}
+
+pub struct CurveDefinition {
+    pub key: CurveDefinitionKey,
+    pub curve: Curve,
+}
+
 #[derive(Default)]
-pub struct CurveDefinitionStore {}
+pub struct CurveDefinitionStore {
+    pub definitions: IndexMap<CurveDefinitionKey, CurveDefinition>,
+}
+
+impl CurveDefinitionStore {
+    pub fn get(&self, key: &CurveDefinitionKey) -> Option<&CurveDefinition> {
+        self.definitions.get(key)
+    }
+
+    pub fn insert(&mut self, curve: CurveDefinition) -> Option<CurveDefinition> {
+        self.definitions.insert(curve.key.clone(), curve)
+    }
+}

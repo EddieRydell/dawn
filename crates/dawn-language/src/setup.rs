@@ -2,15 +2,28 @@ use camino::Utf8PathBuf;
 use indexmap::IndexMap;
 use std::net::IpAddr;
 
+use crate::values::{DistanceSpan, Point3, Rotation3, Scale3};
+
 pub struct Setup {
-    pub controllers: Vec<Controller>,
+    pub controllers: Vec<ControllerInst>,
     pub patch: Patch,
     pub layout: Layout,
 }
 
-pub struct Controller {
+pub struct ControllerInst {
     pub key: String,
+    pub definition: ControllerDefinitionKey,
     pub address: Option<ControllerAddress>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct ControllerDefinitionKey {
+    pub source_path: Utf8PathBuf,
+    pub controller_name: String,
+}
+
+pub struct ControllerDefinition {
+    pub key: ControllerDefinitionKey,
     pub protocol: Protocol,
     pub outputs: Vec<ControllerOutput>,
 }
@@ -92,74 +105,6 @@ pub enum Geometry {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Distance {
-    pub micrometers: i64,
-}
-
-impl Distance {
-    pub const ZERO: Self = Self { micrometers: 0 };
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DistanceSpan {
-    pub micrometers: u64,
-}
-
-impl DistanceSpan {
-    pub const ZERO: Self = Self { micrometers: 0 };
-}
-
-pub struct Point3 {
-    pub x: Distance,
-    pub y: Distance,
-    pub z: Distance,
-}
-
-impl Default for Point3 {
-    fn default() -> Self {
-        Self {
-            x: Distance::ZERO,
-            y: Distance::ZERO,
-            z: Distance::ZERO,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Rotation3 {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
-}
-
-impl Default for Rotation3 {
-    fn default() -> Self {
-        Self {
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Scale3 {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
-}
-
-impl Default for Scale3 {
-    fn default() -> Self {
-        Self {
-            x: 1.0,
-            y: 1.0,
-            z: 1.0,
-        }
-    }
-}
-
 #[derive(Default)]
 pub struct FixtureDefinitionStore {
     pub definitions: IndexMap<FixtureDefinitionKey, FixtureDefinition>,
@@ -176,4 +121,17 @@ impl FixtureDefinitionStore {
 }
 
 #[derive(Default)]
-pub struct ControllerDefinitionStore {}
+pub struct ControllerDefinitionStore {
+    pub definitions: IndexMap<ControllerDefinitionKey, ControllerDefinition>,
+}
+
+impl ControllerDefinitionStore {
+    pub fn get(&self, key: &ControllerDefinitionKey) -> Option<&ControllerDefinition> {
+        self.definitions.get(key)
+    }
+
+    pub fn insert(&mut self, definition: ControllerDefinition) -> Option<ControllerDefinition> {
+        self.definitions.insert(definition.key.clone(), definition)
+    }
+}
+
