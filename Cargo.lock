@@ -509,6 +509,7 @@ dependencies = [
 name = "dawn-language"
 version = "0.1.0"
 dependencies = [
+ "camino",
  "indexmap 2.14.0",
 ]
 
