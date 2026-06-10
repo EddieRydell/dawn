@@ -18,17 +18,16 @@ pub struct ControllerInst {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ControllerInstKey {
-    pub key: String,
+    pub name: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ControllerDefinitionKey {
     pub source_path: Utf8PathBuf,
-    pub controller_name: String,
+    pub name: String,
 }
 
 pub struct ControllerDefinition {
-    pub key: ControllerDefinitionKey,
     pub protocol: Protocol,
     pub outputs: Vec<ControllerOutput>,
 }
@@ -66,7 +65,7 @@ pub struct PatchRoute {
     pub fixture_pixels: PixelRange,
     pub controller: ControllerInstKey,
     pub output: ControllerOutputIndex,
-    pub start_channel: u32,
+    pub start_channel_offset: u32,
 }
 
 pub struct PixelRange {
@@ -82,12 +81,18 @@ pub struct Layout {
 }
 
 pub struct FixtureGroup {
-    pub name: String,
+    pub key: FixtureGroupKey,
     pub fixtures: Vec<FixtureInstKey>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct FixtureGroupKey {
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FixtureInstKey {
-    pub key: String,
+    pub name: String,
 }
 
 pub struct FixtureInst {
@@ -101,11 +106,10 @@ pub struct FixtureInst {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FixtureDefinitionKey {
     pub source_path: Utf8PathBuf,
-    pub fixture_name: String,
+    pub name: String,
 }
 
 pub struct FixtureDefinition {
-    pub key: FixtureDefinitionKey,
     pub bulb_radius: DistanceSpan,
     pub geometry: Geometry,
 }
@@ -137,8 +141,12 @@ impl FixtureDefinitionStore {
         self.definitions.get(key)
     }
 
-    pub fn insert(&mut self, definition: FixtureDefinition) -> Option<FixtureDefinition> {
-        self.definitions.insert(definition.key.clone(), definition)
+    pub fn insert(
+        &mut self,
+        key: FixtureDefinitionKey,
+        definition: FixtureDefinition,
+    ) -> Option<FixtureDefinition> {
+        self.definitions.insert(key, definition)
     }
 }
 
@@ -152,7 +160,11 @@ impl ControllerDefinitionStore {
         self.definitions.get(key)
     }
 
-    pub fn insert(&mut self, definition: ControllerDefinition) -> Option<ControllerDefinition> {
-        self.definitions.insert(definition.key.clone(), definition)
+    pub fn insert(
+        &mut self,
+        key: ControllerDefinitionKey,
+        definition: ControllerDefinition,
+    ) -> Option<ControllerDefinition> {
+        self.definitions.insert(key, definition)
     }
 }

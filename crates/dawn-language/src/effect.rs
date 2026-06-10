@@ -1,11 +1,12 @@
 use crate::effect_dsl::types::{Identifier, Value};
 use crate::effect_dsl::CompiledEffect;
+use crate::setup::{FixtureGroupKey, FixtureInstKey};
 use crate::values::{Curve, DawnDuration, DawnTime};
 use camino::Utf8PathBuf;
 use indexmap::IndexMap;
 
 pub struct EffectInst {
-    pub id: EffectInstID,
+    pub id: EffectInstId,
     pub start: DawnTime,
     pub duration: DawnDuration,
     pub target: EffectTarget,
@@ -13,21 +14,20 @@ pub struct EffectInst {
     pub param_overrides: IndexMap<Identifier, Value>,
 }
 
-pub struct EffectInstID(pub u32);
+pub struct EffectInstId(pub u32);
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct EffectDefinitionKey {
     pub source_path: Utf8PathBuf,
-    pub effect_name: Identifier,
+    pub name: Identifier,
 }
 
 pub enum EffectTarget {
-    Group,
-    Fixture,
+    Group(FixtureGroupKey),
+    Fixture(FixtureInstKey),
 }
 
 pub struct EffectDefinition {
-    pub key: EffectDefinitionKey,
     pub compiled: CompiledEffect,
 }
 
@@ -41,26 +41,22 @@ impl EffectDefinitionStore {
         self.definitions.get(key)
     }
 
-    pub fn insert(&mut self, definition: EffectDefinition) -> Option<EffectDefinition> {
-        self.definitions.insert(definition.key.clone(), definition)
+    pub fn insert(
+        &mut self,
+        key: EffectDefinitionKey,
+        definition: EffectDefinition,
+    ) -> Option<EffectDefinition> {
+        self.definitions.insert(key, definition)
     }
 }
-
-pub struct CurveInst {
-    pub id: CurveInstID,
-    pub definition: CurveDefinitionKey,
-}
-
-pub struct CurveInstID(pub u32);
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CurveDefinitionKey {
     pub source_path: Utf8PathBuf,
-    pub curve_name: String,
+    pub name: String,
 }
 
 pub struct CurveDefinition {
-    pub key: CurveDefinitionKey,
     pub curve: Curve,
 }
 
@@ -74,7 +70,11 @@ impl CurveDefinitionStore {
         self.definitions.get(key)
     }
 
-    pub fn insert(&mut self, curve: CurveDefinition) -> Option<CurveDefinition> {
-        self.definitions.insert(curve.key.clone(), curve)
+    pub fn insert(
+        &mut self,
+        key: CurveDefinitionKey,
+        curve: CurveDefinition,
+    ) -> Option<CurveDefinition> {
+        self.definitions.insert(key, curve)
     }
 }

@@ -1,4 +1,4 @@
-use crate::effect::{CurveInst, EffectInst, EffectInstID};
+use crate::effect::{CurveDefinitionKey, EffectInst, EffectInstId};
 use crate::values::{Color, DawnDuration, DawnTime};
 
 pub struct Sequence {
@@ -21,14 +21,14 @@ pub struct MarkCollectionKey {
 }
 
 pub struct AutomationClip {
-    pub id: AutomationClipID,
-    pub targets: Vec<EffectInstID>,
-    pub start_time: DawnTime,
+    pub id: AutomationClipId,
+    pub targets: Vec<EffectInstId>,
+    pub start: DawnTime,
     pub duration: DawnDuration,
-    pub curve: CurveInst,
+    pub curve: CurveDefinitionKey,
 }
 
-pub struct AutomationClipID(pub u32);
+pub struct AutomationClipId(pub u32);
 
 pub enum SequenceAudio {
     None,

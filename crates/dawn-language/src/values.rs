@@ -36,6 +36,7 @@ impl DistanceSpan {
     pub const ZERO: Self = Self { micrometers: 0 };
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Point3 {
     pub x: Distance,
     pub y: Distance,
