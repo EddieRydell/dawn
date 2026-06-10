@@ -11,9 +11,14 @@ pub struct Setup {
 }
 
 pub struct ControllerInst {
-    pub key: String,
+    pub key: ControllerInstKey,
     pub definition: ControllerDefinitionKey,
     pub address: Option<ControllerAddress>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct ControllerInstKey {
+    pub key: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -52,7 +57,24 @@ pub enum RgbChannelOrder {
     Bgr,
 }
 
-pub struct Patch {}
+pub struct Patch {
+    pub routes: Vec<PatchRoute>,
+}
+
+pub struct PatchRoute {
+    pub fixture: FixtureInstKey,
+    pub fixture_pixels: PixelRange,
+    pub controller: ControllerInstKey,
+    pub output: ControllerOutputIndex,
+    pub start_channel: u32,
+}
+
+pub struct PixelRange {
+    pub start: u32,
+    pub count: u32,
+}
+
+pub struct ControllerOutputIndex(pub u32);
 
 pub struct Layout {
     pub fixtures: Vec<FixtureInst>,
@@ -134,4 +156,3 @@ impl ControllerDefinitionStore {
         self.definitions.insert(definition.key.clone(), definition)
     }
 }
-
