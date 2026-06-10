@@ -1,4 +1,4 @@
-use crate::effect_dsl::types::{EffectDslIdentifier, EffectDslValue};
+use crate::effect_dsl::types::{Identifier, Value};
 use crate::model::{DawnDuration, DawnTime};
 use indexmap::IndexMap;
 
@@ -6,8 +6,8 @@ pub struct Effect {
     pub start: DawnTime,
     pub duration: DawnDuration,
     pub target: EffectTarget,
-    pub params: IndexMap<EffectDslIdentifier, EffectDslValue>,
     pub script: EffectScript,
+    pub param_overrides: IndexMap<Identifier, Value>,
 }
 
 pub enum EffectTarget {

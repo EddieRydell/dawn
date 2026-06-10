@@ -1,23 +1,23 @@
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct EffectDslIdentifier(String);
+pub struct Identifier(String);
 
-impl EffectDslIdentifier {
-    pub fn new(value: String) -> Result<Self, EffectDslIdentifierError> {
+impl Identifier {
+    pub fn new(value: String) -> Result<Self, IdentifierError> {
         if value.is_empty() {
-            return Err(EffectDslIdentifierError::Empty);
+            return Err(IdentifierError::Empty);
         }
 
         let mut chars = value.chars();
         let Some(first) = chars.next() else {
-            return Err(EffectDslIdentifierError::Empty);
+            return Err(IdentifierError::Empty);
         };
 
         if !is_identifier_start(first) {
-            return Err(EffectDslIdentifierError::InvalidStart);
+            return Err(IdentifierError::InvalidStart);
         }
 
         if chars.any(|candidate| !is_identifier_continue(candidate)) {
-            return Err(EffectDslIdentifierError::InvalidCharacter);
+            return Err(IdentifierError::InvalidCharacter);
         }
 
         Ok(Self(value))
@@ -29,70 +29,60 @@ impl EffectDslIdentifier {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EffectDslIdentifierError {
+pub enum IdentifierError {
     Empty,
     InvalidStart,
     InvalidCharacter,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct EffectDslEnumOption {
-    pub name: EffectDslIdentifier,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct EffectDslEnumType {
-    pub options: Vec<EffectDslEnumOption>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum EffectDslType {
+pub enum Type {
     Void,
     Int,
     Float,
     Bool,
     Color,
-    Curve(Box<EffectDslType>),
-    Array(Box<EffectDslType>),
-    Enum(EffectDslEnumType),
+    Curve(Box<Type>),
+    Array(Box<Type>),
+    Enum(Vec<Identifier>),
 }
 
-pub enum EffectDslValue {
+pub enum Value {
     Void,
     Int(i64),
     Float(f64),
     Bool(bool),
-    Color(EffectDslColor),
-    Curve(EffectDslCurve),
-    Array(Vec<EffectDslValue>),
-    Enum(EffectDslIdentifier),
+    Color(Color),
+    Curve(Curve),
+    Array(Vec<Value>),
+    Enum(Identifier),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct EffectDslColor {
+pub struct Color {
     pub red: u8,
     pub green: u8,
     pub blue: u8,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct EffectDslCurve {
-    pub points: Vec<EffectDslCurvePoint>,
+pub struct Curve {
+    pub points: Vec<CurvePoint>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct EffectDslCurvePoint {
+pub struct CurvePoint {
     pub position: f64,
-    pub value: EffectDslCurveValue,
+    pub value: CurveValue,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum EffectDslCurveValue {
+pub enum CurveValue {
     Float(f64),
-    Color(EffectDslColor),
+    Color(Color),
 }
 
-impl EffectDslType {
+impl Type {
     pub fn curve(value_type: Self) -> Self {
         Self::Curve(Box::new(value_type))
     }
