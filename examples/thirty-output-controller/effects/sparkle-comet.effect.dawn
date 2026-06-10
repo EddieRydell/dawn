@@ -13,14 +13,14 @@ effect SparkleComet {
   param float sparkle_gain = 0.75;
   param float seed = 0.0;
 
-  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
-    float pixel_position_value = pixel_position(pixel);
+  color sample() {
+    float pixel_fraction_value = pixel_fraction();
     if (reverse) {
-      pixel_position_value = 1.0 - pixel_position_value;
+      pixel_fraction_value = 1.0 - pixel_fraction_value;
     }
 
-    float head = clamp(position(progress), 0.0, 1.0);
-    float distance = abs(pixel_position_value - head);
+    float head = clamp(position[progress()], 0.0, 1.0);
+    float distance = abs(pixel_fraction_value - head);
     if (wrap) {
       distance = min(distance, 1.0 - distance);
     }
@@ -28,25 +28,25 @@ effect SparkleComet {
     float trail = 1.0 - smoothstep(0.0, max(0.000000001, tail_width), distance);
     float core = 1.0 - smoothstep(0.0, max(0.000000001, head_width), distance);
 
-    float bucket = floor(seconds * max(0.000000001, sparkle_speed) + pixel_index(pixel) * 0.13);
-    srand(seed + pixel_index(pixel) * 19.0 + bucket * 47.0);
+    float bucket = floor(seconds() * max(0.000000001, sparkle_speed) + pixel_index() * 0.13);
+    srand(seed + pixel_index() * 19.0 + bucket * 47.0);
     float sparkle = 0.0;
     if (rand() < clamp(sparkle_density, 0.0, 1.0)) {
-      sparkle = (sin(seconds * sparkle_speed * TAU + pixel_index(pixel)) + 1.0) * 0.5;
+      sparkle = (sin(seconds() * sparkle_speed * TAU + pixel_index()) + 1.0) * 0.5;
     }
 
     float level = max(trail, core);
     level = max(level, sparkle * trail * clamp(sparkle_gain, 0.0, 1.0));
-    level = level * curve_float_clamped(intensity, progress, 0.0, 1.0);
+    level = level * curve_float_clamped(intensity, progress(), 0.0, 1.0);
 
-    color value = gradient(clamp(1.0 - distance / max(0.000000001, tail_width), 0.0, 1.0));
+    color value = gradient[clamp(1.0 - distance / max(0.000000001, tail_width), 0.0, 1.0)];
     if (color_mode == bright_head) {
       value = mix(value, head_color, core);
     }
     if (color_mode == rainbow_hue) {
-      value = hsv(pixel_position_value * 6.0 + progress * 6.0, 1.0, 1.0);
+      value = hsv(pixel_fraction_value * 6.0 + progress() * 6.0, 1.0, 1.0);
     }
 
-    return value * clamp(level, 0.0, 1.0);
+    return mix(#000000, value, clamp(level, 0.0, 1.0));
   }
 }

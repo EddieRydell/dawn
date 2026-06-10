@@ -1,5 +1,3 @@
-use "./impact-burst.effect.dawn" as effects;
-
 effect MarkImpactBurst {
   param marks beats;
   param array<curve<color>> gradients;
@@ -16,33 +14,47 @@ effect MarkImpactBurst {
   param float glow_level = 0.35;
   param bool mirror = false;
 
-  void generate(Timeline timeline, Target target, float duration) {
-    int beat_count = mark_count(beats);
+  color sample() {
     int gradient_count = len(gradients);
-    if (gradient_count > 0) {
-      for (int beat = 0; beat < beat_count; beat = beat + 1) {
-        float hit = mark_at(beats, beat, 0.0) + offset_seconds;
-        if (hit >= 0.0 && hit < duration) {
-          timeline.emit effects.ImpactBurst {
-            target: target;
-            start: hit;
-            duration: burst_seconds;
-            params: {
-              gradient: gradients[beat % gradient_count];
-              intensity: intensity;
-              direction: direction;
-              color_mode: color_mode;
-              center_position: center_position;
-              start_radius: start_radius;
-              end_radius: end_radius;
-              edge_width: edge_width;
-              glow_width: glow_width;
-              glow_level: glow_level;
-              mirror: mirror;
-            };
-          };
-        }
-      }
+    if (gradient_count <= 0) {
+      return #000000;
     }
+
+    float query_time = seconds() - offset_seconds;
+    int beat = mark_prev_index(beats, query_time);
+    if (beat < 0) {
+      return #000000;
+    }
+
+    float hit_time = mark_at(beats, beat, -999.0);
+    float local_progress = clamp((query_time - hit_time) / max(0.000000001, burst_seconds), 0.0, 1.0);
+    float position = pixel_fraction();
+    float center = clamp(center_position, 0.0, 1.0);
+    float distance = abs(position - center);
+    if (mirror) {
+      distance = abs(abs(position - center) * 2.0);
+    }
+
+    float travel = local_progress;
+    if (direction == inward) {
+      travel = 1.0 - local_progress;
+    }
+
+    float radius = mix(max(0.0, start_radius), max(0.0, end_radius), clamp(travel, 0.0, 1.0));
+    float edge = max(0.000000001, edge_width);
+    float ring = 1.0 - smoothstep(0.0, edge, abs(distance - radius));
+    float glow = 1.0 - smoothstep(0.0, max(edge, glow_width), abs(distance - radius));
+    float level = max(ring, glow * clamp(glow_level, 0.0, 1.0));
+    level = level * curve_float_clamped(intensity, local_progress, 0.0, 1.0);
+
+    float color_position = local_progress;
+    if (color_mode == from_center) {
+      color_position = clamp(distance / max(0.000000001, end_radius), 0.0, 1.0);
+    }
+    if (color_mode == from_edge) {
+      color_position = 1.0 - clamp(distance / max(0.000000001, end_radius), 0.0, 1.0);
+    }
+
+    return curve_color_scaled(gradients[beat % gradient_count], clamp(color_position, 0.0, 1.0), level);
   }
 }

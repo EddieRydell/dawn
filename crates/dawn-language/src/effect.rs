@@ -15,6 +15,5 @@ pub enum EffectTarget {
     Fixture,
 }
 pub enum EffectScript {
-    // contains bytecode
-    // and the original source text
+    Reference(Identifier),
 }

@@ -19,3 +19,11 @@ pub struct SequenceMarkCollection {
 pub struct AutomationClip {
     pub id: AutomationClipID,
 }
+
+pub enum SequenceAudio {
+    None,
+    File(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct AutomationClipID(String);

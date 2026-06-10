@@ -9,10 +9,10 @@ effect Chase {
   param bool extend_to_end = false;
   param curve<float> pulse_shape;
 
-  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
+  color sample() {
     float width = max(1.0, section_width_pixels);
-    float item_count = max(1.0, floor((pixel_count(pixel) + width - 1.0) / width));
-    float position = section_position(pixel, width);
+    float item_count = max(1.0, floor((pixel_count() + width - 1.0) / width));
+    float position = section_position(section_width_pixels);
     float chase_position_value = position;
     if (reverse) {
       chase_position_value = 1.0 - chase_position_value;
@@ -28,7 +28,7 @@ effect Chase {
       travel_end = 1.0;
     }
     float hit = mix(travel_start, travel_end, clamp(curve_crossing(chase_position, chase_position_value, chase_position_value), 0.0, 1.0));
-    float pulse_progress = (progress - hit) / pulse_duration;
+    float pulse_progress = (progress() - hit) / pulse_duration;
     float level = 0.0;
     if (pulse_progress >= 0.0 && pulse_progress <= 1.0) {
       level = curve_float_clamped(pulse_shape, pulse_progress, 0.0, 1.0);
@@ -36,7 +36,7 @@ effect Chase {
 
     float gradient_position = pulse_progress;
     if (gradient_mode == through_effect) {
-      gradient_position = progress;
+      gradient_position = progress();
     }
     if (gradient_mode == across_items) {
       gradient_position = position;

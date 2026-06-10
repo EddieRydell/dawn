@@ -65,8 +65,6 @@ impl<'source> Lexer<'source> {
         let text = &self.source[start..self.cursor];
         let kind = match text {
             "effect" => TokenKind::Keyword(Keyword::Effect),
-            "use" => TokenKind::Keyword(Keyword::Use),
-            "as" => TokenKind::Keyword(Keyword::As),
             "param" => TokenKind::Keyword(Keyword::Param),
             "int" => TokenKind::Keyword(Keyword::Int),
             "float" => TokenKind::Keyword(Keyword::Float),
@@ -80,7 +78,6 @@ impl<'source> Lexer<'source> {
             "if" => TokenKind::Keyword(Keyword::If),
             "else" => TokenKind::Keyword(Keyword::Else),
             "for" => TokenKind::Keyword(Keyword::For),
-            "while" => TokenKind::Keyword(Keyword::While),
             "true" => TokenKind::Keyword(Keyword::True),
             "false" => TokenKind::Keyword(Keyword::False),
             _ => TokenKind::Identifier,
@@ -135,6 +132,24 @@ impl<'source> Lexer<'source> {
         }
 
         self.token(TokenKind::Error(LexErrorKind::UnterminatedString), start)
+    }
+
+    fn lex_color(&mut self, start: usize) -> Token {
+        let mut digits = 0;
+        while self
+            .peek()
+            .is_some_and(|candidate| candidate.is_ascii_hexdigit())
+            && digits < 6
+        {
+            self.bump();
+            digits += 1;
+        }
+
+        if digits == 6 {
+            self.token(TokenKind::ColorLiteral, start)
+        } else {
+            self.token(TokenKind::Error(LexErrorKind::InvalidColorLiteral), start)
+        }
     }
 
     fn token(&self, kind: TokenKind, start: usize) -> Token {
@@ -199,18 +214,64 @@ impl Iterator for Lexer<'_> {
             ')' => TokenKind::RightParen,
             '[' => TokenKind::LeftBracket,
             ']' => TokenKind::RightBracket,
-            '<' => TokenKind::LessThan,
-            '>' => TokenKind::GreaterThan,
+            '<' => {
+                if self.peek() == Some('=') {
+                    self.bump();
+                    TokenKind::LessEqual
+                } else {
+                    TokenKind::LessThan
+                }
+            }
+            '>' => {
+                if self.peek() == Some('=') {
+                    self.bump();
+                    TokenKind::GreaterEqual
+                } else {
+                    TokenKind::GreaterThan
+                }
+            }
             ':' => TokenKind::Colon,
             ';' => TokenKind::Semicolon,
             ',' => TokenKind::Comma,
             '.' => TokenKind::Dot,
-            '=' => TokenKind::Equals,
+            '=' => {
+                if self.peek() == Some('=') {
+                    self.bump();
+                    TokenKind::EqualEqual
+                } else {
+                    TokenKind::Equals
+                }
+            }
+            '!' => {
+                if self.peek() == Some('=') {
+                    self.bump();
+                    TokenKind::BangEqual
+                } else {
+                    TokenKind::Bang
+                }
+            }
+            '&' => {
+                if self.peek() == Some('&') {
+                    self.bump();
+                    TokenKind::AmpAmp
+                } else {
+                    TokenKind::Error(LexErrorKind::UnexpectedCharacter)
+                }
+            }
+            '|' => {
+                if self.peek() == Some('|') {
+                    self.bump();
+                    TokenKind::PipePipe
+                } else {
+                    TokenKind::Error(LexErrorKind::UnexpectedCharacter)
+                }
+            }
             '+' => TokenKind::Plus,
             '-' => TokenKind::Minus,
             '*' => TokenKind::Star,
             '/' => TokenKind::Slash,
             '%' => TokenKind::Percent,
+            '#' => return Some(self.lex_color(start)),
             '"' => return Some(self.lex_string(start)),
             candidate if is_identifier_start(candidate) => {
                 return Some(self.lex_identifier_or_keyword(start));
@@ -240,6 +301,7 @@ pub enum TokenKind {
     Identifier,
     IntegerLiteral,
     FloatLiteral,
+    ColorLiteral,
     StringLiteral,
     Keyword(Keyword),
     LeftBrace,
@@ -250,11 +312,18 @@ pub enum TokenKind {
     RightBracket,
     LessThan,
     GreaterThan,
+    LessEqual,
+    GreaterEqual,
     Colon,
     Semicolon,
     Comma,
     Dot,
     Equals,
+    EqualEqual,
+    Bang,
+    BangEqual,
+    AmpAmp,
+    PipePipe,
     Plus,
     Minus,
     Star,
@@ -267,8 +336,6 @@ pub enum TokenKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum Keyword {
     Effect,
-    Use,
-    As,
     Param,
     Int,
     Float,
@@ -282,7 +349,6 @@ pub enum Keyword {
     If,
     Else,
     For,
-    While,
     True,
     False,
 }
@@ -290,6 +356,7 @@ pub enum Keyword {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum LexErrorKind {
     UnexpectedCharacter,
+    InvalidColorLiteral,
     UnterminatedString,
     UnterminatedBlockComment,
 }

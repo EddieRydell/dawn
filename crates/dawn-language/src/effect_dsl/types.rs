@@ -42,17 +42,20 @@ pub enum Type {
     Float,
     Bool,
     Color,
+    Marks,
     Curve(Box<Type>),
     Array(Box<Type>),
     Enum(Vec<Identifier>),
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     Void,
     Int(i64),
     Float(f64),
     Bool(bool),
     Color(Color),
+    Marks(Marks),
     Curve(Curve),
     Array(Vec<Value>),
     Enum(Identifier),
@@ -68,6 +71,11 @@ pub struct Color {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Curve {
     pub points: Vec<CurvePoint>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Marks {
+    pub seconds: Vec<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -12,6 +12,6 @@
 
 pub mod effect;
 pub mod effect_dsl;
-mod model;
+pub mod model;
 pub mod sequence;
 pub mod setup;

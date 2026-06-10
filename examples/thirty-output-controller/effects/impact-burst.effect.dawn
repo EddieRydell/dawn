@@ -11,17 +11,17 @@ effect ImpactBurst {
   param float glow_level = 0.35;
   param bool mirror = false;
 
-  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
-    float position = pixel_position(pixel);
+  color sample() {
+    float position = pixel_fraction();
     float center = clamp(center_position, 0.0, 1.0);
     float distance = abs(position - center);
     if (mirror) {
       distance = abs(abs(position - center) * 2.0);
     }
 
-    float travel = progress;
+    float travel = progress();
     if (direction == inward) {
-      travel = 1.0 - progress;
+      travel = 1.0 - progress();
     }
 
     float radius = mix(max(0.0, start_radius), max(0.0, end_radius), clamp(travel, 0.0, 1.0));
@@ -29,9 +29,9 @@ effect ImpactBurst {
     float ring = 1.0 - smoothstep(0.0, edge, abs(distance - radius));
     float glow = 1.0 - smoothstep(0.0, max(edge, glow_width), abs(distance - radius));
     float level = max(ring, glow * clamp(glow_level, 0.0, 1.0));
-    level = level * curve_float_clamped(intensity, progress, 0.0, 1.0);
+    level = level * curve_float_clamped(intensity, progress(), 0.0, 1.0);
 
-    float color_position = progress;
+    float color_position = progress();
     if (color_mode == from_center) {
       color_position = clamp(distance / max(0.000000001, end_radius), 0.0, 1.0);
     }

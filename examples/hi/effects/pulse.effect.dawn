@@ -2,7 +2,7 @@ effect Pulse {
   param curve<color> gradient;
   param curve<float> pulse_shape;
 
-  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
-    return curve_color_scaled(gradient, progress, pulse_shape(progress));
+  color sample() {
+    return curve_color_scaled(gradient, progress(), pulse_shape[progress()]);
   }
 }

@@ -4,8 +4,8 @@ effect CandyCane {
   param int stripe_pixels = 6;
   param float speed = 1.0;
 
-  color sample(float progress, float seconds, Fixture fixture, Pixel pixel) {
-    float stripe = floor((pixel_index(pixel) + seconds * speed * stripe_pixels) / max(1.0, stripe_pixels));
+  color sample() {
+    float stripe = floor((pixel_index() + seconds() * speed * stripe_pixels) / max(1.0, stripe_pixels));
     float even = stripe - floor(stripe / 2.0) * 2.0;
     if (even < 1.0) {
       return first;
