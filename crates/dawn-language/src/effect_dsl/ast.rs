@@ -1,26 +1,26 @@
 use super::lexer::TextSpan;
 use super::types::{Identifier, Type, Value};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Module {
     pub effects: Vec<EffectDecl>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct EffectDecl {
     pub name: Identifier,
     pub params: Vec<ParamDecl>,
     pub sample: FunctionDecl,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ParamDecl {
     pub name: Identifier,
     pub ty: Type,
     pub default: Option<Value>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FunctionDecl {
     pub return_type: Type,
     pub name: Identifier,
@@ -28,18 +28,18 @@ pub(crate) struct FunctionDecl {
     pub body: Block,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FunctionParam {
     pub name: Identifier,
     pub ty: Type,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Block {
     pub statements: Vec<Stmt>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Stmt {
     Local {
         ty: Type,
@@ -65,13 +65,13 @@ pub(crate) enum Stmt {
     Return(Expr),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Expr {
     pub kind: ExprKind,
     pub span: TextSpan,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ExprKind {
     Literal(Value),
     Variable(Identifier),

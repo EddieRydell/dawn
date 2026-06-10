@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/desktop", "crates/dawn-language"]
+members = ["apps/desktop", "crates/dawn-language", "crates/dawn-project-io"]
 resolver = "2"
 
 [workspace.package]

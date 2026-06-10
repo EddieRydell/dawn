@@ -34,6 +34,12 @@ pub struct CompiledEffect {
     sample: BytecodeFunction,
 }
 
+impl PartialEq for CompiledEffect {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.params == other.params
+    }
+}
+
 impl CompiledEffect {
     pub fn name(&self) -> &Identifier {
         &self.name

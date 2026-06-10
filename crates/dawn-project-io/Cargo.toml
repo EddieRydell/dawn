@@ -1,0 +1,17 @@
+[package]
+name = "dawn-project-io"
+edition.workspace = true
+version.workspace = true
+description = "Dawn project import and export IO"
+authors = ["Dawn"]
+license = "MIT"
+
+[dependencies]
+camino = "1.2.1"
+dawn-language = { path = "../dawn-language" }
+indexmap = "2.14.0"
+serde = { version = "1.0.228", features = ["derive"] }
+yaml_serde = "0.10.4"
+
+[dev-dependencies]
+tempfile = "3.23.0"
