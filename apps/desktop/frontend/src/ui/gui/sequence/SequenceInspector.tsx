@@ -1,4 +1,4 @@
-import type { SequenceEditorDocumentDto, SequenceEffectDto, SequenceEffectScopeDto, SequenceEffectScriptDto } from "../../../types";
+import type { SequenceEditorDocument, SequenceEffect, SequenceEffectScope, SequenceEffectScript } from "../../../types";
 import { commands } from "../../../api";
 import { runSnapshotCommand } from "../../../store";
 import { InspectorScrollArea, Readout } from "../InspectorScrollArea";
@@ -7,14 +7,14 @@ import { ColorField, EffectParamInput } from "./params/EffectParamInput";
 import { defaultMarkColor, nextCollectionKey } from "./marks";
 import { selectedEffectId, selectionCompatibleWithFocusedItem, selectionCount } from "./sequenceSelection";
 
-function selectedEffectScriptValue(effect: SequenceEffectDto, scripts: SequenceEffectScriptDto[]) {
+function selectedEffectScriptValue(effect: SequenceEffect, scripts: SequenceEffectScript[]) {
   const currentScript = effect.scriptSource;
   if (currentScript === null) return "";
   const index = scripts.findIndex((script) => scriptsEqual(script.script, currentScript));
   return index < 0 ? "" : String(index);
 }
 
-function scriptsEqual(left: SequenceEffectScriptDto["script"], right: SequenceEffectScriptDto["script"]) {
+function scriptsEqual(left: SequenceEffectScript["script"], right: SequenceEffectScript["script"]) {
   return left.path === right.path && left.effectName === right.effectName;
 }
 
@@ -28,7 +28,7 @@ export function SequenceInspector({
   visibleMarkCollectionKeys,
   setVisibleMarkCollectionKeys
 }: {
-  document: SequenceEditorDocumentDto;
+  document: SequenceEditorDocument;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
   sequenceSelection: SequenceSelection;
@@ -201,7 +201,7 @@ const id = selectedEffectId(selected);
                   commands.applySequenceGuiEdit({
                     type: "setEffectScope",
                     id: effect.id,
-                    scope: event.currentTarget.value as SequenceEffectScopeDto
+                    scope: event.currentTarget.value as SequenceEffectScope
                   })
                 )
               }

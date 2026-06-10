@@ -1,6 +1,6 @@
-import type { SequenceEditorDocumentDto, SequenceEffectDto, SequenceMarkCollectionDto, SequenceMarkRefDto, SequenceSelectionDto } from "../../../types";
+import type { SequenceEditorDocument, SequenceEffect, SequenceMarkCollection, SequenceMarkRef, SequenceSelection } from "../../../types";
 
-import { clamp, type GuiFocus, type SequenceSelection } from "../shared";
+import { clamp, type GuiFocus } from "../shared";
 
 import { markIndexAfterMove, type MarkDisplayMode } from "./marks";
 
@@ -41,20 +41,20 @@ export type SequenceViewport = {
 };
 
 export type SequenceClipLayout = {
-  effect: SequenceEffectDto;
+  effect: SequenceEffect;
   laneIndex: number;
   rect: { x: number; y: number; width: number; height: number };
 };
 
 type SequenceClip = {
-  effect: SequenceEffectDto;
+  effect: SequenceEffect;
   laneIndex: number;
 };
 
 type SequenceClipWithSlot = SequenceClip & { slot: number };
 
 export type SequenceHit = {
-  effect: SequenceEffectDto;
+  effect: SequenceEffect;
   laneIndex: number;
   resize: "left" | "right" | "none";
 };
@@ -66,7 +66,7 @@ export type SequenceMarkHit = {
 };
 
 export function buildSequenceClipLayout(
-  document: SequenceEditorDocumentDto,
+  document: SequenceEditorDocument,
   drafts: SequenceDraft[],
   viewport: SequenceViewport,
   left: number,
@@ -163,7 +163,7 @@ function assignOverlapSlots(group: SequenceClip[]): SequenceClipWithSlot[] {
   });
 }
 
-function compareClipsByTime(left: { effect: SequenceEffectDto }, right: { effect: SequenceEffectDto }) {
+function compareClipsByTime(left: { effect: SequenceEffect }, right: { effect: SequenceEffect }) {
   return (
     left.effect.startSeconds - right.effect.startSeconds ||
     left.effect.startSeconds + left.effect.durationSeconds - (right.effect.startSeconds + right.effect.durationSeconds) ||
@@ -188,7 +188,7 @@ export function hitSequence(clips: SequenceClipLayout[], x: number, y: number): 
 }
 
 export function hitSequenceMark(
-  collections: SequenceMarkCollectionDto[],
+  collections: SequenceMarkCollection[],
   mode: MarkDisplayMode,
   x: number,
   y: number,
@@ -227,14 +227,14 @@ export function selectedEffectId(selected: GuiFocus): number | null {
   return selected?.type === "effect" ? selected.id : null;
 }
 
-export function selectionFromSingle(selected: GuiFocus): SequenceSelection {
+export function selectionFromSingle(selected: GuiFocus): SequenceSelection | null {
   const effectId = selectedEffectId(selected);
   if (effectId !== null) return { type: "effects", ids: [effectId] };
   if (selected?.type === "mark") return { type: "marks", marks: [{ collectionKey: selected.collectionKey, index: selected.index }] };
   return null;
 }
 
-export function singleSelectionFocus(selection: SequenceSelection): GuiFocus {
+export function singleSelectionFocus(selection: SequenceSelection | null): GuiFocus {
   if (selection?.type === "effects") return singleEffectSelectionFocus(selection.ids);
   if (selection?.type === "marks" && selection.marks.length === 1) {
     const mark = selection.marks[0];
@@ -249,11 +249,11 @@ export function singleEffectSelectionFocus(ids: number[]): GuiFocus {
   return id === undefined ? null : { type: "effect", id };
 }
 
-export function selectionCount(selection: SequenceSelectionDto) {
+export function selectionCount(selection: SequenceSelection) {
   return selection.type === "effects" ? selection.ids.length : selection.marks.length;
 }
 
-export function selectionCompatibleWithFocusedItem(selection: SequenceSelectionDto, selected: GuiFocus) {
+export function selectionCompatibleWithFocusedItem(selection: SequenceSelection, selected: GuiFocus) {
   const effectId = selectedEffectId(selected);
   if (effectId !== null) return selection.type === "effects" && selection.ids.includes(effectId);
   if (selected?.type === "mark") {
@@ -263,7 +263,7 @@ export function selectionCompatibleWithFocusedItem(selection: SequenceSelectionD
   return true;
 }
 
-export function nextEffectSelection(current: SequenceSelection, id: number, shift: boolean, ctrl: boolean): SequenceSelectionDto {
+export function nextEffectSelection(current: SequenceSelection | null, id: number, shift: boolean, ctrl: boolean): SequenceSelection {
   if (current?.type !== "effects" || (!shift && !ctrl)) return { type: "effects", ids: [id] };
   const ids = new Set(current.ids);
   if (ctrl && ids.has(id)) ids.delete(id);
@@ -271,7 +271,7 @@ export function nextEffectSelection(current: SequenceSelection, id: number, shif
   return { type: "effects", ids: [...ids] };
 }
 
-export function nextMarkSelection(current: SequenceSelection, mark: SequenceMarkRefDto, shift: boolean, ctrl: boolean): SequenceSelectionDto {
+export function nextMarkSelection(current: SequenceSelection | null, mark: SequenceMarkRef, shift: boolean, ctrl: boolean): SequenceSelection {
   if (current?.type !== "marks" || (!shift && !ctrl)) return { type: "marks", marks: [mark] };
   const byCollection = markRefLookup(current.marks);
   if (ctrl && markLookupHas(byCollection, mark)) removeMarkRef(byCollection, mark);
@@ -279,7 +279,7 @@ export function nextMarkSelection(current: SequenceSelection, mark: SequenceMark
   return { type: "marks", marks: markRefsFromLookup(byCollection) };
 }
 
-export function mergeSequenceSelection(current: SequenceSelection, next: SequenceSelectionDto, shift: boolean, ctrl: boolean): SequenceSelection {
+export function mergeSequenceSelection(current: SequenceSelection | null, next: SequenceSelection, shift: boolean, ctrl: boolean): SequenceSelection {
   if ((!shift && !ctrl) || current?.type !== next.type) return next;
   if (next.type === "effects") {
     const ids = new Set(current.type === "effects" ? current.ids : []);
@@ -307,13 +307,13 @@ function rectsIntersect(left: { x: number; y: number; width: number; height: num
   return left.x <= right.x + right.width && left.x + left.width >= right.x && left.y <= right.y + right.height && left.y + left.height >= right.y;
 }
 
-export function selectionFromMarqueeEffects(clips: SequenceClipLayout[], marquee: SequenceMarquee): SequenceSelectionDto {
+export function selectionFromMarqueeEffects(clips: SequenceClipLayout[], marquee: SequenceMarquee): SequenceSelection {
   const box = normalizedRect(marquee.startX, marquee.startY, marquee.x, marquee.y);
   return { type: "effects", ids: clips.filter((clip) => rectsIntersect(box, clip.rect)).map((clip) => clip.effect.id) };
 }
 
 export function selectionFromMarqueeMarks(
-  collections: SequenceMarkCollectionDto[],
+  collections: SequenceMarkCollection[],
   mode: MarkDisplayMode,
   marquee: SequenceMarquee,
   left: number,
@@ -321,11 +321,11 @@ export function selectionFromMarqueeMarks(
   audioStripHeight: number,
   canvasHeight: number,
   viewport: SequenceViewport
-): SequenceSelectionDto {
+): SequenceSelection {
   const box = normalizedRect(marquee.startX, marquee.startY, marquee.x, marquee.y);
   const y1 = mode === "strip" ? audioStripTop : audioStripTop;
   const y2 = mode === "strip" ? audioStripTop + audioStripHeight : canvasHeight;
-  const marks: SequenceMarkRefDto[] = [];
+  const marks: SequenceMarkRef[] = [];
   if (mode === "hidden") return { type: "marks", marks };
   for (const collection of collections) {
     collection.marksSeconds.forEach((timeSeconds, index) => {
@@ -338,7 +338,7 @@ export function selectionFromMarqueeMarks(
   return { type: "marks", marks };
 }
 
-export function constrainEffectMoveDelta(document: SequenceEditorDocumentDto, ids: number[], deltaSeconds: number) {
+export function constrainEffectMoveDelta(document: SequenceEditorDocument, ids: number[], deltaSeconds: number) {
   let minDelta = -Infinity;
   let maxDelta = Infinity;
   for (const effect of document.effects.filter((candidate) => ids.includes(candidate.id))) {
@@ -348,7 +348,7 @@ export function constrainEffectMoveDelta(document: SequenceEditorDocumentDto, id
   return clamp(deltaSeconds, minDelta, maxDelta);
 }
 
-export function constrainEffectLaneDelta(document: SequenceEditorDocumentDto, ids: number[], laneDelta: number) {
+export function constrainEffectLaneDelta(document: SequenceEditorDocument, ids: number[], laneDelta: number) {
   let minDelta = -Infinity;
   let maxDelta = Infinity;
   for (const effect of document.effects.filter((candidate) => ids.includes(candidate.id))) {
@@ -360,7 +360,7 @@ export function constrainEffectLaneDelta(document: SequenceEditorDocumentDto, id
   return Math.trunc(clamp(laneDelta, minDelta, maxDelta));
 }
 
-export function effectMoveDrafts(document: SequenceEditorDocumentDto, ids: number[], deltaSeconds: number, laneDelta: number): SequenceDraft[] {
+export function effectMoveDrafts(document: SequenceEditorDocument, ids: number[], deltaSeconds: number, laneDelta: number): SequenceDraft[] {
   return document.effects
     .filter((effect) => ids.includes(effect.id))
     .map((effect) => {
@@ -374,7 +374,7 @@ export function effectMoveDrafts(document: SequenceEditorDocumentDto, ids: numbe
     });
 }
 
-export function effectResizeDrafts(document: SequenceEditorDocumentDto, ids: number[], edge: "left" | "right", deltaSeconds: number): SequenceDraft[] {
+export function effectResizeDrafts(document: SequenceEditorDocument, ids: number[], edge: "left" | "right", deltaSeconds: number): SequenceDraft[] {
   return document.effects
     .filter((effect) => ids.includes(effect.id))
     .map((effect) => {
@@ -393,7 +393,7 @@ export function effectResizeDrafts(document: SequenceEditorDocumentDto, ids: num
     });
 }
 
-export function constrainEffectResizeDelta(document: SequenceEditorDocumentDto, ids: number[], edge: "left" | "right", deltaSeconds: number) {
+export function constrainEffectResizeDelta(document: SequenceEditorDocument, ids: number[], edge: "left" | "right", deltaSeconds: number) {
   let minDelta = -Infinity;
   let maxDelta = Infinity;
   for (const effect of document.effects.filter((candidate) => ids.includes(candidate.id))) {
@@ -408,7 +408,7 @@ export function constrainEffectResizeDelta(document: SequenceEditorDocumentDto, 
   return clamp(deltaSeconds, minDelta, maxDelta);
 }
 
-export function constrainMarkDelta(document: SequenceEditorDocumentDto, marks: SequenceMarkRefDto[], deltaSeconds: number) {
+export function constrainMarkDelta(document: SequenceEditorDocument, marks: SequenceMarkRef[], deltaSeconds: number) {
   let minDelta = -Infinity;
   let maxDelta = Infinity;
   for (const mark of marks) {
@@ -421,7 +421,7 @@ export function constrainMarkDelta(document: SequenceEditorDocumentDto, marks: S
   return clamp(deltaSeconds, minDelta, maxDelta);
 }
 
-export function markMoveDrafts(document: SequenceEditorDocumentDto, marks: SequenceMarkRefDto[], deltaSeconds: number): MarkDraftLookup {
+export function markMoveDrafts(document: SequenceEditorDocument, marks: SequenceMarkRef[], deltaSeconds: number): MarkDraftLookup {
   const drafts: MarkDraftLookup = new Map();
   for (const mark of marks) {
     const collection = document.markCollections.find((candidate) => candidate.key === mark.collectionKey);
@@ -442,7 +442,7 @@ export function markSelectionConsumesKey(selected: GuiFocus, key: string) {
   return selected?.type === "mark" && (key === "ArrowLeft" || key === "ArrowRight");
 }
 
-export function markRefLookup(marks: SequenceMarkRefDto[]): MarkRefLookup {
+export function markRefLookup(marks: SequenceMarkRef[]): MarkRefLookup {
   const lookup: MarkRefLookup = new Map();
   for (const mark of marks) {
     addMarkRef(lookup, mark);
@@ -450,25 +450,25 @@ export function markRefLookup(marks: SequenceMarkRefDto[]): MarkRefLookup {
   return lookup;
 }
 
-function markLookupHas(lookup: MarkRefLookup, mark: SequenceMarkRefDto) {
+function markLookupHas(lookup: MarkRefLookup, mark: SequenceMarkRef) {
   return lookup.get(mark.collectionKey)?.has(mark.index) ?? false;
 }
 
-function addMarkRef(lookup: MarkRefLookup, mark: SequenceMarkRefDto) {
+function addMarkRef(lookup: MarkRefLookup, mark: SequenceMarkRef) {
   const collection = lookup.get(mark.collectionKey) ?? new Set<number>();
   collection.add(mark.index);
   lookup.set(mark.collectionKey, collection);
 }
 
-function removeMarkRef(lookup: MarkRefLookup, mark: SequenceMarkRefDto) {
+function removeMarkRef(lookup: MarkRefLookup, mark: SequenceMarkRef) {
   const collection = lookup.get(mark.collectionKey);
   if (collection === undefined) return;
   collection.delete(mark.index);
   if (collection.size === 0) lookup.delete(mark.collectionKey);
 }
 
-function markRefsFromLookup(lookup: MarkRefLookup): SequenceMarkRefDto[] {
-  const marks: SequenceMarkRefDto[] = [];
+function markRefsFromLookup(lookup: MarkRefLookup): SequenceMarkRef[] {
+  const marks: SequenceMarkRef[] = [];
   for (const [collectionKey, indexes] of lookup) {
     for (const index of indexes) {
       marks.push({ collectionKey, index });
@@ -477,11 +477,11 @@ function markRefsFromLookup(lookup: MarkRefLookup): SequenceMarkRefDto[] {
   return marks;
 }
 
-export function getMarkDraft(lookup: MarkDraftLookup, mark: SequenceMarkRefDto): MarkDraft | undefined {
+export function getMarkDraft(lookup: MarkDraftLookup, mark: SequenceMarkRef): MarkDraft | undefined {
   return lookup.get(mark.collectionKey)?.get(mark.index);
 }
 
-export function setMarkDraft(lookup: MarkDraftLookup, mark: SequenceMarkRefDto, draft: MarkDraft) {
+export function setMarkDraft(lookup: MarkDraftLookup, mark: SequenceMarkRef, draft: MarkDraft) {
   const collection = lookup.get(mark.collectionKey) ?? new Map<number, MarkDraft>();
   collection.set(mark.index, draft);
   lookup.set(mark.collectionKey, collection);

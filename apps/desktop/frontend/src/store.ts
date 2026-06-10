@@ -1,22 +1,21 @@
 import { create } from "zustand";
 import { commands } from "./api";
-import { blankSnapshot } from "./blankSnapshot";
-import type { AppSnapshotDto } from "./types";
+import type { AppSnapshot } from "./types";
 
 type SnapshotApplySource = "event" | "command" | "hydrate";
 
 type AppStore = {
-  snapshot: AppSnapshotDto | null;
+  snapshot: AppSnapshot | null;
   error: string | null;
   localText: string;
-  setSnapshot: (snapshot: AppSnapshotDto, source?: SnapshotApplySource) => void;
+  setSnapshot: (snapshot: AppSnapshot, source?: SnapshotApplySource) => void;
   setError: (error: string | null) => void;
   setLocalText: (text: string) => void;
   hydrate: () => Promise<void>;
 };
 
 export const useAppStore = create<AppStore>((set) => ({
-  snapshot: blankSnapshot(),
+  snapshot: null,
   error: null,
   localText: "",
   setSnapshot: (snapshot, source = "command") => {
@@ -43,7 +42,7 @@ export function subscribeToSnapshots(): Promise<() => void> {
   return Promise.resolve(() => {});
 }
 
-export async function runSnapshotCommand(command: () => Promise<AppSnapshotDto>) {
+export async function runSnapshotCommand(command: () => Promise<AppSnapshot>) {
   try {
     const snapshot = await command();
     useAppStore.getState().setSnapshot(snapshot, "command");

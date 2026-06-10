@@ -1,8 +1,8 @@
 import { useState } from "react";
 
-import type { AppSnapshotDto } from "../../types";
+import type { AppSnapshot } from "../../types";
 
-import type { GuiFocus, ReadyGuiDocumentDto, SequenceSelection } from "./shared";
+import type { GuiFocus, ReadyGuiDocument, SequenceSelection } from "./shared";
 
 import { LayoutCanvas } from "./layout/LayoutCanvas";
 
@@ -23,7 +23,7 @@ export function GuiEditor({
   sequenceSelection,
   setSequenceSelection
 }: {
-  snapshot: AppSnapshotDto;
+  snapshot: AppSnapshot;
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
 }) {
@@ -54,8 +54,8 @@ function GuiEditorInner({
   sequenceSelection,
   setSequenceSelection
 }: {
-  gui: ReadyGuiDocumentDto;
-  snapshot: AppSnapshotDto;
+  gui: ReadyGuiDocument;
+  snapshot: AppSnapshot;
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
 }) {
@@ -110,7 +110,7 @@ function GuiEditorInner({
   );
 }
 
-function guiEditorKey(activeFile: string | null, gui: ReadyGuiDocumentDto) {
+function guiEditorKey(activeFile: string | null, gui: ReadyGuiDocument) {
   switch (gui.type) {
     case "sequence":
     case "layout":

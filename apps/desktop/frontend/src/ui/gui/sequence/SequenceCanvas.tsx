@@ -8,7 +8,7 @@ import { Trash2 } from "lucide-react";
 
 import { commands } from "../../../api";
 
-import type { LayoutTargetDto, SequenceAudioDto, SequenceEditorDocumentDto, SequenceEffectScopeDto, SequenceEffectScriptDto } from "../../../types";
+import type { LayoutTarget, SequenceAudio, SequenceEditorDocument, SequenceEffectScope, SequenceEffectScript } from "../../../types";
 
 import { runSnapshotCommand } from "../../../store";
 
@@ -82,7 +82,7 @@ export function SequenceCanvas({
   visibleMarkCollectionKeys,
   setVisibleMarkCollectionKeys
 }: {
-  document: SequenceEditorDocumentDto;
+  document: SequenceEditorDocument;
   playheadSeconds: number;
   homeSeconds: number;
   selected: GuiFocus;
@@ -351,7 +351,7 @@ export function SequenceCanvas({
     void runSnapshotCommand(() => commands.sequenceTransportSeek(positionSeconds));
   };
   const timeFromCanvasX = (x: number) => clamp(roundToNanosecond(viewport.scrollXSeconds + (x - left) / viewport.pxPerSecond), 0, document.durationSeconds);
-  const addEffectFromContextMenu = async (script: SequenceEffectScriptDto, menu: SequenceContextMenu) => {
+  const addEffectFromContextMenu = async (script: SequenceEffectScript, menu: SequenceContextMenu) => {
     const hasMarksParams = script.params.some((param) => param.kind === "marks");
     let markCollectionKey = hasMarksParams ? activeMarkCollectionKey ?? document.markCollections[0]?.key ?? null : null;
     if (hasMarksParams && markCollectionKey === null) {
@@ -370,7 +370,7 @@ export function SequenceCanvas({
     }
     const target = document.lanes[menu.laneIndex]?.target ?? document.lanes[0]?.target;
     if (target === undefined) return;
-    const scope: SequenceEffectScopeDto = target.kind === "group" ? "wholeTarget" : "perFixture";
+    const scope: SequenceEffectScope = target.kind === "group" ? "wholeTarget" : "perFixture";
     await runSnapshotCommand(() =>
       commands.applySequenceGuiEdit({
         type: "addEffect",
@@ -452,7 +452,7 @@ export function SequenceCanvas({
     setSelected(null);
     updateSequenceSelection(null);
   };
-  const retargetContextEffect = async (effectId: number, target: LayoutTargetDto) => {
+  const retargetContextEffect = async (effectId: number, target: LayoutTarget) => {
     await runSnapshotCommand(() => commands.applySequenceGuiEdit({ type: "retargetEffect", id: effectId, target }));
   };
   const markCollectionsForMenu = () => {
@@ -1000,7 +1000,7 @@ type WaveformState = { key: string | null; audio: WaveformAudio | null };
 
 const waveformCache = new Map<string, Promise<WaveformAudio | null>>();
 
-function useSequenceWaveform(audio: SequenceAudioDto | null): WaveformState {
+function useSequenceWaveform(audio: SequenceAudio | null): WaveformState {
   const key = audio?.exists === true ? audio.resolvedPath : null;
   const [state, setState] = useState<WaveformState>({ key, audio: null });
 

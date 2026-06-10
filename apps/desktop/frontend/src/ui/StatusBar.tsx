@@ -1,7 +1,7 @@
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
-import type { AppSnapshotDto } from "../types";
+import type { AppSnapshot } from "../types";
 
-export function StatusBar({ snapshot }: { snapshot: AppSnapshotDto }) {
+export function StatusBar({ snapshot }: { snapshot: AppSnapshot }) {
   const errors = snapshot.diagnostics.filter((diagnostic) => diagnostic.severity === "error").length;
   const warnings = snapshot.diagnostics.filter((diagnostic) => diagnostic.severity === "warning").length;
   return (

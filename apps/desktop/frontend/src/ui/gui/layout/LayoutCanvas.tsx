@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { commands } from "../../../api";
 
-import type { LayoutDocumentDto } from "../../../types";
+import type { LayoutDocument } from "../../../types";
 
 import { runSnapshotCommand } from "../../../store";
 
@@ -15,7 +15,7 @@ export function LayoutCanvas({
   selected,
   setSelected
 }: {
-  document: LayoutDocumentDto;
+  document: LayoutDocument;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
 }) {

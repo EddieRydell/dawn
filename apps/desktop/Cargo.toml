@@ -8,7 +8,11 @@ license = "MIT"
 default-run = "dawn-desktop"
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+specta = { version = "2.0.0-rc.25", features = ["derive"] }
+specta-typescript = "0.0.12"
 tauri = { version = "2", features = [] }
+tauri-specta = { version = "2.0.0-rc.25", features = ["derive", "typescript"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -16,3 +20,7 @@ tauri-build = { version = "2", features = [] }
 [[bin]]
 name = "dawn-desktop"
 path = "src/main.rs"
+
+[[bin]]
+name = "export-bindings"
+path = "src/bin/export_bindings.rs"

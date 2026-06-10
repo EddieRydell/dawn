@@ -1,11 +1,11 @@
-import type { ProjectDiagnosticDto } from "../../types";
+import type { ProjectDiagnostic } from "../../types";
 
 export function BlockedGui({
   reason,
   diagnostics
 }: {
   reason: string;
-  diagnostics: ProjectDiagnosticDto[];
+  diagnostics: ProjectDiagnostic[];
 }) {
   return (
     <div className="gui-blocked">

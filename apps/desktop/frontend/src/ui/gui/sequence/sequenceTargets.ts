@@ -1,5 +1,5 @@
-import type { LayoutTargetDto } from "../../../types";
+import type { LayoutTarget } from "../../../types";
 
-export function targetsEqual(left: LayoutTargetDto, right: LayoutTargetDto) {
+export function targetsEqual(left: LayoutTarget, right: LayoutTarget) {
   return left.kind === right.kind && left.name === right.name;
 }

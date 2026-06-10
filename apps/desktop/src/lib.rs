@@ -10,6 +10,16 @@
     )
 )]
 
+pub mod bindings;
+pub mod commands;
+pub mod dto;
+pub mod state;
+
 pub fn run() -> Result<(), tauri::Error> {
-    tauri::Builder::default().run(tauri::generate_context!())
+    let bindings = bindings::builder();
+
+    tauri::Builder::default()
+        .manage(state::DesktopState::new())
+        .invoke_handler(bindings.invoke_handler())
+        .run(tauri::generate_context!())
 }

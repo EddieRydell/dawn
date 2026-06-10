@@ -1,4 +1,14 @@
-import type { ActiveGuiDocumentDto, AppSnapshotDto, GeometryRenderBoundsDto, GeometryRenderPointDto, LayoutDocumentDto, LayoutFixturePlacementDto, Point3MetersDto, SequenceSelectionDto, TransformDto } from "../../types";
+import type {
+  ActiveGuiDocument,
+  AppSnapshot,
+  GeometryRenderBounds,
+  GeometryRenderPoint,
+  LayoutDocument,
+  LayoutFixturePlacement,
+  Point3Meters,
+  SequenceSelection as WireSequenceSelection,
+  Transform as WireTransform
+} from "../../types";
 
 export type Point3 = { x: number; y: number; z: number };
 
@@ -48,7 +58,7 @@ export type SequenceRenderTiming = {
 
 export type SequenceRenderEvent = {
   sourceLabel: string;
-  sourceKey: AppSnapshotDto["sequenceTransport"]["sourceKey"];
+  sourceKey: AppSnapshot["sequenceTransport"]["sourceKey"];
   renderGeneration: number;
   renderDirtyRevision: number;
   renderUpdating: boolean;
@@ -57,11 +67,11 @@ export type SequenceRenderEvent = {
   timing: SequenceRenderTiming;
 };
 
-export type SequenceTransportSnapshot = AppSnapshotDto["sequenceTransport"] & { timing?: SequenceRenderTiming };
+export type SequenceTransportSnapshot = AppSnapshot["sequenceTransport"] & { timing?: SequenceRenderTiming };
 
-export type ReadyGuiDocumentDto = Exclude<ActiveGuiDocumentDto, { type: "blocked" }>;
+export type ReadyGuiDocument = Exclude<ActiveGuiDocument, { type: "blocked" }>;
 
-export type SequenceSelection = SequenceSelectionDto | null;
+export type SequenceSelection = WireSequenceSelection | null;
 
 export type GuiFocus =
   | { type: "effect"; id: number }
@@ -84,7 +94,7 @@ const GUI_COLORS = {
   canvasGrid: "#2c3036"
 } as const;
 
-export function normalizePoint(point: Point3MetersDto | GeometryRenderPointDto): Point3 {
+export function normalizePoint(point: Point3Meters | GeometryRenderPoint): Point3 {
   return {
     x: point.xMeters,
     y: point.yMeters,
@@ -92,7 +102,7 @@ export function normalizePoint(point: Point3MetersDto | GeometryRenderPointDto):
   };
 }
 
-export function normalizeTransform(transform: TransformDto): Transform {
+export function normalizeTransform(transform: WireTransform): Transform {
   return {
     position: normalizePoint(transform.position),
     rotation: {
@@ -108,7 +118,7 @@ export function normalizeTransform(transform: TransformDto): Transform {
   };
 }
 
-export function denormalizePoint(point: Point3): Point3MetersDto {
+export function denormalizePoint(point: Point3): Point3Meters {
   return {
     xMeters: point.x,
     yMeters: point.y,
@@ -116,7 +126,7 @@ export function denormalizePoint(point: Point3): Point3MetersDto {
   };
 }
 
-export function denormalizeTransform(transform: Transform): TransformDto {
+export function denormalizeTransform(transform: Transform): WireTransform {
   return {
     position: denormalizePoint(transform.position),
     rotation: {
@@ -135,7 +145,7 @@ export type RenderBounds = {
   maxY: number;
 };
 
-export function normalizeBounds(bounds: GeometryRenderBoundsDto): RenderBounds {
+export function normalizeBounds(bounds: GeometryRenderBounds): RenderBounds {
   return {
     minX: bounds.minXMeters,
     minY: bounds.minYMeters,
@@ -209,8 +219,8 @@ export function unproject(x: number, y: number, canvas: HTMLCanvasElement | null
   };
 }
 
-export function nearestPlacement(document: LayoutDocumentDto, point: Point3): LayoutFixturePlacementDto | null {
-  let best: LayoutFixturePlacementDto | null = null;
+export function nearestPlacement(document: LayoutDocument, point: Point3): LayoutFixturePlacement | null {
+  let best: LayoutFixturePlacement | null = null;
   let bestDistance = Infinity;
   for (const placement of document.fixtures) {
     const transform = normalizeTransform(placement.transform);

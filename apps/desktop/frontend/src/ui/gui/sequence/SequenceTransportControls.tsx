@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 
 import { commands } from "../../../api";
 
-import type { AppSnapshotDto, SequenceTransportState, SequenceEditorDocumentDto } from "../../../types";
+import type { AppSnapshot, SequenceTransportState, SequenceEditorDocument } from "../../../types";
 
 import { runSnapshotCommand } from "../../../store";
 
@@ -18,9 +18,9 @@ export function SequenceTransportControls({
   transport,
   liveOutput
 }: {
-  document: SequenceEditorDocumentDto;
-  transport: AppSnapshotDto["sequenceTransport"];
-  liveOutput: AppSnapshotDto["liveOutput"];
+  document: SequenceEditorDocument;
+  transport: AppSnapshot["sequenceTransport"];
+  liveOutput: AppSnapshot["liveOutput"];
 }) {
   const liveTransport = useSequenceTransport(transport);
   const unsupported = document.durationSeconds <= 0;
@@ -124,7 +124,7 @@ export function SequenceTransportControls({
   );
 }
 
-export function useSequenceTransport(transport: AppSnapshotDto["sequenceTransport"]): SequenceTransportSnapshot {
+export function useSequenceTransport(transport: AppSnapshot["sequenceTransport"]): SequenceTransportSnapshot {
   const [renderEvent, setRenderEvent] = useState<SequenceRenderEvent | null>(null);
   const [animatedPositionSeconds, setAnimatedPositionSeconds] = useState(transport.positionSeconds);
   const snapshotRef = useRef(transport);
@@ -204,7 +204,7 @@ export function useSequenceTransport(transport: AppSnapshotDto["sequenceTranspor
     : liveTransport;
 }
 
-function useSequenceAudioStatus(transport: AppSnapshotDto["sequenceTransport"]) {
+function useSequenceAudioStatus(transport: AppSnapshot["sequenceTransport"]) {
   switch (transport.audioPlaybackStatus) {
     case "playing":
       return { label: "Audio playing", tone: "ready" };
@@ -261,8 +261,8 @@ function isEditableShortcutTarget(target: EventTarget | null) {
 
 export function handleSequencePlaybackShortcut(
   event: KeyboardEvent<HTMLElement>,
-  document: SequenceEditorDocumentDto,
-  transport: AppSnapshotDto["sequenceTransport"],
+  document: SequenceEditorDocument,
+  transport: AppSnapshot["sequenceTransport"],
   unsupported: boolean
 ) {
   if (unsupported || isEditableShortcutTarget(event.target)) return;
@@ -302,7 +302,7 @@ function transportExtrapolationSeconds(anchoredAt: number) {
   return anchoredAt > 0 ? (performance.now() - anchoredAt) / 1000 : 0;
 }
 
-function renderEventMatchesSnapshot(event: SequenceRenderEvent, snapshot: AppSnapshotDto["sequenceTransport"]) {
+function renderEventMatchesSnapshot(event: SequenceRenderEvent, snapshot: AppSnapshot["sequenceTransport"]) {
   return (
     event.sourceLabel === snapshot.sourceLabel &&
     event.renderGeneration === snapshot.renderGeneration &&
@@ -312,12 +312,12 @@ function renderEventMatchesSnapshot(event: SequenceRenderEvent, snapshot: AppSna
   );
 }
 
-function sequenceKeyMatches(left: AppSnapshotDto["sequenceTransport"]["sourceKey"], right: AppSnapshotDto["sequenceTransport"]["sourceKey"]) {
+function sequenceKeyMatches(left: AppSnapshot["sequenceTransport"]["sourceKey"], right: AppSnapshot["sequenceTransport"]["sourceKey"]) {
   if (left === null || right === null) return left === right;
   return left.path === right.path && left.objectKey === right.objectKey;
 }
 
-function stepSequenceFrame(document: SequenceEditorDocumentDto, positionSeconds: number, transportDurationSeconds: number, direction: -1 | 1) {
+function stepSequenceFrame(document: SequenceEditorDocument, positionSeconds: number, transportDurationSeconds: number, direction: -1 | 1) {
   const frameSeconds = 1 / Math.max(1, document.frameRate);
   const nextPositionSeconds = clamp(positionSeconds + direction * frameSeconds, 0, transportDurationSeconds || document.durationSeconds);
   void runSnapshotCommand(() => commands.sequenceTransportSeek(nextPositionSeconds));

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { SequenceMarkCollectionDto } from "../../../types";
+import type { SequenceMarkCollection } from "../../../types";
 
 import type { GuiFocus } from "../shared";
 
@@ -41,7 +41,7 @@ export function useMarkDisplayMode() {
 
 export function drawSequenceMarks(
   ctx: CanvasRenderingContext2D,
-  collections: SequenceMarkCollectionDto[],
+  collections: SequenceMarkCollection[],
   selected: GuiFocus,
   selectedMarks: MarkRefLookup,
   mode: MarkDisplayMode,
@@ -92,7 +92,7 @@ export function drawSequenceMarks(
   ctx.restore();
 }
 
-export function committedMarkDrafts(collections: SequenceMarkCollectionDto[], drafts: MarkDraftLookup) {
+export function committedMarkDrafts(collections: SequenceMarkCollection[], drafts: MarkDraftLookup) {
   const next: MarkDraftLookup = new Map();
   for (const draft of markDraftEntries(drafts)) {
     if (draft.committedIndex === undefined) {
@@ -107,7 +107,7 @@ export function committedMarkDrafts(collections: SequenceMarkCollectionDto[], dr
   return next;
 }
 
-export function markIndexAfterMove(collection: SequenceMarkCollectionDto, index: number, timeSeconds: number) {
+export function markIndexAfterMove(collection: SequenceMarkCollection, index: number, timeSeconds: number) {
   const sorted = collection.marksSeconds
     .map((markTimeSeconds, markIndex) => ({
       markIndex,
@@ -117,7 +117,7 @@ export function markIndexAfterMove(collection: SequenceMarkCollectionDto, index:
   return Math.max(0, sorted.findIndex((mark) => mark.markIndex === index));
 }
 
-export function nextCollectionKey(name: string, collections: SequenceMarkCollectionDto[]) {
+export function nextCollectionKey(name: string, collections: SequenceMarkCollection[]) {
   const used = new Set(collections.map((collection) => collection.key));
   const base = snakeCaseKey(name);
   if (!used.has(base)) return base;

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { commands } from "../../../api";
 
-import type { FixtureDocumentDto } from "../../../types";
+import type { FixtureDocument } from "../../../types";
 
 import { runSnapshotCommand } from "../../../store";
 
@@ -16,7 +16,7 @@ export function FixtureCanvas({
   selected,
   setSelected
 }: {
-  document: FixtureDocumentDto;
+  document: FixtureDocument;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
 }) {

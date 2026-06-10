@@ -9,17 +9,17 @@ import { tags } from "@lezer/highlight";
 import { RefreshCw, Save, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type PointerEvent } from "react";
 import { commands } from "../api";
-import type { AppSnapshotDto, ProjectDiagnosticDto, SequenceSelectionDto, TextRangeDto } from "../types";
+import type { AppSnapshot, ProjectDiagnostic, SequenceSelection, TextRange } from "../types";
 import { commandRegistry } from "../commandRegistry";
 import { runSnapshotCommand, useAppStore } from "../store";
 import { GuiEditor } from "./gui/GuiEditor";
 import { SequenceTransportControls } from "./gui/sequence/SequenceTransportControls";
 
 type BufferExternalState = "current" | "changedOnDisk" | "deletedOnDisk";
-type EditorBufferWithExternalState = NonNullable<AppSnapshotDto["activeBuffer"]>;
-type PathSelection = { path: string | null; selection: SequenceSelectionDto | null };
+type EditorBufferWithExternalState = NonNullable<AppSnapshot["activeBuffer"]>;
+type PathSelection = { path: string | null; selection: SequenceSelection | null };
 
-export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
+export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
   const { localText, setLocalText } = useAppStore();
   const editorHost = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
@@ -37,7 +37,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshotDto }) {
     viewMode === "gui" && snapshot.activeGuiDocument?.type === "sequence" ? snapshot.activeGuiDocument.document : null;
   const sequenceSelection = pathSelection.path === activePath ? pathSelection.selection : null;
   const setSequenceSelection = useCallback(
-    (selection: SequenceSelectionDto | null) => {
+    (selection: SequenceSelection | null) => {
       setPathSelection({ path: activePath, selection });
     },
     [activePath]
@@ -242,7 +242,7 @@ function EditorScrollbar({
   view
 }: {
   activePath: string | null;
-  diagnostics: ProjectDiagnosticDto[];
+  diagnostics: ProjectDiagnostic[];
   editorSignal: number;
   projectRoot: string | null;
   view: EditorView | null;
@@ -407,7 +407,7 @@ function activeBufferExternalState(buffer: EditorBufferWithExternalState | null)
   return buffer?.externalState ?? "current";
 }
 
-function tabExternalState(tab: AppSnapshotDto["tabs"][number]): BufferExternalState {
+function tabExternalState(tab: AppSnapshot["tabs"][number]): BufferExternalState {
   return tab.externalState;
 }
 
@@ -511,7 +511,7 @@ function createState(
 }
 
 function editorDiagnostics(
-  diagnostics: ProjectDiagnosticDto[],
+  diagnostics: ProjectDiagnostic[],
   activePath: string | null,
   projectRoot: string | null,
   view: EditorView
@@ -533,7 +533,7 @@ function editorDiagnostics(
   });
 }
 
-function renderDiagnosticMessage(diagnostic: ProjectDiagnosticDto, from: number, view: EditorView): Node {
+function renderDiagnosticMessage(diagnostic: ProjectDiagnostic, from: number, view: EditorView): Node {
   const fragment = document.createDocumentFragment();
   fragment.append(
     textSpan("cm-diagnostic-location", diagnosticLocation(from, view)),
@@ -551,7 +551,7 @@ function textSpan(className: string, text: string): HTMLSpanElement {
 }
 
 function editorDiagnosticMarkers(
-  diagnostics: ProjectDiagnosticDto[],
+  diagnostics: ProjectDiagnostic[],
   activePath: string | null,
   projectRoot: string | null,
   view: EditorView | null
@@ -609,7 +609,7 @@ function pointDiagnosticRange(view: EditorView): { from: number; to: number } | 
   return { from, to: from };
 }
 
-function rangeToOffsets(range: TextRangeDto, view: EditorView): { from: number; to: number } | null {
+function rangeToOffsets(range: TextRange, view: EditorView): { from: number; to: number } | null {
   const from = positionToOffset(range.start.line, range.start.character, view);
   const rawTo = positionToOffset(range.end.line, range.end.character, view);
   if (from === null || rawTo === null) return null;

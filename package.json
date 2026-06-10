@@ -1,15 +1,16 @@
 {
   "private": true,
   "scripts": {
-    "typecheck": "pnpm --dir apps/desktop/frontend typecheck",
-    "lint": "pnpm --dir apps/desktop/frontend lint",
-    "frontend:build": "pnpm --dir apps/desktop/frontend build",
+    "generate:bindings": "pnpm --dir apps/desktop bindings",
+    "typecheck": "pnpm generate:bindings && pnpm --dir apps/desktop/frontend typecheck",
+    "lint": "pnpm generate:bindings && pnpm --dir apps/desktop/frontend lint",
+    "frontend:build": "pnpm generate:bindings && pnpm --dir apps/desktop/frontend build",
     "rust:fmt": "cargo fmt --check",
     "rust:check": "cargo check --workspace --all-targets",
     "rust:clippy": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
-    "check": "pnpm typecheck && pnpm lint && pnpm frontend:build && pnpm rust:fmt && pnpm rust:check && pnpm rust:clippy",
+    "check": "pnpm generate:bindings && pnpm typecheck && pnpm lint && pnpm frontend:build && pnpm rust:fmt && pnpm rust:check && pnpm rust:clippy",
     "ci": "pnpm check",
-    "build": "pnpm --dir apps/desktop/frontend build",
+    "build": "pnpm generate:bindings && pnpm --dir apps/desktop/frontend build",
     "tauri": "pnpm --dir apps/desktop exec tauri"
   },
   "devDependencies": {

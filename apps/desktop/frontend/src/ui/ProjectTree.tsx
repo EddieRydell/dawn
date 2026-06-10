@@ -5,18 +5,18 @@ import { useMemo, useState, type CSSProperties } from "react";
 import type { NodeApi } from "react-arborist";
 import { Tree } from "react-arborist";
 import { commands } from "../api";
-import type { AppSnapshotDto, ProjectDiagnosticDto, WorkspaceEntryDto } from "../types";
+import type { AppSnapshot, ProjectDiagnostic, WorkspaceEntry } from "../types";
 import { runSnapshotCommand } from "../store";
 
 type TreeNode = {
   id: string;
   name: string;
-  kind: WorkspaceEntryDto["kind"];
+  kind: WorkspaceEntry["kind"];
   hasError: boolean;
   children?: TreeNode[];
 };
 
-export function ProjectTree({ snapshot }: { snapshot: AppSnapshotDto }) {
+export function ProjectTree({ snapshot }: { snapshot: AppSnapshot }) {
   const treeData = useMemo(
     () => buildTree(snapshot.projectEntries, snapshot.diagnostics, snapshot.projectRoot),
     [snapshot.diagnostics, snapshot.projectEntries, snapshot.projectRoot]
@@ -135,8 +135,8 @@ function treeRowClassName(node: NodeApi<TreeNode>): string {
 }
 
 function buildTree(
-  entries: WorkspaceEntryDto[],
-  diagnostics: ProjectDiagnosticDto[],
+  entries: WorkspaceEntry[],
+  diagnostics: ProjectDiagnostic[],
   projectRoot: string | null
 ): TreeNode[] {
   const nodes = new Map<string, TreeNode>();
@@ -168,7 +168,7 @@ function buildTree(
 
 function hasErrorDiagnostic(
   path: string,
-  diagnostics: ProjectDiagnosticDto[],
+  diagnostics: ProjectDiagnostic[],
   projectRoot: string | null
 ): boolean {
   return diagnostics.some((diagnostic) => diagnostic.severity === "error" && samePath(diagnostic.path, path, projectRoot));

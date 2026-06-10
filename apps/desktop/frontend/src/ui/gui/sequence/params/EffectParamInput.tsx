@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, ChevronRight, FlipHorizontal2, FlipVertical2, Link2
 
 import { commands } from "../../../../api";
 
-import type { ColorCurvePointDto, FloatCurvePointDto, SequenceCurveLibraryItemDto, SequenceEffectParamDto, SequenceEffectParamValueDto, SequenceMarkCollectionDto } from "../../../../types";
+import type { ColorCurvePoint, FloatCurvePoint, SequenceCurveLibraryItem, SequenceEffectParam, SequenceEffectParamValue, SequenceMarkCollection } from "../../../../types";
 
 import { runSnapshotCommand } from "../../../../store";
 
@@ -31,11 +31,11 @@ export function EffectParamInput({
   markCollections
 }: {
   effectId: number;
-  param: SequenceEffectParamDto;
-  curveLibrary: SequenceCurveLibraryItemDto[];
-  markCollections: SequenceMarkCollectionDto[];
+  param: SequenceEffectParam;
+  curveLibrary: SequenceCurveLibraryItem[];
+  markCollections: SequenceMarkCollection[];
 }) {
-  const commit = (value: SequenceEffectParamValueDto) => {
+  const commit = (value: SequenceEffectParamValue) => {
     return runSnapshotCommand(() =>
       commands.applySequenceGuiEdit({
         type: "updateEffectParam",
@@ -211,7 +211,7 @@ function ColorArrayParam({ name, values, commit }: { name: string; values: strin
   );
 }
 
-function FloatCurveArrayParam({ name, values, commit }: { name: string; values: FloatCurvePointDto[][]; commit: (values: FloatCurvePointDto[][]) => Promise<void> }) {
+function FloatCurveArrayParam({ name, values, commit }: { name: string; values: FloatCurvePoint[][]; commit: (values: FloatCurvePoint[][]) => Promise<void> }) {
   return (
     <ArrayShell
       name={name}
@@ -226,7 +226,7 @@ function FloatCurveArrayParam({ name, values, commit }: { name: string; values: 
   );
 }
 
-function ColorCurveArrayParam({ name, values, commit }: { name: string; values: ColorCurvePointDto[][]; commit: (values: ColorCurvePointDto[][]) => Promise<void> }) {
+function ColorCurveArrayParam({ name, values, commit }: { name: string; values: ColorCurvePoint[][]; commit: (values: ColorCurvePoint[][]) => Promise<void> }) {
   return (
     <ArrayShell
       name={name}
@@ -290,7 +290,7 @@ function NumberParam({
   step,
   commit
 }: {
-  param: SequenceEffectParamDto;
+  param: SequenceEffectParam;
   value: number;
   step: number;
   commit: (value: number) => Promise<void>;
@@ -398,9 +398,9 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
   render
 }: {
   effectId: number;
-  param: SequenceEffectParamDto;
+  param: SequenceEffectParam;
   valueType: "float" | "color";
-  curveLibrary: SequenceCurveLibraryItemDto[];
+  curveLibrary: SequenceCurveLibraryItem[];
   points: T[];
   commit: (points: T[]) => Promise<void>;
   render: (props: CurveEditorProps<T>) => ReactNode;
@@ -1169,14 +1169,14 @@ function curvePointsSignature(points: Array<{ time: number; value: number | stri
   return JSON.stringify(points);
 }
 
-function normalizeFloatCurvePoints(points: FloatCurvePointDto[]): EditedFloatCurvePoint[] {
+function normalizeFloatCurvePoints(points: FloatCurvePoint[]): EditedFloatCurvePoint[] {
   const normalized = points
     .filter((point) => Number.isFinite(point.time) && Number.isFinite(point.value))
     .map((point) => ({ time: clamp(point.time, 0, 1), value: point.value }));
   return normalized.length > 0 ? normalized : [{ time: 0, value: 0 }];
 }
 
-function normalizeColorCurvePoints(points: ColorCurvePointDto[]): EditedColorCurvePoint[] {
+function normalizeColorCurvePoints(points: ColorCurvePoint[]): EditedColorCurvePoint[] {
   const normalized = points
     .filter((point) => isHexColor(point.value))
     .filter((point) => Number.isFinite(point.time))

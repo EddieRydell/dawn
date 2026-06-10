@@ -1,10 +1,10 @@
-import type { FixtureDocumentDto } from "../../../types";
+import type { FixtureDocument } from "../../../types";
 import { commands } from "../../../api";
 import { runSnapshotCommand } from "../../../store";
 import { InspectorScrollArea } from "../InspectorScrollArea";
 import type { GuiFocus } from "../shared";
 
-export function FixtureInspector({ document, selected }: { document: FixtureDocumentDto; selected: GuiFocus }) {
+export function FixtureInspector({ document, selected }: { document: FixtureDocument; selected: GuiFocus }) {
   const fixture = document.fixtures.find((candidate) => candidate.objectKey === document.selectedObjectKey) ?? document.fixtures[0];
   return (
     <InspectorScrollArea>
