@@ -9,7 +9,7 @@ import { tags } from "@lezer/highlight";
 import { RefreshCw, Save, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type PointerEvent } from "react";
 import { commands } from "../api";
-import type { AppSnapshotDto, ProjectDiagnosticDto, SequenceSelectionDto, TextRangeDto } from "../bindings";
+import type { AppSnapshotDto, ProjectDiagnosticDto, SequenceSelectionDto, TextRangeDto } from "../types";
 import { commandRegistry } from "../commandRegistry";
 import { runSnapshotCommand, useAppStore } from "../store";
 import { GuiEditor } from "./gui/GuiEditor";

@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, ChevronRight, FlipHorizontal2, FlipVertical2, Link2
 
 import { commands } from "../../../../api";
 
-import type { ColorCurvePointDto, FloatCurvePointDto, SequenceCurveLibraryItemDto, SequenceEffectParamDto, SequenceEffectParamValueDto, SequenceMarkCollectionDto } from "../../../../bindings";
+import type { ColorCurvePointDto, FloatCurvePointDto, SequenceCurveLibraryItemDto, SequenceEffectParamDto, SequenceEffectParamValueDto, SequenceMarkCollectionDto } from "../../../../types";
 
 import { runSnapshotCommand } from "../../../../store";
 

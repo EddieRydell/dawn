@@ -1,4 +1,4 @@
-import type { SequenceEditorDocumentDto, SequenceEffectDto, SequenceEffectScopeDto, SequenceEffectScriptDto } from "../../../bindings";
+import type { SequenceEditorDocumentDto, SequenceEffectDto, SequenceEffectScopeDto, SequenceEffectScriptDto } from "../../../types";
 import { commands } from "../../../api";
 import { runSnapshotCommand } from "../../../store";
 import { InspectorScrollArea, Readout } from "../InspectorScrollArea";

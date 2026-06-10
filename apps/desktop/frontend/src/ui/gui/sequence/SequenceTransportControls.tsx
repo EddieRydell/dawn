@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 
 import { commands } from "../../../api";
 
-import type { AppSnapshotDto, SequenceTransportState, SequenceEditorDocumentDto } from "../../../bindings";
+import type { AppSnapshotDto, SequenceTransportState, SequenceEditorDocumentDto } from "../../../types";
 
 import { runSnapshotCommand } from "../../../store";
 

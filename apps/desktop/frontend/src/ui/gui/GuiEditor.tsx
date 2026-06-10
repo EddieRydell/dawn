@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import type { AppSnapshotDto } from "../../bindings";
+import type { AppSnapshotDto } from "../../types";
 
 import type { GuiFocus, ReadyGuiDocumentDto, SequenceSelection } from "./shared";
 

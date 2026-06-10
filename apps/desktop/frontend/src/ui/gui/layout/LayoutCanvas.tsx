@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { commands } from "../../../api";
 
-import type { LayoutDocumentDto } from "../../../bindings";
+import type { LayoutDocumentDto } from "../../../types";
 
 import { runSnapshotCommand } from "../../../store";
 

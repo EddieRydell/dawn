@@ -1,4 +1,4 @@
-import type { LayoutDocumentDto } from "../../../bindings";
+import type { LayoutDocumentDto } from "../../../types";
 import { InspectorScrollArea } from "../InspectorScrollArea";
 import { normalizeTransform, type GuiFocus } from "../shared";
 

@@ -1,4 +1,4 @@
-import type { ProjectDiagnosticDto } from "../../bindings";
+import type { ProjectDiagnosticDto } from "../../types";
 
 export function BlockedGui({
   reason,

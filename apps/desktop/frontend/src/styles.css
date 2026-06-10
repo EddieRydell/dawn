@@ -73,22 +73,15 @@ button:focus-visible,
   position: relative;
   z-index: 50;
   display: grid;
-  grid-template-columns: 108px auto 1fr 138px;
+  grid-template-columns: 108px auto minmax(0, 1fr) 138px;
   align-items: center;
   border-bottom: 1px solid var(--dawn-border);
   background: var(--dawn-bg-panel);
+  cursor: default;
   user-select: none;
 }
 
-.titlebar-drag-surface {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-}
-
 .brand {
-  position: relative;
-  z-index: 1;
   padding-left: 14px;
   font-size: 13px;
   font-weight: 700;
@@ -104,8 +97,7 @@ button:focus-visible,
 
 .menu-row,
 .window-controls {
-  position: relative;
-  z-index: 2;
+  -webkit-app-region: no-drag;
 }
 
 .menu-trigger,

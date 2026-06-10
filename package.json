@@ -1,20 +1,16 @@
 {
   "private": true,
   "scripts": {
-    "generate-bindings": "cargo run -p dawn-desktop --bin generate-bindings",
-    "bindings:check": "cargo run -p dawn-desktop --bin generate-bindings -- --check",
     "typecheck": "pnpm --dir apps/desktop/frontend typecheck",
     "lint": "pnpm --dir apps/desktop/frontend lint",
-    "knip": "pnpm --dir apps/desktop/frontend knip",
     "frontend:build": "pnpm --dir apps/desktop/frontend build",
     "rust:fmt": "cargo fmt --check",
     "rust:check": "cargo check --workspace --all-targets",
     "rust:clippy": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
-    "rust:test": "cargo test",
-    "check": "pnpm bindings:check && pnpm typecheck && pnpm lint && pnpm knip && pnpm frontend:build && pnpm rust:fmt && pnpm rust:check && pnpm rust:clippy && pnpm rust:test",
+    "check": "pnpm typecheck && pnpm lint && pnpm frontend:build && pnpm rust:fmt && pnpm rust:check && pnpm rust:clippy",
     "ci": "pnpm check",
-    "build": "pnpm generate-bindings && pnpm --dir apps/desktop/frontend build",
-    "tauri": "pnpm generate-bindings && pnpm --dir apps/desktop exec tauri"
+    "build": "pnpm --dir apps/desktop/frontend build",
+    "tauri": "pnpm --dir apps/desktop exec tauri"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"

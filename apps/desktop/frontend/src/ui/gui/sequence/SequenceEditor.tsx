@@ -1,6 +1,6 @@
 import type { KeyboardEvent } from "react";
 
-import type { SequenceEditorDocumentDto } from "../../../bindings";
+import type { SequenceEditorDocumentDto } from "../../../types";
 
 import type { GuiFocus, SequenceSelection, SequenceTransportSnapshot } from "../shared";
 

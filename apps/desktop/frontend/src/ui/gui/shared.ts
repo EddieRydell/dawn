@@ -1,4 +1,4 @@
-import type { ActiveGuiDocumentDto, AppSnapshotDto, GeometryRenderBoundsDto, GeometryRenderPointDto, LayoutDocumentDto, LayoutFixturePlacementDto, Point3MetersDto, SequenceSelectionDto, TransformDto } from "../../bindings";
+import type { ActiveGuiDocumentDto, AppSnapshotDto, GeometryRenderBoundsDto, GeometryRenderPointDto, LayoutDocumentDto, LayoutFixturePlacementDto, Point3MetersDto, SequenceSelectionDto, TransformDto } from "../../types";
 
 export type Point3 = { x: number; y: number; z: number };
 

@@ -5,7 +5,7 @@ import { useMemo, useState, type CSSProperties } from "react";
 import type { NodeApi } from "react-arborist";
 import { Tree } from "react-arborist";
 import { commands } from "../api";
-import type { AppSnapshotDto, ProjectDiagnosticDto, WorkspaceEntryDto } from "../bindings";
+import type { AppSnapshotDto, ProjectDiagnosticDto, WorkspaceEntryDto } from "../types";
 import { runSnapshotCommand } from "../store";
 
 type TreeNode = {

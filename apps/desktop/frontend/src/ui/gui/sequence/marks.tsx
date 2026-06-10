@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { SequenceMarkCollectionDto } from "../../../bindings";
+import type { SequenceMarkCollectionDto } from "../../../types";
 
 import type { GuiFocus } from "../shared";
 

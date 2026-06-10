@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { commands } from "../../../api";
 
-import type { FixtureDocumentDto } from "../../../bindings";
+import type { FixtureDocumentDto } from "../../../types";
 
 import { runSnapshotCommand } from "../../../store";
 

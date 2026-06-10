@@ -1,0 +1,10 @@
+[package]
+name = "dawn-language"
+edition.workspace = true
+version.workspace = true
+description = "Dawn language"
+authors = ["Dawn"]
+license = "MIT"
+
+[dependencies]
+indexmap = "2.14.0"

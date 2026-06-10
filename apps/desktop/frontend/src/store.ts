@@ -1,7 +1,7 @@
-import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { commands } from "./api";
-import type { AppSnapshotDto } from "./bindings";
+import { blankSnapshot } from "./blankSnapshot";
+import type { AppSnapshotDto } from "./types";
 
 type SnapshotApplySource = "event" | "command" | "hydrate";
 
@@ -16,7 +16,7 @@ type AppStore = {
 };
 
 export const useAppStore = create<AppStore>((set) => ({
-  snapshot: null,
+  snapshot: blankSnapshot(),
   error: null,
   localText: "",
   setSnapshot: (snapshot, source = "command") => {
@@ -39,13 +39,8 @@ export const useAppStore = create<AppStore>((set) => ({
   }
 }));
 
-export async function subscribeToSnapshots() {
-  const disposeSnapshots = await listen<AppSnapshotDto>("app_snapshot_changed", (event) => {
-    useAppStore.getState().setSnapshot(event.payload, "event");
-  });
-  return () => {
-    disposeSnapshots();
-  };
+export function subscribeToSnapshots(): Promise<() => void> {
+  return Promise.resolve(() => {});
 }
 
 export async function runSnapshotCommand(command: () => Promise<AppSnapshotDto>) {

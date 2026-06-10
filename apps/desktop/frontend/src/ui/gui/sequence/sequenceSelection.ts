@@ -1,4 +1,4 @@
-import type { SequenceEditorDocumentDto, SequenceEffectDto, SequenceMarkCollectionDto, SequenceMarkRefDto, SequenceSelectionDto } from "../../../bindings";
+import type { SequenceEditorDocumentDto, SequenceEffectDto, SequenceMarkCollectionDto, SequenceMarkRefDto, SequenceSelectionDto } from "../../../types";
 
 import { clamp, type GuiFocus, type SequenceSelection } from "../shared";
 

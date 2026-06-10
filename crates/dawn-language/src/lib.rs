@@ -1,4 +1,4 @@
-#![cfg_attr(not(windows), deny(unsafe_code))]
+#![deny(unsafe_code)]
 #![cfg_attr(
     not(test),
     deny(
@@ -10,6 +10,8 @@
     )
 )]
 
-pub fn run() -> Result<(), tauri::Error> {
-    tauri::Builder::default().run(tauri::generate_context!())
-}
+pub mod effect;
+pub mod effect_dsl;
+mod model;
+pub mod sequence;
+pub mod setup;

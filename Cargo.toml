@@ -1,21 +1,7 @@
 [workspace]
-members = [
-  "apps/desktop",
-  "crates/dawn-app-core",
-  "crates/dawn-project",
-]
+members = ["apps/desktop", "crates/dawn-language"]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
 version = "0.1.0"
-
-[workspace.dependencies]
-camino = { version = "1", features = ["serde1"] }
-clap = { version = "4", features = ["derive"] }
-dirs = "6"
-indexmap = { version = "2", features = ["serde"] }
-pathdiff = "0.2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_yaml = "0.9"

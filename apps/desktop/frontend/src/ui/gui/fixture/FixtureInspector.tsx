@@ -1,4 +1,4 @@
-import type { FixtureDocumentDto } from "../../../bindings";
+import type { FixtureDocumentDto } from "../../../types";
 import { commands } from "../../../api";
 import { runSnapshotCommand } from "../../../store";
 import { InspectorScrollArea } from "../InspectorScrollArea";

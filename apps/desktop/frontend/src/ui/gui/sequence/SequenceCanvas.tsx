@@ -8,7 +8,7 @@ import { Trash2 } from "lucide-react";
 
 import { commands } from "../../../api";
 
-import type { LayoutTargetDto, SequenceAudioDto, SequenceEditorDocumentDto, SequenceEffectScopeDto, SequenceEffectScriptDto } from "../../../bindings";
+import type { LayoutTargetDto, SequenceAudioDto, SequenceEditorDocumentDto, SequenceEffectScopeDto, SequenceEffectScriptDto } from "../../../types";
 
 import { runSnapshotCommand } from "../../../store";
 

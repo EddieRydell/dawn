@@ -7,9 +7,8 @@ const appWindow = getCurrentWindow();
 
 export function TitleBar() {
   return (
-    <header className="titlebar">
-      <div className="titlebar-drag-surface" onMouseDown={startTitlebarDrag} />
-      <div className="brand" onMouseDown={startTitlebarDrag}>
+    <header className="titlebar" onMouseDown={startTitlebarDrag}>
+      <div className="brand">
         Dawn
       </div>
       <nav className="menu-row">
@@ -34,7 +33,12 @@ export function TitleBar() {
 
 function startTitlebarDrag(event: React.MouseEvent<HTMLElement>) {
   if (event.button !== 0) return;
+  if (event.target instanceof Element && event.target.closest("button")) return;
   event.preventDefault();
+  if (event.detail === 2) {
+    void appWindow.toggleMaximize();
+    return;
+  }
   void appWindow.startDragging();
 }
 
