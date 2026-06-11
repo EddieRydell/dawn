@@ -1,6 +1,7 @@
 use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle};
 use kira::sound::{FromFileError, PlaybackState};
 use kira::{AudioManager, AudioManagerSettings, DefaultBackend, Tween};
+use std::time::Duration;
 
 use crate::dto::{AudioTransportSnapshot, AudioTransportState, SequenceAudio};
 

@@ -1,7 +1,9 @@
 use std::collections::BTreeSet;
 
 use camino::Utf8Path;
-use dawn_language::effect::{CurveSource, EffectParamValue, EffectScope, EffectTarget};
+use dawn_language::effect::{
+    CurveSource, EffectDefinitionId, EffectParamValue, EffectScope, EffectTarget,
+};
 use dawn_language::effect_dsl::{Type, Value as EffectValue};
 use dawn_language::sequence::SequenceId;
 use dawn_language::setup::{
@@ -1161,6 +1163,14 @@ fn edit_sequence(
     location: &SourceObjectLocation,
     edit: SequenceGuiEdit,
 ) -> Result<(), GuiMutationError> {
+    let add_effect_mark_params = match &edit {
+        SequenceGuiEdit::AddEffect {
+            script,
+            mark_collection_key: Some(_),
+            ..
+        } => mark_param_names(session, &script.effect_name)?,
+        _ => Vec::new(),
+    };
     let object = source_object_mut(session, location)?;
     match edit {
         SequenceGuiEdit::SetAudio { import_path } => {
@@ -1269,7 +1279,7 @@ fn edit_sequence(
             target,
             scope,
             start_seconds,
-            ..
+            mark_collection_key,
         } => {
             let effects = ensure_sequence_field_mut(object, "effects")?;
             let next_id = effects
@@ -1295,6 +1305,18 @@ fn edit_sequence(
                 }),
             );
             effect.insert(string_value("script"), Value::String(script.effect_name));
+            if let Some(key) = mark_collection_key {
+                if !add_effect_mark_params.is_empty() {
+                    let mut params = Mapping::new();
+                    for name in add_effect_mark_params {
+                        params.insert(
+                            string_value(&name),
+                            param_value(SequenceEffectParamValue::Marks { key: key.clone() })?,
+                        );
+                    }
+                    effect.insert(string_value("params"), Value::Mapping(params));
+                }
+            }
             effects.push(Value::Mapping(effect));
         }
         SequenceGuiEdit::ChangeEffectScript { id, script } => {
@@ -1313,6 +1335,26 @@ fn edit_sequence(
         SequenceGuiEdit::UnlinkEffectCurveParam { .. } => {}
     }
     Ok(())
+}
+
+fn mark_param_names(
+    session: &ProjectSession,
+    effect_name: &str,
+) -> Result<Vec<String>, GuiMutationError> {
+    let id = EffectDefinitionId(effect_name.to_string());
+    let definition = session
+        .project
+        .definitions
+        .effects
+        .get(&id)
+        .ok_or_else(|| GuiMutationError::Invalid("Effect script was not found.".to_string()))?;
+    Ok(definition
+        .compiled
+        .params()
+        .iter()
+        .filter(|param| matches!(param.ty, Type::Marks))
+        .map(|param| param.name.as_str().to_string())
+        .collect())
 }
 
 fn source_object_mut<'a>(

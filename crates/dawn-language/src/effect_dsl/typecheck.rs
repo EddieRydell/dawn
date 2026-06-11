@@ -377,14 +377,6 @@ impl Checker {
                 self.require_mark_args(name, args, env, span);
                 Type::Float
             }
-            "mark_global_count" | "mark_global_prev_index" | "mark_global_next_index" => {
-                self.require_global_mark_args(name, args, env, span);
-                Type::Int
-            }
-            "mark_global_at" | "mark_global_elapsed" | "mark_global_phase" => {
-                self.require_global_mark_args(name, args, env, span);
-                Type::Float
-            }
             _ => {
                 self.error(span, format!("unknown function `{name}`"));
                 Type::Void
@@ -400,6 +392,10 @@ impl Checker {
         span: TextSpan,
     ) {
         if args.is_empty() {
+            self.error(
+                span,
+                format!("`{name}` requires marks as the first argument"),
+            );
             return;
         }
         if matches!(name, "mark_count") {
@@ -408,15 +404,6 @@ impl Checker {
             return;
         }
         self.require_arg(args, 0, &Type::Marks, env);
-    }
-
-    fn require_global_mark_args(
-        &mut self,
-        _name: &str,
-        _args: &[Expr],
-        _env: &mut IndexMap<Identifier, Type>,
-        _span: TextSpan,
-    ) {
     }
 
     fn check_binary(&mut self, op: BinaryOp, left: &Type, right: &Type, span: TextSpan) -> Type {

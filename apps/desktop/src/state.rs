@@ -20,6 +20,7 @@ pub struct DesktopState {
     snapshot: Mutex<AppSnapshot>,
     project: Mutex<Option<ProjectSession>>,
     audio: Mutex<crate::audio::AudioEngine>,
+    show_render: Mutex<crate::show_render::ShowRenderService>,
 }
 
 impl DesktopState {
@@ -28,6 +29,7 @@ impl DesktopState {
             snapshot: Mutex::new(empty_snapshot()),
             project: Mutex::new(None),
             audio: Mutex::new(crate::audio::AudioEngine::new()),
+            show_render: Mutex::new(crate::show_render::ShowRenderService::new()),
         }
     }
 
@@ -66,12 +68,25 @@ impl DesktopState {
 
     pub fn load_sequence_audio(&self, request: GuiDocumentRequest) -> AppSnapshot {
         let audio = self.resolve_sequence_audio(&request);
+        let sequence_id = self.resolve_sequence_id(&request);
         let audio_transport = match self.audio.lock() {
             Ok(mut engine) => engine.load(audio),
             Err(poisoned) => poisoned.into_inner().load(audio),
         };
+        let render_error = match (self.project_session(), sequence_id) {
+            (Some(project), Some(sequence_id)) => {
+                self.prepare_sequence_render(&project, &sequence_id)
+            }
+            _ => {
+                self.unload_render_session();
+                None
+            }
+        };
         self.update_snapshot(|snapshot| {
             snapshot.audio_transport = audio_transport;
+            if let Some(error) = render_error {
+                snapshot.status = format!("Render prepare failed: {error:?}");
+            }
         })
     }
 
@@ -80,6 +95,7 @@ impl DesktopState {
             Ok(mut engine) => engine.unload(),
             Err(poisoned) => poisoned.into_inner().unload(),
         };
+        self.unload_render_session();
         self.update_snapshot(|snapshot| {
             snapshot.audio_transport = audio_transport;
         })
@@ -133,6 +149,19 @@ impl DesktopState {
         self.update_snapshot(|snapshot| {
             snapshot.audio_transport = audio_transport;
         })
+    }
+
+    pub fn render_current_sequence_frame(
+        &self,
+    ) -> Result<crate::show_render::AudioClockRenderedFrame, crate::show_render::ShowRenderError>
+    {
+        let audio_transport = self.audio_snapshot();
+        match self.show_render.lock() {
+            Ok(show_render) => show_render.render_current_sequence_frame(&audio_transport),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .render_current_sequence_frame(&audio_transport),
+        }
     }
 
     pub fn open_project_path(&self, path: &str) -> AppSnapshot {
@@ -484,6 +513,7 @@ impl DesktopState {
             Ok(mut project) => *project = Some(session),
             Err(poisoned) => *poisoned.into_inner() = Some(session),
         }
+        self.unload_render_session();
         self.update_snapshot(|snapshot| {
             snapshot.project_root = Some(root);
             snapshot.project_tree_visible = true;
@@ -519,6 +549,7 @@ impl DesktopState {
         // opens are allowed to replace tabs, buffers, GUI state, or transport.
         let entries = workspace_entries(&session);
         let root = session.source.source_root.to_string();
+        let project_model = session.project.clone();
         let active_descriptor = self.snapshot().active_file.as_deref().and_then(|path| {
             let relative_path = Utf8Path::new(path);
             session
@@ -536,6 +567,7 @@ impl DesktopState {
             Ok(mut project) => *project = Some(session),
             Err(poisoned) => *poisoned.into_inner() = Some(session),
         }
+        let render_error = self.refresh_render_session(&project_model);
         self.update_snapshot(|snapshot| {
             snapshot.project_root = Some(root);
             snapshot.project_entries = entries;
@@ -551,6 +583,9 @@ impl DesktopState {
                     snapshot.diagnostics.len()
                 )
             };
+            if let Some(error) = render_error {
+                snapshot.status = format!("Render refresh failed: {error:?}");
+            }
             snapshot.project_revision = snapshot.project_revision.saturating_add(1);
         })
     }
@@ -567,6 +602,83 @@ impl DesktopState {
         match crate::gui::project_gui_document(project.as_ref(), request) {
             GuiDocument::Sequence { document } => document.audio,
             _ => None,
+        }
+    }
+
+    fn resolve_sequence_id(
+        &self,
+        request: &GuiDocumentRequest,
+    ) -> Option<dawn_language::sequence::SequenceId> {
+        let project = self.project_session()?;
+        let path = Utf8Path::new(&request.path);
+        project
+            .source
+            .source_map
+            .objects
+            .iter()
+            .find(|(id, location)| {
+                id.kind == SourceObjectKind::Sequence
+                    && location.document == path
+                    && request
+                        .object_key
+                        .as_deref()
+                        .is_none_or(|key| location.object_key == key)
+            })
+            .map(|(id, _)| dawn_language::sequence::SequenceId(id.id.clone()))
+    }
+
+    fn prepare_sequence_render(
+        &self,
+        session: &ProjectSession,
+        sequence_id: &dawn_language::sequence::SequenceId,
+    ) -> Option<dawn_runtime::RenderError> {
+        let setup_id = session.project.root.setup.clone();
+        match self.show_render.lock() {
+            Ok(mut show_render) => {
+                let result = show_render.prepare(&session.project, &setup_id, sequence_id);
+                if result.is_err() {
+                    show_render.unload();
+                }
+                result.err()
+            }
+            Err(poisoned) => {
+                let mut show_render = poisoned.into_inner();
+                let result = show_render.prepare(&session.project, &setup_id, sequence_id);
+                if result.is_err() {
+                    show_render.unload();
+                }
+                result.err()
+            }
+        }
+    }
+
+    fn refresh_render_session(
+        &self,
+        project: &dawn_language::model::DawnProject,
+    ) -> Option<dawn_runtime::RenderError> {
+        match self.show_render.lock() {
+            Ok(mut show_render) => {
+                let result = show_render.refresh_project(project);
+                if result.is_err() {
+                    show_render.unload();
+                }
+                result.err()
+            }
+            Err(poisoned) => {
+                let mut show_render = poisoned.into_inner();
+                let result = show_render.refresh_project(project);
+                if result.is_err() {
+                    show_render.unload();
+                }
+                result.err()
+            }
+        }
+    }
+
+    fn unload_render_session(&self) {
+        match self.show_render.lock() {
+            Ok(mut show_render) => show_render.unload(),
+            Err(poisoned) => poisoned.into_inner().unload(),
         }
     }
 

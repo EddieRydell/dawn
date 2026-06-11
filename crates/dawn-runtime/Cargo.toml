@@ -1,0 +1,11 @@
+[package]
+name = "dawn-runtime"
+edition.workspace = true
+version.workspace = true
+description = "Dawn rendering runtime"
+authors = ["Dawn"]
+license = "MIT"
+
+[dependencies]
+dawn-language = { path = "../dawn-language" }
+indexmap = "2.14.0"

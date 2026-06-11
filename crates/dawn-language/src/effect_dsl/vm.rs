@@ -351,32 +351,6 @@ impl<'a> Vm<'a> {
             "mark_next_index" => Ok(Value::Int(mark_next_index(args, self.context)?)),
             "mark_elapsed" => Ok(Value::Float(mark_elapsed(args, self.context)?)),
             "mark_phase" => Ok(Value::Float(mark_phase(args, self.context)?)),
-            "mark_global_count" => Ok(Value::Int(
-                i64::try_from(self.context.global_marks.marks.len())
-                    .map_err(|_| RuntimeError::new("mark count exceeds int range"))?,
-            )),
-            "mark_global_at" => Ok(Value::Float(mark_at_from(
-                &self.context.global_marks,
-                to_int(value_at(args, 0)?)?,
-                0.0,
-            )?)),
-            "mark_global_prev_index" => Ok(Value::Int(prev_index(
-                &self.context.global_marks,
-                self.context.seconds,
-            )?)),
-            "mark_global_next_index" => Ok(Value::Int(next_index(
-                &self.context.global_marks,
-                self.context.seconds,
-            )?)),
-            "mark_global_elapsed" => Ok(Value::Float(elapsed(
-                &self.context.global_marks,
-                self.context.seconds,
-            )?)),
-            "mark_global_phase" => Ok(Value::Float(phase(
-                &self.context.global_marks,
-                self.context.seconds,
-                self.context.duration,
-            )?)),
             _ => Err(RuntimeError::new(format!("unknown builtin `{name}`"))),
         }
     }
@@ -494,12 +468,6 @@ fn is_builtin(name: &str) -> bool {
             | "mark_next_index"
             | "mark_elapsed"
             | "mark_phase"
-            | "mark_global_count"
-            | "mark_global_at"
-            | "mark_global_prev_index"
-            | "mark_global_next_index"
-            | "mark_global_elapsed"
-            | "mark_global_phase"
     )
 }
 
@@ -676,24 +644,26 @@ fn random(args: &[Value]) -> Result<f64, RuntimeError> {
     Ok((seed.sin() * 43_758.545_312_3).fract().abs())
 }
 
-fn mark_source<'a>(args: &'a [Value], context: &'a RunContext) -> Result<&'a Marks, RuntimeError> {
-    if let Some(value) = args.first() {
-        match value {
-            Value::Marks(marks) => Ok(marks),
-            _ => Err(RuntimeError::new("mark builtin first arg must be marks")),
-        }
-    } else {
-        Ok(&context.global_marks)
+fn mark_source(args: &[Value]) -> Result<&Marks, RuntimeError> {
+    let Some(value) = args.first() else {
+        return Err(RuntimeError::new(
+            "mark builtin requires marks as the first argument",
+        ));
+    };
+    match value {
+        Value::Marks(marks) => Ok(marks),
+        _ => Err(RuntimeError::new("mark builtin first arg must be marks")),
     }
 }
 
 fn mark_count(args: &[Value], context: &RunContext) -> Result<i64, RuntimeError> {
-    i64::try_from(mark_source(args, context)?.marks.len())
+    let _ = context;
+    i64::try_from(mark_source(args)?.marks.len())
         .map_err(|_| RuntimeError::new("mark count exceeds int range"))
 }
 
-fn mark_at(args: &[Value], context: &RunContext) -> Result<f64, RuntimeError> {
-    let marks = mark_source(args, context)?;
+fn mark_at(args: &[Value], _context: &RunContext) -> Result<f64, RuntimeError> {
+    let marks = mark_source(args)?;
     let index_arg = if matches!(args.first(), Some(Value::Marks(_))) {
         1
     } else {
@@ -709,7 +679,7 @@ fn mark_at(args: &[Value], context: &RunContext) -> Result<f64, RuntimeError> {
 }
 
 fn mark_prev(args: &[Value], context: &RunContext) -> Result<f64, RuntimeError> {
-    let marks = mark_source(args, context)?;
+    let marks = mark_source(args)?;
     let seconds = mark_query_seconds(args, context, 1)?;
     let fallback = args.get(2).map(to_float).transpose()?.unwrap_or(0.0);
     let index = prev_index(marks, seconds)?;
@@ -732,12 +702,12 @@ fn mark_at_from(marks: &Marks, index: i64, fallback: f64) -> Result<f64, Runtime
 
 fn mark_prev_index(args: &[Value], context: &RunContext) -> Result<i64, RuntimeError> {
     let seconds = mark_query_seconds(args, context, 1)?;
-    prev_index(mark_source(args, context)?, seconds)
+    prev_index(mark_source(args)?, seconds)
 }
 
 fn mark_next_index(args: &[Value], context: &RunContext) -> Result<i64, RuntimeError> {
     let seconds = mark_query_seconds(args, context, 1)?;
-    next_index(mark_source(args, context)?, seconds)
+    next_index(mark_source(args)?, seconds)
 }
 
 fn prev_index(marks: &Marks, seconds: f64) -> Result<i64, RuntimeError> {
@@ -763,7 +733,7 @@ fn next_index(marks: &Marks, seconds: f64) -> Result<i64, RuntimeError> {
 
 fn mark_elapsed(args: &[Value], context: &RunContext) -> Result<f64, RuntimeError> {
     let seconds = mark_query_seconds(args, context, 1)?;
-    elapsed(mark_source(args, context)?, seconds)
+    elapsed(mark_source(args)?, seconds)
 }
 
 fn elapsed(marks: &Marks, seconds: f64) -> Result<f64, RuntimeError> {
@@ -776,7 +746,7 @@ fn elapsed(marks: &Marks, seconds: f64) -> Result<f64, RuntimeError> {
 
 fn mark_phase(args: &[Value], context: &RunContext) -> Result<f64, RuntimeError> {
     let seconds = mark_query_seconds(args, context, 1)?;
-    phase(mark_source(args, context)?, seconds, context.duration)
+    phase(mark_source(args)?, seconds, context.duration)
 }
 
 fn phase(marks: &Marks, seconds: f64, duration: f64) -> Result<f64, RuntimeError> {

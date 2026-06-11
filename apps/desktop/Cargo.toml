@@ -11,6 +11,7 @@ default-run = "dawn-desktop"
 camino = "1.2.1"
 dawn-project-io = { path = "../../crates/dawn-project-io" }
 dawn-language = { path = "../../crates/dawn-language" }
+dawn-runtime = { path = "../../crates/dawn-runtime" }
 indexmap = "2.14.0"
 kira = "0.12.1"
 rfd = "0.15.4"

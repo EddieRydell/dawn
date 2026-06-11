@@ -1,0 +1,271 @@
+use dawn_language::model::DawnProject;
+use dawn_language::sequence::SequenceId;
+use dawn_language::setup::SetupId;
+use dawn_runtime::{PreparedSequenceRenderer, RenderError, RenderedFrame};
+
+use crate::dto::{AudioTransportSnapshot, AudioTransportState};
+
+pub struct ShowRenderService {
+    session: Option<RenderSession>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AudioClockRenderedFrame {
+    pub audio_generation: u32,
+    pub frame: RenderedFrame,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ShowRenderError {
+    NoRenderSession,
+    ClockUnavailable { state: AudioTransportState },
+    Render(RenderError),
+}
+
+impl ShowRenderService {
+    pub fn new() -> Self {
+        Self { session: None }
+    }
+
+    pub fn prepare(
+        &mut self,
+        project: &DawnProject,
+        setup_id: &SetupId,
+        sequence_id: &SequenceId,
+    ) -> Result<(), RenderError> {
+        let renderer = PreparedSequenceRenderer::prepare(project, setup_id, sequence_id)?;
+        self.session = Some(RenderSession {
+            setup_id: setup_id.clone(),
+            sequence_id: sequence_id.clone(),
+            renderer,
+        });
+        Ok(())
+    }
+
+    pub fn unload(&mut self) {
+        self.session = None;
+    }
+
+    pub fn refresh_project(&mut self, project: &DawnProject) -> Result<(), RenderError> {
+        let Some(session) = self.session.as_ref() else {
+            return Ok(());
+        };
+        let setup_id = session.setup_id.clone();
+        let sequence_id = session.sequence_id.clone();
+        if !project.sequences.contains_key(&sequence_id) {
+            self.unload();
+            return Ok(());
+        }
+        self.prepare(project, &setup_id, &sequence_id)
+    }
+
+    pub fn render_current_sequence_frame(
+        &self,
+        audio: &AudioTransportSnapshot,
+    ) -> Result<AudioClockRenderedFrame, ShowRenderError> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or(ShowRenderError::NoRenderSession)?;
+        match audio.state {
+            AudioTransportState::Stopped
+            | AudioTransportState::Paused
+            | AudioTransportState::Playing
+            | AudioTransportState::Ended => {}
+            AudioTransportState::Unloaded | AudioTransportState::Error => {
+                return Err(ShowRenderError::ClockUnavailable {
+                    state: audio.state.clone(),
+                })
+            }
+        }
+        let frame = session
+            .renderer
+            .render_seconds(audio.position_seconds)
+            .map_err(ShowRenderError::Render)?;
+        Ok(AudioClockRenderedFrame {
+            audio_generation: audio.generation,
+            frame,
+        })
+    }
+
+    pub fn active_sequence_id(&self) -> Option<&SequenceId> {
+        self.session.as_ref().map(|session| &session.sequence_id)
+    }
+}
+
+impl Default for ShowRenderService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+struct RenderSession {
+    setup_id: SetupId,
+    sequence_id: SequenceId,
+    renderer: PreparedSequenceRenderer,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dawn_language::effect::{
+        EffectDefinition, EffectDefinitionId, EffectInst, EffectInstId, EffectScope, EffectTarget,
+    };
+    use dawn_language::effect_dsl::compile_effects;
+    use dawn_language::model::{ProjectDefinitionStores, ProjectId, ProjectRoot};
+    use dawn_language::sequence::{Sequence, SequenceAudio};
+    use dawn_language::setup::{
+        ControllerDefinitionStore, FixtureDefinition, FixtureDefinitionId, FixtureDefinitionStore,
+        FixtureGroup, FixtureGroupId, FixtureInst, FixtureInstanceId, Geometry, Layout, LayoutId,
+        PatchId, Setup,
+    };
+    use dawn_language::values::{
+        Color, DawnDuration, DawnTime, DistanceSpan, Point3, Rotation3, Scale3,
+    };
+    use indexmap::IndexMap;
+    use std::time::Duration;
+
+    #[test]
+    fn prepares_unloads_rejects_unavailable_clocks_and_renders_loaded_states() {
+        let project = project();
+        let mut service = ShowRenderService::new();
+        let setup_id = SetupId("setup".to_string());
+        let sequence_id = SequenceId("seq".to_string());
+
+        service.prepare(&project, &setup_id, &sequence_id).unwrap();
+        assert_eq!(service.active_sequence_id(), Some(&sequence_id));
+        assert!(matches!(
+            service.render_current_sequence_frame(&snapshot(AudioTransportState::Unloaded, 0.0)),
+            Err(ShowRenderError::ClockUnavailable { .. })
+        ));
+        assert!(matches!(
+            service.render_current_sequence_frame(&snapshot(AudioTransportState::Error, 0.0)),
+            Err(ShowRenderError::ClockUnavailable { .. })
+        ));
+
+        for state in [
+            AudioTransportState::Stopped,
+            AudioTransportState::Paused,
+            AudioTransportState::Playing,
+            AudioTransportState::Ended,
+        ] {
+            let rendered = service
+                .render_current_sequence_frame(&snapshot(state, 0.25))
+                .unwrap();
+            assert_eq!(rendered.audio_generation, 7);
+            assert_eq!(rendered.frame.clock_seconds, 0.25);
+        }
+
+        service.unload();
+        assert!(matches!(
+            service.render_current_sequence_frame(&snapshot(AudioTransportState::Paused, 0.0)),
+            Err(ShowRenderError::NoRenderSession)
+        ));
+    }
+
+    fn project() -> DawnProject {
+        let mut effects = dawn_language::effect::EffectDefinitionStore::default();
+        let compiled =
+            compile_effects("effect Solid { color sample() { return rgb(1.0, 0.0, 0.0); } }")
+                .unwrap()
+                .into_iter()
+                .next()
+                .unwrap();
+        effects.insert(
+            EffectDefinitionId("Solid".to_string()),
+            EffectDefinition { compiled },
+        );
+
+        let mut fixtures = FixtureDefinitionStore::default();
+        fixtures.insert(
+            FixtureDefinitionId("pixel".to_string()),
+            FixtureDefinition {
+                bulb_radius: DistanceSpan::ZERO,
+                geometry: Geometry::Points {
+                    points: vec![Point3::default()],
+                },
+            },
+        );
+
+        DawnProject {
+            root: ProjectRoot {
+                id: ProjectId("project".to_string()),
+                setup: SetupId("setup".to_string()),
+                sequences: vec![SequenceId("seq".to_string())],
+            },
+            setups: IndexMap::from([(
+                SetupId("setup".to_string()),
+                Setup {
+                    id: SetupId("setup".to_string()),
+                    layout: LayoutId("layout".to_string()),
+                    patch: PatchId("patch".to_string()),
+                    controllers: Vec::new(),
+                },
+            )]),
+            layouts: IndexMap::from([(
+                LayoutId("layout".to_string()),
+                Layout {
+                    id: LayoutId("layout".to_string()),
+                    target_order: Vec::new(),
+                    fixtures: vec![FixtureInst {
+                        id: FixtureInstanceId(1),
+                        name: "Pixel".to_string(),
+                        definition: FixtureDefinitionId("pixel".to_string()),
+                        position: Point3::default(),
+                        rotation: Rotation3::default(),
+                        scale: Scale3::default(),
+                    }],
+                    groups: vec![FixtureGroup {
+                        id: FixtureGroupId(1),
+                        name: "All".to_string(),
+                        fixtures: vec![FixtureInstanceId(1)],
+                    }],
+                },
+            )]),
+            patches: IndexMap::new(),
+            controllers: IndexMap::new(),
+            sequences: IndexMap::from([(
+                SequenceId("seq".to_string()),
+                Sequence {
+                    id: SequenceId("seq".to_string()),
+                    duration: DawnDuration(Duration::from_secs_f64(1.0)),
+                    frame_rate: 4,
+                    audio: SequenceAudio::None,
+                    mark_collections: Vec::new(),
+                    effects: vec![EffectInst {
+                        id: EffectInstId(1),
+                        start: DawnTime(Duration::ZERO),
+                        duration: DawnDuration(Duration::from_secs_f64(1.0)),
+                        target: EffectTarget::Group(FixtureGroupId(1)),
+                        scope: EffectScope::WholeTarget,
+                        definition: EffectDefinitionId("Solid".to_string()),
+                        param_overrides: IndexMap::new(),
+                    }],
+                    automation_clips: Vec::new(),
+                },
+            )]),
+            definitions: ProjectDefinitionStores {
+                effects,
+                fixtures,
+                curves: dawn_language::effect::CurveDefinitionStore::default(),
+                controllers: ControllerDefinitionStore::default(),
+            },
+        }
+    }
+
+    fn snapshot(state: AudioTransportState, position_seconds: f64) -> AudioTransportSnapshot {
+        AudioTransportSnapshot {
+            state,
+            source: None,
+            generation: 7,
+            position_seconds,
+            home_seconds: 0.0,
+            duration_seconds: 1.0,
+            last_error: None,
+        }
+    }
+
+    fn _color(red: u8, green: u8, blue: u8) -> Color {
+        Color { red, green, blue }
+    }
+}
