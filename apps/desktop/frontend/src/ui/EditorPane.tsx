@@ -7,9 +7,9 @@ import { EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { RefreshCw, Save, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type PointerEvent } from "react";
-import { commands } from "../api";
-import type { AppSnapshot, ProjectDiagnostic, SequenceSelection, TextRange } from "../types";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { commands, setCurrentGuiRequest } from "../api";
+import type { AppSnapshot, GuiDocumentRequest, ProjectDiagnostic, SequenceSelection, TextRange } from "../types";
 import { commandRegistry } from "../commandRegistry";
 import { runSnapshotCommand, useAppStore } from "../store";
 import { GuiEditor } from "./gui/GuiEditor";
@@ -20,7 +20,7 @@ type EditorBufferWithExternalState = NonNullable<AppSnapshot["activeBuffer"]>;
 type PathSelection = { path: string | null; selection: SequenceSelection | null };
 
 export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
-  const { localText, setLocalText } = useAppStore();
+  const { guiDocument, localText, setGuiDocument, setGuiRequest, setLocalText } = useAppStore();
   const editorHost = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
   const [editorView, setEditorView] = useState<EditorView | null>(null);
@@ -29,13 +29,18 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
   const latestLocalText = useRef(localText);
   const applyingExternalText = useRef(false);
   const activeBuffer = snapshot.activeBuffer;
+  const activeDescriptor = snapshot.activeDocumentDescriptor;
   const activePath = activeBuffer?.path ?? null;
   const viewMode = activeBuffer?.viewMode ?? "text";
   const activeExternalState = activeBufferExternalState(activeBuffer);
   const activeConflicted = activeExternalState !== "current";
+  const nextGuiRequest = useMemo(
+    () => guiRequestForDescriptor(activeDescriptor, snapshot.activeFile),
+    [activeDescriptor, snapshot.activeFile]
+  );
   const activeSequenceDocument =
-    viewMode === "gui" && snapshot.activeGuiDocument?.type === "sequence" ? snapshot.activeGuiDocument.document : null;
-  const guiAvailable = snapshot.activeGuiDocument !== null && snapshot.activeGuiDocument.type !== "blocked";
+    viewMode === "gui" && guiDocument?.type === "sequence" ? guiDocument.document : null;
+  const guiAvailable = nextGuiRequest !== null;
   const sequenceSelection = pathSelection.path === activePath ? pathSelection.selection : null;
   const setSequenceSelection = useCallback(
     (selection: SequenceSelection | null) => {
@@ -47,6 +52,34 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
   useEffect(() => {
     latestLocalText.current = localText;
   }, [localText]);
+
+  useEffect(() => {
+    setGuiRequest(nextGuiRequest);
+    setCurrentGuiRequest(nextGuiRequest);
+    if (nextGuiRequest === null) {
+      setGuiDocument(null);
+      return;
+    }
+    let cancelled = false;
+    commands
+      .getGuiDocument(nextGuiRequest)
+      .then((document) => {
+        if (!cancelled) setGuiDocument(document);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setGuiDocument({ type: "blocked", reason: String(error), diagnostics: [] });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    nextGuiRequest,
+    setGuiDocument,
+    setGuiRequest,
+    snapshot.projectRevision
+  ]);
 
   useEffect(() => {
     if (viewMode !== "text") {
@@ -196,6 +229,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
       )}
       {viewMode === "gui" ? (
         <GuiEditor
+          guiDocument={guiDocument}
           snapshot={snapshot}
           sequenceSelection={sequenceSelection}
           setSequenceSelection={setSequenceSelection}
@@ -214,6 +248,23 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
       )}
     </section>
   );
+}
+
+function guiRequestForDescriptor(
+  descriptor: AppSnapshot["activeDocumentDescriptor"],
+  activePath: string | null
+): GuiDocumentRequest | null {
+  if (descriptor === null || activePath === null) return null;
+  const defaultObject =
+    descriptor.defaultObjectKeys.find((item) => item.view === "sequence") ??
+    descriptor.defaultObjectKeys.find((item) => item.view === "layout") ??
+    descriptor.defaultObjectKeys.find((item) => item.view === "fixture");
+  if (defaultObject === undefined) return null;
+  return {
+    path: activePath,
+    view: defaultObject.view,
+    objectKey: defaultObject.objectKey
+  };
 }
 
 type ScrollbarMetrics = {

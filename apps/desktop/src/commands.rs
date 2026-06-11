@@ -2,8 +2,9 @@ use tauri::State;
 use tauri_specta::{collect_commands, Builder};
 
 use crate::dto::{
-    AppSnapshot, EditorViewMode, FixtureGuiEdit, LayoutGuiEdit, SequenceGuiEdit,
-    SequenceSelectionEdit, SequenceSelectionEditResult, SequenceTransportState,
+    AppSnapshot, EditorViewMode, FixtureGuiEdit, GuiDocument, GuiDocumentRequest, GuiEditCommand,
+    GuiEditResult, LayoutGuiEdit, SequenceGuiEdit, SequenceSelectionEdit,
+    SequenceSelectionEditResult, SequenceTransportState,
 };
 use crate::state::DesktopState;
 
@@ -98,6 +99,25 @@ pub fn undo_active_edit(state: State<'_, DesktopState>) -> AppSnapshot {
 #[specta::specta]
 pub fn redo_active_edit(state: State<'_, DesktopState>) -> AppSnapshot {
     state.snapshot()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_gui_document(
+    request: GuiDocumentRequest,
+    state: State<'_, DesktopState>,
+) -> GuiDocument {
+    state.get_gui_document(request)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn apply_gui_edit(
+    request: GuiDocumentRequest,
+    edit: GuiEditCommand,
+    state: State<'_, DesktopState>,
+) -> GuiEditResult {
+    state.apply_gui_edit(request, edit)
 }
 
 #[tauri::command]
@@ -294,6 +314,8 @@ pub fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         set_active_view_mode,
         undo_active_edit,
         redo_active_edit,
+        get_gui_document,
+        apply_gui_edit,
         apply_sequence_gui_edit,
         apply_sequence_selection_edit,
         choose_sequence_audio,

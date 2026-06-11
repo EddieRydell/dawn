@@ -10,6 +10,7 @@ default-run = "dawn-desktop"
 [dependencies]
 camino = "1.2.1"
 dawn-project-io = { path = "../../crates/dawn-project-io" }
+dawn-language = { path = "../../crates/dawn-language" }
 indexmap = "2.14.0"
 rfd = "0.15.4"
 serde = { version = "1", features = ["derive"] }

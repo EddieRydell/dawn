@@ -5,13 +5,13 @@ use specta::Type;
 #[serde(rename_all = "camelCase")]
 pub struct AppSnapshot {
     pub project_root: Option<String>,
+    pub project_revision: u32,
     pub project_tree_visible: bool,
     pub project_entries: Vec<WorkspaceEntry>,
     pub tabs: Vec<EditorBuffer>,
     pub active_file: Option<String>,
     pub active_buffer: Option<EditorBuffer>,
     pub active_document_descriptor: Option<DocumentDescriptor>,
-    pub active_gui_document: Option<ActiveGuiDocument>,
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub status: String,
     pub sequence_transport: SequenceTransportSnapshot,
@@ -24,20 +24,56 @@ pub struct AppSnapshot {
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-pub enum ActiveGuiDocument {
+pub enum GuiDocument {
     Sequence {
-        document: SequenceEditorDocument,
+        document: SequenceGuiDocument,
     },
     Layout {
-        document: LayoutDocument,
+        document: LayoutGuiDocument,
     },
     Fixture {
-        document: FixtureDocument,
+        document: FixtureGuiDocument,
     },
     Blocked {
         reason: String,
         diagnostics: Vec<ProjectDiagnostic>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiDocumentRequest {
+    pub path: String,
+    pub view: DocumentViewId,
+    pub object_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiObjectRef {
+    pub path: String,
+    pub object_key: String,
+    pub kind: ObjectKind,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum GuiEditCommand {
+    Sequence { edit: SequenceGuiEdit },
+    Layout { edit: LayoutGuiEdit },
+    Fixture { edit: FixtureGuiEdit },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiEditResult {
+    pub snapshot: AppSnapshot,
+    pub document: GuiDocument,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -219,6 +255,7 @@ pub struct EffectScriptReference {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct FixtureDefinition {
+    pub source_ref: GuiObjectRef,
     pub object_key: String,
     pub name: String,
     pub color_model: String,
@@ -230,8 +267,9 @@ pub struct FixtureDefinition {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct FixtureDocument {
+pub struct FixtureGuiDocument {
     pub path: String,
+    pub source_ref: Option<GuiObjectRef>,
     pub selected_object_key: Option<String>,
     pub fixtures: Vec<FixtureDefinition>,
 }
@@ -334,8 +372,9 @@ pub struct GeometryRenderPoint {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct LayoutDocument {
+pub struct LayoutGuiDocument {
     pub path: String,
+    pub source_ref: GuiObjectRef,
     pub object_key: String,
     pub name: String,
     pub render_bounds: GeometryRenderBounds,
@@ -345,6 +384,7 @@ pub struct LayoutDocument {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct LayoutFixturePlacement {
+    pub source_ref: GuiObjectRef,
     pub id: u32,
     pub name: String,
     pub transform: Transform,
@@ -456,8 +496,9 @@ pub enum SequenceCurveLibraryPoints {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SequenceEditorDocument {
+pub struct SequenceGuiDocument {
     pub path: String,
+    pub source_ref: GuiObjectRef,
     pub object_key: String,
     pub duration_seconds: f64,
     pub frame_rate: f64,

@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import type { AppSnapshot } from "../../types";
+import type { AppSnapshot, GuiDocument } from "../../types";
 
 import type { GuiFocus, ReadyGuiDocument, SequenceSelection } from "./shared";
 
@@ -19,15 +19,17 @@ import { useSequenceTransport, handleSequencePlaybackShortcut } from "./sequence
 import { markSelectionConsumesKey } from "./sequence/sequenceSelection";
 
 export function GuiEditor({
+  guiDocument,
   snapshot,
   sequenceSelection,
   setSequenceSelection
 }: {
+  guiDocument: GuiDocument | null;
   snapshot: AppSnapshot;
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
 }) {
-  const gui = snapshot.activeGuiDocument;
+  const gui = guiDocument;
 
   if (!gui) {
     return <BlockedGui reason="GUI data is not available for this document." diagnostics={[]} />;

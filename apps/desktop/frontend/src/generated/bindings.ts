@@ -16,6 +16,8 @@ export const commands = {
 	setActiveViewMode: (mode: EditorViewMode) => __TAURI_INVOKE<AppSnapshot>("set_active_view_mode", { mode }),
 	undoActiveEdit: () => __TAURI_INVOKE<AppSnapshot>("undo_active_edit"),
 	redoActiveEdit: () => __TAURI_INVOKE<AppSnapshot>("redo_active_edit"),
+	getGuiDocument: (request: GuiDocumentRequest) => __TAURI_INVOKE<GuiDocument>("get_gui_document", { request }),
+	applyGuiEdit: (request: GuiDocumentRequest, edit: GuiEditCommand) => __TAURI_INVOKE<GuiEditResult>("apply_gui_edit", { request, edit }),
 	applySequenceGuiEdit: (edit: SequenceGuiEdit) => __TAURI_INVOKE<AppSnapshot>("apply_sequence_gui_edit", { edit }),
 	applySequenceSelectionEdit: (edit: SequenceSelectionEdit) => __TAURI_INVOKE<SequenceSelectionEditResult>("apply_sequence_selection_edit", { edit }),
 	chooseSequenceAudio: () => __TAURI_INVOKE<AppSnapshot>("choose_sequence_audio"),
@@ -41,17 +43,15 @@ export const commands = {
 };
 
 /* Types */
-export type ActiveGuiDocument = { type: "sequence"; document: SequenceEditorDocument } | { type: "layout"; document: LayoutDocument } | { type: "fixture"; document: FixtureDocument } | { type: "blocked"; reason: string; diagnostics: ProjectDiagnostic[] };
-
 export type AppSnapshot = {
 	projectRoot: string | null,
+	projectRevision: number,
 	projectTreeVisible: boolean,
 	projectEntries: WorkspaceEntry[],
 	tabs: EditorBuffer[],
 	activeFile: string | null,
 	activeBuffer: EditorBuffer | null,
 	activeDocumentDescriptor: DocumentDescriptor | null,
-	activeGuiDocument: ActiveGuiDocument | null,
 	diagnostics: ProjectDiagnostic[],
 	status: string,
 	sequenceTransport: SequenceTransportSnapshot,
@@ -105,6 +105,7 @@ export type EffectScriptReference = {
 };
 
 export type FixtureDefinition = {
+	sourceRef: GuiObjectRef,
 	objectKey: string,
 	name: string,
 	colorModel: string,
@@ -114,8 +115,9 @@ export type FixtureDefinition = {
 	renderPlan: GeometryRenderPlan,
 };
 
-export type FixtureDocument = {
+export type FixtureGuiDocument = {
 	path: string,
+	sourceRef: GuiObjectRef | null,
 	selectedObjectKey: string | null,
 	fixtures: FixtureDefinition[],
 };
@@ -151,19 +153,43 @@ export type GeometryRenderPoint = {
 	zMeters: number,
 };
 
-export type LayoutDocument = {
+export type GuiDocument = { type: "sequence"; document: SequenceGuiDocument } | { type: "layout"; document: LayoutGuiDocument } | { type: "fixture"; document: FixtureGuiDocument } | { type: "blocked"; reason: string; diagnostics: ProjectDiagnostic[] };
+
+export type GuiDocumentRequest = {
+	path: string,
+	view: DocumentViewId,
+	objectKey: string | null,
+};
+
+export type GuiEditCommand = { type: "sequence"; edit: SequenceGuiEdit } | { type: "layout"; edit: LayoutGuiEdit } | { type: "fixture"; edit: FixtureGuiEdit };
+
+export type GuiEditResult = {
+	snapshot: AppSnapshot,
+	document: GuiDocument,
+};
+
+export type GuiObjectRef = {
 	path: string,
 	objectKey: string,
-	name: string,
-	renderBounds: GeometryRenderBounds,
-	fixtures: LayoutFixturePlacement[],
+	kind: ObjectKind,
+	id: string,
 };
 
 export type LayoutFixturePlacement = {
+	sourceRef: GuiObjectRef,
 	id: number,
 	name: string,
 	transform: Transform,
 	resolvedFixture: ResolvedLayoutFixture,
+};
+
+export type LayoutGuiDocument = {
+	path: string,
+	sourceRef: GuiObjectRef,
+	objectKey: string,
+	name: string,
+	renderBounds: GeometryRenderBounds,
+	fixtures: LayoutFixturePlacement[],
 };
 
 export type LayoutGuiEdit = { type: "updatePlacementTransform"; id: number; transform: Transform };
@@ -239,20 +265,6 @@ export type SequenceCurveLibraryPoints = { type: "float"; points: FloatCurvePoin
 
 export type SequenceCurveValueType = "float" | "color";
 
-export type SequenceEditorDocument = {
-	path: string,
-	objectKey: string,
-	durationSeconds: number,
-	frameRate: number,
-	audio: SequenceAudio | null,
-	markCollections: SequenceMarkCollection[],
-	lanes: SequenceLane[],
-	effectScripts: SequenceEffectScript[],
-	curveLibrary: SequenceCurveLibraryItem[],
-	effects: SequenceEffect[],
-	degraded: boolean,
-};
-
 export type SequenceEffect = {
 	index: number,
 	id: number,
@@ -296,6 +308,21 @@ export type SequenceEffectScriptKind = "sample" | "generator";
 export type SequenceEffectScriptParam = {
 	name: string,
 	kind: SequenceEffectParamKind,
+};
+
+export type SequenceGuiDocument = {
+	path: string,
+	sourceRef: GuiObjectRef,
+	objectKey: string,
+	durationSeconds: number,
+	frameRate: number,
+	audio: SequenceAudio | null,
+	markCollections: SequenceMarkCollection[],
+	lanes: SequenceLane[],
+	effectScripts: SequenceEffectScript[],
+	curveLibrary: SequenceCurveLibraryItem[],
+	effects: SequenceEffect[],
+	degraded: boolean,
 };
 
 export type SequenceGuiEdit = { type: "setAudio"; import: string | null } | { type: "addEffect"; script: EffectScriptReference; target: LayoutTarget; scope: SequenceEffectScope; startSeconds: number; markCollectionKey: string | null } | { type: "moveEffect"; id: number; startSeconds: number; target: LayoutTarget | null } | { type: "resizeEffect"; id: number; startSeconds: number; durationSeconds: number } | { type: "changeEffectScript"; id: number; script: EffectScriptReference } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTarget } | { type: "setEffectScope"; id: number; scope: SequenceEffectScope } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValue } | { type: "linkEffectCurveParam"; id: number; name: string; curvePath: string; objectKey: string } | { type: "unlinkEffectCurveParam"; id: number; name: string } | { type: "createMarkCollection"; key: string; name: string; color: string } | { type: "renameMarkCollection"; key: string; name: string } | { type: "deleteMarkCollection"; key: string } | { type: "setMarkCollectionColor"; key: string; color: string } | { type: "addMark"; collectionKey: string; timeSeconds: number } | { type: "moveMark"; collectionKey: string; index: number; timeSeconds: number } | { type: "deleteMark"; collectionKey: string; index: number };

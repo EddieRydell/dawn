@@ -3,16 +3,17 @@ use std::sync::Mutex;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_project_io::{
-    check_document_text, check_project, IoDiagnostic, IoDiagnosticSeverity, ProjectCheckReport,
-    ProjectSession, SourceDocument, SourceDocumentKind, SourceObjectKind,
+    check_document_text, check_project, save_project, IoDiagnostic, IoDiagnosticSeverity,
+    ProjectCheckReport, ProjectSession, SourceDocument, SourceDocumentKind, SourceObjectKind,
 };
 use indexmap::IndexSet;
 
 use crate::dto::{
     AppSnapshot, AudioPlaybackStatus, BufferExternalState, DiagnosticSeverity,
     DocumentDefaultObjectKey, DocumentDescriptor, DocumentObjectDescriptor, DocumentViewId,
-    EditorBuffer, EditorViewMode, LiveOutputSnapshot, ObjectKind, ProjectDiagnostic,
-    SequenceTransportSnapshot, SequenceTransportState, WorkspaceEntry, WorkspaceEntryKind,
+    EditorBuffer, EditorViewMode, GuiDocument, GuiDocumentRequest, GuiEditCommand, GuiEditResult,
+    LiveOutputSnapshot, ObjectKind, ProjectDiagnostic, SequenceTransportSnapshot,
+    SequenceTransportState, WorkspaceEntry, WorkspaceEntryKind,
 };
 
 pub struct DesktopState {
@@ -77,7 +78,6 @@ impl DesktopState {
             snapshot.active_file = Some(buffer.path.clone());
             snapshot.active_buffer = Some(buffer);
             snapshot.active_document_descriptor = Some(descriptor);
-            snapshot.active_gui_document = None;
             snapshot.status = format!("Opened {path}");
         })
     }
@@ -110,7 +110,6 @@ impl DesktopState {
             snapshot.active_file = Some(buffer.path.clone());
             snapshot.active_buffer = Some(buffer);
             snapshot.active_document_descriptor = Some(descriptor);
-            snapshot.active_gui_document = None;
         })
     }
 
@@ -146,7 +145,6 @@ impl DesktopState {
                 snapshot.active_file = None;
                 snapshot.active_buffer = None;
                 snapshot.active_document_descriptor = None;
-                snapshot.active_gui_document = None;
             }
         })
     }
@@ -286,6 +284,73 @@ impl DesktopState {
         self.apply_project_refresh_check(entrypoint.as_str(), check_project(&entrypoint))
     }
 
+    pub fn get_gui_document(&self, request: GuiDocumentRequest) -> GuiDocument {
+        let project = self.project_session();
+        crate::gui::project_gui_document(project.as_ref(), &request)
+    }
+
+    pub fn apply_gui_edit(
+        &self,
+        request: GuiDocumentRequest,
+        edit: GuiEditCommand,
+    ) -> GuiEditResult {
+        let Some(project) = self.project_session() else {
+            let snapshot = self.snapshot();
+            return GuiEditResult {
+                snapshot,
+                document: crate::gui::blocked("No project is loaded.", Vec::new()),
+            };
+        };
+        let affected_paths = match crate::gui::affected_paths(&project, &request, &edit) {
+            Ok(paths) => paths,
+            Err(error) => {
+                let snapshot = self.snapshot_with_error("gui.edit", &request.path, error.message());
+                return GuiEditResult {
+                    snapshot,
+                    document: crate::gui::blocked(error.message(), Vec::new()),
+                };
+            }
+        };
+        let dirty_path = self
+            .snapshot()
+            .tabs
+            .into_iter()
+            .find(|tab| tab.dirty && affected_paths.contains(&tab.path))
+            .map(|tab| tab.path);
+        if let Some(path) = dirty_path {
+            let message = format!("Save or reload {path} before using GUI edits.");
+            let snapshot = self.snapshot_with_error("gui.dirty", &path, &message);
+            return GuiEditResult {
+                snapshot,
+                document: crate::gui::blocked(message, Vec::new()),
+            };
+        }
+
+        let mut edited = project;
+        if let Err(error) = crate::gui::apply_edit(&mut edited, &request, edit) {
+            let snapshot = self.snapshot_with_error("gui.edit", &request.path, error.message());
+            return GuiEditResult {
+                snapshot,
+                document: crate::gui::blocked(error.message(), Vec::new()),
+            };
+        }
+        if let Err(error) = save_project(&edited) {
+            let snapshot = self.snapshot_with_error("gui.save", &request.path, &error.to_string());
+            return GuiEditResult {
+                snapshot,
+                document: crate::gui::blocked(error.to_string(), Vec::new()),
+            };
+        }
+        let entrypoint = edited.source.source_root.join(&edited.source.entrypoint);
+        self.apply_project_refresh_check(entrypoint.as_str(), check_project(&entrypoint));
+        self.refresh_saved_tabs(&affected_paths);
+        let document = self.get_gui_document(request);
+        GuiEditResult {
+            snapshot: self.snapshot(),
+            document,
+        }
+    }
+
     fn apply_project_open_check(
         &self,
         entrypoint: &str,
@@ -345,7 +410,6 @@ impl DesktopState {
             snapshot.active_file = active.as_ref().map(|(buffer, _)| buffer.path.clone());
             snapshot.active_buffer = active.as_ref().map(|(buffer, _)| buffer.clone());
             snapshot.active_document_descriptor = active.map(|(_, descriptor)| descriptor);
-            snapshot.active_gui_document = None;
             snapshot.diagnostics = diagnostics;
             snapshot.status = if snapshot.diagnostics.is_empty() {
                 format!("Opened project {entrypoint}")
@@ -356,6 +420,7 @@ impl DesktopState {
                 )
             };
             snapshot.sequence_transport = empty_sequence_transport();
+            snapshot.project_revision = snapshot.project_revision.saturating_add(1);
         })
     }
 
@@ -401,6 +466,7 @@ impl DesktopState {
                     snapshot.diagnostics.len()
                 )
             };
+            snapshot.project_revision = snapshot.project_revision.saturating_add(1);
         })
     }
 
@@ -505,7 +571,6 @@ impl DesktopState {
                     snapshot.active_file = None;
                     snapshot.active_buffer = None;
                     snapshot.active_document_descriptor = None;
-                    snapshot.active_gui_document = None;
                 }
             }
             if refreshed {
@@ -545,6 +610,39 @@ impl DesktopState {
             }];
         })
     }
+
+    fn refresh_saved_tabs(&self, paths: &std::collections::BTreeSet<String>) -> AppSnapshot {
+        let Some(project) = self.project_session() else {
+            return self.snapshot();
+        };
+        let refreshed = paths
+            .iter()
+            .filter_map(|path| {
+                let relative = Utf8Path::new(path);
+                let absolute = absolute_project_path(&project, relative)?;
+                let text = fs::read_to_string(absolute).ok()?;
+                Some((path.clone(), text))
+            })
+            .collect::<Vec<_>>();
+        self.update_snapshot(|snapshot| {
+            for (path, text) in &refreshed {
+                if let Some(tab) = snapshot.tabs.iter_mut().find(|tab| tab.path == *path) {
+                    tab.text = text.clone();
+                    tab.dirty = false;
+                    tab.external_state = BufferExternalState::Current;
+                }
+                if let Some(buffer) = snapshot
+                    .active_buffer
+                    .as_mut()
+                    .filter(|buffer| buffer.path == *path)
+                {
+                    buffer.text = text.clone();
+                    buffer.dirty = false;
+                    buffer.external_state = BufferExternalState::Current;
+                }
+            }
+        })
+    }
 }
 
 impl Default for DesktopState {
@@ -556,13 +654,13 @@ impl Default for DesktopState {
 fn empty_snapshot() -> AppSnapshot {
     AppSnapshot {
         project_root: None,
+        project_revision: 0,
         project_tree_visible: true,
         project_entries: Vec::new(),
         tabs: Vec::new(),
         active_file: None,
         active_buffer: None,
         active_document_descriptor: None,
-        active_gui_document: None,
         diagnostics: Vec::new(),
         status: "Ready".to_string(),
         sequence_transport: empty_sequence_transport(),

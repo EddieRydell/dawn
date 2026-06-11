@@ -1,14 +1,19 @@
 import { create } from "zustand";
-import { commands } from "./api";
-import type { AppSnapshot } from "./types";
+import { commands, setGuiEditResultHandler } from "./api";
+import type { AppSnapshot, GuiDocument, GuiDocumentRequest, GuiEditResult } from "./types";
 
 type SnapshotApplySource = "event" | "command" | "hydrate";
 
 type AppStore = {
   snapshot: AppSnapshot | null;
+  guiRequest: GuiDocumentRequest | null;
+  guiDocument: GuiDocument | null;
   error: string | null;
   localText: string;
   setSnapshot: (snapshot: AppSnapshot, source?: SnapshotApplySource) => void;
+  setGuiRequest: (request: GuiDocumentRequest | null) => void;
+  setGuiDocument: (document: GuiDocument | null) => void;
+  applyGuiEditResult: (result: GuiEditResult) => void;
   setError: (error: string | null) => void;
   setLocalText: (text: string) => void;
   hydrate: () => Promise<void>;
@@ -16,6 +21,8 @@ type AppStore = {
 
 export const useAppStore = create<AppStore>((set) => ({
   snapshot: null,
+  guiRequest: null,
+  guiDocument: null,
   error: null,
   localText: "",
   setSnapshot: (snapshot, source = "command") => {
@@ -24,6 +31,19 @@ export const useAppStore = create<AppStore>((set) => ({
       localText: snapshot.activeBuffer?.text ?? ""
     });
     void source;
+  },
+  setGuiRequest: (guiRequest) => {
+    set({ guiRequest });
+  },
+  setGuiDocument: (guiDocument) => {
+    set({ guiDocument });
+  },
+  applyGuiEditResult: (result) => {
+    set({
+      snapshot: result.snapshot,
+      guiDocument: result.document,
+      localText: result.snapshot.activeBuffer?.text ?? ""
+    });
   },
   setError: (error) => {
     set({ error });
@@ -37,6 +57,11 @@ export const useAppStore = create<AppStore>((set) => ({
     set({ error: null });
   }
 }));
+
+setGuiEditResultHandler((result) => {
+  useAppStore.getState().applyGuiEditResult(result);
+  useAppStore.getState().setError(null);
+});
 
 export function subscribeToSnapshots(): Promise<() => void> {
   return Promise.resolve(() => {});

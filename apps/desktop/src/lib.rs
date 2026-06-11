@@ -13,6 +13,7 @@
 pub mod bindings;
 pub mod commands;
 pub mod dto;
+pub mod gui;
 pub mod state;
 
 pub fn run() -> Result<(), tauri::Error> {

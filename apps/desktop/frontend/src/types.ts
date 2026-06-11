@@ -1,5 +1,4 @@
 export type {
-  ActiveGuiDocument,
   AppSnapshot,
   AudioPlaybackStatus,
   BufferExternalState,
@@ -9,12 +8,16 @@ export type {
   DocumentViewId,
   EditorBuffer,
   EditorViewMode,
-  FixtureDocument,
+  FixtureGuiDocument,
   FixtureGuiEdit,
   FloatCurvePoint,
   GeometryRenderBounds,
   GeometryRenderPoint,
-  LayoutDocument,
+  GuiDocument,
+  GuiDocumentRequest,
+  GuiEditCommand,
+  GuiEditResult,
+  LayoutGuiDocument,
   LayoutFixturePlacement,
   LayoutGuiEdit,
   LayoutTarget,
@@ -23,7 +26,7 @@ export type {
   ProjectDiagnostic,
   SequenceAudio,
   SequenceCurveLibraryItem,
-  SequenceEditorDocument,
+  SequenceGuiDocument,
   SequenceEffect,
   SequenceEffectParam,
   SequenceEffectParamValue,
@@ -40,4 +43,11 @@ export type {
   TextRange,
   Transform,
   WorkspaceEntry
+} from "./generated/bindings";
+
+export type {
+  FixtureGuiDocument as FixtureDocument,
+  GuiDocument as ActiveGuiDocument,
+  LayoutGuiDocument as LayoutDocument,
+  SequenceGuiDocument as SequenceEditorDocument
 } from "./generated/bindings";
