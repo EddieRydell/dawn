@@ -15,7 +15,7 @@ use dawn_language::effect::{
     CurveDefinition, CurveId, CurveSource, EffectDefinition, EffectDefinitionId, EffectInst,
     EffectInstId, EffectParamValue, EffectScope, EffectTarget,
 };
-use dawn_language::effect_dsl::{compile_effects, Identifier};
+use dawn_language::effect_dsl::{compile_effects, Diagnostic as EffectDiagnostic, Identifier};
 use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
 use dawn_language::sequence::{
     AssetId, AutomationClip, AutomationClipId, MarkCollection, MarkCollectionKey, Sequence,
@@ -32,6 +32,8 @@ use dawn_language::values::{
     Rotation3, Scale3,
 };
 use indexmap::{IndexMap, IndexSet};
+use marked_yaml::{LoadError as MarkedYamlError, Marker, Node};
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
@@ -39,8 +41,209 @@ use std::io;
 use std::time::Duration;
 use yaml_serde::{Mapping, Value};
 
+thread_local! {
+    static YAML_SOURCE_INDICES: RefCell<IndexMap<Utf8PathBuf, YamlSourceIndex>> =
+        RefCell::new(IndexMap::new());
+}
+
 pub fn load_project(path: &Utf8Path) -> Result<ProjectSession, LoadProjectError> {
     Loader::new(path)?.load()
+}
+
+pub fn check_project(path: &Utf8Path) -> ProjectCheckReport {
+    let mut diagnostics = Vec::new();
+    let (source_root, mut reachable_files) = match discover_reachable_files(path) {
+        Ok(discovered) => discovered,
+        Err(error) => {
+            push_diagnostic(&mut diagnostics, load_error_diagnostic(error));
+            (Utf8PathBuf::new(), Vec::new())
+        }
+    };
+    reachable_files.sort();
+    reachable_files.dedup();
+
+    for file in &reachable_files {
+        diagnostics.extend(check_absolute_document(&source_root, file));
+    }
+
+    match load_project(path) {
+        Ok(session) => ProjectCheckReport {
+            session: Some(session),
+            diagnostics,
+        },
+        Err(error) => {
+            push_load_error_diagnostics(&mut diagnostics, error);
+            ProjectCheckReport {
+                session: None,
+                diagnostics,
+            }
+        }
+    }
+}
+
+pub fn check_document_text(path: &Utf8Path, text: &str) -> Vec<IoDiagnostic> {
+    if path
+        .file_name()
+        .is_some_and(|file_name| file_name.ends_with(".effect.dawn"))
+    {
+        return effect_diagnostics(path, text);
+    }
+
+    match parse_yaml_value(path, text) {
+        Ok(_) => Vec::new(),
+        Err(LoadProjectError::ParseYaml { message, range, .. }) => vec![IoDiagnostic {
+            path: path.to_path_buf(),
+            range,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::YamlParse,
+            message,
+        }],
+        Err(error) => vec![load_error_diagnostic(error)],
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProjectCheckReport {
+    pub session: Option<ProjectSession>,
+    pub diagnostics: Vec<IoDiagnostic>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct IoDiagnostic {
+    pub path: Utf8PathBuf,
+    pub range: Option<TextRange>,
+    pub severity: IoDiagnosticSeverity,
+    pub code: IoDiagnosticCode,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum IoDiagnosticSeverity {
+    Error,
+    Warning,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum IoDiagnosticCode {
+    DawnLoad,
+    DawnReference,
+    EffectCompile,
+    IoRead,
+    YamlParse,
+}
+
+impl IoDiagnosticCode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::DawnLoad => "dawn.load",
+            Self::DawnReference => "dawn.reference",
+            Self::EffectCompile => "effect.compile",
+            Self::IoRead => "io.read",
+            Self::YamlParse => "yaml.parse",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct TextRange {
+    pub start: TextPosition,
+    pub end: TextPosition,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct TextPosition {
+    pub line: u32,
+    pub character: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+enum YamlPathSegment {
+    Key(String),
+    Index(usize),
+}
+
+#[derive(Clone, Debug, Default)]
+struct YamlSourceIndex {
+    entries: Vec<YamlSourceEntry>,
+}
+
+#[derive(Clone, Debug)]
+struct YamlSourceEntry {
+    path: Vec<YamlPathSegment>,
+    value: Value,
+    range: Option<TextRange>,
+}
+
+impl YamlSourceIndex {
+    fn from_value_and_node(value: &Value, node: &Node) -> Self {
+        let mut index = Self::default();
+        let mut path = Vec::new();
+        index.push(value, node, &mut path);
+        index
+    }
+
+    fn push(&mut self, value: &Value, node: &Node, path: &mut Vec<YamlPathSegment>) {
+        self.entries.push(YamlSourceEntry {
+            path: path.clone(),
+            value: value.clone(),
+            range: node_range(node),
+        });
+
+        match (value, node) {
+            (Value::Mapping(mapping), Node::Mapping(marked_mapping)) => {
+                for (key, child_value) in mapping {
+                    let Some(key) = key.as_str() else {
+                        continue;
+                    };
+                    let Some(child_node) = marked_mapping.get_node(key) else {
+                        continue;
+                    };
+                    path.push(YamlPathSegment::Key(key.to_string()));
+                    self.push(child_value, child_node, path);
+                    let _ = path.pop();
+                }
+            }
+            (Value::Sequence(sequence), Node::Sequence(marked_sequence)) => {
+                for (index, child_value) in sequence.iter().enumerate() {
+                    let Some(child_node) = marked_sequence.get_node(index) else {
+                        continue;
+                    };
+                    path.push(YamlPathSegment::Index(index));
+                    self.push(child_value, child_node, path);
+                    let _ = path.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn range_for_value(&self, value: &Value) -> Option<TextRange> {
+        self.entries
+            .iter()
+            .find(|entry| &entry.value == value)
+            .and_then(|entry| entry.range.clone())
+    }
+
+    fn range_for_field_value(&self, parent: &Value, key: &str) -> Option<TextRange> {
+        let parent_path = self
+            .entries
+            .iter()
+            .find(|entry| &entry.value == parent)
+            .map(|entry| entry.path.clone())?;
+        let mut field_path = parent_path;
+        field_path.push(YamlPathSegment::Key(key.to_string()));
+        self.entries
+            .iter()
+            .find(|entry| entry.path == field_path)
+            .and_then(|entry| entry.range.clone())
+    }
+
+    fn range_for_scalar(&self, value: &str) -> Option<TextRange> {
+        self.entries
+            .iter()
+            .find(|entry| entry.value.as_str() == Some(value))
+            .and_then(|entry| entry.range.clone())
+    }
 }
 
 pub fn export_project(
@@ -195,19 +398,22 @@ pub enum LoadProjectError {
     },
     ParseYaml {
         path: Utf8PathBuf,
-        source: yaml_serde::Error,
+        message: String,
+        range: Option<TextRange>,
     },
     InvalidDocument {
         path: Utf8PathBuf,
+        range: Option<TextRange>,
         message: String,
     },
     InvalidReference {
         path: Utf8PathBuf,
+        range: Option<TextRange>,
         reference: String,
     },
     InvalidEffect {
         path: Utf8PathBuf,
-        diagnostics: Vec<String>,
+        diagnostics: Vec<IoDiagnostic>,
     },
 }
 
@@ -233,16 +439,22 @@ impl fmt::Display for LoadProjectError {
         match self {
             Self::InvalidEntrypoint { path } => write!(formatter, "invalid entrypoint {path}"),
             Self::Io { path, source } => write!(formatter, "{path}: {source}"),
-            Self::ParseYaml { path, source } => write!(formatter, "{path}: {source}"),
-            Self::InvalidDocument { path, message } => write!(formatter, "{path}: {message}"),
-            Self::InvalidReference { path, reference } => {
+            Self::ParseYaml { path, message, .. } => write!(formatter, "{path}: {message}"),
+            Self::InvalidDocument { path, message, .. } => write!(formatter, "{path}: {message}"),
+            Self::InvalidReference {
+                path, reference, ..
+            } => {
                 write!(formatter, "{path}: invalid reference {reference}")
             }
             Self::InvalidEffect { path, diagnostics } => {
                 write!(
                     formatter,
                     "{path}: invalid effect: {}",
-                    diagnostics.join(", ")
+                    diagnostics
+                        .iter()
+                        .map(|diagnostic| diagnostic.message.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )
             }
         }
@@ -250,6 +462,387 @@ impl fmt::Display for LoadProjectError {
 }
 
 impl std::error::Error for LoadProjectError {}
+
+fn discover_reachable_files(
+    path: &Utf8Path,
+) -> Result<(Utf8PathBuf, Vec<Utf8PathBuf>), LoadProjectError> {
+    let loader = Loader::new(path)?;
+    let mut discovered = IndexSet::new();
+    discover_reachable_file(&loader.source_root, &loader.entrypoint, &mut discovered)?;
+    Ok((loader.source_root, discovered.into_iter().collect()))
+}
+
+fn discover_reachable_file(
+    source_root: &Utf8Path,
+    relative: &Utf8Path,
+    discovered: &mut IndexSet<Utf8PathBuf>,
+) -> Result<(), LoadProjectError> {
+    if !discovered.insert(relative.to_path_buf()) {
+        return Ok(());
+    }
+
+    let absolute = source_root.join(relative);
+    let text = fs::read_to_string(&absolute).map_err(|source| LoadProjectError::Io {
+        path: absolute.clone(),
+        source,
+    })?;
+    if relative
+        .file_name()
+        .is_some_and(|file_name| file_name.ends_with(".effect.dawn"))
+    {
+        return Ok(());
+    }
+
+    let value = parse_yaml_value(relative, &text)?;
+    let Some(map) = mapping(&value) else {
+        return Ok(());
+    };
+    for import in parse_imports(relative, map)? {
+        let importer_dir = relative.parent().unwrap_or_else(|| Utf8Path::new(""));
+        let target_relative = normalize_relative(importer_dir.join(&import.from));
+        let target_absolute = source_root.join(&target_relative);
+        if target_absolute.is_dir() {
+            for child in sorted_dawn_children(source_root, &target_absolute)? {
+                discover_reachable_file(source_root, &child, discovered)?;
+            }
+        } else if target_absolute.is_file() {
+            discover_reachable_file(source_root, &target_relative, discovered)?;
+        }
+    }
+    Ok(())
+}
+
+fn parse_yaml_value(path: &Utf8Path, text: &str) -> Result<Value, LoadProjectError> {
+    let node = marked_yaml::parse_yaml_with_options(
+        0,
+        text,
+        marked_yaml::LoaderOptions::default().error_on_duplicate_keys(true),
+    )
+    .map_err(|source| LoadProjectError::ParseYaml {
+        path: path.to_path_buf(),
+        range: marked_yaml_error_range(&source),
+        message: source.to_string(),
+    })?;
+    let value: Value =
+        yaml_serde::from_str(text).map_err(|source| LoadProjectError::ParseYaml {
+            path: path.to_path_buf(),
+            range: yaml_error_range(&source),
+            message: source.to_string(),
+        })?;
+    let source_index = YamlSourceIndex::from_value_and_node(&value, &node);
+    YAML_SOURCE_INDICES.with(|indices| {
+        indices
+            .borrow_mut()
+            .insert(path.to_path_buf(), source_index);
+    });
+    Ok(value)
+}
+
+fn sorted_dawn_children(
+    source_root: &Utf8Path,
+    absolute: &Utf8Path,
+) -> Result<Vec<Utf8PathBuf>, LoadProjectError> {
+    let mut children = Vec::new();
+    for entry in fs::read_dir(absolute).map_err(|source| LoadProjectError::Io {
+        path: absolute.to_path_buf(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| LoadProjectError::Io {
+            path: absolute.to_path_buf(),
+            source,
+        })?;
+        let path = Utf8PathBuf::from_path_buf(entry.path()).map_err(|path| {
+            LoadProjectError::InvalidDocument {
+                path: absolute.to_path_buf(),
+                range: None,
+                message: format!("non-utf8 import child path `{}`", path.display()),
+            }
+        })?;
+        if path.is_file() && path.file_name().is_some_and(|name| name.ends_with(".dawn")) {
+            children.push(relative_path(source_root, &path)?);
+        }
+    }
+    children.sort();
+    Ok(children)
+}
+
+fn check_absolute_document(source_root: &Utf8Path, relative: &Utf8Path) -> Vec<IoDiagnostic> {
+    let path = source_root.join(relative);
+    match fs::read_to_string(&path) {
+        Ok(text) => {
+            let diagnostic_path = relative.to_path_buf();
+            check_document_text(&diagnostic_path, &text)
+        }
+        Err(source) => vec![IoDiagnostic {
+            path: relative.to_path_buf(),
+            range: None,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::IoRead,
+            message: source.to_string(),
+        }],
+    }
+}
+
+fn effect_diagnostics(path: &Utf8Path, text: &str) -> Vec<IoDiagnostic> {
+    match compile_effects(text) {
+        Ok(_) => Vec::new(),
+        Err(diagnostics) => diagnostics
+            .into_iter()
+            .map(|diagnostic| effect_diagnostic(path, text, diagnostic))
+            .collect(),
+    }
+}
+
+fn effect_diagnostic(path: &Utf8Path, text: &str, diagnostic: EffectDiagnostic) -> IoDiagnostic {
+    IoDiagnostic {
+        path: path.to_path_buf(),
+        range: Some(byte_range(text, diagnostic.span.start, diagnostic.span.end)),
+        severity: IoDiagnosticSeverity::Error,
+        code: IoDiagnosticCode::EffectCompile,
+        message: diagnostic.message,
+    }
+}
+
+fn load_error_diagnostic(error: LoadProjectError) -> IoDiagnostic {
+    match error {
+        LoadProjectError::InvalidEntrypoint { path } => IoDiagnostic {
+            path,
+            range: None,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::DawnLoad,
+            message: "invalid entrypoint".to_string(),
+        },
+        LoadProjectError::Io { path, source } => IoDiagnostic {
+            path,
+            range: None,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::IoRead,
+            message: source.to_string(),
+        },
+        LoadProjectError::ParseYaml {
+            path,
+            message,
+            range,
+        } => IoDiagnostic {
+            path,
+            range,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::YamlParse,
+            message,
+        },
+        LoadProjectError::InvalidDocument {
+            path,
+            range,
+            message,
+        } => IoDiagnostic {
+            path,
+            range,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::DawnLoad,
+            message,
+        },
+        LoadProjectError::InvalidReference {
+            path,
+            range,
+            reference,
+        } => IoDiagnostic {
+            path,
+            range,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::DawnReference,
+            message: format!("invalid reference {reference}"),
+        },
+        LoadProjectError::InvalidEffect { path, diagnostics } => IoDiagnostic {
+            path,
+            range: None,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::EffectCompile,
+            message: diagnostics
+                .into_iter()
+                .map(|diagnostic| diagnostic.message)
+                .collect::<Vec<_>>()
+                .join(", "),
+        },
+    }
+}
+
+fn push_diagnostic(diagnostics: &mut Vec<IoDiagnostic>, diagnostic: IoDiagnostic) {
+    if !diagnostics.contains(&diagnostic) {
+        diagnostics.push(diagnostic);
+    }
+}
+
+fn push_load_error_diagnostics(diagnostics: &mut Vec<IoDiagnostic>, error: LoadProjectError) {
+    match error {
+        LoadProjectError::InvalidEffect {
+            diagnostics: effect_diagnostics,
+            ..
+        } => {
+            for diagnostic in effect_diagnostics {
+                push_diagnostic(diagnostics, diagnostic);
+            }
+        }
+        other => push_diagnostic(diagnostics, load_error_diagnostic(other)),
+    }
+}
+
+fn with_yaml_location(
+    error: LoadProjectError,
+    path: &Utf8Path,
+    range: Option<TextRange>,
+) -> LoadProjectError {
+    match error {
+        LoadProjectError::InvalidDocument { message, .. } => LoadProjectError::InvalidDocument {
+            path: path.to_path_buf(),
+            range,
+            message,
+        },
+        LoadProjectError::InvalidReference { reference, .. } => {
+            LoadProjectError::InvalidReference {
+                path: path.to_path_buf(),
+                range,
+                reference,
+            }
+        }
+        other => other,
+    }
+}
+
+fn yaml_error_range(error: &yaml_serde::Error) -> Option<TextRange> {
+    let location = error.location()?;
+    let line = location.line().saturating_sub(1) as u32;
+    let character = location.column().saturating_sub(1) as u32;
+    Some(TextRange {
+        start: TextPosition { line, character },
+        end: TextPosition {
+            line,
+            character: character.saturating_add(1),
+        },
+    })
+}
+
+fn marked_yaml_error_range(error: &MarkedYamlError) -> Option<TextRange> {
+    match error {
+        MarkedYamlError::TopLevelMustBeMapping(marker)
+        | MarkedYamlError::TopLevelMustBeSequence(marker)
+        | MarkedYamlError::UnexpectedAnchor(marker)
+        | MarkedYamlError::MappingKeyMustBeScalar(marker)
+        | MarkedYamlError::UnexpectedTag(marker)
+        | MarkedYamlError::ScanError(marker, _) => Some(marker_range(marker)),
+        MarkedYamlError::DuplicateKey(inner) => span_range(inner.key.span()),
+    }
+}
+
+fn marker_range(marker: &Marker) -> TextRange {
+    let line = marker.line().saturating_sub(1) as u32;
+    let character = marker.column().saturating_sub(1) as u32;
+    TextRange {
+        start: TextPosition { line, character },
+        end: TextPosition {
+            line,
+            character: character.saturating_add(1),
+        },
+    }
+}
+
+fn span_range(span: &marked_yaml::Span) -> Option<TextRange> {
+    let start = span.start()?;
+    let end = span.end().unwrap_or(start);
+    let start_line = start.line().saturating_sub(1) as u32;
+    let start_character = start.column().saturating_sub(1) as u32;
+    let end_line = end.line().saturating_sub(1) as u32;
+    let mut end_character = end.column().saturating_sub(1) as u32;
+    if start_line == end_line && start_character == end_character {
+        end_character = end_character.saturating_add(1);
+    }
+    Some(TextRange {
+        start: TextPosition {
+            line: start_line,
+            character: start_character,
+        },
+        end: TextPosition {
+            line: end_line,
+            character: end_character,
+        },
+    })
+}
+
+fn node_range(node: &Node) -> Option<TextRange> {
+    match node {
+        Node::Scalar(scalar) => scalar_range(scalar),
+        Node::Mapping(mapping) => span_range(mapping.span()),
+        Node::Sequence(sequence) => span_range(sequence.span()),
+    }
+}
+
+fn scalar_range(scalar: &marked_yaml::types::MarkedScalarNode) -> Option<TextRange> {
+    let start = scalar.span().start()?;
+    let line = start.line().saturating_sub(1) as u32;
+    let character = start.column().saturating_sub(1) as u32;
+    let width = scalar.as_str().chars().count().max(1) as u32;
+    Some(TextRange {
+        start: TextPosition { line, character },
+        end: TextPosition {
+            line,
+            character: character.saturating_add(width),
+        },
+    })
+}
+
+fn source_range_for_value(path: &Utf8Path, value: &Value) -> Option<TextRange> {
+    YAML_SOURCE_INDICES.with(|indices| {
+        indices
+            .borrow()
+            .get(path)
+            .and_then(|index| index.range_for_value(value))
+    })
+}
+
+fn source_range_for_field_value(path: &Utf8Path, value: &Value, key: &str) -> Option<TextRange> {
+    YAML_SOURCE_INDICES.with(|indices| {
+        indices
+            .borrow()
+            .get(path)
+            .and_then(|index| index.range_for_field_value(value, key))
+    })
+}
+
+fn source_range_for_scalar(path: &Utf8Path, value: &str) -> Option<TextRange> {
+    YAML_SOURCE_INDICES.with(|indices| {
+        indices
+            .borrow()
+            .get(path)
+            .and_then(|index| index.range_for_scalar(value))
+    })
+}
+
+fn byte_range(text: &str, start: usize, end: usize) -> TextRange {
+    let start = byte_position(text, start);
+    let mut end = byte_position(text, end);
+    if end == start {
+        end.character = end.character.saturating_add(1);
+    }
+    TextRange { start, end }
+}
+
+fn byte_position(text: &str, byte_offset: usize) -> TextPosition {
+    let clamped = byte_offset.min(text.len());
+    let mut line = 0;
+    let mut line_start = 0;
+    for (index, character) in text.char_indices() {
+        if index >= clamped {
+            break;
+        }
+        if character == '\n' {
+            line += 1;
+            line_start = index + character.len_utf8();
+        }
+    }
+    TextPosition {
+        line,
+        character: text[line_start..clamped].chars().count() as u32,
+    }
+}
 
 impl fmt::Display for ExportProjectError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -400,12 +993,7 @@ impl Loader {
                 path: relative.to_path_buf(),
                 diagnostics: diagnostics
                     .into_iter()
-                    .map(|diagnostic| {
-                        format!(
-                            "{}..{} {}",
-                            diagnostic.span.start, diagnostic.span.end, diagnostic.message
-                        )
-                    })
+                    .map(|diagnostic| effect_diagnostic(relative, &source, diagnostic))
                     .collect(),
             })?;
         let mut visible = IndexMap::new();
@@ -458,13 +1046,10 @@ impl Loader {
             path: absolute.to_path_buf(),
             source,
         })?;
-        let value: Value =
-            yaml_serde::from_str(&text).map_err(|source| LoadProjectError::ParseYaml {
-                path: relative.to_path_buf(),
-                source,
-            })?;
+        let value = parse_yaml_value(relative, &text)?;
         let map = mapping(&value).ok_or_else(|| LoadProjectError::InvalidDocument {
             path: relative.to_path_buf(),
+            range: None,
             message: "document root must be a mapping".to_string(),
         })?;
         let imports = parse_imports(relative, map)?;
@@ -476,6 +1061,7 @@ impl Loader {
             let Some(key) = key.as_str() else {
                 return Err(LoadProjectError::InvalidDocument {
                     path: relative.to_path_buf(),
+                    range: None,
                     message: "object keys must be strings".to_string(),
                 });
             };
@@ -497,6 +1083,7 @@ impl Loader {
                 other => {
                     return Err(LoadProjectError::InvalidDocument {
                         path: relative.to_path_buf(),
+                        range: source_range_for_field_value(relative, object_value, "type"),
                         message: format!("unsupported object type `{other}`"),
                     })
                 }
@@ -534,6 +1121,7 @@ impl Loader {
                 let target_visible = self.visible_objects.get(target).ok_or_else(|| {
                     LoadProjectError::InvalidDocument {
                         path: target.clone(),
+                        range: None,
                         message: "loaded document had no visible object index".to_string(),
                     }
                 })?;
@@ -544,6 +1132,7 @@ impl Loader {
                     if !names.insert(key.object.clone()) {
                         return Err(LoadProjectError::InvalidDocument {
                             path: relative.to_path_buf(),
+                            range: None,
                             message: format!(
                                 "duplicate exported object `{}` in import alias `{}`",
                                 key.object, import.alias
@@ -607,6 +1196,7 @@ impl Loader {
                 let path = Utf8PathBuf::from_path_buf(entry.path()).map_err(|path| {
                     LoadProjectError::InvalidDocument {
                         path: absolute.clone(),
+                        range: None,
                         message: format!("non-utf8 import child path `{}`", path.display()),
                     }
                 })?;
@@ -622,6 +1212,7 @@ impl Loader {
         }
         Err(LoadProjectError::InvalidDocument {
             path: importer.to_path_buf(),
+            range: None,
             message: format!("import target does not exist: {import_from}"),
         })
     }
@@ -733,6 +1324,7 @@ impl Loader {
         let mut found = None;
         let document_map = mapping(document).ok_or_else(|| LoadProjectError::InvalidDocument {
             path: path.to_path_buf(),
+            range: None,
             message: "document root must be a mapping".to_string(),
         })?;
         for (key, value) in document_map.iter() {
@@ -752,6 +1344,7 @@ impl Loader {
         }
         found.ok_or_else(|| LoadProjectError::InvalidDocument {
             path: path.to_path_buf(),
+            range: None,
             message: "entrypoint must contain a project object".to_string(),
         })
     }
@@ -769,17 +1362,20 @@ impl Loader {
             })
             .ok_or_else(|| LoadProjectError::InvalidReference {
                 path: self.entrypoint.clone(),
+                range: None,
                 reference: id.id_string(),
             })?;
         let document = self.dawn_document(&location.document)?;
         let document_map = mapping(document).ok_or_else(|| LoadProjectError::InvalidDocument {
             path: location.document.clone(),
+            range: None,
             message: "document root must be a mapping".to_string(),
         })?;
         let value = document_map
             .get(Value::String(location.object_key.clone()))
             .ok_or_else(|| LoadProjectError::InvalidReference {
                 path: location.document.clone(),
+                range: None,
                 reference: location.object_key.clone(),
             })?
             .clone();
@@ -796,12 +1392,14 @@ impl Loader {
                 .get(path)
                 .ok_or_else(|| LoadProjectError::InvalidDocument {
                     path: path.to_path_buf(),
+                    range: None,
                     message: "document not loaded".to_string(),
                 })?;
         match &document.kind {
             SourceDocumentKind::Dawn { value, .. } => Ok(value),
             SourceDocumentKind::Effect { .. } => Err(LoadProjectError::InvalidDocument {
                 path: path.to_path_buf(),
+                range: None,
                 message: "expected YAML Dawn document".to_string(),
             }),
         }
@@ -817,6 +1415,7 @@ impl Loader {
                 .split_once('.')
                 .ok_or_else(|| LoadProjectError::InvalidReference {
                     path: path.to_path_buf(),
+                    range: source_range_for_scalar(path, reference),
                     reference: reference.to_string(),
                 })?;
         self.visible_objects
@@ -830,6 +1429,7 @@ impl Loader {
             .cloned()
             .ok_or_else(|| LoadProjectError::InvalidReference {
                 path: path.to_path_buf(),
+                range: source_range_for_scalar(path, reference),
                 reference: reference.to_string(),
             })
     }
@@ -843,6 +1443,7 @@ impl Loader {
             ResolvedObject::Setup(id) => Ok(id),
             _ => Err(LoadProjectError::InvalidReference {
                 path: path.to_path_buf(),
+                range: source_range_for_scalar(path, reference),
                 reference: reference.to_string(),
             }),
         }
@@ -857,6 +1458,7 @@ impl Loader {
             ResolvedObject::Sequence(id) => Ok(id),
             _ => Err(LoadProjectError::InvalidReference {
                 path: path.to_path_buf(),
+                range: source_range_for_scalar(path, reference),
                 reference: reference.to_string(),
             }),
         }
@@ -883,6 +1485,7 @@ impl DomainResolver<'_> {
             _ => {
                 return Err(LoadProjectError::InvalidReference {
                     path: document_path,
+                    range: None,
                     reference: layout_ref.to_string(),
                 })
             }
@@ -892,6 +1495,7 @@ impl DomainResolver<'_> {
             _ => {
                 return Err(LoadProjectError::InvalidReference {
                     path: path.to_path_buf(),
+                    range: None,
                     reference: patch_ref.to_string(),
                 })
             }
@@ -934,6 +1538,7 @@ impl DomainResolver<'_> {
             other => {
                 return Err(LoadProjectError::InvalidDocument {
                     path: path.to_path_buf(),
+                    range: None,
                     message: format!("unsupported controller protocol `{other}`"),
                 })
             }
@@ -943,6 +1548,7 @@ impl DomainResolver<'_> {
             .transpose()
             .map_err(|message| LoadProjectError::InvalidDocument {
                 path: path.to_path_buf(),
+                range: None,
                 message,
             })?;
         let output = required_mapping(path, &value, "output")?;
@@ -952,6 +1558,7 @@ impl DomainResolver<'_> {
             parse_channel_order(string_field(path, &output_value, "channel_order")?).ok_or_else(
                 || LoadProjectError::InvalidDocument {
                     path: path.to_path_buf(),
+                    range: None,
                     message: "invalid channel order".to_string(),
                 },
             )?;
@@ -975,6 +1582,7 @@ impl DomainResolver<'_> {
                     let slots = parse_slot_range(range).ok_or_else(|| {
                         LoadProjectError::InvalidDocument {
                             path: path.to_path_buf(),
+                            range: None,
                             message: format!("invalid universe range `{range}`"),
                         }
                     })?;
@@ -988,6 +1596,7 @@ impl DomainResolver<'_> {
             other => {
                 return Err(LoadProjectError::InvalidDocument {
                     path: path.to_path_buf(),
+                    range: None,
                     message: format!("unsupported controller output type `{other}`"),
                 })
             }
@@ -1056,6 +1665,7 @@ impl DomainResolver<'_> {
             _ => {
                 return Err(LoadProjectError::InvalidReference {
                     path: path.to_path_buf(),
+                    range: None,
                     reference: fixture_ref.to_string(),
                 })
             }
@@ -1130,6 +1740,7 @@ impl DomainResolver<'_> {
             other => {
                 return Err(LoadProjectError::InvalidDocument {
                     path: path.to_path_buf(),
+                    range: None,
                     message: format!("unsupported fixture geometry `{other}`"),
                 })
             }
@@ -1177,6 +1788,7 @@ impl DomainResolver<'_> {
             Ok(_) => {
                 return Err(LoadProjectError::InvalidReference {
                     path: path.to_path_buf(),
+                    range: None,
                     reference: controller_ref.to_string(),
                 })
             }
@@ -1192,6 +1804,7 @@ impl DomainResolver<'_> {
             })
             .ok_or_else(|| LoadProjectError::InvalidDocument {
                 path: path.to_path_buf(),
+                range: None,
                 message: "patch route must contain output or universe".to_string(),
             })?;
         let start_channel_offset = optional_field(value, "start_channel_offset")
@@ -1204,6 +1817,7 @@ impl DomainResolver<'_> {
             })
             .ok_or_else(|| LoadProjectError::InvalidDocument {
                 path: path.to_path_buf(),
+                range: None,
                 message: "patch route must contain start_channel_offset or start".to_string(),
             })?;
         Ok(PatchRoute {
@@ -1253,7 +1867,14 @@ impl DomainResolver<'_> {
             id.clone(),
             Sequence {
                 id: id.clone(),
-                duration: parse_duration(string_field(&document_path, &value, "duration")?)?,
+                duration: parse_duration(string_field(&document_path, &value, "duration")?)
+                    .map_err(|error| {
+                        with_yaml_location(
+                            error,
+                            &document_path,
+                            source_range_for_field_value(&document_path, &value, "duration"),
+                        )
+                    })?,
                 frame_rate: u32_field(&document_path, &value, "frame_rate")?,
                 audio,
                 mark_collections,
@@ -1279,6 +1900,7 @@ impl DomainResolver<'_> {
         let Some(audio_path) = audio.as_str() else {
             return Err(LoadProjectError::InvalidDocument {
                 path: path.to_path_buf(),
+                range: None,
                 message: "audio must be null or a path string".to_string(),
             });
         };
@@ -1296,6 +1918,7 @@ impl DomainResolver<'_> {
         if !absolute.is_file() {
             return Err(LoadProjectError::InvalidDocument {
                 path: path.to_path_buf(),
+                range: None,
                 message: format!("audio asset does not exist: {audio_path}"),
             });
         }
@@ -1330,6 +1953,7 @@ impl DomainResolver<'_> {
             _ => {
                 return Err(LoadProjectError::InvalidReference {
                     path: path.to_path_buf(),
+                    range: None,
                     reference: script_ref.to_string(),
                 })
             }
@@ -1344,11 +1968,13 @@ impl DomainResolver<'_> {
                             key.as_str()
                                 .ok_or_else(|| LoadProjectError::InvalidDocument {
                                     path: path.to_path_buf(),
+                                    range: None,
                                     message: "effect param keys must be strings".to_string(),
                                 })?;
                         let identifier = Identifier::new(key.to_string()).map_err(|_| {
                             LoadProjectError::InvalidDocument {
                                 path: path.to_path_buf(),
+                                range: None,
                                 message: format!("invalid effect param name `{key}`"),
                             }
                         })?;
@@ -1360,8 +1986,22 @@ impl DomainResolver<'_> {
             .unwrap_or_default();
         Ok(EffectInst {
             id: EffectInstId(u32_field(path, value, "id")?),
-            start: parse_duration_as_time(string_field(path, value, "start")?)?,
-            duration: parse_duration(string_field(path, value, "duration")?)?,
+            start: parse_duration_as_time(string_field(path, value, "start")?).map_err(
+                |error| {
+                    with_yaml_location(
+                        error,
+                        path,
+                        source_range_for_field_value(path, value, "start"),
+                    )
+                },
+            )?,
+            duration: parse_duration(string_field(path, value, "duration")?).map_err(|error| {
+                with_yaml_location(
+                    error,
+                    path,
+                    source_range_for_field_value(path, value, "duration"),
+                )
+            })?,
             target: parse_effect_target(path, required_field(path, value, "target")?)?,
             scope: match string_field(path, value, "scope")? {
                 "per_fixture" => EffectScope::PerFixture,
@@ -1369,6 +2009,7 @@ impl DomainResolver<'_> {
                 other => {
                     return Err(LoadProjectError::InvalidDocument {
                         path: path.to_path_buf(),
+                        range: source_range_for_field_value(path, value, "scope"),
                         message: format!("invalid effect scope `{other}`"),
                     })
                 }
@@ -1394,6 +2035,7 @@ impl DomainResolver<'_> {
         let source = self.loader.effect_source_text.get(id).ok_or_else(|| {
             LoadProjectError::InvalidReference {
                 path: self.loader.entrypoint.clone(),
+                range: None,
                 reference: id.0.clone(),
             }
         })?;
@@ -1403,10 +2045,7 @@ impl DomainResolver<'_> {
                 diagnostics: diagnostics
                     .into_iter()
                     .map(|diagnostic| {
-                        format!(
-                            "{}..{} {}",
-                            diagnostic.span.start, diagnostic.span.end, diagnostic.message
-                        )
+                        effect_diagnostic(&self.loader.entrypoint, source, diagnostic)
                     })
                     .collect(),
             })?;
@@ -1415,6 +2054,7 @@ impl DomainResolver<'_> {
             .find(|effect| effect.name().as_str() == id.0)
             .ok_or_else(|| LoadProjectError::InvalidReference {
                 path: self.loader.entrypoint.clone(),
+                range: None,
                 reference: id.0.clone(),
             })?;
         self.project
@@ -1433,13 +2073,20 @@ impl DomainResolver<'_> {
             "integer" => Ok(EffectParamValue::Int(i64_field(path, value, "value")?)),
             "float" => Ok(EffectParamValue::Float(f64_field(path, value, "value")?)),
             "bool" => Ok(EffectParamValue::Bool(bool_field(path, value, "value")?)),
-            "color" => Ok(EffectParamValue::Color(parse_color(string_field(
-                path, value, "value",
-            )?)?)),
+            "color" => Ok(EffectParamValue::Color(
+                parse_color(string_field(path, value, "value")?).map_err(|error| {
+                    with_yaml_location(
+                        error,
+                        path,
+                        source_range_for_field_value(path, value, "value"),
+                    )
+                })?,
+            )),
             "enum" => Ok(EffectParamValue::Enum(
                 Identifier::new(string_field(path, value, "value")?.to_string()).map_err(|_| {
                     LoadProjectError::InvalidDocument {
                         path: path.to_path_buf(),
+                        range: None,
                         message: "invalid enum value".to_string(),
                     }
                 })?,
@@ -1459,6 +2106,7 @@ impl DomainResolver<'_> {
             }
             other => Err(LoadProjectError::InvalidDocument {
                 path: path.to_path_buf(),
+                range: None,
                 message: format!("unsupported effect param type `{other}`"),
             }),
         }
@@ -1486,6 +2134,7 @@ impl DomainResolver<'_> {
                 _ => {
                     return Err(LoadProjectError::InvalidReference {
                         path: path.to_path_buf(),
+                        range: None,
                         reference: reference.to_string(),
                     })
                 }
@@ -1526,6 +2175,7 @@ impl DomainResolver<'_> {
             _ => {
                 return Err(LoadProjectError::InvalidReference {
                     path: path.to_path_buf(),
+                    range: None,
                     reference: curve_ref.to_string(),
                 })
             }
@@ -1541,12 +2191,27 @@ impl DomainResolver<'_> {
                         .map(|value| EffectInstId(value as u32))
                         .ok_or_else(|| LoadProjectError::InvalidDocument {
                             path: path.to_path_buf(),
+                            range: None,
                             message: "automation targets must be effect ids".to_string(),
                         })
                 })
                 .collect::<Result<Vec<_>, _>>()?,
-            start: parse_duration_as_time(string_field(path, value, "start")?)?,
-            duration: parse_duration(string_field(path, value, "duration")?)?,
+            start: parse_duration_as_time(string_field(path, value, "start")?).map_err(
+                |error| {
+                    with_yaml_location(
+                        error,
+                        path,
+                        source_range_for_field_value(path, value, "start"),
+                    )
+                },
+            )?,
+            duration: parse_duration(string_field(path, value, "duration")?).map_err(|error| {
+                with_yaml_location(
+                    error,
+                    path,
+                    source_range_for_field_value(path, value, "duration"),
+                )
+            })?,
             curve,
         })
     }
@@ -1614,6 +2279,7 @@ fn parse_imports(path: &Utf8Path, map: &Mapping) -> Result<Vec<ImportDecl>, Load
         .as_sequence()
         .ok_or_else(|| LoadProjectError::InvalidDocument {
             path: path.to_path_buf(),
+            range: None,
             message: "imports must be a sequence".to_string(),
         })?;
     imports
@@ -1637,6 +2303,7 @@ fn parse_layout_target(path: &Utf8Path, value: &Value) -> Result<LayoutTarget, L
         )?))),
         other => Err(LoadProjectError::InvalidDocument {
             path: path.to_path_buf(),
+            range: source_range_for_field_value(path, value, "type"),
             message: format!("invalid layout target type `{other}`"),
         }),
     }
@@ -1654,6 +2321,7 @@ fn parse_fixture_group(path: &Utf8Path, value: &Value) -> Result<FixtureGroup, L
                     .map(|value| FixtureInstanceId(value as u32))
                     .ok_or_else(|| LoadProjectError::InvalidDocument {
                         path: path.to_path_buf(),
+                        range: None,
                         message: "group members must be fixture ids".to_string(),
                     })
             })
@@ -1670,16 +2338,27 @@ fn parse_mark_collection(
             name: string_field(path, value, "key")?.to_string(),
         },
         name: string_field(path, value, "name")?.to_string(),
-        display_color: parse_color(string_field(path, value, "color")?)?,
+        display_color: parse_color(string_field(path, value, "color")?).map_err(|error| {
+            with_yaml_location(
+                error,
+                path,
+                source_range_for_field_value(path, value, "color"),
+            )
+        })?,
         marks: sequence_values(path, value, "marks")?
             .iter()
             .map(|mark| {
                 mark.as_str()
                     .ok_or_else(|| LoadProjectError::InvalidDocument {
                         path: path.to_path_buf(),
+                        range: None,
                         message: "marks must be duration strings".to_string(),
                     })
-                    .and_then(parse_duration_as_time)
+                    .and_then(|duration| {
+                        parse_duration_as_time(duration).map_err(|error| {
+                            with_yaml_location(error, path, source_range_for_value(path, mark))
+                        })
+                    })
             })
             .collect::<Result<Vec<_>, _>>()?,
     })
@@ -1695,6 +2374,7 @@ fn parse_effect_target(path: &Utf8Path, value: &Value) -> Result<EffectTarget, L
         )?))),
         other => Err(LoadProjectError::InvalidDocument {
             path: path.to_path_buf(),
+            range: source_range_for_field_value(path, value, "type"),
             message: format!("invalid effect target type `{other}`"),
         }),
     }
@@ -1711,18 +2391,26 @@ fn parse_curve(path: &Utf8Path, value: &Value) -> Result<Curve, LoadProjectError
                 "float" => CurveValue::Float(value.as_f64().ok_or_else(|| {
                     LoadProjectError::InvalidDocument {
                         path: path.to_path_buf(),
+                        range: None,
                         message: "curve float point must be numeric".to_string(),
                     }
                 })?),
-                "color" => CurveValue::Color(parse_color(value.as_str().ok_or_else(|| {
-                    LoadProjectError::InvalidDocument {
-                        path: path.to_path_buf(),
-                        message: "curve color point must be a color string".to_string(),
-                    }
-                })?)?),
+                "color" => CurveValue::Color(
+                    parse_color(value.as_str().ok_or_else(|| {
+                        LoadProjectError::InvalidDocument {
+                            path: path.to_path_buf(),
+                            range: None,
+                            message: "curve color point must be a color string".to_string(),
+                        }
+                    })?)
+                    .map_err(|error| {
+                        with_yaml_location(error, path, source_range_for_value(path, value))
+                    })?,
+                ),
                 other => {
                     return Err(LoadProjectError::InvalidDocument {
                         path: path.to_path_buf(),
+                        range: source_range_for_field_value(path, value, "value_type"),
                         message: format!("unsupported curve value type `{other}`"),
                     })
                 }
@@ -1802,12 +2490,14 @@ fn parse_seconds(value: &str) -> Result<f64, LoadProjectError> {
         .strip_suffix('s')
         .ok_or_else(|| LoadProjectError::InvalidDocument {
             path: Utf8PathBuf::from("<duration>"),
+            range: None,
             message: format!("duration must end in `s`: {value}"),
         })?;
     seconds
         .parse()
         .map_err(|_| LoadProjectError::InvalidDocument {
             path: Utf8PathBuf::from("<duration>"),
+            range: None,
             message: format!("invalid duration: {value}"),
         })
 }
@@ -1816,6 +2506,7 @@ fn parse_color(value: &str) -> Result<Color, LoadProjectError> {
     if value.len() != 7 || !value.starts_with('#') {
         return Err(LoadProjectError::InvalidDocument {
             path: Utf8PathBuf::from("<color>"),
+            range: None,
             message: format!("invalid color: {value}"),
         });
     }
@@ -1823,18 +2514,21 @@ fn parse_color(value: &str) -> Result<Color, LoadProjectError> {
         red: u8::from_str_radix(&value[1..3], 16).map_err(|_| {
             LoadProjectError::InvalidDocument {
                 path: Utf8PathBuf::from("<color>"),
+                range: None,
                 message: format!("invalid color: {value}"),
             }
         })?,
         green: u8::from_str_radix(&value[3..5], 16).map_err(|_| {
             LoadProjectError::InvalidDocument {
                 path: Utf8PathBuf::from("<color>"),
+                range: None,
                 message: format!("invalid color: {value}"),
             }
         })?,
         blue: u8::from_str_radix(&value[5..7], 16).map_err(|_| {
             LoadProjectError::InvalidDocument {
                 path: Utf8PathBuf::from("<color>"),
+                range: None,
                 message: format!("invalid color: {value}"),
             }
         })?,
@@ -1869,6 +2563,7 @@ fn required_field<'a>(
         .and_then(|mapping| mapping.get(Value::String(key.to_string())))
         .ok_or_else(|| LoadProjectError::InvalidDocument {
             path: path.to_path_buf(),
+            range: source_range_for_value(path, value),
             message: format!("missing field `{key}`"),
         })
 }
@@ -1884,6 +2579,7 @@ fn required_mapping(
 ) -> Result<Mapping, LoadProjectError> {
     optional_mapping(value, key).ok_or_else(|| LoadProjectError::InvalidDocument {
         path: path.to_path_buf(),
+        range: source_range_for_value(path, value),
         message: format!("missing mapping `{key}`"),
     })
 }
@@ -1909,6 +2605,7 @@ fn sequence_values<'a>(
         .as_sequence()
         .ok_or_else(|| LoadProjectError::InvalidDocument {
             path: path.to_path_buf(),
+            range: source_range_for_field_value(path, value, key),
             message: format!("field `{key}` must be a sequence"),
         })
 }
@@ -1924,6 +2621,7 @@ fn sequence_field(
             value.as_str().map(ToString::to_string).ok_or_else(|| {
                 LoadProjectError::InvalidDocument {
                     path: path.to_path_buf(),
+                    range: source_range_for_value(path, value),
                     message: format!("field `{key}` values must be strings"),
                 }
             })
@@ -1940,6 +2638,7 @@ fn string_field<'a>(
         .as_str()
         .ok_or_else(|| LoadProjectError::InvalidDocument {
             path: path.to_path_buf(),
+            range: source_range_for_field_value(path, value, key),
             message: format!("field `{key}` must be a string"),
         })
 }
@@ -1954,6 +2653,7 @@ fn u32_field(path: &Utf8Path, value: &Value, key: &str) -> Result<u32, LoadProje
         .and_then(|value| u32::try_from(value).ok())
         .ok_or_else(|| LoadProjectError::InvalidDocument {
             path: path.to_path_buf(),
+            range: source_range_for_field_value(path, value, key),
             message: format!("field `{key}` must be a u32"),
         })
 }
@@ -1964,6 +2664,7 @@ fn usize_field(path: &Utf8Path, value: &Value, key: &str) -> Result<usize, LoadP
         .and_then(|value| usize::try_from(value).ok())
         .ok_or_else(|| LoadProjectError::InvalidDocument {
             path: path.to_path_buf(),
+            range: source_range_for_field_value(path, value, key),
             message: format!("field `{key}` must be a usize"),
         })
 }
@@ -1973,6 +2674,7 @@ fn i64_field(path: &Utf8Path, value: &Value, key: &str) -> Result<i64, LoadProje
         .as_i64()
         .ok_or_else(|| LoadProjectError::InvalidDocument {
             path: path.to_path_buf(),
+            range: source_range_for_field_value(path, value, key),
             message: format!("field `{key}` must be an integer"),
         })
 }
@@ -1982,6 +2684,7 @@ fn f64_field(path: &Utf8Path, value: &Value, key: &str) -> Result<f64, LoadProje
         .as_f64()
         .ok_or_else(|| LoadProjectError::InvalidDocument {
             path: path.to_path_buf(),
+            range: source_range_for_field_value(path, value, key),
             message: format!("field `{key}` must be a number"),
         })
 }
@@ -1991,6 +2694,7 @@ fn bool_field(path: &Utf8Path, value: &Value, key: &str) -> Result<bool, LoadPro
         .as_bool()
         .ok_or_else(|| LoadProjectError::InvalidDocument {
             path: path.to_path_buf(),
+            range: source_range_for_field_value(path, value, key),
             message: format!("field `{key}` must be a bool"),
         })
 }
@@ -2000,6 +2704,7 @@ fn relative_path(root: &Utf8Path, path: &Utf8Path) -> Result<Utf8PathBuf, LoadPr
         .map(Utf8Path::to_path_buf)
         .map_err(|_| LoadProjectError::InvalidDocument {
             path: path.to_path_buf(),
+            range: None,
             message: format!("path is outside source root {root}"),
         })
 }

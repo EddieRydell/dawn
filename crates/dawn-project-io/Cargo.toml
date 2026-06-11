@@ -10,6 +10,7 @@ license = "MIT"
 camino = "1.2.1"
 dawn-language = { path = "../dawn-language" }
 indexmap = "2.14.0"
+marked-yaml = "0.8.0"
 serde = { version = "1.0.228", features = ["derive"] }
 yaml_serde = "0.10.4"
 

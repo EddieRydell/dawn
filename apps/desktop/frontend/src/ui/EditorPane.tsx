@@ -522,7 +522,8 @@ function editorDiagnostics(
   if (activePath === null) return [];
   return diagnostics.flatMap((diagnostic) => {
     if (!samePath(diagnostic.path, activePath, projectRoot)) return [];
-    const range = diagnostic.range !== null ? rangeToOffsets(diagnostic.range, view) : pointDiagnosticRange(view);
+    if (diagnostic.range === null) return [];
+    const range = rangeToOffsets(diagnostic.range, view);
     if (range === null) return [];
     return [
       {
@@ -563,7 +564,8 @@ function editorDiagnosticMarkers(
   const contentHeight = Math.max(1, view.contentHeight);
   return diagnostics.flatMap((diagnostic, index) => {
     if (!samePath(diagnostic.path, activePath, projectRoot)) return [];
-    const range = diagnostic.range !== null ? rangeToOffsets(diagnostic.range, view) : pointDiagnosticRange(view);
+    if (diagnostic.range === null) return [];
+    const range = rangeToOffsets(diagnostic.range, view);
     if (range === null) return [];
     const line = view.state.doc.lineAt(range.from);
     const block = view.lineBlockAt(range.from);
@@ -602,14 +604,6 @@ function normalizePath(path: string): string {
 function isAbsolutePath(path: string): boolean {
   const normalized = normalizePath(path);
   return /^[a-z]:\//.test(normalized) || normalized.startsWith("/");
-}
-
-function pointDiagnosticRange(view: EditorView): { from: number; to: number } | null {
-  if (view.state.doc.length === 0) return { from: 0, to: 0 };
-  const line = view.state.doc.line(1);
-  const firstContent = line.text.search(/\S/);
-  const from = line.from + (firstContent >= 0 ? firstContent : 0);
-  return { from, to: from };
 }
 
 function rangeToOffsets(range: TextRange, view: EditorView): { from: number; to: number } | null {

@@ -3,7 +3,8 @@ use std::sync::Mutex;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_project_io::{
-    load_project, ProjectSession, SourceDocument, SourceDocumentKind, SourceObjectKind,
+    check_document_text, check_project, IoDiagnostic, IoDiagnosticSeverity, ProjectCheckReport,
+    ProjectSession, SourceDocument, SourceDocumentKind, SourceObjectKind,
 };
 use indexmap::IndexSet;
 
@@ -50,22 +51,7 @@ impl DesktopState {
 
     pub fn open_project_path(&self, path: &str) -> AppSnapshot {
         let entrypoint = normalize_project_entrypoint(path);
-        match load_project(&entrypoint) {
-            Ok(session) => self.replace_project(session),
-            Err(error) => {
-                let message = error.to_string();
-                self.update_snapshot(|snapshot| {
-                    snapshot.status = format!("Failed to open project: {message}");
-                    snapshot.diagnostics = vec![ProjectDiagnostic {
-                        path: entrypoint.to_string(),
-                        range: None,
-                        severity: DiagnosticSeverity::Error,
-                        code: "project.open".to_string(),
-                        message,
-                    }];
-                })
-            }
-        }
+        self.apply_project_open_check(entrypoint.as_str(), check_project(&entrypoint))
     }
 
     pub fn open_file_path(&self, path: &str) -> AppSnapshot {
@@ -166,6 +152,11 @@ impl DesktopState {
     }
 
     pub fn update_active_text(&self, text: String) -> AppSnapshot {
+        let active_path = self.snapshot().active_file;
+        let diagnostics = active_path
+            .as_deref()
+            .map(|path| check_document_text(Utf8Path::new(path), &text))
+            .unwrap_or_default();
         self.update_snapshot(|snapshot| {
             if let Some(buffer) = snapshot.active_buffer.as_mut() {
                 buffer.text = text.clone();
@@ -174,6 +165,14 @@ impl DesktopState {
                     tab.text = text;
                     tab.dirty = true;
                 }
+            }
+            if let Some(active_path) = active_path.as_deref() {
+                snapshot
+                    .diagnostics
+                    .retain(|diagnostic| diagnostic.path != active_path);
+                snapshot
+                    .diagnostics
+                    .extend(diagnostics.iter().map(project_diagnostic));
             }
         })
     }
@@ -195,7 +194,11 @@ impl DesktopState {
             );
         };
         match fs::write(&path, &buffer.text) {
-            Ok(()) => self.after_file_saved(&buffer.path),
+            Ok(()) => {
+                self.after_file_saved(&buffer.path);
+                let entrypoint = project.source.source_root.join(&project.source.entrypoint);
+                self.apply_project_refresh_check(entrypoint.as_str(), check_project(&entrypoint))
+            }
             Err(error) => self.snapshot_with_error("file.save", &buffer.path, &error.to_string()),
         }
     }
@@ -279,16 +282,45 @@ impl DesktopState {
         let Some(project) = self.project_session() else {
             return self.snapshot();
         };
-        self.open_project_path(
-            project
-                .source
-                .source_root
-                .join(&project.source.entrypoint)
-                .as_str(),
-        )
+        let entrypoint = project.source.source_root.join(&project.source.entrypoint);
+        self.apply_project_refresh_check(entrypoint.as_str(), check_project(&entrypoint))
     }
 
-    fn replace_project(&self, session: ProjectSession) -> AppSnapshot {
+    fn apply_project_open_check(
+        &self,
+        entrypoint: &str,
+        report: ProjectCheckReport,
+    ) -> AppSnapshot {
+        let diagnostics = project_diagnostics(&report);
+        match report.session {
+            Some(session) => self.replace_project(session, diagnostics),
+            None => self.update_snapshot(|snapshot| {
+                snapshot.diagnostics = diagnostics;
+                snapshot.status = format!("Failed to open project {entrypoint}");
+            }),
+        }
+    }
+
+    fn apply_project_refresh_check(
+        &self,
+        entrypoint: &str,
+        report: ProjectCheckReport,
+    ) -> AppSnapshot {
+        let diagnostics = project_diagnostics(&report);
+        match report.session {
+            Some(session) => self.refresh_project(session, diagnostics),
+            None => self.update_snapshot(|snapshot| {
+                snapshot.diagnostics = diagnostics;
+                snapshot.status = format!("Project check failed for {entrypoint}");
+            }),
+        }
+    }
+
+    fn replace_project(
+        &self,
+        session: ProjectSession,
+        diagnostics: Vec<ProjectDiagnostic>,
+    ) -> AppSnapshot {
         let entries = workspace_entries(&session);
         let root = session.source.source_root.to_string();
         let entrypoint = session.source.entrypoint.clone();
@@ -314,9 +346,61 @@ impl DesktopState {
             snapshot.active_buffer = active.as_ref().map(|(buffer, _)| buffer.clone());
             snapshot.active_document_descriptor = active.map(|(_, descriptor)| descriptor);
             snapshot.active_gui_document = None;
-            snapshot.diagnostics.clear();
-            snapshot.status = format!("Opened project {entrypoint}");
+            snapshot.diagnostics = diagnostics;
+            snapshot.status = if snapshot.diagnostics.is_empty() {
+                format!("Opened project {entrypoint}")
+            } else {
+                format!(
+                    "Opened project {entrypoint} with {} diagnostics",
+                    snapshot.diagnostics.len()
+                )
+            };
             snapshot.sequence_transport = empty_sequence_transport();
+        })
+    }
+
+    fn refresh_project(
+        &self,
+        session: ProjectSession,
+        diagnostics: Vec<ProjectDiagnostic>,
+    ) -> AppSnapshot {
+        // A refresh applies the latest semantic project model in place. It must not
+        // reload editor text or reset user-owned editor state; only full project
+        // opens are allowed to replace tabs, buffers, GUI state, or transport.
+        let entries = workspace_entries(&session);
+        let root = session.source.source_root.to_string();
+        let active_descriptor = self.snapshot().active_file.as_deref().and_then(|path| {
+            let relative_path = Utf8Path::new(path);
+            session
+                .source
+                .documents
+                .get(relative_path)
+                .map(document_descriptor)
+                .or_else(|| {
+                    absolute_project_path(&session, relative_path)
+                        .is_some_and(|path| path.is_file())
+                        .then(|| empty_document_descriptor(relative_path))
+                })
+        });
+        match self.project.lock() {
+            Ok(mut project) => *project = Some(session),
+            Err(poisoned) => *poisoned.into_inner() = Some(session),
+        }
+        self.update_snapshot(|snapshot| {
+            snapshot.project_root = Some(root);
+            snapshot.project_entries = entries;
+            if active_descriptor.is_some() {
+                snapshot.active_document_descriptor = active_descriptor;
+            }
+            snapshot.diagnostics = diagnostics;
+            snapshot.status = if snapshot.diagnostics.is_empty() {
+                "Project checked".to_string()
+            } else {
+                format!(
+                    "Project checked with {} diagnostics",
+                    snapshot.diagnostics.len()
+                )
+            };
         })
     }
 
@@ -402,7 +486,7 @@ impl DesktopState {
         old_path: Option<&str>,
         new_active_path: Option<&str>,
     ) -> AppSnapshot {
-        self.refresh_project_session();
+        let refreshed = self.refresh_project_session();
         let Some(project) = self.project_session() else {
             return self.snapshot();
         };
@@ -424,7 +508,9 @@ impl DesktopState {
                     snapshot.active_gui_document = None;
                 }
             }
-            snapshot.status = "Project files updated".to_string();
+            if refreshed {
+                snapshot.status = "Project files updated".to_string();
+            }
         });
         if let Some(path) = new_active_path {
             if absolute_project_path(&project, Utf8Path::new(path))
@@ -436,17 +522,15 @@ impl DesktopState {
         self.snapshot()
     }
 
-    fn refresh_project_session(&self) {
+    fn refresh_project_session(&self) -> bool {
         let Some(project) = self.project_session() else {
-            return;
+            return false;
         };
         let entrypoint = project.source.source_root.join(&project.source.entrypoint);
-        if let Ok(next_project) = load_project(&entrypoint) {
-            match self.project.lock() {
-                Ok(mut project) => *project = Some(next_project),
-                Err(poisoned) => *poisoned.into_inner() = Some(next_project),
-            }
-        }
+        let report = check_project(&entrypoint);
+        let refreshed = report.session.is_some();
+        self.apply_project_refresh_check(entrypoint.as_str(), report);
+        refreshed
     }
 
     fn snapshot_with_error(&self, code: &str, path: &str, message: &str) -> AppSnapshot {
@@ -517,6 +601,39 @@ fn normalize_project_entrypoint(path: &str) -> Utf8PathBuf {
     } else {
         path
     }
+}
+
+fn project_diagnostic(diagnostic: &IoDiagnostic) -> ProjectDiagnostic {
+    ProjectDiagnostic {
+        path: diagnostic.path.to_string(),
+        range: diagnostic
+            .range
+            .as_ref()
+            .map(|range| crate::dto::TextRange {
+                start: crate::dto::TextPosition {
+                    line: range.start.line,
+                    character: range.start.character,
+                },
+                end: crate::dto::TextPosition {
+                    line: range.end.line,
+                    character: range.end.character,
+                },
+            }),
+        severity: match diagnostic.severity {
+            IoDiagnosticSeverity::Error => DiagnosticSeverity::Error,
+            IoDiagnosticSeverity::Warning => DiagnosticSeverity::Warning,
+        },
+        code: diagnostic.code.as_str().to_string(),
+        message: diagnostic.message.clone(),
+    }
+}
+
+fn project_diagnostics(report: &ProjectCheckReport) -> Vec<ProjectDiagnostic> {
+    report
+        .diagnostics
+        .iter()
+        .map(project_diagnostic)
+        .collect::<Vec<_>>()
 }
 
 fn workspace_entries(session: &ProjectSession) -> Vec<WorkspaceEntry> {
