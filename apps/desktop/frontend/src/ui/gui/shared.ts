@@ -14,60 +14,7 @@ export type Point3 = { x: number; y: number; z: number };
 
 export type Transform = { position: Point3; rotation: Point3; scale: Point3 };
 
-export type SequenceRenderTiming = {
-  backendSeconds: number;
-  targetFps: number;
-  activeFps: number;
-  targetFrameMs: number;
-  sleepPlannedMs: number;
-  loopIntervalMs: number;
-  audioPositionSeconds: number | null;
-  snapshotPositionSeconds: number;
-  renderBufferPositionSeconds: number;
-  snapshotMinusAudioMs: number | null;
-  renderBufferMinusAudioMs: number | null;
-  loopElapsedMs: number;
-  loopTotalMs: number;
-  loopAccountedMs: number;
-  loopUnaccountedMs: number;
-  sleepActualMs: number;
-  liveOutputLockMs: number;
-  modelLockWaitMs: number;
-  sequenceTransportSnapshotMs: number;
-  projectSnapshotMs: number;
-  audioPollMs: number;
-  audioApplyMs: number;
-  modelUpdateMs: number;
-  renderMs: number;
-  renderWallMs: number;
-  renderOverheadMs: number;
-  renderInvalidationMs: number;
-  renderCacheMs: number;
-  renderResultMs: number;
-  rendererBuildMs: number;
-  frameEvaluateMs: number;
-  renderBufferCloneMs: number;
-  frameEffectLoopMs: number;
-  rgbBufferMs: number;
-  eventEmitMs: number;
-  liveOutputMs: number;
-  renderedActiveEffects: number;
-  renderedSampledPixels: number;
-  renderedFrame: boolean;
-};
-
-export type SequenceRenderEvent = {
-  sourceLabel: string;
-  sourceKey: AppSnapshot["sequenceTransport"]["sourceKey"];
-  renderGeneration: number;
-  renderDirtyRevision: number;
-  renderUpdating: boolean;
-  positionSeconds: number;
-  geometryIdentity: string;
-  timing: SequenceRenderTiming;
-};
-
-export type SequenceTransportSnapshot = AppSnapshot["sequenceTransport"] & { timing?: SequenceRenderTiming };
+export type AudioTransportViewSnapshot = AppSnapshot["audioTransport"];
 
 export type ReadyGuiDocument = Exclude<ActiveGuiDocument, { type: "blocked" }>;
 

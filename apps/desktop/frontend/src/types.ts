@@ -1,6 +1,7 @@
 export type {
   AppSnapshot,
-  AudioPlaybackStatus,
+  AudioTransportSnapshot,
+  AudioTransportState,
   BufferExternalState,
   ColorCurvePoint,
   DiagnosticSeverity,
@@ -38,8 +39,6 @@ export type {
   SequenceSelection,
   SequenceSelectionEdit,
   SequenceSelectionEditResult,
-  SequenceTransportSnapshot,
-  SequenceTransportState,
   TextRange,
   Transform,
   WorkspaceEntry

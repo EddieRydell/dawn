@@ -14,18 +14,20 @@ import { BlockedGui } from "./BlockedGui";
 
 import { SequenceEditor } from "./sequence/SequenceEditor";
 
-import { useSequenceTransport, handleSequencePlaybackShortcut } from "./sequence/SequenceTransportControls";
+import { handleSequencePlaybackShortcut } from "./sequence/SequenceTransportControls";
 
 import { markSelectionConsumesKey } from "./sequence/sequenceSelection";
 
 export function GuiEditor({
   guiDocument,
   snapshot,
+  audioTransport,
   sequenceSelection,
   setSequenceSelection
 }: {
   guiDocument: GuiDocument | null;
   snapshot: AppSnapshot;
+  audioTransport: AppSnapshot["audioTransport"];
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
 }) {
@@ -43,7 +45,7 @@ export function GuiEditor({
     <GuiEditorInner
       key={editorKey}
       gui={gui}
-      snapshot={snapshot}
+      audioTransport={audioTransport}
       sequenceSelection={sequenceSelection}
       setSequenceSelection={setSequenceSelection}
     />
@@ -52,12 +54,12 @@ export function GuiEditor({
 
 function GuiEditorInner({
   gui,
-  snapshot,
+  audioTransport,
   sequenceSelection,
   setSequenceSelection
 }: {
   gui: ReadyGuiDocument;
-  snapshot: AppSnapshot;
+  audioTransport: AppSnapshot["audioTransport"];
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
 }) {
@@ -68,14 +70,13 @@ function GuiEditorInner({
   const [visibleMarkCollectionKeys, setVisibleMarkCollectionKeys] = useState<Set<string>>(() =>
     new Set(gui.type === "sequence" ? gui.document.markCollections.map((collection) => collection.key) : [])
   );
-  const sequenceTransport = useSequenceTransport(snapshot.sequenceTransport);
 
   return (
     <div
       className="gui-editor-shell"
       onKeyDownCapture={(event) => {
         if (gui.type === "sequence" && !markSelectionConsumesKey(selected, event.key)) {
-          handleSequencePlaybackShortcut(event, gui.document, sequenceTransport, gui.document.durationSeconds <= 0);
+          handleSequencePlaybackShortcut(event, gui.document, audioTransport, gui.document.durationSeconds <= 0);
         }
       }}
     >
@@ -83,7 +84,7 @@ function GuiEditorInner({
         <SequenceEditor
           key={`${gui.document.path}:${gui.document.objectKey}`}
           document={gui.document}
-          transport={sequenceTransport}
+          transport={audioTransport}
           selected={selected}
           setSelected={setSelected}
           sequenceSelection={sequenceSelection}

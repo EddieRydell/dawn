@@ -20,8 +20,8 @@ export const commands = {
 	applyGuiEdit: (request: GuiDocumentRequest, edit: GuiEditCommand) => __TAURI_INVOKE<GuiEditResult>("apply_gui_edit", { request, edit }),
 	applySequenceGuiEdit: (edit: SequenceGuiEdit) => __TAURI_INVOKE<AppSnapshot>("apply_sequence_gui_edit", { edit }),
 	applySequenceSelectionEdit: (edit: SequenceSelectionEdit) => __TAURI_INVOKE<SequenceSelectionEditResult>("apply_sequence_selection_edit", { edit }),
-	chooseSequenceAudio: () => __TAURI_INVOKE<AppSnapshot>("choose_sequence_audio"),
-	clearSequenceAudio: () => __TAURI_INVOKE<AppSnapshot>("clear_sequence_audio"),
+	chooseSequenceAudio: (request: GuiDocumentRequest) => __TAURI_INVOKE<AppSnapshot>("choose_sequence_audio", { request }),
+	clearSequenceAudio: (request: GuiDocumentRequest) => __TAURI_INVOKE<AppSnapshot>("clear_sequence_audio", { request }),
 	exportActiveSequenceFseq: (stepMs: number) => __TAURI_INVOKE<AppSnapshot>("export_active_sequence_fseq", { stepMs }),
 	applyLayoutGuiEdit: (edit: LayoutGuiEdit) => __TAURI_INVOKE<AppSnapshot>("apply_layout_gui_edit", { edit }),
 	applyFixtureGuiEdit: (edit: FixtureGuiEdit) => __TAURI_INVOKE<AppSnapshot>("apply_fixture_gui_edit", { edit }),
@@ -34,11 +34,13 @@ export const commands = {
 	deletePath: (path: string) => __TAURI_INVOKE<AppSnapshot>("delete_path", { path }),
 	reloadProject: () => __TAURI_INVOKE<AppSnapshot>("reload_project"),
 	toggleProjectTree: () => __TAURI_INVOKE<AppSnapshot>("toggle_project_tree"),
-	sequenceTransportPlay: () => __TAURI_INVOKE<AppSnapshot>("sequence_transport_play"),
-	sequenceTransportPause: () => __TAURI_INVOKE<AppSnapshot>("sequence_transport_pause"),
-	sequenceTransportStop: () => __TAURI_INVOKE<AppSnapshot>("sequence_transport_stop"),
-	sequenceTransportRewindToZero: () => __TAURI_INVOKE<AppSnapshot>("sequence_transport_rewind_to_zero"),
-	sequenceTransportSeek: (positionSeconds: number) => __TAURI_INVOKE<AppSnapshot>("sequence_transport_seek", { positionSeconds }),
+	loadSequenceAudio: (request: GuiDocumentRequest) => __TAURI_INVOKE<AppSnapshot>("load_sequence_audio", { request }),
+	unloadAudio: () => __TAURI_INVOKE<AppSnapshot>("unload_audio"),
+	audioPlay: () => __TAURI_INVOKE<AppSnapshot>("audio_play"),
+	audioPause: () => __TAURI_INVOKE<AppSnapshot>("audio_pause"),
+	audioStop: () => __TAURI_INVOKE<AppSnapshot>("audio_stop"),
+	audioRewindToZero: () => __TAURI_INVOKE<AppSnapshot>("audio_rewind_to_zero"),
+	audioSeek: (positionSeconds: number) => __TAURI_INVOKE<AppSnapshot>("audio_seek", { positionSeconds }),
 	setLiveOutputEnabled: (enabled: boolean) => __TAURI_INVOKE<AppSnapshot>("set_live_output_enabled", { enabled }),
 };
 
@@ -54,11 +56,21 @@ export type AppSnapshot = {
 	activeDocumentDescriptor: DocumentDescriptor | null,
 	diagnostics: ProjectDiagnostic[],
 	status: string,
-	sequenceTransport: SequenceTransportSnapshot,
+	audioTransport: AudioTransportSnapshot,
 	liveOutput: LiveOutputSnapshot,
 };
 
-export type AudioPlaybackStatus = "none" | "missing" | "ready" | "playing" | "ended" | "error";
+export type AudioTransportSnapshot = {
+	state: AudioTransportState,
+	source: SequenceAudio | null,
+	generation: number,
+	positionSeconds: number,
+	homeSeconds: number,
+	durationSeconds: number,
+	lastError: string | null,
+};
+
+export type AudioTransportState = "unloaded" | "playing" | "paused" | "stopped" | "ended" | "error";
 
 export type BufferExternalState = "current" | "changedOnDisk" | "deletedOnDisk";
 
@@ -327,11 +339,6 @@ export type SequenceGuiDocument = {
 
 export type SequenceGuiEdit = { type: "setAudio"; import: string | null } | { type: "addEffect"; script: EffectScriptReference; target: LayoutTarget; scope: SequenceEffectScope; startSeconds: number; markCollectionKey: string | null } | { type: "moveEffect"; id: number; startSeconds: number; target: LayoutTarget | null } | { type: "resizeEffect"; id: number; startSeconds: number; durationSeconds: number } | { type: "changeEffectScript"; id: number; script: EffectScriptReference } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTarget } | { type: "setEffectScope"; id: number; scope: SequenceEffectScope } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValue } | { type: "linkEffectCurveParam"; id: number; name: string; curvePath: string; objectKey: string } | { type: "unlinkEffectCurveParam"; id: number; name: string } | { type: "createMarkCollection"; key: string; name: string; color: string } | { type: "renameMarkCollection"; key: string; name: string } | { type: "deleteMarkCollection"; key: string } | { type: "setMarkCollectionColor"; key: string; color: string } | { type: "addMark"; collectionKey: string; timeSeconds: number } | { type: "moveMark"; collectionKey: string; index: number; timeSeconds: number } | { type: "deleteMark"; collectionKey: string; index: number };
 
-export type SequenceKey = {
-	path: string,
-	objectKey: string,
-};
-
 export type SequenceLane = {
 	target: LayoutTarget,
 	label: string,
@@ -366,25 +373,6 @@ export type SequenceSelectionEditResult = {
 	copiedCount: number,
 	skippedCount: number,
 };
-
-export type SequenceTransportSnapshot = {
-	sourceLabel: string,
-	sourceKey: SequenceKey | null,
-	renderGeneration: number,
-	renderDirtyRevision: number,
-	transportState: SequenceTransportState,
-	renderUpdating: boolean,
-	positionSeconds: number,
-	homeSeconds: number,
-	durationSeconds: number,
-	audio: SequenceAudio | null,
-	clockSource: string,
-	audioPlaybackStatus: AudioPlaybackStatus,
-	geometryIdentity: string,
-	status: string,
-};
-
-export type SequenceTransportState = "stopped" | "paused" | "playing" | "ended" | "error";
 
 export type TextPosition = {
 	line: number,

@@ -1,6 +1,5 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
-
 import * as ContextMenu from "@radix-ui/react-context-menu";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 
@@ -231,8 +230,6 @@ export function SequenceCanvas({
     ctx.fillRect(0, 0, rect.width, top);
     ctx.fillStyle = SEQUENCE_COLORS.page;
     ctx.fillRect(left, audioStripTop, timelineWidth, audioStripHeight);
-    ctx.fillStyle = SEQUENCE_COLORS.textMuted;
-    ctx.fillText(document.audio?.fileName ?? "Audio", 12, audioStripTop + audioStripHeight / 2 + 4);
     ctx.strokeStyle = SEQUENCE_COLORS.gridFaint;
     ctx.beginPath();
     ctx.moveTo(0, top + 0.5);
@@ -348,7 +345,7 @@ export function SequenceCanvas({
     const x = event.nativeEvent.offsetX;
     if (x < left) return;
     const positionSeconds = clamp(Math.round((viewport.scrollXSeconds + (x - left) / viewport.pxPerSecond) / SEQUENCE_CANVAS.scrubStepSeconds) * SEQUENCE_CANVAS.scrubStepSeconds, 0, document.durationSeconds);
-    void runSnapshotCommand(() => commands.sequenceTransportSeek(positionSeconds));
+    void runSnapshotCommand(() => commands.audioSeek(positionSeconds));
   };
   const timeFromCanvasX = (x: number) => clamp(roundToNanosecond(viewport.scrollXSeconds + (x - left) / viewport.pxPerSecond), 0, document.durationSeconds);
   const addEffectFromContextMenu = async (script: SequenceEffectScript, menu: SequenceContextMenu) => {
@@ -918,7 +915,7 @@ export function SequenceCanvas({
               <ContextMenu.Item
                 className="menu-item"
                 onSelect={() => {
-                  void runSnapshotCommand(() => commands.sequenceTransportSeek(sequenceContextMenu.startSeconds));
+                  void runSnapshotCommand(() => commands.audioSeek(sequenceContextMenu.startSeconds));
                 }}
               >
                 Set Playhead Here
@@ -1046,7 +1043,7 @@ async function decodeWaveformPeaks(path: string): Promise<WaveformAudio | null> 
 }
 
 function buildWaveformAudio(buffer: AudioBuffer): WaveformAudio {
-  const baseSamplesPerPeak = 32;
+  const baseSamplesPerPeak = displaySamplesPerPeak(buffer.sampleRate);
   const channels = Array.from({ length: buffer.numberOfChannels }, (_, index) => buffer.getChannelData(index));
   const bucketCount = Math.max(1, Math.ceil(buffer.length / baseSamplesPerPeak));
   const mins = new Float32Array(bucketCount);
@@ -1091,6 +1088,10 @@ function coarsenWaveformLevel(level: WaveformLevel): WaveformLevel {
     mins,
     maxes
   };
+}
+
+function displaySamplesPerPeak(sampleRate: number): number {
+  return clamp(Math.round(sampleRate * 0.02), 512, 4096);
 }
 
 function drawWaveformStrip(

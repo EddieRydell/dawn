@@ -14,8 +14,31 @@ pub struct AppSnapshot {
     pub active_document_descriptor: Option<DocumentDescriptor>,
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub status: String,
-    pub sequence_transport: SequenceTransportSnapshot,
+    pub audio_transport: AudioTransportSnapshot,
     pub live_output: LiveOutputSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioTransportState {
+    Unloaded,
+    Playing,
+    Paused,
+    Stopped,
+    Ended,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioTransportSnapshot {
+    pub state: AudioTransportState,
+    pub source: Option<SequenceAudio>,
+    pub generation: u32,
+    pub position_seconds: f64,
+    pub home_seconds: f64,
+    pub duration_seconds: f64,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -74,17 +97,6 @@ pub enum GuiEditCommand {
 pub struct GuiEditResult {
     pub snapshot: AppSnapshot,
     pub document: GuiDocument,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub enum AudioPlaybackStatus {
-    None,
-    Missing,
-    Ready,
-    Playing,
-    Ended,
-    Error,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -192,16 +204,6 @@ pub enum SequenceEffectScriptKind {
 pub enum SequenceResizeEdge {
     Left,
     Right,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub enum SequenceTransportState {
-    Stopped,
-    Paused,
-    Playing,
-    Ended,
-    Error,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -774,25 +776,6 @@ pub struct SequenceSelectionEditResult {
     pub selection: Option<SequenceSelection>,
     pub copied_count: u32,
     pub skipped_count: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct SequenceTransportSnapshot {
-    pub source_label: String,
-    pub source_key: Option<SequenceKey>,
-    pub render_generation: u32,
-    pub render_dirty_revision: u32,
-    pub transport_state: SequenceTransportState,
-    pub render_updating: bool,
-    pub position_seconds: f64,
-    pub home_seconds: f64,
-    pub duration_seconds: f64,
-    pub audio: Option<SequenceAudio>,
-    pub clock_source: String,
-    pub audio_playback_status: AudioPlaybackStatus,
-    pub geometry_identity: String,
-    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

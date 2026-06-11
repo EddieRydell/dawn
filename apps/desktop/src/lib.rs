@@ -10,6 +10,7 @@
     )
 )]
 
+pub mod audio;
 pub mod bindings;
 pub mod commands;
 pub mod dto;

@@ -2,7 +2,7 @@ import type { KeyboardEvent } from "react";
 
 import type { SequenceEditorDocument } from "../../../types";
 
-import type { GuiFocus, SequenceSelection, SequenceTransportSnapshot } from "../shared";
+import type { AudioTransportViewSnapshot, GuiFocus, SequenceSelection } from "../shared";
 
 import { SequenceCanvas } from "./SequenceCanvas";
 import { handleSequencePlaybackShortcut } from "./SequenceTransportControls";
@@ -20,7 +20,7 @@ export function SequenceEditor({
   setVisibleMarkCollectionKeys
 }: {
   document: SequenceEditorDocument;
-  transport: SequenceTransportSnapshot;
+  transport: AudioTransportViewSnapshot;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
   sequenceSelection: SequenceSelection;

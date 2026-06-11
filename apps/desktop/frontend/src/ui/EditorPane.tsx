@@ -9,11 +9,11 @@ import { tags } from "@lezer/highlight";
 import { RefreshCw, Save, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { commands, setCurrentGuiRequest } from "../api";
-import type { AppSnapshot, GuiDocumentRequest, ProjectDiagnostic, SequenceSelection, TextRange } from "../types";
+import type { AppSnapshot, GuiDocumentRequest, ProjectDiagnostic, SequenceAudio, SequenceSelection, TextRange } from "../types";
 import { commandRegistry } from "../commandRegistry";
 import { runSnapshotCommand, useAppStore } from "../store";
 import { GuiEditor } from "./gui/GuiEditor";
-import { SequenceTransportControls } from "./gui/sequence/SequenceTransportControls";
+import { SequenceTransportControls, useSequenceTransport } from "./gui/sequence/SequenceTransportControls";
 
 type BufferExternalState = "current" | "changedOnDisk" | "deletedOnDisk";
 type EditorBufferWithExternalState = NonNullable<AppSnapshot["activeBuffer"]>;
@@ -27,6 +27,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
   const [editorSignal, setEditorSignal] = useState(0);
   const [pathSelection, setPathSelection] = useState<PathSelection>({ path: null, selection: null });
   const latestLocalText = useRef(localText);
+  const loadedSequenceAudioKey = useRef<string | null>(null);
   const applyingExternalText = useRef(false);
   const activeBuffer = snapshot.activeBuffer;
   const activeDescriptor = snapshot.activeDocumentDescriptor;
@@ -38,8 +39,17 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
     () => guiRequestForDescriptor(activeDescriptor, snapshot.activeFile),
     [activeDescriptor, snapshot.activeFile]
   );
+  const nextGuiPath = nextGuiRequest?.path ?? null;
+  const nextGuiView = nextGuiRequest?.view ?? null;
+  const nextGuiObjectKey = nextGuiRequest?.objectKey ?? null;
   const activeSequenceDocument =
     viewMode === "gui" && guiDocument?.type === "sequence" ? guiDocument.document : null;
+  const sequenceTransport = useSequenceTransport(snapshot.audioTransport);
+  const activeSequenceAudio = activeSequenceDocument?.audio ?? null;
+  const activeSequenceAudioKey =
+    nextGuiPath !== null && nextGuiView === "sequence"
+      ? sequenceAudioKey(nextGuiPath, nextGuiObjectKey, activeSequenceAudio)
+      : null;
   const guiAvailable = nextGuiRequest !== null;
   const sequenceSelection = pathSelection.path === activePath ? pathSelection.selection : null;
   const setSequenceSelection = useCallback(
@@ -80,6 +90,37 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
     setGuiRequest,
     snapshot.projectRevision
   ]);
+
+  useEffect(() => {
+    if (activeSequenceAudioKey === null || nextGuiPath === null || nextGuiView !== "sequence") {
+      if (loadedSequenceAudioKey.current !== null) {
+        loadedSequenceAudioKey.current = null;
+        void runSnapshotCommand(commands.unloadAudio);
+      }
+      return;
+    }
+    if (loadedSequenceAudioKey.current === activeSequenceAudioKey) return;
+    if (loadedSequenceAudioKey.current !== null) {
+      void runSnapshotCommand(commands.unloadAudio);
+    }
+    loadedSequenceAudioKey.current = activeSequenceAudioKey;
+    void runSnapshotCommand(() =>
+      commands.loadSequenceAudio({
+        path: nextGuiPath,
+        view: "sequence",
+        objectKey: nextGuiObjectKey
+      })
+    );
+  }, [activeSequenceAudioKey, nextGuiObjectKey, nextGuiPath, nextGuiView]);
+
+  useEffect(() => {
+    return () => {
+      if (loadedSequenceAudioKey.current !== null) {
+        loadedSequenceAudioKey.current = null;
+        void runSnapshotCommand(commands.unloadAudio);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (viewMode !== "text") {
@@ -189,7 +230,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
         {activeSequenceDocument !== null && (
           <SequenceTransportControls
             document={activeSequenceDocument}
-            transport={snapshot.sequenceTransport}
+            transport={sequenceTransport}
             liveOutput={snapshot.liveOutput}
           />
         )}
@@ -231,6 +272,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
         <GuiEditor
           guiDocument={guiDocument}
           snapshot={snapshot}
+          audioTransport={sequenceTransport}
           sequenceSelection={sequenceSelection}
           setSequenceSelection={setSequenceSelection}
         />
@@ -265,6 +307,17 @@ function guiRequestForDescriptor(
     view: defaultObject.view,
     objectKey: defaultObject.objectKey
   };
+}
+
+function sequenceAudioKey(path: string, objectKey: string | null, audio: SequenceAudio | null): string | null {
+  if (audio === null) return null;
+  return JSON.stringify({
+    path,
+    objectKey,
+    importPath: audio.import,
+    resolvedPath: audio.resolvedPath,
+    exists: audio.exists
+  });
 }
 
 type ScrollbarMetrics = {

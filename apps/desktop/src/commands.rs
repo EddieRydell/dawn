@@ -1,10 +1,13 @@
-use tauri::State;
+use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
+
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_specta::{collect_commands, Builder};
 
 use crate::dto::{
-    AppSnapshot, EditorViewMode, FixtureGuiEdit, GuiDocument, GuiDocumentRequest, GuiEditCommand,
-    GuiEditResult, LayoutGuiEdit, SequenceGuiEdit, SequenceSelectionEdit,
-    SequenceSelectionEditResult, SequenceTransportState,
+    AppSnapshot, AudioTransportState, DocumentViewId, EditorViewMode, FixtureGuiEdit, GuiDocument,
+    GuiDocumentRequest, GuiEditCommand, GuiEditResult, LayoutGuiEdit, SequenceGuiEdit,
+    SequenceSelectionEdit, SequenceSelectionEditResult,
 };
 use crate::state::DesktopState;
 
@@ -147,16 +150,47 @@ pub fn apply_sequence_selection_edit(
 
 #[tauri::command]
 #[specta::specta]
-pub fn choose_sequence_audio(state: State<'_, DesktopState>) -> AppSnapshot {
-    state.snapshot()
+pub fn choose_sequence_audio(
+    request: GuiDocumentRequest,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Audio", &["mp3", "wav", "ogg", "flac"])
+        .pick_file()
+    else {
+        return state.snapshot();
+    };
+    let Some(import_path) = audio_import_path(&state.snapshot(), &request, &path) else {
+        return state.update_snapshot(|snapshot| {
+            snapshot.status = "Selected audio path is not valid UTF-8".to_string();
+        });
+    };
+    state
+        .apply_gui_edit(
+            request,
+            GuiEditCommand::Sequence {
+                edit: SequenceGuiEdit::SetAudio {
+                    import_path: Some(import_path),
+                },
+            },
+        )
+        .snapshot
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn clear_sequence_audio(state: State<'_, DesktopState>) -> AppSnapshot {
-    state.update_snapshot(|snapshot| {
-        snapshot.sequence_transport.audio = None;
-    })
+pub fn clear_sequence_audio(
+    request: GuiDocumentRequest,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
+    state
+        .apply_gui_edit(
+            request,
+            GuiEditCommand::Sequence {
+                edit: SequenceGuiEdit::SetAudio { import_path: None },
+            },
+        )
+        .snapshot
 }
 
 #[tauri::command]
@@ -242,49 +276,56 @@ pub fn toggle_project_tree(state: State<'_, DesktopState>) -> AppSnapshot {
 
 #[tauri::command]
 #[specta::specta]
-pub fn sequence_transport_play(state: State<'_, DesktopState>) -> AppSnapshot {
-    state.update_snapshot(|snapshot| {
-        snapshot.sequence_transport.transport_state = SequenceTransportState::Playing;
-        snapshot.sequence_transport.status = "Playing".to_string();
-    })
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn sequence_transport_pause(state: State<'_, DesktopState>) -> AppSnapshot {
-    state.update_snapshot(|snapshot| {
-        snapshot.sequence_transport.transport_state = SequenceTransportState::Paused;
-        snapshot.sequence_transport.status = "Paused".to_string();
-    })
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn sequence_transport_stop(state: State<'_, DesktopState>) -> AppSnapshot {
-    state.update_snapshot(|snapshot| {
-        snapshot.sequence_transport.transport_state = SequenceTransportState::Stopped;
-        snapshot.sequence_transport.position_seconds = snapshot.sequence_transport.home_seconds;
-        snapshot.sequence_transport.status = "Stopped".to_string();
-    })
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn sequence_transport_rewind_to_zero(state: State<'_, DesktopState>) -> AppSnapshot {
-    state.update_snapshot(|snapshot| {
-        snapshot.sequence_transport.position_seconds = 0.0;
-    })
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn sequence_transport_seek(
-    position_seconds: f64,
+pub fn load_sequence_audio(
+    request: GuiDocumentRequest,
+    app: AppHandle,
     state: State<'_, DesktopState>,
 ) -> AppSnapshot {
-    state.update_snapshot(|snapshot| {
-        snapshot.sequence_transport.position_seconds = position_seconds;
-    })
+    publish_audio_snapshot(&app, state.load_sequence_audio(request))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn unload_audio(app: AppHandle, state: State<'_, DesktopState>) -> AppSnapshot {
+    publish_audio_snapshot(&app, state.unload_audio())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn audio_play(app: AppHandle, state: State<'_, DesktopState>) -> AppSnapshot {
+    let snapshot = publish_audio_snapshot(&app, state.audio_play());
+    if matches!(snapshot.audio_transport.state, AudioTransportState::Playing) {
+        start_audio_transport_poll(app);
+    }
+    snapshot
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn audio_pause(app: AppHandle, state: State<'_, DesktopState>) -> AppSnapshot {
+    publish_audio_snapshot(&app, state.audio_pause())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn audio_stop(app: AppHandle, state: State<'_, DesktopState>) -> AppSnapshot {
+    publish_audio_snapshot(&app, state.audio_stop())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn audio_rewind_to_zero(app: AppHandle, state: State<'_, DesktopState>) -> AppSnapshot {
+    publish_audio_snapshot(&app, state.audio_rewind_to_zero())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn audio_seek(
+    position_seconds: f64,
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
+    publish_audio_snapshot(&app, state.audio_seek(position_seconds))
 }
 
 #[tauri::command]
@@ -332,11 +373,96 @@ pub fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         delete_path,
         reload_project,
         toggle_project_tree,
-        sequence_transport_play,
-        sequence_transport_pause,
-        sequence_transport_stop,
-        sequence_transport_rewind_to_zero,
-        sequence_transport_seek,
+        load_sequence_audio,
+        unload_audio,
+        audio_play,
+        audio_pause,
+        audio_stop,
+        audio_rewind_to_zero,
+        audio_seek,
         set_live_output_enabled
     ])
+}
+
+fn publish_audio_snapshot(app: &AppHandle, snapshot: AppSnapshot) -> AppSnapshot {
+    let _ = app.emit("audio_transport_changed", snapshot.audio_transport.clone());
+    snapshot
+}
+
+fn start_audio_transport_poll(app: AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(50));
+        let state = app.state::<DesktopState>();
+        let snapshot = state.snapshot();
+        let _ = app.emit("audio_transport_changed", snapshot.audio_transport.clone());
+        if !matches!(snapshot.audio_transport.state, AudioTransportState::Playing) {
+            break;
+        }
+    });
+}
+
+fn audio_import_path(
+    snapshot: &AppSnapshot,
+    request: &GuiDocumentRequest,
+    selected_path: &Path,
+) -> Option<String> {
+    if !matches!(request.view, DocumentViewId::Sequence) {
+        return None;
+    }
+    let selected = selected_path.canonicalize().ok()?;
+    let project_root = snapshot.project_root.as_deref().map(PathBuf::from)?;
+    let document_path = project_root.join(&request.path);
+    let document_dir = document_path.parent()?;
+    let document_dir = document_dir.canonicalize().ok()?;
+    relative_path(&document_dir, &selected).or_else(|| selected.to_str().map(ToString::to_string))
+}
+
+fn relative_path(from: &Path, to: &Path) -> Option<String> {
+    let from_parts = path_parts(from)?;
+    let to_parts = path_parts(to)?;
+    if from_parts.prefix != to_parts.prefix || from_parts.rooted != to_parts.rooted {
+        return None;
+    }
+    let common = from_parts
+        .normal
+        .iter()
+        .zip(&to_parts.normal)
+        .take_while(|(left, right)| left.eq_ignore_ascii_case(right))
+        .count();
+    let mut path = PathBuf::new();
+    for _ in common..from_parts.normal.len() {
+        path.push("..");
+    }
+    for part in &to_parts.normal[common..] {
+        path.push(part);
+    }
+    path.to_str().map(|value| value.replace('\\', "/"))
+}
+
+struct PathParts {
+    prefix: Option<String>,
+    rooted: bool,
+    normal: Vec<String>,
+}
+
+fn path_parts(path: &Path) -> Option<PathParts> {
+    let mut prefix = None;
+    let mut rooted = false;
+    let mut normal = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(value) => {
+                prefix = Some(value.as_os_str().to_str()?.to_string());
+            }
+            Component::RootDir => rooted = true,
+            Component::CurDir => {}
+            Component::ParentDir => normal.push("..".to_string()),
+            Component::Normal(value) => normal.push(value.to_str()?.to_string()),
+        }
+    }
+    Some(PathParts {
+        prefix,
+        rooted,
+        normal,
+    })
 }

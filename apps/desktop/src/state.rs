@@ -9,16 +9,17 @@ use dawn_project_io::{
 use indexmap::IndexSet;
 
 use crate::dto::{
-    AppSnapshot, AudioPlaybackStatus, BufferExternalState, DiagnosticSeverity,
+    AppSnapshot, AudioTransportSnapshot, BufferExternalState, DiagnosticSeverity,
     DocumentDefaultObjectKey, DocumentDescriptor, DocumentObjectDescriptor, DocumentViewId,
     EditorBuffer, EditorViewMode, GuiDocument, GuiDocumentRequest, GuiEditCommand, GuiEditResult,
-    LiveOutputSnapshot, ObjectKind, ProjectDiagnostic, SequenceTransportSnapshot,
-    SequenceTransportState, WorkspaceEntry, WorkspaceEntryKind,
+    LiveOutputSnapshot, ObjectKind, ProjectDiagnostic, SequenceAudio, WorkspaceEntry,
+    WorkspaceEntryKind,
 };
 
 pub struct DesktopState {
     snapshot: Mutex<AppSnapshot>,
     project: Mutex<Option<ProjectSession>>,
+    audio: Mutex<crate::audio::AudioEngine>,
 }
 
 impl DesktopState {
@@ -26,13 +27,24 @@ impl DesktopState {
         Self {
             snapshot: Mutex::new(empty_snapshot()),
             project: Mutex::new(None),
+            audio: Mutex::new(crate::audio::AudioEngine::new()),
         }
     }
 
     pub fn snapshot(&self) -> AppSnapshot {
-        match self.snapshot.lock() {
+        let audio_transport = self.audio_snapshot();
+        let mut snapshot = match self.snapshot.lock() {
             Ok(snapshot) => snapshot.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        snapshot.audio_transport = audio_transport;
+        snapshot
+    }
+
+    pub fn audio_snapshot(&self) -> AudioTransportSnapshot {
+        match self.audio.lock() {
+            Ok(mut audio) => audio.snapshot(),
+            Err(poisoned) => poisoned.into_inner().snapshot(),
         }
     }
 
@@ -40,14 +52,87 @@ impl DesktopState {
         match self.snapshot.lock() {
             Ok(mut snapshot) => {
                 update(&mut snapshot);
+                snapshot.audio_transport = self.audio_snapshot();
                 snapshot.clone()
             }
             Err(poisoned) => {
                 let mut snapshot = poisoned.into_inner();
                 update(&mut snapshot);
+                snapshot.audio_transport = self.audio_snapshot();
                 snapshot.clone()
             }
         }
+    }
+
+    pub fn load_sequence_audio(&self, request: GuiDocumentRequest) -> AppSnapshot {
+        let audio = self.resolve_sequence_audio(&request);
+        let audio_transport = match self.audio.lock() {
+            Ok(mut engine) => engine.load(audio),
+            Err(poisoned) => poisoned.into_inner().load(audio),
+        };
+        self.update_snapshot(|snapshot| {
+            snapshot.audio_transport = audio_transport;
+        })
+    }
+
+    pub fn unload_audio(&self) -> AppSnapshot {
+        let audio_transport = match self.audio.lock() {
+            Ok(mut engine) => engine.unload(),
+            Err(poisoned) => poisoned.into_inner().unload(),
+        };
+        self.update_snapshot(|snapshot| {
+            snapshot.audio_transport = audio_transport;
+        })
+    }
+
+    pub fn audio_play(&self) -> AppSnapshot {
+        let audio_transport = match self.audio.lock() {
+            Ok(mut engine) => engine.play(),
+            Err(poisoned) => poisoned.into_inner().play(),
+        };
+        self.update_snapshot(|snapshot| {
+            snapshot.audio_transport = audio_transport;
+        })
+    }
+
+    pub fn audio_pause(&self) -> AppSnapshot {
+        let audio_transport = match self.audio.lock() {
+            Ok(mut engine) => engine.pause(),
+            Err(poisoned) => poisoned.into_inner().pause(),
+        };
+        self.update_snapshot(|snapshot| {
+            snapshot.audio_transport = audio_transport;
+        })
+    }
+
+    pub fn audio_stop(&self) -> AppSnapshot {
+        let audio_transport = match self.audio.lock() {
+            Ok(mut engine) => engine.stop(),
+            Err(poisoned) => poisoned.into_inner().stop(),
+        };
+        self.update_snapshot(|snapshot| {
+            snapshot.audio_transport = audio_transport;
+        })
+    }
+
+    pub fn audio_rewind_to_zero(&self) -> AppSnapshot {
+        let audio_transport = match self.audio.lock() {
+            Ok(mut engine) => engine.rewind_to_zero(),
+            Err(poisoned) => poisoned.into_inner().rewind_to_zero(),
+        };
+        self.update_snapshot(|snapshot| {
+            snapshot.audio_transport = audio_transport;
+        })
+    }
+
+    pub fn audio_seek(&self, position_seconds: f64) -> AppSnapshot {
+        let audio_transport = match self.audio.lock() {
+            Ok(mut engine) => engine.seek(position_seconds),
+            Err(poisoned) => poisoned.into_inner().seek(position_seconds),
+        };
+        self.update_snapshot(|snapshot| {
+            snapshot.audio_transport = audio_transport;
+        })
     }
 
     pub fn open_project_path(&self, path: &str) -> AppSnapshot {
@@ -419,7 +504,7 @@ impl DesktopState {
                     snapshot.diagnostics.len()
                 )
             };
-            snapshot.sequence_transport = empty_sequence_transport();
+            snapshot.audio_transport = self.audio_snapshot();
             snapshot.project_revision = snapshot.project_revision.saturating_add(1);
         })
     }
@@ -474,6 +559,14 @@ impl DesktopState {
         match self.project.lock() {
             Ok(project) => project.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    fn resolve_sequence_audio(&self, request: &GuiDocumentRequest) -> Option<SequenceAudio> {
+        let project = self.project_session();
+        match crate::gui::project_gui_document(project.as_ref(), request) {
+            GuiDocument::Sequence { document } => document.audio,
+            _ => None,
         }
     }
 
@@ -663,32 +756,13 @@ fn empty_snapshot() -> AppSnapshot {
         active_document_descriptor: None,
         diagnostics: Vec::new(),
         status: "Ready".to_string(),
-        sequence_transport: empty_sequence_transport(),
+        audio_transport: crate::audio::AudioEngine::empty_snapshot(),
         live_output: LiveOutputSnapshot {
             enabled: false,
             status: "Disabled".to_string(),
             active_universe_count: 0,
             last_error: None,
         },
-    }
-}
-
-fn empty_sequence_transport() -> SequenceTransportSnapshot {
-    SequenceTransportSnapshot {
-        source_label: "No sequence".to_string(),
-        source_key: None,
-        render_generation: 0,
-        render_dirty_revision: 0,
-        transport_state: SequenceTransportState::Stopped,
-        render_updating: false,
-        position_seconds: 0.0,
-        home_seconds: 0.0,
-        duration_seconds: 0.0,
-        audio: None,
-        clock_source: "none".to_string(),
-        audio_playback_status: AudioPlaybackStatus::None,
-        geometry_identity: String::new(),
-        status: "Idle".to_string(),
     }
 }
 

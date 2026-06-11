@@ -36,5 +36,17 @@ export const commands = {
   },
   applySequenceGuiEdit: (edit: SequenceGuiEdit) => applyCurrentGuiEdit({ type: "sequence", edit }),
   applyLayoutGuiEdit: (edit: LayoutGuiEdit) => applyCurrentGuiEdit({ type: "layout", edit }),
-  applyFixtureGuiEdit: (edit: FixtureGuiEdit) => applyCurrentGuiEdit({ type: "fixture", edit })
+  applyFixtureGuiEdit: (edit: FixtureGuiEdit) => applyCurrentGuiEdit({ type: "fixture", edit }),
+  chooseSequenceAudio: () => {
+    if (currentGuiRequest === null) {
+      throw new Error("Audio selection attempted without an active GUI document request.");
+    }
+    return generatedCommands.chooseSequenceAudio(currentGuiRequest);
+  },
+  clearSequenceAudio: () => {
+    if (currentGuiRequest === null) {
+      throw new Error("Audio clearing attempted without an active GUI document request.");
+    }
+    return generatedCommands.clearSequenceAudio(currentGuiRequest);
+  }
 };

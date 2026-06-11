@@ -1,6 +1,7 @@
 import { create } from "zustand";
+import { listen } from "@tauri-apps/api/event";
 import { commands, setGuiEditResultHandler } from "./api";
-import type { AppSnapshot, GuiDocument, GuiDocumentRequest, GuiEditResult } from "./types";
+import type { AppSnapshot, AudioTransportSnapshot, GuiDocument, GuiDocumentRequest, GuiEditResult } from "./types";
 
 type SnapshotApplySource = "event" | "command" | "hydrate";
 
@@ -26,9 +27,20 @@ export const useAppStore = create<AppStore>((set) => ({
   error: null,
   localText: "",
   setSnapshot: (snapshot, source = "command") => {
-    set({
-      snapshot,
-      localText: snapshot.activeBuffer?.text ?? ""
+    set((current) => {
+      const currentSnapshot = current.snapshot;
+      const audioTransport = mergeAudioTransport(
+        currentSnapshot?.audioTransport ?? null,
+        snapshot.audioTransport,
+        source
+      );
+      return {
+        snapshot: {
+          ...snapshot,
+          audioTransport
+        },
+        localText: snapshot.activeBuffer?.text ?? ""
+      };
     });
     void source;
   },
@@ -39,10 +51,20 @@ export const useAppStore = create<AppStore>((set) => ({
     set({ guiDocument });
   },
   applyGuiEditResult: (result) => {
-    set({
-      snapshot: result.snapshot,
-      guiDocument: result.document,
-      localText: result.snapshot.activeBuffer?.text ?? ""
+    set((current) => {
+      const audioTransport = mergeAudioTransport(
+        current.snapshot?.audioTransport ?? null,
+        result.snapshot.audioTransport,
+        "command"
+      );
+      return {
+        snapshot: {
+          ...result.snapshot,
+          audioTransport
+        },
+        guiDocument: result.document,
+        localText: result.snapshot.activeBuffer?.text ?? ""
+      };
     });
   },
   setError: (error) => {
@@ -64,7 +86,18 @@ setGuiEditResultHandler((result) => {
 });
 
 export function subscribeToSnapshots(): Promise<() => void> {
-  return Promise.resolve(() => {});
+  return listen<AudioTransportSnapshot>("audio_transport_changed", (event) => {
+    const current = useAppStore.getState().snapshot;
+    if (current === null) return;
+    if (event.payload.generation < current.audioTransport.generation) return;
+    useAppStore.getState().setSnapshot(
+      {
+        ...current,
+        audioTransport: event.payload
+      },
+      "event"
+    );
+  });
 }
 
 export async function runSnapshotCommand(command: () => Promise<AppSnapshot>) {
@@ -77,4 +110,15 @@ export async function runSnapshotCommand(command: () => Promise<AppSnapshot>) {
     useAppStore.getState().setError(String(error));
     throw error;
   }
+}
+
+function mergeAudioTransport(
+  current: AudioTransportSnapshot | null,
+  incoming: AudioTransportSnapshot,
+  source: SnapshotApplySource
+): AudioTransportSnapshot {
+  if (current === null) return incoming;
+  if (incoming.generation < current.generation) return current;
+  if (source === "command" && incoming.generation === current.generation) return current;
+  return incoming;
 }
