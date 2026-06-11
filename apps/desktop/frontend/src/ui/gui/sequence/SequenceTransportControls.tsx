@@ -20,7 +20,7 @@ export function SequenceTransportControls({
   transport: AppSnapshot["audioTransport"];
   liveOutput: AppSnapshot["liveOutput"];
 }) {
-  const unsupported = document.durationSeconds <= 0 || transport.state === "unloaded" || transport.state === "error";
+  const unsupported = isSequenceTransportUnsupported(document, transport);
   const activePlayback = isActiveAudioPlayback(transport.state);
   const [mode, setMode] = useMarkDisplayMode();
   const stepFrame = (direction: -1 | 1) => {
@@ -204,6 +204,13 @@ export function handleSequencePlaybackShortcut(
     event.stopPropagation();
     stepSequenceFrame(document, transport.positionSeconds, transport.durationSeconds, 1);
   }
+}
+
+export function isSequenceTransportUnsupported(
+  document: SequenceEditorDocument,
+  transport: AppSnapshot["audioTransport"]
+) {
+  return document.durationSeconds <= 0 || transport.state === "unloaded" || transport.state === "error";
 }
 
 function isActiveAudioPlayback(state: AudioTransportState) {

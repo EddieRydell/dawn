@@ -443,11 +443,11 @@ impl AudioHandle for KiraAudioHandle {
     }
 
     fn pause(&mut self) {
-        self.handle.pause(Tween::default());
+        self.handle.pause(instant_tween());
     }
 
     fn resume(&mut self) {
-        self.handle.resume(Tween::default());
+        self.handle.resume(instant_tween());
     }
 
     fn seek_to(&mut self, position_seconds: f64) {
@@ -455,7 +455,7 @@ impl AudioHandle for KiraAudioHandle {
     }
 
     fn stop(&mut self) {
-        self.handle.stop(Tween::default());
+        self.handle.stop(instant_tween());
     }
 }
 
@@ -463,11 +463,24 @@ fn canonical_audio_path(path: &str) -> Result<String, std::io::Error> {
     std::fs::canonicalize(path).map(|path| path.to_string_lossy().into_owned())
 }
 
+fn instant_tween() -> Tween {
+    Tween {
+        duration: Duration::ZERO,
+        ..Tween::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn transport_commands_use_instant_tween() {
+        assert_eq!(instant_tween().duration, Duration::ZERO);
+    }
 
     #[test]
     fn load_valid_source_initializes_stopped_without_handle() {

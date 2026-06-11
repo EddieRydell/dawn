@@ -5,7 +5,7 @@ import type { SequenceEditorDocument } from "../../../types";
 import type { AudioTransportViewSnapshot, GuiFocus, SequenceSelection } from "../shared";
 
 import { SequenceCanvas } from "./SequenceCanvas";
-import { handleSequencePlaybackShortcut } from "./SequenceTransportControls";
+import { handleSequencePlaybackShortcut, isSequenceTransportUnsupported } from "./SequenceTransportControls";
 
 export function SequenceEditor({
   document,
@@ -31,7 +31,7 @@ export function SequenceEditor({
   setVisibleMarkCollectionKeys: (keys: Set<string>) => void;
 }) {
   const liveTransport = transport;
-  const unsupported = document.durationSeconds <= 0;
+  const unsupported = isSequenceTransportUnsupported(document, liveTransport);
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     handleSequencePlaybackShortcut(event, document, liveTransport, unsupported);
   };

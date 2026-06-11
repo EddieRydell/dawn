@@ -14,7 +14,7 @@ import { BlockedGui } from "./BlockedGui";
 
 import { SequenceEditor } from "./sequence/SequenceEditor";
 
-import { handleSequencePlaybackShortcut } from "./sequence/SequenceTransportControls";
+import { handleSequencePlaybackShortcut, isSequenceTransportUnsupported } from "./sequence/SequenceTransportControls";
 
 import { markSelectionConsumesKey } from "./sequence/sequenceSelection";
 
@@ -76,7 +76,12 @@ function GuiEditorInner({
       className="gui-editor-shell"
       onKeyDownCapture={(event) => {
         if (gui.type === "sequence" && !markSelectionConsumesKey(selected, event.key)) {
-          handleSequencePlaybackShortcut(event, gui.document, audioTransport, gui.document.durationSeconds <= 0);
+          handleSequencePlaybackShortcut(
+            event,
+            gui.document,
+            audioTransport,
+            isSequenceTransportUnsupported(gui.document, audioTransport)
+          );
         }
       }}
     >
