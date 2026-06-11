@@ -1,18 +1,17 @@
 imports:
-- from: ../layouts/outputs.layout.dawn
+- from: ../layouts/main.layout.dawn
   as: layouts
-- from: ../patches/outputs.patch.dawn
+- from: ../patches/main.patch.dawn
   as: patches
 main:
-  type: display
+  type: setup
+  layout: layouts.main
+  patch: patches.main
   controllers:
   - output_controller
-  patch: patches.outputs
-  layout: layouts.outputs
 output_controller:
   type: controller
   protocol: sacn
-  destination: 192.168.7.2:5568
   output:
     type: linear_rgb
     channel_order: grb

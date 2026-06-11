@@ -1,15 +1,15 @@
 use crate::effect::{CurveDefinitionStore, EffectDefinitionStore};
 use crate::sequence::Sequence;
 use crate::setup::{
-    ControllerDefinitionStore, ControllerId, Display, DisplayId, FixtureDefinitionStore, Layout,
-    LayoutId, Patch, PatchId,
+    ControllerDefinitionStore, ControllerId, FixtureDefinitionStore, Layout, LayoutId, Patch,
+    PatchId, Setup, SetupId,
 };
 use indexmap::IndexMap;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DawnProject {
     pub root: ProjectRoot,
-    pub displays: IndexMap<DisplayId, Display>,
+    pub setups: IndexMap<SetupId, Setup>,
     pub layouts: IndexMap<LayoutId, Layout>,
     pub patches: IndexMap<PatchId, Patch>,
     pub controllers: IndexMap<ControllerId, crate::setup::ControllerDefinition>,
@@ -23,7 +23,7 @@ pub struct ProjectId(pub String);
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectRoot {
     pub id: ProjectId,
-    pub display: DisplayId,
+    pub setup: SetupId,
     pub sequences: Vec<crate::sequence::SequenceId>,
 }
 

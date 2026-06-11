@@ -182,7 +182,7 @@ export type LiveOutputSnapshot = {
 	lastError: string | null,
 };
 
-export type ObjectKind = "project" | "display" | "controller" | "layout" | "fixture" | "patch" | "sequence" | "curve" | "effect";
+export type ObjectKind = "project" | "setup" | "controller" | "layout" | "fixture" | "patch" | "sequence" | "curve" | "effect";
 
 export type Point3Meters = {
 	xMeters: number,

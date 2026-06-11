@@ -29,7 +29,7 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
   },
   "file.openProject": {
     id: "file.openProject",
-    label: "Open Project",
+    label: "Open Project...",
     shortcut: "Ctrl+O",
     run: async () => {
       await runSnapshotCommand(commands.openProjectDialog);

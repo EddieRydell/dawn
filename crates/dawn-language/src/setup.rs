@@ -4,7 +4,7 @@ use std::net::IpAddr;
 use crate::values::{DistanceSpan, Point3, Rotation3, Scale3};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct DisplayId(pub String);
+pub struct SetupId(pub String);
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ControllerId(pub String);
@@ -19,8 +19,8 @@ pub struct LayoutId(pub String);
 pub struct PatchId(pub String);
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Display {
-    pub id: DisplayId,
+pub struct Setup {
+    pub id: SetupId,
     pub layout: LayoutId,
     pub patch: PatchId,
     pub controllers: Vec<ControllerId>,

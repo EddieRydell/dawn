@@ -42,7 +42,7 @@ export function App() {
       <ExportFseqDialog />
       {snapshot.projectRoot === null && (
         <div className="empty-project">
-          <button onClick={() => void runSnapshotCommand(commands.openProjectDialog)}>Open Project</button>
+          <button onClick={() => void runSnapshotCommand(commands.openProjectDialog)}>Open Project...</button>
         </div>
       )}
     </div>

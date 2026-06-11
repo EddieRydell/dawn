@@ -100,7 +100,7 @@ pub enum LayoutTargetKind {
 #[serde(rename_all = "camelCase")]
 pub enum ObjectKind {
     Project,
-    Display,
+    Setup,
     Controller,
     Layout,
     Fixture,

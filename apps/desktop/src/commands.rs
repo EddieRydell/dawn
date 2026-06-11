@@ -16,14 +16,25 @@ pub fn get_snapshot(state: State<'_, DesktopState>) -> AppSnapshot {
 #[tauri::command]
 #[specta::specta]
 pub fn open_project_dialog(state: State<'_, DesktopState>) -> AppSnapshot {
-    state.snapshot()
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Dawn project", &["dawn"])
+        .set_file_name("project.dawn")
+        .pick_file()
+    else {
+        return state.snapshot();
+    };
+    let Some(path) = path.to_str() else {
+        return state.update_snapshot(|snapshot| {
+            snapshot.status = "Selected project path is not valid UTF-8".to_string();
+        });
+    };
+    state.open_project_path(path)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn open_project(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
-    let _path = path;
-    state.snapshot()
+    state.open_project_path(&path)
 }
 
 #[tauri::command]
@@ -46,33 +57,25 @@ pub fn create_new_project(
 #[tauri::command]
 #[specta::specta]
 pub fn open_file(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
-    let _path = path;
-    state.snapshot()
+    state.open_file_path(&path)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn close_file(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
-    let _path = path;
-    state.snapshot()
+    state.close_file_path(&path)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn set_active_file(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
-    let _path = path;
-    state.snapshot()
+    state.set_active_file_path(&path)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn update_active_text(text: String, state: State<'_, DesktopState>) -> AppSnapshot {
-    state.update_snapshot(|snapshot| {
-        if let Some(buffer) = snapshot.active_buffer.as_mut() {
-            buffer.text = text;
-            buffer.dirty = true;
-        }
-    })
+    state.update_active_text(text)
 }
 
 #[tauri::command]
@@ -160,13 +163,13 @@ pub fn apply_fixture_gui_edit(edit: FixtureGuiEdit, state: State<'_, DesktopStat
 #[tauri::command]
 #[specta::specta]
 pub fn flush_autosave(state: State<'_, DesktopState>) -> AppSnapshot {
-    state.snapshot()
+    state.save_active_buffer()
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn reload_active_buffer_from_disk(state: State<'_, DesktopState>) -> AppSnapshot {
-    state.snapshot()
+    state.reload_active_buffer_from_disk()
 }
 
 #[tauri::command]
@@ -178,8 +181,7 @@ pub fn keep_active_buffer(state: State<'_, DesktopState>) -> AppSnapshot {
 #[tauri::command]
 #[specta::specta]
 pub fn create_file(parent: String, name: String, state: State<'_, DesktopState>) -> AppSnapshot {
-    let (_parent, _name) = (parent, name);
-    state.snapshot()
+    state.create_file(&parent, &name)
 }
 
 #[tauri::command]
@@ -189,28 +191,25 @@ pub fn create_directory(
     name: String,
     state: State<'_, DesktopState>,
 ) -> AppSnapshot {
-    let (_parent, _name) = (parent, name);
-    state.snapshot()
+    state.create_directory(&parent, &name)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn rename_path(path: String, new_name: String, state: State<'_, DesktopState>) -> AppSnapshot {
-    let (_path, _new_name) = (path, new_name);
-    state.snapshot()
+    state.rename_path(&path, &new_name)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn delete_path(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
-    let _path = path;
-    state.snapshot()
+    state.delete_path(&path)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn reload_project(state: State<'_, DesktopState>) -> AppSnapshot {
-    state.snapshot()
+    state.reload_project()
 }
 
 #[tauri::command]

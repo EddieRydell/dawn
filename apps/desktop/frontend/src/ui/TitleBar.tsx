@@ -33,7 +33,7 @@ export function TitleBar() {
 
 function startTitlebarDrag(event: React.MouseEvent<HTMLElement>) {
   if (event.button !== 0) return;
-  if (event.target instanceof Element && event.target.closest("button")) return;
+  if (event.target instanceof Element && event.target.closest("button, [role='menuitem'], [role='menu'], [data-radix-popper-content-wrapper]")) return;
   event.preventDefault();
   if (event.detail === 2) {
     void appWindow.toggleMaximize();

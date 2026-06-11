@@ -35,6 +35,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
   const activeConflicted = activeExternalState !== "current";
   const activeSequenceDocument =
     viewMode === "gui" && snapshot.activeGuiDocument?.type === "sequence" ? snapshot.activeGuiDocument.document : null;
+  const guiAvailable = snapshot.activeGuiDocument !== null && snapshot.activeGuiDocument.type !== "blocked";
   const sequenceSelection = pathSelection.path === activePath ? pathSelection.selection : null;
   const setSequenceSelection = useCallback(
     (selection: SequenceSelection | null) => {
@@ -166,12 +167,14 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
           >
             Text
           </button>
-          <button
-            className={viewMode === "gui" ? "active" : ""}
-            onClick={() => void runSnapshotCommand(() => commands.setActiveViewMode("gui"))}
-          >
-            GUI
-          </button>
+          {guiAvailable && (
+            <button
+              className={viewMode === "gui" ? "active" : ""}
+              onClick={() => void runSnapshotCommand(() => commands.setActiveViewMode("gui"))}
+            >
+              GUI
+            </button>
+          )}
         </div>
       </div>
       {activeConflicted && (

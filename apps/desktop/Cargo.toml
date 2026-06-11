@@ -8,11 +8,16 @@ license = "MIT"
 default-run = "dawn-desktop"
 
 [dependencies]
+camino = "1.2.1"
+dawn-project-io = { path = "../../crates/dawn-project-io" }
+indexmap = "2.14.0"
+rfd = "0.15.4"
 serde = { version = "1", features = ["derive"] }
 specta = { version = "2.0.0-rc.25", features = ["derive"] }
 specta-typescript = "0.0.12"
 tauri = { version = "2", features = [] }
 tauri-specta = { version = "2.0.0-rc.25", features = ["derive", "typescript"] }
+yaml_serde = "0.10.4"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

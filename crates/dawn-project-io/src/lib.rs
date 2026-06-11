@@ -23,10 +23,9 @@ use dawn_language::sequence::{
 };
 use dawn_language::setup::{
     ControllerAddress, ControllerDefinition, ControllerDefinitionId, ControllerId,
-    ControllerOutput, ControllerOutputIndex, Display, DisplayId, FixtureDefinition,
-    FixtureDefinitionId, FixtureGroup, FixtureGroupId, FixtureInst, FixtureInstanceId, Geometry,
-    Layout, LayoutId, LayoutTarget, Patch, PatchId, PatchRoute, PixelRange, Protocol,
-    RgbChannelOrder,
+    ControllerOutput, ControllerOutputIndex, FixtureDefinition, FixtureDefinitionId, FixtureGroup,
+    FixtureGroupId, FixtureInst, FixtureInstanceId, Geometry, Layout, LayoutId, LayoutTarget,
+    Patch, PatchId, PatchRoute, PixelRange, Protocol, RgbChannelOrder, Setup, SetupId,
 };
 use dawn_language::values::{
     Color, Curve, CurvePoint, CurveValue, DawnDuration, DawnTime, Distance, DistanceSpan, Point3,
@@ -118,7 +117,7 @@ pub struct SourceObjectId {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum SourceObjectKind {
     Project,
-    Display,
+    Setup,
     Controller,
     Layout,
     Patch,
@@ -486,7 +485,7 @@ impl Loader {
             let object_type = string_field(relative, object_value, "type")?;
             let object = match object_type {
                 "project" => ResolvedObject::Project(ProjectId(key.to_string())),
-                "display" => ResolvedObject::Display(DisplayId(key.to_string())),
+                "setup" => ResolvedObject::Setup(SetupId(key.to_string())),
                 "controller" => ResolvedObject::Controller(ControllerId(key.to_string())),
                 "layout" => ResolvedObject::Layout(LayoutId(key.to_string())),
                 "patch" => ResolvedObject::Patch(PatchId(key.to_string())),
@@ -630,9 +629,9 @@ impl Loader {
     fn resolve_project(&mut self, entrypoint: &Utf8Path) -> Result<DawnProject, LoadProjectError> {
         let root_object = self.single_project_object(entrypoint)?;
         let root_id = ProjectId(root_object.key.clone());
-        let display = self.reference_as_display(
+        let setup = self.reference_as_setup(
             entrypoint,
-            string_field(entrypoint, root_object.value, "display")?,
+            string_field(entrypoint, root_object.value, "setup")?,
         )?;
         let sequences = sequence_field(entrypoint, root_object.value, "sequences")?
             .iter()
@@ -642,10 +641,10 @@ impl Loader {
         let mut project = DawnProject {
             root: ProjectRoot {
                 id: root_id,
-                display: display.clone(),
+                setup: setup.clone(),
                 sequences: sequences.clone(),
             },
-            displays: IndexMap::new(),
+            setups: IndexMap::new(),
             layouts: IndexMap::new(),
             patches: IndexMap::new(),
             controllers: IndexMap::new(),
@@ -657,7 +656,7 @@ impl Loader {
             loader: self,
             project: &mut project,
         };
-        resolver.resolve_display(entrypoint, &display)?;
+        resolver.resolve_setup(entrypoint, &setup)?;
         for sequence in sequences {
             resolver.resolve_sequence(entrypoint, &sequence)?;
         }
@@ -835,13 +834,13 @@ impl Loader {
             })
     }
 
-    fn reference_as_display(
+    fn reference_as_setup(
         &self,
         path: &Utf8Path,
         reference: &str,
-    ) -> Result<DisplayId, LoadProjectError> {
+    ) -> Result<SetupId, LoadProjectError> {
         match self.resolve_reference(path, reference)? {
-            ResolvedObject::Display(id) => Ok(id),
+            ResolvedObject::Setup(id) => Ok(id),
             _ => Err(LoadProjectError::InvalidReference {
                 path: path.to_path_buf(),
                 reference: reference.to_string(),
@@ -870,13 +869,13 @@ struct DomainResolver<'a> {
 }
 
 impl DomainResolver<'_> {
-    fn resolve_display(&mut self, path: &Utf8Path, id: &DisplayId) -> Result<(), LoadProjectError> {
-        if self.project.displays.contains_key(id) {
+    fn resolve_setup(&mut self, path: &Utf8Path, id: &SetupId) -> Result<(), LoadProjectError> {
+        if self.project.setups.contains_key(id) {
             return Ok(());
         }
         let (document_path, _, value) = self
             .loader
-            .object_value(&ResolvedObject::Display(id.clone()))?;
+            .object_value(&ResolvedObject::Setup(id.clone()))?;
         let layout_ref = string_field(&document_path, &value, "layout")?;
         let patch_ref = string_field(&document_path, &value, "patch")?;
         let layout = match self.loader.resolve_reference(&document_path, layout_ref)? {
@@ -901,9 +900,9 @@ impl DomainResolver<'_> {
             .iter()
             .map(|name| ControllerId(name.to_string()))
             .collect::<Vec<_>>();
-        self.project.displays.insert(
+        self.project.setups.insert(
             id.clone(),
-            Display {
+            Setup {
                 id: id.clone(),
                 layout: layout.clone(),
                 patch: patch.clone(),
@@ -1562,7 +1561,7 @@ struct AliasObjectKey {
 #[derive(Clone, Debug, PartialEq)]
 enum ResolvedObject {
     Project(ProjectId),
-    Display(DisplayId),
+    Setup(SetupId),
     Controller(ControllerId),
     Layout(LayoutId),
     Patch(PatchId),
@@ -1576,7 +1575,7 @@ impl ResolvedObject {
     fn source_kind(&self) -> SourceObjectKind {
         match self {
             Self::Project(_) => SourceObjectKind::Project,
-            Self::Display(_) => SourceObjectKind::Display,
+            Self::Setup(_) => SourceObjectKind::Setup,
             Self::Controller(_) => SourceObjectKind::Controller,
             Self::Layout(_) => SourceObjectKind::Layout,
             Self::Patch(_) => SourceObjectKind::Patch,
@@ -1590,7 +1589,7 @@ impl ResolvedObject {
     fn id_string(&self) -> String {
         match self {
             Self::Project(id) => id.0.clone(),
-            Self::Display(id) => id.0.clone(),
+            Self::Setup(id) => id.0.clone(),
             Self::Controller(id) => id.0.clone(),
             Self::Layout(id) => id.0.clone(),
             Self::Patch(id) => id.0.clone(),

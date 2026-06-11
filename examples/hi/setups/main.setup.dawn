@@ -4,7 +4,7 @@ imports:
 - from: ../patches/main.patch.dawn
   as: patches
 main:
-  type: display
+  type: setup
   layout: layouts.main
   patch: patches.main
   controllers:
