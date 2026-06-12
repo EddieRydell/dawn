@@ -1,4 +1,7 @@
 use camino::Utf8PathBuf;
+use dawn_language::model::DawnProject;
+use dawn_language::sequence::SequenceId;
+use dawn_language::setup::SetupId;
 use dawn_language::values::Color;
 use dawn_project_io::load_project;
 use dawn_runtime::{PreparedSequenceRenderer, RenderedFrame};
@@ -12,6 +15,7 @@ struct Config {
     frames: Vec<u64>,
     iterations: usize,
     warmup: usize,
+    render_only: bool,
 }
 
 fn main() {
@@ -35,12 +39,8 @@ fn run() -> Result<(), Box<dyn Error>> {
         .first()
         .ok_or("project root has no sequences")?;
 
-    let warm_renderer = PreparedSequenceRenderer::prepare(&session.project, setup_id, sequence_id)
-        .map_err(|error| format!("prepare failed: {error:?}"))?;
-    for frame in &config.frames {
-        let _ = warm_renderer
-            .render_frame(*frame)
-            .map_err(|error| format!("render frame {frame} failed: {error:?}"))?;
+    if config.render_only {
+        return run_render_only(&config, &session.project, setup_id, sequence_id);
     }
 
     for _ in 0..config.warmup {
@@ -96,6 +96,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     println!("project: {}", config.project);
     println!("iterations: {}", config.iterations);
     println!("warmup: {}", config.warmup);
+    println!("mode: prepare+render");
     println!(
         "prepare: p50={} p95={}",
         format_duration(percentile(&mut prepare_times.clone(), 50)),
@@ -120,15 +121,100 @@ fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn run_render_only(
+    config: &Config,
+    project: &DawnProject,
+    setup_id: &SetupId,
+    sequence_id: &SequenceId,
+) -> Result<(), Box<dyn Error>> {
+    let renderer = PreparedSequenceRenderer::prepare(project, setup_id, sequence_id)
+        .map_err(|error| format!("prepare failed: {error:?}"))?;
+
+    let mut active_effects = Vec::new();
+    for frame in &config.frames {
+        active_effects.push((
+            *frame,
+            renderer
+                .active_effect_names(*frame)
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        ));
+    }
+
+    for _ in 0..config.warmup {
+        for frame in &config.frames {
+            let _ = renderer
+                .render_frame(*frame)
+                .map_err(|error| format!("render frame {frame} failed: {error:?}"))?;
+        }
+    }
+
+    let mut frame_times = config
+        .frames
+        .iter()
+        .map(|frame| (*frame, Vec::with_capacity(config.iterations)))
+        .collect::<Vec<_>>();
+    let mut checksums = Vec::new();
+    let total_start = Instant::now();
+    let mut rendered_count = 0usize;
+
+    for iteration in 0..config.iterations {
+        for (frame, times) in &mut frame_times {
+            let frame_start = Instant::now();
+            let rendered = renderer
+                .render_frame(*frame)
+                .map_err(|error| format!("render frame {frame} failed: {error:?}"))?;
+            times.push(frame_start.elapsed());
+            rendered_count += 1;
+            if iteration == 0 {
+                checksums.push((*frame, checksum_frame(&rendered)));
+            }
+        }
+    }
+    let total_time = total_start.elapsed();
+
+    println!("project: {}", config.project);
+    println!("iterations: {}", config.iterations);
+    println!("warmup: {}", config.warmup);
+    println!("mode: render-only");
+    for (frame, mut times) in frame_times {
+        println!(
+            "frame {frame}: p50={} p95={}",
+            format_duration(percentile(&mut times.clone(), 50)),
+            format_duration(percentile(&mut times, 95))
+        );
+    }
+    println!(
+        "total: frames={} time={}",
+        rendered_count,
+        format_duration(total_time)
+    );
+    println!("checksums:");
+    for (frame, checksum) in checksums {
+        println!("  frame {frame}: {checksum:016x}");
+    }
+    println!("active effects:");
+    for (frame, names) in active_effects {
+        println!("  frame {frame}: {}", names.join(", "));
+    }
+
+    Ok(())
+}
+
 fn parse_args() -> Result<Config, Box<dyn Error>> {
     let mut project = None;
     let mut frames = None;
     let mut iterations = None;
     let mut warmup = None;
+    let mut render_only = false;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--bench" => {}
+            "--render-only" => {
+                render_only = true;
+            }
             "--project" => {
                 project = Some(resolve_project_path(&next_value(&mut args, "--project")?));
             }
@@ -153,6 +239,7 @@ fn parse_args() -> Result<Config, Box<dyn Error>> {
         frames: frames.ok_or("missing --frames")?,
         iterations: iterations.ok_or("missing --iterations")?,
         warmup: warmup.ok_or("missing --warmup")?,
+        render_only,
     })
 }
 
