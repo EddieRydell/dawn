@@ -19,6 +19,8 @@ Check both Rust and desktop manifests before assuming a command or dependency be
 Do not add compatibility layers, shims, fallbacks, or allow for legacy code when adding features or refactoring. 
 Do not add fallbacks when something doesn't work. This hides errors and makes debugging harder.
 The goal is fast development, not support. Minimize clutter and favor having a single way of doing things. SSOT is your friend.
+GUI edits must mutate typed domain state only. Do not construct, inspect, or mutate YAML/text directly from GUI edit code.
+GUI edits must not run project checks or reload from YAML after mutation. Persistence belongs to the IO save path.
 Do not use git or commands associated with it unless the user specifically requests it.
 Do not use .env files to store information.
 Do not jump to editing if the conversation is about diagnosing an issue or discussing architecture/design decisions.

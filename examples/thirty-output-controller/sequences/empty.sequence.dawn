@@ -1672,7 +1672,7 @@ empty:
         value: 20.0
     script: effects.MarkPulse
   - id: 75
-    start: 1.75s
+    start: 1s
     duration: 12.80752s
     target:
       type: group
@@ -1684,7 +1684,18 @@ empty:
         value: '#000000'
       palette:
         type: curve
-        curve: curves.fire_gradient
+        curve:
+          type: curve
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.25
+            value: '#2986ff'
+          - time: 0.6
+            value: '#a1ff2e'
+          - time: 1.0
+            value: '#ff0000'
       color_mode:
         type: enum
         value: from_palette
@@ -1696,7 +1707,7 @@ empty:
         value: 0.05
       shimmer_level:
         type: float
-        value: 0.08
+        value: 0.1
       sparkle_level:
         type: float
         value: 0.85

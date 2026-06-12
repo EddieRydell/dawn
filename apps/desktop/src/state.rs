@@ -1,5 +1,7 @@
 use std::fs;
-use std::sync::Mutex;
+use std::sync::{mpsc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_project_io::{
@@ -19,6 +21,7 @@ use crate::dto::{
 pub struct DesktopState {
     snapshot: Mutex<AppSnapshot>,
     project: Mutex<Option<ProjectSession>>,
+    gui_save: Mutex<GuiSaveScheduler>,
     audio: Mutex<crate::audio::AudioEngine>,
     show_render: Mutex<crate::show_render::ShowRenderService>,
     sequence_clipboard: Mutex<Option<crate::gui::SequenceClipboard>>,
@@ -29,6 +32,7 @@ impl DesktopState {
         Self {
             snapshot: Mutex::new(empty_snapshot()),
             project: Mutex::new(None),
+            gui_save: Mutex::new(GuiSaveScheduler::new()),
             audio: Mutex::new(crate::audio::AudioEngine::new()),
             show_render: Mutex::new(crate::show_render::ShowRenderService::new()),
             sequence_clipboard: Mutex::new(None),
@@ -36,6 +40,7 @@ impl DesktopState {
     }
 
     pub fn snapshot(&self) -> AppSnapshot {
+        self.drain_gui_save_results();
         let audio_transport = self.audio_snapshot();
         let mut snapshot = match self.snapshot.lock() {
             Ok(snapshot) => snapshot.clone(),
@@ -481,14 +486,8 @@ impl DesktopState {
             };
         }
         let document = crate::gui::project_gui_document(Some(&edited), &request);
-        let save_error = save_project(&edited).err();
-        self.apply_gui_project_update(edited, "GUI edit applied");
-        let snapshot = if let Some(error) = save_error {
-            self.snapshot_with_error("gui.save", &request.path, &error.to_string())
-        } else {
-            self.refresh_saved_tabs(&affected_paths);
-            self.snapshot()
-        };
+        self.schedule_gui_save(&edited, affected_paths, request.path.clone());
+        let snapshot = self.apply_gui_project_update(edited, "GUI edit applied");
         GuiEditResult { snapshot, document }
     }
 
@@ -598,14 +597,8 @@ impl DesktopState {
                 }
             }
         };
-        let save_error = save_project(&edited).err();
-        self.apply_gui_project_update(edited, "GUI selection edit applied");
-        let snapshot = if let Some(error) = save_error {
-            self.snapshot_with_error("gui.save", &request.path, &error.to_string())
-        } else {
-            self.refresh_saved_tabs(&affected_paths);
-            self.snapshot()
-        };
+        self.schedule_gui_save(&edited, affected_paths, request.path.clone());
+        let snapshot = self.apply_gui_project_update(edited, "GUI selection edit applied");
         SequenceSelectionEditResult {
             snapshot,
             selection: mutation.selection,
@@ -1025,15 +1018,80 @@ impl DesktopState {
         })
     }
 
-    fn refresh_saved_tabs(&self, paths: &std::collections::BTreeSet<String>) -> AppSnapshot {
-        let Some(project) = self.project_session() else {
-            return self.snapshot();
+    fn schedule_gui_save(
+        &self,
+        session: &ProjectSession,
+        affected_paths: std::collections::BTreeSet<String>,
+        status_path: String,
+    ) {
+        let path_for_error = status_path.clone();
+        let request = GuiSavePayload {
+            session: session.clone(),
+            affected_paths,
+            status_path,
         };
+        match self.gui_save.lock() {
+            Ok(mut scheduler) => {
+                if scheduler.schedule(request).is_err() {
+                    self.snapshot_with_error(
+                        "gui.save",
+                        path_for_error.as_str(),
+                        "GUI save worker is unavailable.",
+                    );
+                }
+            }
+            Err(poisoned) => {
+                let mut scheduler = poisoned.into_inner();
+                if scheduler.schedule(request).is_err() {
+                    self.snapshot_with_error(
+                        "gui.save",
+                        path_for_error.as_str(),
+                        "GUI save worker is unavailable.",
+                    );
+                }
+            }
+        }
+    }
+
+    fn drain_gui_save_results(&self) {
+        let results = match self.gui_save.lock() {
+            Ok(scheduler) => scheduler.drain_current_results(),
+            Err(poisoned) => poisoned.into_inner().drain_current_results(),
+        };
+        for result in results {
+            match result {
+                GuiSaveResult::Saved {
+                    sequence: _,
+                    session,
+                    affected_paths,
+                } => {
+                    if self.project_session().as_ref().is_some_and(|project| {
+                        project.source.source_root == session.source.source_root
+                    }) {
+                        self.refresh_saved_tabs(&session, &affected_paths);
+                    }
+                }
+                GuiSaveResult::Failed {
+                    sequence: _,
+                    status_path,
+                    message,
+                } => {
+                    self.snapshot_with_error("gui.save", &status_path, &message);
+                }
+            }
+        }
+    }
+
+    fn refresh_saved_tabs(
+        &self,
+        session: &ProjectSession,
+        paths: &std::collections::BTreeSet<String>,
+    ) -> AppSnapshot {
         let refreshed = paths
             .iter()
             .filter_map(|path| {
                 let relative = Utf8Path::new(path);
-                let absolute = absolute_project_path(&project, relative)?;
+                let absolute = absolute_project_path(session, relative)?;
                 let text = fs::read_to_string(absolute).ok()?;
                 Some((path.clone(), text))
             })
@@ -1041,21 +1099,126 @@ impl DesktopState {
         self.update_snapshot(|snapshot| {
             for (path, text) in &refreshed {
                 if let Some(tab) = snapshot.tabs.iter_mut().find(|tab| tab.path == *path) {
-                    tab.text = text.clone();
-                    tab.dirty = false;
-                    tab.external_state = BufferExternalState::Current;
+                    if tab.dirty {
+                        tab.external_state = BufferExternalState::ChangedOnDisk;
+                    } else {
+                        tab.text = text.clone();
+                        tab.external_state = BufferExternalState::Current;
+                    }
                 }
                 if let Some(buffer) = snapshot
                     .active_buffer
                     .as_mut()
                     .filter(|buffer| buffer.path == *path)
                 {
-                    buffer.text = text.clone();
-                    buffer.dirty = false;
-                    buffer.external_state = BufferExternalState::Current;
+                    if buffer.dirty {
+                        buffer.external_state = BufferExternalState::ChangedOnDisk;
+                    } else {
+                        buffer.text = text.clone();
+                        buffer.external_state = BufferExternalState::Current;
+                    }
                 }
             }
         })
+    }
+}
+
+struct GuiSaveScheduler {
+    sender: mpsc::Sender<SequencedGuiSaveRequest>,
+    receiver: mpsc::Receiver<GuiSaveResult>,
+    latest_sequence: u64,
+}
+
+impl GuiSaveScheduler {
+    fn new() -> Self {
+        let (request_sender, request_receiver) = mpsc::channel();
+        let (result_sender, result_receiver) = mpsc::channel();
+        thread::spawn(move || gui_save_worker(request_receiver, result_sender));
+        Self {
+            sender: request_sender,
+            receiver: result_receiver,
+            latest_sequence: 0,
+        }
+    }
+
+    fn schedule(&mut self, payload: GuiSavePayload) -> Result<(), GuiSaveScheduleError> {
+        self.latest_sequence = self.latest_sequence.saturating_add(1);
+        self.sender
+            .send(SequencedGuiSaveRequest {
+                sequence: self.latest_sequence,
+                payload,
+            })
+            .map_err(|_| GuiSaveScheduleError)
+    }
+
+    fn drain_current_results(&self) -> Vec<GuiSaveResult> {
+        self.receiver
+            .try_iter()
+            .filter(|result| result.sequence() == self.latest_sequence)
+            .collect()
+    }
+}
+
+struct SequencedGuiSaveRequest {
+    sequence: u64,
+    payload: GuiSavePayload,
+}
+
+struct GuiSavePayload {
+    session: ProjectSession,
+    affected_paths: std::collections::BTreeSet<String>,
+    status_path: String,
+}
+
+struct GuiSaveScheduleError;
+
+impl GuiSaveResult {
+    fn sequence(&self) -> u64 {
+        match self {
+            GuiSaveResult::Saved { sequence, .. } | GuiSaveResult::Failed { sequence, .. } => {
+                *sequence
+            }
+        }
+    }
+}
+
+enum GuiSaveResult {
+    Saved {
+        sequence: u64,
+        session: Box<ProjectSession>,
+        affected_paths: std::collections::BTreeSet<String>,
+    },
+    Failed {
+        sequence: u64,
+        status_path: String,
+        message: String,
+    },
+}
+
+fn gui_save_worker(
+    receiver: mpsc::Receiver<SequencedGuiSaveRequest>,
+    sender: mpsc::Sender<GuiSaveResult>,
+) {
+    let debounce = Duration::from_millis(250);
+    while let Ok(mut pending) = receiver.recv() {
+        while let Ok(next) = receiver.recv_timeout(debounce) {
+            pending = next;
+        }
+        let result = match save_project(&pending.payload.session) {
+            Ok(_) => GuiSaveResult::Saved {
+                sequence: pending.sequence,
+                session: Box::new(pending.payload.session),
+                affected_paths: pending.payload.affected_paths,
+            },
+            Err(error) => GuiSaveResult::Failed {
+                sequence: pending.sequence,
+                status_path: pending.payload.status_path,
+                message: error.to_string(),
+            },
+        };
+        if sender.send(result).is_err() {
+            break;
+        }
     }
 }
 
