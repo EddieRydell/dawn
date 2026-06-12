@@ -9,17 +9,20 @@ default-run = "dawn-desktop"
 
 [dependencies]
 camino = "1.2.1"
+bytemuck = { version = "1.25.0", features = ["derive"] }
 dawn-project-io = { path = "../../crates/dawn-project-io" }
 dawn-language = { path = "../../crates/dawn-language" }
 dawn-runtime = { path = "../../crates/dawn-runtime" }
+glam = "0.33.1"
 indexmap = "2.14.0"
 kira = "0.12.1"
 rfd = "0.15.4"
 serde = { version = "1", features = ["derive"] }
 specta = { version = "2.0.0-rc.25", features = ["derive"] }
 specta-typescript = "0.0.12"
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "2", features = ["protocol-asset", "unstable"] }
 tauri-specta = { version = "2.0.0-rc.25", features = ["derive", "typescript"] }
+wgpu = "27.0.1"
 yaml_serde = "0.10.4"
 
 [build-dependencies]

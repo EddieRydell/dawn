@@ -12,7 +12,7 @@ pub use diagnostic::Diagnostic;
 use indexmap::IndexMap;
 use parser::parse_module;
 use typecheck::check_module;
-pub use vm::{RunContext, RuntimeError};
+pub use vm::{BoundEffectParams, EffectVmScratch, RunContext, RuntimeError};
 
 pub(crate) mod lexer;
 pub mod types;
@@ -54,6 +54,21 @@ impl CompiledEffect {
         params: &IndexMap<Identifier, Value>,
         context: &RunContext,
     ) -> Result<Color, RuntimeError> {
-        vm::run_effect(self, params, context)
+        let bound = self.bind_params(params);
+        let mut scratch = EffectVmScratch::default();
+        self.sample_bound(&bound, context, &mut scratch)
+    }
+
+    pub fn bind_params(&self, params: &IndexMap<Identifier, Value>) -> BoundEffectParams {
+        vm::bind_effect_params(self, params)
+    }
+
+    pub fn sample_bound(
+        &self,
+        params: &BoundEffectParams,
+        context: &RunContext,
+        scratch: &mut EffectVmScratch,
+    ) -> Result<Color, RuntimeError> {
+        vm::run_effect(self, params, context, scratch)
     }
 }

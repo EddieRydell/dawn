@@ -341,6 +341,21 @@ pub fn set_live_output_enabled(enabled: bool, state: State<'_, DesktopState>) ->
     })
 }
 
+#[tauri::command]
+#[specta::specta]
+pub fn open_preview_window(
+    app: AppHandle,
+    preview: State<'_, crate::preview::PreviewWindowService>,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
+    match preview.open_or_focus(app.clone()) {
+        Ok(()) => state.snapshot(),
+        Err(error) => state.update_snapshot(|snapshot| {
+            snapshot.status = format!("Preview failed: {error}");
+        }),
+    }
+}
+
 pub fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
     builder.commands(collect_commands![
         get_snapshot,
@@ -380,7 +395,8 @@ pub fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         audio_stop,
         audio_rewind_to_zero,
         audio_seek,
-        set_live_output_enabled
+        set_live_output_enabled,
+        open_preview_window
     ])
 }
 

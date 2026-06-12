@@ -42,6 +42,7 @@ export const commands = {
 	audioRewindToZero: () => __TAURI_INVOKE<AppSnapshot>("audio_rewind_to_zero"),
 	audioSeek: (positionSeconds: number) => __TAURI_INVOKE<AppSnapshot>("audio_seek", { positionSeconds }),
 	setLiveOutputEnabled: (enabled: boolean) => __TAURI_INVOKE<AppSnapshot>("set_live_output_enabled", { enabled }),
+	openPreviewWindow: () => __TAURI_INVOKE<AppSnapshot>("open_preview_window"),
 };
 
 /* Types */

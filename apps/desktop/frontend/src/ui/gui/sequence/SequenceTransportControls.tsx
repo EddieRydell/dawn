@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Music, Pause, Play, RadioTower, SkipBack, Square, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Monitor, Music, Pause, Play, RadioTower, SkipBack, Square, X } from "lucide-react";
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
@@ -87,6 +87,13 @@ export function SequenceTransportControls({
         onClick={() => void runSnapshotCommand(() => commands.setLiveOutputEnabled(!liveOutput.enabled))}
       >
         <RadioTower size={15} />
+      </button>
+      <button
+        type="button"
+        title="Open preview"
+        onClick={() => void runSnapshotCommand(commands.openPreviewWindow)}
+      >
+        <Monitor size={15} />
       </button>
       <button
         type="button"

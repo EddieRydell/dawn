@@ -1,5 +1,5 @@
-use super::ast::{BinaryOp, Block, Expr, ExprKind, Stmt, UnaryOp};
-use super::bytecode::BytecodeFunction;
+use super::ast::{BinaryOp, UnaryOp};
+use super::bytecode::{Builtin, BytecodeFunction, Instruction};
 use super::types::{Identifier, Type, Value};
 use super::{CompiledEffect, ParamDecl};
 use crate::values::{Color, Curve, CurveValue, Marks};
@@ -32,360 +32,384 @@ impl RuntimeError {
     }
 }
 
-pub(crate) fn run_effect(
+#[derive(Clone, Debug)]
+pub struct BoundEffectParams {
+    values: Vec<Value>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct EffectVmScratch {
+    stack: Vec<RuntimeValue>,
+    locals: Vec<Value>,
+    param_overrides: Vec<Option<Value>>,
+}
+
+pub(crate) fn bind_effect_params(
     effect: &CompiledEffect,
     params: &IndexMap<Identifier, Value>,
+) -> BoundEffectParams {
+    BoundEffectParams {
+        values: effect
+            .params
+            .iter()
+            .map(|param| resolve_param(param, params))
+            .collect(),
+    }
+}
+
+pub(crate) fn run_effect(
+    effect: &CompiledEffect,
+    params: &BoundEffectParams,
     context: &RunContext,
+    scratch: &mut EffectVmScratch,
 ) -> Result<Color, RuntimeError> {
-    let mut vm = Vm::new(effect, params, context)?;
-    match vm.run(&effect.sample)? {
-        Value::Color(color) => Ok(color),
+    let mut vm = Vm::new(&effect.sample, params, context, scratch);
+    match vm.run()? {
+        RuntimeValue::Color(color) => Ok(color),
         other => Err(RuntimeError::new(format!(
             "`sample` returned non-color value {other:?}"
         ))),
     }
 }
 
-struct Vm<'a> {
-    context: &'a RunContext,
-    scopes: Vec<IndexMap<Identifier, Value>>,
-    loop_iterations: usize,
+#[derive(Clone, Debug)]
+enum RuntimeValue {
+    Void,
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Color(Color),
+    Marks(Marks),
+    Curve(Curve),
+    Array(Vec<Value>),
+    Enum(Identifier),
+    Param(usize),
 }
 
-enum Flow {
-    Continue,
-    Return(Value),
+impl RuntimeValue {
+    fn from_value(value: &Value) -> Self {
+        match value {
+            Value::Void => Self::Void,
+            Value::Int(value) => Self::Int(*value),
+            Value::Float(value) => Self::Float(*value),
+            Value::Bool(value) => Self::Bool(*value),
+            Value::Color(value) => Self::Color(*value),
+            Value::Marks(value) => Self::Marks(value.clone()),
+            Value::Curve(value) => Self::Curve(value.clone()),
+            Value::Array(value) => Self::Array(value.clone()),
+            Value::Enum(value) => Self::Enum(value.clone()),
+        }
+    }
+}
+
+struct Vm<'a> {
+    function: &'a BytecodeFunction,
+    params: &'a BoundEffectParams,
+    context: &'a RunContext,
+    scratch: &'a mut EffectVmScratch,
+    ip: usize,
+    loop_iterations: usize,
 }
 
 impl<'a> Vm<'a> {
     fn new(
-        effect: &CompiledEffect,
-        params: &IndexMap<Identifier, Value>,
+        function: &'a BytecodeFunction,
+        params: &'a BoundEffectParams,
         context: &'a RunContext,
-    ) -> Result<Self, RuntimeError> {
-        let mut scope = IndexMap::new();
-        for param in &effect.params {
-            let value = resolve_param(param, params);
-            scope.insert(param.name.clone(), value);
-        }
-        Ok(Self {
+        scratch: &'a mut EffectVmScratch,
+    ) -> Self {
+        scratch.stack.clear();
+        scratch.stack.reserve(function.max_stack);
+        scratch.locals.clear();
+        scratch.locals.resize(function.local_count, Value::Void);
+        scratch.param_overrides.clear();
+        scratch.param_overrides.resize(params.values.len(), None);
+        Self {
+            function,
+            params,
             context,
-            scopes: vec![scope],
+            scratch,
+            ip: 0,
             loop_iterations: 0,
-        })
-    }
-
-    fn run(&mut self, function: &BytecodeFunction) -> Result<Value, RuntimeError> {
-        match self.exec_block(&function.body)? {
-            Flow::Return(value) => Ok(value),
-            Flow::Continue => Err(RuntimeError::new("function completed without return")),
         }
     }
 
-    fn exec_block(&mut self, block: &Block) -> Result<Flow, RuntimeError> {
-        self.scopes.push(IndexMap::new());
-        for statement in &block.statements {
-            match self.exec_statement(statement)? {
-                Flow::Continue => {}
-                Flow::Return(value) => {
-                    let _ = self.scopes.pop();
-                    return Ok(Flow::Return(value));
+    fn run(&mut self) -> Result<RuntimeValue, RuntimeError> {
+        loop {
+            let Some(instruction) = self.function.instructions.get(self.ip) else {
+                return Err(RuntimeError::new("function completed without return"));
+            };
+            self.ip += 1;
+            match instruction {
+                Instruction::LoadConst(index) => self.push_constant(*index)?,
+                Instruction::LoadDefault(ty) => {
+                    self.push(RuntimeValue::from_value(&default_value(ty)))
                 }
-            }
-        }
-        let _ = self.scopes.pop();
-        Ok(Flow::Continue)
-    }
-
-    fn exec_statement(&mut self, statement: &Stmt) -> Result<Flow, RuntimeError> {
-        match statement {
-            Stmt::Local {
-                ty,
-                name,
-                initializer,
-            } => {
-                let value = if let Some(initializer) = initializer {
-                    let evaluated = self.eval(initializer)?;
-                    self.coerce(evaluated, ty)?
-                } else {
-                    default_value(ty)
-                };
-                self.define(name.clone(), value);
-                Ok(Flow::Continue)
-            }
-            Stmt::Assign { name, value } => {
-                let value = self.eval(value)?;
-                self.assign(name, value)?;
-                Ok(Flow::Continue)
-            }
-            Stmt::Expr(expr) => {
-                let _ = self.eval(expr)?;
-                Ok(Flow::Continue)
-            }
-            Stmt::If {
-                condition,
-                then_block,
-                else_block,
-            } => {
-                if to_bool(&self.eval(condition)?)? {
-                    self.exec_block(then_block)
-                } else if let Some(else_block) = else_block {
-                    self.exec_block(else_block)
-                } else {
-                    Ok(Flow::Continue)
+                Instruction::LoadParam(index) => self.push_param(*index)?,
+                Instruction::StoreParam(index) => {
+                    let value = self.pop_to_value()?;
+                    let Some(slot) = self.scratch.param_overrides.get_mut(*index) else {
+                        return Err(RuntimeError::new("invalid param slot"));
+                    };
+                    *slot = Some(value);
                 }
-            }
-            Stmt::For {
-                initializer,
-                condition,
-                update,
-                body,
-            } => {
-                self.scopes.push(IndexMap::new());
-                let _ = self.exec_statement(initializer)?;
-                while to_bool(&self.eval(condition)?)? {
+                Instruction::LoadLocal(index) => {
+                    let value = self
+                        .scratch
+                        .locals
+                        .get(*index)
+                        .ok_or_else(|| RuntimeError::new("invalid local slot"))?;
+                    self.push(RuntimeValue::from_value(value));
+                }
+                Instruction::StoreLocal(index) => {
+                    let value = self.pop_to_value()?;
+                    let Some(slot) = self.scratch.locals.get_mut(*index) else {
+                        return Err(RuntimeError::new("invalid local slot"));
+                    };
+                    *slot = value;
+                }
+                Instruction::Pop => {
+                    let _ = self.pop()?;
+                }
+                Instruction::MakeArray(count) => self.make_array(*count)?,
+                Instruction::Index => self.index()?,
+                Instruction::CoerceFloat => self.coerce_float()?,
+                Instruction::Unary(op) => self.unary(*op)?,
+                Instruction::Binary(op) => self.binary(*op)?,
+                Instruction::Jump(target) => self.ip = *target,
+                Instruction::JumpIfFalse(target) => {
+                    let value = self.pop()?;
+                    if !to_bool_runtime(&value, self.params)? {
+                        self.ip = *target;
+                    }
+                }
+                Instruction::JumpIfFalseOrPop(target) => {
+                    if !to_bool_runtime(self.peek()?, self.params)? {
+                        self.ip = *target;
+                    } else {
+                        let _ = self.pop()?;
+                    }
+                }
+                Instruction::JumpIfTrueOrPop(target) => {
+                    if to_bool_runtime(self.peek()?, self.params)? {
+                        self.ip = *target;
+                    } else {
+                        let _ = self.pop()?;
+                    }
+                }
+                Instruction::CallBuiltin(builtin, arity) => self.call_builtin(*builtin, *arity)?,
+                Instruction::CheckLoopLimit => {
                     self.loop_iterations += 1;
                     if self.loop_iterations > LOOP_ITERATION_LIMIT {
-                        let _ = self.scopes.pop();
                         return Err(RuntimeError::new("loop iteration limit exceeded"));
                     }
-                    match self.exec_block(body)? {
-                        Flow::Continue => {}
-                        Flow::Return(value) => {
-                            let _ = self.scopes.pop();
-                            return Ok(Flow::Return(value));
-                        }
-                    }
-                    let _ = self.exec_statement(update)?;
                 }
-                let _ = self.scopes.pop();
-                Ok(Flow::Continue)
+                Instruction::Return => return self.pop(),
             }
-            Stmt::Return(expr) => Ok(Flow::Return(self.eval(expr)?)),
         }
     }
 
-    fn eval(&mut self, expr: &Expr) -> Result<Value, RuntimeError> {
-        match &expr.kind {
-            ExprKind::Literal(value) => Ok(value.clone()),
-            ExprKind::Variable(name) => self
-                .lookup(name)
-                .or_else(|| constant_value(name))
-                .ok_or_else(|| RuntimeError::new(format!("unknown variable `{}`", name.as_str()))),
-            ExprKind::Array(items) => {
-                let mut values = Vec::with_capacity(items.len());
-                for item in items {
-                    values.push(self.eval(item)?);
-                }
-                Ok(Value::Array(values))
+    fn push_constant(&mut self, index: usize) -> Result<(), RuntimeError> {
+        let value = self
+            .function
+            .constants
+            .get(index)
+            .ok_or_else(|| RuntimeError::new("invalid constant slot"))?;
+        self.push(RuntimeValue::from_value(value));
+        Ok(())
+    }
+
+    fn push_param(&mut self, index: usize) -> Result<(), RuntimeError> {
+        if let Some(Some(value)) = self.scratch.param_overrides.get(index) {
+            self.push(RuntimeValue::from_value(value));
+            return Ok(());
+        }
+        let value = self
+            .params
+            .values
+            .get(index)
+            .ok_or_else(|| RuntimeError::new("invalid param slot"))?;
+        self.push(match value {
+            Value::Void => RuntimeValue::Void,
+            Value::Int(value) => RuntimeValue::Int(*value),
+            Value::Float(value) => RuntimeValue::Float(*value),
+            Value::Bool(value) => RuntimeValue::Bool(*value),
+            Value::Color(value) => RuntimeValue::Color(*value),
+            Value::Marks(_) | Value::Curve(_) | Value::Array(_) | Value::Enum(_) => {
+                RuntimeValue::Param(index)
             }
-            ExprKind::Index { target, index } => {
-                let target = self.eval(target)?;
-                match target {
+        });
+        Ok(())
+    }
+
+    fn make_array(&mut self, count: usize) -> Result<(), RuntimeError> {
+        if self.scratch.stack.len() < count {
+            return Err(RuntimeError::new("stack underflow"));
+        }
+        let start = self.scratch.stack.len() - count;
+        let values = self
+            .scratch
+            .stack
+            .drain(start..)
+            .map(|value| runtime_to_value(value, self.params))
+            .collect();
+        self.push(RuntimeValue::Array(values));
+        Ok(())
+    }
+
+    fn index(&mut self) -> Result<(), RuntimeError> {
+        let index = self.pop()?;
+        let target = self.pop()?;
+        match target {
+            RuntimeValue::Array(items) => {
+                let index = to_int_runtime(&index, self.params)?;
+                let index = usize::try_from(index)
+                    .map_err(|_| RuntimeError::new("array index cannot be negative"))?;
+                let value = items
+                    .get(index)
+                    .cloned()
+                    .ok_or_else(|| RuntimeError::new("array index out of bounds"))?;
+                self.push(RuntimeValue::from_value(&value));
+                Ok(())
+            }
+            RuntimeValue::Param(param_index) => {
+                let value = self.param_value(param_index)?;
+                match value {
                     Value::Array(items) => {
-                        let index = to_int(&self.eval(index)?)?;
+                        let index = to_int_runtime(&index, self.params)?;
                         let index = usize::try_from(index)
                             .map_err(|_| RuntimeError::new("array index cannot be negative"))?;
-                        items
+                        let value = items
                             .get(index)
                             .cloned()
-                            .ok_or_else(|| RuntimeError::new("array index out of bounds"))
+                            .ok_or_else(|| RuntimeError::new("array index out of bounds"))?;
+                        self.push(RuntimeValue::from_value(&value));
+                        Ok(())
                     }
                     Value::Curve(curve) => {
-                        let position = to_float(&self.eval(index)?)?;
-                        Ok(sample_curve(&curve, position))
+                        let position = to_float_runtime(&index, self.params)?;
+                        self.push(RuntimeValue::from_value(&sample_curve(curve, position)));
+                        Ok(())
                     }
                     _ => Err(RuntimeError::new("index target is not an array or curve")),
                 }
             }
-            ExprKind::Call { callee, args } => self.eval_call(callee, args),
-            ExprKind::Unary { op, expr } => {
-                let value = self.eval(expr)?;
-                match op {
-                    UnaryOp::Negate => match value {
-                        Value::Int(value) => Ok(Value::Int(-value)),
-                        Value::Float(value) => Ok(Value::Float(-value)),
-                        _ => Err(RuntimeError::new("unary `-` requires a number")),
-                    },
-                    UnaryOp::Not => Ok(Value::Bool(!to_bool(&value)?)),
-                }
+            RuntimeValue::Curve(curve) => {
+                let position = to_float_runtime(&index, self.params)?;
+                self.push(RuntimeValue::from_value(&sample_curve(&curve, position)));
+                Ok(())
             }
-            ExprKind::Binary { op, left, right } => {
-                if *op == BinaryOp::And {
-                    return Ok(Value::Bool(
-                        to_bool(&self.eval(left)?)? && to_bool(&self.eval(right)?)?,
-                    ));
-                }
-                if *op == BinaryOp::Or {
-                    return Ok(Value::Bool(
-                        to_bool(&self.eval(left)?)? || to_bool(&self.eval(right)?)?,
-                    ));
-                }
-                let left = self.eval(left)?;
-                let right = self.eval(right)?;
-                self.eval_binary(*op, left, right)
-            }
+            _ => Err(RuntimeError::new("index target is not an array or curve")),
         }
     }
 
-    fn eval_binary(&self, op: BinaryOp, left: Value, right: Value) -> Result<Value, RuntimeError> {
-        match op {
-            BinaryOp::Add => numeric_binary(left, right, |left, right| left + right),
-            BinaryOp::Subtract => numeric_binary(left, right, |left, right| left - right),
-            BinaryOp::Multiply => numeric_binary(left, right, |left, right| left * right),
-            BinaryOp::Divide => numeric_binary(left, right, |left, right| left / right),
-            BinaryOp::Remainder => numeric_binary(left, right, |left, right| left % right),
-            BinaryOp::Less => compare_binary(left, right, |left, right| left < right),
-            BinaryOp::LessEqual => compare_binary(left, right, |left, right| left <= right),
-            BinaryOp::Greater => compare_binary(left, right, |left, right| left > right),
-            BinaryOp::GreaterEqual => compare_binary(left, right, |left, right| left >= right),
-            BinaryOp::Equal => Ok(Value::Bool(values_equal(&left, &right))),
-            BinaryOp::NotEqual => Ok(Value::Bool(!values_equal(&left, &right))),
-            BinaryOp::And | BinaryOp::Or => Err(RuntimeError::new("invalid boolean operator path")),
-        }
+    fn coerce_float(&mut self) -> Result<(), RuntimeError> {
+        let value = self.pop()?;
+        self.push(match value {
+            RuntimeValue::Int(value) => RuntimeValue::Float(value as f64),
+            value => value,
+        });
+        Ok(())
     }
 
-    fn eval_call(&mut self, callee: &Expr, args: &[Expr]) -> Result<Value, RuntimeError> {
-        let ExprKind::Variable(name) = &callee.kind else {
-            return Err(RuntimeError::new("call target must be a builtin name"));
-        };
-
-        if self.lookup(name).is_none() && !is_builtin(name.as_str()) {
-            return Err(RuntimeError::new(format!(
-                "unknown function `{}`",
-                name.as_str()
-            )));
-        }
-
-        let mut values = Vec::with_capacity(args.len());
-        for arg in args {
-            values.push(self.eval(arg)?);
-        }
-        self.call_builtin(name.as_str(), &values)
-    }
-
-    fn call_builtin(&self, name: &str, args: &[Value]) -> Result<Value, RuntimeError> {
-        match name {
-            "progress" => Ok(Value::Float(self.context.progress)),
-            "seconds" => Ok(Value::Float(self.context.seconds)),
-            "duration" => Ok(Value::Float(self.context.duration)),
-            "pixel_index" => Ok(Value::Int(self.context.pixel_index)),
-            "pixel_count" => Ok(Value::Int(self.context.pixel_count)),
-            "pixel_fraction" => Ok(Value::Float(self.context.pixel_fraction)),
-            "section_position" => {
-                let width = to_float(value_at(args, 0)?)?.max(1.0);
-                let index = self.context.pixel_index as f64;
-                Ok(Value::Float(
-                    (index - (index / width).floor() * width) / width,
-                ))
-            }
-            "sin" => Ok(Value::Float(to_float(value_at(args, 0)?)?.sin())),
-            "cos" => Ok(Value::Float(to_float(value_at(args, 0)?)?.cos())),
-            "abs" => Ok(Value::Float(to_float(value_at(args, 0)?)?.abs())),
-            "floor" => Ok(Value::Float(to_float(value_at(args, 0)?)?.floor())),
-            "min" => Ok(Value::Float(
-                to_float(value_at(args, 0)?)?.min(to_float(value_at(args, 1)?)?),
-            )),
-            "max" => Ok(Value::Float(
-                to_float(value_at(args, 0)?)?.max(to_float(value_at(args, 1)?)?),
-            )),
-            "clamp" => Ok(Value::Float(
-                to_float(value_at(args, 0)?)?
-                    .clamp(to_float(value_at(args, 1)?)?, to_float(value_at(args, 2)?)?),
-            )),
-            "smoothstep" => {
-                let edge0 = to_float(value_at(args, 0)?)?;
-                let edge1 = to_float(value_at(args, 1)?)?;
-                let x = to_float(value_at(args, 2)?)?;
-                let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-                Ok(Value::Float(t * t * (3.0 - 2.0 * t)))
-            }
-            "mix" => mix_values(
-                value_at(args, 0)?,
-                value_at(args, 1)?,
-                to_float(value_at(args, 2)?)?,
-            ),
-            "rgb" => Ok(Value::Color(Color {
-                red: channel(to_float(value_at(args, 0)?)?),
-                green: channel(to_float(value_at(args, 1)?)?),
-                blue: channel(to_float(value_at(args, 2)?)?),
-            })),
-            "hsv" => Ok(Value::Color(hsv(
-                to_float(value_at(args, 0)?)?,
-                to_float(value_at(args, 1)?)?,
-                to_float(value_at(args, 2)?)?,
-            ))),
-            "srand" | "rand" => Ok(Value::Float(random(args)?)),
-            "curve_crossing" => Ok(Value::Float(to_float(value_at(args, 1)?)?)),
-            "curve_float_clamped" => {
-                let curve = to_curve(value_at(args, 0)?)?;
-                let position = to_float(value_at(args, 1)?)?;
-                let min = to_float(value_at(args, 2)?)?;
-                let max = to_float(value_at(args, 3)?)?;
-                Ok(Value::Float(
-                    to_float(&sample_curve(curve, position))?.clamp(min, max),
-                ))
-            }
-            "curve_color_scaled" => {
-                let curve = to_curve(value_at(args, 0)?)?;
-                let position = to_float(value_at(args, 1)?)?;
-                let scale = to_float(value_at(args, 2)?)?.clamp(0.0, 1.0);
-                let Value::Color(color) = sample_curve(curve, position) else {
-                    return Err(RuntimeError::new("curve_color_scaled requires color curve"));
-                };
-                Ok(Value::Color(scale_color(color, scale)))
-            }
-            "len" => match value_at(args, 0)? {
-                Value::Array(items) => i64::try_from(items.len())
-                    .map(Value::Int)
-                    .map_err(|_| RuntimeError::new("array length exceeds int range")),
-                Value::Marks(marks) => i64::try_from(marks.marks.len())
-                    .map(Value::Int)
-                    .map_err(|_| RuntimeError::new("mark count exceeds int range")),
-                _ => Err(RuntimeError::new("len requires array or marks")),
+    fn unary(&mut self, op: UnaryOp) -> Result<(), RuntimeError> {
+        let value = self.pop()?;
+        let result = match op {
+            UnaryOp::Negate => match value {
+                RuntimeValue::Int(value) => RuntimeValue::Int(-value),
+                RuntimeValue::Float(value) => RuntimeValue::Float(-value),
+                _ => return Err(RuntimeError::new("unary `-` requires a number")),
             },
-            "mark_count" => Ok(Value::Int(mark_count(args, self.context)?)),
-            "mark_at" => Ok(Value::Float(mark_at(args, self.context)?)),
-            "mark_prev" => Ok(Value::Float(mark_prev(args, self.context)?)),
-            "mark_prev_index" => Ok(Value::Int(mark_prev_index(args, self.context)?)),
-            "mark_next_index" => Ok(Value::Int(mark_next_index(args, self.context)?)),
-            "mark_elapsed" => Ok(Value::Float(mark_elapsed(args, self.context)?)),
-            "mark_phase" => Ok(Value::Float(mark_phase(args, self.context)?)),
-            _ => Err(RuntimeError::new(format!("unknown builtin `{name}`"))),
-        }
+            UnaryOp::Not => RuntimeValue::Bool(!to_bool_runtime(&value, self.params)?),
+        };
+        self.push(result);
+        Ok(())
     }
 
-    fn coerce(&self, value: Value, ty: &Type) -> Result<Value, RuntimeError> {
-        match (value, ty) {
-            (Value::Int(value), Type::Float) => Ok(Value::Float(value as f64)),
-            (value, _) => Ok(value),
-        }
-    }
-
-    fn lookup(&self, name: &Identifier) -> Option<Value> {
-        self.scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(name).cloned())
-    }
-
-    fn define(&mut self, name: Identifier, value: Value) {
-        if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name, value);
-        }
-    }
-
-    fn assign(&mut self, name: &Identifier, value: Value) -> Result<(), RuntimeError> {
-        for scope in self.scopes.iter_mut().rev() {
-            if scope.contains_key(name) {
-                scope.insert(name.clone(), value);
-                return Ok(());
+    fn binary(&mut self, op: BinaryOp) -> Result<(), RuntimeError> {
+        let right = self.pop()?;
+        let left = self.pop()?;
+        let result = match op {
+            BinaryOp::Add => {
+                numeric_binary(&left, &right, self.params, |left, right| left + right)?
             }
+            BinaryOp::Subtract => {
+                numeric_binary(&left, &right, self.params, |left, right| left - right)?
+            }
+            BinaryOp::Multiply => {
+                numeric_binary(&left, &right, self.params, |left, right| left * right)?
+            }
+            BinaryOp::Divide => {
+                numeric_binary(&left, &right, self.params, |left, right| left / right)?
+            }
+            BinaryOp::Remainder => {
+                numeric_binary(&left, &right, self.params, |left, right| left % right)?
+            }
+            BinaryOp::Less => {
+                compare_binary(&left, &right, self.params, |left, right| left < right)?
+            }
+            BinaryOp::LessEqual => {
+                compare_binary(&left, &right, self.params, |left, right| left <= right)?
+            }
+            BinaryOp::Greater => {
+                compare_binary(&left, &right, self.params, |left, right| left > right)?
+            }
+            BinaryOp::GreaterEqual => {
+                compare_binary(&left, &right, self.params, |left, right| left >= right)?
+            }
+            BinaryOp::Equal => RuntimeValue::Bool(values_equal(&left, &right, self.params)),
+            BinaryOp::NotEqual => RuntimeValue::Bool(!values_equal(&left, &right, self.params)),
+            BinaryOp::And | BinaryOp::Or => {
+                return Err(RuntimeError::new("invalid boolean operator path"));
+            }
+        };
+        self.push(result);
+        Ok(())
+    }
+
+    fn call_builtin(&mut self, builtin: Builtin, arity: usize) -> Result<(), RuntimeError> {
+        if self.scratch.stack.len() < arity {
+            return Err(RuntimeError::new("stack underflow"));
         }
-        Err(RuntimeError::new(format!(
-            "unknown assignment target `{}`",
-            name.as_str()
-        )))
+        let args_start = self.scratch.stack.len() - arity;
+        let value = call_builtin(
+            builtin,
+            &self.scratch.stack[args_start..],
+            self.context,
+            self.params,
+        )?;
+        self.scratch.stack.truncate(args_start);
+        self.push(value);
+        Ok(())
+    }
+
+    fn push(&mut self, value: RuntimeValue) {
+        self.scratch.stack.push(value);
+    }
+
+    fn pop(&mut self) -> Result<RuntimeValue, RuntimeError> {
+        self.scratch
+            .stack
+            .pop()
+            .ok_or_else(|| RuntimeError::new("stack underflow"))
+    }
+
+    fn pop_to_value(&mut self) -> Result<Value, RuntimeError> {
+        self.pop().map(|value| runtime_to_value(value, self.params))
+    }
+
+    fn param_value(&self, index: usize) -> Result<&Value, RuntimeError> {
+        self.params
+            .values
+            .get(index)
+            .ok_or_else(|| RuntimeError::new("invalid param slot"))
+    }
+
+    fn peek(&self) -> Result<&RuntimeValue, RuntimeError> {
+        self.scratch
+            .stack
+            .last()
+            .ok_or_else(|| RuntimeError::new("stack underflow"))
     }
 }
 
@@ -421,116 +445,254 @@ fn default_value(ty: &Type) -> Value {
     }
 }
 
-fn value_at(args: &[Value], index: usize) -> Result<&Value, RuntimeError> {
+fn value_at(args: &[RuntimeValue], index: usize) -> Result<&RuntimeValue, RuntimeError> {
     args.get(index)
         .ok_or_else(|| RuntimeError::new("missing argument"))
 }
 
-fn constant_value(name: &Identifier) -> Option<Value> {
-    match name.as_str() {
-        "PI" => Some(Value::Float(std::f64::consts::PI)),
-        "TAU" => Some(Value::Float(std::f64::consts::TAU)),
-        _ => None,
+fn runtime_to_value(value: RuntimeValue, params: &BoundEffectParams) -> Value {
+    match value {
+        RuntimeValue::Void => Value::Void,
+        RuntimeValue::Int(value) => Value::Int(value),
+        RuntimeValue::Float(value) => Value::Float(value),
+        RuntimeValue::Bool(value) => Value::Bool(value),
+        RuntimeValue::Color(value) => Value::Color(value),
+        RuntimeValue::Marks(value) => Value::Marks(value),
+        RuntimeValue::Curve(value) => Value::Curve(value),
+        RuntimeValue::Array(value) => Value::Array(value),
+        RuntimeValue::Enum(value) => Value::Enum(value),
+        RuntimeValue::Param(index) => params.values.get(index).cloned().unwrap_or(Value::Void),
     }
 }
 
-fn is_builtin(name: &str) -> bool {
-    matches!(
-        name,
-        "progress"
-            | "seconds"
-            | "duration"
-            | "pixel_index"
-            | "pixel_count"
-            | "pixel_fraction"
-            | "section_position"
-            | "sin"
-            | "cos"
-            | "abs"
-            | "floor"
-            | "min"
-            | "max"
-            | "clamp"
-            | "smoothstep"
-            | "mix"
-            | "rgb"
-            | "hsv"
-            | "srand"
-            | "rand"
-            | "curve_crossing"
-            | "curve_float_clamped"
-            | "curve_color_scaled"
-            | "len"
-            | "mark_count"
-            | "mark_at"
-            | "mark_prev"
-            | "mark_prev_index"
-            | "mark_next_index"
-            | "mark_elapsed"
-            | "mark_phase"
-    )
+fn call_builtin(
+    builtin: Builtin,
+    args: &[RuntimeValue],
+    context: &RunContext,
+    params: &BoundEffectParams,
+) -> Result<RuntimeValue, RuntimeError> {
+    match builtin {
+        Builtin::Progress => Ok(RuntimeValue::Float(context.progress)),
+        Builtin::Seconds => Ok(RuntimeValue::Float(context.seconds)),
+        Builtin::Duration => Ok(RuntimeValue::Float(context.duration)),
+        Builtin::PixelIndex => Ok(RuntimeValue::Int(context.pixel_index)),
+        Builtin::PixelCount => Ok(RuntimeValue::Int(context.pixel_count)),
+        Builtin::PixelFraction => Ok(RuntimeValue::Float(context.pixel_fraction)),
+        Builtin::SectionPosition => {
+            let width = to_float_runtime(value_at(args, 0)?, params)?.max(1.0);
+            let index = context.pixel_index as f64;
+            Ok(RuntimeValue::Float(
+                (index - (index / width).floor() * width) / width,
+            ))
+        }
+        Builtin::Sin => Ok(RuntimeValue::Float(
+            to_float_runtime(value_at(args, 0)?, params)?.sin(),
+        )),
+        Builtin::Cos => Ok(RuntimeValue::Float(
+            to_float_runtime(value_at(args, 0)?, params)?.cos(),
+        )),
+        Builtin::Abs => Ok(RuntimeValue::Float(
+            to_float_runtime(value_at(args, 0)?, params)?.abs(),
+        )),
+        Builtin::Floor => Ok(RuntimeValue::Float(
+            to_float_runtime(value_at(args, 0)?, params)?.floor(),
+        )),
+        Builtin::Min => Ok(RuntimeValue::Float(
+            to_float_runtime(value_at(args, 0)?, params)?
+                .min(to_float_runtime(value_at(args, 1)?, params)?),
+        )),
+        Builtin::Max => Ok(RuntimeValue::Float(
+            to_float_runtime(value_at(args, 0)?, params)?
+                .max(to_float_runtime(value_at(args, 1)?, params)?),
+        )),
+        Builtin::Clamp => Ok(RuntimeValue::Float(
+            to_float_runtime(value_at(args, 0)?, params)?.clamp(
+                to_float_runtime(value_at(args, 1)?, params)?,
+                to_float_runtime(value_at(args, 2)?, params)?,
+            ),
+        )),
+        Builtin::Smoothstep => {
+            let edge0 = to_float_runtime(value_at(args, 0)?, params)?;
+            let edge1 = to_float_runtime(value_at(args, 1)?, params)?;
+            let x = to_float_runtime(value_at(args, 2)?, params)?;
+            let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+            Ok(RuntimeValue::Float(t * t * (3.0 - 2.0 * t)))
+        }
+        Builtin::Mix => mix_values(
+            value_at(args, 0)?,
+            value_at(args, 1)?,
+            to_float_runtime(value_at(args, 2)?, params)?,
+            params,
+        ),
+        Builtin::Rgb => Ok(RuntimeValue::Color(Color {
+            red: channel(to_float_runtime(value_at(args, 0)?, params)?),
+            green: channel(to_float_runtime(value_at(args, 1)?, params)?),
+            blue: channel(to_float_runtime(value_at(args, 2)?, params)?),
+        })),
+        Builtin::Hsv => Ok(RuntimeValue::Color(hsv(
+            to_float_runtime(value_at(args, 0)?, params)?,
+            to_float_runtime(value_at(args, 1)?, params)?,
+            to_float_runtime(value_at(args, 2)?, params)?,
+        ))),
+        Builtin::Srand | Builtin::Rand => Ok(RuntimeValue::Float(random(args, params)?)),
+        Builtin::CurveCrossing => Ok(RuntimeValue::Float(to_float_runtime(
+            value_at(args, 1)?,
+            params,
+        )?)),
+        Builtin::CurveFloatClamped => {
+            let curve = to_curve_runtime(value_at(args, 0)?, params)?;
+            let position = to_float_runtime(value_at(args, 1)?, params)?;
+            let min = to_float_runtime(value_at(args, 2)?, params)?;
+            let max = to_float_runtime(value_at(args, 3)?, params)?;
+            Ok(RuntimeValue::Float(
+                to_float_runtime(
+                    &RuntimeValue::from_value(&sample_curve(curve, position)),
+                    params,
+                )?
+                .clamp(min, max),
+            ))
+        }
+        Builtin::CurveColorScaled => {
+            let curve = to_curve_runtime(value_at(args, 0)?, params)?;
+            let position = to_float_runtime(value_at(args, 1)?, params)?;
+            let scale = to_float_runtime(value_at(args, 2)?, params)?.clamp(0.0, 1.0);
+            let Value::Color(color) = sample_curve(curve, position) else {
+                return Err(RuntimeError::new("curve_color_scaled requires color curve"));
+            };
+            Ok(RuntimeValue::Color(scale_color(color, scale)))
+        }
+        Builtin::Len => match value_at(args, 0)? {
+            RuntimeValue::Array(items) => i64::try_from(items.len())
+                .map(RuntimeValue::Int)
+                .map_err(|_| RuntimeError::new("array length exceeds int range")),
+            RuntimeValue::Marks(marks) => i64::try_from(marks.marks.len())
+                .map(RuntimeValue::Int)
+                .map_err(|_| RuntimeError::new("mark count exceeds int range")),
+            RuntimeValue::Param(index) => match params.values.get(*index) {
+                Some(Value::Array(items)) => i64::try_from(items.len())
+                    .map(RuntimeValue::Int)
+                    .map_err(|_| RuntimeError::new("array length exceeds int range")),
+                Some(Value::Marks(marks)) => i64::try_from(marks.marks.len())
+                    .map(RuntimeValue::Int)
+                    .map_err(|_| RuntimeError::new("mark count exceeds int range")),
+                _ => Err(RuntimeError::new("len requires array or marks")),
+            },
+            _ => Err(RuntimeError::new("len requires array or marks")),
+        },
+        Builtin::MarkCount => Ok(RuntimeValue::Int(mark_count(args, context, params)?)),
+        Builtin::MarkAt => Ok(RuntimeValue::Float(mark_at(args, context, params)?)),
+        Builtin::MarkPrev => Ok(RuntimeValue::Float(mark_prev(args, context, params)?)),
+        Builtin::MarkPrevIndex => Ok(RuntimeValue::Int(mark_prev_index(args, context, params)?)),
+        Builtin::MarkNextIndex => Ok(RuntimeValue::Int(mark_next_index(args, context, params)?)),
+        Builtin::MarkElapsed => Ok(RuntimeValue::Float(mark_elapsed(args, context, params)?)),
+        Builtin::MarkPhase => Ok(RuntimeValue::Float(mark_phase(args, context, params)?)),
+    }
 }
 
-fn to_bool(value: &Value) -> Result<bool, RuntimeError> {
+fn to_bool_runtime(value: &RuntimeValue, params: &BoundEffectParams) -> Result<bool, RuntimeError> {
     match value {
-        Value::Bool(value) => Ok(*value),
+        RuntimeValue::Bool(value) => Ok(*value),
+        RuntimeValue::Param(index) => match params.values.get(*index) {
+            Some(Value::Bool(value)) => Ok(*value),
+            _ => Err(RuntimeError::new("expected bool")),
+        },
         _ => Err(RuntimeError::new("expected bool")),
     }
 }
 
-fn to_int(value: &Value) -> Result<i64, RuntimeError> {
+fn to_int_runtime(value: &RuntimeValue, params: &BoundEffectParams) -> Result<i64, RuntimeError> {
     match value {
-        Value::Int(value) => Ok(*value),
-        Value::Float(value) => Ok(*value as i64),
+        RuntimeValue::Int(value) => Ok(*value),
+        RuntimeValue::Float(value) => Ok(*value as i64),
+        RuntimeValue::Param(index) => match params.values.get(*index) {
+            Some(Value::Int(value)) => Ok(*value),
+            Some(Value::Float(value)) => Ok(*value as i64),
+            _ => Err(RuntimeError::new("expected int")),
+        },
         _ => Err(RuntimeError::new("expected int")),
     }
 }
 
-fn to_float(value: &Value) -> Result<f64, RuntimeError> {
+fn to_float_runtime(value: &RuntimeValue, params: &BoundEffectParams) -> Result<f64, RuntimeError> {
     match value {
-        Value::Int(value) => Ok(*value as f64),
-        Value::Float(value) => Ok(*value),
+        RuntimeValue::Int(value) => Ok(*value as f64),
+        RuntimeValue::Float(value) => Ok(*value),
+        RuntimeValue::Param(index) => match params.values.get(*index) {
+            Some(Value::Int(value)) => Ok(*value as f64),
+            Some(Value::Float(value)) => Ok(*value),
+            _ => Err(RuntimeError::new("expected float")),
+        },
         _ => Err(RuntimeError::new("expected float")),
     }
 }
 
-fn to_curve(value: &Value) -> Result<&Curve, RuntimeError> {
+fn to_curve_runtime<'a>(
+    value: &'a RuntimeValue,
+    params: &'a BoundEffectParams,
+) -> Result<&'a Curve, RuntimeError> {
     match value {
-        Value::Curve(curve) => Ok(curve),
+        RuntimeValue::Curve(curve) => Ok(curve),
+        RuntimeValue::Param(index) => match params.values.get(*index) {
+            Some(Value::Curve(curve)) => Ok(curve),
+            _ => Err(RuntimeError::new("expected curve")),
+        },
         _ => Err(RuntimeError::new("expected curve")),
     }
 }
 
 fn numeric_binary(
-    left: Value,
-    right: Value,
+    left: &RuntimeValue,
+    right: &RuntimeValue,
+    params: &BoundEffectParams,
     op: impl FnOnce(f64, f64) -> f64,
-) -> Result<Value, RuntimeError> {
-    let result = op(to_float(&left)?, to_float(&right)?);
-    if matches!((&left, &right), (Value::Int(_), Value::Int(_))) && result.fract() == 0.0 {
-        return Ok(Value::Int(result as i64));
+) -> Result<RuntimeValue, RuntimeError> {
+    let result = op(
+        to_float_runtime(left, params)?,
+        to_float_runtime(right, params)?,
+    );
+    if value_is_int(left, params) && value_is_int(right, params) && result.fract() == 0.0 {
+        return Ok(RuntimeValue::Int(result as i64));
     }
-    Ok(Value::Float(result))
+    Ok(RuntimeValue::Float(result))
 }
 
 fn compare_binary(
-    left: Value,
-    right: Value,
+    left: &RuntimeValue,
+    right: &RuntimeValue,
+    params: &BoundEffectParams,
     op: impl FnOnce(f64, f64) -> bool,
-) -> Result<Value, RuntimeError> {
-    Ok(Value::Bool(op(to_float(&left)?, to_float(&right)?)))
+) -> Result<RuntimeValue, RuntimeError> {
+    Ok(RuntimeValue::Bool(op(
+        to_float_runtime(left, params)?,
+        to_float_runtime(right, params)?,
+    )))
 }
 
-fn values_equal(left: &Value, right: &Value) -> bool {
+fn value_is_int(value: &RuntimeValue, params: &BoundEffectParams) -> bool {
+    match value {
+        RuntimeValue::Int(_) => true,
+        RuntimeValue::Param(index) => matches!(params.values.get(*index), Some(Value::Int(_))),
+        _ => false,
+    }
+}
+
+fn values_equal(left: &RuntimeValue, right: &RuntimeValue, params: &BoundEffectParams) -> bool {
     match (left, right) {
-        (Value::Void, Value::Void) => true,
-        (Value::Int(left), Value::Int(right)) => left == right,
-        (Value::Float(left), Value::Float(right)) => left == right,
-        (Value::Int(left), Value::Float(right)) => (*left as f64) == *right,
-        (Value::Float(left), Value::Int(right)) => *left == (*right as f64),
-        (Value::Bool(left), Value::Bool(right)) => left == right,
-        (Value::Color(left), Value::Color(right)) => left == right,
-        (Value::Enum(left), Value::Enum(right)) => left == right,
+        (RuntimeValue::Void, RuntimeValue::Void) => true,
+        (RuntimeValue::Int(left), RuntimeValue::Int(right)) => left == right,
+        (RuntimeValue::Float(left), RuntimeValue::Float(right)) => left == right,
+        (RuntimeValue::Int(left), RuntimeValue::Float(right)) => (*left as f64) == *right,
+        (RuntimeValue::Float(left), RuntimeValue::Int(right)) => *left == (*right as f64),
+        (RuntimeValue::Bool(left), RuntimeValue::Bool(right)) => left == right,
+        (RuntimeValue::Color(left), RuntimeValue::Color(right)) => left == right,
+        (RuntimeValue::Enum(left), RuntimeValue::Enum(right)) => left == right,
+        (RuntimeValue::Param(left), RuntimeValue::Param(right)) => {
+            params.values.get(*left) == params.values.get(*right)
+        }
+        (RuntimeValue::Param(index), value) | (value, RuntimeValue::Param(index)) => params
+            .values
+            .get(*index)
+            .is_some_and(|param| values_equal(&RuntimeValue::from_value(param), value, params)),
         _ => false,
     }
 }
@@ -570,13 +732,28 @@ fn curve_value_to_value(value: &CurveValue) -> Value {
     }
 }
 
-fn mix_values(left: &Value, right: &Value, t: f64) -> Result<Value, RuntimeError> {
+fn mix_values(
+    left: &RuntimeValue,
+    right: &RuntimeValue,
+    t: f64,
+    params: &BoundEffectParams,
+) -> Result<RuntimeValue, RuntimeError> {
     match (left, right) {
-        (Value::Float(left), Value::Float(right)) => Ok(Value::Float(left + (right - left) * t)),
-        (Value::Int(left), Value::Int(right)) => {
-            Ok(Value::Float(*left as f64 + (*right - *left) as f64 * t))
+        (RuntimeValue::Float(left), RuntimeValue::Float(right)) => {
+            Ok(RuntimeValue::Float(left + (right - left) * t))
         }
-        (Value::Color(left), Value::Color(right)) => mix_colors(*left, *right, t).map(Value::Color),
+        (RuntimeValue::Int(left), RuntimeValue::Int(right)) => Ok(RuntimeValue::Float(
+            *left as f64 + (*right - *left) as f64 * t,
+        )),
+        (RuntimeValue::Color(left), RuntimeValue::Color(right)) => {
+            mix_colors(*left, *right, t).map(RuntimeValue::Color)
+        }
+        (RuntimeValue::Param(_), _) | (_, RuntimeValue::Param(_)) => mix_values(
+            &RuntimeValue::from_value(&runtime_to_value(left.clone(), params)),
+            &RuntimeValue::from_value(&runtime_to_value(right.clone(), params)),
+            t,
+            params,
+        ),
         _ => Err(RuntimeError::new(
             "mix requires matching float or color values",
         )),
@@ -636,52 +813,75 @@ fn hsv(h: f64, s: f64, v: f64) -> Color {
     }
 }
 
-fn random(args: &[Value]) -> Result<f64, RuntimeError> {
+fn random(args: &[RuntimeValue], params: &BoundEffectParams) -> Result<f64, RuntimeError> {
     let mut seed = 0.0;
     for arg in args {
-        seed = seed * 31.0 + to_float(arg)?;
+        seed = seed * 31.0 + to_float_runtime(arg, params)?;
     }
     Ok((seed.sin() * 43_758.545_312_3).fract().abs())
 }
 
-fn mark_source(args: &[Value]) -> Result<&Marks, RuntimeError> {
+fn mark_source<'a>(
+    args: &'a [RuntimeValue],
+    params: &'a BoundEffectParams,
+) -> Result<&'a Marks, RuntimeError> {
     let Some(value) = args.first() else {
         return Err(RuntimeError::new(
             "mark builtin requires marks as the first argument",
         ));
     };
     match value {
-        Value::Marks(marks) => Ok(marks),
+        RuntimeValue::Marks(marks) => Ok(marks),
+        RuntimeValue::Param(index) => match params.values.get(*index) {
+            Some(Value::Marks(marks)) => Ok(marks),
+            _ => Err(RuntimeError::new("mark builtin first arg must be marks")),
+        },
         _ => Err(RuntimeError::new("mark builtin first arg must be marks")),
     }
 }
 
-fn mark_count(args: &[Value], context: &RunContext) -> Result<i64, RuntimeError> {
+fn mark_count(
+    args: &[RuntimeValue],
+    context: &RunContext,
+    params: &BoundEffectParams,
+) -> Result<i64, RuntimeError> {
     let _ = context;
-    i64::try_from(mark_source(args)?.marks.len())
+    i64::try_from(mark_source(args, params)?.marks.len())
         .map_err(|_| RuntimeError::new("mark count exceeds int range"))
 }
 
-fn mark_at(args: &[Value], _context: &RunContext) -> Result<f64, RuntimeError> {
-    let marks = mark_source(args)?;
-    let index_arg = if matches!(args.first(), Some(Value::Marks(_))) {
+fn mark_at(
+    args: &[RuntimeValue],
+    _context: &RunContext,
+    params: &BoundEffectParams,
+) -> Result<f64, RuntimeError> {
+    let marks = mark_source(args, params)?;
+    let index_arg = if first_arg_is_marks(args, params) {
         1
     } else {
         0
     };
-    let index = to_int(value_at(args, index_arg)?)?;
+    let index = to_int_runtime(value_at(args, index_arg)?, params)?;
     let fallback = args
         .get(index_arg + 1)
-        .map(to_float)
+        .map(|value| to_float_runtime(value, params))
         .transpose()?
         .unwrap_or(0.0);
     mark_at_from(marks, index, fallback)
 }
 
-fn mark_prev(args: &[Value], context: &RunContext) -> Result<f64, RuntimeError> {
-    let marks = mark_source(args)?;
-    let seconds = mark_query_seconds(args, context, 1)?;
-    let fallback = args.get(2).map(to_float).transpose()?.unwrap_or(0.0);
+fn mark_prev(
+    args: &[RuntimeValue],
+    context: &RunContext,
+    params: &BoundEffectParams,
+) -> Result<f64, RuntimeError> {
+    let marks = mark_source(args, params)?;
+    let seconds = mark_query_seconds(args, context, 1, params)?;
+    let fallback = args
+        .get(2)
+        .map(|value| to_float_runtime(value, params))
+        .transpose()?
+        .unwrap_or(0.0);
     let index = prev_index(marks, seconds)?;
     if index < 0 {
         Ok(fallback)
@@ -700,14 +900,22 @@ fn mark_at_from(marks: &Marks, index: i64, fallback: f64) -> Result<f64, Runtime
         .unwrap_or(fallback))
 }
 
-fn mark_prev_index(args: &[Value], context: &RunContext) -> Result<i64, RuntimeError> {
-    let seconds = mark_query_seconds(args, context, 1)?;
-    prev_index(mark_source(args)?, seconds)
+fn mark_prev_index(
+    args: &[RuntimeValue],
+    context: &RunContext,
+    params: &BoundEffectParams,
+) -> Result<i64, RuntimeError> {
+    let seconds = mark_query_seconds(args, context, 1, params)?;
+    prev_index(mark_source(args, params)?, seconds)
 }
 
-fn mark_next_index(args: &[Value], context: &RunContext) -> Result<i64, RuntimeError> {
-    let seconds = mark_query_seconds(args, context, 1)?;
-    next_index(mark_source(args)?, seconds)
+fn mark_next_index(
+    args: &[RuntimeValue],
+    context: &RunContext,
+    params: &BoundEffectParams,
+) -> Result<i64, RuntimeError> {
+    let seconds = mark_query_seconds(args, context, 1, params)?;
+    next_index(mark_source(args, params)?, seconds)
 }
 
 fn prev_index(marks: &Marks, seconds: f64) -> Result<i64, RuntimeError> {
@@ -731,9 +939,13 @@ fn next_index(marks: &Marks, seconds: f64) -> Result<i64, RuntimeError> {
     Ok(-1)
 }
 
-fn mark_elapsed(args: &[Value], context: &RunContext) -> Result<f64, RuntimeError> {
-    let seconds = mark_query_seconds(args, context, 1)?;
-    elapsed(mark_source(args)?, seconds)
+fn mark_elapsed(
+    args: &[RuntimeValue],
+    context: &RunContext,
+    params: &BoundEffectParams,
+) -> Result<f64, RuntimeError> {
+    let seconds = mark_query_seconds(args, context, 1, params)?;
+    elapsed(mark_source(args, params)?, seconds)
 }
 
 fn elapsed(marks: &Marks, seconds: f64) -> Result<f64, RuntimeError> {
@@ -744,9 +956,13 @@ fn elapsed(marks: &Marks, seconds: f64) -> Result<f64, RuntimeError> {
     Ok(seconds - mark_at_from(marks, previous, 0.0)?)
 }
 
-fn mark_phase(args: &[Value], context: &RunContext) -> Result<f64, RuntimeError> {
-    let seconds = mark_query_seconds(args, context, 1)?;
-    phase(mark_source(args)?, seconds, context.duration)
+fn mark_phase(
+    args: &[RuntimeValue],
+    context: &RunContext,
+    params: &BoundEffectParams,
+) -> Result<f64, RuntimeError> {
+    let seconds = mark_query_seconds(args, context, 1, params)?;
+    phase(mark_source(args, params)?, seconds, context.duration)
 }
 
 fn phase(marks: &Marks, seconds: f64, duration: f64) -> Result<f64, RuntimeError> {
@@ -766,19 +982,30 @@ fn phase(marks: &Marks, seconds: f64, duration: f64) -> Result<f64, RuntimeError
 }
 
 fn mark_query_seconds(
-    args: &[Value],
+    args: &[RuntimeValue],
     context: &RunContext,
     marks_arg_offset: usize,
+    params: &BoundEffectParams,
 ) -> Result<f64, RuntimeError> {
-    if matches!(args.first(), Some(Value::Marks(_))) {
+    if first_arg_is_marks(args, params) {
         args.get(marks_arg_offset)
-            .map(to_float)
+            .map(|value| to_float_runtime(value, params))
             .transpose()
             .map(|value| value.unwrap_or(context.seconds))
     } else {
         args.first()
-            .map(to_float)
+            .map(|value| to_float_runtime(value, params))
             .transpose()
             .map(|value| value.unwrap_or(context.seconds))
+    }
+}
+
+fn first_arg_is_marks(args: &[RuntimeValue], params: &BoundEffectParams) -> bool {
+    match args.first() {
+        Some(RuntimeValue::Marks(_)) => true,
+        Some(RuntimeValue::Param(index)) => {
+            matches!(params.values.get(*index), Some(Value::Marks(_)))
+        }
+        _ => false,
     }
 }

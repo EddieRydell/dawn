@@ -164,6 +164,36 @@ impl DesktopState {
         }
     }
 
+    pub fn preview_scene(&self) -> Option<crate::preview::PreviewScene> {
+        match self.project.lock() {
+            Ok(project) => {
+                let session = project.as_ref()?;
+                Some(crate::preview::PreviewScene::from_project(
+                    self.project_revision(),
+                    &session.project,
+                ))
+            }
+            Err(poisoned) => {
+                let project = poisoned.into_inner();
+                let session = project.as_ref()?;
+                Some(crate::preview::PreviewScene::from_project(
+                    self.project_revision(),
+                    &session.project,
+                ))
+            }
+        }
+    }
+
+    pub fn preview_scene_revision(&self) -> Option<u64> {
+        match self.project.lock() {
+            Ok(project) => project.as_ref().map(|_| self.project_revision()),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .as_ref()
+                .map(|_| self.project_revision()),
+        }
+    }
+
     pub fn open_project_path(&self, path: &str) -> AppSnapshot {
         let entrypoint = normalize_project_entrypoint(path);
         self.apply_project_open_check(entrypoint.as_str(), check_project(&entrypoint))
@@ -594,6 +624,13 @@ impl DesktopState {
         match self.project.lock() {
             Ok(project) => project.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    fn project_revision(&self) -> u64 {
+        match self.snapshot.lock() {
+            Ok(snapshot) => snapshot.project_revision.into(),
+            Err(poisoned) => poisoned.into_inner().project_revision.into(),
         }
     }
 

@@ -13,7 +13,9 @@
 use dawn_language::effect::{
     CurveSource, EffectDefinitionId, EffectParamValue, EffectScope, EffectTarget,
 };
-use dawn_language::effect_dsl::{Identifier, RunContext, RuntimeError, Value};
+use dawn_language::effect_dsl::{
+    BoundEffectParams, EffectVmScratch, Identifier, RunContext, RuntimeError, Value,
+};
 use dawn_language::model::DawnProject;
 use dawn_language::sequence::{MarkCollectionKey, Sequence, SequenceId};
 use dawn_language::setup::{
@@ -131,15 +133,22 @@ impl PreparedSequenceRenderer {
                 .ok_or_else(|| RenderError::MissingEffect {
                     effect_id: effect.definition.clone(),
                 })?;
-            let target = prepare_target(&effect.target, &fixture_ids, &groups)?;
+            let target_ids = prepare_target(&effect.target, &fixture_ids, &groups)?;
+            let target = prepare_target_indexes(&target_ids, &fixtures)?;
+            let total_target_pixels = target
+                .iter()
+                .map(|index| fixtures[*index].pixel_count)
+                .sum::<usize>();
             let params = prepare_params(project, sequence, &effect.param_overrides)?;
+            let bound_params = definition.compiled.bind_params(&params);
             effects.push(PreparedEffect {
                 start_seconds: effect.start.as_seconds_f64(),
                 duration_seconds: effect_duration_seconds,
                 target,
+                total_target_pixels,
                 scope: effect.scope.clone(),
                 definition: definition.compiled.clone(),
-                params,
+                params: bound_params,
             });
         }
 
@@ -280,6 +289,23 @@ fn prepare_target(
     }
 }
 
+fn prepare_target_indexes(
+    target: &[FixtureInstanceId],
+    fixtures: &[PreparedFixture],
+) -> Result<Vec<usize>, RenderError> {
+    target
+        .iter()
+        .map(|id| {
+            fixtures
+                .iter()
+                .position(|fixture| &fixture.id == id)
+                .ok_or_else(|| RenderError::MissingFixture {
+                    fixture_id: id.clone(),
+                })
+        })
+        .collect()
+}
+
 fn prepare_params(
     project: &DawnProject,
     sequence: &Sequence,
@@ -336,32 +362,17 @@ fn render_effect(
     rendered: &mut [RenderedFixture],
     sample_seconds: f64,
 ) -> Result<(), RenderError> {
-    let target_fixture_indexes = effect
-        .target
-        .iter()
-        .map(|id| {
-            fixtures
-                .iter()
-                .position(|fixture| &fixture.id == id)
-                .ok_or_else(|| RenderError::MissingFixture {
-                    fixture_id: id.clone(),
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let total_pixels = target_fixture_indexes
-        .iter()
-        .map(|index| fixtures[*index].pixel_count)
-        .sum::<usize>();
     let local_seconds = sample_seconds - effect.start_seconds;
     let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
     let mut whole_index = 0usize;
+    let mut scratch = EffectVmScratch::default();
 
-    for fixture_index in target_fixture_indexes {
+    for fixture_index in effect.target.iter().copied() {
         let fixture_pixel_count = fixtures[fixture_index].pixel_count;
         for fixture_pixel_index in 0..fixture_pixel_count {
             let (pixel_index, pixel_count) = match effect.scope {
                 EffectScope::PerFixture => (fixture_pixel_index, fixture_pixel_count),
-                EffectScope::WholeTarget => (whole_index, total_pixels),
+                EffectScope::WholeTarget => (whole_index, effect.total_target_pixels),
             };
             let context = RunContext {
                 progress,
@@ -372,7 +383,9 @@ fn render_effect(
                 pixel_fraction: pixel_fraction(pixel_index, pixel_count),
                 global_marks: Marks { marks: Vec::new() },
             };
-            let color = effect.definition.sample(&effect.params, &context)?;
+            let color = effect
+                .definition
+                .sample_bound(&effect.params, &context, &mut scratch)?;
             compose_max(
                 &mut rendered[fixture_index].pixels[fixture_pixel_index],
                 color,
@@ -415,10 +428,11 @@ struct PreparedFixture {
 struct PreparedEffect {
     start_seconds: f64,
     duration_seconds: f64,
-    target: Vec<FixtureInstanceId>,
+    target: Vec<usize>,
+    total_target_pixels: usize,
     scope: EffectScope,
     definition: dawn_language::effect_dsl::CompiledEffect,
-    params: IndexMap<Identifier, Value>,
+    params: BoundEffectParams,
 }
 
 #[cfg(test)]

@@ -15,6 +15,7 @@ pub mod bindings;
 pub mod commands;
 pub mod dto;
 pub mod gui;
+pub mod preview;
 pub mod show_render;
 pub mod state;
 
@@ -23,6 +24,7 @@ pub fn run() -> Result<(), tauri::Error> {
 
     tauri::Builder::default()
         .manage(state::DesktopState::new())
+        .manage(preview::PreviewWindowService::new())
         .invoke_handler(bindings.invoke_handler())
         .run(tauri::generate_context!())
 }
