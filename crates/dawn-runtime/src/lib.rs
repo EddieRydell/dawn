@@ -25,6 +25,7 @@ use dawn_language::setup::{
 };
 use dawn_language::values::{Color, Marks};
 use indexmap::{IndexMap, IndexSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Clone, Debug)]
@@ -126,6 +127,7 @@ impl PreparedSequenceRenderer {
         let mut effects = Vec::with_capacity(sequence.effects.len());
         let mut generated_child_count = 0usize;
         let mut bind_cache = EffectBindCache::default();
+        let mut target_cache = PrepareTargetCache::default();
         for effect in &sequence.effects {
             let effect_duration_seconds = effect.duration.as_seconds_f64();
             if !effect_duration_seconds.is_finite() || effect_duration_seconds <= 0.0 {
@@ -141,7 +143,12 @@ impl PreparedSequenceRenderer {
                     effect_id: effect.definition.clone(),
                 })?;
             let target_ids = prepare_target(&effect.target, &fixture_ids, &groups)?;
-            let target = prepare_target_pixels(&target_ids, &fixtures, &effect.scope)?;
+            let target = prepare_target_pixels_cached(
+                &mut target_cache,
+                &target_ids,
+                &fixtures,
+                &effect.scope,
+            )?;
             let params = prepare_params(project, sequence, &effect.param_overrides)?;
             let bound_params = definition
                 .compiled
@@ -162,6 +169,7 @@ impl PreparedSequenceRenderer {
                         effects: &mut effects,
                         generated_child_count: &mut generated_child_count,
                         bind_cache: &mut bind_cache,
+                        target_cache: &mut target_cache,
                     },
                     &definition.compiled,
                     &bound_params,
@@ -380,6 +388,24 @@ fn prepare_target_pixels(
     Ok(pixels)
 }
 
+fn prepare_target_pixels_cached(
+    cache: &mut PrepareTargetCache,
+    target: &[FixtureInstanceId],
+    fixtures: &[PreparedFixture],
+    scope: &EffectScope,
+) -> Result<Arc<Vec<PreparedTargetPixel>>, RenderError> {
+    let key = PreparedTargetCacheKey {
+        target: target.to_vec(),
+        scope: PreparedTargetScopeKey::from(scope),
+    };
+    if let Some(pixels) = cache.prepared_targets.get(&key) {
+        return Ok(Arc::clone(pixels));
+    }
+    let pixels = Arc::new(prepare_target_pixels(target, fixtures, scope)?);
+    cache.prepared_targets.insert(key, Arc::clone(&pixels));
+    Ok(pixels)
+}
+
 fn prepare_params(
     project: &DawnProject,
     sequence: &Sequence,
@@ -438,7 +464,7 @@ const MAX_GENERATED_CHILDREN: usize = 20_000;
 struct GeneratorExpansion {
     start_seconds: f64,
     duration_seconds: f64,
-    target: Vec<PreparedTargetPixel>,
+    target: Arc<Vec<PreparedTargetPixel>>,
     depth: usize,
 }
 
@@ -448,6 +474,7 @@ struct GeneratorPrepareContext<'a> {
     effects: &'a mut Vec<PreparedEffect>,
     generated_child_count: &'a mut usize,
     bind_cache: &'a mut EffectBindCache,
+    target_cache: &'a mut PrepareTargetCache,
 }
 
 fn expand_generator(
@@ -462,13 +489,12 @@ fn expand_generator(
         });
     }
     let mut scratch = EffectVmScratch::default();
+    let target = generator_context_target(context.target_cache, &expansion.target);
     let generated = definition.generate_bound(
         params,
         &GeneratorContext {
             duration: expansion.duration_seconds,
-            target: Arc::new(TargetValue {
-                groups: target_groups_from_pixels(&expansion.target),
-            }),
+            target,
         },
         &mut scratch,
     )?;
@@ -506,7 +532,11 @@ fn prepare_generated_child(
             reason: "generated effect duration must be positive and finite".to_string(),
         });
     }
-    let target = prepared_pixels_from_generated_target(context.fixtures, child.target)?;
+    let target = prepared_pixels_from_generated_target_cached(
+        context.target_cache,
+        context.fixtures,
+        child.target,
+    )?;
     let bound_params = definition
         .compiled
         .bind_params_cached(&child.params, context.bind_cache);
@@ -594,6 +624,29 @@ fn target_groups_from_pixels(pixels: &[PreparedTargetPixel]) -> Vec<Arc<TargetIt
     })]
 }
 
+fn generator_context_target(
+    cache: &mut PrepareTargetCache,
+    prepared_target: &Arc<Vec<PreparedTargetPixel>>,
+) -> Arc<TargetValue> {
+    let key = arc_key(prepared_target);
+    if let Some(entry) = cache.generator_context_targets.get(&key) {
+        if Arc::ptr_eq(&entry.source, prepared_target) {
+            return Arc::clone(&entry.target);
+        }
+    }
+    let target = Arc::new(TargetValue {
+        groups: target_groups_from_pixels(prepared_target),
+    });
+    cache.generator_context_targets.insert(
+        key,
+        GeneratorContextTargetCacheEntry {
+            source: Arc::clone(prepared_target),
+            target: Arc::clone(&target),
+        },
+    );
+    target
+}
+
 fn target_pixel_value(pixel: &PreparedTargetPixel) -> TargetPixelValue {
     TargetPixelValue {
         fixture_index: pixel.fixture_index as i64,
@@ -653,6 +706,35 @@ fn prepared_pixels_from_generated_target(
         .collect()
 }
 
+fn prepared_pixels_from_generated_target_cached(
+    cache: &mut PrepareTargetCache,
+    fixtures: &[PreparedFixture],
+    target: Arc<TargetItemValue>,
+) -> Result<Arc<Vec<PreparedTargetPixel>>, RenderError> {
+    let key = arc_key(&target);
+    if let Some(entry) = cache.generated_targets.get(&key) {
+        if Arc::ptr_eq(&entry.source, &target) {
+            return Ok(Arc::clone(&entry.pixels));
+        }
+    }
+    let pixels = Arc::new(prepared_pixels_from_generated_target(
+        fixtures,
+        Arc::clone(&target),
+    )?);
+    cache.generated_targets.insert(
+        key,
+        GeneratedTargetCacheEntry {
+            source: target,
+            pixels: Arc::clone(&pixels),
+        },
+    );
+    Ok(pixels)
+}
+
+fn arc_key<T>(value: &Arc<T>) -> usize {
+    Arc::as_ptr(value).cast::<()>() as usize
+}
+
 fn build_effect_frame_index(
     effects: &[PreparedEffect],
     frame_count: u64,
@@ -683,7 +765,7 @@ fn render_effect(
     let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
     let mut scratch = EffectVmScratch::default();
 
-    for pixel in &effect.target {
+    for pixel in effect.target.iter() {
         let context = RunContext {
             progress,
             seconds: local_seconds,
@@ -745,9 +827,47 @@ struct PreparedTargetPixel {
 struct PreparedEffect {
     start_seconds: f64,
     duration_seconds: f64,
-    target: Vec<PreparedTargetPixel>,
+    target: Arc<Vec<PreparedTargetPixel>>,
     definition: dawn_language::effect_dsl::CompiledEffect,
     params: BoundEffectParams,
+}
+
+#[derive(Default)]
+struct PrepareTargetCache {
+    prepared_targets: HashMap<PreparedTargetCacheKey, Arc<Vec<PreparedTargetPixel>>>,
+    generated_targets: HashMap<usize, GeneratedTargetCacheEntry>,
+    generator_context_targets: HashMap<usize, GeneratorContextTargetCacheEntry>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct PreparedTargetCacheKey {
+    target: Vec<FixtureInstanceId>,
+    scope: PreparedTargetScopeKey,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum PreparedTargetScopeKey {
+    PerFixture,
+    WholeTarget,
+}
+
+impl From<&EffectScope> for PreparedTargetScopeKey {
+    fn from(scope: &EffectScope) -> Self {
+        match scope {
+            EffectScope::PerFixture => Self::PerFixture,
+            EffectScope::WholeTarget => Self::WholeTarget,
+        }
+    }
+}
+
+struct GeneratedTargetCacheEntry {
+    source: Arc<TargetItemValue>,
+    pixels: Arc<Vec<PreparedTargetPixel>>,
+}
+
+struct GeneratorContextTargetCacheEntry {
+    source: Arc<Vec<PreparedTargetPixel>>,
+    target: Arc<TargetValue>,
 }
 
 #[cfg(test)]

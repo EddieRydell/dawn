@@ -565,8 +565,7 @@ impl<'a> Vm<'a> {
                     )?;
                 }
                 Instruction::Rand { dst, args } => {
-                    let args = self.collect_args(args)?;
-                    self.set(*dst, RuntimeValue::Float(random(&args, self.params)?))?;
+                    self.set(*dst, RuntimeValue::Float(self.random(args)?))?;
                 }
                 Instruction::CurveFloatClamped {
                     dst,
@@ -684,7 +683,7 @@ impl<'a> Vm<'a> {
                     self.set(*dst, value)?;
                 }
                 Instruction::Mark { dst, op, args } => {
-                    let args = self.collect_args(args)?;
+                    let args = RegisterRuntimeArgs { vm: self, args };
                     let value = match op {
                         MarkOp::Count => {
                             RuntimeValue::Int(mark_count(&args, self.context, self.params)?)
@@ -711,28 +710,27 @@ impl<'a> Vm<'a> {
                     self.set(*dst, value)?;
                 }
                 Instruction::TargetItems { dst, op, args } => {
-                    let args = self.collect_args(args)?;
                     let value = match op {
                         TargetItemsOp::Fixtures => {
-                            RuntimeValue::TargetItems(Arc::new(fixtures(value_at(&args, 0)?)?))
+                            RuntimeValue::TargetItems(Arc::new(fixtures(self.arg(args, 0)?)?))
                         }
                         TargetItemsOp::Pixels => {
-                            RuntimeValue::TargetItems(Arc::new(pixels(value_at(&args, 0)?)?))
+                            RuntimeValue::TargetItems(Arc::new(pixels(self.arg(args, 0)?)?))
                         }
                         TargetItemsOp::Sections => RuntimeValue::TargetItems(Arc::new(sections(
-                            value_at(&args, 0)?,
-                            to_float_runtime(value_at(&args, 1)?, self.params)?,
+                            self.arg(args, 0)?,
+                            to_float_runtime(self.arg(args, 1)?, self.params)?,
                         )?)),
                         TargetItemsOp::Count => {
-                            RuntimeValue::Int(target_items(value_at(&args, 0)?)?.groups.len() as i64)
+                            RuntimeValue::Int(target_items(self.arg(args, 0)?)?.groups.len() as i64)
                         }
                         TargetItemsOp::Pick => {
-                            let items = target_items(value_at(&args, 0)?)?;
+                            let items = target_items(self.arg(args, 0)?)?;
                             let index =
-                                usize::try_from(to_int_runtime(value_at(&args, 1)?, self.params)?)
+                                usize::try_from(to_int_runtime(self.arg(args, 1)?, self.params)?)
                                     .map_err(|_| {
-                                        RuntimeError::new("target item index cannot be negative")
-                                    })?;
+                                    RuntimeError::new("target item index cannot be negative")
+                                })?;
                             RuntimeValue::TargetItem(items.groups.get(index).cloned().ok_or_else(
                                 || RuntimeError::new("target item index out of bounds"),
                             )?)
@@ -767,8 +765,19 @@ impl<'a> Vm<'a> {
         Ok(())
     }
 
-    fn collect_args(&self, args: &[RegisterId]) -> Result<Vec<RuntimeValue>, RuntimeError> {
-        args.iter().map(|arg| self.get(*arg).cloned()).collect()
+    fn arg(&self, args: &[RegisterId], index: usize) -> Result<&RuntimeValue, RuntimeError> {
+        let Some(register) = args.get(index) else {
+            return Err(RuntimeError::new("missing argument"));
+        };
+        self.get(*register)
+    }
+
+    fn random(&self, args: &[RegisterId]) -> Result<f64, RuntimeError> {
+        let mut seed = 0.0;
+        for register in args {
+            seed = seed * 31.0 + to_float_runtime(self.get(*register)?, self.params)?;
+        }
+        Ok((seed.sin() * 43_758.545_312_3).fract().abs())
     }
 
     fn param_value(&self, index: usize) -> Result<RuntimeValue, RuntimeError> {
@@ -950,6 +959,28 @@ impl<'a> Vm<'a> {
         Ok(())
     }
 }
+
+trait RuntimeArgs {
+    fn get(&self, index: usize) -> Result<Option<&RuntimeValue>, RuntimeError>;
+
+    fn first(&self) -> Result<Option<&RuntimeValue>, RuntimeError> {
+        self.get(0)
+    }
+}
+
+struct RegisterRuntimeArgs<'a, 'vm> {
+    vm: &'vm Vm<'a>,
+    args: &'vm [RegisterId],
+}
+
+impl RuntimeArgs for RegisterRuntimeArgs<'_, '_> {
+    fn get(&self, index: usize) -> Result<Option<&RuntimeValue>, RuntimeError> {
+        let Some(register) = self.args.get(index) else {
+            return Ok(None);
+        };
+        self.vm.get(*register).map(Some)
+    }
+}
 fn resolve_param(param: &ParamDecl, params: &IndexMap<Identifier, Value>) -> Value {
     if let Some(value) = params.get(&param.name) {
         return value.clone();
@@ -993,11 +1024,6 @@ fn default_value(ty: &Type) -> Value {
             .map(Value::Enum)
             .unwrap_or(Value::Void),
     }
-}
-
-fn value_at(args: &[RuntimeValue], index: usize) -> Result<&RuntimeValue, RuntimeError> {
-    args.get(index)
-        .ok_or_else(|| RuntimeError::new("missing argument"))
 }
 
 fn runtime_to_value(value: RuntimeValue) -> Value {
@@ -1111,22 +1137,34 @@ fn target_items(value: &RuntimeValue) -> Result<&TargetItemsValue, RuntimeError>
     }
 }
 
-fn target_groups(value: &RuntimeValue) -> Result<Vec<Arc<TargetItemValue>>, RuntimeError> {
+fn for_each_target_group(
+    value: &RuntimeValue,
+    mut visit: impl FnMut(&Arc<TargetItemValue>),
+) -> Result<(), RuntimeError> {
     match value {
-        RuntimeValue::Target(target) => Ok(target.groups.clone()),
-        RuntimeValue::TargetItems(items) => Ok(items.groups.clone()),
-        RuntimeValue::TargetItem(item) => Ok(vec![item.clone()]),
+        RuntimeValue::Target(target) => {
+            for group in &target.groups {
+                visit(group);
+            }
+            Ok(())
+        }
+        RuntimeValue::TargetItems(items) => {
+            for group in &items.groups {
+                visit(group);
+            }
+            Ok(())
+        }
+        RuntimeValue::TargetItem(item) => {
+            visit(item);
+            Ok(())
+        }
         _ => Err(RuntimeError::new("expected target")),
     }
 }
 
 fn fixtures(value: &RuntimeValue) -> Result<TargetItemsValue, RuntimeError> {
-    let pixels = target_groups(value)?
-        .into_iter()
-        .flat_map(|item| item.pixels.iter().copied().collect::<Vec<_>>())
-        .collect::<Vec<_>>();
     let mut raw_groups: Vec<Vec<TargetPixelValue>> = Vec::new();
-    for pixel in pixels {
+    for_each_target_pixel(value, |pixel| {
         if raw_groups
             .last()
             .and_then(|group| group.first())
@@ -1138,7 +1176,7 @@ fn fixtures(value: &RuntimeValue) -> Result<TargetItemsValue, RuntimeError> {
         } else {
             raw_groups.push(vec![pixel]);
         }
-    }
+    })?;
     let groups = raw_groups
         .into_iter()
         .map(|pixels| {
@@ -1151,26 +1189,19 @@ fn fixtures(value: &RuntimeValue) -> Result<TargetItemsValue, RuntimeError> {
 }
 
 fn pixels(value: &RuntimeValue) -> Result<TargetItemsValue, RuntimeError> {
-    Ok(TargetItemsValue {
-        groups: target_groups(value)?
-            .into_iter()
-            .flat_map(|item| item.pixels.iter().copied().collect::<Vec<_>>())
-            .map(|pixel| {
-                Arc::new(TargetItemValue {
-                    pixels: Arc::new(vec![pixel]),
-                })
-            })
-            .collect(),
-    })
+    let mut groups = Vec::new();
+    for_each_target_pixel(value, |pixel| {
+        groups.push(Arc::new(TargetItemValue {
+            pixels: Arc::new(vec![pixel]),
+        }));
+    })?;
+    Ok(TargetItemsValue { groups })
 }
 
 fn sections(value: &RuntimeValue, width: f64) -> Result<TargetItemsValue, RuntimeError> {
     let width = width.max(1.0).floor() as i64;
     let mut raw_groups: Vec<Vec<TargetPixelValue>> = Vec::new();
-    for pixel in target_groups(value)?
-        .into_iter()
-        .flat_map(|item| item.pixels.iter().copied().collect::<Vec<_>>())
-    {
+    for_each_target_pixel(value, |pixel| {
         if raw_groups
             .last()
             .and_then(|group| group.first())
@@ -1185,7 +1216,7 @@ fn sections(value: &RuntimeValue, width: f64) -> Result<TargetItemsValue, Runtim
         } else {
             raw_groups.push(vec![pixel]);
         }
-    }
+    })?;
     let groups = raw_groups
         .into_iter()
         .map(|pixels| {
@@ -1195,6 +1226,17 @@ fn sections(value: &RuntimeValue, width: f64) -> Result<TargetItemsValue, Runtim
         })
         .collect();
     Ok(TargetItemsValue { groups })
+}
+
+fn for_each_target_pixel(
+    value: &RuntimeValue,
+    mut visit: impl FnMut(TargetPixelValue),
+) -> Result<(), RuntimeError> {
+    for_each_target_group(value, |item| {
+        for pixel in item.pixels.iter().copied() {
+            visit(pixel);
+        }
+    })
 }
 
 fn numeric_binary(
@@ -1571,20 +1613,12 @@ fn hsv(h: f64, s: f64, v: f64) -> Color {
     }
 }
 
-fn random(args: &[RuntimeValue], params: &BoundEffectParams) -> Result<f64, RuntimeError> {
-    let mut seed = 0.0;
-    for arg in args {
-        seed = seed * 31.0 + to_float_runtime(arg, params)?;
-    }
-    Ok((seed.sin() * 43_758.545_312_3).fract().abs())
-}
-
 fn mark_source<'a>(
-    args: &'a [RuntimeValue],
+    args: &'a impl RuntimeArgs,
     params: &'a BoundEffectParams,
 ) -> Result<&'a Marks, RuntimeError> {
     let _ = params;
-    let Some(value) = args.first() else {
+    let Some(value) = args.first()? else {
         return Err(RuntimeError::new(
             "mark builtin requires marks as the first argument",
         ));
@@ -1596,7 +1630,7 @@ fn mark_source<'a>(
 }
 
 fn mark_count(
-    args: &[RuntimeValue],
+    args: &impl RuntimeArgs,
     context: VmContext<'_>,
     params: &BoundEffectParams,
 ) -> Result<i64, RuntimeError> {
@@ -1606,7 +1640,7 @@ fn mark_count(
 }
 
 fn mark_at(
-    args: &[RuntimeValue],
+    args: &impl RuntimeArgs,
     _context: VmContext<'_>,
     params: &BoundEffectParams,
 ) -> Result<f64, RuntimeError> {
@@ -1616,9 +1650,9 @@ fn mark_at(
     } else {
         0
     };
-    let index = to_int_runtime(value_at(args, index_arg)?, params)?;
+    let index = to_int_runtime(arg_value(args, index_arg)?, params)?;
     let fallback = args
-        .get(index_arg + 1)
+        .get(index_arg + 1)?
         .map(|value| to_float_runtime(value, params))
         .transpose()?
         .unwrap_or(0.0);
@@ -1626,14 +1660,14 @@ fn mark_at(
 }
 
 fn mark_prev(
-    args: &[RuntimeValue],
+    args: &impl RuntimeArgs,
     context: VmContext<'_>,
     params: &BoundEffectParams,
 ) -> Result<f64, RuntimeError> {
     let marks = mark_source(args, params)?;
     let seconds = mark_query_seconds(args, context, 1, params)?;
     let fallback = args
-        .get(2)
+        .get(2)?
         .map(|value| to_float_runtime(value, params))
         .transpose()?
         .unwrap_or(0.0);
@@ -1656,7 +1690,7 @@ fn mark_at_from(marks: &Marks, index: i64, fallback: f64) -> Result<f64, Runtime
 }
 
 fn mark_prev_index(
-    args: &[RuntimeValue],
+    args: &impl RuntimeArgs,
     context: VmContext<'_>,
     params: &BoundEffectParams,
 ) -> Result<i64, RuntimeError> {
@@ -1665,7 +1699,7 @@ fn mark_prev_index(
 }
 
 fn mark_next_index(
-    args: &[RuntimeValue],
+    args: &impl RuntimeArgs,
     context: VmContext<'_>,
     params: &BoundEffectParams,
 ) -> Result<i64, RuntimeError> {
@@ -1695,7 +1729,7 @@ fn next_index(marks: &Marks, seconds: f64) -> Result<i64, RuntimeError> {
 }
 
 fn mark_elapsed(
-    args: &[RuntimeValue],
+    args: &impl RuntimeArgs,
     context: VmContext<'_>,
     params: &BoundEffectParams,
 ) -> Result<f64, RuntimeError> {
@@ -1712,7 +1746,7 @@ fn elapsed(marks: &Marks, seconds: f64) -> Result<f64, RuntimeError> {
 }
 
 fn mark_phase(
-    args: &[RuntimeValue],
+    args: &impl RuntimeArgs,
     context: VmContext<'_>,
     params: &BoundEffectParams,
 ) -> Result<f64, RuntimeError> {
@@ -1741,7 +1775,7 @@ fn phase(marks: &Marks, seconds: f64, duration: f64) -> Result<f64, RuntimeError
 }
 
 fn mark_query_seconds(
-    args: &[RuntimeValue],
+    args: &impl RuntimeArgs,
     context: VmContext<'_>,
     marks_arg_offset: usize,
     params: &BoundEffectParams,
@@ -1751,19 +1785,24 @@ fn mark_query_seconds(
         VmContext::Generator(_) => 0.0,
     };
     if first_arg_is_marks(args, params) {
-        args.get(marks_arg_offset)
+        args.get(marks_arg_offset)?
             .map(|value| to_float_runtime(value, params))
             .transpose()
             .map(|value| value.unwrap_or(default_seconds))
     } else {
-        args.first()
+        args.first()?
             .map(|value| to_float_runtime(value, params))
             .transpose()
             .map(|value| value.unwrap_or(default_seconds))
     }
 }
 
-fn first_arg_is_marks(args: &[RuntimeValue], params: &BoundEffectParams) -> bool {
+fn first_arg_is_marks(args: &impl RuntimeArgs, params: &BoundEffectParams) -> bool {
     let _ = params;
-    matches!(args.first(), Some(RuntimeValue::Marks(_)))
+    matches!(args.first(), Ok(Some(RuntimeValue::Marks(_))))
+}
+
+fn arg_value(args: &impl RuntimeArgs, index: usize) -> Result<&RuntimeValue, RuntimeError> {
+    args.get(index)?
+        .ok_or_else(|| RuntimeError::new("missing argument"))
 }
