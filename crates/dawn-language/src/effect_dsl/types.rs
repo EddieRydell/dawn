@@ -1,4 +1,5 @@
 use crate::values::{Color, Curve, Marks};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Identifier(String);
@@ -45,6 +46,10 @@ pub enum Type {
     Bool,
     Color,
     Marks,
+    Timeline,
+    Target,
+    TargetItems,
+    TargetItem,
     Curve(Box<Type>),
     Array(Box<Type>),
     Enum(Vec<Identifier>),
@@ -57,9 +62,12 @@ pub enum Value {
     Float(f64),
     Bool(bool),
     Color(Color),
-    Marks(Marks),
-    Curve(Curve),
-    Array(Vec<Value>),
+    Marks(Arc<Marks>),
+    Target(Arc<TargetValue>),
+    TargetItems(Arc<TargetItemsValue>),
+    TargetItem(Arc<TargetItemValue>),
+    Curve(Arc<Curve>),
+    Array(Arc<Vec<Value>>),
     Enum(Identifier),
 }
 
@@ -71,6 +79,30 @@ impl Type {
     pub fn array(item_type: Self) -> Self {
         Self::Array(Box::new(item_type))
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TargetValue {
+    pub groups: Vec<Arc<TargetItemValue>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TargetItemsValue {
+    pub groups: Vec<Arc<TargetItemValue>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TargetItemValue {
+    pub pixels: Arc<Vec<TargetPixelValue>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TargetPixelValue {
+    pub fixture_index: i64,
+    pub fixture_pixel_index: i64,
+    pub pixel_index: i64,
+    pub pixel_count: i64,
+    pub pixel_fraction: f64,
 }
 
 fn is_identifier_start(candidate: char) -> bool {

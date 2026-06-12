@@ -24,24 +24,31 @@ struct Checker {
 
 impl Checker {
     fn check_effect(&mut self, effect: &EffectDecl) {
-        if effect.sample.name.as_str() != "sample" {
+        let is_sample = effect.entrypoint.name.as_str() == "sample";
+        let is_generator = effect.entrypoint.name.as_str() == "generate";
+        if !is_sample && !is_generator {
             self.error(
                 TextSpan { start: 0, end: 0 },
-                "effect entrypoint must be named `sample`",
+                "effect entrypoint must be named `sample` or `generate`",
             );
         }
-        if effect.sample.return_type != Type::Color {
+        let expected_return = if is_generator {
+            Type::Void
+        } else {
+            Type::Color
+        };
+        if effect.entrypoint.return_type != expected_return {
             self.error(
                 TextSpan { start: 0, end: 0 },
-                "effect entrypoint must return `color`",
+                format!("effect entrypoint must return `{expected_return:?}`"),
             );
         }
-        if !effect.sample.params.is_empty() {
-            for param in &effect.sample.params {
+        if !effect.entrypoint.params.is_empty() {
+            for param in &effect.entrypoint.params {
                 self.error(
                     TextSpan { start: 0, end: 0 },
                     format!(
-                        "`sample` does not accept arguments; remove `{:?} {}`",
+                        "entrypoint does not accept arguments; remove `{:?} {}`",
                         param.ty,
                         param.name.as_str()
                     ),
@@ -54,9 +61,14 @@ impl Checker {
             self.check_param(param);
             env.insert(param.name.clone(), param.ty.clone());
         }
+        if is_generator {
+            env.insert(static_identifier("timeline"), Type::Timeline);
+            env.insert(static_identifier("target"), Type::Target);
+            env.insert(static_identifier("duration"), Type::Float);
+        }
 
-        let returns = self.check_block(&effect.sample.body, &mut env, &Type::Color);
-        if !returns {
+        let returns = self.check_block(&effect.entrypoint.body, &mut env, &expected_return);
+        if is_sample && !returns {
             self.error(
                 TextSpan { start: 0, end: 0 },
                 "`sample` must return a color on all paths",
@@ -65,6 +77,18 @@ impl Checker {
     }
 
     fn check_param(&mut self, param: &ParamDecl) {
+        if matches!(
+            param.ty,
+            Type::Timeline | Type::Target | Type::TargetItems | Type::TargetItem
+        ) {
+            self.error(
+                TextSpan { start: 0, end: 0 },
+                format!(
+                    "`{}` uses an internal generator context type and cannot be a param",
+                    param.name.as_str()
+                ),
+            );
+        }
         match (&param.ty, &param.default) {
             (Type::Marks, None) => {}
             (_, None) => {}
@@ -172,6 +196,12 @@ impl Checker {
                 let _ = self.check_block(body, &mut loop_env, return_type);
                 false
             }
+            Stmt::Emit { fields, .. } => {
+                for (_, value) in fields {
+                    let _ = self.check_expr(value, env, None);
+                }
+                false
+            }
             Stmt::Return(expr) => {
                 let actual = self.check_expr(expr, env, Some(return_type));
                 self.require_assignable(return_type, &actual, expr.span);
@@ -230,6 +260,25 @@ impl Checker {
                     }
                     _ => {
                         self.error(target.span, "indexing requires an array or curve");
+                        Type::Void
+                    }
+                }
+            }
+            ExprKind::Member { target, member } => {
+                let target_type = self.check_expr(target, env, None);
+                match target_type {
+                    Type::TargetItem => match member.as_str() {
+                        "fixture_index" | "fixture_pixel_index" | "pixel_index" | "pixel_count" => {
+                            Type::Int
+                        }
+                        "pixel_fraction" => Type::Float,
+                        _ => {
+                            self.error(expr.span, "unknown TargetItem member");
+                            Type::Void
+                        }
+                    },
+                    _ => {
+                        self.error(target.span, "member access requires TargetItem");
                         Type::Void
                     }
                 }
@@ -377,6 +426,28 @@ impl Checker {
                 self.require_mark_args(name, args, env, span);
                 Type::Float
             }
+            "fixtures" | "pixels" => {
+                self.require_arg_count(name, args.len(), 1, span);
+                self.require_arg(args, 0, &Type::Target, env);
+                Type::TargetItems
+            }
+            "sections" => {
+                self.require_arg_count(name, args.len(), 2, span);
+                self.require_arg(args, 0, &Type::Target, env);
+                self.require_arg(args, 1, &Type::Float, env);
+                Type::TargetItems
+            }
+            "count" => {
+                self.require_arg_count(name, args.len(), 1, span);
+                self.require_arg(args, 0, &Type::TargetItems, env);
+                Type::Int
+            }
+            "pick" => {
+                self.require_arg_count(name, args.len(), 2, span);
+                self.require_arg(args, 0, &Type::TargetItems, env);
+                self.require_arg(args, 1, &Type::Float, env);
+                Type::TargetItem
+            }
             _ => {
                 self.error(span, format!("unknown function `{name}`"));
                 Type::Void
@@ -509,6 +580,9 @@ fn type_of_value(value: &Value) -> Type {
         Value::Bool(_) => Type::Bool,
         Value::Color(_) => Type::Color,
         Value::Marks(_) => Type::Marks,
+        Value::Target(_) => Type::Target,
+        Value::TargetItems(_) => Type::TargetItems,
+        Value::TargetItem(_) => Type::TargetItem,
         Value::Curve(curve) => curve
             .points
             .first()
@@ -532,7 +606,10 @@ fn value_matches_type(value: &Value, ty: &Type) -> bool {
         | (Value::Float(_), Type::Float)
         | (Value::Bool(_), Type::Bool)
         | (Value::Color(_), Type::Color)
-        | (Value::Marks(_), Type::Marks) => true,
+        | (Value::Marks(_), Type::Marks)
+        | (Value::Target(_), Type::Target)
+        | (Value::TargetItems(_), Type::TargetItems)
+        | (Value::TargetItem(_), Type::TargetItem) => true,
         (Value::Array(items), Type::Array(item_type)) => {
             items.iter().all(|item| value_matches_type(item, item_type))
         }
@@ -541,5 +618,12 @@ fn value_matches_type(value: &Value, ty: &Type) -> bool {
         }
         (Value::Curve(_), Type::Curve(_)) => true,
         _ => false,
+    }
+}
+
+fn static_identifier(value: &str) -> Identifier {
+    match Identifier::new(value.to_string()) {
+        Ok(identifier) => identifier,
+        Err(_) => unreachable!("static identifier is valid"),
     }
 }

@@ -19,12 +19,14 @@ pub(crate) enum Instruction {
     LoadConst(ConstantId),
     LoadDefault(Type),
     LoadParam(ParamId),
+    LoadGeneratorContext(GeneratorContextId),
     StoreParam(ParamId),
     LoadLocal(LocalId),
     StoreLocal(LocalId),
     Pop,
     MakeArray(usize),
     Index,
+    Member(Identifier),
     CoerceFloat,
     Unary(UnaryOp),
     Binary(BinaryOp),
@@ -34,7 +36,18 @@ pub(crate) enum Instruction {
     JumpIfTrueOrPop(Target),
     CallBuiltin(Builtin, usize),
     CheckLoopLimit,
+    Emit {
+        effect: Identifier,
+        fields: Vec<Identifier>,
+    },
     Return,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GeneratorContextId {
+    Timeline,
+    Target,
+    Duration,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,6 +83,11 @@ pub(crate) enum Builtin {
     MarkNextIndex,
     MarkElapsed,
     MarkPhase,
+    Fixtures,
+    Pixels,
+    Sections,
+    Count,
+    Pick,
 }
 
 impl Builtin {
@@ -106,6 +124,11 @@ impl Builtin {
             "mark_next_index" => Self::MarkNextIndex,
             "mark_elapsed" => Self::MarkElapsed,
             "mark_phase" => Self::MarkPhase,
+            "fixtures" => Self::Fixtures,
+            "pixels" => Self::Pixels,
+            "sections" => Self::Sections,
+            "count" => Self::Count,
+            "pick" => Self::Pick,
             _ => return None,
         })
     }

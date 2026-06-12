@@ -2049,18 +2049,20 @@ impl DomainResolver<'_> {
                     })
                     .collect(),
             })?;
-        let compiled = compiled
-            .into_iter()
-            .find(|effect| effect.name().as_str() == id.0)
-            .ok_or_else(|| LoadProjectError::InvalidReference {
+        if !compiled.iter().any(|effect| effect.name().as_str() == id.0) {
+            return Err(LoadProjectError::InvalidReference {
                 path: self.loader.entrypoint.clone(),
                 range: None,
                 reference: id.0.clone(),
-            })?;
-        self.project
-            .definitions
-            .effects
-            .insert(id.clone(), EffectDefinition { compiled });
+            });
+        }
+        for compiled in compiled {
+            let definition_id = EffectDefinitionId(compiled.name().as_str().to_string());
+            self.project
+                .definitions
+                .effects
+                .insert(definition_id, EffectDefinition { compiled });
+        }
         Ok(())
     }
 

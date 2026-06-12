@@ -10,7 +10,7 @@ pub(crate) struct Module {
 pub(crate) struct EffectDecl {
     pub name: Identifier,
     pub params: Vec<ParamDecl>,
-    pub sample: FunctionDecl,
+    pub entrypoint: FunctionDecl,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -62,6 +62,10 @@ pub(crate) enum Stmt {
         update: Box<Stmt>,
         body: Block,
     },
+    Emit {
+        effect: Identifier,
+        fields: Vec<(Identifier, Expr)>,
+    },
     Return(Expr),
 }
 
@@ -79,6 +83,10 @@ pub(crate) enum ExprKind {
     Index {
         target: Box<Expr>,
         index: Box<Expr>,
+    },
+    Member {
+        target: Box<Expr>,
+        member: Identifier,
     },
     Call {
         callee: Box<Expr>,

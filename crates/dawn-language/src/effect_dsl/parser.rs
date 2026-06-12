@@ -6,6 +6,7 @@ use super::diagnostic::Diagnostic;
 use super::lexer::{lex, Keyword, TextSpan, Token, TokenKind};
 use super::types::{Identifier, Type, Value};
 use crate::values::Color;
+use std::sync::Arc;
 
 pub(crate) fn parse_module(source: &str) -> Result<Module, Vec<Diagnostic>> {
     let mut parser = Parser::new(source);
@@ -65,7 +66,7 @@ impl<'source> Parser<'source> {
         let name = self.parse_identifier()?;
         self.expect(TokenKind::LeftBrace, "expected `{` after effect name");
         let mut params = Vec::new();
-        let mut sample = None;
+        let mut entrypoint = None;
 
         while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::Eof) {
             let start_cursor = self.cursor;
@@ -77,18 +78,18 @@ impl<'source> Parser<'source> {
                 continue;
             }
 
-            if sample.is_some() {
-                self.error_here("effect may contain only one `sample` function");
+            if entrypoint.is_some() {
+                self.error_here("effect may contain only one entrypoint function");
             }
-            sample = self.parse_function();
+            entrypoint = self.parse_function();
             self.ensure_progress(start_cursor, "parser made no progress in effect");
         }
 
         self.expect(TokenKind::RightBrace, "expected `}` after effect body");
-        let sample = match sample {
-            Some(sample) => sample,
+        let entrypoint = match entrypoint {
+            Some(entrypoint) => entrypoint,
             None => {
-                self.error_here("effect must contain `color sample()`");
+                self.error_here("effect must contain `color sample()` or `void generate()`");
                 let name = match Identifier::new("sample".to_string()) {
                     Ok(identifier) => identifier,
                     Err(_) => return None,
@@ -107,7 +108,7 @@ impl<'source> Parser<'source> {
         Some(EffectDecl {
             name,
             params,
-            sample,
+            entrypoint,
         })
     }
 
@@ -175,6 +176,19 @@ impl<'source> Parser<'source> {
     }
 
     fn parse_statement(&mut self) -> Option<Stmt> {
+        if self.current().kind == TokenKind::Identifier
+            && self.text(self.current().span) == "timeline"
+            && self
+                .tokens
+                .get(self.cursor + 1)
+                .is_some_and(|token| token.kind == TokenKind::Dot)
+            && self.tokens.get(self.cursor + 2).is_some_and(|token| {
+                token.kind == TokenKind::Identifier && self.text(token.span) == "emit"
+            })
+        {
+            return self.parse_emit_statement();
+        }
+
         if self.consume_keyword(Keyword::If) {
             self.expect(TokenKind::LeftParen, "expected `(` after `if`");
             let condition = self.parse_expression();
@@ -244,6 +258,30 @@ impl<'source> Parser<'source> {
 
         self.expect(TokenKind::Semicolon, "expected `;` after expression");
         Some(Stmt::Expr(expr))
+    }
+
+    fn parse_emit_statement(&mut self) -> Option<Stmt> {
+        self.advance();
+        self.expect(TokenKind::Dot, "expected `.` after `timeline`");
+        let emit_name = self.parse_identifier()?;
+        if emit_name.as_str() != "emit" {
+            self.error_here("expected `emit` after `timeline.`");
+        }
+        let effect = self.parse_identifier()?;
+        self.expect(TokenKind::LeftBrace, "expected `{` after emitted effect id");
+        let mut fields = Vec::new();
+        while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::Eof) {
+            let name = self.parse_identifier()?;
+            self.expect(TokenKind::Colon, "expected `:` after emit field name");
+            let value = self.parse_expression();
+            fields.push((name, value));
+            if !self.consume(TokenKind::Comma) {
+                let _ = self.consume(TokenKind::Semicolon);
+            }
+        }
+        self.expect(TokenKind::RightBrace, "expected `}` after emit fields");
+        let _ = self.consume(TokenKind::Semicolon);
+        Some(Stmt::Emit { effect, fields })
     }
 
     fn parse_for_clause(&mut self) -> Option<Stmt> {
@@ -385,6 +423,25 @@ impl<'source> Parser<'source> {
                 continue;
             }
 
+            if self.consume(TokenKind::Dot) {
+                let member = match self.parse_identifier() {
+                    Some(member) => member,
+                    None => break,
+                };
+                let end = self.current().span.end;
+                expr = Expr {
+                    span: TextSpan {
+                        start: expr.span.start,
+                        end,
+                    },
+                    kind: ExprKind::Member {
+                        target: Box::new(expr),
+                        member,
+                    },
+                };
+                continue;
+            }
+
             break;
         }
         expr
@@ -519,6 +576,22 @@ impl<'source> Parser<'source> {
                 self.advance();
                 Some(Type::Marks)
             }
+            TokenKind::Identifier if self.text(token.span) == "Timeline" => {
+                self.advance();
+                Some(Type::Timeline)
+            }
+            TokenKind::Identifier if self.text(token.span) == "Target" => {
+                self.advance();
+                Some(Type::Target)
+            }
+            TokenKind::Identifier if self.text(token.span) == "TargetItems" => {
+                self.advance();
+                Some(Type::TargetItems)
+            }
+            TokenKind::Identifier if self.text(token.span) == "TargetItem" => {
+                self.advance();
+                Some(Type::TargetItem)
+            }
             _ => None,
         }
     }
@@ -571,7 +644,7 @@ impl<'source> Parser<'source> {
                     };
                     values.push(value);
                 }
-                Some(Value::Array(values))
+                Some(Value::Array(Arc::new(values)))
             }
             _ => {
                 self.error(expr.span, "param defaults must be literal values");

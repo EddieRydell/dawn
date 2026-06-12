@@ -4,7 +4,7 @@ use camino::Utf8Path;
 use dawn_language::effect::{
     CurveSource, EffectDefinitionId, EffectParamValue, EffectScope, EffectTarget,
 };
-use dawn_language::effect_dsl::{Type, Value as EffectValue};
+use dawn_language::effect_dsl::{EffectKind, Type, Value as EffectValue};
 use dawn_language::sequence::SequenceId;
 use dawn_language::setup::{
     FixtureDefinitionId, Geometry as DomainGeometry, LayoutId, LayoutTarget as DomainLayoutTarget,
@@ -487,16 +487,21 @@ fn effect_scripts(session: &ProjectSession) -> Vec<SequenceEffectScript> {
             let source = effect_script_ref(session, &id.0)?;
             Some(SequenceEffectScript {
                 name: id.0.clone(),
-                kind: SequenceEffectScriptKind::Sample,
+                kind: match definition.compiled.kind() {
+                    EffectKind::Sample => SequenceEffectScriptKind::Sample,
+                    EffectKind::Generator => SequenceEffectScriptKind::Generator,
+                },
                 script: source.clone(),
                 import_path: source.path.clone(),
                 params: definition
                     .compiled
                     .params()
                     .iter()
-                    .map(|param| SequenceEffectScriptParam {
-                        name: param.name.as_str().to_string(),
-                        kind: param_kind(&param.ty),
+                    .filter_map(|param| {
+                        Some(SequenceEffectScriptParam {
+                            name: param.name.as_str().to_string(),
+                            kind: param_kind(&param.ty)?,
+                        })
                     })
                     .collect(),
             })
@@ -515,20 +520,21 @@ fn effect_params(
         .compiled
         .params()
         .iter()
-        .map(|param| {
+        .filter_map(|param| {
+            let kind = param_kind(&param.ty)?;
             let override_value = effect.param_overrides.get(&param.name);
             let value = override_value
                 .map(effect_param_value)
-                .or_else(|| param.default.as_ref().map(default_param_value))
-                .unwrap_or_else(|| default_value_for_type(&param.ty));
-            SequenceEffectParam {
+                .or_else(|| param.default.as_ref().and_then(default_param_value))
+                .or_else(|| default_value_for_type(&param.ty))?;
+            Some(SequenceEffectParam {
                 name: param.name.as_str().to_string(),
-                kind: param_kind(&param.ty),
+                kind,
                 options: param_options(&param.ty),
                 editable: true,
                 curve_source: override_value.and_then(curve_source),
                 value,
-            }
+            })
         })
         .collect()
 }
@@ -583,8 +589,8 @@ fn fixture_source_ref(source_map: &SourceMap, id: &FixtureDefinitionId) -> Optio
     })
 }
 
-fn param_kind(ty: &Type) -> SequenceEffectParamKind {
-    match ty {
+fn param_kind(ty: &Type) -> Option<SequenceEffectParamKind> {
+    Some(match ty {
         Type::Int => SequenceEffectParamKind::Int,
         Type::Float => SequenceEffectParamKind::Float,
         Type::Bool => SequenceEffectParamKind::Bool,
@@ -606,8 +612,10 @@ fn param_kind(ty: &Type) -> SequenceEffectParamKind {
             },
             _ => SequenceEffectParamKind::FloatArray,
         },
-        Type::Void => SequenceEffectParamKind::Float,
-    }
+        Type::Void | Type::Timeline | Type::Target | Type::TargetItems | Type::TargetItem => {
+            return None;
+        }
+    })
 }
 
 fn param_options(ty: &Type) -> Vec<String> {
@@ -648,8 +656,8 @@ fn effect_param_value(value: &EffectParamValue) -> SequenceEffectParamValue {
     }
 }
 
-fn default_param_value(value: &EffectValue) -> SequenceEffectParamValue {
-    match value {
+fn default_param_value(value: &EffectValue) -> Option<SequenceEffectParamValue> {
+    Some(match value {
         EffectValue::Int(value) => SequenceEffectParamValue::Int {
             value: *value as f64,
         },
@@ -666,15 +674,21 @@ fn default_param_value(value: &EffectValue) -> SequenceEffectParamValue {
             .map(curve_points_param_value)
             .unwrap_or_else(|| SequenceEffectParamValue::FloatCurve { points: Vec::new() }),
         EffectValue::Array(values) => {
-            let converted = values.iter().map(default_param_value).collect::<Vec<_>>();
+            let converted = values
+                .iter()
+                .map(default_param_value)
+                .collect::<Option<Vec<_>>>()?;
             array_param_from_sequence_values(&converted)
         }
-        EffectValue::Void => SequenceEffectParamValue::Float { value: 0.0 },
-    }
+        EffectValue::Void
+        | EffectValue::Target(_)
+        | EffectValue::TargetItems(_)
+        | EffectValue::TargetItem(_) => return None,
+    })
 }
 
-fn default_value_for_type(ty: &Type) -> SequenceEffectParamValue {
-    match ty {
+fn default_value_for_type(ty: &Type) -> Option<SequenceEffectParamValue> {
+    Some(match ty {
         Type::Int => SequenceEffectParamValue::Int { value: 0.0 },
         Type::Float => SequenceEffectParamValue::Float { value: 0.0 },
         Type::Bool => SequenceEffectParamValue::Bool { value: false },
@@ -693,25 +707,27 @@ fn default_value_for_type(ty: &Type) -> SequenceEffectParamValue {
             _ => SequenceEffectParamValue::FloatCurve { points: Vec::new() },
         },
         Type::Array(inner) => match param_kind(inner) {
-            SequenceEffectParamKind::Int => {
+            Some(SequenceEffectParamKind::Int) => {
                 SequenceEffectParamValue::IntArray { values: Vec::new() }
             }
-            SequenceEffectParamKind::Float => {
+            Some(SequenceEffectParamKind::Float) => {
                 SequenceEffectParamValue::FloatArray { values: Vec::new() }
             }
-            SequenceEffectParamKind::Bool => {
+            Some(SequenceEffectParamKind::Bool) => {
                 SequenceEffectParamValue::BoolArray { values: Vec::new() }
             }
-            SequenceEffectParamKind::Color => {
+            Some(SequenceEffectParamKind::Color) => {
                 SequenceEffectParamValue::ColorArray { values: Vec::new() }
             }
-            SequenceEffectParamKind::ColorCurve => {
+            Some(SequenceEffectParamKind::ColorCurve) => {
                 SequenceEffectParamValue::ColorCurveArray { values: Vec::new() }
             }
             _ => SequenceEffectParamValue::FloatCurveArray { values: Vec::new() },
         },
-        Type::Void => SequenceEffectParamValue::Float { value: 0.0 },
-    }
+        Type::Void | Type::Timeline | Type::Target | Type::TargetItems | Type::TargetItem => {
+            return None;
+        }
+    })
 }
 
 fn curve_source(value: &EffectParamValue) -> Option<SequenceEffectParamCurveSource> {

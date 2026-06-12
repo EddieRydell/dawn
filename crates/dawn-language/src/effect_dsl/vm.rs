@@ -1,9 +1,11 @@
 use super::ast::{BinaryOp, UnaryOp};
-use super::bytecode::{Builtin, BytecodeFunction, Instruction};
+use super::bytecode::{Builtin, BytecodeFunction, GeneratorContextId, Instruction};
 use super::types::{Identifier, Type, Value};
-use super::{CompiledEffect, ParamDecl};
+use super::types::{TargetItemValue, TargetItemsValue, TargetPixelValue, TargetValue};
+use super::{CompiledEffect, EffectKind, ParamDecl};
 use crate::values::{Color, Curve, CurveValue, Marks};
 use indexmap::IndexMap;
+use std::sync::Arc;
 
 const LOOP_ITERATION_LIMIT: usize = 100_000;
 
@@ -17,6 +19,21 @@ pub struct RunContext {
     pub pixel_fraction: f64,
     pub global_marks: Marks,
     //TODO location based effects
+}
+
+#[derive(Clone, Debug)]
+pub struct GeneratorContext {
+    pub duration: f64,
+    pub target: Arc<TargetValue>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GeneratedEffect {
+    pub definition: Identifier,
+    pub start_seconds: f64,
+    pub duration_seconds: f64,
+    pub target: Arc<TargetItemValue>,
+    pub params: IndexMap<Identifier, Value>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -42,6 +59,7 @@ pub struct EffectVmScratch {
     stack: Vec<RuntimeValue>,
     locals: Vec<Value>,
     param_overrides: Vec<Option<Value>>,
+    generated: Vec<GeneratedEffect>,
 }
 
 pub(crate) fn bind_effect_params(
@@ -57,19 +75,46 @@ pub(crate) fn bind_effect_params(
     }
 }
 
-pub(crate) fn run_effect(
+pub(crate) fn run_sample_effect(
     effect: &CompiledEffect,
     params: &BoundEffectParams,
     context: &RunContext,
     scratch: &mut EffectVmScratch,
 ) -> Result<Color, RuntimeError> {
-    let mut vm = Vm::new(&effect.sample, params, context, scratch);
+    if effect.kind != EffectKind::Sample {
+        return Err(RuntimeError::new("cannot sample generator effect"));
+    }
+    let mut vm = Vm::new(
+        &effect.function,
+        params,
+        VmContext::Sample(context),
+        scratch,
+    );
     match vm.run()? {
         RuntimeValue::Color(color) => Ok(color),
         other => Err(RuntimeError::new(format!(
             "`sample` returned non-color value {other:?}"
         ))),
     }
+}
+
+pub(crate) fn run_generator_effect(
+    effect: &CompiledEffect,
+    params: &BoundEffectParams,
+    context: &GeneratorContext,
+    scratch: &mut EffectVmScratch,
+) -> Result<Vec<GeneratedEffect>, RuntimeError> {
+    if effect.kind != EffectKind::Generator {
+        return Err(RuntimeError::new("cannot generate sample effect"));
+    }
+    let mut vm = Vm::new(
+        &effect.function,
+        params,
+        VmContext::Generator(context),
+        scratch,
+    );
+    let _ = vm.run()?;
+    Ok(std::mem::take(&mut vm.scratch.generated))
 }
 
 #[derive(Clone, Debug)]
@@ -79,9 +124,13 @@ enum RuntimeValue {
     Float(f64),
     Bool(bool),
     Color(Color),
-    Marks(Marks),
-    Curve(Curve),
-    Array(Vec<Value>),
+    Marks(Arc<Marks>),
+    Timeline,
+    Target(Arc<TargetValue>),
+    TargetItems(Arc<TargetItemsValue>),
+    TargetItem(Arc<TargetItemValue>),
+    Curve(Arc<Curve>),
+    Array(Arc<Vec<Value>>),
     Enum(Identifier),
     Param(usize),
 }
@@ -94,9 +143,12 @@ impl RuntimeValue {
             Value::Float(value) => Self::Float(*value),
             Value::Bool(value) => Self::Bool(*value),
             Value::Color(value) => Self::Color(*value),
-            Value::Marks(value) => Self::Marks(value.clone()),
-            Value::Curve(value) => Self::Curve(value.clone()),
-            Value::Array(value) => Self::Array(value.clone()),
+            Value::Marks(value) => Self::Marks(Arc::clone(value)),
+            Value::Target(value) => Self::Target(Arc::clone(value)),
+            Value::TargetItems(value) => Self::TargetItems(Arc::clone(value)),
+            Value::TargetItem(value) => Self::TargetItem(Arc::clone(value)),
+            Value::Curve(value) => Self::Curve(Arc::clone(value)),
+            Value::Array(value) => Self::Array(Arc::clone(value)),
             Value::Enum(value) => Self::Enum(value.clone()),
         }
     }
@@ -105,17 +157,23 @@ impl RuntimeValue {
 struct Vm<'a> {
     function: &'a BytecodeFunction,
     params: &'a BoundEffectParams,
-    context: &'a RunContext,
+    context: VmContext<'a>,
     scratch: &'a mut EffectVmScratch,
     ip: usize,
     loop_iterations: usize,
+}
+
+#[derive(Clone, Copy)]
+enum VmContext<'a> {
+    Sample(&'a RunContext),
+    Generator(&'a GeneratorContext),
 }
 
 impl<'a> Vm<'a> {
     fn new(
         function: &'a BytecodeFunction,
         params: &'a BoundEffectParams,
-        context: &'a RunContext,
+        context: VmContext<'a>,
         scratch: &'a mut EffectVmScratch,
     ) -> Self {
         scratch.stack.clear();
@@ -124,6 +182,7 @@ impl<'a> Vm<'a> {
         scratch.locals.resize(function.local_count, Value::Void);
         scratch.param_overrides.clear();
         scratch.param_overrides.resize(params.values.len(), None);
+        scratch.generated.clear();
         Self {
             function,
             params,
@@ -146,6 +205,7 @@ impl<'a> Vm<'a> {
                     self.push(RuntimeValue::from_value(&default_value(ty)))
                 }
                 Instruction::LoadParam(index) => self.push_param(*index)?,
+                Instruction::LoadGeneratorContext(slot) => self.load_generator_context(*slot)?,
                 Instruction::StoreParam(index) => {
                     let value = self.pop_to_value()?;
                     let Some(slot) = self.scratch.param_overrides.get_mut(*index) else {
@@ -173,6 +233,7 @@ impl<'a> Vm<'a> {
                 }
                 Instruction::MakeArray(count) => self.make_array(*count)?,
                 Instruction::Index => self.index()?,
+                Instruction::Member(member) => self.member(member)?,
                 Instruction::CoerceFloat => self.coerce_float()?,
                 Instruction::Unary(op) => self.unary(*op)?,
                 Instruction::Binary(op) => self.binary(*op)?,
@@ -204,9 +265,24 @@ impl<'a> Vm<'a> {
                         return Err(RuntimeError::new("loop iteration limit exceeded"));
                     }
                 }
+                Instruction::Emit { effect, fields } => self.emit_generated(effect, fields)?,
                 Instruction::Return => return self.pop(),
             }
         }
+    }
+
+    fn load_generator_context(&mut self, slot: GeneratorContextId) -> Result<(), RuntimeError> {
+        let VmContext::Generator(context) = self.context else {
+            return Err(RuntimeError::new("generator context is unavailable"));
+        };
+        match slot {
+            GeneratorContextId::Timeline => self.push(RuntimeValue::Timeline),
+            GeneratorContextId::Target => {
+                self.push(RuntimeValue::Target(Arc::clone(&context.target)))
+            }
+            GeneratorContextId::Duration => self.push(RuntimeValue::Float(context.duration)),
+        }
+        Ok(())
     }
 
     fn push_constant(&mut self, index: usize) -> Result<(), RuntimeError> {
@@ -235,9 +311,13 @@ impl<'a> Vm<'a> {
             Value::Float(value) => RuntimeValue::Float(*value),
             Value::Bool(value) => RuntimeValue::Bool(*value),
             Value::Color(value) => RuntimeValue::Color(*value),
-            Value::Marks(_) | Value::Curve(_) | Value::Array(_) | Value::Enum(_) => {
-                RuntimeValue::Param(index)
-            }
+            Value::Marks(_)
+            | Value::Target(_)
+            | Value::TargetItems(_)
+            | Value::TargetItem(_)
+            | Value::Curve(_)
+            | Value::Array(_)
+            | Value::Enum(_) => RuntimeValue::Param(index),
         });
         Ok(())
     }
@@ -253,7 +333,7 @@ impl<'a> Vm<'a> {
             .drain(start..)
             .map(|value| runtime_to_value(value, self.params))
             .collect();
-        self.push(RuntimeValue::Array(values));
+        self.push(RuntimeValue::Array(Arc::new(values)));
         Ok(())
     }
 
@@ -270,6 +350,17 @@ impl<'a> Vm<'a> {
                     .cloned()
                     .ok_or_else(|| RuntimeError::new("array index out of bounds"))?;
                 self.push(RuntimeValue::from_value(&value));
+                Ok(())
+            }
+            RuntimeValue::TargetItems(items) => {
+                let index = usize::try_from(to_int_runtime(&index, self.params)?)
+                    .map_err(|_| RuntimeError::new("target item index cannot be negative"))?;
+                let value = items
+                    .groups
+                    .get(index)
+                    .cloned()
+                    .ok_or_else(|| RuntimeError::new("target item index out of bounds"))?;
+                self.push(RuntimeValue::TargetItem(value));
                 Ok(())
             }
             RuntimeValue::Param(param_index) => {
@@ -301,6 +392,26 @@ impl<'a> Vm<'a> {
             }
             _ => Err(RuntimeError::new("index target is not an array or curve")),
         }
+    }
+
+    fn member(&mut self, member: &Identifier) -> Result<(), RuntimeError> {
+        let target = self.pop()?;
+        let RuntimeValue::TargetItem(item) = target else {
+            return Err(RuntimeError::new("member access requires TargetItem"));
+        };
+        let Some(pixel) = item.pixels.first() else {
+            return Err(RuntimeError::new("empty TargetItem has no fields"));
+        };
+        let value = match member.as_str() {
+            "fixture_index" => RuntimeValue::Int(pixel.fixture_index),
+            "fixture_pixel_index" => RuntimeValue::Int(pixel.fixture_pixel_index),
+            "pixel_index" => RuntimeValue::Int(pixel.pixel_index),
+            "pixel_count" => RuntimeValue::Int(pixel.pixel_count),
+            "pixel_fraction" => RuntimeValue::Float(pixel.pixel_fraction),
+            _ => return Err(RuntimeError::new("unknown TargetItem member")),
+        };
+        self.push(value);
+        Ok(())
     }
 
     fn coerce_float(&mut self) -> Result<(), RuntimeError> {
@@ -383,6 +494,74 @@ impl<'a> Vm<'a> {
         Ok(())
     }
 
+    fn emit_generated(
+        &mut self,
+        effect: &Identifier,
+        fields: &[Identifier],
+    ) -> Result<(), RuntimeError> {
+        if self.scratch.stack.len() < fields.len() {
+            return Err(RuntimeError::new("stack underflow"));
+        }
+        let start = self.scratch.stack.len() - fields.len();
+        let values = self.scratch.stack.drain(start..).collect::<Vec<_>>();
+        let mut start_seconds = None;
+        let mut duration_seconds = None;
+        let mut target = None;
+        let mut params = IndexMap::new();
+        for (field, value) in fields.iter().zip(values) {
+            match field.as_str() {
+                "start" => start_seconds = Some(to_float_runtime(&value, self.params)?),
+                "duration" => duration_seconds = Some(to_float_runtime(&value, self.params)?),
+                "target" => {
+                    target = Some(match value {
+                        RuntimeValue::TargetItem(item) => item,
+                        RuntimeValue::TargetItems(items) => {
+                            if items.groups.len() == 1 {
+                                Arc::clone(&items.groups[0])
+                            } else {
+                                let pixels = items
+                                    .groups
+                                    .iter()
+                                    .flat_map(|item| item.pixels.iter().copied())
+                                    .collect();
+                                Arc::new(TargetItemValue {
+                                    pixels: Arc::new(pixels),
+                                })
+                            }
+                        }
+                        RuntimeValue::Target(target) => {
+                            if target.groups.len() == 1 {
+                                Arc::clone(&target.groups[0])
+                            } else {
+                                let pixels = target
+                                    .groups
+                                    .iter()
+                                    .flat_map(|item| item.pixels.iter().copied())
+                                    .collect();
+                                Arc::new(TargetItemValue {
+                                    pixels: Arc::new(pixels),
+                                })
+                            }
+                        }
+                        _ => return Err(RuntimeError::new("emit target must be target items")),
+                    });
+                }
+                _ => {
+                    params.insert(field.clone(), runtime_to_value(value, self.params));
+                }
+            }
+        }
+        self.scratch.generated.push(GeneratedEffect {
+            definition: effect.clone(),
+            start_seconds: start_seconds.ok_or_else(|| RuntimeError::new("emit missing start"))?,
+            duration_seconds: duration_seconds
+                .ok_or_else(|| RuntimeError::new("emit missing duration"))?,
+            target: target.ok_or_else(|| RuntimeError::new("emit missing target"))?,
+            params,
+        });
+        Ok(())
+    }
+
     fn push(&mut self, value: RuntimeValue) {
         self.scratch.stack.push(value);
     }
@@ -434,9 +613,15 @@ fn default_value(ty: &Type) -> Value {
             green: 0,
             blue: 0,
         }),
-        Type::Marks => Value::Marks(Marks { marks: Vec::new() }),
-        Type::Curve(_) => Value::Curve(Curve { points: Vec::new() }),
-        Type::Array(_) => Value::Array(Vec::new()),
+        Type::Marks => Value::Marks(Arc::new(Marks { marks: Vec::new() })),
+        Type::Timeline => Value::Void,
+        Type::Target => Value::Target(Arc::new(TargetValue { groups: Vec::new() })),
+        Type::TargetItems => Value::TargetItems(Arc::new(TargetItemsValue { groups: Vec::new() })),
+        Type::TargetItem => Value::TargetItem(Arc::new(TargetItemValue {
+            pixels: Arc::new(Vec::new()),
+        })),
+        Type::Curve(_) => Value::Curve(Arc::new(Curve { points: Vec::new() })),
+        Type::Array(_) => Value::Array(Arc::new(Vec::new())),
         Type::Enum(options) => options
             .first()
             .cloned()
@@ -458,6 +643,10 @@ fn runtime_to_value(value: RuntimeValue, params: &BoundEffectParams) -> Value {
         RuntimeValue::Bool(value) => Value::Bool(value),
         RuntimeValue::Color(value) => Value::Color(value),
         RuntimeValue::Marks(value) => Value::Marks(value),
+        RuntimeValue::Timeline => Value::Void,
+        RuntimeValue::Target(value) => Value::Target(value),
+        RuntimeValue::TargetItems(value) => Value::TargetItems(value),
+        RuntimeValue::TargetItem(value) => Value::TargetItem(value),
         RuntimeValue::Curve(value) => Value::Curve(value),
         RuntimeValue::Array(value) => Value::Array(value),
         RuntimeValue::Enum(value) => Value::Enum(value),
@@ -468,19 +657,22 @@ fn runtime_to_value(value: RuntimeValue, params: &BoundEffectParams) -> Value {
 fn call_builtin(
     builtin: Builtin,
     args: &[RuntimeValue],
-    context: &RunContext,
+    context: VmContext<'_>,
     params: &BoundEffectParams,
 ) -> Result<RuntimeValue, RuntimeError> {
     match builtin {
-        Builtin::Progress => Ok(RuntimeValue::Float(context.progress)),
-        Builtin::Seconds => Ok(RuntimeValue::Float(context.seconds)),
-        Builtin::Duration => Ok(RuntimeValue::Float(context.duration)),
-        Builtin::PixelIndex => Ok(RuntimeValue::Int(context.pixel_index)),
-        Builtin::PixelCount => Ok(RuntimeValue::Int(context.pixel_count)),
-        Builtin::PixelFraction => Ok(RuntimeValue::Float(context.pixel_fraction)),
+        Builtin::Progress => Ok(RuntimeValue::Float(sample_context(context)?.progress)),
+        Builtin::Seconds => Ok(RuntimeValue::Float(sample_context(context)?.seconds)),
+        Builtin::Duration => Ok(RuntimeValue::Float(match context {
+            VmContext::Sample(context) => context.duration,
+            VmContext::Generator(context) => context.duration,
+        })),
+        Builtin::PixelIndex => Ok(RuntimeValue::Int(sample_context(context)?.pixel_index)),
+        Builtin::PixelCount => Ok(RuntimeValue::Int(sample_context(context)?.pixel_count)),
+        Builtin::PixelFraction => Ok(RuntimeValue::Float(sample_context(context)?.pixel_fraction)),
         Builtin::SectionPosition => {
             let width = to_float_runtime(value_at(args, 0)?, params)?.max(1.0);
-            let index = context.pixel_index as f64;
+            let index = sample_context(context)?.pixel_index as f64;
             Ok(RuntimeValue::Float(
                 (index - (index / width).floor() * width) / width,
             ))
@@ -586,6 +778,41 @@ fn call_builtin(
         Builtin::MarkNextIndex => Ok(RuntimeValue::Int(mark_next_index(args, context, params)?)),
         Builtin::MarkElapsed => Ok(RuntimeValue::Float(mark_elapsed(args, context, params)?)),
         Builtin::MarkPhase => Ok(RuntimeValue::Float(mark_phase(args, context, params)?)),
+        Builtin::Fixtures => Ok(RuntimeValue::TargetItems(Arc::new(fixtures(value_at(
+            args, 0,
+        )?)?))),
+        Builtin::Pixels => Ok(RuntimeValue::TargetItems(Arc::new(pixels(value_at(
+            args, 0,
+        )?)?))),
+        Builtin::Sections => Ok(RuntimeValue::TargetItems(
+            sections(
+                value_at(args, 0)?,
+                to_float_runtime(value_at(args, 1)?, params)?,
+            )?
+            .into(),
+        )),
+        Builtin::Count => Ok(RuntimeValue::Int(
+            target_items(value_at(args, 0)?)?.groups.len() as i64,
+        )),
+        Builtin::Pick => {
+            let items = target_items(value_at(args, 0)?)?;
+            let index = usize::try_from(to_int_runtime(value_at(args, 1)?, params)?)
+                .map_err(|_| RuntimeError::new("target item index cannot be negative"))?;
+            Ok(RuntimeValue::TargetItem(
+                items
+                    .groups
+                    .get(index)
+                    .cloned()
+                    .ok_or_else(|| RuntimeError::new("target item index out of bounds"))?,
+            ))
+        }
+    }
+}
+
+fn sample_context(context: VmContext<'_>) -> Result<&RunContext, RuntimeError> {
+    match context {
+        VmContext::Sample(context) => Ok(context),
+        VmContext::Generator(_) => Err(RuntimeError::new("sample context is unavailable")),
     }
 }
 
@@ -638,6 +865,99 @@ fn to_curve_runtime<'a>(
         },
         _ => Err(RuntimeError::new("expected curve")),
     }
+}
+
+fn target_items(value: &RuntimeValue) -> Result<&TargetItemsValue, RuntimeError> {
+    match value {
+        RuntimeValue::TargetItems(items) => Ok(items),
+        _ => Err(RuntimeError::new("expected TargetItems")),
+    }
+}
+
+fn target_groups(value: &RuntimeValue) -> Result<Vec<Arc<TargetItemValue>>, RuntimeError> {
+    match value {
+        RuntimeValue::Target(target) => Ok(target.groups.clone()),
+        RuntimeValue::TargetItems(items) => Ok(items.groups.clone()),
+        RuntimeValue::TargetItem(item) => Ok(vec![item.clone()]),
+        _ => Err(RuntimeError::new("expected target")),
+    }
+}
+
+fn fixtures(value: &RuntimeValue) -> Result<TargetItemsValue, RuntimeError> {
+    let pixels = target_groups(value)?
+        .into_iter()
+        .flat_map(|item| item.pixels.iter().copied().collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let mut raw_groups: Vec<Vec<TargetPixelValue>> = Vec::new();
+    for pixel in pixels {
+        if raw_groups
+            .last()
+            .and_then(|group| group.first())
+            .is_some_and(|first| first.fixture_index == pixel.fixture_index)
+        {
+            if let Some(group) = raw_groups.last_mut() {
+                group.push(pixel);
+            }
+        } else {
+            raw_groups.push(vec![pixel]);
+        }
+    }
+    let groups = raw_groups
+        .into_iter()
+        .map(|pixels| {
+            Arc::new(TargetItemValue {
+                pixels: Arc::new(pixels),
+            })
+        })
+        .collect();
+    Ok(TargetItemsValue { groups })
+}
+
+fn pixels(value: &RuntimeValue) -> Result<TargetItemsValue, RuntimeError> {
+    Ok(TargetItemsValue {
+        groups: target_groups(value)?
+            .into_iter()
+            .flat_map(|item| item.pixels.iter().copied().collect::<Vec<_>>())
+            .map(|pixel| {
+                Arc::new(TargetItemValue {
+                    pixels: Arc::new(vec![pixel]),
+                })
+            })
+            .collect(),
+    })
+}
+
+fn sections(value: &RuntimeValue, width: f64) -> Result<TargetItemsValue, RuntimeError> {
+    let width = width.max(1.0).floor() as i64;
+    let mut raw_groups: Vec<Vec<TargetPixelValue>> = Vec::new();
+    for pixel in target_groups(value)?
+        .into_iter()
+        .flat_map(|item| item.pixels.iter().copied().collect::<Vec<_>>())
+    {
+        if raw_groups
+            .last()
+            .and_then(|group| group.first())
+            .is_some_and(|first| {
+                first.fixture_index == pixel.fixture_index
+                    && first.fixture_pixel_index / width == pixel.fixture_pixel_index / width
+            })
+        {
+            if let Some(group) = raw_groups.last_mut() {
+                group.push(pixel);
+            }
+        } else {
+            raw_groups.push(vec![pixel]);
+        }
+    }
+    let groups = raw_groups
+        .into_iter()
+        .map(|pixels| {
+            Arc::new(TargetItemValue {
+                pixels: Arc::new(pixels),
+            })
+        })
+        .collect();
+    Ok(TargetItemsValue { groups })
 }
 
 fn numeric_binary(
@@ -842,7 +1162,7 @@ fn mark_source<'a>(
 
 fn mark_count(
     args: &[RuntimeValue],
-    context: &RunContext,
+    context: VmContext<'_>,
     params: &BoundEffectParams,
 ) -> Result<i64, RuntimeError> {
     let _ = context;
@@ -852,7 +1172,7 @@ fn mark_count(
 
 fn mark_at(
     args: &[RuntimeValue],
-    _context: &RunContext,
+    _context: VmContext<'_>,
     params: &BoundEffectParams,
 ) -> Result<f64, RuntimeError> {
     let marks = mark_source(args, params)?;
@@ -872,7 +1192,7 @@ fn mark_at(
 
 fn mark_prev(
     args: &[RuntimeValue],
-    context: &RunContext,
+    context: VmContext<'_>,
     params: &BoundEffectParams,
 ) -> Result<f64, RuntimeError> {
     let marks = mark_source(args, params)?;
@@ -902,7 +1222,7 @@ fn mark_at_from(marks: &Marks, index: i64, fallback: f64) -> Result<f64, Runtime
 
 fn mark_prev_index(
     args: &[RuntimeValue],
-    context: &RunContext,
+    context: VmContext<'_>,
     params: &BoundEffectParams,
 ) -> Result<i64, RuntimeError> {
     let seconds = mark_query_seconds(args, context, 1, params)?;
@@ -911,7 +1231,7 @@ fn mark_prev_index(
 
 fn mark_next_index(
     args: &[RuntimeValue],
-    context: &RunContext,
+    context: VmContext<'_>,
     params: &BoundEffectParams,
 ) -> Result<i64, RuntimeError> {
     let seconds = mark_query_seconds(args, context, 1, params)?;
@@ -941,7 +1261,7 @@ fn next_index(marks: &Marks, seconds: f64) -> Result<i64, RuntimeError> {
 
 fn mark_elapsed(
     args: &[RuntimeValue],
-    context: &RunContext,
+    context: VmContext<'_>,
     params: &BoundEffectParams,
 ) -> Result<f64, RuntimeError> {
     let seconds = mark_query_seconds(args, context, 1, params)?;
@@ -958,11 +1278,15 @@ fn elapsed(marks: &Marks, seconds: f64) -> Result<f64, RuntimeError> {
 
 fn mark_phase(
     args: &[RuntimeValue],
-    context: &RunContext,
+    context: VmContext<'_>,
     params: &BoundEffectParams,
 ) -> Result<f64, RuntimeError> {
     let seconds = mark_query_seconds(args, context, 1, params)?;
-    phase(mark_source(args, params)?, seconds, context.duration)
+    let duration = match context {
+        VmContext::Sample(context) => context.duration,
+        VmContext::Generator(context) => context.duration,
+    };
+    phase(mark_source(args, params)?, seconds, duration)
 }
 
 fn phase(marks: &Marks, seconds: f64, duration: f64) -> Result<f64, RuntimeError> {
@@ -983,20 +1307,24 @@ fn phase(marks: &Marks, seconds: f64, duration: f64) -> Result<f64, RuntimeError
 
 fn mark_query_seconds(
     args: &[RuntimeValue],
-    context: &RunContext,
+    context: VmContext<'_>,
     marks_arg_offset: usize,
     params: &BoundEffectParams,
 ) -> Result<f64, RuntimeError> {
+    let default_seconds = match context {
+        VmContext::Sample(context) => context.seconds,
+        VmContext::Generator(_) => 0.0,
+    };
     if first_arg_is_marks(args, params) {
         args.get(marks_arg_offset)
             .map(|value| to_float_runtime(value, params))
             .transpose()
-            .map(|value| value.unwrap_or(context.seconds))
+            .map(|value| value.unwrap_or(default_seconds))
     } else {
         args.first()
             .map(|value| to_float_runtime(value, params))
             .transpose()
-            .map(|value| value.unwrap_or(context.seconds))
+            .map(|value| value.unwrap_or(default_seconds))
     }
 }
 

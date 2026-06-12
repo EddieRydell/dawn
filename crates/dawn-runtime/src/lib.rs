@@ -14,7 +14,8 @@ use dawn_language::effect::{
     CurveSource, EffectDefinitionId, EffectParamValue, EffectScope, EffectTarget,
 };
 use dawn_language::effect_dsl::{
-    BoundEffectParams, EffectVmScratch, Identifier, RunContext, RuntimeError, Value,
+    BoundEffectParams, EffectKind, EffectVmScratch, GeneratedEffect, GeneratorContext, Identifier,
+    RunContext, RuntimeError, TargetItemValue, TargetPixelValue, TargetValue, Type, Value,
 };
 use dawn_language::model::DawnProject;
 use dawn_language::sequence::{MarkCollectionKey, Sequence, SequenceId};
@@ -23,6 +24,7 @@ use dawn_language::setup::{
 };
 use dawn_language::values::{Color, Marks};
 use indexmap::{IndexMap, IndexSet};
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct PreparedSequenceRenderer {
@@ -30,6 +32,7 @@ pub struct PreparedSequenceRenderer {
     frame_count: u64,
     fixtures: Vec<PreparedFixture>,
     effects: Vec<PreparedEffect>,
+    effects_by_frame: Vec<Vec<usize>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -61,6 +64,7 @@ pub enum RenderError {
     MissingMarkCollection { key: MarkCollectionKey },
     BadTarget,
     EffectVm { message: String },
+    GeneratorPrepare { message: String },
 }
 
 impl From<RuntimeError> for RenderError {
@@ -119,6 +123,7 @@ impl PreparedSequenceRenderer {
             .collect::<IndexMap<_, _>>();
 
         let mut effects = Vec::with_capacity(sequence.effects.len());
+        let mut generated_child_count = 0usize;
         for effect in &sequence.effects {
             let effect_duration_seconds = effect.duration.as_seconds_f64();
             if !effect_duration_seconds.is_finite() || effect_duration_seconds <= 0.0 {
@@ -134,31 +139,47 @@ impl PreparedSequenceRenderer {
                     effect_id: effect.definition.clone(),
                 })?;
             let target_ids = prepare_target(&effect.target, &fixture_ids, &groups)?;
-            let target = prepare_target_indexes(&target_ids, &fixtures)?;
-            let total_target_pixels = target
-                .iter()
-                .map(|index| fixtures[*index].pixel_count)
-                .sum::<usize>();
+            let target = prepare_target_pixels(&target_ids, &fixtures, &effect.scope)?;
             let params = prepare_params(project, sequence, &effect.param_overrides)?;
             let bound_params = definition.compiled.bind_params(&params);
-            effects.push(PreparedEffect {
-                start_seconds: effect.start.as_seconds_f64(),
-                duration_seconds: effect_duration_seconds,
-                target,
-                total_target_pixels,
-                scope: effect.scope.clone(),
-                definition: definition.compiled.clone(),
-                params: bound_params,
-            });
+            let start_seconds = effect.start.as_seconds_f64();
+            match definition.compiled.kind() {
+                EffectKind::Sample => effects.push(PreparedEffect {
+                    start_seconds,
+                    duration_seconds: effect_duration_seconds,
+                    target,
+                    definition: definition.compiled.clone(),
+                    params: bound_params,
+                }),
+                EffectKind::Generator => expand_generator(
+                    &mut GeneratorPrepareContext {
+                        project,
+                        fixtures: &fixtures,
+                        effects: &mut effects,
+                        generated_child_count: &mut generated_child_count,
+                    },
+                    &definition.compiled,
+                    &bound_params,
+                    GeneratorExpansion {
+                        start_seconds,
+                        duration_seconds: effect_duration_seconds,
+                        target,
+                        depth: 0,
+                    },
+                )?,
+            }
         }
 
         let frame_rate = sequence.frame_rate;
         let duration_seconds = sequence.duration.as_seconds_f64();
+        let frame_count = frame_count(duration_seconds, frame_rate);
+        let effects_by_frame = build_effect_frame_index(&effects, frame_count, frame_rate);
         Ok(Self {
             frame_rate,
-            frame_count: frame_count(duration_seconds, frame_rate),
+            frame_count,
             fixtures,
             effects,
+            effects_by_frame,
         })
     }
 
@@ -204,13 +225,18 @@ impl PreparedSequenceRenderer {
             })
             .collect::<Vec<_>>();
 
-        for effect in &self.effects {
-            if sample_seconds < effect.start_seconds
-                || sample_seconds >= effect.start_seconds + effect.duration_seconds
-            {
-                continue;
+        if let Some(active_effects) = self.effects_by_frame.get(frame_index as usize) {
+            for effect_index in active_effects {
+                let Some(effect) = self.effects.get(*effect_index) else {
+                    continue;
+                };
+                if sample_seconds < effect.start_seconds
+                    || sample_seconds >= effect.start_seconds + effect.duration_seconds
+                {
+                    continue;
+                }
+                render_effect(effect, &mut rendered, sample_seconds)?;
             }
-            render_effect(effect, &self.fixtures, &mut rendered, sample_seconds)?;
         }
 
         Ok(RenderedFrame {
@@ -306,6 +332,38 @@ fn prepare_target_indexes(
         .collect()
 }
 
+fn prepare_target_pixels(
+    target: &[FixtureInstanceId],
+    fixtures: &[PreparedFixture],
+    scope: &EffectScope,
+) -> Result<Vec<PreparedTargetPixel>, RenderError> {
+    let indexes = prepare_target_indexes(target, fixtures)?;
+    let total_target_pixels = indexes
+        .iter()
+        .map(|index| fixtures[*index].pixel_count)
+        .sum::<usize>();
+    let mut pixels = Vec::with_capacity(total_target_pixels);
+    let mut whole_index = 0usize;
+    for fixture_index in indexes {
+        let fixture_pixel_count = fixtures[fixture_index].pixel_count;
+        for fixture_pixel_index in 0..fixture_pixel_count {
+            let (pixel_index, pixel_count) = match scope {
+                EffectScope::PerFixture => (fixture_pixel_index, fixture_pixel_count),
+                EffectScope::WholeTarget => (whole_index, total_target_pixels),
+            };
+            pixels.push(PreparedTargetPixel {
+                fixture_index,
+                fixture_pixel_index,
+                pixel_index,
+                pixel_count,
+                pixel_fraction: pixel_fraction(pixel_index, pixel_count),
+            });
+            whole_index += 1;
+        }
+    }
+    Ok(pixels)
+}
+
 fn prepare_params(
     project: &DawnProject,
     sequence: &Sequence,
@@ -334,11 +392,11 @@ fn prepare_param_value(
                 .iter()
                 .find(|collection| collection.key == *key)
                 .ok_or_else(|| RenderError::MissingMarkCollection { key: key.clone() })?;
-            Ok(Value::Marks(Marks {
+            Ok(Value::Marks(Arc::new(Marks {
                 marks: collection.marks.clone(),
-            }))
+            })))
         }
-        EffectParamValue::Curve(source) => Ok(Value::Curve(match source {
+        EffectParamValue::Curve(source) => Ok(Value::Curve(Arc::new(match source {
             CurveSource::Inline(curve) => curve.clone(),
             CurveSource::Reference(id) => project
                 .definitions
@@ -347,51 +405,282 @@ fn prepare_param_value(
                 .ok_or(RenderError::MissingCurve)?
                 .curve
                 .clone(),
-        })),
+        }))),
         EffectParamValue::Array(values) => values
             .iter()
             .map(|value| prepare_param_value(project, sequence, value))
             .collect::<Result<Vec<_>, _>>()
+            .map(Arc::new)
             .map(Value::Array),
     }
 }
 
+const MAX_GENERATOR_DEPTH: usize = 4;
+const MAX_GENERATED_CHILDREN: usize = 20_000;
+
+#[derive(Clone, Debug)]
+struct GeneratorExpansion {
+    start_seconds: f64,
+    duration_seconds: f64,
+    target: Vec<PreparedTargetPixel>,
+    depth: usize,
+}
+
+struct GeneratorPrepareContext<'a> {
+    project: &'a DawnProject,
+    fixtures: &'a [PreparedFixture],
+    effects: &'a mut Vec<PreparedEffect>,
+    generated_child_count: &'a mut usize,
+}
+
+fn expand_generator(
+    context: &mut GeneratorPrepareContext<'_>,
+    definition: &dawn_language::effect_dsl::CompiledEffect,
+    params: &BoundEffectParams,
+    expansion: GeneratorExpansion,
+) -> Result<(), RenderError> {
+    if expansion.depth >= MAX_GENERATOR_DEPTH {
+        return Err(RenderError::GeneratorPrepare {
+            message: "generator depth limit exceeded".to_string(),
+        });
+    }
+    let mut scratch = EffectVmScratch::default();
+    let generated = definition.generate_bound(
+        params,
+        &GeneratorContext {
+            duration: expansion.duration_seconds,
+            target: Arc::new(TargetValue {
+                groups: target_groups_from_pixels(&expansion.target),
+            }),
+        },
+        &mut scratch,
+    )?;
+    for child in generated {
+        if *context.generated_child_count >= MAX_GENERATED_CHILDREN {
+            return Err(RenderError::GeneratorPrepare {
+                message: "generated child limit exceeded".to_string(),
+            });
+        }
+        *context.generated_child_count += 1;
+        prepare_generated_child(context, expansion.start_seconds, expansion.depth, child)?;
+    }
+    Ok(())
+}
+
+fn prepare_generated_child(
+    context: &mut GeneratorPrepareContext<'_>,
+    parent_start_seconds: f64,
+    parent_depth: usize,
+    child: GeneratedEffect,
+) -> Result<(), RenderError> {
+    let effect_id = EffectDefinitionId(child.definition.as_str().to_string());
+    let definition = context
+        .project
+        .definitions
+        .effects
+        .get(&effect_id)
+        .ok_or_else(|| RenderError::GeneratorPrepare {
+            message: format!("generated child effect `{}` does not exist", effect_id.0),
+        })?;
+    validate_generated_params(&definition.compiled, &child.params)?;
+    let duration_seconds = child.duration_seconds;
+    if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
+        return Err(RenderError::InvalidTiming {
+            reason: "generated effect duration must be positive and finite".to_string(),
+        });
+    }
+    let target = prepared_pixels_from_generated_target(context.fixtures, child.target)?;
+    let bound_params = definition.compiled.bind_params(&child.params);
+    let start_seconds = parent_start_seconds + child.start_seconds;
+    match definition.compiled.kind() {
+        EffectKind::Sample => {
+            context.effects.push(PreparedEffect {
+                start_seconds,
+                duration_seconds,
+                target,
+                definition: definition.compiled.clone(),
+                params: bound_params,
+            });
+            Ok(())
+        }
+        EffectKind::Generator => expand_generator(
+            context,
+            &definition.compiled,
+            &bound_params,
+            GeneratorExpansion {
+                start_seconds,
+                duration_seconds,
+                target,
+                depth: parent_depth + 1,
+            },
+        ),
+    }
+}
+
+fn validate_generated_params(
+    definition: &dawn_language::effect_dsl::CompiledEffect,
+    params: &IndexMap<Identifier, Value>,
+) -> Result<(), RenderError> {
+    for key in params.keys() {
+        if !definition.params().iter().any(|param| &param.name == key) {
+            return Err(RenderError::GeneratorPrepare {
+                message: format!("unknown generated param `{}`", key.as_str()),
+            });
+        }
+    }
+    for param in definition.params() {
+        let Some(value) = params.get(&param.name) else {
+            if param.default.is_none() {
+                return Err(RenderError::GeneratorPrepare {
+                    message: format!("missing generated param `{}`", param.name.as_str()),
+                });
+            }
+            continue;
+        };
+        if !value_matches_type(value, &param.ty) {
+            return Err(RenderError::GeneratorPrepare {
+                message: format!("generated param `{}` has wrong type", param.name.as_str()),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn value_matches_type(value: &Value, ty: &Type) -> bool {
+    matches!(
+        (value, ty),
+        (Value::Void, Type::Void)
+            | (Value::Int(_), Type::Int)
+            | (Value::Float(_), Type::Float)
+            | (Value::Int(_), Type::Float)
+            | (Value::Bool(_), Type::Bool)
+            | (Value::Color(_), Type::Color)
+            | (Value::Marks(_), Type::Marks)
+            | (Value::Curve(_), Type::Curve(_))
+            | (Value::Target(_), Type::Target)
+            | (Value::TargetItems(_), Type::TargetItems)
+            | (Value::TargetItem(_), Type::TargetItem)
+    ) || match (value, ty) {
+        (Value::Array(items), Type::Array(item_type)) => {
+            items.iter().all(|item| value_matches_type(item, item_type))
+        }
+        (Value::Enum(value), Type::Enum(options)) => options.iter().any(|option| option == value),
+        _ => false,
+    }
+}
+
+fn target_groups_from_pixels(pixels: &[PreparedTargetPixel]) -> Vec<Arc<TargetItemValue>> {
+    vec![Arc::new(TargetItemValue {
+        pixels: Arc::new(pixels.iter().map(target_pixel_value).collect()),
+    })]
+}
+
+fn target_pixel_value(pixel: &PreparedTargetPixel) -> TargetPixelValue {
+    TargetPixelValue {
+        fixture_index: pixel.fixture_index as i64,
+        fixture_pixel_index: pixel.fixture_pixel_index as i64,
+        pixel_index: pixel.pixel_index as i64,
+        pixel_count: pixel.pixel_count as i64,
+        pixel_fraction: pixel.pixel_fraction,
+    }
+}
+
+fn prepared_pixels_from_generated_target(
+    fixtures: &[PreparedFixture],
+    target: Arc<TargetItemValue>,
+) -> Result<Vec<PreparedTargetPixel>, RenderError> {
+    target
+        .pixels
+        .iter()
+        .copied()
+        .map(|pixel| {
+            let fixture_index = usize::try_from(pixel.fixture_index).map_err(|_| {
+                RenderError::GeneratorPrepare {
+                    message: "generated target fixture index cannot be negative".to_string(),
+                }
+            })?;
+            let fixture_pixel_index = usize::try_from(pixel.fixture_pixel_index).map_err(|_| {
+                RenderError::GeneratorPrepare {
+                    message: "generated target pixel index cannot be negative".to_string(),
+                }
+            })?;
+            let fixture =
+                fixtures
+                    .get(fixture_index)
+                    .ok_or_else(|| RenderError::GeneratorPrepare {
+                        message: "generated target fixture index is out of bounds".to_string(),
+                    })?;
+            if fixture_pixel_index >= fixture.pixel_count {
+                return Err(RenderError::GeneratorPrepare {
+                    message: "generated target pixel index is out of bounds".to_string(),
+                });
+            }
+            let pixel_index =
+                usize::try_from(pixel.pixel_index).map_err(|_| RenderError::GeneratorPrepare {
+                    message: "generated target pixel context index cannot be negative".to_string(),
+                })?;
+            let pixel_count =
+                usize::try_from(pixel.pixel_count).map_err(|_| RenderError::GeneratorPrepare {
+                    message: "generated target pixel context count cannot be negative".to_string(),
+                })?;
+            Ok(PreparedTargetPixel {
+                fixture_index,
+                fixture_pixel_index,
+                pixel_index,
+                pixel_count,
+                pixel_fraction: pixel.pixel_fraction,
+            })
+        })
+        .collect()
+}
+
+fn build_effect_frame_index(
+    effects: &[PreparedEffect],
+    frame_count: u64,
+    frame_rate: u32,
+) -> Vec<Vec<usize>> {
+    let mut index = vec![Vec::new(); frame_count as usize];
+    for (effect_index, effect) in effects.iter().enumerate() {
+        let start_frame = (effect.start_seconds * f64::from(frame_rate))
+            .floor()
+            .max(0.0) as u64;
+        let end_frame = ((effect.start_seconds + effect.duration_seconds) * f64::from(frame_rate))
+            .ceil() as u64;
+        for frame in start_frame..end_frame.min(frame_count) {
+            if let Some(bucket) = index.get_mut(frame as usize) {
+                bucket.push(effect_index);
+            }
+        }
+    }
+    index
+}
+
 fn render_effect(
     effect: &PreparedEffect,
-    fixtures: &[PreparedFixture],
     rendered: &mut [RenderedFixture],
     sample_seconds: f64,
 ) -> Result<(), RenderError> {
     let local_seconds = sample_seconds - effect.start_seconds;
     let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
-    let mut whole_index = 0usize;
     let mut scratch = EffectVmScratch::default();
 
-    for fixture_index in effect.target.iter().copied() {
-        let fixture_pixel_count = fixtures[fixture_index].pixel_count;
-        for fixture_pixel_index in 0..fixture_pixel_count {
-            let (pixel_index, pixel_count) = match effect.scope {
-                EffectScope::PerFixture => (fixture_pixel_index, fixture_pixel_count),
-                EffectScope::WholeTarget => (whole_index, effect.total_target_pixels),
-            };
-            let context = RunContext {
-                progress,
-                seconds: local_seconds,
-                duration: effect.duration_seconds,
-                pixel_index: pixel_index as i64,
-                pixel_count: pixel_count as i64,
-                pixel_fraction: pixel_fraction(pixel_index, pixel_count),
-                global_marks: Marks { marks: Vec::new() },
-            };
-            let color = effect
-                .definition
-                .sample_bound(&effect.params, &context, &mut scratch)?;
-            compose_max(
-                &mut rendered[fixture_index].pixels[fixture_pixel_index],
-                color,
-            );
-            whole_index += 1;
-        }
+    for pixel in &effect.target {
+        let context = RunContext {
+            progress,
+            seconds: local_seconds,
+            duration: effect.duration_seconds,
+            pixel_index: pixel.pixel_index as i64,
+            pixel_count: pixel.pixel_count as i64,
+            pixel_fraction: pixel.pixel_fraction,
+            global_marks: Marks { marks: Vec::new() },
+        };
+        let color = effect
+            .definition
+            .sample_bound(&effect.params, &context, &mut scratch)?;
+        compose_max(
+            &mut rendered[pixel.fixture_index].pixels[pixel.fixture_pixel_index],
+            color,
+        );
     }
     Ok(())
 }
@@ -425,12 +714,19 @@ struct PreparedFixture {
 }
 
 #[derive(Clone, Debug)]
+struct PreparedTargetPixel {
+    fixture_index: usize,
+    fixture_pixel_index: usize,
+    pixel_index: usize,
+    pixel_count: usize,
+    pixel_fraction: f64,
+}
+
+#[derive(Clone, Debug)]
 struct PreparedEffect {
     start_seconds: f64,
     duration_seconds: f64,
-    target: Vec<usize>,
-    total_target_pixels: usize,
-    scope: EffectScope,
+    target: Vec<PreparedTargetPixel>,
     definition: dawn_language::effect_dsl::CompiledEffect,
     params: BoundEffectParams,
 }

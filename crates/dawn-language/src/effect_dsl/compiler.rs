@@ -1,7 +1,9 @@
 use super::ast::{BinaryOp, EffectDecl, Expr, ExprKind, Module, ParamDecl, Stmt};
-use super::bytecode::{Builtin, BytecodeFunction, Instruction, LocalId, ParamId, Target};
+use super::bytecode::{
+    Builtin, BytecodeFunction, GeneratorContextId, Instruction, LocalId, ParamId, Target,
+};
 use super::types::{Identifier, Type, Value};
-use super::CompiledEffect;
+use super::{CompiledEffect, EffectKind};
 use indexmap::IndexMap;
 
 pub(crate) fn compile_checked_effects(module: Module) -> Vec<CompiledEffect> {
@@ -14,11 +16,17 @@ fn compile_effect(effect: EffectDecl) -> CompiledEffect {
         .into_iter()
         .map(compile_param)
         .collect::<Vec<_>>();
-    let sample = FunctionCompiler::new(&params).compile(effect.sample.body.statements);
+    let kind = if effect.entrypoint.name.as_str() == "generate" {
+        EffectKind::Generator
+    } else {
+        EffectKind::Sample
+    };
+    let function = FunctionCompiler::new(&params, kind).compile(effect.entrypoint.body.statements);
     CompiledEffect {
         name: effect.name,
         params,
-        sample,
+        kind,
+        function,
     }
 }
 
@@ -39,13 +47,28 @@ struct FunctionCompiler {
 enum Binding {
     Param(ParamId),
     Local(LocalId),
+    GeneratorContext(GeneratorContextId),
 }
 
 impl FunctionCompiler {
-    fn new(params: &[ParamDecl]) -> Self {
+    fn new(params: &[ParamDecl], kind: EffectKind) -> Self {
         let mut param_scope = IndexMap::new();
         for (index, param) in params.iter().enumerate() {
             param_scope.insert(param.name.clone(), Binding::Param(index));
+        }
+        if kind == EffectKind::Generator {
+            param_scope.insert(
+                static_identifier("timeline"),
+                Binding::GeneratorContext(GeneratorContextId::Timeline),
+            );
+            param_scope.insert(
+                static_identifier("target"),
+                Binding::GeneratorContext(GeneratorContextId::Target),
+            );
+            param_scope.insert(
+                static_identifier("duration"),
+                Binding::GeneratorContext(GeneratorContextId::Duration),
+            );
         }
         Self {
             instructions: Vec::new(),
@@ -59,6 +82,9 @@ impl FunctionCompiler {
 
     fn compile(mut self, statements: Vec<Stmt>) -> BytecodeFunction {
         self.compile_block(statements);
+        let void = self.add_constant(Value::Void);
+        self.emit(Instruction::LoadConst(void), 1);
+        self.emit(Instruction::Return, -1);
         BytecodeFunction {
             instructions: self.instructions,
             constants: self.constants,
@@ -98,7 +124,7 @@ impl FunctionCompiler {
                 match self.lookup(&name) {
                     Some(Binding::Param(slot)) => self.emit(Instruction::StoreParam(slot), -1),
                     Some(Binding::Local(slot)) => self.emit(Instruction::StoreLocal(slot), -1),
-                    None => {}
+                    Some(Binding::GeneratorContext(_)) | None => {}
                 }
             }
             Stmt::Expr(expr) => {
@@ -140,6 +166,21 @@ impl FunctionCompiler {
                 self.patch_jump(end_jump, self.current_target());
                 let _ = self.scopes.pop();
             }
+            Stmt::Emit { effect, fields } => {
+                let arity = fields.len();
+                let mut names = Vec::with_capacity(arity);
+                for (name, value) in fields {
+                    names.push(name);
+                    self.compile_expr(value);
+                }
+                self.emit(
+                    Instruction::Emit {
+                        effect,
+                        fields: names,
+                    },
+                    -(arity as isize),
+                );
+            }
             Stmt::Return(expr) => {
                 self.compile_expr(expr);
                 self.emit(Instruction::Return, -1);
@@ -156,6 +197,9 @@ impl FunctionCompiler {
             ExprKind::Variable(name) => match self.lookup(&name) {
                 Some(Binding::Param(slot)) => self.emit(Instruction::LoadParam(slot), 1),
                 Some(Binding::Local(slot)) => self.emit(Instruction::LoadLocal(slot), 1),
+                Some(Binding::GeneratorContext(slot)) => {
+                    self.emit(Instruction::LoadGeneratorContext(slot), 1);
+                }
                 None => {
                     let value = match name.as_str() {
                         "PI" => Value::Float(std::f64::consts::PI),
@@ -177,6 +221,10 @@ impl FunctionCompiler {
                 self.compile_expr(*target);
                 self.compile_expr(*index);
                 self.emit(Instruction::Index, -1);
+            }
+            ExprKind::Member { target, member } => {
+                self.compile_expr(*target);
+                self.emit(Instruction::Member(member), 0);
             }
             ExprKind::Call { callee, args } => {
                 let ExprKind::Variable(name) = callee.kind else {
@@ -269,5 +317,12 @@ impl FunctionCompiler {
         if self.stack_depth > self.max_stack as isize {
             self.max_stack = self.stack_depth as usize;
         }
+    }
+}
+
+fn static_identifier(value: &str) -> Identifier {
+    match Identifier::new(value.to_string()) {
+        Ok(identifier) => identifier,
+        Err(_) => unreachable!("static identifier is valid"),
     }
 }

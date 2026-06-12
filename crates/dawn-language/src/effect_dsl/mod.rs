@@ -12,14 +12,18 @@ pub use diagnostic::Diagnostic;
 use indexmap::IndexMap;
 use parser::parse_module;
 use typecheck::check_module;
-pub use vm::{BoundEffectParams, EffectVmScratch, RunContext, RuntimeError};
+pub use vm::{
+    BoundEffectParams, EffectVmScratch, GeneratedEffect, GeneratorContext, RunContext, RuntimeError,
+};
 
 pub(crate) mod lexer;
 pub mod types;
 
 pub use crate::values::{Color, Curve, CurvePoint, CurveValue, Marks};
 pub use ast::ParamDecl;
-pub use types::{Identifier, Type, Value};
+pub use types::{
+    Identifier, TargetItemValue, TargetItemsValue, TargetPixelValue, TargetValue, Type, Value,
+};
 
 pub fn compile_effects(source: &str) -> Result<Vec<CompiledEffect>, Vec<Diagnostic>> {
     let module = parse_module(source)?;
@@ -31,7 +35,14 @@ pub fn compile_effects(source: &str) -> Result<Vec<CompiledEffect>, Vec<Diagnost
 pub struct CompiledEffect {
     name: Identifier,
     params: Vec<ParamDecl>,
-    sample: BytecodeFunction,
+    kind: EffectKind,
+    function: BytecodeFunction,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EffectKind {
+    Sample,
+    Generator,
 }
 
 impl PartialEq for CompiledEffect {
@@ -47,6 +58,10 @@ impl CompiledEffect {
 
     pub fn params(&self) -> &[ParamDecl] {
         &self.params
+    }
+
+    pub fn kind(&self) -> EffectKind {
+        self.kind
     }
 
     pub fn sample(
@@ -69,6 +84,15 @@ impl CompiledEffect {
         context: &RunContext,
         scratch: &mut EffectVmScratch,
     ) -> Result<Color, RuntimeError> {
-        vm::run_effect(self, params, context, scratch)
+        vm::run_sample_effect(self, params, context, scratch)
+    }
+
+    pub fn generate_bound(
+        &self,
+        params: &BoundEffectParams,
+        context: &GeneratorContext,
+        scratch: &mut EffectVmScratch,
+    ) -> Result<Vec<GeneratedEffect>, RuntimeError> {
+        vm::run_generator_effect(self, params, context, scratch)
     }
 }

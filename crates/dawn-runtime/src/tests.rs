@@ -303,6 +303,120 @@ fn no_arg_and_global_mark_builtins_are_rejected() {
     .is_err());
 }
 
+#[test]
+fn generator_emits_sample_child_for_selected_fixture_target() {
+    let mut project = project(sequence_with_effects(vec![constant_effect(
+        1,
+        0.0,
+        2.0,
+        3,
+        EffectScope::WholeTarget,
+        "FixtureGenerator",
+        IndexMap::new(),
+    )]));
+    insert_effect(
+        &mut project,
+        "FixtureGenerator",
+        "effect FixtureGenerator {
+          void generate() {
+            TargetItems items = fixtures(target);
+            timeline.emit Green { start: 0.0, duration: duration, target: pick(items, 1.0) };
+          }
+        }",
+    );
+
+    let frame =
+        PreparedSequenceRenderer::prepare(&project, &SetupId("setup".to_string()), &seq_id())
+            .unwrap()
+            .render_frame(0)
+            .unwrap();
+
+    assert_eq!(frame.fixtures[0].pixels, vec![black(), black()]);
+    assert_eq!(
+        frame.fixtures[1].pixels,
+        vec![color(0, 255, 0), color(0, 255, 0)]
+    );
+    assert_eq!(frame.fixtures[2].pixels, vec![black(), black()]);
+}
+
+#[test]
+fn generated_child_validation_fails_during_prepare() {
+    for (name, source) in [
+        (
+            "MissingChildGenerator",
+            "effect MissingChildGenerator {
+              void generate() {
+                timeline.emit MissingChild { start: 0.0, duration: 1.0, target: target };
+              }
+            }",
+        ),
+        (
+            "BadParamGenerator",
+            "effect BadParamGenerator {
+              void generate() {
+                timeline.emit Green { start: 0.0, duration: 1.0, target: target, nope: 1.0 };
+              }
+            }",
+        ),
+        (
+            "BadTypeGenerator",
+            "effect BadTypeGenerator {
+              void generate() {
+                timeline.emit FloatChild { start: 0.0, duration: 1.0, target: target, value: #ffffff };
+              }
+            }",
+        ),
+    ] {
+        let mut project = project(sequence_with_effects(vec![constant_effect(
+            1,
+            0.0,
+            2.0,
+            3,
+            EffectScope::WholeTarget,
+            name,
+            IndexMap::new(),
+        )]));
+        insert_effect(
+            &mut project,
+            "FloatChild",
+            "effect FloatChild { param float value; color sample() { return rgb(value, 0.0, 0.0); } }",
+        );
+        insert_effect(&mut project, name, source);
+
+        assert!(matches!(
+            PreparedSequenceRenderer::prepare(&project, &SetupId("setup".to_string()), &seq_id()),
+            Err(RenderError::GeneratorPrepare { .. })
+        ));
+    }
+}
+
+#[test]
+fn nested_generator_depth_is_bounded() {
+    let mut project = project(sequence_with_effects(vec![constant_effect(
+        1,
+        0.0,
+        2.0,
+        3,
+        EffectScope::WholeTarget,
+        "LoopGenerator",
+        IndexMap::new(),
+    )]));
+    insert_effect(
+        &mut project,
+        "LoopGenerator",
+        "effect LoopGenerator {
+          void generate() {
+            timeline.emit LoopGenerator { start: 0.0, duration: 1.0, target: target };
+          }
+        }",
+    );
+
+    assert!(matches!(
+        PreparedSequenceRenderer::prepare(&project, &SetupId("setup".to_string()), &seq_id()),
+        Err(RenderError::GeneratorPrepare { .. })
+    ));
+}
+
 fn renderer_for(sequence: Sequence) -> PreparedSequenceRenderer {
     prepare(sequence).unwrap()
 }
@@ -407,6 +521,18 @@ fn definitions() -> ProjectDefinitionStores {
         },
         controllers: ControllerDefinitionStore::default(),
     }
+}
+
+fn insert_effect(project: &mut DawnProject, name: &str, source: &str) {
+    let compiled = compile_effects(source)
+        .unwrap()
+        .into_iter()
+        .find(|effect| effect.name().as_str() == name)
+        .unwrap();
+    project.definitions.effects.insert(
+        EffectDefinitionId(name.to_string()),
+        EffectDefinition { compiled },
+    );
 }
 
 fn layout() -> Layout {
