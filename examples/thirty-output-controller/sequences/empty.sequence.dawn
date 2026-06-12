@@ -1676,7 +1676,7 @@ empty:
         value: 20.0
     script: effects.MarkPulse
   - id: 75
-    start: 0.85s
+    start: 3.45s
     duration: 12.80752s
     target:
       type: group
@@ -1688,9 +1688,7 @@ empty:
         value: '#000000'
       palette:
         type: curve
-        curve:
-          id: 1
-          curve: curves.ghost_blue_gradient
+        curve: cool_gradient
       color_mode:
         type: enum
         value: from_palette

@@ -302,9 +302,9 @@ export type SequenceEffectParam = {
 
 export type SequenceEffectParamCurveSource = { type: "inline" } | { type: "library"; reference: string; path: string | null; objectKey: string | null; displayName: string | null };
 
-export type SequenceEffectParamKind = "int" | "float" | "bool" | "color" | "enum" | "flags" | "floatCurve" | "colorCurve" | "intArray" | "floatArray" | "boolArray" | "colorArray" | "floatCurveArray" | "colorCurveArray" | "marks";
+export type SequenceEffectParamKind = "int" | "float" | "bool" | "color" | "enum" | "floatCurve" | "colorCurve" | "intArray" | "floatArray" | "boolArray" | "colorArray" | "floatCurveArray" | "colorCurveArray" | "marks";
 
-export type SequenceEffectParamValue = { type: "int"; value: number } | { type: "float"; value: number } | { type: "bool"; value: boolean } | { type: "color"; value: string } | { type: "enum"; value: string } | { type: "flags"; value: string[] } | { type: "floatCurve"; points: FloatCurvePoint[] } | { type: "colorCurve"; points: ColorCurvePoint[] } | { type: "intArray"; values: number[] } | { type: "floatArray"; values: number[] } | { type: "boolArray"; values: boolean[] } | { type: "colorArray"; values: string[] } | { type: "floatCurveArray"; values: FloatCurvePoint[][] } | { type: "colorCurveArray"; values: ColorCurvePoint[][] } | { type: "marks"; key: string };
+export type SequenceEffectParamValue = { type: "int"; value: number } | { type: "float"; value: number } | { type: "bool"; value: boolean } | { type: "color"; value: string } | { type: "enum"; value: string } | { type: "floatCurve"; points: FloatCurvePoint[] } | { type: "colorCurve"; points: ColorCurvePoint[] } | { type: "intArray"; values: number[] } | { type: "floatArray"; values: number[] } | { type: "boolArray"; values: boolean[] } | { type: "colorArray"; values: string[] } | { type: "floatCurveArray"; values: FloatCurvePoint[][] } | { type: "colorCurveArray"; values: ColorCurvePoint[][] } | { type: "marks"; key: string };
 
 export type SequenceEffectScope = "perFixture" | "wholeTarget";
 

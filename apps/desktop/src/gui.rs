@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use camino::Utf8Path;
 use dawn_language::effect::{
@@ -7,7 +7,8 @@ use dawn_language::effect::{
 use dawn_language::effect_dsl::{EffectKind, Type, Value as EffectValue};
 use dawn_language::sequence::SequenceId;
 use dawn_language::setup::{
-    FixtureDefinitionId, Geometry as DomainGeometry, LayoutId, LayoutTarget as DomainLayoutTarget,
+    FixtureDefinitionId, FixtureGroupId, FixtureInstanceId, Geometry as DomainGeometry, LayoutId,
+    LayoutTarget as DomainLayoutTarget,
 };
 use dawn_language::values::{Color, CurveValue, Distance, DistanceSpan, Point3};
 use dawn_project_io::{
@@ -26,7 +27,8 @@ use crate::dto::{
     SequenceCurveLibraryPoints, SequenceCurveValueType, SequenceEffect, SequenceEffectParam,
     SequenceEffectParamCurveSource, SequenceEffectParamKind, SequenceEffectParamValue,
     SequenceEffectScope, SequenceEffectScript, SequenceEffectScriptKind, SequenceEffectScriptParam,
-    SequenceGuiDocument, SequenceGuiEdit, SequenceLane, SequenceMarkCollection, Transform,
+    SequenceGuiDocument, SequenceGuiEdit, SequenceLane, SequenceMarkCollection, SequenceMarkRef,
+    SequencePasteAnchor, SequenceResizeEdge, SequenceSelection, SequenceSelectionEdit, Transform,
 };
 
 #[derive(Debug)]
@@ -107,7 +109,7 @@ pub fn apply_edit(
     let resolved = resolve_request(session, request).map_err(GuiMutationError::Invalid)?;
     match (request.view.clone(), edit) {
         (DocumentViewId::Sequence, GuiEditCommand::Sequence { edit }) => {
-            edit_sequence(session, &resolved.location, edit)
+            edit_sequence(session, &resolved, edit)
         }
         (DocumentViewId::Layout, GuiEditCommand::Layout { edit }) => {
             edit_layout(session, &resolved.location, edit)
@@ -118,6 +120,130 @@ pub fn apply_edit(
         _ => Err(GuiMutationError::Invalid(
             "GUI edit type does not match the requested document view.".to_string(),
         )),
+    }
+}
+
+#[derive(Clone)]
+pub(crate) enum SequenceClipboard {
+    Effects(Vec<ClipboardEffect>),
+    Marks(Vec<ClipboardMark>),
+}
+
+#[derive(Clone)]
+pub(crate) struct ClipboardEffect {
+    value: Value,
+    start_seconds: f64,
+    lane_index: usize,
+}
+
+#[derive(Clone)]
+pub(crate) struct ClipboardMark {
+    collection_key: String,
+    time_seconds: f64,
+}
+
+pub(crate) struct SequenceSelectionMutation {
+    pub selection: Option<SequenceSelection>,
+    pub copied_count: u32,
+    pub skipped_count: u32,
+}
+
+pub(crate) fn apply_sequence_selection_edit(
+    session: &mut ProjectSession,
+    request: &GuiDocumentRequest,
+    edit: SequenceSelectionEdit,
+    clipboard: &mut Option<SequenceClipboard>,
+) -> Result<SequenceSelectionMutation, GuiMutationError> {
+    if !matches!(request.view, DocumentViewId::Sequence) {
+        return Err(GuiMutationError::Invalid(
+            "Sequence selection edits require a sequence GUI document.".to_string(),
+        ));
+    }
+    let resolved = resolve_request(session, request).map_err(GuiMutationError::Invalid)?;
+    let sequence_id = SequenceId(resolved.source_id.id.clone());
+    match edit {
+        SequenceSelectionEdit::Copy { selection } => {
+            let (next_clipboard, copied_count, skipped_count) =
+                copy_sequence_selection(session, &resolved.location, &sequence_id, &selection)?;
+            *clipboard = next_clipboard;
+            Ok(SequenceSelectionMutation {
+                selection: Some(selection),
+                copied_count,
+                skipped_count,
+            })
+        }
+        SequenceSelectionEdit::Cut { selection } => {
+            let (next_clipboard, copied_count, skipped_count) =
+                copy_sequence_selection(session, &resolved.location, &sequence_id, &selection)?;
+            *clipboard = next_clipboard;
+            delete_sequence_selection(session, &resolved.location, &selection)?;
+            Ok(SequenceSelectionMutation {
+                selection: None,
+                copied_count,
+                skipped_count,
+            })
+        }
+        SequenceSelectionEdit::Delete { selection } => {
+            delete_sequence_selection(session, &resolved.location, &selection)?;
+            Ok(SequenceSelectionMutation {
+                selection: None,
+                copied_count: 0,
+                skipped_count: 0,
+            })
+        }
+        SequenceSelectionEdit::Paste { anchor } => {
+            paste_sequence_clipboard(session, &resolved.location, anchor, clipboard.as_ref())
+        }
+        SequenceSelectionEdit::MoveEffects {
+            ids,
+            time_delta_seconds,
+            lane_delta,
+        } => {
+            let moved = move_effect_selection(
+                session,
+                &resolved.location,
+                &sequence_id,
+                &ids,
+                time_delta_seconds,
+                lane_delta,
+            )?;
+            Ok(SequenceSelectionMutation {
+                selection: Some(SequenceSelection::Effects { ids: moved }),
+                copied_count: 0,
+                skipped_count: 0,
+            })
+        }
+        SequenceSelectionEdit::ResizeEffects {
+            ids,
+            edge,
+            time_delta_seconds,
+        } => {
+            resize_effect_selection(
+                session,
+                &resolved.location,
+                &sequence_id,
+                &ids,
+                edge,
+                time_delta_seconds,
+            )?;
+            Ok(SequenceSelectionMutation {
+                selection: Some(SequenceSelection::Effects { ids }),
+                copied_count: 0,
+                skipped_count: 0,
+            })
+        }
+        SequenceSelectionEdit::MoveMarks {
+            marks,
+            time_delta_seconds,
+        } => {
+            let moved =
+                move_mark_selection(session, &resolved.location, &marks, time_delta_seconds)?;
+            Ok(SequenceSelectionMutation {
+                selection: Some(SequenceSelection::Marks { marks: moved }),
+                copied_count: 0,
+                skipped_count: 0,
+            })
+        }
     }
 }
 
@@ -524,7 +650,7 @@ fn effect_params(
             let kind = param_kind(&param.ty)?;
             let override_value = effect.param_overrides.get(&param.name);
             let value = override_value
-                .map(effect_param_value)
+                .map(|value| effect_param_value(session, value))
                 .or_else(|| param.default.as_ref().and_then(default_param_value))
                 .or_else(|| default_value_for_type(&param.ty))?;
             Some(SequenceEffectParam {
@@ -532,7 +658,7 @@ fn effect_params(
                 kind,
                 options: param_options(&param.ty),
                 editable: true,
-                curve_source: override_value.and_then(curve_source),
+                curve_source: override_value.and_then(|value| curve_source(session, value)),
                 value,
             })
         })
@@ -628,7 +754,10 @@ fn param_options(ty: &Type) -> Vec<String> {
     }
 }
 
-fn effect_param_value(value: &EffectParamValue) -> SequenceEffectParamValue {
+fn effect_param_value(
+    session: &ProjectSession,
+    value: &EffectParamValue,
+) -> SequenceEffectParamValue {
     match value {
         EffectParamValue::Int(value) => SequenceEffectParamValue::Int {
             value: *value as f64,
@@ -648,11 +777,16 @@ fn effect_param_value(value: &EffectParamValue) -> SequenceEffectParamValue {
             CurveSource::Inline(curve) => curve_points(&curve.points)
                 .map(curve_points_param_value)
                 .unwrap_or_else(|| SequenceEffectParamValue::FloatCurve { points: Vec::new() }),
-            CurveSource::Reference(_) => {
-                SequenceEffectParamValue::FloatCurve { points: Vec::new() }
-            }
+            CurveSource::Reference(id) => session
+                .project
+                .definitions
+                .curves
+                .get(id)
+                .and_then(|definition| curve_points(&definition.curve.points))
+                .map(curve_points_param_value)
+                .unwrap_or_else(|| SequenceEffectParamValue::FloatCurve { points: Vec::new() }),
         },
-        EffectParamValue::Array(values) => array_param_value(values),
+        EffectParamValue::Array(values) => array_param_value(session, values),
     }
 }
 
@@ -730,17 +864,31 @@ fn default_value_for_type(ty: &Type) -> Option<SequenceEffectParamValue> {
     })
 }
 
-fn curve_source(value: &EffectParamValue) -> Option<SequenceEffectParamCurveSource> {
+fn curve_source(
+    session: &ProjectSession,
+    value: &EffectParamValue,
+) -> Option<SequenceEffectParamCurveSource> {
     match value {
         EffectParamValue::Curve(CurveSource::Inline(_)) => {
             Some(SequenceEffectParamCurveSource::Inline)
         }
         EffectParamValue::Curve(CurveSource::Reference(id)) => {
+            let location =
+                source_location(&session.source.source_map, SourceObjectKind::Curve, &id.0);
             Some(SequenceEffectParamCurveSource::Library {
                 reference: id.0.clone(),
-                path: None,
-                object_key: None,
-                display_name: Some(id.0.clone()),
+                path: location
+                    .as_ref()
+                    .map(|location| location.document.to_string()),
+                object_key: location
+                    .as_ref()
+                    .map(|location| location.object_key.clone()),
+                display_name: Some(
+                    location
+                        .as_ref()
+                        .map(|location| location.object_key.clone())
+                        .unwrap_or_else(|| id.0.clone()),
+                ),
             })
         }
         _ => None,
@@ -790,8 +938,14 @@ fn curve_points_param_value(points: SequenceCurveLibraryPoints) -> SequenceEffec
     }
 }
 
-fn array_param_value(values: &[EffectParamValue]) -> SequenceEffectParamValue {
-    let converted = values.iter().map(effect_param_value).collect::<Vec<_>>();
+fn array_param_value(
+    session: &ProjectSession,
+    values: &[EffectParamValue],
+) -> SequenceEffectParamValue {
+    let converted = values
+        .iter()
+        .map(|value| effect_param_value(session, value))
+        .collect::<Vec<_>>();
     array_param_from_sequence_values(&converted)
 }
 
@@ -1176,7 +1330,7 @@ fn edit_fixture(
 
 fn edit_sequence(
     session: &mut ProjectSession,
-    location: &SourceObjectLocation,
+    resolved: &ResolvedGuiObject,
     edit: SequenceGuiEdit,
 ) -> Result<(), GuiMutationError> {
     let add_effect_mark_params = match &edit {
@@ -1187,7 +1341,13 @@ fn edit_sequence(
         } => mark_param_names(session, &script.effect_name)?,
         _ => Vec::new(),
     };
-    let object = source_object_mut(session, location)?;
+    let unlink_curve_value = match &edit {
+        SequenceGuiEdit::UnlinkEffectCurveParam { id, name } => {
+            Some(current_curve_param_value(session, resolved, *id, name)?)
+        }
+        _ => None,
+    };
+    let object = source_object_mut(session, &resolved.location)?;
     match edit {
         SequenceGuiEdit::SetAudio { import_path } => {
             mapping_mut(object)?.insert(
@@ -1348,9 +1508,558 @@ fn edit_sequence(
             let effect = effect_mut(object, id)?;
             upsert_param_raw(effect, &name, curve_reference_param_value(object_key))?;
         }
-        SequenceGuiEdit::UnlinkEffectCurveParam { .. } => {}
+        SequenceGuiEdit::UnlinkEffectCurveParam { id, name } => {
+            let effect = effect_mut(object, id)?;
+            let value = unlink_curve_value.ok_or_else(|| {
+                GuiMutationError::Invalid("Curve param could not be resolved.".to_string())
+            })?;
+            upsert_param(effect, &name, value)?;
+        }
     }
     Ok(())
+}
+
+fn current_curve_param_value(
+    session: &ProjectSession,
+    resolved: &ResolvedGuiObject,
+    effect_id: u32,
+    name: &str,
+) -> Result<SequenceEffectParamValue, GuiMutationError> {
+    let sequence_id = SequenceId(resolved.source_id.id.clone());
+    let sequence = session
+        .project
+        .sequences
+        .get(&sequence_id)
+        .ok_or_else(|| GuiMutationError::Invalid("Sequence was not found.".to_string()))?;
+    let effect = sequence
+        .effects
+        .iter()
+        .find(|effect| effect.id.0 == effect_id)
+        .ok_or_else(|| GuiMutationError::Invalid("Effect was not found.".to_string()))?;
+
+    if let Some(value) = effect
+        .param_overrides
+        .iter()
+        .find_map(|(key, value)| (key.as_str() == name).then_some(value))
+    {
+        return match value {
+            EffectParamValue::Curve(_) => Ok(effect_param_value(session, value)),
+            _ => Err(GuiMutationError::Invalid(
+                "Param is not a curve param.".to_string(),
+            )),
+        };
+    }
+
+    let definition = session
+        .project
+        .definitions
+        .effects
+        .get(&effect.definition)
+        .ok_or_else(|| GuiMutationError::Invalid("Effect definition was not found.".to_string()))?;
+    let param = definition
+        .compiled
+        .params()
+        .iter()
+        .find(|param| param.name.as_str() == name)
+        .ok_or_else(|| GuiMutationError::Invalid("Effect param was not found.".to_string()))?;
+    match &param.ty {
+        Type::Curve(inner) => Ok(param
+            .default
+            .as_ref()
+            .and_then(default_param_value)
+            .unwrap_or_else(|| match inner.as_ref() {
+                Type::Color => SequenceEffectParamValue::ColorCurve { points: Vec::new() },
+                _ => SequenceEffectParamValue::FloatCurve { points: Vec::new() },
+            })),
+        _ => Err(GuiMutationError::Invalid(
+            "Param is not a curve param.".to_string(),
+        )),
+    }
+}
+
+fn copy_sequence_selection(
+    session: &ProjectSession,
+    location: &SourceObjectLocation,
+    sequence_id: &SequenceId,
+    selection: &SequenceSelection,
+) -> Result<(Option<SequenceClipboard>, u32, u32), GuiMutationError> {
+    match selection {
+        SequenceSelection::Effects { ids } => {
+            let object = source_object(session, location)?;
+            let effects = sequence_field(object, "effects")?;
+            let sequence =
+                session.project.sequences.get(sequence_id).ok_or_else(|| {
+                    GuiMutationError::Invalid("Sequence was not found.".to_string())
+                })?;
+            let mut copied = Vec::new();
+            let mut skipped = 0u32;
+            for id in ids {
+                let Some(effect) = sequence.effects.iter().find(|effect| effect.id.0 == *id) else {
+                    skipped = skipped.saturating_add(1);
+                    continue;
+                };
+                let Some(value) = effects
+                    .iter()
+                    .find(|value| u32_field(value, "id") == Some(*id))
+                else {
+                    skipped = skipped.saturating_add(1);
+                    continue;
+                };
+                copied.push(ClipboardEffect {
+                    value: value.clone(),
+                    start_seconds: effect.start.as_seconds_f64(),
+                    lane_index: effect_lane_index(session, &effect.target),
+                });
+            }
+            let copied_count = copied.len() as u32;
+            Ok((
+                (!copied.is_empty()).then_some(SequenceClipboard::Effects(copied)),
+                copied_count,
+                skipped,
+            ))
+        }
+        SequenceSelection::Marks { marks } => {
+            let object = source_object(session, location)?;
+            let mut copied = Vec::new();
+            let mut skipped = 0u32;
+            for mark in marks {
+                let Some(time_seconds) = mark_time_seconds(object, mark)? else {
+                    skipped = skipped.saturating_add(1);
+                    continue;
+                };
+                copied.push(ClipboardMark {
+                    collection_key: mark.collection_key.clone(),
+                    time_seconds,
+                });
+            }
+            let copied_count = copied.len() as u32;
+            Ok((
+                (!copied.is_empty()).then_some(SequenceClipboard::Marks(copied)),
+                copied_count,
+                skipped,
+            ))
+        }
+    }
+}
+
+fn delete_sequence_selection(
+    session: &mut ProjectSession,
+    location: &SourceObjectLocation,
+    selection: &SequenceSelection,
+) -> Result<(), GuiMutationError> {
+    let object = source_object_mut(session, location)?;
+    match selection {
+        SequenceSelection::Effects { ids } => {
+            sequence_field_mut(object, "effects")?
+                .retain(|value| !ids.iter().any(|id| u32_field(value, "id") == Some(*id)));
+        }
+        SequenceSelection::Marks { marks } => {
+            for (collection_key, indexes) in mark_indexes_by_collection(marks) {
+                let collection = mark_collection_mut(object, &collection_key)?;
+                let values = sequence_field_mut(collection, "marks")?;
+                for index in indexes.into_iter().rev() {
+                    if index < values.len() {
+                        values.remove(index);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn paste_sequence_clipboard(
+    session: &mut ProjectSession,
+    location: &SourceObjectLocation,
+    anchor: SequencePasteAnchor,
+    clipboard: Option<&SequenceClipboard>,
+) -> Result<SequenceSelectionMutation, GuiMutationError> {
+    let Some(clipboard) = clipboard else {
+        return Ok(SequenceSelectionMutation {
+            selection: None,
+            copied_count: 0,
+            skipped_count: 0,
+        });
+    };
+    let lane_count = sequence_lane_count(session);
+    let lane_targets = (0..lane_count)
+        .map(|lane| target_for_lane(session, lane))
+        .collect::<Vec<_>>();
+    let object = source_object_mut(session, location)?;
+    match clipboard {
+        SequenceClipboard::Effects(effects) => {
+            let min_start = effects
+                .iter()
+                .map(|effect| effect.start_seconds)
+                .fold(f64::INFINITY, f64::min);
+            let min_lane = effects
+                .iter()
+                .map(|effect| effect.lane_index)
+                .min()
+                .unwrap_or_default();
+            let mut next_id = sequence_field_mut(object, "effects")?
+                .iter()
+                .filter_map(|value| u32_field(value, "id"))
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1);
+            let mut pasted_ids = Vec::with_capacity(effects.len());
+            for effect in effects {
+                let mut value = effect.value.clone();
+                let target_lane = anchored_lane(
+                    anchor.lane_index as usize,
+                    effect.lane_index,
+                    min_lane,
+                    lane_count,
+                );
+                mapping_mut(&mut value)?.insert(
+                    string_value("id"),
+                    yaml_serde::to_value(next_id)
+                        .map_err(|error| GuiMutationError::Invalid(error.to_string()))?,
+                );
+                set_seconds_field(
+                    &mut value,
+                    "start",
+                    (anchor.time_seconds + effect.start_seconds - min_start).max(0.0),
+                )?;
+                if let Some(Some(target)) = lane_targets.get(target_lane) {
+                    mapping_mut(&mut value)?
+                        .insert(string_value("target"), effect_target_value(target.clone())?);
+                }
+                sequence_field_mut(object, "effects")?.push(value);
+                pasted_ids.push(next_id);
+                next_id = next_id.saturating_add(1);
+            }
+            Ok(SequenceSelectionMutation {
+                selection: Some(SequenceSelection::Effects { ids: pasted_ids }),
+                copied_count: effects.len() as u32,
+                skipped_count: 0,
+            })
+        }
+        SequenceClipboard::Marks(marks) => {
+            let min_time = marks
+                .iter()
+                .map(|mark| mark.time_seconds)
+                .fold(f64::INFINITY, f64::min);
+            let mut pasted = Vec::new();
+            let mut skipped = 0u32;
+            for mark in marks {
+                let collection = match mark_collection_mut(object, &mark.collection_key) {
+                    Ok(collection) => collection,
+                    Err(_) => {
+                        skipped = skipped.saturating_add(1);
+                        continue;
+                    }
+                };
+                let values = sequence_field_mut(collection, "marks")?;
+                let time_seconds = (anchor.time_seconds + mark.time_seconds - min_time).max(0.0);
+                values.push(seconds_value(time_seconds));
+                sort_duration_strings(values);
+                let index = values
+                    .iter()
+                    .position(|value| (duration_seconds(value) - time_seconds).abs() < f64::EPSILON)
+                    .unwrap_or_else(|| values.len().saturating_sub(1));
+                pasted.push(SequenceMarkRef {
+                    collection_key: mark.collection_key.clone(),
+                    index: index as u32,
+                });
+            }
+            Ok(SequenceSelectionMutation {
+                selection: Some(SequenceSelection::Marks { marks: pasted }),
+                copied_count: marks.len() as u32,
+                skipped_count: skipped,
+            })
+        }
+    }
+}
+
+fn move_effect_selection(
+    session: &mut ProjectSession,
+    location: &SourceObjectLocation,
+    sequence_id: &SequenceId,
+    ids: &[u32],
+    time_delta_seconds: f64,
+    lane_delta: i32,
+) -> Result<Vec<u32>, GuiMutationError> {
+    let effect_updates = effect_selection_updates(session, sequence_id, ids, |session, effect| {
+        let lane = shifted_lane(
+            effect_lane_index(session, &effect.target),
+            lane_delta,
+            sequence_lane_count(session),
+        );
+        (
+            effect.start.as_seconds_f64() + time_delta_seconds,
+            effect.duration.as_seconds_f64(),
+            lane,
+        )
+    })?;
+    apply_effect_updates(session, location, effect_updates)
+}
+
+fn resize_effect_selection(
+    session: &mut ProjectSession,
+    location: &SourceObjectLocation,
+    sequence_id: &SequenceId,
+    ids: &[u32],
+    edge: SequenceResizeEdge,
+    time_delta_seconds: f64,
+) -> Result<(), GuiMutationError> {
+    let effect_updates = effect_selection_updates(session, sequence_id, ids, |session, effect| {
+        let start_seconds = effect.start.as_seconds_f64();
+        let duration_seconds = effect.duration.as_seconds_f64();
+        let lane = effect_lane_index(session, &effect.target);
+        match edge {
+            SequenceResizeEdge::Left => (
+                start_seconds + time_delta_seconds,
+                duration_seconds - time_delta_seconds,
+                lane,
+            ),
+            SequenceResizeEdge::Right => {
+                (start_seconds, duration_seconds + time_delta_seconds, lane)
+            }
+        }
+    })?;
+    apply_effect_updates(session, location, effect_updates)?;
+    Ok(())
+}
+
+fn move_mark_selection(
+    session: &mut ProjectSession,
+    location: &SourceObjectLocation,
+    marks: &[SequenceMarkRef],
+    time_delta_seconds: f64,
+) -> Result<Vec<SequenceMarkRef>, GuiMutationError> {
+    let object = source_object_mut(session, location)?;
+    let mut moved = Vec::new();
+    for (collection_key, indexes) in mark_indexes_by_collection(marks) {
+        let collection = mark_collection_mut(object, &collection_key)?;
+        let values = sequence_field_mut(collection, "marks")?;
+        let mut moved_times = Vec::new();
+        for index in indexes {
+            if let Some(value) = values.get_mut(index) {
+                let time_seconds = (duration_seconds(value) + time_delta_seconds).max(0.0);
+                *value = seconds_value(time_seconds);
+                moved_times.push(time_seconds);
+            }
+        }
+        sort_duration_strings(values);
+        for time_seconds in moved_times {
+            if let Some(index) = values
+                .iter()
+                .position(|value| (duration_seconds(value) - time_seconds).abs() < f64::EPSILON)
+            {
+                moved.push(SequenceMarkRef {
+                    collection_key: collection_key.clone(),
+                    index: index as u32,
+                });
+            }
+        }
+    }
+    Ok(moved)
+}
+
+struct EffectUpdate {
+    id: u32,
+    start_seconds: f64,
+    duration_seconds: f64,
+    lane_index: usize,
+}
+
+fn effect_selection_updates(
+    session: &ProjectSession,
+    sequence_id: &SequenceId,
+    ids: &[u32],
+    update: impl Fn(&ProjectSession, &dawn_language::effect::EffectInst) -> (f64, f64, usize),
+) -> Result<Vec<EffectUpdate>, GuiMutationError> {
+    let sequence = session
+        .project
+        .sequences
+        .get(sequence_id)
+        .ok_or_else(|| GuiMutationError::Invalid("Sequence was not found.".to_string()))?;
+    Ok(sequence
+        .effects
+        .iter()
+        .filter(|effect| ids.contains(&effect.id.0))
+        .map(|effect| {
+            let (start_seconds, duration_seconds, lane_index) = update(session, effect);
+            EffectUpdate {
+                id: effect.id.0,
+                start_seconds,
+                duration_seconds,
+                lane_index,
+            }
+        })
+        .collect())
+}
+
+fn apply_effect_updates(
+    session: &mut ProjectSession,
+    location: &SourceObjectLocation,
+    updates: Vec<EffectUpdate>,
+) -> Result<Vec<u32>, GuiMutationError> {
+    let targets = updates
+        .iter()
+        .map(|update| (update.id, target_for_lane(session, update.lane_index)))
+        .collect::<Vec<_>>();
+    let object = source_object_mut(session, location)?;
+    let mut moved = Vec::new();
+    for update in updates {
+        let effect = effect_mut(object, update.id)?;
+        set_seconds_field(effect, "start", update.start_seconds.max(0.0))?;
+        set_seconds_field(effect, "duration", update.duration_seconds.max(0.000000001))?;
+        if let Some((_, Some(target))) = targets.iter().find(|(id, _)| *id == update.id) {
+            mapping_mut(effect)?
+                .insert(string_value("target"), effect_target_value(target.clone())?);
+        }
+        moved.push(update.id);
+    }
+    Ok(moved)
+}
+
+fn source_object<'a>(
+    session: &'a ProjectSession,
+    location: &SourceObjectLocation,
+) -> Result<&'a Value, GuiMutationError> {
+    let document = session
+        .source
+        .documents
+        .get(&location.document)
+        .ok_or_else(|| GuiMutationError::Invalid("Source document was not found.".to_string()))?;
+    let SourceDocumentKind::Dawn { value, .. } = &document.kind else {
+        return Err(GuiMutationError::Invalid(
+            "GUI edits can only read Dawn YAML documents.".to_string(),
+        ));
+    };
+    mapping(value)?
+        .get(string_value(&location.object_key))
+        .ok_or_else(|| GuiMutationError::Invalid("Source object was not found.".to_string()))
+}
+
+fn mapping(value: &Value) -> Result<&Mapping, GuiMutationError> {
+    match value {
+        Value::Mapping(mapping) => Ok(mapping),
+        _ => Err(GuiMutationError::Invalid(
+            "Expected a YAML mapping.".to_string(),
+        )),
+    }
+}
+
+fn sequence_field<'a>(value: &'a Value, field: &str) -> Result<&'a Vec<Value>, GuiMutationError> {
+    match mapping(value)?.get(string_value(field)) {
+        Some(Value::Sequence(sequence)) => Ok(sequence),
+        _ => Err(GuiMutationError::Invalid(format!(
+            "`{field}` must be a sequence."
+        ))),
+    }
+}
+
+fn mark_time_seconds(
+    sequence_object: &Value,
+    mark: &SequenceMarkRef,
+) -> Result<Option<f64>, GuiMutationError> {
+    let collections = sequence_field(sequence_object, "mark_collections")?;
+    let Some(collection) = collections.iter().find(|collection| {
+        string_field(collection, "key").as_deref() == Some(&mark.collection_key)
+    }) else {
+        return Ok(None);
+    };
+    Ok(sequence_field(collection, "marks")?
+        .get(mark.index as usize)
+        .map(duration_seconds))
+}
+
+fn mark_indexes_by_collection(marks: &[SequenceMarkRef]) -> BTreeMap<String, Vec<usize>> {
+    let mut grouped = BTreeMap::<String, Vec<usize>>::new();
+    for mark in marks {
+        grouped
+            .entry(mark.collection_key.clone())
+            .or_default()
+            .push(mark.index as usize);
+    }
+    for indexes in grouped.values_mut() {
+        indexes.sort_unstable();
+        indexes.dedup();
+    }
+    grouped
+}
+
+fn effect_lane_index(session: &ProjectSession, target: &EffectTarget) -> usize {
+    let Some(layout_id) = active_layout_id(session) else {
+        return 0;
+    };
+    let Some(layout) = session.project.layouts.get(&layout_id) else {
+        return 0;
+    };
+    layout
+        .target_order
+        .iter()
+        .position(|candidate| effect_target_matches_layout(target, candidate))
+        .unwrap_or_default()
+}
+
+fn effect_target_matches_layout(target: &EffectTarget, candidate: &DomainLayoutTarget) -> bool {
+    matches!(
+        (target, candidate),
+        (EffectTarget::Fixture(left), DomainLayoutTarget::Fixture(right)) if left == right
+    ) || matches!(
+        (target, candidate),
+        (EffectTarget::Group(left), DomainLayoutTarget::Group(right)) if left == right
+    )
+}
+
+fn sequence_lane_count(session: &ProjectSession) -> usize {
+    active_layout_id(session)
+        .and_then(|layout_id| session.project.layouts.get(&layout_id))
+        .map(|layout| layout.target_order.len())
+        .unwrap_or_default()
+}
+
+fn target_for_lane(session: &ProjectSession, lane_index: usize) -> Option<EffectTarget> {
+    let layout_id = active_layout_id(session)?;
+    let layout = session.project.layouts.get(&layout_id)?;
+    layout
+        .target_order
+        .get(lane_index)
+        .map(effect_target_from_layout)
+}
+
+fn effect_target_from_layout(target: &DomainLayoutTarget) -> EffectTarget {
+    match target {
+        DomainLayoutTarget::Fixture(id) => EffectTarget::Fixture(FixtureInstanceId(id.0)),
+        DomainLayoutTarget::Group(id) => EffectTarget::Group(FixtureGroupId(id.0)),
+    }
+}
+
+fn effect_target_value(target: EffectTarget) -> Result<Value, GuiMutationError> {
+    match target {
+        EffectTarget::Fixture(id) => layout_target_value(LayoutTarget {
+            kind: LayoutTargetKind::Fixture,
+            name: id.0.to_string(),
+        }),
+        EffectTarget::Group(id) => layout_target_value(LayoutTarget {
+            kind: LayoutTargetKind::Group,
+            name: id.0.to_string(),
+        }),
+    }
+}
+
+fn shifted_lane(lane_index: usize, lane_delta: i32, lane_count: usize) -> usize {
+    if lane_count == 0 {
+        return 0;
+    }
+    (lane_index as i32 + lane_delta).clamp(0, lane_count.saturating_sub(1) as i32) as usize
+}
+
+fn anchored_lane(
+    anchor_lane: usize,
+    lane_index: usize,
+    min_lane: usize,
+    lane_count: usize,
+) -> usize {
+    if lane_count == 0 {
+        return lane_index;
+    }
+    (anchor_lane + lane_index.saturating_sub(min_lane)).min(lane_count.saturating_sub(1))
 }
 
 fn mark_param_names(
@@ -1446,6 +2155,22 @@ fn ensure_sequence_field_mut<'a>(
     }
 }
 
+fn ensure_mapping_field_mut<'a>(
+    value: &'a mut Value,
+    field: &str,
+) -> Result<&'a mut Mapping, GuiMutationError> {
+    let mapping = mapping_mut(value)?;
+    if !mapping.contains_key(string_value(field)) {
+        mapping.insert(string_value(field), Value::Mapping(Mapping::new()));
+    }
+    match mapping.get_mut(string_value(field)) {
+        Some(Value::Mapping(mapping)) => Ok(mapping),
+        _ => Err(GuiMutationError::Invalid(format!(
+            "`{field}` must be a mapping."
+        ))),
+    }
+}
+
 fn effect_mut(value: &mut Value, id: u32) -> Result<&mut Value, GuiMutationError> {
     sequence_field_mut(value, "effects")?
         .iter_mut()
@@ -1477,15 +2202,7 @@ fn upsert_param(
 }
 
 fn upsert_param_raw(effect: &mut Value, name: &str, value: Value) -> Result<(), GuiMutationError> {
-    let params = ensure_sequence_field_mut(effect, "params")?;
-    if let Some(param) = params
-        .iter_mut()
-        .find(|param| string_field(param, "name").as_deref() == Some(name))
-    {
-        *param = value;
-    } else {
-        params.push(value);
-    }
+    ensure_mapping_field_mut(effect, "params")?.insert(string_value(name), value);
     Ok(())
 }
 
@@ -1553,12 +2270,130 @@ fn param_value(value: SequenceEffectParamValue) -> Result<Value, GuiMutationErro
                 ),
             );
         }
-        _ => {
-            return Err(GuiMutationError::Invalid(
-                "This parameter value shape is not supported for GUI editing yet.".to_string(),
-            ))
+        SequenceEffectParamValue::IntArray { values } => {
+            mapping.insert(string_value("type"), Value::String("array".to_string()));
+            mapping.insert(
+                string_value("element_type"),
+                Value::String("integer".to_string()),
+            );
+            mapping.insert(
+                string_value("values"),
+                Value::Sequence(
+                    values
+                        .into_iter()
+                        .map(|value| param_value(SequenceEffectParamValue::Int { value }))
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+            );
+        }
+        SequenceEffectParamValue::FloatArray { values } => {
+            mapping.insert(string_value("type"), Value::String("array".to_string()));
+            mapping.insert(
+                string_value("element_type"),
+                Value::String("float".to_string()),
+            );
+            mapping.insert(
+                string_value("values"),
+                Value::Sequence(
+                    values
+                        .into_iter()
+                        .map(|value| param_value(SequenceEffectParamValue::Float { value }))
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+            );
+        }
+        SequenceEffectParamValue::BoolArray { values } => {
+            mapping.insert(string_value("type"), Value::String("array".to_string()));
+            mapping.insert(
+                string_value("element_type"),
+                Value::String("bool".to_string()),
+            );
+            mapping.insert(
+                string_value("values"),
+                Value::Sequence(
+                    values
+                        .into_iter()
+                        .map(|value| param_value(SequenceEffectParamValue::Bool { value }))
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+            );
+        }
+        SequenceEffectParamValue::ColorArray { values } => {
+            mapping.insert(string_value("type"), Value::String("array".to_string()));
+            mapping.insert(
+                string_value("element_type"),
+                Value::String("color".to_string()),
+            );
+            mapping.insert(
+                string_value("values"),
+                Value::Sequence(
+                    values
+                        .into_iter()
+                        .map(|value| param_value(SequenceEffectParamValue::Color { value }))
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+            );
+        }
+        SequenceEffectParamValue::FloatCurveArray { values } => {
+            mapping.insert(string_value("type"), Value::String("array".to_string()));
+            mapping.insert(
+                string_value("element_type"),
+                Value::String("curve_float".to_string()),
+            );
+            mapping.insert(
+                string_value("values"),
+                Value::Sequence(
+                    values
+                        .into_iter()
+                        .map(|points| array_curve_item_value("float", float_curve_points(points)))
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+            );
+        }
+        SequenceEffectParamValue::ColorCurveArray { values } => {
+            mapping.insert(string_value("type"), Value::String("array".to_string()));
+            mapping.insert(
+                string_value("element_type"),
+                Value::String("curve_color".to_string()),
+            );
+            mapping.insert(
+                string_value("values"),
+                Value::Sequence(
+                    values
+                        .into_iter()
+                        .map(|points| array_curve_item_value("color", color_curve_points(points)))
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+            );
         }
     }
+    Ok(Value::Mapping(mapping))
+}
+
+fn float_curve_points(points: Vec<FloatCurvePoint>) -> Result<Vec<(f64, Value)>, GuiMutationError> {
+    points
+        .into_iter()
+        .map(|point| {
+            yaml_serde::to_value(point.value)
+                .map(|value| (point.time, value))
+                .map_err(|error| GuiMutationError::Invalid(error.to_string()))
+        })
+        .collect()
+}
+
+fn color_curve_points(points: Vec<ColorCurvePoint>) -> Result<Vec<(f64, Value)>, GuiMutationError> {
+    points
+        .into_iter()
+        .map(|point| Ok((point.time, Value::String(point.value))))
+        .collect()
+}
+
+fn array_curve_item_value(
+    value_type: &str,
+    points: Result<Vec<(f64, Value)>, GuiMutationError>,
+) -> Result<Value, GuiMutationError> {
+    let mut mapping = Mapping::new();
+    mapping.insert(string_value("curve"), curve_value(value_type, points?));
     Ok(Value::Mapping(mapping))
 }
 

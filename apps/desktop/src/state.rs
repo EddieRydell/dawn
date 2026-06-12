@@ -12,8 +12,8 @@ use crate::dto::{
     AppSnapshot, AudioTransportSnapshot, BufferExternalState, DiagnosticSeverity,
     DocumentDefaultObjectKey, DocumentDescriptor, DocumentObjectDescriptor, DocumentViewId,
     EditorBuffer, EditorViewMode, GuiDocument, GuiDocumentRequest, GuiEditCommand, GuiEditResult,
-    LiveOutputSnapshot, ObjectKind, ProjectDiagnostic, SequenceAudio, WorkspaceEntry,
-    WorkspaceEntryKind,
+    LiveOutputSnapshot, ObjectKind, ProjectDiagnostic, SequenceAudio, SequenceSelectionEdit,
+    SequenceSelectionEditResult, WorkspaceEntry, WorkspaceEntryKind,
 };
 
 pub struct DesktopState {
@@ -21,6 +21,7 @@ pub struct DesktopState {
     project: Mutex<Option<ProjectSession>>,
     audio: Mutex<crate::audio::AudioEngine>,
     show_render: Mutex<crate::show_render::ShowRenderService>,
+    sequence_clipboard: Mutex<Option<crate::gui::SequenceClipboard>>,
 }
 
 impl DesktopState {
@@ -30,6 +31,7 @@ impl DesktopState {
             project: Mutex::new(None),
             audio: Mutex::new(crate::audio::AudioEngine::new()),
             show_render: Mutex::new(crate::show_render::ShowRenderService::new()),
+            sequence_clipboard: Mutex::new(None),
         }
     }
 
@@ -495,6 +497,131 @@ impl DesktopState {
         }
     }
 
+    pub fn apply_active_sequence_gui_edit(&self, edit: crate::dto::SequenceGuiEdit) -> AppSnapshot {
+        let Some(request) = self.active_sequence_gui_request() else {
+            return self.snapshot_with_error(
+                "gui.sequence",
+                "",
+                "No active sequence GUI document is available.",
+            );
+        };
+        self.apply_gui_edit(request, GuiEditCommand::Sequence { edit })
+            .snapshot
+    }
+
+    pub fn apply_sequence_selection_edit(
+        &self,
+        edit: SequenceSelectionEdit,
+    ) -> SequenceSelectionEditResult {
+        let Some(request) = self.active_sequence_gui_request() else {
+            return SequenceSelectionEditResult {
+                snapshot: self.snapshot_with_error(
+                    "gui.sequence.selection",
+                    "",
+                    "No active sequence GUI document is available.",
+                ),
+                selection: None,
+                copied_count: 0,
+                skipped_count: 0,
+            };
+        };
+        let Some(project) = self.project_session() else {
+            return SequenceSelectionEditResult {
+                snapshot: self.snapshot(),
+                selection: None,
+                copied_count: 0,
+                skipped_count: 0,
+            };
+        };
+        let affected_paths = match crate::gui::affected_paths(
+            &project,
+            &request,
+            &GuiEditCommand::Sequence {
+                edit: crate::dto::SequenceGuiEdit::DeleteEffect { id: 0 },
+            },
+        ) {
+            Ok(paths) => paths,
+            Err(error) => {
+                return SequenceSelectionEditResult {
+                    snapshot: self.snapshot_with_error(
+                        "gui.sequence.selection",
+                        &request.path,
+                        error.message(),
+                    ),
+                    selection: None,
+                    copied_count: 0,
+                    skipped_count: 0,
+                }
+            }
+        };
+        let dirty_path = self
+            .snapshot()
+            .tabs
+            .into_iter()
+            .find(|tab| tab.dirty && affected_paths.contains(&tab.path))
+            .map(|tab| tab.path);
+        if let Some(path) = dirty_path {
+            let message = format!("Save or reload {path} before using GUI edits.");
+            return SequenceSelectionEditResult {
+                snapshot: self.snapshot_with_error("gui.dirty", &path, &message),
+                selection: None,
+                copied_count: 0,
+                skipped_count: 0,
+            };
+        }
+
+        let mut edited = project;
+        let mutation = match self.sequence_clipboard.lock() {
+            Ok(mut clipboard) => crate::gui::apply_sequence_selection_edit(
+                &mut edited,
+                &request,
+                edit,
+                &mut clipboard,
+            ),
+            Err(poisoned) => {
+                let mut clipboard = poisoned.into_inner();
+                crate::gui::apply_sequence_selection_edit(
+                    &mut edited,
+                    &request,
+                    edit,
+                    &mut clipboard,
+                )
+            }
+        };
+        let mutation = match mutation {
+            Ok(mutation) => mutation,
+            Err(error) => {
+                return SequenceSelectionEditResult {
+                    snapshot: self.snapshot_with_error(
+                        "gui.sequence.selection",
+                        &request.path,
+                        error.message(),
+                    ),
+                    selection: None,
+                    copied_count: 0,
+                    skipped_count: 0,
+                }
+            }
+        };
+        if let Err(error) = save_project(&edited) {
+            return SequenceSelectionEditResult {
+                snapshot: self.snapshot_with_error("gui.save", &request.path, &error.to_string()),
+                selection: None,
+                copied_count: mutation.copied_count,
+                skipped_count: mutation.skipped_count,
+            };
+        }
+        let entrypoint = edited.source.source_root.join(&edited.source.entrypoint);
+        self.apply_project_refresh_check(entrypoint.as_str(), check_project(&entrypoint));
+        self.refresh_saved_tabs(&affected_paths);
+        SequenceSelectionEditResult {
+            snapshot: self.snapshot(),
+            selection: mutation.selection,
+            copied_count: mutation.copied_count,
+            skipped_count: mutation.skipped_count,
+        }
+    }
+
     fn apply_project_open_check(
         &self,
         entrypoint: &str,
@@ -632,6 +759,23 @@ impl DesktopState {
             Ok(snapshot) => snapshot.project_revision.into(),
             Err(poisoned) => poisoned.into_inner().project_revision.into(),
         }
+    }
+
+    fn active_sequence_gui_request(&self) -> Option<GuiDocumentRequest> {
+        let snapshot = self.snapshot();
+        let active_path = snapshot.active_file?;
+        let descriptor = snapshot.active_document_descriptor?;
+        let object_key = descriptor
+            .default_object_keys
+            .iter()
+            .find(|item| matches!(item.view, DocumentViewId::Sequence))?
+            .object_key
+            .clone();
+        Some(GuiDocumentRequest {
+            path: active_path,
+            view: DocumentViewId::Sequence,
+            object_key: Some(object_key),
+        })
     }
 
     fn resolve_sequence_audio(&self, request: &GuiDocumentRequest) -> Option<SequenceAudio> {

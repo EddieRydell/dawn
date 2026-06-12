@@ -382,32 +382,41 @@ impl PreviewRenderer {
         size: PreviewSize,
         scene: Option<&PreviewScene>,
         frame: Option<&dawn_runtime::RenderedFrame>,
-    ) {
+    ) -> PreviewRenderTiming {
+        let mut timing = PreviewRenderTiming::default();
         if size.width == 0 || size.height == 0 {
-            return;
+            return timing;
         }
         if self.config.width != size.width || self.config.height != size.height {
+            let started = Instant::now();
             self.resize(size);
+            timing.resize = started.elapsed();
         }
 
+        let started = Instant::now();
         if let Some(scene) = scene {
-            self.update_scene(scene, frame, size);
+            timing.update_scene = self.update_scene(scene, frame, size);
         } else {
             self.instance_count = 0;
             self.uploaded_revision = None;
             self.uniform_revision = None;
         }
+        timing.scene_total = started.elapsed();
 
+        let started = Instant::now();
         let output = match self.surface.get_current_texture() {
             Ok(output) => output,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                 self.surface.configure(&self.device, &self.config);
-                return;
+                return timing;
             }
-            Err(wgpu::SurfaceError::Timeout) => return,
-            Err(wgpu::SurfaceError::OutOfMemory) => return,
-            Err(wgpu::SurfaceError::Other) => return,
+            Err(wgpu::SurfaceError::Timeout) => return timing,
+            Err(wgpu::SurfaceError::OutOfMemory) => return timing,
+            Err(wgpu::SurfaceError::Other) => return timing,
         };
+        timing.acquire = started.elapsed();
+
+        let started = Instant::now();
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -441,7 +450,12 @@ impl PreviewRenderer {
             }
         }
         self.queue.submit([encoder.finish()]);
+        timing.encode_submit = started.elapsed();
+
+        let started = Instant::now();
         output.present();
+        timing.present = started.elapsed();
+        timing
     }
 
     fn resize(&mut self, size: PreviewSize) {
@@ -456,14 +470,22 @@ impl PreviewRenderer {
         scene: &PreviewScene,
         frame: Option<&dawn_runtime::RenderedFrame>,
         size: PreviewSize,
-    ) {
+    ) -> PreviewSceneUpdateTiming {
+        let mut timing = PreviewSceneUpdateTiming::default();
         if self.uploaded_revision != Some(scene.revision) {
+            let started = Instant::now();
             self.upload_scene(scene);
+            timing.upload_scene = started.elapsed();
         }
         if self.uniform_revision != Some(scene.revision) || self.uniform_size != Some(size) {
+            let started = Instant::now();
             self.update_uniforms(scene, size);
+            timing.update_uniforms = started.elapsed();
         }
+        let started = Instant::now();
         self.update_colors(scene, frame);
+        timing.update_colors = started.elapsed();
+        timing
     }
 
     fn upload_scene(&mut self, scene: &PreviewScene) {
@@ -536,6 +558,23 @@ impl PreviewRenderer {
         });
         self.instance_capacity = capacity;
     }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PreviewRenderTiming {
+    resize: Duration,
+    scene_total: Duration,
+    update_scene: PreviewSceneUpdateTiming,
+    acquire: Duration,
+    encode_submit: Duration,
+    present: Duration,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PreviewSceneUpdateTiming {
+    upload_scene: Duration,
+    update_uniforms: Duration,
+    update_colors: Duration,
 }
 
 #[repr(C)]
@@ -620,10 +659,15 @@ fn run_preview_loop(
     let mut stats = PreviewFrameStats::new();
     let mut cached_scene: Option<PreviewScene> = None;
     while running.load(Ordering::Acquire) {
+        let loop_started = Instant::now();
+        let window_size_started = Instant::now();
         let size = match window_size(&window) {
             Ok(size) => size,
             Err(_) => break,
         };
+        let window_size_time = window_size_started.elapsed();
+
+        let scene_started = Instant::now();
         let state = app.state::<crate::state::DesktopState>();
         match state.preview_scene_revision() {
             Some(revision)
@@ -636,12 +680,32 @@ fn run_preview_loop(
             Some(_) => {}
             None => cached_scene = None,
         }
+        let scene_time = scene_started.elapsed();
+
+        let frame_started = Instant::now();
         let frame = state
             .render_current_sequence_frame()
             .map(|rendered| rendered.frame)
             .ok();
-        renderer.render(size, cached_scene.as_ref(), frame.as_ref());
-        if let Some(fps) = stats.record_frame() {
+        let frame_time = frame_started.elapsed();
+        let frame_index = frame.as_ref().map(|frame| frame.frame_index);
+        let render_started = Instant::now();
+        let render_timing = renderer.render(size, cached_scene.as_ref(), frame.as_ref());
+        let render_time = render_started.elapsed();
+        let profile = PreviewLoopTiming {
+            total: loop_started.elapsed(),
+            window_size: window_size_time,
+            scene: scene_time,
+            frame: frame_time,
+            render: render_time,
+            render_detail: render_timing,
+            scene_instances: cached_scene
+                .as_ref()
+                .map(|scene| scene.instances.len())
+                .unwrap_or_default(),
+            frame_index,
+        };
+        if let Some(fps) = stats.record_frame(profile) {
             let _ = window.set_title(&format!("Dawn Preview - {fps:.0} FPS"));
         }
         std::thread::yield_now();
@@ -650,28 +714,127 @@ fn run_preview_loop(
 
 struct PreviewFrameStats {
     window_started: Instant,
-    frames: u32,
+    samples: Vec<PreviewLoopTiming>,
+    last_frame_index: Option<u64>,
+    repeated_frames: u32,
 }
 
 impl PreviewFrameStats {
     fn new() -> Self {
         Self {
             window_started: Instant::now(),
-            frames: 0,
+            samples: Vec::with_capacity(240),
+            last_frame_index: None,
+            repeated_frames: 0,
         }
     }
 
-    fn record_frame(&mut self) -> Option<f64> {
-        self.frames = self.frames.saturating_add(1);
+    fn record_frame(&mut self, sample: PreviewLoopTiming) -> Option<f64> {
+        if sample.frame_index.is_some() && sample.frame_index == self.last_frame_index {
+            self.repeated_frames = self.repeated_frames.saturating_add(1);
+        }
+        self.last_frame_index = sample.frame_index;
+        self.samples.push(sample);
         let elapsed = self.window_started.elapsed();
         if elapsed < Duration::from_secs(1) {
             return None;
         }
-        let fps = f64::from(self.frames) / elapsed.as_secs_f64();
+        let fps = self.samples.len() as f64 / elapsed.as_secs_f64();
+        self.log_profile(fps);
         self.window_started = Instant::now();
-        self.frames = 0;
+        self.samples.clear();
+        self.repeated_frames = 0;
         Some(fps)
     }
+
+    fn log_profile(&self, fps: f64) {
+        if !cfg!(debug_assertions) || self.samples.is_empty() {
+            return;
+        }
+        let latest = self.samples[self.samples.len() - 1];
+        eprintln!(
+            "preview profile: fps={fps:.1} samples={} repeated={} instances={} frame={}",
+            self.samples.len(),
+            self.repeated_frames,
+            latest.scene_instances,
+            latest
+                .frame_index
+                .map(|frame| frame.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        );
+        eprintln!(
+            "  p50/p95 ms: total={:.3}/{:.3} window={:.3}/{:.3} scene={:.3}/{:.3} frame={:.3}/{:.3} render={:.3}/{:.3}",
+            percentile_ms(self.samples.iter().map(|sample| sample.total), 50),
+            percentile_ms(self.samples.iter().map(|sample| sample.total), 95),
+            percentile_ms(self.samples.iter().map(|sample| sample.window_size), 50),
+            percentile_ms(self.samples.iter().map(|sample| sample.window_size), 95),
+            percentile_ms(self.samples.iter().map(|sample| sample.scene), 50),
+            percentile_ms(self.samples.iter().map(|sample| sample.scene), 95),
+            percentile_ms(self.samples.iter().map(|sample| sample.frame), 50),
+            percentile_ms(self.samples.iter().map(|sample| sample.frame), 95),
+            percentile_ms(self.samples.iter().map(|sample| sample.render), 50),
+            percentile_ms(self.samples.iter().map(|sample| sample.render), 95),
+        );
+        eprintln!(
+            "  renderer p50/p95 ms: colors={:.3}/{:.3} acquire={:.3}/{:.3} encode_submit={:.3}/{:.3} present={:.3}/{:.3} resize={:.3}/{:.3}",
+            percentile_ms(
+                self.samples
+                    .iter()
+                    .map(|sample| sample.render_detail.update_scene.update_colors),
+                50
+            ),
+            percentile_ms(
+                self.samples
+                    .iter()
+                    .map(|sample| sample.render_detail.update_scene.update_colors),
+                95
+            ),
+            percentile_ms(self.samples.iter().map(|sample| sample.render_detail.acquire), 50),
+            percentile_ms(self.samples.iter().map(|sample| sample.render_detail.acquire), 95),
+            percentile_ms(
+                self.samples
+                    .iter()
+                    .map(|sample| sample.render_detail.encode_submit),
+                50
+            ),
+            percentile_ms(
+                self.samples
+                    .iter()
+                    .map(|sample| sample.render_detail.encode_submit),
+                95
+            ),
+            percentile_ms(self.samples.iter().map(|sample| sample.render_detail.present), 50),
+            percentile_ms(self.samples.iter().map(|sample| sample.render_detail.present), 95),
+            percentile_ms(self.samples.iter().map(|sample| sample.render_detail.resize), 50),
+            percentile_ms(self.samples.iter().map(|sample| sample.render_detail.resize), 95),
+        );
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PreviewLoopTiming {
+    total: Duration,
+    window_size: Duration,
+    scene: Duration,
+    frame: Duration,
+    render: Duration,
+    render_detail: PreviewRenderTiming,
+    scene_instances: usize,
+    frame_index: Option<u64>,
+}
+
+fn percentile_ms(samples: impl Iterator<Item = Duration>, percentile: usize) -> f64 {
+    let mut samples = samples.map(duration_ms).collect::<Vec<_>>();
+    samples.sort_by(f64::total_cmp);
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let index = samples.len().saturating_sub(1).saturating_mul(percentile) / 100;
+    samples[index]
+}
+
+fn duration_ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
 }
 
 fn window_size(window: &Window) -> Result<PreviewSize, String> {

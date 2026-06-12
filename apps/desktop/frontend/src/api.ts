@@ -4,7 +4,8 @@ import type {
   GuiDocumentRequest,
   GuiEditResult,
   LayoutGuiEdit,
-  SequenceGuiEdit
+  SequenceGuiEdit,
+  SequenceSelectionEdit
 } from "./types";
 
 let currentGuiRequest: GuiDocumentRequest | null = null;
@@ -24,6 +25,9 @@ async function applyCurrentGuiEdit(edit: Parameters<typeof generatedCommands.app
   }
   const result = await generatedCommands.applyGuiEdit(currentGuiRequest, edit);
   guiEditResultHandler?.(result);
+  if (result.document.type === "blocked") {
+    throw new Error(result.document.reason);
+  }
   return result.snapshot;
 }
 
@@ -32,9 +36,20 @@ export const commands = {
   applyGuiEdit: async (request: GuiDocumentRequest, edit: Parameters<typeof generatedCommands.applyGuiEdit>[1]) => {
     const result = await generatedCommands.applyGuiEdit(request, edit);
     guiEditResultHandler?.(result);
+    if (result.document.type === "blocked") {
+      throw new Error(result.document.reason);
+    }
     return result;
   },
   applySequenceGuiEdit: (edit: SequenceGuiEdit) => applyCurrentGuiEdit({ type: "sequence", edit }),
+  applySequenceSelectionEdit: async (edit: SequenceSelectionEdit) => {
+    const result = await generatedCommands.applySequenceSelectionEdit(edit);
+    const guiDiagnostic = result.snapshot.diagnostics.find((diagnostic) => diagnostic.code.startsWith("gui."));
+    if (guiDiagnostic !== undefined) {
+      throw new Error(guiDiagnostic.message);
+    }
+    return result;
+  },
   applyLayoutGuiEdit: (edit: LayoutGuiEdit) => applyCurrentGuiEdit({ type: "layout", edit }),
   applyFixtureGuiEdit: (edit: FixtureGuiEdit) => applyCurrentGuiEdit({ type: "fixture", edit }),
   chooseSequenceAudio: () => {

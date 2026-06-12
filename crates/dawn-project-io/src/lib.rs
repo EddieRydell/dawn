@@ -2119,6 +2119,9 @@ impl DomainResolver<'_> {
         path: &Utf8Path,
         value: &Value,
     ) -> Result<EffectParamValue, LoadProjectError> {
+        if optional_field(value, "type").is_some() {
+            return self.parse_effect_param(path, value);
+        }
         let curve = required_field(path, value, "curve")?;
         Ok(EffectParamValue::Curve(
             self.parse_curve_source(path, curve)?,

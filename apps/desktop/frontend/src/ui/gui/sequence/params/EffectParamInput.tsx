@@ -77,30 +77,6 @@ export function EffectParamInput({
           </select>
         </label>
       );
-    case "flags": {
-      const selectedFlags = param.value.value;
-      return (
-        <div className="effect-param-group">
-          <div className="effect-param-name">{param.name}</div>
-          {param.options.map((option) => {
-            const checked = selectedFlags.includes(option);
-            const nextValue = checked
-              ? selectedFlags.filter((value: string) => value !== option)
-              : [...selectedFlags, option];
-            return (
-              <label key={option} className="effect-param-check">
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => void commit({ type: "flags", value: nextValue })}
-                />
-                <span>{option}</span>
-              </label>
-            );
-          })}
-        </div>
-      );
-    }
     case "floatCurve":
       return (
         <CurveParamSourceShell

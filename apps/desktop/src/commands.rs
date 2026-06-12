@@ -129,8 +129,7 @@ pub fn apply_sequence_gui_edit(
     edit: SequenceGuiEdit,
     state: State<'_, DesktopState>,
 ) -> AppSnapshot {
-    let _edit = edit;
-    state.snapshot()
+    state.apply_active_sequence_gui_edit(edit)
 }
 
 #[tauri::command]
@@ -139,13 +138,7 @@ pub fn apply_sequence_selection_edit(
     edit: SequenceSelectionEdit,
     state: State<'_, DesktopState>,
 ) -> SequenceSelectionEditResult {
-    let _edit = edit;
-    SequenceSelectionEditResult {
-        snapshot: state.snapshot(),
-        selection: None,
-        copied_count: 0,
-        skipped_count: 0,
-    }
+    state.apply_sequence_selection_edit(edit)
 }
 
 #[tauri::command]
