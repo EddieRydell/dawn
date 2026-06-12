@@ -4,50 +4,197 @@ use super::types::{Identifier, Type, Value};
 pub(crate) type ConstantId = usize;
 pub(crate) type LocalId = usize;
 pub(crate) type ParamId = usize;
+pub(crate) type RegisterId = usize;
 pub(crate) type Target = usize;
 
 #[derive(Clone, Debug)]
-pub(crate) struct BytecodeFunction {
+pub(crate) struct RegisterFunction {
     pub instructions: Vec<Instruction>,
     pub constants: Vec<Value>,
-    pub local_count: usize,
-    pub max_stack: usize,
+    pub register_count: usize,
+    pub register_types: Vec<Type>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Instruction {
-    LoadConst(ConstantId),
-    LoadDefault(Type),
-    LoadParam(ParamId),
-    LoadGeneratorContext(GeneratorContextId),
-    StoreParam(ParamId),
-    LoadLocal(LocalId),
-    StoreLocal(LocalId),
-    Pop,
-    MakeArray(usize),
-    Index,
-    CurveParamSample(ParamId),
-    Member(Identifier),
-    CoerceFloat,
-    Unary(UnaryOp),
-    Binary(BinaryOp),
-    Jump(Target),
-    JumpIfFalse(Target),
-    JumpIfFalseOrPop(Target),
-    JumpIfTrueOrPop(Target),
-    CallBuiltin(Builtin, usize),
-    CurveParamFloatClamped(ParamId),
-    CurveParamColorScaled(ParamId),
-    CurveParamCrossing {
+    LoadConst {
+        dst: RegisterId,
+        constant: ConstantId,
+    },
+    LoadDefault {
+        dst: RegisterId,
+        ty: Type,
+    },
+    LoadParam {
+        dst: RegisterId,
         param: ParamId,
-        has_fallback: bool,
+    },
+    LoadGeneratorContext {
+        dst: RegisterId,
+        slot: GeneratorContextId,
+    },
+    StoreParam {
+        param: ParamId,
+        src: RegisterId,
+    },
+    Move {
+        dst: RegisterId,
+        src: RegisterId,
+    },
+    MakeArray {
+        dst: RegisterId,
+        items: Vec<RegisterId>,
+    },
+    Index {
+        dst: RegisterId,
+        target: RegisterId,
+        index: RegisterId,
+    },
+    CurveParamSample {
+        dst: RegisterId,
+        param: ParamId,
+        position: RegisterId,
+    },
+    Member {
+        dst: RegisterId,
+        target: RegisterId,
+        member: Identifier,
+    },
+    CoerceFloat {
+        dst: RegisterId,
+        src: RegisterId,
+    },
+    Unary {
+        dst: RegisterId,
+        op: UnaryOp,
+        src: RegisterId,
+    },
+    Binary {
+        dst: RegisterId,
+        op: BinaryOp,
+        left: RegisterId,
+        right: RegisterId,
+    },
+    Jump(Target),
+    JumpIfFalse {
+        condition: RegisterId,
+        target: Target,
+    },
+    JumpIfTrue {
+        condition: RegisterId,
+        target: Target,
+    },
+    ContextRead {
+        dst: RegisterId,
+        read: ContextRead,
+    },
+    SectionPosition {
+        dst: RegisterId,
+        width: RegisterId,
+    },
+    FloatUnary {
+        dst: RegisterId,
+        op: FloatUnary,
+        value: RegisterId,
+    },
+    FloatBinary {
+        dst: RegisterId,
+        op: FloatBinary,
+        left: RegisterId,
+        right: RegisterId,
+    },
+    Clamp {
+        dst: RegisterId,
+        value: RegisterId,
+        min: RegisterId,
+        max: RegisterId,
+    },
+    Smoothstep {
+        dst: RegisterId,
+        edge0: RegisterId,
+        edge1: RegisterId,
+        value: RegisterId,
+    },
+    Mix {
+        dst: RegisterId,
+        left: RegisterId,
+        right: RegisterId,
+        amount: RegisterId,
+    },
+    Rgb {
+        dst: RegisterId,
+        red: RegisterId,
+        green: RegisterId,
+        blue: RegisterId,
+    },
+    Hsv {
+        dst: RegisterId,
+        hue: RegisterId,
+        saturation: RegisterId,
+        value: RegisterId,
+    },
+    Rand {
+        dst: RegisterId,
+        args: Vec<RegisterId>,
+    },
+    CurveFloatClamped {
+        dst: RegisterId,
+        curve: RegisterId,
+        position: RegisterId,
+        min: RegisterId,
+        max: RegisterId,
+    },
+    CurveParamFloatClamped {
+        dst: RegisterId,
+        param: ParamId,
+        position: RegisterId,
+        min: RegisterId,
+        max: RegisterId,
+    },
+    CurveColorScaled {
+        dst: RegisterId,
+        curve: RegisterId,
+        position: RegisterId,
+        scale: RegisterId,
+    },
+    CurveParamColorScaled {
+        dst: RegisterId,
+        param: ParamId,
+        position: RegisterId,
+        scale: RegisterId,
+    },
+    CurveCrossing {
+        dst: RegisterId,
+        curve: RegisterId,
+        value: RegisterId,
+        fallback: Option<RegisterId>,
+    },
+    CurveParamCrossing {
+        dst: RegisterId,
+        param: ParamId,
+        value: RegisterId,
+        fallback: Option<RegisterId>,
+    },
+    Len {
+        dst: RegisterId,
+        value: RegisterId,
+    },
+    Mark {
+        dst: RegisterId,
+        op: MarkOp,
+        args: Vec<RegisterId>,
+    },
+    TargetItems {
+        dst: RegisterId,
+        op: TargetItemsOp,
+        args: Vec<RegisterId>,
     },
     CheckLoopLimit,
     Emit {
         effect: Identifier,
-        fields: Vec<Identifier>,
+        fields: Vec<(Identifier, RegisterId)>,
     },
-    Return,
+    Return(RegisterId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,85 +205,45 @@ pub(crate) enum GeneratorContextId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Builtin {
+pub(crate) enum ContextRead {
     Progress,
     Seconds,
     Duration,
     PixelIndex,
     PixelCount,
     PixelFraction,
-    SectionPosition,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FloatUnary {
     Sin,
     Cos,
     Abs,
     Floor,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FloatBinary {
     Min,
     Max,
-    Clamp,
-    Smoothstep,
-    Mix,
-    Rgb,
-    Hsv,
-    Srand,
-    Rand,
-    CurveCrossing,
-    CurveFloatClamped,
-    CurveColorScaled,
-    Len,
-    MarkCount,
-    MarkAt,
-    MarkPrev,
-    MarkPrevIndex,
-    MarkNextIndex,
-    MarkElapsed,
-    MarkPhase,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MarkOp {
+    Count,
+    At,
+    Prev,
+    PrevIndex,
+    NextIndex,
+    Elapsed,
+    Phase,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TargetItemsOp {
     Fixtures,
     Pixels,
     Sections,
     Count,
     Pick,
-}
-
-impl Builtin {
-    pub(crate) fn from_name(name: &Identifier) -> Option<Self> {
-        Some(match name.as_str() {
-            "progress" => Self::Progress,
-            "seconds" => Self::Seconds,
-            "duration" => Self::Duration,
-            "pixel_index" => Self::PixelIndex,
-            "pixel_count" => Self::PixelCount,
-            "pixel_fraction" => Self::PixelFraction,
-            "section_position" => Self::SectionPosition,
-            "sin" => Self::Sin,
-            "cos" => Self::Cos,
-            "abs" => Self::Abs,
-            "floor" => Self::Floor,
-            "min" => Self::Min,
-            "max" => Self::Max,
-            "clamp" => Self::Clamp,
-            "smoothstep" => Self::Smoothstep,
-            "mix" => Self::Mix,
-            "rgb" => Self::Rgb,
-            "hsv" => Self::Hsv,
-            "srand" => Self::Srand,
-            "rand" => Self::Rand,
-            "curve_crossing" => Self::CurveCrossing,
-            "curve_float_clamped" => Self::CurveFloatClamped,
-            "curve_color_scaled" => Self::CurveColorScaled,
-            "len" => Self::Len,
-            "mark_count" => Self::MarkCount,
-            "mark_at" => Self::MarkAt,
-            "mark_prev" => Self::MarkPrev,
-            "mark_prev_index" => Self::MarkPrevIndex,
-            "mark_next_index" => Self::MarkNextIndex,
-            "mark_elapsed" => Self::MarkElapsed,
-            "mark_phase" => Self::MarkPhase,
-            "fixtures" => Self::Fixtures,
-            "pixels" => Self::Pixels,
-            "sections" => Self::Sections,
-            "count" => Self::Count,
-            "pick" => Self::Pick,
-            _ => return None,
-        })
-    }
 }

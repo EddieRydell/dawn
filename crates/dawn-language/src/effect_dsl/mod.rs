@@ -1,12 +1,13 @@
 mod ast;
 mod bytecode;
+mod checked;
 mod compiler;
 mod diagnostic;
 mod parser;
 mod typecheck;
 mod vm;
 
-use bytecode::BytecodeFunction;
+use bytecode::RegisterFunction;
 use compiler::compile_checked_effects;
 pub use diagnostic::Diagnostic;
 use indexmap::IndexMap;
@@ -27,7 +28,7 @@ pub use types::{
 
 pub fn compile_effects(source: &str) -> Result<Vec<CompiledEffect>, Vec<Diagnostic>> {
     let module = parse_module(source)?;
-    check_module(&module)?;
+    let module = check_module(module)?;
     Ok(compile_checked_effects(module))
 }
 
@@ -36,7 +37,7 @@ pub struct CompiledEffect {
     name: Identifier,
     params: Vec<ParamDecl>,
     kind: EffectKind,
-    function: BytecodeFunction,
+    function: RegisterFunction,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

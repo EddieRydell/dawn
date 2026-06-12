@@ -1,18 +1,23 @@
 use super::ast::{BinaryOp, Block, EffectDecl, Expr, ExprKind, Module, ParamDecl, Stmt, UnaryOp};
+use super::checked::{
+    CheckedBlock, CheckedEffectDecl, CheckedExpr, CheckedExprKind, CheckedModule, CheckedStmt,
+};
 use super::diagnostic::Diagnostic;
 use super::lexer::TextSpan;
 use super::types::{Identifier, Type, Value};
 use indexmap::IndexMap;
 
-pub(crate) fn check_module(module: &Module) -> Result<(), Vec<Diagnostic>> {
+pub(crate) fn check_module(module: Module) -> Result<CheckedModule, Vec<Diagnostic>> {
     let mut checker = Checker {
         diagnostics: Vec::new(),
     };
-    for effect in &module.effects {
-        checker.check_effect(effect);
-    }
+    let effects = module
+        .effects
+        .into_iter()
+        .map(|effect| checker.check_effect(effect))
+        .collect();
     if checker.diagnostics.is_empty() {
-        Ok(())
+        Ok(CheckedModule { effects })
     } else {
         Err(checker.diagnostics)
     }
@@ -23,7 +28,7 @@ struct Checker {
 }
 
 impl Checker {
-    fn check_effect(&mut self, effect: &EffectDecl) {
+    fn check_effect(&mut self, effect: EffectDecl) -> CheckedEffectDecl {
         let is_sample = effect.entrypoint.name.as_str() == "sample";
         let is_generator = effect.entrypoint.name.as_str() == "generate";
         if !is_sample && !is_generator {
@@ -67,12 +72,19 @@ impl Checker {
             env.insert(static_identifier("duration"), Type::Float);
         }
 
-        let returns = self.check_block(&effect.entrypoint.body, &mut env, &expected_return);
+        let (body, returns) =
+            self.check_block(effect.entrypoint.body.clone(), &mut env, &expected_return);
         if is_sample && !returns {
             self.error(
                 TextSpan { start: 0, end: 0 },
                 "`sample` must return a color on all paths",
             );
+        }
+        CheckedEffectDecl {
+            name: effect.name,
+            params: effect.params,
+            entrypoint: effect.entrypoint,
+            body,
         }
     }
 
@@ -90,7 +102,6 @@ impl Checker {
             );
         }
         match (&param.ty, &param.default) {
-            (Type::Marks, None) => {}
             (_, None) => {}
             (ty, Some(value)) if value_matches_type(value, ty) => {}
             (Type::Float, Some(Value::Int(_))) => {}
@@ -116,71 +127,101 @@ impl Checker {
 
     fn check_block(
         &mut self,
-        block: &Block,
+        block: Block,
         env: &mut IndexMap<Identifier, Type>,
         return_type: &Type,
-    ) -> bool {
+    ) -> (CheckedBlock, bool) {
         let mut returned = false;
-        for statement in &block.statements {
-            if self.check_statement(statement, env, return_type) {
+        let mut statements = Vec::with_capacity(block.statements.len());
+        for statement in block.statements {
+            let (statement, returns) = self.check_statement(statement, env, return_type);
+            statements.push(statement);
+            if returns {
                 returned = true;
                 break;
             }
         }
-        returned
+        (CheckedBlock { statements }, returned)
     }
 
     fn check_statement(
         &mut self,
-        statement: &Stmt,
+        statement: Stmt,
         env: &mut IndexMap<Identifier, Type>,
         return_type: &Type,
-    ) -> bool {
+    ) -> (CheckedStmt, bool) {
         match statement {
             Stmt::Local {
                 ty,
                 name,
                 initializer,
             } => {
-                if let Some(initializer) = initializer {
-                    let initializer_type = self.check_expr(initializer, env, Some(ty));
-                    self.require_assignable(ty, &initializer_type, initializer.span);
-                }
+                let initializer = initializer.map(|initializer| {
+                    let checked = self.check_expr(initializer, env, Some(&ty));
+                    self.require_assignable(&ty, &checked.ty, checked.span);
+                    checked
+                });
                 env.insert(name.clone(), ty.clone());
-                false
+                (
+                    CheckedStmt::Local {
+                        ty,
+                        name,
+                        initializer,
+                    },
+                    false,
+                )
             }
             Stmt::Assign { name, value } => {
-                let Some(target_type) = env.get(name).cloned() else {
+                let Some(target_type) = env.get(&name).cloned() else {
                     self.error(
                         value.span,
                         format!("unknown assignment target `{}`", name.as_str()),
                     );
-                    return false;
+                    let checked = self.check_expr(value, env, None);
+                    return (
+                        CheckedStmt::Assign {
+                            name,
+                            value: checked,
+                        },
+                        false,
+                    );
                 };
-                let value_type = self.check_expr(value, env, Some(&target_type));
-                self.require_assignable(&target_type, &value_type, value.span);
-                false
+                let checked = self.check_expr(value, env, Some(&target_type));
+                self.require_assignable(&target_type, &checked.ty, checked.span);
+                (
+                    CheckedStmt::Assign {
+                        name,
+                        value: checked,
+                    },
+                    false,
+                )
             }
-            Stmt::Expr(expr) => {
-                let _ = self.check_expr(expr, env, None);
-                false
-            }
+            Stmt::Expr(expr) => (CheckedStmt::Expr(self.check_expr(expr, env, None)), false),
             Stmt::If {
                 condition,
                 then_block,
                 else_block,
             } => {
-                let condition_type = self.check_expr(condition, env, Some(&Type::Bool));
-                self.require_assignable(&Type::Bool, &condition_type, condition.span);
+                let condition = self.check_expr(condition, env, Some(&Type::Bool));
+                self.require_assignable(&Type::Bool, &condition.ty, condition.span);
                 let mut then_env = env.clone();
-                let then_returns = self.check_block(then_block, &mut then_env, return_type);
-                let else_returns = if let Some(else_block) = else_block {
+                let (then_block, then_returns) =
+                    self.check_block(then_block, &mut then_env, return_type);
+                let (else_block, else_returns) = if let Some(else_block) = else_block {
                     let mut else_env = env.clone();
-                    self.check_block(else_block, &mut else_env, return_type)
+                    let (block, returns) = self.check_block(else_block, &mut else_env, return_type);
+                    (Some(block), returns)
                 } else {
-                    false
+                    (None, false)
                 };
-                then_returns && else_returns
+                (
+                    CheckedStmt::If {
+                        condition,
+                        then_block,
+                        else_block,
+                    },
+                    then_returns && else_returns,
+                )
             }
             Stmt::For {
                 initializer,
@@ -189,91 +230,135 @@ impl Checker {
                 body,
             } => {
                 let mut loop_env = env.clone();
-                let _ = self.check_statement(initializer, &mut loop_env, return_type);
-                let condition_type = self.check_expr(condition, &mut loop_env, Some(&Type::Bool));
-                self.require_assignable(&Type::Bool, &condition_type, condition.span);
-                let _ = self.check_statement(update, &mut loop_env, return_type);
-                let _ = self.check_block(body, &mut loop_env, return_type);
-                false
+                let (initializer, _) =
+                    self.check_statement(*initializer, &mut loop_env, return_type);
+                let condition = self.check_expr(condition, &mut loop_env, Some(&Type::Bool));
+                self.require_assignable(&Type::Bool, &condition.ty, condition.span);
+                let (update, _) = self.check_statement(*update, &mut loop_env, return_type);
+                let (body, _) = self.check_block(body, &mut loop_env, return_type);
+                (
+                    CheckedStmt::For {
+                        initializer: Box::new(initializer),
+                        condition,
+                        update: Box::new(update),
+                        body,
+                    },
+                    false,
+                )
             }
-            Stmt::Emit { fields, .. } => {
-                for (_, value) in fields {
-                    let _ = self.check_expr(value, env, None);
-                }
-                false
-            }
+            Stmt::Emit { effect, fields } => (
+                CheckedStmt::Emit {
+                    effect,
+                    fields: fields
+                        .into_iter()
+                        .map(|(name, value)| (name, self.check_expr(value, env, None)))
+                        .collect(),
+                },
+                false,
+            ),
             Stmt::Return(expr) => {
-                let actual = self.check_expr(expr, env, Some(return_type));
-                self.require_assignable(return_type, &actual, expr.span);
-                true
+                let checked = self.check_expr(expr, env, Some(return_type));
+                self.require_assignable(return_type, &checked.ty, checked.span);
+                (CheckedStmt::Return(checked), true)
             }
         }
     }
 
     fn check_expr(
         &mut self,
-        expr: &Expr,
+        expr: Expr,
         env: &mut IndexMap<Identifier, Type>,
         expected: Option<&Type>,
-    ) -> Type {
-        match &expr.kind {
-            ExprKind::Literal(value) => type_of_value(value),
-            ExprKind::Variable(name) => env.get(name).cloned().unwrap_or_else(|| {
-                if matches!(name.as_str(), "PI" | "TAU") {
-                    Type::Float
-                } else {
-                    Type::Enum(vec![name.clone()])
-                }
-            }),
+    ) -> CheckedExpr {
+        let span = expr.span;
+        let (kind, ty) = match expr.kind {
+            ExprKind::Literal(value) => {
+                let ty = type_of_value(&value);
+                (CheckedExprKind::Literal(value), ty)
+            }
+            ExprKind::Variable(name) => {
+                let ty = env.get(&name).cloned().unwrap_or_else(|| {
+                    if matches!(name.as_str(), "PI" | "TAU") {
+                        Type::Float
+                    } else {
+                        Type::Enum(vec![name.clone()])
+                    }
+                });
+                (CheckedExprKind::Variable(name), ty)
+            }
             ExprKind::Array(items) => {
                 if items.is_empty() {
-                    if let Some(Type::Array(item_type)) = expected {
-                        return Type::Array(item_type.clone());
+                    let ty = if let Some(Type::Array(item_type)) = expected {
+                        Type::Array(item_type.clone())
+                    } else {
+                        self.error(span, "empty array literal needs an array type context");
+                        Type::Array(Box::new(Type::Void))
+                    };
+                    (CheckedExprKind::Array(Vec::new()), ty)
+                } else {
+                    let expected_item = expected.and_then(|ty| match ty {
+                        Type::Array(item) => Some(item.as_ref()),
+                        _ => None,
+                    });
+                    let mut checked_items = Vec::with_capacity(items.len());
+                    let mut items_iter = items.into_iter();
+                    let first = self.check_expr(
+                        items_iter.next().unwrap_or_else(|| unreachable!()),
+                        env,
+                        expected_item,
+                    );
+                    let first_type = first.ty.clone();
+                    checked_items.push(first);
+                    for item in items_iter {
+                        let checked = self.check_expr(item, env, Some(&first_type));
+                        self.require_assignable(&first_type, &checked.ty, checked.span);
+                        checked_items.push(checked);
                     }
-                    self.error(expr.span, "empty array literal needs an array type context");
-                    return Type::Array(Box::new(Type::Void));
+                    (
+                        CheckedExprKind::Array(checked_items),
+                        Type::Array(Box::new(first_type)),
+                    )
                 }
-
-                let expected_item = expected.and_then(|ty| match ty {
-                    Type::Array(item) => Some(item.as_ref()),
-                    _ => None,
-                });
-                let first_type = self.check_expr(&items[0], env, expected_item);
-                for item in items.iter().skip(1) {
-                    let item_type = self.check_expr(item, env, Some(&first_type));
-                    self.require_assignable(&first_type, &item_type, item.span);
-                }
-                Type::Array(Box::new(first_type))
             }
             ExprKind::Index { target, index } => {
-                let target_type = self.check_expr(target, env, None);
-                match target_type {
+                let target = self.check_expr(*target, env, None);
+                let index = match &target.ty {
+                    Type::Array(_) => self.check_expr(*index, env, Some(&Type::Int)),
+                    Type::Curve(_) => self.check_expr(*index, env, Some(&Type::Float)),
+                    _ => self.check_expr(*index, env, None),
+                };
+                let ty = match &target.ty {
                     Type::Array(item) => {
-                        let index_type = self.check_expr(index, env, Some(&Type::Int));
-                        self.require_assignable(&Type::Int, &index_type, index.span);
-                        *item
+                        self.require_assignable(&Type::Int, &index.ty, index.span);
+                        item.as_ref().clone()
                     }
                     Type::Curve(value_type) => {
-                        let index_type = self.check_expr(index, env, Some(&Type::Float));
-                        self.require_assignable(&Type::Float, &index_type, index.span);
-                        *value_type
+                        self.require_assignable(&Type::Float, &index.ty, index.span);
+                        value_type.as_ref().clone()
                     }
                     _ => {
                         self.error(target.span, "indexing requires an array or curve");
                         Type::Void
                     }
-                }
+                };
+                (
+                    CheckedExprKind::Index {
+                        target: Box::new(target),
+                        index: Box::new(index),
+                    },
+                    ty,
+                )
             }
             ExprKind::Member { target, member } => {
-                let target_type = self.check_expr(target, env, None);
-                match target_type {
+                let target = self.check_expr(*target, env, None);
+                let ty = match &target.ty {
                     Type::TargetItem => match member.as_str() {
                         "fixture_index" | "fixture_pixel_index" | "pixel_index" | "pixel_count" => {
                             Type::Int
                         }
                         "pixel_fraction" => Type::Float,
                         _ => {
-                            self.error(expr.span, "unknown TargetItem member");
+                            self.error(span, "unknown TargetItem member");
                             Type::Void
                         }
                     },
@@ -281,45 +366,93 @@ impl Checker {
                         self.error(target.span, "member access requires TargetItem");
                         Type::Void
                     }
-                }
+                };
+                (
+                    CheckedExprKind::Member {
+                        target: Box::new(target),
+                        member,
+                    },
+                    ty,
+                )
             }
-            ExprKind::Call { callee, args } => self.check_call(callee, args, env, expr.span),
+            ExprKind::Call { callee, args } => {
+                let callee = self.check_expr(*callee, env, None);
+                let ty = if let CheckedExprKind::Variable(name) = &callee.kind {
+                    self.check_builtin_call(name.as_str(), &args, env, span)
+                } else {
+                    self.error(callee.span, "call target must be a builtin");
+                    Type::Void
+                };
+                let args = self.check_call_args(&callee, args, env);
+                (
+                    CheckedExprKind::Call {
+                        callee: Box::new(callee),
+                        args,
+                    },
+                    ty,
+                )
+            }
             ExprKind::Unary { op, expr: inner } => {
-                let inner_type = self.check_expr(inner, env, None);
-                match op {
-                    UnaryOp::Negate if numeric(&inner_type) => inner_type,
-                    UnaryOp::Not if inner_type == Type::Bool => Type::Bool,
+                let inner = self.check_expr(*inner, env, None);
+                let ty = match op {
+                    UnaryOp::Negate if numeric(&inner.ty) => inner.ty.clone(),
+                    UnaryOp::Not if inner.ty == Type::Bool => Type::Bool,
                     UnaryOp::Negate => {
-                        self.error(expr.span, "unary `-` requires int or float");
+                        self.error(span, "unary `-` requires int or float");
                         Type::Void
                     }
                     UnaryOp::Not => {
-                        self.error(expr.span, "unary `!` requires bool");
+                        self.error(span, "unary `!` requires bool");
                         Type::Void
                     }
-                }
+                };
+                (
+                    CheckedExprKind::Unary {
+                        op,
+                        expr: Box::new(inner),
+                    },
+                    ty,
+                )
             }
             ExprKind::Binary { op, left, right } => {
-                let left_type = self.check_expr(left, env, None);
-                let right_type = self.check_expr(right, env, Some(&left_type));
-                self.check_binary(*op, &left_type, &right_type, expr.span)
+                let left = self.check_expr(*left, env, None);
+                let right = self.check_expr(*right, env, Some(&left.ty));
+                let ty = self.check_binary(op, &left.ty, &right.ty, span);
+                (
+                    CheckedExprKind::Binary {
+                        op,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    },
+                    ty,
+                )
             }
-        }
+        };
+        CheckedExpr { kind, span, ty }
     }
 
-    fn check_call(
+    fn check_call_args(
         &mut self,
-        callee: &Expr,
-        args: &[Expr],
+        callee: &CheckedExpr,
+        args: Vec<Expr>,
         env: &mut IndexMap<Identifier, Type>,
-        span: TextSpan,
-    ) -> Type {
-        if let ExprKind::Variable(name) = &callee.kind {
-            return self.check_builtin_call(name.as_str(), args, env, span);
-        }
-
-        self.error(callee.span, "call target must be a builtin");
-        Type::Void
+    ) -> Vec<CheckedExpr> {
+        let name = match &callee.kind {
+            CheckedExprKind::Variable(name) => name.as_str(),
+            _ => {
+                return args
+                    .into_iter()
+                    .map(|arg| self.check_expr(arg, env, None))
+                    .collect()
+            }
+        };
+        args.into_iter()
+            .enumerate()
+            .map(|(index, arg)| {
+                let expected = builtin_arg_type(name, index);
+                self.check_expr(arg, env, expected.as_ref())
+            })
+            .collect()
     }
 
     fn check_builtin_call(
@@ -532,8 +665,8 @@ impl Checker {
         env: &mut IndexMap<Identifier, Type>,
     ) {
         if let Some(arg) = args.get(index) {
-            let actual = self.check_expr(arg, env, Some(expected));
-            self.require_assignable(expected, &actual, arg.span);
+            let actual = self.check_expr(arg.clone(), env, Some(expected));
+            self.require_assignable(expected, &actual.ty, arg.span);
         }
     }
 
@@ -544,7 +677,7 @@ impl Checker {
         env: &mut IndexMap<Identifier, Type>,
     ) -> Type {
         args.get(index)
-            .map(|arg| self.check_expr(arg, env, None))
+            .map(|arg| self.check_expr(arg.clone(), env, None).ty)
             .unwrap_or(Type::Void)
     }
 
@@ -565,6 +698,33 @@ impl Checker {
 
     fn error(&mut self, span: TextSpan, message: impl Into<String>) {
         self.diagnostics.push(Diagnostic::new(span, message));
+    }
+}
+
+fn builtin_arg_type(name: &str, index: usize) -> Option<Type> {
+    match name {
+        "progress" | "seconds" | "duration" | "pixel_index" | "pixel_count" | "pixel_fraction" => {
+            None
+        }
+        "fixtures" | "pixels" if index == 0 => Some(Type::Target),
+        "sections" if index == 0 => Some(Type::Target),
+        "sections" if index == 1 => Some(Type::Float),
+        "count" if index == 0 => Some(Type::TargetItems),
+        "pick" if index == 0 => Some(Type::TargetItems),
+        "pick" if index == 1 => Some(Type::Float),
+        "mark_count" | "mark_at" | "mark_prev" | "mark_prev_index" | "mark_next_index"
+        | "mark_elapsed" | "mark_phase"
+            if index == 0 =>
+        {
+            Some(Type::Marks)
+        }
+        "rgb" | "hsv" | "rand" | "srand" | "sin" | "cos" | "abs" | "floor" | "min" | "max"
+        | "clamp" | "smoothstep" | "section_position" => Some(Type::Float),
+        "curve_crossing" if index == 0 => Some(Type::curve(Type::Float)),
+        "curve_float_clamped" if index == 0 => Some(Type::curve(Type::Float)),
+        "curve_color_scaled" if index == 0 => Some(Type::curve(Type::Color)),
+        "curve_crossing" | "curve_float_clamped" | "curve_color_scaled" => Some(Type::Float),
+        _ => None,
     }
 }
 

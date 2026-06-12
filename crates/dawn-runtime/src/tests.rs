@@ -304,6 +304,111 @@ fn no_arg_and_global_mark_builtins_are_rejected() {
 }
 
 #[test]
+fn register_vm_evaluates_core_ops_and_builtins() {
+    let mut project = project(sequence_with_effects(vec![constant_effect(
+        1,
+        0.0,
+        10.0,
+        1,
+        EffectScope::WholeTarget,
+        "RegisterCore",
+        IndexMap::new(),
+    )]));
+    insert_effect(
+        &mut project,
+        "RegisterCore",
+        "effect RegisterCore {
+          color sample() {
+            float value = 1.0;
+            value = value + 2.0 * 3.0;
+            bool skipped = false && rand(1.0) > 0.0;
+            if (!skipped || value == 7.0) {
+              value = clamp(sin(PI / 2.0) + cos(0.0) + abs(-1.0) + floor(1.9), 0.0, 4.0);
+            }
+            color mixed = mix(rgb(value / 4.0, section_position(2.0), pixel_fraction()), hsv(0.0, 1.0, 1.0), 0.0);
+            return mixed;
+          }
+        }",
+    );
+
+    let frame =
+        PreparedSequenceRenderer::prepare(&project, &SetupId("setup".to_string()), &seq_id())
+            .unwrap()
+            .render_frame(0)
+            .unwrap();
+
+    assert_eq!(frame.fixtures[0].pixels[0], color(255, 0, 0));
+    assert_eq!(frame.fixtures[0].pixels[1], color(255, 128, 85));
+}
+
+#[test]
+fn register_vm_uses_prepared_curve_ops() {
+    let params = IndexMap::from([
+        (
+            ident("level"),
+            EffectParamValue::Curve(CurveSource::Inline(Curve {
+                points: vec![
+                    CurvePoint {
+                        position: 0.0,
+                        value: CurveValue::Float(0.0),
+                    },
+                    CurvePoint {
+                        position: 1.0,
+                        value: CurveValue::Float(1.0),
+                    },
+                ],
+            })),
+        ),
+        (
+            ident("palette"),
+            EffectParamValue::Curve(CurveSource::Inline(Curve {
+                points: vec![
+                    CurvePoint {
+                        position: 0.0,
+                        value: CurveValue::Color(color(0, 0, 0)),
+                    },
+                    CurvePoint {
+                        position: 1.0,
+                        value: CurveValue::Color(color(0, 200, 0)),
+                    },
+                ],
+            })),
+        ),
+    ]);
+    let mut project = project(sequence_with_effects(vec![constant_effect(
+        1,
+        0.0,
+        10.0,
+        1,
+        EffectScope::WholeTarget,
+        "CurveOps",
+        params,
+    )]));
+    insert_effect(
+        &mut project,
+        "CurveOps",
+        "effect CurveOps {
+          param curve<float> level;
+          param curve<color> palette;
+          color sample() {
+            float amount = curve_float_clamped(level, 0.5, 0.0, 1.0);
+            float position = curve_crossing(level, 0.5, 0.0);
+            color zero = curve_color_scaled(palette, position, 0.0);
+            return mix(zero, curve_color_scaled(palette, position, amount), 1.0);
+          }
+        }",
+    );
+
+    let frame =
+        PreparedSequenceRenderer::prepare(&project, &SetupId("setup".to_string()), &seq_id())
+            .unwrap()
+            .render_frame(0)
+            .unwrap();
+
+    assert_eq!(frame.fixtures[0].pixels[0], color(0, 50, 0));
+}
+
+#[test]
 fn generator_emits_sample_child_for_selected_fixture_target() {
     let mut project = project(sequence_with_effects(vec![constant_effect(
         1,

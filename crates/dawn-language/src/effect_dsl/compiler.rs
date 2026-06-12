@@ -1,37 +1,32 @@
-use super::ast::{BinaryOp, EffectDecl, Expr, ExprKind, Module, ParamDecl, Stmt};
+use super::ast::{BinaryOp, ParamDecl};
 use super::bytecode::{
-    Builtin, BytecodeFunction, GeneratorContextId, Instruction, LocalId, ParamId, Target,
+    ContextRead, FloatBinary, FloatUnary, GeneratorContextId, Instruction, LocalId, MarkOp,
+    ParamId, RegisterFunction, RegisterId, Target, TargetItemsOp,
+};
+use super::checked::{
+    CheckedBlock, CheckedEffectDecl, CheckedExpr, CheckedExprKind, CheckedModule, CheckedStmt,
 };
 use super::types::{Identifier, Type, Value};
 use super::{CompiledEffect, EffectKind};
 use indexmap::IndexMap;
 
-pub(crate) fn compile_checked_effects(module: Module) -> Vec<CompiledEffect> {
+pub(crate) fn compile_checked_effects(module: CheckedModule) -> Vec<CompiledEffect> {
     module.effects.into_iter().map(compile_effect).collect()
 }
 
-fn compile_effect(effect: EffectDecl) -> CompiledEffect {
-    let params = effect
-        .params
-        .into_iter()
-        .map(compile_param)
-        .collect::<Vec<_>>();
+fn compile_effect(effect: CheckedEffectDecl) -> CompiledEffect {
     let kind = if effect.entrypoint.name.as_str() == "generate" {
         EffectKind::Generator
     } else {
         EffectKind::Sample
     };
-    let function = FunctionCompiler::new(&params, kind).compile(effect.entrypoint.body.statements);
+    let function = FunctionCompiler::new(&effect.params, kind).compile(effect.body);
     CompiledEffect {
         name: effect.name,
-        params,
+        params: effect.params,
         kind,
         function,
     }
-}
-
-fn compile_param(param: ParamDecl) -> ParamDecl {
-    param
 }
 
 struct FunctionCompiler {
@@ -39,9 +34,7 @@ struct FunctionCompiler {
     constants: Vec<Value>,
     scopes: Vec<IndexMap<Identifier, Binding>>,
     param_types: Vec<Type>,
-    local_count: usize,
-    stack_depth: isize,
-    max_stack: usize,
+    register_types: Vec<Type>,
 }
 
 #[derive(Clone, Copy)]
@@ -76,81 +69,98 @@ impl FunctionCompiler {
             constants: Vec::new(),
             scopes: vec![param_scope],
             param_types: params.iter().map(|param| param.ty.clone()).collect(),
-            local_count: 0,
-            stack_depth: 0,
-            max_stack: 0,
+            register_types: Vec::new(),
         }
     }
 
-    fn compile(mut self, statements: Vec<Stmt>) -> BytecodeFunction {
-        self.compile_block(statements);
-        let void = self.add_constant(Value::Void);
-        self.emit(Instruction::LoadConst(void), 1);
-        self.emit(Instruction::Return, -1);
-        BytecodeFunction {
+    fn compile(mut self, block: CheckedBlock) -> RegisterFunction {
+        self.compile_block(block);
+        let void = self.allocate_register(Type::Void);
+        let constant = self.add_constant(Value::Void);
+        self.emit(Instruction::LoadConst {
+            dst: void,
+            constant,
+        });
+        self.emit(Instruction::Return(void));
+        RegisterFunction {
             instructions: self.instructions,
             constants: self.constants,
-            local_count: self.local_count,
-            max_stack: self.max_stack,
+            register_count: self.register_types.len(),
+            register_types: self.register_types,
         }
     }
 
-    fn compile_block(&mut self, statements: Vec<Stmt>) {
+    fn compile_block(&mut self, block: CheckedBlock) {
         self.scopes.push(IndexMap::new());
-        for statement in statements {
+        for statement in block.statements {
             self.compile_statement(statement);
         }
         let _ = self.scopes.pop();
     }
 
-    fn compile_statement(&mut self, statement: Stmt) {
+    fn compile_statement(&mut self, statement: CheckedStmt) {
         match statement {
-            Stmt::Local {
+            CheckedStmt::Local {
                 ty,
                 name,
                 initializer,
             } => {
-                let slot = self.allocate_local(name);
+                let slot = self.allocate_local(name, ty.clone());
                 if let Some(initializer) = initializer {
-                    self.compile_expr(initializer);
-                    if ty == Type::Float {
-                        self.emit(Instruction::CoerceFloat, 0);
-                    }
+                    let value = self.compile_expr(initializer);
+                    let value = self.coerce_register(value, &ty);
+                    self.emit(Instruction::Move {
+                        dst: slot,
+                        src: value,
+                    });
                 } else {
-                    self.emit(Instruction::LoadDefault(ty), 1);
+                    self.emit(Instruction::LoadDefault { dst: slot, ty });
                 }
-                self.emit(Instruction::StoreLocal(slot), -1);
             }
-            Stmt::Assign { name, value } => {
-                self.compile_expr(value);
+            CheckedStmt::Assign { name, value } => {
+                let value = self.compile_expr(value);
                 match self.lookup(&name) {
-                    Some(Binding::Param(slot)) => self.emit(Instruction::StoreParam(slot), -1),
-                    Some(Binding::Local(slot)) => self.emit(Instruction::StoreLocal(slot), -1),
+                    Some(Binding::Param(slot)) => {
+                        let value = self.coerce_register(value, &self.param_types[slot].clone());
+                        self.emit(Instruction::StoreParam {
+                            param: slot,
+                            src: value,
+                        });
+                    }
+                    Some(Binding::Local(slot)) => {
+                        let value = self.coerce_register(value, &self.register_types[slot].clone());
+                        self.emit(Instruction::Move {
+                            dst: slot,
+                            src: value,
+                        });
+                    }
                     Some(Binding::GeneratorContext(_)) | None => {}
                 }
             }
-            Stmt::Expr(expr) => {
-                self.compile_expr(expr);
-                self.emit(Instruction::Pop, -1);
+            CheckedStmt::Expr(expr) => {
+                let _ = self.compile_expr(expr);
             }
-            Stmt::If {
+            CheckedStmt::If {
                 condition,
                 then_block,
                 else_block,
             } => {
-                self.compile_expr(condition);
-                let false_jump = self.emit_jump(Instruction::JumpIfFalse(usize::MAX), -1);
-                self.compile_block(then_block.statements);
+                let condition = self.compile_expr(condition);
+                let false_jump = self.emit_jump(Instruction::JumpIfFalse {
+                    condition,
+                    target: usize::MAX,
+                });
+                self.compile_block(then_block);
                 if let Some(else_block) = else_block {
-                    let end_jump = self.emit_jump(Instruction::Jump(usize::MAX), 0);
+                    let end_jump = self.emit_jump(Instruction::Jump(usize::MAX));
                     self.patch_jump(false_jump, self.current_target());
-                    self.compile_block(else_block.statements);
+                    self.compile_block(else_block);
                     self.patch_jump(end_jump, self.current_target());
                 } else {
                     self.patch_jump(false_jump, self.current_target());
                 }
             }
-            Stmt::For {
+            CheckedStmt::For {
                 initializer,
                 condition,
                 update,
@@ -159,48 +169,52 @@ impl FunctionCompiler {
                 self.scopes.push(IndexMap::new());
                 self.compile_statement(*initializer);
                 let loop_start = self.current_target();
-                self.compile_expr(condition);
-                let end_jump = self.emit_jump(Instruction::JumpIfFalse(usize::MAX), -1);
-                self.emit(Instruction::CheckLoopLimit, 0);
-                self.compile_block(body.statements);
+                let condition = self.compile_expr(condition);
+                let end_jump = self.emit_jump(Instruction::JumpIfFalse {
+                    condition,
+                    target: usize::MAX,
+                });
+                self.emit(Instruction::CheckLoopLimit);
+                self.compile_block(body);
                 self.compile_statement(*update);
-                self.emit(Instruction::Jump(loop_start), 0);
+                self.emit(Instruction::Jump(loop_start));
                 self.patch_jump(end_jump, self.current_target());
                 let _ = self.scopes.pop();
             }
-            Stmt::Emit { effect, fields } => {
-                let arity = fields.len();
-                let mut names = Vec::with_capacity(arity);
-                for (name, value) in fields {
-                    names.push(name);
-                    self.compile_expr(value);
-                }
-                self.emit(
-                    Instruction::Emit {
-                        effect,
-                        fields: names,
-                    },
-                    -(arity as isize),
-                );
+            CheckedStmt::Emit { effect, fields } => {
+                let fields = fields
+                    .into_iter()
+                    .map(|(name, value)| (name, self.compile_expr(value)))
+                    .collect();
+                self.emit(Instruction::Emit { effect, fields });
             }
-            Stmt::Return(expr) => {
-                self.compile_expr(expr);
-                self.emit(Instruction::Return, -1);
+            CheckedStmt::Return(expr) => {
+                let value = self.compile_expr(expr);
+                self.emit(Instruction::Return(value));
             }
         }
     }
 
-    fn compile_expr(&mut self, expr: Expr) {
+    fn compile_expr(&mut self, expr: CheckedExpr) -> RegisterId {
+        let result_ty = expr.ty.clone();
         match expr.kind {
-            ExprKind::Literal(value) => {
+            CheckedExprKind::Literal(value) => {
+                let dst = self.allocate_register(result_ty);
                 let constant = self.add_constant(value);
-                self.emit(Instruction::LoadConst(constant), 1);
+                self.emit(Instruction::LoadConst { dst, constant });
+                dst
             }
-            ExprKind::Variable(name) => match self.lookup(&name) {
-                Some(Binding::Param(slot)) => self.emit(Instruction::LoadParam(slot), 1),
-                Some(Binding::Local(slot)) => self.emit(Instruction::LoadLocal(slot), 1),
+            CheckedExprKind::Variable(name) => match self.lookup(&name) {
+                Some(Binding::Param(slot)) => {
+                    let dst = self.allocate_register(result_ty);
+                    self.emit(Instruction::LoadParam { dst, param: slot });
+                    dst
+                }
+                Some(Binding::Local(slot)) => slot,
                 Some(Binding::GeneratorContext(slot)) => {
-                    self.emit(Instruction::LoadGeneratorContext(slot), 1);
+                    let dst = self.allocate_register(result_ty);
+                    self.emit(Instruction::LoadGeneratorContext { dst, slot });
+                    dst
                 }
                 None => {
                     let value = match name.as_str() {
@@ -208,117 +222,337 @@ impl FunctionCompiler {
                         "TAU" => Value::Float(std::f64::consts::TAU),
                         _ => Value::Enum(name),
                     };
+                    let dst = self.allocate_register(result_ty);
                     let constant = self.add_constant(value);
-                    self.emit(Instruction::LoadConst(constant), 1);
+                    self.emit(Instruction::LoadConst { dst, constant });
+                    dst
                 }
             },
-            ExprKind::Array(items) => {
-                let count = items.len();
-                for item in items {
-                    self.compile_expr(item);
-                }
-                self.emit(Instruction::MakeArray(count), 1 - count as isize);
+            CheckedExprKind::Array(items) => {
+                let item_registers = items
+                    .into_iter()
+                    .map(|item| self.compile_expr(item))
+                    .collect();
+                let dst = self.allocate_register(result_ty);
+                self.emit(Instruction::MakeArray {
+                    dst,
+                    items: item_registers,
+                });
+                dst
             }
-            ExprKind::Index { target, index } => {
+            CheckedExprKind::Index { target, index } => {
                 if let Some(param) = self.curve_param_binding(&target) {
-                    self.compile_expr(*index);
-                    self.emit(Instruction::CurveParamSample(param), 0);
+                    let position = self.compile_expr(*index);
+                    let dst = self.allocate_register(result_ty);
+                    self.emit(Instruction::CurveParamSample {
+                        dst,
+                        param,
+                        position,
+                    });
+                    dst
                 } else {
-                    self.compile_expr(*target);
-                    self.compile_expr(*index);
-                    self.emit(Instruction::Index, -1);
+                    let target = self.compile_expr(*target);
+                    let index = self.compile_expr(*index);
+                    let dst = self.allocate_register(result_ty);
+                    self.emit(Instruction::Index { dst, target, index });
+                    dst
                 }
             }
-            ExprKind::Member { target, member } => {
-                self.compile_expr(*target);
-                self.emit(Instruction::Member(member), 0);
+            CheckedExprKind::Member { target, member } => {
+                let target = self.compile_expr(*target);
+                let dst = self.allocate_register(result_ty);
+                self.emit(Instruction::Member {
+                    dst,
+                    target,
+                    member,
+                });
+                dst
             }
-            ExprKind::Call { callee, args } => {
-                let ExprKind::Variable(name) = callee.kind else {
-                    return;
+            CheckedExprKind::Call { callee, args } => {
+                let CheckedExprKind::Variable(name) = callee.kind else {
+                    let dst = self.allocate_register(result_ty);
+                    self.emit(Instruction::LoadDefault {
+                        dst,
+                        ty: Type::Void,
+                    });
+                    return dst;
                 };
-                let Some(builtin) = Builtin::from_name(&name) else {
-                    return;
-                };
-                if self.compile_specialized_curve_call(builtin, &args) {
-                    return;
-                }
-                let arity = args.len();
-                for arg in args {
-                    self.compile_expr(arg);
-                }
-                self.emit(Instruction::CallBuiltin(builtin, arity), 1 - arity as isize);
+                self.compile_builtin_call(name, args, result_ty)
             }
-            ExprKind::Unary { op, expr } => {
-                self.compile_expr(*expr);
-                self.emit(Instruction::Unary(op), 0);
+            CheckedExprKind::Unary { op, expr } => {
+                let src = self.compile_expr(*expr);
+                let dst = self.allocate_register(result_ty);
+                self.emit(Instruction::Unary { dst, op, src });
+                dst
             }
-            ExprKind::Binary { op, left, right } => match op {
-                BinaryOp::And => {
-                    self.compile_expr(*left);
-                    let end_jump = self.emit_jump(Instruction::JumpIfFalseOrPop(usize::MAX), 0);
-                    self.compile_expr(*right);
-                    self.patch_jump(end_jump, self.current_target());
-                }
-                BinaryOp::Or => {
-                    self.compile_expr(*left);
-                    let end_jump = self.emit_jump(Instruction::JumpIfTrueOrPop(usize::MAX), 0);
-                    self.compile_expr(*right);
-                    self.patch_jump(end_jump, self.current_target());
-                }
+            CheckedExprKind::Binary { op, left, right } => match op {
+                BinaryOp::And => self.compile_short_circuit(false, *left, *right, result_ty),
+                BinaryOp::Or => self.compile_short_circuit(true, *left, *right, result_ty),
                 _ => {
-                    self.compile_expr(*left);
-                    self.compile_expr(*right);
-                    self.emit(Instruction::Binary(op), -1);
+                    let left = self.compile_expr(*left);
+                    let right = self.compile_expr(*right);
+                    let dst = self.allocate_register(result_ty);
+                    self.emit(Instruction::Binary {
+                        dst,
+                        op,
+                        left,
+                        right,
+                    });
+                    dst
                 }
             },
         }
     }
 
-    fn compile_specialized_curve_call(&mut self, builtin: Builtin, args: &[Expr]) -> bool {
-        match builtin {
-            Builtin::CurveFloatClamped if args.len() == 4 => {
-                let Some(param) = self.curve_param_binding(&args[0]) else {
-                    return false;
-                };
-                for arg in &args[1..] {
-                    self.compile_expr(arg.clone());
-                }
-                self.emit(Instruction::CurveParamFloatClamped(param), -2);
-                true
-            }
-            Builtin::CurveColorScaled if args.len() == 3 => {
-                let Some(param) = self.curve_param_binding(&args[0]) else {
-                    return false;
-                };
-                for arg in &args[1..] {
-                    self.compile_expr(arg.clone());
-                }
-                self.emit(Instruction::CurveParamColorScaled(param), -1);
-                true
-            }
-            Builtin::CurveCrossing if args.len() == 2 || args.len() == 3 => {
-                let Some(param) = self.curve_param_binding(&args[0]) else {
-                    return false;
-                };
-                for arg in &args[1..] {
-                    self.compile_expr(arg.clone());
-                }
-                self.emit(
-                    Instruction::CurveParamCrossing {
-                        param,
-                        has_fallback: args.len() == 3,
-                    },
-                    if args.len() == 3 { -1 } else { 0 },
-                );
-                true
-            }
-            _ => false,
-        }
+    fn compile_short_circuit(
+        &mut self,
+        jump_when_true: bool,
+        left: CheckedExpr,
+        right: CheckedExpr,
+        result_ty: Type,
+    ) -> RegisterId {
+        let dst = self.allocate_register(result_ty);
+        let left = self.compile_expr(left);
+        self.emit(Instruction::Move { dst, src: left });
+        let jump = if jump_when_true {
+            self.emit_jump(Instruction::JumpIfTrue {
+                condition: dst,
+                target: usize::MAX,
+            })
+        } else {
+            self.emit_jump(Instruction::JumpIfFalse {
+                condition: dst,
+                target: usize::MAX,
+            })
+        };
+        let right = self.compile_expr(right);
+        self.emit(Instruction::Move { dst, src: right });
+        self.patch_jump(jump, self.current_target());
+        dst
     }
 
-    fn curve_param_binding(&self, expr: &Expr) -> Option<ParamId> {
-        let ExprKind::Variable(name) = &expr.kind else {
+    fn compile_builtin_call(
+        &mut self,
+        name: Identifier,
+        args: Vec<CheckedExpr>,
+        result_ty: Type,
+    ) -> RegisterId {
+        let dst = self.allocate_register(result_ty);
+        match name.as_str() {
+            "progress" => self.emit(Instruction::ContextRead {
+                dst,
+                read: ContextRead::Progress,
+            }),
+            "seconds" => self.emit(Instruction::ContextRead {
+                dst,
+                read: ContextRead::Seconds,
+            }),
+            "duration" => self.emit(Instruction::ContextRead {
+                dst,
+                read: ContextRead::Duration,
+            }),
+            "pixel_index" => self.emit(Instruction::ContextRead {
+                dst,
+                read: ContextRead::PixelIndex,
+            }),
+            "pixel_count" => self.emit(Instruction::ContextRead {
+                dst,
+                read: ContextRead::PixelCount,
+            }),
+            "pixel_fraction" => self.emit(Instruction::ContextRead {
+                dst,
+                read: ContextRead::PixelFraction,
+            }),
+            "section_position" => {
+                let args = self.compile_args(args);
+                self.emit(Instruction::SectionPosition {
+                    dst,
+                    width: args[0],
+                });
+            }
+            "sin" | "cos" | "abs" | "floor" => {
+                let args = self.compile_args(args);
+                self.emit(Instruction::FloatUnary {
+                    dst,
+                    op: match name.as_str() {
+                        "sin" => FloatUnary::Sin,
+                        "cos" => FloatUnary::Cos,
+                        "abs" => FloatUnary::Abs,
+                        "floor" => FloatUnary::Floor,
+                        _ => unreachable!("matched float unary builtin"),
+                    },
+                    value: args[0],
+                });
+            }
+            "min" | "max" => {
+                let args = self.compile_args(args);
+                self.emit(Instruction::FloatBinary {
+                    dst,
+                    op: if name.as_str() == "min" {
+                        FloatBinary::Min
+                    } else {
+                        FloatBinary::Max
+                    },
+                    left: args[0],
+                    right: args[1],
+                });
+            }
+            "clamp" => {
+                let args = self.compile_args(args);
+                self.emit(Instruction::Clamp {
+                    dst,
+                    value: args[0],
+                    min: args[1],
+                    max: args[2],
+                });
+            }
+            "smoothstep" => {
+                let args = self.compile_args(args);
+                self.emit(Instruction::Smoothstep {
+                    dst,
+                    edge0: args[0],
+                    edge1: args[1],
+                    value: args[2],
+                });
+            }
+            "mix" => {
+                let args = self.compile_args(args);
+                self.emit(Instruction::Mix {
+                    dst,
+                    left: args[0],
+                    right: args[1],
+                    amount: args[2],
+                });
+            }
+            "rgb" => {
+                let args = self.compile_args(args);
+                self.emit(Instruction::Rgb {
+                    dst,
+                    red: args[0],
+                    green: args[1],
+                    blue: args[2],
+                });
+            }
+            "hsv" => {
+                let args = self.compile_args(args);
+                self.emit(Instruction::Hsv {
+                    dst,
+                    hue: args[0],
+                    saturation: args[1],
+                    value: args[2],
+                });
+            }
+            "srand" | "rand" => {
+                let args = self.compile_args(args);
+                self.emit(Instruction::Rand { dst, args });
+            }
+            "curve_float_clamped" if args.len() == 4 => {
+                if let Some(param) = self.curve_param_binding(&args[0]) {
+                    let registers = self.compile_args(args.into_iter().skip(1).collect());
+                    self.emit(Instruction::CurveParamFloatClamped {
+                        dst,
+                        param,
+                        position: registers[0],
+                        min: registers[1],
+                        max: registers[2],
+                    });
+                } else {
+                    let args = self.compile_args(args);
+                    self.emit(Instruction::CurveFloatClamped {
+                        dst,
+                        curve: args[0],
+                        position: args[1],
+                        min: args[2],
+                        max: args[3],
+                    });
+                }
+            }
+            "curve_color_scaled" if args.len() == 3 => {
+                if let Some(param) = self.curve_param_binding(&args[0]) {
+                    let registers = self.compile_args(args.into_iter().skip(1).collect());
+                    self.emit(Instruction::CurveParamColorScaled {
+                        dst,
+                        param,
+                        position: registers[0],
+                        scale: registers[1],
+                    });
+                } else {
+                    let args = self.compile_args(args);
+                    self.emit(Instruction::CurveColorScaled {
+                        dst,
+                        curve: args[0],
+                        position: args[1],
+                        scale: args[2],
+                    });
+                }
+            }
+            "curve_crossing" if args.len() == 2 || args.len() == 3 => {
+                if let Some(param) = self.curve_param_binding(&args[0]) {
+                    let registers = self.compile_args(args.into_iter().skip(1).collect());
+                    self.emit(Instruction::CurveParamCrossing {
+                        dst,
+                        param,
+                        value: registers[0],
+                        fallback: registers.get(1).copied(),
+                    });
+                } else {
+                    let args = self.compile_args(args);
+                    self.emit(Instruction::CurveCrossing {
+                        dst,
+                        curve: args[0],
+                        value: args[1],
+                        fallback: args.get(2).copied(),
+                    });
+                }
+            }
+            "len" => {
+                let args = self.compile_args(args);
+                self.emit(Instruction::Len {
+                    dst,
+                    value: args[0],
+                });
+            }
+            "mark_count" | "mark_at" | "mark_prev" | "mark_prev_index" | "mark_next_index"
+            | "mark_elapsed" | "mark_phase" => {
+                let op = match name.as_str() {
+                    "mark_count" => MarkOp::Count,
+                    "mark_at" => MarkOp::At,
+                    "mark_prev" => MarkOp::Prev,
+                    "mark_prev_index" => MarkOp::PrevIndex,
+                    "mark_next_index" => MarkOp::NextIndex,
+                    "mark_elapsed" => MarkOp::Elapsed,
+                    "mark_phase" => MarkOp::Phase,
+                    _ => unreachable!("matched mark builtin"),
+                };
+                let args = self.compile_args(args);
+                self.emit(Instruction::Mark { dst, op, args });
+            }
+            "fixtures" | "pixels" | "sections" | "count" | "pick" => {
+                let op = match name.as_str() {
+                    "fixtures" => TargetItemsOp::Fixtures,
+                    "pixels" => TargetItemsOp::Pixels,
+                    "sections" => TargetItemsOp::Sections,
+                    "count" => TargetItemsOp::Count,
+                    "pick" => TargetItemsOp::Pick,
+                    _ => unreachable!("matched target builtin"),
+                };
+                let args = self.compile_args(args);
+                self.emit(Instruction::TargetItems { dst, op, args });
+            }
+            _ => self.emit(Instruction::LoadDefault {
+                dst,
+                ty: Type::Void,
+            }),
+        }
+        dst
+    }
+
+    fn compile_args(&mut self, args: Vec<CheckedExpr>) -> Vec<RegisterId> {
+        args.into_iter().map(|arg| self.compile_expr(arg)).collect()
+    }
+
+    fn curve_param_binding(&self, expr: &CheckedExpr) -> Option<ParamId> {
+        let CheckedExprKind::Variable(name) = &expr.kind else {
             return None;
         };
         let Some(Binding::Param(param)) = self.lookup(name) else {
@@ -330,12 +564,27 @@ impl FunctionCompiler {
         }
     }
 
-    fn allocate_local(&mut self, name: Identifier) -> LocalId {
-        let slot = self.local_count;
-        self.local_count += 1;
+    fn coerce_register(&mut self, register: RegisterId, target: &Type) -> RegisterId {
+        if target == &Type::Float && self.register_types.get(register) == Some(&Type::Int) {
+            let dst = self.allocate_register(Type::Float);
+            self.emit(Instruction::CoerceFloat { dst, src: register });
+            dst
+        } else {
+            register
+        }
+    }
+
+    fn allocate_local(&mut self, name: Identifier, ty: Type) -> LocalId {
+        let slot = self.allocate_register(ty);
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, Binding::Local(slot));
         }
+        slot
+    }
+
+    fn allocate_register(&mut self, ty: Type) -> RegisterId {
+        let slot = self.register_types.len();
+        self.register_types.push(ty);
         slot
     }
 
@@ -355,32 +604,26 @@ impl FunctionCompiler {
         self.instructions.len()
     }
 
-    fn emit(&mut self, instruction: Instruction, stack_delta: isize) {
+    fn emit(&mut self, instruction: Instruction) {
         self.instructions.push(instruction);
-        self.adjust_stack(stack_delta);
     }
 
-    fn emit_jump(&mut self, instruction: Instruction, stack_delta: isize) -> usize {
+    fn emit_jump(&mut self, instruction: Instruction) -> usize {
         let offset = self.instructions.len();
         self.instructions.push(instruction);
-        self.adjust_stack(stack_delta);
         offset
     }
 
     fn patch_jump(&mut self, offset: usize, target: Target) {
         match &mut self.instructions[offset] {
-            Instruction::Jump(existing)
-            | Instruction::JumpIfFalse(existing)
-            | Instruction::JumpIfFalseOrPop(existing)
-            | Instruction::JumpIfTrueOrPop(existing) => *existing = target,
+            Instruction::Jump(existing) => *existing = target,
+            Instruction::JumpIfFalse {
+                target: existing, ..
+            }
+            | Instruction::JumpIfTrue {
+                target: existing, ..
+            } => *existing = target,
             _ => {}
-        }
-    }
-
-    fn adjust_stack(&mut self, delta: isize) {
-        self.stack_depth += delta;
-        if self.stack_depth > self.max_stack as isize {
-            self.max_stack = self.stack_depth as usize;
         }
     }
 }

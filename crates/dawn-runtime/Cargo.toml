@@ -9,3 +9,11 @@ license = "MIT"
 [dependencies]
 dawn-language = { path = "../dawn-language" }
 indexmap = "2.14.0"
+
+[dev-dependencies]
+camino = "1.2.1"
+dawn-project-io = { path = "../dawn-project-io" }
+
+[[bench]]
+name = "render_bench"
+harness = false

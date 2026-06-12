@@ -890,7 +890,9 @@ dependencies = [
 name = "dawn-runtime"
 version = "0.1.0"
 dependencies = [
+ "camino",
  "dawn-language",
+ "dawn-project-io",
  "indexmap 2.14.0",
 ]
 

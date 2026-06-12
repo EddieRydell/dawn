@@ -210,6 +210,17 @@ impl PreparedSequenceRenderer {
         self.frame_count
     }
 
+    pub fn active_effect_names(&self, frame_index: u64) -> Vec<&str> {
+        let Some(active_effects) = self.effects_by_frame.get(frame_index as usize) else {
+            return Vec::new();
+        };
+        active_effects
+            .iter()
+            .filter_map(|effect_index| self.effects.get(*effect_index))
+            .map(|effect| effect.definition.name().as_str())
+            .collect()
+    }
+
     fn render_at(
         &self,
         frame_index: u64,
