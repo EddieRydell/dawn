@@ -5,19 +5,17 @@ imports:
   as: patches
 main:
   type: setup
+  layout: layouts.outputs
+  patch: patches.outputs
   controllers:
   - output_controller
-  patch: patches.outputs
-  layout: layouts.outputs
 output_controller:
   type: controller
   protocol: sacn
   destination: 192.168.7.2:5568
   output:
-    type: linear_rgb
     channel_order: grb
-    group: 1
+    type: linear_rgb
     output_count: 30
     pixels_per_output: 113
     first_universe: 1
-    slots_per_universe: 510

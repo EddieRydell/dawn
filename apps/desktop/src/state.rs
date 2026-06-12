@@ -480,21 +480,16 @@ impl DesktopState {
                 document: crate::gui::blocked(error.message(), Vec::new()),
             };
         }
-        if let Err(error) = save_project(&edited) {
-            let snapshot = self.snapshot_with_error("gui.save", &request.path, &error.to_string());
-            return GuiEditResult {
-                snapshot,
-                document: crate::gui::blocked(error.to_string(), Vec::new()),
-            };
-        }
-        let entrypoint = edited.source.source_root.join(&edited.source.entrypoint);
-        self.apply_project_refresh_check(entrypoint.as_str(), check_project(&entrypoint));
-        self.refresh_saved_tabs(&affected_paths);
-        let document = self.get_gui_document(request);
-        GuiEditResult {
-            snapshot: self.snapshot(),
-            document,
-        }
+        let document = crate::gui::project_gui_document(Some(&edited), &request);
+        let save_error = save_project(&edited).err();
+        self.apply_gui_project_update(edited, "GUI edit applied");
+        let snapshot = if let Some(error) = save_error {
+            self.snapshot_with_error("gui.save", &request.path, &error.to_string())
+        } else {
+            self.refresh_saved_tabs(&affected_paths);
+            self.snapshot()
+        };
+        GuiEditResult { snapshot, document }
     }
 
     pub fn apply_active_sequence_gui_edit(&self, edit: crate::dto::SequenceGuiEdit) -> AppSnapshot {
@@ -603,19 +598,16 @@ impl DesktopState {
                 }
             }
         };
-        if let Err(error) = save_project(&edited) {
-            return SequenceSelectionEditResult {
-                snapshot: self.snapshot_with_error("gui.save", &request.path, &error.to_string()),
-                selection: None,
-                copied_count: mutation.copied_count,
-                skipped_count: mutation.skipped_count,
-            };
-        }
-        let entrypoint = edited.source.source_root.join(&edited.source.entrypoint);
-        self.apply_project_refresh_check(entrypoint.as_str(), check_project(&entrypoint));
-        self.refresh_saved_tabs(&affected_paths);
+        let save_error = save_project(&edited).err();
+        self.apply_gui_project_update(edited, "GUI selection edit applied");
+        let snapshot = if let Some(error) = save_error {
+            self.snapshot_with_error("gui.save", &request.path, &error.to_string())
+        } else {
+            self.refresh_saved_tabs(&affected_paths);
+            self.snapshot()
+        };
         SequenceSelectionEditResult {
-            snapshot: self.snapshot(),
+            snapshot,
             selection: mutation.selection,
             copied_count: mutation.copied_count,
             skipped_count: mutation.skipped_count,
@@ -740,6 +732,42 @@ impl DesktopState {
                     snapshot.diagnostics.len()
                 )
             };
+            if let Some(error) = render_error {
+                snapshot.status = format!("Render refresh failed: {error:?}");
+            }
+            snapshot.project_revision = snapshot.project_revision.saturating_add(1);
+        })
+    }
+
+    fn apply_gui_project_update(&self, session: ProjectSession, status: &str) -> AppSnapshot {
+        let entries = workspace_entries(&session);
+        let root = session.source.source_root.to_string();
+        let project_model = session.project.clone();
+        let active_descriptor = self.snapshot().active_file.as_deref().and_then(|path| {
+            let relative_path = Utf8Path::new(path);
+            session
+                .source
+                .documents
+                .get(relative_path)
+                .map(document_descriptor)
+                .or_else(|| {
+                    absolute_project_path(&session, relative_path)
+                        .is_some_and(|path| path.is_file())
+                        .then(|| empty_document_descriptor(relative_path))
+                })
+        });
+        match self.project.lock() {
+            Ok(mut project) => *project = Some(session),
+            Err(poisoned) => *poisoned.into_inner() = Some(session),
+        }
+        let render_error = self.refresh_render_session(&project_model);
+        self.update_snapshot(|snapshot| {
+            snapshot.project_root = Some(root);
+            snapshot.project_entries = entries;
+            if active_descriptor.is_some() {
+                snapshot.active_document_descriptor = active_descriptor;
+            }
+            snapshot.status = status.to_string();
             if let Some(error) = render_error {
                 snapshot.status = format!("Render refresh failed: {error:?}");
             }

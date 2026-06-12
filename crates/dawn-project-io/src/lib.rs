@@ -10,6 +10,7 @@
     )
 )]
 
+use camino::Utf8Component;
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_language::effect::{
     CurveDefinition, CurveId, CurveSource, EffectDefinition, EffectDefinitionId, EffectInst,
@@ -260,7 +261,9 @@ pub fn export_project(
         source,
     })?;
 
-    let written_files = write_source_documents(session, output_root)?;
+    let mut synced = session.clone();
+    sync_project_source(&mut synced)?;
+    let written_files = write_source_documents(&synced, output_root)?;
 
     let mut copied_assets = Vec::new();
     for asset in &session.source.referenced_assets {
@@ -285,7 +288,9 @@ pub fn export_project(
 }
 
 pub fn save_project(session: &ProjectSession) -> Result<SaveReport, SaveProjectError> {
-    let written_files = write_source_documents(session, &session.source.source_root)?;
+    let mut synced = session.clone();
+    sync_project_source(&mut synced)?;
+    let written_files = write_source_documents(&synced, &synced.source.source_root)?;
     Ok(SaveReport { written_files })
 }
 
@@ -429,6 +434,11 @@ pub enum ExportProjectError {
     Serialize {
         path: Utf8PathBuf,
         source: yaml_serde::Error,
+    },
+    InvalidReference {
+        path: Utf8PathBuf,
+        reference: String,
+        message: String,
     },
 }
 
@@ -850,6 +860,14 @@ impl fmt::Display for ExportProjectError {
             Self::OutputRootIsFile { path } => write!(formatter, "output root is a file: {path}"),
             Self::Io { path, source } => write!(formatter, "{path}: {source}"),
             Self::Serialize { path, source } => write!(formatter, "{path}: {source}"),
+            Self::InvalidReference {
+                path,
+                reference,
+                message,
+            } => write!(
+                formatter,
+                "{path}: invalid reference {reference}: {message}"
+            ),
         }
     }
 }
@@ -893,6 +911,1074 @@ fn write_source_documents(
         written_files.push(document.relative_path.clone());
     }
     Ok(written_files)
+}
+
+fn sync_project_source(session: &mut ProjectSession) -> Result<(), ExportProjectError> {
+    let documents = session.source.documents.keys().cloned().collect::<Vec<_>>();
+    for path in documents {
+        let Some(document) = session.source.documents.get(&path) else {
+            continue;
+        };
+        let SourceDocumentKind::Dawn { object_types, .. } = &document.kind else {
+            continue;
+        };
+        let object_types = object_types.clone();
+        let imports = document.imports.clone();
+        let exported_objects = document.exported_objects.clone();
+        let existing = match &document.kind {
+            SourceDocumentKind::Dawn { value, .. } => mapping(value).cloned(),
+            SourceDocumentKind::Effect { .. } => None,
+        };
+
+        let mut root = Mapping::new();
+        if !imports.is_empty() {
+            root.insert(string_value("imports"), import_decls_value(&imports));
+        }
+        for object_key in &exported_objects {
+            let object_id =
+                source_object_id_for_location(session, &path, object_key).ok_or_else(|| {
+                    ExportProjectError::InvalidReference {
+                        path: path.clone(),
+                        reference: object_key.clone(),
+                        message: "source object is missing from the source map".to_string(),
+                    }
+                })?;
+            let value = if has_typed_object(session, &object_id) {
+                serialize_source_object(session, &path, &object_id)?
+            } else {
+                existing
+                    .as_ref()
+                    .and_then(|mapping| mapping.get(string_value(object_key)))
+                    .cloned()
+                    .ok_or_else(|| ExportProjectError::InvalidReference {
+                        path: path.clone(),
+                        reference: object_key.clone(),
+                        message: "source object is missing from the source document".to_string(),
+                    })?
+            };
+            root.insert(string_value(object_key), value);
+        }
+
+        let Some(document) = session.source.documents.get_mut(&path) else {
+            continue;
+        };
+        document.kind = SourceDocumentKind::Dawn {
+            value: Value::Mapping(root),
+            object_types,
+        };
+    }
+    Ok(())
+}
+
+fn has_typed_object(session: &ProjectSession, id: &SourceObjectId) -> bool {
+    match id.kind {
+        SourceObjectKind::Project => session.project.root.id.0 == id.id,
+        SourceObjectKind::Setup => session.project.setups.contains_key(&SetupId(id.id.clone())),
+        SourceObjectKind::Controller => session
+            .project
+            .controllers
+            .contains_key(&ControllerId(id.id.clone())),
+        SourceObjectKind::Layout => session
+            .project
+            .layouts
+            .contains_key(&LayoutId(id.id.clone())),
+        SourceObjectKind::Patch => session
+            .project
+            .patches
+            .contains_key(&PatchId(id.id.clone())),
+        SourceObjectKind::FixtureDefinition => session
+            .project
+            .definitions
+            .fixtures
+            .definitions
+            .contains_key(&FixtureDefinitionId(id.id.clone())),
+        SourceObjectKind::Curve => session
+            .project
+            .definitions
+            .curves
+            .definitions
+            .contains_key(&CurveId(id.id.clone())),
+        SourceObjectKind::Sequence => session
+            .project
+            .sequences
+            .contains_key(&SequenceId(id.id.clone())),
+        SourceObjectKind::EffectDefinition => session
+            .project
+            .definitions
+            .effects
+            .definitions
+            .contains_key(&EffectDefinitionId(id.id.clone())),
+        SourceObjectKind::EffectInstance => false,
+    }
+}
+
+fn source_object_id_for_location(
+    session: &ProjectSession,
+    document: &Utf8Path,
+    object_key: &str,
+) -> Option<SourceObjectId> {
+    session
+        .source
+        .source_map
+        .objects
+        .iter()
+        .find_map(|(id, location)| {
+            (location.document == document && location.object_key == object_key).then(|| id.clone())
+        })
+}
+
+fn serialize_source_object(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    id: &SourceObjectId,
+) -> Result<Value, ExportProjectError> {
+    match id.kind {
+        SourceObjectKind::Project => project_root_value(session, from_document),
+        SourceObjectKind::Setup => {
+            let setup = session
+                .project
+                .setups
+                .get(&SetupId(id.id.clone()))
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
+            setup_value(session, from_document, setup)
+        }
+        SourceObjectKind::Controller => {
+            let controller = session
+                .project
+                .controllers
+                .get(&ControllerId(id.id.clone()))
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
+            controller_value(controller)
+        }
+        SourceObjectKind::Layout => {
+            let layout = session
+                .project
+                .layouts
+                .get(&LayoutId(id.id.clone()))
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
+            layout_value(session, from_document, layout)
+        }
+        SourceObjectKind::Patch => {
+            let patch = session
+                .project
+                .patches
+                .get(&PatchId(id.id.clone()))
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
+            patch_value(session, from_document, patch)
+        }
+        SourceObjectKind::FixtureDefinition => {
+            let definition = session
+                .project
+                .definitions
+                .fixtures
+                .definitions
+                .get(&FixtureDefinitionId(id.id.clone()))
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
+            fixture_definition_value(definition)
+        }
+        SourceObjectKind::Curve => {
+            let curve = session
+                .project
+                .definitions
+                .curves
+                .definitions
+                .get(&CurveId(id.id.clone()))
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
+            curve_value(&curve.curve)
+        }
+        SourceObjectKind::Sequence => {
+            let sequence = session
+                .project
+                .sequences
+                .get(&SequenceId(id.id.clone()))
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
+            sequence_value(session, from_document, sequence)
+        }
+        SourceObjectKind::EffectDefinition | SourceObjectKind::EffectInstance => {
+            Err(ExportProjectError::InvalidReference {
+                path: from_document.to_path_buf(),
+                reference: id.id.clone(),
+                message: "effect definitions are preserved as effect source documents".to_string(),
+            })
+        }
+    }
+}
+
+fn missing_typed_object(path: &Utf8Path, id: &SourceObjectId) -> ExportProjectError {
+    ExportProjectError::InvalidReference {
+        path: path.to_path_buf(),
+        reference: id.id.clone(),
+        message: "typed project object is missing".to_string(),
+    }
+}
+
+fn import_decls_value(imports: &[ImportDecl]) -> Value {
+    Value::Sequence(
+        imports
+            .iter()
+            .map(|import| {
+                let mut value = Mapping::new();
+                value.insert(string_value("from"), Value::String(import.from.to_string()));
+                value.insert(string_value("as"), Value::String(import.alias.clone()));
+                Value::Mapping(value)
+            })
+            .collect(),
+    )
+}
+
+fn project_root_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+) -> Result<Value, ExportProjectError> {
+    let mut value = typed_object("project");
+    value.insert(
+        string_value("setup"),
+        Value::String(write_reference(
+            session,
+            from_document,
+            SourceObjectKind::Setup,
+            &session.project.root.setup.0,
+        )?),
+    );
+    value.insert(
+        string_value("sequences"),
+        Value::Sequence(
+            session
+                .project
+                .root
+                .sequences
+                .iter()
+                .map(|sequence| {
+                    write_reference(
+                        session,
+                        from_document,
+                        SourceObjectKind::Sequence,
+                        &sequence.0,
+                    )
+                    .map(Value::String)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn setup_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    setup: &Setup,
+) -> Result<Value, ExportProjectError> {
+    let mut value = typed_object("setup");
+    value.insert(
+        string_value("layout"),
+        Value::String(write_reference(
+            session,
+            from_document,
+            SourceObjectKind::Layout,
+            &setup.layout.0,
+        )?),
+    );
+    value.insert(
+        string_value("patch"),
+        Value::String(write_reference(
+            session,
+            from_document,
+            SourceObjectKind::Patch,
+            &setup.patch.0,
+        )?),
+    );
+    value.insert(
+        string_value("controllers"),
+        Value::Sequence(
+            setup
+                .controllers
+                .iter()
+                .map(|controller| Value::String(controller.0.clone()))
+                .collect(),
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn controller_value(controller: &ControllerDefinition) -> Result<Value, ExportProjectError> {
+    let mut value = typed_object("controller");
+    value.insert(
+        string_value("protocol"),
+        Value::String(
+            match controller.protocol {
+                Protocol::E131 => "sacn",
+                Protocol::Artnet => "artnet",
+            }
+            .to_string(),
+        ),
+    );
+    if let Some(address) = &controller.address {
+        value.insert(
+            string_value("destination"),
+            Value::String(format!("{}:{}", address.ip, address.port)),
+        );
+    }
+    let Some(first) = controller.outputs.first() else {
+        value.insert(string_value("output"), Value::Mapping(Mapping::new()));
+        return Ok(Value::Mapping(value));
+    };
+    let linear = controller
+        .outputs
+        .iter()
+        .enumerate()
+        .all(|(index, output)| {
+            output.channel_order == first.channel_order
+                && output.pixels == first.pixels
+                && output.first_universe == first.first_universe + index as u32
+        });
+    let mut output = Mapping::new();
+    output.insert(
+        string_value("channel_order"),
+        Value::String(channel_order_name(&first.channel_order).to_string()),
+    );
+    if linear {
+        output.insert(
+            string_value("type"),
+            Value::String("linear_rgb".to_string()),
+        );
+        output.insert(
+            string_value("output_count"),
+            number_value(controller.outputs.len() as u32)?,
+        );
+        output.insert(
+            string_value("pixels_per_output"),
+            number_value(first.pixels as u32)?,
+        );
+        output.insert(
+            string_value("first_universe"),
+            number_value(first.first_universe)?,
+        );
+    } else {
+        output.insert(
+            string_value("type"),
+            Value::String("patched_dmx".to_string()),
+        );
+        output.insert(
+            string_value("universes"),
+            Value::Sequence(
+                controller
+                    .outputs
+                    .iter()
+                    .map(|output| {
+                        let mut universe = Mapping::new();
+                        universe.insert(string_value("id"), number_value(output.first_universe)?);
+                        universe.insert(
+                            string_value("range"),
+                            Value::String(format!("1..{}", output.pixels * 3)),
+                        );
+                        Ok(Value::Mapping(universe))
+                    })
+                    .collect::<Result<Vec<_>, ExportProjectError>>()?,
+            ),
+        );
+    }
+    value.insert(string_value("output"), Value::Mapping(output));
+    Ok(Value::Mapping(value))
+}
+
+fn layout_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    layout: &Layout,
+) -> Result<Value, ExportProjectError> {
+    let mut value = typed_object("layout");
+    value.insert(
+        string_value("target_order"),
+        Value::Sequence(
+            layout
+                .target_order
+                .iter()
+                .map(layout_target_value)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    value.insert(
+        string_value("fixtures"),
+        Value::Sequence(
+            layout
+                .fixtures
+                .iter()
+                .map(|fixture| fixture_inst_value(session, from_document, fixture))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    value.insert(
+        string_value("groups"),
+        Value::Sequence(
+            layout
+                .groups
+                .iter()
+                .map(fixture_group_value)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn fixture_inst_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    fixture: &FixtureInst,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("id"), number_value(fixture.id.0)?);
+    value.insert(string_value("name"), Value::String(fixture.name.clone()));
+    value.insert(
+        string_value("fixture"),
+        Value::String(write_reference(
+            session,
+            from_document,
+            SourceObjectKind::FixtureDefinition,
+            &fixture.definition.0,
+        )?),
+    );
+    value.insert(string_value("transform"), transform_value(fixture)?);
+    Ok(Value::Mapping(value))
+}
+
+fn fixture_group_value(group: &FixtureGroup) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("id"), number_value(group.id.0)?);
+    value.insert(string_value("name"), Value::String(group.name.clone()));
+    value.insert(
+        string_value("members"),
+        Value::Sequence(
+            group
+                .fixtures
+                .iter()
+                .map(|fixture| number_value(fixture.0))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn patch_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    patch: &Patch,
+) -> Result<Value, ExportProjectError> {
+    let mut value = typed_object("patch");
+    value.insert(
+        string_value("routes"),
+        Value::Sequence(
+            patch
+                .routes
+                .iter()
+                .map(|route| patch_route_value(session, from_document, route))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn patch_route_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    route: &PatchRoute,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("fixture"), number_value(route.fixture.0)?);
+    value.insert(
+        string_value("controller"),
+        Value::String(write_reference(
+            session,
+            from_document,
+            SourceObjectKind::Controller,
+            &route.controller.0,
+        )?),
+    );
+    value.insert(string_value("output"), number_value(route.output.0)?);
+    value.insert(
+        string_value("start_channel_offset"),
+        number_value(route.start_channel_offset)?,
+    );
+    value.insert(
+        string_value("fixture_pixel_start"),
+        number_value(route.fixture_pixels.start)?,
+    );
+    value.insert(
+        string_value("fixture_pixel_count"),
+        number_value(route.fixture_pixels.count)?,
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn fixture_definition_value(definition: &FixtureDefinition) -> Result<Value, ExportProjectError> {
+    let mut value = typed_object("fixture");
+    value.insert(
+        string_value("bulb_diameter"),
+        number_value(distance_span_meters(definition.bulb_radius) * 2.0)?,
+    );
+    value.insert(
+        string_value("geometry"),
+        geometry_value(&definition.geometry)?,
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn sequence_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    sequence: &Sequence,
+) -> Result<Value, ExportProjectError> {
+    let mut value = typed_object("sequence");
+    value.insert(
+        string_value("duration"),
+        Value::String(seconds_string(sequence.duration.as_seconds_f64())),
+    );
+    value.insert(
+        string_value("frame_rate"),
+        number_value(sequence.frame_rate)?,
+    );
+    match &sequence.audio {
+        SequenceAudio::None => {
+            value.insert(string_value("audio"), Value::Null);
+        }
+        SequenceAudio::Asset(id) => {
+            let asset = session
+                .source
+                .referenced_assets
+                .iter()
+                .find(|asset| asset.id == *id)
+                .ok_or_else(|| ExportProjectError::InvalidReference {
+                    path: from_document.to_path_buf(),
+                    reference: id.0.to_string(),
+                    message: "sequence audio asset is missing from source metadata".to_string(),
+                })?;
+            value.insert(
+                string_value("audio"),
+                Value::String(
+                    relative_path_from_document(from_document, &asset.relative_path).to_string(),
+                ),
+            );
+        }
+    }
+    value.insert(
+        string_value("mark_collections"),
+        Value::Sequence(
+            sequence
+                .mark_collections
+                .iter()
+                .map(mark_collection_value)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    value.insert(
+        string_value("effects"),
+        Value::Sequence(
+            sequence
+                .effects
+                .iter()
+                .map(|effect| effect_inst_value(session, from_document, effect))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    value.insert(
+        string_value("automation_clips"),
+        Value::Sequence(
+            sequence
+                .automation_clips
+                .iter()
+                .map(|clip| automation_clip_value(session, from_document, clip))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn mark_collection_value(collection: &MarkCollection) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(
+        string_value("key"),
+        Value::String(collection.key.name.clone()),
+    );
+    value.insert(string_value("name"), Value::String(collection.name.clone()));
+    value.insert(
+        string_value("color"),
+        Value::String(color_string(collection.display_color)),
+    );
+    value.insert(
+        string_value("marks"),
+        Value::Sequence(
+            collection
+                .marks
+                .iter()
+                .map(|time| Value::String(seconds_string(time.as_seconds_f64())))
+                .collect(),
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn effect_inst_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    effect: &EffectInst,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("id"), number_value(effect.id.0)?);
+    value.insert(
+        string_value("start"),
+        Value::String(seconds_string(effect.start.as_seconds_f64())),
+    );
+    value.insert(
+        string_value("duration"),
+        Value::String(seconds_string(effect.duration.as_seconds_f64())),
+    );
+    value.insert(string_value("target"), effect_target_value(&effect.target)?);
+    value.insert(
+        string_value("scope"),
+        Value::String(
+            match effect.scope {
+                EffectScope::PerFixture => "per_fixture",
+                EffectScope::WholeTarget => "whole_target",
+            }
+            .to_string(),
+        ),
+    );
+    if !effect.param_overrides.is_empty() {
+        value.insert(
+            string_value("params"),
+            Value::Mapping(
+                effect
+                    .param_overrides
+                    .iter()
+                    .map(|(name, param)| {
+                        Ok((
+                            string_value(name.as_str()),
+                            effect_param_value(session, from_document, param)?,
+                        ))
+                    })
+                    .collect::<Result<Mapping, ExportProjectError>>()?,
+            ),
+        );
+    }
+    value.insert(
+        string_value("script"),
+        Value::String(write_reference(
+            session,
+            from_document,
+            SourceObjectKind::EffectDefinition,
+            &effect.definition.0,
+        )?),
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn automation_clip_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    clip: &AutomationClip,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("id"), number_value(clip.id.0)?);
+    value.insert(
+        string_value("targets"),
+        Value::Sequence(
+            clip.targets
+                .iter()
+                .map(|target| number_value(target.0))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    value.insert(
+        string_value("start"),
+        Value::String(seconds_string(clip.start.as_seconds_f64())),
+    );
+    value.insert(
+        string_value("duration"),
+        Value::String(seconds_string(clip.duration.as_seconds_f64())),
+    );
+    value.insert(
+        string_value("curve"),
+        Value::String(write_reference(
+            session,
+            from_document,
+            SourceObjectKind::Curve,
+            &clip.curve.0,
+        )?),
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn effect_param_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    param: &EffectParamValue,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    match param {
+        EffectParamValue::Int(inner) => {
+            value.insert(string_value("type"), Value::String("integer".to_string()));
+            value.insert(string_value("value"), number_value(*inner)?);
+        }
+        EffectParamValue::Float(inner) => {
+            value.insert(string_value("type"), Value::String("float".to_string()));
+            value.insert(string_value("value"), number_value(*inner)?);
+        }
+        EffectParamValue::Bool(inner) => {
+            value.insert(string_value("type"), Value::String("bool".to_string()));
+            value.insert(string_value("value"), Value::Bool(*inner));
+        }
+        EffectParamValue::Color(inner) => {
+            value.insert(string_value("type"), Value::String("color".to_string()));
+            value.insert(string_value("value"), Value::String(color_string(*inner)));
+        }
+        EffectParamValue::Enum(inner) => {
+            value.insert(string_value("type"), Value::String("enum".to_string()));
+            value.insert(
+                string_value("value"),
+                Value::String(inner.as_str().to_string()),
+            );
+        }
+        EffectParamValue::Marks(inner) => {
+            value.insert(string_value("type"), Value::String("marks".to_string()));
+            value.insert(string_value("key"), Value::String(inner.name.clone()));
+        }
+        EffectParamValue::Curve(inner) => {
+            value.insert(string_value("type"), Value::String("curve".to_string()));
+            value.insert(
+                string_value("curve"),
+                curve_source_value(session, from_document, inner)?,
+            );
+        }
+        EffectParamValue::Array(values) => {
+            value.insert(string_value("type"), Value::String("array".to_string()));
+            value.insert(
+                string_value("element_type"),
+                Value::String(array_element_type(values).to_string()),
+            );
+            value.insert(
+                string_value("values"),
+                Value::Sequence(
+                    values
+                        .iter()
+                        .map(|item| array_item_value(session, from_document, item))
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+            );
+        }
+    }
+    Ok(Value::Mapping(value))
+}
+
+fn array_item_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    param: &EffectParamValue,
+) -> Result<Value, ExportProjectError> {
+    match param {
+        EffectParamValue::Curve(source) => {
+            let mut value = Mapping::new();
+            value.insert(
+                string_value("curve"),
+                curve_source_value(session, from_document, source)?,
+            );
+            Ok(Value::Mapping(value))
+        }
+        _ => effect_param_value(session, from_document, param),
+    }
+}
+
+fn array_element_type(values: &[EffectParamValue]) -> &'static str {
+    match values.first() {
+        Some(EffectParamValue::Int(_)) => "integer",
+        Some(EffectParamValue::Float(_)) => "float",
+        Some(EffectParamValue::Bool(_)) => "bool",
+        Some(EffectParamValue::Color(_)) => "color",
+        Some(EffectParamValue::Curve(CurveSource::Inline(curve))) => match curve.points.first() {
+            Some(CurvePoint {
+                value: CurveValue::Color(_),
+                ..
+            }) => "curve_color",
+            _ => "curve_float",
+        },
+        Some(EffectParamValue::Curve(CurveSource::Reference(_))) => "curve",
+        _ => "float",
+    }
+}
+
+fn curve_source_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    source: &CurveSource,
+) -> Result<Value, ExportProjectError> {
+    match source {
+        CurveSource::Inline(curve) => curve_value(curve),
+        CurveSource::Reference(id) => Ok(Value::String(write_reference(
+            session,
+            from_document,
+            SourceObjectKind::Curve,
+            &id.0,
+        )?)),
+    }
+}
+
+fn curve_value(curve: &Curve) -> Result<Value, ExportProjectError> {
+    let mut value = typed_object("curve");
+    let value_type = match curve.points.first() {
+        Some(CurvePoint {
+            value: CurveValue::Color(_),
+            ..
+        }) => "color",
+        _ => "float",
+    };
+    value.insert(
+        string_value("value_type"),
+        Value::String(value_type.to_string()),
+    );
+    value.insert(
+        string_value("points"),
+        Value::Sequence(
+            curve
+                .points
+                .iter()
+                .map(|point| {
+                    let mut value = Mapping::new();
+                    value.insert(string_value("time"), number_value(point.position)?);
+                    value.insert(
+                        string_value("value"),
+                        match point.value {
+                            CurveValue::Float(inner) => number_value(inner)?,
+                            CurveValue::Color(inner) => Value::String(color_string(inner)),
+                        },
+                    );
+                    Ok(Value::Mapping(value))
+                })
+                .collect::<Result<Vec<_>, ExportProjectError>>()?,
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn geometry_value(geometry: &Geometry) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    match geometry {
+        Geometry::Points { points } => {
+            value.insert(string_value("type"), Value::String("points".to_string()));
+            value.insert(
+                string_value("points"),
+                Value::Sequence(
+                    points
+                        .iter()
+                        .map(point_value)
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+            );
+        }
+        Geometry::Lines { points, pixels } => {
+            value.insert(string_value("type"), Value::String("lines".to_string()));
+            value.insert(
+                string_value("points"),
+                Value::Sequence(
+                    points
+                        .iter()
+                        .map(point_value)
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+            );
+            value.insert(string_value("pixels"), number_value(*pixels)?);
+        }
+        Geometry::Arc {
+            center,
+            radius,
+            start_degrees,
+            end_degrees,
+            pixels,
+        } => {
+            value.insert(string_value("type"), Value::String("arc".to_string()));
+            value.insert(string_value("center"), point_value(center)?);
+            value.insert(
+                string_value("radius"),
+                number_value(distance_span_meters(*radius))?,
+            );
+            value.insert(string_value("startDegrees"), number_value(*start_degrees)?);
+            value.insert(string_value("endDegrees"), number_value(*end_degrees)?);
+            value.insert(string_value("pixels"), number_value(*pixels)?);
+        }
+    }
+    Ok(Value::Mapping(value))
+}
+
+fn transform_value(fixture: &FixtureInst) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("position"), point_value(&fixture.position)?);
+    value.insert(string_value("rotation"), rotation_value(&fixture.rotation)?);
+    value.insert(string_value("scale"), scale_value(&fixture.scale)?);
+    Ok(Value::Mapping(value))
+}
+
+fn point_value(point: &Point3) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("x"), number_value(distance_meters(point.x))?);
+    value.insert(string_value("y"), number_value(distance_meters(point.y))?);
+    value.insert(string_value("z"), number_value(distance_meters(point.z))?);
+    Ok(Value::Mapping(value))
+}
+
+fn rotation_value(rotation: &Rotation3) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("x"), number_value(rotation.x)?);
+    value.insert(string_value("y"), number_value(rotation.y)?);
+    value.insert(string_value("z"), number_value(rotation.z)?);
+    Ok(Value::Mapping(value))
+}
+
+fn scale_value(scale: &Scale3) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("x"), number_value(scale.x)?);
+    value.insert(string_value("y"), number_value(scale.y)?);
+    value.insert(string_value("z"), number_value(scale.z)?);
+    Ok(Value::Mapping(value))
+}
+
+fn layout_target_value(target: &LayoutTarget) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    match target {
+        LayoutTarget::Fixture(id) => {
+            value.insert(string_value("type"), Value::String("fixture".to_string()));
+            value.insert(string_value("id"), number_value(id.0)?);
+        }
+        LayoutTarget::Group(id) => {
+            value.insert(string_value("type"), Value::String("group".to_string()));
+            value.insert(string_value("id"), number_value(id.0)?);
+        }
+    }
+    Ok(Value::Mapping(value))
+}
+
+fn effect_target_value(target: &EffectTarget) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    match target {
+        EffectTarget::Fixture(id) => {
+            value.insert(string_value("type"), Value::String("fixture".to_string()));
+            value.insert(string_value("id"), number_value(id.0)?);
+        }
+        EffectTarget::Group(id) => {
+            value.insert(string_value("type"), Value::String("group".to_string()));
+            value.insert(string_value("id"), number_value(id.0)?);
+        }
+    }
+    Ok(Value::Mapping(value))
+}
+
+fn write_reference(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    kind: SourceObjectKind,
+    id: &str,
+) -> Result<String, ExportProjectError> {
+    let target = SourceObjectId {
+        kind: kind.clone(),
+        id: id.to_string(),
+    };
+    let location = session
+        .source
+        .source_map
+        .objects
+        .get(&target)
+        .ok_or_else(|| ExportProjectError::InvalidReference {
+            path: from_document.to_path_buf(),
+            reference: id.to_string(),
+            message: "target is missing from the source map".to_string(),
+        })?;
+    let alias = session
+        .source
+        .import_graph
+        .get(from_document)
+        .into_iter()
+        .flatten()
+        .find(|edge| {
+            edge.targets
+                .iter()
+                .any(|target| target == &location.document)
+        })
+        .map(|edge| edge.alias.clone())
+        .ok_or_else(|| ExportProjectError::InvalidReference {
+            path: from_document.to_path_buf(),
+            reference: id.to_string(),
+            message: "no import alias makes the target visible from this document".to_string(),
+        })?;
+    Ok(format!("{alias}.{}", location.object_key))
+}
+
+fn relative_path_from_document(from_document: &Utf8Path, target: &Utf8Path) -> Utf8PathBuf {
+    let from_dir = from_document.parent().unwrap_or_else(|| Utf8Path::new(""));
+    let from_components = normal_components(from_dir);
+    let target_components = normal_components(target);
+    let common_len = from_components
+        .iter()
+        .zip(target_components.iter())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut relative = Utf8PathBuf::new();
+    for _ in common_len..from_components.len() {
+        relative.push("..");
+    }
+    for component in target_components.iter().skip(common_len) {
+        relative.push(component);
+    }
+    relative
+}
+
+fn normal_components(path: &Utf8Path) -> Vec<String> {
+    path.components()
+        .filter_map(|component| match component {
+            Utf8Component::Normal(value) => Some(value.to_string()),
+            Utf8Component::ParentDir => Some("..".to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn typed_object(object_type: &str) -> Mapping {
+    let mut value = Mapping::new();
+    value.insert(string_value("type"), Value::String(object_type.to_string()));
+    value
+}
+
+fn string_value(value: &str) -> Value {
+    Value::String(value.to_string())
+}
+
+fn number_value<T: serde::Serialize>(value: T) -> Result<Value, ExportProjectError> {
+    yaml_serde::to_value(value).map_err(|source| ExportProjectError::Serialize {
+        path: Utf8PathBuf::from("<sync>"),
+        source,
+    })
+}
+
+fn color_string(color: Color) -> String {
+    format!("#{:02x}{:02x}{:02x}", color.red, color.green, color.blue)
+}
+
+fn seconds_string(seconds: f64) -> String {
+    format!("{seconds}s")
+}
+
+fn distance_meters(distance: Distance) -> f64 {
+    distance.micrometers as f64 / 1_000_000.0
+}
+
+fn distance_span_meters(distance: DistanceSpan) -> f64 {
+    distance.micrometers as f64 / 1_000_000.0
+}
+
+fn channel_order_name(order: &RgbChannelOrder) -> &'static str {
+    match order {
+        RgbChannelOrder::Rgb => "rgb",
+        RgbChannelOrder::Rbg => "rbg",
+        RgbChannelOrder::Grb => "grb",
+        RgbChannelOrder::Gbr => "gbr",
+        RgbChannelOrder::Brg => "brg",
+        RgbChannelOrder::Bgr => "bgr",
+    }
 }
 
 struct Loader {

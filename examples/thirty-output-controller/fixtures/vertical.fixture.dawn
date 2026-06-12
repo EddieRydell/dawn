@@ -1,14 +1,13 @@
 vertical_113:
   type: fixture
-  color_model: rgb
   bulb_diameter: 0.05
   geometry:
     type: lines
     points:
-    - x: 0
-      y: 0
-      z: 0
-    - x: 0
+    - x: 0.0
+      y: 0.0
+      z: 0.0
+    - x: 0.0
       y: 11.2
-      z: 0
+      z: 0.0
     pixels: 113
