@@ -51,14 +51,136 @@ impl RuntimeError {
 
 #[derive(Clone, Debug)]
 pub struct BoundEffectParams {
-    values: Vec<Value>,
+    values: Vec<BoundParamValue>,
+}
+
+#[derive(Clone, Debug)]
+enum BoundParamValue {
+    Void,
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Color(Color),
+    Marks(Arc<Marks>),
+    Target(Arc<TargetValue>),
+    TargetItems(Arc<TargetItemsValue>),
+    TargetItem(Arc<TargetItemValue>),
+    Curve(Arc<PreparedCurve>),
+    Array(Arc<Vec<Value>>),
+    Enum(Identifier),
+}
+
+impl BoundParamValue {
+    fn from_value(ty: &Type, value: Value) -> Self {
+        match value {
+            Value::Void => Self::Void,
+            Value::Int(value) => Self::Int(value),
+            Value::Float(value) => Self::Float(value),
+            Value::Bool(value) => Self::Bool(value),
+            Value::Color(value) => Self::Color(value),
+            Value::Marks(value) => Self::Marks(value),
+            Value::Target(value) => Self::Target(value),
+            Value::TargetItems(value) => Self::TargetItems(value),
+            Value::TargetItem(value) => Self::TargetItem(value),
+            Value::Curve(value) => Self::Curve(Arc::new(PreparedCurve::new(ty, value))),
+            Value::Array(value) => Self::Array(value),
+            Value::Enum(value) => Self::Enum(value),
+        }
+    }
+
+    fn to_runtime(&self) -> RuntimeValue {
+        match self {
+            Self::Void => RuntimeValue::Void,
+            Self::Int(value) => RuntimeValue::Int(*value),
+            Self::Float(value) => RuntimeValue::Float(*value),
+            Self::Bool(value) => RuntimeValue::Bool(*value),
+            Self::Color(value) => RuntimeValue::Color(*value),
+            Self::Marks(value) => RuntimeValue::Marks(Arc::clone(value)),
+            Self::Target(value) => RuntimeValue::Target(Arc::clone(value)),
+            Self::TargetItems(value) => RuntimeValue::TargetItems(Arc::clone(value)),
+            Self::TargetItem(value) => RuntimeValue::TargetItem(Arc::clone(value)),
+            Self::Curve(value) => RuntimeValue::PreparedCurve(Arc::clone(value)),
+            Self::Array(value) => RuntimeValue::Array(Arc::clone(value)),
+            Self::Enum(value) => RuntimeValue::Enum(value.clone()),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum PreparedCurve {
+    Float {
+        raw: Arc<Curve>,
+        segments: Vec<FloatCurveSegment>,
+        crossings: PreparedCurveCrossings,
+    },
+    Color {
+        raw: Arc<Curve>,
+        segments: Vec<ColorCurveSegment>,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FloatCurveSegment {
+    start_position: f64,
+    end_position: f64,
+    start_value: f64,
+    end_value: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ColorCurveSegment {
+    start_position: f64,
+    end_position: f64,
+    start_value: Color,
+    end_value: Color,
+}
+
+#[derive(Clone, Debug)]
+enum PreparedCurveCrossings {
+    Increasing(Vec<CrossingSegment>),
+    Decreasing(Vec<CrossingSegment>),
+    Mixed(Vec<CrossingSegment>),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CrossingSegment {
+    start_position: f64,
+    end_position: f64,
+    start_value: f64,
+    end_value: f64,
+}
+
+impl PreparedCurve {
+    fn new(ty: &Type, raw: Arc<Curve>) -> Self {
+        match ty {
+            Type::Curve(inner) if matches!(inner.as_ref(), Type::Color) => Self::Color {
+                segments: prepare_color_segments(&raw),
+                raw,
+            },
+            _ => {
+                let segments = prepare_float_segments(&raw);
+                let crossings = prepare_curve_crossings(&segments);
+                Self::Float {
+                    raw,
+                    segments,
+                    crossings,
+                }
+            }
+        }
+    }
+
+    fn raw(&self) -> Arc<Curve> {
+        match self {
+            Self::Float { raw, .. } | Self::Color { raw, .. } => Arc::clone(raw),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct EffectVmScratch {
     stack: Vec<RuntimeValue>,
     locals: Vec<Value>,
-    param_overrides: Vec<Option<Value>>,
+    param_overrides: Vec<Option<RuntimeValue>>,
     generated: Vec<GeneratedEffect>,
 }
 
@@ -70,7 +192,7 @@ pub(crate) fn bind_effect_params(
         values: effect
             .params
             .iter()
-            .map(|param| resolve_param(param, params))
+            .map(|param| bind_param_value(&param.ty, resolve_param(param, params)))
             .collect(),
     }
 }
@@ -130,9 +252,9 @@ enum RuntimeValue {
     TargetItems(Arc<TargetItemsValue>),
     TargetItem(Arc<TargetItemValue>),
     Curve(Arc<Curve>),
+    PreparedCurve(Arc<PreparedCurve>),
     Array(Arc<Vec<Value>>),
     Enum(Identifier),
-    Param(usize),
 }
 
 impl RuntimeValue {
@@ -207,7 +329,7 @@ impl<'a> Vm<'a> {
                 Instruction::LoadParam(index) => self.push_param(*index)?,
                 Instruction::LoadGeneratorContext(slot) => self.load_generator_context(*slot)?,
                 Instruction::StoreParam(index) => {
-                    let value = self.pop_to_value()?;
+                    let value = self.pop()?;
                     let Some(slot) = self.scratch.param_overrides.get_mut(*index) else {
                         return Err(RuntimeError::new("invalid param slot"));
                     };
@@ -233,6 +355,7 @@ impl<'a> Vm<'a> {
                 }
                 Instruction::MakeArray(count) => self.make_array(*count)?,
                 Instruction::Index => self.index()?,
+                Instruction::CurveParamSample(param) => self.curve_param_sample(*param)?,
                 Instruction::Member(member) => self.member(member)?,
                 Instruction::CoerceFloat => self.coerce_float()?,
                 Instruction::Unary(op) => self.unary(*op)?,
@@ -259,6 +382,16 @@ impl<'a> Vm<'a> {
                     }
                 }
                 Instruction::CallBuiltin(builtin, arity) => self.call_builtin(*builtin, *arity)?,
+                Instruction::CurveParamFloatClamped(param) => {
+                    self.curve_param_float_clamped(*param)?
+                }
+                Instruction::CurveParamColorScaled(param) => {
+                    self.curve_param_color_scaled(*param)?
+                }
+                Instruction::CurveParamCrossing {
+                    param,
+                    has_fallback,
+                } => self.curve_param_crossing(*param, *has_fallback)?,
                 Instruction::CheckLoopLimit => {
                     self.loop_iterations += 1;
                     if self.loop_iterations > LOOP_ITERATION_LIMIT {
@@ -297,28 +430,16 @@ impl<'a> Vm<'a> {
 
     fn push_param(&mut self, index: usize) -> Result<(), RuntimeError> {
         if let Some(Some(value)) = self.scratch.param_overrides.get(index) {
-            self.push(RuntimeValue::from_value(value));
+            self.push(value.clone());
             return Ok(());
         }
         let value = self
             .params
             .values
             .get(index)
-            .ok_or_else(|| RuntimeError::new("invalid param slot"))?;
-        self.push(match value {
-            Value::Void => RuntimeValue::Void,
-            Value::Int(value) => RuntimeValue::Int(*value),
-            Value::Float(value) => RuntimeValue::Float(*value),
-            Value::Bool(value) => RuntimeValue::Bool(*value),
-            Value::Color(value) => RuntimeValue::Color(*value),
-            Value::Marks(_)
-            | Value::Target(_)
-            | Value::TargetItems(_)
-            | Value::TargetItem(_)
-            | Value::Curve(_)
-            | Value::Array(_)
-            | Value::Enum(_) => RuntimeValue::Param(index),
-        });
+            .ok_or_else(|| RuntimeError::new("invalid param slot"))?
+            .to_runtime();
+        self.push(value);
         Ok(())
     }
 
@@ -331,7 +452,7 @@ impl<'a> Vm<'a> {
             .scratch
             .stack
             .drain(start..)
-            .map(|value| runtime_to_value(value, self.params))
+            .map(runtime_to_value)
             .collect();
         self.push(RuntimeValue::Array(Arc::new(values)));
         Ok(())
@@ -363,34 +484,94 @@ impl<'a> Vm<'a> {
                 self.push(RuntimeValue::TargetItem(value));
                 Ok(())
             }
-            RuntimeValue::Param(param_index) => {
-                let value = self.param_value(param_index)?;
-                match value {
-                    Value::Array(items) => {
-                        let index = to_int_runtime(&index, self.params)?;
-                        let index = usize::try_from(index)
-                            .map_err(|_| RuntimeError::new("array index cannot be negative"))?;
-                        let value = items
-                            .get(index)
-                            .cloned()
-                            .ok_or_else(|| RuntimeError::new("array index out of bounds"))?;
-                        self.push(RuntimeValue::from_value(&value));
-                        Ok(())
-                    }
-                    Value::Curve(curve) => {
-                        let position = to_float_runtime(&index, self.params)?;
-                        self.push(RuntimeValue::from_value(&sample_curve(curve, position)));
-                        Ok(())
-                    }
-                    _ => Err(RuntimeError::new("index target is not an array or curve")),
-                }
-            }
             RuntimeValue::Curve(curve) => {
                 let position = to_float_runtime(&index, self.params)?;
                 self.push(RuntimeValue::from_value(&sample_curve(&curve, position)));
                 Ok(())
             }
+            RuntimeValue::PreparedCurve(curve) => {
+                let position = to_float_runtime(&index, self.params)?;
+                self.push(sample_prepared_curve(&curve, position)?);
+                Ok(())
+            }
             _ => Err(RuntimeError::new("index target is not an array or curve")),
+        }
+    }
+
+    fn curve_param_sample(&mut self, param: usize) -> Result<(), RuntimeError> {
+        let position = self.pop()?;
+        let position = to_float_runtime(&position, self.params)?;
+        let curve = self.prepared_curve_param(param)?;
+        self.push(sample_prepared_curve(curve, position)?);
+        Ok(())
+    }
+
+    fn curve_param_float_clamped(&mut self, param: usize) -> Result<(), RuntimeError> {
+        let max = self.pop()?;
+        let min = self.pop()?;
+        let position = self.pop()?;
+        let max = to_float_runtime(&max, self.params)?;
+        let min = to_float_runtime(&min, self.params)?;
+        let position = to_float_runtime(&position, self.params)?;
+        let curve = self.prepared_curve_param(param)?;
+        let value = sample_prepared_float_curve(curve, position)?.clamp(min, max);
+        self.push(RuntimeValue::Float(value));
+        Ok(())
+    }
+
+    fn curve_param_color_scaled(&mut self, param: usize) -> Result<(), RuntimeError> {
+        let scale = self.pop()?;
+        let position = self.pop()?;
+        let scale = to_float_runtime(&scale, self.params)?.clamp(0.0, 1.0);
+        if scale <= 0.0 {
+            self.push(RuntimeValue::Color(Color {
+                red: 0,
+                green: 0,
+                blue: 0,
+            }));
+            return Ok(());
+        }
+        let position = to_float_runtime(&position, self.params)?;
+        let curve = self.prepared_curve_param(param)?;
+        let color = sample_prepared_color_curve(curve, position)?;
+        self.push(RuntimeValue::Color(scale_color(color, scale)));
+        Ok(())
+    }
+
+    fn curve_param_crossing(
+        &mut self,
+        param: usize,
+        has_fallback: bool,
+    ) -> Result<(), RuntimeError> {
+        let fallback = if has_fallback {
+            Some(self.pop()?)
+        } else {
+            None
+        };
+        let value = self.pop()?;
+        let value = to_float_runtime(&value, self.params)?;
+        let fallback = fallback
+            .map(|fallback| to_float_runtime(&fallback, self.params))
+            .transpose()?
+            .unwrap_or(value);
+        let curve = self.prepared_curve_param(param)?;
+        self.push(RuntimeValue::Float(curve_crossing(curve, value, fallback)?));
+        Ok(())
+    }
+
+    fn prepared_curve_param(&self, param: usize) -> Result<&PreparedCurve, RuntimeError> {
+        match self.scratch.param_overrides.get(param) {
+            Some(Some(RuntimeValue::PreparedCurve(curve))) => return Ok(curve),
+            Some(Some(RuntimeValue::Curve(_))) => {
+                return Err(RuntimeError::new("unprepared curve param override"));
+            }
+            Some(Some(_)) => return Err(RuntimeError::new("expected curve")),
+            _ => {}
+        }
+        match self.params.values.get(param) {
+            Some(BoundParamValue::Curve(curve)) => Ok(curve),
+            Some(_) => Err(RuntimeError::new("expected curve")),
+            None => Err(RuntimeError::new("invalid param slot")),
         }
     }
 
@@ -547,7 +728,7 @@ impl<'a> Vm<'a> {
                     });
                 }
                 _ => {
-                    params.insert(field.clone(), runtime_to_value(value, self.params));
+                    params.insert(field.clone(), runtime_to_value(value));
                 }
             }
         }
@@ -574,14 +755,7 @@ impl<'a> Vm<'a> {
     }
 
     fn pop_to_value(&mut self) -> Result<Value, RuntimeError> {
-        self.pop().map(|value| runtime_to_value(value, self.params))
-    }
-
-    fn param_value(&self, index: usize) -> Result<&Value, RuntimeError> {
-        self.params
-            .values
-            .get(index)
-            .ok_or_else(|| RuntimeError::new("invalid param slot"))
+        self.pop().map(runtime_to_value)
     }
 
     fn peek(&self) -> Result<&RuntimeValue, RuntimeError> {
@@ -600,6 +774,13 @@ fn resolve_param(param: &ParamDecl, params: &IndexMap<Identifier, Value>) -> Val
         return default.clone();
     }
     default_value(&param.ty)
+}
+
+fn bind_param_value(ty: &Type, value: Value) -> BoundParamValue {
+    match (ty, value) {
+        (Type::Float, Value::Int(value)) => BoundParamValue::Float(value as f64),
+        (ty, value) => BoundParamValue::from_value(ty, value),
+    }
 }
 
 fn default_value(ty: &Type) -> Value {
@@ -635,7 +816,7 @@ fn value_at(args: &[RuntimeValue], index: usize) -> Result<&RuntimeValue, Runtim
         .ok_or_else(|| RuntimeError::new("missing argument"))
 }
 
-fn runtime_to_value(value: RuntimeValue, params: &BoundEffectParams) -> Value {
+fn runtime_to_value(value: RuntimeValue) -> Value {
     match value {
         RuntimeValue::Void => Value::Void,
         RuntimeValue::Int(value) => Value::Int(value),
@@ -648,9 +829,9 @@ fn runtime_to_value(value: RuntimeValue, params: &BoundEffectParams) -> Value {
         RuntimeValue::TargetItems(value) => Value::TargetItems(value),
         RuntimeValue::TargetItem(value) => Value::TargetItem(value),
         RuntimeValue::Curve(value) => Value::Curve(value),
+        RuntimeValue::PreparedCurve(value) => Value::Curve(value.raw()),
         RuntimeValue::Array(value) => Value::Array(value),
         RuntimeValue::Enum(value) => Value::Enum(value),
-        RuntimeValue::Param(index) => params.values.get(index).cloned().unwrap_or(Value::Void),
     }
 }
 
@@ -727,10 +908,18 @@ fn call_builtin(
             to_float_runtime(value_at(args, 2)?, params)?,
         ))),
         Builtin::Srand | Builtin::Rand => Ok(RuntimeValue::Float(random(args, params)?)),
-        Builtin::CurveCrossing => Ok(RuntimeValue::Float(to_float_runtime(
-            value_at(args, 1)?,
-            params,
-        )?)),
+        Builtin::CurveCrossing => {
+            let curve = to_curve_runtime(value_at(args, 0)?, params)?;
+            let value = to_float_runtime(value_at(args, 1)?, params)?;
+            let fallback = args
+                .get(2)
+                .map(|value| to_float_runtime(value, params))
+                .transpose()?
+                .unwrap_or(value);
+            Ok(RuntimeValue::Float(curve_crossing_raw(
+                curve, value, fallback,
+            )))
+        }
         Builtin::CurveFloatClamped => {
             let curve = to_curve_runtime(value_at(args, 0)?, params)?;
             let position = to_float_runtime(value_at(args, 1)?, params)?;
@@ -748,6 +937,13 @@ fn call_builtin(
             let curve = to_curve_runtime(value_at(args, 0)?, params)?;
             let position = to_float_runtime(value_at(args, 1)?, params)?;
             let scale = to_float_runtime(value_at(args, 2)?, params)?.clamp(0.0, 1.0);
+            if scale <= 0.0 {
+                return Ok(RuntimeValue::Color(Color {
+                    red: 0,
+                    green: 0,
+                    blue: 0,
+                }));
+            }
             let Value::Color(color) = sample_curve(curve, position) else {
                 return Err(RuntimeError::new("curve_color_scaled requires color curve"));
             };
@@ -760,15 +956,6 @@ fn call_builtin(
             RuntimeValue::Marks(marks) => i64::try_from(marks.marks.len())
                 .map(RuntimeValue::Int)
                 .map_err(|_| RuntimeError::new("mark count exceeds int range")),
-            RuntimeValue::Param(index) => match params.values.get(*index) {
-                Some(Value::Array(items)) => i64::try_from(items.len())
-                    .map(RuntimeValue::Int)
-                    .map_err(|_| RuntimeError::new("array length exceeds int range")),
-                Some(Value::Marks(marks)) => i64::try_from(marks.marks.len())
-                    .map(RuntimeValue::Int)
-                    .map_err(|_| RuntimeError::new("mark count exceeds int range")),
-                _ => Err(RuntimeError::new("len requires array or marks")),
-            },
             _ => Err(RuntimeError::new("len requires array or marks")),
         },
         Builtin::MarkCount => Ok(RuntimeValue::Int(mark_count(args, context, params)?)),
@@ -817,38 +1004,27 @@ fn sample_context(context: VmContext<'_>) -> Result<&RunContext, RuntimeError> {
 }
 
 fn to_bool_runtime(value: &RuntimeValue, params: &BoundEffectParams) -> Result<bool, RuntimeError> {
+    let _ = params;
     match value {
         RuntimeValue::Bool(value) => Ok(*value),
-        RuntimeValue::Param(index) => match params.values.get(*index) {
-            Some(Value::Bool(value)) => Ok(*value),
-            _ => Err(RuntimeError::new("expected bool")),
-        },
         _ => Err(RuntimeError::new("expected bool")),
     }
 }
 
 fn to_int_runtime(value: &RuntimeValue, params: &BoundEffectParams) -> Result<i64, RuntimeError> {
+    let _ = params;
     match value {
         RuntimeValue::Int(value) => Ok(*value),
         RuntimeValue::Float(value) => Ok(*value as i64),
-        RuntimeValue::Param(index) => match params.values.get(*index) {
-            Some(Value::Int(value)) => Ok(*value),
-            Some(Value::Float(value)) => Ok(*value as i64),
-            _ => Err(RuntimeError::new("expected int")),
-        },
         _ => Err(RuntimeError::new("expected int")),
     }
 }
 
 fn to_float_runtime(value: &RuntimeValue, params: &BoundEffectParams) -> Result<f64, RuntimeError> {
+    let _ = params;
     match value {
         RuntimeValue::Int(value) => Ok(*value as f64),
         RuntimeValue::Float(value) => Ok(*value),
-        RuntimeValue::Param(index) => match params.values.get(*index) {
-            Some(Value::Int(value)) => Ok(*value as f64),
-            Some(Value::Float(value)) => Ok(*value),
-            _ => Err(RuntimeError::new("expected float")),
-        },
         _ => Err(RuntimeError::new("expected float")),
     }
 }
@@ -857,11 +1033,11 @@ fn to_curve_runtime<'a>(
     value: &'a RuntimeValue,
     params: &'a BoundEffectParams,
 ) -> Result<&'a Curve, RuntimeError> {
+    let _ = params;
     match value {
         RuntimeValue::Curve(curve) => Ok(curve),
-        RuntimeValue::Param(index) => match params.values.get(*index) {
-            Some(Value::Curve(curve)) => Ok(curve),
-            _ => Err(RuntimeError::new("expected curve")),
+        RuntimeValue::PreparedCurve(curve) => match curve.as_ref() {
+            PreparedCurve::Float { raw, .. } | PreparedCurve::Color { raw, .. } => Ok(raw),
         },
         _ => Err(RuntimeError::new("expected curve")),
     }
@@ -989,14 +1165,12 @@ fn compare_binary(
 }
 
 fn value_is_int(value: &RuntimeValue, params: &BoundEffectParams) -> bool {
-    match value {
-        RuntimeValue::Int(_) => true,
-        RuntimeValue::Param(index) => matches!(params.values.get(*index), Some(Value::Int(_))),
-        _ => false,
-    }
+    let _ = params;
+    matches!(value, RuntimeValue::Int(_))
 }
 
 fn values_equal(left: &RuntimeValue, right: &RuntimeValue, params: &BoundEffectParams) -> bool {
+    let _ = params;
     match (left, right) {
         (RuntimeValue::Void, RuntimeValue::Void) => true,
         (RuntimeValue::Int(left), RuntimeValue::Int(right)) => left == right,
@@ -1006,15 +1180,223 @@ fn values_equal(left: &RuntimeValue, right: &RuntimeValue, params: &BoundEffectP
         (RuntimeValue::Bool(left), RuntimeValue::Bool(right)) => left == right,
         (RuntimeValue::Color(left), RuntimeValue::Color(right)) => left == right,
         (RuntimeValue::Enum(left), RuntimeValue::Enum(right)) => left == right,
-        (RuntimeValue::Param(left), RuntimeValue::Param(right)) => {
-            params.values.get(*left) == params.values.get(*right)
-        }
-        (RuntimeValue::Param(index), value) | (value, RuntimeValue::Param(index)) => params
-            .values
-            .get(*index)
-            .is_some_and(|param| values_equal(&RuntimeValue::from_value(param), value, params)),
         _ => false,
     }
+}
+
+fn prepare_float_segments(curve: &Curve) -> Vec<FloatCurveSegment> {
+    let Some(first) = curve.points.first() else {
+        return Vec::new();
+    };
+    let mut previous = first;
+    let mut segments = Vec::with_capacity(curve.points.len());
+    for point in &curve.points {
+        let (CurveValue::Float(start_value), CurveValue::Float(end_value)) =
+            (&previous.value, &point.value)
+        else {
+            previous = point;
+            continue;
+        };
+        segments.push(FloatCurveSegment {
+            start_position: previous.position,
+            end_position: point.position,
+            start_value: *start_value,
+            end_value: *end_value,
+        });
+        previous = point;
+    }
+    segments
+}
+
+fn prepare_color_segments(curve: &Curve) -> Vec<ColorCurveSegment> {
+    let Some(first) = curve.points.first() else {
+        return Vec::new();
+    };
+    let mut previous = first;
+    let mut segments = Vec::with_capacity(curve.points.len());
+    for point in &curve.points {
+        let (CurveValue::Color(start_value), CurveValue::Color(end_value)) =
+            (&previous.value, &point.value)
+        else {
+            previous = point;
+            continue;
+        };
+        segments.push(ColorCurveSegment {
+            start_position: previous.position,
+            end_position: point.position,
+            start_value: *start_value,
+            end_value: *end_value,
+        });
+        previous = point;
+    }
+    segments
+}
+
+fn prepare_curve_crossings(segments: &[FloatCurveSegment]) -> PreparedCurveCrossings {
+    let crossings = segments
+        .iter()
+        .map(|segment| CrossingSegment {
+            start_position: segment.start_position,
+            end_position: segment.end_position,
+            start_value: segment.start_value,
+            end_value: segment.end_value,
+        })
+        .collect::<Vec<_>>();
+    let increasing = crossings
+        .windows(2)
+        .all(|pair| pair[0].end_value <= pair[1].end_value);
+    let decreasing = crossings
+        .windows(2)
+        .all(|pair| pair[0].end_value >= pair[1].end_value);
+    if increasing {
+        PreparedCurveCrossings::Increasing(crossings)
+    } else if decreasing {
+        PreparedCurveCrossings::Decreasing(crossings)
+    } else {
+        PreparedCurveCrossings::Mixed(crossings)
+    }
+}
+
+fn sample_prepared_curve(
+    curve: &PreparedCurve,
+    position: f64,
+) -> Result<RuntimeValue, RuntimeError> {
+    match curve {
+        PreparedCurve::Float { .. } => {
+            sample_prepared_float_curve(curve, position).map(RuntimeValue::Float)
+        }
+        PreparedCurve::Color { .. } => {
+            sample_prepared_color_curve(curve, position).map(RuntimeValue::Color)
+        }
+    }
+}
+
+fn sample_prepared_float_curve(curve: &PreparedCurve, position: f64) -> Result<f64, RuntimeError> {
+    let PreparedCurve::Float { segments, .. } = curve else {
+        return Err(RuntimeError::new(
+            "curve_float_clamped requires float curve",
+        ));
+    };
+    let Some(segment) = find_position_segment(segments, position) else {
+        return Ok(0.0);
+    };
+    Ok(mix_float_segment(
+        segment.start_position,
+        segment.end_position,
+        segment.start_value,
+        segment.end_value,
+        position,
+    ))
+}
+
+fn sample_prepared_color_curve(
+    curve: &PreparedCurve,
+    position: f64,
+) -> Result<Color, RuntimeError> {
+    let PreparedCurve::Color { segments, .. } = curve else {
+        return Err(RuntimeError::new("curve_color_scaled requires color curve"));
+    };
+    let Some(segment) = find_position_segment(segments, position) else {
+        return Err(RuntimeError::new("cannot sample empty color curve"));
+    };
+    mix_colors(
+        segment.start_value,
+        segment.end_value,
+        segment_t(segment.start_position, segment.end_position, position),
+    )
+}
+
+trait PositionSegment {
+    fn end_position(&self) -> f64;
+}
+
+impl PositionSegment for FloatCurveSegment {
+    fn end_position(&self) -> f64 {
+        self.end_position
+    }
+}
+
+impl PositionSegment for ColorCurveSegment {
+    fn end_position(&self) -> f64 {
+        self.end_position
+    }
+}
+
+fn find_position_segment<T: PositionSegment>(segments: &[T], position: f64) -> Option<&T> {
+    if segments.is_empty() {
+        return None;
+    }
+    let index = segments.partition_point(|segment| segment.end_position() < position);
+    segments.get(index).or_else(|| segments.last())
+}
+
+fn mix_float_segment(
+    start_position: f64,
+    end_position: f64,
+    start_value: f64,
+    end_value: f64,
+    position: f64,
+) -> f64 {
+    start_value + (end_value - start_value) * segment_t(start_position, end_position, position)
+}
+
+fn segment_t(start_position: f64, end_position: f64, position: f64) -> f64 {
+    let span = (end_position - start_position).max(0.000000001);
+    ((position - start_position) / span).clamp(0.0, 1.0)
+}
+
+fn curve_crossing(curve: &PreparedCurve, value: f64, fallback: f64) -> Result<f64, RuntimeError> {
+    let PreparedCurve::Float { crossings, .. } = curve else {
+        return Err(RuntimeError::new("curve_crossing requires float curve"));
+    };
+    Ok(match crossings {
+        PreparedCurveCrossings::Increasing(segments) => {
+            let index = segments.partition_point(|segment| segment.end_value < value);
+            crossing_at(segments.get(index), value).unwrap_or(fallback)
+        }
+        PreparedCurveCrossings::Decreasing(segments) => {
+            let index = segments.partition_point(|segment| segment.end_value > value);
+            crossing_at(segments.get(index), value).unwrap_or(fallback)
+        }
+        PreparedCurveCrossings::Mixed(segments) => segments
+            .iter()
+            .find_map(|segment| crossing_at(Some(segment), value))
+            .unwrap_or(fallback),
+    })
+}
+
+fn curve_crossing_raw(curve: &Curve, value: f64, fallback: f64) -> f64 {
+    let segments = prepare_float_segments(curve);
+    let crossings = prepare_curve_crossings(&segments);
+    match crossings {
+        PreparedCurveCrossings::Increasing(segments) => {
+            let index = segments.partition_point(|segment| segment.end_value < value);
+            crossing_at(segments.get(index), value).unwrap_or(fallback)
+        }
+        PreparedCurveCrossings::Decreasing(segments) => {
+            let index = segments.partition_point(|segment| segment.end_value > value);
+            crossing_at(segments.get(index), value).unwrap_or(fallback)
+        }
+        PreparedCurveCrossings::Mixed(segments) => segments
+            .iter()
+            .find_map(|segment| crossing_at(Some(segment), value))
+            .unwrap_or(fallback),
+    }
+}
+
+fn crossing_at(segment: Option<&CrossingSegment>, value: f64) -> Option<f64> {
+    let segment = segment?;
+    let min = segment.start_value.min(segment.end_value);
+    let max = segment.start_value.max(segment.end_value);
+    if value < min || value > max {
+        return None;
+    }
+    let span = segment.end_value - segment.start_value;
+    if span.abs() <= 0.000000001 {
+        return Some(segment.start_position);
+    }
+    let t = ((value - segment.start_value) / span).clamp(0.0, 1.0);
+    Some(segment.start_position + (segment.end_position - segment.start_position) * t)
 }
 
 fn sample_curve(curve: &Curve, position: f64) -> Value {
@@ -1058,6 +1440,7 @@ fn mix_values(
     t: f64,
     params: &BoundEffectParams,
 ) -> Result<RuntimeValue, RuntimeError> {
+    let _ = params;
     match (left, right) {
         (RuntimeValue::Float(left), RuntimeValue::Float(right)) => {
             Ok(RuntimeValue::Float(left + (right - left) * t))
@@ -1068,12 +1451,6 @@ fn mix_values(
         (RuntimeValue::Color(left), RuntimeValue::Color(right)) => {
             mix_colors(*left, *right, t).map(RuntimeValue::Color)
         }
-        (RuntimeValue::Param(_), _) | (_, RuntimeValue::Param(_)) => mix_values(
-            &RuntimeValue::from_value(&runtime_to_value(left.clone(), params)),
-            &RuntimeValue::from_value(&runtime_to_value(right.clone(), params)),
-            t,
-            params,
-        ),
         _ => Err(RuntimeError::new(
             "mix requires matching float or color values",
         )),
@@ -1145,6 +1522,7 @@ fn mark_source<'a>(
     args: &'a [RuntimeValue],
     params: &'a BoundEffectParams,
 ) -> Result<&'a Marks, RuntimeError> {
+    let _ = params;
     let Some(value) = args.first() else {
         return Err(RuntimeError::new(
             "mark builtin requires marks as the first argument",
@@ -1152,10 +1530,6 @@ fn mark_source<'a>(
     };
     match value {
         RuntimeValue::Marks(marks) => Ok(marks),
-        RuntimeValue::Param(index) => match params.values.get(*index) {
-            Some(Value::Marks(marks)) => Ok(marks),
-            _ => Err(RuntimeError::new("mark builtin first arg must be marks")),
-        },
         _ => Err(RuntimeError::new("mark builtin first arg must be marks")),
     }
 }
@@ -1329,11 +1703,6 @@ fn mark_query_seconds(
 }
 
 fn first_arg_is_marks(args: &[RuntimeValue], params: &BoundEffectParams) -> bool {
-    match args.first() {
-        Some(RuntimeValue::Marks(_)) => true,
-        Some(RuntimeValue::Param(index)) => {
-            matches!(params.values.get(*index), Some(Value::Marks(_)))
-        }
-        _ => false,
-    }
+    let _ = params;
+    matches!(args.first(), Some(RuntimeValue::Marks(_)))
 }

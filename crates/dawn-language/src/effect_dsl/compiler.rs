@@ -38,6 +38,7 @@ struct FunctionCompiler {
     instructions: Vec<Instruction>,
     constants: Vec<Value>,
     scopes: Vec<IndexMap<Identifier, Binding>>,
+    param_types: Vec<Type>,
     local_count: usize,
     stack_depth: isize,
     max_stack: usize,
@@ -74,6 +75,7 @@ impl FunctionCompiler {
             instructions: Vec::new(),
             constants: Vec::new(),
             scopes: vec![param_scope],
+            param_types: params.iter().map(|param| param.ty.clone()).collect(),
             local_count: 0,
             stack_depth: 0,
             max_stack: 0,
@@ -218,9 +220,14 @@ impl FunctionCompiler {
                 self.emit(Instruction::MakeArray(count), 1 - count as isize);
             }
             ExprKind::Index { target, index } => {
-                self.compile_expr(*target);
-                self.compile_expr(*index);
-                self.emit(Instruction::Index, -1);
+                if let Some(param) = self.curve_param_binding(&target) {
+                    self.compile_expr(*index);
+                    self.emit(Instruction::CurveParamSample(param), 0);
+                } else {
+                    self.compile_expr(*target);
+                    self.compile_expr(*index);
+                    self.emit(Instruction::Index, -1);
+                }
             }
             ExprKind::Member { target, member } => {
                 self.compile_expr(*target);
@@ -233,6 +240,9 @@ impl FunctionCompiler {
                 let Some(builtin) = Builtin::from_name(&name) else {
                     return;
                 };
+                if self.compile_specialized_curve_call(builtin, &args) {
+                    return;
+                }
                 let arity = args.len();
                 for arg in args {
                     self.compile_expr(arg);
@@ -262,6 +272,61 @@ impl FunctionCompiler {
                     self.emit(Instruction::Binary(op), -1);
                 }
             },
+        }
+    }
+
+    fn compile_specialized_curve_call(&mut self, builtin: Builtin, args: &[Expr]) -> bool {
+        match builtin {
+            Builtin::CurveFloatClamped if args.len() == 4 => {
+                let Some(param) = self.curve_param_binding(&args[0]) else {
+                    return false;
+                };
+                for arg in &args[1..] {
+                    self.compile_expr(arg.clone());
+                }
+                self.emit(Instruction::CurveParamFloatClamped(param), -2);
+                true
+            }
+            Builtin::CurveColorScaled if args.len() == 3 => {
+                let Some(param) = self.curve_param_binding(&args[0]) else {
+                    return false;
+                };
+                for arg in &args[1..] {
+                    self.compile_expr(arg.clone());
+                }
+                self.emit(Instruction::CurveParamColorScaled(param), -1);
+                true
+            }
+            Builtin::CurveCrossing if args.len() == 2 || args.len() == 3 => {
+                let Some(param) = self.curve_param_binding(&args[0]) else {
+                    return false;
+                };
+                for arg in &args[1..] {
+                    self.compile_expr(arg.clone());
+                }
+                self.emit(
+                    Instruction::CurveParamCrossing {
+                        param,
+                        has_fallback: args.len() == 3,
+                    },
+                    if args.len() == 3 { -1 } else { 0 },
+                );
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn curve_param_binding(&self, expr: &Expr) -> Option<ParamId> {
+        let ExprKind::Variable(name) = &expr.kind else {
+            return None;
+        };
+        let Some(Binding::Param(param)) = self.lookup(name) else {
+            return None;
+        };
+        match self.param_types.get(param) {
+            Some(Type::Curve(_)) => Some(param),
+            _ => None,
         }
     }
 

@@ -26,6 +26,7 @@ pub(crate) enum Instruction {
     Pop,
     MakeArray(usize),
     Index,
+    CurveParamSample(ParamId),
     Member(Identifier),
     CoerceFloat,
     Unary(UnaryOp),
@@ -35,6 +36,12 @@ pub(crate) enum Instruction {
     JumpIfFalseOrPop(Target),
     JumpIfTrueOrPop(Target),
     CallBuiltin(Builtin, usize),
+    CurveParamFloatClamped(ParamId),
+    CurveParamColorScaled(ParamId),
+    CurveParamCrossing {
+        param: ParamId,
+        has_fallback: bool,
+    },
     CheckLoopLimit,
     Emit {
         effect: Identifier,
