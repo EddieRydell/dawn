@@ -231,17 +231,27 @@ pub struct EffectVmScratch {
 
 #[derive(Clone, Debug, Default)]
 struct VmRegisters {
-    layout: Vec<Type>,
+    layout: Option<VmRegisterLayout>,
     values: Vec<RuntimeValue>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct VmRegisterLayout {
+    id: u64,
+    count: usize,
+}
+
 impl VmRegisters {
-    fn prepare(&mut self, register_types: &[Type]) {
-        if self.layout == register_types && self.values.len() == register_types.len() {
+    fn prepare(&mut self, function: &RegisterFunction) {
+        let register_types = &function.register_types;
+        let layout = VmRegisterLayout {
+            id: function.register_layout_id,
+            count: function.register_count,
+        };
+        if self.layout == Some(layout) && self.values.len() == register_types.len() {
             return;
         }
-        self.layout.clear();
-        self.layout.extend_from_slice(register_types);
+        self.layout = Some(layout);
         self.values.clear();
         self.values.reserve(register_types.len());
         self.values
@@ -362,6 +372,25 @@ impl RuntimeValue {
     }
 }
 
+fn clone_runtime(value: &RuntimeValue) -> RuntimeValue {
+    match value {
+        RuntimeValue::Void => RuntimeValue::Void,
+        RuntimeValue::Int(value) => RuntimeValue::Int(*value),
+        RuntimeValue::Float(value) => RuntimeValue::Float(*value),
+        RuntimeValue::Bool(value) => RuntimeValue::Bool(*value),
+        RuntimeValue::Color(value) => RuntimeValue::Color(*value),
+        RuntimeValue::Marks(value) => RuntimeValue::Marks(Arc::clone(value)),
+        RuntimeValue::Timeline => RuntimeValue::Timeline,
+        RuntimeValue::Target(value) => RuntimeValue::Target(Arc::clone(value)),
+        RuntimeValue::TargetItems(value) => RuntimeValue::TargetItems(Arc::clone(value)),
+        RuntimeValue::TargetItem(value) => RuntimeValue::TargetItem(Arc::clone(value)),
+        RuntimeValue::Curve(value) => RuntimeValue::Curve(Arc::clone(value)),
+        RuntimeValue::PreparedCurve(value) => RuntimeValue::PreparedCurve(Arc::clone(value)),
+        RuntimeValue::Array(value) => RuntimeValue::Array(Arc::clone(value)),
+        RuntimeValue::Enum(value) => RuntimeValue::Enum(value.clone()),
+    }
+}
+
 fn default_runtime_for_register(ty: &Type) -> RuntimeValue {
     match ty {
         Type::Void => RuntimeValue::Void,
@@ -412,7 +441,7 @@ impl<'a> Vm<'a> {
     ) -> Self {
         let register_count = function.register_types.len();
         debug_assert_eq!(register_count, function.register_count);
-        scratch.registers.prepare(&function.register_types);
+        scratch.registers.prepare(function);
         if scratch.param_overrides.len() != params.values.len() {
             scratch.param_overrides.clear();
             scratch.param_overrides.resize(params.values.len(), None);
@@ -820,22 +849,7 @@ impl<'a> Vm<'a> {
     }
 
     fn return_value(&self, register: RegisterId) -> Result<RuntimeValue, RuntimeError> {
-        Ok(match self.get(register)? {
-            RuntimeValue::Void => RuntimeValue::Void,
-            RuntimeValue::Int(value) => RuntimeValue::Int(*value),
-            RuntimeValue::Float(value) => RuntimeValue::Float(*value),
-            RuntimeValue::Bool(value) => RuntimeValue::Bool(*value),
-            RuntimeValue::Color(value) => RuntimeValue::Color(*value),
-            RuntimeValue::Marks(value) => RuntimeValue::Marks(Arc::clone(value)),
-            RuntimeValue::Timeline => RuntimeValue::Timeline,
-            RuntimeValue::Target(value) => RuntimeValue::Target(Arc::clone(value)),
-            RuntimeValue::TargetItems(value) => RuntimeValue::TargetItems(Arc::clone(value)),
-            RuntimeValue::TargetItem(value) => RuntimeValue::TargetItem(Arc::clone(value)),
-            RuntimeValue::Curve(value) => RuntimeValue::Curve(Arc::clone(value)),
-            RuntimeValue::PreparedCurve(value) => RuntimeValue::PreparedCurve(Arc::clone(value)),
-            RuntimeValue::Array(value) => RuntimeValue::Array(Arc::clone(value)),
-            RuntimeValue::Enum(value) => RuntimeValue::Enum(value.clone()),
-        })
+        Ok(clone_runtime(self.get(register)?))
     }
 
     fn get(&self, register: RegisterId) -> Result<&RuntimeValue, RuntimeError> {

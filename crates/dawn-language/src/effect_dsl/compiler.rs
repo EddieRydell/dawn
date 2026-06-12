@@ -1,7 +1,7 @@
 use super::ast::{BinaryOp, ParamDecl};
 use super::bytecode::{
-    ContextRead, FloatBinary, FloatUnary, GeneratorContextId, Instruction, LocalId, MarkOp,
-    ParamId, RegisterFunction, RegisterId, Target, TargetItemsOp,
+    register_layout_id, ContextRead, FloatBinary, FloatUnary, GeneratorContextId, Instruction,
+    LocalId, MarkOp, ParamId, RegisterFunction, RegisterId, Target, TargetItemsOp,
 };
 use super::checked::{
     CheckedBlock, CheckedEffectDecl, CheckedExpr, CheckedExprKind, CheckedModule, CheckedStmt,
@@ -86,6 +86,7 @@ impl FunctionCompiler {
             instructions: self.instructions,
             constants: self.constants,
             register_count: self.register_types.len(),
+            register_layout_id: register_layout_id(&self.register_types),
             register_types: self.register_types,
         }
     }

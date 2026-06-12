@@ -1,5 +1,7 @@
 use super::ast::{BinaryOp, UnaryOp};
 use super::types::{Identifier, Type, Value};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 pub(crate) type ConstantId = usize;
 pub(crate) type LocalId = usize;
@@ -12,7 +14,14 @@ pub(crate) struct RegisterFunction {
     pub instructions: Vec<Instruction>,
     pub constants: Vec<Value>,
     pub register_count: usize,
+    pub register_layout_id: u64,
     pub register_types: Vec<Type>,
+}
+
+pub(crate) fn register_layout_id(register_types: &[Type]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    register_types.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[derive(Clone, Debug, PartialEq)]
