@@ -105,3 +105,61 @@ Final top VTune hotspots:
 | `RuntimeValue` drop | 0.218s | 2.3% |
 
 Compared with baseline VTune, `Vm::run` CPU time decreased from 6.996s to 3.052s, `RtlAllocateHeap` from 4.442s to 2.396s, and `RtlFreeHeap` from 2.391s to 1.041s. `alloc::string::clone`, `Vm::value`, and `round` are no longer in the final top hotspots.
+
+## Render-Focused Pass
+
+Follow-up optimization focused on runtime rendering over generator preparation:
+
+- `timeline.emit` now reads `start`, `duration`, and `target` directly from typed/borrowed slots instead of constructing owned `RuntimeValue`s for those fields.
+- Ref equality now compares borrowed runtime refs directly, avoiding enum/string clones in equality.
+- Enum param vs enum constant comparisons compile to a direct param/constant opcode, avoiding enum param and enum literal ref loads in hot sample branches.
+- Prepared curve param indexing writes directly to float/color slots.
+- A direct indexed register read/write experiment was tried and rejected: it worsened `Vm::run` in VTune (`2.694s -> 3.101s`) and was removed.
+
+Focused render-only frame 5760 best warm checkpoint:
+
+```powershell
+cargo bench -p dawn-runtime --bench render_bench -- --project examples/thirty-output-controller/project.dawn --frames 5760 --iterations 1500 --warmup 100 --render-only
+```
+
+Result: p50=2.296ms, p95=3.914ms, total=3,727.542ms, checksum=c232ac4a02bfb53a.
+
+Final full render-only sample:
+
+| Frame | p50 | p95 | Checksum |
+| --- | ---: | ---: | --- |
+| 111 | 0.002ms | 0.004ms | 70ff2d7b17783745 |
+| 122 | 0.002ms | 0.003ms | 8101f63d0ad95168 |
+| 123 | 1.294ms | 2.323ms | 34cba5bcdfc0ef01 |
+| 5760 | 2.400ms | 4.337ms | c232ac4a02bfb53a |
+| 9360 | 1.615ms | 2.878ms | c8854b88f2e20b00 |
+
+Total: 10,000 rendered frames in 12,115.715ms.
+
+Final render-focused VTune:
+
+```powershell
+& 'C:\Program Files (x86)\Intel\oneAPI\vtune\2025.3\bin64\vtune.exe' -collect hotspots -result-dir target\vtune-effect-vm-render-final-5760 -- cargo bench -p dawn-runtime --bench render_bench -- --project examples/thirty-output-controller/project.dawn --frames 5760 --iterations 1500 --warmup 100 --render-only
+```
+
+VTune benchmark result: frame 5760 p50=2.445ms, p95=4.386ms, total=4,106.947ms, checksum=c232ac4a02bfb53a.
+
+Top VTune hotspots:
+
+| Function | CPU Time | CPU % |
+| --- | ---: | ---: |
+| `dawn_language::effect_dsl::vm::Vm::run` | 3.130s | 67.1% |
+| `func@0x1400b3830` | 0.663s | 14.2% |
+| `dawn_language::effect_dsl::vm::run_sample_effect` | 0.167s | 3.6% |
+| `dawn_language::effect_dsl::vm::Vm::new` | 0.069s | 1.5% |
+| `RuntimeValue` drop | 0.068s | 1.5% |
+
+Allocator/free hotspots are no longer dominant in the render-focused VTune profile.
+
+Prepare+render sample after the render-focused pass:
+
+```powershell
+cargo bench -p dawn-runtime --bench render_bench -- --project examples/thirty-output-controller/project.dawn --frames 111,122,123,5760,9360 --iterations 200 --warmup 20
+```
+
+Result: prepare p50=98.544ms, p95=135.000ms. Checksums unchanged. This pass should be considered primarily a rendering improvement, not a preparation improvement.

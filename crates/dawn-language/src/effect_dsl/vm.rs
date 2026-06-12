@@ -525,8 +525,12 @@ impl<'a> Vm<'a> {
                     self.set_float(*dst, self.int(*src)? as f64)?;
                 }
                 Instruction::Not { dst, src } => self.set_bool(*dst, !self.bool(*src)?)?,
-                Instruction::NegInt { dst, src } => self.set_int(*dst, -self.int(*src)?)?,
-                Instruction::NegFloat { dst, src } => self.set_float(*dst, -self.float(*src)?)?,
+                Instruction::NegInt { dst, src } => {
+                    self.set_int(*dst, -self.int(*src)?)?;
+                }
+                Instruction::NegFloat { dst, src } => {
+                    self.set_float(*dst, -self.float(*src)?)?;
+                }
                 Instruction::FloatArithmetic {
                     dst,
                     op,
@@ -1337,11 +1341,7 @@ impl<'a> Vm<'a> {
         }
     }
 
-    fn enum_param_equal_const(
-        &self,
-        param: usize,
-        constant: usize,
-    ) -> Result<bool, RuntimeError> {
+    fn enum_param_equal_const(&self, param: usize, constant: usize) -> Result<bool, RuntimeError> {
         let expected = match self.function.constants.get(constant) {
             Some(Value::Enum(value)) => value,
             Some(_) => return Err(RuntimeError::new("expected enum constant")),

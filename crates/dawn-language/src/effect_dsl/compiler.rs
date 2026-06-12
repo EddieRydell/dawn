@@ -695,9 +695,7 @@ impl FunctionCompiler {
         left: &CheckedExpr,
         right: &CheckedExpr,
     ) -> Option<ValueSlot> {
-        let Some((param, constant)) = self.enum_param_const_pair(left, right) else {
-            return None;
-        };
+        let (param, constant) = self.enum_param_const_pair(left, right)?;
         let dst = self.allocate_slot(&Type::Bool);
         let bool_dst = self.bool_slot(dst);
         self.emit(Instruction::EnumParamEqualConst {
