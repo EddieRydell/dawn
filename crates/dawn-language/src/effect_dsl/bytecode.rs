@@ -1,209 +1,317 @@
-use super::ast::{BinaryOp, UnaryOp};
 use super::types::{Identifier, Type, Value};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 pub(crate) type ConstantId = usize;
-pub(crate) type LocalId = usize;
+pub(crate) type LocalId = ValueSlot;
 pub(crate) type ParamId = usize;
-pub(crate) type RegisterId = usize;
 pub(crate) type Target = usize;
 
 #[derive(Clone, Debug)]
 pub(crate) struct RegisterFunction {
     pub instructions: Vec<Instruction>,
     pub constants: Vec<Value>,
-    pub register_count: usize,
-    pub register_layout_id: u64,
-    pub register_types: Vec<Type>,
+    pub layout: SlotLayout,
+    pub layout_id: u64,
 }
 
-pub(crate) fn register_layout_id(register_types: &[Type]) -> u64 {
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub(crate) struct SlotLayout {
+    pub ints: usize,
+    pub floats: usize,
+    pub bools: usize,
+    pub colors: usize,
+    pub refs: usize,
+}
+
+pub(crate) fn slot_layout_id(layout: SlotLayout) -> u64 {
     let mut hasher = DefaultHasher::new();
-    register_types.hash(&mut hasher);
+    layout.hash(&mut hasher);
     hasher.finish()
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct IntSlot(pub usize);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct FloatSlot(pub usize);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct BoolSlot(pub usize);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct ColorSlot(pub usize);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct RefSlot(pub usize);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum ValueSlot {
+    Int(IntSlot),
+    Float(FloatSlot),
+    Bool(BoolSlot),
+    Color(ColorSlot),
+    Ref(RefSlot),
+}
+
+impl ValueSlot {
+    pub(crate) fn for_type(ty: &Type, layout: &mut SlotLayout) -> Self {
+        match ty {
+            Type::Int => {
+                let slot = IntSlot(layout.ints);
+                layout.ints += 1;
+                Self::Int(slot)
+            }
+            Type::Float => {
+                let slot = FloatSlot(layout.floats);
+                layout.floats += 1;
+                Self::Float(slot)
+            }
+            Type::Bool => {
+                let slot = BoolSlot(layout.bools);
+                layout.bools += 1;
+                Self::Bool(slot)
+            }
+            Type::Color => {
+                let slot = ColorSlot(layout.colors);
+                layout.colors += 1;
+                Self::Color(slot)
+            }
+            Type::Void
+            | Type::Marks
+            | Type::Timeline
+            | Type::Target
+            | Type::TargetItems
+            | Type::TargetItem
+            | Type::Curve(_)
+            | Type::Array(_)
+            | Type::Enum(_) => {
+                let slot = RefSlot(layout.refs);
+                layout.refs += 1;
+                Self::Ref(slot)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Instruction {
     LoadConst {
-        dst: RegisterId,
+        dst: ValueSlot,
         constant: ConstantId,
     },
     LoadDefault {
-        dst: RegisterId,
+        dst: ValueSlot,
         ty: Type,
     },
     LoadParam {
-        dst: RegisterId,
+        dst: ValueSlot,
         param: ParamId,
     },
     LoadGeneratorContext {
-        dst: RegisterId,
+        dst: ValueSlot,
         slot: GeneratorContextId,
     },
     StoreParam {
         param: ParamId,
-        src: RegisterId,
+        src: ValueSlot,
     },
     Move {
-        dst: RegisterId,
-        src: RegisterId,
+        dst: ValueSlot,
+        src: ValueSlot,
     },
     MakeArray {
-        dst: RegisterId,
-        items: Vec<RegisterId>,
+        dst: RefSlot,
+        items: Vec<ValueSlot>,
     },
     Index {
-        dst: RegisterId,
-        target: RegisterId,
-        index: RegisterId,
+        dst: ValueSlot,
+        target: ValueSlot,
+        index: ValueSlot,
     },
     CurveParamSample {
-        dst: RegisterId,
+        dst: ValueSlot,
         param: ParamId,
-        position: RegisterId,
+        position: FloatSlot,
     },
     Member {
-        dst: RegisterId,
-        target: RegisterId,
+        dst: ValueSlot,
+        target: RefSlot,
         member: Identifier,
     },
-    CoerceFloat {
-        dst: RegisterId,
-        src: RegisterId,
+    IntToFloat {
+        dst: FloatSlot,
+        src: IntSlot,
     },
-    Unary {
-        dst: RegisterId,
-        op: UnaryOp,
-        src: RegisterId,
+    Not {
+        dst: BoolSlot,
+        src: BoolSlot,
     },
-    Binary {
-        dst: RegisterId,
-        op: BinaryOp,
-        left: RegisterId,
-        right: RegisterId,
+    NegInt {
+        dst: IntSlot,
+        src: IntSlot,
+    },
+    NegFloat {
+        dst: FloatSlot,
+        src: FloatSlot,
+    },
+    FloatArithmetic {
+        dst: FloatSlot,
+        op: ArithmeticOp,
+        left: FloatSlot,
+        right: FloatSlot,
+    },
+    IntArithmetic {
+        dst: IntSlot,
+        op: IntArithmeticOp,
+        left: IntSlot,
+        right: IntSlot,
+    },
+    FloatCompare {
+        dst: BoolSlot,
+        op: CompareOp,
+        left: FloatSlot,
+        right: FloatSlot,
+    },
+    ValueEqual {
+        dst: BoolSlot,
+        negate: bool,
+        left: ValueSlot,
+        right: ValueSlot,
+    },
+    EnumParamEqualConst {
+        dst: BoolSlot,
+        param: ParamId,
+        constant: ConstantId,
+        negate: bool,
     },
     Jump(Target),
     JumpIfFalse {
-        condition: RegisterId,
+        condition: BoolSlot,
         target: Target,
     },
     JumpIfTrue {
-        condition: RegisterId,
+        condition: BoolSlot,
         target: Target,
     },
     ContextRead {
-        dst: RegisterId,
+        dst: ValueSlot,
         read: ContextRead,
     },
     SectionPosition {
-        dst: RegisterId,
-        width: RegisterId,
+        dst: FloatSlot,
+        width: FloatSlot,
     },
     FloatUnary {
-        dst: RegisterId,
+        dst: FloatSlot,
         op: FloatUnary,
-        value: RegisterId,
+        value: FloatSlot,
     },
     FloatBinary {
-        dst: RegisterId,
+        dst: FloatSlot,
         op: FloatBinary,
-        left: RegisterId,
-        right: RegisterId,
+        left: FloatSlot,
+        right: FloatSlot,
     },
     Clamp {
-        dst: RegisterId,
-        value: RegisterId,
-        min: RegisterId,
-        max: RegisterId,
+        dst: FloatSlot,
+        value: FloatSlot,
+        min: FloatSlot,
+        max: FloatSlot,
     },
     Smoothstep {
-        dst: RegisterId,
-        edge0: RegisterId,
-        edge1: RegisterId,
-        value: RegisterId,
+        dst: FloatSlot,
+        edge0: FloatSlot,
+        edge1: FloatSlot,
+        value: FloatSlot,
     },
-    Mix {
-        dst: RegisterId,
-        left: RegisterId,
-        right: RegisterId,
-        amount: RegisterId,
+    MixFloat {
+        dst: FloatSlot,
+        left: FloatSlot,
+        right: FloatSlot,
+        amount: FloatSlot,
+    },
+    MixColor {
+        dst: ColorSlot,
+        left: ColorSlot,
+        right: ColorSlot,
+        amount: FloatSlot,
     },
     Rgb {
-        dst: RegisterId,
-        red: RegisterId,
-        green: RegisterId,
-        blue: RegisterId,
+        dst: ColorSlot,
+        red: FloatSlot,
+        green: FloatSlot,
+        blue: FloatSlot,
     },
     Hsv {
-        dst: RegisterId,
-        hue: RegisterId,
-        saturation: RegisterId,
-        value: RegisterId,
+        dst: ColorSlot,
+        hue: FloatSlot,
+        saturation: FloatSlot,
+        value: FloatSlot,
     },
     Rand {
-        dst: RegisterId,
-        args: Vec<RegisterId>,
+        dst: FloatSlot,
+        args: Vec<FloatSlot>,
     },
     CurveFloatClamped {
-        dst: RegisterId,
-        curve: RegisterId,
-        position: RegisterId,
-        min: RegisterId,
-        max: RegisterId,
+        dst: FloatSlot,
+        curve: RefSlot,
+        position: FloatSlot,
+        min: FloatSlot,
+        max: FloatSlot,
     },
     CurveParamFloatClamped {
-        dst: RegisterId,
+        dst: FloatSlot,
         param: ParamId,
-        position: RegisterId,
-        min: RegisterId,
-        max: RegisterId,
+        position: FloatSlot,
+        min: FloatSlot,
+        max: FloatSlot,
     },
     CurveColorScaled {
-        dst: RegisterId,
-        curve: RegisterId,
-        position: RegisterId,
-        scale: RegisterId,
+        dst: ColorSlot,
+        curve: RefSlot,
+        position: FloatSlot,
+        scale: FloatSlot,
     },
     CurveParamColorScaled {
-        dst: RegisterId,
+        dst: ColorSlot,
         param: ParamId,
-        position: RegisterId,
-        scale: RegisterId,
+        position: FloatSlot,
+        scale: FloatSlot,
     },
     CurveCrossing {
-        dst: RegisterId,
-        curve: RegisterId,
-        value: RegisterId,
-        fallback: Option<RegisterId>,
+        dst: FloatSlot,
+        curve: RefSlot,
+        value: FloatSlot,
+        fallback: Option<FloatSlot>,
     },
     CurveParamCrossing {
-        dst: RegisterId,
+        dst: FloatSlot,
         param: ParamId,
-        value: RegisterId,
-        fallback: Option<RegisterId>,
+        value: FloatSlot,
+        fallback: Option<FloatSlot>,
     },
     Len {
-        dst: RegisterId,
-        value: RegisterId,
+        dst: IntSlot,
+        value: ValueSlot,
     },
     Mark {
-        dst: RegisterId,
+        dst: ValueSlot,
         op: MarkOp,
-        args: Vec<RegisterId>,
+        args: Vec<ValueSlot>,
     },
     TargetItems {
-        dst: RegisterId,
+        dst: ValueSlot,
         op: TargetItemsOp,
-        args: Vec<RegisterId>,
+        args: Vec<ValueSlot>,
     },
     CheckLoopLimit,
     Emit {
         effect: Identifier,
-        fields: Vec<(Identifier, RegisterId)>,
+        fields: Vec<(Identifier, ValueSlot)>,
     },
-    Return(RegisterId),
+    Return(ValueSlot),
+    ReturnColor(ColorSlot),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -229,6 +337,31 @@ pub(crate) enum FloatUnary {
     Cos,
     Abs,
     Floor,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ArithmeticOp {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Remainder,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum IntArithmeticOp {
+    Add,
+    Subtract,
+    Multiply,
+    Remainder,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CompareOp {
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

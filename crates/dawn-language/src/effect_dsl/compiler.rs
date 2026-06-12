@@ -1,7 +1,8 @@
-use super::ast::{BinaryOp, ParamDecl};
+use super::ast::{BinaryOp, UnaryOp};
 use super::bytecode::{
-    register_layout_id, ContextRead, FloatBinary, FloatUnary, GeneratorContextId, Instruction,
-    LocalId, MarkOp, ParamId, RegisterFunction, RegisterId, Target, TargetItemsOp,
+    slot_layout_id, ArithmeticOp, BoolSlot, ColorSlot, CompareOp, ContextRead, FloatBinary,
+    FloatSlot, FloatUnary, GeneratorContextId, Instruction, IntArithmeticOp, IntSlot, LocalId,
+    MarkOp, ParamId, RefSlot, RegisterFunction, SlotLayout, Target, TargetItemsOp, ValueSlot,
 };
 use super::checked::{
     CheckedBlock, CheckedEffectDecl, CheckedExpr, CheckedExprKind, CheckedModule, CheckedStmt,
@@ -34,10 +35,11 @@ struct FunctionCompiler {
     constants: Vec<Value>,
     scopes: Vec<IndexMap<Identifier, Binding>>,
     param_types: Vec<Type>,
-    register_types: Vec<Type>,
+    layout: SlotLayout,
+    kind: EffectKind,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Binding {
     Param(ParamId),
     Local(LocalId),
@@ -45,7 +47,7 @@ enum Binding {
 }
 
 impl FunctionCompiler {
-    fn new(params: &[ParamDecl], kind: EffectKind) -> Self {
+    fn new(params: &[super::ast::ParamDecl], kind: EffectKind) -> Self {
         let mut param_scope = IndexMap::new();
         for (index, param) in params.iter().enumerate() {
             param_scope.insert(param.name.clone(), Binding::Param(index));
@@ -69,13 +71,14 @@ impl FunctionCompiler {
             constants: Vec::new(),
             scopes: vec![param_scope],
             param_types: params.iter().map(|param| param.ty.clone()).collect(),
-            register_types: Vec::new(),
+            layout: SlotLayout::default(),
+            kind,
         }
     }
 
     fn compile(mut self, block: CheckedBlock) -> RegisterFunction {
         self.compile_block(block);
-        let void = self.allocate_register(Type::Void);
+        let void = self.allocate_slot(&Type::Void);
         let constant = self.add_constant(Value::Void);
         self.emit(Instruction::LoadConst {
             dst: void,
@@ -85,9 +88,8 @@ impl FunctionCompiler {
         RegisterFunction {
             instructions: self.instructions,
             constants: self.constants,
-            register_count: self.register_types.len(),
-            register_layout_id: register_layout_id(&self.register_types),
-            register_types: self.register_types,
+            layout: self.layout,
+            layout_id: slot_layout_id(self.layout),
         }
     }
 
@@ -106,10 +108,10 @@ impl FunctionCompiler {
                 name,
                 initializer,
             } => {
-                let slot = self.allocate_local(name, ty.clone());
+                let slot = self.allocate_local(name, &ty);
                 if let Some(initializer) = initializer {
                     let value = self.compile_expr(initializer);
-                    let value = self.coerce_register(value, &ty);
+                    let value = self.coerce_slot(value, &ty);
                     self.emit(Instruction::Move {
                         dst: slot,
                         src: value,
@@ -122,14 +124,15 @@ impl FunctionCompiler {
                 let value = self.compile_expr(value);
                 match self.lookup(&name) {
                     Some(Binding::Param(slot)) => {
-                        let value = self.coerce_register(value, &self.param_types[slot].clone());
+                        let ty = self.param_types[slot].clone();
+                        let value = self.coerce_slot(value, &ty);
                         self.emit(Instruction::StoreParam {
                             param: slot,
                             src: value,
                         });
                     }
                     Some(Binding::Local(slot)) => {
-                        let value = self.coerce_register(value, &self.register_types[slot].clone());
+                        let value = self.coerce_to_slot(value, slot);
                         self.emit(Instruction::Move {
                             dst: slot,
                             src: value,
@@ -147,6 +150,7 @@ impl FunctionCompiler {
                 else_block,
             } => {
                 let condition = self.compile_expr(condition);
+                let condition = self.bool_slot(condition);
                 let false_jump = self.emit_jump(Instruction::JumpIfFalse {
                     condition,
                     target: usize::MAX,
@@ -171,6 +175,7 @@ impl FunctionCompiler {
                 self.compile_statement(*initializer);
                 let loop_start = self.current_target();
                 let condition = self.compile_expr(condition);
+                let condition = self.bool_slot(condition);
                 let end_jump = self.emit_jump(Instruction::JumpIfFalse {
                     condition,
                     target: usize::MAX,
@@ -191,29 +196,33 @@ impl FunctionCompiler {
             }
             CheckedStmt::Return(expr) => {
                 let value = self.compile_expr(expr);
-                self.emit(Instruction::Return(value));
+                if self.kind == EffectKind::Sample {
+                    self.emit(Instruction::ReturnColor(self.color_slot(value)));
+                } else {
+                    self.emit(Instruction::Return(value));
+                }
             }
         }
     }
 
-    fn compile_expr(&mut self, expr: CheckedExpr) -> RegisterId {
+    fn compile_expr(&mut self, expr: CheckedExpr) -> ValueSlot {
         let result_ty = expr.ty.clone();
         match expr.kind {
             CheckedExprKind::Literal(value) => {
-                let dst = self.allocate_register(result_ty);
+                let dst = self.allocate_slot(&result_ty);
                 let constant = self.add_constant(value);
                 self.emit(Instruction::LoadConst { dst, constant });
                 dst
             }
             CheckedExprKind::Variable(name) => match self.lookup(&name) {
                 Some(Binding::Param(slot)) => {
-                    let dst = self.allocate_register(result_ty);
+                    let dst = self.allocate_slot(&result_ty);
                     self.emit(Instruction::LoadParam { dst, param: slot });
                     dst
                 }
                 Some(Binding::Local(slot)) => slot,
                 Some(Binding::GeneratorContext(slot)) => {
-                    let dst = self.allocate_register(result_ty);
+                    let dst = self.allocate_slot(&result_ty);
                     self.emit(Instruction::LoadGeneratorContext { dst, slot });
                     dst
                 }
@@ -223,28 +232,29 @@ impl FunctionCompiler {
                         "TAU" => Value::Float(std::f64::consts::TAU),
                         _ => Value::Enum(name),
                     };
-                    let dst = self.allocate_register(result_ty);
+                    let dst = self.allocate_slot(&result_ty);
                     let constant = self.add_constant(value);
                     self.emit(Instruction::LoadConst { dst, constant });
                     dst
                 }
             },
             CheckedExprKind::Array(items) => {
-                let item_registers = items
+                let item_slots = items
                     .into_iter()
                     .map(|item| self.compile_expr(item))
                     .collect();
-                let dst = self.allocate_register(result_ty);
+                let dst = self.allocate_slot(&result_ty);
+                let dst = self.ref_slot(dst);
                 self.emit(Instruction::MakeArray {
                     dst,
-                    items: item_registers,
+                    items: item_slots,
                 });
-                dst
+                ValueSlot::Ref(dst)
             }
             CheckedExprKind::Index { target, index } => {
                 if let Some(param) = self.curve_param_binding(&target) {
-                    let position = self.compile_expr(*index);
-                    let dst = self.allocate_register(result_ty);
+                    let position = self.float_slot_from_expr(*index);
+                    let dst = self.allocate_slot(&result_ty);
                     self.emit(Instruction::CurveParamSample {
                         dst,
                         param,
@@ -254,14 +264,15 @@ impl FunctionCompiler {
                 } else {
                     let target = self.compile_expr(*target);
                     let index = self.compile_expr(*index);
-                    let dst = self.allocate_register(result_ty);
+                    let dst = self.allocate_slot(&result_ty);
                     self.emit(Instruction::Index { dst, target, index });
                     dst
                 }
             }
             CheckedExprKind::Member { target, member } => {
                 let target = self.compile_expr(*target);
-                let dst = self.allocate_register(result_ty);
+                let target = self.ref_slot(target);
+                let dst = self.allocate_slot(&result_ty);
                 self.emit(Instruction::Member {
                     dst,
                     target,
@@ -271,7 +282,7 @@ impl FunctionCompiler {
             }
             CheckedExprKind::Call { callee, args } => {
                 let CheckedExprKind::Variable(name) = callee.kind else {
-                    let dst = self.allocate_register(result_ty);
+                    let dst = self.allocate_slot(&result_ty);
                     self.emit(Instruction::LoadDefault {
                         dst,
                         ty: Type::Void,
@@ -282,23 +293,49 @@ impl FunctionCompiler {
             }
             CheckedExprKind::Unary { op, expr } => {
                 let src = self.compile_expr(*expr);
-                let dst = self.allocate_register(result_ty);
-                self.emit(Instruction::Unary { dst, op, src });
+                let dst = self.allocate_slot(&result_ty);
+                match op {
+                    UnaryOp::Not => self.emit(Instruction::Not {
+                        dst: self.bool_slot(dst),
+                        src: self.bool_slot(src),
+                    }),
+                    UnaryOp::Negate => match (dst, src) {
+                        (ValueSlot::Int(dst), ValueSlot::Int(src)) => {
+                            self.emit(Instruction::NegInt { dst, src })
+                        }
+                        (ValueSlot::Float(dst), src) => {
+                            let src = self.float_slot(src);
+                            self.emit(Instruction::NegFloat { dst, src });
+                        }
+                        _ => {}
+                    },
+                }
                 dst
             }
             CheckedExprKind::Binary { op, left, right } => match op {
                 BinaryOp::And => self.compile_short_circuit(false, *left, *right, result_ty),
                 BinaryOp::Or => self.compile_short_circuit(true, *left, *right, result_ty),
+                BinaryOp::Equal | BinaryOp::NotEqual => {
+                    if let Some(dst) = self.compile_enum_param_const_equal(op, &left, &right) {
+                        dst
+                    } else {
+                        let left = self.compile_expr(*left);
+                        let right = self.compile_expr(*right);
+                        let dst = self.allocate_slot(&result_ty);
+                        self.emit_binary(dst, op, left, right);
+                        dst
+                    }
+                }
                 _ => {
+                    let result_slot_ty = if op == BinaryOp::Divide && result_ty == Type::Int {
+                        Type::Float
+                    } else {
+                        result_ty
+                    };
                     let left = self.compile_expr(*left);
                     let right = self.compile_expr(*right);
-                    let dst = self.allocate_register(result_ty);
-                    self.emit(Instruction::Binary {
-                        dst,
-                        op,
-                        left,
-                        right,
-                    });
+                    let dst = self.allocate_slot(&result_slot_ty);
+                    self.emit_binary(dst, op, left, right);
                     dst
                 }
             },
@@ -311,18 +348,19 @@ impl FunctionCompiler {
         left: CheckedExpr,
         right: CheckedExpr,
         result_ty: Type,
-    ) -> RegisterId {
-        let dst = self.allocate_register(result_ty);
+    ) -> ValueSlot {
+        let dst = self.allocate_slot(&result_ty);
         let left = self.compile_expr(left);
         self.emit(Instruction::Move { dst, src: left });
+        let condition = self.bool_slot(dst);
         let jump = if jump_when_true {
             self.emit_jump(Instruction::JumpIfTrue {
-                condition: dst,
+                condition,
                 target: usize::MAX,
             })
         } else {
             self.emit_jump(Instruction::JumpIfFalse {
-                condition: dst,
+                condition,
                 target: usize::MAX,
             })
         };
@@ -337,8 +375,8 @@ impl FunctionCompiler {
         name: Identifier,
         args: Vec<CheckedExpr>,
         result_ty: Type,
-    ) -> RegisterId {
-        let dst = self.allocate_register(result_ty);
+    ) -> ValueSlot {
+        let dst = self.allocate_slot(&result_ty);
         match name.as_str() {
             "progress" => self.emit(Instruction::ContextRead {
                 dst,
@@ -365,14 +403,16 @@ impl FunctionCompiler {
                 read: ContextRead::PixelFraction,
             }),
             "section_position" => {
-                let args = self.compile_args(args);
+                let args = self.compile_float_args(args);
+                let dst = self.float_slot(dst);
                 self.emit(Instruction::SectionPosition {
                     dst,
                     width: args[0],
                 });
             }
             "sin" | "cos" | "abs" | "floor" => {
-                let args = self.compile_args(args);
+                let args = self.compile_float_args(args);
+                let dst = self.float_slot(dst);
                 self.emit(Instruction::FloatUnary {
                     dst,
                     op: match name.as_str() {
@@ -386,7 +426,8 @@ impl FunctionCompiler {
                 });
             }
             "min" | "max" => {
-                let args = self.compile_args(args);
+                let args = self.compile_float_args(args);
+                let dst = self.float_slot(dst);
                 self.emit(Instruction::FloatBinary {
                     dst,
                     op: if name.as_str() == "min" {
@@ -399,7 +440,8 @@ impl FunctionCompiler {
                 });
             }
             "clamp" => {
-                let args = self.compile_args(args);
+                let args = self.compile_float_args(args);
+                let dst = self.float_slot(dst);
                 self.emit(Instruction::Clamp {
                     dst,
                     value: args[0],
@@ -408,7 +450,8 @@ impl FunctionCompiler {
                 });
             }
             "smoothstep" => {
-                let args = self.compile_args(args);
+                let args = self.compile_float_args(args);
+                let dst = self.float_slot(dst);
                 self.emit(Instruction::Smoothstep {
                     dst,
                     edge0: args[0],
@@ -417,39 +460,60 @@ impl FunctionCompiler {
                 });
             }
             "mix" => {
-                let args = self.compile_args(args);
-                self.emit(Instruction::Mix {
-                    dst,
-                    left: args[0],
-                    right: args[1],
-                    amount: args[2],
-                });
+                let mut args = self.compile_args(args);
+                let left = args.remove(0);
+                let right = args.remove(0);
+                let amount = self.float_slot(args.remove(0));
+                match dst {
+                    ValueSlot::Float(dst) => {
+                        let left = self.float_slot(left);
+                        let right = self.float_slot(right);
+                        self.emit(Instruction::MixFloat {
+                            dst,
+                            left,
+                            right,
+                            amount,
+                        });
+                    }
+                    ValueSlot::Color(dst) => self.emit(Instruction::MixColor {
+                        dst,
+                        left: self.color_slot(left),
+                        right: self.color_slot(right),
+                        amount,
+                    }),
+                    _ => self.emit(Instruction::LoadDefault {
+                        dst,
+                        ty: Type::Void,
+                    }),
+                }
             }
             "rgb" => {
-                let args = self.compile_args(args);
+                let args = self.compile_float_args(args);
                 self.emit(Instruction::Rgb {
-                    dst,
+                    dst: self.color_slot(dst),
                     red: args[0],
                     green: args[1],
                     blue: args[2],
                 });
             }
             "hsv" => {
-                let args = self.compile_args(args);
+                let args = self.compile_float_args(args);
                 self.emit(Instruction::Hsv {
-                    dst,
+                    dst: self.color_slot(dst),
                     hue: args[0],
                     saturation: args[1],
                     value: args[2],
                 });
             }
             "srand" | "rand" => {
-                let args = self.compile_args(args);
+                let args = self.compile_float_args(args);
+                let dst = self.float_slot(dst);
                 self.emit(Instruction::Rand { dst, args });
             }
             "curve_float_clamped" if args.len() == 4 => {
                 if let Some(param) = self.curve_param_binding(&args[0]) {
-                    let registers = self.compile_args(args.into_iter().skip(1).collect());
+                    let registers = self.compile_float_args(args.into_iter().skip(1).collect());
+                    let dst = self.float_slot(dst);
                     self.emit(Instruction::CurveParamFloatClamped {
                         dst,
                         param,
@@ -458,19 +522,25 @@ impl FunctionCompiler {
                         max: registers[2],
                     });
                 } else {
-                    let args = self.compile_args(args);
+                    let mut args = args;
+                    let curve_expr = args.remove(0);
+                    let curve = self.compile_expr(curve_expr);
+                    let curve = self.ref_slot(curve);
+                    let registers = self.compile_float_args(args);
+                    let dst = self.float_slot(dst);
                     self.emit(Instruction::CurveFloatClamped {
                         dst,
-                        curve: args[0],
-                        position: args[1],
-                        min: args[2],
-                        max: args[3],
+                        curve,
+                        position: registers[0],
+                        min: registers[1],
+                        max: registers[2],
                     });
                 }
             }
             "curve_color_scaled" if args.len() == 3 => {
                 if let Some(param) = self.curve_param_binding(&args[0]) {
-                    let registers = self.compile_args(args.into_iter().skip(1).collect());
+                    let registers = self.compile_float_args(args.into_iter().skip(1).collect());
+                    let dst = self.color_slot(dst);
                     self.emit(Instruction::CurveParamColorScaled {
                         dst,
                         param,
@@ -478,18 +548,24 @@ impl FunctionCompiler {
                         scale: registers[1],
                     });
                 } else {
-                    let args = self.compile_args(args);
+                    let mut args = args;
+                    let curve_expr = args.remove(0);
+                    let curve = self.compile_expr(curve_expr);
+                    let curve = self.ref_slot(curve);
+                    let registers = self.compile_float_args(args);
+                    let dst = self.color_slot(dst);
                     self.emit(Instruction::CurveColorScaled {
                         dst,
-                        curve: args[0],
-                        position: args[1],
-                        scale: args[2],
+                        curve,
+                        position: registers[0],
+                        scale: registers[1],
                     });
                 }
             }
             "curve_crossing" if args.len() == 2 || args.len() == 3 => {
                 if let Some(param) = self.curve_param_binding(&args[0]) {
-                    let registers = self.compile_args(args.into_iter().skip(1).collect());
+                    let registers = self.compile_float_args(args.into_iter().skip(1).collect());
+                    let dst = self.float_slot(dst);
                     self.emit(Instruction::CurveParamCrossing {
                         dst,
                         param,
@@ -497,19 +573,24 @@ impl FunctionCompiler {
                         fallback: registers.get(1).copied(),
                     });
                 } else {
-                    let args = self.compile_args(args);
+                    let mut args = args;
+                    let curve_expr = args.remove(0);
+                    let curve = self.compile_expr(curve_expr);
+                    let curve = self.ref_slot(curve);
+                    let registers = self.compile_float_args(args);
+                    let dst = self.float_slot(dst);
                     self.emit(Instruction::CurveCrossing {
                         dst,
-                        curve: args[0],
-                        value: args[1],
-                        fallback: args.get(2).copied(),
+                        curve,
+                        value: registers[0],
+                        fallback: registers.get(1).copied(),
                     });
                 }
             }
             "len" => {
                 let args = self.compile_args(args);
                 self.emit(Instruction::Len {
-                    dst,
+                    dst: self.int_slot(dst),
                     value: args[0],
                 });
             }
@@ -548,8 +629,121 @@ impl FunctionCompiler {
         dst
     }
 
-    fn compile_args(&mut self, args: Vec<CheckedExpr>) -> Vec<RegisterId> {
+    fn compile_args(&mut self, args: Vec<CheckedExpr>) -> Vec<ValueSlot> {
         args.into_iter().map(|arg| self.compile_expr(arg)).collect()
+    }
+
+    fn compile_float_args(&mut self, args: Vec<CheckedExpr>) -> Vec<FloatSlot> {
+        args.into_iter()
+            .map(|arg| self.float_slot_from_expr(arg))
+            .collect()
+    }
+
+    fn float_slot_from_expr(&mut self, expr: CheckedExpr) -> FloatSlot {
+        let slot = self.compile_expr(expr);
+        self.float_slot(slot)
+    }
+
+    fn emit_binary(&mut self, dst: ValueSlot, op: BinaryOp, left: ValueSlot, right: ValueSlot) {
+        match op {
+            BinaryOp::Add
+            | BinaryOp::Subtract
+            | BinaryOp::Multiply
+            | BinaryOp::Divide
+            | BinaryOp::Remainder => match dst {
+                ValueSlot::Float(dst) => {
+                    let left = self.float_slot(left);
+                    let right = self.float_slot(right);
+                    self.emit(Instruction::FloatArithmetic {
+                        dst,
+                        op: arithmetic_op(op),
+                        left,
+                        right,
+                    });
+                }
+                ValueSlot::Int(dst) => self.emit(Instruction::IntArithmetic {
+                    dst,
+                    op: int_arithmetic_op(op),
+                    left: self.int_slot(left),
+                    right: self.int_slot(right),
+                }),
+                _ => unreachable!("checked arithmetic result is numeric"),
+            },
+            BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
+                let left = self.float_slot(left);
+                let right = self.float_slot(right);
+                self.emit(Instruction::FloatCompare {
+                    dst: self.bool_slot(dst),
+                    op: compare_op(op),
+                    left,
+                    right,
+                });
+            }
+            BinaryOp::Equal | BinaryOp::NotEqual => self.emit(Instruction::ValueEqual {
+                dst: self.bool_slot(dst),
+                negate: op == BinaryOp::NotEqual,
+                left,
+                right,
+            }),
+            BinaryOp::And | BinaryOp::Or => unreachable!("short-circuit binary operator"),
+        }
+    }
+
+    fn compile_enum_param_const_equal(
+        &mut self,
+        op: BinaryOp,
+        left: &CheckedExpr,
+        right: &CheckedExpr,
+    ) -> Option<ValueSlot> {
+        let Some((param, constant)) = self.enum_param_const_pair(left, right) else {
+            return None;
+        };
+        let dst = self.allocate_slot(&Type::Bool);
+        let bool_dst = self.bool_slot(dst);
+        self.emit(Instruction::EnumParamEqualConst {
+            dst: bool_dst,
+            param,
+            constant,
+            negate: op == BinaryOp::NotEqual,
+        });
+        Some(dst)
+    }
+
+    fn enum_param_const_pair(
+        &mut self,
+        left: &CheckedExpr,
+        right: &CheckedExpr,
+    ) -> Option<(ParamId, usize)> {
+        if let Some(param) = self.enum_param_binding(left) {
+            return self.enum_constant(right).map(|constant| (param, constant));
+        }
+        if let Some(param) = self.enum_param_binding(right) {
+            return self.enum_constant(left).map(|constant| (param, constant));
+        }
+        None
+    }
+
+    fn enum_param_binding(&self, expr: &CheckedExpr) -> Option<ParamId> {
+        let CheckedExprKind::Variable(name) = &expr.kind else {
+            return None;
+        };
+        let Some(Binding::Param(param)) = self.lookup(name) else {
+            return None;
+        };
+        match self.param_types.get(param) {
+            Some(Type::Enum(_)) => Some(param),
+            _ => None,
+        }
+    }
+
+    fn enum_constant(&mut self, expr: &CheckedExpr) -> Option<usize> {
+        let CheckedExprKind::Variable(name) = &expr.kind else {
+            return None;
+        };
+        if self.lookup(name).is_some() || !matches!(expr.ty, Type::Enum(_)) {
+            return None;
+        }
+        Some(self.add_constant(Value::Enum(name.clone())))
     }
 
     fn curve_param_binding(&self, expr: &CheckedExpr) -> Option<ParamId> {
@@ -565,35 +759,80 @@ impl FunctionCompiler {
         }
     }
 
-    fn coerce_register(&mut self, register: RegisterId, target: &Type) -> RegisterId {
-        if target == &Type::Float && self.register_types.get(register) == Some(&Type::Int) {
-            let dst = self.allocate_register(Type::Float);
-            self.emit(Instruction::CoerceFloat { dst, src: register });
-            dst
-        } else {
-            register
+    fn coerce_slot(&mut self, slot: ValueSlot, target: &Type) -> ValueSlot {
+        if target == &Type::Float {
+            return ValueSlot::Float(self.float_slot(slot));
+        }
+        slot
+    }
+
+    fn coerce_to_slot(&mut self, src: ValueSlot, dst: ValueSlot) -> ValueSlot {
+        match (dst, src) {
+            (ValueSlot::Float(_), src) => ValueSlot::Float(self.float_slot(src)),
+            _ => src,
         }
     }
 
-    fn allocate_local(&mut self, name: Identifier, ty: Type) -> LocalId {
-        let slot = self.allocate_register(ty);
+    fn allocate_local(&mut self, name: Identifier, ty: &Type) -> LocalId {
+        let slot = self.allocate_slot(ty);
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, Binding::Local(slot));
         }
         slot
     }
 
-    fn allocate_register(&mut self, ty: Type) -> RegisterId {
-        let slot = self.register_types.len();
-        self.register_types.push(ty);
-        slot
+    fn allocate_slot(&mut self, ty: &Type) -> ValueSlot {
+        ValueSlot::for_type(ty, &mut self.layout)
+    }
+
+    fn int_slot(&self, slot: ValueSlot) -> IntSlot {
+        match slot {
+            ValueSlot::Int(slot) => slot,
+            _ => unreachable!("checked expression is int"),
+        }
+    }
+
+    fn float_slot(&mut self, slot: ValueSlot) -> FloatSlot {
+        match slot {
+            ValueSlot::Float(slot) => slot,
+            ValueSlot::Int(src) => {
+                let dst = match self.allocate_slot(&Type::Float) {
+                    ValueSlot::Float(slot) => slot,
+                    _ => unreachable!("float allocation"),
+                };
+                self.emit(Instruction::IntToFloat { dst, src });
+                dst
+            }
+            _ => unreachable!("checked expression is numeric"),
+        }
+    }
+
+    fn bool_slot(&self, slot: ValueSlot) -> BoolSlot {
+        match slot {
+            ValueSlot::Bool(slot) => slot,
+            _ => unreachable!("checked expression is bool"),
+        }
+    }
+
+    fn color_slot(&self, slot: ValueSlot) -> ColorSlot {
+        match slot {
+            ValueSlot::Color(slot) => slot,
+            _ => unreachable!("checked expression is color"),
+        }
+    }
+
+    fn ref_slot(&self, slot: ValueSlot) -> RefSlot {
+        match slot {
+            ValueSlot::Ref(slot) => slot,
+            _ => unreachable!("checked expression is reference-like"),
+        }
     }
 
     fn lookup(&self, name: &Identifier) -> Option<Binding> {
         self.scopes
             .iter()
             .rev()
-            .find_map(|scope| scope.get(name).copied())
+            .find_map(|scope| scope.get(name).cloned())
     }
 
     fn add_constant(&mut self, value: Value) -> usize {
@@ -633,5 +872,37 @@ fn static_identifier(value: &str) -> Identifier {
     match Identifier::new(value.to_string()) {
         Ok(identifier) => identifier,
         Err(_) => unreachable!("static identifier is valid"),
+    }
+}
+
+fn arithmetic_op(op: BinaryOp) -> ArithmeticOp {
+    match op {
+        BinaryOp::Add => ArithmeticOp::Add,
+        BinaryOp::Subtract => ArithmeticOp::Subtract,
+        BinaryOp::Multiply => ArithmeticOp::Multiply,
+        BinaryOp::Divide => ArithmeticOp::Divide,
+        BinaryOp::Remainder => ArithmeticOp::Remainder,
+        _ => unreachable!("arithmetic operator"),
+    }
+}
+
+fn int_arithmetic_op(op: BinaryOp) -> IntArithmeticOp {
+    match op {
+        BinaryOp::Add => IntArithmeticOp::Add,
+        BinaryOp::Subtract => IntArithmeticOp::Subtract,
+        BinaryOp::Multiply => IntArithmeticOp::Multiply,
+        BinaryOp::Remainder => IntArithmeticOp::Remainder,
+        BinaryOp::Divide => unreachable!("int division compiles to float arithmetic"),
+        _ => unreachable!("int arithmetic operator"),
+    }
+}
+
+fn compare_op(op: BinaryOp) -> CompareOp {
+    match op {
+        BinaryOp::Less => CompareOp::Less,
+        BinaryOp::LessEqual => CompareOp::LessEqual,
+        BinaryOp::Greater => CompareOp::Greater,
+        BinaryOp::GreaterEqual => CompareOp::GreaterEqual,
+        _ => unreachable!("compare operator"),
     }
 }
