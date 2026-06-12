@@ -14,8 +14,9 @@ use dawn_language::effect::{
     CurveSource, EffectDefinitionId, EffectParamValue, EffectScope, EffectTarget,
 };
 use dawn_language::effect_dsl::{
-    BoundEffectParams, EffectKind, EffectVmScratch, GeneratedEffect, GeneratorContext, Identifier,
-    RunContext, RuntimeError, TargetItemValue, TargetPixelValue, TargetValue, Type, Value,
+    BoundEffectParams, EffectBindCache, EffectKind, EffectVmScratch, GeneratedEffect,
+    GeneratorContext, Identifier, RunContext, RuntimeError, TargetItemValue, TargetPixelValue,
+    TargetValue, Type, Value,
 };
 use dawn_language::model::DawnProject;
 use dawn_language::sequence::{MarkCollectionKey, Sequence, SequenceId};
@@ -124,6 +125,7 @@ impl PreparedSequenceRenderer {
 
         let mut effects = Vec::with_capacity(sequence.effects.len());
         let mut generated_child_count = 0usize;
+        let mut bind_cache = EffectBindCache::default();
         for effect in &sequence.effects {
             let effect_duration_seconds = effect.duration.as_seconds_f64();
             if !effect_duration_seconds.is_finite() || effect_duration_seconds <= 0.0 {
@@ -141,7 +143,9 @@ impl PreparedSequenceRenderer {
             let target_ids = prepare_target(&effect.target, &fixture_ids, &groups)?;
             let target = prepare_target_pixels(&target_ids, &fixtures, &effect.scope)?;
             let params = prepare_params(project, sequence, &effect.param_overrides)?;
-            let bound_params = definition.compiled.bind_params(&params);
+            let bound_params = definition
+                .compiled
+                .bind_params_cached(&params, &mut bind_cache);
             let start_seconds = effect.start.as_seconds_f64();
             match definition.compiled.kind() {
                 EffectKind::Sample => effects.push(PreparedEffect {
@@ -157,6 +161,7 @@ impl PreparedSequenceRenderer {
                         fixtures: &fixtures,
                         effects: &mut effects,
                         generated_child_count: &mut generated_child_count,
+                        bind_cache: &mut bind_cache,
                     },
                     &definition.compiled,
                     &bound_params,
@@ -442,6 +447,7 @@ struct GeneratorPrepareContext<'a> {
     fixtures: &'a [PreparedFixture],
     effects: &'a mut Vec<PreparedEffect>,
     generated_child_count: &'a mut usize,
+    bind_cache: &'a mut EffectBindCache,
 }
 
 fn expand_generator(
@@ -501,7 +507,9 @@ fn prepare_generated_child(
         });
     }
     let target = prepared_pixels_from_generated_target(context.fixtures, child.target)?;
-    let bound_params = definition.compiled.bind_params(&child.params);
+    let bound_params = definition
+        .compiled
+        .bind_params_cached(&child.params, context.bind_cache);
     let start_seconds = parent_start_seconds + child.start_seconds;
     match definition.compiled.kind() {
         EffectKind::Sample => {

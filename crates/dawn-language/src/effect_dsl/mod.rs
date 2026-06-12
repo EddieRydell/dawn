@@ -14,7 +14,8 @@ use indexmap::IndexMap;
 use parser::parse_module;
 use typecheck::check_module;
 pub use vm::{
-    BoundEffectParams, EffectVmScratch, GeneratedEffect, GeneratorContext, RunContext, RuntimeError,
+    BoundEffectParams, EffectBindCache, EffectVmScratch, GeneratedEffect, GeneratorContext,
+    RunContext, RuntimeError,
 };
 
 pub(crate) mod lexer;
@@ -77,6 +78,14 @@ impl CompiledEffect {
 
     pub fn bind_params(&self, params: &IndexMap<Identifier, Value>) -> BoundEffectParams {
         vm::bind_effect_params(self, params)
+    }
+
+    pub fn bind_params_cached(
+        &self,
+        params: &IndexMap<Identifier, Value>,
+        cache: &mut EffectBindCache,
+    ) -> BoundEffectParams {
+        vm::bind_effect_params_cached(self, params, cache)
     }
 
     pub fn sample_bound(

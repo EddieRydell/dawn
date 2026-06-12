@@ -8,6 +8,7 @@ use super::types::{TargetItemValue, TargetItemsValue, TargetPixelValue, TargetVa
 use super::{CompiledEffect, EffectKind, ParamDecl};
 use crate::values::{Color, Curve, CurveValue, Marks};
 use indexmap::IndexMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 const LOOP_ITERATION_LIMIT: usize = 100_000;
@@ -57,6 +58,23 @@ pub struct BoundEffectParams {
     values: Vec<BoundParamValue>,
 }
 
+#[derive(Debug, Default)]
+pub struct EffectBindCache {
+    curves: HashMap<CurveCacheKey, Arc<PreparedCurve>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct CurveCacheKey {
+    ptr: usize,
+    kind: CurveCacheKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum CurveCacheKind {
+    Float,
+    Color,
+}
+
 #[derive(Clone, Debug)]
 enum BoundParamValue {
     Void,
@@ -74,7 +92,7 @@ enum BoundParamValue {
 }
 
 impl BoundParamValue {
-    fn from_value(ty: &Type, value: Value) -> Self {
+    fn from_value(ty: &Type, value: Value, cache: &mut EffectBindCache) -> Self {
         match value {
             Value::Void => Self::Void,
             Value::Int(value) => Self::Int(value),
@@ -85,7 +103,7 @@ impl BoundParamValue {
             Value::Target(value) => Self::Target(value),
             Value::TargetItems(value) => Self::TargetItems(value),
             Value::TargetItem(value) => Self::TargetItem(value),
-            Value::Curve(value) => Self::Curve(Arc::new(PreparedCurve::new(ty, value))),
+            Value::Curve(value) => Self::Curve(cache.prepared_curve(ty, value)),
             Value::Array(value) => Self::Array(value),
             Value::Enum(value) => Self::Enum(value),
         }
@@ -105,6 +123,30 @@ impl BoundParamValue {
             Self::Curve(value) => RuntimeValue::PreparedCurve(Arc::clone(value)),
             Self::Array(value) => RuntimeValue::Array(Arc::clone(value)),
             Self::Enum(value) => RuntimeValue::Enum(value.clone()),
+        }
+    }
+}
+
+impl EffectBindCache {
+    fn prepared_curve(&mut self, ty: &Type, raw: Arc<Curve>) -> Arc<PreparedCurve> {
+        let key = CurveCacheKey {
+            ptr: Arc::as_ptr(&raw).cast::<()>() as usize,
+            kind: CurveCacheKind::from_type(ty),
+        };
+        if let Some(curve) = self.curves.get(&key) {
+            return Arc::clone(curve);
+        }
+        let curve = Arc::new(PreparedCurve::new(ty, raw));
+        self.curves.insert(key, Arc::clone(&curve));
+        curve
+    }
+}
+
+impl CurveCacheKind {
+    fn from_type(ty: &Type) -> Self {
+        match ty {
+            Type::Curve(inner) if matches!(inner.as_ref(), Type::Color) => Self::Color,
+            _ => Self::Float,
         }
     }
 }
@@ -190,11 +232,20 @@ pub(crate) fn bind_effect_params(
     effect: &CompiledEffect,
     params: &IndexMap<Identifier, Value>,
 ) -> BoundEffectParams {
+    let mut cache = EffectBindCache::default();
+    bind_effect_params_cached(effect, params, &mut cache)
+}
+
+pub(crate) fn bind_effect_params_cached(
+    effect: &CompiledEffect,
+    params: &IndexMap<Identifier, Value>,
+    cache: &mut EffectBindCache,
+) -> BoundEffectParams {
     BoundEffectParams {
         values: effect
             .params
             .iter()
-            .map(|param| bind_param_value(&param.ty, resolve_param(param, params)))
+            .map(|param| bind_param_value(&param.ty, resolve_param(param, params), cache))
             .collect(),
     }
 }
@@ -909,10 +960,10 @@ fn resolve_param(param: &ParamDecl, params: &IndexMap<Identifier, Value>) -> Val
     default_value(&param.ty)
 }
 
-fn bind_param_value(ty: &Type, value: Value) -> BoundParamValue {
+fn bind_param_value(ty: &Type, value: Value, cache: &mut EffectBindCache) -> BoundParamValue {
     match (ty, value) {
         (Type::Float, Value::Int(value)) => BoundParamValue::Float(value as f64),
-        (ty, value) => BoundParamValue::from_value(ty, value),
+        (ty, value) => BoundParamValue::from_value(ty, value, cache),
     }
 }
 
