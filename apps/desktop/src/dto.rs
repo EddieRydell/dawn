@@ -516,25 +516,24 @@ pub struct SequenceGuiDocument {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SequenceClipPreviewRequest {
+pub struct SequenceClipRasterRequest {
     #[serde(flatten)]
     pub document: GuiDocumentRequest,
-    pub items: Vec<SequenceClipPreviewRequestItem>,
-    pub sample_step_seconds: f64,
-    pub max_rows: u32,
-    pub max_columns: u32,
+    pub items: Vec<SequenceClipRasterRequestItem>,
+    pub column_stride_frames: u32,
+    pub display_row_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SequenceClipPreviewRequestItem {
+pub struct SequenceClipRasterRequestItem {
     pub effect_id: u32,
     pub signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SequenceClipPreviewResponse {
+pub struct SequenceClipRasterResponse {
     pub project_revision: u32,
     pub request_id: u32,
     pub complete: bool,
@@ -542,32 +541,32 @@ pub struct SequenceClipPreviewResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SequenceClipPreviewResultBatch {
+pub struct SequenceClipRasterResultBatch {
     pub project_revision: u32,
     pub request_id: u32,
-    pub ready: Vec<SequenceClipPreview>,
-    pub unavailable: Vec<SequenceClipPreviewUnavailable>,
-    pub errors: Vec<SequenceClipPreviewError>,
+    pub ready: Vec<SequenceClipRaster>,
+    pub unavailable: Vec<SequenceClipRasterUnavailable>,
+    pub errors: Vec<SequenceClipRasterError>,
     pub complete: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SequenceClipPreview {
+pub struct SequenceClipRaster {
     pub request_id: u32,
     pub effect_id: u32,
     pub signature: String,
     pub columns: u32,
     pub rows: u32,
-    pub sample_step_seconds: f64,
+    pub column_stride_frames: u32,
     pub start_seconds: f64,
     pub duration_seconds: f64,
-    pub pixels_rgb: Vec<u8>,
+    pub pixels_rgba_base64: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SequenceClipPreviewError {
+pub struct SequenceClipRasterError {
     pub request_id: u32,
     pub effect_id: u32,
     pub signature: String,
@@ -576,7 +575,7 @@ pub struct SequenceClipPreviewError {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SequenceClipPreviewUnavailable {
+pub struct SequenceClipRasterUnavailable {
     pub request_id: u32,
     pub effect_id: u32,
     pub signature: String,

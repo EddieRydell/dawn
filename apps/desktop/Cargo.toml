@@ -8,6 +8,7 @@ license = "MIT"
 default-run = "dawn-desktop"
 
 [dependencies]
+base64 = "0.22.1"
 camino = "1.2.1"
 bytemuck = { version = "1.25.0", features = ["derive"] }
 dawn-project-io = { path = "../../crates/dawn-project-io" }

@@ -7,6 +7,7 @@ use std::sync::{
 };
 use std::thread;
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use dawn_language::effect::{
     CurveDefinition, CurveId, CurveSource, EffectDefinition, EffectInst, EffectInstId,
     EffectParamValue,
@@ -17,33 +18,33 @@ use dawn_language::sequence::{MarkCollectionKey, Sequence, SequenceId};
 use dawn_language::setup::SetupId;
 use dawn_language::values::{Color, DawnTime};
 use dawn_runtime::{
-    resolve_effect_target_pixel_addresses, PreparedEffectPreviewRenderer,
+    resolve_effect_target_pixel_addresses, EffectRasterPrepareBatch, PreparedEffectRasterRenderer,
     RenderedTargetPixelAddress,
 };
 
 use crate::dto::{
-    GuiDocumentRequest, SequenceClipPreview, SequenceClipPreviewError, SequenceClipPreviewRequest,
-    SequenceClipPreviewResponse, SequenceClipPreviewResultBatch, SequenceClipPreviewUnavailable,
+    GuiDocumentRequest, SequenceClipRaster, SequenceClipRasterError, SequenceClipRasterRequest,
+    SequenceClipRasterResponse, SequenceClipRasterResultBatch, SequenceClipRasterUnavailable,
 };
 
-pub struct SequenceClipPreviewService {
-    sender: mpsc::Sender<PreviewJob>,
-    receiver: mpsc::Receiver<PreviewWorkerResult>,
-    cache: HashMap<PreviewCacheKey, CachedPreviewResult>,
-    pending_results: HashMap<PreviewDocumentKey, VecDeque<PreviewResultEntry>>,
-    active: Option<ActivePreviewJob>,
+pub struct SequenceClipRasterService {
+    sender: mpsc::Sender<RasterJob>,
+    receiver: mpsc::Receiver<RasterWorkerResult>,
+    cache: HashMap<RasterCacheKey, CachedRasterResult>,
+    pending_results: HashMap<RasterDocumentKey, VecDeque<RasterResultEntry>>,
+    active: Option<ActiveRasterJob>,
     next_job_id: u32,
     latest_job_id: Arc<AtomicU64>,
 }
 
-impl SequenceClipPreviewService {
+impl SequenceClipRasterService {
     pub fn new() -> Self {
         let (request_sender, request_receiver) = mpsc::channel();
         let (result_sender, result_receiver) = mpsc::channel();
         let latest_job_id = Arc::new(AtomicU64::new(0));
         thread::spawn({
             let latest_job_id = Arc::clone(&latest_job_id);
-            move || preview_worker(request_receiver, result_sender, latest_job_id)
+            move || raster_worker(request_receiver, result_sender, latest_job_id)
         });
         Self {
             sender: request_sender,
@@ -62,18 +63,17 @@ impl SequenceClipPreviewService {
         project: Option<DawnProject>,
         setup_id: Option<SetupId>,
         sequence_id: Option<SequenceId>,
-        request: SequenceClipPreviewRequest,
-    ) -> SequenceClipPreviewResponse {
-        let document_key = PreviewDocumentKey::new(&request.document);
-        let base_key = PreviewRequestKey {
+        request: SequenceClipRasterRequest,
+    ) -> SequenceClipRasterResponse {
+        let document_key = RasterDocumentKey::new(&request.document);
+        let base_key = RasterRequestKey {
             path: request.document.path.clone(),
             object_key: request.document.object_key.clone(),
-            sample_step_seconds: request.sample_step_seconds,
-            max_rows: request.max_rows,
-            max_columns: request.max_columns,
+            column_stride_frames: request.column_stride_frames,
+            display_row_count: request.display_row_count,
         };
         self.drain_results();
-        self.prepare_response_and_schedule(PreviewScheduleInput {
+        self.prepare_response_and_schedule(RasterScheduleInput {
             project_revision,
             project,
             setup_id,
@@ -87,36 +87,36 @@ impl SequenceClipPreviewService {
     fn drain_results(&mut self) {
         while let Ok(result) = self.receiver.try_recv() {
             match result {
-                PreviewWorkerResult::Preview {
+                RasterWorkerResult::Raster {
                     job_id,
                     request_id,
                     document_key,
                     cache_key,
                     signature,
                     signature_key,
-                    preview,
+                    raster,
                 } => {
-                    let result_preview = preview.clone();
+                    let result_raster = raster.clone();
                     self.cache.insert(
                         cache_key,
-                        CachedPreviewResult {
+                        CachedRasterResult {
                             signature: signature.clone(),
-                            result: CachedPreviewValue::Preview(preview),
+                            result: CachedRasterValue::Raster(raster),
                         },
                     );
                     if self.is_current_request(&document_key, request_id) {
                         self.push_result(
                             document_key,
-                            PreviewResultEntry::Ready {
+                            RasterResultEntry::Ready {
                                 request_id,
                                 signature: signature_key,
-                                preview: result_preview,
+                                raster: result_raster,
                             },
                         );
                     }
                     self.finish_active_work_item(job_id);
                 }
-                PreviewWorkerResult::Error {
+                RasterWorkerResult::Error {
                     job_id,
                     request_id,
                     document_key,
@@ -128,15 +128,15 @@ impl SequenceClipPreviewService {
                     let result_error = error.clone();
                     self.cache.insert(
                         cache_key,
-                        CachedPreviewResult {
+                        CachedRasterResult {
                             signature: signature.clone(),
-                            result: CachedPreviewValue::Error(error),
+                            result: CachedRasterValue::Error(error),
                         },
                     );
                     if self.is_current_request(&document_key, request_id) {
                         self.push_result(
                             document_key,
-                            PreviewResultEntry::Error {
+                            RasterResultEntry::Error {
                                 request_id,
                                 signature: signature_key,
                                 error: result_error,
@@ -145,7 +145,7 @@ impl SequenceClipPreviewService {
                     }
                     self.finish_active_work_item(job_id);
                 }
-                PreviewWorkerResult::Complete {
+                RasterWorkerResult::Complete {
                     job_id,
                     request_id,
                     document_key,
@@ -159,7 +159,7 @@ impl SequenceClipPreviewService {
                         self.active = None;
                     }
                     if current_request {
-                        self.push_result(document_key, PreviewResultEntry::Complete { request_id });
+                        self.push_result(document_key, RasterResultEntry::Complete { request_id });
                     }
                 }
             }
@@ -171,9 +171,9 @@ impl SequenceClipPreviewService {
         project_revision: u32,
         request: GuiDocumentRequest,
         request_id: u32,
-    ) -> SequenceClipPreviewResultBatch {
+    ) -> SequenceClipRasterResultBatch {
         self.drain_results();
-        let document_key = PreviewDocumentKey::new(&request);
+        let document_key = RasterDocumentKey::new(&request);
         let mut ready = Vec::new();
         let mut unavailable = Vec::new();
         let mut errors = Vec::new();
@@ -186,27 +186,27 @@ impl SequenceClipPreviewService {
             let mut retained = VecDeque::new();
             while let Some(entry) = entries.pop_front() {
                 match entry {
-                    PreviewResultEntry::Ready {
+                    RasterResultEntry::Ready {
                         request_id: entry_request_id,
                         signature,
-                        mut preview,
+                        mut raster,
                     } if entry_request_id == request_id => {
-                        preview.request_id = entry_request_id;
-                        preview.signature = signature;
-                        ready.push(preview);
+                        raster.request_id = entry_request_id;
+                        raster.signature = signature;
+                        ready.push(raster);
                     }
-                    PreviewResultEntry::Unavailable {
+                    RasterResultEntry::Unavailable {
                         request_id: entry_request_id,
                         effect_id,
                         signature,
                     } if entry_request_id == request_id => {
-                        unavailable.push(SequenceClipPreviewUnavailable {
+                        unavailable.push(SequenceClipRasterUnavailable {
                             request_id: entry_request_id,
                             effect_id,
                             signature,
                         });
                     }
-                    PreviewResultEntry::Error {
+                    RasterResultEntry::Error {
                         request_id: entry_request_id,
                         signature,
                         mut error,
@@ -215,7 +215,7 @@ impl SequenceClipPreviewService {
                         error.signature = signature;
                         errors.push(error);
                     }
-                    PreviewResultEntry::Complete {
+                    RasterResultEntry::Complete {
                         request_id: entry_request_id,
                     } if entry_request_id == request_id => {
                         complete = true;
@@ -226,7 +226,7 @@ impl SequenceClipPreviewService {
             *entries = retained;
         }
 
-        SequenceClipPreviewResultBatch {
+        SequenceClipRasterResultBatch {
             project_revision,
             request_id,
             ready,
@@ -238,9 +238,9 @@ impl SequenceClipPreviewService {
 
     fn prepare_response_and_schedule(
         &mut self,
-        input: PreviewScheduleInput,
-    ) -> SequenceClipPreviewResponse {
-        let PreviewScheduleInput {
+        input: RasterScheduleInput,
+    ) -> SequenceClipRasterResponse {
+        let RasterScheduleInput {
             project_revision,
             project,
             setup_id,
@@ -270,7 +270,7 @@ impl SequenceClipPreviewService {
             .iter()
             .map(|item| item.effect_id)
             .collect::<Vec<_>>();
-        let ordered_ids = ordered_all_effect_ids(&sequence.effects, &requested_ids);
+        let ordered_ids = ordered_existing_effect_ids(&sequence.effects, &requested_ids);
         let client_signatures = ordered_items
             .iter()
             .map(|item| (item.effect_id, item.signature.clone()))
@@ -289,7 +289,7 @@ impl SequenceClipPreviewService {
             if !current_ids.contains(&effect_id) {
                 self.push_result(
                     document_key.clone(),
-                    PreviewResultEntry::Unavailable {
+                    RasterResultEntry::Unavailable {
                         request_id,
                         effect_id,
                         signature: signature_key(&RenderInputSignature::Invalid {
@@ -308,7 +308,7 @@ impl SequenceClipPreviewService {
             else {
                 continue;
             };
-            let cache_key = PreviewCacheKey::new(&base_key, effect_id);
+            let cache_key = RasterCacheKey::new(&base_key, effect_id);
             let signature = match render_signature(&project, &setup_id, sequence, effect) {
                 Ok(signature) => signature,
                 Err(message) => RenderInputSignature::Invalid { message },
@@ -323,17 +323,17 @@ impl SequenceClipPreviewService {
             }
             match self.cache.get(&cache_key) {
                 Some(entry) if entry.signature == signature => match &entry.result {
-                    CachedPreviewValue::Preview(preview) => self.push_result(
+                    CachedRasterValue::Raster(raster) => self.push_result(
                         document_key.clone(),
-                        PreviewResultEntry::Ready {
+                        RasterResultEntry::Ready {
                             request_id,
                             signature: signature_key,
-                            preview: preview.clone(),
+                            raster: raster.clone(),
                         },
                     ),
-                    CachedPreviewValue::Error(error) => self.push_result(
+                    CachedRasterValue::Error(error) => self.push_result(
                         document_key.clone(),
-                        PreviewResultEntry::Error {
+                        RasterResultEntry::Error {
                             request_id,
                             signature: signature_key,
                             error: error.clone(),
@@ -342,14 +342,14 @@ impl SequenceClipPreviewService {
                 },
                 Some(_) => {
                     self.cache.remove(&cache_key);
-                    work_items.push(PreviewWorkItem {
+                    work_items.push(RasterWorkItem {
                         cache_key,
                         signature,
                         signature_key,
                         effect_id,
                     });
                 }
-                None => work_items.push(PreviewWorkItem {
+                None => work_items.push(RasterWorkItem {
                     cache_key,
                     signature,
                     signature_key,
@@ -366,7 +366,7 @@ impl SequenceClipPreviewService {
             sequence_id,
             work_items,
         );
-        SequenceClipPreviewResponse {
+        SequenceClipRasterResponse {
             project_revision,
             request_id,
             complete: self.active.is_none(),
@@ -376,19 +376,19 @@ impl SequenceClipPreviewService {
     fn schedule_missing_work(
         &mut self,
         request_id: u32,
-        document_key: PreviewDocumentKey,
+        document_key: RasterDocumentKey,
         project: DawnProject,
         setup_id: SetupId,
         sequence_id: SequenceId,
-        work_items: Vec<PreviewWorkItem>,
+        work_items: Vec<RasterWorkItem>,
     ) {
         if work_items.is_empty() {
             self.active = None;
-            self.push_result(document_key, PreviewResultEntry::Complete { request_id });
+            self.push_result(document_key, RasterResultEntry::Complete { request_id });
             return;
         }
         let job_id = request_id;
-        let job = PreviewJob {
+        let job = RasterJob {
             job_id,
             request_id,
             document_key: document_key.clone(),
@@ -400,7 +400,7 @@ impl SequenceClipPreviewService {
         if self.sender.send(job).is_ok() {
             self.latest_job_id
                 .store(u64::from(job_id), Ordering::Relaxed);
-            self.active = Some(ActivePreviewJob {
+            self.active = Some(ActiveRasterJob {
                 job_id,
                 request_id,
                 document_key,
@@ -408,7 +408,7 @@ impl SequenceClipPreviewService {
             });
         } else {
             self.active = None;
-            self.push_result(document_key, PreviewResultEntry::Complete { request_id });
+            self.push_result(document_key, RasterResultEntry::Complete { request_id });
         }
     }
 
@@ -422,50 +422,50 @@ impl SequenceClipPreviewService {
         active.work_items.remove(0);
     }
 
-    fn push_result(&mut self, document_key: PreviewDocumentKey, result: PreviewResultEntry) {
+    fn push_result(&mut self, document_key: RasterDocumentKey, result: RasterResultEntry) {
         self.pending_results
             .entry(document_key)
             .or_default()
             .push_back(result);
     }
 
-    fn is_current_request(&self, document_key: &PreviewDocumentKey, request_id: u32) -> bool {
+    fn is_current_request(&self, document_key: &RasterDocumentKey, request_id: u32) -> bool {
         self.active.as_ref().is_some_and(|active| {
             &active.document_key == document_key && active.request_id == request_id
         })
     }
 }
 
-impl Default for SequenceClipPreviewService {
+impl Default for SequenceClipRasterService {
     fn default() -> Self {
         Self::new()
     }
 }
 
-struct ActivePreviewJob {
+struct ActiveRasterJob {
     job_id: u32,
     request_id: u32,
-    document_key: PreviewDocumentKey,
-    work_items: Vec<PreviewWorkItem>,
+    document_key: RasterDocumentKey,
+    work_items: Vec<RasterWorkItem>,
 }
 
-struct PreviewScheduleInput {
+struct RasterScheduleInput {
     project_revision: u32,
     project: Option<DawnProject>,
     setup_id: Option<SetupId>,
     sequence_id: Option<SequenceId>,
-    document_key: PreviewDocumentKey,
-    base_key: PreviewRequestKey,
-    ordered_items: Vec<crate::dto::SequenceClipPreviewRequestItem>,
+    document_key: RasterDocumentKey,
+    base_key: RasterRequestKey,
+    ordered_items: Vec<crate::dto::SequenceClipRasterRequestItem>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct PreviewDocumentKey {
+struct RasterDocumentKey {
     path: String,
     object_key: Option<String>,
 }
 
-impl PreviewDocumentKey {
+impl RasterDocumentKey {
     fn new(request: &GuiDocumentRequest) -> Self {
         Self {
             path: request.path.clone(),
@@ -474,9 +474,9 @@ impl PreviewDocumentKey {
     }
 }
 
-impl Eq for PreviewDocumentKey {}
+impl Eq for RasterDocumentKey {}
 
-impl Hash for PreviewDocumentKey {
+impl Hash for RasterDocumentKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.path.hash(state);
         self.object_key.hash(state);
@@ -484,91 +484,86 @@ impl Hash for PreviewDocumentKey {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct PreviewRequestKey {
+struct RasterRequestKey {
     path: String,
     object_key: Option<String>,
-    sample_step_seconds: f64,
-    max_rows: u32,
-    max_columns: u32,
+    column_stride_frames: u32,
+    display_row_count: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct PreviewCacheKey {
+struct RasterCacheKey {
     path: String,
     object_key: Option<String>,
     effect_id: u32,
-    sample_step_seconds: u64,
-    max_rows: u32,
-    max_columns: u32,
+    column_stride_frames: u32,
+    display_row_count: u32,
 }
 
-impl PreviewCacheKey {
-    fn new(request: &PreviewRequestKey, effect_id: u32) -> Self {
+impl RasterCacheKey {
+    fn new(request: &RasterRequestKey, effect_id: u32) -> Self {
         Self {
             path: request.path.clone(),
             object_key: request.object_key.clone(),
             effect_id,
-            sample_step_seconds: request.sample_step_seconds.to_bits(),
-            max_rows: request.max_rows,
-            max_columns: request.max_columns,
+            column_stride_frames: request.column_stride_frames,
+            display_row_count: request.display_row_count,
         }
     }
 
-    fn matches_request(&self, request: &PreviewRequestKey) -> bool {
+    fn matches_request(&self, request: &RasterRequestKey) -> bool {
         self.path == request.path
             && self.object_key == request.object_key
-            && self.sample_step_seconds == request.sample_step_seconds.to_bits()
-            && self.max_rows == request.max_rows
-            && self.max_columns == request.max_columns
+            && self.column_stride_frames == request.column_stride_frames
+            && self.display_row_count == request.display_row_count
     }
 }
 
-impl Hash for PreviewCacheKey {
+impl Hash for RasterCacheKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.path.hash(state);
         self.object_key.hash(state);
         self.effect_id.hash(state);
-        self.sample_step_seconds.hash(state);
-        self.max_rows.hash(state);
-        self.max_columns.hash(state);
+        self.column_stride_frames.hash(state);
+        self.display_row_count.hash(state);
     }
 }
 
 #[derive(Clone)]
-struct CachedPreviewResult {
+struct CachedRasterResult {
     signature: RenderInputSignature,
-    result: CachedPreviewValue,
+    result: CachedRasterValue,
 }
 
 #[derive(Clone)]
-enum CachedPreviewValue {
-    Preview(SequenceClipPreview),
-    Error(SequenceClipPreviewError),
+enum CachedRasterValue {
+    Raster(SequenceClipRaster),
+    Error(SequenceClipRasterError),
 }
 
-struct PreviewJob {
+struct RasterJob {
     job_id: u32,
     request_id: u32,
-    document_key: PreviewDocumentKey,
+    document_key: RasterDocumentKey,
     project: DawnProject,
     setup_id: SetupId,
     sequence_id: SequenceId,
-    work_items: Vec<PreviewWorkItem>,
+    work_items: Vec<RasterWorkItem>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct PreviewWorkItem {
-    cache_key: PreviewCacheKey,
+struct RasterWorkItem {
+    cache_key: RasterCacheKey,
     signature: RenderInputSignature,
     signature_key: String,
     effect_id: u32,
 }
 
-enum PreviewResultEntry {
+enum RasterResultEntry {
     Ready {
         request_id: u32,
         signature: String,
-        preview: SequenceClipPreview,
+        raster: SequenceClipRaster,
     },
     Unavailable {
         request_id: u32,
@@ -578,70 +573,80 @@ enum PreviewResultEntry {
     Error {
         request_id: u32,
         signature: String,
-        error: SequenceClipPreviewError,
+        error: SequenceClipRasterError,
     },
     Complete {
         request_id: u32,
     },
 }
 
-enum PreviewWorkerResult {
-    Preview {
+enum RasterWorkerResult {
+    Raster {
         job_id: u32,
         request_id: u32,
-        document_key: PreviewDocumentKey,
-        cache_key: PreviewCacheKey,
+        document_key: RasterDocumentKey,
+        cache_key: RasterCacheKey,
         signature: RenderInputSignature,
         signature_key: String,
-        preview: SequenceClipPreview,
+        raster: SequenceClipRaster,
     },
     Error {
         job_id: u32,
         request_id: u32,
-        document_key: PreviewDocumentKey,
-        cache_key: PreviewCacheKey,
+        document_key: RasterDocumentKey,
+        cache_key: RasterCacheKey,
         signature: RenderInputSignature,
         signature_key: String,
-        error: SequenceClipPreviewError,
+        error: SequenceClipRasterError,
     },
     Complete {
         job_id: u32,
         request_id: u32,
-        document_key: PreviewDocumentKey,
+        document_key: RasterDocumentKey,
     },
 }
 
-fn preview_worker(
-    receiver: mpsc::Receiver<PreviewJob>,
-    sender: mpsc::Sender<PreviewWorkerResult>,
+fn raster_worker(
+    receiver: mpsc::Receiver<RasterJob>,
+    sender: mpsc::Sender<RasterWorkerResult>,
     latest_job_id: Arc<AtomicU64>,
 ) {
-    let mut cache = HashMap::<PreviewRenderCacheKey, CachedPreviewValue>::new();
+    let mut raster_cache = HashMap::<RasterRenderCacheKey, CachedRasterValue>::new();
+    let mut renderer_cache = HashMap::<String, PreparedEffectRasterRenderer>::new();
     let mut job = match receiver.recv() {
         Ok(job) => job,
         Err(_) => return,
     };
     loop {
-        prune_worker_cache(&mut cache, &job.work_items);
+        prune_worker_raster_cache(&mut raster_cache, &job.work_items);
+        prune_prepared_renderer_cache(&mut renderer_cache, &job.work_items);
         let mut completed = true;
         let work_items = std::mem::take(&mut job.work_items);
+        let (mut prepare_batch, prepare_batch_error) = match EffectRasterPrepareBatch::prepare(
+            &job.project,
+            &job.setup_id,
+            &job.sequence_id,
+        ) {
+            Ok(batch) => (Some(batch), None),
+            Err(error) => (None, Some(format!("{error:?}"))),
+        };
         for item in work_items {
             if latest_job_id.load(Ordering::Relaxed) != u64::from(job.job_id) {
                 completed = false;
                 break;
             }
-            let render_cache_key = PreviewRenderCacheKey::new(&item);
-            let result = match cache.get(&render_cache_key).cloned() {
-                Some(CachedPreviewValue::Preview(preview)) => PreviewWorkerResult::Preview {
+            let render_cache_key = RasterRenderCacheKey::new(&item);
+            let result = match raster_cache.get(&render_cache_key).cloned() {
+                Some(CachedRasterValue::Raster(raster)) => RasterWorkerResult::Raster {
                     job_id: job.job_id,
                     request_id: job.request_id,
                     document_key: job.document_key.clone(),
                     cache_key: item.cache_key,
                     signature: item.signature,
                     signature_key: item.signature_key,
-                    preview,
+                    raster,
                 },
-                Some(CachedPreviewValue::Error(error)) => PreviewWorkerResult::Error {
+                Some(CachedRasterValue::Error(error)) => RasterWorkerResult::Error {
                     job_id: job.job_id,
                     request_id: job.request_id,
                     document_key: job.document_key.clone(),
@@ -653,45 +658,64 @@ fn preview_worker(
                 None => {
                     let should_continue =
                         || latest_job_id.load(Ordering::Relaxed) == u64::from(job.job_id);
-                    match render_effect_preview(PreviewRenderRequest {
-                        project: &job.project,
-                        setup_id: &job.setup_id,
-                        sequence_id: &job.sequence_id,
-                        effect_id: item.effect_id,
-                        sample_step_seconds: item.cache_key.sample_step_seconds,
-                        max_rows: item.cache_key.max_rows,
-                        max_columns: item.cache_key.max_columns,
-                        should_continue: &should_continue,
-                    }) {
-                        Ok(preview) => {
-                            cache.insert(
+                    let renderer = match renderer_cache.get(&item.signature_key).cloned() {
+                        Some(renderer) => Ok(renderer),
+                        None => match prepare_batch.as_mut() {
+                            Some(batch) => {
+                                match batch.prepare_effect(&EffectInstId(item.effect_id)) {
+                                    Ok(renderer) => {
+                                        renderer_cache
+                                            .insert(item.signature_key.clone(), renderer.clone());
+                                        Ok(renderer)
+                                    }
+                                    Err(error) => Err(format!("{error:?}")),
+                                }
+                            }
+                            None => match &prepare_batch_error {
+                                Some(message) => Err(message.clone()),
+                                None => Err("raster prepare batch unavailable".to_string()),
+                            },
+                        },
+                    };
+                    match match renderer {
+                        Ok(renderer) => render_effect_raster(RasterRenderRequest {
+                            renderer,
+                            effect_id: item.effect_id,
+                            column_stride_frames: item.cache_key.column_stride_frames,
+                            display_row_count: item.cache_key.display_row_count,
+                            should_continue: &should_continue,
+                        }),
+                        Err(message) => Err(RasterRenderFailure::Error(message)),
+                    } {
+                        Ok(raster) => {
+                            raster_cache.insert(
                                 render_cache_key,
-                                CachedPreviewValue::Preview(preview.clone()),
+                                CachedRasterValue::Raster(raster.clone()),
                             );
-                            PreviewWorkerResult::Preview {
+                            RasterWorkerResult::Raster {
                                 job_id: job.job_id,
                                 request_id: job.request_id,
                                 document_key: job.document_key.clone(),
                                 cache_key: item.cache_key,
                                 signature: item.signature,
                                 signature_key: item.signature_key,
-                                preview,
+                                raster,
                             }
                         }
-                        Err(PreviewRenderFailure::Cancelled) => {
+                        Err(RasterRenderFailure::Cancelled) => {
                             completed = false;
                             break;
                         }
-                        Err(PreviewRenderFailure::Error(message)) => {
-                            let error = SequenceClipPreviewError {
+                        Err(RasterRenderFailure::Error(message)) => {
+                            let error = SequenceClipRasterError {
                                 request_id: job.request_id,
                                 effect_id: item.effect_id,
                                 signature: item.signature_key.clone(),
                                 message,
                             };
-                            cache
-                                .insert(render_cache_key, CachedPreviewValue::Error(error.clone()));
-                            PreviewWorkerResult::Error {
+                            raster_cache
+                                .insert(render_cache_key, CachedRasterValue::Error(error.clone()));
+                            RasterWorkerResult::Error {
                                 job_id: job.job_id,
                                 request_id: job.request_id,
                                 document_key: job.document_key.clone(),
@@ -715,7 +739,7 @@ fn preview_worker(
         }
         if completed
             && sender
-                .send(PreviewWorkerResult::Complete {
+                .send(RasterWorkerResult::Complete {
                     job_id: job.job_id,
                     request_id: job.request_id,
                     document_key: job.document_key.clone(),
@@ -741,54 +765,50 @@ fn preview_worker(
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct PreviewRenderCacheKey {
+struct RasterRenderCacheKey {
     signature: String,
-    sample_step_seconds: u64,
-    max_rows: u32,
-    max_columns: u32,
+    column_stride_frames: u32,
+    display_row_count: u32,
 }
 
-impl PreviewRenderCacheKey {
-    fn new(item: &PreviewWorkItem) -> Self {
+impl RasterRenderCacheKey {
+    fn new(item: &RasterWorkItem) -> Self {
         Self {
             signature: item.signature_key.clone(),
-            sample_step_seconds: item.cache_key.sample_step_seconds,
-            max_rows: item.cache_key.max_rows,
-            max_columns: item.cache_key.max_columns,
+            column_stride_frames: item.cache_key.column_stride_frames,
+            display_row_count: item.cache_key.display_row_count,
         }
     }
 }
 
-fn prune_worker_cache(
-    cache: &mut HashMap<PreviewRenderCacheKey, CachedPreviewValue>,
-    active_items: &[PreviewWorkItem],
+fn prune_worker_raster_cache(
+    cache: &mut HashMap<RasterRenderCacheKey, CachedRasterValue>,
+    active_items: &[RasterWorkItem],
 ) {
     let active = active_items
         .iter()
-        .map(PreviewRenderCacheKey::new)
+        .map(RasterRenderCacheKey::new)
         .collect::<HashSet<_>>();
     cache.retain(|key, _| active.contains(key));
 }
 
-fn newest_queued_job(receiver: &mpsc::Receiver<PreviewJob>) -> Option<PreviewJob> {
+fn prune_prepared_renderer_cache(
+    cache: &mut HashMap<String, PreparedEffectRasterRenderer>,
+    active_items: &[RasterWorkItem],
+) {
+    let active = active_items
+        .iter()
+        .map(|item| item.signature_key.clone())
+        .collect::<HashSet<_>>();
+    cache.retain(|key, _| active.contains(key));
+}
+
+fn newest_queued_job(receiver: &mpsc::Receiver<RasterJob>) -> Option<RasterJob> {
     let mut newest = None;
     while let Ok(job) = receiver.try_recv() {
         newest = Some(job);
     }
     newest
-}
-
-fn ordered_all_effect_ids(
-    effects: &[dawn_language::effect::EffectInst],
-    ordered_effect_ids: &[u32],
-) -> Vec<u32> {
-    let mut ids = ordered_existing_effect_ids(effects, ordered_effect_ids);
-    for effect in effects {
-        if !ids.contains(&effect.id.0) {
-            ids.push(effect.id.0);
-        }
-    }
-    ids
 }
 
 fn ordered_existing_effect_ids(
@@ -808,103 +828,90 @@ fn ordered_existing_effect_ids(
     ids
 }
 
-struct PreviewRenderRequest<'a> {
-    project: &'a DawnProject,
-    setup_id: &'a SetupId,
-    sequence_id: &'a SequenceId,
+struct RasterRenderRequest<'a> {
+    renderer: PreparedEffectRasterRenderer,
     effect_id: u32,
-    sample_step_seconds: u64,
-    max_rows: u32,
-    max_columns: u32,
+    column_stride_frames: u32,
+    display_row_count: u32,
     should_continue: &'a dyn Fn() -> bool,
 }
 
-fn render_effect_preview(
-    request: PreviewRenderRequest<'_>,
-) -> Result<SequenceClipPreview, PreviewRenderFailure> {
-    let PreviewRenderRequest {
-        project,
-        setup_id,
-        sequence_id,
+fn render_effect_raster(
+    request: RasterRenderRequest<'_>,
+) -> Result<SequenceClipRaster, RasterRenderFailure> {
+    let RasterRenderRequest {
+        renderer,
         effect_id,
-        sample_step_seconds,
-        max_rows,
-        max_columns,
+        column_stride_frames,
+        display_row_count,
         should_continue,
     } = request;
-    let sample_step_seconds = f64::from_bits(sample_step_seconds);
-    if !sample_step_seconds.is_finite() || sample_step_seconds <= 0.0 {
-        return Err(PreviewRenderFailure::Error(
-            "preview sample step must be positive and finite".to_string(),
+    if column_stride_frames == 0 {
+        return Err(RasterRenderFailure::Error(
+            "raster column stride frames must be greater than zero".to_string(),
         ));
     }
-    if max_rows == 0 {
-        return Err(PreviewRenderFailure::Error(
-            "preview max rows must be greater than zero".to_string(),
+    if display_row_count == 0 {
+        return Err(RasterRenderFailure::Error(
+            "raster display row count must be greater than zero".to_string(),
         ));
     }
-    if max_columns == 0 {
-        return Err(PreviewRenderFailure::Error(
-            "preview max columns must be greater than zero".to_string(),
-        ));
-    }
-    let effect_id = EffectInstId(effect_id);
-    let renderer =
-        PreparedEffectPreviewRenderer::prepare(project, setup_id, sequence_id, &effect_id)
-            .map_err(|error| PreviewRenderFailure::Error(format!("{error:?}")))?;
-
     let start_seconds = renderer.start_seconds();
     let duration_seconds = renderer.duration_seconds();
     if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
-        return Err(PreviewRenderFailure::Error(
+        return Err(RasterRenderFailure::Error(
             "effect duration must be positive and finite".to_string(),
         ));
     }
     let target_pixel_count = renderer.target_pixel_count();
     if target_pixel_count == 0 {
-        return Err(PreviewRenderFailure::Error(
+        return Err(RasterRenderFailure::Error(
             "effect target has no pixels".to_string(),
         ));
     }
-    let requested_columns = (duration_seconds / sample_step_seconds).ceil().max(1.0) as usize;
-    let columns = requested_columns.min(max_columns as usize);
-    let rows = target_pixel_count.min(max_rows as usize);
-    let mut pixels_rgb = vec![0u8; rows * columns * 3];
+    let duration_frames = duration_seconds * f64::from(renderer.frame_rate());
+    if !duration_frames.is_finite() || duration_frames <= 0.0 {
+        return Err(RasterRenderFailure::Error(
+            "effect duration frames must be positive and finite".to_string(),
+        ));
+    }
+    let columns = (duration_frames / f64::from(column_stride_frames))
+        .ceil()
+        .max(1.0) as usize;
+    let rows = target_pixel_count.min(display_row_count as usize);
+    let mut pixels_rgba = vec![0u8; rows * columns * 4];
     for column in 0..columns {
         if !should_continue() {
-            return Err(PreviewRenderFailure::Cancelled);
+            return Err(RasterRenderFailure::Cancelled);
         }
-        let sample_seconds = if columns <= 1 {
-            start_seconds
-        } else {
-            let progress = column as f64 / (columns - 1) as f64;
-            start_seconds + duration_seconds * progress
-        };
+        let sample_seconds = start_seconds
+            + (column * column_stride_frames as usize) as f64 / f64::from(renderer.frame_rate());
         let colors = renderer
             .render_target_colors(sample_seconds)
-            .map_err(|error| PreviewRenderFailure::Error(format!("{error:?}")))?;
+            .map_err(|error| RasterRenderFailure::Error(format!("{error:?}")))?;
         for row in 0..rows {
             let color = average_row(&colors, row, rows);
-            let offset = (row * columns + column) * 3;
-            pixels_rgb[offset] = color.red;
-            pixels_rgb[offset + 1] = color.green;
-            pixels_rgb[offset + 2] = color.blue;
+            let offset = (row * columns + column) * 4;
+            pixels_rgba[offset] = color.red;
+            pixels_rgba[offset + 1] = color.green;
+            pixels_rgba[offset + 2] = color.blue;
+            pixels_rgba[offset + 3] = 255;
         }
     }
-    Ok(SequenceClipPreview {
+    Ok(SequenceClipRaster {
         request_id: 0,
-        effect_id: effect_id.0,
+        effect_id,
         signature: String::new(),
         columns: columns as u32,
         rows: rows as u32,
-        sample_step_seconds,
+        column_stride_frames,
         start_seconds,
         duration_seconds,
-        pixels_rgb,
+        pixels_rgba_base64: STANDARD.encode(pixels_rgba),
     })
 }
 
-enum PreviewRenderFailure {
+enum RasterRenderFailure {
     Cancelled,
     Error(String),
 }
@@ -1021,8 +1028,8 @@ fn empty_response(
     project_revision: u32,
     request_id: u32,
     complete: bool,
-) -> SequenceClipPreviewResponse {
-    SequenceClipPreviewResponse {
+) -> SequenceClipRasterResponse {
+    SequenceClipRasterResponse {
         project_revision,
         request_id,
         complete,

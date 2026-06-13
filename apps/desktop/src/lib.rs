@@ -19,7 +19,7 @@ pub mod dto;
 pub mod gui;
 pub mod persistence;
 pub mod preview;
-pub mod sequence_clip_preview;
+pub mod sequence_clip_raster;
 pub mod show_render;
 pub mod state;
 

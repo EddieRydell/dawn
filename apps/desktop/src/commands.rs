@@ -6,8 +6,8 @@ use tauri_specta::{collect_commands, Builder};
 
 use crate::dto::{
     AppSnapshot, AudioTransportState, DocumentViewId, EditorViewMode, FixtureGuiEdit, GuiDocument,
-    GuiDocumentRequest, GuiEditCommand, GuiEditResult, LayoutGuiEdit, SequenceClipPreviewRequest,
-    SequenceClipPreviewResponse, SequenceClipPreviewResultBatch, SequenceGuiEdit,
+    GuiDocumentRequest, GuiEditCommand, GuiEditResult, LayoutGuiEdit, SequenceClipRasterRequest,
+    SequenceClipRasterResponse, SequenceClipRasterResultBatch, SequenceGuiEdit,
     SequenceSelectionEdit, SequenceSelectionEditResult,
 };
 use crate::persistence::{
@@ -149,21 +149,21 @@ pub fn get_gui_document(
 
 #[tauri::command]
 #[specta::specta]
-pub fn request_sequence_clip_previews(
-    request: SequenceClipPreviewRequest,
+pub fn request_sequence_clip_rasters(
+    request: SequenceClipRasterRequest,
     state: State<'_, DesktopState>,
-) -> SequenceClipPreviewResponse {
-    state.request_sequence_clip_previews(request)
+) -> SequenceClipRasterResponse {
+    state.request_sequence_clip_rasters(request)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn take_sequence_clip_preview_results(
+pub fn take_sequence_clip_raster_results(
     request: GuiDocumentRequest,
     request_id: u32,
     state: State<'_, DesktopState>,
-) -> SequenceClipPreviewResultBatch {
-    state.take_sequence_clip_preview_results(request, request_id)
+) -> SequenceClipRasterResultBatch {
+    state.take_sequence_clip_raster_results(request, request_id)
 }
 
 #[tauri::command]
@@ -451,8 +451,8 @@ pub fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         undo_active_edit,
         redo_active_edit,
         get_gui_document,
-        request_sequence_clip_previews,
-        take_sequence_clip_preview_results,
+        request_sequence_clip_rasters,
+        take_sequence_clip_raster_results,
         apply_gui_edit,
         apply_sequence_gui_edit,
         apply_sequence_selection_edit,

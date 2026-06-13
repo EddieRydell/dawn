@@ -7,7 +7,7 @@ import { Trash2 } from "lucide-react";
 
 import { commands } from "../../../api";
 
-import type { LayoutTarget, PersistedSequenceViewportState, SequenceAudio, SequenceClipPreview, SequenceEditorDocument, SequenceEffectScope, SequenceEffectScript } from "../../../types";
+import type { LayoutTarget, PersistedSequenceViewportState, SequenceAudio, SequenceClipRaster, SequenceEditorDocument, SequenceEffectScope, SequenceEffectScript } from "../../../types";
 
 import { runSnapshotCommand, useAppStore } from "../../../store";
 
@@ -188,12 +188,11 @@ export function SequenceCanvas({
     [document, groupDraft, left, draft, top, viewport]
   );
   const visibleEffectIds = useMemo(() => {
-    const visible = visibleClips
+    return visibleClips
       .filter((clip) => clip.rect.x + clip.rect.width >= left && clip.rect.x <= canvasSize.width && clip.rect.y + clip.rect.height >= top && clip.rect.y <= canvasSize.height)
       .map((clip) => clip.effect.id);
-    return [...visible, ...document.effects.map((effect) => effect.id).filter((id) => !visible.includes(id))];
-  }, [canvasSize.height, canvasSize.width, document.effects, left, top, visibleClips]);
-  const clipPreviews = useSequenceClipPreviews(document, visibleEffectIds);
+  }, [canvasSize.height, canvasSize.width, left, top, visibleClips]);
+  const clipRasters = useSequenceClipRasters(document, visibleEffectIds, viewport.laneHeight);
   const selectedEffectIds = useMemo(() => new Set<number>(sequenceSelection?.type === "effects" ? sequenceSelection.ids : []), [sequenceSelection]);
   const selectedMarks = useMemo(
     () => markRefLookup(sequenceSelection?.type === "marks" ? sequenceSelection.marks : []),
@@ -308,13 +307,13 @@ export function SequenceCanvas({
       const hoverResize = hover?.kind === "effect" && hover.effectId === clip.effect.id ? hover.resize : null;
       ctx.fillStyle = SEQUENCE_COLORS.textFaint;
       ctx.fillRect(clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height);
-      const preview = clipPreviews.previews.get(clip.effect.id) ?? null;
-      const previewError = clipPreviews.errors.has(clip.effect.id);
-      if (preview !== null) {
-        drawClipPreviewRaster(ctx, preview, clip.rect);
+      const raster = clipRasters.rasters.get(clip.effect.id) ?? null;
+      const rasterError = clipRasters.errors.has(clip.effect.id);
+      if (raster !== null) {
+        drawClipRaster(ctx, raster, clip.rect);
       }
-      if (previewError) {
-        drawClipPreviewWarning(ctx, clip.rect);
+      if (rasterError) {
+        drawClipRasterWarning(ctx, clip.rect);
       }
       if (hoverResize !== null) {
         ctx.fillStyle = SEQUENCE_COLORS.overlay;
@@ -380,7 +379,7 @@ export function SequenceCanvas({
     ctx.moveTo(left + 0.5, top);
     ctx.lineTo(left, rect.height);
     ctx.stroke();
-  }, [document, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, selected, selectedEffectIds, selectedMarks, playheadSeconds, homeSeconds, selectedLaneIndex, selectedTimeSeconds, marquee, waveform.audio, visibleMarkCollections, mode, markDrafts, hover, clipPreviews]);
+  }, [document, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, selected, selectedEffectIds, selectedMarks, playheadSeconds, homeSeconds, selectedLaneIndex, selectedTimeSeconds, marquee, waveform.audio, visibleMarkCollections, mode, markDrafts, hover, clipRasters]);
 
   const seekFromCanvas = (event: MouseEvent<HTMLCanvasElement>) => {
     const x = event.nativeEvent.offsetX;
@@ -1036,41 +1035,42 @@ type WaveformLevel = { samplesPerPeak: number; mins: Float32Array; maxes: Float3
 
 type WaveformState = { key: string | null; audio: WaveformAudio | null };
 
-type ClipPreviewState = {
+type ClipRasterState = {
   requestKey: string;
   projectRevision: number | null;
-  previews: Map<number, DecodedClipPreview>;
+  rasters: Map<number, DecodedClipRaster>;
   errors: Set<number>;
 };
 
-type DecodedClipPreview = {
+type DecodedClipRaster = {
   signature: string;
   image: CanvasImageSource;
 };
 
-const CLIP_PREVIEW_SAMPLE_STEP_SECONDS = 0.05;
-const CLIP_PREVIEW_MAX_ROWS = 20;
-const CLIP_PREVIEW_MAX_COLUMNS = 360;
-const CLIP_PREVIEW_REQUEST_THROTTLE_MS = 50;
-const CLIP_PREVIEW_DECODE_CHUNK_SIZE = 2;
+const CLIP_RASTER_COLUMN_STRIDE_FRAMES = 4;
+const CLIP_RASTER_REQUEST_THROTTLE_MS = 50;
+const CLIP_RASTER_DECODE_CHUNK_SIZE = 2;
+const CLIP_RASTER_BACKFILL_STABLE_MS = 250;
+const CLIP_RASTER_BACKFILL_CHUNK_SIZE = 8;
 
 const waveformCache = new Map<string, Promise<WaveformAudio | null>>();
 
-function useSequenceClipPreviews(document: SequenceEditorDocument, visibleEffectIds: number[]): ClipPreviewState {
+function useSequenceClipRasters(document: SequenceEditorDocument, visibleEffectIds: number[], laneHeight: number): ClipRasterState {
   const projectRevision = useAppStore((store) => store.snapshot?.projectRevision ?? null);
   const requestKey = `${document.path}:${document.objectKey}`;
   const effectIds = useMemo(() => document.effects.map((effect) => effect.id), [document.effects]);
   const effectIdsKey = effectIds.join(",");
+  const visibleEffectIdsKey = visibleEffectIds.join(",");
   const visibleEffectIdsRef = useRef<number[]>(visibleEffectIds);
-  const previews = useRef<Map<number, DecodedClipPreview>>(new Map());
+  const rasters = useRef<Map<number, DecodedClipRaster>>(new Map());
   const errors = useRef<Set<number>>(new Set());
   const signatures = useRef<Map<number, string>>(new Map());
   const inFlightSignatures = useRef<Map<number, string | null>>(new Map());
   const cachedRequestKey = useRef(requestKey);
-  const [state, setState] = useState<ClipPreviewState>({
+  const [state, setState] = useState<ClipRasterState>({
     requestKey,
     projectRevision,
-    previews: new Map(),
+    rasters: new Map(),
     errors: new Set()
   });
 
@@ -1083,19 +1083,21 @@ function useSequenceClipPreviews(document: SequenceEditorDocument, visibleEffect
     let cancelled = false;
     let pollTimeout: number | null = null;
     let requestTimeout: number | null = null;
+    let backfillTimeout: number | null = null;
     let decodeFrame: number | null = null;
-    const decodeQueue: SequenceClipPreview[] = [];
+    const decodeQueue: SequenceClipRaster[] = [];
     let decoding = false;
+    const displayRowCount = Math.max(1, Math.ceil(laneHeight * (window.devicePixelRatio || 1)));
     if (cachedRequestKey.current !== requestKey) {
       cachedRequestKey.current = requestKey;
-      previews.current.clear();
+      rasters.current.clear();
       errors.current.clear();
       signatures.current.clear();
       inFlightSignatures.current.clear();
     }
     const effectIdSet = new Set(effectIds);
-    for (const effectId of [...previews.current.keys()]) {
-      if (!effectIdSet.has(effectId)) previews.current.delete(effectId);
+    for (const effectId of [...rasters.current.keys()]) {
+      if (!effectIdSet.has(effectId)) rasters.current.delete(effectId);
     }
     for (const effectId of [...errors.current]) {
       if (!effectIdSet.has(effectId)) errors.current.delete(effectId);
@@ -1111,7 +1113,7 @@ function useSequenceClipPreviews(document: SequenceEditorDocument, visibleEffect
       setState({
         requestKey,
         projectRevision: nextProjectRevision,
-        previews: new Map(previews.current),
+        rasters: new Map(rasters.current),
         errors: new Set(errors.current)
       });
     };
@@ -1121,15 +1123,15 @@ function useSequenceClipPreviews(document: SequenceEditorDocument, visibleEffect
       decoding = true;
       const decodeNextChunk = () => {
         if (cancelled) return;
-        for (let index = 0; index < CLIP_PREVIEW_DECODE_CHUNK_SIZE; index += 1) {
-          const preview = decodeQueue.shift();
-          if (preview === undefined) break;
-          previews.current.set(preview.effectId, {
-            signature: preview.signature,
-            image: decodeClipPreviewRaster(preview)
+        for (let index = 0; index < CLIP_RASTER_DECODE_CHUNK_SIZE; index += 1) {
+          const raster = decodeQueue.shift();
+          if (raster === undefined) break;
+          rasters.current.set(raster.effectId, {
+            signature: raster.signature,
+            image: decodeClipRaster(raster)
           });
-          signatures.current.set(preview.effectId, preview.signature);
-          errors.current.delete(preview.effectId);
+          signatures.current.set(raster.effectId, raster.signature);
+          errors.current.delete(raster.effectId);
         }
         publishState(nextProjectRevision);
         if (decodeQueue.length === 0) {
@@ -1142,16 +1144,21 @@ function useSequenceClipPreviews(document: SequenceEditorDocument, visibleEffect
       decodeFrame = window.requestAnimationFrame(decodeNextChunk);
     };
 
-    const orderedEffectIds = () => {
-      const remainingEffectIds = new Set(effectIds);
-      const ordered: number[] = [];
+    const visibleRequestEffectIds = () => {
+      const existingEffectIds = new Set(effectIds);
+      const requested = new Set<number>();
+      const ids: number[] = [];
       for (const effectId of visibleEffectIdsRef.current) {
-        if (!remainingEffectIds.has(effectId)) continue;
-        ordered.push(effectId);
-        remainingEffectIds.delete(effectId);
+        if (!existingEffectIds.has(effectId) || requested.has(effectId)) continue;
+        ids.push(effectId);
+        requested.add(effectId);
       }
-      ordered.push(...effectIds.filter((effectId) => remainingEffectIds.has(effectId)));
-      return ordered;
+      return ids;
+    };
+
+    const backfillEffectIds = () => {
+      const visible = new Set(visibleEffectIdsRef.current);
+      return effectIds.filter((effectId) => !visible.has(effectId));
     };
 
     if (effectIds.length === 0) {
@@ -1159,25 +1166,25 @@ function useSequenceClipPreviews(document: SequenceEditorDocument, visibleEffect
       return;
     }
 
-    const pollResults = async (requestId: number, requestComplete: boolean) => {
-      const batch = await commands.takeSequenceClipPreviewResults({
+    const pollResults = async (requestId: number, requestComplete: boolean): Promise<boolean> => {
+      const batch = await commands.takeSequenceClipRasterResults({
         path: document.path,
         view: "sequence",
         objectKey: document.objectKey
       }, requestId);
-      if (cancelled) return;
-      for (const preview of batch.ready) {
-        decodeQueue.push(preview);
-        inFlightSignatures.current.delete(preview.effectId);
+      if (cancelled) return false;
+      for (const raster of batch.ready) {
+        decodeQueue.push(raster);
+        inFlightSignatures.current.delete(raster.effectId);
       }
       for (const error of batch.errors) {
-        previews.current.delete(error.effectId);
+        rasters.current.delete(error.effectId);
         signatures.current.set(error.effectId, error.signature);
         inFlightSignatures.current.delete(error.effectId);
         errors.current.add(error.effectId);
       }
       for (const unavailable of batch.unavailable) {
-        previews.current.delete(unavailable.effectId);
+        rasters.current.delete(unavailable.effectId);
         signatures.current.delete(unavailable.effectId);
         inFlightSignatures.current.delete(unavailable.effectId);
         errors.current.delete(unavailable.effectId);
@@ -1189,39 +1196,60 @@ function useSequenceClipPreviews(document: SequenceEditorDocument, visibleEffect
       }
       const complete = requestComplete || batch.complete || batch.projectRevision !== projectRevision;
       if (!complete) {
-        pollTimeout = window.setTimeout(() => void pollResults(requestId, false), 100);
+        return await new Promise((resolve) => {
+          pollTimeout = window.setTimeout(() => {
+            void pollResults(requestId, false).then(resolve);
+          }, 100);
+        });
       }
+      return batch.projectRevision === projectRevision;
     };
-    const requestPreviews = async () => {
-      const response = await commands.requestSequenceClipPreviews({
+
+    const requestRasters = async (requestEffectIds: number[]): Promise<boolean> => {
+      if (requestEffectIds.length === 0) return true;
+      const response = await commands.requestSequenceClipRasters({
         path: document.path,
         view: "sequence",
         objectKey: document.objectKey,
-        items: orderedEffectIds().map((effectId) => {
+        items: requestEffectIds.map((effectId) => {
           const signature = signatures.current.get(effectId) ?? null;
           inFlightSignatures.current.set(effectId, signature);
           return { effectId, signature };
         }),
-        sampleStepSeconds: CLIP_PREVIEW_SAMPLE_STEP_SECONDS,
-        maxRows: CLIP_PREVIEW_MAX_ROWS,
-        maxColumns: CLIP_PREVIEW_MAX_COLUMNS
+        columnStrideFrames: CLIP_RASTER_COLUMN_STRIDE_FRAMES,
+        displayRowCount
       });
-      if (cancelled) return;
-      await pollResults(response.requestId, response.complete);
+      if (cancelled) return false;
+      return await pollResults(response.requestId, response.complete);
     };
-    requestTimeout = window.setTimeout(() => void requestPreviews(), CLIP_PREVIEW_REQUEST_THROTTLE_MS);
+
+    const requestBackfill = async () => {
+      const remaining = backfillEffectIds();
+      for (let index = 0; index < remaining.length && !cancelled; index += CLIP_RASTER_BACKFILL_CHUNK_SIZE) {
+        const complete = await requestRasters(remaining.slice(index, index + CLIP_RASTER_BACKFILL_CHUNK_SIZE));
+        if (!complete) return;
+      }
+    };
+
+    const requestVisibleThenBackfill = async () => {
+      const complete = await requestRasters(visibleRequestEffectIds());
+      if (!complete || cancelled) return;
+      backfillTimeout = window.setTimeout(() => void requestBackfill(), CLIP_RASTER_BACKFILL_STABLE_MS);
+    };
+    requestTimeout = window.setTimeout(() => void requestVisibleThenBackfill(), CLIP_RASTER_REQUEST_THROTTLE_MS);
     return () => {
       cancelled = true;
       if (pollTimeout !== null) window.clearTimeout(pollTimeout);
       window.clearTimeout(requestTimeout);
+      if (backfillTimeout !== null) window.clearTimeout(backfillTimeout);
       if (decodeFrame !== null) window.cancelAnimationFrame(decodeFrame);
     };
-  }, [document.objectKey, document.path, effectIds, effectIdsKey, projectRevision, requestKey]);
+  }, [document.objectKey, document.path, effectIds, effectIdsKey, laneHeight, projectRevision, requestKey, visibleEffectIdsKey]);
 
   return state.requestKey === requestKey ? state : {
     requestKey,
     projectRevision,
-    previews: new Map(),
+    rasters: new Map(),
     errors: new Set()
   };
 }
@@ -1251,28 +1279,26 @@ function useSequenceWaveform(audio: SequenceAudio | null): WaveformState {
   return state.key === key ? state : { key, audio: null };
 }
 
-function drawClipPreviewRaster(
+function drawClipRaster(
   ctx: CanvasRenderingContext2D,
-  preview: DecodedClipPreview,
+  raster: DecodedClipRaster,
   rect: { x: number; y: number; width: number; height: number }
 ) {
   ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(preview.image, rect.x, rect.y, rect.width, rect.height);
+  ctx.drawImage(raster.image, rect.x, rect.y, rect.width, rect.height);
   ctx.imageSmoothingEnabled = true;
 }
 
-function decodeClipPreviewRaster(preview: SequenceClipPreview): CanvasImageSource {
+function decodeClipRaster(payload: SequenceClipRaster): CanvasImageSource {
   const raster = window.document.createElement("canvas");
-  raster.width = preview.columns;
-  raster.height = preview.rows;
+  raster.width = payload.columns;
+  raster.height = payload.rows;
   const rasterContext = raster.getContext("2d");
   if (rasterContext === null) return raster;
-  const image = rasterContext.createImageData(preview.columns, preview.rows);
-  for (let source = 0, target = 0; source < preview.pixelsRgb.length; source += 3, target += 4) {
-    image.data[target] = preview.pixelsRgb[source] ?? 0;
-    image.data[target + 1] = preview.pixelsRgb[source + 1] ?? 0;
-    image.data[target + 2] = preview.pixelsRgb[source + 2] ?? 0;
-    image.data[target + 3] = 255;
+  const image = rasterContext.createImageData(payload.columns, payload.rows);
+  const bytes = window.atob(payload.pixelsRgbaBase64);
+  for (let index = 0; index < image.data.length; index += 1) {
+    image.data[index] = bytes.charCodeAt(index);
   }
   rasterContext.putImageData(image, 0, 0);
   return raster;
@@ -1302,7 +1328,7 @@ function sequenceViewportFromPersisted(state: PersistedSequenceViewportState | u
   };
 }
 
-function drawClipPreviewWarning(
+function drawClipRasterWarning(
   ctx: CanvasRenderingContext2D,
   rect: { x: number; y: number; width: number; height: number }
 ) {

@@ -45,7 +45,7 @@ pub struct PreparedSequenceRenderer {
 }
 
 #[derive(Clone, Debug)]
-pub struct PreparedEffectPreviewRenderer {
+pub struct PreparedEffectRasterRenderer {
     frame_rate: u32,
     frame_count: u64,
     start_seconds: f64,
@@ -54,6 +54,18 @@ pub struct PreparedEffectPreviewRenderer {
     target_lookup: HashMap<TargetColorAddress, Vec<usize>>,
     effects: Vec<PreparedEffect>,
     effects_by_frame: Vec<Vec<usize>>,
+}
+
+pub struct EffectRasterPrepareBatch<'a> {
+    project: &'a DawnProject,
+    sequence: &'a Sequence,
+    fixtures: Vec<PreparedFixture>,
+    fixture_ids: IndexSet<FixtureInstanceId>,
+    groups: IndexMap<FixtureGroupId, Vec<FixtureInstanceId>>,
+    frame_rate: u32,
+    frame_count: u64,
+    bind_cache: EffectBindCache,
+    target_cache: PrepareTargetCache,
 }
 
 pub fn resolve_effect_target_pixel_addresses(
@@ -299,94 +311,15 @@ impl PreparedSequenceRenderer {
     }
 }
 
-impl PreparedEffectPreviewRenderer {
+impl PreparedEffectRasterRenderer {
     pub fn prepare(
         project: &DawnProject,
         setup_id: &SetupId,
         sequence_id: &SequenceId,
         effect_id: &EffectInstId,
     ) -> Result<Self, RenderError> {
-        let setup = project
-            .setups
-            .get(setup_id)
-            .ok_or_else(|| RenderError::MissingSetup {
-                setup_id: setup_id.clone(),
-            })?;
-        let layout = project
-            .layouts
-            .get(&setup.layout)
-            .ok_or(RenderError::MissingLayout)?;
-        let sequence =
-            project
-                .sequences
-                .get(sequence_id)
-                .ok_or_else(|| RenderError::MissingSequence {
-                    sequence_id: sequence_id.clone(),
-                })?;
-        prepare_timing(sequence)?;
-        if !sequence.automation_clips.is_empty() {
-            return Err(RenderError::UnsupportedAutomation);
-        }
-
-        let fixtures = prepare_fixtures(project, layout)?;
-        let fixture_ids = fixtures
-            .iter()
-            .map(|fixture| fixture.id.clone())
-            .collect::<IndexSet<_>>();
-        let groups = layout
-            .groups
-            .iter()
-            .map(|group| {
-                let members = layout
-                    .fixtures
-                    .iter()
-                    .filter(|fixture| group.fixtures.iter().any(|member| member == &fixture.id))
-                    .map(|fixture| fixture.id.clone())
-                    .collect::<Vec<_>>();
-                (group.id.clone(), members)
-            })
-            .collect::<IndexMap<_, _>>();
-
-        let effect = sequence
-            .effects
-            .iter()
-            .find(|effect| &effect.id == effect_id)
-            .ok_or_else(|| RenderError::MissingEffect {
-                effect_id: EffectDefinitionId(effect_id.0.to_string()),
-            })?;
-        let mut effects = Vec::new();
-        let mut generated_child_count = 0usize;
-        let mut bind_cache = EffectBindCache::default();
-        let mut target_cache = PrepareTargetCache::default();
-        let target = prepare_effect(
-            PrepareEffectContext {
-                project,
-                sequence,
-                fixtures: &fixtures,
-                fixture_ids: &fixture_ids,
-                groups: &groups,
-                effects: &mut effects,
-                generated_child_count: &mut generated_child_count,
-                bind_cache: &mut bind_cache,
-                target_cache: &mut target_cache,
-            },
-            effect,
-        )?;
-
-        let frame_rate = sequence.frame_rate;
-        let duration_seconds = sequence.duration.as_seconds_f64();
-        let frame_count = frame_count(duration_seconds, frame_rate);
-        let effects_by_frame = build_effect_frame_index(&effects, frame_count, frame_rate);
-        Ok(Self {
-            frame_rate,
-            frame_count,
-            start_seconds: effect.start.as_seconds_f64(),
-            duration_seconds: effect.duration.as_seconds_f64(),
-            target_lookup: target_color_lookup(&target),
-            target,
-            effects,
-            effects_by_frame,
-        })
+        let mut batch = EffectRasterPrepareBatch::prepare(project, setup_id, sequence_id)?;
+        batch.prepare_effect(effect_id)
     }
 
     pub fn start_seconds(&self) -> f64 {
@@ -395,6 +328,10 @@ impl PreparedEffectPreviewRenderer {
 
     pub fn duration_seconds(&self) -> f64 {
         self.duration_seconds
+    }
+
+    pub fn frame_rate(&self) -> u32 {
+        self.frame_rate
     }
 
     pub fn target_pixel_count(&self) -> usize {
@@ -443,6 +380,113 @@ impl PreparedEffectPreviewRenderer {
         }
 
         Ok(rendered)
+    }
+}
+
+impl<'a> EffectRasterPrepareBatch<'a> {
+    pub fn prepare(
+        project: &'a DawnProject,
+        setup_id: &SetupId,
+        sequence_id: &SequenceId,
+    ) -> Result<Self, RenderError> {
+        let setup = project
+            .setups
+            .get(setup_id)
+            .ok_or_else(|| RenderError::MissingSetup {
+                setup_id: setup_id.clone(),
+            })?;
+        let layout = project
+            .layouts
+            .get(&setup.layout)
+            .ok_or(RenderError::MissingLayout)?;
+        let sequence =
+            project
+                .sequences
+                .get(sequence_id)
+                .ok_or_else(|| RenderError::MissingSequence {
+                    sequence_id: sequence_id.clone(),
+                })?;
+        prepare_timing(sequence)?;
+        if !sequence.automation_clips.is_empty() {
+            return Err(RenderError::UnsupportedAutomation);
+        }
+
+        let fixtures = prepare_fixtures(project, layout)?;
+        let fixture_ids = fixtures
+            .iter()
+            .map(|fixture| fixture.id.clone())
+            .collect::<IndexSet<_>>();
+        let groups = layout
+            .groups
+            .iter()
+            .map(|group| {
+                let members = layout
+                    .fixtures
+                    .iter()
+                    .filter(|fixture| group.fixtures.iter().any(|member| member == &fixture.id))
+                    .map(|fixture| fixture.id.clone())
+                    .collect::<Vec<_>>();
+                (group.id.clone(), members)
+            })
+            .collect::<IndexMap<_, _>>();
+        let frame_rate = sequence.frame_rate;
+        let duration_seconds = sequence.duration.as_seconds_f64();
+        let frame_count = frame_count(duration_seconds, frame_rate);
+
+        Ok(Self {
+            project,
+            sequence,
+            fixtures,
+            fixture_ids,
+            groups,
+            frame_rate,
+            frame_count,
+            bind_cache: EffectBindCache::default(),
+            target_cache: PrepareTargetCache::default(),
+        })
+    }
+
+    pub fn prepare_effect(
+        &mut self,
+        effect_id: &EffectInstId,
+    ) -> Result<PreparedEffectRasterRenderer, RenderError> {
+        let effect = self
+            .sequence
+            .effects
+            .iter()
+            .find(|effect| &effect.id == effect_id)
+            .ok_or_else(|| RenderError::MissingEffect {
+                effect_id: EffectDefinitionId(effect_id.0.to_string()),
+            })?;
+        let mut effects = Vec::new();
+        let mut generated_child_count = 0usize;
+        let target = prepare_effect(
+            PrepareEffectContext {
+                project: self.project,
+                sequence: self.sequence,
+                fixtures: &self.fixtures,
+                fixture_ids: &self.fixture_ids,
+                groups: &self.groups,
+                effects: &mut effects,
+                generated_child_count: &mut generated_child_count,
+                bind_cache: &mut self.bind_cache,
+                target_cache: &mut self.target_cache,
+            },
+            effect,
+        )?;
+
+        let effects_by_frame =
+            build_effect_frame_index(&effects, self.frame_count, self.frame_rate);
+        Ok(PreparedEffectRasterRenderer {
+            frame_rate: self.frame_rate,
+            frame_count: self.frame_count,
+            start_seconds: effect.start.as_seconds_f64(),
+            duration_seconds: effect.duration.as_seconds_f64(),
+            target_lookup: target_color_lookup(&target),
+            target,
+            effects,
+            effects_by_frame,
+        })
     }
 }
 

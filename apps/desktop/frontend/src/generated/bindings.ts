@@ -20,8 +20,8 @@ export const commands = {
 	undoActiveEdit: () => __TAURI_INVOKE<AppSnapshot>("undo_active_edit"),
 	redoActiveEdit: () => __TAURI_INVOKE<AppSnapshot>("redo_active_edit"),
 	getGuiDocument: (request: GuiDocumentRequest) => __TAURI_INVOKE<GuiDocument>("get_gui_document", { request }),
-	requestSequenceClipPreviews: (request: SequenceClipPreviewRequest) => __TAURI_INVOKE<SequenceClipPreviewResponse>("request_sequence_clip_previews", { request }),
-	takeSequenceClipPreviewResults: (request: GuiDocumentRequest, requestId: number) => __TAURI_INVOKE<SequenceClipPreviewResultBatch>("take_sequence_clip_preview_results", { request, requestId }).then((v) => (({...v,ready:v.ready.map(i=>i)}) as typeof v)),
+	requestSequenceClipRasters: (request: SequenceClipRasterRequest) => __TAURI_INVOKE<SequenceClipRasterResponse>("request_sequence_clip_rasters", { request }),
+	takeSequenceClipRasterResults: (request: GuiDocumentRequest, requestId: number) => __TAURI_INVOKE<SequenceClipRasterResultBatch>("take_sequence_clip_raster_results", { request, requestId }).then((v) => (({...v,ready:v.ready.map(i=>i)}) as typeof v)),
 	applyGuiEdit: (request: GuiDocumentRequest, edit: GuiEditCommand) => __TAURI_INVOKE<GuiEditResult>("apply_gui_edit", { request, edit }),
 	applySequenceGuiEdit: (edit: SequenceGuiEdit) => __TAURI_INVOKE<AppSnapshot>("apply_sequence_gui_edit", { edit }),
 	applySequenceSelectionEdit: (edit: SequenceSelectionEdit) => __TAURI_INVOKE<SequenceSelectionEditResult>("apply_sequence_selection_edit", { edit }),
@@ -305,53 +305,52 @@ export type SequenceAudio = {
 	exists: boolean,
 };
 
-export type SequenceClipPreview = {
+export type SequenceClipRaster = {
 	requestId: number,
 	effectId: number,
 	signature: string,
 	columns: number,
 	rows: number,
-	sampleStepSeconds: number,
+	columnStrideFrames: number,
 	startSeconds: number,
 	durationSeconds: number,
-	pixelsRgb: number[],
+	pixelsRgbaBase64: string,
 };
 
-export type SequenceClipPreviewError = {
+export type SequenceClipRasterError = {
 	requestId: number,
 	effectId: number,
 	signature: string,
 	message: string,
 };
 
-export type SequenceClipPreviewRequest = {
-	items: SequenceClipPreviewRequestItem[],
-	sampleStepSeconds: number,
-	maxRows: number,
-	maxColumns: number,
+export type SequenceClipRasterRequest = {
+	items: SequenceClipRasterRequestItem[],
+	columnStrideFrames: number,
+	displayRowCount: number,
 } & GuiDocumentRequest;
 
-export type SequenceClipPreviewRequestItem = {
+export type SequenceClipRasterRequestItem = {
 	effectId: number,
 	signature: string | null,
 };
 
-export type SequenceClipPreviewResponse = {
+export type SequenceClipRasterResponse = {
 	projectRevision: number,
 	requestId: number,
 	complete: boolean,
 };
 
-export type SequenceClipPreviewResultBatch = {
+export type SequenceClipRasterResultBatch = {
 	projectRevision: number,
 	requestId: number,
-	ready: SequenceClipPreview[],
-	unavailable: SequenceClipPreviewUnavailable[],
-	errors: SequenceClipPreviewError[],
+	ready: SequenceClipRaster[],
+	unavailable: SequenceClipRasterUnavailable[],
+	errors: SequenceClipRasterError[],
 	complete: boolean,
 };
 
-export type SequenceClipPreviewUnavailable = {
+export type SequenceClipRasterUnavailable = {
 	requestId: number,
 	effectId: number,
 	signature: string,

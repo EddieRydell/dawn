@@ -29,7 +29,7 @@ pub struct DesktopState {
     gui_save: Mutex<GuiSaveScheduler>,
     audio: Mutex<crate::audio::AudioEngine>,
     show_render: Mutex<crate::show_render::ShowRenderService>,
-    sequence_clip_preview: Mutex<crate::sequence_clip_preview::SequenceClipPreviewService>,
+    sequence_clip_raster: Mutex<crate::sequence_clip_raster::SequenceClipRasterService>,
     sequence_clipboard: Mutex<Option<crate::gui::SequenceClipboard>>,
     persistence: PersistenceService,
 }
@@ -42,8 +42,8 @@ impl DesktopState {
             gui_save: Mutex::new(GuiSaveScheduler::new()),
             audio: Mutex::new(crate::audio::AudioEngine::new()),
             show_render: Mutex::new(crate::show_render::ShowRenderService::new()),
-            sequence_clip_preview: Mutex::new(
-                crate::sequence_clip_preview::SequenceClipPreviewService::new(),
+            sequence_clip_raster: Mutex::new(
+                crate::sequence_clip_raster::SequenceClipRasterService::new(),
             ),
             sequence_clipboard: Mutex::new(None),
             persistence: PersistenceService::new(),
@@ -541,10 +541,10 @@ impl DesktopState {
         crate::gui::project_gui_document(project.as_ref(), &request)
     }
 
-    pub fn request_sequence_clip_previews(
+    pub fn request_sequence_clip_rasters(
         &self,
-        request: crate::dto::SequenceClipPreviewRequest,
-    ) -> crate::dto::SequenceClipPreviewResponse {
+        request: crate::dto::SequenceClipRasterRequest,
+    ) -> crate::dto::SequenceClipRasterResponse {
         let project_revision = self.snapshot().project_revision;
         let project = self.project_session();
         let setup_id = project
@@ -552,8 +552,8 @@ impl DesktopState {
             .map(|project| project.project.root.setup.clone());
         let sequence_id = self.resolve_sequence_id(&request.document);
         let project_model = project.map(|project| project.project);
-        match self.sequence_clip_preview.lock() {
-            Ok(mut preview) => preview.request(
+        match self.sequence_clip_raster.lock() {
+            Ok(mut raster) => raster.request(
                 project_revision,
                 project_model,
                 setup_id,
@@ -570,14 +570,14 @@ impl DesktopState {
         }
     }
 
-    pub fn take_sequence_clip_preview_results(
+    pub fn take_sequence_clip_raster_results(
         &self,
         request: GuiDocumentRequest,
         request_id: u32,
-    ) -> crate::dto::SequenceClipPreviewResultBatch {
+    ) -> crate::dto::SequenceClipRasterResultBatch {
         let project_revision = self.snapshot().project_revision;
-        match self.sequence_clip_preview.lock() {
-            Ok(mut preview) => preview.take_results(project_revision, request, request_id),
+        match self.sequence_clip_raster.lock() {
+            Ok(mut raster) => raster.take_results(project_revision, request, request_id),
             Err(poisoned) => {
                 poisoned
                     .into_inner()
