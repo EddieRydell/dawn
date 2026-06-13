@@ -5,6 +5,7 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	getSnapshot: () => __TAURI_INVOKE<AppSnapshot>("get_snapshot"),
+	getRestoredViewState: () => __TAURI_INVOKE<ProjectRestoreState>("get_restored_view_state").then((v) => (({...v,editorStates:Object.fromEntries(Object.entries(v.editorStates).map(([k,v])=>[k,v])),sequenceViewports:Object.fromEntries(Object.entries(v.sequenceViewports).map(([k,v])=>[k,v]))}) as typeof v)),
 	openProjectDialog: () => __TAURI_INVOKE<AppSnapshot>("open_project_dialog"),
 	openProject: (path: string) => __TAURI_INVOKE<AppSnapshot>("open_project", { path }),
 	chooseNewProjectParentDirectory: () => __TAURI_INVOKE<string | null>("choose_new_project_parent_directory"),
@@ -14,9 +15,13 @@ export const commands = {
 	setActiveFile: (path: string) => __TAURI_INVOKE<AppSnapshot>("set_active_file", { path }),
 	updateActiveText: (text: string) => __TAURI_INVOKE<AppSnapshot>("update_active_text", { text }),
 	setActiveViewMode: (mode: EditorViewMode) => __TAURI_INVOKE<AppSnapshot>("set_active_view_mode", { mode }),
+	saveEditorViewState: (update: PersistedEditorViewStateUpdate) => __TAURI_INVOKE<AppSnapshot>("save_editor_view_state", { update }),
+	saveSequenceViewportState: (update: PersistedSequenceViewportStateUpdate) => __TAURI_INVOKE<AppSnapshot>("save_sequence_viewport_state", { update }),
 	undoActiveEdit: () => __TAURI_INVOKE<AppSnapshot>("undo_active_edit"),
 	redoActiveEdit: () => __TAURI_INVOKE<AppSnapshot>("redo_active_edit"),
 	getGuiDocument: (request: GuiDocumentRequest) => __TAURI_INVOKE<GuiDocument>("get_gui_document", { request }),
+	requestSequenceClipPreviews: (request: SequenceClipPreviewRequest) => __TAURI_INVOKE<SequenceClipPreviewResponse>("request_sequence_clip_previews", { request }),
+	takeSequenceClipPreviewResults: (request: GuiDocumentRequest, requestId: number) => __TAURI_INVOKE<SequenceClipPreviewResultBatch>("take_sequence_clip_preview_results", { request, requestId }).then((v) => (({...v,ready:v.ready.map(i=>i)}) as typeof v)),
 	applyGuiEdit: (request: GuiDocumentRequest, edit: GuiEditCommand) => __TAURI_INVOKE<GuiEditResult>("apply_gui_edit", { request, edit }),
 	applySequenceGuiEdit: (edit: SequenceGuiEdit) => __TAURI_INVOKE<AppSnapshot>("apply_sequence_gui_edit", { edit }),
 	applySequenceSelectionEdit: (edit: SequenceSelectionEdit) => __TAURI_INVOKE<SequenceSelectionEditResult>("apply_sequence_selection_edit", { edit }),
@@ -43,6 +48,7 @@ export const commands = {
 	audioSeek: (positionSeconds: number) => __TAURI_INVOKE<AppSnapshot>("audio_seek", { positionSeconds }),
 	setLiveOutputEnabled: (enabled: boolean) => __TAURI_INVOKE<AppSnapshot>("set_live_output_enabled", { enabled }),
 	openPreviewWindow: () => __TAURI_INVOKE<AppSnapshot>("open_preview_window"),
+	persistAppClose: () => __TAURI_INVOKE<AppSnapshot>("persist_app_close"),
 };
 
 /* Types */
@@ -57,6 +63,8 @@ export type AppSnapshot = {
 	activeDocumentDescriptor: DocumentDescriptor | null,
 	diagnostics: ProjectDiagnostic[],
 	status: string,
+	renderError: string | null,
+	previewError: string | null,
 	audioTransport: AudioTransportSnapshot,
 	liveOutput: LiveOutputSnapshot,
 };
@@ -223,6 +231,32 @@ export type LiveOutputSnapshot = {
 
 export type ObjectKind = "project" | "setup" | "controller" | "layout" | "fixture" | "patch" | "sequence" | "curve" | "effect";
 
+export type PersistedEditorViewState = {
+	cursorAnchor: number,
+	cursorHead: number,
+	scrollTop: number,
+};
+
+export type PersistedEditorViewStateUpdate = {
+	path: string,
+	state: PersistedEditorViewState,
+};
+
+export type PersistedSequenceViewportState = {
+	pxPerSecond: number,
+	laneHeight: number,
+	scrollXSeconds: number,
+	scrollY: number,
+	activeMarkCollectionKey: string | null,
+	visibleMarkCollectionKeys: string[],
+};
+
+export type PersistedSequenceViewportStateUpdate = {
+	path: string,
+	objectKey: string,
+	state: PersistedSequenceViewportState,
+};
+
 export type Point3Meters = {
 	xMeters: number,
 	yMeters: number,
@@ -235,6 +269,11 @@ export type ProjectDiagnostic = {
 	severity: DiagnosticSeverity,
 	code: string,
 	message: string,
+};
+
+export type ProjectRestoreState = {
+	editorStates: { [key in string]: PersistedEditorViewState },
+	sequenceViewports: { [key in string]: PersistedSequenceViewportState },
 };
 
 export type ResolvedLayoutFixture = {
@@ -264,6 +303,58 @@ export type SequenceAudio = {
 	resolvedPath: string,
 	fileName: string,
 	exists: boolean,
+};
+
+export type SequenceClipPreview = {
+	requestId: number,
+	effectId: number,
+	signature: string,
+	columns: number,
+	rows: number,
+	sampleStepSeconds: number,
+	startSeconds: number,
+	durationSeconds: number,
+	pixelsRgb: number[],
+};
+
+export type SequenceClipPreviewError = {
+	requestId: number,
+	effectId: number,
+	signature: string,
+	message: string,
+};
+
+export type SequenceClipPreviewRequest = {
+	items: SequenceClipPreviewRequestItem[],
+	sampleStepSeconds: number,
+	maxRows: number,
+	maxColumns: number,
+} & GuiDocumentRequest;
+
+export type SequenceClipPreviewRequestItem = {
+	effectId: number,
+	signature: string | null,
+};
+
+export type SequenceClipPreviewResponse = {
+	projectRevision: number,
+	requestId: number,
+	complete: boolean,
+};
+
+export type SequenceClipPreviewResultBatch = {
+	projectRevision: number,
+	requestId: number,
+	ready: SequenceClipPreview[],
+	unavailable: SequenceClipPreviewUnavailable[],
+	errors: SequenceClipPreviewError[],
+	complete: boolean,
+};
+
+export type SequenceClipPreviewUnavailable = {
+	requestId: number,
+	effectId: number,
+	signature: string,
 };
 
 export type SequenceCurveLibraryItem = {

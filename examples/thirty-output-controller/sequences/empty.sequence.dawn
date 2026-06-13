@@ -2550,7 +2550,7 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 11
-    start: 40.750078668s
+    start: 40.787215457s
     duration: 0.252901318s
     target:
       type: group
@@ -4685,61 +4685,6 @@ empty:
         type: float
         value: 1.0
     script: effects.ScanSweep
-  - id: 53
-    start: 68.031259179s
-    duration: 3.051949479s
-    target:
-      type: group
-      id: 1
-    scope: per_fixture
-    params:
-      base:
-        type: color
-        value: '#000000'
-      palette:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-          - time: 1.0
-            value: '#ffffff'
-      color_mode:
-        type: enum
-        value: from_palette
-      sparkle_color:
-        type: color
-        value: '#ffffff'
-      density:
-        type: float
-        value: 0.1
-      shimmer_level:
-        type: float
-        value: 0.1
-      sparkle_level:
-        type: float
-        value: 1.0
-      wave_speed:
-        type: float
-        value: 1.0
-      wave_scale:
-        type: float
-        value: 1.0
-      sparkle_speed:
-        type: float
-        value: 1.0
-      sparkle_hold:
-        type: float
-        value: 1.0
-      section_width_pixels:
-        type: float
-        value: 1.0
-      seed:
-        type: float
-        value: 0.0
-    script: effects.ShimmerField
   - id: 47
     start: 68.47608011s
     duration: 0.413182895s
@@ -5482,61 +5427,6 @@ empty:
         type: float
         value: 1.0
     script: effects.ScanSweep
-  - id: 63
-    start: 74.469422898s
-    duration: 3.061021274s
-    target:
-      type: group
-      id: 1
-    scope: per_fixture
-    params:
-      base:
-        type: color
-        value: '#000000'
-      palette:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-          - time: 1.0
-            value: '#ffffff'
-      color_mode:
-        type: enum
-        value: from_palette
-      sparkle_color:
-        type: color
-        value: '#ffffff'
-      density:
-        type: float
-        value: 0.1
-      shimmer_level:
-        type: float
-        value: 0.1
-      sparkle_level:
-        type: float
-        value: 1.0
-      wave_speed:
-        type: float
-        value: 1.0
-      wave_scale:
-        type: float
-        value: 1.0
-      sparkle_speed:
-        type: float
-        value: 1.0
-      sparkle_hold:
-        type: float
-        value: 1.0
-      section_width_pixels:
-        type: float
-        value: 1.0
-      seed:
-        type: float
-        value: 0.0
-    script: effects.ShimmerField
   - id: 64
     start: 74.914243829s
     duration: 0.413182895s

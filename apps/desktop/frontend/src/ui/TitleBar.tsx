@@ -1,6 +1,7 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Maximize2, Minus, X } from "lucide-react";
+import { commands } from "../api";
 import { commandRegistry } from "../commandRegistry";
 
 const appWindow = getCurrentWindow();
@@ -23,12 +24,17 @@ export function TitleBar() {
         <button onClick={() => void appWindow.toggleMaximize()} aria-label="Maximize">
           <Maximize2 size={14} />
         </button>
-        <button className="close" onClick={() => void appWindow.close()} aria-label="Close">
+        <button className="close" onClick={() => void closeMainWindow()} aria-label="Close">
           <X size={15} />
         </button>
       </div>
     </header>
   );
+}
+
+async function closeMainWindow() {
+  await commands.persistAppClose();
+  await appWindow.close();
 }
 
 function startTitlebarDrag(event: React.MouseEvent<HTMLElement>) {

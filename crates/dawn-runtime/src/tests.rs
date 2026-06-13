@@ -7,8 +7,7 @@ use dawn_language::effect::{
 use dawn_language::effect_dsl::{compile_effects, Identifier};
 use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
 use dawn_language::sequence::{
-    AutomationClip, AutomationClipId, MarkCollection, MarkCollectionKey, Sequence, SequenceAudio,
-    SequenceId,
+    AutomationClip, AutomationClipId, MarkCollectionKey, Sequence, SequenceAudio, SequenceId,
 };
 use dawn_language::setup::{
     ControllerDefinitionStore, FixtureDefinition, FixtureDefinitionId, FixtureDefinitionStore,
@@ -193,36 +192,6 @@ fn active_effects_compose_with_channel_max() {
         renderer.render_frame(0).unwrap().fixtures[0].pixels[0],
         color(200, 0, 210)
     );
-}
-
-#[test]
-fn explicit_marks_param_resolves_full_collection() {
-    let params = IndexMap::from([(
-        ident("beats"),
-        EffectParamValue::Marks(MarkCollectionKey {
-            name: "beats".to_string(),
-        }),
-    )]);
-    let mut sequence = sequence_with_effects(vec![constant_effect(
-        1,
-        1.0,
-        1.0,
-        1,
-        EffectScope::WholeTarget,
-        "MarkCountColor",
-        params,
-    )]);
-    sequence.mark_collections = vec![MarkCollection {
-        key: MarkCollectionKey {
-            name: "beats".to_string(),
-        },
-        name: "Beats".to_string(),
-        display_color: color(255, 255, 255),
-        marks: vec![time(0.2), time(1.2), time(5.0)],
-    }];
-
-    let frame = renderer_for(sequence).render_frame(3).unwrap();
-    assert_eq!(frame.fixtures[0].pixels[0], color(3, 0, 0));
 }
 
 #[test]

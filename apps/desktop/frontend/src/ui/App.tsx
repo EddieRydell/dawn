@@ -32,7 +32,15 @@ export function App() {
   return (
     <div className="app-shell">
       <TitleBar />
-      {error !== null && error !== "" && <div className="error-strip">{error}</div>}
+      <div className="alert-stack">
+        {error !== null && error !== "" && <div className="error-strip">{error}</div>}
+        {snapshot.renderError !== null && snapshot.renderError !== "" && (
+          <div className="error-strip">{snapshot.renderError}</div>
+        )}
+        {snapshot.previewError !== null && snapshot.previewError !== "" && (
+          <div className="error-strip">{snapshot.previewError}</div>
+        )}
+      </div>
       <main className="workbench">
         {snapshot.projectTreeVisible ? <ProjectTree snapshot={snapshot} /> : null}
         <EditorPane snapshot={snapshot} />

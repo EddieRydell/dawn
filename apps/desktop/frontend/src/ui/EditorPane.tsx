@@ -9,7 +9,7 @@ import { tags } from "@lezer/highlight";
 import { RefreshCw, Save, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { commands, setCurrentGuiRequest } from "../api";
-import type { AppSnapshot, GuiDocumentRequest, ProjectDiagnostic, SequenceAudio, SequenceSelection, TextRange } from "../types";
+import type { AppSnapshot, GuiDocumentRequest, PersistedEditorViewState, ProjectDiagnostic, SequenceAudio, SequenceSelection, TextRange } from "../types";
 import { commandRegistry } from "../commandRegistry";
 import { runSnapshotCommand, useAppStore } from "../store";
 import { GuiEditor } from "./gui/GuiEditor";
@@ -20,7 +20,7 @@ type EditorBufferWithExternalState = NonNullable<AppSnapshot["activeBuffer"]>;
 type PathSelection = { path: string | null; selection: SequenceSelection | null };
 
 export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
-  const { guiDocument, localText, setGuiDocument, setGuiRequest, setLocalText } = useAppStore();
+  const { guiDocument, localText, restoreState, setGuiDocument, setGuiRequest, setLocalText } = useAppStore();
   const editorHost = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
   const [editorView, setEditorView] = useState<EditorView | null>(null);
@@ -29,6 +29,8 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
   const latestLocalText = useRef(localText);
   const loadedSequenceAudioKey = useRef<string | null>(null);
   const applyingExternalText = useRef(false);
+  const applyingRestoredEditorState = useRef(false);
+  const restoredEditorPath = useRef<string | null>(null);
   const activeBuffer = snapshot.activeBuffer;
   const activeDescriptor = snapshot.activeDocumentDescriptor;
   const activePath = activeBuffer?.path ?? null;
@@ -139,6 +141,13 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
           if (update.docChanged || update.viewportChanged || update.geometryChanged) {
             setEditorSignal((signal) => signal + 1);
           }
+          if (
+            activePath !== null &&
+            !applyingRestoredEditorState.current &&
+            (update.selectionSet || update.viewportChanged || update.geometryChanged)
+          ) {
+            scheduleEditorViewStateSave(activePath, readEditorViewState(update.view));
+          }
           if (update.docChanged && !applyingExternalText.current) {
             if (activeConflicted) {
               return;
@@ -175,6 +184,29 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
       });
     };
   }, [activeConflicted, activePath, setLocalText, viewMode]);
+
+  useEffect(() => {
+    if (!view.current || viewMode !== "text" || activePath === null) return;
+    if (restoredEditorPath.current === activePath) return;
+    const restored = restoreState?.editorStates[activePath];
+    if (restored === undefined) return;
+    restoredEditorPath.current = activePath;
+    applyingRestoredEditorState.current = true;
+    const docLength = view.current.state.doc.length;
+    view.current.dispatch({
+      selection: {
+        anchor: clamp(Math.floor(restored.cursorAnchor), 0, docLength),
+        head: clamp(Math.floor(restored.cursorHead), 0, docLength)
+      }
+    });
+    window.requestAnimationFrame(() => {
+      if (view.current !== null && activePath === snapshot.activeFile) {
+        view.current.scrollDOM.scrollTop = Math.max(0, restored.scrollTop);
+        setEditorSignal((signal) => signal + 1);
+      }
+      applyingRestoredEditorState.current = false;
+    });
+  }, [activePath, restoreState, snapshot.activeFile, viewMode]);
 
   useEffect(() => {
     if (!view.current) return;
@@ -500,6 +532,7 @@ function EditorScrollbar({
 }
 
 let autosaveTimer: number | undefined;
+let editorViewStateTimer: number | undefined;
 
 function scheduleAutosave(text: string) {
   window.clearTimeout(autosaveTimer);
@@ -508,6 +541,22 @@ function scheduleAutosave(text: string) {
       runSnapshotCommand(commands.flushAutosave)
     );
   }, 450);
+}
+
+function scheduleEditorViewStateSave(path: string, state: PersistedEditorViewState) {
+  window.clearTimeout(editorViewStateTimer);
+  editorViewStateTimer = window.setTimeout(() => {
+    void commands.saveEditorViewState({ path, state });
+  }, 250);
+}
+
+function readEditorViewState(view: EditorView): PersistedEditorViewState {
+  const selection = view.state.selection.main;
+  return {
+    cursorAnchor: selection.anchor,
+    cursorHead: selection.head,
+    scrollTop: view.scrollDOM.scrollTop
+  };
 }
 
 function activeBufferExternalState(buffer: EditorBufferWithExternalState | null): BufferExternalState {

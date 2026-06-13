@@ -49,7 +49,10 @@ pub enum EffectKind {
 
 impl PartialEq for CompiledEffect {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.params == other.params
+        self.name == other.name
+            && self.params == other.params
+            && self.kind == other.kind
+            && self.function == other.function
     }
 }
 

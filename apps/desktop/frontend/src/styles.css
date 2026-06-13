@@ -56,6 +56,7 @@ button:focus-visible,
 }
 
 .app-shell {
+  position: relative;
   display: grid;
   grid-template-rows: 38px 1fr 26px;
   height: 100%;
@@ -1239,12 +1240,21 @@ button:focus-visible,
   color: #df6b6b;
 }
 
-.error-strip {
+.alert-stack {
   position: absolute;
+  top: 44px;
+  right: 10px;
+  left: 10px;
   z-index: 10;
-  right: 18px;
-  bottom: 38px;
-  max-width: min(520px, calc(100vw - 36px));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.error-strip {
+  align-self: center;
+  width: min(720px, 100%);
   padding: 8px 10px;
   border: 1px solid #7d3b3b;
   border-radius: 6px;

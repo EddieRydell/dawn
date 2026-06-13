@@ -14,6 +14,8 @@ pub struct AppSnapshot {
     pub active_document_descriptor: Option<DocumentDescriptor>,
     pub diagnostics: Vec<ProjectDiagnostic>,
     pub status: String,
+    pub render_error: Option<String>,
+    pub preview_error: Option<String>,
     pub audio_transport: AudioTransportSnapshot,
     pub live_output: LiveOutputSnapshot,
 }
@@ -510,6 +512,74 @@ pub struct SequenceGuiDocument {
     pub curve_library: Vec<SequenceCurveLibraryItem>,
     pub effects: Vec<SequenceEffect>,
     pub degraded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceClipPreviewRequest {
+    #[serde(flatten)]
+    pub document: GuiDocumentRequest,
+    pub items: Vec<SequenceClipPreviewRequestItem>,
+    pub sample_step_seconds: f64,
+    pub max_rows: u32,
+    pub max_columns: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceClipPreviewRequestItem {
+    pub effect_id: u32,
+    pub signature: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceClipPreviewResponse {
+    pub project_revision: u32,
+    pub request_id: u32,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceClipPreviewResultBatch {
+    pub project_revision: u32,
+    pub request_id: u32,
+    pub ready: Vec<SequenceClipPreview>,
+    pub unavailable: Vec<SequenceClipPreviewUnavailable>,
+    pub errors: Vec<SequenceClipPreviewError>,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceClipPreview {
+    pub request_id: u32,
+    pub effect_id: u32,
+    pub signature: String,
+    pub columns: u32,
+    pub rows: u32,
+    pub sample_step_seconds: f64,
+    pub start_seconds: f64,
+    pub duration_seconds: f64,
+    pub pixels_rgb: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceClipPreviewError {
+    pub request_id: u32,
+    pub effect_id: u32,
+    pub signature: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceClipPreviewUnavailable {
+    pub request_id: u32,
+    pub effect_id: u32,
+    pub signature: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

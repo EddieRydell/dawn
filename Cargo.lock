@@ -856,6 +856,7 @@ dependencies = [
  "kira",
  "rfd",
  "serde",
+ "serde_json",
  "specta",
  "specta-typescript",
  "tauri",

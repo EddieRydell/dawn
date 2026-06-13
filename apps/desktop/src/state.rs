@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::sync::{mpsc, Mutex};
 use std::thread;
@@ -11,11 +12,15 @@ use dawn_project_io::{
 use indexmap::IndexSet;
 
 use crate::dto::{
-    AppSnapshot, AudioTransportSnapshot, BufferExternalState, DiagnosticSeverity,
-    DocumentDefaultObjectKey, DocumentDescriptor, DocumentObjectDescriptor, DocumentViewId,
-    EditorBuffer, EditorViewMode, GuiDocument, GuiDocumentRequest, GuiEditCommand, GuiEditResult,
-    LiveOutputSnapshot, ObjectKind, ProjectDiagnostic, SequenceAudio, SequenceSelectionEdit,
-    SequenceSelectionEditResult, WorkspaceEntry, WorkspaceEntryKind,
+    AppSnapshot, AudioTransportSnapshot, AudioTransportState, BufferExternalState,
+    DiagnosticSeverity, DocumentDefaultObjectKey, DocumentDescriptor, DocumentObjectDescriptor,
+    DocumentViewId, EditorBuffer, EditorViewMode, GuiDocument, GuiDocumentRequest, GuiEditCommand,
+    GuiEditResult, LiveOutputSnapshot, ObjectKind, ProjectDiagnostic, SequenceAudio,
+    SequenceSelectionEdit, SequenceSelectionEditResult, WorkspaceEntry, WorkspaceEntryKind,
+};
+use crate::persistence::{
+    PersistedEditorViewStateUpdate, PersistedProjectSession, PersistedSequenceViewportStateUpdate,
+    PersistenceService, ProjectRestoreState,
 };
 
 pub struct DesktopState {
@@ -24,7 +29,9 @@ pub struct DesktopState {
     gui_save: Mutex<GuiSaveScheduler>,
     audio: Mutex<crate::audio::AudioEngine>,
     show_render: Mutex<crate::show_render::ShowRenderService>,
+    sequence_clip_preview: Mutex<crate::sequence_clip_preview::SequenceClipPreviewService>,
     sequence_clipboard: Mutex<Option<crate::gui::SequenceClipboard>>,
+    persistence: PersistenceService,
 }
 
 impl DesktopState {
@@ -35,18 +42,25 @@ impl DesktopState {
             gui_save: Mutex::new(GuiSaveScheduler::new()),
             audio: Mutex::new(crate::audio::AudioEngine::new()),
             show_render: Mutex::new(crate::show_render::ShowRenderService::new()),
+            sequence_clip_preview: Mutex::new(
+                crate::sequence_clip_preview::SequenceClipPreviewService::new(),
+            ),
             sequence_clipboard: Mutex::new(None),
+            persistence: PersistenceService::new(),
         }
+    }
+
+    pub fn persistence(&self) -> &PersistenceService {
+        &self.persistence
     }
 
     pub fn snapshot(&self) -> AppSnapshot {
         self.drain_gui_save_results();
-        let audio_transport = self.audio_snapshot();
         let mut snapshot = match self.snapshot.lock() {
             Ok(snapshot) => snapshot.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
         };
-        snapshot.audio_transport = audio_transport;
+        snapshot.audio_transport = self.merged_audio_snapshot(&snapshot.audio_transport);
         snapshot
     }
 
@@ -57,19 +71,60 @@ impl DesktopState {
         }
     }
 
+    fn merged_audio_snapshot(&self, previous: &AudioTransportSnapshot) -> AudioTransportSnapshot {
+        let mut audio_transport = self.audio_snapshot();
+        if matches!(audio_transport.state, AudioTransportState::Unloaded) {
+            audio_transport.position_seconds = previous.position_seconds;
+            audio_transport.home_seconds = previous.home_seconds;
+        }
+        audio_transport
+    }
+
     pub fn update_snapshot(&self, update: impl FnOnce(&mut AppSnapshot)) -> AppSnapshot {
-        match self.snapshot.lock() {
+        let snapshot = match self.snapshot.lock() {
             Ok(mut snapshot) => {
                 update(&mut snapshot);
-                snapshot.audio_transport = self.audio_snapshot();
+                snapshot.audio_transport = self.merged_audio_snapshot(&snapshot.audio_transport);
                 snapshot.clone()
             }
             Err(poisoned) => {
                 let mut snapshot = poisoned.into_inner();
                 update(&mut snapshot);
-                snapshot.audio_transport = self.audio_snapshot();
+                snapshot.audio_transport = self.merged_audio_snapshot(&snapshot.audio_transport);
                 snapshot.clone()
             }
+        };
+        self.record_persistent_snapshot(&snapshot);
+        snapshot
+    }
+
+    pub fn set_persistence_error(&self, message: String) -> AppSnapshot {
+        self.update_snapshot(|snapshot| {
+            snapshot.status = message;
+        })
+    }
+
+    pub fn set_render_error_if_changed(&self, message: String) {
+        let current = match self.snapshot.lock() {
+            Ok(snapshot) => snapshot.render_error.clone(),
+            Err(poisoned) => poisoned.into_inner().render_error.clone(),
+        };
+        if current.as_deref() != Some(message.as_str()) {
+            self.update_snapshot(|snapshot| {
+                snapshot.render_error = Some(message);
+            });
+        }
+    }
+
+    pub fn clear_render_error_if_set(&self) {
+        let current = match self.snapshot.lock() {
+            Ok(snapshot) => snapshot.render_error.is_some(),
+            Err(poisoned) => poisoned.into_inner().render_error.is_some(),
+        };
+        if current {
+            self.update_snapshot(|snapshot| {
+                snapshot.render_error = None;
+            });
         }
     }
 
@@ -92,7 +147,9 @@ impl DesktopState {
         self.update_snapshot(|snapshot| {
             snapshot.audio_transport = audio_transport;
             if let Some(error) = render_error {
-                snapshot.status = format!("Render prepare failed: {error:?}");
+                snapshot.render_error = Some(format!("Render prepare failed: {error:?}"));
+            } else {
+                snapshot.render_error = None;
             }
         })
     }
@@ -105,6 +162,7 @@ impl DesktopState {
         self.unload_render_session();
         self.update_snapshot(|snapshot| {
             snapshot.audio_transport = audio_transport;
+            snapshot.render_error = None;
         })
     }
 
@@ -204,6 +262,49 @@ impl DesktopState {
     pub fn open_project_path(&self, path: &str) -> AppSnapshot {
         let entrypoint = normalize_project_entrypoint(path);
         self.apply_project_open_check(entrypoint.as_str(), check_project(&entrypoint))
+    }
+
+    pub fn save_editor_view_state(&self, update: PersistedEditorViewStateUpdate) -> AppSnapshot {
+        let snapshot = self.snapshot();
+        let Some(project_root) = snapshot.project_root.clone() else {
+            return snapshot;
+        };
+        match self.persistence.record_editor_state(&project_root, update) {
+            Ok(()) => snapshot,
+            Err(error) => {
+                self.set_persistence_error(format!("Editor state was not saved: {error}"))
+            }
+        }
+    }
+
+    pub fn save_sequence_viewport_state(
+        &self,
+        update: PersistedSequenceViewportStateUpdate,
+    ) -> AppSnapshot {
+        let snapshot = self.snapshot();
+        let Some(project_root) = snapshot.project_root.clone() else {
+            return snapshot;
+        };
+        match self
+            .persistence
+            .record_sequence_viewport(&project_root, update)
+        {
+            Ok(()) => snapshot,
+            Err(error) => {
+                self.set_persistence_error(format!("Sequence view state was not saved: {error}"))
+            }
+        }
+    }
+
+    pub fn restored_view_state(&self) -> ProjectRestoreState {
+        let snapshot = self.snapshot();
+        let Some(project_root) = snapshot.project_root.as_deref() else {
+            return ProjectRestoreState {
+                editor_states: Default::default(),
+                sequence_viewports: Default::default(),
+            };
+        };
+        self.persistence.restore_view_state(project_root)
     }
 
     pub fn open_file_path(&self, path: &str) -> AppSnapshot {
@@ -440,6 +541,51 @@ impl DesktopState {
         crate::gui::project_gui_document(project.as_ref(), &request)
     }
 
+    pub fn request_sequence_clip_previews(
+        &self,
+        request: crate::dto::SequenceClipPreviewRequest,
+    ) -> crate::dto::SequenceClipPreviewResponse {
+        let project_revision = self.snapshot().project_revision;
+        let project = self.project_session();
+        let setup_id = project
+            .as_ref()
+            .map(|project| project.project.root.setup.clone());
+        let sequence_id = self.resolve_sequence_id(&request.document);
+        let project_model = project.map(|project| project.project);
+        match self.sequence_clip_preview.lock() {
+            Ok(mut preview) => preview.request(
+                project_revision,
+                project_model,
+                setup_id,
+                sequence_id,
+                request,
+            ),
+            Err(poisoned) => poisoned.into_inner().request(
+                project_revision,
+                project_model,
+                setup_id,
+                sequence_id,
+                request,
+            ),
+        }
+    }
+
+    pub fn take_sequence_clip_preview_results(
+        &self,
+        request: GuiDocumentRequest,
+        request_id: u32,
+    ) -> crate::dto::SequenceClipPreviewResultBatch {
+        let project_revision = self.snapshot().project_revision;
+        match self.sequence_clip_preview.lock() {
+            Ok(mut preview) => preview.take_results(project_revision, request, request_id),
+            Err(poisoned) => {
+                poisoned
+                    .into_inner()
+                    .take_results(project_revision, request, request_id)
+            }
+        }
+    }
+
     pub fn apply_gui_edit(
         &self,
         request: GuiDocumentRequest,
@@ -645,12 +791,18 @@ impl DesktopState {
         let entries = workspace_entries(&session);
         let root = session.source.source_root.to_string();
         let entrypoint = session.source.entrypoint.clone();
-        let active = session.source.documents.get(&entrypoint).map(|document| {
-            (
-                editor_buffer(&session, document),
-                document_descriptor(document),
-            )
-        });
+        let valid_paths = valid_project_paths(&session);
+        let restore = self.persistence.restore_for_project(&root, &valid_paths);
+        let active = restored_active_buffers(&session, restore.as_ref().map(|item| &item.session))
+            .or_else(|| {
+                session.source.documents.get(&entrypoint).map(|document| {
+                    let buffer = editor_buffer(&session, document);
+                    (vec![buffer.clone()], buffer.path)
+                })
+            });
+        let active_descriptor = active
+            .as_ref()
+            .and_then(|(_, active_path)| descriptor_for_path(&session, Utf8Path::new(active_path)));
         match self.project.lock() {
             Ok(mut project) => *project = Some(session),
             Err(poisoned) => *poisoned.into_inner() = Some(session),
@@ -658,15 +810,23 @@ impl DesktopState {
         self.unload_render_session();
         self.update_snapshot(|snapshot| {
             snapshot.project_root = Some(root);
-            snapshot.project_tree_visible = true;
+            snapshot.project_tree_visible = restore
+                .as_ref()
+                .map(|restore| restore.session.project_tree_visible)
+                .unwrap_or(true);
             snapshot.project_entries = entries;
             snapshot.tabs = active
                 .as_ref()
-                .map(|(buffer, _)| vec![buffer.clone()])
+                .map(|(buffers, _)| buffers.clone())
                 .unwrap_or_default();
-            snapshot.active_file = active.as_ref().map(|(buffer, _)| buffer.path.clone());
-            snapshot.active_buffer = active.as_ref().map(|(buffer, _)| buffer.clone());
-            snapshot.active_document_descriptor = active.map(|(_, descriptor)| descriptor);
+            snapshot.active_file = active.as_ref().map(|(_, path)| path.clone());
+            snapshot.active_buffer = active.as_ref().and_then(|(buffers, active_path)| {
+                buffers
+                    .iter()
+                    .find(|buffer| buffer.path == *active_path)
+                    .cloned()
+            });
+            snapshot.active_document_descriptor = active_descriptor;
             snapshot.diagnostics = diagnostics;
             snapshot.status = if snapshot.diagnostics.is_empty() {
                 format!("Opened project {entrypoint}")
@@ -676,9 +836,42 @@ impl DesktopState {
                     snapshot.diagnostics.len()
                 )
             };
+            if let Some(restore) = restore
+                .as_ref()
+                .filter(|restore| !restore.stale_tabs.is_empty())
+            {
+                snapshot.status = format!(
+                    "{}. Skipped stale tabs: {}",
+                    snapshot.status,
+                    restore.stale_tabs.join(", ")
+                );
+            }
             snapshot.audio_transport = self.audio_snapshot();
+            if let Some(restore) = restore.as_ref() {
+                snapshot.audio_transport.position_seconds = restore.session.audio_position_seconds;
+                snapshot.audio_transport.home_seconds = restore.session.audio_home_seconds;
+                snapshot.live_output.enabled = restore.session.live_output_enabled;
+                snapshot.live_output.status = if restore.session.live_output_enabled {
+                    "Enabled".to_string()
+                } else {
+                    "Disabled".to_string()
+                };
+            }
             snapshot.project_revision = snapshot.project_revision.saturating_add(1);
         })
+    }
+
+    fn record_persistent_snapshot(&self, snapshot: &AppSnapshot) {
+        if let Err(error) = self.persistence.record_snapshot(snapshot) {
+            match self.snapshot.lock() {
+                Ok(mut current) => {
+                    current.status = format!("Desktop state was not saved: {error}");
+                }
+                Err(poisoned) => {
+                    poisoned.into_inner().status = format!("Desktop state was not saved: {error}");
+                }
+            }
+        }
     }
 
     fn refresh_project(
@@ -725,9 +918,8 @@ impl DesktopState {
                     snapshot.diagnostics.len()
                 )
             };
-            if let Some(error) = render_error {
-                snapshot.status = format!("Render refresh failed: {error:?}");
-            }
+            snapshot.render_error =
+                render_error.map(|error| format!("Render refresh failed: {error:?}"));
             snapshot.project_revision = snapshot.project_revision.saturating_add(1);
         })
     }
@@ -761,9 +953,8 @@ impl DesktopState {
                 snapshot.active_document_descriptor = active_descriptor;
             }
             snapshot.status = status.to_string();
-            if let Some(error) = render_error {
-                snapshot.status = format!("Render refresh failed: {error:?}");
-            }
+            snapshot.render_error =
+                render_error.map(|error| format!("Render refresh failed: {error:?}"));
             snapshot.project_revision = snapshot.project_revision.saturating_add(1);
         })
     }
@@ -1240,6 +1431,8 @@ fn empty_snapshot() -> AppSnapshot {
         active_document_descriptor: None,
         diagnostics: Vec::new(),
         status: "Ready".to_string(),
+        render_error: None,
+        preview_error: None,
         audio_transport: crate::audio::AudioEngine::empty_snapshot(),
         live_output: LiveOutputSnapshot {
             enabled: false,
@@ -1397,6 +1590,55 @@ fn editor_buffer_for_path(
         external_state: BufferExternalState::Current,
         view_mode: EditorViewMode::Text,
     })
+}
+
+fn restored_active_buffers(
+    session: &ProjectSession,
+    restore: Option<&PersistedProjectSession>,
+) -> Option<(Vec<EditorBuffer>, String)> {
+    let restore = restore?;
+    let mut buffers = Vec::new();
+    for tab in &restore.tabs {
+        let relative_path = Utf8Path::new(&tab.path);
+        if let Some(mut buffer) = editor_buffer_for_path(session, relative_path) {
+            buffer.view_mode = tab.view_mode.clone();
+            buffers.push(buffer);
+        }
+    }
+    if buffers.is_empty() {
+        return None;
+    }
+    let active_file = restore
+        .active_file
+        .as_ref()
+        .filter(|path| buffers.iter().any(|buffer| &buffer.path == *path))
+        .cloned()
+        .unwrap_or_else(|| buffers[0].path.clone());
+    Some((buffers, active_file))
+}
+
+fn descriptor_for_path(
+    session: &ProjectSession,
+    relative_path: &Utf8Path,
+) -> Option<DocumentDescriptor> {
+    session
+        .source
+        .documents
+        .get(relative_path)
+        .map(document_descriptor)
+        .or_else(|| {
+            absolute_project_path(session, relative_path)
+                .is_some_and(|path| path.is_file())
+                .then(|| empty_document_descriptor(relative_path))
+        })
+}
+
+fn valid_project_paths(session: &ProjectSession) -> BTreeSet<String> {
+    workspace_entries(session)
+        .into_iter()
+        .filter(|entry| matches!(entry.kind, WorkspaceEntryKind::File))
+        .map(|entry| entry.path)
+        .collect()
 }
 
 fn source_document_text(document: &SourceDocument) -> String {

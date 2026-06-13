@@ -7,7 +7,7 @@ pub(crate) type LocalId = ValueSlot;
 pub(crate) type ParamId = usize;
 pub(crate) type Target = usize;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RegisterFunction {
     pub instructions: Vec<Instruction>,
     pub constants: Vec<Value>,

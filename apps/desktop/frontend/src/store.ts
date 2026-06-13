@@ -1,17 +1,19 @@
 import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
 import { commands, setGuiEditResultHandler } from "./api";
-import type { AppSnapshot, AudioTransportSnapshot, GuiDocument, GuiDocumentRequest, GuiEditResult } from "./types";
+import type { AppSnapshot, AudioTransportSnapshot, GuiDocument, GuiDocumentRequest, GuiEditResult, ProjectRestoreState } from "./types";
 
 type SnapshotApplySource = "event" | "command" | "hydrate";
 
 type AppStore = {
   snapshot: AppSnapshot | null;
+  restoreState: ProjectRestoreState | null;
   guiRequest: GuiDocumentRequest | null;
   guiDocument: GuiDocument | null;
   error: string | null;
   localText: string;
   setSnapshot: (snapshot: AppSnapshot, source?: SnapshotApplySource) => void;
+  setRestoreState: (restoreState: ProjectRestoreState | null) => void;
   setGuiRequest: (request: GuiDocumentRequest | null) => void;
   setGuiDocument: (document: GuiDocument | null) => void;
   applyGuiEditResult: (result: GuiEditResult) => void;
@@ -22,6 +24,7 @@ type AppStore = {
 
 export const useAppStore = create<AppStore>((set) => ({
   snapshot: null,
+  restoreState: null,
   guiRequest: null,
   guiDocument: null,
   error: null,
@@ -46,6 +49,9 @@ export const useAppStore = create<AppStore>((set) => ({
   },
   setGuiRequest: (guiRequest) => {
     set({ guiRequest });
+  },
+  setRestoreState: (restoreState) => {
+    set({ restoreState });
   },
   setGuiDocument: (guiDocument) => {
     set({ guiDocument });
@@ -76,6 +82,8 @@ export const useAppStore = create<AppStore>((set) => ({
   hydrate: async () => {
     const snapshot = await commands.getSnapshot();
     useAppStore.getState().setSnapshot(snapshot, "hydrate");
+    const restoreState = await commands.getRestoredViewState();
+    useAppStore.getState().setRestoreState(restoreState);
     set({ error: null });
   }
 }));
@@ -102,8 +110,13 @@ export function subscribeToSnapshots(): Promise<() => void> {
 
 export async function runSnapshotCommand(command: () => Promise<AppSnapshot>) {
   try {
+    const previousRoot = useAppStore.getState().snapshot?.projectRoot ?? null;
     const snapshot = await command();
     useAppStore.getState().setSnapshot(snapshot, "command");
+    if (snapshot.projectRoot !== previousRoot) {
+      const restoreState = await commands.getRestoredViewState();
+      useAppStore.getState().setRestoreState(restoreState);
+    }
     useAppStore.getState().setError(null);
     return snapshot;
   } catch (error) {

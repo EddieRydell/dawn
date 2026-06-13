@@ -6,8 +6,13 @@ use tauri_specta::{collect_commands, Builder};
 
 use crate::dto::{
     AppSnapshot, AudioTransportState, DocumentViewId, EditorViewMode, FixtureGuiEdit, GuiDocument,
-    GuiDocumentRequest, GuiEditCommand, GuiEditResult, LayoutGuiEdit, SequenceGuiEdit,
+    GuiDocumentRequest, GuiEditCommand, GuiEditResult, LayoutGuiEdit, SequenceClipPreviewRequest,
+    SequenceClipPreviewResponse, SequenceClipPreviewResultBatch, SequenceGuiEdit,
     SequenceSelectionEdit, SequenceSelectionEditResult,
+};
+use crate::persistence::{
+    read_window_state, PersistedEditorViewStateUpdate, PersistedPreviewWindowState,
+    PersistedSequenceViewportStateUpdate, ProjectRestoreState,
 };
 use crate::state::DesktopState;
 
@@ -15,6 +20,12 @@ use crate::state::DesktopState;
 #[specta::specta]
 pub fn get_snapshot(state: State<'_, DesktopState>) -> AppSnapshot {
     state.snapshot()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_restored_view_state(state: State<'_, DesktopState>) -> ProjectRestoreState {
+    state.restored_view_state()
 }
 
 #[tauri::command]
@@ -87,9 +98,32 @@ pub fn update_active_text(text: String, state: State<'_, DesktopState>) -> AppSn
 pub fn set_active_view_mode(mode: EditorViewMode, state: State<'_, DesktopState>) -> AppSnapshot {
     state.update_snapshot(|snapshot| {
         if let Some(buffer) = snapshot.active_buffer.as_mut() {
-            buffer.view_mode = mode;
+            buffer.view_mode = mode.clone();
+        }
+        if let Some(path) = snapshot.active_file.as_deref() {
+            if let Some(tab) = snapshot.tabs.iter_mut().find(|tab| tab.path == path) {
+                tab.view_mode = mode;
+            }
         }
     })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn save_editor_view_state(
+    update: PersistedEditorViewStateUpdate,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
+    state.save_editor_view_state(update)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn save_sequence_viewport_state(
+    update: PersistedSequenceViewportStateUpdate,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
+    state.save_sequence_viewport_state(update)
 }
 
 #[tauri::command]
@@ -111,6 +145,25 @@ pub fn get_gui_document(
     state: State<'_, DesktopState>,
 ) -> GuiDocument {
     state.get_gui_document(request)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn request_sequence_clip_previews(
+    request: SequenceClipPreviewRequest,
+    state: State<'_, DesktopState>,
+) -> SequenceClipPreviewResponse {
+    state.request_sequence_clip_previews(request)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn take_sequence_clip_preview_results(
+    request: GuiDocumentRequest,
+    request_id: u32,
+    state: State<'_, DesktopState>,
+) -> SequenceClipPreviewResultBatch {
+    state.take_sequence_clip_preview_results(request, request_id)
 }
 
 #[tauri::command]
@@ -341,17 +394,49 @@ pub fn open_preview_window(
     preview: State<'_, crate::preview::PreviewWindowService>,
     state: State<'_, DesktopState>,
 ) -> AppSnapshot {
-    match preview.open_or_focus(app.clone()) {
-        Ok(()) => state.snapshot(),
+    let restore = state.persistence().preview_window();
+    match preview.open_or_focus(
+        app.clone(),
+        PersistedPreviewWindowState {
+            open: true,
+            ..restore
+        },
+    ) {
+        Ok(()) => state.update_snapshot(|snapshot| {
+            snapshot.preview_error = None;
+        }),
         Err(error) => state.update_snapshot(|snapshot| {
-            snapshot.status = format!("Preview failed: {error}");
+            snapshot.preview_error = Some(format!("Preview failed: {error}"));
         }),
     }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn persist_app_close(
+    app: AppHandle,
+    preview: State<'_, crate::preview::PreviewWindowService>,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
+    if let Some(main) = app
+        .get_window("main")
+        .and_then(|window| read_window_state(&window))
+    {
+        if let Err(error) = state.persistence().record_main_window(main) {
+            return state
+                .set_persistence_error(format!("Main window state was not saved: {error}"));
+        }
+    }
+    if let Err(error) = preview.close_for_main_shutdown(&app, state.persistence()) {
+        return state.set_persistence_error(format!("Preview window state was not saved: {error}"));
+    }
+    state.snapshot()
 }
 
 pub fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
     builder.commands(collect_commands![
         get_snapshot,
+        get_restored_view_state,
         open_project_dialog,
         open_project,
         choose_new_project_parent_directory,
@@ -361,9 +446,13 @@ pub fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         set_active_file,
         update_active_text,
         set_active_view_mode,
+        save_editor_view_state,
+        save_sequence_viewport_state,
         undo_active_edit,
         redo_active_edit,
         get_gui_document,
+        request_sequence_clip_previews,
+        take_sequence_clip_preview_results,
         apply_gui_edit,
         apply_sequence_gui_edit,
         apply_sequence_selection_edit,
@@ -389,7 +478,8 @@ pub fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         audio_rewind_to_zero,
         audio_seek,
         set_live_output_enabled,
-        open_preview_window
+        open_preview_window,
+        persist_app_close
     ])
 }
 

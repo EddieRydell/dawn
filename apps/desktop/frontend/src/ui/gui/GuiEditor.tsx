@@ -13,6 +13,7 @@ import { GuiInspector } from "./GuiInspector";
 import { BlockedGui } from "./BlockedGui";
 
 import { SequenceEditor } from "./sequence/SequenceEditor";
+import { useAppStore } from "../../store";
 
 import { handleSequencePlaybackShortcut, isSequenceTransportUnsupported } from "./sequence/SequenceTransportControls";
 
@@ -63,12 +64,25 @@ function GuiEditorInner({
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
 }) {
+  const restoreState = useAppStore((store) => store.restoreState);
+  const sequenceRestore =
+    gui.type === "sequence"
+      ? restoreState?.sequenceViewports[`${gui.document.path}::${gui.document.objectKey}`]
+      : undefined;
   const [selected, setSelected] = useState<GuiFocus>(null);
   const [activeMarkCollectionKey, setActiveMarkCollectionKey] = useState<string | null>(() =>
-    gui.type === "sequence" ? gui.document.markCollections[0]?.key ?? null : null
+    gui.type === "sequence"
+      ? sequenceRestore?.activeMarkCollectionKey ?? gui.document.markCollections[0]?.key ?? null
+      : null
   );
   const [visibleMarkCollectionKeys, setVisibleMarkCollectionKeys] = useState<Set<string>>(() =>
-    new Set(gui.type === "sequence" ? gui.document.markCollections.map((collection) => collection.key) : [])
+    new Set(
+      gui.type === "sequence" && sequenceRestore !== undefined
+        ? sequenceRestore.visibleMarkCollectionKeys
+        : gui.type === "sequence"
+          ? gui.document.markCollections.map((collection) => collection.key)
+          : []
+    )
   );
 
   return (

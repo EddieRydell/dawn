@@ -15,7 +15,9 @@ use tauri::window::WindowBuilder;
 use tauri::{AppHandle, Manager, Window};
 use wgpu::util::DeviceExt;
 
-const PREVIEW_LABEL: &str = "preview";
+use crate::show_render::ShowRenderError;
+
+pub const PREVIEW_LABEL: &str = "preview";
 const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     r: 0.0,
     g: 0.0,
@@ -25,20 +27,28 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
 
 pub struct PreviewWindowService {
     running: Mutex<Option<Arc<AtomicBool>>>,
+    closing_for_main_shutdown: Arc<AtomicBool>,
 }
 
 impl PreviewWindowService {
     pub fn new() -> Self {
         Self {
             running: Mutex::new(None),
+            closing_for_main_shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    pub fn open_or_focus(&self, app: AppHandle) -> Result<(), String> {
+    pub fn open_or_focus(
+        &self,
+        app: AppHandle,
+        restore: crate::persistence::PersistedPreviewWindowState,
+    ) -> Result<(), String> {
         if let Some(window) = app.get_window(PREVIEW_LABEL) {
             window.set_focus().map_err(|error| error.to_string())?;
             return Ok(());
         }
+        self.closing_for_main_shutdown
+            .store(false, Ordering::Release);
 
         let window = WindowBuilder::new(&app, PREVIEW_LABEL)
             .title("Dawn Preview")
@@ -47,6 +57,9 @@ impl PreviewWindowService {
             .center()
             .build()
             .map_err(|error| error.to_string())?;
+        if let Some(geometry) = restore.geometry.as_ref() {
+            crate::persistence::apply_window_state(&window, geometry);
+        }
         let renderer = PreviewRenderer::new(&window)?;
         let running = Arc::new(AtomicBool::new(true));
 
@@ -59,10 +72,40 @@ impl PreviewWindowService {
         }
 
         let close_flag = running.clone();
-        window.on_window_event(move |event| {
-            if matches!(event, tauri::WindowEvent::Destroyed) {
+        let close_app = app.clone();
+        let closing_for_main_shutdown = self.closing_for_main_shutdown.clone();
+        window.on_window_event(move |event| match event {
+            tauri::WindowEvent::CloseRequested { .. } => {
+                if closing_for_main_shutdown.load(Ordering::Acquire) {
+                    return;
+                }
+                let state = close_app.state::<crate::state::DesktopState>();
+                let geometry = close_app
+                    .get_window(PREVIEW_LABEL)
+                    .and_then(|window| crate::persistence::read_window_state(&window));
+                let _ = state.persistence().record_preview_window(
+                    crate::persistence::PersistedPreviewWindowState {
+                        open: false,
+                        geometry,
+                    },
+                );
+            }
+            tauri::WindowEvent::Destroyed => {
                 close_flag.store(false, Ordering::Release);
             }
+            tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+                let state = close_app.state::<crate::state::DesktopState>();
+                let geometry = close_app
+                    .get_window(PREVIEW_LABEL)
+                    .and_then(|window| crate::persistence::read_window_state(&window));
+                let _ = state.persistence().record_preview_window(
+                    crate::persistence::PersistedPreviewWindowState {
+                        open: true,
+                        geometry,
+                    },
+                );
+            }
+            _ => {}
         });
 
         std::thread::spawn(move || {
@@ -70,6 +113,24 @@ impl PreviewWindowService {
         });
 
         Ok(())
+    }
+
+    pub fn close_for_main_shutdown(
+        &self,
+        app: &AppHandle,
+        persistence: &crate::persistence::PersistenceService,
+    ) -> Result<(), String> {
+        let Some(window) = app.get_window(PREVIEW_LABEL) else {
+            return Ok(());
+        };
+        let geometry = crate::persistence::read_window_state(&window);
+        persistence.record_preview_window(crate::persistence::PersistedPreviewWindowState {
+            open: true,
+            geometry,
+        })?;
+        self.closing_for_main_shutdown
+            .store(true, Ordering::Release);
+        window.close().map_err(|error| error.to_string())
     }
 }
 
@@ -202,10 +263,20 @@ struct PreviewSize {
     height: u32,
 }
 
+impl PreviewSize {
+    fn clamp_to_max_dimension(self, max_dimension: u32) -> Self {
+        Self {
+            width: self.width.min(max_dimension),
+            height: self.height.min(max_dimension),
+        }
+    }
+}
+
 struct PreviewRenderer {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
+    max_surface_dimension: u32,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
@@ -251,6 +322,8 @@ impl PreviewRenderer {
             })
             .await
             .map_err(|error| error.to_string())?;
+        let max_surface_dimension = device.limits().max_texture_dimension_2d;
+        let size = size.clamp_to_max_dimension(max_surface_dimension);
         let capabilities = surface.get_capabilities(&adapter);
         let format = capabilities
             .formats
@@ -361,6 +434,7 @@ impl PreviewRenderer {
             surface,
             device,
             queue,
+            max_surface_dimension,
             config,
             pipeline,
             bind_group,
@@ -383,6 +457,7 @@ impl PreviewRenderer {
         scene: Option<&PreviewScene>,
         frame: Option<&dawn_runtime::RenderedFrame>,
     ) {
+        let size = size.clamp_to_max_dimension(self.max_surface_dimension);
         if size.width == 0 || size.height == 0 {
             return;
         }
@@ -446,6 +521,7 @@ impl PreviewRenderer {
     }
 
     fn resize(&mut self, size: PreviewSize) {
+        let size = size.clamp_to_max_dimension(self.max_surface_dimension);
         self.config.width = size.width;
         self.config.height = size.height;
         self.surface.configure(&self.device, &self.config);
@@ -620,6 +696,7 @@ fn run_preview_loop(
 ) {
     let mut stats = PreviewFrameStats::new();
     let mut cached_scene: Option<PreviewScene> = None;
+    let mut reported_render_error = false;
     while running.load(Ordering::Acquire) {
         let size = match window_size(&window) {
             Ok(size) => size,
@@ -639,10 +716,23 @@ fn run_preview_loop(
             None => cached_scene = None,
         }
 
-        let frame = state
-            .render_current_sequence_frame()
-            .map(|rendered| rendered.frame)
-            .ok();
+        let frame = match state.render_current_sequence_frame() {
+            Ok(rendered) => {
+                if reported_render_error {
+                    state.clear_render_error_if_set();
+                    reported_render_error = false;
+                }
+                Some(rendered.frame)
+            }
+            Err(ShowRenderError::NoRenderSession | ShowRenderError::ClockUnavailable { .. }) => {
+                None
+            }
+            Err(ShowRenderError::Render(error)) => {
+                state.set_render_error_if_changed(format!("Render failed: {error:?}"));
+                reported_render_error = true;
+                None
+            }
+        };
         renderer.render(size, cached_scene.as_ref(), frame.as_ref());
         if let Some(fps) = stats.record_frame() {
             let _ = window.set_title(&format!("Dawn Preview - {fps:.0} FPS"));
