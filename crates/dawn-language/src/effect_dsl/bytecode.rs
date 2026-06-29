@@ -104,8 +104,24 @@ pub(crate) enum Instruction {
         dst: ValueSlot,
         ty: Type,
     },
-    LoadParam {
-        dst: ValueSlot,
+    LoadIntParam {
+        dst: IntSlot,
+        param: ParamId,
+    },
+    LoadFloatParam {
+        dst: FloatSlot,
+        param: ParamId,
+    },
+    LoadBoolParam {
+        dst: BoolSlot,
+        param: ParamId,
+    },
+    LoadColorParam {
+        dst: ColorSlot,
+        param: ParamId,
+    },
+    LoadRefParam {
+        dst: RefSlot,
         param: ParamId,
     },
     LoadGeneratorContext {

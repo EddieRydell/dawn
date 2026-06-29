@@ -463,8 +463,20 @@ impl<'a> Vm<'a> {
                 Instruction::LoadDefault { dst, ty } => {
                     self.set_value(*dst, RuntimeValue::from_value(&default_value(ty)))?;
                 }
-                Instruction::LoadParam { dst, param } => {
-                    self.load_param(*dst, *param)?;
+                Instruction::LoadIntParam { dst, param } => {
+                    self.load_int_param(*dst, *param)?;
+                }
+                Instruction::LoadFloatParam { dst, param } => {
+                    self.load_float_param(*dst, *param)?;
+                }
+                Instruction::LoadBoolParam { dst, param } => {
+                    self.load_bool_param(*dst, *param)?;
+                }
+                Instruction::LoadColorParam { dst, param } => {
+                    self.load_color_param(*dst, *param)?;
+                }
+                Instruction::LoadRefParam { dst, param } => {
+                    self.load_ref_param(*dst, *param)?;
                 }
                 Instruction::LoadGeneratorContext { dst, slot } => {
                     let value = self.generator_context_value(*slot)?;
@@ -684,7 +696,7 @@ impl<'a> Vm<'a> {
                     let amount = self.float(*amount)?;
                     let left = self.color(*left)?;
                     let right = self.color(*right)?;
-                    self.set_color(*dst, mix_colors(left, right, amount)?)?;
+                    self.set_color(*dst, mix_colors(left, right, amount))?;
                 }
                 Instruction::Rgb {
                     dst,
@@ -717,7 +729,7 @@ impl<'a> Vm<'a> {
                     )?;
                 }
                 Instruction::Rand { dst, args } => {
-                    self.set_float(*dst, self.random(args)?)?;
+                    self.set_float(*dst, self.random(args))?;
                 }
                 Instruction::CurveFloatClamped {
                     dst,
@@ -959,47 +971,23 @@ impl<'a> Vm<'a> {
     }
 
     fn int(&self, slot: IntSlot) -> Result<i64, RuntimeError> {
-        self.scratch
-            .registers
-            .ints
-            .get(slot.0)
-            .copied()
-            .ok_or_else(|| RuntimeError::new("invalid int slot"))
+        Ok(self.scratch.registers.ints[slot.0])
     }
 
     fn float(&self, slot: FloatSlot) -> Result<f64, RuntimeError> {
-        self.scratch
-            .registers
-            .floats
-            .get(slot.0)
-            .copied()
-            .ok_or_else(|| RuntimeError::new("invalid float slot"))
+        Ok(self.scratch.registers.floats[slot.0])
     }
 
     fn bool(&self, slot: BoolSlot) -> Result<bool, RuntimeError> {
-        self.scratch
-            .registers
-            .bools
-            .get(slot.0)
-            .copied()
-            .ok_or_else(|| RuntimeError::new("invalid bool slot"))
+        Ok(self.scratch.registers.bools[slot.0])
     }
 
     fn color(&self, slot: ColorSlot) -> Result<Color, RuntimeError> {
-        self.scratch
-            .registers
-            .colors
-            .get(slot.0)
-            .copied()
-            .ok_or_else(|| RuntimeError::new("invalid color slot"))
+        Ok(self.scratch.registers.colors[slot.0])
     }
 
     fn ref_value(&self, slot: RefSlot) -> Result<&RuntimeValue, RuntimeError> {
-        self.scratch
-            .registers
-            .refs
-            .get(slot.0)
-            .ok_or_else(|| RuntimeError::new("invalid ref slot"))
+        Ok(&self.scratch.registers.refs[slot.0])
     }
 
     fn value(&self, slot: ValueSlot) -> Result<RuntimeValue, RuntimeError> {
@@ -1107,52 +1095,27 @@ impl<'a> Vm<'a> {
     }
 
     fn set_int(&mut self, slot: IntSlot, value: i64) -> Result<(), RuntimeError> {
-        *self
-            .scratch
-            .registers
-            .ints
-            .get_mut(slot.0)
-            .ok_or_else(|| RuntimeError::new("invalid int slot"))? = value;
+        self.scratch.registers.ints[slot.0] = value;
         Ok(())
     }
 
     fn set_float(&mut self, slot: FloatSlot, value: f64) -> Result<(), RuntimeError> {
-        *self
-            .scratch
-            .registers
-            .floats
-            .get_mut(slot.0)
-            .ok_or_else(|| RuntimeError::new("invalid float slot"))? = value;
+        self.scratch.registers.floats[slot.0] = value;
         Ok(())
     }
 
     fn set_bool(&mut self, slot: BoolSlot, value: bool) -> Result<(), RuntimeError> {
-        *self
-            .scratch
-            .registers
-            .bools
-            .get_mut(slot.0)
-            .ok_or_else(|| RuntimeError::new("invalid bool slot"))? = value;
+        self.scratch.registers.bools[slot.0] = value;
         Ok(())
     }
 
     fn set_color(&mut self, slot: ColorSlot, value: Color) -> Result<(), RuntimeError> {
-        *self
-            .scratch
-            .registers
-            .colors
-            .get_mut(slot.0)
-            .ok_or_else(|| RuntimeError::new("invalid color slot"))? = value;
+        self.scratch.registers.colors[slot.0] = value;
         Ok(())
     }
 
     fn set_ref(&mut self, slot: RefSlot, value: RuntimeValue) -> Result<(), RuntimeError> {
-        *self
-            .scratch
-            .registers
-            .refs
-            .get_mut(slot.0)
-            .ok_or_else(|| RuntimeError::new("invalid ref slot"))? = value;
+        self.scratch.registers.refs[slot.0] = value;
         Ok(())
     }
 
@@ -1183,25 +1146,73 @@ impl<'a> Vm<'a> {
         }
     }
 
-    fn load_param(&mut self, slot: ValueSlot, index: usize) -> Result<(), RuntimeError> {
+    fn load_int_param(&mut self, slot: IntSlot, index: usize) -> Result<(), RuntimeError> {
         if let Some(Some(value)) = self.scratch.param_overrides.get(index) {
-            return self.set_value(slot, clone_runtime(value));
+            return match value {
+                RuntimeValue::Int(value) => self.set_int(slot, *value),
+                RuntimeValue::Float(value) => self.set_int(slot, *value as i64),
+                _ => Err(RuntimeError::new("expected int")),
+            };
         }
-        let value = self
-            .params
-            .values
-            .get(index)
-            .ok_or_else(|| RuntimeError::new("invalid param slot"))?;
-        match (slot, value) {
-            (ValueSlot::Int(slot), BoundParamValue::Int(value)) => self.set_int(slot, *value),
-            (ValueSlot::Float(slot), BoundParamValue::Float(value)) => self.set_float(slot, *value),
-            (ValueSlot::Float(slot), BoundParamValue::Int(value)) => {
-                self.set_float(slot, *value as f64)
-            }
-            (ValueSlot::Bool(slot), BoundParamValue::Bool(value)) => self.set_bool(slot, *value),
-            (ValueSlot::Color(slot), BoundParamValue::Color(value)) => self.set_color(slot, *value),
-            (ValueSlot::Ref(slot), value) => self.set_ref(slot, value.to_runtime()),
-            _ => self.set_value(slot, value.to_runtime()),
+        match self.params.values.get(index) {
+            Some(BoundParamValue::Int(value)) => self.set_int(slot, *value),
+            Some(BoundParamValue::Float(value)) => self.set_int(slot, *value as i64),
+            Some(_) => Err(RuntimeError::new("expected int")),
+            None => Err(RuntimeError::new("invalid param slot")),
+        }
+    }
+
+    fn load_float_param(&mut self, slot: FloatSlot, index: usize) -> Result<(), RuntimeError> {
+        if let Some(Some(value)) = self.scratch.param_overrides.get(index) {
+            return match value {
+                RuntimeValue::Float(value) => self.set_float(slot, *value),
+                RuntimeValue::Int(value) => self.set_float(slot, *value as f64),
+                _ => Err(RuntimeError::new("expected float")),
+            };
+        }
+        match self.params.values.get(index) {
+            Some(BoundParamValue::Float(value)) => self.set_float(slot, *value),
+            Some(BoundParamValue::Int(value)) => self.set_float(slot, *value as f64),
+            Some(_) => Err(RuntimeError::new("expected float")),
+            None => Err(RuntimeError::new("invalid param slot")),
+        }
+    }
+
+    fn load_bool_param(&mut self, slot: BoolSlot, index: usize) -> Result<(), RuntimeError> {
+        if let Some(Some(value)) = self.scratch.param_overrides.get(index) {
+            return match value {
+                RuntimeValue::Bool(value) => self.set_bool(slot, *value),
+                _ => Err(RuntimeError::new("expected bool")),
+            };
+        }
+        match self.params.values.get(index) {
+            Some(BoundParamValue::Bool(value)) => self.set_bool(slot, *value),
+            Some(_) => Err(RuntimeError::new("expected bool")),
+            None => Err(RuntimeError::new("invalid param slot")),
+        }
+    }
+
+    fn load_color_param(&mut self, slot: ColorSlot, index: usize) -> Result<(), RuntimeError> {
+        if let Some(Some(value)) = self.scratch.param_overrides.get(index) {
+            return match value {
+                RuntimeValue::Color(value) => self.set_color(slot, *value),
+                _ => Err(RuntimeError::new("expected color")),
+            };
+        }
+        match self.params.values.get(index) {
+            Some(BoundParamValue::Color(value)) => self.set_color(slot, *value),
+            Some(_) => Err(RuntimeError::new("expected color")),
+            None => Err(RuntimeError::new("invalid param slot")),
+        }
+    }
+
+    fn load_ref_param(&mut self, slot: RefSlot, index: usize) -> Result<(), RuntimeError> {
+        if let Some(Some(value)) = self.scratch.param_overrides.get(index) {
+            return self.set_ref(slot, clone_runtime(value));
+        }
+        match self.params.values.get(index) {
+            Some(value) => self.set_ref(slot, value.to_runtime()),
+            None => Err(RuntimeError::new("invalid param slot")),
         }
     }
 
@@ -1224,12 +1235,12 @@ impl<'a> Vm<'a> {
         }
     }
 
-    fn random(&self, args: &[FloatSlot]) -> Result<f64, RuntimeError> {
+    fn random(&self, args: &[FloatSlot]) -> f64 {
         let mut seed = 0.0;
         for slot in args {
-            seed = seed * 31.0 + self.float(*slot)?;
+            seed = seed * 31.0 + self.scratch.registers.floats[slot.0];
         }
-        Ok((seed.sin() * 43_758.545_312_3).fract().abs())
+        (seed.sin() * 43_758.545_312_3).fract().abs()
     }
 
     fn generator_context_value(
@@ -1806,11 +1817,11 @@ fn sample_prepared_color_curve(
     let Some(segment) = find_position_segment(segments, position) else {
         return Err(RuntimeError::new("cannot sample empty color curve"));
     };
-    mix_colors(
+    Ok(mix_colors(
         segment.start_value,
         segment.end_value,
         segment_t(segment.start_position, segment.end_position, position),
-    )
+    ))
 }
 
 trait PositionSegment {
@@ -1927,9 +1938,9 @@ fn mix_curve_values(left: &CurveValue, right: &CurveValue, t: f64) -> Value {
         (CurveValue::Float(left), CurveValue::Float(right)) => {
             Value::Float(left + (right - left) * t)
         }
-        (CurveValue::Color(left), CurveValue::Color(right)) => mix_colors(*left, *right, t)
-            .map(Value::Color)
-            .unwrap_or(Value::Color(*left)),
+        (CurveValue::Color(left), CurveValue::Color(right)) => {
+            Value::Color(mix_colors(*left, *right, t))
+        }
         _ => curve_value_to_value(left),
     }
 }
@@ -1941,12 +1952,12 @@ fn curve_value_to_value(value: &CurveValue) -> Value {
     }
 }
 
-fn mix_colors(left: Color, right: Color, t: f64) -> Result<Color, RuntimeError> {
-    Ok(Color {
+fn mix_colors(left: Color, right: Color, t: f64) -> Color {
+    Color {
         red: channel_byte_lerp(left.red, right.red, t),
         green: channel_byte_lerp(left.green, right.green, t),
         blue: channel_byte_lerp(left.blue, right.blue, t),
-    })
+    }
 }
 
 fn scale_color(color: Color, scale: f64) -> Color {

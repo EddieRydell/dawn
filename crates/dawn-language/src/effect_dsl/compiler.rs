@@ -217,7 +217,7 @@ impl FunctionCompiler {
             CheckedExprKind::Variable(name) => match self.lookup(&name) {
                 Some(Binding::Param(slot)) => {
                     let dst = self.allocate_slot(&result_ty);
-                    self.emit(Instruction::LoadParam { dst, param: slot });
+                    self.emit_load_param(dst, slot);
                     dst
                 }
                 Some(Binding::Local(slot)) => slot,
@@ -378,30 +378,12 @@ impl FunctionCompiler {
     ) -> ValueSlot {
         let dst = self.allocate_slot(&result_ty);
         match name.as_str() {
-            "progress" => self.emit(Instruction::ContextRead {
-                dst,
-                read: ContextRead::Progress,
-            }),
-            "seconds" => self.emit(Instruction::ContextRead {
-                dst,
-                read: ContextRead::Seconds,
-            }),
-            "duration" => self.emit(Instruction::ContextRead {
-                dst,
-                read: ContextRead::Duration,
-            }),
-            "pixel_index" => self.emit(Instruction::ContextRead {
-                dst,
-                read: ContextRead::PixelIndex,
-            }),
-            "pixel_count" => self.emit(Instruction::ContextRead {
-                dst,
-                read: ContextRead::PixelCount,
-            }),
-            "pixel_fraction" => self.emit(Instruction::ContextRead {
-                dst,
-                read: ContextRead::PixelFraction,
-            }),
+            "progress" => self.emit_context_read(dst, ContextRead::Progress),
+            "seconds" => self.emit_context_read(dst, ContextRead::Seconds),
+            "duration" => self.emit_context_read(dst, ContextRead::Duration),
+            "pixel_index" => self.emit_context_read(dst, ContextRead::PixelIndex),
+            "pixel_count" => self.emit_context_read(dst, ContextRead::PixelCount),
+            "pixel_fraction" => self.emit_context_read(dst, ContextRead::PixelFraction),
             "section_position" => {
                 let args = self.compile_float_args(args);
                 let dst = self.float_slot(dst);
@@ -642,6 +624,20 @@ impl FunctionCompiler {
     fn float_slot_from_expr(&mut self, expr: CheckedExpr) -> FloatSlot {
         let slot = self.compile_expr(expr);
         self.float_slot(slot)
+    }
+
+    fn emit_load_param(&mut self, dst: ValueSlot, param: ParamId) {
+        match dst {
+            ValueSlot::Int(dst) => self.emit(Instruction::LoadIntParam { dst, param }),
+            ValueSlot::Float(dst) => self.emit(Instruction::LoadFloatParam { dst, param }),
+            ValueSlot::Bool(dst) => self.emit(Instruction::LoadBoolParam { dst, param }),
+            ValueSlot::Color(dst) => self.emit(Instruction::LoadColorParam { dst, param }),
+            ValueSlot::Ref(dst) => self.emit(Instruction::LoadRefParam { dst, param }),
+        }
+    }
+
+    fn emit_context_read(&mut self, dst: ValueSlot, read: ContextRead) {
+        self.emit(Instruction::ContextRead { dst, read });
     }
 
     fn emit_binary(&mut self, dst: ValueSlot, op: BinaryOp, left: ValueSlot, right: ValueSlot) {
