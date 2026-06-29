@@ -3,7 +3,7 @@ use super::ast::{
     Stmt, UnaryOp,
 };
 use super::diagnostic::Diagnostic;
-use super::lexer::{lex, Keyword, TextSpan, Token, TokenKind};
+use super::lexer::{Keyword, TextSpan, Token, TokenKind, lex};
 use super::types::{Identifier, Type, Value};
 use crate::values::Color;
 use std::sync::Arc;
@@ -318,10 +318,7 @@ impl<'source> Parser<'source> {
 
     fn parse_precedence(&mut self, min_precedence: u8) -> Expr {
         let mut left = self.parse_unary();
-        loop {
-            let Some((op, precedence)) = self.current_binary_op() else {
-                break;
-            };
+        while let Some((op, precedence)) = self.current_binary_op() {
             if precedence < min_precedence {
                 break;
             }

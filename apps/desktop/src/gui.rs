@@ -71,7 +71,7 @@ pub fn project_gui_document(
             return blocked(
                 message.clone(),
                 vec![gui_diagnostic(&request.path, "gui.resolve", &message)],
-            )
+            );
         }
     };
     match request.view {

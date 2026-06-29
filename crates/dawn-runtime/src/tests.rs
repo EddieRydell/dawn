@@ -4,7 +4,7 @@ use dawn_language::effect::{
     CurveDefinition, CurveId, CurveSource, EffectDefinition, EffectDefinitionId, EffectInst,
     EffectInstId, EffectParamValue, EffectScope, EffectTarget,
 };
-use dawn_language::effect_dsl::{compile_effects, Identifier};
+use dawn_language::effect_dsl::{Identifier, compile_effects};
 use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
 use dawn_language::sequence::{
     AutomationClip, AutomationClipId, MarkCollectionKey, Sequence, SequenceAudio, SequenceId,
@@ -262,14 +262,18 @@ fn missing_references_and_unsupported_automation_fail() {
 
 #[test]
 fn no_arg_and_global_mark_builtins_are_rejected() {
-    assert!(compile_effects(
-        "effect Bad { color sample() { return rgb(mark_count() / 255.0, 0.0, 0.0); } }"
-    )
-    .is_err());
-    assert!(compile_effects(
-        "effect Bad { color sample() { return rgb(mark_global_count() / 255.0, 0.0, 0.0); } }"
-    )
-    .is_err());
+    assert!(
+        compile_effects(
+            "effect Bad { color sample() { return rgb(mark_count() / 255.0, 0.0, 0.0); } }"
+        )
+        .is_err()
+    );
+    assert!(
+        compile_effects(
+            "effect Bad { color sample() { return rgb(mark_global_count() / 255.0, 0.0, 0.0); } }"
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -550,13 +554,22 @@ fn definitions() -> ProjectDefinitionStores {
             "LocalColor",
             "effect LocalColor { color sample() { return rgb(seconds() / 2.0, progress(), 0.0); } }",
         ),
-        ("Green", "effect Green { color sample() { return rgb(0.0, 1.0, 0.0); } }"),
+        (
+            "Green",
+            "effect Green { color sample() { return rgb(0.0, 1.0, 0.0); } }",
+        ),
         (
             "IndexColor",
             "effect IndexColor { color sample() { return rgb(pixel_index() / pixel_count(), 0.0, 0.0); } }",
         ),
-        ("Red", "effect Red { color sample() { return rgb(0.7843137255, 0.0, 0.0); } }"),
-        ("Blue", "effect Blue { color sample() { return rgb(0.0, 0.0, 0.8235294118); } }"),
+        (
+            "Red",
+            "effect Red { color sample() { return rgb(0.7843137255, 0.0, 0.0); } }",
+        ),
+        (
+            "Blue",
+            "effect Blue { color sample() { return rgb(0.0, 0.0, 0.8235294118); } }",
+        ),
         (
             "MarkCountColor",
             "effect MarkCountColor { param marks beats; color sample() { return rgb(mark_count(beats) / 255.0, 0.0, 0.0); } }",
@@ -566,11 +579,7 @@ fn definitions() -> ProjectDefinitionStores {
             "effect CurveColor { param curve<color> gradient; color sample() { return gradient[0.0]; } }",
         ),
     ] {
-        let compiled = compile_effects(source)
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
+        let compiled = compile_effects(source).unwrap().into_iter().next().unwrap();
         effects.insert(
             EffectDefinitionId(name.to_string()),
             EffectDefinition { compiled },

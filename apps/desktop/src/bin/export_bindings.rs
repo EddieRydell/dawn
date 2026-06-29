@@ -19,11 +19,11 @@ fn main() {
         .join("generated")
         .join("bindings.ts");
 
-    if let Some(parent) = path.parent() {
-        if let Err(error) = std::fs::create_dir_all(parent) {
-            eprintln!("failed to create generated bindings directory: {error}");
-            std::process::exit(1);
-        }
+    if let Some(parent) = path.parent()
+        && let Err(error) = std::fs::create_dir_all(parent)
+    {
+        eprintln!("failed to create generated bindings directory: {error}");
+        std::process::exit(1);
     }
 
     if let Err(error) = dawn_desktop::bindings::export_typescript(path) {

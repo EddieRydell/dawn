@@ -1,7 +1,3 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
 :root {
   --dawn-bg: #17181b;
   --dawn-bg-app: #16171a;

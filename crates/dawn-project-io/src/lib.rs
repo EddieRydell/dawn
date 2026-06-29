@@ -16,7 +16,7 @@ use dawn_language::effect::{
     CurveDefinition, CurveId, CurveSource, EffectDefinition, EffectDefinitionId, EffectInst,
     EffectInstId, EffectParamValue, EffectScope, EffectTarget,
 };
-use dawn_language::effect_dsl::{compile_effects, Diagnostic as EffectDiagnostic, Identifier};
+use dawn_language::effect_dsl::{Diagnostic as EffectDiagnostic, Identifier, compile_effects};
 use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
 use dawn_language::sequence::{
     AssetId, AutomationClip, AutomationClipId, MarkCollection, MarkCollectionKey, Sequence,
@@ -2171,7 +2171,7 @@ impl Loader {
                         path: relative.to_path_buf(),
                         range: source_range_for_field_value(relative, object_value, "type"),
                         message: format!("unsupported object type `{other}`"),
-                    })
+                    });
                 }
             };
             object_types.push(object.source_kind());
@@ -2573,7 +2573,7 @@ impl DomainResolver<'_> {
                     path: document_path,
                     range: None,
                     reference: layout_ref.to_string(),
-                })
+                });
             }
         };
         let patch = match self.loader.resolve_reference(&document_path, patch_ref)? {
@@ -2583,7 +2583,7 @@ impl DomainResolver<'_> {
                     path: path.to_path_buf(),
                     range: None,
                     reference: patch_ref.to_string(),
-                })
+                });
             }
         };
         let controllers = sequence_field(&document_path, &value, "controllers")?
@@ -2626,7 +2626,7 @@ impl DomainResolver<'_> {
                     path: path.to_path_buf(),
                     range: None,
                     message: format!("unsupported controller protocol `{other}`"),
-                })
+                });
             }
         };
         let address = optional_string_field(&value, "destination")
@@ -2684,7 +2684,7 @@ impl DomainResolver<'_> {
                     path: path.to_path_buf(),
                     range: None,
                     message: format!("unsupported controller output type `{other}`"),
-                })
+                });
             }
         };
         let definition = ControllerDefinition {
@@ -2753,7 +2753,7 @@ impl DomainResolver<'_> {
                     path: path.to_path_buf(),
                     range: None,
                     reference: fixture_ref.to_string(),
-                })
+                });
             }
         };
         let transform = optional_mapping_ref(value, "transform");
@@ -2828,7 +2828,7 @@ impl DomainResolver<'_> {
                     path: path.to_path_buf(),
                     range: None,
                     message: format!("unsupported fixture geometry `{other}`"),
-                })
+                });
             }
         };
         self.project.definitions.fixtures.insert(
@@ -2876,7 +2876,7 @@ impl DomainResolver<'_> {
                     path: path.to_path_buf(),
                     range: None,
                     reference: controller_ref.to_string(),
-                })
+                });
             }
             Err(_) => ControllerId(controller_ref.to_string()),
         };
@@ -3041,7 +3041,7 @@ impl DomainResolver<'_> {
                     path: path.to_path_buf(),
                     range: None,
                     reference: script_ref.to_string(),
-                })
+                });
             }
         };
         self.resolve_effect_definition(&definition)?;
@@ -3097,7 +3097,7 @@ impl DomainResolver<'_> {
                         path: path.to_path_buf(),
                         range: source_range_for_field_value(path, value, "scope"),
                         message: format!("invalid effect scope `{other}`"),
-                    })
+                    });
                 }
             },
             definition,
@@ -3227,7 +3227,7 @@ impl DomainResolver<'_> {
                         path: path.to_path_buf(),
                         range: None,
                         reference: reference.to_string(),
-                    })
+                    });
                 }
             };
             self.resolve_curve(path, &id)?;
@@ -3268,7 +3268,7 @@ impl DomainResolver<'_> {
                     path: path.to_path_buf(),
                     range: None,
                     reference: curve_ref.to_string(),
-                })
+                });
             }
         };
         self.resolve_curve(path, &curve)?;
@@ -3503,7 +3503,7 @@ fn parse_curve(path: &Utf8Path, value: &Value) -> Result<Curve, LoadProjectError
                         path: path.to_path_buf(),
                         range: source_range_for_field_value(path, value, "value_type"),
                         message: format!("unsupported curve value type `{other}`"),
-                    })
+                    });
                 }
             };
             Ok(CurvePoint { position, value })

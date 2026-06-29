@@ -984,10 +984,10 @@ fn generator_context_target(
     prepared_target: &Arc<Vec<PreparedTargetPixel>>,
 ) -> Arc<TargetValue> {
     let key = arc_key(prepared_target);
-    if let Some(entry) = cache.generator_context_targets.get(&key) {
-        if Arc::ptr_eq(&entry.source, prepared_target) {
-            return Arc::clone(&entry.target);
-        }
+    if let Some(entry) = cache.generator_context_targets.get(&key)
+        && Arc::ptr_eq(&entry.source, prepared_target)
+    {
+        return Arc::clone(&entry.target);
     }
     let target = Arc::new(TargetValue {
         groups: target_groups_from_pixels(prepared_target),
@@ -1067,10 +1067,10 @@ fn prepared_pixels_from_generated_target_cached(
     target: Arc<TargetItemValue>,
 ) -> Result<Arc<Vec<PreparedTargetPixel>>, RenderError> {
     let key = arc_key(&target);
-    if let Some(entry) = cache.generated_targets.get(&key) {
-        if Arc::ptr_eq(&entry.source, &target) {
-            return Ok(Arc::clone(&entry.pixels));
-        }
+    if let Some(entry) = cache.generated_targets.get(&key)
+        && Arc::ptr_eq(&entry.source, &target)
+    {
+        return Ok(Arc::clone(&entry.pixels));
     }
     let pixels = Arc::new(prepared_pixels_from_generated_target(
         fixtures,

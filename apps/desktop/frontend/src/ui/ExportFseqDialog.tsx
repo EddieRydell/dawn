@@ -1,6 +1,6 @@
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { useEffect, useState } from "react";
-import type { FormEvent } from "react";
+import type { SyntheticEvent } from "react";
 import { commands } from "../api";
 import { useAppStore } from "../store";
 
@@ -32,7 +32,7 @@ export function ExportFseqDialog() {
       : "Step ms must be an integer from 1 to 255.";
   const exportDisabled = exporting || stepError !== null;
 
-  async function exportFseq(event: FormEvent) {
+  async function exportFseq(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     if (exportDisabled) return;
     setExporting(true);

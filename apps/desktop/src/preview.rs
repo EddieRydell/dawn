@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
 
@@ -299,7 +299,7 @@ impl PreviewRenderer {
 
     async fn new_async(window: &Window) -> Result<Self, String> {
         let size = window_size(window)?;
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let surface = instance
             .create_surface(window.clone())
             .map_err(|error| error.to_string())?;
@@ -395,8 +395,8 @@ impl PreviewRenderer {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Preview Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Preview Pipeline"),
@@ -423,7 +423,7 @@ impl PreviewRenderer {
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -474,14 +474,15 @@ impl PreviewRenderer {
         }
 
         let output = match self.surface.get_current_texture() {
-            Ok(output) => output,
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+            wgpu::CurrentSurfaceTexture::Success(output)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
+            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&self.device, &self.config);
                 return;
             }
-            Err(wgpu::SurfaceError::Timeout) => return,
-            Err(wgpu::SurfaceError::OutOfMemory) => return,
-            Err(wgpu::SurfaceError::Other) => return,
+            wgpu::CurrentSurfaceTexture::Timeout
+            | wgpu::CurrentSurfaceTexture::Occluded
+            | wgpu::CurrentSurfaceTexture::Validation => return,
         };
 
         let view = output
@@ -507,6 +508,7 @@ impl PreviewRenderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
             if self.instance_count > 0 {
                 pass.set_pipeline(&self.pipeline);

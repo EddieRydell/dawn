@@ -1,13 +1,13 @@
 use std::collections::BTreeSet;
 use std::fs;
-use std::sync::{mpsc, Mutex};
+use std::sync::{Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_project_io::{
-    check_document_text, check_project, save_project, IoDiagnostic, IoDiagnosticSeverity,
-    ProjectCheckReport, ProjectSession, SourceDocument, SourceDocumentKind, SourceObjectKind,
+    IoDiagnostic, IoDiagnosticSeverity, ProjectCheckReport, ProjectSession, SourceDocument,
+    SourceDocumentKind, SourceObjectKind, check_document_text, check_project, save_project,
 };
 use indexmap::IndexSet;
 
@@ -691,7 +691,7 @@ impl DesktopState {
                     selection: None,
                     copied_count: 0,
                     skipped_count: 0,
-                }
+                };
             }
         };
         let dirty_path = self
@@ -740,7 +740,7 @@ impl DesktopState {
                     selection: None,
                     copied_count: 0,
                     skipped_count: 0,
-                }
+                };
             }
         };
         self.schedule_gui_save(&edited, affected_paths, request.path.clone());
@@ -1175,12 +1175,11 @@ impl DesktopState {
                 snapshot.status = "Project files updated".to_string();
             }
         });
-        if let Some(path) = new_active_path {
-            if absolute_project_path(&project, Utf8Path::new(path))
+        if let Some(path) = new_active_path
+            && absolute_project_path(&project, Utf8Path::new(path))
                 .is_some_and(|path| path.is_file())
-            {
-                return self.open_file_path(path);
-            }
+        {
+            return self.open_file_path(path);
         }
         self.snapshot()
     }
@@ -1715,10 +1714,10 @@ fn available_views(objects: &[DocumentObjectDescriptor]) -> Vec<DocumentViewId> 
             ObjectKind::Sequence => Some(DocumentViewId::Sequence),
             _ => None,
         };
-        if let Some(view) = view {
-            if !views.iter().any(|existing| same_view(existing, &view)) {
-                views.push(view);
-            }
+        if let Some(view) = view
+            && !views.iter().any(|existing| same_view(existing, &view))
+        {
+            views.push(view);
         }
     }
     views

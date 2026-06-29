@@ -443,7 +443,7 @@ impl Checker {
                 return args
                     .into_iter()
                     .map(|arg| self.check_expr(arg, env, None))
-                    .collect()
+                    .collect();
             }
         };
         args.into_iter()
@@ -685,13 +685,12 @@ impl Checker {
         if expected == actual || (expected == &Type::Float && actual == &Type::Int) {
             return;
         }
-        if let (Type::Enum(options), Type::Enum(actual_options)) = (expected, actual) {
-            if actual_options
+        if let (Type::Enum(options), Type::Enum(actual_options)) = (expected, actual)
+            && actual_options
                 .iter()
                 .all(|value| options.iter().any(|option| option == value))
-            {
-                return;
-            }
+        {
+            return;
         }
         self.error(span, format!("expected {expected:?}, got {actual:?}"));
     }

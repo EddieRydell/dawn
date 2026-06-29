@@ -1,4 +1,4 @@
-use specta_typescript::{semantic, Typescript};
+use specta_typescript::{Typescript, semantic};
 use tauri_specta::Builder;
 
 pub fn builder() -> Builder<tauri::Wry> {

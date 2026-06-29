@@ -2,7 +2,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_specta::{collect_commands, Builder};
+use tauri_specta::{Builder, collect_commands};
 
 use crate::dto::{
     AppSnapshot, AudioTransportState, DocumentViewId, EditorViewMode, FixtureGuiEdit, GuiDocument,
@@ -11,8 +11,8 @@ use crate::dto::{
     SequenceSelectionEdit, SequenceSelectionEditResult,
 };
 use crate::persistence::{
-    read_window_state, PersistedEditorViewStateUpdate, PersistedPreviewWindowState,
-    PersistedSequenceViewportStateUpdate, ProjectRestoreState,
+    PersistedEditorViewStateUpdate, PersistedPreviewWindowState,
+    PersistedSequenceViewportStateUpdate, ProjectRestoreState, read_window_state,
 };
 use crate::state::DesktopState;
 
@@ -100,10 +100,10 @@ pub fn set_active_view_mode(mode: EditorViewMode, state: State<'_, DesktopState>
         if let Some(buffer) = snapshot.active_buffer.as_mut() {
             buffer.view_mode = mode.clone();
         }
-        if let Some(path) = snapshot.active_file.as_deref() {
-            if let Some(tab) = snapshot.tabs.iter_mut().find(|tab| tab.path == path) {
-                tab.view_mode = mode;
-            }
+        if let Some(path) = snapshot.active_file.as_deref()
+            && let Some(tab) = snapshot.tabs.iter_mut().find(|tab| tab.path == path)
+        {
+            tab.view_mode = mode;
         }
     })
 }
@@ -421,11 +421,9 @@ pub fn persist_app_close(
     if let Some(main) = app
         .get_window("main")
         .and_then(|window| read_window_state(&window))
+        && let Err(error) = state.persistence().record_main_window(main)
     {
-        if let Err(error) = state.persistence().record_main_window(main) {
-            return state
-                .set_persistence_error(format!("Main window state was not saved: {error}"));
-        }
+        return state.set_persistence_error(format!("Main window state was not saved: {error}"));
     }
     if let Err(error) = preview.close_for_main_shutdown(&app, state.persistence()) {
         return state.set_persistence_error(format!("Preview window state was not saved: {error}"));
@@ -489,13 +487,15 @@ fn publish_audio_snapshot(app: &AppHandle, snapshot: AppSnapshot) -> AppSnapshot
 }
 
 fn start_audio_transport_poll(app: AppHandle) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_millis(50));
-        let state = app.state::<DesktopState>();
-        let snapshot = state.snapshot();
-        let _ = app.emit("audio_transport_changed", snapshot.audio_transport.clone());
-        if !matches!(snapshot.audio_transport.state, AudioTransportState::Playing) {
-            break;
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(50));
+            let state = app.state::<DesktopState>();
+            let snapshot = state.snapshot();
+            let _ = app.emit("audio_transport_changed", snapshot.audio_transport.clone());
+            if !matches!(snapshot.audio_transport.state, AudioTransportState::Playing) {
+                break;
+            }
         }
     });
 }

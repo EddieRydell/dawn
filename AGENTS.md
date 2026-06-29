@@ -9,6 +9,12 @@ This is a Rust workspace. The desktop service and UI state live under `apps/desk
 Rust integration tests live under `crates/*/tests`, and desktop service tests may live beside the service modules. Do not add or modify tests unless specifically requested. 
 When tests are requested for project analysis, document edits, diagnostics, or model behavior, prefer fixtures from `examples/thirty-output-controller` for realistic project flows and use temporary test directories for invalid or synthetic Dawn documents.
 
+## Benchmark Guidelines
+
+Effect DSL VM and real-project render benchmarks use Criterion only. Use `pnpm bench:effect-vm:quick` for a fast smoke pass, `pnpm bench:effect-vm:save` before optimization work, `pnpm bench:effect-vm:compare` after optimization work, and `pnpm bench:effect-vm` for the full benchmark set. Focused runs are `cargo bench -p dawn-language --bench effect_vm_bench -- scan_sweep` and `cargo bench -p dawn-runtime --bench render_bench -- render_frame_9504`.
+
+Do not reintroduce custom benchmark CLIs, JSON reporters, legacy aliases, or old render bench flags such as `--project`, `--frames`, `--iterations`, `--warmup`, or `--render-only`. Criterion output lives under `target/criterion` and must not be committed. Timing changes are advisory; checksum and active-effect-count assertion changes are behavior changes unless intentional.
+
 ## Agent-Specific Instructions
 
 Do not write tests unless specifically requested.

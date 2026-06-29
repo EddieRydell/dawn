@@ -2,12 +2,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::mpsc;
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     Arc,
+    atomic::{AtomicU64, Ordering},
 };
 use std::thread;
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use dawn_language::effect::{
     CurveDefinition, CurveId, CurveSource, EffectDefinition, EffectInst, EffectInstId,
     EffectParamValue,
@@ -18,8 +18,8 @@ use dawn_language::sequence::{MarkCollectionKey, Sequence, SequenceId};
 use dawn_language::setup::SetupId;
 use dawn_language::values::{Color, DawnTime};
 use dawn_runtime::{
-    resolve_effect_target_pixel_addresses, EffectRasterPrepareBatch, PreparedEffectRasterRenderer,
-    RenderedTargetPixelAddress,
+    EffectRasterPrepareBatch, PreparedEffectRasterRenderer, RenderedTargetPixelAddress,
+    resolve_effect_target_pixel_addresses,
 };
 
 use crate::dto::{

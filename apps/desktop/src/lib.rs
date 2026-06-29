@@ -34,10 +34,10 @@ pub fn run() -> Result<(), tauri::Error> {
             let state = app.state::<state::DesktopState>();
             match state.persistence().load(&handle) {
                 Ok(last_project) => {
-                    if let Some(window_state) = state.persistence().main_window() {
-                        if let Some(window) = app.get_window("main") {
-                            persistence::apply_window_state(&window, &window_state);
-                        }
+                    if let Some(window_state) = state.persistence().main_window()
+                        && let Some(window) = app.get_window("main")
+                    {
+                        persistence::apply_window_state(&window, &window_state);
                     }
                     if let Some(window) = app.get_window("main") {
                         let close_app = handle.clone();

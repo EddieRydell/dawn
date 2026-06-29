@@ -75,7 +75,7 @@ impl ShowRenderService {
             AudioTransportState::Unloaded | AudioTransportState::Error => {
                 return Err(ShowRenderError::ClockUnavailable {
                     state: audio.state.clone(),
-                })
+                });
             }
         }
         let frame = session

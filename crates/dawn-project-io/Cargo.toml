@@ -7,12 +7,12 @@ authors = ["Dawn"]
 license = "MIT"
 
 [dependencies]
-camino = "1.2.1"
-dawn-language = { path = "../dawn-language" }
-indexmap = "2.14.0"
-marked-yaml = "0.8.0"
-serde = { version = "1.0.228", features = ["derive"] }
-yaml_serde = "0.10.4"
+camino.workspace = true
+dawn-language.workspace = true
+indexmap.workspace = true
+marked-yaml.workspace = true
+serde.workspace = true
+yaml_serde.workspace = true
 
 [dev-dependencies]
-tempfile = "3.23.0"
+tempfile.workspace = true

@@ -1,6 +1,6 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_project_io::{
-    export_project, load_project, save_project, source_file_list, SourceDocumentKind,
+    SourceDocumentKind, export_project, load_project, save_project, source_file_list,
 };
 use std::fs;
 

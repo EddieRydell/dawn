@@ -7,12 +7,13 @@ authors = ["Dawn"]
 license = "MIT"
 
 [dependencies]
-dawn-language = { path = "../dawn-language" }
-indexmap = "2.14.0"
+dawn-language.workspace = true
+indexmap.workspace = true
 
 [dev-dependencies]
-camino = "1.2.1"
-dawn-project-io = { path = "../dawn-project-io" }
+camino.workspace = true
+criterion.workspace = true
+dawn-project-io.workspace = true
 
 [[bench]]
 name = "render_bench"

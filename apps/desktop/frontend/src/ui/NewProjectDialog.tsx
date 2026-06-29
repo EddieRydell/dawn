@@ -1,7 +1,7 @@
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { FolderOpen } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
+import type { SyntheticEvent } from "react";
 import { commands } from "../api";
 import { useAppStore } from "../store";
 
@@ -44,7 +44,7 @@ export function NewProjectDialog() {
     }
   }
 
-  async function createProject(event: FormEvent) {
+  async function createProject(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     if (createDisabled) return;
     setCreating(true);

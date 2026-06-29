@@ -153,15 +153,16 @@ impl AudioEngine {
         if matches!(self.state, AudioTransportState::Ended) {
             self.position_seconds = self.home_seconds;
         }
-        if matches!(self.state, AudioTransportState::Paused) && self.can_resume_handle {
-            if let Some(handle) = self.handle.as_mut() {
-                handle.resume();
-                self.state = AudioTransportState::Playing;
-                self.last_error = None;
-                self.can_resume_handle = false;
-                self.bump_generation();
-                return self.current_snapshot();
-            }
+        if matches!(self.state, AudioTransportState::Paused)
+            && self.can_resume_handle
+            && let Some(handle) = self.handle.as_mut()
+        {
+            handle.resume();
+            self.state = AudioTransportState::Playing;
+            self.last_error = None;
+            self.can_resume_handle = false;
+            self.bump_generation();
+            return self.current_snapshot();
         }
         self.lifecycle_stop_handle();
         self.start_stream_at_position();
@@ -767,12 +768,14 @@ mod tests {
         }
 
         fn assert_no_handle_stop(&self) {
-            assert!(!self
-                .shared
-                .lock()
-                .expect("fake shared")
-                .handle_actions
-                .contains(&HandleAction::Stop));
+            assert!(
+                !self
+                    .shared
+                    .lock()
+                    .expect("fake shared")
+                    .handle_actions
+                    .contains(&HandleAction::Stop)
+            );
         }
     }
 

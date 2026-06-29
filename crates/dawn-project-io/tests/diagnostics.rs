@@ -1,6 +1,6 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_project_io::{
-    check_document_text, check_project, IoDiagnosticCode, IoDiagnosticSeverity, TextRange,
+    IoDiagnosticCode, IoDiagnosticSeverity, TextRange, check_document_text, check_project,
 };
 use std::fs;
 
@@ -139,7 +139,10 @@ fn nested_invalid_color_reports_nested_scalar_range() {
     let temp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
     let entrypoint = root.join("project.dawn");
-    write_imported_sequence_project(&root, "  duration: 1s\n  frame_rate: 30\n  mark_collections:\n    - key: beats\n      name: Beats\n      color: bad-color\n      marks: []\n");
+    write_imported_sequence_project(
+        &root,
+        "  duration: 1s\n  frame_rate: 30\n  mark_collections:\n    - key: beats\n      name: Beats\n      color: bad-color\n      marks: []\n",
+    );
 
     let report = check_project(&entrypoint);
     let diagnostic = report
@@ -191,9 +194,11 @@ fn imported_effect_errors_keep_exact_spans_without_aggregate_marker() {
         .filter(|diagnostic| diagnostic.code == IoDiagnosticCode::EffectCompile)
         .collect::<Vec<_>>();
 
-    assert!(effect_diagnostics
-        .iter()
-        .all(|diagnostic| diagnostic.range.is_some()));
+    assert!(
+        effect_diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.range.is_some())
+    );
     assert!(effect_diagnostics.iter().any(|diagnostic| diagnostic.path
         == Utf8Path::new("bad.effect.dawn")
         && diagnostic.range.as_ref().is_some_and(|range| {
@@ -202,11 +207,13 @@ fn imported_effect_errors_keep_exact_spans_without_aggregate_marker() {
                 && range.end.line == 2
                 && range.end.character == 12
         })));
-    assert!(effect_diagnostics
-        .iter()
-        .all(|diagnostic| diagnostic.range.as_ref().is_none_or(|range| {
-            range.start.line != 0 || range.start.character != 0 || range.end.character != 1
-        })));
+    assert!(
+        effect_diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.range.as_ref().is_none_or(|range| {
+                range.start.line != 0 || range.start.character != 0 || range.end.character != 1
+            }))
+    );
 }
 
 #[test]

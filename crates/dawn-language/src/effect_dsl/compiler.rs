@@ -1,8 +1,8 @@
 use super::ast::{BinaryOp, UnaryOp};
 use super::bytecode::{
-    slot_layout_id, ArithmeticOp, BoolSlot, ColorSlot, CompareOp, ContextRead, FloatBinary,
-    FloatSlot, FloatUnary, GeneratorContextId, Instruction, IntArithmeticOp, IntSlot, LocalId,
-    MarkOp, ParamId, RefSlot, RegisterFunction, SlotLayout, Target, TargetItemsOp, ValueSlot,
+    ArithmeticOp, BoolSlot, ColorSlot, CompareOp, ContextRead, FloatBinary, FloatSlot, FloatUnary,
+    GeneratorContextId, Instruction, IntArithmeticOp, IntSlot, LocalId, MarkOp, ParamId, RefSlot,
+    RegisterFunction, SlotLayout, Target, TargetItemsOp, ValueSlot, slot_layout_id,
 };
 use super::checked::{
     CheckedBlock, CheckedEffectDecl, CheckedExpr, CheckedExprKind, CheckedModule, CheckedStmt,
