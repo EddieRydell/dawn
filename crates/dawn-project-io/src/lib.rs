@@ -294,6 +294,18 @@ pub fn save_project(session: &ProjectSession) -> Result<SaveReport, SaveProjectE
     Ok(SaveReport { written_files })
 }
 
+pub fn source_document_text(
+    session: &ProjectSession,
+    relative_path: &Utf8Path,
+) -> Result<Option<String>, ExportProjectError> {
+    let mut synced = session.clone();
+    sync_project_source(&mut synced)?;
+    let Some(document) = synced.source.documents.get(relative_path) else {
+        return Ok(None);
+    };
+    document_text(document).map(Some)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectSession {
     pub project: DawnProject,
@@ -888,29 +900,32 @@ fn write_source_documents(
             })?;
         }
 
-        match &document.kind {
-            SourceDocumentKind::Dawn { value, .. } => {
-                let yaml = yaml_serde::to_string(value).map_err(|source| {
-                    ExportProjectError::Serialize {
-                        path: output_path.clone(),
-                        source,
-                    }
-                })?;
-                fs::write(&output_path, yaml).map_err(|source| ExportProjectError::Io {
-                    path: output_path.clone(),
-                    source,
-                })?;
-            }
-            SourceDocumentKind::Effect { source } => {
-                fs::write(&output_path, source).map_err(|source| ExportProjectError::Io {
-                    path: output_path.clone(),
-                    source,
-                })?;
-            }
-        }
+        let text = document_text(document).map_err(|error| match error {
+            ExportProjectError::Serialize { source, .. } => ExportProjectError::Serialize {
+                path: output_path.clone(),
+                source,
+            },
+            other => other,
+        })?;
+        fs::write(&output_path, text).map_err(|source| ExportProjectError::Io {
+            path: output_path.clone(),
+            source,
+        })?;
         written_files.push(document.relative_path.clone());
     }
     Ok(written_files)
+}
+
+fn document_text(document: &SourceDocument) -> Result<String, ExportProjectError> {
+    match &document.kind {
+        SourceDocumentKind::Dawn { value, .. } => {
+            yaml_serde::to_string(value).map_err(|source| ExportProjectError::Serialize {
+                path: document.relative_path.clone(),
+                source,
+            })
+        }
+        SourceDocumentKind::Effect { source } => Ok(source.clone()),
+    }
 }
 
 fn sync_project_source(session: &mut ProjectSession) -> Result<(), ExportProjectError> {

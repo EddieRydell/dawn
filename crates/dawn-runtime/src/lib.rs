@@ -48,12 +48,19 @@ pub struct PreparedSequenceRenderer {
 pub struct PreparedEffectRasterRenderer {
     frame_rate: u32,
     frame_count: u64,
+    index_start_frame: u64,
     start_seconds: f64,
     duration_seconds: f64,
     target: Arc<Vec<PreparedTargetPixel>>,
     target_lookup: HashMap<TargetColorAddress, Vec<usize>>,
     effects: Vec<PreparedEffect>,
     effects_by_frame: Vec<Vec<usize>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedEffectRasterSample {
+    row_count: usize,
+    effect_pixels: Vec<Vec<PreparedSampledEffectPixel>>,
 }
 
 pub struct EffectRasterPrepareBatch<'a> {
@@ -356,11 +363,76 @@ impl PreparedEffectRasterRenderer {
         self.render_target_colors_at(frame_index)
     }
 
+    pub fn prepare_sampled_raster(&self, row_count: usize) -> PreparedEffectRasterSample {
+        let sample_indices = evenly_sample_indices(self.target.len(), row_count);
+        let row_count = sample_indices.len();
+        let mut sample_lookup = HashMap::<TargetColorAddress, Vec<usize>>::new();
+        for (row_index, target_index) in sample_indices.into_iter().enumerate() {
+            if let Some(pixel) = self.target.get(target_index) {
+                sample_lookup
+                    .entry(TargetColorAddress {
+                        fixture_index: pixel.fixture_index,
+                        fixture_pixel_index: pixel.fixture_pixel_index,
+                    })
+                    .or_default()
+                    .push(row_index);
+            }
+        }
+        let effect_pixels = self
+            .effects
+            .iter()
+            .map(|effect| {
+                effect
+                    .target
+                    .iter()
+                    .filter_map(|pixel| {
+                        sample_lookup
+                            .get(&TargetColorAddress {
+                                fixture_index: pixel.fixture_index,
+                                fixture_pixel_index: pixel.fixture_pixel_index,
+                            })
+                            .map(|rows| PreparedSampledEffectPixel {
+                                pixel: pixel.clone(),
+                                rows: rows.clone(),
+                            })
+                    })
+                    .collect()
+            })
+            .collect();
+        PreparedEffectRasterSample {
+            row_count,
+            effect_pixels,
+        }
+    }
+
+    pub fn render_sampled_raster_column(
+        &self,
+        sample: &PreparedEffectRasterSample,
+        audio_seconds: f64,
+    ) -> Result<Vec<Color>, RenderError> {
+        if !audio_seconds.is_finite() {
+            return Err(RenderError::InvalidTiming {
+                reason: "audio seconds must be finite".to_string(),
+            });
+        }
+        let max_frame = self.frame_count.saturating_sub(1);
+        let frame_index = (audio_seconds * f64::from(self.frame_rate)).floor();
+        let frame_index = if frame_index < 0.0 {
+            0
+        } else if frame_index > max_frame as f64 {
+            max_frame
+        } else {
+            frame_index as u64
+        };
+        self.render_sampled_raster_column_at(sample, frame_index)
+    }
+
     fn render_target_colors_at(&self, frame_index: u64) -> Result<Vec<Color>, RenderError> {
         let sample_seconds = frame_index as f64 / f64::from(self.frame_rate);
         let mut rendered = vec![black(); self.target.len()];
 
-        if let Some(active_effects) = self.effects_by_frame.get(frame_index as usize) {
+        let local_frame_index = frame_index.saturating_sub(self.index_start_frame);
+        if let Some(active_effects) = self.effects_by_frame.get(local_frame_index as usize) {
             for effect_index in active_effects {
                 let Some(effect) = self.effects.get(*effect_index) else {
                     continue;
@@ -373,6 +445,40 @@ impl PreparedEffectRasterRenderer {
                 render_effect_target_colors(
                     effect,
                     &self.target_lookup,
+                    &mut rendered,
+                    sample_seconds,
+                )?;
+            }
+        }
+
+        Ok(rendered)
+    }
+
+    fn render_sampled_raster_column_at(
+        &self,
+        sample: &PreparedEffectRasterSample,
+        frame_index: u64,
+    ) -> Result<Vec<Color>, RenderError> {
+        let sample_seconds = frame_index as f64 / f64::from(self.frame_rate);
+        let mut rendered = vec![black(); sample.row_count];
+
+        let local_frame_index = frame_index.saturating_sub(self.index_start_frame);
+        if let Some(active_effects) = self.effects_by_frame.get(local_frame_index as usize) {
+            for effect_index in active_effects {
+                let Some(effect) = self.effects.get(*effect_index) else {
+                    continue;
+                };
+                if sample_seconds < effect.start_seconds
+                    || sample_seconds >= effect.start_seconds + effect.duration_seconds
+                {
+                    continue;
+                }
+                let Some(effect_pixels) = sample.effect_pixels.get(*effect_index) else {
+                    continue;
+                };
+                render_sampled_effect_target_colors(
+                    effect,
+                    effect_pixels,
                     &mut rendered,
                     sample_seconds,
                 )?;
@@ -475,13 +581,24 @@ impl<'a> EffectRasterPrepareBatch<'a> {
             effect,
         )?;
 
-        let effects_by_frame =
-            build_effect_frame_index(&effects, self.frame_count, self.frame_rate);
+        let start_seconds = effect.start.as_seconds_f64();
+        let duration_seconds = effect.duration.as_seconds_f64();
+        let index_start_frame = (start_seconds * f64::from(self.frame_rate))
+            .floor()
+            .max(0.0) as u64;
+        let index_frame_count = frame_count(duration_seconds, self.frame_rate);
+        let effects_by_frame = build_effect_frame_index_for_window(
+            &effects,
+            index_start_frame,
+            index_frame_count,
+            self.frame_rate,
+        );
         Ok(PreparedEffectRasterRenderer {
             frame_rate: self.frame_rate,
             frame_count: self.frame_count,
-            start_seconds: effect.start.as_seconds_f64(),
-            duration_seconds: effect.duration.as_seconds_f64(),
+            index_start_frame,
+            start_seconds,
+            duration_seconds,
             target_lookup: target_color_lookup(&target),
             target,
             effects,
@@ -1095,15 +1212,27 @@ fn build_effect_frame_index(
     frame_count: u64,
     frame_rate: u32,
 ) -> Vec<Vec<usize>> {
+    build_effect_frame_index_for_window(effects, 0, frame_count, frame_rate)
+}
+
+fn build_effect_frame_index_for_window(
+    effects: &[PreparedEffect],
+    start_frame: u64,
+    frame_count: u64,
+    frame_rate: u32,
+) -> Vec<Vec<usize>> {
     let mut index = vec![Vec::new(); frame_count as usize];
+    let end_frame_limit = start_frame.saturating_add(frame_count);
     for (effect_index, effect) in effects.iter().enumerate() {
-        let start_frame = (effect.start_seconds * f64::from(frame_rate))
+        let effect_start_frame = (effect.start_seconds * f64::from(frame_rate))
             .floor()
             .max(0.0) as u64;
-        let end_frame = ((effect.start_seconds + effect.duration_seconds) * f64::from(frame_rate))
-            .ceil() as u64;
-        for frame in start_frame..end_frame.min(frame_count) {
-            if let Some(bucket) = index.get_mut(frame as usize) {
+        let effect_end_frame = ((effect.start_seconds + effect.duration_seconds)
+            * f64::from(frame_rate))
+        .ceil() as u64;
+        for frame in effect_start_frame.max(start_frame)..effect_end_frame.min(end_frame_limit) {
+            let local_frame = frame.saturating_sub(start_frame);
+            if let Some(bucket) = index.get_mut(local_frame as usize) {
                 bucket.push(effect_index);
             }
         }
@@ -1193,6 +1322,56 @@ fn render_effect_target_colors(
     Ok(())
 }
 
+fn render_sampled_effect_target_colors(
+    effect: &PreparedEffect,
+    effect_pixels: &[PreparedSampledEffectPixel],
+    rendered: &mut [Color],
+    sample_seconds: f64,
+) -> Result<(), RenderError> {
+    let local_seconds = sample_seconds - effect.start_seconds;
+    let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
+    let mut scratch = EffectVmScratch::default();
+
+    for sampled in effect_pixels {
+        let pixel = &sampled.pixel;
+        let context = RunContext {
+            progress,
+            seconds: local_seconds,
+            duration: effect.duration_seconds,
+            pixel_index: pixel.pixel_index as i64,
+            pixel_count: pixel.pixel_count as i64,
+            pixel_fraction: pixel.pixel_fraction,
+            global_marks: Marks { marks: Vec::new() },
+        };
+        let color = effect
+            .definition
+            .sample_bound(&effect.params, &context, &mut scratch)?;
+        for row in &sampled.rows {
+            if let Some(target) = rendered.get_mut(*row) {
+                compose_max(target, color);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn evenly_sample_indices(source_count: usize, sample_count: usize) -> Vec<usize> {
+    if source_count == 0 || sample_count == 0 {
+        return Vec::new();
+    }
+    let sample_count = source_count.min(sample_count);
+    if sample_count == 1 {
+        return vec![0];
+    }
+    let last_source_index = source_count - 1;
+    let last_sample_index = sample_count - 1;
+    (0..sample_count)
+        .map(|sample_index| {
+            (sample_index * last_source_index + last_sample_index / 2) / last_sample_index
+        })
+        .collect()
+}
+
 fn pixel_fraction(index: usize, count: usize) -> f64 {
     if count <= 1 {
         0.0
@@ -1228,6 +1407,12 @@ struct PreparedTargetPixel {
     pixel_index: usize,
     pixel_count: usize,
     pixel_fraction: f64,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedSampledEffectPixel {
+    pixel: PreparedTargetPixel,
+    rows: Vec<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

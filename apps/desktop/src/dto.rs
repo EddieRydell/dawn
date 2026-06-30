@@ -520,7 +520,6 @@ pub struct SequenceClipRasterRequest {
     #[serde(flatten)]
     pub document: GuiDocumentRequest,
     pub items: Vec<SequenceClipRasterRequestItem>,
-    pub column_stride_frames: u32,
     pub display_row_count: u32,
 }
 
@@ -529,6 +528,7 @@ pub struct SequenceClipRasterRequest {
 pub struct SequenceClipRasterRequestItem {
     pub effect_id: u32,
     pub signature: Option<String>,
+    pub display_column_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -558,10 +558,9 @@ pub struct SequenceClipRaster {
     pub signature: String,
     pub columns: u32,
     pub rows: u32,
-    pub column_stride_frames: u32,
     pub start_seconds: f64,
     pub duration_seconds: f64,
-    pub pixels_rgba_base64: String,
+    pub pixels_rgba_token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -840,6 +839,7 @@ pub enum SequenceSelectionEdit {
 #[serde(rename_all = "camelCase")]
 pub struct SequenceSelectionEditResult {
     pub snapshot: AppSnapshot,
+    pub document: GuiDocument,
     pub selection: Option<SequenceSelection>,
     pub copied_count: u32,
     pub skipped_count: u32,

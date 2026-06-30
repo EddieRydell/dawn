@@ -517,7 +517,7 @@ empty:
     - 59.136026264s
     - 59.228906082s
     - 59.33774962s
-    - 59.433531933s
+    - 59.482851326s
     - 59.630901547s
     - 59.733940096s
     - 59.934212205s
@@ -1809,6 +1809,8 @@ empty:
             points:
             - time: 0.0
               value: '#ffffff'
+            - time: 0.243
+              value: '#00ff66'
             - time: 0.5
               value: '#8000ff'
             - time: 1.0
@@ -1821,6 +1823,14 @@ empty:
           points:
           - time: 0.0
             value: 1.0
+          - time: 0.231
+            value: 0.873
+          - time: 0.371
+            value: 0.195
+          - time: 0.679
+            value: 0.186
+          - time: 0.76
+            value: 0.457
           - time: 1.0
             value: 0.0
       hue_mix:
@@ -2413,7 +2423,7 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 8
-    start: 39.361695521s
+    start: 39.415856891s
     duration: 0.65s
     target:
       type: group
@@ -2550,7 +2560,7 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 11
-    start: 40.787215457s
+    start: 40.64832131s
     duration: 0.252901318s
     target:
       type: group

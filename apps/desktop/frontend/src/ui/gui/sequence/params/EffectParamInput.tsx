@@ -5,7 +5,7 @@ import { commands } from "../../../../api";
 
 import type { ColorCurvePoint, FloatCurvePoint, SequenceCurveLibraryItem, SequenceEffectParam, SequenceEffectParamValue, SequenceMarkCollection } from "../../../../types";
 
-import { runSnapshotCommand } from "../../../../store";
+import { runGuiEditCommand } from "../../../../store";
 
 import { Readout } from "../../InspectorScrollArea";
 import { clamp } from "../../shared";
@@ -36,7 +36,7 @@ export function EffectParamInput({
   markCollections: SequenceMarkCollection[];
 }) {
   const commit = (value: SequenceEffectParamValue) => {
-    return runSnapshotCommand(() =>
+    return runGuiEditCommand(() =>
       commands.applySequenceGuiEdit({
         type: "updateEffectParam",
         id: effectId,
@@ -389,7 +389,7 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
     ? matchingCurves.findIndex((item) => item.path === source.path && item.objectKey === source.objectKey)
     : -1;
   const unlinkCopy = () =>
-    runSnapshotCommand(() =>
+    runGuiEditCommand(() =>
       commands.applySequenceGuiEdit({
         type: "unlinkEffectCurveParam",
         id: effectId,
@@ -428,7 +428,7 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
             }
             const first = matchingCurves[0];
             if (first === undefined) return;
-            void runSnapshotCommand(() =>
+            void runGuiEditCommand(() =>
               commands.applySequenceGuiEdit({
                 type: "linkEffectCurveParam",
                 id: effectId,
@@ -449,7 +449,7 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
           onChange={(event) => {
             const curve = matchingCurves[Number(event.currentTarget.value)];
             if (curve === undefined) return;
-            void runSnapshotCommand(() =>
+            void runGuiEditCommand(() =>
               commands.applySequenceGuiEdit({
                 type: "linkEffectCurveParam",
                 id: effectId,

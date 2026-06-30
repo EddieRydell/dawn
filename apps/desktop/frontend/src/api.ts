@@ -5,7 +5,8 @@ import type {
   GuiEditResult,
   LayoutGuiEdit,
   SequenceGuiEdit,
-  SequenceSelectionEdit
+  SequenceSelectionEdit,
+  SequenceSelectionEditResult
 } from "./types";
 
 let currentGuiRequest: GuiDocumentRequest | null = null;
@@ -28,7 +29,7 @@ async function applyCurrentGuiEdit(edit: Parameters<typeof generatedCommands.app
   if (result.document.type === "blocked") {
     throw new Error(result.document.reason);
   }
-  return result.snapshot;
+  return result;
 }
 
 export const commands = {
@@ -48,6 +49,7 @@ export const commands = {
     if (guiDiagnostic !== undefined) {
       throw new Error(guiDiagnostic.message);
     }
+    guiEditResultHandler?.(guiEditResultFromSelection(result));
     return result;
   },
   applyLayoutGuiEdit: (edit: LayoutGuiEdit) => applyCurrentGuiEdit({ type: "layout", edit }),
@@ -65,3 +67,10 @@ export const commands = {
     return generatedCommands.clearSequenceAudio(currentGuiRequest);
   }
 };
+
+export function guiEditResultFromSelection(result: SequenceSelectionEditResult): GuiEditResult {
+  return {
+    snapshot: result.snapshot,
+    document: result.document
+  };
+}

@@ -8,6 +8,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use dawn_project_io::{
     IoDiagnostic, IoDiagnosticSeverity, ProjectCheckReport, ProjectSession, SourceDocument,
     SourceDocumentKind, SourceObjectKind, check_document_text, check_project, save_project,
+    source_document_text as serialized_source_document_text,
 };
 use indexmap::IndexSet;
 
@@ -27,6 +28,7 @@ pub struct DesktopState {
     snapshot: Mutex<AppSnapshot>,
     project: Mutex<Option<ProjectSession>>,
     gui_save: Mutex<GuiSaveScheduler>,
+    render_refresh: Mutex<RenderRefreshScheduler>,
     audio: Mutex<crate::audio::AudioEngine>,
     show_render: Mutex<crate::show_render::ShowRenderService>,
     sequence_clip_raster: Mutex<crate::sequence_clip_raster::SequenceClipRasterService>,
@@ -40,6 +42,7 @@ impl DesktopState {
             snapshot: Mutex::new(empty_snapshot()),
             project: Mutex::new(None),
             gui_save: Mutex::new(GuiSaveScheduler::new()),
+            render_refresh: Mutex::new(RenderRefreshScheduler::new()),
             audio: Mutex::new(crate::audio::AudioEngine::new()),
             show_render: Mutex::new(crate::show_render::ShowRenderService::new()),
             sequence_clip_raster: Mutex::new(
@@ -56,6 +59,7 @@ impl DesktopState {
 
     pub fn snapshot(&self) -> AppSnapshot {
         self.drain_gui_save_results();
+        self.drain_render_refresh_results();
         let mut snapshot = match self.snapshot.lock() {
             Ok(snapshot) => snapshot.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
@@ -220,6 +224,7 @@ impl DesktopState {
         &self,
     ) -> Result<crate::show_render::AudioClockRenderedFrame, crate::show_render::ShowRenderError>
     {
+        self.drain_render_refresh_results();
         let audio_transport = self.audio_snapshot();
         match self.show_render.lock() {
             Ok(show_render) => show_render.render_current_sequence_frame(&audio_transport),
@@ -427,6 +432,48 @@ impl DesktopState {
         })
     }
 
+    pub fn set_active_view_mode(&self, mode: EditorViewMode) -> AppSnapshot {
+        let active_path = self.snapshot().active_file;
+        let text = if matches!(mode, EditorViewMode::Text) {
+            match active_path
+                .as_deref()
+                .map(|path| self.text_for_active_view_mode_switch(path))
+            {
+                Some(Ok(text)) => text,
+                Some(Err(error)) => {
+                    return self.snapshot_with_error(
+                        "file.viewMode",
+                        active_path.as_deref().unwrap_or_default(),
+                        &error,
+                    );
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+        self.update_snapshot(|snapshot| {
+            if let Some(buffer) = snapshot.active_buffer.as_mut() {
+                buffer.view_mode = mode.clone();
+                if let Some(text) = text.as_ref() {
+                    buffer.text = text.clone();
+                    buffer.dirty = false;
+                    buffer.external_state = BufferExternalState::Current;
+                }
+            }
+            if let Some(path) = snapshot.active_file.as_deref()
+                && let Some(tab) = snapshot.tabs.iter_mut().find(|tab| tab.path == path)
+            {
+                tab.view_mode = mode;
+                if let Some(text) = text {
+                    tab.text = text;
+                    tab.dirty = false;
+                    tab.external_state = BufferExternalState::Current;
+                }
+            }
+        })
+    }
+
     pub fn save_active_buffer(&self) -> AppSnapshot {
         let snapshot = self.snapshot();
         let Some(buffer) = snapshot.active_buffer else {
@@ -586,6 +633,13 @@ impl DesktopState {
         }
     }
 
+    pub fn sequence_clip_raster_pixels(&self, token: &str) -> Option<Vec<u8>> {
+        match self.sequence_clip_raster.lock() {
+            Ok(mut raster) => raster.pixels_rgba_for_token(token),
+            Err(poisoned) => poisoned.into_inner().pixels_rgba_for_token(token),
+        }
+    }
+
     pub fn apply_gui_edit(
         &self,
         request: GuiDocumentRequest,
@@ -660,6 +714,10 @@ impl DesktopState {
                     "",
                     "No active sequence GUI document is available.",
                 ),
+                document: crate::gui::blocked(
+                    "No active sequence GUI document is available.",
+                    Vec::new(),
+                ),
                 selection: None,
                 copied_count: 0,
                 skipped_count: 0,
@@ -668,6 +726,7 @@ impl DesktopState {
         let Some(project) = self.project_session() else {
             return SequenceSelectionEditResult {
                 snapshot: self.snapshot(),
+                document: crate::gui::blocked("No project is loaded.", Vec::new()),
                 selection: None,
                 copied_count: 0,
                 skipped_count: 0,
@@ -688,6 +747,7 @@ impl DesktopState {
                         &request.path,
                         error.message(),
                     ),
+                    document: crate::gui::blocked(error.message(), Vec::new()),
                     selection: None,
                     copied_count: 0,
                     skipped_count: 0,
@@ -704,6 +764,7 @@ impl DesktopState {
             let message = format!("Save or reload {path} before using GUI edits.");
             return SequenceSelectionEditResult {
                 snapshot: self.snapshot_with_error("gui.dirty", &path, &message),
+                document: crate::gui::blocked(message, Vec::new()),
                 selection: None,
                 copied_count: 0,
                 skipped_count: 0,
@@ -711,6 +772,7 @@ impl DesktopState {
         }
 
         let mut edited = project;
+        let previous_project = edited.project.clone();
         let mutation = match self.sequence_clipboard.lock() {
             Ok(mut clipboard) => crate::gui::apply_sequence_selection_edit(
                 &mut edited,
@@ -737,16 +799,23 @@ impl DesktopState {
                         &request.path,
                         error.message(),
                     ),
+                    document: crate::gui::blocked(error.message(), Vec::new()),
                     selection: None,
                     copied_count: 0,
                     skipped_count: 0,
                 };
             }
         };
-        self.schedule_gui_save(&edited, affected_paths, request.path.clone());
-        let snapshot = self.apply_gui_project_update(edited, "GUI selection edit applied");
+        let document = crate::gui::project_gui_document(Some(&edited), &request);
+        let snapshot = if edited.project == previous_project {
+            self.snapshot()
+        } else {
+            self.schedule_gui_save(&edited, affected_paths, request.path.clone());
+            self.apply_gui_project_update(edited, "GUI selection edit applied")
+        };
         SequenceSelectionEditResult {
             snapshot,
+            document,
             selection: mutation.selection,
             copied_count: mutation.copied_count,
             skipped_count: mutation.skipped_count,
@@ -945,7 +1014,7 @@ impl DesktopState {
             Ok(mut project) => *project = Some(session),
             Err(poisoned) => *poisoned.into_inner() = Some(session),
         }
-        let render_error = self.refresh_render_session(&project_model);
+        self.schedule_render_refresh(project_model);
         self.update_snapshot(|snapshot| {
             snapshot.project_root = Some(root);
             snapshot.project_entries = entries;
@@ -953,8 +1022,6 @@ impl DesktopState {
                 snapshot.active_document_descriptor = active_descriptor;
             }
             snapshot.status = status.to_string();
-            snapshot.render_error =
-                render_error.map(|error| format!("Render refresh failed: {error:?}"));
             snapshot.project_revision = snapshot.project_revision.saturating_add(1);
         })
     }
@@ -963,6 +1030,25 @@ impl DesktopState {
         match self.project.lock() {
             Ok(project) => project.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    fn text_for_active_view_mode_switch(&self, path: &str) -> Result<Option<String>, String> {
+        let Some(project) = self.project_session() else {
+            return Ok(None);
+        };
+        let relative_path = Utf8Path::new(path);
+        match serialized_source_document_text(&project, relative_path) {
+            Ok(Some(text)) => Ok(Some(text)),
+            Ok(None) => {
+                let Some(absolute_path) = absolute_project_path(&project, relative_path) else {
+                    return Ok(None);
+                };
+                fs::read_to_string(&absolute_path)
+                    .map(Some)
+                    .map_err(|error| error.to_string())
+            }
+            Err(error) => Err(error.to_string()),
         }
     }
 
@@ -1064,6 +1150,61 @@ impl DesktopState {
                     show_render.unload();
                 }
                 result.err()
+            }
+        }
+    }
+
+    fn schedule_render_refresh(&self, project: dawn_language::model::DawnProject) {
+        let target = match self.show_render.lock() {
+            Ok(show_render) => show_render.active_target(),
+            Err(poisoned) => poisoned.into_inner().active_target(),
+        };
+        let Some((setup_id, sequence_id)) = target else {
+            return;
+        };
+        if !project.sequences.contains_key(&sequence_id) {
+            self.unload_render_session();
+            return;
+        }
+        let request = RenderRefreshPayload {
+            project,
+            setup_id,
+            sequence_id,
+        };
+        match self.render_refresh.lock() {
+            Ok(mut scheduler) => {
+                let _ = scheduler.schedule(request);
+            }
+            Err(poisoned) => {
+                let mut scheduler = poisoned.into_inner();
+                let _ = scheduler.schedule(request);
+            }
+        }
+    }
+
+    fn drain_render_refresh_results(&self) {
+        let results = match self.render_refresh.lock() {
+            Ok(scheduler) => scheduler.drain_current_results(),
+            Err(poisoned) => poisoned.into_inner().drain_current_results(),
+        };
+        for result in results {
+            match result {
+                RenderRefreshResult::Refreshed {
+                    sequence: _,
+                    session,
+                } => {
+                    match self.show_render.lock() {
+                        Ok(mut show_render) => show_render.apply_prepared(session),
+                        Err(poisoned) => poisoned.into_inner().apply_prepared(session),
+                    }
+                    self.clear_render_error_if_set();
+                }
+                RenderRefreshResult::Failed {
+                    sequence: _,
+                    message,
+                } => {
+                    self.set_render_error_if_changed(format!("Render refresh failed: {message}"));
+                }
             }
         }
     }
@@ -1274,25 +1415,15 @@ impl DesktopState {
 
     fn refresh_saved_tabs(
         &self,
-        session: &ProjectSession,
+        _session: &ProjectSession,
         paths: &std::collections::BTreeSet<String>,
     ) -> AppSnapshot {
-        let refreshed = paths
-            .iter()
-            .filter_map(|path| {
-                let relative = Utf8Path::new(path);
-                let absolute = absolute_project_path(session, relative)?;
-                let text = fs::read_to_string(absolute).ok()?;
-                Some((path.clone(), text))
-            })
-            .collect::<Vec<_>>();
         self.update_snapshot(|snapshot| {
-            for (path, text) in &refreshed {
+            for path in paths {
                 if let Some(tab) = snapshot.tabs.iter_mut().find(|tab| tab.path == *path) {
                     if tab.dirty {
                         tab.external_state = BufferExternalState::ChangedOnDisk;
                     } else {
-                        tab.text = text.clone();
                         tab.external_state = BufferExternalState::Current;
                     }
                 }
@@ -1304,7 +1435,6 @@ impl DesktopState {
                     if buffer.dirty {
                         buffer.external_state = BufferExternalState::ChangedOnDisk;
                     } else {
-                        buffer.text = text.clone();
                         buffer.external_state = BufferExternalState::Current;
                     }
                 }
@@ -1404,6 +1534,103 @@ fn gui_save_worker(
                 sequence: pending.sequence,
                 status_path: pending.payload.status_path,
                 message: error.to_string(),
+            },
+        };
+        if sender.send(result).is_err() {
+            break;
+        }
+    }
+}
+
+struct RenderRefreshScheduler {
+    sender: mpsc::Sender<SequencedRenderRefreshRequest>,
+    receiver: mpsc::Receiver<RenderRefreshResult>,
+    latest_sequence: u64,
+}
+
+impl RenderRefreshScheduler {
+    fn new() -> Self {
+        let (request_sender, request_receiver) = mpsc::channel();
+        let (result_sender, result_receiver) = mpsc::channel();
+        thread::spawn(move || render_refresh_worker(request_receiver, result_sender));
+        Self {
+            sender: request_sender,
+            receiver: result_receiver,
+            latest_sequence: 0,
+        }
+    }
+
+    fn schedule(
+        &mut self,
+        payload: RenderRefreshPayload,
+    ) -> Result<(), RenderRefreshScheduleError> {
+        self.latest_sequence = self.latest_sequence.saturating_add(1);
+        self.sender
+            .send(SequencedRenderRefreshRequest {
+                sequence: self.latest_sequence,
+                payload,
+            })
+            .map_err(|_| RenderRefreshScheduleError)
+    }
+
+    fn drain_current_results(&self) -> Vec<RenderRefreshResult> {
+        self.receiver
+            .try_iter()
+            .filter(|result| result.sequence() == self.latest_sequence)
+            .collect()
+    }
+}
+
+struct SequencedRenderRefreshRequest {
+    sequence: u64,
+    payload: RenderRefreshPayload,
+}
+
+struct RenderRefreshPayload {
+    project: dawn_language::model::DawnProject,
+    setup_id: dawn_language::setup::SetupId,
+    sequence_id: dawn_language::sequence::SequenceId,
+}
+
+struct RenderRefreshScheduleError;
+
+impl RenderRefreshResult {
+    fn sequence(&self) -> u64 {
+        match self {
+            RenderRefreshResult::Refreshed { sequence, .. }
+            | RenderRefreshResult::Failed { sequence, .. } => *sequence,
+        }
+    }
+}
+
+enum RenderRefreshResult {
+    Refreshed {
+        sequence: u64,
+        session: crate::show_render::PreparedRenderSession,
+    },
+    Failed {
+        sequence: u64,
+        message: String,
+    },
+}
+
+fn render_refresh_worker(
+    receiver: mpsc::Receiver<SequencedRenderRefreshRequest>,
+    sender: mpsc::Sender<RenderRefreshResult>,
+) {
+    while let Ok(pending) = receiver.recv() {
+        let result = match crate::show_render::prepare_render_session(
+            &pending.payload.project,
+            &pending.payload.setup_id,
+            &pending.payload.sequence_id,
+        ) {
+            Ok(session) => RenderRefreshResult::Refreshed {
+                sequence: pending.sequence,
+                session,
+            },
+            Err(error) => RenderRefreshResult::Failed {
+                sequence: pending.sequence,
+                message: format!("{error:?}"),
             },
         };
         if sender.send(result).is_err() {

@@ -9,6 +9,12 @@ pub struct ShowRenderService {
     session: Option<RenderSession>,
 }
 
+pub struct PreparedRenderSession {
+    setup_id: SetupId,
+    sequence_id: SequenceId,
+    renderer: PreparedSequenceRenderer,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AudioClockRenderedFrame {
     pub audio_generation: u32,
@@ -33,12 +39,8 @@ impl ShowRenderService {
         setup_id: &SetupId,
         sequence_id: &SequenceId,
     ) -> Result<(), RenderError> {
-        let renderer = PreparedSequenceRenderer::prepare(project, setup_id, sequence_id)?;
-        self.session = Some(RenderSession {
-            setup_id: setup_id.clone(),
-            sequence_id: sequence_id.clone(),
-            renderer,
-        });
+        let session = prepare_render_session(project, setup_id, sequence_id)?;
+        self.apply_prepared(session);
         Ok(())
     }
 
@@ -91,6 +93,20 @@ impl ShowRenderService {
     pub fn active_sequence_id(&self) -> Option<&SequenceId> {
         self.session.as_ref().map(|session| &session.sequence_id)
     }
+
+    pub fn active_target(&self) -> Option<(SetupId, SequenceId)> {
+        self.session
+            .as_ref()
+            .map(|session| (session.setup_id.clone(), session.sequence_id.clone()))
+    }
+
+    pub fn apply_prepared(&mut self, session: PreparedRenderSession) {
+        self.session = Some(RenderSession {
+            setup_id: session.setup_id,
+            sequence_id: session.sequence_id,
+            renderer: session.renderer,
+        });
+    }
 }
 
 impl Default for ShowRenderService {
@@ -103,6 +119,19 @@ struct RenderSession {
     setup_id: SetupId,
     sequence_id: SequenceId,
     renderer: PreparedSequenceRenderer,
+}
+
+pub fn prepare_render_session(
+    project: &DawnProject,
+    setup_id: &SetupId,
+    sequence_id: &SequenceId,
+) -> Result<PreparedRenderSession, RenderError> {
+    let renderer = PreparedSequenceRenderer::prepare(project, setup_id, sequence_id)?;
+    Ok(PreparedRenderSession {
+        setup_id: setup_id.clone(),
+        sequence_id: sequence_id.clone(),
+        renderer,
+    })
 }
 
 #[cfg(test)]

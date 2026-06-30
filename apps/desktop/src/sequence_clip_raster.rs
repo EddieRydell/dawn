@@ -7,16 +7,15 @@ use std::sync::{
 };
 use std::thread;
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use dawn_language::effect::{
     CurveDefinition, CurveId, CurveSource, EffectDefinition, EffectInst, EffectInstId,
-    EffectParamValue,
+    EffectParamValue, EffectScope, EffectTarget,
 };
-use dawn_language::effect_dsl::EffectKind;
+use dawn_language::effect_dsl::{EffectKind, hash_compiled_effect};
 use dawn_language::model::DawnProject;
 use dawn_language::sequence::{MarkCollectionKey, Sequence, SequenceId};
 use dawn_language::setup::SetupId;
-use dawn_language::values::{Color, DawnTime};
+use dawn_language::values::{Curve, CurveValue, DawnTime};
 use dawn_runtime::{
     EffectRasterPrepareBatch, PreparedEffectRasterRenderer, RenderedTargetPixelAddress,
     resolve_effect_target_pixel_addresses,
@@ -27,10 +26,13 @@ use crate::dto::{
     SequenceClipRasterResponse, SequenceClipRasterResultBatch, SequenceClipRasterUnavailable,
 };
 
+const MAX_RASTER_ROWS: usize = 50;
+
 pub struct SequenceClipRasterService {
     sender: mpsc::Sender<RasterJob>,
     receiver: mpsc::Receiver<RasterWorkerResult>,
     cache: HashMap<RasterCacheKey, CachedRasterResult>,
+    pixels_by_token: HashMap<String, Arc<Vec<u8>>>,
     pending_results: HashMap<RasterDocumentKey, VecDeque<RasterResultEntry>>,
     active: Option<ActiveRasterJob>,
     next_job_id: u32,
@@ -50,6 +52,7 @@ impl SequenceClipRasterService {
             sender: request_sender,
             receiver: result_receiver,
             cache: HashMap::new(),
+            pixels_by_token: HashMap::new(),
             pending_results: HashMap::new(),
             active: None,
             next_job_id: 1,
@@ -69,7 +72,6 @@ impl SequenceClipRasterService {
         let base_key = RasterRequestKey {
             path: request.document.path.clone(),
             object_key: request.document.object_key.clone(),
-            column_stride_frames: request.column_stride_frames,
             display_row_count: request.display_row_count,
         };
         self.drain_results();
@@ -94,14 +96,16 @@ impl SequenceClipRasterService {
                     cache_key,
                     signature,
                     signature_key,
-                    raster,
+                    payload,
                 } => {
-                    let result_raster = raster.clone();
+                    let result_payload = payload.clone();
+                    self.pixels_by_token
+                        .insert(payload.token.clone(), Arc::clone(&payload.pixels_rgba));
                     self.cache.insert(
                         cache_key,
                         CachedRasterResult {
                             signature: signature.clone(),
-                            result: CachedRasterValue::Raster(raster),
+                            result: CachedRasterValue::Raster(payload),
                         },
                     );
                     if self.is_current_request(&document_key, request_id) {
@@ -110,7 +114,7 @@ impl SequenceClipRasterService {
                             RasterResultEntry::Ready {
                                 request_id,
                                 signature: signature_key,
-                                raster: result_raster,
+                                payload: result_payload,
                             },
                         );
                     }
@@ -189,8 +193,9 @@ impl SequenceClipRasterService {
                     RasterResultEntry::Ready {
                         request_id: entry_request_id,
                         signature,
-                        mut raster,
+                        payload,
                     } if entry_request_id == request_id => {
+                        let mut raster = payload.raster;
                         raster.request_id = entry_request_id;
                         raster.signature = signature;
                         ready.push(raster);
@@ -283,6 +288,7 @@ impl SequenceClipRasterService {
         self.cache.retain(|key, _| {
             !key.matches_request(&base_key) || current_ids.contains(&key.effect_id)
         });
+        self.retain_active_pixel_tokens();
         self.pending_results
             .insert(document_key.clone(), VecDeque::new());
         for effect_id in requested_ids {
@@ -308,7 +314,14 @@ impl SequenceClipRasterService {
             else {
                 continue;
             };
-            let cache_key = RasterCacheKey::new(&base_key, effect_id);
+            let Some(request_item) = ordered_items
+                .iter()
+                .find(|item| item.effect_id == effect_id)
+            else {
+                continue;
+            };
+            let cache_key =
+                RasterCacheKey::new(&base_key, effect_id, request_item.display_column_count);
             let signature = match render_signature(&project, &setup_id, sequence, effect) {
                 Ok(signature) => signature,
                 Err(message) => RenderInputSignature::Invalid { message },
@@ -323,12 +336,12 @@ impl SequenceClipRasterService {
             }
             match self.cache.get(&cache_key) {
                 Some(entry) if entry.signature == signature => match &entry.result {
-                    CachedRasterValue::Raster(raster) => self.push_result(
+                    CachedRasterValue::Raster(payload) => self.push_result(
                         document_key.clone(),
                         RasterResultEntry::Ready {
                             request_id,
                             signature: signature_key,
-                            raster: raster.clone(),
+                            payload: payload.clone(),
                         },
                     ),
                     CachedRasterValue::Error(error) => self.push_result(
@@ -434,6 +447,26 @@ impl SequenceClipRasterService {
             &active.document_key == document_key && active.request_id == request_id
         })
     }
+
+    pub fn pixels_rgba_for_token(&mut self, token: &str) -> Option<Vec<u8>> {
+        self.drain_results();
+        self.pixels_by_token
+            .get(token)
+            .map(|pixels| pixels.as_ref().clone())
+    }
+
+    fn retain_active_pixel_tokens(&mut self) {
+        let active_tokens = self
+            .cache
+            .values()
+            .filter_map(|entry| match &entry.result {
+                CachedRasterValue::Raster(payload) => Some(payload.token.clone()),
+                CachedRasterValue::Error(_) => None,
+            })
+            .collect::<HashSet<_>>();
+        self.pixels_by_token
+            .retain(|token, _| active_tokens.contains(token));
+    }
 }
 
 impl Default for SequenceClipRasterService {
@@ -487,7 +520,6 @@ impl Hash for RasterDocumentKey {
 struct RasterRequestKey {
     path: String,
     object_key: Option<String>,
-    column_stride_frames: u32,
     display_row_count: u32,
 }
 
@@ -496,17 +528,17 @@ struct RasterCacheKey {
     path: String,
     object_key: Option<String>,
     effect_id: u32,
-    column_stride_frames: u32,
+    display_column_count: u32,
     display_row_count: u32,
 }
 
 impl RasterCacheKey {
-    fn new(request: &RasterRequestKey, effect_id: u32) -> Self {
+    fn new(request: &RasterRequestKey, effect_id: u32, display_column_count: u32) -> Self {
         Self {
             path: request.path.clone(),
             object_key: request.object_key.clone(),
             effect_id,
-            column_stride_frames: request.column_stride_frames,
+            display_column_count,
             display_row_count: request.display_row_count,
         }
     }
@@ -514,7 +546,6 @@ impl RasterCacheKey {
     fn matches_request(&self, request: &RasterRequestKey) -> bool {
         self.path == request.path
             && self.object_key == request.object_key
-            && self.column_stride_frames == request.column_stride_frames
             && self.display_row_count == request.display_row_count
     }
 }
@@ -524,7 +555,7 @@ impl Hash for RasterCacheKey {
         self.path.hash(state);
         self.object_key.hash(state);
         self.effect_id.hash(state);
-        self.column_stride_frames.hash(state);
+        self.display_column_count.hash(state);
         self.display_row_count.hash(state);
     }
 }
@@ -537,8 +568,15 @@ struct CachedRasterResult {
 
 #[derive(Clone)]
 enum CachedRasterValue {
-    Raster(SequenceClipRaster),
+    Raster(CachedRasterPayload),
     Error(SequenceClipRasterError),
+}
+
+#[derive(Clone)]
+struct CachedRasterPayload {
+    raster: SequenceClipRaster,
+    pixels_rgba: Arc<Vec<u8>>,
+    token: String,
 }
 
 struct RasterJob {
@@ -563,7 +601,7 @@ enum RasterResultEntry {
     Ready {
         request_id: u32,
         signature: String,
-        raster: SequenceClipRaster,
+        payload: CachedRasterPayload,
     },
     Unavailable {
         request_id: u32,
@@ -588,7 +626,7 @@ enum RasterWorkerResult {
         cache_key: RasterCacheKey,
         signature: RenderInputSignature,
         signature_key: String,
-        raster: SequenceClipRaster,
+        payload: CachedRasterPayload,
     },
     Error {
         job_id: u32,
@@ -644,7 +682,7 @@ fn raster_worker(
                     cache_key: item.cache_key,
                     signature: item.signature,
                     signature_key: item.signature_key,
-                    raster,
+                    payload: raster,
                 },
                 Some(CachedRasterValue::Error(error)) => RasterWorkerResult::Error {
                     job_id: job.job_id,
@@ -681,7 +719,9 @@ fn raster_worker(
                         Ok(renderer) => render_effect_raster(RasterRenderRequest {
                             renderer,
                             effect_id: item.effect_id,
-                            column_stride_frames: item.cache_key.column_stride_frames,
+                            signature_key: &item.signature_key,
+                            cache_key: &item.cache_key,
+                            display_column_count: item.cache_key.display_column_count,
                             display_row_count: item.cache_key.display_row_count,
                             should_continue: &should_continue,
                         }),
@@ -699,7 +739,7 @@ fn raster_worker(
                                 cache_key: item.cache_key,
                                 signature: item.signature,
                                 signature_key: item.signature_key,
-                                raster,
+                                payload: raster,
                             }
                         }
                         Err(RasterRenderFailure::Cancelled) => {
@@ -767,7 +807,7 @@ fn raster_worker(
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct RasterRenderCacheKey {
     signature: String,
-    column_stride_frames: u32,
+    display_column_count: u32,
     display_row_count: u32,
 }
 
@@ -775,7 +815,7 @@ impl RasterRenderCacheKey {
     fn new(item: &RasterWorkItem) -> Self {
         Self {
             signature: item.signature_key.clone(),
-            column_stride_frames: item.cache_key.column_stride_frames,
+            display_column_count: item.cache_key.display_column_count,
             display_row_count: item.cache_key.display_row_count,
         }
     }
@@ -831,24 +871,28 @@ fn ordered_existing_effect_ids(
 struct RasterRenderRequest<'a> {
     renderer: PreparedEffectRasterRenderer,
     effect_id: u32,
-    column_stride_frames: u32,
+    signature_key: &'a str,
+    cache_key: &'a RasterCacheKey,
+    display_column_count: u32,
     display_row_count: u32,
     should_continue: &'a dyn Fn() -> bool,
 }
 
 fn render_effect_raster(
     request: RasterRenderRequest<'_>,
-) -> Result<SequenceClipRaster, RasterRenderFailure> {
+) -> Result<CachedRasterPayload, RasterRenderFailure> {
     let RasterRenderRequest {
         renderer,
         effect_id,
-        column_stride_frames,
+        signature_key,
+        cache_key,
+        display_column_count,
         display_row_count,
         should_continue,
     } = request;
-    if column_stride_frames == 0 {
+    if display_column_count == 0 {
         return Err(RasterRenderFailure::Error(
-            "raster column stride frames must be greater than zero".to_string(),
+            "raster display column count must be greater than zero".to_string(),
         ));
     }
     if display_row_count == 0 {
@@ -875,22 +919,29 @@ fn render_effect_raster(
             "effect duration frames must be positive and finite".to_string(),
         ));
     }
-    let columns = (duration_frames / f64::from(column_stride_frames))
-        .ceil()
-        .max(1.0) as usize;
-    let rows = target_pixel_count.min(display_row_count as usize);
+    let stride_limited_columns = (duration_frames / 4.0).ceil().max(1.0) as u32;
+    let columns = display_column_count
+        .min(stride_limited_columns)
+        .clamp(1, 256) as usize;
+    let sample_step_frames = (duration_frames / columns as f64).max(4.0);
+    let rows = target_pixel_count
+        .min(display_row_count as usize)
+        .min(MAX_RASTER_ROWS);
+    let sample = renderer.prepare_sampled_raster(rows);
     let mut pixels_rgba = vec![0u8; rows * columns * 4];
     for column in 0..columns {
         if !should_continue() {
             return Err(RasterRenderFailure::Cancelled);
         }
-        let sample_seconds = start_seconds
-            + (column * column_stride_frames as usize) as f64 / f64::from(renderer.frame_rate());
+        let sample_seconds =
+            start_seconds + (column as f64 * sample_step_frames) / f64::from(renderer.frame_rate());
         let colors = renderer
-            .render_target_colors(sample_seconds)
+            .render_sampled_raster_column(&sample, sample_seconds)
             .map_err(|error| RasterRenderFailure::Error(format!("{error:?}")))?;
         for row in 0..rows {
-            let color = average_row(&colors, row, rows);
+            let Some(color) = colors.get(row) else {
+                continue;
+            };
             let offset = (row * columns + column) * 4;
             pixels_rgba[offset] = color.red;
             pixels_rgba[offset + 1] = color.green;
@@ -898,16 +949,20 @@ fn render_effect_raster(
             pixels_rgba[offset + 3] = 255;
         }
     }
-    Ok(SequenceClipRaster {
-        request_id: 0,
-        effect_id,
-        signature: String::new(),
-        columns: columns as u32,
-        rows: rows as u32,
-        column_stride_frames,
-        start_seconds,
-        duration_seconds,
-        pixels_rgba_base64: STANDARD.encode(pixels_rgba),
+    let token = raster_token(cache_key, signature_key);
+    Ok(CachedRasterPayload {
+        raster: SequenceClipRaster {
+            request_id: 0,
+            effect_id,
+            signature: String::new(),
+            columns: columns as u32,
+            rows: rows as u32,
+            start_seconds,
+            duration_seconds,
+            pixels_rgba_token: token.clone(),
+        },
+        pixels_rgba: Arc::new(pixels_rgba),
+        token,
     })
 }
 
@@ -1020,8 +1075,193 @@ fn collect_param_references(
 
 fn signature_key(signature: &RenderInputSignature) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    format!("{signature:?}").hash(&mut hasher);
+    hash_render_signature(signature, &mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+fn raster_token(cache_key: &RasterCacheKey, signature_key: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    cache_key.hash(&mut hasher);
+    signature_key.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn hash_render_signature<H: Hasher>(signature: &RenderInputSignature, state: &mut H) {
+    match signature {
+        RenderInputSignature::Valid(data) => {
+            0u8.hash(state);
+            hash_effect_inst(&data.effect, state);
+            hash_optional_effect_definition(&data.definition, state);
+            data.generator_definitions.len().hash(state);
+            for (id, definition) in &data.generator_definitions {
+                id.hash(state);
+                hash_effect_definition(definition, state);
+            }
+            data.curve_references.len().hash(state);
+            for (id, definition) in &data.curve_references {
+                id.hash(state);
+                hash_optional_curve_definition(definition, state);
+            }
+            data.mark_references.len().hash(state);
+            for (key, marks) in &data.mark_references {
+                key.hash(state);
+                match marks {
+                    Some(marks) => {
+                        1u8.hash(state);
+                        hash_marks(marks, state);
+                    }
+                    None => 0u8.hash(state),
+                }
+            }
+            data.target_pixels.len().hash(state);
+            for pixel in &data.target_pixels {
+                pixel.fixture_id.hash(state);
+                pixel.fixture_pixel_index.hash(state);
+            }
+        }
+        RenderInputSignature::Invalid { message } => {
+            1u8.hash(state);
+            message.hash(state);
+        }
+    }
+}
+
+fn hash_effect_inst<H: Hasher>(effect: &EffectInst, state: &mut H) {
+    effect.id.hash(state);
+    effect.start.0.hash(state);
+    effect.duration.0.hash(state);
+    hash_effect_target(&effect.target, state);
+    hash_effect_scope(&effect.scope, state);
+    effect.definition.hash(state);
+    effect.param_overrides.len().hash(state);
+    for (key, value) in &effect.param_overrides {
+        key.hash(state);
+        hash_effect_param_value(value, state);
+    }
+}
+
+fn hash_effect_target<H: Hasher>(target: &EffectTarget, state: &mut H) {
+    match target {
+        EffectTarget::Group(id) => {
+            0u8.hash(state);
+            id.hash(state);
+        }
+        EffectTarget::Fixture(id) => {
+            1u8.hash(state);
+            id.hash(state);
+        }
+    }
+}
+
+fn hash_effect_scope<H: Hasher>(scope: &EffectScope, state: &mut H) {
+    match scope {
+        EffectScope::PerFixture => 0u8.hash(state),
+        EffectScope::WholeTarget => 1u8.hash(state),
+    }
+}
+
+fn hash_effect_param_value<H: Hasher>(value: &EffectParamValue, state: &mut H) {
+    match value {
+        EffectParamValue::Int(value) => {
+            0u8.hash(state);
+            value.hash(state);
+        }
+        EffectParamValue::Float(value) => {
+            1u8.hash(state);
+            value.to_bits().hash(state);
+        }
+        EffectParamValue::Bool(value) => {
+            2u8.hash(state);
+            value.hash(state);
+        }
+        EffectParamValue::Color(value) => {
+            3u8.hash(state);
+            value.hash(state);
+        }
+        EffectParamValue::Enum(value) => {
+            4u8.hash(state);
+            value.hash(state);
+        }
+        EffectParamValue::Marks(key) => {
+            5u8.hash(state);
+            key.hash(state);
+        }
+        EffectParamValue::Curve(source) => {
+            6u8.hash(state);
+            hash_curve_source(source, state);
+        }
+        EffectParamValue::Array(values) => {
+            7u8.hash(state);
+            values.len().hash(state);
+            for value in values {
+                hash_effect_param_value(value, state);
+            }
+        }
+    }
+}
+
+fn hash_curve_source<H: Hasher>(source: &CurveSource, state: &mut H) {
+    match source {
+        CurveSource::Inline(curve) => {
+            0u8.hash(state);
+            hash_curve(curve, state);
+        }
+        CurveSource::Reference(id) => {
+            1u8.hash(state);
+            id.hash(state);
+        }
+    }
+}
+
+fn hash_optional_effect_definition<H: Hasher>(
+    definition: &Option<EffectDefinition>,
+    state: &mut H,
+) {
+    match definition {
+        Some(definition) => {
+            1u8.hash(state);
+            hash_effect_definition(definition, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_effect_definition<H: Hasher>(definition: &EffectDefinition, state: &mut H) {
+    hash_compiled_effect(&definition.compiled, state);
+}
+
+fn hash_optional_curve_definition<H: Hasher>(definition: &Option<CurveDefinition>, state: &mut H) {
+    match definition {
+        Some(definition) => {
+            1u8.hash(state);
+            hash_curve(&definition.curve, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_curve<H: Hasher>(curve: &Curve, state: &mut H) {
+    curve.points.len().hash(state);
+    for point in &curve.points {
+        point.position.to_bits().hash(state);
+        match point.value {
+            CurveValue::Float(value) => {
+                0u8.hash(state);
+                value.to_bits().hash(state);
+            }
+            CurveValue::Color(value) => {
+                1u8.hash(state);
+                value.hash(state);
+            }
+        }
+    }
+}
+
+fn hash_marks<H: Hasher>(marks: &[DawnTime], state: &mut H) {
+    marks.len().hash(state);
+    for mark in marks {
+        mark.0.hash(state);
+    }
 }
 
 fn empty_response(
@@ -1033,24 +1273,5 @@ fn empty_response(
         project_revision,
         request_id,
         complete,
-    }
-}
-
-fn average_row(colors: &[Color], row: usize, rows: usize) -> Color {
-    let start = row * colors.len() / rows;
-    let end = ((row + 1) * colors.len() / rows).max(start + 1);
-    let mut red = 0u32;
-    let mut green = 0u32;
-    let mut blue = 0u32;
-    for color in &colors[start..end] {
-        red += u32::from(color.red);
-        green += u32::from(color.green);
-        blue += u32::from(color.blue);
-    }
-    let count = (end - start) as u32;
-    Color {
-        red: (red / count) as u8,
-        green: (green / count) as u8,
-        blue: (blue / count) as u8,
     }
 }

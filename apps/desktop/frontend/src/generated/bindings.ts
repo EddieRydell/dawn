@@ -311,10 +311,9 @@ export type SequenceClipRaster = {
 	signature: string,
 	columns: number,
 	rows: number,
-	columnStrideFrames: number,
 	startSeconds: number,
 	durationSeconds: number,
-	pixelsRgbaBase64: string,
+	pixelsRgbaToken: string,
 };
 
 export type SequenceClipRasterError = {
@@ -326,13 +325,13 @@ export type SequenceClipRasterError = {
 
 export type SequenceClipRasterRequest = {
 	items: SequenceClipRasterRequestItem[],
-	columnStrideFrames: number,
 	displayRowCount: number,
 } & GuiDocumentRequest;
 
 export type SequenceClipRasterRequestItem = {
 	effectId: number,
 	signature: string | null,
+	displayColumnCount: number,
 };
 
 export type SequenceClipRasterResponse = {
@@ -460,6 +459,7 @@ export type SequenceSelectionEdit = { type: "copy"; selection: SequenceSelection
 
 export type SequenceSelectionEditResult = {
 	snapshot: AppSnapshot,
+	document: GuiDocument,
 	selection: SequenceSelection | null,
 	copiedCount: number,
 	skippedCount: number,

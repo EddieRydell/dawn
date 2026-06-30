@@ -1,8 +1,9 @@
 use camino::Utf8PathBuf;
 use criterion::{Criterion, criterion_group, criterion_main};
+use dawn_language::effect::EffectInstId;
 use dawn_language::values::Color;
 use dawn_project_io::load_project;
-use dawn_runtime::{PreparedSequenceRenderer, RenderedFrame};
+use dawn_runtime::{PreparedEffectRasterRenderer, PreparedSequenceRenderer, RenderedFrame};
 use std::hint::black_box;
 
 const SCENARIOS: [RenderScenario; 7] = [
@@ -43,11 +44,37 @@ const SCENARIOS: [RenderScenario; 7] = [
     },
 ];
 
+const RASTER_SCENARIOS: [RasterScenario; 2] = [
+    RasterScenario {
+        name: "raster_sample_shimmer_field_75",
+        effect_id: 75,
+        columns: 256,
+        rows: 50,
+        checksum: 0x5185_944c_8772_1aee,
+    },
+    RasterScenario {
+        name: "raster_generator_mark_pulse_76",
+        effect_id: 76,
+        columns: 256,
+        rows: 50,
+        checksum: 0x53ae_7bcf_daa0_4721,
+    },
+];
+
 #[derive(Clone, Copy)]
 struct RenderScenario {
     frame: u64,
     checksum: u64,
     active_effect_count: usize,
+}
+
+#[derive(Clone, Copy)]
+struct RasterScenario {
+    name: &'static str,
+    effect_id: u32,
+    columns: usize,
+    rows: usize,
+    checksum: u64,
 }
 
 fn bench_render(c: &mut Criterion) {
@@ -63,6 +90,8 @@ fn bench_render(c: &mut Criterion) {
         .expect("benchmark project should prepare");
 
     assert_scenarios(&renderer);
+    let raster_renderers = prepare_raster_renderers(&session.project, setup_id, sequence_id);
+    assert_raster_scenarios(&raster_renderers);
 
     c.bench_function("prepare_thirty_output_controller", |b| {
         b.iter(|| {
@@ -88,6 +117,19 @@ fn bench_render(c: &mut Criterion) {
             });
         });
     }
+
+    for (scenario, renderer) in RASTER_SCENARIOS.into_iter().zip(raster_renderers.iter()) {
+        let sample = renderer.prepare_sampled_raster(scenario.rows);
+        c.bench_function(scenario.name, |b| {
+            b.iter(|| {
+                black_box(render_raster_columns(
+                    black_box(renderer),
+                    black_box(&sample),
+                    black_box(scenario),
+                ))
+            });
+        });
+    }
 }
 
 fn assert_scenarios(renderer: &PreparedSequenceRenderer) {
@@ -103,6 +145,54 @@ fn assert_scenarios(renderer: &PreparedSequenceRenderer) {
     }
 }
 
+fn prepare_raster_renderers(
+    project: &dawn_language::model::DawnProject,
+    setup_id: &dawn_language::setup::SetupId,
+    sequence_id: &dawn_language::sequence::SequenceId,
+) -> Vec<PreparedEffectRasterRenderer> {
+    RASTER_SCENARIOS
+        .iter()
+        .map(|scenario| {
+            PreparedEffectRasterRenderer::prepare(
+                project,
+                setup_id,
+                sequence_id,
+                &EffectInstId(scenario.effect_id),
+            )
+            .expect("benchmark raster should prepare")
+        })
+        .collect()
+}
+
+fn assert_raster_scenarios(renderers: &[PreparedEffectRasterRenderer]) {
+    for (scenario, renderer) in RASTER_SCENARIOS.into_iter().zip(renderers.iter()) {
+        let sample = renderer.prepare_sampled_raster(scenario.rows);
+        let raster = render_raster_columns(renderer, &sample, scenario);
+        assert_eq!(raster.len(), scenario.columns * scenario.rows);
+        assert_eq!(checksum_colors(&raster), scenario.checksum);
+    }
+}
+
+fn render_raster_columns(
+    renderer: &PreparedEffectRasterRenderer,
+    sample: &dawn_runtime::PreparedEffectRasterSample,
+    scenario: RasterScenario,
+) -> Vec<Color> {
+    let duration_frames = renderer.duration_seconds() * f64::from(renderer.frame_rate());
+    let sample_step_frames = (duration_frames / scenario.columns as f64).max(4.0);
+    let mut raster = Vec::with_capacity(scenario.columns * scenario.rows);
+    for column in 0..scenario.columns {
+        let sample_seconds = renderer.start_seconds()
+            + (column as f64 * sample_step_frames) / f64::from(renderer.frame_rate());
+        let colors = renderer
+            .render_sampled_raster_column(sample, sample_seconds)
+            .expect("benchmark raster column should render");
+        assert_eq!(colors.len(), scenario.rows);
+        raster.extend(colors);
+    }
+    raster
+}
+
 fn project_path() -> Utf8PathBuf {
     Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -114,11 +204,19 @@ fn checksum_frame(frame: &RenderedFrame) -> u64 {
     hash = checksum_u64(hash, frame.frame_index);
     for fixture in &frame.fixtures {
         hash = checksum_u32(hash, fixture.fixture_id.0);
-        for color in &fixture.pixels {
-            hash = checksum_color(hash, *color);
-        }
+        hash = checksum_colors_with_seed(hash, &fixture.pixels);
     }
     hash
+}
+
+fn checksum_colors(colors: &[Color]) -> u64 {
+    checksum_colors_with_seed(0xcbf2_9ce4_8422_2325u64, colors)
+}
+
+fn checksum_colors_with_seed(hash: u64, colors: &[Color]) -> u64 {
+    colors
+        .iter()
+        .fold(hash, |hash, color| checksum_color(hash, *color))
 }
 
 fn checksum_color(hash: u64, color: Color) -> u64 {

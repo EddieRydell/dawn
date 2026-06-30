@@ -96,16 +96,7 @@ pub fn update_active_text(text: String, state: State<'_, DesktopState>) -> AppSn
 #[tauri::command]
 #[specta::specta]
 pub fn set_active_view_mode(mode: EditorViewMode, state: State<'_, DesktopState>) -> AppSnapshot {
-    state.update_snapshot(|snapshot| {
-        if let Some(buffer) = snapshot.active_buffer.as_mut() {
-            buffer.view_mode = mode.clone();
-        }
-        if let Some(path) = snapshot.active_file.as_deref()
-            && let Some(tab) = snapshot.tabs.iter_mut().find(|tab| tab.path == path)
-        {
-            tab.view_mode = mode;
-        }
-    })
+    state.set_active_view_mode(mode)
 }
 
 #[tauri::command]

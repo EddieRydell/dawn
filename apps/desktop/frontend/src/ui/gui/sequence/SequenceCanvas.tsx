@@ -9,7 +9,7 @@ import { commands } from "../../../api";
 
 import type { LayoutTarget, PersistedSequenceViewportState, SequenceAudio, SequenceClipRaster, SequenceEditorDocument, SequenceEffectScope, SequenceEffectScript } from "../../../types";
 
-import { runSnapshotCommand, useAppStore } from "../../../store";
+import { runGuiEditCommand, runSnapshotCommand, useAppStore } from "../../../store";
 
 import { clamp, formatSeconds, roundToNanosecond, type GuiFocus, type SequenceSelection } from "../shared";
 
@@ -17,7 +17,7 @@ import { defaultMarkColor, drawSequenceMarks, committedMarkDrafts, markIndexAfte
 
 import { targetsEqual } from "./sequenceTargets";
 
-import { buildSequenceClipLayout, constrainEffectLaneDelta, constrainEffectMoveDelta, constrainEffectResizeDelta, constrainMarkDelta, effectMoveDrafts, effectResizeDrafts, hitSequence, hitSequenceMark, markMoveDrafts, markRefLookup, mergeSequenceSelection, MIN_EFFECT_DURATION_SECONDS, nextEffectSelection, nextMarkSelection, normalizedRect, selectedEffectId, selectionCount, selectionFromMarqueeEffects, selectionFromMarqueeMarks, sequenceHoverEqual, setMarkDraft, singleEffectSelectionFocus, singleSelectionFocus, selectionFromSingle, type MarkDraftLookup, type SequenceContextMenu, type SequenceHover, type SequenceMarquee, type SequenceDraft, type SequenceViewport } from "./sequenceSelection";
+import { buildSequenceClipLayout, constrainEffectLaneDelta, constrainEffectMoveDelta, constrainEffectResizeDelta, constrainMarkDelta, effectMoveDrafts, effectResizeDrafts, hitSequence, hitSequenceMark, markMoveDrafts, markRefLookup, mergeSequenceSelection, MIN_EFFECT_DURATION_SECONDS, nextEffectSelection, nextMarkSelection, normalizedRect, selectedEffectId, selectionCount, selectionFromMarqueeEffects, selectionFromMarqueeMarks, sequenceHoverEqual, setMarkDraft, singleEffectSelectionFocus, singleSelectionFocus, selectionFromSingle, type MarkDraftLookup, type SequenceClipLayout, type SequenceContextMenu, type SequenceHover, type SequenceMarquee, type SequenceDraft, type SequenceViewport } from "./sequenceSelection";
 
 const SEQUENCE_CANVAS = {
   leftGutterPx: 128,
@@ -61,10 +61,12 @@ const SEQUENCE_COLORS = {
   playhead: "#d6a35a"
 } as const;
 
+const SEQUENCE_DRAG_THRESHOLD_PX = 4;
+
 type SequenceDragState =
   | null
-  | { kind: "sequence"; id: number; startX: number; originalStartSeconds: number; laneIndex: number; resize: "none" | "left" | "right" }
-  | { kind: "mark"; collectionKey: string; index: number; startX: number; originalTimeSeconds: number }
+  | { kind: "sequence"; id: number; startX: number; startY: number; active: boolean; originalStartSeconds: number; laneIndex: number; resize: "none" | "left" | "right" }
+  | { kind: "mark"; collectionKey: string; index: number; startX: number; startY: number; active: boolean; originalTimeSeconds: number }
   | { kind: "marquee"; state: SequenceMarquee }
   | { kind: "sequenceScrub" };
 
@@ -187,12 +189,11 @@ export function SequenceCanvas({
     () => buildSequenceClipLayout(document, groupDraft.length > 0 ? groupDraft : draft === null ? [] : [draft], viewport, left, top),
     [document, groupDraft, left, draft, top, viewport]
   );
-  const visibleEffectIds = useMemo(() => {
+  const visibleRasterClips = useMemo(() => {
     return visibleClips
-      .filter((clip) => clip.rect.x + clip.rect.width >= left && clip.rect.x <= canvasSize.width && clip.rect.y + clip.rect.height >= top && clip.rect.y <= canvasSize.height)
-      .map((clip) => clip.effect.id);
+      .filter((clip) => clip.rect.x + clip.rect.width >= left && clip.rect.x <= canvasSize.width && clip.rect.y + clip.rect.height >= top && clip.rect.y <= canvasSize.height);
   }, [canvasSize.height, canvasSize.width, left, top, visibleClips]);
-  const clipRasters = useSequenceClipRasters(document, visibleEffectIds, viewport.laneHeight);
+  const clipRasters = useSequenceClipRasters(document, visibleRasterClips, viewport.laneHeight);
   const selectedEffectIds = useMemo(() => new Set<number>(sequenceSelection?.type === "effects" ? sequenceSelection.ids : []), [sequenceSelection]);
   const selectedMarks = useMemo(
     () => markRefLookup(sequenceSelection?.type === "marks" ? sequenceSelection.marks : []),
@@ -393,7 +394,7 @@ export function SequenceCanvas({
     let markCollectionKey = hasMarksParams ? activeMarkCollectionKey ?? document.markCollections[0]?.key ?? null : null;
     if (hasMarksParams && markCollectionKey === null) {
       const newCollectionKey = nextCollectionKey("Marks", document.markCollections);
-      await runSnapshotCommand(() =>
+      await runGuiEditCommand(() =>
         commands.applySequenceGuiEdit({
           type: "createMarkCollection",
           key: newCollectionKey,
@@ -408,7 +409,7 @@ export function SequenceCanvas({
     const target = document.lanes[menu.laneIndex]?.target ?? document.lanes[0]?.target;
     if (target === undefined) return;
     const scope: SequenceEffectScope = target.kind === "group" ? "wholeTarget" : "perFixture";
-    await runSnapshotCommand(() =>
+    await runGuiEditCommand(() =>
       commands.applySequenceGuiEdit({
         type: "addEffect",
         script: script.script,
@@ -423,7 +424,7 @@ export function SequenceCanvas({
     let targetCollectionKey = collectionKey;
     if (targetCollectionKey === null) {
       const newCollectionKey = nextCollectionKey("Marks", document.markCollections);
-      await runSnapshotCommand(() =>
+      await runGuiEditCommand(() =>
         commands.applySequenceGuiEdit({
           type: "createMarkCollection",
           key: newCollectionKey,
@@ -435,7 +436,7 @@ export function SequenceCanvas({
       setActiveMarkCollectionKey(targetCollectionKey);
       setVisibleMarkCollectionKeys(new Set([...visibleMarkCollectionKeys, targetCollectionKey]));
     }
-    await runSnapshotCommand(() =>
+    await runGuiEditCommand(() =>
       commands.applySequenceGuiEdit({
         type: "addMark",
         collectionKey: targetCollectionKey,
@@ -447,7 +448,7 @@ export function SequenceCanvas({
     let collectionKey = activeMarkCollectionKey ?? document.markCollections[0]?.key ?? null;
     if (collectionKey === null) {
       const newCollectionKey = nextCollectionKey("Marks", document.markCollections);
-      await runSnapshotCommand(() =>
+      await runGuiEditCommand(() =>
         commands.applySequenceGuiEdit({
           type: "createMarkCollection",
           key: newCollectionKey,
@@ -459,7 +460,7 @@ export function SequenceCanvas({
       setActiveMarkCollectionKey(newCollectionKey);
       setVisibleMarkCollectionKeys(new Set([...visibleMarkCollectionKeys, newCollectionKey]));
     }
-    await runSnapshotCommand(() =>
+    await runGuiEditCommand(() =>
       commands.applySequenceGuiEdit({
         type: "addMark",
         collectionKey,
@@ -474,12 +475,12 @@ export function SequenceCanvas({
     setSelected({ type: "mark", collectionKey, index: Math.max(0, nextIndex) });
   };
   const deleteSelectedEffect = async (effectId: number) => {
-    await runSnapshotCommand(() => commands.applySequenceGuiEdit({ type: "deleteEffect", id: effectId }));
+    await runGuiEditCommand(() => commands.applySequenceGuiEdit({ type: "deleteEffect", id: effectId }));
     setSelected(null);
     updateSequenceSelection(null);
   };
   const deleteContextMark = async (menu: Extract<SequenceContextMenu, { kind: "mark" }>) => {
-    await runSnapshotCommand(() =>
+    await runGuiEditCommand(() =>
       commands.applySequenceGuiEdit({
         type: "deleteMark",
         collectionKey: menu.collectionKey,
@@ -490,7 +491,7 @@ export function SequenceCanvas({
     updateSequenceSelection(null);
   };
   const retargetContextEffect = async (effectId: number, target: LayoutTarget) => {
-    await runSnapshotCommand(() => commands.applySequenceGuiEdit({ type: "retargetEffect", id: effectId, target }));
+    await runGuiEditCommand(() => commands.applySequenceGuiEdit({ type: "retargetEffect", id: effectId, target }));
   };
   const markCollectionsForMenu = () => {
     if (activeMarkCollectionKey === null) return document.markCollections;
@@ -518,21 +519,23 @@ export function SequenceCanvas({
           if ((key === "c" || key === "x") && activeSelection !== null && selectionCount(activeSelection) > 0) {
             event.preventDefault();
             const editType = key === "c" ? "copy" : "cut";
-            void commands.applySequenceSelectionEdit({ type: editType, selection: activeSelection }).then((result) => {
+            void runGuiEditCommand(() => commands.applySequenceSelectionEdit({ type: editType, selection: activeSelection }).then((result) => {
               updateSequenceSelection(result.selection);
               setSelected(singleSelectionFocus(result.selection));
-            });
+              return result;
+            }));
             return;
           }
           if (key === "v") {
             event.preventDefault();
-            void commands.applySequenceSelectionEdit({
+            void runGuiEditCommand(() => commands.applySequenceSelectionEdit({
               type: "paste",
               anchor: { laneIndex: selectedLaneIndex as never, timeSeconds: selectedTimeSeconds as never }
             }).then((result) => {
               updateSequenceSelection(result.selection);
               setSelected(singleSelectionFocus(result.selection));
-            });
+              return result;
+            }));
             return;
           }
         }
@@ -552,7 +555,7 @@ export function SequenceCanvas({
           const nextDrafts: MarkDraftLookup = new Map();
           setMarkDraft(nextDrafts, selectedMark, { collectionKey: selectedMark.collectionKey, index: selectedMark.index, timeSeconds: nextTimeSeconds, committedIndex: nextIndex });
           setMarkDrafts(nextDrafts);
-          void runSnapshotCommand(() =>
+          void runGuiEditCommand(() =>
             commands.applySequenceGuiEdit({
               type: "moveMark",
               collectionKey: selectedMark.collectionKey,
@@ -568,10 +571,11 @@ export function SequenceCanvas({
         if ((event.key !== "Delete" && event.key !== "Backspace") || isTextEntryElement(event.target)) return;
         event.preventDefault();
         if (activeSelection !== null && selectionCount(activeSelection) > 1) {
-          void commands.applySequenceSelectionEdit({ type: "delete", selection: activeSelection }).then((result) => {
+          void runGuiEditCommand(() => commands.applySequenceSelectionEdit({ type: "delete", selection: activeSelection }).then((result) => {
             updateSequenceSelection(result.selection);
             setSelected(null);
-          });
+            return result;
+          }));
           return;
         }
         if (focusedEffectId !== null) {
@@ -579,7 +583,7 @@ export function SequenceCanvas({
           return;
         }
         if (selectedMark === null) return;
-        void runSnapshotCommand(() =>
+        void runGuiEditCommand(() =>
           commands.applySequenceGuiEdit({
             type: "deleteMark",
             collectionKey: selectedMark.collectionKey,
@@ -649,21 +653,16 @@ export function SequenceCanvas({
           updateSequenceSelection(nextSelection);
           setSelected(nextSelection.type === "effects" ? singleEffectSelectionFocus(nextSelection.ids) ?? { type: "effect", id: hit.effect.id } : { type: "effect", id: hit.effect.id });
           setSelectedLaneIndex(hit.laneIndex);
-          setDragCursor("grabbing");
           drag.current = {
             kind: "sequence",
             id: hit.effect.id,
             startX: event.nativeEvent.offsetX,
+            startY: event.nativeEvent.offsetY,
+            active: false,
             originalStartSeconds: hit.effect.startSeconds,
             laneIndex: hit.laneIndex,
             resize: hit.resize
           };
-          setDraft({
-            id: hit.effect.id,
-            startSeconds: hit.effect.startSeconds,
-            durationSeconds: hit.effect.durationSeconds,
-            laneIndex: hit.laneIndex
-          });
           return;
         }
         const markHit = hitSequenceMark(visibleMarkCollections, mode, x, y, left, audioStripTop, audioStripHeight, canvasSize.height, viewport);
@@ -682,6 +681,8 @@ export function SequenceCanvas({
             collectionKey: markHit.collectionKey,
             index: markHit.index,
             startX: x,
+            startY: y,
+            active: false,
             originalTimeSeconds: markHit.timeSeconds
           };
           return;
@@ -709,7 +710,7 @@ export function SequenceCanvas({
             ...current.state,
             x: event.nativeEvent.offsetX,
             y: event.nativeEvent.offsetY,
-            active: current.state.active || Math.hypot(event.nativeEvent.offsetX - current.state.startX, event.nativeEvent.offsetY - current.state.startY) >= 4
+            active: current.state.active || Math.hypot(event.nativeEvent.offsetX - current.state.startX, event.nativeEvent.offsetY - current.state.startY) >= SEQUENCE_DRAG_THRESHOLD_PX
           };
           current.state = next;
           setMarquee(next);
@@ -723,6 +724,10 @@ export function SequenceCanvas({
           return;
         }
         if (current?.kind === "mark") {
+          if (!current.active) {
+            if (Math.hypot(event.nativeEvent.offsetX - current.startX, event.nativeEvent.offsetY - current.startY) < SEQUENCE_DRAG_THRESHOLD_PX) return;
+            current.active = true;
+          }
           const deltaSeconds = roundToNanosecond((event.nativeEvent.offsetX - current.startX) / viewport.pxPerSecond);
           const timeSeconds = clamp(current.originalTimeSeconds + deltaSeconds, 0, document.durationSeconds);
           setSelected({ type: "mark", collectionKey: current.collectionKey, index: current.index });
@@ -760,6 +765,11 @@ export function SequenceCanvas({
           );
           return;
         }
+        if (!current.active) {
+          if (Math.hypot(event.nativeEvent.offsetX - current.startX, event.nativeEvent.offsetY - current.startY) < SEQUENCE_DRAG_THRESHOLD_PX) return;
+          current.active = true;
+          setDragCursor("grabbing");
+        }
         const effect = document.effects.find((candidate) => candidate.id === current.id);
         if (effect === undefined) return;
         const deltaSeconds = roundToNanosecond((event.nativeEvent.offsetX - current.startX) / viewport.pxPerSecond);
@@ -785,7 +795,7 @@ export function SequenceCanvas({
           const startSeconds = clamp(current.originalStartSeconds + deltaSeconds, 0, effect.startSeconds + effect.durationSeconds - MIN_EFFECT_DURATION_SECONDS);
           setDraft({ id: effect.id, startSeconds, durationSeconds: effect.startSeconds + effect.durationSeconds - startSeconds, laneIndex });
         } else if (current.resize === "right") {
-          setDraft({ id: effect.id, startSeconds: effect.startSeconds, durationSeconds: Math.max(MIN_EFFECT_DURATION_SECONDS, effect.durationSeconds + deltaSeconds), laneIndex });
+          setDraft({ id: effect.id, startSeconds: effect.startSeconds, durationSeconds: clamp(effect.durationSeconds + deltaSeconds, MIN_EFFECT_DURATION_SECONDS, document.durationSeconds - effect.startSeconds), laneIndex });
         } else {
           setDraft({ id: effect.id, startSeconds: clamp(current.originalStartSeconds + deltaSeconds, 0, Math.max(0, document.durationSeconds - effect.durationSeconds)), durationSeconds: effect.durationSeconds, laneIndex });
         }
@@ -802,11 +812,21 @@ export function SequenceCanvas({
           return;
         }
         if (current?.kind === "mark") {
+          if (!current.active) {
+            setMarkDrafts(new Map());
+            setDraft(null);
+            setGroupDraft([]);
+            return;
+          }
           const deltaSeconds = roundToNanosecond((event.nativeEvent.offsetX - current.startX) / viewport.pxPerSecond);
           const activeSelection = sequenceSelectionRef.current;
           if (activeSelection?.type === "marks" && activeSelection.marks.some((mark) => mark.collectionKey === current.collectionKey && mark.index === current.index)) {
             const constrainedDelta = constrainMarkDelta(document, activeSelection.marks, deltaSeconds);
-            void commands.applySequenceSelectionEdit({
+            if (constrainedDelta === 0) {
+              setMarkDrafts(new Map());
+              return;
+            }
+            void runGuiEditCommand(() => commands.applySequenceSelectionEdit({
               type: "moveMarks",
               marks: activeSelection.marks,
               timeDeltaSeconds: constrainedDelta
@@ -814,13 +834,18 @@ export function SequenceCanvas({
               updateSequenceSelection(result.selection);
               setSelected(null);
               setMarkDrafts(new Map());
-            });
+              return result;
+            }));
             return;
           }
           const timeSeconds = clamp(current.originalTimeSeconds + deltaSeconds, 0, document.durationSeconds);
+          if (timeSeconds === current.originalTimeSeconds) {
+            setMarkDrafts(new Map());
+            return;
+          }
           const collection = document.markCollections.find((candidate) => candidate.key === current.collectionKey);
           const nextIndex = collection === undefined ? current.index : markIndexAfterMove(collection, current.index, timeSeconds);
-          void runSnapshotCommand(() =>
+          void runGuiEditCommand(() =>
             commands.applySequenceGuiEdit({
               type: "moveMark",
               collectionKey: current.collectionKey,
@@ -834,33 +859,82 @@ export function SequenceCanvas({
           return;
         }
         if (!current || current.kind !== "sequence") return;
+        if (!current.active) {
+          setDraft(null);
+          setGroupDraft([]);
+          return;
+        }
         const activeSelection = sequenceSelectionRef.current;
         if (activeSelection?.type === "effects" && activeSelection.ids.length > 1 && activeSelection.ids.includes(current.id)) {
-          const deltaSeconds = current.resize === "none"
-            ? roundToNanosecond((event.nativeEvent.offsetX - current.startX) / viewport.pxPerSecond)
-            : roundToNanosecond((event.nativeEvent.offsetX - current.startX) / viewport.pxPerSecond);
+          const deltaSeconds = roundToNanosecond((event.nativeEvent.offsetX - current.startX) / viewport.pxPerSecond);
           const rawLaneIndex = clamp(Math.floor((event.nativeEvent.offsetY - top + viewport.scrollY) / viewport.laneHeight), 0, document.lanes.length - 1);
           const laneDelta = current.resize === "none" ? constrainEffectLaneDelta(document, activeSelection.ids, rawLaneIndex - current.laneIndex) : 0;
           const edit = current.resize === "none"
             ? { type: "moveEffects" as const, ids: activeSelection.ids, timeDeltaSeconds: constrainEffectMoveDelta(document, activeSelection.ids, deltaSeconds), laneDelta }
             : { type: "resizeEffects" as const, ids: activeSelection.ids, edge: current.resize, timeDeltaSeconds: constrainEffectResizeDelta(document, activeSelection.ids, current.resize, deltaSeconds) };
-          void commands.applySequenceSelectionEdit(edit).then((result) => {
+          if ((edit.type === "moveEffects" && edit.timeDeltaSeconds === 0 && edit.laneDelta === 0) || (edit.type === "resizeEffects" && edit.timeDeltaSeconds === 0)) {
+            setDraft(null);
+            setGroupDraft([]);
+            return;
+          }
+          void runGuiEditCommand(() => commands.applySequenceSelectionEdit(edit).then((result) => {
             updateSequenceSelection(result.selection);
             setSelected(null);
             setDraft(null);
             setGroupDraft([]);
-          });
+            return result;
+          }));
           return;
         }
-        if (!draft) return;
-        const committedDraft = draft;
+        const effect = document.effects.find((candidate) => candidate.id === current.id);
+        if (effect === undefined) {
+          setDraft(null);
+          setGroupDraft([]);
+          return;
+        }
+        const deltaSeconds = roundToNanosecond((event.nativeEvent.offsetX - current.startX) / viewport.pxPerSecond);
+        const laneIndex =
+          current.resize === "none"
+            ? clamp(Math.floor((event.nativeEvent.offsetY - top + viewport.scrollY) / viewport.laneHeight), 0, document.lanes.length - 1)
+            : current.laneIndex;
+        const committedDraft =
+          current.resize === "left"
+            ? {
+                id: effect.id,
+                startSeconds: clamp(current.originalStartSeconds + deltaSeconds, 0, effect.startSeconds + effect.durationSeconds - MIN_EFFECT_DURATION_SECONDS),
+                durationSeconds: effect.startSeconds + effect.durationSeconds - clamp(current.originalStartSeconds + deltaSeconds, 0, effect.startSeconds + effect.durationSeconds - MIN_EFFECT_DURATION_SECONDS),
+                laneIndex
+              }
+            : current.resize === "right"
+              ? {
+                  id: effect.id,
+                  startSeconds: effect.startSeconds,
+                  durationSeconds: clamp(effect.durationSeconds + deltaSeconds, MIN_EFFECT_DURATION_SECONDS, document.durationSeconds - effect.startSeconds),
+                  laneIndex
+                }
+              : {
+                  id: effect.id,
+                  startSeconds: clamp(current.originalStartSeconds + deltaSeconds, 0, Math.max(0, document.durationSeconds - effect.durationSeconds)),
+                  durationSeconds: effect.durationSeconds,
+                  laneIndex
+                };
+        const target = document.lanes[committedDraft.laneIndex]?.target ?? null;
+        const isNoOp =
+          current.resize === "none"
+            ? committedDraft.startSeconds === effect.startSeconds && (target === null || targetsEqual(effect.target, target))
+            : committedDraft.startSeconds === effect.startSeconds && committedDraft.durationSeconds === effect.durationSeconds;
+        if (isNoOp) {
+          setDraft(null);
+          setGroupDraft([]);
+          return;
+        }
         const edit = () =>
           current.resize === "none"
             ? commands.applySequenceGuiEdit({
                 type: "moveEffect",
                 id: committedDraft.id,
                 startSeconds: committedDraft.startSeconds,
-                target: document.lanes[committedDraft.laneIndex]?.target ?? null
+                target
               })
             : commands.applySequenceGuiEdit({
                 type: "resizeEffect",
@@ -868,8 +942,8 @@ export function SequenceCanvas({
                 startSeconds: committedDraft.startSeconds,
                 durationSeconds: committedDraft.durationSeconds
               });
-        void runSnapshotCommand(edit).finally(() => {
-          setDraft((currentDraft) => (currentDraft === committedDraft ? null : currentDraft));
+        void runGuiEditCommand(edit).finally(() => {
+          setDraft(null);
           setGroupDraft([]);
         });
       }}
@@ -1045,26 +1119,48 @@ type ClipRasterState = {
 type DecodedClipRaster = {
   signature: string;
   image: CanvasImageSource;
+  columns: number;
+  rows: number;
+  requestRows: number;
 };
 
-const CLIP_RASTER_COLUMN_STRIDE_FRAMES = 4;
+const CLIP_RASTER_MAX_COLUMNS = 256;
+const CLIP_RASTER_MIN_STRIDE_FRAMES = 4;
 const CLIP_RASTER_REQUEST_THROTTLE_MS = 50;
 const CLIP_RASTER_DECODE_CHUNK_SIZE = 2;
-const CLIP_RASTER_BACKFILL_STABLE_MS = 250;
-const CLIP_RASTER_BACKFILL_CHUNK_SIZE = 8;
 
 const waveformCache = new Map<string, Promise<WaveformAudio | null>>();
 
-function useSequenceClipRasters(document: SequenceEditorDocument, visibleEffectIds: number[], laneHeight: number): ClipRasterState {
+type ClipRasterRequestItem = { effectId: number; displayColumnCount: number; requestedColumns: number; requestedRows: number };
+
+function useSequenceClipRasters(document: SequenceEditorDocument, visibleClips: SequenceClipLayout[], laneHeight: number): ClipRasterState {
   const projectRevision = useAppStore((store) => store.snapshot?.projectRevision ?? null);
   const requestKey = `${document.path}:${document.objectKey}`;
   const effectIds = useMemo(() => document.effects.map((effect) => effect.id), [document.effects]);
   const effectIdsKey = effectIds.join(",");
-  const visibleEffectIdsKey = visibleEffectIds.join(",");
-  const visibleEffectIdsRef = useRef<number[]>(visibleEffectIds);
+  const visibleRequestItems = useMemo(() => {
+    const dpr = window.devicePixelRatio || 1;
+    const displayRowCount = Math.max(1, Math.ceil(laneHeight * dpr));
+    const items: ClipRasterRequestItem[] = [];
+    const requested = new Set<number>();
+    for (const clip of visibleClips) {
+      if (requested.has(clip.effect.id)) continue;
+      const displayColumnCount = Math.max(1, Math.ceil(clip.rect.width * dpr));
+      const durationFrames = Math.max(1, clip.effect.durationSeconds * document.frameRate);
+      items.push({
+        effectId: clip.effect.id,
+        displayColumnCount,
+        requestedColumns: Math.min(displayColumnCount, Math.ceil(durationFrames / CLIP_RASTER_MIN_STRIDE_FRAMES), CLIP_RASTER_MAX_COLUMNS),
+        requestedRows: displayRowCount
+      });
+      requested.add(clip.effect.id);
+    }
+    return items;
+  }, [document.frameRate, laneHeight, visibleClips]);
+  const visibleRequestItemsKey = visibleRequestItems.map((item) => `${item.effectId}:${item.displayColumnCount}:${item.requestedColumns}:${item.requestedRows}`).join(",");
+  const visibleRequestItemsRef = useRef<ClipRasterRequestItem[]>(visibleRequestItems);
   const rasters = useRef<Map<number, DecodedClipRaster>>(new Map());
   const errors = useRef<Set<number>>(new Set());
-  const signatures = useRef<Map<number, string>>(new Map());
   const inFlightSignatures = useRef<Map<number, string | null>>(new Map());
   const cachedRequestKey = useRef(requestKey);
   const [state, setState] = useState<ClipRasterState>({
@@ -1075,15 +1171,14 @@ function useSequenceClipRasters(document: SequenceEditorDocument, visibleEffectI
   });
 
   useEffect(() => {
-    visibleEffectIdsRef.current = visibleEffectIds;
-  }, [visibleEffectIds]);
+    visibleRequestItemsRef.current = visibleRequestItems;
+  }, [visibleRequestItems]);
 
   useEffect(() => {
     if (projectRevision === null) return;
     let cancelled = false;
     let pollTimeout: number | null = null;
     let requestTimeout: number | null = null;
-    let backfillTimeout: number | null = null;
     let decodeFrame: number | null = null;
     const decodeQueue: SequenceClipRaster[] = [];
     let decoding = false;
@@ -1092,7 +1187,6 @@ function useSequenceClipRasters(document: SequenceEditorDocument, visibleEffectI
       cachedRequestKey.current = requestKey;
       rasters.current.clear();
       errors.current.clear();
-      signatures.current.clear();
       inFlightSignatures.current.clear();
     }
     const effectIdSet = new Set(effectIds);
@@ -1101,9 +1195,6 @@ function useSequenceClipRasters(document: SequenceEditorDocument, visibleEffectI
     }
     for (const effectId of [...errors.current]) {
       if (!effectIdSet.has(effectId)) errors.current.delete(effectId);
-    }
-    for (const effectId of [...signatures.current.keys()]) {
-      if (!effectIdSet.has(effectId)) signatures.current.delete(effectId);
     }
     for (const effectId of [...inFlightSignatures.current.keys()]) {
       if (!effectIdSet.has(effectId)) inFlightSignatures.current.delete(effectId);
@@ -1121,17 +1212,26 @@ function useSequenceClipRasters(document: SequenceEditorDocument, visibleEffectI
     const scheduleDecode = (nextProjectRevision: number) => {
       if (decoding) return;
       decoding = true;
-      const decodeNextChunk = () => {
+      const decodeNextChunk = async () => {
         if (cancelled) return;
         for (let index = 0; index < CLIP_RASTER_DECODE_CHUNK_SIZE; index += 1) {
           const raster = decodeQueue.shift();
           if (raster === undefined) break;
-          rasters.current.set(raster.effectId, {
-            signature: raster.signature,
-            image: decodeClipRaster(raster)
-          });
-          signatures.current.set(raster.effectId, raster.signature);
-          errors.current.delete(raster.effectId);
+          try {
+            const image = await decodeClipRaster(raster);
+            rasters.current.set(raster.effectId, {
+              signature: raster.signature,
+              image,
+              columns: raster.columns,
+              rows: raster.rows,
+              requestRows: displayRowCount
+            });
+            errors.current.delete(raster.effectId);
+          } catch {
+            rasters.current.delete(raster.effectId);
+            inFlightSignatures.current.delete(raster.effectId);
+            errors.current.add(raster.effectId);
+          }
         }
         publishState(nextProjectRevision);
         if (decodeQueue.length === 0) {
@@ -1139,26 +1239,21 @@ function useSequenceClipRasters(document: SequenceEditorDocument, visibleEffectI
           decodeFrame = null;
           return;
         }
-        decodeFrame = window.requestAnimationFrame(decodeNextChunk);
+        decodeFrame = window.requestAnimationFrame(() => void decodeNextChunk());
       };
-      decodeFrame = window.requestAnimationFrame(decodeNextChunk);
+      decodeFrame = window.requestAnimationFrame(() => void decodeNextChunk());
     };
 
-    const visibleRequestEffectIds = () => {
+    const visibleRequestRasterItems = () => {
       const existingEffectIds = new Set(effectIds);
       const requested = new Set<number>();
-      const ids: number[] = [];
-      for (const effectId of visibleEffectIdsRef.current) {
-        if (!existingEffectIds.has(effectId) || requested.has(effectId)) continue;
-        ids.push(effectId);
-        requested.add(effectId);
+      const items: ClipRasterRequestItem[] = [];
+      for (const item of visibleRequestItemsRef.current) {
+        if (!existingEffectIds.has(item.effectId) || requested.has(item.effectId)) continue;
+        items.push(item);
+        requested.add(item.effectId);
       }
-      return ids;
-    };
-
-    const backfillEffectIds = () => {
-      const visible = new Set(visibleEffectIdsRef.current);
-      return effectIds.filter((effectId) => !visible.has(effectId));
+      return items;
     };
 
     if (effectIds.length === 0) {
@@ -1179,13 +1274,11 @@ function useSequenceClipRasters(document: SequenceEditorDocument, visibleEffectI
       }
       for (const error of batch.errors) {
         rasters.current.delete(error.effectId);
-        signatures.current.set(error.effectId, error.signature);
         inFlightSignatures.current.delete(error.effectId);
         errors.current.add(error.effectId);
       }
       for (const unavailable of batch.unavailable) {
         rasters.current.delete(unavailable.effectId);
-        signatures.current.delete(unavailable.effectId);
         inFlightSignatures.current.delete(unavailable.effectId);
         errors.current.delete(unavailable.effectId);
       }
@@ -1205,46 +1298,32 @@ function useSequenceClipRasters(document: SequenceEditorDocument, visibleEffectI
       return batch.projectRevision === projectRevision;
     };
 
-    const requestRasters = async (requestEffectIds: number[]): Promise<boolean> => {
-      if (requestEffectIds.length === 0) return true;
+    const requestRasters = async (requestItems: ClipRasterRequestItem[]): Promise<boolean> => {
+      if (requestItems.length === 0) return true;
       const response = await commands.requestSequenceClipRasters({
         path: document.path,
         view: "sequence",
         objectKey: document.objectKey,
-        items: requestEffectIds.map((effectId) => {
-          const signature = signatures.current.get(effectId) ?? null;
-          inFlightSignatures.current.set(effectId, signature);
-          return { effectId, signature };
+        items: requestItems.map((item) => {
+          const cached = rasters.current.get(item.effectId) ?? null;
+          const signature = cached !== null && cached.columns === item.requestedColumns && cached.requestRows === item.requestedRows ? cached.signature : null;
+          inFlightSignatures.current.set(item.effectId, signature);
+          return { effectId: item.effectId, signature, displayColumnCount: item.displayColumnCount };
         }),
-        columnStrideFrames: CLIP_RASTER_COLUMN_STRIDE_FRAMES,
         displayRowCount
       });
       if (cancelled) return false;
       return await pollResults(response.requestId, response.complete);
     };
 
-    const requestBackfill = async () => {
-      const remaining = backfillEffectIds();
-      for (let index = 0; index < remaining.length && !cancelled; index += CLIP_RASTER_BACKFILL_CHUNK_SIZE) {
-        const complete = await requestRasters(remaining.slice(index, index + CLIP_RASTER_BACKFILL_CHUNK_SIZE));
-        if (!complete) return;
-      }
-    };
-
-    const requestVisibleThenBackfill = async () => {
-      const complete = await requestRasters(visibleRequestEffectIds());
-      if (!complete || cancelled) return;
-      backfillTimeout = window.setTimeout(() => void requestBackfill(), CLIP_RASTER_BACKFILL_STABLE_MS);
-    };
-    requestTimeout = window.setTimeout(() => void requestVisibleThenBackfill(), CLIP_RASTER_REQUEST_THROTTLE_MS);
+    requestTimeout = window.setTimeout(() => void requestRasters(visibleRequestRasterItems()), CLIP_RASTER_REQUEST_THROTTLE_MS);
     return () => {
       cancelled = true;
       if (pollTimeout !== null) window.clearTimeout(pollTimeout);
       window.clearTimeout(requestTimeout);
-      if (backfillTimeout !== null) window.clearTimeout(backfillTimeout);
       if (decodeFrame !== null) window.cancelAnimationFrame(decodeFrame);
     };
-  }, [document.objectKey, document.path, effectIds, effectIdsKey, laneHeight, projectRevision, requestKey, visibleEffectIdsKey]);
+  }, [document.objectKey, document.path, effectIds, effectIdsKey, laneHeight, projectRevision, requestKey, visibleRequestItemsKey]);
 
   return state.requestKey === requestKey ? state : {
     requestKey,
@@ -1289,17 +1368,20 @@ function drawClipRaster(
   ctx.imageSmoothingEnabled = true;
 }
 
-function decodeClipRaster(payload: SequenceClipRaster): CanvasImageSource {
+async function decodeClipRaster(payload: SequenceClipRaster): Promise<CanvasImageSource> {
   const raster = window.document.createElement("canvas");
   raster.width = payload.columns;
   raster.height = payload.rows;
   const rasterContext = raster.getContext("2d");
-  if (rasterContext === null) return raster;
-  const image = rasterContext.createImageData(payload.columns, payload.rows);
-  const bytes = window.atob(payload.pixelsRgbaBase64);
-  for (let index = 0; index < image.data.length; index += 1) {
-    image.data[index] = bytes.charCodeAt(index);
+  if (rasterContext === null) throw new Error("Raster canvas context is unavailable.");
+  const response = await fetch(convertFileSrc(payload.pixelsRgbaToken, "dawn-raster"));
+  if (!response.ok) throw new Error(`Raster byte fetch failed with status ${response.status}.`);
+  const arrayBuffer = await response.arrayBuffer();
+  const expectedByteLength = payload.columns * payload.rows * 4;
+  if (arrayBuffer.byteLength !== expectedByteLength) {
+    throw new Error(`Raster byte length ${arrayBuffer.byteLength} did not match expected length ${expectedByteLength}.`);
   }
+  const image = new ImageData(new Uint8ClampedArray(arrayBuffer), payload.columns, payload.rows);
   rasterContext.putImageData(image, 0, 0);
   return raster;
 }

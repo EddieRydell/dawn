@@ -37,13 +37,16 @@ export const useAppStore = create<AppStore>((set) => ({
         snapshot.audioTransport,
         source
       );
-      return {
+      const nextState: Partial<AppStore> = {
         snapshot: {
           ...snapshot,
           audioTransport
-        },
-        localText: snapshot.activeBuffer?.text ?? ""
+        }
       };
+      if (snapshot.activeBuffer?.viewMode === "text") {
+        nextState.localText = snapshot.activeBuffer.text;
+      }
+      return nextState;
     });
     void source;
   },
@@ -68,8 +71,7 @@ export const useAppStore = create<AppStore>((set) => ({
           ...result.snapshot,
           audioTransport
         },
-        guiDocument: result.document,
-        localText: result.snapshot.activeBuffer?.text ?? ""
+        guiDocument: result.document
       };
     });
   },
@@ -119,6 +121,22 @@ export async function runSnapshotCommand(command: () => Promise<AppSnapshot>) {
     }
     useAppStore.getState().setError(null);
     return snapshot;
+  } catch (error) {
+    useAppStore.getState().setError(String(error));
+    throw error;
+  }
+}
+
+export async function runGuiEditCommand(command: () => Promise<GuiEditResult>) {
+  try {
+    const previousRoot = useAppStore.getState().snapshot?.projectRoot ?? null;
+    const result = await command();
+    if (result.snapshot.projectRoot !== previousRoot) {
+      const restoreState = await commands.getRestoredViewState();
+      useAppStore.getState().setRestoreState(restoreState);
+    }
+    useAppStore.getState().setError(null);
+    return result;
   } catch (error) {
     useAppStore.getState().setError(String(error));
     throw error;

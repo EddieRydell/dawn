@@ -4,7 +4,7 @@ import { commands } from "../../../api";
 
 import type { LayoutDocument } from "../../../types";
 
-import { runSnapshotCommand } from "../../../store";
+import { runGuiEditCommand } from "../../../store";
 
 import { denormalizeTransform, drawSpatialCanvas, nearestPlacement, normalizeBounds, normalizePoint, normalizeTransform, round6, unproject, type GuiFocus, type Transform } from "../shared";
 
@@ -88,7 +88,7 @@ export function LayoutCanvas({
         const current = drag.current;
         drag.current = null;
         if (!current) return;
-        void runSnapshotCommand(() =>
+        void runGuiEditCommand(() =>
           commands.applyLayoutGuiEdit({
             type: "updatePlacementTransform",
             id: current.id,

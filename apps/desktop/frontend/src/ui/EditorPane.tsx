@@ -89,8 +89,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
   }, [
     nextGuiRequest,
     setGuiDocument,
-    setGuiRequest,
-    snapshot.projectRevision
+    setGuiRequest
   ]);
 
   useEffect(() => {

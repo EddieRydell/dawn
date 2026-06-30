@@ -1,6 +1,6 @@
 import type { FixtureDocument } from "../../../types";
 import { commands } from "../../../api";
-import { runSnapshotCommand } from "../../../store";
+import { runGuiEditCommand } from "../../../store";
 import { InspectorScrollArea } from "../InspectorScrollArea";
 import type { GuiFocus } from "../shared";
 
@@ -20,7 +20,7 @@ export function FixtureInspector({ document, selected }: { document: FixtureDocu
               step="any"
               defaultValue={fixture.bulbDiameterMeters}
               onBlur={(event) =>
-                void runSnapshotCommand(() =>
+                void runGuiEditCommand(() =>
                   commands.applyFixtureGuiEdit({
                     type: "updateBulbDiameter",
                     objectKey: fixture.objectKey,

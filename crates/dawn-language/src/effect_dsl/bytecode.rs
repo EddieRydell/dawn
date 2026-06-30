@@ -94,7 +94,7 @@ impl ValueSlot {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Hash, PartialEq)]
 pub(crate) enum Instruction {
     LoadConst {
         dst: ValueSlot,
@@ -330,14 +330,14 @@ pub(crate) enum Instruction {
     ReturnColor(ColorSlot),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum GeneratorContextId {
     Timeline,
     Target,
     Duration,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ContextRead {
     Progress,
     Seconds,
@@ -347,7 +347,7 @@ pub(crate) enum ContextRead {
     PixelFraction,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum FloatUnary {
     Sin,
     Cos,
@@ -355,7 +355,7 @@ pub(crate) enum FloatUnary {
     Floor,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ArithmeticOp {
     Add,
     Subtract,
@@ -364,7 +364,7 @@ pub(crate) enum ArithmeticOp {
     Remainder,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum IntArithmeticOp {
     Add,
     Subtract,
@@ -372,7 +372,7 @@ pub(crate) enum IntArithmeticOp {
     Remainder,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum CompareOp {
     Less,
     LessEqual,
@@ -380,13 +380,13 @@ pub(crate) enum CompareOp {
     GreaterEqual,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum FloatBinary {
     Min,
     Max,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum MarkOp {
     Count,
     At,
@@ -397,7 +397,7 @@ pub(crate) enum MarkOp {
     Phase,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum TargetItemsOp {
     Fixtures,
     Pixels,

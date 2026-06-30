@@ -29,6 +29,12 @@ pub fn run() -> Result<(), tauri::Error> {
     tauri::Builder::default()
         .manage(state::DesktopState::new())
         .manage(preview::PreviewWindowService::new())
+        .register_uri_scheme_protocol("dawn-raster", |context, request| {
+            raster_protocol_response(
+                context.app_handle().state::<state::DesktopState>().inner(),
+                request,
+            )
+        })
         .setup(|app| {
             let handle = app.handle().clone();
             let state = app.state::<state::DesktopState>();
@@ -74,4 +80,33 @@ pub fn run() -> Result<(), tauri::Error> {
         })
         .invoke_handler(bindings.invoke_handler())
         .run(tauri::generate_context!())
+}
+
+fn raster_protocol_response(
+    state: &state::DesktopState,
+    request: tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    let token = request.uri().path().trim_start_matches('/');
+    if token.is_empty() {
+        return response_with_status(tauri::http::StatusCode::NOT_FOUND, Vec::new());
+    }
+    match state.sequence_clip_raster_pixels(token) {
+        Some(bytes) => response_with_status(tauri::http::StatusCode::OK, bytes),
+        None => response_with_status(tauri::http::StatusCode::NOT_FOUND, Vec::new()),
+    }
+}
+
+fn response_with_status(
+    status: tauri::http::StatusCode,
+    body: Vec<u8>,
+) -> tauri::http::Response<Vec<u8>> {
+    tauri::http::Response::builder()
+        .status(status)
+        .header(
+            tauri::http::header::CONTENT_TYPE,
+            "application/octet-stream",
+        )
+        .header(tauri::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .body(body)
+        .unwrap_or_else(|_| tauri::http::Response::new(Vec::new()))
 }

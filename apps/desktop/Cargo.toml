@@ -8,7 +8,6 @@ license = "MIT"
 default-run = "dawn-desktop"
 
 [dependencies]
-base64.workspace = true
 camino.workspace = true
 bytemuck.workspace = true
 dawn-project-io.workspace = true
