@@ -13,11 +13,12 @@ use dawn_project_io::{
 use indexmap::IndexSet;
 
 use crate::dto::{
-    AppSnapshot, AudioTransportSnapshot, AudioTransportState, BufferExternalState,
-    DiagnosticSeverity, DocumentDefaultObjectKey, DocumentDescriptor, DocumentObjectDescriptor,
-    DocumentViewId, EditorBuffer, EditorViewMode, GuiDocument, GuiDocumentRequest, GuiEditCommand,
-    GuiEditResult, LiveOutputSnapshot, ObjectKind, ProjectDiagnostic, SequenceAudio,
-    SequenceSelectionEdit, SequenceSelectionEditResult, WorkspaceEntry, WorkspaceEntryKind,
+    AppSettings, AppSnapshot, AudioTransportSnapshot, AudioTransportState, BufferExternalState,
+    DefaultDawnViewMode, DiagnosticSeverity, DocumentDefaultObjectKey, DocumentDescriptor,
+    DocumentObjectDescriptor, DocumentViewId, EditorBuffer, EditorViewMode, GuiDocument,
+    GuiDocumentRequest, GuiEditCommand, GuiEditResult, LiveOutputSnapshot, ObjectKind,
+    ProjectDiagnostic, ProjectTreeMode, SequenceAudio, SequenceSelectionEdit,
+    SequenceSelectionEditResult, WorkspaceEntry, WorkspaceEntryKind,
 };
 use crate::persistence::{
     PersistedEditorViewStateUpdate, PersistedProjectSession, PersistedSequenceViewportStateUpdate,
@@ -55,6 +56,13 @@ impl DesktopState {
 
     pub fn persistence(&self) -> &PersistenceService {
         &self.persistence
+    }
+
+    pub fn apply_persisted_settings(&self) -> AppSnapshot {
+        let settings = sanitize_app_settings(self.persistence.settings());
+        self.update_snapshot(|snapshot| {
+            snapshot.settings = settings;
+        })
     }
 
     pub fn snapshot(&self) -> AppSnapshot {
@@ -105,6 +113,22 @@ impl DesktopState {
     pub fn set_persistence_error(&self, message: String) -> AppSnapshot {
         self.update_snapshot(|snapshot| {
             snapshot.status = message;
+        })
+    }
+
+    pub fn update_app_settings(&self, settings: AppSettings) -> AppSnapshot {
+        let settings = sanitize_app_settings(settings);
+        if let Err(error) = self.persistence.record_settings(settings.clone()) {
+            return self.set_persistence_error(format!("Settings were not saved: {error}"));
+        }
+        self.update_snapshot(|snapshot| {
+            let tree_mode = settings.project_tree_mode.clone();
+            snapshot.settings = settings;
+            match tree_mode {
+                ProjectTreeMode::Show => snapshot.project_tree_visible = true,
+                ProjectTreeMode::Hide => snapshot.project_tree_visible = false,
+                ProjectTreeMode::Remember => {}
+            }
         })
     }
 
@@ -317,7 +341,7 @@ impl DesktopState {
             return self.snapshot();
         };
         let relative_path = Utf8PathBuf::from(path);
-        let Some(buffer) = editor_buffer_for_path(&project, &relative_path) else {
+        let Some(mut buffer) = editor_buffer_for_path(&project, &relative_path) else {
             return self.snapshot_with_error(
                 "file.open",
                 path,
@@ -330,6 +354,15 @@ impl DesktopState {
             .get(&relative_path)
             .map(document_descriptor)
             .unwrap_or_else(|| empty_document_descriptor(&relative_path));
+        let existing_view_mode = self
+            .snapshot()
+            .tabs
+            .into_iter()
+            .find(|tab| tab.path == path)
+            .map(|tab| tab.view_mode);
+        buffer.view_mode = existing_view_mode.unwrap_or_else(|| {
+            default_view_mode_for_descriptor(&self.snapshot().settings, &descriptor)
+        });
         self.update_snapshot(|snapshot| {
             upsert_tab(&mut snapshot.tabs, buffer.clone());
             snapshot.active_file = Some(buffer.path.clone());
@@ -592,7 +625,9 @@ impl DesktopState {
         &self,
         request: crate::dto::SequenceClipRasterRequest,
     ) -> crate::dto::SequenceClipRasterResponse {
-        let project_revision = self.snapshot().project_revision;
+        let snapshot = self.snapshot();
+        let project_revision = snapshot.project_revision;
+        let raster_settings = snapshot.settings.effect_raster;
         let project = self.project_session();
         let setup_id = project
             .as_ref()
@@ -602,6 +637,7 @@ impl DesktopState {
         match self.sequence_clip_raster.lock() {
             Ok(mut raster) => raster.request(
                 project_revision,
+                raster_settings,
                 project_model,
                 setup_id,
                 sequence_id,
@@ -609,6 +645,7 @@ impl DesktopState {
             ),
             Err(poisoned) => poisoned.into_inner().request(
                 project_revision,
+                raster_settings,
                 project_model,
                 setup_id,
                 sequence_id,
@@ -883,6 +920,11 @@ impl DesktopState {
                 .as_ref()
                 .map(|restore| restore.session.project_tree_visible)
                 .unwrap_or(true);
+            match snapshot.settings.project_tree_mode {
+                ProjectTreeMode::Remember => {}
+                ProjectTreeMode::Show => snapshot.project_tree_visible = true,
+                ProjectTreeMode::Hide => snapshot.project_tree_visible = false,
+            }
             snapshot.project_entries = entries;
             snapshot.tabs = active
                 .as_ref()
@@ -1647,6 +1689,7 @@ impl Default for DesktopState {
 
 fn empty_snapshot() -> AppSnapshot {
     AppSnapshot {
+        settings: AppSettings::default(),
         project_root: None,
         project_revision: 0,
         project_tree_visible: true,
@@ -1976,6 +2019,47 @@ fn same_view(left: &DocumentViewId, right: &DocumentViewId) -> bool {
             | (DocumentViewId::Fixture, DocumentViewId::Fixture)
             | (DocumentViewId::Sequence, DocumentViewId::Sequence)
     )
+}
+
+fn default_view_mode_for_descriptor(
+    settings: &AppSettings,
+    descriptor: &DocumentDescriptor,
+) -> EditorViewMode {
+    match settings.default_dawn_view_mode {
+        DefaultDawnViewMode::Remember | DefaultDawnViewMode::Text => EditorViewMode::Text,
+        DefaultDawnViewMode::Gui => {
+            if descriptor
+                .available_views
+                .iter()
+                .any(|view| !matches!(view, DocumentViewId::Text))
+            {
+                EditorViewMode::Gui
+            } else {
+                EditorViewMode::Text
+            }
+        }
+    }
+}
+
+fn sanitize_app_settings(mut settings: AppSettings) -> AppSettings {
+    if !settings.sequence_initial_px_per_second.is_finite() {
+        settings.sequence_initial_px_per_second = 80.0;
+    }
+    if !settings.sequence_initial_lane_height_px.is_finite() {
+        settings.sequence_initial_lane_height_px = 42.0;
+    }
+    if !settings.effect_raster.render_scale.is_finite() {
+        settings.effect_raster.render_scale = 1.0;
+    }
+    settings.sequence_initial_px_per_second =
+        settings.sequence_initial_px_per_second.clamp(20.0, 12000.0);
+    settings.sequence_initial_lane_height_px =
+        settings.sequence_initial_lane_height_px.clamp(24.0, 120.0);
+    settings.effect_raster.render_scale = settings.effect_raster.render_scale.clamp(0.25, 2.0);
+    settings.effect_raster.max_columns = settings.effect_raster.max_columns.clamp(16, 1024);
+    settings.effect_raster.max_rows = settings.effect_raster.max_rows.clamp(1, 200);
+    settings.effect_raster.min_frame_stride = settings.effect_raster.min_frame_stride.clamp(1, 16);
+    settings
 }
 
 fn upsert_tab(tabs: &mut Vec<EditorBuffer>, buffer: EditorBuffer) {

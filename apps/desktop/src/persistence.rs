@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Manager, Runtime, Window};
 
-use crate::dto::{AppSnapshot, EditorViewMode};
+use crate::dto::{AppSettings, AppSnapshot, EditorViewMode};
 
 const VERSION: u32 = 1;
 const FILE_NAME: &str = "desktop-state-v1.json";
@@ -111,6 +111,19 @@ impl PersistenceService {
 
     pub fn is_write_allowed(&self) -> bool {
         self.inner().write_allowed
+    }
+
+    pub fn settings(&self) -> AppSettings {
+        self.inner().store.settings.clone()
+    }
+
+    pub fn record_settings(&self, settings: AppSettings) -> Result<(), String> {
+        let mut inner = self.inner();
+        if !inner.write_allowed {
+            return Ok(());
+        }
+        inner.store.settings = settings;
+        inner.save_now()
     }
 
     pub fn record_snapshot(&self, snapshot: &AppSnapshot) -> Result<(), String> {
@@ -281,6 +294,8 @@ impl PersistenceInner {
 #[serde(rename_all = "camelCase")]
 struct PersistedStore {
     version: u32,
+    #[serde(default)]
+    settings: AppSettings,
     last_project: Option<String>,
     projects: BTreeMap<String, PersistedProjectSession>,
     main_window: Option<PersistedWindowState>,
@@ -303,6 +318,7 @@ impl Default for PersistedStore {
     fn default() -> Self {
         Self {
             version: VERSION,
+            settings: AppSettings::default(),
             last_project: None,
             projects: BTreeMap::new(),
             main_window: None,

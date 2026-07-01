@@ -6,6 +6,7 @@ import { EditorPane } from "./EditorPane";
 import { ExportFseqDialog } from "./ExportFseqDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { ProjectTree } from "./ProjectTree";
+import { SettingsDialog } from "./SettingsDialog";
 import { StatusBar } from "./StatusBar";
 import { TitleBar } from "./TitleBar";
 
@@ -48,6 +49,7 @@ export function App() {
       <StatusBar snapshot={snapshot} />
       <NewProjectDialog />
       <ExportFseqDialog />
+      <SettingsDialog />
       {snapshot.projectRoot === null && (
         <div className="empty-project">
           <button onClick={() => void runSnapshotCommand(commands.openProjectDialog)}>Open Project...</button>

@@ -1409,6 +1409,75 @@ button:focus-visible,
   gap: 12px;
 }
 
+.settings-dialog {
+  width: min(620px, calc(100vw - 32px));
+}
+
+.settings-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  max-height: min(680px, calc(100vh - 150px));
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.settings-form section {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  min-width: 0;
+  border: 1px solid #30343a;
+  background: #1d1f23;
+  padding: 10px;
+}
+
+.settings-form h3 {
+  margin: 0;
+  color: #fffaf0;
+  font-size: 12px;
+}
+
+.settings-form label {
+  display: grid;
+  gap: 5px;
+  color: #a8a29a;
+  font-size: 12px;
+}
+
+.settings-form input,
+.settings-form select {
+  min-width: 0;
+  height: 28px;
+  border: 1px solid #373b42;
+  border-radius: 4px;
+  background: #17181b;
+  padding: 0 7px;
+  color: #ebe7df;
+}
+
+.settings-checkbox {
+  display: flex !important;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  color: #ebe7df !important;
+}
+
+.settings-checkbox input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+}
+
+@media (max-width: 700px) {
+  .settings-form {
+    grid-template-columns: 1fr;
+  }
+}
+
 .new-project-location-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

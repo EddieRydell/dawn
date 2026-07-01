@@ -66,6 +66,12 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
   }, [localText]);
 
   useEffect(() => {
+    if (!snapshot.settings.autosaveTextEdits) {
+      window.clearTimeout(autosaveTimer);
+    }
+  }, [snapshot.settings.autosaveTextEdits]);
+
+  useEffect(() => {
     setGuiRequest(nextGuiRequest);
     setCurrentGuiRequest(nextGuiRequest);
     if (nextGuiRequest === null) {
@@ -153,7 +159,9 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
             }
             const text = update.state.doc.toString();
             setLocalText(text);
-            scheduleAutosave(text);
+            if (snapshot.settings.autosaveTextEdits) {
+              scheduleAutosave(text);
+            }
           }
         },
         async (text, redo) => {
@@ -182,7 +190,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
         setEditorView(null);
       });
     };
-  }, [activeConflicted, activePath, setLocalText, viewMode]);
+  }, [activeConflicted, activePath, setLocalText, snapshot.settings.autosaveTextEdits, viewMode]);
 
   useEffect(() => {
     if (!view.current || viewMode !== "text" || activePath === null) return;

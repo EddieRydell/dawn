@@ -2423,7 +2423,7 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 8
-    start: 39.415856891s
+    start: 39.402323362s
     duration: 0.65s
     target:
       type: group

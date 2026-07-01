@@ -40,6 +40,7 @@ pub fn run() -> Result<(), tauri::Error> {
             let state = app.state::<state::DesktopState>();
             match state.persistence().load(&handle) {
                 Ok(last_project) => {
+                    let settings_snapshot = state.apply_persisted_settings();
                     if let Some(window_state) = state.persistence().main_window()
                         && let Some(window) = app.get_window("main")
                     {
@@ -62,10 +63,14 @@ pub fn run() -> Result<(), tauri::Error> {
                             let _ = preview.close_for_main_shutdown(&close_app, state.persistence());
                         });
                     }
-                    if let Some(project) = last_project {
+                    if settings_snapshot.settings.reopen_last_project
+                        && let Some(project) = last_project
+                    {
                         state.open_project_path(&project);
                     }
-                    if state.persistence().preview_window().open {
+                    if settings_snapshot.settings.reopen_preview_window
+                        && state.persistence().preview_window().open
+                    {
                         let preview = app.state::<preview::PreviewWindowService>();
                         let _ = preview.open_or_focus(handle, state.persistence().preview_window());
                     }

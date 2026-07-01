@@ -22,11 +22,10 @@ use dawn_runtime::{
 };
 
 use crate::dto::{
-    GuiDocumentRequest, SequenceClipRaster, SequenceClipRasterError, SequenceClipRasterRequest,
-    SequenceClipRasterResponse, SequenceClipRasterResultBatch, SequenceClipRasterUnavailable,
+    EffectRasterSettings, GuiDocumentRequest, SequenceClipRaster, SequenceClipRasterError,
+    SequenceClipRasterRequest, SequenceClipRasterResponse, SequenceClipRasterResultBatch,
+    SequenceClipRasterUnavailable,
 };
-
-const MAX_RASTER_ROWS: usize = 50;
 
 pub struct SequenceClipRasterService {
     sender: mpsc::Sender<RasterJob>,
@@ -63,6 +62,7 @@ impl SequenceClipRasterService {
     pub fn request(
         &mut self,
         project_revision: u32,
+        settings: EffectRasterSettings,
         project: Option<DawnProject>,
         setup_id: Option<SetupId>,
         sequence_id: Option<SequenceId>,
@@ -73,6 +73,7 @@ impl SequenceClipRasterService {
             path: request.document.path.clone(),
             object_key: request.document.object_key.clone(),
             display_row_count: request.display_row_count,
+            settings: settings.clone(),
         };
         self.drain_results();
         self.prepare_response_and_schedule(RasterScheduleInput {
@@ -371,14 +372,15 @@ impl SequenceClipRasterService {
             }
         }
 
-        self.schedule_missing_work(
+        self.schedule_missing_work(RasterMissingWorkInput {
             request_id,
             document_key,
             project,
             setup_id,
             sequence_id,
+            settings: base_key.settings.clone(),
             work_items,
-        );
+        });
         SequenceClipRasterResponse {
             project_revision,
             request_id,
@@ -386,15 +388,16 @@ impl SequenceClipRasterService {
         }
     }
 
-    fn schedule_missing_work(
-        &mut self,
-        request_id: u32,
-        document_key: RasterDocumentKey,
-        project: DawnProject,
-        setup_id: SetupId,
-        sequence_id: SequenceId,
-        work_items: Vec<RasterWorkItem>,
-    ) {
+    fn schedule_missing_work(&mut self, input: RasterMissingWorkInput) {
+        let RasterMissingWorkInput {
+            request_id,
+            document_key,
+            project,
+            setup_id,
+            sequence_id,
+            settings,
+            work_items,
+        } = input;
         if work_items.is_empty() {
             self.active = None;
             self.push_result(document_key, RasterResultEntry::Complete { request_id });
@@ -408,6 +411,7 @@ impl SequenceClipRasterService {
             project,
             setup_id,
             sequence_id,
+            settings,
             work_items: work_items.clone(),
         };
         if self.sender.send(job).is_ok() {
@@ -492,6 +496,16 @@ struct RasterScheduleInput {
     ordered_items: Vec<crate::dto::SequenceClipRasterRequestItem>,
 }
 
+struct RasterMissingWorkInput {
+    request_id: u32,
+    document_key: RasterDocumentKey,
+    project: DawnProject,
+    setup_id: SetupId,
+    sequence_id: SequenceId,
+    settings: EffectRasterSettings,
+    work_items: Vec<RasterWorkItem>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct RasterDocumentKey {
     path: String,
@@ -521,16 +535,20 @@ struct RasterRequestKey {
     path: String,
     object_key: Option<String>,
     display_row_count: u32,
+    settings: EffectRasterSettings,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct RasterCacheKey {
     path: String,
     object_key: Option<String>,
     effect_id: u32,
     display_column_count: u32,
     display_row_count: u32,
+    settings: EffectRasterSettings,
 }
+
+impl Eq for RasterCacheKey {}
 
 impl RasterCacheKey {
     fn new(request: &RasterRequestKey, effect_id: u32, display_column_count: u32) -> Self {
@@ -540,6 +558,7 @@ impl RasterCacheKey {
             effect_id,
             display_column_count,
             display_row_count: request.display_row_count,
+            settings: request.settings.clone(),
         }
     }
 
@@ -547,6 +566,7 @@ impl RasterCacheKey {
         self.path == request.path
             && self.object_key == request.object_key
             && self.display_row_count == request.display_row_count
+            && self.settings == request.settings
     }
 }
 
@@ -557,6 +577,7 @@ impl Hash for RasterCacheKey {
         self.effect_id.hash(state);
         self.display_column_count.hash(state);
         self.display_row_count.hash(state);
+        hash_effect_raster_settings(&self.settings, state);
     }
 }
 
@@ -586,6 +607,7 @@ struct RasterJob {
     project: DawnProject,
     setup_id: SetupId,
     sequence_id: SequenceId,
+    settings: EffectRasterSettings,
     work_items: Vec<RasterWorkItem>,
 }
 
@@ -723,6 +745,7 @@ fn raster_worker(
                             cache_key: &item.cache_key,
                             display_column_count: item.cache_key.display_column_count,
                             display_row_count: item.cache_key.display_row_count,
+                            settings: &job.settings,
                             should_continue: &should_continue,
                         }),
                         Err(message) => Err(RasterRenderFailure::Error(message)),
@@ -804,11 +827,23 @@ fn raster_worker(
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct RasterRenderCacheKey {
     signature: String,
     display_column_count: u32,
     display_row_count: u32,
+    settings: EffectRasterSettings,
+}
+
+impl Eq for RasterRenderCacheKey {}
+
+impl Hash for RasterRenderCacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.signature.hash(state);
+        self.display_column_count.hash(state);
+        self.display_row_count.hash(state);
+        hash_effect_raster_settings(&self.settings, state);
+    }
 }
 
 impl RasterRenderCacheKey {
@@ -817,6 +852,7 @@ impl RasterRenderCacheKey {
             signature: item.signature_key.clone(),
             display_column_count: item.cache_key.display_column_count,
             display_row_count: item.cache_key.display_row_count,
+            settings: item.cache_key.settings.clone(),
         }
     }
 }
@@ -875,6 +911,7 @@ struct RasterRenderRequest<'a> {
     cache_key: &'a RasterCacheKey,
     display_column_count: u32,
     display_row_count: u32,
+    settings: &'a EffectRasterSettings,
     should_continue: &'a dyn Fn() -> bool,
 }
 
@@ -888,6 +925,7 @@ fn render_effect_raster(
         cache_key,
         display_column_count,
         display_row_count,
+        settings,
         should_continue,
     } = request;
     if display_column_count == 0 {
@@ -919,14 +957,15 @@ fn render_effect_raster(
             "effect duration frames must be positive and finite".to_string(),
         ));
     }
-    let stride_limited_columns = (duration_frames / 4.0).ceil().max(1.0) as u32;
+    let min_frame_stride = f64::from(settings.min_frame_stride.max(1));
+    let stride_limited_columns = (duration_frames / min_frame_stride).ceil().max(1.0) as u32;
     let columns = display_column_count
         .min(stride_limited_columns)
-        .clamp(1, 256) as usize;
-    let sample_step_frames = (duration_frames / columns as f64).max(4.0);
+        .clamp(1, settings.max_columns.max(1)) as usize;
+    let sample_step_frames = (duration_frames / columns as f64).max(min_frame_stride);
     let rows = target_pixel_count
         .min(display_row_count as usize)
-        .min(MAX_RASTER_ROWS);
+        .min(settings.max_rows.max(1) as usize);
     let sample = renderer.prepare_sampled_raster(rows);
     let mut pixels_rgba = vec![0u8; rows * columns * 4];
     for column in 0..columns {
@@ -1084,6 +1123,13 @@ fn raster_token(cache_key: &RasterCacheKey, signature_key: &str) -> String {
     cache_key.hash(&mut hasher);
     signature_key.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+fn hash_effect_raster_settings<H: Hasher>(settings: &EffectRasterSettings, state: &mut H) {
+    settings.render_scale.to_bits().hash(state);
+    settings.max_columns.hash(state);
+    settings.max_rows.hash(state);
+    settings.min_frame_stride.hash(state);
 }
 
 fn hash_render_signature<H: Hasher>(signature: &RenderInputSignature, state: &mut H) {

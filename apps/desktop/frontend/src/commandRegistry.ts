@@ -6,6 +6,7 @@ export type CommandId =
   | "file.openProject"
   | "file.save"
   | "file.exportFseq"
+  | "file.settings"
   | "edit.undo"
   | "edit.redo"
   | "view.toggleProjectTree"
@@ -40,6 +41,8 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     label: "Save",
     shortcut: "Ctrl+S",
     run: async () => {
+      const text = useAppStore.getState().localText;
+      await runSnapshotCommand(commands.updateActiveText.bind(null, text));
       await runSnapshotCommand(commands.flushAutosave);
     }
   },
@@ -48,6 +51,14 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     label: "Export FSEQ...",
     run: () => {
       window.dispatchEvent(new CustomEvent("dawn:export-fseq"));
+      return Promise.resolve();
+    }
+  },
+  "file.settings": {
+    id: "file.settings",
+    label: "Settings...",
+    run: () => {
+      window.dispatchEvent(new CustomEvent("dawn:settings"));
       return Promise.resolve();
     }
   },

@@ -1,5 +1,6 @@
 export type {
   AppSnapshot,
+  AppSettings,
   AudioTransportSnapshot,
   AudioTransportState,
   BufferExternalState,

@@ -5,10 +5,10 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_specta::{Builder, collect_commands};
 
 use crate::dto::{
-    AppSnapshot, AudioTransportState, DocumentViewId, EditorViewMode, FixtureGuiEdit, GuiDocument,
-    GuiDocumentRequest, GuiEditCommand, GuiEditResult, LayoutGuiEdit, SequenceClipRasterRequest,
-    SequenceClipRasterResponse, SequenceClipRasterResultBatch, SequenceGuiEdit,
-    SequenceSelectionEdit, SequenceSelectionEditResult,
+    AppSettings, AppSnapshot, AudioTransportState, DocumentViewId, EditorViewMode, FixtureGuiEdit,
+    GuiDocument, GuiDocumentRequest, GuiEditCommand, GuiEditResult, LayoutGuiEdit,
+    SequenceClipRasterRequest, SequenceClipRasterResponse, SequenceClipRasterResultBatch,
+    SequenceGuiEdit, SequenceSelectionEdit, SequenceSelectionEditResult,
 };
 use crate::persistence::{
     PersistedEditorViewStateUpdate, PersistedPreviewWindowState,
@@ -20,6 +20,12 @@ use crate::state::DesktopState;
 #[specta::specta]
 pub fn get_snapshot(state: State<'_, DesktopState>) -> AppSnapshot {
     state.snapshot()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn update_app_settings(settings: AppSettings, state: State<'_, DesktopState>) -> AppSnapshot {
+    state.update_app_settings(settings)
 }
 
 #[tauri::command]
@@ -425,6 +431,7 @@ pub fn persist_app_close(
 pub fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
     builder.commands(collect_commands![
         get_snapshot,
+        update_app_settings,
         get_restored_view_state,
         open_project_dialog,
         open_project,

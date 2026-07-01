@@ -4,6 +4,7 @@ use specta::Type;
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSnapshot {
+    pub settings: AppSettings,
     pub project_root: Option<String>,
     pub project_revision: u32,
     pub project_tree_visible: bool,
@@ -18,6 +19,79 @@ pub struct AppSnapshot {
     pub preview_error: Option<String>,
     pub audio_transport: AudioTransportSnapshot,
     pub live_output: LiveOutputSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettings {
+    pub reopen_last_project: bool,
+    pub default_dawn_view_mode: DefaultDawnViewMode,
+    pub project_tree_mode: ProjectTreeMode,
+    pub reopen_preview_window: bool,
+    pub autosave_text_edits: bool,
+    pub sequence_initial_zoom_mode: SequenceInitialZoomMode,
+    pub sequence_initial_px_per_second: f64,
+    pub sequence_initial_lane_height_px: f64,
+    pub effect_raster: EffectRasterSettings,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            reopen_last_project: true,
+            default_dawn_view_mode: DefaultDawnViewMode::Remember,
+            project_tree_mode: ProjectTreeMode::Remember,
+            reopen_preview_window: true,
+            autosave_text_edits: true,
+            sequence_initial_zoom_mode: SequenceInitialZoomMode::FitToWidth,
+            sequence_initial_px_per_second: 80.0,
+            sequence_initial_lane_height_px: 42.0,
+            effect_raster: EffectRasterSettings::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum DefaultDawnViewMode {
+    Remember,
+    Gui,
+    Text,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum ProjectTreeMode {
+    Remember,
+    Show,
+    Hide,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SequenceInitialZoomMode {
+    FitToWidth,
+    FixedPxPerSecond,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectRasterSettings {
+    pub render_scale: f64,
+    pub max_columns: u32,
+    pub max_rows: u32,
+    pub min_frame_stride: u32,
+}
+
+impl Default for EffectRasterSettings {
+    fn default() -> Self {
+        Self {
+            render_scale: 1.0,
+            max_columns: 256,
+            max_rows: 50,
+            min_frame_stride: 4,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]

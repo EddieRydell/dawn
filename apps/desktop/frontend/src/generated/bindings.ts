@@ -5,6 +5,7 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	getSnapshot: () => __TAURI_INVOKE<AppSnapshot>("get_snapshot"),
+	updateAppSettings: (settings: AppSettings) => __TAURI_INVOKE<AppSnapshot>("update_app_settings", { settings }),
 	getRestoredViewState: () => __TAURI_INVOKE<ProjectRestoreState>("get_restored_view_state").then((v) => (({...v,editorStates:Object.fromEntries(Object.entries(v.editorStates).map(([k,v])=>[k,v])),sequenceViewports:Object.fromEntries(Object.entries(v.sequenceViewports).map(([k,v])=>[k,v]))}) as typeof v)),
 	openProjectDialog: () => __TAURI_INVOKE<AppSnapshot>("open_project_dialog"),
 	openProject: (path: string) => __TAURI_INVOKE<AppSnapshot>("open_project", { path }),
@@ -52,7 +53,20 @@ export const commands = {
 };
 
 /* Types */
+export type AppSettings = {
+	reopenLastProject: boolean,
+	defaultDawnViewMode: DefaultDawnViewMode,
+	projectTreeMode: ProjectTreeMode,
+	reopenPreviewWindow: boolean,
+	autosaveTextEdits: boolean,
+	sequenceInitialZoomMode: SequenceInitialZoomMode,
+	sequenceInitialPxPerSecond: number,
+	sequenceInitialLaneHeightPx: number,
+	effectRaster: EffectRasterSettings,
+};
+
 export type AppSnapshot = {
+	settings: AppSettings,
 	projectRoot: string | null,
 	projectRevision: number,
 	projectTreeVisible: boolean,
@@ -88,6 +102,8 @@ export type ColorCurvePoint = {
 	value: string,
 };
 
+export type DefaultDawnViewMode = "remember" | "gui" | "text";
+
 export type DiagnosticSeverity = "error" | "warning";
 
 export type DocumentDefaultObjectKey = {
@@ -119,6 +135,13 @@ export type EditorBuffer = {
 };
 
 export type EditorViewMode = "text" | "gui";
+
+export type EffectRasterSettings = {
+	renderScale: number,
+	maxColumns: number,
+	maxRows: number,
+	minFrameStride: number,
+};
 
 export type EffectScriptReference = {
 	path: string,
@@ -276,6 +299,8 @@ export type ProjectRestoreState = {
 	sequenceViewports: { [key in string]: PersistedSequenceViewportState },
 };
 
+export type ProjectTreeMode = "remember" | "show" | "hide";
+
 export type ResolvedLayoutFixture = {
 	name: string,
 	colorModel: string,
@@ -428,6 +453,8 @@ export type SequenceGuiDocument = {
 };
 
 export type SequenceGuiEdit = { type: "setAudio"; import: string | null } | { type: "addEffect"; script: EffectScriptReference; target: LayoutTarget; scope: SequenceEffectScope; startSeconds: number; markCollectionKey: string | null } | { type: "moveEffect"; id: number; startSeconds: number; target: LayoutTarget | null } | { type: "resizeEffect"; id: number; startSeconds: number; durationSeconds: number } | { type: "changeEffectScript"; id: number; script: EffectScriptReference } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTarget } | { type: "setEffectScope"; id: number; scope: SequenceEffectScope } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValue } | { type: "linkEffectCurveParam"; id: number; name: string; curvePath: string; objectKey: string } | { type: "unlinkEffectCurveParam"; id: number; name: string } | { type: "createMarkCollection"; key: string; name: string; color: string } | { type: "renameMarkCollection"; key: string; name: string } | { type: "deleteMarkCollection"; key: string } | { type: "setMarkCollectionColor"; key: string; color: string } | { type: "addMark"; collectionKey: string; timeSeconds: number } | { type: "moveMark"; collectionKey: string; index: number; timeSeconds: number } | { type: "deleteMark"; collectionKey: string; index: number };
+
+export type SequenceInitialZoomMode = "fitToWidth" | "fixedPxPerSecond";
 
 export type SequenceLane = {
 	target: LayoutTarget,

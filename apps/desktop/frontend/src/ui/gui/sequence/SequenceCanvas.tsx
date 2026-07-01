@@ -7,7 +7,7 @@ import { Trash2 } from "lucide-react";
 
 import { commands } from "../../../api";
 
-import type { LayoutTarget, PersistedSequenceViewportState, SequenceAudio, SequenceClipRaster, SequenceEditorDocument, SequenceEffectScope, SequenceEffectScript } from "../../../types";
+import type { AppSettings, LayoutTarget, PersistedSequenceViewportState, SequenceAudio, SequenceClipRaster, SequenceEditorDocument, SequenceEffectScope, SequenceEffectScript } from "../../../types";
 
 import { runGuiEditCommand, runSnapshotCommand, useAppStore } from "../../../store";
 
@@ -111,9 +111,10 @@ export function SequenceCanvas({
   const [marquee, setMarquee] = useState<SequenceMarquee | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const restoreState = useAppStore((store) => store.restoreState);
+  const settings = useAppStore((store) => store.snapshot?.settings ?? null);
   const restoreKey = `${document.path}::${document.objectKey}`;
   const restoredViewport = restoreState?.sequenceViewports[restoreKey];
-  const [viewport, setViewport] = useState<SequenceViewport>(() => sequenceViewportFromPersisted(restoredViewport));
+  const [viewport, setViewport] = useState<SequenceViewport>(() => sequenceViewportFromPersisted(restoredViewport, settings));
   const initializedViewportKey = useRef<string | null>(null);
   const restoredViewportKey = useRef<string | null>(restoredViewport === undefined ? null : restoreKey);
   const left = SEQUENCE_CANVAS.leftGutterPx;
@@ -150,8 +151,8 @@ export function SequenceCanvas({
         initializedViewportKey.current = key;
         if (restoredViewport === undefined) {
           setViewport({
-            pxPerSecond: clamp(timelineWidth / Math.max(1, document.durationSeconds), SEQUENCE_CANVAS.minPxPerSecond, SEQUENCE_CANVAS.maxPxPerSecond),
-            laneHeight: SEQUENCE_CANVAS.initialLaneHeightPx,
+            pxPerSecond: initialSequencePxPerSecond(settings, timelineWidth, document.durationSeconds),
+            laneHeight: initialSequenceLaneHeight(settings),
             scrollXSeconds: 0,
             scrollY: 0
           });
@@ -165,13 +166,13 @@ export function SequenceCanvas({
       window.cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [document.durationSeconds, document.lanes.length, left, restoredViewport]);
+  }, [document.durationSeconds, document.lanes.length, left, restoredViewport, settings]);
 
   useEffect(() => {
     if (restoredViewport === undefined || restoredViewportKey.current === restoreKey) return;
     restoredViewportKey.current = restoreKey;
-    setViewport(sequenceViewportFromPersisted(restoredViewport));
-  }, [restoreKey, restoredViewport]);
+    setViewport(sequenceViewportFromPersisted(restoredViewport, settings));
+  }, [restoreKey, restoredViewport, settings]);
 
   useEffect(() => {
     const state: PersistedSequenceViewportState = {
@@ -193,7 +194,7 @@ export function SequenceCanvas({
     return visibleClips
       .filter((clip) => clip.rect.x + clip.rect.width >= left && clip.rect.x <= canvasSize.width && clip.rect.y + clip.rect.height >= top && clip.rect.y <= canvasSize.height);
   }, [canvasSize.height, canvasSize.width, left, top, visibleClips]);
-  const clipRasters = useSequenceClipRasters(document, visibleRasterClips, viewport.laneHeight);
+  const clipRasters = useSequenceClipRasters(document, visibleRasterClips, viewport.laneHeight, settings);
   const selectedEffectIds = useMemo(() => new Set<number>(sequenceSelection?.type === "effects" ? sequenceSelection.ids : []), [sequenceSelection]);
   const selectedMarks = useMemo(
     () => markRefLookup(sequenceSelection?.type === "marks" ? sequenceSelection.marks : []),
@@ -1124,8 +1125,6 @@ type DecodedClipRaster = {
   requestRows: number;
 };
 
-const CLIP_RASTER_MAX_COLUMNS = 256;
-const CLIP_RASTER_MIN_STRIDE_FRAMES = 4;
 const CLIP_RASTER_REQUEST_THROTTLE_MS = 50;
 const CLIP_RASTER_DECODE_CHUNK_SIZE = 2;
 
@@ -1133,13 +1132,26 @@ const waveformCache = new Map<string, Promise<WaveformAudio | null>>();
 
 type ClipRasterRequestItem = { effectId: number; displayColumnCount: number; requestedColumns: number; requestedRows: number };
 
-function useSequenceClipRasters(document: SequenceEditorDocument, visibleClips: SequenceClipLayout[], laneHeight: number): ClipRasterState {
+function useSequenceClipRasters(
+  document: SequenceEditorDocument,
+  visibleClips: SequenceClipLayout[],
+  laneHeight: number,
+  settings: AppSettings | null
+): ClipRasterState {
   const projectRevision = useAppStore((store) => store.snapshot?.projectRevision ?? null);
   const requestKey = `${document.path}:${document.objectKey}`;
+  const rasterSettings = settings?.effectRaster ?? {
+    renderScale: 1,
+    maxColumns: 256,
+    maxRows: 50,
+    minFrameStride: 4
+  };
+  const rasterSettingsKey = `${rasterSettings.renderScale}:${rasterSettings.maxColumns}:${rasterSettings.maxRows}:${rasterSettings.minFrameStride}`;
+  const rasterRequestKey = `${requestKey}:${rasterSettingsKey}`;
   const effectIds = useMemo(() => document.effects.map((effect) => effect.id), [document.effects]);
   const effectIdsKey = effectIds.join(",");
   const visibleRequestItems = useMemo(() => {
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = (window.devicePixelRatio || 1) * rasterSettings.renderScale;
     const displayRowCount = Math.max(1, Math.ceil(laneHeight * dpr));
     const items: ClipRasterRequestItem[] = [];
     const requested = new Set<number>();
@@ -1150,21 +1162,21 @@ function useSequenceClipRasters(document: SequenceEditorDocument, visibleClips: 
       items.push({
         effectId: clip.effect.id,
         displayColumnCount,
-        requestedColumns: Math.min(displayColumnCount, Math.ceil(durationFrames / CLIP_RASTER_MIN_STRIDE_FRAMES), CLIP_RASTER_MAX_COLUMNS),
+        requestedColumns: Math.min(displayColumnCount, Math.ceil(durationFrames / rasterSettings.minFrameStride), rasterSettings.maxColumns),
         requestedRows: displayRowCount
       });
       requested.add(clip.effect.id);
     }
     return items;
-  }, [document.frameRate, laneHeight, visibleClips]);
+  }, [document.frameRate, laneHeight, rasterSettings.maxColumns, rasterSettings.minFrameStride, rasterSettings.renderScale, visibleClips]);
   const visibleRequestItemsKey = visibleRequestItems.map((item) => `${item.effectId}:${item.displayColumnCount}:${item.requestedColumns}:${item.requestedRows}`).join(",");
   const visibleRequestItemsRef = useRef<ClipRasterRequestItem[]>(visibleRequestItems);
   const rasters = useRef<Map<number, DecodedClipRaster>>(new Map());
   const errors = useRef<Set<number>>(new Set());
   const inFlightSignatures = useRef<Map<number, string | null>>(new Map());
-  const cachedRequestKey = useRef(requestKey);
+  const cachedRequestKey = useRef(rasterRequestKey);
   const [state, setState] = useState<ClipRasterState>({
-    requestKey,
+    requestKey: rasterRequestKey,
     projectRevision,
     rasters: new Map(),
     errors: new Set()
@@ -1182,9 +1194,9 @@ function useSequenceClipRasters(document: SequenceEditorDocument, visibleClips: 
     let decodeFrame: number | null = null;
     const decodeQueue: SequenceClipRaster[] = [];
     let decoding = false;
-    const displayRowCount = Math.max(1, Math.ceil(laneHeight * (window.devicePixelRatio || 1)));
-    if (cachedRequestKey.current !== requestKey) {
-      cachedRequestKey.current = requestKey;
+    const displayRowCount = Math.max(1, Math.ceil(laneHeight * (window.devicePixelRatio || 1) * rasterSettings.renderScale));
+    if (cachedRequestKey.current !== rasterRequestKey) {
+      cachedRequestKey.current = rasterRequestKey;
       rasters.current.clear();
       errors.current.clear();
       inFlightSignatures.current.clear();
@@ -1202,12 +1214,15 @@ function useSequenceClipRasters(document: SequenceEditorDocument, visibleClips: 
 
     const publishState = (nextProjectRevision: number) => {
       setState({
-        requestKey,
+        requestKey: rasterRequestKey,
         projectRevision: nextProjectRevision,
         rasters: new Map(rasters.current),
         errors: new Set(errors.current)
       });
     };
+    if (cachedRequestKey.current === rasterRequestKey && rasters.current.size === 0 && errors.current.size === 0) {
+      publishState(projectRevision);
+    }
 
     const scheduleDecode = (nextProjectRevision: number) => {
       if (decoding) return;
@@ -1323,10 +1338,10 @@ function useSequenceClipRasters(document: SequenceEditorDocument, visibleClips: 
       window.clearTimeout(requestTimeout);
       if (decodeFrame !== null) window.cancelAnimationFrame(decodeFrame);
     };
-  }, [document.objectKey, document.path, effectIds, effectIdsKey, laneHeight, projectRevision, requestKey, visibleRequestItemsKey]);
+  }, [document.objectKey, document.path, effectIds, effectIdsKey, laneHeight, projectRevision, rasterRequestKey, rasterSettings.renderScale, visibleRequestItemsKey]);
 
-  return state.requestKey === requestKey ? state : {
-    requestKey,
+  return state.requestKey === rasterRequestKey ? state : {
+    requestKey: rasterRequestKey,
     projectRevision,
     rasters: new Map(),
     errors: new Set()
@@ -1393,11 +1408,11 @@ function scheduleSequenceViewportStateSave(path: string, objectKey: string, stat
   }, 250);
 }
 
-function sequenceViewportFromPersisted(state: PersistedSequenceViewportState | undefined): SequenceViewport {
+function sequenceViewportFromPersisted(state: PersistedSequenceViewportState | undefined, settings: AppSettings | null): SequenceViewport {
   if (state === undefined) {
     return {
-      pxPerSecond: SEQUENCE_CANVAS.initialPxPerSecond,
-      laneHeight: SEQUENCE_CANVAS.initialLaneHeightPx,
+      pxPerSecond: settings?.sequenceInitialPxPerSecond ?? SEQUENCE_CANVAS.initialPxPerSecond,
+      laneHeight: initialSequenceLaneHeight(settings),
       scrollXSeconds: 0,
       scrollY: 0
     };
@@ -1408,6 +1423,17 @@ function sequenceViewportFromPersisted(state: PersistedSequenceViewportState | u
     scrollXSeconds: Math.max(0, state.scrollXSeconds),
     scrollY: Math.max(0, state.scrollY)
   };
+}
+
+function initialSequencePxPerSecond(settings: AppSettings | null, timelineWidth: number, durationSeconds: number): number {
+  if (settings?.sequenceInitialZoomMode === "fixedPxPerSecond") {
+    return clamp(settings.sequenceInitialPxPerSecond, SEQUENCE_CANVAS.minPxPerSecond, SEQUENCE_CANVAS.maxPxPerSecond);
+  }
+  return clamp(timelineWidth / Math.max(1, durationSeconds), SEQUENCE_CANVAS.minPxPerSecond, SEQUENCE_CANVAS.maxPxPerSecond);
+}
+
+function initialSequenceLaneHeight(settings: AppSettings | null): number {
+  return clamp(settings?.sequenceInitialLaneHeightPx ?? SEQUENCE_CANVAS.initialLaneHeightPx, SEQUENCE_CANVAS.minLaneHeightPx, SEQUENCE_CANVAS.maxLaneHeightPx);
 }
 
 function drawClipRasterWarning(
