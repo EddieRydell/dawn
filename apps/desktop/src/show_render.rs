@@ -7,6 +7,7 @@ use crate::dto::{AudioTransportSnapshot, AudioTransportState};
 
 pub struct ShowRenderService {
     session: Option<RenderSession>,
+    session_generation: u64,
 }
 
 pub struct PreparedRenderSession {
@@ -22,6 +23,17 @@ pub struct AudioClockRenderedFrame {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct AudioClockRenderIdentity {
+    pub session_generation: u64,
+    pub audio_generation: u32,
+    pub audio_state: AudioTransportState,
+    pub position_seconds: f64,
+    pub frame_rate: u32,
+    pub frame_count: u64,
+    pub frame_index: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum ShowRenderError {
     NoRenderSession,
     ClockUnavailable { state: AudioTransportState },
@@ -30,7 +42,10 @@ pub enum ShowRenderError {
 
 impl ShowRenderService {
     pub fn new() -> Self {
-        Self { session: None }
+        Self {
+            session: None,
+            session_generation: 0,
+        }
     }
 
     pub fn prepare(
@@ -45,7 +60,10 @@ impl ShowRenderService {
     }
 
     pub fn unload(&mut self) {
-        self.session = None;
+        if self.session.is_some() {
+            self.session_generation = self.session_generation.saturating_add(1);
+            self.session = None;
+        }
     }
 
     pub fn refresh_project(&mut self, project: &DawnProject) -> Result<(), RenderError> {
@@ -90,6 +108,40 @@ impl ShowRenderService {
         })
     }
 
+    pub fn active_render_identity(
+        &self,
+        audio: &AudioTransportSnapshot,
+    ) -> Result<AudioClockRenderIdentity, ShowRenderError> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or(ShowRenderError::NoRenderSession)?;
+        match audio.state {
+            AudioTransportState::Stopped
+            | AudioTransportState::Paused
+            | AudioTransportState::Playing
+            | AudioTransportState::Ended => {}
+            AudioTransportState::Unloaded | AudioTransportState::Error => {
+                return Err(ShowRenderError::ClockUnavailable {
+                    state: audio.state.clone(),
+                });
+            }
+        }
+        Ok(AudioClockRenderIdentity {
+            session_generation: self.session_generation,
+            audio_generation: audio.generation,
+            audio_state: audio.state.clone(),
+            position_seconds: audio.position_seconds,
+            frame_rate: session.renderer.frame_rate(),
+            frame_count: session.renderer.frame_count(),
+            frame_index: frame_index_for_audio_seconds(
+                audio.position_seconds,
+                session.renderer.frame_rate(),
+                session.renderer.frame_count(),
+            ),
+        })
+    }
+
     pub fn active_sequence_id(&self) -> Option<&SequenceId> {
         self.session.as_ref().map(|session| &session.sequence_id)
     }
@@ -101,6 +153,7 @@ impl ShowRenderService {
     }
 
     pub fn apply_prepared(&mut self, session: PreparedRenderSession) {
+        self.session_generation = self.session_generation.saturating_add(1);
         self.session = Some(RenderSession {
             setup_id: session.setup_id,
             sequence_id: session.sequence_id,
@@ -132,6 +185,18 @@ pub fn prepare_render_session(
         sequence_id: sequence_id.clone(),
         renderer,
     })
+}
+
+fn frame_index_for_audio_seconds(audio_seconds: f64, frame_rate: u32, frame_count: u64) -> u64 {
+    let max_frame = frame_count.saturating_sub(1);
+    let frame_index = (audio_seconds * f64::from(frame_rate)).floor();
+    if frame_index < 0.0 {
+        0
+    } else if frame_index > max_frame as f64 {
+        max_frame
+    } else {
+        frame_index as u64
+    }
 }
 
 #[cfg(test)]

@@ -268,6 +268,10 @@ impl PreparedSequenceRenderer {
         self.frame_count
     }
 
+    pub fn frame_rate(&self) -> u32 {
+        self.frame_rate
+    }
+
     pub fn active_effect_names(&self, frame_index: u64) -> Vec<&str> {
         let Some(active_effects) = self.effects_by_frame.get(frame_index as usize) else {
             return Vec::new();

@@ -27,10 +27,14 @@ use crate::dto::{
     SequenceClipRasterUnavailable,
 };
 
+const RASTER_CACHE_BYTE_BUDGET: usize = 128 * 1024 * 1024;
+
 pub struct SequenceClipRasterService {
     sender: mpsc::Sender<RasterJob>,
     receiver: mpsc::Receiver<RasterWorkerResult>,
     cache: HashMap<RasterCacheKey, CachedRasterResult>,
+    cache_bytes: usize,
+    next_cache_access: u64,
     pixels_by_token: HashMap<String, Arc<Vec<u8>>>,
     pending_results: HashMap<RasterDocumentKey, VecDeque<RasterResultEntry>>,
     active: Option<ActiveRasterJob>,
@@ -51,6 +55,8 @@ impl SequenceClipRasterService {
             sender: request_sender,
             receiver: result_receiver,
             cache: HashMap::new(),
+            cache_bytes: 0,
+            next_cache_access: 1,
             pixels_by_token: HashMap::new(),
             pending_results: HashMap::new(),
             active: None,
@@ -102,10 +108,13 @@ impl SequenceClipRasterService {
                     let result_payload = payload.clone();
                     self.pixels_by_token
                         .insert(payload.token.clone(), Arc::clone(&payload.pixels_rgba));
-                    self.cache.insert(
+                    let last_used = self.next_cache_access();
+                    self.insert_cache_entry(
                         cache_key,
                         CachedRasterResult {
                             signature: signature.clone(),
+                            byte_len: payload.byte_len(),
+                            last_used,
                             result: CachedRasterValue::Raster(payload),
                         },
                     );
@@ -131,10 +140,13 @@ impl SequenceClipRasterService {
                     error,
                 } => {
                     let result_error = error.clone();
-                    self.cache.insert(
+                    let last_used = self.next_cache_access();
+                    self.insert_cache_entry(
                         cache_key,
                         CachedRasterResult {
                             signature: signature.clone(),
+                            byte_len: 0,
+                            last_used,
                             result: CachedRasterValue::Error(error),
                         },
                     );
@@ -231,6 +243,8 @@ impl SequenceClipRasterService {
             }
             *entries = retained;
         }
+        self.pending_results
+            .retain(|_, entries| !entries.is_empty());
 
         SequenceClipRasterResultBatch {
             project_revision,
@@ -272,6 +286,7 @@ impl SequenceClipRasterService {
         };
 
         let mut work_items = Vec::new();
+        let mut requested_cache_keys = Vec::new();
         let requested_ids = ordered_items
             .iter()
             .map(|item| item.effect_id)
@@ -286,9 +301,15 @@ impl SequenceClipRasterService {
             .iter()
             .map(|effect| effect.id.0)
             .collect::<HashSet<_>>();
-        self.cache.retain(|key, _| {
-            !key.matches_request(&base_key) || current_ids.contains(&key.effect_id)
-        });
+        let stale_keys = self
+            .cache
+            .keys()
+            .filter(|key| key.matches_request(&base_key) && !current_ids.contains(&key.effect_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in stale_keys {
+            self.remove_cache_entry(&key);
+        }
         self.retain_active_pixel_tokens();
         self.pending_results
             .insert(document_key.clone(), VecDeque::new());
@@ -328,6 +349,7 @@ impl SequenceClipRasterService {
                 Err(message) => RenderInputSignature::Invalid { message },
             };
             let signature_key = signature_key(&signature);
+            requested_cache_keys.push(cache_key.clone());
             if client_signatures
                 .get(&effect_id)
                 .and_then(|signature| signature.as_ref())
@@ -335,14 +357,14 @@ impl SequenceClipRasterService {
             {
                 continue;
             }
-            match self.cache.get(&cache_key) {
-                Some(entry) if entry.signature == signature => match &entry.result {
+            match self.cache_entry(&cache_key) {
+                Some(entry) if entry.signature == signature => match entry.result {
                     CachedRasterValue::Raster(payload) => self.push_result(
                         document_key.clone(),
                         RasterResultEntry::Ready {
                             request_id,
                             signature: signature_key,
-                            payload: payload.clone(),
+                            payload,
                         },
                     ),
                     CachedRasterValue::Error(error) => self.push_result(
@@ -350,12 +372,12 @@ impl SequenceClipRasterService {
                         RasterResultEntry::Error {
                             request_id,
                             signature: signature_key,
-                            error: error.clone(),
+                            error,
                         },
                     ),
                 },
                 Some(_) => {
-                    self.cache.remove(&cache_key);
+                    self.remove_cache_entry(&cache_key);
                     work_items.push(RasterWorkItem {
                         cache_key,
                         signature,
@@ -372,6 +394,8 @@ impl SequenceClipRasterService {
             }
         }
 
+        let protected_keys = requested_cache_keys.into_iter().collect::<HashSet<_>>();
+        self.evict_cache_over_budget(&protected_keys);
         self.schedule_missing_work(RasterMissingWorkInput {
             request_id,
             document_key,
@@ -457,6 +481,50 @@ impl SequenceClipRasterService {
         self.pixels_by_token
             .get(token)
             .map(|pixels| pixels.as_ref().clone())
+    }
+
+    fn cache_entry(&mut self, key: &RasterCacheKey) -> Option<CachedRasterResult> {
+        let last_used = self.next_cache_access();
+        self.cache.get_mut(key).map(|entry| {
+            entry.last_used = last_used;
+            entry.clone()
+        })
+    }
+
+    fn insert_cache_entry(&mut self, key: RasterCacheKey, entry: CachedRasterResult) {
+        if let Some(previous) = self.cache.insert(key, entry.clone()) {
+            self.cache_bytes = self.cache_bytes.saturating_sub(previous.byte_len);
+        }
+        self.cache_bytes = self.cache_bytes.saturating_add(entry.byte_len);
+        self.evict_cache_over_budget(&HashSet::new());
+        self.retain_active_pixel_tokens();
+    }
+
+    fn remove_cache_entry(&mut self, key: &RasterCacheKey) {
+        if let Some(previous) = self.cache.remove(key) {
+            self.cache_bytes = self.cache_bytes.saturating_sub(previous.byte_len);
+        }
+    }
+
+    fn evict_cache_over_budget(&mut self, protected_keys: &HashSet<RasterCacheKey>) {
+        while self.cache_bytes > RASTER_CACHE_BYTE_BUDGET {
+            let Some(key) = self
+                .cache
+                .iter()
+                .filter(|(key, _)| !protected_keys.contains(*key))
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.remove_cache_entry(&key);
+        }
+    }
+
+    fn next_cache_access(&mut self) -> u64 {
+        let access = self.next_cache_access;
+        self.next_cache_access = self.next_cache_access.saturating_add(1);
+        access
     }
 
     fn retain_active_pixel_tokens(&mut self) {
@@ -584,6 +652,8 @@ impl Hash for RasterCacheKey {
 #[derive(Clone)]
 struct CachedRasterResult {
     signature: RenderInputSignature,
+    byte_len: usize,
+    last_used: u64,
     result: CachedRasterValue,
 }
 
@@ -598,6 +668,12 @@ struct CachedRasterPayload {
     raster: SequenceClipRaster,
     pixels_rgba: Arc<Vec<u8>>,
     token: String,
+}
+
+impl CachedRasterPayload {
+    fn byte_len(&self) -> usize {
+        self.pixels_rgba.len()
+    }
 }
 
 struct RasterJob {

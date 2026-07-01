@@ -15,6 +15,8 @@ use tauri::window::WindowBuilder;
 use tauri::{AppHandle, Manager, Window};
 use wgpu::util::DeviceExt;
 
+use crate::dto::AudioTransportState;
+use crate::show_render::AudioClockRenderIdentity;
 use crate::show_render::ShowRenderError;
 
 pub const PREVIEW_LABEL: &str = "preview";
@@ -698,6 +700,7 @@ fn run_preview_loop(
 ) {
     let mut stats = PreviewFrameStats::new();
     let mut cached_scene: Option<PreviewScene> = None;
+    let mut last_render_key: Option<PreviewRenderKey> = None;
     let mut reported_render_error = false;
     while running.load(Ordering::Acquire) {
         let size = match window_size(&window) {
@@ -718,29 +721,107 @@ fn run_preview_loop(
             None => cached_scene = None,
         }
 
-        let frame = match state.render_current_sequence_frame() {
-            Ok(rendered) => {
-                if reported_render_error {
-                    state.clear_render_error_if_set();
-                    reported_render_error = false;
-                }
-                Some(rendered.frame)
-            }
+        let clock = match state.active_preview_render_identity() {
+            Ok(clock) => Some(clock),
             Err(ShowRenderError::NoRenderSession | ShowRenderError::ClockUnavailable { .. }) => {
                 None
             }
-            Err(ShowRenderError::Render(error)) => {
-                state.set_render_error_if_changed(format!("Render failed: {error:?}"));
-                reported_render_error = true;
-                None
-            }
+            Err(ShowRenderError::Render(_)) => None,
         };
-        renderer.render(size, cached_scene.as_ref(), frame.as_ref());
-        if let Some(fps) = stats.record_frame() {
-            let _ = window.set_title(&format!("Dawn Preview - {fps:.0} FPS"));
+        let render_key = PreviewRenderKey::new(size, cached_scene.as_ref(), clock.as_ref());
+        if last_render_key.as_ref() != Some(&render_key) {
+            let frame = match state.render_current_sequence_frame() {
+                Ok(rendered) => {
+                    if reported_render_error {
+                        state.clear_render_error_if_set();
+                        reported_render_error = false;
+                    }
+                    Some(rendered.frame)
+                }
+                Err(
+                    ShowRenderError::NoRenderSession | ShowRenderError::ClockUnavailable { .. },
+                ) => None,
+                Err(ShowRenderError::Render(error)) => {
+                    state.set_render_error_if_changed(format!("Render failed: {error:?}"));
+                    reported_render_error = true;
+                    None
+                }
+            };
+            renderer.render(size, cached_scene.as_ref(), frame.as_ref());
+            last_render_key = Some(render_key);
+            if let Some(fps) = stats.record_frame() {
+                let _ = window.set_title(&format!("Dawn Preview - {fps:.0} FPS"));
+            }
         }
-        std::thread::yield_now();
+        std::thread::sleep(preview_sleep_duration(clock.as_ref()));
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PreviewRenderKey {
+    size: PreviewSize,
+    scene_revision: Option<u64>,
+    clock: Option<PreviewClockKey>,
+}
+
+impl PreviewRenderKey {
+    fn new(
+        size: PreviewSize,
+        scene: Option<&PreviewScene>,
+        clock: Option<&AudioClockRenderIdentity>,
+    ) -> Self {
+        Self {
+            size,
+            scene_revision: scene.map(|scene| scene.revision),
+            clock: clock.map(PreviewClockKey::new),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct PreviewClockKey {
+    session_generation: u64,
+    audio_generation: u32,
+    audio_state: AudioTransportState,
+    frame_rate: u32,
+    frame_count: u64,
+    frame_index: u64,
+    paused_position_bits: Option<u64>,
+}
+
+impl PreviewClockKey {
+    fn new(clock: &AudioClockRenderIdentity) -> Self {
+        let paused_position_bits = if matches!(clock.audio_state, AudioTransportState::Playing) {
+            None
+        } else {
+            Some(clock.position_seconds.to_bits())
+        };
+        Self {
+            session_generation: clock.session_generation,
+            audio_generation: clock.audio_generation,
+            audio_state: clock.audio_state.clone(),
+            frame_rate: clock.frame_rate,
+            frame_count: clock.frame_count,
+            frame_index: clock.frame_index,
+            paused_position_bits,
+        }
+    }
+}
+
+fn preview_sleep_duration(clock: Option<&AudioClockRenderIdentity>) -> Duration {
+    const IDLE_POLL: Duration = Duration::from_millis(100);
+    const MIN_PLAYING_SLEEP: Duration = Duration::from_millis(1);
+    let Some(clock) = clock else {
+        return IDLE_POLL;
+    };
+    if !matches!(clock.audio_state, AudioTransportState::Playing) || clock.frame_rate == 0 {
+        return IDLE_POLL;
+    }
+    let next_frame_seconds =
+        (clock.frame_index.saturating_add(1)) as f64 / f64::from(clock.frame_rate);
+    let delay_seconds = (next_frame_seconds - clock.position_seconds).max(0.0);
+    let delay = Duration::from_secs_f64(delay_seconds);
+    delay.clamp(MIN_PLAYING_SLEEP, IDLE_POLL)
 }
 
 struct PreviewFrameStats {

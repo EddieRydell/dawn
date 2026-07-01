@@ -25,11 +25,11 @@ const SEQUENCE_CANVAS = {
   audioStripTopPx: 28,
   initialPxPerSecond: 80,
   initialLaneHeightPx: 42,
-  minPxPerSecond: 20,
+  minPxPerSecond: 0.01,
   maxPxPerSecond: 600,
   maxZoomPxPerSecond: 12000,
   minLaneHeightPx: 24,
-  maxLaneHeightPx: 120,
+  maxLaneHeightPx: 600,
   wheelZoomScale: 0.002,
   scrubStepSeconds: 0.01,
   nudgeSeconds: 0.001,
@@ -158,6 +158,17 @@ export function SequenceCanvas({
           });
         }
       }
+      setViewport((current) => {
+        const minPxPerSecond = minSequencePxPerSecond(timelineWidth, document.durationSeconds);
+        const pxPerSecond = Math.max(current.pxPerSecond, minPxPerSecond);
+        const scrollXSeconds = clamp(current.scrollXSeconds, 0, Math.max(0, document.durationSeconds - timelineWidth / pxPerSecond));
+        if (pxPerSecond === current.pxPerSecond && scrollXSeconds === current.scrollXSeconds) return current;
+        return {
+          ...current,
+          pxPerSecond,
+          scrollXSeconds
+        };
+      });
     };
     const frame = window.requestAnimationFrame(updateSize);
     const observer = new ResizeObserver(updateSize);
@@ -978,7 +989,11 @@ export function SequenceCanvas({
           if (event.ctrlKey) {
             const anchorX = clamp(offsetX - left, 0, timelineWidth);
             const anchorTime = current.scrollXSeconds + anchorX / current.pxPerSecond;
-            const nextPxPerSecond = clamp(current.pxPerSecond * Math.exp(-event.deltaY * SEQUENCE_CANVAS.wheelZoomScale), SEQUENCE_CANVAS.minPxPerSecond, SEQUENCE_CANVAS.maxZoomPxPerSecond);
+            const nextPxPerSecond = clamp(
+              current.pxPerSecond * Math.exp(-event.deltaY * SEQUENCE_CANVAS.wheelZoomScale),
+              minSequencePxPerSecond(timelineWidth, document.durationSeconds),
+              SEQUENCE_CANVAS.maxZoomPxPerSecond
+            );
             const nextScrollXSeconds = anchorTime - anchorX / nextPxPerSecond;
             return {
               ...current,
@@ -1123,12 +1138,17 @@ type DecodedClipRaster = {
   columns: number;
   rows: number;
   requestRows: number;
+  byteLength: number;
+  lastUsed: number;
 };
 
 const CLIP_RASTER_REQUEST_THROTTLE_MS = 50;
 const CLIP_RASTER_DECODE_CHUNK_SIZE = 2;
+const CLIP_RASTER_DECODED_BYTE_BUDGET = 64 * 1024 * 1024;
+const WAVEFORM_CACHE_LIMIT = 4;
 
-const waveformCache = new Map<string, Promise<WaveformAudio | null>>();
+const waveformCache = new Map<string, { request: Promise<WaveformAudio | null>; lastUsed: number }>();
+let waveformCacheAccess = 1;
 
 type ClipRasterRequestItem = { effectId: number; displayColumnCount: number; requestedColumns: number; requestedRows: number };
 
@@ -1172,6 +1192,7 @@ function useSequenceClipRasters(
   const visibleRequestItemsKey = visibleRequestItems.map((item) => `${item.effectId}:${item.displayColumnCount}:${item.requestedColumns}:${item.requestedRows}`).join(",");
   const visibleRequestItemsRef = useRef<ClipRasterRequestItem[]>(visibleRequestItems);
   const rasters = useRef<Map<number, DecodedClipRaster>>(new Map());
+  const rasterCacheAccess = useRef(1);
   const errors = useRef<Set<number>>(new Set());
   const inFlightSignatures = useRef<Map<number, string | null>>(new Map());
   const cachedRequestKey = useRef(rasterRequestKey);
@@ -1239,8 +1260,11 @@ function useSequenceClipRasters(
               image,
               columns: raster.columns,
               rows: raster.rows,
-              requestRows: displayRowCount
+              requestRows: displayRowCount,
+              byteLength: raster.columns * raster.rows * 4,
+              lastUsed: rasterCacheAccess.current++
             });
+            evictDecodedClipRasters(rasters.current, new Set(visibleRequestItemsRef.current.map((item) => item.effectId)));
             errors.current.delete(raster.effectId);
           } catch {
             rasters.current.delete(raster.effectId);
@@ -1265,6 +1289,10 @@ function useSequenceClipRasters(
       const items: ClipRasterRequestItem[] = [];
       for (const item of visibleRequestItemsRef.current) {
         if (!existingEffectIds.has(item.effectId) || requested.has(item.effectId)) continue;
+        const raster = rasters.current.get(item.effectId);
+        if (raster !== undefined) {
+          raster.lastUsed = rasterCacheAccess.current++;
+        }
         items.push(item);
         requested.add(item.effectId);
       }
@@ -1355,11 +1383,16 @@ function useSequenceWaveform(audio: SequenceAudio | null): WaveformState {
   useEffect(() => {
     if (key === null) return;
     let cancelled = false;
-    let request = waveformCache.get(key);
-    if (request === undefined) {
-      request = decodeWaveformPeaks(key);
-      waveformCache.set(key, request);
+    let cached = waveformCache.get(key);
+    if (cached === undefined) {
+      const request = decodeWaveformPeaks(key);
+      cached = { request, lastUsed: waveformCacheAccess++ };
+      waveformCache.set(key, cached);
+      evictWaveformCache();
+    } else {
+      cached.lastUsed = waveformCacheAccess++;
     }
+    const request = cached.request;
     void request.then((waveformAudio) => {
       if (!cancelled) {
         setState({ key, audio: waveformAudio });
@@ -1371,6 +1404,44 @@ function useSequenceWaveform(audio: SequenceAudio | null): WaveformState {
   }, [key]);
 
   return state.key === key ? state : { key, audio: null };
+}
+
+function evictDecodedClipRasters(rasters: Map<number, DecodedClipRaster>, protectedEffectIds: Set<number>) {
+  let byteLength = 0;
+  for (const raster of rasters.values()) {
+    byteLength += raster.byteLength;
+  }
+  while (byteLength > CLIP_RASTER_DECODED_BYTE_BUDGET) {
+    let evictEffectId: number | null = null;
+    let oldest = Number.POSITIVE_INFINITY;
+    for (const [effectId, raster] of rasters) {
+      if (protectedEffectIds.has(effectId)) continue;
+      if (raster.lastUsed < oldest) {
+        oldest = raster.lastUsed;
+        evictEffectId = effectId;
+      }
+    }
+    if (evictEffectId === null) return;
+    const raster = rasters.get(evictEffectId);
+    if (raster === undefined) return;
+    byteLength -= raster.byteLength;
+    rasters.delete(evictEffectId);
+  }
+}
+
+function evictWaveformCache() {
+  while (waveformCache.size > WAVEFORM_CACHE_LIMIT) {
+    let evictKey: string | null = null;
+    let oldest = Number.POSITIVE_INFINITY;
+    for (const [key, entry] of waveformCache) {
+      if (entry.lastUsed < oldest) {
+        oldest = entry.lastUsed;
+        evictKey = key;
+      }
+    }
+    if (evictKey === null) return;
+    waveformCache.delete(evictKey);
+  }
 }
 
 function drawClipRaster(
@@ -1426,10 +1497,18 @@ function sequenceViewportFromPersisted(state: PersistedSequenceViewportState | u
 }
 
 function initialSequencePxPerSecond(settings: AppSettings | null, timelineWidth: number, durationSeconds: number): number {
+  const minPxPerSecond = minSequencePxPerSecond(timelineWidth, durationSeconds);
   if (settings?.sequenceInitialZoomMode === "fixedPxPerSecond") {
-    return clamp(settings.sequenceInitialPxPerSecond, SEQUENCE_CANVAS.minPxPerSecond, SEQUENCE_CANVAS.maxPxPerSecond);
+    return clamp(settings.sequenceInitialPxPerSecond, minPxPerSecond, SEQUENCE_CANVAS.maxPxPerSecond);
   }
-  return clamp(timelineWidth / Math.max(1, durationSeconds), SEQUENCE_CANVAS.minPxPerSecond, SEQUENCE_CANVAS.maxPxPerSecond);
+  return clamp(minPxPerSecond, minPxPerSecond, SEQUENCE_CANVAS.maxPxPerSecond);
+}
+
+function minSequencePxPerSecond(timelineWidth: number, durationSeconds: number): number {
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    return SEQUENCE_CANVAS.minPxPerSecond;
+  }
+  return Math.max(SEQUENCE_CANVAS.minPxPerSecond, timelineWidth / durationSeconds);
 }
 
 function initialSequenceLaneHeight(settings: AppSettings | null): number {
