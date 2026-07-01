@@ -1390,10 +1390,7 @@ function useSequenceClipRasters(
           requestContexts.set(item.effectId, rasterKeyContext);
           const expectedRasterKey = expectedRasterKeys.current.get(item.effectId) ?? null;
           const cached = expectedRasterKey === null ? null : rasters.current.get(expectedRasterKey) ?? null;
-          const signature = cached !== null && cached.columns === item.requestedColumns && cached.requestRows === item.requestedRows ? cached.signature : null;
-          if (signature !== null) {
-            expectedRasterKeys.current.set(item.effectId, clipRasterKey(document.path, document.objectKey, item.effectId, signature, rasterKeyContext));
-          }
+          const signature = cached !== null && decodedClipRasterSatisfies(cached, item) ? cached.signature : null;
           return { effectId: item.effectId, signature, displayColumnCount: item.displayColumnCount };
         }),
         displayRowCount
@@ -1471,6 +1468,10 @@ function clipRasterKey(
 
 function clipRasterRequestCancelled(signal: AbortSignal): boolean {
   return signal.aborted;
+}
+
+function decodedClipRasterSatisfies(raster: DecodedClipRaster, item: ClipRasterRequestItem): boolean {
+  return raster.columns >= item.requestedColumns && raster.requestRows >= item.requestedRows;
 }
 
 function evictDecodedClipRasters(rasters: Map<string, DecodedClipRaster>, protectedRasterKeys: Set<string>) {
