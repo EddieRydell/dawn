@@ -73,7 +73,7 @@ effect MarkChaseChild {
 
     float parent_progress = clamp((child_start + seconds()) / max(0.000000001, parent_duration), 0.0, 1.0);
     color value = curve_color_scaled(gradient, clamp(gradient_position, 0.0, 1.0), level);
-    color hue_color = hsv(hue[parent_progress], 1.0, 1.0);
+    color hue_color = hsv(hue[parent_progress] / 360.0, 1.0, 1.0);
     return mix(base, mix(value, hue_color, clamp(hue_mix, 0.0, 1.0)), level);
   }
 }

@@ -64,7 +64,7 @@ effect MarkPulseChild {
     float pulse_progress = clamp(progress(), 0.0, 1.0);
     float pulse = 1.0 - pulse_progress;
     float parent_progress = clamp((child_start + seconds()) / max(0.000000001, parent_duration), 0.0, 1.0);
-    color pulse_color = mix(accent[pulse_progress], hsv(hue[parent_progress], 1.0, 1.0), clamp(hue_mix, 0.0, 1.0));
+    color pulse_color = mix(accent[pulse_progress], hsv(hue[parent_progress] / 360.0, 1.0, 1.0), clamp(hue_mix, 0.0, 1.0));
     return mix(base, pulse_color, active * pulse);
   }
 }

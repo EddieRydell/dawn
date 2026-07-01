@@ -320,7 +320,8 @@ export function SequenceCanvas({
       const hoverResize = hover?.kind === "effect" && hover.effectId === clip.effect.id ? hover.resize : null;
       ctx.fillStyle = SEQUENCE_COLORS.textFaint;
       ctx.fillRect(clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height);
-      const raster = clipRasters.rasters.get(clip.effect.id) ?? null;
+      const expectedRasterKey = clipRasters.expectedRasterKeys.get(clip.effect.id) ?? null;
+      const raster = expectedRasterKey === null ? null : clipRasters.rasters.get(expectedRasterKey) ?? null;
       const rasterError = clipRasters.errors.has(clip.effect.id);
       if (raster !== null) {
         drawClipRaster(ctx, raster, clip.rect);
@@ -1128,7 +1129,8 @@ type WaveformState = { key: string | null; audio: WaveformAudio | null };
 type ClipRasterState = {
   requestKey: string;
   projectRevision: number | null;
-  rasters: Map<number, DecodedClipRaster>;
+  rasters: Map<string, DecodedClipRaster>;
+  expectedRasterKeys: Map<number, string>;
   errors: Set<number>;
 };
 
@@ -1142,6 +1144,11 @@ type DecodedClipRaster = {
   lastUsed: number;
 };
 
+type QueuedClipRasterDecode = {
+  payload: SequenceClipRaster;
+  keyContext: ClipRasterKeyContext;
+};
+
 const CLIP_RASTER_REQUEST_THROTTLE_MS = 50;
 const CLIP_RASTER_DECODE_CHUNK_SIZE = 2;
 const CLIP_RASTER_DECODED_BYTE_BUDGET = 64 * 1024 * 1024;
@@ -1151,6 +1158,7 @@ const waveformCache = new Map<string, { request: Promise<WaveformAudio | null>; 
 let waveformCacheAccess = 1;
 
 type ClipRasterRequestItem = { effectId: number; displayColumnCount: number; requestedColumns: number; requestedRows: number };
+type ClipRasterKeyContext = { projectRevision: number; rasterSettingsKey: string; requestedColumns: number; requestedRows: number };
 
 function useSequenceClipRasters(
   document: SequenceEditorDocument,
@@ -1191,15 +1199,18 @@ function useSequenceClipRasters(
   }, [document.frameRate, laneHeight, rasterSettings.maxColumns, rasterSettings.minFrameStride, rasterSettings.renderScale, visibleClips]);
   const visibleRequestItemsKey = visibleRequestItems.map((item) => `${item.effectId}:${item.displayColumnCount}:${item.requestedColumns}:${item.requestedRows}`).join(",");
   const visibleRequestItemsRef = useRef<ClipRasterRequestItem[]>(visibleRequestItems);
-  const rasters = useRef<Map<number, DecodedClipRaster>>(new Map());
+  const rasters = useRef<Map<string, DecodedClipRaster>>(new Map());
+  const expectedRasterKeys = useRef<Map<number, string>>(new Map());
   const rasterCacheAccess = useRef(1);
   const errors = useRef<Set<number>>(new Set());
-  const inFlightSignatures = useRef<Map<number, string | null>>(new Map());
   const cachedRequestKey = useRef(rasterRequestKey);
+  const cachedProjectRevision = useRef(projectRevision);
+  const projectRevisionRef = useRef(projectRevision);
   const [state, setState] = useState<ClipRasterState>({
     requestKey: rasterRequestKey,
     projectRevision,
     rasters: new Map(),
+    expectedRasterKeys: new Map(),
     errors: new Set()
   });
 
@@ -1208,29 +1219,38 @@ function useSequenceClipRasters(
   }, [visibleRequestItems]);
 
   useEffect(() => {
+    projectRevisionRef.current = projectRevision;
+  }, [projectRevision]);
+
+  useEffect(() => {
     if (projectRevision === null) return;
-    let cancelled = false;
+    const abortController = new AbortController();
     let pollTimeout: number | null = null;
     let requestTimeout: number | null = null;
     let decodeFrame: number | null = null;
-    const decodeQueue: SequenceClipRaster[] = [];
+    const decodeQueue: QueuedClipRasterDecode[] = [];
     let decoding = false;
     const displayRowCount = Math.max(1, Math.ceil(laneHeight * (window.devicePixelRatio || 1) * rasterSettings.renderScale));
+    if (cachedProjectRevision.current !== projectRevision) {
+      cachedProjectRevision.current = projectRevision;
+      expectedRasterKeys.current.clear();
+      errors.current.clear();
+    }
     if (cachedRequestKey.current !== rasterRequestKey) {
       cachedRequestKey.current = rasterRequestKey;
       rasters.current.clear();
+      expectedRasterKeys.current.clear();
       errors.current.clear();
-      inFlightSignatures.current.clear();
     }
     const effectIdSet = new Set(effectIds);
-    for (const effectId of [...rasters.current.keys()]) {
-      if (!effectIdSet.has(effectId)) rasters.current.delete(effectId);
+    for (const [effectId, rasterKey] of [...expectedRasterKeys.current]) {
+      if (!effectIdSet.has(effectId)) {
+        expectedRasterKeys.current.delete(effectId);
+        rasters.current.delete(rasterKey);
+      }
     }
     for (const effectId of [...errors.current]) {
       if (!effectIdSet.has(effectId)) errors.current.delete(effectId);
-    }
-    for (const effectId of [...inFlightSignatures.current.keys()]) {
-      if (!effectIdSet.has(effectId)) inFlightSignatures.current.delete(effectId);
     }
 
     const publishState = (nextProjectRevision: number) => {
@@ -1238,10 +1258,11 @@ function useSequenceClipRasters(
         requestKey: rasterRequestKey,
         projectRevision: nextProjectRevision,
         rasters: new Map(rasters.current),
+        expectedRasterKeys: new Map(expectedRasterKeys.current),
         errors: new Set(errors.current)
       });
     };
-    if (cachedRequestKey.current === rasterRequestKey && rasters.current.size === 0 && errors.current.size === 0) {
+    if (cachedRequestKey.current === rasterRequestKey && rasters.current.size === 0 && expectedRasterKeys.current.size === 0 && errors.current.size === 0) {
       publishState(projectRevision);
     }
 
@@ -1249,26 +1270,32 @@ function useSequenceClipRasters(
       if (decoding) return;
       decoding = true;
       const decodeNextChunk = async () => {
-        if (cancelled) return;
+        if (clipRasterRequestCancelled(abortController.signal)) return;
         for (let index = 0; index < CLIP_RASTER_DECODE_CHUNK_SIZE; index += 1) {
-          const raster = decodeQueue.shift();
-          if (raster === undefined) break;
+          const queued = decodeQueue.shift();
+          if (queued === undefined) break;
+          const raster = queued.payload;
           try {
             const image = await decodeClipRaster(raster);
-            rasters.current.set(raster.effectId, {
+            if (clipRasterRequestCancelled(abortController.signal)) return;
+            if (!Object.is(nextProjectRevision, projectRevisionRef.current)) return;
+            const rasterKey = clipRasterKey(document.path, document.objectKey, raster.effectId, raster.signature, queued.keyContext);
+            rasters.current.set(rasterKey, {
               signature: raster.signature,
               image,
               columns: raster.columns,
               rows: raster.rows,
-              requestRows: displayRowCount,
+              requestRows: queued.keyContext.requestedRows,
               byteLength: raster.columns * raster.rows * 4,
               lastUsed: rasterCacheAccess.current++
             });
-            evictDecodedClipRasters(rasters.current, new Set(visibleRequestItemsRef.current.map((item) => item.effectId)));
+            expectedRasterKeys.current.set(raster.effectId, rasterKey);
+            evictDecodedClipRasters(rasters.current, new Set(expectedRasterKeys.current.values()));
             errors.current.delete(raster.effectId);
           } catch {
-            rasters.current.delete(raster.effectId);
-            inFlightSignatures.current.delete(raster.effectId);
+            const rasterKey = expectedRasterKeys.current.get(raster.effectId);
+            if (rasterKey !== undefined) rasters.current.delete(rasterKey);
+            expectedRasterKeys.current.delete(raster.effectId);
             errors.current.add(raster.effectId);
           }
         }
@@ -1289,7 +1316,8 @@ function useSequenceClipRasters(
       const items: ClipRasterRequestItem[] = [];
       for (const item of visibleRequestItemsRef.current) {
         if (!existingEffectIds.has(item.effectId) || requested.has(item.effectId)) continue;
-        const raster = rasters.current.get(item.effectId);
+        const rasterKey = expectedRasterKeys.current.get(item.effectId);
+        const raster = rasterKey === undefined ? undefined : rasters.current.get(rasterKey);
         if (raster !== undefined) {
           raster.lastUsed = rasterCacheAccess.current++;
         }
@@ -1304,25 +1332,29 @@ function useSequenceClipRasters(
       return;
     }
 
-    const pollResults = async (requestId: number, requestComplete: boolean): Promise<boolean> => {
+    const pollResults = async (requestId: number, requestComplete: boolean, requestContexts: Map<number, ClipRasterKeyContext>): Promise<boolean> => {
       const batch = await commands.takeSequenceClipRasterResults({
         path: document.path,
         view: "sequence",
         objectKey: document.objectKey
       }, requestId);
-      if (cancelled) return false;
+      if (clipRasterRequestCancelled(abortController.signal)) return false;
       for (const raster of batch.ready) {
-        decodeQueue.push(raster);
-        inFlightSignatures.current.delete(raster.effectId);
+        const keyContext = requestContexts.get(raster.effectId);
+        if (keyContext !== undefined) {
+          decodeQueue.push({ payload: raster, keyContext });
+        }
       }
       for (const error of batch.errors) {
-        rasters.current.delete(error.effectId);
-        inFlightSignatures.current.delete(error.effectId);
+        const rasterKey = expectedRasterKeys.current.get(error.effectId);
+        if (rasterKey !== undefined) rasters.current.delete(rasterKey);
+        expectedRasterKeys.current.delete(error.effectId);
         errors.current.add(error.effectId);
       }
       for (const unavailable of batch.unavailable) {
-        rasters.current.delete(unavailable.effectId);
-        inFlightSignatures.current.delete(unavailable.effectId);
+        const rasterKey = expectedRasterKeys.current.get(unavailable.effectId);
+        if (rasterKey !== undefined) rasters.current.delete(rasterKey);
+        expectedRasterKeys.current.delete(unavailable.effectId);
         errors.current.delete(unavailable.effectId);
       }
       if (decodeQueue.length > 0) {
@@ -1334,7 +1366,7 @@ function useSequenceClipRasters(
       if (!complete) {
         return await new Promise((resolve) => {
           pollTimeout = window.setTimeout(() => {
-            void pollResults(requestId, false).then(resolve);
+            void pollResults(requestId, false, requestContexts).then(resolve);
           }, 100);
         });
       }
@@ -1343,35 +1375,47 @@ function useSequenceClipRasters(
 
     const requestRasters = async (requestItems: ClipRasterRequestItem[]): Promise<boolean> => {
       if (requestItems.length === 0) return true;
+      const requestContexts = new Map<number, ClipRasterKeyContext>();
       const response = await commands.requestSequenceClipRasters({
         path: document.path,
         view: "sequence",
         objectKey: document.objectKey,
         items: requestItems.map((item) => {
-          const cached = rasters.current.get(item.effectId) ?? null;
+          const rasterKeyContext = {
+            projectRevision,
+            rasterSettingsKey,
+            requestedColumns: item.requestedColumns,
+            requestedRows: item.requestedRows
+          };
+          requestContexts.set(item.effectId, rasterKeyContext);
+          const expectedRasterKey = expectedRasterKeys.current.get(item.effectId) ?? null;
+          const cached = expectedRasterKey === null ? null : rasters.current.get(expectedRasterKey) ?? null;
           const signature = cached !== null && cached.columns === item.requestedColumns && cached.requestRows === item.requestedRows ? cached.signature : null;
-          inFlightSignatures.current.set(item.effectId, signature);
+          if (signature !== null) {
+            expectedRasterKeys.current.set(item.effectId, clipRasterKey(document.path, document.objectKey, item.effectId, signature, rasterKeyContext));
+          }
           return { effectId: item.effectId, signature, displayColumnCount: item.displayColumnCount };
         }),
         displayRowCount
       });
-      if (cancelled) return false;
-      return await pollResults(response.requestId, response.complete);
+      if (clipRasterRequestCancelled(abortController.signal)) return false;
+      return await pollResults(response.requestId, response.complete, requestContexts);
     };
 
     requestTimeout = window.setTimeout(() => void requestRasters(visibleRequestRasterItems()), CLIP_RASTER_REQUEST_THROTTLE_MS);
     return () => {
-      cancelled = true;
+      abortController.abort();
       if (pollTimeout !== null) window.clearTimeout(pollTimeout);
       window.clearTimeout(requestTimeout);
       if (decodeFrame !== null) window.cancelAnimationFrame(decodeFrame);
     };
-  }, [document.objectKey, document.path, effectIds, effectIdsKey, laneHeight, projectRevision, rasterRequestKey, rasterSettings.renderScale, visibleRequestItemsKey]);
+  }, [document.objectKey, document.path, effectIds, effectIdsKey, laneHeight, projectRevision, rasterRequestKey, rasterSettings.renderScale, rasterSettingsKey, visibleRequestItemsKey]);
 
   return state.requestKey === rasterRequestKey ? state : {
     requestKey: rasterRequestKey,
     projectRevision,
     rasters: new Map(),
+    expectedRasterKeys: new Map(),
     errors: new Set()
   };
 }
@@ -1406,26 +1450,49 @@ function useSequenceWaveform(audio: SequenceAudio | null): WaveformState {
   return state.key === key ? state : { key, audio: null };
 }
 
-function evictDecodedClipRasters(rasters: Map<number, DecodedClipRaster>, protectedEffectIds: Set<number>) {
+function clipRasterKey(
+  path: string,
+  objectKey: string | null,
+  effectId: number,
+  signature: string,
+  context: ClipRasterKeyContext
+): string {
+  return JSON.stringify([
+    path,
+    objectKey,
+    context.projectRevision,
+    context.rasterSettingsKey,
+    effectId,
+    context.requestedColumns,
+    context.requestedRows,
+    signature
+  ]);
+}
+
+function clipRasterRequestCancelled(signal: AbortSignal): boolean {
+  return signal.aborted;
+}
+
+function evictDecodedClipRasters(rasters: Map<string, DecodedClipRaster>, protectedRasterKeys: Set<string>) {
   let byteLength = 0;
   for (const raster of rasters.values()) {
     byteLength += raster.byteLength;
   }
   while (byteLength > CLIP_RASTER_DECODED_BYTE_BUDGET) {
-    let evictEffectId: number | null = null;
+    let evictRasterKey: string | null = null;
     let oldest = Number.POSITIVE_INFINITY;
-    for (const [effectId, raster] of rasters) {
-      if (protectedEffectIds.has(effectId)) continue;
+    for (const [rasterKey, raster] of rasters) {
+      if (protectedRasterKeys.has(rasterKey)) continue;
       if (raster.lastUsed < oldest) {
         oldest = raster.lastUsed;
-        evictEffectId = effectId;
+        evictRasterKey = rasterKey;
       }
     }
-    if (evictEffectId === null) return;
-    const raster = rasters.get(evictEffectId);
+    if (evictRasterKey === null) return;
+    const raster = rasters.get(evictRasterKey);
     if (raster === undefined) return;
     byteLength -= raster.byteLength;
-    rasters.delete(evictEffectId);
+    rasters.delete(evictRasterKey);
   }
 }
 
