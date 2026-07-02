@@ -2,7 +2,7 @@ import type { KeyboardEvent } from "react";
 
 import type { SequenceEditorDocument } from "../../../types";
 
-import type { AudioTransportViewSnapshot, GuiFocus, SequenceSelection } from "../shared";
+import type { AudioTransportViewSnapshot, AutomationClipChooser, GuiFocus, SequenceSelection } from "../shared";
 
 import { SequenceCanvas } from "./SequenceCanvas";
 import { handleSequencePlaybackShortcut, isSequenceTransportUnsupported } from "./SequenceTransportControls";
@@ -14,6 +14,8 @@ export function SequenceEditor({
   setSelected,
   sequenceSelection,
   setSequenceSelection,
+  automationClipChooser,
+  setAutomationClipChooser,
   activeMarkCollectionKey,
   setActiveMarkCollectionKey,
   visibleMarkCollectionKeys,
@@ -25,6 +27,8 @@ export function SequenceEditor({
   setSelected: (id: GuiFocus) => void;
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
+  automationClipChooser: AutomationClipChooser;
+  setAutomationClipChooser: (chooser: AutomationClipChooser) => void;
   activeMarkCollectionKey: string | null;
   setActiveMarkCollectionKey: (key: string | null) => void;
   visibleMarkCollectionKeys: Set<string>;
@@ -33,6 +37,11 @@ export function SequenceEditor({
   const liveTransport = transport;
   const unsupported = isSequenceTransportUnsupported(document, liveTransport);
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape" && automationClipChooser !== null) {
+      event.preventDefault();
+      setAutomationClipChooser(null);
+      return;
+    }
     handleSequencePlaybackShortcut(event, document, liveTransport, unsupported);
   };
   return (
@@ -45,6 +54,8 @@ export function SequenceEditor({
         setSelected={setSelected}
         sequenceSelection={sequenceSelection}
         setSequenceSelection={setSequenceSelection}
+        automationClipChooser={automationClipChooser}
+        setAutomationClipChooser={setAutomationClipChooser}
         activeMarkCollectionKey={activeMarkCollectionKey}
         setActiveMarkCollectionKey={setActiveMarkCollectionKey}
         visibleMarkCollectionKeys={visibleMarkCollectionKeys}

@@ -32,7 +32,6 @@ pub struct MarkCollectionKey {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AutomationClip {
     pub id: AutomationClipId,
-    pub name: String,
     pub start: DawnTime,
     pub duration: DawnDuration,
     pub anchor_lane_index: u32,

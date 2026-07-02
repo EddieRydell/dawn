@@ -1,4 +1,4 @@
-import type { GuiFocus, ReadyGuiDocument, SequenceSelection } from "./shared";
+import type { AutomationClipChooser, GuiFocus, ReadyGuiDocument, SequenceSelection } from "./shared";
 import { FixtureInspector } from "./fixture/FixtureInspector";
 import { LayoutInspector } from "./layout/LayoutInspector";
 import { SequenceInspector } from "./sequence/SequenceInspector";
@@ -8,6 +8,8 @@ export function GuiInspector({
   selected,
   setSelected,
   sequenceSelection,
+  automationClipChooser,
+  setAutomationClipChooser,
   activeMarkCollectionKey,
   setActiveMarkCollectionKey,
   visibleMarkCollectionKeys,
@@ -17,6 +19,8 @@ export function GuiInspector({
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
   sequenceSelection: SequenceSelection;
+  automationClipChooser: AutomationClipChooser;
+  setAutomationClipChooser: (chooser: AutomationClipChooser) => void;
   activeMarkCollectionKey: string | null;
   setActiveMarkCollectionKey: (key: string | null) => void;
   visibleMarkCollectionKeys: Set<string>;
@@ -29,6 +33,8 @@ export function GuiInspector({
         selected={selected}
         setSelected={setSelected}
         sequenceSelection={sequenceSelection}
+        automationClipChooser={automationClipChooser}
+        setAutomationClipChooser={setAutomationClipChooser}
         activeMarkCollectionKey={activeMarkCollectionKey}
         setActiveMarkCollectionKey={setActiveMarkCollectionKey}
         visibleMarkCollectionKeys={visibleMarkCollectionKeys}

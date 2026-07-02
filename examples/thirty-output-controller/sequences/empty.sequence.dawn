@@ -1704,10 +1704,10 @@ empty:
         value: '#ffffff'
       density:
         type: float
-        value: 0.05
+        value: 0.02
       shimmer_level:
         type: float
-        value: 0.1
+        value: 0.05
       sparkle_level:
         type: float
         value: 0.85
@@ -2387,24 +2387,7 @@ empty:
         value: 1
       chase_position:
         type: curve
-        curve:
-          type: curve
-          value_type: float
-          points:
-          - time: 0.0
-            value: 1.0
-          - time: 0.068
-            value: 0.724
-          - time: 0.235
-            value: 0.371
-          - time: 0.421
-            value: 0.217
-          - time: 0.597
-            value: 0.1
-          - time: 0.738
-            value: 0.054
-          - time: 1.0
-            value: 0.0
+        curve: curves.hue_sweep
       extend_to_start:
         type: bool
         value: false
@@ -2421,6 +2404,9 @@ empty:
             value: 1.0
           - time: 1.0
             value: 0.0
+      reverse:
+        type: bool
+        value: false
     script: effects.Chase
   - id: 8
     start: 39.402323362s
@@ -11474,7 +11460,6 @@ empty:
     script: effects.Pulse
   automation_clips:
   - id: 1
-    name: Shimmer lift
     start: 0.370043439s
     duration: 8.233100912s
     anchor_lane_index: 0
@@ -11496,25 +11481,12 @@ empty:
         value: 0.8
     bindings:
     - effect_id: 75
-      param: shimmer_level
-      mapping:
-        type: float
-        min: 0.05
-        max: 0.9
-    - effect_id: 75
       param: sparkle_level
       mapping:
         type: float
         min: 0.25
         max: 1.0
-    - effect_id: 75
-      param: density
-      mapping:
-        type: float
-        min: 0.02
-        max: 0.18
   - id: 2
-    name: Mark pulse spread
     start: 0s
     duration: 13.150496763s
     anchor_lane_index: 0
@@ -11553,9 +11525,14 @@ empty:
         type: float
         min: 0.0
         max: 0.75
+    - effect_id: 75
+      param: density
+      mapping:
+        type: float
+        min: 0.0
+        max: 1.0
   - id: 3
-    name: Chase window
-    start: 39.765825847s
+    start: 38.661208301s
     duration: 4.173401742s
     anchor_lane_index: 0
     lane_index: 0
@@ -11564,8 +11541,30 @@ empty:
       points:
       - time: 0.0
         value: 1.0
+      - time: 0.142391906
+        value: 0.275
+      - time: 0.150107641
+        value: 0.614
+      - time: 0.240124555
+        value: 0.826
+      - time: 0.256841982
+        value: 0.377
+      - time: 0.274845364
+        value: 0.657
       - time: 0.35
         value: 0.25
+      - time: 0.368720146
+        value: 0.665
+      - time: 0.49602978
+        value: 0.386
+      - time: 0.566757355
+        value: 0.771
+      - time: 0.652916401
+        value: 0.78
+      - time: 0.66577596
+        value: 0.081
+      - time: 0.813660889
+        value: 0.797
       - time: 1.0
         value: 0.0
     bindings:
@@ -11575,9 +11574,3 @@ empty:
         type: float
         min: 18.0
         max: 70.0
-    - effect_id: 3
-      param: chase_position
-      mapping:
-        type: float_curve
-        min: 0.0
-        max: 1.0

@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import type { AppSnapshot, GuiDocument } from "../../types";
 
-import type { GuiFocus, ReadyGuiDocument, SequenceSelection } from "./shared";
+import type { AutomationClipChooser, GuiFocus, ReadyGuiDocument, SequenceSelection } from "./shared";
 
 import { LayoutCanvas } from "./layout/LayoutCanvas";
 
@@ -72,6 +72,7 @@ function GuiEditorInner({
       ? restoreState?.sequenceViewports[`${gui.document.path}::${gui.document.objectKey}`]
       : undefined;
   const [selected, setSelected] = useState<GuiFocus>(null);
+  const [automationClipChooser, setAutomationClipChooser] = useState<AutomationClipChooser>(null);
   const [activeMarkCollectionKey, setActiveMarkCollectionKey] = useState<string | null>(() =>
     gui.type === "sequence"
       ? sequenceRestore?.activeMarkCollectionKey ?? gui.document.markCollections[0]?.key ?? null
@@ -110,6 +111,8 @@ function GuiEditorInner({
           setSelected={setSelected}
           sequenceSelection={sequenceSelection}
           setSequenceSelection={setSequenceSelection}
+          automationClipChooser={automationClipChooser}
+          setAutomationClipChooser={setAutomationClipChooser}
           activeMarkCollectionKey={activeMarkCollectionKey}
           setActiveMarkCollectionKey={setActiveMarkCollectionKey}
           visibleMarkCollectionKeys={visibleMarkCollectionKeys}
@@ -125,6 +128,8 @@ function GuiEditorInner({
         selected={selected}
         setSelected={setSelected}
         sequenceSelection={sequenceSelection}
+        automationClipChooser={automationClipChooser}
+        setAutomationClipChooser={setAutomationClipChooser}
         activeMarkCollectionKey={activeMarkCollectionKey}
         setActiveMarkCollectionKey={setActiveMarkCollectionKey}
         visibleMarkCollectionKeys={visibleMarkCollectionKeys}

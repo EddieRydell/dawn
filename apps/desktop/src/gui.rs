@@ -388,7 +388,6 @@ fn automation_clips(sequence: &dawn_language::sequence::Sequence) -> Vec<Sequenc
         .iter()
         .map(|clip| SequenceAutomationClip {
             id: clip.id.0,
-            name: clip.name.clone(),
             start_seconds: clip.start.as_seconds_f64(),
             duration_seconds: clip.duration.as_seconds_f64(),
             anchor_lane_index: clip.anchor_lane_index,
@@ -711,7 +710,6 @@ fn automation_for_param(
             .find(|binding| binding.effect_id.0 == effect_id && binding.param.as_str() == param)
             .map(|binding| SequenceParamAutomation {
                 clip_id: clip.id.0,
-                clip_name: clip.name.clone(),
                 mapping: automation_mapping_to_gui(&binding.mapping),
             })
     })
@@ -1644,7 +1642,6 @@ fn edit_sequence(
                 .insert(identifier(&name)?, effect_param_value_from_gui(value)?);
         }
         SequenceGuiEdit::AddAutomationClip {
-            name,
             start_seconds,
             duration_seconds,
             anchor_lane_index,
@@ -1660,13 +1657,73 @@ fn edit_sequence(
                 + 1;
             sequence.automation_clips.push(AutomationClip {
                 id: AutomationClipId(next_id),
-                name,
                 start: dawn_time(start_seconds.max(0.0)),
                 duration: dawn_duration(duration_seconds.max(0.000000001)),
                 anchor_lane_index,
                 lane_index,
                 curve: default_automation_curve(),
                 bindings: Vec::new(),
+            });
+        }
+        SequenceGuiEdit::CreateAndBindAutomationClip {
+            effect_id,
+            param,
+            mapping,
+        } => {
+            let param = identifier(&param)?;
+            let mapping = automation_mapping_from_gui(mapping)?;
+            let (effect_start, effect_duration, anchor_lane_index) = {
+                let sequence = session.project.sequences.get(&sequence_id).ok_or_else(|| {
+                    GuiMutationError::Invalid("Sequence was not found.".to_string())
+                })?;
+                let effect = sequence
+                    .effects
+                    .iter()
+                    .find(|effect| effect.id.0 == effect_id)
+                    .ok_or_else(|| {
+                        GuiMutationError::Invalid("Effect was not found.".to_string())
+                    })?;
+                let anchor_lane_index = effect_lane_index_resolved(session, &effect.target)
+                    .ok_or_else(|| {
+                        GuiMutationError::Invalid("Effect lane was not found.".to_string())
+                    })?;
+                (
+                    effect.start.clone(),
+                    effect.duration.clone(),
+                    anchor_lane_index as u32,
+                )
+            };
+            let sequence = sequence_mut(session, &sequence_id)?;
+            for clip in &sequence.automation_clips {
+                if clip
+                    .bindings
+                    .iter()
+                    .any(|binding| binding.effect_id.0 == effect_id && binding.param == param)
+                {
+                    return Err(GuiMutationError::Invalid(
+                        "Param is already automated.".to_string(),
+                    ));
+                }
+            }
+            let next_id = sequence
+                .automation_clips
+                .iter()
+                .map(|clip| clip.id.0)
+                .max()
+                .unwrap_or(0)
+                + 1;
+            sequence.automation_clips.push(AutomationClip {
+                id: AutomationClipId(next_id),
+                start: effect_start,
+                duration: effect_duration,
+                anchor_lane_index,
+                lane_index: 0,
+                curve: default_automation_curve(),
+                bindings: vec![AutomationBinding {
+                    effect_id: EffectInstId(effect_id),
+                    param,
+                    mapping,
+                }],
             });
         }
         SequenceGuiEdit::MoveAutomationClip {
@@ -2179,17 +2236,16 @@ fn mark_indexes_by_collection(marks: &[SequenceMarkRef]) -> BTreeMap<String, Vec
 }
 
 fn effect_lane_index(session: &ProjectSession, target: &EffectTarget) -> usize {
-    let Some(layout_id) = active_layout_id(session) else {
-        return 0;
-    };
-    let Some(layout) = session.project.layouts.get(&layout_id) else {
-        return 0;
-    };
+    effect_lane_index_resolved(session, target).unwrap_or_default()
+}
+
+fn effect_lane_index_resolved(session: &ProjectSession, target: &EffectTarget) -> Option<usize> {
+    let layout_id = active_layout_id(session)?;
+    let layout = session.project.layouts.get(&layout_id)?;
     layout
         .target_order
         .iter()
         .position(|candidate| effect_target_matches_layout(target, candidate))
-        .unwrap_or_default()
 }
 
 fn effect_target_matches_layout(target: &EffectTarget, candidate: &DomainLayoutTarget) -> bool {

@@ -249,7 +249,6 @@ fn missing_references_fail_and_automation_prepares() {
     let mut sequence = sequence_with_effects(Vec::new());
     sequence.automation_clips = vec![AutomationClip {
         id: AutomationClipId(1),
-        name: "Automation".to_string(),
         start: time(0.0),
         duration: duration(1.0),
         anchor_lane_index: 0,

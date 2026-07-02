@@ -6,6 +6,7 @@ import type {
   LayoutDocument,
   LayoutFixturePlacement,
   Point3Meters,
+  SequenceAutomationMapping,
   SequenceSelection as WireSequenceSelection,
   Transform as WireTransform
 } from "../../types";
@@ -19,6 +20,12 @@ export type AudioTransportViewSnapshot = AppSnapshot["audioTransport"];
 export type ReadyGuiDocument = Exclude<ActiveGuiDocument, { type: "blocked" }>;
 
 export type SequenceSelection = WireSequenceSelection | null;
+
+export type AutomationClipChooser = {
+  effectId: number;
+  param: string;
+  mapping: SequenceAutomationMapping;
+} | null;
 
 export type GuiFocus =
   | { type: "effect"; id: number }

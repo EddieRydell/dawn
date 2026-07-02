@@ -1589,7 +1589,6 @@ fn effect_inst_value(
 fn automation_clip_value(clip: &AutomationClip) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
     value.insert(string_value("id"), number_value(clip.id.0)?);
-    value.insert(string_value("name"), Value::String(clip.name.clone()));
     value.insert(
         string_value("start"),
         Value::String(seconds_string(clip.start.as_seconds_f64())),
@@ -3374,7 +3373,6 @@ impl DomainResolver<'_> {
         }
         Ok(AutomationClip {
             id: AutomationClipId(u32_field(path, value, "id")?),
-            name: string_field(path, value, "name")?.to_string(),
             start: parse_duration_as_time(string_field(path, value, "start")?).map_err(
                 |error| {
                     with_yaml_location(

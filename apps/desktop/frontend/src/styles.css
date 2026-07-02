@@ -747,14 +747,50 @@ button:focus-visible,
 
 .effect-param-section {
   display: grid;
-  gap: 8px;
-  margin: 12px 0;
+  gap: 0;
+  margin: 12px -12px;
 }
 
 .effect-param-section h3 {
-  margin: 0;
+  margin: 0 12px 8px;
   color: #fffaf0;
   font-size: 12px;
+}
+
+.effect-param-row {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-top: 2px solid #2c3036;
+  box-shadow: inset 0 1px rgb(255 250 240 / 3%);
+}
+
+.effect-param-row:last-child {
+  border-bottom: 2px solid #2c3036;
+}
+
+.effect-param-row-even {
+  background: #111214;
+}
+
+.effect-param-row-odd {
+  background: #15171a;
+}
+
+.effect-param-row > .effect-param-group,
+.effect-param-row > .effect-param-check,
+.effect-param-row > label {
+  margin-bottom: 0;
+}
+
+.effect-param-row > label {
+  font-weight: 700;
+}
+
+.effect-param-row > label input,
+.effect-param-row > label select,
+.effect-param-row > label .effect-param-color {
+  font-weight: 400;
 }
 
 .effect-param-check {
@@ -771,7 +807,91 @@ button:focus-visible,
 }
 
 .effect-param-name {
-  color: #a8a29a;
+  min-width: 0;
+  overflow: hidden;
+  color: #ebe7df;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.effect-param-value-row,
+.curve-source-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+}
+
+.effect-param-value-control {
+  min-width: 0;
+}
+
+.effect-param-value-control > label,
+.effect-param-value-control .effect-param-check {
+  margin-bottom: 0;
+}
+
+.effect-param-value-row input:not([type="checkbox"]):not([type="color"]),
+.effect-param-value-row select,
+.curve-source-row select {
+  height: 30px;
+}
+
+.effect-param-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.effect-param-group .icon-button {
+  display: inline-grid;
+  width: 28px;
+  height: 30px;
+  place-items: center;
+  padding: 0;
+}
+
+.effect-param-group .icon-button:not(:disabled):hover {
+  border-color: #6abf8a;
+  background: #1f2a25;
+  color: #dff5e7;
+}
+
+.effect-param-group .icon-button:focus-visible {
+  border-color: #6abf8a;
+  outline: 2px solid rgb(106 191 138 / 28%);
+  outline-offset: 1px;
+}
+
+.effect-param-automated input,
+.effect-param-automated select,
+.effect-param-automated .float-curve-graph,
+.effect-param-automated .color-curve-gradient {
+  opacity: 0.58;
+}
+
+.effect-param-automated .effect-param-name {
+  color: #c7c0b6;
+}
+
+.effect-param-unavailable {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  border: 1px solid #30343a;
+  border-radius: 4px;
+  background: #17181b;
+  padding: 5px 7px;
+  color: #696b70;
+}
+
+.curve-source-selects {
+  display: grid;
+  grid-template-columns: minmax(0, 0.75fr) minmax(0, 1fr);
+  gap: 6px;
 }
 
 .array-param-editor {
@@ -829,7 +949,8 @@ button:focus-visible,
 
 .curve-source-row {
   display: grid;
-  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.4fr);
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 6px;
 }
 

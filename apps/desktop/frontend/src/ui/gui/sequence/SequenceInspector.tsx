@@ -2,10 +2,11 @@ import type { SequenceEditorDocument, SequenceEffect, SequenceEffectScope, Seque
 import { commands } from "../../../api";
 import { runGuiEditCommand } from "../../../store";
 import { InspectorScrollArea, Readout } from "../InspectorScrollArea";
-import { formatSeconds, roundToNanosecond, type GuiFocus, type SequenceSelection } from "../shared";
+import { formatSeconds, roundToNanosecond, type AutomationClipChooser, type GuiFocus, type SequenceSelection } from "../shared";
 import { ColorField, EffectParamInput } from "./params/EffectParamInput";
 import { defaultMarkColor, nextCollectionKey } from "./marks";
 import { selectedEffectId, selectionCompatibleWithFocusedItem, selectionCount } from "./sequenceSelection";
+import { targetsEqual } from "./sequenceTargets";
 
 function selectedEffectScriptValue(effect: SequenceEffect, scripts: SequenceEffectScript[]) {
   const currentScript = effect.scriptSource;
@@ -23,6 +24,8 @@ export function SequenceInspector({
   selected,
   setSelected,
   sequenceSelection,
+  automationClipChooser,
+  setAutomationClipChooser,
   activeMarkCollectionKey,
   setActiveMarkCollectionKey,
   visibleMarkCollectionKeys,
@@ -32,6 +35,8 @@ export function SequenceInspector({
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
   sequenceSelection: SequenceSelection;
+  automationClipChooser: AutomationClipChooser;
+  setAutomationClipChooser: (chooser: AutomationClipChooser) => void;
   activeMarkCollectionKey: string | null;
   setActiveMarkCollectionKey: (key: string | null) => void;
   visibleMarkCollectionKeys: Set<string>;
@@ -219,15 +224,24 @@ const id = selectedEffectId(selected);
               <div className="inspector-section-divider" />
               <div className="effect-param-section">
                 <h3>Parameters</h3>
-                {effect.params.map((param) => (
-                  <EffectParamInput
+                {effect.params.map((param, index) => (
+                  <div
                     key={`${effect.id}:${param.name}`}
-                    effectId={effect.id}
-                    param={param}
-                    curveLibrary={document.curveLibrary}
-                    markCollections={document.markCollections}
-                    automationClips={document.automationClips}
-                  />
+                    className={`effect-param-row ${index % 2 === 0 ? "effect-param-row-even" : "effect-param-row-odd"}`}
+                  >
+                    <EffectParamInput
+                      effectId={effect.id}
+                      effectStartSeconds={effect.startSeconds}
+                      effectDurationSeconds={effect.durationSeconds}
+                      param={param}
+                      curveLibrary={document.curveLibrary}
+                      markCollections={document.markCollections}
+                      automationClips={document.automationClips}
+                      canCreateAutomationClip={document.lanes.some((lane) => targetsEqual(lane.target, effect.target))}
+                      automationClipChooser={automationClipChooser}
+                      setAutomationClipChooser={setAutomationClipChooser}
+                    />
+                  </div>
                 ))}
               </div>
             </>

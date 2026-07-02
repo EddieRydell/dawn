@@ -11,7 +11,7 @@ import type { AppSettings, LayoutTarget, PersistedSequenceViewportState, Sequenc
 
 import { runGuiEditCommand, runSnapshotCommand, useAppStore } from "../../../store";
 
-import { clamp, formatSeconds, roundToNanosecond, type GuiFocus, type SequenceSelection } from "../shared";
+import { clamp, formatSeconds, roundToNanosecond, type AutomationClipChooser, type GuiFocus, type SequenceSelection } from "../shared";
 
 import { defaultMarkColor, drawSequenceMarks, committedMarkDrafts, markIndexAfterMove, nextCollectionKey, useMarkDisplayMode } from "./marks";
 
@@ -55,6 +55,9 @@ const SEQUENCE_COLORS = {
   clipBorder: "#8a8d93",
   automation: "#8ecae6",
   automationFill: "rgb(142 202 230 / 28%)",
+  automationGraph: "#070809",
+  automationGraphGrid: "#16191d",
+  automationGraphGridMajor: "#24282e",
   accent: "#6abf8a",
   accentSubtle: "rgb(106 191 138 / 14%)",
   warning: "#f0c46b",
@@ -100,6 +103,8 @@ export function SequenceCanvas({
   setSelected,
   sequenceSelection,
   setSequenceSelection,
+  automationClipChooser,
+  setAutomationClipChooser,
   activeMarkCollectionKey,
   setActiveMarkCollectionKey,
   visibleMarkCollectionKeys,
@@ -112,6 +117,8 @@ export function SequenceCanvas({
   setSelected: (id: GuiFocus) => void;
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
+  automationClipChooser: AutomationClipChooser;
+  setAutomationClipChooser: (chooser: AutomationClipChooser) => void;
   activeMarkCollectionKey: string | null;
   setActiveMarkCollectionKey: (key: string | null) => void;
   visibleMarkCollectionKeys: Set<string>;
@@ -162,7 +169,9 @@ export function SequenceCanvas({
   const [automationHover, setAutomationHover] = useState<AutomationHover | null>(null);
   const canvasCursor =
     dragCursor ??
-    (automationHover !== null
+    (automationClipChooser !== null && automationHover !== null
+      ? "pointer"
+      : automationHover !== null
       ? automationHover.resize === "none" ? "grab" : "ew-resize"
       : hover === null ? undefined : hover.kind === "mark" ? "pointer" : hover.resize === "none" ? "grab" : "ew-resize");
 
@@ -437,17 +446,23 @@ export function SequenceCanvas({
     for (const clip of visibleAutomationClips) {
       const selectedClip = selected?.type === "automationClip" && selected.id === clip.clip.id;
       const hoverResize = automationHover?.clipId === clip.clip.id ? automationHover.resize : null;
-      ctx.fillStyle = SEQUENCE_COLORS.page;
+      const choosingCandidate = automationClipChooser !== null;
+      const choosingHover = choosingCandidate && hoverResize !== null;
+      ctx.fillStyle = SEQUENCE_COLORS.automationGraph;
       ctx.fillRect(clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height);
       drawAutomationCurve(ctx, clip.clip, clip.rect);
+      if (choosingCandidate) {
+        ctx.fillStyle = SEQUENCE_COLORS.accentSubtle;
+        ctx.fillRect(clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height);
+      }
       if (hoverResize !== null) {
         ctx.fillStyle = SEQUENCE_COLORS.overlay;
         ctx.fillRect(clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height);
       }
-      ctx.strokeStyle = selectedClip ? SEQUENCE_COLORS.clipSelected : hoverResize !== null ? SEQUENCE_COLORS.clipHover : SEQUENCE_COLORS.clipBorder;
-      ctx.lineWidth = selectedClip || hoverResize !== null ? 2 : 1;
+      ctx.strokeStyle = choosingCandidate ? SEQUENCE_COLORS.accent : selectedClip ? SEQUENCE_COLORS.clipSelected : hoverResize !== null ? SEQUENCE_COLORS.clipHover : SEQUENCE_COLORS.clipBorder;
+      ctx.lineWidth = choosingHover || selectedClip || hoverResize !== null ? 2 : 1;
       ctx.strokeRect(clip.rect.x + 0.5, clip.rect.y + 0.5, Math.max(0, clip.rect.width - 1), Math.max(0, clip.rect.height - 1));
-      if (hoverResize === "left" || hoverResize === "right") {
+      if (!choosingCandidate && (hoverResize === "left" || hoverResize === "right")) {
         const handleX = hoverResize === "left" ? clip.rect.x : clip.rect.x + clip.rect.width;
         ctx.fillStyle = SEQUENCE_COLORS.warning;
         ctx.fillRect(handleX - 2, clip.rect.y + 4, 4, Math.max(4, clip.rect.height - 8));
@@ -503,7 +518,7 @@ export function SequenceCanvas({
     ctx.moveTo(left + 0.5, top);
     ctx.lineTo(left, rect.height);
     ctx.stroke();
-  }, [activeAutomationTargetEffectIds, automationHover, automationRowHeight, automationRowsByLane, document, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, visibleAutomationClips, selected, selectedEffectIds, selectedMarks, playheadSeconds, homeSeconds, selectedLaneIndex, selectedTimeSeconds, marquee, waveform.audio, visibleMarkCollections, mode, markDrafts, hover, clipRasters]);
+  }, [activeAutomationTargetEffectIds, automationClipChooser, automationHover, automationRowHeight, automationRowsByLane, document, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, visibleAutomationClips, selected, selectedEffectIds, selectedMarks, playheadSeconds, homeSeconds, selectedLaneIndex, selectedTimeSeconds, marquee, waveform.audio, visibleMarkCollections, mode, markDrafts, hover, clipRasters]);
 
   const seekFromCanvas = (event: MouseEvent<HTMLCanvasElement>) => {
     const x = event.nativeEvent.offsetX;
@@ -601,13 +616,27 @@ export function SequenceCanvas({
     await runGuiEditCommand(() =>
       commands.applySequenceGuiEdit({
         type: "addAutomationClip",
-        name: "Automation",
         startSeconds: menu.startSeconds,
         durationSeconds: Math.min(2, Math.max(0.000000001, document.durationSeconds - menu.startSeconds)),
         anchorLaneIndex: menu.laneIndex,
         laneIndex: 0
       })
     );
+  };
+  const chooseAutomationClip = (clipId: number) => {
+    if (automationClipChooser === null) return;
+    const chooser = automationClipChooser;
+    void runGuiEditCommand(() =>
+      commands.applySequenceGuiEdit({
+        type: "bindAutomationParam",
+        clipId,
+        effectId: chooser.effectId,
+        param: chooser.param,
+        mapping: chooser.mapping
+      })
+    ).then(() => {
+      setAutomationClipChooser(null);
+    });
   };
   const deleteSelectedEffect = async (effectId: number) => {
     await runGuiEditCommand(() => commands.applySequenceGuiEdit({ type: "deleteEffect", id: effectId }));
@@ -646,6 +675,11 @@ export function SequenceCanvas({
             style={canvasCursor === undefined ? undefined : { cursor: canvasCursor }}
             tabIndex={0}
       onKeyDown={(event) => {
+        if (event.key === "Escape" && automationClipChooser !== null) {
+          event.preventDefault();
+          setAutomationClipChooser(null);
+          return;
+        }
         const selectedMark = selected?.type === "mark" ? { collectionKey: selected.collectionKey, index: selected.index } : null;
         const focusedEffectId = selectedEffectId(selected);
         const activeSelection = sequenceSelection ?? selectionFromSingle(selected);
@@ -731,6 +765,11 @@ export function SequenceCanvas({
       onContextMenu={(event) => {
         const x = event.nativeEvent.offsetX;
         const y = event.nativeEvent.offsetY;
+        if (automationClipChooser !== null) {
+          event.preventDefault();
+          setSequenceContextMenu(null);
+          return;
+        }
         if (x < left || y < top || document.lanes.length === 0) {
           event.preventDefault();
           setSequenceContextMenu(null);
@@ -788,6 +827,15 @@ export function SequenceCanvas({
         const x = event.nativeEvent.offsetX;
         const y = event.nativeEvent.offsetY;
         setMarkDrafts(new Map());
+        if (automationClipChooser !== null) {
+          const automationHit = hitAutomationClip(visibleAutomationClips, x, y);
+          if (automationHit !== null) {
+            event.preventDefault();
+            event.stopPropagation();
+            chooseAutomationClip(automationHit.clip.id);
+          }
+          return;
+        }
         if (x >= left && y < top) {
           drag.current = { kind: "sequenceScrub" };
           seekFromCanvas(event);
@@ -971,9 +1019,10 @@ export function SequenceCanvas({
           const x = event.nativeEvent.offsetX;
           const y = event.nativeEvent.offsetY;
           const automationHit = hitAutomationClip(visibleAutomationClips, x, y);
-          const hit = automationHit === null ? hitSequence(visibleClips, x, y) : null;
+          const choosingAutomation = automationClipChooser !== null;
+          const hit = automationHit === null && !choosingAutomation ? hitSequence(visibleClips, x, y) : null;
           const markHit =
-            hit === null && automationHit === null
+            hit === null && automationHit === null && !choosingAutomation
               ? hitSequenceMark(visibleMarkCollections, mode, x, y, left, audioStripTop, audioStripHeight, canvasSize.height, viewport)
               : null;
           const nextHover: SequenceHover =
@@ -982,7 +1031,7 @@ export function SequenceCanvas({
               : markHit !== null
                 ? { kind: "mark", collectionKey: markHit.collectionKey, index: markHit.index }
                 : null;
-          const nextAutomationHover: AutomationHover | null = automationHit === null ? null : { kind: "automation", clipId: automationHit.clip.id, resize: automationHit.resize };
+          const nextAutomationHover: AutomationHover | null = automationHit === null ? null : { kind: "automation", clipId: automationHit.clip.id, resize: choosingAutomation ? "none" : automationHit.resize };
           setHover((previous) =>
             sequenceHoverEqual(previous, nextHover) ? previous : nextHover
           );
@@ -2021,16 +2070,33 @@ function drawAutomationCurve(
   rect: { x: number; y: number; width: number; height: number }
 ) {
   const graph = automationCurveGraphRect(rect);
-  ctx.fillStyle = "#17181b";
+  ctx.fillStyle = SEQUENCE_COLORS.automationGraph;
   ctx.fillRect(graph.x, graph.y, graph.width, graph.height);
-  ctx.strokeStyle = "#2c3036";
   ctx.lineWidth = 1;
+  ctx.strokeStyle = SEQUENCE_COLORS.automationGraphGrid;
+  ctx.beginPath();
+  const columns = 4;
+  const rows = 4;
+  for (let column = 1; column < columns; column += 1) {
+    const x = graph.x + (graph.width * column) / columns + 0.5;
+    ctx.moveTo(x, graph.y);
+    ctx.lineTo(x, graph.y + graph.height);
+  }
+  for (let row = 1; row < rows; row += 1) {
+    const y = graph.y + (graph.height * row) / rows + 0.5;
+    ctx.moveTo(graph.x, y);
+    ctx.lineTo(graph.x + graph.width, y);
+  }
+  ctx.stroke();
+  ctx.strokeStyle = SEQUENCE_COLORS.automationGraphGridMajor;
   ctx.beginPath();
   ctx.moveTo(graph.x, graph.y + graph.height / 2 + 0.5);
   ctx.lineTo(graph.x + graph.width, graph.y + graph.height / 2 + 0.5);
   ctx.moveTo(graph.x + graph.width / 2 + 0.5, graph.y);
   ctx.lineTo(graph.x + graph.width / 2 + 0.5, graph.y + graph.height);
   ctx.stroke();
+  ctx.strokeStyle = SEQUENCE_COLORS.grid;
+  ctx.strokeRect(graph.x + 0.5, graph.y + 0.5, Math.max(0, graph.width - 1), Math.max(0, graph.height - 1));
   if (clip.curve.length === 0) return;
   const curvePoints = automationCurveCanvasPoints(clip.curve, rect);
   ctx.strokeStyle = SEQUENCE_COLORS.accent;

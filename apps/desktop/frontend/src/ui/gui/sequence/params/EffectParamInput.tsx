@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, ChevronRight, FlipHorizontal2, FlipVertical2, Link2Off, Minus, Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronRight, FlipHorizontal2, FlipVertical2, Link2, Link2Off, Minus, Plus, Trash2, X } from "lucide-react";
 
 import { commands } from "../../../../api";
 
@@ -7,8 +7,7 @@ import type { ColorCurvePoint, FloatCurvePoint, SequenceAutomationClip, Sequence
 
 import { runGuiEditCommand } from "../../../../store";
 
-import { Readout } from "../../InspectorScrollArea";
-import { clamp } from "../../shared";
+import { clamp, type AutomationClipChooser } from "../../shared";
 
 const CURVE_EDITOR = {
   width: 240,
@@ -26,16 +25,26 @@ export type EditedColorCurvePoint = { time: number; value: string };
 
 export function EffectParamInput({
   effectId,
+  effectStartSeconds,
+  effectDurationSeconds,
   param,
   curveLibrary,
   markCollections,
-  automationClips
+  automationClips,
+  canCreateAutomationClip,
+  automationClipChooser,
+  setAutomationClipChooser
 }: {
   effectId: number;
+  effectStartSeconds: number;
+  effectDurationSeconds: number;
   param: SequenceEffectParam;
   curveLibrary: SequenceCurveLibraryItem[];
   markCollections: SequenceMarkCollection[];
   automationClips: SequenceAutomationClip[];
+  canCreateAutomationClip: boolean;
+  automationClipChooser: AutomationClipChooser;
+  setAutomationClipChooser: (chooser: AutomationClipChooser) => void;
 }) {
   const commit = (value: SequenceEffectParamValue) => {
     return runGuiEditCommand(() =>
@@ -47,90 +56,78 @@ export function EffectParamInput({
       })
     ).then(() => undefined);
   };
+  const automated = param.automation !== null;
 
-  if (param.automation !== null) {
+  if (!param.editable && !automated) {
     return (
-      <div className="effect-param-group">
-        <div className="effect-param-name">{param.name}</div>
-        <div className="inspector-inline-row">
-          <Readout label="Automated" value={param.automation.clipName} />
-          <button
-            type="button"
-            className="neutral-button"
-            onClick={() =>
-              void runGuiEditCommand(() =>
-                commands.applySequenceGuiEdit({
-                  type: "unbindAutomationParam",
-                  clipId: param.automation?.clipId ?? 0,
-                  effectId,
-                  param: param.name
-                })
-              )
-            }
-          >
-            Unlink
-          </button>
-        </div>
-      </div>
+      <ParamShell name={param.name}>
+        <div className="effect-param-unavailable">Unavailable</div>
+      </ParamShell>
     );
   }
 
-  if (!param.editable) {
-    return <Readout label={param.name} value="Unavailable" />;
-  }
-
-  const automation = automationBindingControl(effectId, param, automationClips);
+  const automationActions = automationBindingControl(
+    effectId,
+    param,
+    automationClips,
+    canCreateAutomationClip,
+    automationClipChooser,
+    setAutomationClipChooser
+  );
+  const automationClip = param.automation === null ? null : automationClips.find((clip) => clip.id === param.automation?.clipId) ?? null;
 
   switch (param.value.type) {
     case "int":
-      return <>{automation}<NumberParam key={`${param.name}:${param.value.value}`} param={param} value={param.value.value} step={1} commit={(value) => commit({ type: "int", value: Math.max(0, Math.round(value)) })} /></>;
+      return <ParamShell name={param.name} automated={automated}><ParamValueRow actions={automationActions}><NumberParam key={`${param.name}:${param.value.value}`} value={param.value.value} step={1} disabled={automated} commit={(value) => commit({ type: "int", value: Math.max(0, Math.round(value)) })} /></ParamValueRow></ParamShell>;
     case "float":
-      return <>{automation}<NumberParam key={`${param.name}:${param.value.value}`} param={param} value={param.value.value} step={0.05} commit={(value) => commit({ type: "float", value })} /></>;
+      return <ParamShell name={param.name} automated={automated}><ParamValueRow actions={automationActions}><NumberParam key={`${param.name}:${param.value.value}`} value={param.value.value} step={0.05} disabled={automated} commit={(value) => commit({ type: "float", value })} /></ParamValueRow></ParamShell>;
     case "bool":
       return (
-        <>
-        {automation}
-        <label className="effect-param-check">
-          <input
-            type="checkbox"
-            checked={param.value.value}
-            onChange={(event) => void commit({ type: "bool", value: event.currentTarget.checked })}
-          />
-          <span>{param.name}</span>
-        </label>
-        </>
+        <ParamShell name={param.name} automated={automated}>
+          <ParamValueRow actions={automationActions}>
+            <label className="effect-param-check">
+              <input
+                type="checkbox"
+                checked={param.value.value}
+                disabled={automated}
+                onChange={(event) => void commit({ type: "bool", value: event.currentTarget.checked })}
+              />
+              <span>{param.value.value ? "Enabled" : "Disabled"}</span>
+            </label>
+          </ParamValueRow>
+        </ParamShell>
       );
     case "color":
-      return <ColorField key={`${param.name}:${param.value.value.toLowerCase()}`} label={param.name} value={param.value.value} commit={(value) => commit({ type: "color", value })} />;
+      return <ParamShell name={param.name}><ColorField key={`${param.name}:${param.value.value.toLowerCase()}`} label={param.name} value={param.value.value} commit={(value) => commit({ type: "color", value })} showLabel={false} /></ParamShell>;
     case "enum":
       return (
-        <>
-        {automation}
-        <label>
-          {param.name}
-          <select value={param.value.value} onChange={(event) => void commit({ type: "enum", value: event.currentTarget.value })}>
-            {param.options.map((option) => <option key={option} value={option}>{option}</option>)}
-          </select>
-        </label>
-        </>
+        <ParamShell name={param.name} automated={automated}>
+          <ParamValueRow actions={automationActions}>
+            <select value={param.value.value} disabled={automated} onChange={(event) => void commit({ type: "enum", value: event.currentTarget.value })}>
+              {param.options.map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+          </ParamValueRow>
+        </ParamShell>
       );
     case "floatCurve":
       return (
-        <>
-        {automation}
+        <ParamShell name={param.name} automated={automated}>
         <CurveParamSourceShell
           effectId={effectId}
           param={param}
           valueType="float"
           curveLibrary={curveLibrary}
-          points={normalizeFloatCurvePoints(param.value.points)}
+          points={automated && automationClip !== null ? automationClipWindowCurve(automationClip, effectStartSeconds, effectDurationSeconds) : normalizeFloatCurvePoints(param.value.points)}
           commit={(points) => commit({ type: "floatCurve", points })}
+          disabled={automated}
+          actions={automationActions}
           render={(props) => <FloatCurveParamShell name={param.name} {...props} />}
         />
-        </>
+        </ParamShell>
       );
     case "colorCurve":
       return (
+        <ParamShell name={param.name}>
         <CurveParamSourceShell
           effectId={effectId}
           param={param}
@@ -140,6 +137,7 @@ export function EffectParamInput({
           commit={(points) => commit({ type: "colorCurve", points })}
           render={(props) => <ColorCurveParamShell name={param.name} {...props} />}
         />
+        </ParamShell>
       );
     case "intArray":
       return <NumberArrayParam name={param.name} values={param.value.values} step={1} commit={(values) => commit({ type: "intArray", values: values.map((value) => Math.max(0, Math.round(value))) })} />;
@@ -155,16 +153,33 @@ export function EffectParamInput({
       return <ColorCurveArrayParam name={param.name} values={param.value.values} commit={(values) => commit({ type: "colorCurveArray", values })} />;
     case "marks":
       return (
-        <label>
-          {param.name}
+        <ParamShell name={param.name}>
           <select value={param.value.key} onChange={(event) => void commit({ type: "marks", key: event.currentTarget.value })}>
             {markCollections.map((collection) => (
               <option key={collection.key} value={collection.key}>{collection.name}</option>
             ))}
           </select>
-        </label>
+        </ParamShell>
       );
   }
+}
+
+function ParamShell({ name, automated = false, children }: { name: string; automated?: boolean; children: ReactNode }) {
+  return (
+    <div className={`effect-param-group ${automated ? "effect-param-automated" : ""}`}>
+      <div className="effect-param-name">{name}</div>
+      {children}
+    </div>
+  );
+}
+
+function ParamValueRow({ actions, children }: { actions: ReactNode; children: ReactNode }) {
+  return (
+    <div className="effect-param-value-row">
+      <div className="effect-param-value-control">{children}</div>
+      {actions !== null && <div className="effect-param-actions">{actions}</div>}
+    </div>
+  );
 }
 
 function NumberArrayParam({ name, values, step, commit }: { name: string; values: number[]; step: number; commit: (values: number[]) => Promise<void> }) {
@@ -194,34 +209,75 @@ function NumberArrayParam({ name, values, step, commit }: { name: string; values
   );
 }
 
-function automationBindingControl(effectId: number, param: SequenceEffectParam, clips: SequenceAutomationClip[]) {
+function automationBindingControl(
+  effectId: number,
+  param: SequenceEffectParam,
+  clips: SequenceAutomationClip[],
+  canCreateAutomationClip: boolean,
+  automationClipChooser: AutomationClipChooser,
+  setAutomationClipChooser: (chooser: AutomationClipChooser) => void
+) {
   const mapping = defaultAutomationMapping(param);
-  if (mapping === null || clips.length === 0) return null;
-  return (
-    <label>
-      Automation
-      <select
-        value=""
-        onChange={(event) => {
-          const clipId = Number(event.currentTarget.value);
-          if (!Number.isFinite(clipId)) return;
+  if (mapping === null) return null;
+  const choosing = automationClipChooser?.effectId === effectId && automationClipChooser.param === param.name;
+  if (param.automation !== null) {
+    return (
+      <button
+        type="button"
+        className="neutral-button icon-button"
+        title="Unlink automation"
+        onClick={() =>
           void runGuiEditCommand(() =>
             commands.applySequenceGuiEdit({
-              type: "bindAutomationParam",
-              clipId,
+              type: "unbindAutomationParam",
+              clipId: param.automation?.clipId ?? 0,
+              effectId,
+              param: param.name
+            })
+          )
+        }
+      >
+        <Link2Off size={14} />
+      </button>
+    );
+  }
+  return (
+    <>
+      <button
+        type="button"
+        className="neutral-button icon-button"
+        title="Link existing automation"
+        disabled={clips.length === 0}
+        onClick={() => {
+          setAutomationClipChooser({ effectId, param: param.name, mapping });
+        }}
+      >
+        <Link2 size={14} />
+      </button>
+      <button
+        type="button"
+        className="neutral-button icon-button"
+        title="Create automation"
+        disabled={!canCreateAutomationClip}
+        onClick={() =>
+          void runGuiEditCommand(() =>
+            commands.applySequenceGuiEdit({
+              type: "createAndBindAutomationClip",
               effectId,
               param: param.name,
               mapping
             })
-          );
-        }}
+          )
+        }
       >
-        <option value="">Link clip</option>
-        {clips.map((clip) => (
-          <option key={clip.id} value={String(clip.id)}>{clip.name}</option>
-        ))}
-      </select>
-    </label>
+        <Plus size={14} />
+      </button>
+      {choosing && (
+        <button type="button" className="neutral-button icon-button" title="Cancel choosing" onClick={() => { setAutomationClipChooser(null); }}>
+          <X size={14} />
+        </button>
+      )}
+    </>
   );
 }
 
@@ -359,14 +415,14 @@ function ArrayShell({
 }
 
 function NumberParam({
-  param,
   value,
   step,
+  disabled = false,
   commit
 }: {
-  param: SequenceEffectParam;
   value: number;
   step: number;
+  disabled?: boolean;
   commit: (value: number) => Promise<void>;
 }) {
   const [text, setText] = useState(String(value));
@@ -383,12 +439,12 @@ function NumberParam({
     }
   };
   return (
-    <label>
-      {param.name}
+    <label className="effect-param-control-label">
       <input
         type="number"
         step={step}
         value={text}
+        disabled={disabled}
         onChange={(event) => { setText(event.currentTarget.value); }}
         onBlur={commitText}
         onKeyDown={(event) => {
@@ -402,7 +458,7 @@ function NumberParam({
   );
 }
 
-export function ColorField({ label, value, commit }: { label: string; value: string; commit: (value: string) => Promise<void> }) {
+export function ColorField({ label, value, commit, showLabel = true }: { label: string; value: string; commit: (value: string) => Promise<void>; showLabel?: boolean }) {
   const committedValue = value.toLowerCase();
   const [draft, setDraft] = useState(committedValue);
   const lastCommitted = useRef(committedValue);
@@ -419,9 +475,7 @@ export function ColorField({ label, value, commit }: { label: string; value: str
     }
   };
   const displayedColor = isHexColor(draft) ? draft : committedValue;
-  return (
-    <label>
-      {label}
+  const control = (
       <div className="effect-param-color">
         <span className="color-swatch" style={{ background: displayedColor }} />
         <input
@@ -444,6 +498,12 @@ export function ColorField({ label, value, commit }: { label: string; value: str
           }}
         />
       </div>
+  );
+  if (!showLabel) return control;
+  return (
+    <label>
+      {label}
+      {control}
     </label>
   );
 }
@@ -460,6 +520,7 @@ type CurveEditorProps<T extends EditedCurvePoint> = {
   commit: (points: T[]) => Promise<void>;
   readOnly?: boolean;
   requestInlineEdit?: () => void;
+  showName?: boolean;
 };
 
 function CurveParamSourceShell<T extends EditedCurvePoint>({
@@ -469,6 +530,8 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
   curveLibrary,
   points,
   commit,
+  disabled = false,
+  actions = null,
   render
 }: {
   effectId: number;
@@ -477,6 +540,8 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
   curveLibrary: SequenceCurveLibraryItem[];
   points: T[];
   commit: (points: T[]) => Promise<void>;
+  disabled?: boolean;
+  actions?: ReactNode;
   render: (props: CurveEditorProps<T>) => ReactNode;
 }) {
   const source = param.curveSource?.type === "library" ? param.curveSource : null;
@@ -516,76 +581,86 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
   return (
     <div className={`curve-source-shell ${linked ? "linked" : ""}`}>
       <div className="curve-source-row">
-        <select
-          title={`${param.name} source`}
-          value={linked ? "library" : "inline"}
-          onChange={(event) => {
-            if (event.currentTarget.value === "inline") {
-              if (linked) void unlinkCopy();
-              return;
-            }
-            const first = matchingCurves[0];
-            if (first === undefined) return;
-            void runGuiEditCommand(() =>
-              commands.applySequenceGuiEdit({
-                type: "linkEffectCurveParam",
-                id: effectId,
-                name: param.name,
-                curvePath: first.path,
-                objectKey: first.objectKey
-              })
-            );
-          }}
-        >
-          <option value="inline">Inline</option>
-          <option value="library" disabled={matchingCurves.length === 0}>Library</option>
-        </select>
-        <select
-          title={`${param.name} library curve`}
-          disabled={matchingCurves.length === 0}
-          value={String(selectedCurveIndex)}
-          onChange={(event) => {
-            const curve = matchingCurves[Number(event.currentTarget.value)];
-            if (curve === undefined) return;
-            void runGuiEditCommand(() =>
-              commands.applySequenceGuiEdit({
-                type: "linkEffectCurveParam",
-                id: effectId,
-                name: param.name,
-                curvePath: curve.path,
-                objectKey: curve.objectKey
-              })
-            );
-          }}
-        >
-          {!linked && <option value="-1">Choose curve</option>}
-          {linked && selectedCurveIndex === -1 && (
-            <option value="-1">{linkedLabel}</option>
-          )}
-          {matchingCurves.map((item, index) => (
-            <option key={index} value={String(index)}>
-              {item.displayName}
-            </option>
-          ))}
-        </select>
+        <div className="curve-source-selects">
+          <select
+            title={`${param.name} source`}
+            disabled={disabled}
+            value={linked ? "library" : "inline"}
+            onChange={(event) => {
+              if (event.currentTarget.value === "inline") {
+                if (linked) void unlinkCopy();
+                return;
+              }
+              const first = matchingCurves[0];
+              if (first === undefined) return;
+              void runGuiEditCommand(() =>
+                commands.applySequenceGuiEdit({
+                  type: "linkEffectCurveParam",
+                  id: effectId,
+                  name: param.name,
+                  curvePath: first.path,
+                  objectKey: first.objectKey
+                })
+              );
+            }}
+          >
+            <option value="inline">Inline</option>
+            <option value="library" disabled={matchingCurves.length === 0}>Library</option>
+          </select>
+          <select
+            title={`${param.name} library curve`}
+            disabled={disabled || matchingCurves.length === 0}
+            value={String(selectedCurveIndex)}
+            onChange={(event) => {
+              const curve = matchingCurves[Number(event.currentTarget.value)];
+              if (curve === undefined) return;
+              void runGuiEditCommand(() =>
+                commands.applySequenceGuiEdit({
+                  type: "linkEffectCurveParam",
+                  id: effectId,
+                  name: param.name,
+                  curvePath: curve.path,
+                  objectKey: curve.objectKey
+                })
+              );
+            }}
+          >
+            {!linked && <option value="-1">Choose curve</option>}
+            {linked && selectedCurveIndex === -1 && (
+              <option value="-1">{linkedLabel}</option>
+            )}
+            {matchingCurves.map((item, index) => (
+              <option key={index} value={String(index)}>
+                {item.displayName}
+              </option>
+            ))}
+          </select>
+        </div>
+        {actions !== null && <div className="effect-param-actions">{actions}</div>}
       </div>
       {linked && <div className="curve-linked-label">{linkedLabel}</div>}
       <div className="curve-action-row">
-        {linked && (
+        {linked && !disabled && (
           <button type="button" className="neutral-button" title="Unlink copy" onClick={() => void unlinkCopy()}>
             <Link2Off size={14} />
           </button>
         )}
-        <button type="button" className="neutral-button" title="Flip horizontal" onClick={flipHorizontal}>
+        <button type="button" className="neutral-button" title="Flip horizontal" disabled={disabled} onClick={flipHorizontal}>
           <FlipHorizontal2 size={14} />
         </button>
         {valueType === "float" && (
-          <button type="button" className="neutral-button" title="Flip vertical" onClick={flipVertical}>
+          <button type="button" className="neutral-button" title="Flip vertical" disabled={disabled} onClick={flipVertical}>
             <FlipVertical2 size={14} />
           </button>
         )}
       </div>
-      {render({ points, commit, readOnly: linked, requestInlineEdit: confirmUnlinkCopy })}
+      {render({
+        points,
+        commit,
+        readOnly: disabled || linked,
+        ...(disabled ? {} : { requestInlineEdit: confirmUnlinkCopy }),
+        showName: false
+      })}
     </div>
   );
 }
@@ -596,6 +671,7 @@ function FloatCurveParamShell(props: {
   commit: (points: EditedFloatCurvePoint[]) => Promise<void>;
   readOnly?: boolean;
   requestInlineEdit?: () => void;
+  showName?: boolean;
 }) {
   return <FloatCurveParam {...props} />;
 }
@@ -606,6 +682,7 @@ function ColorCurveParamShell(props: {
   commit: (points: EditedColorCurvePoint[]) => Promise<void>;
   readOnly?: boolean;
   requestInlineEdit?: () => void;
+  showName?: boolean;
 }) {
   return <ColorCurveParam {...props} />;
 }
@@ -615,13 +692,15 @@ function FloatCurveParam({
   points,
   commit,
   readOnly = false,
-  requestInlineEdit
+  requestInlineEdit,
+  showName = true
 }: {
   name: string;
   points: EditedFloatCurvePoint[];
   commit: (points: EditedFloatCurvePoint[]) => Promise<void>;
   readOnly?: boolean;
   requestInlineEdit?: () => void;
+  showName?: boolean;
 }) {
   const [drafts, setDrafts] = useState(points);
   const draftsRef = useRef(points);
@@ -703,7 +782,7 @@ function FloatCurveParam({
   };
   return (
     <div className="effect-param-group float-curve-editor">
-      <div className="effect-param-name">{name}</div>
+      {showName && <div className="effect-param-name">{name}</div>}
       <svg
         ref={svgRef}
         className="float-curve-graph"
@@ -742,7 +821,7 @@ function FloatCurveParam({
         <path className="float-curve-grid-line" d={`M0 ${CURVE_EDITOR.height / 2}H${CURVE_EDITOR.width}`} />
         <path className="float-curve-grid-line" d={`M${CURVE_EDITOR.width / 2} 0V${CURVE_EDITOR.height}`} />
         <path className="float-curve-line" d={path} />
-        {drafts.map((point, index) => {
+        {!readOnly && drafts.map((point, index) => {
           const x = point.time * CURVE_EDITOR.width;
           const y = CURVE_EDITOR.height - ((point.value - valueRange.min) / (valueRange.max - valueRange.min)) * CURVE_EDITOR.height;
           return (
@@ -755,10 +834,6 @@ function FloatCurveParam({
               tabIndex={0}
               onPointerDown={(event) => {
                 event.stopPropagation();
-                if (readOnly) {
-                  requestInlineEdit?.();
-                  return;
-                }
                 event.currentTarget.ownerSVGElement?.setPointerCapture(event.pointerId);
                 draggingPoint.current = index;
                 setSelectedIndex(index);
@@ -766,10 +841,6 @@ function FloatCurveParam({
               onContextMenu={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                if (readOnly) {
-                  requestInlineEdit?.();
-                  return;
-                }
                 deletePoint(index);
               }}
               onFocus={() => { setSelectedIndex(index); }}
@@ -777,87 +848,87 @@ function FloatCurveParam({
           );
         })}
       </svg>
-      <div className="float-curve-points-panel">
-        <button
-          type="button"
-          className="float-curve-points-toggle"
-          onClick={() => { setPointsCollapsed((collapsed) => !collapsed); }}
-        >
-          {pointsCollapsed ? <ChevronRight size={13} /> : <ChevronRight className="expanded" size={13} />}
-          <span>Points</span>
-          <strong>{drafts.length}</strong>
-        </button>
-        {!pointsCollapsed && (
-          <div className="float-curve-point-list">
-            {drafts.map((point, index) => (
-              <div
-                key={`${index}:${point.time}:${point.value}`}
-                className={`float-curve-point-row ${index === selectedIndex ? "selected" : ""}`}
-                onPointerDown={() => { setSelectedIndex(index); }}
-              >
-                <label>
-                  <span>t</span>
-                  <input
-                    type="number"
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    value={point.time}
-                    readOnly={readOnly}
-                    onFocus={() => { setSelectedIndex(index); }}
-                    onChange={(event) => {
-                      if (readOnly) return;
-                      setPoint(index, { ...point, time: Number(event.currentTarget.value) }, false);
-                    }}
-                    onBlur={() => { commitDraftPoint(index); }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        commitDraftPoint(index);
-                        event.currentTarget.blur();
-                      }
-                    }}
-                  />
-                </label>
-                <label>
-                  <span>v</span>
-                  <input
-                    type="number"
-                    step={0.05}
-                    value={point.value}
-                    readOnly={readOnly}
-                    onFocus={() => { setSelectedIndex(index); }}
-                    onChange={(event) => {
-                      if (readOnly) return;
-                      setPoint(index, { ...point, value: Number(event.currentTarget.value) }, false);
-                    }}
-                    onBlur={() => { commitDraftPoint(index); }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        commitDraftPoint(index);
-                        event.currentTarget.blur();
-                      }
-                    }}
-                  />
-                </label>
-                <button
-                  type="button"
-                  className="float-curve-point-delete"
-                  title="Delete point"
-                  disabled={readOnly || drafts.length <= 1}
-                  onClick={() => { deletePoint(index); }}
-                >
-                  <Minus size={14} />
-                </button>
+      {!readOnly && (
+        <>
+          <div className="float-curve-points-panel">
+            <button
+              type="button"
+              className="float-curve-points-toggle"
+              onClick={() => { setPointsCollapsed((collapsed) => !collapsed); }}
+            >
+              {pointsCollapsed ? <ChevronRight size={13} /> : <ChevronRight className="expanded" size={13} />}
+              <span>Points</span>
+              <strong>{drafts.length}</strong>
+            </button>
+            {!pointsCollapsed && (
+              <div className="float-curve-point-list">
+                {drafts.map((point, index) => (
+                  <div
+                    key={`${index}:${point.time}:${point.value}`}
+                    className={`float-curve-point-row ${index === selectedIndex ? "selected" : ""}`}
+                    onPointerDown={() => { setSelectedIndex(index); }}
+                  >
+                    <label>
+                      <span>t</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={point.time}
+                        onFocus={() => { setSelectedIndex(index); }}
+                        onChange={(event) => {
+                          setPoint(index, { ...point, time: Number(event.currentTarget.value) }, false);
+                        }}
+                        onBlur={() => { commitDraftPoint(index); }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            commitDraftPoint(index);
+                            event.currentTarget.blur();
+                          }
+                        }}
+                      />
+                    </label>
+                    <label>
+                      <span>v</span>
+                      <input
+                        type="number"
+                        step={0.05}
+                        value={point.value}
+                        onFocus={() => { setSelectedIndex(index); }}
+                        onChange={(event) => {
+                          setPoint(index, { ...point, value: Number(event.currentTarget.value) }, false);
+                        }}
+                        onBlur={() => { commitDraftPoint(index); }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            commitDraftPoint(index);
+                            event.currentTarget.blur();
+                          }
+                        }}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="float-curve-point-delete"
+                      title="Delete point"
+                      disabled={drafts.length <= 1}
+                      onClick={() => { deletePoint(index); }}
+                    >
+                      <Minus size={14} />
+                    </button>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
-        )}
-      </div>
-      <button type="button" disabled={readOnly} onClick={() => {
-        const nextPoint = { time: 1, value: drafts[drafts.length - 1]?.value ?? 0 };
-        update([...drafts, nextPoint]);
-        setSelectedIndex(drafts.length);
-      }}>Add point</button>
+          <button type="button" onClick={() => {
+            const nextPoint = { time: 1, value: drafts[drafts.length - 1]?.value ?? 0 };
+            update([...drafts, nextPoint]);
+            setSelectedIndex(drafts.length);
+          }}>Add point</button>
+        </>
+      )}
     </div>
   );
 }
@@ -867,13 +938,15 @@ function ColorCurveParam({
   points,
   commit,
   readOnly = false,
-  requestInlineEdit
+  requestInlineEdit,
+  showName = true
 }: {
   name: string;
   points: EditedColorCurvePoint[];
   commit: (points: EditedColorCurvePoint[]) => Promise<void>;
   readOnly?: boolean;
   requestInlineEdit?: () => void;
+  showName?: boolean;
 }) {
   const [drafts, setDrafts] = useState(points);
   const draftsRef = useRef(points);
@@ -973,7 +1046,7 @@ function ColorCurveParam({
   const gradient = colorCurveGradient(drafts);
   return (
     <div className="effect-param-group color-curve-editor">
-      <div className="effect-param-name">{name}</div>
+      {showName && <div className="effect-param-name">{name}</div>}
       <div
         ref={gradientRef}
         className="color-curve-gradient"
@@ -1016,7 +1089,7 @@ function ColorCurveParam({
           }
         }}
       >
-        {drafts.map((point, index) => {
+        {!readOnly && drafts.map((point, index) => {
           const displayedColor = isHexColor(point.value) ? point.value : (points[index]?.value ?? CURVE_EDITOR.defaultColor);
           return (
             <span
@@ -1025,10 +1098,6 @@ function ColorCurveParam({
               style={{ left: `${point.time * 100}%` }}
               onPointerDown={(event) => {
                 event.stopPropagation();
-                if (readOnly) {
-                  requestInlineEdit?.();
-                  return;
-                }
                 event.currentTarget.parentElement?.setPointerCapture(event.pointerId);
                 draggingPoint.current = { index, moved: false };
                 setSelectedIndex(index);
@@ -1036,19 +1105,11 @@ function ColorCurveParam({
               onDoubleClick={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                if (readOnly) {
-                  requestInlineEdit?.();
-                  return;
-                }
                 openColorPicker(colorInputRefs.current[index]);
               }}
               onContextMenu={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                if (readOnly) {
-                  requestInlineEdit?.();
-                  return;
-                }
                 deletePoint(index);
               }}
               onFocus={() => { setSelectedIndex(index); }}
@@ -1061,9 +1122,7 @@ function ColorCurveParam({
                   }}
                   type="color"
                   value={displayedColor}
-                  disabled={readOnly}
                   onChange={(event) => {
-                    if (readOnly) return;
                     setPoint(index, { ...point, value: event.currentTarget.value }, false);
                   }}
                   onBlur={() => { commitDraftValue(index); }}
@@ -1073,92 +1132,91 @@ function ColorCurveParam({
           );
         })}
       </div>
-      <div className="float-curve-points-panel">
-        <button
-          type="button"
-          className="float-curve-points-toggle"
-          onClick={() => { setPointsCollapsed((collapsed) => !collapsed); }}
-        >
-          {pointsCollapsed ? <ChevronRight size={13} /> : <ChevronRight className="expanded" size={13} />}
-          <span>Stops</span>
-          <strong>{drafts.length}</strong>
-        </button>
-        {!pointsCollapsed && (
-          <div className="float-curve-point-list">
-            {drafts.map((point, index) => {
-              const displayedColor = isHexColor(point.value) ? point.value : (points[index]?.value ?? CURVE_EDITOR.defaultColor);
-              return (
-                <div
-                  key={index}
-                  className={`color-curve-point-row-compact ${index === selectedIndex ? "selected" : ""}`}
-                  onPointerDown={() => { setSelectedIndex(index); }}
-                >
-                  <label>
-                    <span>t</span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      value={point.time}
-                      readOnly={readOnly}
-                      onFocus={() => { setSelectedIndex(index); }}
-                      onChange={(event) => {
-                        setPoint(index, { ...point, time: Number(event.currentTarget.value) }, false);
-                      }}
-                      onBlur={() => { commitDraftPoint(index); }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          commitDraftPoint(index);
-                          event.currentTarget.blur();
-                        }
-                      }}
-                    />
-                  </label>
-                  <label className="color-swatch-picker">
-                    <span className="color-swatch" style={{ background: displayedColor }} />
-                    <input
-                      type="color"
-                      value={displayedColor}
-                      disabled={readOnly}
-                      onFocus={() => { setSelectedIndex(index); }}
-                      onChange={(event) => {
-                        if (readOnly) return;
-                        setPoint(index, { ...point, value: event.currentTarget.value }, false);
-                      }}
-                      onBlur={() => { commitDraftValue(index); }}
-                    />
-                  </label>
-                  <input
-                    value={point.value}
-                    readOnly={readOnly}
-                    onFocus={() => { setSelectedIndex(index); }}
-                    onChange={(event) => {
-                      if (readOnly) return;
-                      setPoint(index, { ...point, value: event.currentTarget.value }, false);
-                    }}
-                    onBlur={() => { commitDraftValue(index); }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        commitDraftValue(index);
-                        event.currentTarget.blur();
-                      }
-                    }}
-                  />
-                  <button type="button" className="float-curve-point-delete" disabled={readOnly || drafts.length <= 1} onClick={() => { deletePoint(index); }}>
-                    <Minus size={14} />
-                  </button>
-                </div>
-              );
-            })}
+      {!readOnly && (
+        <>
+          <div className="float-curve-points-panel">
+            <button
+              type="button"
+              className="float-curve-points-toggle"
+              onClick={() => { setPointsCollapsed((collapsed) => !collapsed); }}
+            >
+              {pointsCollapsed ? <ChevronRight size={13} /> : <ChevronRight className="expanded" size={13} />}
+              <span>Stops</span>
+              <strong>{drafts.length}</strong>
+            </button>
+            {!pointsCollapsed && (
+              <div className="float-curve-point-list">
+                {drafts.map((point, index) => {
+                  const displayedColor = isHexColor(point.value) ? point.value : (points[index]?.value ?? CURVE_EDITOR.defaultColor);
+                  return (
+                    <div
+                      key={index}
+                      className={`color-curve-point-row-compact ${index === selectedIndex ? "selected" : ""}`}
+                      onPointerDown={() => { setSelectedIndex(index); }}
+                    >
+                      <label>
+                        <span>t</span>
+                        <input
+                          type="number"
+                          min={0}
+                          max={1}
+                          step={0.01}
+                          value={point.time}
+                          onFocus={() => { setSelectedIndex(index); }}
+                          onChange={(event) => {
+                            setPoint(index, { ...point, time: Number(event.currentTarget.value) }, false);
+                          }}
+                          onBlur={() => { commitDraftPoint(index); }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              commitDraftPoint(index);
+                              event.currentTarget.blur();
+                            }
+                          }}
+                        />
+                      </label>
+                      <label className="color-swatch-picker">
+                        <span className="color-swatch" style={{ background: displayedColor }} />
+                        <input
+                          type="color"
+                          value={displayedColor}
+                          onFocus={() => { setSelectedIndex(index); }}
+                          onChange={(event) => {
+                            setPoint(index, { ...point, value: event.currentTarget.value }, false);
+                          }}
+                          onBlur={() => { commitDraftValue(index); }}
+                        />
+                      </label>
+                      <input
+                        value={point.value}
+                        onFocus={() => { setSelectedIndex(index); }}
+                        onChange={(event) => {
+                          setPoint(index, { ...point, value: event.currentTarget.value }, false);
+                        }}
+                        onBlur={() => { commitDraftValue(index); }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            commitDraftValue(index);
+                            event.currentTarget.blur();
+                          }
+                        }}
+                      />
+                      <button type="button" className="float-curve-point-delete" disabled={drafts.length <= 1} onClick={() => { deletePoint(index); }}>
+                        <Minus size={14} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
-        )}
-      </div>
-      <button type="button" disabled={readOnly} onClick={() => {
-        const nextPoint = { time: 1, value: drafts[drafts.length - 1]?.value ?? CURVE_EDITOR.defaultColor };
-        update([...drafts, nextPoint]);
-        setSelectedIndex(drafts.length);
-      }}>Add stop</button>
+          <button type="button" onClick={() => {
+            const nextPoint = { time: 1, value: drafts[drafts.length - 1]?.value ?? CURVE_EDITOR.defaultColor };
+            update([...drafts, nextPoint]);
+            setSelectedIndex(drafts.length);
+          }}>Add stop</button>
+        </>
+      )}
     </div>
   );
 }
@@ -1248,6 +1306,66 @@ function normalizeFloatCurvePoints(points: FloatCurvePoint[]): EditedFloatCurveP
     .filter((point) => Number.isFinite(point.time) && Number.isFinite(point.value))
     .map((point) => ({ time: clamp(point.time, 0, 1), value: point.value }));
   return normalized.length > 0 ? normalized : [{ time: 0, value: 0 }];
+}
+
+function automationClipWindowCurve(
+  clip: SequenceAutomationClip,
+  effectStartSeconds: number,
+  effectDurationSeconds: number
+): EditedFloatCurvePoint[] {
+  const effectDuration = Math.max(0.000000001, effectDurationSeconds);
+  const clipDuration = Math.max(0.000000001, clip.durationSeconds);
+  const localTimes = new Set<number>([0, 1]);
+
+  for (const point of clip.curve) {
+    if (!Number.isFinite(point.time) || !Number.isFinite(point.value)) continue;
+    const seconds = clip.startSeconds + clamp(point.time, 0, 1) * clipDuration;
+    const localTime = (seconds - effectStartSeconds) / effectDuration;
+    if (localTime > 0 && localTime < 1) {
+      localTimes.add(roundCurveValue(localTime));
+    }
+  }
+
+  const points = [...localTimes]
+    .sort((left, right) => left - right)
+    .map((time) => {
+      const seconds = effectStartSeconds + time * effectDuration;
+      const clipTime = (seconds - clip.startSeconds) / clipDuration;
+      return {
+        time,
+        value: sampleFloatCurve(clip.curve, clamp(clipTime, 0, 1))
+      };
+    });
+  return dedupeFloatCurvePoints(points);
+}
+
+function sampleFloatCurve(points: FloatCurvePoint[], time: number): number {
+  const sorted = normalizeFloatCurvePoints(points).sort((left, right) => left.time - right.time);
+  const first = sorted[0];
+  if (first === undefined) return 0;
+  if (time <= first.time) return first.value;
+  for (const [left, right] of sorted.slice(1).map((point, index) => [sorted[index], point] as const)) {
+    if (left === undefined) continue;
+    if (time <= right.time) {
+      const span = right.time - left.time;
+      const amount = span <= 0 ? 0 : (time - left.time) / span;
+      return left.value + (right.value - left.value) * amount;
+    }
+  }
+  return sorted[sorted.length - 1]?.value ?? first.value;
+}
+
+function dedupeFloatCurvePoints(points: EditedFloatCurvePoint[]): EditedFloatCurvePoint[] {
+  const deduped: EditedFloatCurvePoint[] = [];
+  for (const point of points) {
+    const previous = deduped[deduped.length - 1];
+    if (previous !== undefined && Math.abs(previous.time - point.time) < 0.000000001) {
+      deduped[deduped.length - 1] = point;
+    } else {
+      deduped.push(point);
+    }
+  }
+  return deduped.length > 0 ? deduped : [{ time: 0, value: 0 }];
 }
 
 function normalizeColorCurvePoints(points: ColorCurvePoint[]): EditedColorCurvePoint[] {

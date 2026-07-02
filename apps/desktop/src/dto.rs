@@ -594,7 +594,6 @@ pub struct SequenceGuiDocument {
 #[serde(rename_all = "camelCase")]
 pub struct SequenceAutomationClip {
     pub id: u32,
-    pub name: String,
     pub start_seconds: f64,
     pub duration_seconds: f64,
     pub anchor_lane_index: u32,
@@ -738,7 +737,6 @@ pub struct SequenceEffectParam {
 #[serde(rename_all = "camelCase")]
 pub struct SequenceParamAutomation {
     pub clip_id: u32,
-    pub clip_name: String,
     pub mapping: SequenceAutomationMapping,
 }
 
@@ -842,11 +840,15 @@ pub enum SequenceGuiEdit {
         name: String,
     },
     AddAutomationClip {
-        name: String,
         start_seconds: f64,
         duration_seconds: f64,
         anchor_lane_index: u32,
         lane_index: u32,
+    },
+    CreateAndBindAutomationClip {
+        effect_id: u32,
+        param: String,
+        mapping: SequenceAutomationMapping,
     },
     MoveAutomationClip {
         id: u32,
