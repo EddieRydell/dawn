@@ -866,6 +866,84 @@ button:focus-visible,
   outline-offset: 1px;
 }
 
+.bool-param-group {
+  margin-bottom: 10px;
+}
+
+.bool-param-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+}
+
+.bool-param-switch {
+  display: inline-flex;
+  align-items: center;
+  width: 46px;
+  height: 30px;
+  justify-content: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  color: #c7c0b6;
+  cursor: pointer;
+  user-select: none;
+}
+
+.bool-param-switch-track {
+  position: relative;
+  display: inline-block;
+  width: 42px;
+  height: 22px;
+  flex: 0 0 42px;
+  border: 1px solid #454a53;
+  border-radius: 999px;
+  background: #17181b;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.bool-param-switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #a8a29a;
+  transition: transform 120ms ease, background 120ms ease;
+}
+
+.bool-param-switch[aria-checked="true"] .bool-param-switch-track {
+  border-color: #6abf8a;
+  background: #31543f;
+}
+
+.bool-param-switch[aria-checked="true"] .bool-param-switch-thumb {
+  transform: translateX(20px);
+  background: #fffaf0;
+}
+
+.bool-param-switch:focus-visible {
+  outline: none;
+}
+
+.bool-param-switch:focus-visible .bool-param-switch-track {
+  border-color: #6abf8a;
+  outline: 2px solid rgb(106 191 138 / 28%);
+  outline-offset: 2px;
+}
+
+.bool-param-switch:disabled .bool-param-switch-track {
+  opacity: 0.58;
+}
+
+.bool-param-switch:disabled {
+  cursor: default;
+}
+
 .effect-param-automated input,
 .effect-param-automated select,
 .effect-param-automated .float-curve-graph,
@@ -886,12 +964,6 @@ button:focus-visible,
   background: #17181b;
   padding: 5px 7px;
   color: #696b70;
-}
-
-.curve-source-selects {
-  display: grid;
-  grid-template-columns: minmax(0, 0.75fr) minmax(0, 1fr);
-  gap: 6px;
 }
 
 .array-param-editor {
@@ -944,34 +1016,22 @@ button:focus-visible,
 
 .curve-source-shell {
   display: grid;
-  gap: 7px;
+  gap: 8px;
 }
 
 .curve-source-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 6px;
-}
-
-.curve-linked-label {
-  overflow: hidden;
-  color: #a8a29a;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  gap: 8px;
+  min-height: 30px;
 }
 
 .curve-action-row {
   display: flex;
-  gap: 6px;
-}
-
-.curve-action-row button {
-  display: inline-grid;
-  width: 30px;
-  height: 28px;
-  place-items: center;
-  padding: 0;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
 }
 
 .curve-source-shell.linked .float-curve-graph,

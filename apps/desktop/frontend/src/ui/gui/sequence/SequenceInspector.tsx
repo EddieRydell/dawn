@@ -246,7 +246,6 @@ const id = selectedEffectId(selected);
               </div>
             </>
           )}
-          <button onClick={() => void runGuiEditCommand(() => commands.applySequenceGuiEdit({ type: "deleteEffect", id: effect.id }))}>Delete</button>
         </InspectorScrollArea>
       );
     }

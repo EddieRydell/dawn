@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, ChevronRight, FlipHorizontal2, FlipVertical2, Link2, Link2Off, Minus, Plus, Trash2, X } from "lucide-react";
+import * as AlertDialog from "@radix-ui/react-alert-dialog";
+import { ArrowDown, ArrowUp, ChevronRight, CopyPlus, FlipHorizontal2, FlipVertical2, Link2, Link2Off, Minus, Plus, Trash2, X } from "lucide-react";
 
 import { commands } from "../../../../api";
 
@@ -83,19 +84,13 @@ export function EffectParamInput({
       return <ParamShell name={param.name} automated={automated}><ParamValueRow actions={automationActions}><NumberParam key={`${param.name}:${param.value.value}`} value={param.value.value} step={0.05} disabled={automated} commit={(value) => commit({ type: "float", value })} /></ParamValueRow></ParamShell>;
     case "bool":
       return (
-        <ParamShell name={param.name} automated={automated}>
-          <ParamValueRow actions={automationActions}>
-            <label className="effect-param-check">
-              <input
-                type="checkbox"
-                checked={param.value.value}
-                disabled={automated}
-                onChange={(event) => void commit({ type: "bool", value: event.currentTarget.checked })}
-              />
-              <span>{param.value.value ? "Enabled" : "Disabled"}</span>
-            </label>
-          </ParamValueRow>
-        </ParamShell>
+        <BoolParam
+          name={param.name}
+          value={param.value.value}
+          disabled={automated}
+          actions={automationActions}
+          commit={(value) => commit({ type: "bool", value })}
+        />
       );
     case "color":
       return <ParamShell name={param.name}><ColorField key={`${param.name}:${param.value.value.toLowerCase()}`} label={param.name} value={param.value.value} commit={(value) => commit({ type: "color", value })} showLabel={false} /></ParamShell>;
@@ -178,6 +173,42 @@ function ParamValueRow({ actions, children }: { actions: ReactNode; children: Re
     <div className="effect-param-value-row">
       <div className="effect-param-value-control">{children}</div>
       {actions !== null && <div className="effect-param-actions">{actions}</div>}
+    </div>
+  );
+}
+
+function BoolParam({
+  name,
+  value,
+  disabled,
+  actions,
+  commit
+}: {
+  name: string;
+  value: boolean;
+  disabled: boolean;
+  actions: ReactNode;
+  commit: (value: boolean) => Promise<void>;
+}) {
+  return (
+    <div className={`effect-param-group bool-param-group ${disabled ? "effect-param-automated" : ""}`}>
+      <div className="bool-param-row">
+        <div className="effect-param-name">{name}</div>
+        <button
+          type="button"
+          className="bool-param-switch"
+          role="switch"
+          aria-label={name}
+          aria-checked={value}
+          disabled={disabled}
+          onClick={() => void commit(!value)}
+        >
+          <span className="bool-param-switch-track">
+            <span className="bool-param-switch-thumb" />
+          </span>
+        </button>
+        {actions !== null && <div className="effect-param-actions">{actions}</div>}
+      </div>
     </div>
   );
 }
@@ -523,6 +554,8 @@ type CurveEditorProps<T extends EditedCurvePoint> = {
   showName?: boolean;
 };
 
+type CurveCopyAction = "edit" | "flipHorizontal" | "flipVertical";
+
 function CurveParamSourceShell<T extends EditedCurvePoint>({
   effectId,
   param,
@@ -544,6 +577,7 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
   actions?: ReactNode;
   render: (props: CurveEditorProps<T>) => ReactNode;
 }) {
+  const [pendingCopyAction, setPendingCopyAction] = useState<CurveCopyAction | null>(null);
   const source = param.curveSource?.type === "library" ? param.curveSource : null;
   const linked = source !== null;
   const linkedLabel = source?.displayName ?? source?.reference ?? "";
@@ -559,108 +593,126 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
         name: param.name
       })
     ).then(() => undefined);
-  const confirmUnlinkCopy = () => {
-    if (!linked) return true;
-    if (!window.confirm(`Unlink ${param.name} and edit a local copy?`)) return false;
-    void unlinkCopy();
-    return true;
+  const linkCurve = (curve: SequenceCurveLibraryItem) =>
+    runGuiEditCommand(() =>
+      commands.applySequenceGuiEdit({
+        type: "linkEffectCurveParam",
+        id: effectId,
+        name: param.name,
+        curvePath: curve.path,
+        objectKey: curve.objectKey
+      })
+    ).then(() => undefined);
+  const requestEditableCopy = (action: CurveCopyAction) => {
+    if (!linked) return;
+    setPendingCopyAction(action);
   };
   const flipHorizontal = () => {
     const next = sortCurvePoints(points.map((point) => ({ ...point, time: roundCurveValue(1 - point.time) }))) as T[];
-    if (!linked || window.confirm(`Unlink ${param.name} and flip a local copy?`)) {
+    if (linked) {
+      requestEditableCopy("flipHorizontal");
+    } else {
       void commit(next);
     }
   };
   const flipVertical = () => {
     if (valueType !== "float") return;
     const next = points.map((point) => ({ ...point, value: roundCurveValue(1 - (point.value as number)) })) as T[];
-    if (!linked || window.confirm(`Unlink ${param.name} and flip a local copy?`)) {
+    if (linked) {
+      requestEditableCopy("flipVertical");
+    } else {
       void commit(next);
     }
   };
+  const confirmPendingCopyAction = () => {
+    const action = pendingCopyAction;
+    if (action === null) return;
+    if (action === "flipHorizontal") {
+      const next = sortCurvePoints(points.map((point) => ({ ...point, time: roundCurveValue(1 - point.time) }))) as T[];
+      void commit(next);
+    } else if (action === "flipVertical") {
+      if (valueType !== "float") return;
+      const next = points.map((point) => ({ ...point, value: roundCurveValue(1 - (point.value as number)) })) as T[];
+      void commit(next);
+    } else {
+      void unlinkCopy();
+    }
+    setPendingCopyAction(null);
+  };
+  const copyDialogTitle = pendingCopyAction === "flipHorizontal" || pendingCopyAction === "flipVertical"
+    ? `Flip ${param.name} copy?`
+    : `Edit ${param.name} copy?`;
+  const copyDialogDescription = pendingCopyAction === "flipHorizontal" || pendingCopyAction === "flipVertical"
+    ? "This curve is linked from the library. Dawn will make an editable custom copy before applying the flip."
+    : "This curve is linked from the library. Dawn will make an editable custom copy so changes do not modify the library curve.";
   return (
     <div className={`curve-source-shell ${linked ? "linked" : ""}`}>
       <div className="curve-source-row">
-        <div className="curve-source-selects">
-          <select
-            title={`${param.name} source`}
-            disabled={disabled}
-            value={linked ? "library" : "inline"}
-            onChange={(event) => {
-              if (event.currentTarget.value === "inline") {
-                if (linked) void unlinkCopy();
-                return;
-              }
-              const first = matchingCurves[0];
-              if (first === undefined) return;
-              void runGuiEditCommand(() =>
-                commands.applySequenceGuiEdit({
-                  type: "linkEffectCurveParam",
-                  id: effectId,
-                  name: param.name,
-                  curvePath: first.path,
-                  objectKey: first.objectKey
-                })
-              );
-            }}
-          >
-            <option value="inline">Inline</option>
-            <option value="library" disabled={matchingCurves.length === 0}>Library</option>
-          </select>
-          <select
-            title={`${param.name} library curve`}
-            disabled={disabled || matchingCurves.length === 0}
-            value={String(selectedCurveIndex)}
-            onChange={(event) => {
-              const curve = matchingCurves[Number(event.currentTarget.value)];
-              if (curve === undefined) return;
-              void runGuiEditCommand(() =>
-                commands.applySequenceGuiEdit({
-                  type: "linkEffectCurveParam",
-                  id: effectId,
-                  name: param.name,
-                  curvePath: curve.path,
-                  objectKey: curve.objectKey
-                })
-              );
-            }}
-          >
-            {!linked && <option value="-1">Choose curve</option>}
-            {linked && selectedCurveIndex === -1 && (
-              <option value="-1">{linkedLabel}</option>
-            )}
-            {matchingCurves.map((item, index) => (
-              <option key={index} value={String(index)}>
-                {item.displayName}
-              </option>
-            ))}
-          </select>
-        </div>
+        <select
+          title={`${param.name} curve source`}
+          disabled={disabled}
+          value={linked ? `library:${selectedCurveIndex}` : "custom"}
+          onChange={(event) => {
+            const value = event.currentTarget.value;
+            if (value === "custom") {
+              if (linked) void unlinkCopy();
+              return;
+            }
+            const index = Number(value.replace("library:", ""));
+            const curve = matchingCurves[index];
+            if (curve === undefined) return;
+            void linkCurve(curve);
+          }}
+        >
+          <option value="custom">Custom curve</option>
+          {linked && selectedCurveIndex === -1 && (
+            <option value="library:-1">{linkedLabel}</option>
+          )}
+          {matchingCurves.map((item, index) => (
+            <option key={index} value={`library:${index}`}>
+              {item.displayName}
+            </option>
+          ))}
+        </select>
         {actions !== null && <div className="effect-param-actions">{actions}</div>}
       </div>
-      {linked && <div className="curve-linked-label">{linkedLabel}</div>}
-      <div className="curve-action-row">
-        {linked && !disabled && (
-          <button type="button" className="neutral-button" title="Unlink copy" onClick={() => void unlinkCopy()}>
-            <Link2Off size={14} />
+      {!disabled && (
+        <div className="curve-action-row">
+          {linked && (
+            <button type="button" className="neutral-button icon-button" title="Make editable copy" onClick={() => { requestEditableCopy("edit"); }}>
+              <CopyPlus size={14} />
+            </button>
+          )}
+          <button type="button" className="neutral-button icon-button" title="Flip horizontal" onClick={flipHorizontal}>
+            <FlipHorizontal2 size={14} />
           </button>
-        )}
-        <button type="button" className="neutral-button" title="Flip horizontal" disabled={disabled} onClick={flipHorizontal}>
-          <FlipHorizontal2 size={14} />
-        </button>
-        {valueType === "float" && (
-          <button type="button" className="neutral-button" title="Flip vertical" disabled={disabled} onClick={flipVertical}>
-            <FlipVertical2 size={14} />
-          </button>
-        )}
-      </div>
+          {valueType === "float" && (
+            <button type="button" className="neutral-button icon-button" title="Flip vertical" onClick={flipVertical}>
+              <FlipVertical2 size={14} />
+            </button>
+          )}
+        </div>
+      )}
       {render({
         points,
         commit,
         readOnly: disabled || linked,
-        ...(disabled ? {} : { requestInlineEdit: confirmUnlinkCopy }),
+        ...(disabled ? {} : { requestInlineEdit: () => { requestEditableCopy("edit"); } }),
         showName: false
       })}
+      <AlertDialog.Root open={pendingCopyAction !== null} onOpenChange={(open) => { if (!open) setPendingCopyAction(null); }}>
+        <AlertDialog.Portal>
+          <AlertDialog.Overlay className="dialog-overlay" />
+          <AlertDialog.Content className="dialog-content">
+            <AlertDialog.Title>{copyDialogTitle}</AlertDialog.Title>
+            <AlertDialog.Description>{copyDialogDescription}</AlertDialog.Description>
+            <div className="dialog-actions">
+              <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+              <AlertDialog.Action onClick={confirmPendingCopyAction}>Make Copy</AlertDialog.Action>
+            </div>
+          </AlertDialog.Content>
+        </AlertDialog.Portal>
+      </AlertDialog.Root>
     </div>
   );
 }
@@ -705,7 +757,7 @@ function FloatCurveParam({
   const [drafts, setDrafts] = useState(points);
   const draftsRef = useRef(points);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [pointsCollapsed, setPointsCollapsed] = useState(false);
+  const [pointsCollapsed, setPointsCollapsed] = useState(true);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const draggingPoint = useRef<number | null>(null);
   const pointsSignature = curvePointsSignature(points);
@@ -849,8 +901,7 @@ function FloatCurveParam({
         })}
       </svg>
       {!readOnly && (
-        <>
-          <div className="float-curve-points-panel">
+        <div className="float-curve-points-panel">
             <button
               type="button"
               className="float-curve-points-toggle"
@@ -921,13 +972,7 @@ function FloatCurveParam({
                 ))}
               </div>
             )}
-          </div>
-          <button type="button" onClick={() => {
-            const nextPoint = { time: 1, value: drafts[drafts.length - 1]?.value ?? 0 };
-            update([...drafts, nextPoint]);
-            setSelectedIndex(drafts.length);
-          }}>Add point</button>
-        </>
+        </div>
       )}
     </div>
   );
@@ -951,7 +996,7 @@ function ColorCurveParam({
   const [drafts, setDrafts] = useState(points);
   const draftsRef = useRef(points);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [pointsCollapsed, setPointsCollapsed] = useState(false);
+  const [pointsCollapsed, setPointsCollapsed] = useState(true);
   const gradientRef = useRef<HTMLDivElement | null>(null);
   const colorInputRefs = useRef<Array<HTMLInputElement | null>>([]);
   const draggingPoint = useRef<{ index: number; moved: boolean } | null>(null);
@@ -1133,8 +1178,7 @@ function ColorCurveParam({
         })}
       </div>
       {!readOnly && (
-        <>
-          <div className="float-curve-points-panel">
+        <div className="float-curve-points-panel">
             <button
               type="button"
               className="float-curve-points-toggle"
@@ -1209,13 +1253,7 @@ function ColorCurveParam({
                 })}
               </div>
             )}
-          </div>
-          <button type="button" onClick={() => {
-            const nextPoint = { time: 1, value: drafts[drafts.length - 1]?.value ?? CURVE_EDITOR.defaultColor };
-            update([...drafts, nextPoint]);
-            setSelectedIndex(drafts.length);
-          }}>Add stop</button>
-        </>
+        </div>
       )}
     </div>
   );

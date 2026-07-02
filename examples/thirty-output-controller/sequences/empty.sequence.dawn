@@ -11574,3 +11574,16 @@ empty:
         type: float
         min: 18.0
         max: 70.0
+  - id: 4
+    start: 39.261304317s
+    duration: 0.65s
+    anchor_lane_index: 0
+    lane_index: 0
+    curve:
+      value_type: float
+      points:
+      - time: 0.0
+        value: 0.0
+      - time: 1.0
+        value: 1.0
+    bindings: []
