@@ -12,6 +12,8 @@ const DEFAULT_MARK_COLORS = ["#38bdf8", "#f97316", "#22c55e", "#e879f9", "#facc1
 
 const MARK_DRAWING = {
   cullPaddingPx: 6,
+  overlayAlpha: 0.55,
+  stripAlpha: 0.75,
   selectedCapHalfWidthPx: 4,
   selectedStroke: "#fffaf0"
 } as const;
@@ -73,7 +75,7 @@ export function drawSequenceMarks(
         (selectedMarks.get(collection.key)?.has(index) ?? false);
       ctx.strokeStyle = collection.color;
       ctx.lineWidth = isSelected ? 2 : 1;
-      ctx.globalAlpha = mode === "strip" ? 0.95 : 0.75;
+      ctx.globalAlpha = mode === "strip" ? MARK_DRAWING.stripAlpha : MARK_DRAWING.overlayAlpha;
       ctx.beginPath();
       ctx.moveTo(x + 0.5, y1);
       ctx.lineTo(x + 0.5, y2);

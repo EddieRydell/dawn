@@ -1,4 +1,4 @@
-import type { SequenceEditorDocument, SequenceEffect, SequenceMarkCollection, SequenceMarkRef, SequenceSelection } from "../../../types";
+import type { LayoutTarget, SequenceEditorDocument, SequenceEffect, SequenceMarkCollection, SequenceMarkRef, SequenceSelection } from "../../../types";
 
 import { clamp, type GuiFocus } from "../shared";
 
@@ -46,6 +46,11 @@ export type SequenceClipLayout = {
   rect: { x: number; y: number; width: number; height: number };
 };
 
+export type SequenceClipLayoutBounds = {
+  width: number;
+  height: number;
+};
+
 type SequenceClip = {
   effect: SequenceEffect;
   laneIndex: number;
@@ -70,28 +75,36 @@ export function buildSequenceClipLayout(
   drafts: SequenceDraft[],
   viewport: SequenceViewport,
   left: number,
-  top: number
+  top: number,
+  bounds: SequenceClipLayoutBounds
 ): SequenceClipLayout[] {
-  const clips = document.effects.map((effect): SequenceClip => {
-    const activeDraft = drafts.find((draft) => draft.id === effect.id) ?? null;
-    if (activeDraft === null) {
-      return {
-        effect,
-        laneIndex: Math.max(0, document.lanes.findIndex((lane) => targetsEqual(lane.target, effect.target)))
-      };
-    }
-    const draftLane = document.lanes[activeDraft.laneIndex];
-    return {
-      effect: {
-        ...effect,
-        startSeconds: activeDraft.startSeconds,
-        durationSeconds: activeDraft.durationSeconds,
-        target: draftLane?.target ?? effect.target,
-        targetLabel: draftLane?.label ?? effect.targetLabel
-      },
-      laneIndex: activeDraft.laneIndex
-    };
+  const laneIndexByTarget = new Map<LayoutTarget["kind"], Map<string, number>>();
+  document.lanes.forEach((lane, index) => {
+    const byName = laneIndexByTarget.get(lane.target.kind) ?? new Map<string, number>();
+    if (!byName.has(lane.target.name)) byName.set(lane.target.name, index);
+    laneIndexByTarget.set(lane.target.kind, byName);
   });
+  const draftById = new Map(drafts.map((draft) => [draft.id, draft]));
+  const visibleStartSeconds = viewport.scrollXSeconds;
+  const visibleEndSeconds = viewport.scrollXSeconds + Math.max(1, bounds.width - left) / viewport.pxPerSecond;
+  const firstVisibleLane = Math.max(0, Math.floor((viewport.scrollY - viewport.laneHeight) / viewport.laneHeight));
+  const lastVisibleLane = Math.min(
+    Math.max(0, document.lanes.length - 1),
+    Math.ceil((viewport.scrollY + Math.max(1, bounds.height - top) + viewport.laneHeight) / viewport.laneHeight)
+  );
+  const clips: SequenceClip[] = [];
+  for (const effect of document.effects) {
+    const activeDraft = draftById.get(effect.id) ?? null;
+    const clip: SequenceClip = activeDraft === null
+      ? {
+          effect,
+          laneIndex: laneIndexForTarget(laneIndexByTarget, effect.target)
+        }
+      : clipFromDraft(document, effect, activeDraft);
+    if (clip.laneIndex < firstVisibleLane || clip.laneIndex > lastVisibleLane) continue;
+    if (!effectIntersectsTimeRange(clip.effect, visibleStartSeconds, visibleEndSeconds)) continue;
+    clips.push(clip);
+  }
 
   const byLane = new Map<number, SequenceClip[]>();
   for (const clip of clips) {
@@ -127,6 +140,34 @@ export function buildSequenceClipLayout(
     }
   }
   return layouts;
+}
+
+function clipFromDraft(
+  document: SequenceEditorDocument,
+  effect: SequenceEffect,
+  draft: SequenceDraft
+): SequenceClip {
+  const draftLane = document.lanes[draft.laneIndex];
+  return {
+    effect: {
+      ...effect,
+      startSeconds: draft.startSeconds,
+      durationSeconds: draft.durationSeconds,
+      target: draftLane?.target ?? effect.target,
+      targetLabel: draftLane?.label ?? effect.targetLabel
+    },
+    laneIndex: draft.laneIndex
+  };
+}
+
+function laneIndexForTarget(lanes: Map<LayoutTarget["kind"], Map<string, number>>, target: LayoutTarget): number {
+  return lanes.get(target.kind)?.get(target.name) ?? 0;
+}
+
+function effectIntersectsTimeRange(effect: SequenceEffect, startSeconds: number, endSeconds: number): boolean {
+  const effectStart = effect.startSeconds;
+  const effectEnd = effect.startSeconds + effect.durationSeconds;
+  return effectEnd >= startSeconds && effectStart <= endSeconds;
 }
 
 function groupOverlappingClips(clips: SequenceClip[]) {

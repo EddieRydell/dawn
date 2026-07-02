@@ -165,22 +165,18 @@ impl DesktopState {
             Ok(mut engine) => engine.load(audio),
             Err(poisoned) => poisoned.into_inner().load(audio),
         };
-        let render_error = match (self.project_session(), sequence_id) {
+        match (self.project_session(), sequence_id) {
             (Some(project), Some(sequence_id)) => {
-                self.prepare_sequence_render(&project, &sequence_id)
+                self.unload_render_session();
+                self.schedule_sequence_render_prepare(project.project, sequence_id);
             }
             _ => {
                 self.unload_render_session();
-                None
             }
         };
         self.update_snapshot(|snapshot| {
             snapshot.audio_transport = audio_transport;
-            if let Some(error) = render_error {
-                snapshot.render_error = Some(format!("Render prepare failed: {error:?}"));
-            } else {
-                snapshot.render_error = None;
-            }
+            snapshot.render_error = None;
         })
     }
 
@@ -1288,31 +1284,6 @@ impl DesktopState {
             .map(|(id, _)| dawn_language::sequence::SequenceId(id.id.clone()))
     }
 
-    fn prepare_sequence_render(
-        &self,
-        session: &ProjectSession,
-        sequence_id: &dawn_language::sequence::SequenceId,
-    ) -> Option<dawn_runtime::RenderError> {
-        let setup_id = session.project.root.setup.clone();
-        match self.show_render.lock() {
-            Ok(mut show_render) => {
-                let result = show_render.prepare(&session.project, &setup_id, sequence_id);
-                if result.is_err() {
-                    show_render.unload();
-                }
-                result.err()
-            }
-            Err(poisoned) => {
-                let mut show_render = poisoned.into_inner();
-                let result = show_render.prepare(&session.project, &setup_id, sequence_id);
-                if result.is_err() {
-                    show_render.unload();
-                }
-                result.err()
-            }
-        }
-    }
-
     fn refresh_render_session(
         &self,
         project: &dawn_language::model::DawnProject,
@@ -1351,6 +1322,31 @@ impl DesktopState {
         let request = RenderRefreshPayload {
             project,
             setup_id,
+            sequence_id,
+        };
+        match self.render_refresh.lock() {
+            Ok(mut scheduler) => {
+                let _ = scheduler.schedule(request);
+            }
+            Err(poisoned) => {
+                let mut scheduler = poisoned.into_inner();
+                let _ = scheduler.schedule(request);
+            }
+        }
+    }
+
+    fn schedule_sequence_render_prepare(
+        &self,
+        project: dawn_language::model::DawnProject,
+        sequence_id: dawn_language::sequence::SequenceId,
+    ) {
+        if !project.sequences.contains_key(&sequence_id) {
+            self.unload_render_session();
+            return;
+        }
+        let request = RenderRefreshPayload {
+            setup_id: project.root.setup.clone(),
+            project,
             sequence_id,
         };
         match self.render_refresh.lock() {

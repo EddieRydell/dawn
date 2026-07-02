@@ -198,8 +198,15 @@ export function SequenceCanvas({
   }, [activeMarkCollectionKey, document.objectKey, document.path, viewport, visibleMarkCollectionKeys]);
 
   const visibleClips = useMemo(
-    () => buildSequenceClipLayout(document, groupDraft.length > 0 ? groupDraft : draft === null ? [] : [draft], viewport, left, top),
-    [document, groupDraft, left, draft, top, viewport]
+    () => buildSequenceClipLayout(
+      document,
+      groupDraft.length > 0 ? groupDraft : draft === null ? [] : [draft],
+      viewport,
+      left,
+      top,
+      canvasSize
+    ),
+    [canvasSize, document, groupDraft, left, draft, top, viewport]
   );
   const visibleRasterClips = useMemo(() => {
     return visibleClips
