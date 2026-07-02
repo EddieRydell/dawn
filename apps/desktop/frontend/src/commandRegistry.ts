@@ -1,4 +1,4 @@
-import { commands } from "./api";
+import { commands, getCurrentGuiRequest } from "./api";
 import { runSnapshotCommand, useAppStore } from "./store";
 
 export type CommandId =
@@ -41,7 +41,9 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     label: "Save",
     shortcut: "Ctrl+S",
     run: async () => {
-      const text = useAppStore.getState().localText;
+      const store = useAppStore.getState();
+      if (store.snapshot?.activeBuffer?.viewMode !== "text") return;
+      const text = store.localText;
       await runSnapshotCommand(commands.updateActiveText.bind(null, text));
       await runSnapshotCommand(commands.flushAutosave);
     }
@@ -67,17 +69,19 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     label: "Undo",
     shortcut: "Ctrl+Z",
     run: async () => {
-      const text = useAppStore.getState().localText;
-      await runSnapshotCommand(commands.updateActiveText.bind(null, text));
+      if (useAppStore.getState().snapshot?.activeBuffer?.viewMode !== "gui") return;
       await runSnapshotCommand(commands.undoActiveEdit);
+      await refreshActiveGuiDocument();
     }
   },
   "edit.redo": {
     id: "edit.redo",
     label: "Redo",
-    shortcut: "Ctrl+Shift+Z",
+    shortcut: "Ctrl+Shift+Z / Ctrl+Y",
     run: async () => {
+      if (useAppStore.getState().snapshot?.activeBuffer?.viewMode !== "gui") return;
       await runSnapshotCommand(commands.redoActiveEdit);
+      await refreshActiveGuiDocument();
     }
   },
   "view.toggleProjectTree": {
@@ -106,8 +110,15 @@ export function installGlobalShortcuts() {
     if (!active) return;
     const key = event.key.toLowerCase();
     if (key === "z") {
+      if (active.activeBuffer?.viewMode !== "gui") return;
       event.preventDefault();
       void (event.shiftKey ? commandRegistry["edit.redo"] : commandRegistry["edit.undo"]).run();
+      return;
+    }
+    if (key === "y") {
+      if (active.activeBuffer?.viewMode !== "gui") return;
+      event.preventDefault();
+      void commandRegistry["edit.redo"].run();
       return;
     }
     const command =
@@ -129,4 +140,13 @@ export function installGlobalShortcuts() {
   return () => {
     window.removeEventListener("keydown", onKeyDown);
   };
+}
+
+async function refreshActiveGuiDocument() {
+  const request = getCurrentGuiRequest();
+  if (request === null) return;
+  const document = await commands.getGuiDocument(request);
+  const store = useAppStore.getState();
+  store.setGuiDocument(document);
+  store.resetGuiLocalState();
 }

@@ -28,6 +28,7 @@ use crate::persistence::{
 pub struct DesktopState {
     snapshot: Mutex<AppSnapshot>,
     project: Mutex<Option<ProjectSession>>,
+    gui_history: Mutex<GuiHistory>,
     gui_save: Mutex<GuiSaveScheduler>,
     render_refresh: Mutex<RenderRefreshScheduler>,
     audio: Mutex<crate::audio::AudioEngine>,
@@ -42,6 +43,7 @@ impl DesktopState {
         Self {
             snapshot: Mutex::new(empty_snapshot()),
             project: Mutex::new(None),
+            gui_history: Mutex::new(GuiHistory::new(100)),
             gui_save: Mutex::new(GuiSaveScheduler::new()),
             render_refresh: Mutex::new(RenderRefreshScheduler::new()),
             audio: Mutex::new(crate::audio::AudioEngine::new()),
@@ -728,6 +730,7 @@ impl DesktopState {
             };
         }
 
+        let before = project.clone();
         let mut edited = project;
         if let Err(error) = crate::gui::apply_edit(&mut edited, &request, edit) {
             let snapshot = self.snapshot_with_error("gui.edit", &request.path, error.message());
@@ -737,6 +740,12 @@ impl DesktopState {
             };
         }
         let document = crate::gui::project_gui_document(Some(&edited), &request);
+        self.push_gui_history(GuiHistoryEntry {
+            before,
+            after: edited.clone(),
+            affected_paths: affected_paths.clone(),
+            status_path: request.path.clone(),
+        });
         self.schedule_gui_save(&edited, affected_paths, request.path.clone());
         let snapshot = self.apply_gui_project_update(edited, "GUI edit applied");
         GuiEditResult { snapshot, document }
@@ -822,6 +831,7 @@ impl DesktopState {
             };
         }
 
+        let before = project.clone();
         let mut edited = project;
         let previous_project = edited.project.clone();
         let mutation = match self.sequence_clipboard.lock() {
@@ -861,6 +871,12 @@ impl DesktopState {
         let snapshot = if edited.project == previous_project {
             self.snapshot()
         } else {
+            self.push_gui_history(GuiHistoryEntry {
+                before,
+                after: edited.clone(),
+                affected_paths: affected_paths.clone(),
+                status_path: request.path.clone(),
+            });
             self.schedule_gui_save(&edited, affected_paths, request.path.clone());
             self.apply_gui_project_update(edited, "GUI selection edit applied")
         };
@@ -873,11 +889,56 @@ impl DesktopState {
         }
     }
 
+    pub fn undo_active_edit(&self) -> AppSnapshot {
+        let Some(entry) = self.peek_gui_undo() else {
+            return self.update_snapshot(|snapshot| {
+                snapshot.status = "No GUI edit to undo".to_string();
+            });
+        };
+        if let Some(path) = self.dirty_affected_path(&entry.affected_paths) {
+            let message = format!("Save or reload {path} before undoing GUI edits.");
+            return self.snapshot_with_error("gui.undo.dirty", &path, &message);
+        }
+        let Some(entry) = self.pop_gui_undo() else {
+            return self.snapshot();
+        };
+        self.push_gui_redo(entry.clone());
+        self.schedule_gui_save(
+            &entry.before,
+            entry.affected_paths.clone(),
+            entry.status_path.clone(),
+        );
+        self.apply_gui_project_update(entry.before, "GUI edit undone")
+    }
+
+    pub fn redo_active_edit(&self) -> AppSnapshot {
+        let Some(entry) = self.peek_gui_redo() else {
+            return self.update_snapshot(|snapshot| {
+                snapshot.status = "No GUI edit to redo".to_string();
+            });
+        };
+        if let Some(path) = self.dirty_affected_path(&entry.affected_paths) {
+            let message = format!("Save or reload {path} before redoing GUI edits.");
+            return self.snapshot_with_error("gui.redo.dirty", &path, &message);
+        }
+        let Some(entry) = self.pop_gui_redo() else {
+            return self.snapshot();
+        };
+        self.push_gui_undo_from_redo(entry.clone());
+        self.schedule_gui_save(
+            &entry.after,
+            entry.affected_paths.clone(),
+            entry.status_path.clone(),
+        );
+        self.apply_gui_project_update(entry.after, "GUI edit redone")
+    }
+
     fn apply_project_open_check(
         &self,
         entrypoint: &str,
         report: ProjectCheckReport,
     ) -> AppSnapshot {
+        self.clear_gui_history();
         let diagnostics = project_diagnostics(&report);
         match report.session {
             Some(session) => self.replace_project(session, diagnostics),
@@ -893,6 +954,7 @@ impl DesktopState {
         entrypoint: &str,
         report: ProjectCheckReport,
     ) -> AppSnapshot {
+        self.clear_gui_history();
         let diagnostics = project_diagnostics(&report);
         match report.session {
             Some(session) => self.refresh_project(session, diagnostics),
@@ -1087,6 +1149,70 @@ impl DesktopState {
             Ok(project) => project.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
         }
+    }
+
+    fn push_gui_history(&self, entry: GuiHistoryEntry) {
+        match self.gui_history.lock() {
+            Ok(mut history) => history.push_undo(entry),
+            Err(poisoned) => poisoned.into_inner().push_undo(entry),
+        }
+    }
+
+    fn clear_gui_history(&self) {
+        match self.gui_history.lock() {
+            Ok(mut history) => history.clear(),
+            Err(poisoned) => poisoned.into_inner().clear(),
+        }
+    }
+
+    fn peek_gui_undo(&self) -> Option<GuiHistoryEntry> {
+        match self.gui_history.lock() {
+            Ok(history) => history.peek_undo(),
+            Err(poisoned) => poisoned.into_inner().peek_undo(),
+        }
+    }
+
+    fn pop_gui_undo(&self) -> Option<GuiHistoryEntry> {
+        match self.gui_history.lock() {
+            Ok(mut history) => history.pop_undo(),
+            Err(poisoned) => poisoned.into_inner().pop_undo(),
+        }
+    }
+
+    fn push_gui_redo(&self, entry: GuiHistoryEntry) {
+        match self.gui_history.lock() {
+            Ok(mut history) => history.push_redo(entry),
+            Err(poisoned) => poisoned.into_inner().push_redo(entry),
+        }
+    }
+
+    fn peek_gui_redo(&self) -> Option<GuiHistoryEntry> {
+        match self.gui_history.lock() {
+            Ok(history) => history.peek_redo(),
+            Err(poisoned) => poisoned.into_inner().peek_redo(),
+        }
+    }
+
+    fn pop_gui_redo(&self) -> Option<GuiHistoryEntry> {
+        match self.gui_history.lock() {
+            Ok(mut history) => history.pop_redo(),
+            Err(poisoned) => poisoned.into_inner().pop_redo(),
+        }
+    }
+
+    fn push_gui_undo_from_redo(&self, entry: GuiHistoryEntry) {
+        match self.gui_history.lock() {
+            Ok(mut history) => history.push_undo_from_redo(entry),
+            Err(poisoned) => poisoned.into_inner().push_undo_from_redo(entry),
+        }
+    }
+
+    fn dirty_affected_path(&self, affected_paths: &BTreeSet<String>) -> Option<String> {
+        self.snapshot()
+            .tabs
+            .into_iter()
+            .find(|tab| tab.dirty && affected_paths.contains(&tab.path))
+            .map(|tab| tab.path)
     }
 
     fn text_for_active_view_mode_switch(&self, path: &str) -> Result<Option<String>, String> {
@@ -1698,6 +1824,73 @@ fn render_refresh_worker(
 impl Default for DesktopState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Clone)]
+struct GuiHistoryEntry {
+    before: ProjectSession,
+    after: ProjectSession,
+    affected_paths: BTreeSet<String>,
+    status_path: String,
+}
+
+struct GuiHistory {
+    undo: Vec<GuiHistoryEntry>,
+    redo: Vec<GuiHistoryEntry>,
+    limit: usize,
+}
+
+impl GuiHistory {
+    fn new(limit: usize) -> Self {
+        Self {
+            undo: Vec::new(),
+            redo: Vec::new(),
+            limit,
+        }
+    }
+
+    fn push_undo(&mut self, entry: GuiHistoryEntry) {
+        self.undo.push(entry);
+        self.trim_undo();
+        self.redo.clear();
+    }
+
+    fn push_undo_from_redo(&mut self, entry: GuiHistoryEntry) {
+        self.undo.push(entry);
+        self.trim_undo();
+    }
+
+    fn peek_undo(&self) -> Option<GuiHistoryEntry> {
+        self.undo.last().cloned()
+    }
+
+    fn pop_undo(&mut self) -> Option<GuiHistoryEntry> {
+        self.undo.pop()
+    }
+
+    fn push_redo(&mut self, entry: GuiHistoryEntry) {
+        self.redo.push(entry);
+    }
+
+    fn peek_redo(&self) -> Option<GuiHistoryEntry> {
+        self.redo.last().cloned()
+    }
+
+    fn pop_redo(&mut self) -> Option<GuiHistoryEntry> {
+        self.redo.pop()
+    }
+
+    fn clear(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+    }
+
+    fn trim_undo(&mut self) {
+        if self.undo.len() > self.limit {
+            let overflow = self.undo.len() - self.limit;
+            self.undo.drain(0..overflow);
+        }
     }
 }
 

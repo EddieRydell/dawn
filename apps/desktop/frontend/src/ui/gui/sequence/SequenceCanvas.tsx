@@ -1158,7 +1158,7 @@ const waveformCache = new Map<string, { request: Promise<WaveformAudio | null>; 
 let waveformCacheAccess = 1;
 
 type ClipRasterRequestItem = { effectId: number; displayColumnCount: number; requestedColumns: number; requestedRows: number };
-type ClipRasterKeyContext = { projectRevision: number; rasterSettingsKey: string; requestedColumns: number; requestedRows: number };
+type ClipRasterKeyContext = { rasterSettingsKey: string; requestedColumns: number; requestedRows: number };
 
 function useSequenceClipRasters(
   document: SequenceEditorDocument,
@@ -1204,7 +1204,6 @@ function useSequenceClipRasters(
   const rasterCacheAccess = useRef(1);
   const errors = useRef<Set<number>>(new Set());
   const cachedRequestKey = useRef(rasterRequestKey);
-  const cachedProjectRevision = useRef(projectRevision);
   const projectRevisionRef = useRef(projectRevision);
   const [state, setState] = useState<ClipRasterState>({
     requestKey: rasterRequestKey,
@@ -1231,11 +1230,6 @@ function useSequenceClipRasters(
     const decodeQueue: QueuedClipRasterDecode[] = [];
     let decoding = false;
     const displayRowCount = Math.max(1, Math.ceil(laneHeight * (window.devicePixelRatio || 1) * rasterSettings.renderScale));
-    if (cachedProjectRevision.current !== projectRevision) {
-      cachedProjectRevision.current = projectRevision;
-      expectedRasterKeys.current.clear();
-      errors.current.clear();
-    }
     if (cachedRequestKey.current !== rasterRequestKey) {
       cachedRequestKey.current = rasterRequestKey;
       rasters.current.clear();
@@ -1382,7 +1376,6 @@ function useSequenceClipRasters(
         objectKey: document.objectKey,
         items: requestItems.map((item) => {
           const rasterKeyContext = {
-            projectRevision,
             rasterSettingsKey,
             requestedColumns: item.requestedColumns,
             requestedRows: item.requestedRows
@@ -1457,7 +1450,6 @@ function clipRasterKey(
   return JSON.stringify([
     path,
     objectKey,
-    context.projectRevision,
     context.rasterSettingsKey,
     effectId,
     context.requestedColumns,

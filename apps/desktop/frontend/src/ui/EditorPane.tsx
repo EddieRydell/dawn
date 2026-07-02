@@ -1,4 +1,4 @@
-import { defaultKeymap } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { cpp } from "@codemirror/lang-cpp";
 import { yaml } from "@codemirror/lang-yaml";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -17,15 +17,15 @@ import { SequenceTransportControls, useSequenceTransport } from "./gui/sequence/
 
 type BufferExternalState = "current" | "changedOnDisk" | "deletedOnDisk";
 type EditorBufferWithExternalState = NonNullable<AppSnapshot["activeBuffer"]>;
-type PathSelection = { path: string | null; selection: SequenceSelection | null };
+type PathSelection = { path: string | null; resetRevision: number; selection: SequenceSelection | null };
 
 export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
-  const { guiDocument, localText, restoreState, setGuiDocument, setGuiRequest, setLocalText } = useAppStore();
+  const { guiDocument, guiResetRevision, localText, restoreState, setGuiDocument, setGuiRequest, setLocalText } = useAppStore();
   const editorHost = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const [editorSignal, setEditorSignal] = useState(0);
-  const [pathSelection, setPathSelection] = useState<PathSelection>({ path: null, selection: null });
+  const [pathSelection, setPathSelection] = useState<PathSelection>({ path: null, resetRevision: 0, selection: null });
   const latestLocalText = useRef(localText);
   const loadedSequenceAudioKey = useRef<string | null>(null);
   const applyingExternalText = useRef(false);
@@ -53,12 +53,15 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
       ? sequenceAudioKey(nextGuiPath, nextGuiObjectKey, activeSequenceAudio)
       : null;
   const guiAvailable = nextGuiRequest !== null;
-  const sequenceSelection = pathSelection.path === activePath ? pathSelection.selection : null;
+  const sequenceSelection =
+    pathSelection.path === activePath && pathSelection.resetRevision === guiResetRevision
+      ? pathSelection.selection
+      : null;
   const setSequenceSelection = useCallback(
     (selection: SequenceSelection | null) => {
-      setPathSelection({ path: activePath, selection });
+      setPathSelection({ path: activePath, resetRevision: guiResetRevision, selection });
     },
-    [activePath]
+    [activePath, guiResetRevision]
   );
 
   useEffect(() => {
@@ -162,15 +165,6 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
             if (snapshot.settings.autosaveTextEdits) {
               scheduleAutosave(text);
             }
-          }
-        },
-        async (text, redo) => {
-          window.clearTimeout(autosaveTimer);
-          if (!redo) {
-            await runSnapshotCommand(() => commands.updateActiveText(text));
-            await runSnapshotCommand(commands.undoActiveEdit);
-          } else {
-            await runSnapshotCommand(commands.redoActiveEdit);
           }
         }
       )
@@ -315,6 +309,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
           audioTransport={sequenceTransport}
           sequenceSelection={sequenceSelection}
           setSequenceSelection={setSequenceSelection}
+          resetRevision={guiResetRevision}
         />
       ) : (
         <div className="editor-scrollbar-shell">
@@ -584,13 +579,13 @@ function createState(
   text: string,
   path: string | null,
   readOnly: boolean,
-  onUpdate: (update: ViewUpdate) => void,
-  onHistoryCommand: (text: string, redo: boolean) => Promise<void>
+  onUpdate: (update: ViewUpdate) => void
 ) {
   return EditorState.create({
     doc: text,
     extensions: [
       languageForPath(path),
+      history(),
       syntaxHighlighting(dawnHighlightStyle),
       EditorState.readOnly.of(readOnly),
       EditorView.editable.of(!readOnly),
@@ -603,20 +598,7 @@ function createState(
             return true;
           }
         },
-        {
-          key: "Mod-z",
-          run: (view) => {
-            void onHistoryCommand(view.state.doc.toString(), false);
-            return true;
-          }
-        },
-        {
-          key: "Mod-Shift-z",
-          run: () => {
-            void onHistoryCommand("", true);
-            return true;
-          }
-        },
+        ...historyKeymap,
         ...defaultKeymap
       ]),
       EditorView.updateListener.of(onUpdate),

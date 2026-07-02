@@ -126,13 +126,13 @@ pub fn save_sequence_viewport_state(
 #[tauri::command]
 #[specta::specta]
 pub fn undo_active_edit(state: State<'_, DesktopState>) -> AppSnapshot {
-    state.snapshot()
+    state.undo_active_edit()
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn redo_active_edit(state: State<'_, DesktopState>) -> AppSnapshot {
-    state.snapshot()
+    state.redo_active_edit()
 }
 
 #[tauri::command]

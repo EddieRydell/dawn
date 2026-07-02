@@ -10,12 +10,14 @@ type AppStore = {
   restoreState: ProjectRestoreState | null;
   guiRequest: GuiDocumentRequest | null;
   guiDocument: GuiDocument | null;
+  guiResetRevision: number;
   error: string | null;
   localText: string;
   setSnapshot: (snapshot: AppSnapshot, source?: SnapshotApplySource) => void;
   setRestoreState: (restoreState: ProjectRestoreState | null) => void;
   setGuiRequest: (request: GuiDocumentRequest | null) => void;
   setGuiDocument: (document: GuiDocument | null) => void;
+  resetGuiLocalState: () => void;
   applyGuiEditResult: (result: GuiEditResult) => void;
   setError: (error: string | null) => void;
   setLocalText: (text: string) => void;
@@ -27,6 +29,7 @@ export const useAppStore = create<AppStore>((set) => ({
   restoreState: null,
   guiRequest: null,
   guiDocument: null,
+  guiResetRevision: 0,
   error: null,
   localText: "",
   setSnapshot: (snapshot, source = "command") => {
@@ -58,6 +61,9 @@ export const useAppStore = create<AppStore>((set) => ({
   },
   setGuiDocument: (guiDocument) => {
     set({ guiDocument });
+  },
+  resetGuiLocalState: () => {
+    set((current) => ({ guiResetRevision: current.guiResetRevision + 1 }));
   },
   applyGuiEditResult: (result) => {
     set((current) => {

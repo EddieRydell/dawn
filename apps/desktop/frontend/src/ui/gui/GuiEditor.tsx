@@ -24,13 +24,15 @@ export function GuiEditor({
   snapshot,
   audioTransport,
   sequenceSelection,
-  setSequenceSelection
+  setSequenceSelection,
+  resetRevision
 }: {
   guiDocument: GuiDocument | null;
   snapshot: AppSnapshot;
   audioTransport: AppSnapshot["audioTransport"];
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
+  resetRevision: number;
 }) {
   const gui = guiDocument;
 
@@ -41,7 +43,7 @@ export function GuiEditor({
     return <BlockedGui reason={gui.reason} diagnostics={gui.diagnostics} />;
   }
 
-  const editorKey = guiEditorKey(snapshot.activeFile, gui);
+  const editorKey = `${guiEditorKey(snapshot.activeFile, gui)}:${resetRevision}`;
   return (
     <GuiEditorInner
       key={editorKey}

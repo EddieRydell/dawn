@@ -16,6 +16,10 @@ export function setCurrentGuiRequest(request: GuiDocumentRequest | null): void {
   currentGuiRequest = request;
 }
 
+export function getCurrentGuiRequest(): GuiDocumentRequest | null {
+  return currentGuiRequest;
+}
+
 export function setGuiEditResultHandler(handler: (result: GuiEditResult) => void): void {
   guiEditResultHandler = handler;
 }

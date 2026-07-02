@@ -15,14 +15,14 @@ empty:
     marks:
     - 40.028816894s
     - 40.135611358s
-    - 40.335068438s
+    - 40.361031627s
     - 40.535602561s
     - 40.633105367s
     - 40.832003576s
-    - 40.941167707s
+    - 40.921724353s
     - 41.134640005s
-    - 41.333260645s
-    - 41.433276411s
+    - 41.303888426s
+    - 41.556748982s
     - 42.725446822s
     - 42.77220502s
     - 42.804494547s
@@ -396,7 +396,7 @@ empty:
     color: '#22c55e'
     marks:
     - 48.041241683s
-    - 48.852488849s
+    - 48.99098303s
     - 49.641967307s
     - 51.241241683s
     - 52.051037602s
@@ -2560,7 +2560,7 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 11
-    start: 40.64832131s
+    start: 40.680227993s
     duration: 0.252901318s
     target:
       type: group
@@ -3112,7 +3112,7 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 23
-    start: 44.883427046s
+    start: 44.947981252s
     duration: 0.64651178s
     target:
       type: group
@@ -4283,8 +4283,12 @@ empty:
             points:
             - time: 0.0
               value: '#ffffff'
+            - time: 0.291
+              value: '#ff0000'
             - time: 0.5
               value: '#ff6600'
+            - time: 0.777
+              value: '#ff0000'
             - time: 1.0
               value: '#ff0000'
         - curve:
@@ -4626,7 +4630,7 @@ empty:
         value: 4.0
     script: effects.MarkPulse
   - id: 48
-    start: 67.977857656s
+    start: 68.077056336s
     duration: 0.525681511s
     target:
       type: group
@@ -4653,7 +4657,7 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 49
-    start: 67.986979166s
+    start: 68.255821671s
     duration: 0.595613083s
     target:
       type: group
@@ -4847,7 +4851,20 @@ empty:
         value: '#000000'
       accent:
         type: curve
-        curve: curves.ember_core_gradient
+        curve:
+          type: curve
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#fff0d8'
+          - time: 0.16
+            value: '#ff7a00'
+          - time: 0.5
+            value: '#e00020'
+          - time: 0.82
+            value: '#4d0015'
+          - time: 1.0
+            value: '#000000'
       hue:
         type: curve
         curve:
