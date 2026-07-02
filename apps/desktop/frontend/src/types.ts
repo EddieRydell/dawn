@@ -30,6 +30,8 @@ export type {
   PersistedEditorViewState,
   PersistedSequenceViewportState,
   SequenceAudio,
+  SequenceAutomationClip,
+  SequenceAutomationMapping,
   SequenceClipRaster,
   SequenceClipRasterError,
   SequenceClipRasterRequest,

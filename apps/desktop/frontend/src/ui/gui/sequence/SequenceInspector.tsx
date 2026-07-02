@@ -39,6 +39,7 @@ export function SequenceInspector({
 }) {
 const id = selectedEffectId(selected);
     const effect = document.effects.find((candidate) => candidate.id === id);
+    const selectedAutomationClip = selected?.type === "automationClip" ? document.automationClips.find((clip) => clip.id === selected.id) : undefined;
     const selectedMark = selected?.type === "mark" ? { collectionKey: selected.collectionKey, index: selected.index } : null;
     const selectedMarkCollection = selectedMark === null ? null : document.markCollections.find((collection) => collection.key === selectedMark.collectionKey) ?? null;
     const activeCollection = document.markCollections.find((collection) => collection.key === activeMarkCollectionKey) ?? document.markCollections[0] ?? null;
@@ -225,12 +226,38 @@ const id = selectedEffectId(selected);
                     param={param}
                     curveLibrary={document.curveLibrary}
                     markCollections={document.markCollections}
+                    automationClips={document.automationClips}
                   />
                 ))}
               </div>
             </>
           )}
           <button onClick={() => void runGuiEditCommand(() => commands.applySequenceGuiEdit({ type: "deleteEffect", id: effect.id }))}>Delete</button>
+        </InspectorScrollArea>
+      );
+    }
+    if (selectedAutomationClip !== undefined) {
+      return (
+        <InspectorScrollArea>
+          <h2>Automation</h2>
+          <div className="inspector-readout-grid">
+            <Readout label="ID" value={String(selectedAutomationClip.id)} />
+            <Readout label="Start" value={formatSeconds(selectedAutomationClip.startSeconds)} />
+            <Readout label="Duration" value={formatSeconds(selectedAutomationClip.durationSeconds)} />
+            <Readout label="Bindings" value={String(selectedAutomationClip.bindings.length)} />
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              void runGuiEditCommand(() =>
+                commands.applySequenceGuiEdit({ type: "deleteAutomationClip", id: selectedAutomationClip.id })
+              ).then(() => {
+                setSelected(null);
+              })
+            }
+          >
+            Delete
+          </button>
         </InspectorScrollArea>
       );
     }

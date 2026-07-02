@@ -586,7 +586,43 @@ pub struct SequenceGuiDocument {
     pub effect_scripts: Vec<SequenceEffectScript>,
     pub curve_library: Vec<SequenceCurveLibraryItem>,
     pub effects: Vec<SequenceEffect>,
+    pub automation_clips: Vec<SequenceAutomationClip>,
     pub degraded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceAutomationClip {
+    pub id: u32,
+    pub name: String,
+    pub start_seconds: f64,
+    pub duration_seconds: f64,
+    pub anchor_lane_index: u32,
+    pub lane_index: u32,
+    pub curve: Vec<FloatCurvePoint>,
+    pub bindings: Vec<SequenceAutomationBinding>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceAutomationBinding {
+    pub effect_id: u32,
+    pub param: String,
+    pub mapping: SequenceAutomationMapping,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SequenceAutomationMapping {
+    Float { min: f64, max: f64 },
+    Int { min: f64, max: f64 },
+    Bool,
+    Enum { values: Vec<String> },
+    FloatCurve { min: f64, max: f64 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -695,6 +731,15 @@ pub struct SequenceEffectParam {
     pub editable: bool,
     pub value: SequenceEffectParamValue,
     pub curve_source: Option<SequenceEffectParamCurveSource>,
+    pub automation: Option<SequenceParamAutomation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceParamAutomation {
+    pub clip_id: u32,
+    pub clip_name: String,
+    pub mapping: SequenceAutomationMapping,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -795,6 +840,42 @@ pub enum SequenceGuiEdit {
     UnlinkEffectCurveParam {
         id: u32,
         name: String,
+    },
+    AddAutomationClip {
+        name: String,
+        start_seconds: f64,
+        duration_seconds: f64,
+        anchor_lane_index: u32,
+        lane_index: u32,
+    },
+    MoveAutomationClip {
+        id: u32,
+        start_seconds: f64,
+        anchor_lane_index: u32,
+        lane_index: u32,
+    },
+    ResizeAutomationClip {
+        id: u32,
+        start_seconds: f64,
+        duration_seconds: f64,
+    },
+    UpdateAutomationCurve {
+        id: u32,
+        curve: Vec<FloatCurvePoint>,
+    },
+    DeleteAutomationClip {
+        id: u32,
+    },
+    BindAutomationParam {
+        clip_id: u32,
+        effect_id: u32,
+        param: String,
+        mapping: SequenceAutomationMapping,
+    },
+    UnbindAutomationParam {
+        clip_id: u32,
+        effect_id: u32,
+        param: String,
     },
     CreateMarkCollection {
         key: String,

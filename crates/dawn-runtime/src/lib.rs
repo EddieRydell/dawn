@@ -19,11 +19,13 @@ use dawn_language::effect_dsl::{
     TargetValue, Type, Value,
 };
 use dawn_language::model::DawnProject;
-use dawn_language::sequence::{MarkCollectionKey, Sequence, SequenceId};
+use dawn_language::sequence::{
+    AutomationBinding, AutomationClip, AutomationMapping, MarkCollectionKey, Sequence, SequenceId,
+};
 use dawn_language::setup::{
     FixtureGroupId, FixtureInst, FixtureInstanceId, Geometry, Layout, SetupId,
 };
-use dawn_language::values::{Color, DawnTime, Marks};
+use dawn_language::values::{Color, Curve, CurvePoint, CurveValue, DawnTime, Marks};
 use indexmap::{IndexMap, IndexSet};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -138,7 +140,6 @@ pub struct RenderedFixture {
 #[derive(Clone, Debug, PartialEq)]
 pub enum RenderError {
     InvalidTiming { reason: String },
-    UnsupportedAutomation,
     MissingSetup { setup_id: SetupId },
     MissingLayout,
     MissingSequence { sequence_id: SequenceId },
@@ -184,9 +185,6 @@ impl PreparedSequenceRenderer {
                     sequence_id: sequence_id.clone(),
                 })?;
         prepare_timing(sequence)?;
-        if !sequence.automation_clips.is_empty() {
-            return Err(RenderError::UnsupportedAutomation);
-        }
 
         let fixtures = prepare_fixtures(project, layout)?;
         let fixture_ids = fixtures
@@ -519,9 +517,6 @@ impl<'a> EffectRasterPrepareBatch<'a> {
                     sequence_id: sequence_id.clone(),
                 })?;
         prepare_timing(sequence)?;
-        if !sequence.automation_clips.is_empty() {
-            return Err(RenderError::UnsupportedAutomation);
-        }
 
         let fixtures = prepare_fixtures(project, layout)?;
         let fixture_ids = fixtures
@@ -655,29 +650,38 @@ fn prepare_effect(
         start_seconds,
         duration_seconds: effect_duration_seconds,
     };
+    let automation = automation_for_effect(context.sequence, &effect.id);
     let params = prepare_params(
         context.project,
         context.sequence,
         &effect.param_overrides,
         param_timing,
     )?;
-    let bound_params = definition
-        .compiled
-        .bind_params_cached(&params, context.bind_cache);
     match definition.compiled.kind() {
-        EffectKind::Sample => context.effects.push(PreparedEffect {
-            start_seconds,
-            duration_seconds: effect_duration_seconds,
-            target: Arc::clone(&target),
-            sample_groups: definition
+        EffectKind::Sample => {
+            let bound_params = definition
                 .compiled
-                .sample_reads_only_written_slots()
-                .then(|| prepare_sample_context_groups(&target))
-                .flatten(),
-            definition: definition.compiled.clone(),
-            params: bound_params,
-        }),
+                .bind_params_cached(&params, context.bind_cache);
+            context.effects.push(PreparedEffect {
+                start_seconds,
+                duration_seconds: effect_duration_seconds,
+                target: Arc::clone(&target),
+                sample_groups: definition
+                    .compiled
+                    .sample_reads_only_written_slots()
+                    .then(|| prepare_sample_context_groups(&target))
+                    .flatten(),
+                definition: definition.compiled.clone(),
+                params,
+                bound_params,
+                automation,
+            });
+        }
         EffectKind::Generator => {
+            let params = apply_automation_params(params, &automation, start_seconds);
+            let bound_params = definition
+                .compiled
+                .bind_params_cached(&params, context.bind_cache);
             let mut generator_context = GeneratorPrepareContext {
                 project: context.project,
                 fixtures: context.fixtures,
@@ -940,6 +944,156 @@ fn prepare_param_value(
     }
 }
 
+fn automation_for_effect(sequence: &Sequence, effect_id: &EffectInstId) -> Vec<PreparedAutomation> {
+    sequence
+        .automation_clips
+        .iter()
+        .flat_map(|clip| {
+            clip.bindings
+                .iter()
+                .filter(move |binding| &binding.effect_id == effect_id)
+                .map(move |binding| PreparedAutomation {
+                    clip: clip.clone(),
+                    binding: binding.clone(),
+                })
+        })
+        .collect()
+}
+
+fn apply_automation_params(
+    mut params: IndexMap<Identifier, Value>,
+    automation: &[PreparedAutomation],
+    sample_seconds: f64,
+) -> IndexMap<Identifier, Value> {
+    for automation in automation {
+        let normalized = sample_automation_clip(&automation.clip, sample_seconds);
+        params.insert(
+            automation.binding.param.clone(),
+            automation_value(
+                &automation.clip,
+                &automation.binding,
+                normalized,
+                sample_seconds,
+            ),
+        );
+    }
+    params
+}
+
+fn automation_value(
+    clip: &AutomationClip,
+    binding: &AutomationBinding,
+    normalized: f64,
+    sample_seconds: f64,
+) -> Value {
+    match &binding.mapping {
+        AutomationMapping::Float { min, max } => Value::Float(lerp(*min, *max, normalized)),
+        AutomationMapping::Int { min, max } => {
+            Value::Int(lerp(*min as f64, *max as f64, normalized).round() as i64)
+        }
+        AutomationMapping::Bool => Value::Bool(normalized >= 0.5),
+        AutomationMapping::Enum { values } => {
+            if values.is_empty() {
+                return Value::Void;
+            }
+            let index = if values.is_empty() {
+                0
+            } else {
+                ((normalized.clamp(0.0, 1.0) * values.len() as f64).floor() as usize)
+                    .min(values.len().saturating_sub(1))
+            };
+            Value::Enum(values[index].clone())
+        }
+        AutomationMapping::FloatCurve { min, max } => Value::Curve(Arc::new(float_curve_window(
+            clip,
+            *min,
+            *max,
+            sample_seconds,
+        ))),
+    }
+}
+
+fn sample_automation_clip(clip: &AutomationClip, sample_seconds: f64) -> f64 {
+    let start_seconds = clip.start.as_seconds_f64();
+    let duration_seconds = clip.duration.as_seconds_f64();
+    let position = if duration_seconds <= 0.0 {
+        0.0
+    } else {
+        ((sample_seconds - start_seconds) / duration_seconds).clamp(0.0, 1.0)
+    };
+    sample_float_curve(&clip.curve, position).clamp(0.0, 1.0)
+}
+
+fn float_curve_window(clip: &AutomationClip, min: f64, max: f64, sample_seconds: f64) -> Curve {
+    let start_seconds = clip.start.as_seconds_f64();
+    let duration_seconds = clip.duration.as_seconds_f64().max(0.000000001);
+    let sample_position = ((sample_seconds - start_seconds) / duration_seconds).clamp(0.0, 1.0);
+    let points = clip
+        .curve
+        .points
+        .iter()
+        .filter_map(|point| {
+            let position = point.position - sample_position;
+            (0.0..=1.0).contains(&position).then(|| CurvePoint {
+                position,
+                value: CurveValue::Float(lerp(min, max, curve_point_float(point))),
+            })
+        })
+        .collect::<Vec<_>>();
+    if points.is_empty() {
+        return Curve {
+            points: vec![CurvePoint {
+                position: 0.0,
+                value: CurveValue::Float(lerp(
+                    min,
+                    max,
+                    sample_automation_clip(clip, sample_seconds),
+                )),
+            }],
+        };
+    }
+    Curve { points }
+}
+
+fn sample_float_curve(curve: &Curve, position: f64) -> f64 {
+    let mut points = curve.points.iter().collect::<Vec<_>>();
+    points.sort_by(|left, right| left.position.total_cmp(&right.position));
+    let Some(first) = points.first() else {
+        return 0.0;
+    };
+    if position <= first.position {
+        return curve_point_float(first);
+    }
+    for pair in points.windows(2) {
+        let left = pair[0];
+        let right = pair[1];
+        if position <= right.position {
+            let span = right.position - left.position;
+            let amount = if span <= 0.0 {
+                0.0
+            } else {
+                (position - left.position) / span
+            };
+            return lerp(curve_point_float(left), curve_point_float(right), amount);
+        }
+    }
+    points
+        .last()
+        .map(|point| curve_point_float(point))
+        .unwrap_or(0.0)
+}
+
+fn curve_point_float(point: &CurvePoint) -> f64 {
+    match point.value {
+        CurveValue::Float(value) => value,
+        CurveValue::Color(_) => 0.0,
+    }
+}
+
+fn lerp(min: f64, max: f64, amount: f64) -> f64 {
+    min + (max - min) * amount.clamp(0.0, 1.0)
+}
+
 const MAX_GENERATOR_DEPTH: usize = 4;
 const MAX_GENERATED_CHILDREN: usize = 1_000_000;
 
@@ -1036,7 +1190,9 @@ fn prepare_generated_child(
                     .flatten(),
                 target,
                 definition: definition.compiled.clone(),
-                params: bound_params,
+                params: child.params,
+                bound_params,
+                automation: Vec::new(),
             });
             Ok(())
         }
@@ -1428,9 +1584,20 @@ fn sample_effect_group(
         pixel_fraction: sample_context.pixel_fraction,
         global_marks: Marks { marks: Vec::new() },
     };
+    if effect.automation.is_empty() {
+        return effect
+            .definition
+            .sample_bound(&effect.bound_params, &context, scratch);
+    }
+    let params = apply_automation_params(
+        effect.params.clone(),
+        &effect.automation,
+        effect.start_seconds + local_seconds,
+    );
+    let bound_params = effect.definition.bind_params(&params);
     effect
         .definition
-        .sample_bound(&effect.params, &context, scratch)
+        .sample_bound(&bound_params, &context, scratch)
 }
 
 fn prepare_sample_context_groups(
@@ -1608,7 +1775,15 @@ struct PreparedEffect {
     target: Arc<Vec<PreparedTargetPixel>>,
     sample_groups: Option<Vec<PreparedSampleContextGroup>>,
     definition: dawn_language::effect_dsl::CompiledEffect,
-    params: BoundEffectParams,
+    params: IndexMap<Identifier, Value>,
+    bound_params: BoundEffectParams,
+    automation: Vec<PreparedAutomation>,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedAutomation {
+    clip: AutomationClip,
+    binding: AutomationBinding,
 }
 
 #[derive(Default)]

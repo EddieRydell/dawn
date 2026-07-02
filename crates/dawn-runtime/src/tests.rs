@@ -195,7 +195,7 @@ fn active_effects_compose_with_channel_max() {
 }
 
 #[test]
-fn missing_references_and_unsupported_automation_fail() {
+fn missing_references_fail_and_automation_prepares() {
     let mut project = project(sequence_with_effects(vec![constant_effect(
         1,
         0.0,
@@ -249,15 +249,26 @@ fn missing_references_and_unsupported_automation_fail() {
     let mut sequence = sequence_with_effects(Vec::new());
     sequence.automation_clips = vec![AutomationClip {
         id: AutomationClipId(1),
-        targets: vec![EffectInstId(1)],
+        name: "Automation".to_string(),
         start: time(0.0),
         duration: duration(1.0),
-        curve: CurveId("curve".to_string()),
+        anchor_lane_index: 0,
+        lane_index: 0,
+        curve: Curve {
+            points: vec![
+                CurvePoint {
+                    position: 0.0,
+                    value: CurveValue::Float(0.0),
+                },
+                CurvePoint {
+                    position: 1.0,
+                    value: CurveValue::Float(1.0),
+                },
+            ],
+        },
+        bindings: Vec::new(),
     }];
-    assert!(matches!(
-        prepare(sequence),
-        Err(RenderError::UnsupportedAutomation)
-    ));
+    assert!(prepare(sequence).is_ok());
 }
 
 #[test]

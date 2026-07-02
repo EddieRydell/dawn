@@ -8,7 +8,8 @@ use dawn_language::effect::{
 };
 use dawn_language::effect_dsl::{EffectKind, Identifier, Type, Value as EffectValue};
 use dawn_language::sequence::{
-    MarkCollection, MarkCollectionKey, SequenceAudio as DomainSequenceAudio, SequenceId,
+    AutomationBinding, AutomationClip, AutomationClipId, AutomationMapping, MarkCollection,
+    MarkCollectionKey, SequenceAudio as DomainSequenceAudio, SequenceId,
 };
 use dawn_language::setup::{
     FixtureDefinitionId, FixtureGroupId, FixtureInstanceId, Geometry as DomainGeometry, LayoutId,
@@ -29,12 +30,14 @@ use crate::dto::{
     GeometryRenderGuide, GeometryRenderPlan, GeometryRenderPoint, GuiDocument, GuiDocumentRequest,
     GuiEditCommand, GuiObjectRef, LayoutFixturePlacement, LayoutGuiDocument, LayoutGuiEdit,
     LayoutTarget, LayoutTargetKind, ObjectKind, Point3Meters, ProjectDiagnostic,
-    ResolvedLayoutFixture, Rotation3Degrees, Scale3, SequenceAudio, SequenceCurveLibraryItem,
+    ResolvedLayoutFixture, Rotation3Degrees, Scale3, SequenceAudio, SequenceAutomationBinding,
+    SequenceAutomationClip, SequenceAutomationMapping, SequenceCurveLibraryItem,
     SequenceCurveLibraryPoints, SequenceCurveValueType, SequenceEffect, SequenceEffectParam,
     SequenceEffectParamCurveSource, SequenceEffectParamKind, SequenceEffectParamValue,
     SequenceEffectScope, SequenceEffectScript, SequenceEffectScriptKind, SequenceEffectScriptParam,
     SequenceGuiDocument, SequenceGuiEdit, SequenceLane, SequenceMarkCollection, SequenceMarkRef,
-    SequencePasteAnchor, SequenceResizeEdge, SequenceSelection, SequenceSelectionEdit, Transform,
+    SequenceParamAutomation, SequencePasteAnchor, SequenceResizeEdge, SequenceSelection,
+    SequenceSelectionEdit, Transform,
 };
 
 #[derive(Debug)]
@@ -344,7 +347,7 @@ fn project_sequence(session: &ProjectSession, resolved: &ResolvedGuiObject) -> G
             },
             script: effect.definition.0.clone(),
             script_source: effect_script_ref(session, &effect.definition.0),
-            params: effect_params(session, effect),
+            params: effect_params(session, sequence, effect),
         })
         .collect();
     GuiDocument::Sequence {
@@ -373,9 +376,46 @@ fn project_sequence(session: &ProjectSession, resolved: &ResolvedGuiObject) -> G
             effect_scripts: effect_scripts(session),
             curve_library: curve_library(session),
             effects,
+            automation_clips: automation_clips(sequence),
             degraded: false,
         },
     }
+}
+
+fn automation_clips(sequence: &dawn_language::sequence::Sequence) -> Vec<SequenceAutomationClip> {
+    sequence
+        .automation_clips
+        .iter()
+        .map(|clip| SequenceAutomationClip {
+            id: clip.id.0,
+            name: clip.name.clone(),
+            start_seconds: clip.start.as_seconds_f64(),
+            duration_seconds: clip.duration.as_seconds_f64(),
+            anchor_lane_index: clip.anchor_lane_index,
+            lane_index: clip.lane_index,
+            curve: clip
+                .curve
+                .points
+                .iter()
+                .filter_map(|point| match point.value {
+                    CurveValue::Float(value) => Some(FloatCurvePoint {
+                        time: point.position,
+                        value,
+                    }),
+                    CurveValue::Color(_) => None,
+                })
+                .collect(),
+            bindings: clip
+                .bindings
+                .iter()
+                .map(|binding| SequenceAutomationBinding {
+                    effect_id: binding.effect_id.0,
+                    param: binding.param.as_str().to_string(),
+                    mapping: automation_mapping_to_gui(&binding.mapping),
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 fn project_layout(session: &ProjectSession, resolved: &ResolvedGuiObject) -> GuiDocument {
@@ -629,6 +669,7 @@ fn effect_scripts(session: &ProjectSession) -> Vec<SequenceEffectScript> {
 
 fn effect_params(
     session: &ProjectSession,
+    sequence: &dawn_language::sequence::Sequence,
     effect: &dawn_language::effect::EffectInst,
 ) -> Vec<SequenceEffectParam> {
     let Some(definition) = session.project.definitions.effects.get(&effect.definition) else {
@@ -649,12 +690,55 @@ fn effect_params(
                 name: param.name.as_str().to_string(),
                 kind,
                 options: param_options(&param.ty),
-                editable: true,
+                editable: automation_for_param(sequence, effect.id.0, param.name.as_str())
+                    .is_none(),
                 curve_source: override_value.and_then(|value| curve_source(session, value)),
+                automation: automation_for_param(sequence, effect.id.0, param.name.as_str()),
                 value,
             })
         })
         .collect()
+}
+
+fn automation_for_param(
+    sequence: &dawn_language::sequence::Sequence,
+    effect_id: u32,
+    param: &str,
+) -> Option<SequenceParamAutomation> {
+    sequence.automation_clips.iter().find_map(|clip| {
+        clip.bindings
+            .iter()
+            .find(|binding| binding.effect_id.0 == effect_id && binding.param.as_str() == param)
+            .map(|binding| SequenceParamAutomation {
+                clip_id: clip.id.0,
+                clip_name: clip.name.clone(),
+                mapping: automation_mapping_to_gui(&binding.mapping),
+            })
+    })
+}
+
+fn automation_mapping_to_gui(mapping: &AutomationMapping) -> SequenceAutomationMapping {
+    match mapping {
+        AutomationMapping::Float { min, max } => SequenceAutomationMapping::Float {
+            min: *min,
+            max: *max,
+        },
+        AutomationMapping::Int { min, max } => SequenceAutomationMapping::Int {
+            min: *min as f64,
+            max: *max as f64,
+        },
+        AutomationMapping::Bool => SequenceAutomationMapping::Bool,
+        AutomationMapping::Enum { values } => SequenceAutomationMapping::Enum {
+            values: values
+                .iter()
+                .map(|value| value.as_str().to_string())
+                .collect(),
+        },
+        AutomationMapping::FloatCurve { min, max } => SequenceAutomationMapping::FloatCurve {
+            min: *min,
+            max: *max,
+        },
+    }
 }
 
 fn curve_library(session: &ProjectSession) -> Vec<SequenceCurveLibraryItem> {
@@ -1395,9 +1479,14 @@ fn edit_sequence(
                 layout_target_to_effect_target(target)?;
         }
         SequenceGuiEdit::DeleteEffect { id } => {
-            sequence_mut(session, &sequence_id)?
-                .effects
-                .retain(|effect| effect.id.0 != id);
+            let sequence = sequence_mut(session, &sequence_id)?;
+            sequence.effects.retain(|effect| effect.id.0 != id);
+            for clip in &mut sequence.automation_clips {
+                clip.bindings.retain(|binding| binding.effect_id.0 != id);
+            }
+            sequence
+                .automation_clips
+                .retain(|clip| !clip.bindings.is_empty());
         }
         SequenceGuiEdit::MoveMark {
             collection_key,
@@ -1553,6 +1642,127 @@ fn edit_sequence(
             effect_mut(sequence_mut(session, &sequence_id)?, id)?
                 .param_overrides
                 .insert(identifier(&name)?, effect_param_value_from_gui(value)?);
+        }
+        SequenceGuiEdit::AddAutomationClip {
+            name,
+            start_seconds,
+            duration_seconds,
+            anchor_lane_index,
+            lane_index,
+        } => {
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let next_id = sequence
+                .automation_clips
+                .iter()
+                .map(|clip| clip.id.0)
+                .max()
+                .unwrap_or(0)
+                + 1;
+            sequence.automation_clips.push(AutomationClip {
+                id: AutomationClipId(next_id),
+                name,
+                start: dawn_time(start_seconds.max(0.0)),
+                duration: dawn_duration(duration_seconds.max(0.000000001)),
+                anchor_lane_index,
+                lane_index,
+                curve: default_automation_curve(),
+                bindings: Vec::new(),
+            });
+        }
+        SequenceGuiEdit::MoveAutomationClip {
+            id,
+            start_seconds,
+            anchor_lane_index,
+            lane_index,
+        } => {
+            let clip = automation_clip_mut(sequence_mut(session, &sequence_id)?, id)?;
+            clip.start = dawn_time(start_seconds.max(0.0));
+            clip.anchor_lane_index = anchor_lane_index;
+            clip.lane_index = lane_index;
+        }
+        SequenceGuiEdit::ResizeAutomationClip {
+            id,
+            start_seconds,
+            duration_seconds,
+        } => {
+            let clip = automation_clip_mut(sequence_mut(session, &sequence_id)?, id)?;
+            clip.start = dawn_time(start_seconds.max(0.0));
+            clip.duration = dawn_duration(duration_seconds.max(0.000000001));
+        }
+        SequenceGuiEdit::UpdateAutomationCurve { id, curve } => {
+            automation_clip_mut(sequence_mut(session, &sequence_id)?, id)?.curve =
+                float_curve(curve);
+        }
+        SequenceGuiEdit::DeleteAutomationClip { id } => {
+            sequence_mut(session, &sequence_id)?
+                .automation_clips
+                .retain(|clip| clip.id.0 != id);
+        }
+        SequenceGuiEdit::BindAutomationParam {
+            clip_id,
+            effect_id,
+            param,
+            mapping,
+        } => {
+            let param = identifier(&param)?;
+            let sequence = sequence_mut(session, &sequence_id)?;
+            for clip in &sequence.automation_clips {
+                if clip
+                    .bindings
+                    .iter()
+                    .any(|binding| binding.effect_id.0 == effect_id && binding.param == param)
+                {
+                    return Err(GuiMutationError::Invalid(
+                        "Param is already automated.".to_string(),
+                    ));
+                }
+            }
+            automation_clip_mut(sequence, clip_id)?
+                .bindings
+                .push(AutomationBinding {
+                    effect_id: EffectInstId(effect_id),
+                    param,
+                    mapping: automation_mapping_from_gui(mapping)?,
+                });
+        }
+        SequenceGuiEdit::UnbindAutomationParam {
+            clip_id,
+            effect_id,
+            param,
+        } => {
+            let param_id = identifier(&param)?;
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let clip = sequence
+                .automation_clips
+                .iter()
+                .find(|clip| clip.id.0 == clip_id)
+                .cloned()
+                .ok_or_else(|| {
+                    GuiMutationError::Invalid("Automation clip was not found.".to_string())
+                })?;
+            let Some(binding) = clip
+                .bindings
+                .iter()
+                .find(|binding| binding.effect_id.0 == effect_id && binding.param == param_id)
+                .cloned()
+            else {
+                return Err(GuiMutationError::Invalid(
+                    "Automation binding was not found.".to_string(),
+                ));
+            };
+            let effect_start = sequence
+                .effects
+                .iter()
+                .find(|effect| effect.id.0 == effect_id)
+                .map(|effect| effect.start.as_seconds_f64())
+                .ok_or_else(|| GuiMutationError::Invalid("Effect was not found.".to_string()))?;
+            let value = automation_binding_value_at(&clip, &binding, effect_start)?;
+            effect_mut(sequence, effect_id)?
+                .param_overrides
+                .insert(param_id.clone(), value);
+            automation_clip_mut(sequence, clip_id)?
+                .bindings
+                .retain(|binding| !(binding.effect_id.0 == effect_id && binding.param == param_id));
         }
     }
     Ok(())
@@ -2115,6 +2325,17 @@ fn mark_collection_mut<'a>(
         .ok_or_else(|| GuiMutationError::Invalid("Mark collection was not found.".to_string()))
 }
 
+fn automation_clip_mut(
+    sequence: &mut dawn_language::sequence::Sequence,
+    id: u32,
+) -> Result<&mut AutomationClip, GuiMutationError> {
+    sequence
+        .automation_clips
+        .iter_mut()
+        .find(|clip| clip.id.0 == id)
+        .ok_or_else(|| GuiMutationError::Invalid("Automation clip was not found.".to_string()))
+}
+
 fn identifier(value: &str) -> Result<Identifier, GuiMutationError> {
     Identifier::new(value.to_string())
         .map_err(|_| GuiMutationError::Invalid(format!("Invalid identifier `{value}`.")))
@@ -2188,6 +2409,128 @@ fn effect_param_value_from_gui(
                 .collect::<Result<Vec<_>, _>>()?,
         ),
     })
+}
+
+fn automation_mapping_from_gui(
+    mapping: SequenceAutomationMapping,
+) -> Result<AutomationMapping, GuiMutationError> {
+    Ok(match mapping {
+        SequenceAutomationMapping::Float { min, max } => AutomationMapping::Float { min, max },
+        SequenceAutomationMapping::Int { min, max } => AutomationMapping::Int {
+            min: min.round() as i64,
+            max: max.round() as i64,
+        },
+        SequenceAutomationMapping::Bool => AutomationMapping::Bool,
+        SequenceAutomationMapping::Enum { values } => AutomationMapping::Enum {
+            values: values
+                .into_iter()
+                .map(|value| identifier(&value))
+                .collect::<Result<Vec<_>, _>>()?,
+        },
+        SequenceAutomationMapping::FloatCurve { min, max } => {
+            AutomationMapping::FloatCurve { min, max }
+        }
+    })
+}
+
+fn automation_binding_value_at(
+    clip: &AutomationClip,
+    binding: &AutomationBinding,
+    seconds: f64,
+) -> Result<EffectParamValue, GuiMutationError> {
+    let normalized = sample_gui_automation_clip(clip, seconds);
+    Ok(match &binding.mapping {
+        AutomationMapping::Float { min, max } => {
+            EffectParamValue::Float(lerp(*min, *max, normalized))
+        }
+        AutomationMapping::Int { min, max } => {
+            EffectParamValue::Int(lerp(*min as f64, *max as f64, normalized).round() as i64)
+        }
+        AutomationMapping::Bool => EffectParamValue::Bool(normalized >= 0.5),
+        AutomationMapping::Enum { values } => {
+            if values.is_empty() {
+                return Err(GuiMutationError::Invalid(
+                    "Enum automation mapping has no values.".to_string(),
+                ));
+            }
+            let index = ((normalized.clamp(0.0, 1.0) * values.len() as f64).floor() as usize)
+                .min(values.len().saturating_sub(1));
+            EffectParamValue::Enum(values[index].clone())
+        }
+        AutomationMapping::FloatCurve { min, max } => {
+            EffectParamValue::Curve(CurveSource::Inline(Curve {
+                points: vec![CurvePoint {
+                    position: 0.0,
+                    value: CurveValue::Float(lerp(*min, *max, normalized)),
+                }],
+            }))
+        }
+    })
+}
+
+fn sample_gui_automation_clip(clip: &AutomationClip, seconds: f64) -> f64 {
+    let start_seconds = clip.start.as_seconds_f64();
+    let duration_seconds = clip.duration.as_seconds_f64();
+    let position = if duration_seconds <= 0.0 {
+        0.0
+    } else {
+        ((seconds - start_seconds) / duration_seconds).clamp(0.0, 1.0)
+    };
+    sample_gui_float_curve(&clip.curve, position).clamp(0.0, 1.0)
+}
+
+fn sample_gui_float_curve(curve: &Curve, position: f64) -> f64 {
+    let mut points = curve.points.iter().collect::<Vec<_>>();
+    points.sort_by(|left, right| left.position.total_cmp(&right.position));
+    let Some(first) = points.first() else {
+        return 0.0;
+    };
+    if position <= first.position {
+        return gui_curve_point_float(first);
+    }
+    for pair in points.windows(2) {
+        let left = pair[0];
+        let right = pair[1];
+        if position <= right.position {
+            let span = right.position - left.position;
+            let amount = if span <= 0.0 {
+                0.0
+            } else {
+                (position - left.position) / span
+            };
+            return lerp(
+                gui_curve_point_float(left),
+                gui_curve_point_float(right),
+                amount,
+            );
+        }
+    }
+    points
+        .last()
+        .map(|point| gui_curve_point_float(point))
+        .unwrap_or(0.0)
+}
+
+fn gui_curve_point_float(point: &CurvePoint) -> f64 {
+    match point.value {
+        CurveValue::Float(value) => value,
+        CurveValue::Color(_) => 0.0,
+    }
+}
+
+fn default_automation_curve() -> Curve {
+    Curve {
+        points: vec![
+            CurvePoint {
+                position: 0.0,
+                value: CurveValue::Float(0.0),
+            },
+            CurvePoint {
+                position: 1.0,
+                value: CurveValue::Float(1.0),
+            },
+        ],
+    }
 }
 
 fn float_curve(points: Vec<FloatCurvePoint>) -> Curve {

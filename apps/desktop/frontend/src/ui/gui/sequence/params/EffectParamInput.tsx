@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, ChevronRight, FlipHorizontal2, FlipVertical2, Link2
 
 import { commands } from "../../../../api";
 
-import type { ColorCurvePoint, FloatCurvePoint, SequenceCurveLibraryItem, SequenceEffectParam, SequenceEffectParamValue, SequenceMarkCollection } from "../../../../types";
+import type { ColorCurvePoint, FloatCurvePoint, SequenceAutomationClip, SequenceAutomationMapping, SequenceCurveLibraryItem, SequenceEffectParam, SequenceEffectParamValue, SequenceMarkCollection } from "../../../../types";
 
 import { runGuiEditCommand } from "../../../../store";
 
@@ -28,12 +28,14 @@ export function EffectParamInput({
   effectId,
   param,
   curveLibrary,
-  markCollections
+  markCollections,
+  automationClips
 }: {
   effectId: number;
   param: SequenceEffectParam;
   curveLibrary: SequenceCurveLibraryItem[];
   markCollections: SequenceMarkCollection[];
+  automationClips: SequenceAutomationClip[];
 }) {
   const commit = (value: SequenceEffectParamValue) => {
     return runGuiEditCommand(() =>
@@ -46,17 +48,48 @@ export function EffectParamInput({
     ).then(() => undefined);
   };
 
+  if (param.automation !== null) {
+    return (
+      <div className="effect-param-group">
+        <div className="effect-param-name">{param.name}</div>
+        <div className="inspector-inline-row">
+          <Readout label="Automated" value={param.automation.clipName} />
+          <button
+            type="button"
+            className="neutral-button"
+            onClick={() =>
+              void runGuiEditCommand(() =>
+                commands.applySequenceGuiEdit({
+                  type: "unbindAutomationParam",
+                  clipId: param.automation?.clipId ?? 0,
+                  effectId,
+                  param: param.name
+                })
+              )
+            }
+          >
+            Unlink
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!param.editable) {
     return <Readout label={param.name} value="Unavailable" />;
   }
 
+  const automation = automationBindingControl(effectId, param, automationClips);
+
   switch (param.value.type) {
     case "int":
-      return <NumberParam key={`${param.name}:${param.value.value}`} param={param} value={param.value.value} step={1} commit={(value) => commit({ type: "int", value: Math.max(0, Math.round(value)) })} />;
+      return <>{automation}<NumberParam key={`${param.name}:${param.value.value}`} param={param} value={param.value.value} step={1} commit={(value) => commit({ type: "int", value: Math.max(0, Math.round(value)) })} /></>;
     case "float":
-      return <NumberParam key={`${param.name}:${param.value.value}`} param={param} value={param.value.value} step={0.05} commit={(value) => commit({ type: "float", value })} />;
+      return <>{automation}<NumberParam key={`${param.name}:${param.value.value}`} param={param} value={param.value.value} step={0.05} commit={(value) => commit({ type: "float", value })} /></>;
     case "bool":
       return (
+        <>
+        {automation}
         <label className="effect-param-check">
           <input
             type="checkbox"
@@ -65,20 +98,26 @@ export function EffectParamInput({
           />
           <span>{param.name}</span>
         </label>
+        </>
       );
     case "color":
       return <ColorField key={`${param.name}:${param.value.value.toLowerCase()}`} label={param.name} value={param.value.value} commit={(value) => commit({ type: "color", value })} />;
     case "enum":
       return (
+        <>
+        {automation}
         <label>
           {param.name}
           <select value={param.value.value} onChange={(event) => void commit({ type: "enum", value: event.currentTarget.value })}>
             {param.options.map((option) => <option key={option} value={option}>{option}</option>)}
           </select>
         </label>
+        </>
       );
     case "floatCurve":
       return (
+        <>
+        {automation}
         <CurveParamSourceShell
           effectId={effectId}
           param={param}
@@ -88,6 +127,7 @@ export function EffectParamInput({
           commit={(points) => commit({ type: "floatCurve", points })}
           render={(props) => <FloatCurveParamShell name={param.name} {...props} />}
         />
+        </>
       );
     case "colorCurve":
       return (
@@ -152,6 +192,64 @@ function NumberArrayParam({ name, values, step, commit }: { name: string; values
       ))}
     />
   );
+}
+
+function automationBindingControl(effectId: number, param: SequenceEffectParam, clips: SequenceAutomationClip[]) {
+  const mapping = defaultAutomationMapping(param);
+  if (mapping === null || clips.length === 0) return null;
+  return (
+    <label>
+      Automation
+      <select
+        value=""
+        onChange={(event) => {
+          const clipId = Number(event.currentTarget.value);
+          if (!Number.isFinite(clipId)) return;
+          void runGuiEditCommand(() =>
+            commands.applySequenceGuiEdit({
+              type: "bindAutomationParam",
+              clipId,
+              effectId,
+              param: param.name,
+              mapping
+            })
+          );
+        }}
+      >
+        <option value="">Link clip</option>
+        {clips.map((clip) => (
+          <option key={clip.id} value={String(clip.id)}>{clip.name}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function defaultAutomationMapping(param: SequenceEffectParam): SequenceAutomationMapping | null {
+  switch (param.value.type) {
+    case "float":
+      return { type: "float", min: 0, max: Math.max(1, param.value.value) };
+    case "int":
+      return { type: "int", min: 0, max: Math.max(1, param.value.value) };
+    case "bool":
+      return { type: "bool" };
+    case "enum":
+      return { type: "enum", values: param.options };
+    case "floatCurve":
+      return { type: "floatCurve", min: 0, max: 1 };
+    case "color":
+    case "marks":
+    case "colorCurve":
+    case "intArray":
+    case "floatArray":
+    case "boolArray":
+    case "colorArray":
+    case "floatCurveArray":
+    case "colorCurveArray":
+      return null;
+    default:
+      return null;
+  }
 }
 
 function BoolArrayParam({ name, values, commit }: { name: string; values: boolean[]; commit: (values: boolean[]) => Promise<void> }) {

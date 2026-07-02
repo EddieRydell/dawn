@@ -22,6 +22,7 @@ export type SequenceSelection = WireSequenceSelection | null;
 
 export type GuiFocus =
   | { type: "effect"; id: number }
+  | { type: "automationClip"; id: number }
   | { type: "mark"; collectionKey: string; index: number }
   | { type: "placement"; id: number }
   | { type: "point"; index: number }

@@ -19,8 +19,8 @@ use dawn_language::effect::{
 use dawn_language::effect_dsl::{Diagnostic as EffectDiagnostic, Identifier, compile_effects};
 use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
 use dawn_language::sequence::{
-    AssetId, AutomationClip, AutomationClipId, MarkCollection, MarkCollectionKey, Sequence,
-    SequenceAudio, SequenceId,
+    AssetId, AutomationBinding, AutomationClip, AutomationClipId, AutomationMapping,
+    MarkCollection, MarkCollectionKey, Sequence, SequenceAudio, SequenceId,
 };
 use dawn_language::setup::{
     ControllerAddress, ControllerDefinition, ControllerDefinitionId, ControllerId,
@@ -1500,7 +1500,7 @@ fn sequence_value(
             sequence
                 .automation_clips
                 .iter()
-                .map(|clip| automation_clip_value(session, from_document, clip))
+                .map(automation_clip_value)
                 .collect::<Result<Vec<_>, _>>()?,
         ),
     );
@@ -1586,22 +1586,10 @@ fn effect_inst_value(
     Ok(Value::Mapping(value))
 }
 
-fn automation_clip_value(
-    session: &ProjectSession,
-    from_document: &Utf8Path,
-    clip: &AutomationClip,
-) -> Result<Value, ExportProjectError> {
+fn automation_clip_value(clip: &AutomationClip) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
     value.insert(string_value("id"), number_value(clip.id.0)?);
-    value.insert(
-        string_value("targets"),
-        Value::Sequence(
-            clip.targets
-                .iter()
-                .map(|target| number_value(target.0))
-                .collect::<Result<Vec<_>, _>>()?,
-        ),
-    );
+    value.insert(string_value("name"), Value::String(clip.name.clone()));
     value.insert(
         string_value("start"),
         Value::String(seconds_string(clip.start.as_seconds_f64())),
@@ -1611,14 +1599,108 @@ fn automation_clip_value(
         Value::String(seconds_string(clip.duration.as_seconds_f64())),
     );
     value.insert(
-        string_value("curve"),
-        Value::String(write_reference(
-            session,
-            from_document,
-            SourceObjectKind::Curve,
-            &clip.curve.0,
-        )?),
+        string_value("anchor_lane_index"),
+        number_value(clip.anchor_lane_index)?,
     );
+    value.insert(string_value("lane_index"), number_value(clip.lane_index)?);
+    value.insert(string_value("curve"), automation_curve_value(&clip.curve)?);
+    value.insert(
+        string_value("bindings"),
+        Value::Sequence(
+            clip.bindings
+                .iter()
+                .map(automation_binding_value)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn automation_curve_value(curve: &Curve) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(
+        string_value("value_type"),
+        Value::String("float".to_string()),
+    );
+    value.insert(
+        string_value("points"),
+        Value::Sequence(
+            curve
+                .points
+                .iter()
+                .map(|point| {
+                    let mut value = Mapping::new();
+                    value.insert(string_value("time"), number_value(point.position)?);
+                    let CurveValue::Float(point_value) = point.value else {
+                        return Err(ExportProjectError::InvalidReference {
+                            path: Utf8PathBuf::from("<sync>"),
+                            reference: "automation.curve".to_string(),
+                            message: "automation curves must contain float points".to_string(),
+                        });
+                    };
+                    value.insert(string_value("value"), number_value(point_value)?);
+                    Ok(Value::Mapping(value))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn automation_binding_value(binding: &AutomationBinding) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(
+        string_value("effect_id"),
+        number_value(binding.effect_id.0)?,
+    );
+    value.insert(
+        string_value("param"),
+        Value::String(binding.param.as_str().to_string()),
+    );
+    value.insert(
+        string_value("mapping"),
+        automation_mapping_value(&binding.mapping)?,
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn automation_mapping_value(mapping: &AutomationMapping) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    match mapping {
+        AutomationMapping::Float { min, max } => {
+            value.insert(string_value("type"), Value::String("float".to_string()));
+            value.insert(string_value("min"), number_value(*min)?);
+            value.insert(string_value("max"), number_value(*max)?);
+        }
+        AutomationMapping::Int { min, max } => {
+            value.insert(string_value("type"), Value::String("int".to_string()));
+            value.insert(string_value("min"), number_value(*min)?);
+            value.insert(string_value("max"), number_value(*max)?);
+        }
+        AutomationMapping::Bool => {
+            value.insert(string_value("type"), Value::String("bool".to_string()));
+        }
+        AutomationMapping::Enum { values } => {
+            value.insert(string_value("type"), Value::String("enum".to_string()));
+            value.insert(
+                string_value("values"),
+                Value::Sequence(
+                    values
+                        .iter()
+                        .map(|value| Value::String(value.as_str().to_string()))
+                        .collect(),
+                ),
+            );
+        }
+        AutomationMapping::FloatCurve { min, max } => {
+            value.insert(
+                string_value("type"),
+                Value::String("float_curve".to_string()),
+            );
+            value.insert(string_value("min"), number_value(*min)?);
+            value.insert(string_value("max"), number_value(*max)?);
+        }
+    }
     Ok(Value::Mapping(value))
 }
 
@@ -3275,33 +3357,24 @@ impl DomainResolver<'_> {
         path: &Utf8Path,
         value: &Value,
     ) -> Result<AutomationClip, LoadProjectError> {
-        let curve_ref = string_field(path, value, "curve")?;
-        let curve = match self.loader.resolve_reference(path, curve_ref)? {
-            ResolvedObject::Curve(curve) => curve,
-            _ => {
-                return Err(LoadProjectError::InvalidReference {
+        let bindings = sequence_values(path, value, "bindings")?
+            .iter()
+            .map(|binding| parse_automation_binding(path, binding))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut seen = IndexSet::new();
+        for binding in &bindings {
+            if !seen.insert((binding.effect_id.0, binding.param.as_str().to_string())) {
+                return Err(LoadProjectError::InvalidDocument {
                     path: path.to_path_buf(),
-                    range: None,
-                    reference: curve_ref.to_string(),
+                    range: source_range_for_field_value(path, value, "bindings"),
+                    message: "automation clip has duplicate bindings for an effect param"
+                        .to_string(),
                 });
             }
-        };
-        self.resolve_curve(path, &curve)?;
+        }
         Ok(AutomationClip {
             id: AutomationClipId(u32_field(path, value, "id")?),
-            targets: sequence_values(path, value, "targets")?
-                .iter()
-                .map(|target| {
-                    target
-                        .as_u64()
-                        .map(|value| EffectInstId(value as u32))
-                        .ok_or_else(|| LoadProjectError::InvalidDocument {
-                            path: path.to_path_buf(),
-                            range: None,
-                            message: "automation targets must be effect ids".to_string(),
-                        })
-                })
-                .collect::<Result<Vec<_>, _>>()?,
+            name: string_field(path, value, "name")?.to_string(),
             start: parse_duration_as_time(string_field(path, value, "start")?).map_err(
                 |error| {
                     with_yaml_location(
@@ -3318,9 +3391,92 @@ impl DomainResolver<'_> {
                     source_range_for_field_value(path, value, "duration"),
                 )
             })?,
-            curve,
+            anchor_lane_index: u32_field(path, value, "anchor_lane_index")?,
+            lane_index: u32_field(path, value, "lane_index")?,
+            curve: parse_automation_curve(path, required_field(path, value, "curve")?)?,
+            bindings,
         })
     }
+}
+
+fn parse_automation_curve(path: &Utf8Path, value: &Value) -> Result<Curve, LoadProjectError> {
+    let curve = parse_curve(path, value)?;
+    if curve
+        .points
+        .iter()
+        .any(|point| !matches!(point.value, CurveValue::Float(_)))
+    {
+        return Err(LoadProjectError::InvalidDocument {
+            path: path.to_path_buf(),
+            range: source_range_for_value(path, value),
+            message: "automation curves must be float curves".to_string(),
+        });
+    }
+    Ok(curve)
+}
+
+fn parse_automation_binding(
+    path: &Utf8Path,
+    value: &Value,
+) -> Result<AutomationBinding, LoadProjectError> {
+    Ok(AutomationBinding {
+        effect_id: EffectInstId(u32_field(path, value, "effect_id")?),
+        param: parse_identifier_field(path, value, "param")?,
+        mapping: parse_automation_mapping(path, required_field(path, value, "mapping")?)?,
+    })
+}
+
+fn parse_automation_mapping(
+    path: &Utf8Path,
+    value: &Value,
+) -> Result<AutomationMapping, LoadProjectError> {
+    Ok(match string_field(path, value, "type")? {
+        "float" => AutomationMapping::Float {
+            min: f64_field(path, value, "min")?,
+            max: f64_field(path, value, "max")?,
+        },
+        "int" => AutomationMapping::Int {
+            min: i64_field(path, value, "min")?,
+            max: i64_field(path, value, "max")?,
+        },
+        "bool" => AutomationMapping::Bool,
+        "enum" => AutomationMapping::Enum {
+            values: sequence_field(path, value, "values")?
+                .into_iter()
+                .map(|enum_value| {
+                    Identifier::new(enum_value).map_err(|_| LoadProjectError::InvalidDocument {
+                        path: path.to_path_buf(),
+                        range: source_range_for_field_value(path, value, "values"),
+                        message: "enum automation values must be identifiers".to_string(),
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        },
+        "float_curve" => AutomationMapping::FloatCurve {
+            min: f64_field(path, value, "min")?,
+            max: f64_field(path, value, "max")?,
+        },
+        other => {
+            return Err(LoadProjectError::InvalidDocument {
+                path: path.to_path_buf(),
+                range: source_range_for_field_value(path, value, "type"),
+                message: format!("unsupported automation mapping `{other}`"),
+            });
+        }
+    })
+}
+
+fn parse_identifier_field(
+    path: &Utf8Path,
+    value: &Value,
+    key: &str,
+) -> Result<Identifier, LoadProjectError> {
+    let raw = string_field(path, value, key)?;
+    Identifier::new(raw.to_string()).map_err(|_| LoadProjectError::InvalidDocument {
+        path: path.to_path_buf(),
+        range: source_range_for_field_value(path, value, key),
+        message: format!("invalid identifier `{raw}`"),
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]

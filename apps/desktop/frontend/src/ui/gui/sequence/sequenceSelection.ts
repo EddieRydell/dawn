@@ -87,11 +87,6 @@ export function buildSequenceClipLayout(
   const draftById = new Map(drafts.map((draft) => [draft.id, draft]));
   const visibleStartSeconds = viewport.scrollXSeconds;
   const visibleEndSeconds = viewport.scrollXSeconds + Math.max(1, bounds.width - left) / viewport.pxPerSecond;
-  const firstVisibleLane = Math.max(0, Math.floor((viewport.scrollY - viewport.laneHeight) / viewport.laneHeight));
-  const lastVisibleLane = Math.min(
-    Math.max(0, document.lanes.length - 1),
-    Math.ceil((viewport.scrollY + Math.max(1, bounds.height - top) + viewport.laneHeight) / viewport.laneHeight)
-  );
   const clips: SequenceClip[] = [];
   for (const effect of document.effects) {
     const activeDraft = draftById.get(effect.id) ?? null;
@@ -101,7 +96,6 @@ export function buildSequenceClipLayout(
           laneIndex: laneIndexForTarget(laneIndexByTarget, effect.target)
         }
       : clipFromDraft(document, effect, activeDraft);
-    if (clip.laneIndex < firstVisibleLane || clip.laneIndex > lastVisibleLane) continue;
     if (!effectIntersectsTimeRange(clip.effect, visibleStartSeconds, visibleEndSeconds)) continue;
     clips.push(clip);
   }

@@ -1630,7 +1630,7 @@ empty:
     - 189.652488849s
   effects:
   - id: 76
-    start: 0.77s
+    start: 4.921111904s
     duration: 12.96752s
     target:
       type: group
@@ -1672,7 +1672,7 @@ empty:
         value: 20.0
     script: effects.MarkPulse
   - id: 75
-    start: 1s
+    start: 0s
     duration: 12.80752s
     target:
       type: group
@@ -1731,7 +1731,7 @@ empty:
         value: 20.0
     script: effects.ShimmerField
   - id: 77
-    start: 13.57752s
+    start: 13.695145433s
     duration: 12.96s
     target:
       type: group
@@ -11472,4 +11472,112 @@ empty:
           - time: 1.0
             value: 0.0
     script: effects.Pulse
-  automation_clips: []
+  automation_clips:
+  - id: 1
+    name: Shimmer lift
+    start: 0.370043439s
+    duration: 8.233100912s
+    anchor_lane_index: 0
+    lane_index: 0
+    curve:
+      value_type: float
+      points:
+      - time: 0.0
+        value: 0.0
+      - time: 0.141177356
+        value: 0.382
+      - time: 0.179141015
+        value: 0.155
+      - time: 0.326764795
+        value: 1.0
+      - time: 0.366951594
+        value: 0.0
+      - time: 1.0
+        value: 0.8
+    bindings:
+    - effect_id: 75
+      param: shimmer_level
+      mapping:
+        type: float
+        min: 0.05
+        max: 0.9
+    - effect_id: 75
+      param: sparkle_level
+      mapping:
+        type: float
+        min: 0.25
+        max: 1.0
+    - effect_id: 75
+      param: density
+      mapping:
+        type: float
+        min: 0.02
+        max: 0.18
+  - id: 2
+    name: Mark pulse spread
+    start: 0s
+    duration: 13.150496763s
+    anchor_lane_index: 0
+    lane_index: 0
+    curve:
+      value_type: float
+      points:
+      - time: 0.0
+        value: 0.2
+      - time: 0.19282976
+        value: 0.782
+      - time: 0.336897972
+        value: 0.3
+      - time: 0.475055693
+        value: 0.827
+      - time: 0.557802564
+        value: 0.2
+      - time: 1.0
+        value: 0.35
+    bindings:
+    - effect_id: 76
+      param: decay_seconds
+      mapping:
+        type: float
+        min: 0.12
+        max: 0.55
+    - effect_id: 76
+      param: sections_per_mark
+      mapping:
+        type: int
+        min: 1
+        max: 6
+    - effect_id: 76
+      param: hue_mix
+      mapping:
+        type: float
+        min: 0.0
+        max: 0.75
+  - id: 3
+    name: Chase window
+    start: 39.765825847s
+    duration: 4.173401742s
+    anchor_lane_index: 0
+    lane_index: 0
+    curve:
+      value_type: float
+      points:
+      - time: 0.0
+        value: 1.0
+      - time: 0.35
+        value: 0.25
+      - time: 1.0
+        value: 0.0
+    bindings:
+    - effect_id: 3
+      param: pulse_overlap
+      mapping:
+        type: float
+        min: 18.0
+        max: 70.0
+    - effect_id: 3
+      param: chase_position
+      mapping:
+        type: float_curve
+        min: 0.0
+        max: 1.0

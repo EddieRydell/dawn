@@ -13,7 +13,9 @@ use dawn_language::effect::{
 };
 use dawn_language::effect_dsl::{EffectKind, hash_compiled_effect};
 use dawn_language::model::DawnProject;
-use dawn_language::sequence::{MarkCollectionKey, Sequence, SequenceId};
+use dawn_language::sequence::{
+    AutomationBinding, AutomationMapping, MarkCollectionKey, Sequence, SequenceId,
+};
 use dawn_language::setup::SetupId;
 use dawn_language::values::{Curve, CurveValue, DawnTime};
 use dawn_runtime::{
@@ -1095,11 +1097,21 @@ enum RenderInputSignature {
 #[derive(Clone, Debug, PartialEq)]
 struct RenderInputSignatureData {
     effect: EffectInst,
+    automation_clips: Vec<AutomationInputSignature>,
     definition: Option<EffectDefinition>,
     generator_definitions: Vec<(dawn_language::effect::EffectDefinitionId, EffectDefinition)>,
     curve_references: Vec<(CurveId, Option<CurveDefinition>)>,
     mark_references: Vec<(MarkCollectionKey, Option<Vec<DawnTime>>)>,
     target_pixels: Vec<RenderedTargetPixelAddress>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct AutomationInputSignature {
+    clip_id: u32,
+    start: DawnTime,
+    duration: dawn_language::values::DawnDuration,
+    curve: Curve,
+    bindings: Vec<AutomationBinding>,
 }
 
 fn render_signature(
@@ -1137,9 +1149,29 @@ fn render_signature(
             &mut mark_references,
         );
     }
+    let automation_clips = sequence
+        .automation_clips
+        .iter()
+        .filter_map(|clip| {
+            let bindings = clip
+                .bindings
+                .iter()
+                .filter(|binding| binding.effect_id == effect.id)
+                .cloned()
+                .collect::<Vec<_>>();
+            (!bindings.is_empty()).then(|| AutomationInputSignature {
+                clip_id: clip.id.0,
+                start: clip.start.clone(),
+                duration: clip.duration.clone(),
+                curve: clip.curve.clone(),
+                bindings,
+            })
+        })
+        .collect();
     Ok(RenderInputSignature::Valid(Box::new(
         RenderInputSignatureData {
             effect: effect.clone(),
+            automation_clips,
             definition,
             generator_definitions,
             curve_references,
@@ -1213,6 +1245,10 @@ fn hash_render_signature<H: Hasher>(signature: &RenderInputSignature, state: &mu
         RenderInputSignature::Valid(data) => {
             0u8.hash(state);
             hash_effect_inst(&data.effect, state);
+            data.automation_clips.len().hash(state);
+            for clip in &data.automation_clips {
+                hash_automation_input_signature(clip, state);
+            }
             hash_optional_effect_definition(&data.definition, state);
             data.generator_definitions.len().hash(state);
             for (id, definition) in &data.generator_definitions {
@@ -1244,6 +1280,49 @@ fn hash_render_signature<H: Hasher>(signature: &RenderInputSignature, state: &mu
         RenderInputSignature::Invalid { message } => {
             1u8.hash(state);
             message.hash(state);
+        }
+    }
+}
+
+fn hash_automation_input_signature<H: Hasher>(clip: &AutomationInputSignature, state: &mut H) {
+    clip.clip_id.hash(state);
+    clip.start.0.hash(state);
+    clip.duration.0.hash(state);
+    hash_curve(&clip.curve, state);
+    clip.bindings.len().hash(state);
+    for binding in &clip.bindings {
+        binding.effect_id.hash(state);
+        binding.param.hash(state);
+        hash_automation_mapping(&binding.mapping, state);
+    }
+}
+
+fn hash_automation_mapping<H: Hasher>(mapping: &AutomationMapping, state: &mut H) {
+    match mapping {
+        AutomationMapping::Float { min, max } => {
+            0u8.hash(state);
+            min.to_bits().hash(state);
+            max.to_bits().hash(state);
+        }
+        AutomationMapping::Int { min, max } => {
+            1u8.hash(state);
+            min.hash(state);
+            max.hash(state);
+        }
+        AutomationMapping::Bool => {
+            2u8.hash(state);
+        }
+        AutomationMapping::Enum { values } => {
+            3u8.hash(state);
+            values.len().hash(state);
+            for value in values {
+                value.hash(state);
+            }
+        }
+        AutomationMapping::FloatCurve { min, max } => {
+            4u8.hash(state);
+            min.to_bits().hash(state);
+            max.to_bits().hash(state);
         }
     }
 }
