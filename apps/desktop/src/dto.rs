@@ -5,6 +5,7 @@ use specta::Type;
 #[serde(rename_all = "camelCase")]
 pub struct AppSnapshot {
     pub settings: AppSettings,
+    pub workspace_layout: WorkspaceLayoutState,
     pub project_root: Option<String>,
     pub project_revision: u32,
     pub project_tree_visible: bool,
@@ -22,11 +23,32 @@ pub struct AppSnapshot {
     pub live_output: LiveOutputSnapshot,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceLayoutState {
+    pub project_tree_width_px: f64,
+    pub inspector_width_px: f64,
+    pub project_tree_collapsed: bool,
+    pub inspector_collapsed: bool,
+}
+
+impl Default for WorkspaceLayoutState {
+    fn default() -> Self {
+        Self {
+            project_tree_width_px: 288.0,
+            inspector_width_px: 260.0,
+            project_tree_collapsed: false,
+            inspector_collapsed: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub reopen_last_project: bool,
-    pub default_dawn_view_mode: DefaultDawnViewMode,
+    #[serde(default = "default_editor_view_mode")]
+    pub editor_view_mode: EditorViewMode,
     pub project_tree_mode: ProjectTreeMode,
     pub reopen_preview_window: bool,
     pub autosave_text_edits: bool,
@@ -36,11 +58,15 @@ pub struct AppSettings {
     pub effect_raster: EffectRasterSettings,
 }
 
+fn default_editor_view_mode() -> EditorViewMode {
+    EditorViewMode::Gui
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
             reopen_last_project: true,
-            default_dawn_view_mode: DefaultDawnViewMode::Remember,
+            editor_view_mode: EditorViewMode::Gui,
             project_tree_mode: ProjectTreeMode::Remember,
             reopen_preview_window: true,
             autosave_text_edits: true,
@@ -50,14 +76,6 @@ impl Default for AppSettings {
             effect_raster: EffectRasterSettings::default(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub enum DefaultDawnViewMode {
-    Remember,
-    Gui,
-    Text,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
@@ -320,7 +338,6 @@ pub struct EditorBuffer {
     pub text: String,
     pub dirty: bool,
     pub external_state: BufferExternalState,
-    pub view_mode: EditorViewMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

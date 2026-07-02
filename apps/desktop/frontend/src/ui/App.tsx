@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { commands } from "../api";
 import { installGlobalShortcuts } from "../commandRegistry";
 import { runSnapshotCommand, subscribeToSnapshots, useAppStore } from "../store";
+import type { AppSnapshot, WorkspaceLayoutState } from "../types";
 import { EditorPane } from "./EditorPane";
 import { ExportFseqDialog } from "./ExportFseqDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
@@ -9,6 +10,11 @@ import { ProjectTree } from "./ProjectTree";
 import { SettingsDialog } from "./SettingsDialog";
 import { StatusBar } from "./StatusBar";
 import { TitleBar } from "./TitleBar";
+import { WorkspaceResizeHandle } from "./WorkspaceResizeHandle";
+
+const PROJECT_TREE_MIN_WIDTH_PX = 220;
+const PROJECT_TREE_MAX_WIDTH_PX = 520;
+const WORKSPACE_LAYOUT_SAVE_DELAY_MS = 250;
 
 export function App() {
   const { snapshot, error, hydrate } = useAppStore();
@@ -42,10 +48,7 @@ export function App() {
           <div className="error-strip">{snapshot.previewError}</div>
         )}
       </div>
-      <main className="workbench">
-        {snapshot.projectTreeVisible ? <ProjectTree snapshot={snapshot} /> : null}
-        <EditorPane snapshot={snapshot} />
-      </main>
+      <WorkspaceMain snapshot={snapshot} />
       <StatusBar snapshot={snapshot} />
       <NewProjectDialog />
       <ExportFseqDialog />
@@ -56,5 +59,55 @@ export function App() {
         </div>
       )}
     </div>
+  );
+}
+
+function WorkspaceMain({ snapshot }: { snapshot: AppSnapshot }) {
+  const [workspaceLayout, setWorkspaceLayout] = useState<WorkspaceLayoutState>(() => snapshot.workspaceLayout);
+  const layoutSaveTimer = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    return () => {
+      window.clearTimeout(layoutSaveTimer.current);
+    };
+  }, []);
+
+  const updateWorkspaceLayout = useCallback((next: WorkspaceLayoutState) => {
+    setWorkspaceLayout(next);
+    window.clearTimeout(layoutSaveTimer.current);
+    layoutSaveTimer.current = window.setTimeout(() => {
+      void runSnapshotCommand(() => commands.saveWorkspaceLayoutState(next));
+    }, WORKSPACE_LAYOUT_SAVE_DELAY_MS);
+  }, []);
+
+  const layout = workspaceLayout;
+
+  return (
+    <main className="workbench">
+      {snapshot.projectTreeVisible ? (
+        <div
+          className={`project-panel-shell ${layout.projectTreeCollapsed ? "collapsed" : ""}`}
+          style={{ width: layout.projectTreeCollapsed ? 8 : layout.projectTreeWidthPx }}
+        >
+          {!layout.projectTreeCollapsed && <ProjectTree snapshot={snapshot} />}
+          <WorkspaceResizeHandle
+            ariaLabel="Resize project tree"
+            collapsed={layout.projectTreeCollapsed}
+            direction="left"
+            min={PROJECT_TREE_MIN_WIDTH_PX}
+            max={PROJECT_TREE_MAX_WIDTH_PX}
+            value={layout.projectTreeWidthPx}
+            onChange={(update) => {
+              updateWorkspaceLayout({
+                ...layout,
+                projectTreeCollapsed: update.collapsed,
+                projectTreeWidthPx: update.width
+              });
+            }}
+          />
+        </div>
+      ) : null}
+      <EditorPane snapshot={snapshot} workspaceLayout={layout} onWorkspaceLayoutChange={updateWorkspaceLayout} />
+    </main>
   );
 }

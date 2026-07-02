@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
 import { commands, setGuiEditResultHandler } from "./api";
+import { effectiveEditorViewMode } from "./editorViewMode";
 import type { AppSnapshot, AudioTransportSnapshot, GuiDocument, GuiDocumentRequest, GuiEditResult, ProjectRestoreState } from "./types";
 
 type SnapshotApplySource = "event" | "command" | "hydrate";
@@ -46,7 +47,7 @@ export const useAppStore = create<AppStore>((set) => ({
           audioTransport
         }
       };
-      if (snapshot.activeBuffer?.viewMode === "text") {
+      if (snapshot.activeBuffer !== null && effectiveEditorViewMode(snapshot) === "text") {
         nextState.localText = snapshot.activeBuffer.text;
       }
       return nextState;

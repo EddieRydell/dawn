@@ -9,8 +9,9 @@ import { tags } from "@lezer/highlight";
 import { RefreshCw, Save, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { commands, setCurrentGuiRequest } from "../api";
-import type { AppSnapshot, GuiDocumentRequest, PersistedEditorViewState, ProjectDiagnostic, SequenceAudio, SequenceSelection, TextRange } from "../types";
+import type { AppSnapshot, GuiDocumentRequest, PersistedEditorViewState, ProjectDiagnostic, SequenceAudio, SequenceSelection, TextRange, WorkspaceLayoutState } from "../types";
 import { commandRegistry } from "../commandRegistry";
+import { effectiveEditorViewMode } from "../editorViewMode";
 import { runSnapshotCommand, useAppStore } from "../store";
 import { GuiEditor } from "./gui/GuiEditor";
 import { SequenceTransportControls, useSequenceTransport } from "./gui/sequence/SequenceTransportControls";
@@ -19,7 +20,15 @@ type BufferExternalState = "current" | "changedOnDisk" | "deletedOnDisk";
 type EditorBufferWithExternalState = NonNullable<AppSnapshot["activeBuffer"]>;
 type PathSelection = { path: string | null; resetRevision: number; selection: SequenceSelection | null };
 
-export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
+export function EditorPane({
+  snapshot,
+  workspaceLayout,
+  onWorkspaceLayoutChange
+}: {
+  snapshot: AppSnapshot;
+  workspaceLayout: WorkspaceLayoutState;
+  onWorkspaceLayoutChange: (layout: WorkspaceLayoutState) => void;
+}) {
   const { guiDocument, guiResetRevision, localText, restoreState, setGuiDocument, setGuiRequest, setLocalText } = useAppStore();
   const editorHost = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
@@ -34,16 +43,17 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
   const activeBuffer = snapshot.activeBuffer;
   const activeDescriptor = snapshot.activeDocumentDescriptor;
   const activePath = activeBuffer?.path ?? null;
-  const viewMode = activeBuffer?.viewMode ?? "text";
+  const viewMode = effectiveEditorViewMode(snapshot);
   const activeExternalState = activeBufferExternalState(activeBuffer);
   const activeConflicted = activeExternalState !== "current";
-  const nextGuiRequest = useMemo(
+  const availableGuiRequest = useMemo(
     () => guiRequestForDescriptor(activeDescriptor, snapshot.activeFile),
     [activeDescriptor, snapshot.activeFile]
   );
-  const nextGuiPath = nextGuiRequest?.path ?? null;
-  const nextGuiView = nextGuiRequest?.view ?? null;
-  const nextGuiObjectKey = nextGuiRequest?.objectKey ?? null;
+  const activeGuiRequest = viewMode === "gui" ? availableGuiRequest : null;
+  const nextGuiPath = activeGuiRequest?.path ?? null;
+  const nextGuiView = activeGuiRequest?.view ?? null;
+  const nextGuiObjectKey = activeGuiRequest?.objectKey ?? null;
   const activeSequenceDocument =
     viewMode === "gui" && guiDocument?.type === "sequence" ? guiDocument.document : null;
   const sequenceTransport = useSequenceTransport(snapshot.audioTransport);
@@ -52,7 +62,6 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
     nextGuiPath !== null && nextGuiView === "sequence"
       ? sequenceAudioKey(nextGuiPath, nextGuiObjectKey, activeSequenceAudio)
       : null;
-  const guiAvailable = nextGuiRequest !== null;
   const sequenceSelection =
     pathSelection.path === activePath && pathSelection.resetRevision === guiResetRevision
       ? pathSelection.selection
@@ -75,15 +84,15 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
   }, [snapshot.settings.autosaveTextEdits]);
 
   useEffect(() => {
-    setGuiRequest(nextGuiRequest);
-    setCurrentGuiRequest(nextGuiRequest);
-    if (nextGuiRequest === null) {
+    setGuiRequest(activeGuiRequest);
+    setCurrentGuiRequest(activeGuiRequest);
+    if (activeGuiRequest === null) {
       setGuiDocument(null);
       return;
     }
     let cancelled = false;
     commands
-      .getGuiDocument(nextGuiRequest)
+      .getGuiDocument(activeGuiRequest)
       .then((document) => {
         if (!cancelled) setGuiDocument(document);
       })
@@ -96,7 +105,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
       cancelled = true;
     };
   }, [
-    nextGuiRequest,
+    activeGuiRequest,
     setGuiDocument,
     setGuiRequest
   ]);
@@ -259,32 +268,16 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
           </button>
         ))}
       </div>
-      <div className="editor-toolbar">
-        {activeSequenceDocument !== null && (
+      {activeSequenceDocument !== null && (
+        <div className="editor-toolbar">
           <SequenceTransportControls
             document={activeSequenceDocument}
             transport={sequenceTransport}
             previewOpen={snapshot.previewOpen}
             liveOutput={snapshot.liveOutput}
           />
-        )}
-        <div className="segmented-control">
-          <button
-            className={viewMode === "text" ? "active" : ""}
-            onClick={() => void runSnapshotCommand(() => commands.setActiveViewMode("text"))}
-          >
-            Text
-          </button>
-          {guiAvailable && (
-            <button
-              className={viewMode === "gui" ? "active" : ""}
-              onClick={() => void runSnapshotCommand(() => commands.setActiveViewMode("gui"))}
-            >
-              GUI
-            </button>
-          )}
         </div>
-      </div>
+      )}
       {activeConflicted && (
         <div className="conflict-banner">
           <span>
@@ -306,6 +299,8 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
         <GuiEditor
           guiDocument={guiDocument}
           snapshot={snapshot}
+          workspaceLayout={workspaceLayout}
+          onWorkspaceLayoutChange={onWorkspaceLayoutChange}
           audioTransport={sequenceTransport}
           sequenceSelection={sequenceSelection}
           setSequenceSelection={setSequenceSelection}

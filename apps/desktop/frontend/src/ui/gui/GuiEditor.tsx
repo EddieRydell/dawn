@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import type { AppSnapshot, GuiDocument } from "../../types";
+import type { AppSnapshot, GuiDocument, WorkspaceLayoutState } from "../../types";
 
 import type { AutomationClipChooser, GuiFocus, ReadyGuiDocument, SequenceSelection } from "./shared";
 
@@ -18,10 +18,16 @@ import { useAppStore } from "../../store";
 import { handleSequencePlaybackShortcut, isSequenceTransportUnsupported } from "./sequence/SequenceTransportControls";
 
 import { markSelectionConsumesKey } from "./sequence/sequenceSelection";
+import { WorkspaceResizeHandle } from "../WorkspaceResizeHandle";
+
+const INSPECTOR_MIN_WIDTH_PX = 240;
+const INSPECTOR_MAX_WIDTH_PX = 560;
 
 export function GuiEditor({
   guiDocument,
   snapshot,
+  workspaceLayout,
+  onWorkspaceLayoutChange,
   audioTransport,
   sequenceSelection,
   setSequenceSelection,
@@ -29,6 +35,8 @@ export function GuiEditor({
 }: {
   guiDocument: GuiDocument | null;
   snapshot: AppSnapshot;
+  workspaceLayout: WorkspaceLayoutState;
+  onWorkspaceLayoutChange: (layout: WorkspaceLayoutState) => void;
   audioTransport: AppSnapshot["audioTransport"];
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
@@ -48,6 +56,8 @@ export function GuiEditor({
     <GuiEditorInner
       key={editorKey}
       gui={gui}
+      workspaceLayout={workspaceLayout}
+      onWorkspaceLayoutChange={onWorkspaceLayoutChange}
       audioTransport={audioTransport}
       sequenceSelection={sequenceSelection}
       setSequenceSelection={setSequenceSelection}
@@ -57,11 +67,15 @@ export function GuiEditor({
 
 function GuiEditorInner({
   gui,
+  workspaceLayout,
+  onWorkspaceLayoutChange,
   audioTransport,
   sequenceSelection,
   setSequenceSelection
 }: {
   gui: ReadyGuiDocument;
+  workspaceLayout: WorkspaceLayoutState;
+  onWorkspaceLayoutChange: (layout: WorkspaceLayoutState) => void;
   audioTransport: AppSnapshot["audioTransport"];
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
@@ -91,6 +105,11 @@ function GuiEditorInner({
   return (
     <div
       className="gui-editor-shell"
+      style={{
+        gridTemplateColumns: workspaceLayout.inspectorCollapsed
+          ? "minmax(0, 1fr) 8px"
+          : `minmax(0, 1fr) ${workspaceLayout.inspectorWidthPx}px`
+      }}
       onKeyDownCapture={(event) => {
         if (gui.type === "sequence" && !markSelectionConsumesKey(selected, event.key)) {
           handleSequencePlaybackShortcut(
@@ -123,18 +142,37 @@ function GuiEditorInner({
       {gui.type === "fixture" && (
         <FixtureCanvas document={gui.document} selected={selected} setSelected={setSelected} />
       )}
-      <GuiInspector
-        gui={gui}
-        selected={selected}
-        setSelected={setSelected}
-        sequenceSelection={sequenceSelection}
-        automationClipChooser={automationClipChooser}
-        setAutomationClipChooser={setAutomationClipChooser}
-        activeMarkCollectionKey={activeMarkCollectionKey}
-        setActiveMarkCollectionKey={setActiveMarkCollectionKey}
-        visibleMarkCollectionKeys={visibleMarkCollectionKeys}
-        setVisibleMarkCollectionKeys={setVisibleMarkCollectionKeys}
-      />
+      <div className={`gui-inspector-resize-shell ${workspaceLayout.inspectorCollapsed ? "collapsed" : ""}`}>
+        <WorkspaceResizeHandle
+          ariaLabel="Resize inspector"
+          collapsed={workspaceLayout.inspectorCollapsed}
+          direction="right"
+          min={INSPECTOR_MIN_WIDTH_PX}
+          max={INSPECTOR_MAX_WIDTH_PX}
+          value={workspaceLayout.inspectorWidthPx}
+          onChange={(update) => {
+            onWorkspaceLayoutChange({
+              ...workspaceLayout,
+              inspectorCollapsed: update.collapsed,
+              inspectorWidthPx: update.width
+            });
+          }}
+        />
+        {!workspaceLayout.inspectorCollapsed && (
+          <GuiInspector
+            gui={gui}
+            selected={selected}
+            setSelected={setSelected}
+            sequenceSelection={sequenceSelection}
+            automationClipChooser={automationClipChooser}
+            setAutomationClipChooser={setAutomationClipChooser}
+            activeMarkCollectionKey={activeMarkCollectionKey}
+            setActiveMarkCollectionKey={setActiveMarkCollectionKey}
+            visibleMarkCollectionKeys={visibleMarkCollectionKeys}
+            setVisibleMarkCollectionKeys={setVisibleMarkCollectionKeys}
+          />
+        )}
+      </div>
     </div>
   );
 }

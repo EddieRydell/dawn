@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, Manager, Runtime, Window};
 
-use crate::dto::{AppSettings, AppSnapshot, EditorViewMode};
+use crate::dto::{AppSettings, AppSnapshot, WorkspaceLayoutState};
 
 const VERSION: u32 = 1;
 const FILE_NAME: &str = "desktop-state-v1.json";
@@ -117,6 +117,10 @@ impl PersistenceService {
         self.inner().store.settings.clone()
     }
 
+    pub fn workspace_layout(&self) -> WorkspaceLayoutState {
+        self.inner().store.workspace_layout.clone()
+    }
+
     pub fn record_settings(&self, settings: AppSettings) -> Result<(), String> {
         let mut inner = self.inner();
         if !inner.write_allowed {
@@ -124,6 +128,15 @@ impl PersistenceService {
         }
         inner.store.settings = settings;
         inner.save_now()
+    }
+
+    pub fn record_workspace_layout(&self, state: WorkspaceLayoutState) -> Result<(), String> {
+        let mut inner = self.inner();
+        if !inner.write_allowed {
+            return Ok(());
+        }
+        inner.store.workspace_layout = state;
+        inner.save_debounced()
     }
 
     pub fn record_snapshot(&self, snapshot: &AppSnapshot) -> Result<(), String> {
@@ -296,6 +309,8 @@ struct PersistedStore {
     version: u32,
     #[serde(default)]
     settings: AppSettings,
+    #[serde(default)]
+    workspace_layout: WorkspaceLayoutState,
     last_project: Option<String>,
     projects: BTreeMap<String, PersistedProjectSession>,
     main_window: Option<PersistedWindowState>,
@@ -319,6 +334,7 @@ impl Default for PersistedStore {
         Self {
             version: VERSION,
             settings: AppSettings::default(),
+            workspace_layout: WorkspaceLayoutState::default(),
             last_project: None,
             projects: BTreeMap::new(),
             main_window: None,
@@ -365,7 +381,6 @@ impl PersistedProjectSession {
             .iter()
             .map(|tab| PersistedTab {
                 path: tab.path.clone(),
-                view_mode: tab.view_mode.clone(),
             })
             .collect();
         self.active_file = snapshot.active_file.clone();
@@ -381,7 +396,6 @@ impl PersistedProjectSession {
 #[serde(rename_all = "camelCase")]
 pub struct PersistedTab {
     pub path: String,
-    pub view_mode: EditorViewMode,
 }
 
 pub fn read_window_state<R: Runtime>(window: &Window<R>) -> Option<PersistedWindowState> {

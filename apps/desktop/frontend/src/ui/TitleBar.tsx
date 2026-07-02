@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Maximize2, Minus, X } from "lucide-react";
 import { commands } from "../api";
 import { commandRegistry } from "../commandRegistry";
+import { useAppStore } from "../store";
 
 const appWindow = getCurrentWindow();
 
@@ -15,7 +16,7 @@ export function TitleBar() {
       <nav className="menu-row">
         <Menu label="File" commands={["file.newProject", "file.openProject", "file.save", "file.exportFseq", "file.settings"]} />
         <Menu label="Edit" commands={["file.save"]} />
-        <Menu label="View" commands={["view.toggleProjectTree", "project.reload"]} />
+        <ViewMenu />
       </nav>
       <div className="window-controls">
         <button onClick={() => void appWindow.minimize()} aria-label="Minimize">
@@ -35,6 +36,44 @@ export function TitleBar() {
 async function closeMainWindow() {
   await commands.persistAppClose();
   await appWindow.close();
+}
+
+function ViewMenu() {
+  const checked = useAppStore((store) => (store.snapshot?.settings.editorViewMode ?? "gui") === "gui");
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger className="menu-trigger">View</DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content className="menu-content" sideOffset={7}>
+          <DropdownMenu.CheckboxItem
+            checked={checked}
+            className="menu-item"
+            onCheckedChange={() => {
+              void commandRegistry["view.toggleGuiMode"].run();
+            }}
+          >
+            <span>{commandRegistry["view.toggleGuiMode"].label}</span>
+            <span className="shortcut" />
+          </DropdownMenu.CheckboxItem>
+          {(["view.toggleProjectTree", "project.reload"] as const).map((id) => {
+            const command = commandRegistry[id];
+            return (
+              <DropdownMenu.Item
+                key={id}
+                className="menu-item"
+                onSelect={() => {
+                  void command.run();
+                }}
+              >
+                <span>{command.label}</span>
+                <span className="shortcut">{command.shortcut}</span>
+              </DropdownMenu.Item>
+            );
+          })}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
 }
 
 function startTitlebarDrag(event: React.MouseEvent<HTMLElement>) {

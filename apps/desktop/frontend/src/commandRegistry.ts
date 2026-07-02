@@ -1,4 +1,5 @@
 import { commands, getCurrentGuiRequest } from "./api";
+import { effectiveEditorViewMode } from "./editorViewMode";
 import { runSnapshotCommand, useAppStore } from "./store";
 
 export type CommandId =
@@ -9,6 +10,7 @@ export type CommandId =
   | "file.settings"
   | "edit.undo"
   | "edit.redo"
+  | "view.toggleGuiMode"
   | "view.toggleProjectTree"
   | "project.reload";
 
@@ -42,7 +44,7 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     shortcut: "Ctrl+S",
     run: async () => {
       const store = useAppStore.getState();
-      if (store.snapshot?.activeBuffer?.viewMode !== "text") return;
+      if (store.snapshot === null || store.snapshot.activeBuffer === null || effectiveEditorViewMode(store.snapshot) !== "text") return;
       const text = store.localText;
       await runSnapshotCommand(commands.updateActiveText.bind(null, text));
       await runSnapshotCommand(commands.flushAutosave);
@@ -69,7 +71,7 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     label: "Undo",
     shortcut: "Ctrl+Z",
     run: async () => {
-      if (useAppStore.getState().snapshot?.activeBuffer?.viewMode !== "gui") return;
+      if (effectiveEditorViewMode(useAppStore.getState().snapshot) !== "gui") return;
       await runSnapshotCommand(commands.undoActiveEdit);
       await refreshActiveGuiDocument();
     }
@@ -79,9 +81,17 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     label: "Redo",
     shortcut: "Ctrl+Shift+Z / Ctrl+Y",
     run: async () => {
-      if (useAppStore.getState().snapshot?.activeBuffer?.viewMode !== "gui") return;
+      if (effectiveEditorViewMode(useAppStore.getState().snapshot) !== "gui") return;
       await runSnapshotCommand(commands.redoActiveEdit);
       await refreshActiveGuiDocument();
+    }
+  },
+  "view.toggleGuiMode": {
+    id: "view.toggleGuiMode",
+    label: "GUI Mode",
+    run: async () => {
+      const mode = (useAppStore.getState().snapshot?.settings.editorViewMode ?? "gui") === "gui" ? "text" : "gui";
+      await runSnapshotCommand(() => commands.setEditorViewMode(mode));
     }
   },
   "view.toggleProjectTree": {
@@ -110,13 +120,13 @@ export function installGlobalShortcuts() {
     if (!active) return;
     const key = event.key.toLowerCase();
     if (key === "z") {
-      if (active.activeBuffer?.viewMode !== "gui") return;
+      if (effectiveEditorViewMode(active) !== "gui") return;
       event.preventDefault();
       void (event.shiftKey ? commandRegistry["edit.redo"] : commandRegistry["edit.undo"]).run();
       return;
     }
     if (key === "y") {
-      if (active.activeBuffer?.viewMode !== "gui") return;
+      if (effectiveEditorViewMode(active) !== "gui") return;
       event.preventDefault();
       void commandRegistry["edit.redo"].run();
       return;

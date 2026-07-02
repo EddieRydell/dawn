@@ -8,7 +8,7 @@ use crate::dto::{
     AppSettings, AppSnapshot, AudioTransportState, DocumentViewId, EditorViewMode, FixtureGuiEdit,
     GuiDocument, GuiDocumentRequest, GuiEditCommand, GuiEditResult, LayoutGuiEdit,
     SequenceClipRasterRequest, SequenceClipRasterResponse, SequenceClipRasterResultBatch,
-    SequenceGuiEdit, SequenceSelectionEdit, SequenceSelectionEditResult,
+    SequenceGuiEdit, SequenceSelectionEdit, SequenceSelectionEditResult, WorkspaceLayoutState,
 };
 use crate::persistence::{
     PersistedEditorViewStateUpdate, PersistedPreviewWindowState,
@@ -26,6 +26,15 @@ pub fn get_snapshot(state: State<'_, DesktopState>) -> AppSnapshot {
 #[specta::specta]
 pub fn update_app_settings(settings: AppSettings, state: State<'_, DesktopState>) -> AppSnapshot {
     state.update_app_settings(settings)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn save_workspace_layout_state(
+    state_update: WorkspaceLayoutState,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
+    state.save_workspace_layout_state(state_update)
 }
 
 #[tauri::command]
@@ -101,8 +110,8 @@ pub fn update_active_text(text: String, state: State<'_, DesktopState>) -> AppSn
 
 #[tauri::command]
 #[specta::specta]
-pub fn set_active_view_mode(mode: EditorViewMode, state: State<'_, DesktopState>) -> AppSnapshot {
-    state.set_active_view_mode(mode)
+pub fn set_editor_view_mode(mode: EditorViewMode, state: State<'_, DesktopState>) -> AppSnapshot {
+    state.set_editor_view_mode(mode)
 }
 
 #[tauri::command]
@@ -454,6 +463,7 @@ pub fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
     builder.commands(collect_commands![
         get_snapshot,
         update_app_settings,
+        save_workspace_layout_state,
         get_restored_view_state,
         open_project_dialog,
         open_project,
@@ -463,7 +473,7 @@ pub fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         close_file,
         set_active_file,
         update_active_text,
-        set_active_view_mode,
+        set_editor_view_mode,
         save_editor_view_state,
         save_sequence_viewport_state,
         undo_active_edit,

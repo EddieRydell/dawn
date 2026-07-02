@@ -6,6 +6,7 @@ import { invoke as __TAURI_INVOKE } from "@tauri-apps/api/core";
 export const commands = {
 	getSnapshot: () => __TAURI_INVOKE<AppSnapshot>("get_snapshot"),
 	updateAppSettings: (settings: AppSettings) => __TAURI_INVOKE<AppSnapshot>("update_app_settings", { settings }),
+	saveWorkspaceLayoutState: (stateUpdate: WorkspaceLayoutState) => __TAURI_INVOKE<AppSnapshot>("save_workspace_layout_state", { stateUpdate }),
 	getRestoredViewState: () => __TAURI_INVOKE<ProjectRestoreState>("get_restored_view_state").then((v) => (({...v,editorStates:Object.fromEntries(Object.entries(v.editorStates).map(([k,v])=>[k,v])),sequenceViewports:Object.fromEntries(Object.entries(v.sequenceViewports).map(([k,v])=>[k,v]))}) as typeof v)),
 	openProjectDialog: () => __TAURI_INVOKE<AppSnapshot>("open_project_dialog"),
 	openProject: (path: string) => __TAURI_INVOKE<AppSnapshot>("open_project", { path }),
@@ -15,7 +16,7 @@ export const commands = {
 	closeFile: (path: string) => __TAURI_INVOKE<AppSnapshot>("close_file", { path }),
 	setActiveFile: (path: string) => __TAURI_INVOKE<AppSnapshot>("set_active_file", { path }),
 	updateActiveText: (text: string) => __TAURI_INVOKE<AppSnapshot>("update_active_text", { text }),
-	setActiveViewMode: (mode: EditorViewMode) => __TAURI_INVOKE<AppSnapshot>("set_active_view_mode", { mode }),
+	setEditorViewMode: (mode: EditorViewMode) => __TAURI_INVOKE<AppSnapshot>("set_editor_view_mode", { mode }),
 	saveEditorViewState: (update: PersistedEditorViewStateUpdate) => __TAURI_INVOKE<AppSnapshot>("save_editor_view_state", { update }),
 	saveSequenceViewportState: (update: PersistedSequenceViewportStateUpdate) => __TAURI_INVOKE<AppSnapshot>("save_sequence_viewport_state", { update }),
 	undoActiveEdit: () => __TAURI_INVOKE<AppSnapshot>("undo_active_edit"),
@@ -56,7 +57,7 @@ export const commands = {
 /* Types */
 export type AppSettings = {
 	reopenLastProject: boolean,
-	defaultDawnViewMode: DefaultDawnViewMode,
+	editorViewMode?: EditorViewMode,
 	projectTreeMode: ProjectTreeMode,
 	reopenPreviewWindow: boolean,
 	autosaveTextEdits: boolean,
@@ -68,6 +69,7 @@ export type AppSettings = {
 
 export type AppSnapshot = {
 	settings: AppSettings,
+	workspaceLayout: WorkspaceLayoutState,
 	projectRoot: string | null,
 	projectRevision: number,
 	projectTreeVisible: boolean,
@@ -104,8 +106,6 @@ export type ColorCurvePoint = {
 	value: string,
 };
 
-export type DefaultDawnViewMode = "remember" | "gui" | "text";
-
 export type DiagnosticSeverity = "error" | "warning";
 
 export type DocumentDefaultObjectKey = {
@@ -133,7 +133,6 @@ export type EditorBuffer = {
 	text: string,
 	dirty: boolean,
 	externalState: BufferExternalState,
-	viewMode: EditorViewMode,
 };
 
 export type EditorViewMode = "text" | "gui";
@@ -543,4 +542,11 @@ export type WorkspaceEntry = {
 };
 
 export type WorkspaceEntryKind = "directory" | "file";
+
+export type WorkspaceLayoutState = {
+	projectTreeWidthPx: number,
+	inspectorWidthPx: number,
+	projectTreeCollapsed: boolean,
+	inspectorCollapsed: boolean,
+};
 

@@ -2,6 +2,7 @@ import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { useEffect, useState } from "react";
 import type { SyntheticEvent } from "react";
 import { commands } from "../api";
+import { effectiveEditorViewMode } from "../editorViewMode";
 import { useAppStore } from "../store";
 
 const EXPORT_FSEQ_EVENT = "dawn:export-fseq";
@@ -39,7 +40,7 @@ export function ExportFseqDialog() {
     setError(null);
     try {
       const store = useAppStore.getState();
-      if (store.snapshot?.activeBuffer?.viewMode === "text") {
+      if (store.snapshot !== null && store.snapshot.activeBuffer !== null && effectiveEditorViewMode(store.snapshot) === "text") {
         const textSnapshot = await commands.updateActiveText(store.localText);
         store.setSnapshot(textSnapshot);
       }

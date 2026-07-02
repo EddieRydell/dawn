@@ -68,16 +68,6 @@ export function SettingsDialog() {
 
             <section>
               <h3>Editor</h3>
-              <Select
-                label="Default Dawn view"
-                value={draft.defaultDawnViewMode}
-                options={[
-                  ["remember", "Remember"],
-                  ["gui", "GUI"],
-                  ["text", "Text"]
-                ]}
-                onChange={(defaultDawnViewMode) => void update({ ...draft, defaultDawnViewMode })}
-              />
               <Checkbox
                 label="Autosave text edits"
                 checked={draft.autosaveTextEdits}

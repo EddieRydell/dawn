@@ -2381,7 +2381,7 @@ empty:
         value: per_pulse
       pulse_overlap:
         type: float
-        value: 60.0
+        value: 20.0
       section_width_pixels:
         type: integer
         value: 1
@@ -2490,7 +2490,18 @@ empty:
         value: '#000000'
       accent:
         type: curve
-        curve: curves.cool_gradient
+        curve:
+          type: curve
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#eaffff'
+          - time: 0.25
+            value: '#7cffc7'
+          - time: 0.55
+            value: '#48a0ff'
+          - time: 1.0
+            value: '#b33cff'
       hue:
         type: curve
         curve: curves.hue_warm_shift
@@ -6909,7 +6920,22 @@ empty:
         curve: curves.neon_candy_gradient
       hue:
         type: curve
-        curve: curves.hue_sweep
+        curve:
+          type: curve
+          value_type: float
+          points:
+          - time: 0.0
+            value: 0.0
+          - time: 0.2
+            value: 55.0
+          - time: 0.4
+            value: 130.0
+          - time: 0.65
+            value: 220.0
+          - time: 0.85
+            value: 300.0
+          - time: 1.0
+            value: 360.0
       hue_mix:
         type: float
         value: 0.45
@@ -11555,6 +11581,10 @@ empty:
         value: 0.25
       - time: 0.368720146
         value: 0.665
+      - time: 0.422730294
+        value: 0.282
+      - time: 0.449735368
+        value: 0.673
       - time: 0.49602978
         value: 0.386
       - time: 0.566757355
@@ -11567,13 +11597,7 @@ empty:
         value: 0.797
       - time: 1.0
         value: 0.0
-    bindings:
-    - effect_id: 3
-      param: pulse_overlap
-      mapping:
-        type: float
-        min: 18.0
-        max: 70.0
+    bindings: []
   - id: 4
     start: 39.261304317s
     duration: 0.65s
@@ -11584,6 +11608,10 @@ empty:
       points:
       - time: 0.0
         value: 0.0
+      - time: 0.244962273
+        value: 0.8
+      - time: 0.488241147
+        value: 0.264
       - time: 1.0
         value: 1.0
     bindings: []

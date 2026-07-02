@@ -51,7 +51,8 @@ export type {
   SequenceSelectionEditResult,
   TextRange,
   Transform,
-  WorkspaceEntry
+  WorkspaceEntry,
+  WorkspaceLayoutState
 } from "./generated/bindings";
 
 export type {

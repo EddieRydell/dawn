@@ -8,17 +8,16 @@ use camino::{Utf8Path, Utf8PathBuf};
 use dawn_project_io::{
     IoDiagnostic, IoDiagnosticSeverity, ProjectCheckReport, ProjectSession, SourceDocument,
     SourceDocumentKind, SourceObjectKind, check_document_text, check_project, save_project,
-    source_document_text as serialized_source_document_text,
 };
 use indexmap::IndexSet;
 
 use crate::dto::{
     AppSettings, AppSnapshot, AudioTransportSnapshot, AudioTransportState, BufferExternalState,
-    DefaultDawnViewMode, DiagnosticSeverity, DocumentDefaultObjectKey, DocumentDescriptor,
-    DocumentObjectDescriptor, DocumentViewId, EditorBuffer, EditorViewMode, GuiDocument,
-    GuiDocumentRequest, GuiEditCommand, GuiEditResult, LiveOutputSnapshot, ObjectKind,
-    ProjectDiagnostic, ProjectTreeMode, SequenceAudio, SequenceSelectionEdit,
-    SequenceSelectionEditResult, WorkspaceEntry, WorkspaceEntryKind,
+    DiagnosticSeverity, DocumentDefaultObjectKey, DocumentDescriptor, DocumentObjectDescriptor,
+    DocumentViewId, EditorBuffer, EditorViewMode, GuiDocument, GuiDocumentRequest, GuiEditCommand,
+    GuiEditResult, LiveOutputSnapshot, ObjectKind, ProjectDiagnostic, ProjectTreeMode,
+    SequenceAudio, SequenceSelectionEdit, SequenceSelectionEditResult, WorkspaceEntry,
+    WorkspaceEntryKind, WorkspaceLayoutState,
 };
 use crate::persistence::{
     PersistedEditorViewStateUpdate, PersistedProjectSession, PersistedSequenceViewportStateUpdate,
@@ -62,8 +61,10 @@ impl DesktopState {
 
     pub fn apply_persisted_settings(&self) -> AppSnapshot {
         let settings = sanitize_app_settings(self.persistence.settings());
+        let workspace_layout = sanitize_workspace_layout(self.persistence.workspace_layout());
         self.update_snapshot(|snapshot| {
             snapshot.settings = settings;
+            snapshot.workspace_layout = workspace_layout;
         })
     }
 
@@ -132,6 +133,18 @@ impl DesktopState {
                 ProjectTreeMode::Remember => {}
             }
         })
+    }
+
+    pub fn save_workspace_layout_state(&self, state: WorkspaceLayoutState) -> AppSnapshot {
+        let state = sanitize_workspace_layout(state);
+        match self.persistence.record_workspace_layout(state.clone()) {
+            Ok(()) => self.update_snapshot(|snapshot| {
+                snapshot.workspace_layout = state;
+            }),
+            Err(error) => {
+                self.set_persistence_error(format!("Workspace layout was not saved: {error}"))
+            }
+        }
     }
 
     pub fn set_render_error_if_changed(&self, message: String) {
@@ -353,7 +366,7 @@ impl DesktopState {
             return self.snapshot();
         };
         let relative_path = Utf8PathBuf::from(path);
-        let Some(mut buffer) = editor_buffer_for_path(&project, &relative_path) else {
+        let Some(buffer) = editor_buffer_for_path(&project, &relative_path) else {
             return self.snapshot_with_error(
                 "file.open",
                 path,
@@ -366,15 +379,6 @@ impl DesktopState {
             .get(&relative_path)
             .map(document_descriptor)
             .unwrap_or_else(|| empty_document_descriptor(&relative_path));
-        let existing_view_mode = self
-            .snapshot()
-            .tabs
-            .into_iter()
-            .find(|tab| tab.path == path)
-            .map(|tab| tab.view_mode);
-        buffer.view_mode = existing_view_mode.unwrap_or_else(|| {
-            default_view_mode_for_descriptor(&self.snapshot().settings, &descriptor)
-        });
         self.update_snapshot(|snapshot| {
             upsert_tab(&mut snapshot.tabs, buffer.clone());
             snapshot.active_file = Some(buffer.path.clone());
@@ -477,46 +481,10 @@ impl DesktopState {
         })
     }
 
-    pub fn set_active_view_mode(&self, mode: EditorViewMode) -> AppSnapshot {
-        let active_path = self.snapshot().active_file;
-        let text = if matches!(mode, EditorViewMode::Text) {
-            match active_path
-                .as_deref()
-                .map(|path| self.text_for_active_view_mode_switch(path))
-            {
-                Some(Ok(text)) => text,
-                Some(Err(error)) => {
-                    return self.snapshot_with_error(
-                        "file.viewMode",
-                        active_path.as_deref().unwrap_or_default(),
-                        &error,
-                    );
-                }
-                None => None,
-            }
-        } else {
-            None
-        };
-        self.update_snapshot(|snapshot| {
-            if let Some(buffer) = snapshot.active_buffer.as_mut() {
-                buffer.view_mode = mode.clone();
-                if let Some(text) = text.as_ref() {
-                    buffer.text = text.clone();
-                    buffer.dirty = false;
-                    buffer.external_state = BufferExternalState::Current;
-                }
-            }
-            if let Some(path) = snapshot.active_file.as_deref()
-                && let Some(tab) = snapshot.tabs.iter_mut().find(|tab| tab.path == path)
-            {
-                tab.view_mode = mode;
-                if let Some(text) = text {
-                    tab.text = text;
-                    tab.dirty = false;
-                    tab.external_state = BufferExternalState::Current;
-                }
-            }
-        })
+    pub fn set_editor_view_mode(&self, mode: EditorViewMode) -> AppSnapshot {
+        let mut settings = self.snapshot().settings;
+        settings.editor_view_mode = mode;
+        self.update_app_settings(settings)
     }
 
     pub fn save_active_buffer(&self) -> AppSnapshot {
@@ -1211,25 +1179,6 @@ impl DesktopState {
             .map(|tab| tab.path)
     }
 
-    fn text_for_active_view_mode_switch(&self, path: &str) -> Result<Option<String>, String> {
-        let Some(project) = self.project_session() else {
-            return Ok(None);
-        };
-        let relative_path = Utf8Path::new(path);
-        match serialized_source_document_text(&project, relative_path) {
-            Ok(Some(text)) => Ok(Some(text)),
-            Ok(None) => {
-                let Some(absolute_path) = absolute_project_path(&project, relative_path) else {
-                    return Ok(None);
-                };
-                fs::read_to_string(&absolute_path)
-                    .map(Some)
-                    .map_err(|error| error.to_string())
-            }
-            Err(error) => Err(error.to_string()),
-        }
-    }
-
     fn project_revision(&self) -> u64 {
         match self.snapshot.lock() {
             Ok(snapshot) => snapshot.project_revision.into(),
@@ -1893,6 +1842,7 @@ impl GuiHistory {
 fn empty_snapshot() -> AppSnapshot {
     AppSnapshot {
         settings: AppSettings::default(),
+        workspace_layout: WorkspaceLayoutState::default(),
         project_root: None,
         project_revision: 0,
         project_tree_visible: true,
@@ -1914,6 +1864,22 @@ fn empty_snapshot() -> AppSnapshot {
             last_error: None,
         },
     }
+}
+
+fn sanitize_workspace_layout(state: WorkspaceLayoutState) -> WorkspaceLayoutState {
+    WorkspaceLayoutState {
+        project_tree_width_px: clamp_f64(state.project_tree_width_px, 220.0, 520.0),
+        inspector_width_px: clamp_f64(state.inspector_width_px, 240.0, 560.0),
+        project_tree_collapsed: state.project_tree_collapsed,
+        inspector_collapsed: state.inspector_collapsed,
+    }
+}
+
+fn clamp_f64(value: f64, min: f64, max: f64) -> f64 {
+    if !value.is_finite() {
+        return min;
+    }
+    value.clamp(min, max)
 }
 
 fn normalize_project_entrypoint(path: &str) -> Utf8PathBuf {
@@ -2036,7 +2002,6 @@ fn editor_buffer(session: &ProjectSession, document: &SourceDocument) -> EditorB
         text,
         dirty: false,
         external_state: BufferExternalState::Current,
-        view_mode: EditorViewMode::Text,
     }
 }
 
@@ -2061,7 +2026,6 @@ fn editor_buffer_for_path(
         text,
         dirty: false,
         external_state: BufferExternalState::Current,
-        view_mode: EditorViewMode::Text,
     })
 }
 
@@ -2073,8 +2037,7 @@ fn restored_active_buffers(
     let mut buffers = Vec::new();
     for tab in &restore.tabs {
         let relative_path = Utf8Path::new(&tab.path);
-        if let Some(mut buffer) = editor_buffer_for_path(session, relative_path) {
-            buffer.view_mode = tab.view_mode.clone();
+        if let Some(buffer) = editor_buffer_for_path(session, relative_path) {
             buffers.push(buffer);
         }
     }
@@ -2223,26 +2186,6 @@ fn same_view(left: &DocumentViewId, right: &DocumentViewId) -> bool {
             | (DocumentViewId::Fixture, DocumentViewId::Fixture)
             | (DocumentViewId::Sequence, DocumentViewId::Sequence)
     )
-}
-
-fn default_view_mode_for_descriptor(
-    settings: &AppSettings,
-    descriptor: &DocumentDescriptor,
-) -> EditorViewMode {
-    match settings.default_dawn_view_mode {
-        DefaultDawnViewMode::Remember | DefaultDawnViewMode::Text => EditorViewMode::Text,
-        DefaultDawnViewMode::Gui => {
-            if descriptor
-                .available_views
-                .iter()
-                .any(|view| !matches!(view, DocumentViewId::Text))
-            {
-                EditorViewMode::Gui
-            } else {
-                EditorViewMode::Text
-            }
-        }
-    }
 }
 
 fn sanitize_app_settings(mut settings: AppSettings) -> AppSettings {
