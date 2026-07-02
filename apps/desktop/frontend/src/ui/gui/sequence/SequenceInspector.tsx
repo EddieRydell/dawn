@@ -133,7 +133,10 @@ const id = selectedEffectId(selected);
       return (
         <InspectorScrollArea>
           <h2>Effect</h2>
-          <div className="inspector-readout-grid">
+          <div className="effect-inspector-fields">
+            <div className="inspector-readout-grid">
+              <Readout label="ID" value={String(effect.id)} />
+            </div>
             <div className="inspector-inline-row">
               <label>
                 Start
@@ -166,32 +169,32 @@ const id = selectedEffectId(selected);
                 />
               </label>
             </div>
+            <label>
+              Effect type
+              <select
+                value={currentScriptValue}
+                disabled={document.effectScripts.length === 0}
+                onChange={(event) => {
+                  const script = document.effectScripts[Number(event.currentTarget.value)]?.script;
+                  if (script === undefined) return;
+                  void runGuiEditCommand(() =>
+                    commands.applySequenceGuiEdit({
+                      type: "changeEffectScript",
+                      id: effect.id,
+                      script
+                    })
+                  );
+                }}
+              >
+                {currentScriptValue === "" && <option value="">{effect.script}</option>}
+                {document.effectScripts.map((script, index) => (
+                  <option key={`${script.script.path}:${script.script.effectName}`} value={String(index)}>
+                    {script.name}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
-          <label>
-            Effect type
-            <select
-              value={currentScriptValue}
-              disabled={document.effectScripts.length === 0}
-              onChange={(event) => {
-                const script = document.effectScripts[Number(event.currentTarget.value)]?.script;
-                if (script === undefined) return;
-                void runGuiEditCommand(() =>
-                  commands.applySequenceGuiEdit({
-                    type: "changeEffectScript",
-                    id: effect.id,
-                    script
-                  })
-                );
-              }}
-            >
-              {currentScriptValue === "" && <option value="">{effect.script}</option>}
-              {document.effectScripts.map((script, index) => (
-                <option key={`${script.script.path}:${script.script.effectName}`} value={String(index)}>
-                  {script.name}
-                </option>
-              ))}
-            </select>
-          </label>
           <label>
             Scope
             <select
@@ -211,18 +214,21 @@ const id = selectedEffectId(selected);
             </select>
           </label>
           {effect.params.length > 0 && (
-            <div className="effect-param-section">
-              <h3>Parameters</h3>
-              {effect.params.map((param) => (
-                <EffectParamInput
-                  key={`${effect.id}:${param.name}`}
-                  effectId={effect.id}
-                  param={param}
-                  curveLibrary={document.curveLibrary}
-                  markCollections={document.markCollections}
-                />
-              ))}
-            </div>
+            <>
+              <div className="inspector-section-divider" />
+              <div className="effect-param-section">
+                <h3>Parameters</h3>
+                {effect.params.map((param) => (
+                  <EffectParamInput
+                    key={`${effect.id}:${param.name}`}
+                    effectId={effect.id}
+                    param={param}
+                    curveLibrary={document.curveLibrary}
+                    markCollections={document.markCollections}
+                  />
+                ))}
+              </div>
+            </>
           )}
           <button onClick={() => void runGuiEditCommand(() => commands.applySequenceGuiEdit({ type: "deleteEffect", id: effect.id }))}>Delete</button>
         </InspectorScrollArea>

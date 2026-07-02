@@ -7,7 +7,7 @@ mod parser;
 mod typecheck;
 mod vm;
 
-use bytecode::RegisterFunction;
+use bytecode::{RegisterFunction, register_function_reads_only_written_slots};
 use compiler::compile_checked_effects;
 pub use diagnostic::Diagnostic;
 use indexmap::IndexMap;
@@ -75,6 +75,10 @@ impl CompiledEffect {
 
     pub fn kind(&self) -> EffectKind {
         self.kind
+    }
+
+    pub fn sample_reads_only_written_slots(&self) -> bool {
+        register_function_reads_only_written_slots(&self.function)
     }
 
     pub fn sample(

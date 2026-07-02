@@ -58,7 +58,13 @@ export const commands = {
     if (currentGuiRequest === null) {
       throw new Error("Audio selection attempted without an active GUI document request.");
     }
-    return generatedCommands.chooseSequenceAudio(currentGuiRequest);
+    return generatedCommands.chooseSequenceAudio(currentGuiRequest).then((result) => {
+      guiEditResultHandler?.(result);
+      if (result.document.type === "blocked") {
+        throw new Error(result.document.reason);
+      }
+      return result;
+    });
   },
   clearSequenceAudio: () => {
     if (currentGuiRequest === null) {

@@ -453,11 +453,12 @@ button:focus-visible,
 }
 
 .sequence-toolbar {
-  display: grid;
-  grid-template-columns: repeat(9, 32px) auto minmax(0, 1fr);
+  display: flex;
   align-items: center;
+  flex: 1 1 auto;
   gap: 0;
-  min-width: min(520px, 100%);
+  min-width: 0;
+  max-width: 100%;
   height: 32px;
   margin-right: auto;
   border-right: 1px solid #373b42;
@@ -469,6 +470,7 @@ button:focus-visible,
 
 .sequence-toolbar button {
   display: grid;
+  flex: 0 0 32px;
   width: 32px;
   height: 32px;
   place-items: center;
@@ -494,6 +496,7 @@ button:focus-visible,
 }
 
 .sequence-time-readout {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   border-left: 1px solid #373b42;
@@ -504,6 +507,7 @@ button:focus-visible,
 }
 
 .mark-display-select {
+  flex: 0 0 78px;
   width: 78px;
   height: 24px;
   margin: 0 8px;
@@ -617,6 +621,22 @@ button:focus-visible,
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
+}
+
+.effect-inspector-fields {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 2px;
+}
+
+.effect-inspector-fields .inspector-readout-grid {
+  margin-bottom: 2px;
+}
+
+.inspector-section-divider {
+  height: 1px;
+  margin: 14px 0 12px;
+  background: linear-gradient(90deg, #373b42, #373b4200);
 }
 
 .inspector-readout {

@@ -1716,6 +1716,7 @@ fn empty_snapshot() -> AppSnapshot {
         status: "Ready".to_string(),
         render_error: None,
         preview_error: None,
+        preview_open: false,
         audio_transport: crate::audio::AudioEngine::empty_snapshot(),
         live_output: LiveOutputSnapshot {
             enabled: false,

@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Monitor, Music, Pause, Play, RadioTower, SkipBack, Square, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Monitor, Music, Pause, Play, RadioTower, SkipBack, Square } from "lucide-react";
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
@@ -6,7 +6,7 @@ import { commands } from "../../../api";
 
 import type { AppSnapshot, AudioTransportState, SequenceEditorDocument } from "../../../types";
 
-import { runSnapshotCommand } from "../../../store";
+import { runGuiEditCommand, runSnapshotCommand } from "../../../store";
 
 import { clamp, formatSeconds, type AudioTransportViewSnapshot } from "../shared";
 import { setGlobalMarkDisplayMode, useMarkDisplayMode, type MarkDisplayMode } from "./marks";
@@ -14,10 +14,12 @@ import { setGlobalMarkDisplayMode, useMarkDisplayMode, type MarkDisplayMode } fr
 export function SequenceTransportControls({
   document,
   transport,
+  previewOpen,
   liveOutput
 }: {
   document: SequenceEditorDocument;
   transport: AppSnapshot["audioTransport"];
+  previewOpen: boolean;
   liveOutput: AppSnapshot["liveOutput"];
 }) {
   const unsupported = isSequenceTransportUnsupported(document, transport);
@@ -90,25 +92,18 @@ export function SequenceTransportControls({
       </button>
       <button
         type="button"
-        title="Open preview"
-        onClick={() => void runSnapshotCommand(commands.openPreviewWindow)}
+        className={previewOpen ? "active" : ""}
+        title={previewOpen ? "Close preview" : "Open preview"}
+        onClick={() => void runSnapshotCommand(() => commands.setPreviewWindowOpen(!previewOpen))}
       >
         <Monitor size={15} />
       </button>
       <button
         type="button"
         title="Choose audio"
-        onClick={() => void runSnapshotCommand(commands.chooseSequenceAudio)}
+        onClick={() => void runGuiEditCommand(commands.chooseSequenceAudio)}
       >
         <Music size={15} />
-      </button>
-      <button
-        type="button"
-        title="Clear audio"
-        disabled={document.audio === null}
-        onClick={() => void runSnapshotCommand(commands.clearSequenceAudio)}
-      >
-        <X size={15} />
       </button>
       <select
         className="mark-display-select"

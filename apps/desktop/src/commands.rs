@@ -196,28 +196,33 @@ pub fn apply_sequence_selection_edit(
 pub fn choose_sequence_audio(
     request: GuiDocumentRequest,
     state: State<'_, DesktopState>,
-) -> AppSnapshot {
+) -> GuiEditResult {
     let Some(path) = rfd::FileDialog::new()
         .add_filter("Audio", &["mp3", "wav", "ogg", "flac"])
         .pick_file()
     else {
-        return state.snapshot();
+        return GuiEditResult {
+            snapshot: state.snapshot(),
+            document: state.get_gui_document(request),
+        };
     };
     let Some(import_path) = audio_import_path(&state.snapshot(), &request, &path) else {
-        return state.update_snapshot(|snapshot| {
+        let snapshot = state.update_snapshot(|snapshot| {
             snapshot.status = "Selected audio path is not valid UTF-8".to_string();
         });
+        return GuiEditResult {
+            snapshot,
+            document: state.get_gui_document(request),
+        };
     };
-    state
-        .apply_gui_edit(
-            request,
-            GuiEditCommand::Sequence {
-                edit: SequenceGuiEdit::SetAudio {
-                    import_path: Some(import_path),
-                },
+    state.apply_gui_edit(
+        request,
+        GuiEditCommand::Sequence {
+            edit: SequenceGuiEdit::SetAudio {
+                import_path: Some(import_path),
             },
-        )
-        .snapshot
+        },
+    )
 }
 
 #[tauri::command]
@@ -391,15 +396,32 @@ pub fn open_preview_window(
     preview: State<'_, crate::preview::PreviewWindowService>,
     state: State<'_, DesktopState>,
 ) -> AppSnapshot {
+    set_preview_window_open(true, app, preview, state)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_preview_window_open(
+    enabled: bool,
+    app: AppHandle,
+    preview: State<'_, crate::preview::PreviewWindowService>,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
     let restore = state.persistence().preview_window();
-    match preview.open_or_focus(
-        app.clone(),
-        PersistedPreviewWindowState {
-            open: true,
-            ..restore
-        },
-    ) {
+    let result = if enabled {
+        preview.open_or_focus(
+            app.clone(),
+            PersistedPreviewWindowState {
+                open: true,
+                ..restore
+            },
+        )
+    } else {
+        preview.close(&app, state.persistence())
+    };
+    match result {
         Ok(()) => state.update_snapshot(|snapshot| {
+            snapshot.preview_open = enabled;
             snapshot.preview_error = None;
         }),
         Err(error) => state.update_snapshot(|snapshot| {
@@ -475,6 +497,7 @@ pub fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         audio_seek,
         set_live_output_enabled,
         open_preview_window,
+        set_preview_window_open,
         persist_app_close
     ])
 }

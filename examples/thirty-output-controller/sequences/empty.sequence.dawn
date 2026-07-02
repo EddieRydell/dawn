@@ -5574,7 +5574,7 @@ empty:
         value: 0.0
     script: effects.SparkleComet
   - id: 72
-    start: 77.533465114s
+    start: 77.596542467s
     duration: 3.296864625s
     target:
       type: group

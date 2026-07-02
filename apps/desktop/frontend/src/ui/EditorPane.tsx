@@ -270,6 +270,7 @@ export function EditorPane({ snapshot }: { snapshot: AppSnapshot }) {
           <SequenceTransportControls
             document={activeSequenceDocument}
             transport={sequenceTransport}
+            previewOpen={snapshot.previewOpen}
             liveOutput={snapshot.liveOutput}
           />
         )}

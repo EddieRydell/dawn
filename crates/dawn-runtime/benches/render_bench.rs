@@ -19,8 +19,8 @@ const SCENARIOS: [RenderScenario; 7] = [
     },
     RenderScenario {
         frame: 5904,
-        checksum: 0x4185_ac9a_0c21_168f,
-        active_effect_count: 181,
+        checksum: 0x2cd4_8e9a_6687_58d7,
+        active_effect_count: 180,
     },
     RenderScenario {
         frame: 9504,
@@ -34,7 +34,7 @@ const SCENARIOS: [RenderScenario; 7] = [
     },
     RenderScenario {
         frame: 19080,
-        checksum: 0xc10d_4f6e_9ab4_e5f8,
+        checksum: 0xc8d2_ca17_c905_e8f8,
         active_effect_count: 301,
     },
     RenderScenario {
@@ -57,7 +57,7 @@ const RASTER_SCENARIOS: [RasterScenario; 2] = [
         effect_id: 76,
         columns: 256,
         rows: 50,
-        checksum: 0x53ae_7bcf_daa0_4721,
+        checksum: 0x9e95_b38b_5f33_f35d,
     },
 ];
 

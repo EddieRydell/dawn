@@ -72,7 +72,15 @@ pub fn run() -> Result<(), tauri::Error> {
                         && state.persistence().preview_window().open
                     {
                         let preview = app.state::<preview::PreviewWindowService>();
-                        let _ = preview.open_or_focus(handle, state.persistence().preview_window());
+                        if preview
+                            .open_or_focus(handle, state.persistence().preview_window())
+                            .is_ok()
+                        {
+                            state.update_snapshot(|snapshot| {
+                                snapshot.preview_open = true;
+                                snapshot.preview_error = None;
+                            });
+                        }
                     }
                 }
                 Err(error) => {

@@ -26,7 +26,7 @@ export const commands = {
 	applyGuiEdit: (request: GuiDocumentRequest, edit: GuiEditCommand) => __TAURI_INVOKE<GuiEditResult>("apply_gui_edit", { request, edit }),
 	applySequenceGuiEdit: (edit: SequenceGuiEdit) => __TAURI_INVOKE<AppSnapshot>("apply_sequence_gui_edit", { edit }),
 	applySequenceSelectionEdit: (edit: SequenceSelectionEdit) => __TAURI_INVOKE<SequenceSelectionEditResult>("apply_sequence_selection_edit", { edit }),
-	chooseSequenceAudio: (request: GuiDocumentRequest) => __TAURI_INVOKE<AppSnapshot>("choose_sequence_audio", { request }),
+	chooseSequenceAudio: (request: GuiDocumentRequest) => __TAURI_INVOKE<GuiEditResult>("choose_sequence_audio", { request }),
 	clearSequenceAudio: (request: GuiDocumentRequest) => __TAURI_INVOKE<AppSnapshot>("clear_sequence_audio", { request }),
 	exportActiveSequenceFseq: (stepMs: number) => __TAURI_INVOKE<AppSnapshot>("export_active_sequence_fseq", { stepMs }),
 	applyLayoutGuiEdit: (edit: LayoutGuiEdit) => __TAURI_INVOKE<AppSnapshot>("apply_layout_gui_edit", { edit }),
@@ -49,6 +49,7 @@ export const commands = {
 	audioSeek: (positionSeconds: number) => __TAURI_INVOKE<AppSnapshot>("audio_seek", { positionSeconds }),
 	setLiveOutputEnabled: (enabled: boolean) => __TAURI_INVOKE<AppSnapshot>("set_live_output_enabled", { enabled }),
 	openPreviewWindow: () => __TAURI_INVOKE<AppSnapshot>("open_preview_window"),
+	setPreviewWindowOpen: (enabled: boolean) => __TAURI_INVOKE<AppSnapshot>("set_preview_window_open", { enabled }),
 	persistAppClose: () => __TAURI_INVOKE<AppSnapshot>("persist_app_close"),
 };
 
@@ -79,6 +80,7 @@ export type AppSnapshot = {
 	status: string,
 	renderError: string | null,
 	previewError: string | null,
+	previewOpen: boolean,
 	audioTransport: AudioTransportSnapshot,
 	liveOutput: LiveOutputSnapshot,
 };

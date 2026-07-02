@@ -60,7 +60,7 @@ pub struct PreparedEffectRasterRenderer {
 #[derive(Clone, Debug)]
 pub struct PreparedEffectRasterSample {
     row_count: usize,
-    effect_pixels: Vec<Vec<PreparedSampledEffectPixel>>,
+    effect_pixels: Vec<PreparedSampledEffectPixels>,
 }
 
 pub struct EffectRasterPrepareBatch<'a> {
@@ -386,7 +386,7 @@ impl PreparedEffectRasterRenderer {
             .effects
             .iter()
             .map(|effect| {
-                effect
+                let pixels = effect
                     .target
                     .iter()
                     .filter_map(|pixel| {
@@ -400,7 +400,9 @@ impl PreparedEffectRasterRenderer {
                                 rows: rows.clone(),
                             })
                     })
-                    .collect()
+                    .collect::<Vec<_>>();
+                let groups = prepare_sampled_effect_pixel_groups(&pixels);
+                PreparedSampledEffectPixels { pixels, groups }
             })
             .collect();
         PreparedEffectRasterSample {
@@ -667,6 +669,11 @@ fn prepare_effect(
             start_seconds,
             duration_seconds: effect_duration_seconds,
             target: Arc::clone(&target),
+            sample_groups: definition
+                .compiled
+                .sample_reads_only_written_slots()
+                .then(|| prepare_sample_context_groups(&target))
+                .flatten(),
             definition: definition.compiled.clone(),
             params: bound_params,
         }),
@@ -1022,6 +1029,11 @@ fn prepare_generated_child(
             context.effects.push(PreparedEffect {
                 start_seconds,
                 duration_seconds,
+                sample_groups: definition
+                    .compiled
+                    .sample_reads_only_written_slots()
+                    .then(|| prepare_sample_context_groups(&target))
+                    .flatten(),
                 target,
                 definition: definition.compiled.clone(),
                 params: bound_params,
@@ -1253,19 +1265,25 @@ fn render_effect(
     let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
     let mut scratch = EffectVmScratch::default();
 
+    if let Some(groups) = &effect.sample_groups {
+        for group in groups {
+            let color =
+                sample_effect_group(effect, group.context, progress, local_seconds, &mut scratch)?;
+            for target_index in &group.target_indexes {
+                let Some(pixel) = effect.target.get(*target_index) else {
+                    continue;
+                };
+                compose_max(
+                    &mut rendered[pixel.fixture_index].pixels[pixel.fixture_pixel_index],
+                    color,
+                );
+            }
+        }
+        return Ok(());
+    }
+
     for pixel in effect.target.iter() {
-        let context = RunContext {
-            progress,
-            seconds: local_seconds,
-            duration: effect.duration_seconds,
-            pixel_index: pixel.pixel_index as i64,
-            pixel_count: pixel.pixel_count as i64,
-            pixel_fraction: pixel.pixel_fraction,
-            global_marks: Marks { marks: Vec::new() },
-        };
-        let color = effect
-            .definition
-            .sample_bound(&effect.params, &context, &mut scratch)?;
+        let color = sample_effect_pixel(effect, pixel, progress, local_seconds, &mut scratch)?;
         compose_max(
             &mut rendered[pixel.fixture_index].pixels[pixel.fixture_pixel_index],
             color,
@@ -1298,6 +1316,30 @@ fn render_effect_target_colors(
     let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
     let mut scratch = EffectVmScratch::default();
 
+    if let Some(groups) = &effect.sample_groups {
+        for group in groups {
+            let color =
+                sample_effect_group(effect, group.context, progress, local_seconds, &mut scratch)?;
+            for effect_target_index in &group.target_indexes {
+                let Some(pixel) = effect.target.get(*effect_target_index) else {
+                    continue;
+                };
+                let Some(target_indexes) = target_lookup.get(&TargetColorAddress {
+                    fixture_index: pixel.fixture_index,
+                    fixture_pixel_index: pixel.fixture_pixel_index,
+                }) else {
+                    continue;
+                };
+                for target_index in target_indexes {
+                    if let Some(target) = rendered.get_mut(*target_index) {
+                        compose_max(target, color);
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
+
     for pixel in effect.target.iter() {
         let Some(target_indexes) = target_lookup.get(&TargetColorAddress {
             fixture_index: pixel.fixture_index,
@@ -1305,18 +1347,7 @@ fn render_effect_target_colors(
         }) else {
             continue;
         };
-        let context = RunContext {
-            progress,
-            seconds: local_seconds,
-            duration: effect.duration_seconds,
-            pixel_index: pixel.pixel_index as i64,
-            pixel_count: pixel.pixel_count as i64,
-            pixel_fraction: pixel.pixel_fraction,
-            global_marks: Marks { marks: Vec::new() },
-        };
-        let color = effect
-            .definition
-            .sample_bound(&effect.params, &context, &mut scratch)?;
+        let color = sample_effect_pixel(effect, pixel, progress, local_seconds, &mut scratch)?;
         for target_index in target_indexes {
             if let Some(target) = rendered.get_mut(*target_index) {
                 compose_max(target, color);
@@ -1328,7 +1359,7 @@ fn render_effect_target_colors(
 
 fn render_sampled_effect_target_colors(
     effect: &PreparedEffect,
-    effect_pixels: &[PreparedSampledEffectPixel],
+    effect_pixels: &PreparedSampledEffectPixels,
     rendered: &mut [Color],
     sample_seconds: f64,
 ) -> Result<(), RenderError> {
@@ -1336,20 +1367,22 @@ fn render_sampled_effect_target_colors(
     let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
     let mut scratch = EffectVmScratch::default();
 
-    for sampled in effect_pixels {
+    if let Some(groups) = &effect_pixels.groups {
+        for group in groups {
+            let color =
+                sample_effect_group(effect, group.context, progress, local_seconds, &mut scratch)?;
+            for row in &group.rows {
+                if let Some(target) = rendered.get_mut(*row) {
+                    compose_max(target, color);
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    for sampled in &effect_pixels.pixels {
         let pixel = &sampled.pixel;
-        let context = RunContext {
-            progress,
-            seconds: local_seconds,
-            duration: effect.duration_seconds,
-            pixel_index: pixel.pixel_index as i64,
-            pixel_count: pixel.pixel_count as i64,
-            pixel_fraction: pixel.pixel_fraction,
-            global_marks: Marks { marks: Vec::new() },
-        };
-        let color = effect
-            .definition
-            .sample_bound(&effect.params, &context, &mut scratch)?;
+        let color = sample_effect_pixel(effect, pixel, progress, local_seconds, &mut scratch)?;
         for row in &sampled.rows {
             if let Some(target) = rendered.get_mut(*row) {
                 compose_max(target, color);
@@ -1357,6 +1390,107 @@ fn render_sampled_effect_target_colors(
         }
     }
     Ok(())
+}
+
+fn sample_effect_pixel(
+    effect: &PreparedEffect,
+    pixel: &PreparedTargetPixel,
+    progress: f64,
+    local_seconds: f64,
+    scratch: &mut EffectVmScratch,
+) -> Result<Color, RuntimeError> {
+    sample_effect_group(
+        effect,
+        PreparedSampleContext {
+            pixel_index: pixel.pixel_index,
+            pixel_count: pixel.pixel_count,
+            pixel_fraction: pixel.pixel_fraction,
+        },
+        progress,
+        local_seconds,
+        scratch,
+    )
+}
+
+fn sample_effect_group(
+    effect: &PreparedEffect,
+    sample_context: PreparedSampleContext,
+    progress: f64,
+    local_seconds: f64,
+    scratch: &mut EffectVmScratch,
+) -> Result<Color, RuntimeError> {
+    let context = RunContext {
+        progress,
+        seconds: local_seconds,
+        duration: effect.duration_seconds,
+        pixel_index: sample_context.pixel_index as i64,
+        pixel_count: sample_context.pixel_count as i64,
+        pixel_fraction: sample_context.pixel_fraction,
+        global_marks: Marks { marks: Vec::new() },
+    };
+    effect
+        .definition
+        .sample_bound(&effect.params, &context, scratch)
+}
+
+fn prepare_sample_context_groups(
+    target: &[PreparedTargetPixel],
+) -> Option<Vec<PreparedSampleContextGroup>> {
+    let mut group_indexes = HashMap::<PreparedSampleContextKey, usize>::new();
+    let mut groups = Vec::<PreparedSampleContextGroup>::new();
+    let mut has_repeated_context = false;
+
+    for (target_index, pixel) in target.iter().enumerate() {
+        let context = PreparedSampleContext {
+            pixel_index: pixel.pixel_index,
+            pixel_count: pixel.pixel_count,
+            pixel_fraction: pixel.pixel_fraction,
+        };
+        let key = PreparedSampleContextKey::from(context);
+        if let Some(group_index) = group_indexes.get(&key) {
+            has_repeated_context = true;
+            groups[*group_index].target_indexes.push(target_index);
+        } else {
+            group_indexes.insert(key, groups.len());
+            groups.push(PreparedSampleContextGroup {
+                context,
+                target_indexes: vec![target_index],
+            });
+        }
+    }
+
+    has_repeated_context.then_some(groups)
+}
+
+fn prepare_sampled_effect_pixel_groups(
+    pixels: &[PreparedSampledEffectPixel],
+) -> Option<Vec<PreparedSampledEffectPixelGroup>> {
+    let mut group_indexes = HashMap::<PreparedSampleContextKey, usize>::new();
+    let mut groups = Vec::<PreparedSampledEffectPixelGroup>::new();
+    let mut has_repeated_context = false;
+
+    for sampled in pixels {
+        let context = PreparedSampleContext {
+            pixel_index: sampled.pixel.pixel_index,
+            pixel_count: sampled.pixel.pixel_count,
+            pixel_fraction: sampled.pixel.pixel_fraction,
+        };
+        let key = PreparedSampleContextKey::from(context);
+        if let Some(group_index) = group_indexes.get(&key) {
+            has_repeated_context = true;
+            groups[*group_index]
+                .rows
+                .extend(sampled.rows.iter().copied());
+        } else {
+            group_indexes.insert(key, groups.len());
+            groups.push(PreparedSampledEffectPixelGroup {
+                context,
+                rows: sampled.rows.clone(),
+            });
+        }
+    }
+
+    has_repeated_context.then_some(groups)
 }
 
 fn evenly_sample_indices(source_count: usize, sample_count: usize) -> Vec<usize> {
@@ -1413,9 +1547,51 @@ struct PreparedTargetPixel {
     pixel_fraction: f64,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PreparedSampleContext {
+    pixel_index: usize,
+    pixel_count: usize,
+    pixel_fraction: f64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct PreparedSampleContextKey {
+    pixel_index: usize,
+    pixel_count: usize,
+    pixel_fraction_bits: u64,
+}
+
+impl From<PreparedSampleContext> for PreparedSampleContextKey {
+    fn from(context: PreparedSampleContext) -> Self {
+        Self {
+            pixel_index: context.pixel_index,
+            pixel_count: context.pixel_count,
+            pixel_fraction_bits: context.pixel_fraction.to_bits(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PreparedSampleContextGroup {
+    context: PreparedSampleContext,
+    target_indexes: Vec<usize>,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedSampledEffectPixels {
+    pixels: Vec<PreparedSampledEffectPixel>,
+    groups: Option<Vec<PreparedSampledEffectPixelGroup>>,
+}
+
 #[derive(Clone, Debug)]
 struct PreparedSampledEffectPixel {
     pixel: PreparedTargetPixel,
+    rows: Vec<usize>,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedSampledEffectPixelGroup {
+    context: PreparedSampleContext,
     rows: Vec<usize>,
 }
 
@@ -1430,6 +1606,7 @@ struct PreparedEffect {
     start_seconds: f64,
     duration_seconds: f64,
     target: Arc<Vec<PreparedTargetPixel>>,
+    sample_groups: Option<Vec<PreparedSampleContextGroup>>,
     definition: dawn_language::effect_dsl::CompiledEffect,
     params: BoundEffectParams,
 }

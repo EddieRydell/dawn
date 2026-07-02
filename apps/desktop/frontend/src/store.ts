@@ -96,17 +96,34 @@ setGuiEditResultHandler((result) => {
 });
 
 export function subscribeToSnapshots(): Promise<() => void> {
-  return listen<AudioTransportSnapshot>("audio_transport_changed", (event) => {
-    const current = useAppStore.getState().snapshot;
-    if (current === null) return;
-    if (event.payload.generation < current.audioTransport.generation) return;
-    useAppStore.getState().setSnapshot(
-      {
-        ...current,
-        audioTransport: event.payload
-      },
-      "event"
-    );
+  return Promise.all([
+    listen<AudioTransportSnapshot>("audio_transport_changed", (event) => {
+      const current = useAppStore.getState().snapshot;
+      if (current === null) return;
+      if (event.payload.generation < current.audioTransport.generation) return;
+      useAppStore.getState().setSnapshot(
+        {
+          ...current,
+          audioTransport: event.payload
+        },
+        "event"
+      );
+    }),
+    listen<boolean>("preview_window_changed", (event) => {
+      const current = useAppStore.getState().snapshot;
+      if (current === null) return;
+      useAppStore.getState().setSnapshot(
+        {
+          ...current,
+          previewOpen: event.payload
+        },
+        "event"
+      );
+    })
+  ]).then((unsubscribes) => () => {
+    for (const unsubscribe of unsubscribes) {
+      unsubscribe();
+    }
   });
 }
 

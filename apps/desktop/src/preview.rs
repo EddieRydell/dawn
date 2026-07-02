@@ -12,7 +12,7 @@ use dawn_language::values::{Distance, DistanceSpan, Point3};
 use glam::{EulerRot, Mat4, Vec2, Vec3};
 use tauri::async_runtime::block_on;
 use tauri::window::WindowBuilder;
-use tauri::{AppHandle, Manager, Window};
+use tauri::{AppHandle, Emitter, Manager, Window};
 use wgpu::util::DeviceExt;
 
 use crate::dto::AudioTransportState;
@@ -91,6 +91,10 @@ impl PreviewWindowService {
                         geometry,
                     },
                 );
+                let snapshot = state.update_snapshot(|snapshot| {
+                    snapshot.preview_open = false;
+                });
+                let _ = close_app.emit("preview_window_changed", snapshot.preview_open);
             }
             tauri::WindowEvent::Destroyed => {
                 close_flag.store(false, Ordering::Release);
@@ -115,6 +119,26 @@ impl PreviewWindowService {
         });
 
         Ok(())
+    }
+
+    pub fn close(
+        &self,
+        app: &AppHandle,
+        persistence: &crate::persistence::PersistenceService,
+    ) -> Result<(), String> {
+        let Some(window) = app.get_window(PREVIEW_LABEL) else {
+            persistence.record_preview_window(crate::persistence::PersistedPreviewWindowState {
+                open: false,
+                geometry: persistence.preview_window().geometry,
+            })?;
+            return Ok(());
+        };
+        let geometry = crate::persistence::read_window_state(&window);
+        persistence.record_preview_window(crate::persistence::PersistedPreviewWindowState {
+            open: false,
+            geometry,
+        })?;
+        window.close().map_err(|error| error.to_string())
     }
 
     pub fn close_for_main_shutdown(

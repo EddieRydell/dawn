@@ -17,6 +17,7 @@ pub struct AppSnapshot {
     pub status: String,
     pub render_error: Option<String>,
     pub preview_error: Option<String>,
+    pub preview_open: bool,
     pub audio_transport: AudioTransportSnapshot,
     pub live_output: LiveOutputSnapshot,
 }
