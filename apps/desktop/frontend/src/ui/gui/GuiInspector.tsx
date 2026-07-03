@@ -7,6 +7,8 @@ export function GuiInspector({
   gui,
   selected,
   setSelected,
+  openGraphClipId,
+  setOpenGraphClipId,
   sequenceSelection,
   automationClipChooser,
   setAutomationClipChooser,
@@ -18,6 +20,8 @@ export function GuiInspector({
   gui: ReadyGuiDocument;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
+  openGraphClipId: number | null;
+  setOpenGraphClipId: (id: number | null) => void;
   sequenceSelection: SequenceSelection;
   automationClipChooser: AutomationClipChooser;
   setAutomationClipChooser: (chooser: AutomationClipChooser) => void;
@@ -32,6 +36,8 @@ export function GuiInspector({
         document={gui.document}
         selected={selected}
         setSelected={setSelected}
+        openGraphClipId={openGraphClipId}
+        setOpenGraphClipId={setOpenGraphClipId}
         sequenceSelection={sequenceSelection}
         automationClipChooser={automationClipChooser}
         setAutomationClipChooser={setAutomationClipChooser}

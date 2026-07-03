@@ -21,6 +21,7 @@
     "@radix-ui/react-context-menu": "catalog:",
     "@radix-ui/react-dropdown-menu": "catalog:",
     "@tauri-apps/api": "catalog:",
+    "@xyflow/react": "catalog:",
     "lucide-react": "catalog:",
     "react": "catalog:",
     "react-arborist": "catalog:",

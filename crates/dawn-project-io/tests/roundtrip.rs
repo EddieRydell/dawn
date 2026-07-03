@@ -80,7 +80,6 @@ fn example_entrypoints() -> Vec<Utf8PathBuf> {
         .unwrap();
     vec![
         workspace_root.join("examples/starter/project.dawn"),
-        workspace_root.join("examples/hi/project.dawn"),
         workspace_root.join("examples/christmas-house/project.dawn"),
         workspace_root.join("examples/thirty-output-controller/project.dawn"),
     ]

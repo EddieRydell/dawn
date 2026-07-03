@@ -8,8 +8,11 @@ use dawn_language::effect::{
 };
 use dawn_language::effect_dsl::{EffectKind, Identifier, Type, Value as EffectValue};
 use dawn_language::sequence::{
-    AutomationBinding, AutomationClip, AutomationClipId, AutomationMapping, MarkCollection,
-    MarkCollectionKey, SequenceAudio as DomainSequenceAudio, SequenceId,
+    AutomationBinding, AutomationClip, AutomationClipId, AutomationMapping, AutomationTarget,
+    EffectClip, EffectGraphClip, EffectGraphEdge, EffectGraphNode, EffectGraphNodeId,
+    EffectGraphNodeKind, GraphNodePosition, GraphOperator, GraphOperatorNode, GraphPortId,
+    GraphSourceNode, MarkCollection, MarkCollectionKey, SequenceAudio as DomainSequenceAudio,
+    SequenceClip, SequenceClipId, SequenceClipKind, SequenceId,
 };
 use dawn_language::setup::{
     FixtureDefinitionId, FixtureGroupId, FixtureInstanceId, Geometry as DomainGeometry, LayoutId,
@@ -35,9 +38,11 @@ use crate::dto::{
     SequenceCurveLibraryPoints, SequenceCurveValueType, SequenceEffect, SequenceEffectParam,
     SequenceEffectParamCurveSource, SequenceEffectParamKind, SequenceEffectParamValue,
     SequenceEffectScope, SequenceEffectScript, SequenceEffectScriptKind, SequenceEffectScriptParam,
-    SequenceGuiDocument, SequenceGuiEdit, SequenceLane, SequenceMarkCollection, SequenceMarkRef,
-    SequenceParamAutomation, SequencePasteAnchor, SequenceResizeEdge, SequenceSelection,
-    SequenceSelectionEdit, Transform,
+    SequenceGraphClip, SequenceGraphEdge, SequenceGraphNode, SequenceGraphNodeKind,
+    SequenceGraphOperator, SequenceGraphOperatorParam, SequenceGuiDocument, SequenceGuiEdit,
+    SequenceLane, SequenceMarkCollection, SequenceMarkRef, SequenceParamAutomation,
+    SequencePasteAnchor, SequenceResizeEdge, SequenceSelection, SequenceSelectionEdit,
+    SequenceTimelineClipKind, Transform,
 };
 
 #[derive(Debug)]
@@ -331,23 +336,70 @@ fn project_sequence(session: &ProjectSession, resolved: &ResolvedGuiObject) -> G
         })
         .unwrap_or_default();
     let effects = sequence
-        .effects
+        .clips
         .iter()
         .enumerate()
-        .map(|(index, effect)| SequenceEffect {
+        .map(|(index, clip)| SequenceEffect {
             index: index as u32,
-            id: effect.id.0,
-            start_seconds: effect.start.as_seconds_f64(),
-            duration_seconds: effect.duration.as_seconds_f64(),
-            target: effect_target(&effect.target),
-            target_label: effect_target_label(session, &effect.target),
-            scope: match effect.scope {
+            id: clip.id.0,
+            start_seconds: clip.start.as_seconds_f64(),
+            duration_seconds: clip.duration.as_seconds_f64(),
+            target: effect_target(&clip.target),
+            target_label: effect_target_label(session, &clip.target),
+            scope: match clip.scope {
                 EffectScope::PerFixture => SequenceEffectScope::PerFixture,
                 EffectScope::WholeTarget => SequenceEffectScope::WholeTarget,
             },
-            script: effect.definition.0.clone(),
-            script_source: effect_script_ref(session, &effect.definition.0),
-            params: effect_params(session, sequence, effect),
+            script: match &clip.kind {
+                SequenceClipKind::Effect(effect) => effect.definition.0.clone(),
+                SequenceClipKind::Graph(_) => "Graph".to_string(),
+            },
+            script_source: match &clip.kind {
+                SequenceClipKind::Effect(effect) => {
+                    effect_script_ref(session, &effect.definition.0)
+                }
+                SequenceClipKind::Graph(_) => None,
+            },
+            params: match &clip.kind {
+                SequenceClipKind::Effect(_) => sequence
+                    .effects
+                    .iter()
+                    .find(|effect| effect.id.0 == clip.id.0)
+                    .map(|effect| effect_params(session, sequence, effect))
+                    .unwrap_or_default(),
+                SequenceClipKind::Graph(_) => Vec::new(),
+            },
+            kind: match &clip.kind {
+                SequenceClipKind::Effect(_) => SequenceTimelineClipKind::Effect,
+                SequenceClipKind::Graph(_) => SequenceTimelineClipKind::Graph,
+            },
+        })
+        .collect();
+    let graph_clips = sequence
+        .clips
+        .iter()
+        .filter_map(|clip| {
+            let SequenceClipKind::Graph(graph) = &clip.kind else {
+                return None;
+            };
+            Some(SequenceGraphClip {
+                id: clip.id.0,
+                nodes: graph
+                    .nodes
+                    .iter()
+                    .map(|node| sequence_graph_node(session, sequence, clip.id.0, node))
+                    .collect(),
+                edges: graph
+                    .edges
+                    .iter()
+                    .map(|edge| SequenceGraphEdge {
+                        from_node: edge.from_node.0,
+                        from_port: edge.from_port.0.clone(),
+                        to_node: edge.to_node.0,
+                        to_port: edge.to_port.0.clone(),
+                    })
+                    .collect(),
+            })
         })
         .collect();
     GuiDocument::Sequence {
@@ -376,6 +428,7 @@ fn project_sequence(session: &ProjectSession, resolved: &ResolvedGuiObject) -> G
             effect_scripts: effect_scripts(session),
             curve_library: curve_library(session),
             effects,
+            graph_clips,
             automation_clips: automation_clips(sequence),
             degraded: false,
         },
@@ -699,6 +752,141 @@ fn effect_params(
         .collect()
 }
 
+fn sequence_graph_node(
+    session: &ProjectSession,
+    sequence: &dawn_language::sequence::Sequence,
+    clip_id: u32,
+    node: &EffectGraphNode,
+) -> SequenceGraphNode {
+    SequenceGraphNode {
+        id: node.id.0,
+        x: node.position.x,
+        y: node.position.y,
+        kind: match &node.kind {
+            EffectGraphNodeKind::Source(source) => SequenceGraphNodeKind::Source {
+                start_seconds: source.start.as_seconds_f64(),
+                duration_seconds: source.duration.as_seconds_f64(),
+                target: effect_target(&source.target),
+                target_label: effect_target_label(session, &source.target),
+                scope: match source.scope {
+                    EffectScope::PerFixture => SequenceEffectScope::PerFixture,
+                    EffectScope::WholeTarget => SequenceEffectScope::WholeTarget,
+                },
+                script: source.definition.0.clone(),
+                script_source: effect_script_ref(session, &source.definition.0),
+                params: graph_source_params(session, sequence, clip_id, node.id.0, source),
+            },
+            EffectGraphNodeKind::Operator(operator) => SequenceGraphNodeKind::Operator {
+                operator: graph_operator_to_gui(&operator.operator),
+                params: graph_operator_params(session, &operator.params),
+            },
+            EffectGraphNodeKind::Output => SequenceGraphNodeKind::Output,
+        },
+    }
+}
+
+fn graph_source_params(
+    session: &ProjectSession,
+    sequence: &dawn_language::sequence::Sequence,
+    clip_id: u32,
+    node_id: u32,
+    source: &GraphSourceNode,
+) -> Vec<SequenceEffectParam> {
+    let Some(definition) = session.project.definitions.effects.get(&source.definition) else {
+        return Vec::new();
+    };
+    definition
+        .compiled
+        .params()
+        .iter()
+        .filter_map(|param| {
+            let kind = param_kind(&param.ty)?;
+            let override_value = source.param_overrides.get(&param.name);
+            let value = override_value
+                .map(|value| effect_param_value(session, value))
+                .or_else(|| param.default.as_ref().and_then(default_param_value))
+                .or_else(|| default_value_for_type(&param.ty))?;
+            Some(SequenceEffectParam {
+                name: param.name.as_str().to_string(),
+                kind,
+                options: param_options(&param.ty),
+                editable: automation_for_graph_node_param(
+                    sequence,
+                    clip_id,
+                    node_id,
+                    param.name.as_str(),
+                )
+                .is_none(),
+                curve_source: override_value.and_then(|value| curve_source(session, value)),
+                automation: automation_for_graph_node_param(
+                    sequence,
+                    clip_id,
+                    node_id,
+                    param.name.as_str(),
+                ),
+                value,
+            })
+        })
+        .collect()
+}
+
+fn graph_operator_params(
+    session: &ProjectSession,
+    params: &IndexMap<Identifier, EffectParamValue>,
+) -> Vec<SequenceGraphOperatorParam> {
+    params
+        .iter()
+        .filter_map(|(name, value)| {
+            Some(SequenceGraphOperatorParam {
+                name: name.as_str().to_string(),
+                kind: param_kind_for_value(value)?,
+                value: effect_param_value(session, value),
+            })
+        })
+        .collect()
+}
+
+fn automation_for_graph_node_param(
+    sequence: &dawn_language::sequence::Sequence,
+    clip_id: u32,
+    node_id: u32,
+    param: &str,
+) -> Option<SequenceParamAutomation> {
+    sequence.automation_clips.iter().find_map(|clip| {
+        clip.bindings
+            .iter()
+            .find(|binding| {
+                matches!(
+                    &binding.target,
+                    AutomationTarget::GraphNodeParam {
+                        clip_id: target_clip_id,
+                        node_id: target_node_id,
+                        param: target_param,
+                    } if target_clip_id.0 == clip_id && target_node_id.0 == node_id && target_param.as_str() == param
+                )
+            })
+            .map(|binding| SequenceParamAutomation {
+                clip_id: clip.id.0,
+                mapping: automation_mapping_to_gui(&binding.mapping),
+            })
+    })
+}
+
+fn graph_operator_to_gui(operator: &GraphOperator) -> SequenceGraphOperator {
+    match operator {
+        GraphOperator::Max => SequenceGraphOperator::Max,
+        GraphOperator::Add => SequenceGraphOperator::Add,
+        GraphOperator::Multiply => SequenceGraphOperator::Multiply,
+        GraphOperator::IntensityModulate => SequenceGraphOperator::IntensityModulate,
+        GraphOperator::Dim => SequenceGraphOperator::Dim,
+        GraphOperator::Invert => SequenceGraphOperator::Invert,
+        GraphOperator::Colorize => SequenceGraphOperator::Colorize,
+        GraphOperator::Delay => SequenceGraphOperator::Delay,
+        GraphOperator::Echo => SequenceGraphOperator::Echo,
+        GraphOperator::RemapNearest => SequenceGraphOperator::RemapNearest,
+    }
+}
+
 fn automation_for_param(
     sequence: &dawn_language::sequence::Sequence,
     effect_id: u32,
@@ -826,6 +1014,40 @@ fn param_options(ty: &Type) -> Vec<String> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+fn param_kind_for_value(value: &EffectParamValue) -> Option<SequenceEffectParamKind> {
+    Some(match value {
+        EffectParamValue::Int(_) => SequenceEffectParamKind::Int,
+        EffectParamValue::Float(_) => SequenceEffectParamKind::Float,
+        EffectParamValue::Bool(_) => SequenceEffectParamKind::Bool,
+        EffectParamValue::Color(_) => SequenceEffectParamKind::Color,
+        EffectParamValue::Enum(_) => SequenceEffectParamKind::Enum,
+        EffectParamValue::Marks(_) => SequenceEffectParamKind::Marks,
+        EffectParamValue::Curve(CurveSource::Inline(curve)) => match curve.points.first()?.value {
+            CurveValue::Color(_) => SequenceEffectParamKind::ColorCurve,
+            CurveValue::Float(_) => SequenceEffectParamKind::FloatCurve,
+        },
+        EffectParamValue::Curve(CurveSource::Reference(_)) => SequenceEffectParamKind::FloatCurve,
+        EffectParamValue::Array(values) => match values.first()? {
+            EffectParamValue::Int(_) => SequenceEffectParamKind::IntArray,
+            EffectParamValue::Float(_) => SequenceEffectParamKind::FloatArray,
+            EffectParamValue::Bool(_) => SequenceEffectParamKind::BoolArray,
+            EffectParamValue::Color(_) => SequenceEffectParamKind::ColorArray,
+            EffectParamValue::Curve(CurveSource::Inline(curve)) => {
+                match curve.points.first()?.value {
+                    CurveValue::Color(_) => SequenceEffectParamKind::ColorCurveArray,
+                    CurveValue::Float(_) => SequenceEffectParamKind::FloatCurveArray,
+                }
+            }
+            EffectParamValue::Curve(CurveSource::Reference(_)) => {
+                SequenceEffectParamKind::FloatCurveArray
+            }
+            EffectParamValue::Enum(_) | EffectParamValue::Marks(_) | EffectParamValue::Array(_) => {
+                return None;
+            }
+        },
+    })
 }
 
 fn effect_param_value(
@@ -1454,10 +1676,16 @@ fn edit_sequence(
             target,
         } => {
             let parsed_target = target.map(layout_target_to_effect_target).transpose()?;
-            let effect = effect_mut(sequence_mut(session, &sequence_id)?, id)?;
-            effect.start = dawn_time(start_seconds.max(0.0));
-            if let Some(target) = parsed_target {
-                effect.target = target;
+            let sequence = sequence_mut(session, &sequence_id)?;
+            clip_mut(sequence, id)?.start = dawn_time(start_seconds.max(0.0));
+            if let Some(target) = parsed_target.clone() {
+                clip_mut(sequence, id)?.target = target;
+            }
+            if let Ok(effect) = effect_mut(sequence, id) {
+                effect.start = dawn_time(start_seconds.max(0.0));
+                if let Some(target) = parsed_target {
+                    effect.target = target;
+                }
             }
         }
         SequenceGuiEdit::ResizeEffect {
@@ -1465,20 +1693,37 @@ fn edit_sequence(
             start_seconds,
             duration_seconds,
         } => {
-            let effect = effect_mut(sequence_mut(session, &sequence_id)?, id)?;
-            effect.start = dawn_time(start_seconds.max(0.0));
-            effect.duration = dawn_duration(duration_seconds.max(0.000000001));
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let start = dawn_time(start_seconds.max(0.0));
+            let duration = dawn_duration(duration_seconds.max(0.000000001));
+            let clip = clip_mut(sequence, id)?;
+            clip.start = start.clone();
+            clip.duration = duration.clone();
+            if let Ok(effect) = effect_mut(sequence, id) {
+                effect.start = start;
+                effect.duration = duration;
+            }
         }
         SequenceGuiEdit::SetEffectScope { id, scope } => {
-            effect_mut(sequence_mut(session, &sequence_id)?, id)?.scope = effect_scope(scope);
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let scope = effect_scope(scope);
+            clip_mut(sequence, id)?.scope = scope.clone();
+            if let Ok(effect) = effect_mut(sequence, id) {
+                effect.scope = scope;
+            }
         }
         SequenceGuiEdit::RetargetEffect { id, target } => {
-            effect_mut(sequence_mut(session, &sequence_id)?, id)?.target =
-                layout_target_to_effect_target(target)?;
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let target = layout_target_to_effect_target(target)?;
+            clip_mut(sequence, id)?.target = target.clone();
+            if let Ok(effect) = effect_mut(sequence, id) {
+                effect.target = target;
+            }
         }
         SequenceGuiEdit::DeleteEffect { id } => {
             let sequence = sequence_mut(session, &sequence_id)?;
             sequence.effects.retain(|effect| effect.id.0 != id);
+            sequence.clips.retain(|clip| clip.id.0 != id);
             for clip in &mut sequence.automation_clips {
                 clip.bindings.retain(|binding| binding.effect_id.0 != id);
             }
@@ -1593,6 +1838,37 @@ fn edit_sequence(
                 param_overrides,
             });
         }
+        SequenceGuiEdit::AddGraphClip {
+            target,
+            scope,
+            start_seconds,
+            duration_seconds,
+        } => {
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let next_id = sequence
+                .clips
+                .iter()
+                .map(|clip| clip.id.0)
+                .chain(sequence.effects.iter().map(|effect| effect.id.0))
+                .max()
+                .unwrap_or(0)
+                + 1;
+            sequence.clips.push(SequenceClip {
+                id: SequenceClipId(next_id),
+                start: dawn_time(start_seconds.max(0.0)),
+                duration: dawn_duration(duration_seconds.max(0.000000001)),
+                target: layout_target_to_effect_target(target)?,
+                scope: effect_scope(scope),
+                kind: SequenceClipKind::Graph(EffectGraphClip {
+                    nodes: vec![EffectGraphNode {
+                        id: EffectGraphNodeId(1),
+                        position: GraphNodePosition { x: 420.0, y: 160.0 },
+                        kind: EffectGraphNodeKind::Output,
+                    }],
+                    edges: Vec::new(),
+                }),
+            });
+        }
         SequenceGuiEdit::ChangeEffectScript { id, script } => {
             let definition = EffectDefinitionId(script.effect_name);
             if !session
@@ -1639,6 +1915,190 @@ fn edit_sequence(
             })?;
             effect_mut(sequence_mut(session, &sequence_id)?, id)?
                 .param_overrides
+                .insert(identifier(&name)?, effect_param_value_from_gui(value)?);
+        }
+        SequenceGuiEdit::AddGraphSourceNode {
+            clip_id,
+            script,
+            x,
+            y,
+        } => {
+            let definition = EffectDefinitionId(script.effect_name);
+            if !session
+                .project
+                .definitions
+                .effects
+                .definitions
+                .contains_key(&definition)
+            {
+                return Err(GuiMutationError::Invalid(
+                    "Effect script was not found.".to_string(),
+                ));
+            }
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let clip = clip_mut(sequence, clip_id)?;
+            let (target, scope, duration) = (
+                clip.target.clone(),
+                clip.scope.clone(),
+                clip.duration.clone(),
+            );
+            let graph = graph_clip_mut(clip)?;
+            let next_id = next_graph_node_id(graph);
+            graph.nodes.push(EffectGraphNode {
+                id: EffectGraphNodeId(next_id),
+                position: GraphNodePosition { x, y },
+                kind: EffectGraphNodeKind::Source(GraphSourceNode {
+                    start: DawnTime(Duration::ZERO),
+                    duration,
+                    target,
+                    scope,
+                    definition,
+                    param_overrides: IndexMap::new(),
+                }),
+            });
+        }
+        SequenceGuiEdit::AddGraphOperatorNode {
+            clip_id,
+            operator,
+            x,
+            y,
+        } => {
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let graph = graph_clip_mut(clip_mut(sequence, clip_id)?)?;
+            let next_id = next_graph_node_id(graph);
+            graph.nodes.push(EffectGraphNode {
+                id: EffectGraphNodeId(next_id),
+                position: GraphNodePosition { x, y },
+                kind: EffectGraphNodeKind::Operator(GraphOperatorNode {
+                    operator: graph_operator_from_gui(&operator),
+                    params: default_graph_operator_params(&operator),
+                }),
+            });
+        }
+        SequenceGuiEdit::MoveGraphNode {
+            clip_id,
+            node_id,
+            x,
+            y,
+        } => {
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let graph = graph_clip_mut(clip_mut(sequence, clip_id)?)?;
+            let node = graph_node_mut(graph, node_id)?;
+            node.position = GraphNodePosition { x, y };
+        }
+        SequenceGuiEdit::DeleteGraphNode { clip_id, node_id } => {
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let graph = graph_clip_mut(clip_mut(sequence, clip_id)?)?;
+            if graph.nodes.iter().any(|node| {
+                node.id.0 == node_id && matches!(node.kind, EffectGraphNodeKind::Output)
+            }) {
+                return Err(GuiMutationError::Invalid(
+                    "Graph output node cannot be deleted.".to_string(),
+                ));
+            }
+            graph.nodes.retain(|node| node.id.0 != node_id);
+            graph
+                .edges
+                .retain(|edge| edge.from_node.0 != node_id && edge.to_node.0 != node_id);
+        }
+        SequenceGuiEdit::ConnectGraphNodes {
+            clip_id,
+            from_node,
+            from_port,
+            to_node,
+            to_port,
+        } => {
+            if from_node == to_node {
+                return Err(GuiMutationError::Invalid(
+                    "Graph node cannot connect to itself.".to_string(),
+                ));
+            }
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let graph = graph_clip_mut(clip_mut(sequence, clip_id)?)?;
+            if !graph.nodes.iter().any(|node| node.id.0 == from_node)
+                || !graph.nodes.iter().any(|node| node.id.0 == to_node)
+            {
+                return Err(GuiMutationError::Invalid(
+                    "Graph node was not found.".to_string(),
+                ));
+            }
+            if !graph.edges.iter().any(|edge| {
+                edge.from_node.0 == from_node
+                    && edge.from_port.0 == from_port
+                    && edge.to_node.0 == to_node
+                    && edge.to_port.0 == to_port
+            }) {
+                graph.edges.push(EffectGraphEdge {
+                    from_node: EffectGraphNodeId(from_node),
+                    from_port: GraphPortId(from_port),
+                    to_node: EffectGraphNodeId(to_node),
+                    to_port: GraphPortId(to_port),
+                });
+            }
+        }
+        SequenceGuiEdit::DisconnectGraphNodes {
+            clip_id,
+            from_node,
+            from_port,
+            to_node,
+            to_port,
+        } => {
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let graph = graph_clip_mut(clip_mut(sequence, clip_id)?)?;
+            graph.edges.retain(|edge| {
+                !(edge.from_node.0 == from_node
+                    && edge.from_port.0 == from_port
+                    && edge.to_node.0 == to_node
+                    && edge.to_port.0 == to_port)
+            });
+        }
+        SequenceGuiEdit::ChangeGraphSourceScript {
+            clip_id,
+            node_id,
+            script,
+        } => {
+            let definition = EffectDefinitionId(script.effect_name);
+            if !session
+                .project
+                .definitions
+                .effects
+                .definitions
+                .contains_key(&definition)
+            {
+                return Err(GuiMutationError::Invalid(
+                    "Effect script was not found.".to_string(),
+                ));
+            }
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let source =
+                graph_source_node_mut(graph_clip_mut(clip_mut(sequence, clip_id)?)?, node_id)?;
+            source.definition = definition;
+            source.param_overrides.clear();
+        }
+        SequenceGuiEdit::UpdateGraphSourceParam {
+            clip_id,
+            node_id,
+            name,
+            value,
+        } => {
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let source =
+                graph_source_node_mut(graph_clip_mut(clip_mut(sequence, clip_id)?)?, node_id)?;
+            source
+                .param_overrides
+                .insert(identifier(&name)?, effect_param_value_from_gui(value)?);
+        }
+        SequenceGuiEdit::UpdateGraphOperatorParam {
+            clip_id,
+            node_id,
+            name,
+            value,
+        } => {
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let operator =
+                graph_operator_node_mut(graph_clip_mut(clip_mut(sequence, clip_id)?)?, node_id)?;
+            operator
+                .params
                 .insert(identifier(&name)?, effect_param_value_from_gui(value)?);
         }
         SequenceGuiEdit::AddAutomationClip {
@@ -1720,6 +2180,10 @@ fn edit_sequence(
                 lane_index: 0,
                 curve: default_automation_curve(),
                 bindings: vec![AutomationBinding {
+                    target: AutomationTarget::EffectClipParam {
+                        clip_id: SequenceClipId(effect_id),
+                        param: param.clone(),
+                    },
                     effect_id: EffectInstId(effect_id),
                     param,
                     mapping,
@@ -1777,6 +2241,10 @@ fn edit_sequence(
             automation_clip_mut(sequence, clip_id)?
                 .bindings
                 .push(AutomationBinding {
+                    target: AutomationTarget::EffectClipParam {
+                        clip_id: SequenceClipId(effect_id),
+                        param: param.clone(),
+                    },
                     effect_id: EffectInstId(effect_id),
                     param,
                     mapping: automation_mapping_from_gui(mapping)?,
@@ -1822,6 +2290,7 @@ fn edit_sequence(
                 .retain(|binding| !(binding.effect_id.0 == effect_id && binding.param == param_id));
         }
     }
+    sync_sequence_effect_clips(sequence_mut(session, &sequence_id)?);
     Ok(())
 }
 
@@ -1952,6 +2421,7 @@ fn delete_sequence_selection(
             sequence
                 .effects
                 .retain(|effect| !ids.contains(&effect.id.0));
+            sync_sequence_effect_clips(sequence);
         }
         SequenceSelection::Marks { marks } => {
             for (collection_key, indexes) in mark_indexes_by_collection(marks) {
@@ -2022,6 +2492,7 @@ fn paste_sequence_clipboard(
                 pasted_ids.push(next_id);
                 next_id = next_id.saturating_add(1);
             }
+            sync_sequence_effect_clips(sequence);
             Ok(SequenceSelectionMutation {
                 selection: Some(SequenceSelection::Effects { ids: pasted_ids }),
                 copied_count: effects.len() as u32,
@@ -2204,6 +2675,7 @@ fn apply_effect_updates(
         }
         moved.push(update.id);
     }
+    sync_sequence_effect_clips(sequence);
     Ok(moved)
 }
 
@@ -2368,6 +2840,157 @@ fn effect_mut(
         .iter_mut()
         .find(|effect| effect.id.0 == id)
         .ok_or_else(|| GuiMutationError::Invalid("Effect was not found.".to_string()))
+}
+
+fn clip_mut(
+    sequence: &mut dawn_language::sequence::Sequence,
+    id: u32,
+) -> Result<&mut SequenceClip, GuiMutationError> {
+    sequence
+        .clips
+        .iter_mut()
+        .find(|clip| clip.id.0 == id)
+        .ok_or_else(|| GuiMutationError::Invalid("Clip was not found.".to_string()))
+}
+
+fn graph_clip_mut(clip: &mut SequenceClip) -> Result<&mut EffectGraphClip, GuiMutationError> {
+    match &mut clip.kind {
+        SequenceClipKind::Graph(graph) => Ok(graph),
+        SequenceClipKind::Effect(_) => Err(GuiMutationError::Invalid(
+            "Clip is not a graph.".to_string(),
+        )),
+    }
+}
+
+fn graph_node_mut(
+    graph: &mut EffectGraphClip,
+    id: u32,
+) -> Result<&mut EffectGraphNode, GuiMutationError> {
+    graph
+        .nodes
+        .iter_mut()
+        .find(|node| node.id.0 == id)
+        .ok_or_else(|| GuiMutationError::Invalid("Graph node was not found.".to_string()))
+}
+
+fn graph_source_node_mut(
+    graph: &mut EffectGraphClip,
+    id: u32,
+) -> Result<&mut GraphSourceNode, GuiMutationError> {
+    match &mut graph_node_mut(graph, id)?.kind {
+        EffectGraphNodeKind::Source(source) => Ok(source),
+        EffectGraphNodeKind::Operator(_) | EffectGraphNodeKind::Output => Err(
+            GuiMutationError::Invalid("Graph node is not a source.".to_string()),
+        ),
+    }
+}
+
+fn graph_operator_node_mut(
+    graph: &mut EffectGraphClip,
+    id: u32,
+) -> Result<&mut GraphOperatorNode, GuiMutationError> {
+    match &mut graph_node_mut(graph, id)?.kind {
+        EffectGraphNodeKind::Operator(operator) => Ok(operator),
+        EffectGraphNodeKind::Source(_) | EffectGraphNodeKind::Output => Err(
+            GuiMutationError::Invalid("Graph node is not an operator.".to_string()),
+        ),
+    }
+}
+
+fn next_graph_node_id(graph: &EffectGraphClip) -> u32 {
+    graph.nodes.iter().map(|node| node.id.0).max().unwrap_or(0) + 1
+}
+
+fn graph_operator_from_gui(operator: &SequenceGraphOperator) -> GraphOperator {
+    match operator {
+        SequenceGraphOperator::Max => GraphOperator::Max,
+        SequenceGraphOperator::Add => GraphOperator::Add,
+        SequenceGraphOperator::Multiply => GraphOperator::Multiply,
+        SequenceGraphOperator::IntensityModulate => GraphOperator::IntensityModulate,
+        SequenceGraphOperator::Dim => GraphOperator::Dim,
+        SequenceGraphOperator::Invert => GraphOperator::Invert,
+        SequenceGraphOperator::Colorize => GraphOperator::Colorize,
+        SequenceGraphOperator::Delay => GraphOperator::Delay,
+        SequenceGraphOperator::Echo => GraphOperator::Echo,
+        SequenceGraphOperator::RemapNearest => GraphOperator::RemapNearest,
+    }
+}
+
+fn default_graph_operator_params(
+    operator: &SequenceGraphOperator,
+) -> IndexMap<Identifier, EffectParamValue> {
+    let mut params = IndexMap::new();
+    match operator {
+        SequenceGraphOperator::Dim => {
+            insert_default_operator_param(&mut params, "amount", EffectParamValue::Float(0.5))
+        }
+        SequenceGraphOperator::Colorize => insert_default_operator_param(
+            &mut params,
+            "color",
+            EffectParamValue::Color(Color {
+                red: 255,
+                green: 255,
+                blue: 255,
+            }),
+        ),
+        SequenceGraphOperator::Delay => {
+            insert_default_operator_param(&mut params, "seconds", EffectParamValue::Float(0.1))
+        }
+        SequenceGraphOperator::Echo => {
+            insert_default_operator_param(&mut params, "seconds", EffectParamValue::Float(0.1));
+            insert_default_operator_param(&mut params, "repeats", EffectParamValue::Int(3));
+            insert_default_operator_param(&mut params, "decay", EffectParamValue::Float(0.5));
+        }
+        SequenceGraphOperator::Max
+        | SequenceGraphOperator::Add
+        | SequenceGraphOperator::Multiply
+        | SequenceGraphOperator::IntensityModulate
+        | SequenceGraphOperator::Invert
+        | SequenceGraphOperator::RemapNearest => {}
+    }
+    params
+}
+
+fn insert_default_operator_param(
+    params: &mut IndexMap<Identifier, EffectParamValue>,
+    name: &str,
+    value: EffectParamValue,
+) {
+    if let Ok(identifier) = identifier(name) {
+        params.insert(identifier, value);
+    }
+}
+
+fn sync_sequence_effect_clips(sequence: &mut dawn_language::sequence::Sequence) {
+    let mut clips = sequence
+        .clips
+        .iter()
+        .filter(|clip| matches!(clip.kind, SequenceClipKind::Graph(_)))
+        .cloned()
+        .collect::<Vec<_>>();
+    clips.extend(sequence.effects.iter().map(|effect| SequenceClip {
+        id: SequenceClipId(effect.id.0),
+        start: effect.start.clone(),
+        duration: effect.duration.clone(),
+        target: effect.target.clone(),
+        scope: effect.scope.clone(),
+        kind: SequenceClipKind::Effect(EffectClip {
+            definition: effect.definition.clone(),
+            param_overrides: effect.param_overrides.clone(),
+        }),
+    }));
+    clips.sort_by_key(|clip| clip.id.0);
+    sequence.clips = clips;
+    for automation_clip in &mut sequence.automation_clips {
+        for binding in &mut automation_clip.bindings {
+            if matches!(binding.target, AutomationTarget::EffectClipParam { .. }) {
+                binding.target = AutomationTarget::EffectClipParam {
+                    clip_id: SequenceClipId(binding.effect_id.0),
+                    param: binding.param.clone(),
+                };
+            }
+        }
+    }
 }
 
 fn mark_collection_mut<'a>(

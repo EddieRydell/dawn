@@ -86,6 +86,7 @@ function GuiEditorInner({
       ? restoreState?.sequenceViewports[`${gui.document.path}::${gui.document.objectKey}`]
       : undefined;
   const [selected, setSelected] = useState<GuiFocus>(null);
+  const [openGraphClipId, setOpenGraphClipId] = useState<number | null>(null);
   const [automationClipChooser, setAutomationClipChooser] = useState<AutomationClipChooser>(null);
   const [activeMarkCollectionKey, setActiveMarkCollectionKey] = useState<string | null>(() =>
     gui.type === "sequence"
@@ -128,6 +129,8 @@ function GuiEditorInner({
           transport={audioTransport}
           selected={selected}
           setSelected={setSelected}
+          openGraphClipId={openGraphClipId}
+          setOpenGraphClipId={setOpenGraphClipId}
           sequenceSelection={sequenceSelection}
           setSequenceSelection={setSequenceSelection}
           automationClipChooser={automationClipChooser}
@@ -163,6 +166,8 @@ function GuiEditorInner({
             gui={gui}
             selected={selected}
             setSelected={setSelected}
+            openGraphClipId={openGraphClipId}
+            setOpenGraphClipId={setOpenGraphClipId}
             sequenceSelection={sequenceSelection}
             automationClipChooser={automationClipChooser}
             setAutomationClipChooser={setAutomationClipChooser}

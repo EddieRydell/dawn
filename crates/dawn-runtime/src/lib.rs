@@ -20,7 +20,9 @@ use dawn_language::effect_dsl::{
 };
 use dawn_language::model::DawnProject;
 use dawn_language::sequence::{
-    AutomationBinding, AutomationClip, AutomationMapping, MarkCollectionKey, Sequence, SequenceId,
+    AutomationBinding, AutomationClip, AutomationMapping, AutomationTarget, EffectClip,
+    EffectGraphClip, EffectGraphNodeId, EffectGraphNodeKind, GraphOperator, GraphPortId,
+    MarkCollectionKey, Sequence, SequenceClip, SequenceClipId, SequenceClipKind, SequenceId,
 };
 use dawn_language::setup::{
     FixtureGroupId, FixtureInst, FixtureInstanceId, Geometry, Layout, SetupId,
@@ -43,7 +45,9 @@ pub struct PreparedSequenceRenderer {
     frame_count: u64,
     fixtures: Vec<PreparedFixture>,
     effects: Vec<PreparedEffect>,
+    graphs: Vec<PreparedGraphClip>,
     effects_by_frame: Vec<Vec<usize>>,
+    graphs_by_frame: Vec<Vec<usize>>,
 }
 
 #[derive(Clone, Debug)]
@@ -149,6 +153,7 @@ pub enum RenderError {
     MissingCurve,
     MissingMarkCollection { key: MarkCollectionKey },
     BadTarget,
+    BadGraph { message: String },
     EffectVm { message: String },
     GeneratorPrepare { message: String },
 }
@@ -205,37 +210,61 @@ impl PreparedSequenceRenderer {
             })
             .collect::<IndexMap<_, _>>();
 
-        let mut effects = Vec::with_capacity(sequence.effects.len());
+        let mut effects = Vec::with_capacity(sequence.clips.len());
+        let mut graphs = Vec::new();
         let mut generated_child_count = 0usize;
         let mut bind_cache = EffectBindCache::default();
         let mut target_cache = PrepareTargetCache::default();
-        for effect in &sequence.effects {
-            prepare_effect(
-                PrepareEffectContext {
-                    project,
-                    sequence,
-                    fixtures: &fixtures,
-                    fixture_ids: &fixture_ids,
-                    groups: &groups,
-                    effects: &mut effects,
-                    generated_child_count: &mut generated_child_count,
-                    bind_cache: &mut bind_cache,
-                    target_cache: &mut target_cache,
-                },
-                effect,
-            )?;
+        for clip in &sequence.clips {
+            match &clip.kind {
+                SequenceClipKind::Effect(effect) => {
+                    prepare_effect_clip(
+                        PrepareEffectContext {
+                            project,
+                            sequence,
+                            fixtures: &fixtures,
+                            fixture_ids: &fixture_ids,
+                            groups: &groups,
+                            effects: &mut effects,
+                            generated_child_count: &mut generated_child_count,
+                            bind_cache: &mut bind_cache,
+                            target_cache: &mut target_cache,
+                        },
+                        clip,
+                        effect,
+                    )?;
+                }
+                SequenceClipKind::Graph(graph) => {
+                    graphs.push(prepare_graph_clip(
+                        PrepareGraphContext {
+                            project,
+                            sequence,
+                            fixtures: &fixtures,
+                            fixture_ids: &fixture_ids,
+                            groups: &groups,
+                            bind_cache: &mut bind_cache,
+                            target_cache: &mut target_cache,
+                        },
+                        clip,
+                        graph,
+                    )?);
+                }
+            }
         }
 
         let frame_rate = sequence.frame_rate;
         let duration_seconds = sequence.duration.as_seconds_f64();
         let frame_count = frame_count(duration_seconds, frame_rate);
         let effects_by_frame = build_effect_frame_index(&effects, frame_count, frame_rate);
+        let graphs_by_frame = build_graph_frame_index(&graphs, frame_count, frame_rate);
         Ok(Self {
             frame_rate,
             frame_count,
             fixtures,
             effects,
+            graphs,
             effects_by_frame,
+            graphs_by_frame,
         })
     }
 
@@ -310,6 +339,20 @@ impl PreparedSequenceRenderer {
             }
         }
 
+        if let Some(active_graphs) = self.graphs_by_frame.get(frame_index as usize) {
+            for graph_index in active_graphs {
+                let Some(graph) = self.graphs.get(*graph_index) else {
+                    continue;
+                };
+                if sample_seconds < graph.start_seconds
+                    || sample_seconds >= graph.start_seconds + graph.duration_seconds
+                {
+                    continue;
+                }
+                render_graph_clip(graph, &mut rendered, sample_seconds)?;
+            }
+        }
+
         Ok(RenderedFrame {
             frame_index,
             frame_rate: self.frame_rate,
@@ -325,10 +368,10 @@ impl PreparedEffectRasterRenderer {
         project: &DawnProject,
         setup_id: &SetupId,
         sequence_id: &SequenceId,
-        effect_id: &EffectInstId,
+        clip_id: &SequenceClipId,
     ) -> Result<Self, RenderError> {
         let mut batch = EffectRasterPrepareBatch::prepare(project, setup_id, sequence_id)?;
-        batch.prepare_effect(effect_id)
+        batch.prepare_clip(clip_id)
     }
 
     pub fn start_seconds(&self) -> f64 {
@@ -553,21 +596,26 @@ impl<'a> EffectRasterPrepareBatch<'a> {
         })
     }
 
-    pub fn prepare_effect(
+    pub fn prepare_clip(
         &mut self,
-        effect_id: &EffectInstId,
+        clip_id: &SequenceClipId,
     ) -> Result<PreparedEffectRasterRenderer, RenderError> {
-        let effect = self
+        let clip = self
             .sequence
-            .effects
+            .clips
             .iter()
-            .find(|effect| &effect.id == effect_id)
+            .find(|clip| &clip.id == clip_id)
             .ok_or_else(|| RenderError::MissingEffect {
-                effect_id: EffectDefinitionId(effect_id.0.to_string()),
+                effect_id: EffectDefinitionId(clip_id.0.to_string()),
             })?;
+        let SequenceClipKind::Effect(effect) = &clip.kind else {
+            return Err(RenderError::BadGraph {
+                message: "graph clip raster preview is not available".to_string(),
+            });
+        };
         let mut effects = Vec::new();
         let mut generated_child_count = 0usize;
-        let target = prepare_effect(
+        let target = prepare_effect_clip(
             PrepareEffectContext {
                 project: self.project,
                 sequence: self.sequence,
@@ -579,11 +627,12 @@ impl<'a> EffectRasterPrepareBatch<'a> {
                 bind_cache: &mut self.bind_cache,
                 target_cache: &mut self.target_cache,
             },
+            clip,
             effect,
         )?;
 
-        let start_seconds = effect.start.as_seconds_f64();
-        let duration_seconds = effect.duration.as_seconds_f64();
+        let start_seconds = clip.start.as_seconds_f64();
+        let duration_seconds = clip.duration.as_seconds_f64();
         let index_start_frame = (start_seconds * f64::from(self.frame_rate))
             .floor()
             .max(0.0) as u64;
@@ -606,6 +655,13 @@ impl<'a> EffectRasterPrepareBatch<'a> {
             effects_by_frame,
         })
     }
+
+    pub fn prepare_effect(
+        &mut self,
+        effect_id: &EffectInstId,
+    ) -> Result<PreparedEffectRasterRenderer, RenderError> {
+        self.prepare_clip(&SequenceClipId(effect_id.0))
+    }
 }
 
 struct PrepareEffectContext<'a> {
@@ -620,11 +676,12 @@ struct PrepareEffectContext<'a> {
     target_cache: &'a mut PrepareTargetCache,
 }
 
-fn prepare_effect(
+fn prepare_effect_clip(
     context: PrepareEffectContext<'_>,
-    effect: &dawn_language::effect::EffectInst,
+    clip: &SequenceClip,
+    effect: &EffectClip,
 ) -> Result<Arc<Vec<PreparedTargetPixel>>, RenderError> {
-    let effect_duration_seconds = effect.duration.as_seconds_f64();
+    let effect_duration_seconds = clip.duration.as_seconds_f64();
     if !effect_duration_seconds.is_finite() || effect_duration_seconds <= 0.0 {
         return Err(RenderError::InvalidTiming {
             reason: "effect duration must be positive and finite".to_string(),
@@ -638,19 +695,19 @@ fn prepare_effect(
         .ok_or_else(|| RenderError::MissingEffect {
             effect_id: effect.definition.clone(),
         })?;
-    let target_ids = prepare_target(&effect.target, context.fixture_ids, context.groups)?;
+    let target_ids = prepare_target(&clip.target, context.fixture_ids, context.groups)?;
     let target = prepare_target_pixels_cached(
         context.target_cache,
         &target_ids,
         context.fixtures,
-        &effect.scope,
+        &clip.scope,
     )?;
-    let start_seconds = effect.start.as_seconds_f64();
+    let start_seconds = clip.start.as_seconds_f64();
     let param_timing = EffectParamTiming {
         start_seconds,
         duration_seconds: effect_duration_seconds,
     };
-    let automation = automation_for_effect(context.sequence, &effect.id);
+    let automation = automation_for_effect_clip(context.sequence, &clip.id);
     let params = prepare_params(
         context.project,
         context.sequence,
@@ -690,7 +747,7 @@ fn prepare_effect(
                 bind_cache: context.bind_cache,
                 target_cache: context.target_cache,
             };
-            for expansion_target in generator_expansion_targets(&target, &effect.scope) {
+            for expansion_target in generator_expansion_targets(&target, &clip.scope) {
                 expand_generator(
                     &mut generator_context,
                     &definition.compiled,
@@ -706,6 +763,365 @@ fn prepare_effect(
         }
     }
     Ok(target)
+}
+
+struct PrepareGraphContext<'a> {
+    project: &'a DawnProject,
+    sequence: &'a Sequence,
+    fixtures: &'a [PreparedFixture],
+    fixture_ids: &'a IndexSet<FixtureInstanceId>,
+    groups: &'a IndexMap<FixtureGroupId, Vec<FixtureInstanceId>>,
+    bind_cache: &'a mut EffectBindCache,
+    target_cache: &'a mut PrepareTargetCache,
+}
+
+fn prepare_graph_clip(
+    context: PrepareGraphContext<'_>,
+    clip: &SequenceClip,
+    graph: &EffectGraphClip,
+) -> Result<PreparedGraphClip, RenderError> {
+    let duration_seconds = clip.duration.as_seconds_f64();
+    if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
+        return Err(RenderError::InvalidTiming {
+            reason: "graph clip duration must be positive and finite".to_string(),
+        });
+    }
+    let graph_target_ids = prepare_target(&clip.target, context.fixture_ids, context.groups)?;
+    let graph_target = prepare_target_pixels_cached(
+        context.target_cache,
+        &graph_target_ids,
+        context.fixtures,
+        &clip.scope,
+    )?;
+    let node_order = topological_graph_order(graph)?;
+    let node_indexes = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (node.id.clone(), index))
+        .collect::<IndexMap<_, _>>();
+    let mut incoming = vec![Vec::<(GraphPortId, usize)>::new(); graph.nodes.len()];
+    for edge in &graph.edges {
+        let from = *node_indexes
+            .get(&edge.from_node)
+            .ok_or_else(|| RenderError::BadGraph {
+                message: format!("edge references missing source node {}", edge.from_node.0),
+            })?;
+        let to = *node_indexes
+            .get(&edge.to_node)
+            .ok_or_else(|| RenderError::BadGraph {
+                message: format!("edge references missing target node {}", edge.to_node.0),
+            })?;
+        validate_graph_edge_ports(&graph.nodes[from].kind, &graph.nodes[to].kind, edge)?;
+        if incoming[to].iter().any(|(port, _)| port == &edge.to_port) {
+            return Err(RenderError::BadGraph {
+                message: format!(
+                    "graph input port `{}` on node {} has multiple connections",
+                    edge.to_port.0, edge.to_node.0
+                ),
+            });
+        }
+        incoming[to].push((edge.to_port.clone(), from));
+    }
+
+    let mut prepared_nodes = Vec::<PreparedGraphNode>::new();
+    let mut prepared_index_by_original = vec![usize::MAX; graph.nodes.len()];
+    let mut generated_child_count = 0usize;
+    for node_index in &node_order {
+        let node = &graph.nodes[*node_index];
+        let prepared = match &node.kind {
+            EffectGraphNodeKind::Source(source) => {
+                let mut effects = Vec::new();
+                let source_clip = SequenceClip {
+                    id: clip.id.clone(),
+                    start: DawnTime(Duration::from_secs_f64(
+                        clip.start.as_seconds_f64() + source.start.as_seconds_f64(),
+                    )),
+                    duration: source.duration.clone(),
+                    target: source.target.clone(),
+                    scope: source.scope.clone(),
+                    kind: SequenceClipKind::Effect(EffectClip {
+                        definition: source.definition.clone(),
+                        param_overrides: source.param_overrides.clone(),
+                    }),
+                };
+                let target = prepare_effect_clip(
+                    PrepareEffectContext {
+                        project: context.project,
+                        sequence: context.sequence,
+                        fixtures: context.fixtures,
+                        fixture_ids: context.fixture_ids,
+                        groups: context.groups,
+                        effects: &mut effects,
+                        generated_child_count: &mut generated_child_count,
+                        bind_cache: context.bind_cache,
+                        target_cache: context.target_cache,
+                    },
+                    &source_clip,
+                    match &source_clip.kind {
+                        SequenceClipKind::Effect(effect) => effect,
+                        SequenceClipKind::Graph(_) => {
+                            return Err(RenderError::BadGraph {
+                                message: "source node must be an effect".to_string(),
+                            });
+                        }
+                    },
+                )?;
+                PreparedGraphNode {
+                    target_lookup: target_color_lookup(&target),
+                    target,
+                    kind: PreparedGraphNodeKind::Source { effects },
+                }
+            }
+            EffectGraphNodeKind::Operator(operator) => {
+                let inputs = graph_node_inputs(&node.kind, &incoming[*node_index])?
+                    .into_iter()
+                    .map(|input| {
+                        let prepared_index = prepared_index_by_original[input];
+                        (prepared_index != usize::MAX)
+                            .then_some(prepared_index)
+                            .ok_or_else(|| RenderError::BadGraph {
+                                message: "graph order did not prepare an input first".to_string(),
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                validate_operator_inputs(&operator.operator, &inputs)?;
+                let target = if operator.operator == GraphOperator::RemapNearest {
+                    Arc::clone(&graph_target)
+                } else {
+                    let first_input = *inputs.first().ok_or_else(|| RenderError::BadGraph {
+                        message: "operator has no input".to_string(),
+                    })?;
+                    let target = Arc::clone(&prepared_nodes[first_input].target);
+                    for input in inputs.iter().skip(1) {
+                        if !same_target(&target, &prepared_nodes[*input].target) {
+                            return Err(RenderError::BadGraph {
+                                message: "operator input targets differ; use remap_nearest"
+                                    .to_string(),
+                            });
+                        }
+                    }
+                    target
+                };
+                PreparedGraphNode {
+                    target_lookup: target_color_lookup(&target),
+                    target,
+                    kind: PreparedGraphNodeKind::Operator {
+                        operator: operator.operator.clone(),
+                        inputs,
+                        params: prepare_params(
+                            context.project,
+                            context.sequence,
+                            &operator.params,
+                            EffectParamTiming {
+                                start_seconds: clip.start.as_seconds_f64(),
+                                duration_seconds,
+                            },
+                        )?,
+                        automation: automation_for_graph_node(context.sequence, &clip.id, &node.id),
+                    },
+                }
+            }
+            EffectGraphNodeKind::Output => {
+                let inputs = graph_node_inputs(&node.kind, &incoming[*node_index])?;
+                let input = *inputs.first().ok_or_else(|| RenderError::BadGraph {
+                    message: "graph output node requires an input".to_string(),
+                })?;
+                let prepared_index = prepared_index_by_original[input];
+                if prepared_index == usize::MAX {
+                    return Err(RenderError::BadGraph {
+                        message: "graph order did not prepare output input first".to_string(),
+                    });
+                }
+                if !same_target(&graph_target, &prepared_nodes[prepared_index].target) {
+                    return Err(RenderError::BadGraph {
+                        message: "graph output input target must match graph clip target"
+                            .to_string(),
+                    });
+                }
+                PreparedGraphNode {
+                    target_lookup: target_color_lookup(&graph_target),
+                    target: Arc::clone(&graph_target),
+                    kind: PreparedGraphNodeKind::Output {
+                        input: prepared_index,
+                    },
+                }
+            }
+        };
+        prepared_index_by_original[*node_index] = prepared_nodes.len();
+        prepared_nodes.push(prepared);
+    }
+
+    let output_candidates = node_order
+        .iter()
+        .filter(|index| matches!(graph.nodes[**index].kind, EffectGraphNodeKind::Output))
+        .copied()
+        .collect::<Vec<_>>();
+    let [output_source_index] = output_candidates.as_slice() else {
+        return Err(RenderError::BadGraph {
+            message: "graph must have exactly one output node".to_string(),
+        });
+    };
+    let output_index = prepared_index_by_original[*output_source_index];
+    if output_index == usize::MAX {
+        return Err(RenderError::BadGraph {
+            message: "graph output node is not in render order".to_string(),
+        });
+    }
+    if !same_target(&graph_target, &prepared_nodes[output_index].target) {
+        return Err(RenderError::BadGraph {
+            message: "graph output target must match graph clip target".to_string(),
+        });
+    }
+
+    Ok(PreparedGraphClip {
+        start_seconds: clip.start.as_seconds_f64(),
+        duration_seconds,
+        output_index,
+        target: graph_target,
+        nodes: prepared_nodes,
+    })
+}
+
+fn topological_graph_order(graph: &EffectGraphClip) -> Result<Vec<usize>, RenderError> {
+    let node_indexes = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (node.id.clone(), index))
+        .collect::<IndexMap<_, _>>();
+    let mut indegree = vec![0usize; graph.nodes.len()];
+    let mut outgoing = vec![Vec::<usize>::new(); graph.nodes.len()];
+    for edge in &graph.edges {
+        let from = *node_indexes
+            .get(&edge.from_node)
+            .ok_or_else(|| RenderError::BadGraph {
+                message: format!("edge references missing source node {}", edge.from_node.0),
+            })?;
+        let to = *node_indexes
+            .get(&edge.to_node)
+            .ok_or_else(|| RenderError::BadGraph {
+                message: format!("edge references missing target node {}", edge.to_node.0),
+            })?;
+        outgoing[from].push(to);
+        indegree[to] += 1;
+    }
+    let mut ready = indegree
+        .iter()
+        .enumerate()
+        .filter_map(|(index, count)| (*count == 0).then_some(index))
+        .collect::<Vec<_>>();
+    let mut order = Vec::with_capacity(graph.nodes.len());
+    while let Some(index) = ready.pop() {
+        order.push(index);
+        for next in &outgoing[index] {
+            indegree[*next] = indegree[*next].saturating_sub(1);
+            if indegree[*next] == 0 {
+                ready.push(*next);
+            }
+        }
+    }
+    if order.len() != graph.nodes.len() {
+        return Err(RenderError::BadGraph {
+            message: "graph contains a cycle".to_string(),
+        });
+    }
+    Ok(order)
+}
+
+fn validate_operator_inputs(operator: &GraphOperator, inputs: &[usize]) -> Result<(), RenderError> {
+    let valid = match operator {
+        GraphOperator::Max
+        | GraphOperator::Add
+        | GraphOperator::Multiply
+        | GraphOperator::IntensityModulate => inputs.len() == 2,
+        GraphOperator::Dim
+        | GraphOperator::Invert
+        | GraphOperator::Colorize
+        | GraphOperator::Delay
+        | GraphOperator::Echo
+        | GraphOperator::RemapNearest => inputs.len() == 1,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(RenderError::BadGraph {
+            message: format!("operator {:?} has wrong input count", operator),
+        })
+    }
+}
+
+fn validate_graph_edge_ports(
+    from: &EffectGraphNodeKind,
+    to: &EffectGraphNodeKind,
+    edge: &dawn_language::sequence::EffectGraphEdge,
+) -> Result<(), RenderError> {
+    if !graph_output_ports(from).contains(&edge.from_port.0.as_str()) {
+        return Err(RenderError::BadGraph {
+            message: format!("unknown graph output port `{}`", edge.from_port.0),
+        });
+    }
+    if !graph_input_ports(to).contains(&edge.to_port.0.as_str()) {
+        return Err(RenderError::BadGraph {
+            message: format!("unknown graph input port `{}`", edge.to_port.0),
+        });
+    }
+    Ok(())
+}
+
+fn graph_node_inputs(
+    kind: &EffectGraphNodeKind,
+    incoming: &[(GraphPortId, usize)],
+) -> Result<Vec<usize>, RenderError> {
+    graph_input_ports(kind)
+        .iter()
+        .map(|port| {
+            incoming
+                .iter()
+                .find_map(|(input_port, node)| (input_port.0 == *port).then_some(*node))
+                .ok_or_else(|| RenderError::BadGraph {
+                    message: format!("graph input port `{port}` is not connected"),
+                })
+        })
+        .collect()
+}
+
+fn graph_input_ports(kind: &EffectGraphNodeKind) -> &'static [&'static str] {
+    match kind {
+        EffectGraphNodeKind::Source(_) => &[],
+        EffectGraphNodeKind::Operator(operator) => operator_input_ports(&operator.operator),
+        EffectGraphNodeKind::Output => &["input"],
+    }
+}
+
+fn graph_output_ports(kind: &EffectGraphNodeKind) -> &'static [&'static str] {
+    match kind {
+        EffectGraphNodeKind::Source(_) | EffectGraphNodeKind::Operator(_) => &["output"],
+        EffectGraphNodeKind::Output => &[],
+    }
+}
+
+fn operator_input_ports(operator: &GraphOperator) -> &'static [&'static str] {
+    match operator {
+        GraphOperator::Max
+        | GraphOperator::Add
+        | GraphOperator::Multiply
+        | GraphOperator::IntensityModulate => &["a", "b"],
+        GraphOperator::Dim
+        | GraphOperator::Invert
+        | GraphOperator::Colorize
+        | GraphOperator::Delay
+        | GraphOperator::Echo
+        | GraphOperator::RemapNearest => &["input"],
+    }
+}
+
+fn same_target(left: &[PreparedTargetPixel], right: &[PreparedTargetPixel]) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| {
+            left.fixture_index == right.fixture_index
+                && left.fixture_pixel_index == right.fixture_pixel_index
+        })
 }
 
 fn prepare_timing(sequence: &Sequence) -> Result<(), RenderError> {
@@ -944,14 +1360,52 @@ fn prepare_param_value(
     }
 }
 
-fn automation_for_effect(sequence: &Sequence, effect_id: &EffectInstId) -> Vec<PreparedAutomation> {
+fn automation_for_effect_clip(
+    sequence: &Sequence,
+    clip_id: &SequenceClipId,
+) -> Vec<PreparedAutomation> {
     sequence
         .automation_clips
         .iter()
         .flat_map(|clip| {
             clip.bindings
                 .iter()
-                .filter(move |binding| &binding.effect_id == effect_id)
+                .filter(move |binding| {
+                    matches!(
+                        &binding.target,
+                        AutomationTarget::EffectClipParam { clip_id: target_id, .. }
+                            if target_id == clip_id
+                    )
+                })
+                .map(move |binding| PreparedAutomation {
+                    clip: clip.clone(),
+                    binding: binding.clone(),
+                })
+        })
+        .collect()
+}
+
+fn automation_for_graph_node(
+    sequence: &Sequence,
+    clip_id: &SequenceClipId,
+    node_id: &EffectGraphNodeId,
+) -> Vec<PreparedAutomation> {
+    sequence
+        .automation_clips
+        .iter()
+        .flat_map(|clip| {
+            clip.bindings
+                .iter()
+                .filter(move |binding| {
+                    matches!(
+                        &binding.target,
+                        AutomationTarget::GraphNodeParam {
+                            clip_id: target_clip_id,
+                            node_id: target_node_id,
+                            ..
+                        } if target_clip_id == clip_id && target_node_id == node_id
+                    )
+                })
                 .map(move |binding| PreparedAutomation {
                     clip: clip.clone(),
                     binding: binding.clone(),
@@ -968,7 +1422,7 @@ fn apply_automation_params(
     for automation in automation {
         let normalized = sample_automation_clip(&automation.clip, sample_seconds);
         params.insert(
-            automation.binding.param.clone(),
+            automation_param(&automation.binding).clone(),
             automation_value(
                 &automation.clip,
                 &automation.binding,
@@ -978,6 +1432,13 @@ fn apply_automation_params(
         );
     }
     params
+}
+
+fn automation_param(binding: &AutomationBinding) -> &Identifier {
+    match &binding.target {
+        AutomationTarget::EffectClipParam { param, .. }
+        | AutomationTarget::GraphNodeParam { param, .. } => param,
+    }
 }
 
 fn automation_value(
@@ -1387,6 +1848,27 @@ fn build_effect_frame_index(
     build_effect_frame_index_for_window(effects, 0, frame_count, frame_rate)
 }
 
+fn build_graph_frame_index(
+    graphs: &[PreparedGraphClip],
+    frame_count: u64,
+    frame_rate: u32,
+) -> Vec<Vec<usize>> {
+    let mut index = vec![Vec::new(); frame_count as usize];
+    for (graph_index, graph) in graphs.iter().enumerate() {
+        let graph_start_frame = (graph.start_seconds * f64::from(frame_rate))
+            .floor()
+            .max(0.0) as u64;
+        let graph_end_frame =
+            ((graph.start_seconds + graph.duration_seconds) * f64::from(frame_rate)).ceil() as u64;
+        for frame in graph_start_frame..graph_end_frame.min(frame_count) {
+            if let Some(bucket) = index.get_mut(frame as usize) {
+                bucket.push(graph_index);
+            }
+        }
+    }
+    index
+}
+
 fn build_effect_frame_index_for_window(
     effects: &[PreparedEffect],
     start_frame: u64,
@@ -1446,6 +1928,193 @@ fn render_effect(
         );
     }
     Ok(())
+}
+
+fn render_graph_clip(
+    graph: &PreparedGraphClip,
+    rendered: &mut [RenderedFixture],
+    sample_seconds: f64,
+) -> Result<(), RenderError> {
+    let mut cache = HashMap::<GraphRenderCacheKey, Vec<Color>>::new();
+    let output = render_graph_node(graph, graph.output_index, sample_seconds, &mut cache)?;
+    for (target_index, color) in output.into_iter().enumerate() {
+        let Some(pixel) = graph.target.get(target_index) else {
+            continue;
+        };
+        compose_max(
+            &mut rendered[pixel.fixture_index].pixels[pixel.fixture_pixel_index],
+            color,
+        );
+    }
+    Ok(())
+}
+
+fn render_graph_node(
+    graph: &PreparedGraphClip,
+    node_index: usize,
+    sample_seconds: f64,
+    cache: &mut HashMap<GraphRenderCacheKey, Vec<Color>>,
+) -> Result<Vec<Color>, RenderError> {
+    let frame_key = (sample_seconds * 1_000_000.0).round() as i64;
+    let key = GraphRenderCacheKey {
+        node_index,
+        frame_key,
+    };
+    if let Some(colors) = cache.get(&key) {
+        return Ok(colors.clone());
+    }
+    let node = graph
+        .nodes
+        .get(node_index)
+        .ok_or_else(|| RenderError::BadGraph {
+            message: "graph node index is out of bounds".to_string(),
+        })?;
+    let colors = match &node.kind {
+        PreparedGraphNodeKind::Source { effects } => {
+            let mut colors = vec![black(); node.target.len()];
+            for effect in effects {
+                if sample_seconds < effect.start_seconds
+                    || sample_seconds >= effect.start_seconds + effect.duration_seconds
+                {
+                    continue;
+                }
+                render_effect_target_colors(
+                    effect,
+                    &node.target_lookup,
+                    &mut colors,
+                    sample_seconds,
+                )?;
+            }
+            colors
+        }
+        PreparedGraphNodeKind::Operator {
+            operator,
+            inputs,
+            params,
+            automation,
+        } => {
+            let params = apply_automation_params(params.clone(), automation, sample_seconds);
+            render_graph_operator(
+                graph,
+                node,
+                operator,
+                inputs,
+                &params,
+                sample_seconds,
+                cache,
+            )?
+        }
+        PreparedGraphNodeKind::Output { input } => {
+            render_graph_node(graph, *input, sample_seconds, cache)?
+        }
+    };
+    cache.insert(key, colors.clone());
+    Ok(colors)
+}
+
+fn render_graph_operator(
+    graph: &PreparedGraphClip,
+    node: &PreparedGraphNode,
+    operator: &GraphOperator,
+    inputs: &[usize],
+    params: &IndexMap<Identifier, Value>,
+    sample_seconds: f64,
+    cache: &mut HashMap<GraphRenderCacheKey, Vec<Color>>,
+) -> Result<Vec<Color>, RenderError> {
+    match operator {
+        GraphOperator::Max => binary_graph_op(graph, inputs, sample_seconds, cache, max_color),
+        GraphOperator::Add => binary_graph_op(graph, inputs, sample_seconds, cache, add_color),
+        GraphOperator::Multiply => {
+            binary_graph_op(graph, inputs, sample_seconds, cache, multiply_color)
+        }
+        GraphOperator::IntensityModulate => {
+            let source = render_graph_node(graph, inputs[0], sample_seconds, cache)?;
+            let mask = render_graph_node(graph, inputs[1], sample_seconds, cache)?;
+            Ok(source
+                .into_iter()
+                .zip(mask)
+                .map(|(source, mask)| scale_color(source, intensity(mask)))
+                .collect())
+        }
+        GraphOperator::Dim => {
+            let amount = float_param(params, "amount", 0.5).clamp(0.0, 1.0);
+            let source = render_graph_node(graph, inputs[0], sample_seconds, cache)?;
+            Ok(source
+                .into_iter()
+                .map(|color| scale_color(color, amount))
+                .collect())
+        }
+        GraphOperator::Invert => {
+            let source = render_graph_node(graph, inputs[0], sample_seconds, cache)?;
+            Ok(source.into_iter().map(invert_color).collect())
+        }
+        GraphOperator::Colorize => {
+            let tint = color_param(params, "color", color_rgb(255, 255, 255));
+            let source = render_graph_node(graph, inputs[0], sample_seconds, cache)?;
+            Ok(source
+                .into_iter()
+                .map(|color| scale_color(tint, intensity(color)))
+                .collect())
+        }
+        GraphOperator::Delay => {
+            let delay = float_param(params, "seconds", 0.1).max(0.0);
+            render_graph_node(graph, inputs[0], sample_seconds - delay, cache)
+        }
+        GraphOperator::Echo => {
+            let delay = float_param(params, "seconds", 0.1).max(0.0);
+            let repeats = int_param(params, "repeats", 3).clamp(1, 32);
+            let decay = float_param(params, "decay", 0.5).clamp(0.0, 1.0);
+            let mut output = vec![black(); node.target.len()];
+            for repeat in 0..=repeats {
+                let source = render_graph_node(
+                    graph,
+                    inputs[0],
+                    sample_seconds - delay * repeat as f64,
+                    cache,
+                )?;
+                let amount = decay.powi(repeat as i32);
+                for (target, source) in output.iter_mut().zip(source) {
+                    compose_max(target, scale_color(source, amount));
+                }
+            }
+            Ok(output)
+        }
+        GraphOperator::RemapNearest => {
+            let source = render_graph_node(graph, inputs[0], sample_seconds, cache)?;
+            let source_target = &graph.nodes[inputs[0]].target;
+            Ok(node
+                .target
+                .iter()
+                .map(|target_pixel| {
+                    let nearest = source_target
+                        .iter()
+                        .enumerate()
+                        .min_by(|(_, left), (_, right)| {
+                            let left_distance =
+                                (left.pixel_fraction - target_pixel.pixel_fraction).abs();
+                            let right_distance =
+                                (right.pixel_fraction - target_pixel.pixel_fraction).abs();
+                            left_distance.total_cmp(&right_distance)
+                        })
+                        .map(|(index, _)| index)
+                        .unwrap_or(0);
+                    source.get(nearest).copied().unwrap_or_else(black)
+                })
+                .collect())
+        }
+    }
+}
+
+fn binary_graph_op(
+    graph: &PreparedGraphClip,
+    inputs: &[usize],
+    sample_seconds: f64,
+    cache: &mut HashMap<GraphRenderCacheKey, Vec<Color>>,
+    op: fn(Color, Color) -> Color,
+) -> Result<Vec<Color>, RenderError> {
+    let left = render_graph_node(graph, inputs[0], sample_seconds, cache)?;
+    let right = render_graph_node(graph, inputs[1], sample_seconds, cache)?;
+    Ok(left.into_iter().zip(right).map(|(l, r)| op(l, r)).collect())
 }
 
 fn target_color_lookup(target: &[PreparedTargetPixel]) -> HashMap<TargetColorAddress, Vec<usize>> {
@@ -1691,6 +2360,99 @@ fn compose_max(target: &mut Color, source: Color) {
     target.blue = target.blue.max(source.blue);
 }
 
+fn max_color(left: Color, right: Color) -> Color {
+    Color {
+        red: left.red.max(right.red),
+        green: left.green.max(right.green),
+        blue: left.blue.max(right.blue),
+    }
+}
+
+fn add_color(left: Color, right: Color) -> Color {
+    Color {
+        red: left.red.saturating_add(right.red),
+        green: left.green.saturating_add(right.green),
+        blue: left.blue.saturating_add(right.blue),
+    }
+}
+
+fn multiply_color(left: Color, right: Color) -> Color {
+    Color {
+        red: ((u16::from(left.red) * u16::from(right.red)) / 255) as u8,
+        green: ((u16::from(left.green) * u16::from(right.green)) / 255) as u8,
+        blue: ((u16::from(left.blue) * u16::from(right.blue)) / 255) as u8,
+    }
+}
+
+fn invert_color(color: Color) -> Color {
+    Color {
+        red: 255 - color.red,
+        green: 255 - color.green,
+        blue: 255 - color.blue,
+    }
+}
+
+fn scale_color(color: Color, amount: f64) -> Color {
+    Color {
+        red: scale_channel(color.red, amount),
+        green: scale_channel(color.green, amount),
+        blue: scale_channel(color.blue, amount),
+    }
+}
+
+fn scale_channel(value: u8, amount: f64) -> u8 {
+    (f64::from(value) * amount.clamp(0.0, 1.0)).round() as u8
+}
+
+fn intensity(color: Color) -> f64 {
+    f64::from(color.red.max(color.green).max(color.blue)) / 255.0
+}
+
+fn float_param(params: &IndexMap<Identifier, Value>, name: &str, default: f64) -> f64 {
+    let Ok(name) = Identifier::new(name.to_string()) else {
+        return default;
+    };
+    params
+        .get(&name)
+        .and_then(|value| match value {
+            Value::Float(value) => Some(*value),
+            Value::Int(value) => Some(*value as f64),
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
+fn int_param(params: &IndexMap<Identifier, Value>, name: &str, default: i64) -> i64 {
+    let Ok(name) = Identifier::new(name.to_string()) else {
+        return default;
+    };
+    params
+        .get(&name)
+        .and_then(|value| match value {
+            Value::Int(value) => Some(*value),
+            Value::Float(value) => Some(value.round() as i64),
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
+fn color_param(params: &IndexMap<Identifier, Value>, name: &str, default: Color) -> Color {
+    let Ok(name) = Identifier::new(name.to_string()) else {
+        return default;
+    };
+    params
+        .get(&name)
+        .and_then(|value| match value {
+            Value::Color(value) => Some(*value),
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
+fn color_rgb(red: u8, green: u8, blue: u8) -> Color {
+    Color { red, green, blue }
+}
+
 fn black() -> Color {
     Color {
         red: 0,
@@ -1778,6 +2540,44 @@ struct PreparedEffect {
     params: IndexMap<Identifier, Value>,
     bound_params: BoundEffectParams,
     automation: Vec<PreparedAutomation>,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedGraphClip {
+    start_seconds: f64,
+    duration_seconds: f64,
+    output_index: usize,
+    target: Arc<Vec<PreparedTargetPixel>>,
+    nodes: Vec<PreparedGraphNode>,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedGraphNode {
+    target: Arc<Vec<PreparedTargetPixel>>,
+    target_lookup: HashMap<TargetColorAddress, Vec<usize>>,
+    kind: PreparedGraphNodeKind,
+}
+
+#[derive(Clone, Debug)]
+enum PreparedGraphNodeKind {
+    Source {
+        effects: Vec<PreparedEffect>,
+    },
+    Operator {
+        operator: GraphOperator,
+        inputs: Vec<usize>,
+        params: IndexMap<Identifier, Value>,
+        automation: Vec<PreparedAutomation>,
+    },
+    Output {
+        input: usize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct GraphRenderCacheKey {
+    node_index: usize,
+    frame_key: i64,
 }
 
 #[derive(Clone, Debug)]

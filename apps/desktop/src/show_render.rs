@@ -207,7 +207,9 @@ mod tests {
     };
     use dawn_language::effect_dsl::compile_effects;
     use dawn_language::model::{ProjectDefinitionStores, ProjectId, ProjectRoot};
-    use dawn_language::sequence::{Sequence, SequenceAudio};
+    use dawn_language::sequence::{
+        EffectClip, Sequence, SequenceAudio, SequenceClip, SequenceClipId, SequenceClipKind,
+    };
     use dawn_language::setup::{
         ControllerDefinitionStore, FixtureDefinition, FixtureDefinitionId, FixtureDefinitionStore,
         FixtureGroup, FixtureGroupId, FixtureInst, FixtureInstanceId, Geometry, Layout, LayoutId,
@@ -281,6 +283,30 @@ mod tests {
             },
         );
 
+        let sequence_effects = vec![EffectInst {
+            id: EffectInstId(1),
+            start: DawnTime(Duration::ZERO),
+            duration: DawnDuration(Duration::from_secs_f64(1.0)),
+            target: EffectTarget::Group(FixtureGroupId(1)),
+            scope: EffectScope::WholeTarget,
+            definition: EffectDefinitionId("Solid".to_string()),
+            param_overrides: IndexMap::new(),
+        }];
+        let sequence_clips = sequence_effects
+            .iter()
+            .map(|effect| SequenceClip {
+                id: SequenceClipId(effect.id.0),
+                start: effect.start.clone(),
+                duration: effect.duration.clone(),
+                target: effect.target.clone(),
+                scope: effect.scope.clone(),
+                kind: SequenceClipKind::Effect(EffectClip {
+                    definition: effect.definition.clone(),
+                    param_overrides: effect.param_overrides.clone(),
+                }),
+            })
+            .collect();
+
         DawnProject {
             root: ProjectRoot {
                 id: ProjectId("project".to_string()),
@@ -326,15 +352,8 @@ mod tests {
                     frame_rate: 4,
                     audio: SequenceAudio::None,
                     mark_collections: Vec::new(),
-                    effects: vec![EffectInst {
-                        id: EffectInstId(1),
-                        start: DawnTime(Duration::ZERO),
-                        duration: DawnDuration(Duration::from_secs_f64(1.0)),
-                        target: EffectTarget::Group(FixtureGroupId(1)),
-                        scope: EffectScope::WholeTarget,
-                        definition: EffectDefinitionId("Solid".to_string()),
-                        param_overrides: IndexMap::new(),
-                    }],
+                    clips: sequence_clips,
+                    effects: sequence_effects,
                     automation_clips: Vec::new(),
                 },
             )]),

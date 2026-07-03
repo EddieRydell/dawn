@@ -1,6 +1,6 @@
 use camino::Utf8PathBuf;
 use criterion::{Criterion, criterion_group, criterion_main};
-use dawn_language::effect::EffectInstId;
+use dawn_language::sequence::SequenceClipId;
 use dawn_language::values::Color;
 use dawn_project_io::load_project;
 use dawn_runtime::{PreparedEffectRasterRenderer, PreparedSequenceRenderer, RenderedFrame};
@@ -157,7 +157,7 @@ fn prepare_raster_renderers(
                 project,
                 setup_id,
                 sequence_id,
-                &EffectInstId(scenario.effect_id),
+                &SequenceClipId(scenario.effect_id),
             )
             .expect("benchmark raster should prepare")
         })

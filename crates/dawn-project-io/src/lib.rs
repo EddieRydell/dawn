@@ -20,7 +20,10 @@ use dawn_language::effect_dsl::{Diagnostic as EffectDiagnostic, Identifier, comp
 use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
 use dawn_language::sequence::{
     AssetId, AutomationBinding, AutomationClip, AutomationClipId, AutomationMapping,
-    MarkCollection, MarkCollectionKey, Sequence, SequenceAudio, SequenceId,
+    AutomationTarget, EffectClip, EffectGraphClip, EffectGraphEdge, EffectGraphNode,
+    EffectGraphNodeId, EffectGraphNodeKind, GraphNodePosition, GraphOperator, GraphOperatorNode,
+    GraphPortId, GraphSourceNode, MarkCollection, MarkCollectionKey, Sequence, SequenceAudio,
+    SequenceClip, SequenceClipId, SequenceClipKind, SequenceId,
 };
 use dawn_language::setup::{
     ControllerAddress, ControllerDefinition, ControllerDefinitionId, ControllerId,
@@ -1485,12 +1488,12 @@ fn sequence_value(
         ),
     );
     value.insert(
-        string_value("effects"),
+        string_value("clips"),
         Value::Sequence(
             sequence
-                .effects
+                .clips
                 .iter()
-                .map(|effect| effect_inst_value(session, from_document, effect))
+                .map(|clip| sequence_clip_value(session, from_document, clip))
                 .collect::<Result<Vec<_>, _>>()?,
         ),
     );
@@ -1531,32 +1534,70 @@ fn mark_collection_value(collection: &MarkCollection) -> Result<Value, ExportPro
     Ok(Value::Mapping(value))
 }
 
-fn effect_inst_value(
+fn sequence_clip_value(
     session: &ProjectSession,
     from_document: &Utf8Path,
-    effect: &EffectInst,
+    clip: &SequenceClip,
 ) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
-    value.insert(string_value("id"), number_value(effect.id.0)?);
+    value.insert(string_value("id"), number_value(clip.id.0)?);
     value.insert(
         string_value("start"),
-        Value::String(seconds_string(effect.start.as_seconds_f64())),
+        Value::String(seconds_string(clip.start.as_seconds_f64())),
     );
     value.insert(
         string_value("duration"),
-        Value::String(seconds_string(effect.duration.as_seconds_f64())),
+        Value::String(seconds_string(clip.duration.as_seconds_f64())),
     );
-    value.insert(string_value("target"), effect_target_value(&effect.target)?);
+    value.insert(string_value("target"), effect_target_value(&clip.target)?);
     value.insert(
         string_value("scope"),
         Value::String(
-            match effect.scope {
+            match clip.scope {
                 EffectScope::PerFixture => "per_fixture",
                 EffectScope::WholeTarget => "whole_target",
             }
             .to_string(),
         ),
     );
+    match &clip.kind {
+        SequenceClipKind::Effect(effect) => {
+            value.insert(string_value("type"), Value::String("effect".to_string()));
+            write_effect_clip_fields(session, from_document, &mut value, effect)?;
+        }
+        SequenceClipKind::Graph(graph) => {
+            value.insert(string_value("type"), Value::String("graph".to_string()));
+            value.insert(
+                string_value("nodes"),
+                Value::Sequence(
+                    graph
+                        .nodes
+                        .iter()
+                        .map(|node| graph_node_value(session, from_document, node))
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+            );
+            value.insert(
+                string_value("edges"),
+                Value::Sequence(
+                    graph
+                        .edges
+                        .iter()
+                        .map(graph_edge_value)
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+            );
+        }
+    }
+    Ok(Value::Mapping(value))
+}
+
+fn write_effect_clip_fields(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    value: &mut Mapping,
+    effect: &EffectClip,
+) -> Result<(), ExportProjectError> {
     if !effect.param_overrides.is_empty() {
         value.insert(
             string_value("params"),
@@ -1583,7 +1624,118 @@ fn effect_inst_value(
             &effect.definition.0,
         )?),
     );
+    Ok(())
+}
+
+fn graph_node_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    node: &EffectGraphNode,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("id"), number_value(node.id.0)?);
+    value.insert(
+        string_value("position"),
+        graph_position_value(&node.position)?,
+    );
+    match &node.kind {
+        EffectGraphNodeKind::Source(source) => {
+            value.insert(string_value("type"), Value::String("source".to_string()));
+            value.insert(
+                string_value("start"),
+                Value::String(seconds_string(source.start.as_seconds_f64())),
+            );
+            value.insert(
+                string_value("duration"),
+                Value::String(seconds_string(source.duration.as_seconds_f64())),
+            );
+            value.insert(string_value("target"), effect_target_value(&source.target)?);
+            value.insert(
+                string_value("scope"),
+                Value::String(
+                    match source.scope {
+                        EffectScope::PerFixture => "per_fixture",
+                        EffectScope::WholeTarget => "whole_target",
+                    }
+                    .to_string(),
+                ),
+            );
+            write_effect_clip_fields(
+                session,
+                from_document,
+                &mut value,
+                &EffectClip {
+                    definition: source.definition.clone(),
+                    param_overrides: source.param_overrides.clone(),
+                },
+            )?;
+        }
+        EffectGraphNodeKind::Operator(operator) => {
+            value.insert(string_value("type"), Value::String("operator".to_string()));
+            value.insert(
+                string_value("operator"),
+                Value::String(graph_operator_name(&operator.operator).to_string()),
+            );
+            if !operator.params.is_empty() {
+                value.insert(
+                    string_value("params"),
+                    Value::Mapping(
+                        operator
+                            .params
+                            .iter()
+                            .map(|(name, param)| {
+                                Ok((
+                                    string_value(name.as_str()),
+                                    effect_param_value(session, from_document, param)?,
+                                ))
+                            })
+                            .collect::<Result<Mapping, ExportProjectError>>()?,
+                    ),
+                );
+            }
+        }
+        EffectGraphNodeKind::Output => {
+            value.insert(string_value("type"), Value::String("output".to_string()));
+        }
+    }
     Ok(Value::Mapping(value))
+}
+
+fn graph_position_value(position: &GraphNodePosition) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("x"), number_value(position.x)?);
+    value.insert(string_value("y"), number_value(position.y)?);
+    Ok(Value::Mapping(value))
+}
+
+fn graph_edge_value(edge: &EffectGraphEdge) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("from_node"), number_value(edge.from_node.0)?);
+    value.insert(
+        string_value("from_port"),
+        Value::String(edge.from_port.0.clone()),
+    );
+    value.insert(string_value("to_node"), number_value(edge.to_node.0)?);
+    value.insert(
+        string_value("to_port"),
+        Value::String(edge.to_port.0.clone()),
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn graph_operator_name(operator: &GraphOperator) -> &'static str {
+    match operator {
+        GraphOperator::Max => "max",
+        GraphOperator::Add => "add",
+        GraphOperator::Multiply => "multiply",
+        GraphOperator::IntensityModulate => "intensity_modulate",
+        GraphOperator::Dim => "dim",
+        GraphOperator::Invert => "invert",
+        GraphOperator::Colorize => "colorize",
+        GraphOperator::Delay => "delay",
+        GraphOperator::Echo => "echo",
+        GraphOperator::RemapNearest => "remap_nearest",
+    }
 }
 
 fn automation_clip_value(clip: &AutomationClip) -> Result<Value, ExportProjectError> {
@@ -1649,17 +1801,47 @@ fn automation_curve_value(curve: &Curve) -> Result<Value, ExportProjectError> {
 fn automation_binding_value(binding: &AutomationBinding) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
     value.insert(
-        string_value("effect_id"),
-        number_value(binding.effect_id.0)?,
-    );
-    value.insert(
-        string_value("param"),
-        Value::String(binding.param.as_str().to_string()),
+        string_value("target"),
+        automation_target_value(&binding.target)?,
     );
     value.insert(
         string_value("mapping"),
         automation_mapping_value(&binding.mapping)?,
     );
+    Ok(Value::Mapping(value))
+}
+
+fn automation_target_value(target: &AutomationTarget) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    match target {
+        AutomationTarget::EffectClipParam { clip_id, param } => {
+            value.insert(
+                string_value("type"),
+                Value::String("effect_clip_param".to_string()),
+            );
+            value.insert(string_value("clip_id"), number_value(clip_id.0)?);
+            value.insert(
+                string_value("param"),
+                Value::String(param.as_str().to_string()),
+            );
+        }
+        AutomationTarget::GraphNodeParam {
+            clip_id,
+            node_id,
+            param,
+        } => {
+            value.insert(
+                string_value("type"),
+                Value::String("graph_node_param".to_string()),
+            );
+            value.insert(string_value("clip_id"), number_value(clip_id.0)?);
+            value.insert(string_value("node_id"), number_value(node_id.0)?);
+            value.insert(
+                string_value("param"),
+                Value::String(param.as_str().to_string()),
+            );
+        }
+    }
     Ok(Value::Mapping(value))
 }
 
@@ -3035,11 +3217,11 @@ impl DomainResolver<'_> {
             .iter()
             .map(|collection| parse_mark_collection(&document_path, collection))
             .collect::<Result<Vec<_>, _>>()?;
-        let effects = optional_sequence(&value, "effects")
-            .unwrap_or_default()
+        let clips = sequence_values(&document_path, &value, "clips")?
             .iter()
-            .map(|effect| self.parse_effect_inst(&document_path, effect))
+            .map(|clip| self.parse_sequence_clip(&document_path, clip))
             .collect::<Result<Vec<_>, _>>()?;
+        let effects = effect_inst_mirror_from_clips(&clips);
         let automation_clips = optional_sequence(&value, "automation_clips")
             .unwrap_or_default()
             .iter()
@@ -3060,6 +3242,7 @@ impl DomainResolver<'_> {
                 frame_rate: u32_field(&document_path, &value, "frame_rate")?,
                 audio,
                 mark_collections,
+                clips,
                 effects,
                 automation_clips,
             },
@@ -3124,11 +3307,60 @@ impl DomainResolver<'_> {
         Ok(SequenceAudio::Asset(id))
     }
 
-    fn parse_effect_inst(
+    fn parse_sequence_clip(
         &mut self,
         path: &Utf8Path,
         value: &Value,
-    ) -> Result<EffectInst, LoadProjectError> {
+    ) -> Result<SequenceClip, LoadProjectError> {
+        let kind = match string_field(path, value, "type")? {
+            "effect" => SequenceClipKind::Effect(self.parse_effect_clip(path, value)?),
+            "graph" => SequenceClipKind::Graph(EffectGraphClip {
+                nodes: sequence_values(path, value, "nodes")?
+                    .iter()
+                    .map(|node| self.parse_graph_node(path, node))
+                    .collect::<Result<Vec<_>, _>>()?,
+                edges: sequence_values(path, value, "edges")?
+                    .iter()
+                    .map(|edge| parse_graph_edge(path, edge))
+                    .collect::<Result<Vec<_>, _>>()?,
+            }),
+            other => {
+                return Err(LoadProjectError::InvalidDocument {
+                    path: path.to_path_buf(),
+                    range: source_range_for_field_value(path, value, "type"),
+                    message: format!("unsupported sequence clip type `{other}`"),
+                });
+            }
+        };
+        Ok(SequenceClip {
+            id: SequenceClipId(u32_field(path, value, "id")?),
+            start: parse_duration_as_time(string_field(path, value, "start")?).map_err(
+                |error| {
+                    with_yaml_location(
+                        error,
+                        path,
+                        source_range_for_field_value(path, value, "start"),
+                    )
+                },
+            )?,
+            duration: parse_duration(string_field(path, value, "duration")?).map_err(|error| {
+                with_yaml_location(
+                    error,
+                    path,
+                    source_range_for_field_value(path, value, "duration"),
+                )
+            })?,
+            target: parse_effect_target(path, required_field(path, value, "target")?)?,
+            scope: parse_effect_scope(path, value)?,
+            kind,
+        })
+    }
+
+    fn parse_effect_clip(
+        &mut self,
+        path: &Utf8Path,
+        value: &Value,
+    ) -> Result<EffectClip, LoadProjectError> {
         let script_ref = string_field(path, value, "script")?;
         let definition = match self.loader.resolve_reference(path, script_ref)? {
             ResolvedObject::EffectDefinition(definition) => definition,
@@ -3166,39 +3398,95 @@ impl DomainResolver<'_> {
             })
             .transpose()?
             .unwrap_or_default();
-        Ok(EffectInst {
-            id: EffectInstId(u32_field(path, value, "id")?),
-            start: parse_duration_as_time(string_field(path, value, "start")?).map_err(
-                |error| {
-                    with_yaml_location(
-                        error,
-                        path,
-                        source_range_for_field_value(path, value, "start"),
-                    )
-                },
-            )?,
-            duration: parse_duration(string_field(path, value, "duration")?).map_err(|error| {
-                with_yaml_location(
-                    error,
-                    path,
-                    source_range_for_field_value(path, value, "duration"),
-                )
-            })?,
-            target: parse_effect_target(path, required_field(path, value, "target")?)?,
-            scope: match string_field(path, value, "scope")? {
-                "per_fixture" => EffectScope::PerFixture,
-                "whole_target" => EffectScope::WholeTarget,
-                other => {
-                    return Err(LoadProjectError::InvalidDocument {
-                        path: path.to_path_buf(),
-                        range: source_range_for_field_value(path, value, "scope"),
-                        message: format!("invalid effect scope `{other}`"),
-                    });
-                }
-            },
+        Ok(EffectClip {
             definition,
             param_overrides: params,
         })
+    }
+
+    fn parse_graph_node(
+        &mut self,
+        path: &Utf8Path,
+        value: &Value,
+    ) -> Result<EffectGraphNode, LoadProjectError> {
+        let kind = match string_field(path, value, "type")? {
+            "source" => {
+                let effect = self.parse_effect_clip(path, value)?;
+                EffectGraphNodeKind::Source(GraphSourceNode {
+                    start: parse_duration_as_time(string_field(path, value, "start")?).map_err(
+                        |error| {
+                            with_yaml_location(
+                                error,
+                                path,
+                                source_range_for_field_value(path, value, "start"),
+                            )
+                        },
+                    )?,
+                    duration: parse_duration(string_field(path, value, "duration")?).map_err(
+                        |error| {
+                            with_yaml_location(
+                                error,
+                                path,
+                                source_range_for_field_value(path, value, "duration"),
+                            )
+                        },
+                    )?,
+                    target: parse_effect_target(path, required_field(path, value, "target")?)?,
+                    scope: parse_effect_scope(path, value)?,
+                    definition: effect.definition,
+                    param_overrides: effect.param_overrides,
+                })
+            }
+            "operator" => EffectGraphNodeKind::Operator(GraphOperatorNode {
+                operator: parse_graph_operator(path, value)?,
+                params: self.parse_graph_operator_params(path, value)?,
+            }),
+            "output" => EffectGraphNodeKind::Output,
+            other => {
+                return Err(LoadProjectError::InvalidDocument {
+                    path: path.to_path_buf(),
+                    range: source_range_for_field_value(path, value, "type"),
+                    message: format!("unsupported graph node type `{other}`"),
+                });
+            }
+        };
+        Ok(EffectGraphNode {
+            id: EffectGraphNodeId(u32_field(path, value, "id")?),
+            position: parse_graph_position(path, required_field(path, value, "position")?)?,
+            kind,
+        })
+    }
+
+    fn parse_graph_operator_params(
+        &mut self,
+        path: &Utf8Path,
+        value: &Value,
+    ) -> Result<IndexMap<Identifier, EffectParamValue>, LoadProjectError> {
+        optional_mapping(value, "params")
+            .map(|mapping| {
+                mapping
+                    .iter()
+                    .map(|(key, value)| {
+                        let key =
+                            key.as_str()
+                                .ok_or_else(|| LoadProjectError::InvalidDocument {
+                                    path: path.to_path_buf(),
+                                    range: None,
+                                    message: "operator param keys must be strings".to_string(),
+                                })?;
+                        let identifier = Identifier::new(key.to_string()).map_err(|_| {
+                            LoadProjectError::InvalidDocument {
+                                path: path.to_path_buf(),
+                                range: None,
+                                message: format!("invalid operator param name `{key}`"),
+                            }
+                        })?;
+                        Ok((identifier, self.parse_effect_param(path, value)?))
+                    })
+                    .collect::<Result<IndexMap<_, _>, LoadProjectError>>()
+            })
+            .transpose()
+            .map(Option::unwrap_or_default)
     }
 
     fn resolve_effect_definition(
@@ -3362,12 +3650,11 @@ impl DomainResolver<'_> {
             .collect::<Result<Vec<_>, _>>()?;
         let mut seen = IndexSet::new();
         for binding in &bindings {
-            if !seen.insert((binding.effect_id.0, binding.param.as_str().to_string())) {
+            if !seen.insert(binding.target.clone()) {
                 return Err(LoadProjectError::InvalidDocument {
                     path: path.to_path_buf(),
                     range: source_range_for_field_value(path, value, "bindings"),
-                    message: "automation clip has duplicate bindings for an effect param"
-                        .to_string(),
+                    message: "automation clip has duplicate bindings for a parameter".to_string(),
                 });
             }
         }
@@ -3413,14 +3700,72 @@ fn parse_automation_curve(path: &Utf8Path, value: &Value) -> Result<Curve, LoadP
     Ok(curve)
 }
 
+fn effect_inst_mirror_from_clips(clips: &[SequenceClip]) -> Vec<EffectInst> {
+    clips
+        .iter()
+        .filter_map(|clip| {
+            let SequenceClipKind::Effect(effect) = &clip.kind else {
+                return None;
+            };
+            Some(EffectInst {
+                id: EffectInstId(clip.id.0),
+                start: clip.start.clone(),
+                duration: clip.duration.clone(),
+                target: clip.target.clone(),
+                scope: clip.scope.clone(),
+                definition: effect.definition.clone(),
+                param_overrides: effect.param_overrides.clone(),
+            })
+        })
+        .collect()
+}
+
 fn parse_automation_binding(
     path: &Utf8Path,
     value: &Value,
 ) -> Result<AutomationBinding, LoadProjectError> {
+    let target = parse_automation_target(path, required_field(path, value, "target")?)?;
+    let (effect_id, param) = automation_binding_mirror(&target);
     Ok(AutomationBinding {
-        effect_id: EffectInstId(u32_field(path, value, "effect_id")?),
-        param: parse_identifier_field(path, value, "param")?,
+        target,
+        effect_id,
+        param,
         mapping: parse_automation_mapping(path, required_field(path, value, "mapping")?)?,
+    })
+}
+
+fn automation_binding_mirror(target: &AutomationTarget) -> (EffectInstId, Identifier) {
+    match target {
+        AutomationTarget::EffectClipParam { clip_id, param } => {
+            (EffectInstId(clip_id.0), param.clone())
+        }
+        AutomationTarget::GraphNodeParam { clip_id, param, .. } => {
+            (EffectInstId(clip_id.0), param.clone())
+        }
+    }
+}
+
+fn parse_automation_target(
+    path: &Utf8Path,
+    value: &Value,
+) -> Result<AutomationTarget, LoadProjectError> {
+    Ok(match string_field(path, value, "type")? {
+        "effect_clip_param" => AutomationTarget::EffectClipParam {
+            clip_id: SequenceClipId(u32_field(path, value, "clip_id")?),
+            param: parse_identifier_field(path, value, "param")?,
+        },
+        "graph_node_param" => AutomationTarget::GraphNodeParam {
+            clip_id: SequenceClipId(u32_field(path, value, "clip_id")?),
+            node_id: EffectGraphNodeId(u32_field(path, value, "node_id")?),
+            param: parse_identifier_field(path, value, "param")?,
+        },
+        other => {
+            return Err(LoadProjectError::InvalidDocument {
+                path: path.to_path_buf(),
+                range: source_range_for_field_value(path, value, "type"),
+                message: format!("unsupported automation target `{other}`"),
+            });
+        }
     })
 }
 
@@ -3636,6 +3981,57 @@ fn parse_effect_target(path: &Utf8Path, value: &Value) -> Result<EffectTarget, L
             path: path.to_path_buf(),
             range: source_range_for_field_value(path, value, "type"),
             message: format!("invalid effect target type `{other}`"),
+        }),
+    }
+}
+
+fn parse_effect_scope(path: &Utf8Path, value: &Value) -> Result<EffectScope, LoadProjectError> {
+    match string_field(path, value, "scope")? {
+        "per_fixture" => Ok(EffectScope::PerFixture),
+        "whole_target" => Ok(EffectScope::WholeTarget),
+        other => Err(LoadProjectError::InvalidDocument {
+            path: path.to_path_buf(),
+            range: source_range_for_field_value(path, value, "scope"),
+            message: format!("invalid effect scope `{other}`"),
+        }),
+    }
+}
+
+fn parse_graph_position(
+    path: &Utf8Path,
+    value: &Value,
+) -> Result<GraphNodePosition, LoadProjectError> {
+    Ok(GraphNodePosition {
+        x: f64_field(path, value, "x")?,
+        y: f64_field(path, value, "y")?,
+    })
+}
+
+fn parse_graph_edge(path: &Utf8Path, value: &Value) -> Result<EffectGraphEdge, LoadProjectError> {
+    Ok(EffectGraphEdge {
+        from_node: EffectGraphNodeId(u32_field(path, value, "from_node")?),
+        from_port: GraphPortId(string_field(path, value, "from_port")?.to_string()),
+        to_node: EffectGraphNodeId(u32_field(path, value, "to_node")?),
+        to_port: GraphPortId(string_field(path, value, "to_port")?.to_string()),
+    })
+}
+
+fn parse_graph_operator(path: &Utf8Path, value: &Value) -> Result<GraphOperator, LoadProjectError> {
+    match string_field(path, value, "operator")? {
+        "max" => Ok(GraphOperator::Max),
+        "add" => Ok(GraphOperator::Add),
+        "multiply" => Ok(GraphOperator::Multiply),
+        "intensity_modulate" => Ok(GraphOperator::IntensityModulate),
+        "dim" => Ok(GraphOperator::Dim),
+        "invert" => Ok(GraphOperator::Invert),
+        "colorize" => Ok(GraphOperator::Colorize),
+        "delay" => Ok(GraphOperator::Delay),
+        "echo" => Ok(GraphOperator::Echo),
+        "remap_nearest" => Ok(GraphOperator::RemapNearest),
+        other => Err(LoadProjectError::InvalidDocument {
+            path: path.to_path_buf(),
+            range: source_range_for_field_value(path, value, "operator"),
+            message: format!("unsupported graph operator `{other}`"),
         }),
     }
 }

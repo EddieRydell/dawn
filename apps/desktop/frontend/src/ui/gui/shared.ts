@@ -29,6 +29,7 @@ export type AutomationClipChooser = {
 
 export type GuiFocus =
   | { type: "effect"; id: number }
+  | { type: "graphNode"; clipId: number; nodeId: number }
   | { type: "automationClip"; id: number }
   | { type: "mark"; collectionKey: string; index: number }
   | { type: "placement"; id: number }

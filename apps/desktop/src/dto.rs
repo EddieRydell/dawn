@@ -603,6 +603,7 @@ pub struct SequenceGuiDocument {
     pub effect_scripts: Vec<SequenceEffectScript>,
     pub curve_library: Vec<SequenceCurveLibraryItem>,
     pub effects: Vec<SequenceEffect>,
+    pub graph_clips: Vec<SequenceGraphClip>,
     pub automation_clips: Vec<SequenceAutomationClip>,
     pub degraded: bool,
 }
@@ -720,6 +721,87 @@ pub struct SequenceEffect {
     pub script: String,
     pub script_source: Option<EffectScriptReference>,
     pub params: Vec<SequenceEffectParam>,
+    pub kind: SequenceTimelineClipKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SequenceTimelineClipKind {
+    Effect,
+    Graph,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceGraphClip {
+    pub id: u32,
+    pub nodes: Vec<SequenceGraphNode>,
+    pub edges: Vec<SequenceGraphEdge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceGraphNode {
+    pub id: u32,
+    pub x: f64,
+    pub y: f64,
+    pub kind: SequenceGraphNodeKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SequenceGraphNodeKind {
+    Source {
+        start_seconds: f64,
+        duration_seconds: f64,
+        target: LayoutTarget,
+        target_label: String,
+        scope: SequenceEffectScope,
+        script: String,
+        script_source: Option<EffectScriptReference>,
+        params: Vec<SequenceEffectParam>,
+    },
+    Operator {
+        operator: SequenceGraphOperator,
+        params: Vec<SequenceGraphOperatorParam>,
+    },
+    Output,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceGraphEdge {
+    pub from_node: u32,
+    pub from_port: String,
+    pub to_node: u32,
+    pub to_port: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SequenceGraphOperator {
+    Max,
+    Add,
+    Multiply,
+    IntensityModulate,
+    Dim,
+    Invert,
+    Colorize,
+    Delay,
+    Echo,
+    RemapNearest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceGraphOperatorParam {
+    pub name: String,
+    pub kind: SequenceEffectParamKind,
+    pub value: SequenceEffectParamValue,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -816,6 +898,12 @@ pub enum SequenceGuiEdit {
         start_seconds: f64,
         mark_collection_key: Option<String>,
     },
+    AddGraphClip {
+        target: LayoutTarget,
+        scope: SequenceEffectScope,
+        start_seconds: f64,
+        duration_seconds: f64,
+    },
     MoveEffect {
         id: u32,
         start_seconds: f64,
@@ -855,6 +943,59 @@ pub enum SequenceGuiEdit {
     UnlinkEffectCurveParam {
         id: u32,
         name: String,
+    },
+    AddGraphSourceNode {
+        clip_id: u32,
+        script: EffectScriptReference,
+        x: f64,
+        y: f64,
+    },
+    AddGraphOperatorNode {
+        clip_id: u32,
+        operator: SequenceGraphOperator,
+        x: f64,
+        y: f64,
+    },
+    MoveGraphNode {
+        clip_id: u32,
+        node_id: u32,
+        x: f64,
+        y: f64,
+    },
+    DeleteGraphNode {
+        clip_id: u32,
+        node_id: u32,
+    },
+    ConnectGraphNodes {
+        clip_id: u32,
+        from_node: u32,
+        from_port: String,
+        to_node: u32,
+        to_port: String,
+    },
+    DisconnectGraphNodes {
+        clip_id: u32,
+        from_node: u32,
+        from_port: String,
+        to_node: u32,
+        to_port: String,
+    },
+    ChangeGraphSourceScript {
+        clip_id: u32,
+        node_id: u32,
+        script: EffectScriptReference,
+    },
+    UpdateGraphSourceParam {
+        clip_id: u32,
+        node_id: u32,
+        name: String,
+        value: SequenceEffectParamValue,
+    },
+    UpdateGraphOperatorParam {
+        clip_id: u32,
+        node_id: u32,
+        name: String,
+        value: SequenceEffectParamValue,
     },
     AddAutomationClip {
         start_seconds: f64,

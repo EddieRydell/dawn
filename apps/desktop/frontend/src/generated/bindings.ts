@@ -422,6 +422,7 @@ export type SequenceEffect = {
 	script: string,
 	scriptSource: EffectScriptReference | null,
 	params: SequenceEffectParam[],
+	kind: SequenceTimelineClipKind,
 };
 
 export type SequenceEffectParam = {
@@ -457,6 +458,36 @@ export type SequenceEffectScriptParam = {
 	kind: SequenceEffectParamKind,
 };
 
+export type SequenceGraphClip = {
+	id: number,
+	nodes: SequenceGraphNode[],
+	edges: SequenceGraphEdge[],
+};
+
+export type SequenceGraphEdge = {
+	fromNode: number,
+	fromPort: string,
+	toNode: number,
+	toPort: string,
+};
+
+export type SequenceGraphNode = {
+	id: number,
+	x: number,
+	y: number,
+	kind: SequenceGraphNodeKind,
+};
+
+export type SequenceGraphNodeKind = { type: "source"; startSeconds: number; durationSeconds: number; target: LayoutTarget; targetLabel: string; scope: SequenceEffectScope; script: string; scriptSource: EffectScriptReference | null; params: SequenceEffectParam[] } | { type: "operator"; operator: SequenceGraphOperator; params: SequenceGraphOperatorParam[] } | { type: "output" };
+
+export type SequenceGraphOperator = "max" | "add" | "multiply" | "intensityModulate" | "dim" | "invert" | "colorize" | "delay" | "echo" | "remapNearest";
+
+export type SequenceGraphOperatorParam = {
+	name: string,
+	kind: SequenceEffectParamKind,
+	value: SequenceEffectParamValue,
+};
+
 export type SequenceGuiDocument = {
 	path: string,
 	sourceRef: GuiObjectRef,
@@ -469,11 +500,12 @@ export type SequenceGuiDocument = {
 	effectScripts: SequenceEffectScript[],
 	curveLibrary: SequenceCurveLibraryItem[],
 	effects: SequenceEffect[],
+	graphClips: SequenceGraphClip[],
 	automationClips: SequenceAutomationClip[],
 	degraded: boolean,
 };
 
-export type SequenceGuiEdit = { type: "setAudio"; import: string | null } | { type: "addEffect"; script: EffectScriptReference; target: LayoutTarget; scope: SequenceEffectScope; startSeconds: number; markCollectionKey: string | null } | { type: "moveEffect"; id: number; startSeconds: number; target: LayoutTarget | null } | { type: "resizeEffect"; id: number; startSeconds: number; durationSeconds: number } | { type: "changeEffectScript"; id: number; script: EffectScriptReference } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTarget } | { type: "setEffectScope"; id: number; scope: SequenceEffectScope } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValue } | { type: "linkEffectCurveParam"; id: number; name: string; curvePath: string; objectKey: string } | { type: "unlinkEffectCurveParam"; id: number; name: string } | { type: "addAutomationClip"; startSeconds: number; durationSeconds: number; anchorLaneIndex: number; laneIndex: number } | { type: "createAndBindAutomationClip"; effectId: number; param: string; mapping: SequenceAutomationMapping } | { type: "moveAutomationClip"; id: number; startSeconds: number; anchorLaneIndex: number; laneIndex: number } | { type: "resizeAutomationClip"; id: number; startSeconds: number; durationSeconds: number } | { type: "updateAutomationCurve"; id: number; curve: FloatCurvePoint[] } | { type: "deleteAutomationClip"; id: number } | { type: "bindAutomationParam"; clipId: number; effectId: number; param: string; mapping: SequenceAutomationMapping } | { type: "unbindAutomationParam"; clipId: number; effectId: number; param: string } | { type: "createMarkCollection"; key: string; name: string; color: string } | { type: "renameMarkCollection"; key: string; name: string } | { type: "deleteMarkCollection"; key: string } | { type: "setMarkCollectionColor"; key: string; color: string } | { type: "addMark"; collectionKey: string; timeSeconds: number } | { type: "moveMark"; collectionKey: string; index: number; timeSeconds: number } | { type: "deleteMark"; collectionKey: string; index: number };
+export type SequenceGuiEdit = { type: "setAudio"; import: string | null } | { type: "addEffect"; script: EffectScriptReference; target: LayoutTarget; scope: SequenceEffectScope; startSeconds: number; markCollectionKey: string | null } | { type: "addGraphClip"; target: LayoutTarget; scope: SequenceEffectScope; startSeconds: number; durationSeconds: number } | { type: "moveEffect"; id: number; startSeconds: number; target: LayoutTarget | null } | { type: "resizeEffect"; id: number; startSeconds: number; durationSeconds: number } | { type: "changeEffectScript"; id: number; script: EffectScriptReference } | { type: "deleteEffect"; id: number } | { type: "retargetEffect"; id: number; target: LayoutTarget } | { type: "setEffectScope"; id: number; scope: SequenceEffectScope } | { type: "updateEffectParam"; id: number; name: string; value: SequenceEffectParamValue } | { type: "linkEffectCurveParam"; id: number; name: string; curvePath: string; objectKey: string } | { type: "unlinkEffectCurveParam"; id: number; name: string } | { type: "addGraphSourceNode"; clipId: number; script: EffectScriptReference; x: number; y: number } | { type: "addGraphOperatorNode"; clipId: number; operator: SequenceGraphOperator; x: number; y: number } | { type: "moveGraphNode"; clipId: number; nodeId: number; x: number; y: number } | { type: "deleteGraphNode"; clipId: number; nodeId: number } | { type: "connectGraphNodes"; clipId: number; fromNode: number; fromPort: string; toNode: number; toPort: string } | { type: "disconnectGraphNodes"; clipId: number; fromNode: number; fromPort: string; toNode: number; toPort: string } | { type: "changeGraphSourceScript"; clipId: number; nodeId: number; script: EffectScriptReference } | { type: "updateGraphSourceParam"; clipId: number; nodeId: number; name: string; value: SequenceEffectParamValue } | { type: "updateGraphOperatorParam"; clipId: number; nodeId: number; name: string; value: SequenceEffectParamValue } | { type: "addAutomationClip"; startSeconds: number; durationSeconds: number; anchorLaneIndex: number; laneIndex: number } | { type: "createAndBindAutomationClip"; effectId: number; param: string; mapping: SequenceAutomationMapping } | { type: "moveAutomationClip"; id: number; startSeconds: number; anchorLaneIndex: number; laneIndex: number } | { type: "resizeAutomationClip"; id: number; startSeconds: number; durationSeconds: number } | { type: "updateAutomationCurve"; id: number; curve: FloatCurvePoint[] } | { type: "deleteAutomationClip"; id: number } | { type: "bindAutomationParam"; clipId: number; effectId: number; param: string; mapping: SequenceAutomationMapping } | { type: "unbindAutomationParam"; clipId: number; effectId: number; param: string } | { type: "createMarkCollection"; key: string; name: string; color: string } | { type: "renameMarkCollection"; key: string; name: string } | { type: "deleteMarkCollection"; key: string } | { type: "setMarkCollectionColor"; key: string; color: string } | { type: "addMark"; collectionKey: string; timeSeconds: number } | { type: "moveMark"; collectionKey: string; index: number; timeSeconds: number } | { type: "deleteMark"; collectionKey: string; index: number };
 
 export type SequenceInitialZoomMode = "fitToWidth" | "fixedPxPerSecond";
 
@@ -517,6 +549,8 @@ export type SequenceSelectionEditResult = {
 	copiedCount: number,
 	skippedCount: number,
 };
+
+export type SequenceTimelineClipKind = "effect" | "graph";
 
 export type TextPosition = {
 	line: number,

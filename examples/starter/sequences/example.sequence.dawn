@@ -12,5 +12,5 @@ example:
     name: Marks
     color: '#38bdf8'
     marks: []
-  effects: []
+  clips: []
   automation_clips: []

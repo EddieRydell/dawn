@@ -24,38 +24,31 @@ export type EditedFloatCurvePoint = { time: number; value: number };
 
 export type EditedColorCurvePoint = { time: number; value: string };
 
-export function EffectParamInput({
-  effectId,
-  effectStartSeconds,
-  effectDurationSeconds,
-  param,
-  curveLibrary,
-  markCollections,
-  automationClips,
-  canCreateAutomationClip,
-  automationClipChooser,
-  setAutomationClipChooser
-}: {
+type EffectParamAutomationControls = {
   effectId: number;
   effectStartSeconds: number;
   effectDurationSeconds: number;
-  param: SequenceEffectParam;
-  curveLibrary: SequenceCurveLibraryItem[];
-  markCollections: SequenceMarkCollection[];
   automationClips: SequenceAutomationClip[];
   canCreateAutomationClip: boolean;
   automationClipChooser: AutomationClipChooser;
   setAutomationClipChooser: (chooser: AutomationClipChooser) => void;
+};
+
+export function EffectParamInput({
+  param,
+  commitParam,
+  curveLibrary,
+  markCollections,
+  automation = null
+}: {
+  param: SequenceEffectParam;
+  commitParam: (name: string, value: SequenceEffectParamValue) => Promise<void>;
+  curveLibrary: SequenceCurveLibraryItem[];
+  markCollections: SequenceMarkCollection[];
+  automation?: EffectParamAutomationControls | null;
 }) {
   const commit = (value: SequenceEffectParamValue) => {
-    return runGuiEditCommand(() =>
-      commands.applySequenceGuiEdit({
-        type: "updateEffectParam",
-        id: effectId,
-        name: param.name,
-        value
-      })
-    ).then(() => undefined);
+    return commitParam(param.name, value);
   };
   const automated = param.automation !== null;
 
@@ -67,15 +60,21 @@ export function EffectParamInput({
     );
   }
 
-  const automationActions = automationBindingControl(
-    effectId,
-    param,
-    automationClips,
-    canCreateAutomationClip,
-    automationClipChooser,
-    setAutomationClipChooser
-  );
-  const automationClip = param.automation === null ? null : automationClips.find((clip) => clip.id === param.automation?.clipId) ?? null;
+  const automationActions =
+    automation === null
+      ? null
+      : automationBindingControl(
+          automation.effectId,
+          param,
+          automation.automationClips,
+          automation.canCreateAutomationClip,
+          automation.automationClipChooser,
+          automation.setAutomationClipChooser
+        );
+  const automationClip =
+    automation === null || param.automation === null
+      ? null
+      : automation.automationClips.find((clip) => clip.id === param.automation?.clipId) ?? null;
 
   switch (param.value.type) {
     case "int":
@@ -108,11 +107,11 @@ export function EffectParamInput({
       return (
         <ParamShell name={param.name} automated={automated}>
         <CurveParamSourceShell
-          effectId={effectId}
+          effectId={automation?.effectId ?? 0}
           param={param}
           valueType="float"
           curveLibrary={curveLibrary}
-          points={automated && automationClip !== null ? automationClipWindowCurve(automationClip, effectStartSeconds, effectDurationSeconds) : normalizeFloatCurvePoints(param.value.points)}
+          points={automated && automationClip !== null ? automationClipWindowCurve(automationClip, automation?.effectStartSeconds ?? 0, automation?.effectDurationSeconds ?? 1) : normalizeFloatCurvePoints(param.value.points)}
           commit={(points) => commit({ type: "floatCurve", points })}
           disabled={automated}
           actions={automationActions}
@@ -124,7 +123,7 @@ export function EffectParamInput({
       return (
         <ParamShell name={param.name}>
         <CurveParamSourceShell
-          effectId={effectId}
+          effectId={automation?.effectId ?? 0}
           param={param}
           valueType="color"
           curveLibrary={curveLibrary}

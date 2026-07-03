@@ -5,6 +5,7 @@ import type { SequenceEditorDocument } from "../../../types";
 import type { AudioTransportViewSnapshot, AutomationClipChooser, GuiFocus, SequenceSelection } from "../shared";
 
 import { SequenceCanvas } from "./SequenceCanvas";
+import { GraphEditorModal } from "./GraphEditorModal";
 import { handleSequencePlaybackShortcut, isSequenceTransportUnsupported } from "./SequenceTransportControls";
 
 export function SequenceEditor({
@@ -12,6 +13,8 @@ export function SequenceEditor({
   transport,
   selected,
   setSelected,
+  openGraphClipId,
+  setOpenGraphClipId,
   sequenceSelection,
   setSequenceSelection,
   automationClipChooser,
@@ -25,6 +28,8 @@ export function SequenceEditor({
   transport: AudioTransportViewSnapshot;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
+  openGraphClipId: number | null;
+  setOpenGraphClipId: (id: number | null) => void;
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
   automationClipChooser: AutomationClipChooser;
@@ -36,7 +41,17 @@ export function SequenceEditor({
 }) {
   const liveTransport = transport;
   const unsupported = isSequenceTransportUnsupported(document, liveTransport);
+  const graphClip = openGraphClipId === null ? null : document.graphClips.find((clip) => clip.id === openGraphClipId) ?? null;
+  const selectedGraphNodeId = selected?.type === "graphNode" && selected.clipId === graphClip?.id ? selected.nodeId : null;
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape" && graphClip !== null) {
+      event.preventDefault();
+      setOpenGraphClipId(null);
+      if (selected?.type === "graphNode" && selected.clipId === graphClip.id) {
+        setSelected({ type: "effect", id: graphClip.id });
+      }
+      return;
+    }
     if (event.key === "Escape" && automationClipChooser !== null) {
       event.preventDefault();
       setAutomationClipChooser(null);
@@ -61,6 +76,22 @@ export function SequenceEditor({
         visibleMarkCollectionKeys={visibleMarkCollectionKeys}
         setVisibleMarkCollectionKeys={setVisibleMarkCollectionKeys}
       />
+      {graphClip !== null && (
+        <GraphEditorModal
+          document={document}
+          clip={graphClip}
+          selectedNodeId={selectedGraphNodeId}
+          setSelectedNodeId={(nodeId) => {
+            setSelected(nodeId === null ? { type: "effect", id: graphClip.id } : { type: "graphNode", clipId: graphClip.id, nodeId });
+          }}
+          onClose={() => {
+            setOpenGraphClipId(null);
+            if (selected?.type === "graphNode" && selected.clipId === graphClip.id) {
+              setSelected({ type: "effect", id: graphClip.id });
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
