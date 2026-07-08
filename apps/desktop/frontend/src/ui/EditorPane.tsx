@@ -247,7 +247,7 @@ export function EditorPane({
   }
 
   return (
-    <section className={`editor-shell ${activeConflicted ? "has-conflict-banner" : ""}`}>
+    <section className={`editor-shell ${activeSequenceDocument !== null ? "has-editor-toolbar" : ""} ${activeConflicted ? "has-conflict-banner" : ""}`}>
       <div className="tab-strip">
         {snapshot.tabs.map((tab) => (
           <button

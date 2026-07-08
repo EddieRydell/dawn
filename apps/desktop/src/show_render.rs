@@ -208,7 +208,9 @@ mod tests {
     use dawn_language::effect_dsl::compile_effects;
     use dawn_language::model::{ProjectDefinitionStores, ProjectId, ProjectRoot};
     use dawn_language::sequence::{
-        EffectClip, Sequence, SequenceAudio, SequenceClip, SequenceClipId, SequenceClipKind,
+        CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind, EffectClip,
+        EffectGraphEdge, GraphNodePosition, GraphPortId, Sequence, SequenceAudio, SequenceClip,
+        SequenceClipId, SequenceClipKind, SequenceCompositionGraph, SequenceLayer, SequenceLayerId,
     };
     use dawn_language::setup::{
         ControllerDefinitionStore, FixtureDefinition, FixtureDefinitionId, FixtureDefinitionStore,
@@ -285,6 +287,7 @@ mod tests {
 
         let sequence_effects = vec![EffectInst {
             id: EffectInstId(1),
+            layer_id: SequenceLayerId(0),
             start: DawnTime(Duration::ZERO),
             duration: DawnDuration(Duration::from_secs_f64(1.0)),
             target: EffectTarget::Group(FixtureGroupId(1)),
@@ -353,7 +356,39 @@ mod tests {
                     audio: SequenceAudio::None,
                     mark_collections: Vec::new(),
                     clips: sequence_clips,
+                    layers: vec![SequenceLayer {
+                        id: SequenceLayerId(0),
+                        name: "Default".to_string(),
+                        color: Color {
+                            red: 80,
+                            green: 160,
+                            blue: 255,
+                        },
+                        enabled: true,
+                    }],
                     effects: sequence_effects,
+                    composition_graph: SequenceCompositionGraph {
+                        nodes: vec![
+                            CompositionGraphNode {
+                                id: CompositionGraphNodeId(1),
+                                position: GraphNodePosition { x: 0.0, y: 0.0 },
+                                kind: CompositionGraphNodeKind::Layer {
+                                    layer_id: SequenceLayerId(0),
+                                },
+                            },
+                            CompositionGraphNode {
+                                id: CompositionGraphNodeId(2),
+                                position: GraphNodePosition { x: 200.0, y: 0.0 },
+                                kind: CompositionGraphNodeKind::Output,
+                            },
+                        ],
+                        edges: vec![EffectGraphEdge {
+                            from: CompositionGraphNodeId(1),
+                            from_port: GraphPortId("output".to_string()),
+                            to: CompositionGraphNodeId(2),
+                            to_port: GraphPortId("input".to_string()),
+                        }],
+                    },
                     automation_clips: Vec::new(),
                 },
             )]),

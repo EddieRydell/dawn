@@ -136,6 +136,7 @@ pub struct AudioTransportSnapshot {
     pub last_error: Option<String>,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(
     tag = "type",
@@ -602,10 +603,21 @@ pub struct SequenceGuiDocument {
     pub lanes: Vec<SequenceLane>,
     pub effect_scripts: Vec<SequenceEffectScript>,
     pub curve_library: Vec<SequenceCurveLibraryItem>,
+    pub layers: Vec<SequenceLayer>,
     pub effects: Vec<SequenceEffect>,
-    pub graph_clips: Vec<SequenceGraphClip>,
+    pub composition_graph: SequenceCompositionGraph,
     pub automation_clips: Vec<SequenceAutomationClip>,
     pub degraded: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceLayer {
+    pub id: u32,
+    pub name: String,
+    pub color: String,
+    pub enabled: bool,
+    pub is_default: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -713,6 +725,7 @@ pub struct SequenceClipRasterUnavailable {
 pub struct SequenceEffect {
     pub index: u32,
     pub id: u32,
+    pub layer_id: u32,
     pub start_seconds: f64,
     pub duration_seconds: f64,
     pub target: LayoutTarget,
@@ -728,12 +741,11 @@ pub struct SequenceEffect {
 #[serde(rename_all = "camelCase")]
 pub enum SequenceTimelineClipKind {
     Effect,
-    Graph,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SequenceGraphClip {
+pub struct SequenceCompositionGraph {
     pub id: u32,
     pub nodes: Vec<SequenceGraphNode>,
     pub edges: Vec<SequenceGraphEdge>,
@@ -742,7 +754,7 @@ pub struct SequenceGraphClip {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceGraphNode {
-    pub id: u32,
+    pub id: String,
     pub x: f64,
     pub y: f64,
     pub kind: SequenceGraphNodeKind,
@@ -755,15 +767,11 @@ pub struct SequenceGraphNode {
     rename_all_fields = "camelCase"
 )]
 pub enum SequenceGraphNodeKind {
-    Source {
-        start_seconds: f64,
-        duration_seconds: f64,
-        target: LayoutTarget,
-        target_label: String,
-        scope: SequenceEffectScope,
-        script: String,
-        script_source: Option<EffectScriptReference>,
-        params: Vec<SequenceEffectParam>,
+    Layer {
+        layer_id: u32,
+        layer_name: String,
+        layer_color: String,
+        enabled: bool,
     },
     Operator {
         operator: SequenceGraphOperator,
@@ -775,9 +783,9 @@ pub enum SequenceGraphNodeKind {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceGraphEdge {
-    pub from_node: u32,
+    pub from_node: String,
     pub from_port: String,
-    pub to_node: u32,
+    pub to_node: String,
     pub to_port: String,
 }
 
@@ -793,7 +801,6 @@ pub enum SequenceGraphOperator {
     Colorize,
     Delay,
     Echo,
-    RemapNearest,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -898,11 +905,28 @@ pub enum SequenceGuiEdit {
         start_seconds: f64,
         mark_collection_key: Option<String>,
     },
-    AddGraphClip {
-        target: LayoutTarget,
-        scope: SequenceEffectScope,
-        start_seconds: f64,
-        duration_seconds: f64,
+    CreateLayer {
+        name: String,
+        color: String,
+    },
+    RenameLayer {
+        id: u32,
+        name: String,
+    },
+    SetLayerColor {
+        id: u32,
+        color: String,
+    },
+    SetLayerEnabled {
+        id: u32,
+        enabled: bool,
+    },
+    DeleteLayer {
+        id: u32,
+    },
+    SetEffectLayer {
+        id: u32,
+        layer_id: u32,
     },
     MoveEffect {
         id: u32,
@@ -944,56 +968,33 @@ pub enum SequenceGuiEdit {
         id: u32,
         name: String,
     },
-    AddGraphSourceNode {
-        clip_id: u32,
-        script: EffectScriptReference,
-        x: f64,
-        y: f64,
-    },
     AddGraphOperatorNode {
-        clip_id: u32,
         operator: SequenceGraphOperator,
         x: f64,
         y: f64,
     },
     MoveGraphNode {
-        clip_id: u32,
-        node_id: u32,
+        node_id: String,
         x: f64,
         y: f64,
     },
     DeleteGraphNode {
-        clip_id: u32,
-        node_id: u32,
+        node_id: String,
     },
     ConnectGraphNodes {
-        clip_id: u32,
-        from_node: u32,
+        from_node: String,
         from_port: String,
-        to_node: u32,
+        to_node: String,
         to_port: String,
     },
     DisconnectGraphNodes {
-        clip_id: u32,
-        from_node: u32,
+        from_node: String,
         from_port: String,
-        to_node: u32,
+        to_node: String,
         to_port: String,
     },
-    ChangeGraphSourceScript {
-        clip_id: u32,
-        node_id: u32,
-        script: EffectScriptReference,
-    },
-    UpdateGraphSourceParam {
-        clip_id: u32,
-        node_id: u32,
-        name: String,
-        value: SequenceEffectParamValue,
-    },
     UpdateGraphOperatorParam {
-        clip_id: u32,
-        node_id: u32,
+        node_id: String,
         name: String,
         value: SequenceEffectParamValue,
     },

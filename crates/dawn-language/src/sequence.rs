@@ -16,8 +16,41 @@ pub struct Sequence {
     pub audio: SequenceAudio,
     pub mark_collections: Vec<MarkCollection>,
     pub clips: Vec<SequenceClip>,
+    pub layers: Vec<SequenceLayer>,
     pub effects: Vec<EffectInst>,
+    pub composition_graph: SequenceCompositionGraph,
     pub automation_clips: Vec<AutomationClip>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct SequenceLayerId(pub u32);
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SequenceLayer {
+    pub id: SequenceLayerId,
+    pub name: String,
+    pub color: Color,
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SequenceCompositionGraph {
+    pub nodes: Vec<CompositionGraphNode>,
+    pub edges: Vec<EffectGraphEdge>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompositionGraphNode {
+    pub id: CompositionGraphNodeId,
+    pub position: GraphNodePosition,
+    pub kind: CompositionGraphNodeKind,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CompositionGraphNodeKind {
+    Layer { layer_id: SequenceLayerId },
+    Operator(GraphOperatorNode),
+    Output,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -36,7 +69,6 @@ pub struct SequenceClipId(pub u32);
 #[derive(Clone, Debug, PartialEq)]
 pub enum SequenceClipKind {
     Effect(EffectClip),
-    Graph(EffectGraphClip),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -45,21 +77,8 @@ pub struct EffectClip {
     pub param_overrides: IndexMap<Identifier, EffectParamValue>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct EffectGraphClip {
-    pub nodes: Vec<EffectGraphNode>,
-    pub edges: Vec<EffectGraphEdge>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct EffectGraphNode {
-    pub id: EffectGraphNodeId,
-    pub position: GraphNodePosition,
-    pub kind: EffectGraphNodeKind,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct EffectGraphNodeId(pub u32);
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
+pub struct CompositionGraphNodeId(pub u32);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GraphNodePosition {
@@ -68,26 +87,14 @@ pub struct GraphNodePosition {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum EffectGraphNodeKind {
-    Source(GraphSourceNode),
-    Operator(GraphOperatorNode),
-    Output,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct GraphSourceNode {
-    pub start: DawnTime,
-    pub duration: DawnDuration,
-    pub target: EffectTarget,
-    pub scope: EffectScope,
-    pub definition: EffectDefinitionId,
-    pub param_overrides: IndexMap<Identifier, EffectParamValue>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub struct GraphOperatorNode {
-    pub operator: GraphOperator,
+    pub operator: GraphOperatorRef,
     pub params: IndexMap<Identifier, EffectParamValue>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GraphOperatorRef {
+    Builtin(GraphOperator),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -101,14 +108,13 @@ pub enum GraphOperator {
     Colorize,
     Delay,
     Echo,
-    RemapNearest,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectGraphEdge {
-    pub from_node: EffectGraphNodeId,
+    pub from: CompositionGraphNodeId,
     pub from_port: GraphPortId,
-    pub to_node: EffectGraphNodeId,
+    pub to: CompositionGraphNodeId,
     pub to_port: GraphPortId,
 }
 
@@ -152,13 +158,12 @@ pub struct AutomationBinding {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum AutomationTarget {
-    EffectClipParam {
-        clip_id: SequenceClipId,
+    EffectParam {
+        effect_id: EffectInstId,
         param: Identifier,
     },
-    GraphNodeParam {
-        clip_id: SequenceClipId,
-        node_id: EffectGraphNodeId,
+    CompositionNodeParam {
+        node_id: CompositionGraphNodeId,
         param: Identifier,
     },
 }

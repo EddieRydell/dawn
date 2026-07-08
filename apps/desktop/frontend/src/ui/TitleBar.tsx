@@ -1,9 +1,11 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Maximize2, Minus, X } from "lucide-react";
+import { Check, Maximize2, Minus, X } from "lucide-react";
 import { commands } from "../api";
 import { commandRegistry } from "../commandRegistry";
 import { useAppStore } from "../store";
+import { setGlobalMarkDisplayMode, useMarkDisplayMode, type MarkDisplayMode } from "./gui/sequence/marks";
+import { requestOpenLayerGraph } from "./uiEvents";
 
 const appWindow = getCurrentWindow();
 
@@ -40,6 +42,8 @@ async function closeMainWindow() {
 
 function ViewMenu() {
   const checked = useAppStore((store) => (store.snapshot?.settings.editorViewMode ?? "gui") === "gui");
+  const showSequenceItems = useAppStore((store) => store.guiDocument?.type === "sequence");
+  const [markMode] = useMarkDisplayMode();
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger className="menu-trigger">View</DropdownMenu.Trigger>
@@ -70,9 +74,41 @@ function ViewMenu() {
               </DropdownMenu.Item>
             );
           })}
+          {showSequenceItems && (
+            <>
+              <DropdownMenu.Separator className="menu-separator" />
+              <DropdownMenu.Item className="menu-item" onSelect={requestOpenLayerGraph}>
+                <span>Layer Graph</span>
+                <span className="shortcut" />
+              </DropdownMenu.Item>
+              <DropdownMenu.Separator className="menu-separator" />
+              <DropdownMenu.Label className="menu-label">Mark display</DropdownMenu.Label>
+              <DropdownMenu.RadioGroup
+                value={markMode}
+                onValueChange={(value) => {
+                  setGlobalMarkDisplayMode(value as MarkDisplayMode);
+                }}
+              >
+                <MarkDisplayItem value="overlay" label="Overlay" />
+                <MarkDisplayItem value="strip" label="Strip" />
+                <MarkDisplayItem value="hidden" label="Hidden" />
+              </DropdownMenu.RadioGroup>
+            </>
+          )}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
+  );
+}
+
+function MarkDisplayItem({ value, label }: { value: MarkDisplayMode; label: string }) {
+  return (
+    <DropdownMenu.RadioItem className="menu-item" value={value}>
+      <span>{label}</span>
+      <DropdownMenu.ItemIndicator>
+        <Check size={13} />
+      </DropdownMenu.ItemIndicator>
+    </DropdownMenu.RadioItem>
   );
 }
 

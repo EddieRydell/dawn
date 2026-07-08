@@ -13,8 +13,8 @@ export function SequenceEditor({
   transport,
   selected,
   setSelected,
-  openGraphClipId,
-  setOpenGraphClipId,
+  compositionGraphOpen,
+  setCompositionGraphOpen,
   sequenceSelection,
   setSequenceSelection,
   automationClipChooser,
@@ -28,8 +28,8 @@ export function SequenceEditor({
   transport: AudioTransportViewSnapshot;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
-  openGraphClipId: number | null;
-  setOpenGraphClipId: (id: number | null) => void;
+  compositionGraphOpen: boolean;
+  setCompositionGraphOpen: (open: boolean) => void;
   sequenceSelection: SequenceSelection;
   setSequenceSelection: (selection: SequenceSelection) => void;
   automationClipChooser: AutomationClipChooser;
@@ -41,15 +41,17 @@ export function SequenceEditor({
 }) {
   const liveTransport = transport;
   const unsupported = isSequenceTransportUnsupported(document, liveTransport);
-  const graphClip = openGraphClipId === null ? null : document.graphClips.find((clip) => clip.id === openGraphClipId) ?? null;
-  const selectedGraphNodeId = selected?.type === "graphNode" && selected.clipId === graphClip?.id ? selected.nodeId : null;
+  const selectedGraphItem =
+    selected?.type === "graphNode"
+      ? { type: "node" as const, id: selected.nodeId }
+      : selected?.type === "graphEdge"
+        ? { type: "edge" as const, id: selected.edgeId }
+        : null;
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "Escape" && graphClip !== null) {
+    if (event.key === "Escape" && compositionGraphOpen) {
       event.preventDefault();
-      setOpenGraphClipId(null);
-      if (selected?.type === "graphNode" && selected.clipId === graphClip.id) {
-        setSelected({ type: "effect", id: graphClip.id });
-      }
+      setCompositionGraphOpen(false);
+      if (selected?.type === "graphNode" || selected?.type === "graphEdge") setSelected(null);
       return;
     }
     if (event.key === "Escape" && automationClipChooser !== null) {
@@ -76,19 +78,20 @@ export function SequenceEditor({
         visibleMarkCollectionKeys={visibleMarkCollectionKeys}
         setVisibleMarkCollectionKeys={setVisibleMarkCollectionKeys}
       />
-      {graphClip !== null && (
+      {compositionGraphOpen && (
         <GraphEditorModal
           document={document}
-          clip={graphClip}
-          selectedNodeId={selectedGraphNodeId}
-          setSelectedNodeId={(nodeId) => {
-            setSelected(nodeId === null ? { type: "effect", id: graphClip.id } : { type: "graphNode", clipId: graphClip.id, nodeId });
+          selectedItem={selectedGraphItem}
+          setSelectedItem={(item) => {
+            if (item === null) {
+              setSelected(null);
+              return;
+            }
+            setSelected(item.type === "node" ? { type: "graphNode", nodeId: item.id } : { type: "graphEdge", edgeId: item.id });
           }}
           onClose={() => {
-            setOpenGraphClipId(null);
-            if (selected?.type === "graphNode" && selected.clipId === graphClip.id) {
-              setSelected({ type: "effect", id: graphClip.id });
-            }
+            setCompositionGraphOpen(false);
+            if (selected?.type === "graphNode" || selected?.type === "graphEdge") setSelected(null);
           }}
         />
       )}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { AppSnapshot, GuiDocument, WorkspaceLayoutState } from "../../types";
 
@@ -19,6 +19,7 @@ import { handleSequencePlaybackShortcut, isSequenceTransportUnsupported } from "
 
 import { markSelectionConsumesKey } from "./sequence/sequenceSelection";
 import { WorkspaceResizeHandle } from "../WorkspaceResizeHandle";
+import { OPEN_LAYER_GRAPH_EVENT } from "../uiEvents";
 
 const INSPECTOR_MIN_WIDTH_PX = 240;
 const INSPECTOR_MAX_WIDTH_PX = 560;
@@ -86,7 +87,7 @@ function GuiEditorInner({
       ? restoreState?.sequenceViewports[`${gui.document.path}::${gui.document.objectKey}`]
       : undefined;
   const [selected, setSelected] = useState<GuiFocus>(null);
-  const [openGraphClipId, setOpenGraphClipId] = useState<number | null>(null);
+  const [compositionGraphOpen, setCompositionGraphOpen] = useState(false);
   const [automationClipChooser, setAutomationClipChooser] = useState<AutomationClipChooser>(null);
   const [activeMarkCollectionKey, setActiveMarkCollectionKey] = useState<string | null>(() =>
     gui.type === "sequence"
@@ -102,6 +103,17 @@ function GuiEditorInner({
           : []
     )
   );
+
+  useEffect(() => {
+    if (gui.type !== "sequence") return;
+    const openLayerGraph = () => {
+      setCompositionGraphOpen(true);
+    };
+    window.addEventListener(OPEN_LAYER_GRAPH_EVENT, openLayerGraph);
+    return () => {
+      window.removeEventListener(OPEN_LAYER_GRAPH_EVENT, openLayerGraph);
+    };
+  }, [gui.type]);
 
   return (
     <div
@@ -129,8 +141,8 @@ function GuiEditorInner({
           transport={audioTransport}
           selected={selected}
           setSelected={setSelected}
-          openGraphClipId={openGraphClipId}
-          setOpenGraphClipId={setOpenGraphClipId}
+          compositionGraphOpen={compositionGraphOpen}
+          setCompositionGraphOpen={setCompositionGraphOpen}
           sequenceSelection={sequenceSelection}
           setSequenceSelection={setSequenceSelection}
           automationClipChooser={automationClipChooser}
@@ -166,8 +178,6 @@ function GuiEditorInner({
             gui={gui}
             selected={selected}
             setSelected={setSelected}
-            openGraphClipId={openGraphClipId}
-            setOpenGraphClipId={setOpenGraphClipId}
             sequenceSelection={sequenceSelection}
             automationClipChooser={automationClipChooser}
             setAutomationClipChooser={setAutomationClipChooser}

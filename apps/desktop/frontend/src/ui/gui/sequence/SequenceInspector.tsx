@@ -12,6 +12,7 @@ import { runGuiEditCommand } from "../../../store";
 import { InspectorScrollArea, Readout } from "../InspectorScrollArea";
 import { formatSeconds, roundToNanosecond, type AutomationClipChooser, type GuiFocus, type SequenceSelection } from "../shared";
 import { ColorField, EffectParamInput } from "./params/EffectParamInput";
+import { graphEdgeId, graphEdgeLineages, parseGraphEdgeId } from "./graphEdge";
 import { defaultMarkColor, nextCollectionKey } from "./marks";
 import { selectedEffectId, selectionCompatibleWithFocusedItem, selectionCount } from "./sequenceSelection";
 import { targetsEqual } from "./sequenceTargets";
@@ -27,12 +28,15 @@ function scriptsEqual(left: SequenceEffectScript["script"], right: SequenceEffec
   return left.path === right.path && left.effectName === right.effectName;
 }
 
+function defaultLayerColor(index: number) {
+  const colors = ["#50a0ff", "#f45b69", "#37a987", "#f6b84b", "#9b6dff", "#e86fb0"];
+  return colors[index % colors.length] ?? "#50a0ff";
+}
+
 export function SequenceInspector({
   document,
   selected,
   setSelected,
-  openGraphClipId,
-  setOpenGraphClipId,
   sequenceSelection,
   automationClipChooser,
   setAutomationClipChooser,
@@ -44,8 +48,6 @@ export function SequenceInspector({
   document: SequenceEditorDocument;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
-  openGraphClipId: number | null;
-  setOpenGraphClipId: (id: number | null) => void;
   sequenceSelection: SequenceSelection;
   automationClipChooser: AutomationClipChooser;
   setAutomationClipChooser: (chooser: AutomationClipChooser) => void;
@@ -56,9 +58,14 @@ export function SequenceInspector({
 }) {
 const id = selectedEffectId(selected);
     const effect = document.effects.find((candidate) => candidate.id === id);
-    const selectedGraphClip = selected?.type === "graphNode" ? document.graphClips.find((clip) => clip.id === selected.clipId) ?? null : null;
+    const selectedCompositionGraph = selected?.type === "graphNode" || selected?.type === "graphEdge" ? document.compositionGraph : null;
     const selectedGraphNode =
-      selected?.type === "graphNode" ? selectedGraphClip?.nodes.find((node) => node.id === selected.nodeId) ?? null : null;
+      selected?.type === "graphNode" ? selectedCompositionGraph?.nodes.find((node) => node.id === selected.nodeId) ?? null : null;
+    const selectedGraphEdgeParts = selected?.type === "graphEdge" ? parseGraphEdgeId(selected.edgeId) : null;
+    const selectedGraphEdge =
+      selectedGraphEdgeParts === null
+        ? null
+        : document.compositionGraph.edges.find((edge) => graphEdgeId(edge) === graphEdgeId(selectedGraphEdgeParts)) ?? null;
     const selectedAutomationClip = selected?.type === "automationClip" ? document.automationClips.find((clip) => clip.id === selected.id) : undefined;
     const selectedMark = selected?.type === "mark" ? { collectionKey: selected.collectionKey, index: selected.index } : null;
     const selectedMarkCollection = selectedMark === null ? null : document.markCollections.find((collection) => collection.key === selectedMark.collectionKey) ?? null;
@@ -95,6 +102,39 @@ const id = selectedEffectId(selected);
             }
           >
             Delete
+          </button>
+        </InspectorScrollArea>
+      );
+    }
+    if (selected?.type === "graphEdge" && selectedGraphEdge !== null) {
+      const lineage = graphEdgeLineages(document.compositionGraph).get(graphEdgeId(selectedGraphEdge)) ?? {
+        color: "#8ecae6",
+        label: "Unknown lineage"
+      };
+      const deleteEdge = () =>
+        runGuiEditCommand(() =>
+          commands.applySequenceGuiEdit({
+            type: "disconnectGraphNodes",
+            fromNode: selectedGraphEdge.fromNode,
+            fromPort: selectedGraphEdge.fromPort,
+            toNode: selectedGraphEdge.toNode,
+            toPort: selectedGraphEdge.toPort
+          })
+        ).then(() => {
+          setSelected(null);
+        });
+      return (
+        <InspectorScrollArea>
+          <h2>Connection</h2>
+          <div className="inspector-readout-grid">
+            <Readout label="Source" value={selectedGraphEdge.fromNode} />
+            <Readout label="Source port" value={selectedGraphEdge.fromPort} />
+            <Readout label="Target" value={selectedGraphEdge.toNode} />
+            <Readout label="Target port" value={selectedGraphEdge.toPort} />
+            <Readout label="Lineage" value={lineage.label} swatch={lineage.color} />
+          </div>
+          <button type="button" onClick={() => void deleteEdge()}>
+            Delete connection
           </button>
         </InspectorScrollArea>
       );
@@ -140,80 +180,29 @@ const id = selectedEffectId(selected);
         </InspectorScrollArea>
       );
     }
-    if (selected?.type === "graphNode" && selectedGraphClip !== null && selectedGraphNode !== null) {
-      const incoming = selectedGraphClip.edges.filter((edge) => edge.toNode === selectedGraphNode.id).length;
-      const outgoing = selectedGraphClip.edges.filter((edge) => edge.fromNode === selectedGraphNode.id).length;
+    if (selected?.type === "graphNode" && selectedCompositionGraph !== null && selectedGraphNode !== null) {
+      const incoming = selectedCompositionGraph.edges.filter((edge) => edge.toNode === selectedGraphNode.id).length;
+      const outgoing = selectedCompositionGraph.edges.filter((edge) => edge.fromNode === selectedGraphNode.id).length;
       const deleteNode = () =>
         runGuiEditCommand(() =>
           commands.applySequenceGuiEdit({
             type: "deleteGraphNode",
-            clipId: selectedGraphClip.id,
             nodeId: selectedGraphNode.id
           })
         ).then(() => {
-          setSelected({ type: "effect", id: selectedGraphClip.id });
+          setSelected(null);
         });
-      if (selectedGraphNode.kind.type === "source") {
-        const source = selectedGraphNode.kind;
-        const currentScriptValue = graphSourceScriptValue(source.scriptSource, document.effectScripts);
+      if (selectedGraphNode.kind.type === "layer") {
+        const layer = selectedGraphNode.kind;
         return (
           <InspectorScrollArea>
-            <h2>Graph Source</h2>
+            <h2>Layer</h2>
             <div className="inspector-readout-grid">
-              <Readout label="Clip" value={String(selectedGraphClip.id)} />
-              <Readout label="Node" value={String(selectedGraphNode.id)} />
-              <Readout label="Target" value={source.targetLabel} />
-              <Readout label="Scope" value={scopeLabel(source.scope)} />
-              <Readout label="Start" value={formatSeconds(source.startSeconds)} />
-              <Readout label="Duration" value={formatSeconds(source.durationSeconds)} />
+              <Readout label="Node" value={selectedGraphNode.id} />
+              <Readout label="Layer" value={layer.layerName} swatch={layer.layerColor} />
+              <Readout label="Enabled" value={layer.enabled ? "Yes" : "No"} />
               <Readout label="Outputs" value={String(outgoing)} />
             </div>
-            <label>
-              Source
-              <select
-                value={currentScriptValue}
-                disabled={document.effectScripts.filter((script) => script.kind === "sample").length === 0}
-                onChange={(event) => {
-                  const script = document.effectScripts.filter((candidate) => candidate.kind === "sample")[Number(event.currentTarget.value)]?.script;
-                  if (script === undefined) return;
-                  void runGuiEditCommand(() =>
-                    commands.applySequenceGuiEdit({
-                      type: "changeGraphSourceScript",
-                      clipId: selectedGraphClip.id,
-                      nodeId: selectedGraphNode.id,
-                      script
-                    })
-                  );
-                }}
-              >
-                {currentScriptValue === "" && <option value="">{source.script}</option>}
-                {document.effectScripts.filter((script) => script.kind === "sample").map((script, index) => (
-                  <option key={`${script.script.path}:${script.script.effectName}`} value={String(index)}>
-                    {script.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {source.params.length > 0 && (
-              <GraphParamSection
-                params={source.params}
-                document={document}
-                commitParam={(name, value) =>
-                  runGuiEditCommand(() =>
-                    commands.applySequenceGuiEdit({
-                      type: "updateGraphSourceParam",
-                      clipId: selectedGraphClip.id,
-                      nodeId: selectedGraphNode.id,
-                      name,
-                      value
-                    })
-                  ).then(() => undefined)
-                }
-              />
-            )}
-            <button type="button" onClick={() => void deleteNode()}>
-              Delete node
-            </button>
           </InspectorScrollArea>
         );
       }
@@ -223,8 +212,7 @@ const id = selectedEffectId(selected);
           <InspectorScrollArea>
             <h2>Graph Operator</h2>
             <div className="inspector-readout-grid">
-              <Readout label="Clip" value={String(selectedGraphClip.id)} />
-              <Readout label="Node" value={String(selectedGraphNode.id)} />
+              <Readout label="Node" value={selectedGraphNode.id} />
               <Readout label="Operator" value={operatorLabel(operator.operator)} />
               <Readout label="Inputs" value={String(incoming)} />
               <Readout label="Outputs" value={String(outgoing)} />
@@ -237,7 +225,6 @@ const id = selectedEffectId(selected);
                   runGuiEditCommand(() =>
                     commands.applySequenceGuiEdit({
                       type: "updateGraphOperatorParam",
-                      clipId: selectedGraphClip.id,
                       nodeId: selectedGraphNode.id,
                       name,
                       value
@@ -256,91 +243,14 @@ const id = selectedEffectId(selected);
         <InspectorScrollArea>
           <h2>Graph Output</h2>
           <div className="inspector-readout-grid">
-            <Readout label="Clip" value={String(selectedGraphClip.id)} />
-            <Readout label="Node" value={String(selectedGraphNode.id)} />
+            <Readout label="Node" value={selectedGraphNode.id} />
             <Readout label="Inputs" value={String(incoming)} />
             <Readout label="Outputs" value={String(outgoing)} />
           </div>
-          <p>This node returns the graph clip output.</p>
         </InspectorScrollArea>
       );
     }
     if (effect !== undefined) {
-      const graphClip = effect.kind === "graph" ? document.graphClips.find((clip) => clip.id === effect.id) ?? null : null;
-      if (graphClip !== null) {
-        const resizeEffect = (startSeconds: number, durationSeconds: number) =>
-          runGuiEditCommand(() =>
-            commands.applySequenceGuiEdit({
-              type: "resizeEffect",
-              id: effect.id,
-              startSeconds: Math.max(0, roundToNanosecond(startSeconds)),
-              durationSeconds: Math.max(0.000000001, roundToNanosecond(durationSeconds))
-            })
-          );
-        return (
-            <InspectorScrollArea>
-              <h2>Graph</h2>
-              <div className="effect-inspector-fields">
-                <div className="inspector-readout-grid">
-                  <Readout label="ID" value={String(effect.id)} />
-                  <Readout label="Nodes" value={String(graphClip.nodes.length)} />
-                  <Readout label="Edges" value={String(graphClip.edges.length)} />
-                </div>
-                <div className="inspector-inline-row">
-                  <label>
-                    Start
-                    <input
-                      key={`${effect.id}:graph-start:${effect.startSeconds}`}
-                      type="number"
-                      min={0}
-                      step="any"
-                      defaultValue={effect.startSeconds}
-                      onBlur={(event) => {
-                        const nextStartSeconds = Number(event.currentTarget.value);
-                        if (!Number.isFinite(nextStartSeconds) || roundToNanosecond(nextStartSeconds) === effect.startSeconds) return;
-                        void resizeEffect(nextStartSeconds, effect.durationSeconds);
-                      }}
-                    />
-                  </label>
-                  <label>
-                    Duration
-                    <input
-                      key={`${effect.id}:graph-duration:${effect.durationSeconds}`}
-                      type="number"
-                      min={0.000000001}
-                      step="any"
-                      defaultValue={effect.durationSeconds}
-                      onBlur={(event) => {
-                        const nextDurationSeconds = Number(event.currentTarget.value);
-                        if (!Number.isFinite(nextDurationSeconds) || roundToNanosecond(nextDurationSeconds) === effect.durationSeconds) return;
-                        void resizeEffect(effect.startSeconds, nextDurationSeconds);
-                      }}
-                    />
-                  </label>
-                </div>
-                <button
-                  type="button"
-                  className="neutral-button"
-                  onClick={() => {
-                    setOpenGraphClipId(openGraphClipId === graphClip.id ? null : graphClip.id);
-                  }}
-                >
-                  {openGraphClipId === graphClip.id ? "Close graph" : "Open graph"}
-                </button>
-                <button
-                  type="button"
-                  className="neutral-button"
-                  onClick={() => {
-                    setOpenGraphClipId(null);
-                    setSelected(null);
-                  }}
-                >
-                  Show timeline
-                </button>
-              </div>
-            </InspectorScrollArea>
-        );
-      }
       const currentScriptValue = selectedEffectScriptValue(effect, document.effectScripts);
       const resizeEffect = (startSeconds: number, durationSeconds: number) =>
         runGuiEditCommand(() =>
@@ -358,6 +268,27 @@ const id = selectedEffectId(selected);
             <div className="inspector-readout-grid">
               <Readout label="ID" value={String(effect.id)} />
             </div>
+            <label>
+              Layer
+              <select
+                value={String(effect.layerId)}
+                onChange={(event) =>
+                  void runGuiEditCommand(() =>
+                    commands.applySequenceGuiEdit({
+                      type: "setEffectLayer",
+                      id: effect.id,
+                      layerId: Number(event.currentTarget.value)
+                    })
+                  )
+                }
+              >
+                {document.layers.map((layer) => (
+                  <option key={layer.id} value={String(layer.id)}>
+                    {layer.name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="inspector-inline-row">
               <label>
                 Start
@@ -504,30 +435,88 @@ const id = selectedEffectId(selected);
     return (
       <InspectorScrollArea>
         <h2>Sequence</h2>
-        {document.lanes[0] !== undefined && (
-          <div className="mark-section">
-            <h3>Graphs</h3>
-            <button
-              type="button"
-              className="neutral-button"
-              onClick={() => {
-                const firstLane = document.lanes[0];
-                if (firstLane === undefined) return;
-                void runGuiEditCommand(() =>
-                  commands.applySequenceGuiEdit({
-                    type: "addGraphClip",
-                    target: firstLane.target,
-                    scope: "wholeTarget",
-                    startSeconds: 0,
-                    durationSeconds: Math.min(5, Math.max(0.000000001, document.durationSeconds))
-                  })
-                );
-              }}
-            >
-              Add graph
-            </button>
+        <div className="mark-section">
+          <h3>Layers</h3>
+          <button
+            type="button"
+            className="neutral-button"
+            onClick={() =>
+              void runGuiEditCommand(() =>
+                commands.applySequenceGuiEdit({
+                  type: "createLayer",
+                  name: `Layer ${document.layers.length + 1}`,
+                  color: defaultLayerColor(document.layers.length)
+                })
+              )
+            }
+          >
+            Add layer
+          </button>
+          <div className="mark-visibility-list">
+            {document.layers.map((layer) => (
+              <div key={layer.id} className="mark-collection-row">
+                <input
+                  type="checkbox"
+                  checked={layer.enabled}
+                  onChange={(event) =>
+                    void runGuiEditCommand(() =>
+                      commands.applySequenceGuiEdit({
+                        type: "setLayerEnabled",
+                        id: layer.id,
+                        enabled: event.currentTarget.checked
+                      })
+                    )
+                  }
+                />
+                <input
+                  type="color"
+                  value={layer.color}
+                  onChange={(event) =>
+                    void runGuiEditCommand(() =>
+                      commands.applySequenceGuiEdit({
+                        type: "setLayerColor",
+                        id: layer.id,
+                        color: event.currentTarget.value
+                      })
+                    )
+                  }
+                />
+                <input
+                  key={`${layer.id}:name:${layer.name}`}
+                  defaultValue={layer.name}
+                  onBlur={(event) => {
+                    const name = event.currentTarget.value.trim() || layer.name;
+                    if (name === layer.name) return;
+                    void runGuiEditCommand(() =>
+                      commands.applySequenceGuiEdit({
+                        type: "renameLayer",
+                        id: layer.id,
+                        name
+                      })
+                    );
+                  }}
+                />
+                {!layer.isDefault && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const effectCount = document.effects.filter((effect) => effect.layerId === layer.id).length;
+                      if (effectCount > 0 && !window.confirm(`Delete ${layer.name} and move ${effectCount} effects to Default?`)) return;
+                      void runGuiEditCommand(() =>
+                        commands.applySequenceGuiEdit({
+                          type: "deleteLayer",
+                          id: layer.id
+                        })
+                      );
+                    }}
+                  >
+                    Delete
+                  </button>
+                )}
+              </div>
+            ))}
           </div>
-        )}
+        </div>
         <div className="mark-section">
           <h3>Marks</h3>
           <button type="button" className="neutral-button" onClick={createCollection}>Add collection</button>
@@ -640,16 +629,6 @@ function GraphParamSection({
   );
 }
 
-function graphSourceScriptValue(
-  currentScript: SequenceEffectScript["script"] | null,
-  scripts: SequenceEffectScript[]
-) {
-  if (currentScript === null) return "";
-  const sampleScripts = scripts.filter((script) => script.kind === "sample");
-  const index = sampleScripts.findIndex((script) => scriptsEqual(script.script, currentScript));
-  return index < 0 ? "" : String(index);
-}
-
 function graphOperatorParamToEffectParam(param: SequenceGraphOperatorParam): SequenceEffectParam {
   return {
     name: param.name,
@@ -660,10 +639,6 @@ function graphOperatorParamToEffectParam(param: SequenceGraphOperatorParam): Seq
     curveSource: null,
     automation: null
   };
-}
-
-function scopeLabel(scope: SequenceEffectScope) {
-  return scope === "perFixture" ? "Per fixture" : "Whole target";
 }
 
 function operatorLabel(operator: string) {

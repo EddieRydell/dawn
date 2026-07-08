@@ -1,6 +1,6 @@
 use crate::effect_dsl::CompiledEffect;
 use crate::effect_dsl::types::Identifier;
-use crate::sequence::MarkCollectionKey;
+use crate::sequence::{MarkCollectionKey, SequenceLayerId};
 use crate::setup::{FixtureGroupId, FixtureInstanceId};
 use crate::values::{Curve, DawnDuration, DawnTime};
 use indexmap::IndexMap;
@@ -8,6 +8,7 @@ use indexmap::IndexMap;
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectInst {
     pub id: EffectInstId,
+    pub layer_id: SequenceLayerId,
     pub start: DawnTime,
     pub duration: DawnDuration,
     pub target: EffectTarget,

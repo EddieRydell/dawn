@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Monitor, Music, Pause, Play, RadioTower, SkipBack, Square } from "lucide-react";
+import { ChevronLeft, ChevronRight, GitBranch, Monitor, Music, Pause, Play, RadioTower, SkipBack, Square } from "lucide-react";
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
@@ -9,7 +9,7 @@ import type { AppSnapshot, AudioTransportState, SequenceEditorDocument } from ".
 import { runGuiEditCommand, runSnapshotCommand } from "../../../store";
 
 import { clamp, formatSeconds, type AudioTransportViewSnapshot } from "../shared";
-import { setGlobalMarkDisplayMode, useMarkDisplayMode, type MarkDisplayMode } from "./marks";
+import { requestOpenLayerGraph } from "../../uiEvents";
 
 export function SequenceTransportControls({
   document,
@@ -24,13 +24,8 @@ export function SequenceTransportControls({
 }) {
   const unsupported = isSequenceTransportUnsupported(document, transport);
   const activePlayback = isActiveAudioPlayback(transport.state);
-  const [mode, setMode] = useMarkDisplayMode();
   const stepFrame = (direction: -1 | 1) => {
     stepSequenceFrame(document, transport.positionSeconds, transport.durationSeconds, direction);
-  };
-  const setMarkMode = (nextMode: MarkDisplayMode) => {
-    setGlobalMarkDisplayMode(nextMode);
-    setMode(nextMode);
   };
   return (
     <div
@@ -98,6 +93,9 @@ export function SequenceTransportControls({
       >
         <Monitor size={15} />
       </button>
+      <button type="button" title="Open layer graph" onClick={requestOpenLayerGraph}>
+        <GitBranch size={15} />
+      </button>
       <button
         type="button"
         title="Choose audio"
@@ -105,18 +103,6 @@ export function SequenceTransportControls({
       >
         <Music size={15} />
       </button>
-      <select
-        className="mark-display-select"
-        title="Mark display"
-        value={mode}
-        onChange={(event) => {
-          setMarkMode(event.currentTarget.value as MarkDisplayMode);
-        }}
-      >
-        <option value="overlay">Marks</option>
-        <option value="strip">Strip</option>
-        <option value="hidden">Hidden</option>
-      </select>
       <span className="sequence-time-readout">
         {formatSeconds(transport.positionSeconds)} / {formatSeconds(transport.durationSeconds || document.durationSeconds)} | Home {formatSeconds(transport.homeSeconds)}
         {liveOutput.enabled ? ` | Live ${liveOutput.status} (${liveOutput.activeUniverseCount})` : ""}

@@ -1,13 +1,14 @@
 import "@xyflow/react/dist/style.css";
 
 import {
-  applyNodeChanges,
   Background,
   Controls,
   Handle,
   MarkerType,
+  MiniMap,
   Position,
   ReactFlow,
+  applyNodeChanges,
   type ReactFlowInstance,
   type Connection,
   type Edge,
@@ -15,17 +16,23 @@ import {
   type NodeChange,
   type NodeProps
 } from "@xyflow/react";
-import { Plus, Trash2, X } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { commands } from "../../../api";
 import { runGuiEditCommand } from "../../../store";
 import type {
   SequenceEditorDocument,
-  SequenceGraphClip,
   SequenceGraphNode,
   SequenceGraphOperator
 } from "../../../types";
+import {
+  GRAPH_NEUTRAL_EDGE_COLOR,
+  graphEdgeId,
+  graphEdgeLineages,
+  parseGraphEdgeId,
+  type GraphEdgeIdParts
+} from "./graphEdge";
 
 const OPERATORS: SequenceGraphOperator[] = [
   "max",
@@ -36,13 +43,13 @@ const OPERATORS: SequenceGraphOperator[] = [
   "invert",
   "colorize",
   "delay",
-  "echo",
-  "remapNearest"
+  "echo"
 ];
 
 type GraphNodeData = {
   label: string;
-  kind: "source" | "operator" | "output";
+  kind: "layer" | "operator" | "output";
+  color: string | null;
   inputs: GraphPort[];
   outputs: GraphPort[];
 };
@@ -54,12 +61,29 @@ type GraphPort = {
   label: string;
 };
 
-type GraphContextMenu = {
-  screenX: number;
-  screenY: number;
-  flowX: number;
-  flowY: number;
-} | null;
+type SelectedGraphItem = { type: "node"; id: string } | { type: "edge"; id: string } | null;
+
+type GraphContextMenu =
+  | {
+      type: "pane";
+      screenX: number;
+      screenY: number;
+      flowX: number;
+      flowY: number;
+    }
+  | {
+      type: "edge";
+      screenX: number;
+      screenY: number;
+      edgeId: string;
+    }
+  | {
+      type: "node";
+      screenX: number;
+      screenY: number;
+      nodeId: string;
+    }
+  | null;
 
 const GRAPH_NODE_TYPES = {
   dawn: GraphFlowNodeView
@@ -67,35 +91,28 @@ const GRAPH_NODE_TYPES = {
 
 export function GraphEditorModal({
   document,
-  clip,
-  selectedNodeId,
-  setSelectedNodeId,
+  selectedItem,
+  setSelectedItem,
   onClose
 }: {
   document: SequenceEditorDocument;
-  clip: SequenceGraphClip;
-  selectedNodeId: number | null;
-  setSelectedNodeId: (nodeId: number | null) => void;
+  selectedItem: SelectedGraphItem;
+  setSelectedItem: (item: SelectedGraphItem) => void;
   onClose: () => void;
 }) {
   return (
     <div className="graph-modal-backdrop" role="presentation">
-      <div className="graph-modal" role="dialog" aria-modal="true" aria-label="Effect graph editor">
+      <div className="graph-modal" role="dialog" aria-modal="true" aria-label="Composition graph editor">
         <div className="graph-modal-header">
           <div>
-            <h2>Effect graph</h2>
-            <span>Clip {clip.id}</span>
+            <h2>Composition Graph</h2>
+            <span>Sequence layers</span>
           </div>
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close graph editor">
             <X size={16} />
           </button>
         </div>
-        <GraphEditorWorkspace
-          document={document}
-          clip={clip}
-          selectedNodeId={selectedNodeId}
-          setSelectedNodeId={setSelectedNodeId}
-        />
+        <GraphEditorWorkspace document={document} selectedItem={selectedItem} setSelectedItem={setSelectedItem} />
       </div>
     </div>
   );
@@ -103,59 +120,51 @@ export function GraphEditorModal({
 
 export function GraphEditorWorkspace({
   document,
-  clip,
-  selectedNodeId,
-  setSelectedNodeId
+  selectedItem,
+  setSelectedItem
 }: {
   document: SequenceEditorDocument;
-  clip: SequenceGraphClip;
-  selectedNodeId: number | null;
-  setSelectedNodeId: (nodeId: number | null) => void;
+  selectedItem: SelectedGraphItem;
+  setSelectedItem: (item: SelectedGraphItem) => void;
 }) {
-  const [sourceScriptValue, setSourceScriptValue] = useState("0");
-  const [operatorValue, setOperatorValue] = useState<SequenceGraphOperator>("max");
-  const sampleScripts = document.effectScripts.filter((script) => script.kind === "sample");
-
-  const flowNodes = useMemo(() => graphFlowNodes(clip.nodes), [clip.nodes]);
-  const flowNodesKey = useMemo(() => clip.nodes.map((node) => `${node.id}:${graphNodeLabel(node)}`).join("|"), [clip.nodes]);
-  const selectedNode = selectedNodeId === null ? null : clip.nodes.find((node) => node.id === selectedNodeId) ?? null;
+  const graph = document.compositionGraph;
+  const selectedNodeId = selectedItem?.type === "node" ? selectedItem.id : null;
+  const selectedEdgeId = selectedItem?.type === "edge" ? selectedItem.id : null;
+  const flowNodes = useMemo(() => graphFlowNodes(graph.nodes, selectedNodeId), [graph.nodes, selectedNodeId]);
+  const edgeLineages = useMemo(() => graphEdgeLineages(graph), [graph]);
 
   const edges = useMemo<Edge[]>(
     () =>
-      clip.edges.map((edge) => ({
-        id: `${edge.fromNode}:${edge.toNode}:${edge.fromPort}:${edge.toPort}`,
-        source: String(edge.fromNode),
-        target: String(edge.toNode),
-        sourceHandle: edge.fromPort,
-        targetHandle: edge.toPort,
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          color: "#8ecae6"
-        },
-        className: "graph-flow-edge"
-      })),
-    [clip.edges]
+      graph.edges.map((edge) => {
+        const id = graphEdgeId(edge);
+        const color = edgeLineages.get(id)?.color ?? GRAPH_NEUTRAL_EDGE_COLOR;
+        return {
+          id,
+          source: edge.fromNode,
+          target: edge.toNode,
+          sourceHandle: edge.fromPort,
+          targetHandle: edge.toPort,
+          type: "default",
+          selected: id === selectedEdgeId,
+          interactionWidth: 18,
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color
+          },
+          style: {
+            stroke: color,
+            strokeWidth: id === selectedEdgeId ? 3 : 2
+          },
+          className: id === selectedEdgeId ? "graph-flow-edge selected" : "graph-flow-edge"
+        };
+      }),
+    [edgeLineages, graph.edges, selectedEdgeId]
   );
 
-  const addSource = (x = nextNodeX(clip), y = 80) => {
-    const script = sampleScripts[Number(sourceScriptValue)]?.script;
-    if (script === undefined) return;
-    void runGuiEditCommand(() =>
-      commands.applySequenceGuiEdit({
-        type: "addGraphSourceNode",
-        clipId: clip.id,
-        script,
-        x,
-        y
-      })
-    );
-  };
-
-  const addOperator = (operator = operatorValue, x = nextNodeX(clip), y = 280) => {
+  const addOperator = (operator: SequenceGraphOperator, x = nextNodeX(graph), y = 280) => {
     void runGuiEditCommand(() =>
       commands.applySequenceGuiEdit({
         type: "addGraphOperatorNode",
-        clipId: clip.id,
         operator,
         x,
         y
@@ -163,156 +172,158 @@ export function GraphEditorWorkspace({
     );
   };
 
-  const deleteSelected = () => {
-    if (selectedNodeId === null) return;
-    void runGuiEditCommand(() =>
-      commands.applySequenceGuiEdit({
-        type: "deleteGraphNode",
-        clipId: clip.id,
-        nodeId: selectedNodeId
-      })
-    ).then(() => {
-      setSelectedNodeId(null);
-    });
-  };
-
   return (
     <div className="graph-workspace">
-        <div className="graph-modal-toolbar">
-          <label>
-            Source
-            <select
-              value={sourceScriptValue}
-              onChange={(event) => {
-                setSourceScriptValue(event.currentTarget.value);
-              }}
-            >
-              {sampleScripts.map((script, index) => (
-                <option key={`${script.script.path}:${script.script.effectName}`} value={String(index)}>
-                  {script.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            className="graph-toolbar-button"
-            onClick={() => {
-              addSource();
-            }}
-            disabled={sampleScripts.length === 0}
-          >
-            <Plus size={14} />
-            Source
-          </button>
-          <label>
-            Operator
-            <select
-              value={operatorValue}
-              onChange={(event) => {
-                setOperatorValue(event.currentTarget.value as SequenceGraphOperator);
-              }}
-            >
-              {OPERATORS.map((operator) => (
-                <option key={operator} value={operator}>
-                  {operatorLabel(operator)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            className="graph-toolbar-button"
-            onClick={() => {
-              addOperator();
-            }}
-          >
-            <Plus size={14} />
-            Operator
-          </button>
-          <button
-            type="button"
-            className="graph-toolbar-button danger"
-            onClick={deleteSelected}
-            disabled={selectedNodeId === null || selectedNode?.kind.type === "output"}
-          >
-            <Trash2 size={14} />
-            Delete
-          </button>
+      <div className="graph-modal-body">
+        <div className="graph-flow-pane">
+          <GraphFlowCanvas
+            nodes={flowNodes}
+            edges={edges}
+            selectedItem={selectedItem}
+            setSelectedItem={setSelectedItem}
+            addOperatorAt={addOperator}
+          />
         </div>
-        <div className="graph-modal-body">
-          <div className="graph-flow-pane">
-            <GraphFlowCanvas
-              key={flowNodesKey}
-              clipId={clip.id}
-              initialNodes={flowNodes}
-              edges={edges}
-              setSelectedNodeId={setSelectedNodeId}
-              addSourceAt={addSource}
-              addOperatorAt={addOperator}
-              sourceDisabled={sampleScripts.length === 0}
-            />
-          </div>
-        </div>
+      </div>
     </div>
   );
 }
 
 function GraphFlowCanvas({
-  clipId,
-  initialNodes,
+  nodes,
   edges,
-  setSelectedNodeId,
-  addSourceAt,
-  addOperatorAt,
-  sourceDisabled
+  selectedItem,
+  setSelectedItem,
+  addOperatorAt
 }: {
-  clipId: number;
-  initialNodes: GraphFlowNode[];
+  nodes: GraphFlowNode[];
   edges: Edge[];
-  setSelectedNodeId: (id: number | null) => void;
-  addSourceAt: (x: number, y: number) => void;
+  selectedItem: SelectedGraphItem;
+  setSelectedItem: (item: SelectedGraphItem) => void;
   addOperatorAt: (operator: SequenceGraphOperator, x: number, y: number) => void;
-  sourceDisabled: boolean;
 }) {
-  const [nodes, setNodes] = useState(initialNodes);
+  const [flowNodes, setFlowNodes] = useState<GraphFlowNode[]>(nodes);
   const [contextMenu, setContextMenu] = useState<GraphContextMenu>(null);
   const flow = useRef<ReactFlowInstance<GraphFlowNode> | null>(null);
-  const handleNodesChange = useCallback(
-    (changes: NodeChange<GraphFlowNode>[]) => {
-      setNodes((current) => applyNodeChanges(changes, current));
-      persistNodePositions(clipId, changes);
-    },
-    [clipId]
-  );
+  const pendingPositions = useRef<Map<string, { x: number; y: number }>>(new Map());
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setFlowNodes((current) => mergeGraphNodes(nodes, current, pendingPositions.current));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [nodes]);
+
+  const handleNodesChange = useCallback((changes: NodeChange<GraphFlowNode>[]) => {
+    setFlowNodes((current) => applyNodeChanges(changes, current));
+    persistNodePositions(changes, pendingPositions.current);
+  }, []);
 
   const closeContextMenu = () => {
     setContextMenu(null);
   };
 
+  const deleteEdgeById = useCallback(
+    (edgeId: string) => {
+      const edge = edges.find((candidate) => candidate.id === edgeId);
+      if (edge === undefined) return;
+      void deleteFlowEdge(edge).then(() => {
+        setSelectedItem(null);
+      });
+    },
+    [edges, setSelectedItem]
+  );
+
+  const deleteNodeById = useCallback(
+    (nodeId: string) => {
+      const node = flowNodes.find((candidate) => candidate.id === nodeId);
+      if (node?.data.kind !== "operator") return;
+      void runGuiEditCommand(() =>
+        commands.applySequenceGuiEdit({
+          type: "deleteGraphNode",
+          nodeId
+        })
+      ).then(() => {
+        setSelectedItem(null);
+      });
+    },
+    [flowNodes, setSelectedItem]
+  );
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Delete" && event.key !== "Backspace") return;
+      if (selectedItem?.type !== "edge") return;
+      event.preventDefault();
+      deleteEdgeById(selectedItem.id);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [deleteEdgeById, selectedItem]);
+
   return (
     <>
       <ReactFlow
-        nodes={nodes}
+        nodes={flowNodes}
         edges={edges}
         nodeTypes={GRAPH_NODE_TYPES}
         fitView
+        minZoom={0.2}
+        maxZoom={2}
+        deleteKeyCode={null}
+        defaultEdgeOptions={{
+          type: "default",
+          interactionWidth: 18,
+          className: "graph-flow-edge"
+        }}
         onInit={(instance) => {
           flow.current = instance;
         }}
         onNodesChange={handleNodesChange}
         onNodeClick={(_, node) => {
           closeContextMenu();
-          setSelectedNodeId(Number(node.id));
+          setSelectedItem({ type: "node", id: node.id });
+        }}
+        onNodeContextMenu={(event, node) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setSelectedItem({ type: "node", id: node.id });
+          setContextMenu({
+            type: "node",
+            screenX: event.clientX,
+            screenY: event.clientY,
+            nodeId: node.id
+          });
+        }}
+        onEdgeClick={(_, edge) => {
+          closeContextMenu();
+          setSelectedItem({ type: "edge", id: edge.id });
+        }}
+        onEdgeContextMenu={(event, edge) => {
+          event.preventDefault();
+          setSelectedItem({ type: "edge", id: edge.id });
+          setContextMenu({
+            type: "edge",
+            screenX: event.clientX,
+            screenY: event.clientY,
+            edgeId: edge.id
+          });
         }}
         onPaneClick={() => {
           closeContextMenu();
-          setSelectedNodeId(null);
+          setSelectedItem(null);
         }}
         onPaneContextMenu={(event) => {
           event.preventDefault();
           const position = flow.current?.screenToFlowPosition({ x: event.clientX, y: event.clientY }) ?? { x: 0, y: 0 };
           setContextMenu({
+            type: "pane",
             screenX: event.clientX,
             screenY: event.clientY,
             flowX: position.x,
@@ -321,45 +332,54 @@ function GraphFlowCanvas({
         }}
         onConnect={(connection) => {
           closeContextMenu();
-          connectNodes(clipId, connection);
+          connectNodes(connection);
         }}
         onEdgesDelete={(deleted) => {
           closeContextMenu();
-          disconnectEdges(clipId, deleted);
-        }}
-        defaultEdgeOptions={{
-          type: "smoothstep",
-          className: "graph-flow-edge"
+          disconnectEdges(deleted);
         }}
       >
         <Background color="#2c3036" gap={32} />
-        <Controls className="graph-flow-controls" />
+        <MiniMap className="graph-flow-minimap" nodeStrokeWidth={2} pannable zoomable />
+        <Controls className="graph-flow-controls" showInteractive={false} />
       </ReactFlow>
       {contextMenu !== null && (
         <div className="graph-context-menu" style={{ left: contextMenu.screenX, top: contextMenu.screenY }}>
-          <button
-            type="button"
-            disabled={sourceDisabled}
-            onClick={() => {
-              addSourceAt(contextMenu.flowX, contextMenu.flowY);
-              closeContextMenu();
-            }}
-          >
-            Source
-          </button>
-          <div className="graph-context-menu-divider" />
-          {OPERATORS.map((operator) => (
+          {contextMenu.type === "node" ? (
             <button
-              key={operator}
               type="button"
+              disabled={flowNodes.find((node) => node.id === contextMenu.nodeId)?.data.kind !== "operator"}
               onClick={() => {
-                addOperatorAt(operator, contextMenu.flowX, contextMenu.flowY);
+                deleteNodeById(contextMenu.nodeId);
                 closeContextMenu();
               }}
             >
-              {operatorLabel(operator)}
+              Delete operator
             </button>
-          ))}
+          ) : contextMenu.type === "edge" ? (
+            <button
+              type="button"
+              onClick={() => {
+                deleteEdgeById(contextMenu.edgeId);
+                closeContextMenu();
+              }}
+            >
+              Delete connection
+            </button>
+          ) : (
+            OPERATORS.map((operator) => (
+              <button
+                key={operator}
+                type="button"
+                onClick={() => {
+                  addOperatorAt(operator, contextMenu.flowX, contextMenu.flowY);
+                  closeContextMenu();
+                }}
+              >
+                {operatorLabel(operator)}
+              </button>
+            ))
+          )}
         </div>
       )}
     </>
@@ -368,8 +388,14 @@ function GraphFlowCanvas({
 
 function GraphFlowNodeView({ data, selected }: NodeProps<GraphFlowNode>) {
   return (
-    <div className={`graph-flow-node-card ${data.kind} ${selected ? "selected" : ""}`}>
-      <div className="graph-flow-node-title">{data.label}</div>
+    <div
+      className={`graph-flow-node-card ${data.kind} ${selected ? "selected" : ""}`}
+      style={data.color === null ? undefined : { borderLeftColor: data.color }}
+    >
+      <div className="graph-flow-node-title">
+        {data.color !== null && <span className="graph-flow-node-swatch" style={{ background: data.color }} />}
+        <span>{data.label}</span>
+      </div>
       <div className="graph-flow-node-body">
         {data.inputs.map((port, index) => (
           <Handle
@@ -406,16 +432,43 @@ function portStyle(index: number, count: number) {
   };
 }
 
-function persistNodePositions(clipId: number, changes: NodeChange<GraphFlowNode>[]) {
+function samePosition(left: { x: number; y: number }, right: { x: number; y: number }) {
+  return Math.abs(left.x - right.x) < 0.001 && Math.abs(left.y - right.y) < 0.001;
+}
+
+function mergeGraphNodes(
+  sourceNodes: GraphFlowNode[],
+  currentNodes: GraphFlowNode[],
+  pendingPositions: Map<string, { x: number; y: number }>
+) {
+  const currentById = new Map(currentNodes.map((node) => [node.id, node]));
+  return sourceNodes.map((sourceNode) => {
+    const currentNode = currentById.get(sourceNode.id);
+    const pending = pendingPositions.get(sourceNode.id);
+    if (pending !== undefined) {
+      if (samePosition(pending, sourceNode.position)) {
+        pendingPositions.delete(sourceNode.id);
+        return sourceNode;
+      }
+      return { ...sourceNode, position: pending };
+    }
+    if (currentNode?.dragging === true) {
+      return { ...sourceNode, position: currentNode.position, dragging: true };
+    }
+    return sourceNode;
+  });
+}
+
+function persistNodePositions(changes: NodeChange<GraphFlowNode>[], pendingPositions: Map<string, { x: number; y: number }>) {
   for (const change of changes) {
     const isDragging = Boolean((change as { dragging?: boolean }).dragging);
     if (change.type !== "position" || change.position === undefined || isDragging) continue;
     const position = change.position;
+    pendingPositions.set(change.id, position);
     void runGuiEditCommand(() =>
       commands.applySequenceGuiEdit({
         type: "moveGraphNode",
-        clipId,
-        nodeId: Number(change.id),
+        nodeId: change.id,
         x: position.x,
         y: position.y
       })
@@ -423,32 +476,33 @@ function persistNodePositions(clipId: number, changes: NodeChange<GraphFlowNode>
   }
 }
 
-function graphFlowNodes(nodes: SequenceGraphNode[]): GraphFlowNode[] {
+function graphFlowNodes(nodes: SequenceGraphNode[], selectedNodeId: string | null): GraphFlowNode[] {
   return nodes.map((node) => ({
-    id: String(node.id),
+    id: node.id,
     type: "dawn",
     position: { x: node.x, y: node.y },
+    selected: node.id === selectedNodeId,
     sourcePosition: Position.Right,
     targetPosition: Position.Left,
     data: {
       label: graphNodeLabel(node),
       kind: node.kind.type,
+      color: graphNodeColor(node),
       inputs: graphNodeInputs(node),
       outputs: graphNodeOutputs(node)
     }
   }));
 }
 
-function connectNodes(clipId: number, connection: Connection) {
-  const fromNode = Number(connection.source);
-  const toNode = Number(connection.target);
+function connectNodes(connection: Connection) {
+  const fromNode = connection.source;
+  const toNode = connection.target;
   const fromPort = connection.sourceHandle;
   const toPort = connection.targetHandle;
-  if (!Number.isFinite(fromNode) || !Number.isFinite(toNode) || fromPort === null || toPort === null) return;
+  if (fromPort === null || toPort === null) return;
   void runGuiEditCommand(() =>
     commands.applySequenceGuiEdit({
       type: "connectGraphNodes",
-      clipId,
       fromNode,
       fromPort,
       toNode,
@@ -457,39 +511,38 @@ function connectNodes(clipId: number, connection: Connection) {
   );
 }
 
-function disconnectEdges(clipId: number, edges: Edge[]) {
+function disconnectEdges(edges: Edge[]) {
   for (const edge of edges) {
-    const fromNode = Number(edge.source);
-    const toNode = Number(edge.target);
-    const fromPort = edge.sourceHandle;
-    const toPort = edge.targetHandle;
-    if (
-      !Number.isFinite(fromNode) ||
-      !Number.isFinite(toNode) ||
-      fromPort === null ||
-      fromPort === undefined ||
-      toPort === null ||
-      toPort === undefined
-    ) {
-      continue;
-    }
-    void runGuiEditCommand(() =>
-      commands.applySequenceGuiEdit({
-        type: "disconnectGraphNodes",
-        clipId,
-        fromNode,
-        fromPort,
-        toNode,
-        toPort
-      })
-    );
+    void deleteFlowEdge(edge);
   }
 }
 
+function deleteFlowEdge(edge: Edge) {
+  const parsed = parseGraphEdgeId(edge.id);
+  if (parsed === null) return Promise.resolve();
+  return deleteGraphEdge(parsed);
+}
+
+function deleteGraphEdge(edge: GraphEdgeIdParts) {
+  return runGuiEditCommand(() =>
+    commands.applySequenceGuiEdit({
+      type: "disconnectGraphNodes",
+      fromNode: edge.fromNode,
+      fromPort: edge.fromPort,
+      toNode: edge.toNode,
+      toPort: edge.toPort
+    })
+  );
+}
+
 function graphNodeLabel(node: SequenceGraphNode) {
-  if (node.kind.type === "source") return node.kind.script;
+  if (node.kind.type === "layer") return node.kind.layerName;
   if (node.kind.type === "operator") return operatorLabel(node.kind.operator);
   return "Output";
+}
+
+function graphNodeColor(node: SequenceGraphNode) {
+  return node.kind.type === "layer" ? node.kind.layerColor : null;
 }
 
 function graphNodeInputs(node: SequenceGraphNode): GraphPort[] {
@@ -516,6 +569,6 @@ function operatorLabel(operator: SequenceGraphOperator) {
   return operator.replace(/[A-Z]/g, (match) => ` ${match}`).replace(/^./, (match) => match.toUpperCase());
 }
 
-function nextNodeX(clip: SequenceGraphClip) {
-  return (clip.nodes.reduce((max, node) => Math.max(max, node.x), 0) || 0) + 180;
+function nextNodeX(graph: { nodes: SequenceGraphNode[] }) {
+  return (graph.nodes.reduce((max, node) => Math.max(max, node.x), 0) || 0) + 180;
 }

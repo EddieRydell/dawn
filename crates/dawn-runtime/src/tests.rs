@@ -7,10 +7,11 @@ use dawn_language::effect::{
 use dawn_language::effect_dsl::{Identifier, compile_effects};
 use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
 use dawn_language::sequence::{
-    AutomationClip, AutomationClipId, EffectClip, EffectGraphClip, EffectGraphEdge,
-    EffectGraphNode, EffectGraphNodeId, EffectGraphNodeKind, GraphNodePosition, GraphOperator,
-    GraphOperatorNode, GraphPortId, GraphSourceNode, MarkCollectionKey, Sequence, SequenceAudio,
-    SequenceClip, SequenceClipId, SequenceClipKind, SequenceId,
+    AutomationClip, AutomationClipId, CompositionGraphNode, CompositionGraphNodeId,
+    CompositionGraphNodeKind, EffectClip, EffectGraphEdge, GraphNodePosition, GraphOperator,
+    GraphOperatorNode, GraphOperatorRef, GraphPortId, MarkCollectionKey, Sequence, SequenceAudio,
+    SequenceClip, SequenceClipId, SequenceClipKind, SequenceCompositionGraph, SequenceId,
+    SequenceLayer, SequenceLayerId,
 };
 use dawn_language::setup::{
     ControllerDefinitionStore, FixtureDefinition, FixtureDefinitionId, FixtureDefinitionStore,
@@ -218,30 +219,30 @@ fn graph_intensity_modulate_uses_max_rgb_channel() {
 }
 
 #[test]
-fn graph_rejects_target_mismatch_without_remap() {
-    assert!(matches!(
-        prepare(sequence_with_graph(GraphOperator::Add, 1, 2)),
-        Err(RenderError::BadGraph { .. })
-    ));
+fn composition_graph_mixes_mismatched_layer_targets() {
+    let renderer = renderer_for(sequence_with_graph(GraphOperator::Add, 1, 2));
+    let frame = renderer.render_frame(0).unwrap();
+
+    assert_eq!(frame.fixtures[0].pixels[0], color(200, 0, 0));
+    assert_eq!(frame.fixtures[1].pixels[0], color(0, 0, 210));
 }
 
 #[test]
-fn graph_remap_nearest_outputs_into_clip_target() {
-    let renderer = renderer_for(sequence_with_remap_graph());
+fn composition_graph_output_with_no_inputs_renders_black() {
+    let mut sequence = sequence_with_effects(vec![constant_effect(
+        1,
+        0.0,
+        10.0,
+        1,
+        EffectScope::WholeTarget,
+        "Red",
+        IndexMap::new(),
+    )]);
+    sequence.composition_graph.edges.clear();
+    let renderer = renderer_for(sequence);
     let frame = renderer.render_frame(0).unwrap();
 
-    assert_eq!(
-        frame.fixtures[0].pixels,
-        vec![color(200, 0, 0), color(200, 0, 0)]
-    );
-    assert_eq!(
-        frame.fixtures[1].pixels,
-        vec![color(200, 0, 0), color(200, 0, 0)]
-    );
-    assert_eq!(
-        frame.fixtures[2].pixels,
-        vec![color(200, 0, 0), color(200, 0, 0)]
-    );
+    assert_eq!(frame.fixtures[0].pixels[0], color(0, 0, 0));
 }
 
 #[test]
@@ -740,7 +741,9 @@ fn sequence_with_effects(effects: Vec<EffectInst>) -> Sequence {
         audio: SequenceAudio::None,
         mark_collections: Vec::new(),
         clips,
+        layers: default_layers(),
         effects,
+        composition_graph: default_composition_graph(),
         automation_clips: Vec::new(),
     }
 }
@@ -750,114 +753,124 @@ fn sequence_with_graph(
     left_group_id: u32,
     right_group_id: u32,
 ) -> Sequence {
-    sequence_with_clips(vec![graph_clip(
-        10,
-        EffectTarget::Group(FixtureGroupId(left_group_id)),
-        vec![
-            source_node(1, left_group_id, "Red"),
-            source_node(2, right_group_id, "Blue"),
-            operator_node(3, operator, IndexMap::new()),
-            output_node(4),
-        ],
-        vec![
-            edge(1, "output", 3, "a"),
-            edge(2, "output", 3, "b"),
-            edge(3, "output", 4, "input"),
-        ],
-    )])
-}
-
-fn sequence_with_remap_graph() -> Sequence {
-    sequence_with_clips(vec![graph_clip(
-        10,
-        EffectTarget::Group(FixtureGroupId(3)),
-        vec![
-            source_node(1, 1, "Red"),
-            operator_node(2, GraphOperator::RemapNearest, IndexMap::new()),
-            output_node(3),
-        ],
-        vec![edge(1, "output", 2, "input"), edge(2, "output", 3, "input")],
-    )])
-}
-
-fn sequence_with_clips(clips: Vec<SequenceClip>) -> Sequence {
-    Sequence {
-        id: seq_id(),
-        duration: duration(10.0),
-        frame_rate: 3,
-        audio: SequenceAudio::None,
-        mark_collections: Vec::new(),
-        clips,
-        effects: Vec::new(),
-        automation_clips: Vec::new(),
-    }
-}
-
-fn graph_clip(
-    id: u32,
-    target: EffectTarget,
-    nodes: Vec<EffectGraphNode>,
-    edges: Vec<EffectGraphEdge>,
-) -> SequenceClip {
-    SequenceClip {
-        id: SequenceClipId(id),
-        start: time(0.0),
-        duration: duration(10.0),
-        target,
-        scope: EffectScope::WholeTarget,
-        kind: SequenceClipKind::Graph(EffectGraphClip { nodes, edges }),
-    }
-}
-
-fn source_node(id: u32, group_id: u32, definition: &str) -> EffectGraphNode {
-    EffectGraphNode {
-        id: EffectGraphNodeId(id),
-        position: GraphNodePosition {
-            x: f64::from(id) * 160.0,
-            y: 0.0,
+    let mut left = constant_effect(
+        1,
+        0.0,
+        10.0,
+        left_group_id,
+        EffectScope::WholeTarget,
+        "Red",
+        IndexMap::new(),
+    );
+    left.layer_id = SequenceLayerId(0);
+    let mut right = constant_effect(
+        2,
+        0.0,
+        10.0,
+        right_group_id,
+        EffectScope::WholeTarget,
+        "Blue",
+        IndexMap::new(),
+    );
+    right.layer_id = SequenceLayerId(1);
+    let mut sequence = sequence_with_effects(vec![left, right]);
+    sequence.layers.push(SequenceLayer {
+        id: SequenceLayerId(1),
+        name: "Layer 2".to_string(),
+        color: Color {
+            red: 246,
+            green: 184,
+            blue: 75,
         },
-        kind: EffectGraphNodeKind::Source(GraphSourceNode {
-            start: time(0.0),
-            duration: duration(10.0),
-            target: EffectTarget::Group(FixtureGroupId(group_id)),
-            scope: EffectScope::WholeTarget,
-            definition: EffectDefinitionId(definition.to_string()),
-            param_overrides: IndexMap::new(),
-        }),
-    }
+        enabled: true,
+    });
+    sequence.composition_graph = SequenceCompositionGraph {
+        nodes: vec![
+            layer_node(1, 0, 0.0, 0.0),
+            layer_node(2, 1, 0.0, 120.0),
+            CompositionGraphNode {
+                id: CompositionGraphNodeId(3),
+                position: GraphNodePosition { x: 160.0, y: 60.0 },
+                kind: CompositionGraphNodeKind::Operator(GraphOperatorNode {
+                    operator: GraphOperatorRef::Builtin(operator),
+                    params: IndexMap::new(),
+                }),
+            },
+            CompositionGraphNode {
+                id: CompositionGraphNodeId(4),
+                position: GraphNodePosition { x: 320.0, y: 60.0 },
+                kind: CompositionGraphNodeKind::Output,
+            },
+        ],
+        edges: vec![
+            node_edge(1, "output", 3, "a"),
+            node_edge(2, "output", 3, "b"),
+            node_edge(3, "output", 4, "input"),
+        ],
+    };
+    sequence.clips = clips_from_effects_for_test(&sequence.effects);
+    sequence
 }
 
-fn operator_node(
-    id: u32,
-    operator: GraphOperator,
-    params: IndexMap<Identifier, EffectParamValue>,
-) -> EffectGraphNode {
-    EffectGraphNode {
-        id: EffectGraphNodeId(id),
-        position: GraphNodePosition {
-            x: f64::from(id) * 160.0,
-            y: 160.0,
+fn default_layers() -> Vec<SequenceLayer> {
+    vec![SequenceLayer {
+        id: SequenceLayerId(0),
+        name: "Default".to_string(),
+        color: Color {
+            red: 80,
+            green: 160,
+            blue: 255,
         },
-        kind: EffectGraphNodeKind::Operator(GraphOperatorNode { operator, params }),
+        enabled: true,
+    }]
+}
+
+fn default_composition_graph() -> SequenceCompositionGraph {
+    SequenceCompositionGraph {
+        nodes: vec![
+            layer_node(1, 0, 0.0, 0.0),
+            CompositionGraphNode {
+                id: CompositionGraphNodeId(2),
+                position: GraphNodePosition { x: 200.0, y: 0.0 },
+                kind: CompositionGraphNodeKind::Output,
+            },
+        ],
+        edges: vec![node_edge(1, "output", 2, "input")],
     }
 }
 
-fn output_node(id: u32) -> EffectGraphNode {
-    EffectGraphNode {
-        id: EffectGraphNodeId(id),
-        position: GraphNodePosition {
-            x: f64::from(id) * 160.0,
-            y: 160.0,
+fn clips_from_effects_for_test(effects: &[EffectInst]) -> Vec<SequenceClip> {
+    effects
+        .iter()
+        .map(|effect| SequenceClip {
+            id: SequenceClipId(effect.id.0),
+            start: effect.start.clone(),
+            duration: effect.duration.clone(),
+            target: effect.target.clone(),
+            scope: effect.scope.clone(),
+            kind: SequenceClipKind::Effect(EffectClip {
+                definition: effect.definition.clone(),
+                param_overrides: effect.param_overrides.clone(),
+            }),
+        })
+        .collect()
+}
+
+fn layer_node(id: u32, layer_id: u32, x: f64, y: f64) -> CompositionGraphNode {
+    CompositionGraphNode {
+        id: CompositionGraphNodeId(id),
+        position: GraphNodePosition { x, y },
+        kind: CompositionGraphNodeKind::Layer {
+            layer_id: SequenceLayerId(layer_id),
         },
-        kind: EffectGraphNodeKind::Output,
     }
 }
 
-fn edge(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectGraphEdge {
+fn node_edge(from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> EffectGraphEdge {
     EffectGraphEdge {
-        from_node: EffectGraphNodeId(from_node),
+        from: CompositionGraphNodeId(from_node),
         from_port: GraphPortId(from_port.to_string()),
-        to_node: EffectGraphNodeId(to_node),
+        to: CompositionGraphNodeId(to_node),
         to_port: GraphPortId(to_port.to_string()),
     }
 }
@@ -873,6 +886,7 @@ fn constant_effect(
 ) -> EffectInst {
     EffectInst {
         id: EffectInstId(id),
+        layer_id: SequenceLayerId(0),
         start: time(start),
         duration: duration(effect_duration),
         target: EffectTarget::Group(FixtureGroupId(group_id)),

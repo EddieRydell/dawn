@@ -177,8 +177,8 @@ empty:
     name: intro_build_a fills
     color: '#f97316'
     marks:
+    - 13.327181006s
     - 15.836615833s
-    - 16.235708803s
     - 16.633350527s
     - 17.837885674s
     - 20.637341456s
@@ -1627,15 +1627,32 @@ empty:
     - 188.051763225s
     - 188.84269293s
     - 189.652488849s
-  clips:
+  layers:
+  - id: 0
+    name: Default
+    color: '#50a0ff'
+    enabled: true
+  - id: 172001
+    name: Layer 2
+    color: '#00ffe1'
+    enabled: true
+  - id: 172003
+    name: Layer 3
+    color: '#a078ff'
+    enabled: true
+  - id: 172004
+    name: Layer 4
+    color: '#f6b84b'
+    enabled: true
+  effects:
   - id: 1
+    layer_id: 0
     start: 39.809442678s
     duration: 1.85s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -1683,13 +1700,13 @@ empty:
         value: 1.0
     script: effects.MarkPulse
   - id: 2
+    layer_id: 0
     start: 42.80648335s
     duration: 1.233960319s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -1726,13 +1743,13 @@ empty:
         value: 21.0
     script: effects.MarkPulse
   - id: 3
+    layer_id: 0
     start: 39.261304317s
     duration: 0.65s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -1779,13 +1796,13 @@ empty:
         value: false
     script: effects.Chase
   - id: 4
+    layer_id: 0
     start: 45.924220329s
     duration: 1.85s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -1822,13 +1839,13 @@ empty:
         value: 2.0
     script: effects.MarkPulse
   - id: 5
+    layer_id: 0
     start: 41.700034975s
     duration: 0.65s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -1889,13 +1906,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 6
+    layer_id: 0
     start: 41.946364641s
     duration: 0.529984768s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -1939,13 +1956,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 7
+    layer_id: 0
     start: 42.398476426s
     duration: 0.37404243s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -1962,13 +1979,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 8
+    layer_id: 0
     start: 39.402323362s
     duration: 0.65s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -2029,13 +2046,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 9
+    layer_id: 0
     start: 39.257519581s
     duration: 0.195316374s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -2057,13 +2074,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 10
+    layer_id: 0
     start: 39.93921968s
     duration: 0.228531262s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -2087,13 +2104,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 11
+    layer_id: 0
     start: 40.680227993s
     duration: 0.252901318s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -2110,13 +2127,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 12
+    layer_id: 0
     start: 41.603225945s
     duration: 0.256483659s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -2133,13 +2150,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 13
+    layer_id: 0
     start: 129.512749672s
     duration: 1.726904807s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -2176,13 +2193,13 @@ empty:
         value: 0.0
     script: effects.MarkPulse
   - id: 14
+    layer_id: 0
     start: 132.208042367s
     duration: 1.950581634s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -2226,13 +2243,13 @@ empty:
         value: 0.0
     script: effects.MarkPulse
   - id: 15
+    layer_id: 0
     start: 135.518927819s
     duration: 2.159232927s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -2282,13 +2299,13 @@ empty:
         value: 0.0
     script: effects.MarkPulse
   - id: 16
+    layer_id: 0
     start: 43.232149752s
     duration: 0.30719621s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -2305,13 +2322,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 17
+    layer_id: 0
     start: 43.899620133s
     duration: 0.307624612s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -2351,13 +2368,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 18
+    layer_id: 0
     start: 43.99819901s
     duration: 0.237721985s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -2379,13 +2396,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 19
+    layer_id: 0
     start: 44.05325324s
     duration: 0.638691752s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -2420,13 +2437,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 20
+    layer_id: 0
     start: 128.836789387s
     duration: 0.747570248s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -2476,13 +2493,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 21
+    layer_id: 0
     start: 44.552843918s
     duration: 0.64651178s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -2517,13 +2534,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 22
+    layer_id: 0
     start: 44.696725522s
     duration: 0.64651178s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -2567,13 +2584,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 23
+    layer_id: 0
     start: 44.947981252s
     duration: 0.64651178s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -2617,13 +2634,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 24
+    layer_id: 0
     start: 45.460395646s
     duration: 0.655351459s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -2640,13 +2657,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 25
+    layer_id: 0
     start: 45.231936559s
     duration: 0.842397373s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -2681,13 +2698,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 26
+    layer_id: 0
     start: 42.002119622s
     duration: 0.462299662s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -2737,13 +2754,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 28
+    layer_id: 0
     start: 131.003356878s
     duration: 0.374566783s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -2800,13 +2817,13 @@ empty:
         value: 0.0
     script: effects.MarkPulse
   - id: 29
+    layer_id: 0
     start: 131.167636271s
     duration: 0.402976665s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -2851,13 +2868,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 30
+    layer_id: 0
     start: 131.4203985s
     duration: 0.402976665s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -2902,13 +2919,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 31
+    layer_id: 0
     start: 131.700257375s
     duration: 0.402976665s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -2953,13 +2970,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 32
+    layer_id: 0
     start: 131.86299674s
     duration: 0.22358698s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -3009,13 +3026,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 33
+    layer_id: 0
     start: 131.993181635s
     duration: 0.519319981s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -3060,13 +3077,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 34
+    layer_id: 0
     start: 130.862931348s
     duration: 0.122470578s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -3115,13 +3132,13 @@ empty:
         value: 6.0
     script: effects.MarkPulse
   - id: 35
+    layer_id: 0
     start: 64.943428748s
     duration: 3.190447015s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -3433,13 +3450,13 @@ empty:
             value: 0.0
     script: effects.MarkChase
   - id: 36
+    layer_id: 0
     start: 42.523020286s
     duration: 0.318739316s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -3485,13 +3502,13 @@ empty:
         value: 40.0
     script: effects.MarkPulse
   - id: 37
+    layer_id: 0
     start: 52.010062587s
     duration: 0.814316055s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -3535,13 +3552,13 @@ empty:
         value: false
     script: effects.ImpactBurst
   - id: 38
+    layer_id: 0
     start: 128.832971742s
     duration: 0.749629726s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       base:
         type: color
@@ -3584,13 +3601,13 @@ empty:
         value: 0.0
     script: effects.ShimmerField
   - id: 39
+    layer_id: 0
     start: 129.567433419s
     duration: 0.16539483s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -3612,13 +3629,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 40
+    layer_id: 0
     start: 133.735190094s
     duration: 1.113478018s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -3732,13 +3749,13 @@ empty:
             value: 0.0
     script: effects.MarkChase
   - id: 41
+    layer_id: 0
     start: 64.805438567s
     duration: 0.528362778s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -3755,13 +3772,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 42
+    layer_id: 0
     start: 134.66361564s
     duration: 0.347789405s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -3778,13 +3795,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 43
+    layer_id: 0
     start: 134.803019432s
     duration: 0.668915995s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -3801,13 +3818,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 44
+    layer_id: 0
     start: 135.156399811s
     duration: 0.581788626s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -3852,13 +3869,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 45
+    layer_id: 0
     start: 64.831434319s
     duration: 0.476371274s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       base:
         type: color
@@ -3908,13 +3925,13 @@ empty:
         value: 5.0
     script: effects.ShimmerField
   - id: 46
+    layer_id: 0
     start: 65.379859086s
     duration: 2.274587244s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -3965,13 +3982,13 @@ empty:
         value: 4.0
     script: effects.MarkPulse
   - id: 47
+    layer_id: 0
     start: 68.47608011s
     duration: 0.413182895s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -4009,13 +4026,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 48
+    layer_id: 0
     start: 68.077056336s
     duration: 0.525681511s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -4037,13 +4054,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 49
+    layer_id: 0
     start: 68.255821671s
     duration: 0.595613083s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -4081,13 +4098,13 @@ empty:
         value: 1.0
     script: effects.ScanSweep
   - id: 50
+    layer_id: 0
     start: 68.668088585s
     duration: 0.806464017s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -4108,13 +4125,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 51
+    layer_id: 0
     start: 68.968244213s
     duration: 0.457320955s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -4176,13 +4193,13 @@ empty:
         value: 0.0
     script: effects.SparkleComet
   - id: 52
+    layer_id: 0
     start: 69.467207736s
     duration: 0.82086222s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -4239,13 +4256,13 @@ empty:
         value: 0.0
     script: effects.MarkPulse
   - id: 54
+    layer_id: 0
     start: 70.150575038s
     duration: 0.413182895s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -4304,13 +4321,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 55
+    layer_id: 0
     start: 70.339972663s
     duration: 0.747045154s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -4331,13 +4348,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 56
+    layer_id: 0
     start: 70.685344802s
     duration: 0.401673015s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -4356,13 +4373,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 57
+    layer_id: 0
     start: 70.679016549s
     duration: 0.415800464s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -4421,13 +4438,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 58
+    layer_id: 0
     start: 71.095301395s
     duration: 3.296864625s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -4651,13 +4668,13 @@ empty:
             value: 0.0
     script: effects.MarkChase
   - id: 59
+    layer_id: 0
     start: 71.899886606s
     duration: 2.274587244s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -4708,13 +4725,13 @@ empty:
         value: 7.0
     script: effects.MarkPulse
   - id: 60
+    layer_id: 0
     start: 71.10323582s
     duration: 0.401673015s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -4733,13 +4750,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 61
+    layer_id: 0
     start: 74.416021375s
     duration: 0.525681511s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -4761,13 +4778,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 62
+    layer_id: 0
     start: 74.425142885s
     duration: 0.595613083s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -4805,13 +4822,13 @@ empty:
         value: 1.0
     script: effects.ScanSweep
   - id: 64
+    layer_id: 0
     start: 74.914243829s
     duration: 0.413182895s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -4849,13 +4866,13 @@ empty:
             value: 0.0
     script: effects.Chase
   - id: 65
+    layer_id: 0
     start: 75.106252304s
     duration: 0.806464017s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -4876,13 +4893,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 66
+    layer_id: 0
     start: 75.406407932s
     duration: 0.457320955s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -4944,13 +4961,13 @@ empty:
         value: 0.0
     script: effects.SparkleComet
   - id: 67
+    layer_id: 0
     start: 130.000823689s
     duration: 1.3870179839999999s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -5001,13 +5018,13 @@ empty:
         value: 4.0
     script: effects.MarkPulse
   - id: 72
+    layer_id: 0
     start: 77.596542467s
     duration: 3.296864625s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -5231,13 +5248,13 @@ empty:
             value: 0.0
     script: effects.MarkChase
   - id: 73
+    layer_id: 0
     start: 77.541399539s
     duration: 0.646611489s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -5256,13 +5273,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 74
+    layer_id: 0
     start: 78.338050325s
     duration: 2.274587244s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -5313,13 +5330,13 @@ empty:
         value: 6.0
     script: effects.MarkPulse
   - id: 75
+    layer_id: 0
     start: 0s
     duration: 12.80752s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       base:
         type: color
@@ -5373,13 +5390,13 @@ empty:
         value: 20.0
     script: effects.ShimmerField
   - id: 77
+    layer_id: 0
     start: 13.695145433s
     duration: 12.96s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -5416,13 +5433,13 @@ empty:
         value: 21.0
     script: effects.MarkPulse
   - id: 78
+    layer_id: 0
     start: 13.57752s
     duration: 12.96s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -5560,13 +5577,13 @@ empty:
             value: 0.0
     script: effects.MarkChase
   - id: 79
+    layer_id: 0
     start: 13.685784945s
     duration: 0.28s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -5583,13 +5600,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 80
+    layer_id: 0
     start: 26.37752s
     duration: 6.5600000000000005s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -5626,13 +5643,13 @@ empty:
         value: 22.0
     script: effects.MarkPulse
   - id: 81
+    layer_id: 0
     start: 26.37752s
     duration: 6.5600000000000005s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -5760,13 +5777,13 @@ empty:
             value: 0.0
     script: effects.MarkChase
   - id: 82
+    layer_id: 0
     start: 26.40038548s
     duration: 0.28s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -5783,13 +5800,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 83
+    layer_id: 0
     start: 32.785784944s
     duration: 6.138240914s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -5826,13 +5843,13 @@ empty:
         value: 23.0
     script: effects.MarkPulse
   - id: 84
+    layer_id: 0
     start: 32.77752s
     duration: 6.138240914s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -5980,13 +5997,13 @@ empty:
             value: 0.0
     script: effects.MarkChase
   - id: 87
+    layer_id: 0
     start: 47.71s
     duration: 4.42752s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -6023,13 +6040,13 @@ empty:
         value: 24.0
     script: effects.MarkPulse
   - id: 88
+    layer_id: 0
     start: 47.71s
     duration: 4.42752s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -6167,13 +6184,13 @@ empty:
             value: 0.0
     script: effects.MarkChase
   - id: 89
+    layer_id: 0
     start: 51.97752s
     duration: 6.5600000000000005s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -6210,13 +6227,13 @@ empty:
         value: 25.0
     script: effects.MarkPulse
   - id: 90
+    layer_id: 0
     start: 51.97752s
     duration: 6.5600000000000005s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -6354,13 +6371,13 @@ empty:
             value: 0.0
     script: effects.MarkChase
   - id: 91
+    layer_id: 0
     start: 52.10752s
     duration: 3.1s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       base:
         type: color
@@ -6403,13 +6420,13 @@ empty:
         value: 25.0
     script: effects.ShimmerField
   - id: 92
+    layer_id: 0
     start: 53.30752s
     duration: 0.48s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -6466,13 +6483,13 @@ empty:
         value: 0.0
     script: effects.SparkleComet
   - id: 93
+    layer_id: 0
     start: 58.37752s
     duration: 6.49248s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -6509,13 +6526,13 @@ empty:
         value: 26.0
     script: effects.MarkPulse
   - id: 94
+    layer_id: 0
     start: 58.37752s
     duration: 6.49248s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -6653,13 +6670,13 @@ empty:
             value: 0.0
     script: effects.MarkChase
   - id: 95
+    layer_id: 0
     start: 58.50752s
     duration: 3.1s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       base:
         type: color
@@ -6702,13 +6719,13 @@ empty:
         value: 26.0
     script: effects.ShimmerField
   - id: 96
+    layer_id: 0
     start: 59.70752s
     duration: 0.48s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -6765,13 +6782,13 @@ empty:
         value: 0.0
     script: effects.SparkleComet
   - id: 97
+    layer_id: 0
     start: 80.77s
     duration: 9.76752s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -6808,13 +6825,13 @@ empty:
         value: 27.0
     script: effects.MarkPulse
   - id: 98
+    layer_id: 0
     start: 80.77s
     duration: 9.76752s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       beats:
         type: marks
@@ -6952,13 +6969,13 @@ empty:
             value: 0.0
     script: effects.MarkChase
   - id: 99
+    layer_id: 0
     start: 80.9s
     duration: 3.1s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       base:
         type: color
@@ -7001,13 +7018,13 @@ empty:
         value: 27.0
     script: effects.ShimmerField
   - id: 100
+    layer_id: 0
     start: 82.1s
     duration: 0.48s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -7064,13 +7081,13 @@ empty:
         value: 0.0
     script: effects.SparkleComet
   - id: 117
+    layer_id: 0
     start: 127.37s
     duration: 0.58s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -7108,13 +7125,13 @@ empty:
         value: 1.0
     script: effects.ScanSweep
   - id: 118
+    layer_id: 0
     start: 128.47s
     duration: 0.28s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -7135,13 +7152,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 154
+    layer_id: 0
     start: 52.03s
     duration: 0.32s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -7158,13 +7175,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 155
+    layer_id: 0
     start: 60.35s
     duration: 0.58s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -7202,13 +7219,13 @@ empty:
         value: 1.0
     script: effects.ScanSweep
   - id: 156
+    layer_id: 0
     start: 64.2s
     duration: 0.36s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -7229,13 +7246,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 157
+    layer_id: 0
     start: 90.43s
     duration: 0.3s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -7252,13 +7269,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 160
+    layer_id: 0
     start: 127.73s
     duration: 0.32s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: effect
     params:
       gradient:
         type: curve
@@ -7279,13 +7296,13 @@ empty:
             value: 0.0
     script: effects.Pulse
   - id: 161
+    layer_id: 0
     start: 128.38s
     duration: 0.3s
     target:
       type: group
       id: 1
     scope: per_fixture
-    type: effect
     params:
       gradient:
         type: curve
@@ -7328,62 +7345,81 @@ empty:
         type: bool
         value: false
     script: effects.ImpactBurst
-  - id: 162
+  - id: 163
+    layer_id: 172001
     start: 0s
     duration: 12.799020589s
     target:
       type: group
       id: 1
     scope: whole_target
-    type: graph
+    script: effects.Pulse
+  - id: 164
+    layer_id: 172003
+    start: 0s
+    duration: 12.799020589s
+    target:
+      type: group
+      id: 1
+    scope: whole_target
+    script: effects.Pulse
+  composition_graph:
     nodes:
     - id: 1
       position:
-        x: -92.63454784663408
-        y: -47.73033358037315
-      type: source
-      start: 0s
-      duration: 12.799020589s
-      target:
-        type: group
-        id: 1
-      scope: whole_target
-      script: effects.Pulse
+        x: 213.4907463829255
+        y: -150.85720264493136
+      type: layer
+      layer_id: 0
     - id: 2
       position:
-        x: 282.740492861493
-        y: 48.738823793556776
-      type: operator
-      operator: max
+        x: 841.0030683293573
+        y: -100.7377494807003
+      type: output
     - id: 3
       position:
-        x: -97.67391830567368
-        y: 114.37685942077536
-      type: source
-      start: 0s
-      duration: 12.799020589s
-      target:
-        type: group
-        id: 1
-      scope: whole_target
-      script: effects.Pulse
+        x: 519.6303225951108
+        y: 149.3781564878152
+      type: operator
+      operator: max
     - id: 4
       position:
-        x: 578.2740584024831
-        y: 3.8253362264831736
-      type: output
+        x: 161.24171732957427
+        y: 13.468925912684751
+      type: layer
+      layer_id: 172001
+    - id: 5
+      position:
+        x: 163.284069904865
+        y: 162.72933586953937
+      type: layer
+      layer_id: 172003
+    - id: 6
+      position:
+        x: 80.0
+        y: 13760440.0
+      type: layer
+      layer_id: 172004
     edges:
-    - from_node: 1
+    - from: 1
       from_port: output
-      to_node: 2
+      to: 2
+      to_port: input
+    - from: 4
+      from_port: output
+      to: 3
       to_port: a
-    - from_node: 3
+    - from: 5
       from_port: output
-      to_node: 2
+      to: 3
       to_port: b
-    - from_node: 2
+    - from: 3
       from_port: output
-      to_node: 4
+      to: 2
+      to_port: input
+    - from: 6
+      from_port: output
+      to: 2
       to_port: input
   automation_clips:
   - id: 1
@@ -7408,8 +7444,8 @@ empty:
         value: 0.8
     bindings:
     - target:
-        type: effect_clip_param
-        clip_id: 75
+        type: effect_param
+        effect_id: 75
         param: sparkle_level
       mapping:
         type: float
@@ -7437,8 +7473,8 @@ empty:
         value: 0.35
     bindings:
     - target:
-        type: effect_clip_param
-        clip_id: 75
+        type: effect_param
+        effect_id: 75
         param: density
       mapping:
         type: float

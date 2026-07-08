@@ -159,7 +159,10 @@ fn nested_invalid_duration_reports_nested_scalar_range() {
     let temp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
     let entrypoint = root.join("project.dawn");
-    write_imported_sequence_project(&root, "  duration: soon\n  frame_rate: 30\n  clips: []\n");
+    write_imported_sequence_project(
+        &root,
+        "  duration: soon\n  frame_rate: 30\n  layers: []\n  effects: []\n  composition_graph:\n    nodes: []\n    edges: []\n",
+    );
 
     let report = check_project(&entrypoint);
     let diagnostic = report

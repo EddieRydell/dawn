@@ -20,10 +20,11 @@ use dawn_language::effect_dsl::{Diagnostic as EffectDiagnostic, Identifier, comp
 use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
 use dawn_language::sequence::{
     AssetId, AutomationBinding, AutomationClip, AutomationClipId, AutomationMapping,
-    AutomationTarget, EffectClip, EffectGraphClip, EffectGraphEdge, EffectGraphNode,
-    EffectGraphNodeId, EffectGraphNodeKind, GraphNodePosition, GraphOperator, GraphOperatorNode,
-    GraphPortId, GraphSourceNode, MarkCollection, MarkCollectionKey, Sequence, SequenceAudio,
-    SequenceClip, SequenceClipId, SequenceClipKind, SequenceId,
+    AutomationTarget, CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind,
+    EffectClip, EffectGraphEdge, GraphNodePosition, GraphOperator, GraphOperatorNode,
+    GraphOperatorRef, GraphPortId, MarkCollection, MarkCollectionKey, Sequence, SequenceAudio,
+    SequenceClip, SequenceClipId, SequenceClipKind, SequenceCompositionGraph, SequenceId,
+    SequenceLayer, SequenceLayerId,
 };
 use dawn_language::setup::{
     ControllerAddress, ControllerDefinition, ControllerDefinitionId, ControllerId,
@@ -1488,14 +1489,28 @@ fn sequence_value(
         ),
     );
     value.insert(
-        string_value("clips"),
+        string_value("layers"),
         Value::Sequence(
             sequence
-                .clips
+                .layers
                 .iter()
-                .map(|clip| sequence_clip_value(session, from_document, clip))
+                .map(sequence_layer_value)
                 .collect::<Result<Vec<_>, _>>()?,
         ),
+    );
+    value.insert(
+        string_value("effects"),
+        Value::Sequence(
+            sequence
+                .effects
+                .iter()
+                .map(|effect| sequence_effect_value(session, from_document, effect))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    value.insert(
+        string_value("composition_graph"),
+        composition_graph_value(session, from_document, &sequence.composition_graph)?,
     );
     value.insert(
         string_value("automation_clips"),
@@ -1507,6 +1522,133 @@ fn sequence_value(
                 .collect::<Result<Vec<_>, _>>()?,
         ),
     );
+    Ok(Value::Mapping(value))
+}
+
+fn sequence_layer_value(layer: &SequenceLayer) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("id"), number_value(layer.id.0)?);
+    value.insert(string_value("name"), Value::String(layer.name.clone()));
+    value.insert(
+        string_value("color"),
+        Value::String(color_string(layer.color)),
+    );
+    value.insert(string_value("enabled"), Value::Bool(layer.enabled));
+    Ok(Value::Mapping(value))
+}
+
+fn sequence_effect_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    effect: &EffectInst,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("id"), number_value(effect.id.0)?);
+    value.insert(string_value("layer_id"), number_value(effect.layer_id.0)?);
+    value.insert(
+        string_value("start"),
+        Value::String(seconds_string(effect.start.as_seconds_f64())),
+    );
+    value.insert(
+        string_value("duration"),
+        Value::String(seconds_string(effect.duration.as_seconds_f64())),
+    );
+    value.insert(string_value("target"), effect_target_value(&effect.target)?);
+    value.insert(
+        string_value("scope"),
+        Value::String(
+            match effect.scope {
+                EffectScope::PerFixture => "per_fixture",
+                EffectScope::WholeTarget => "whole_target",
+            }
+            .to_string(),
+        ),
+    );
+    write_effect_clip_fields(
+        session,
+        from_document,
+        &mut value,
+        &EffectClip {
+            definition: effect.definition.clone(),
+            param_overrides: effect.param_overrides.clone(),
+        },
+    )?;
+    Ok(Value::Mapping(value))
+}
+
+fn composition_graph_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    graph: &SequenceCompositionGraph,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(
+        string_value("nodes"),
+        Value::Sequence(
+            graph
+                .nodes
+                .iter()
+                .map(|node| composition_graph_node_value(session, from_document, node))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    value.insert(
+        string_value("edges"),
+        Value::Sequence(
+            graph
+                .edges
+                .iter()
+                .map(graph_edge_value)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn composition_graph_node_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    node: &CompositionGraphNode,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("id"), number_value(node.id.0)?);
+    value.insert(
+        string_value("position"),
+        graph_position_value(&node.position)?,
+    );
+    match &node.kind {
+        CompositionGraphNodeKind::Layer { layer_id } => {
+            value.insert(string_value("type"), Value::String("layer".to_string()));
+            value.insert(string_value("layer_id"), number_value(layer_id.0)?);
+        }
+        CompositionGraphNodeKind::Operator(operator) => {
+            value.insert(string_value("type"), Value::String("operator".to_string()));
+            value.insert(
+                string_value("operator"),
+                Value::String(graph_operator_name(&operator.operator).to_string()),
+            );
+            if !operator.params.is_empty() {
+                value.insert(
+                    string_value("params"),
+                    Value::Mapping(
+                        operator
+                            .params
+                            .iter()
+                            .map(|(name, param)| {
+                                Ok((
+                                    string_value(name.as_str()),
+                                    effect_param_value(session, from_document, param)?,
+                                ))
+                            })
+                            .collect::<Result<Mapping, ExportProjectError>>()?,
+                    ),
+                );
+            }
+        }
+        CompositionGraphNodeKind::Output => {
+            value.insert(string_value("type"), Value::String("output".to_string()));
+        }
+    }
     Ok(Value::Mapping(value))
 }
 
@@ -1531,64 +1673,6 @@ fn mark_collection_value(collection: &MarkCollection) -> Result<Value, ExportPro
                 .collect(),
         ),
     );
-    Ok(Value::Mapping(value))
-}
-
-fn sequence_clip_value(
-    session: &ProjectSession,
-    from_document: &Utf8Path,
-    clip: &SequenceClip,
-) -> Result<Value, ExportProjectError> {
-    let mut value = Mapping::new();
-    value.insert(string_value("id"), number_value(clip.id.0)?);
-    value.insert(
-        string_value("start"),
-        Value::String(seconds_string(clip.start.as_seconds_f64())),
-    );
-    value.insert(
-        string_value("duration"),
-        Value::String(seconds_string(clip.duration.as_seconds_f64())),
-    );
-    value.insert(string_value("target"), effect_target_value(&clip.target)?);
-    value.insert(
-        string_value("scope"),
-        Value::String(
-            match clip.scope {
-                EffectScope::PerFixture => "per_fixture",
-                EffectScope::WholeTarget => "whole_target",
-            }
-            .to_string(),
-        ),
-    );
-    match &clip.kind {
-        SequenceClipKind::Effect(effect) => {
-            value.insert(string_value("type"), Value::String("effect".to_string()));
-            write_effect_clip_fields(session, from_document, &mut value, effect)?;
-        }
-        SequenceClipKind::Graph(graph) => {
-            value.insert(string_value("type"), Value::String("graph".to_string()));
-            value.insert(
-                string_value("nodes"),
-                Value::Sequence(
-                    graph
-                        .nodes
-                        .iter()
-                        .map(|node| graph_node_value(session, from_document, node))
-                        .collect::<Result<Vec<_>, _>>()?,
-                ),
-            );
-            value.insert(
-                string_value("edges"),
-                Value::Sequence(
-                    graph
-                        .edges
-                        .iter()
-                        .map(graph_edge_value)
-                        .collect::<Result<Vec<_>, _>>()?,
-                ),
-            );
-        }
-    }
     Ok(Value::Mapping(value))
 }
 
@@ -1627,80 +1711,6 @@ fn write_effect_clip_fields(
     Ok(())
 }
 
-fn graph_node_value(
-    session: &ProjectSession,
-    from_document: &Utf8Path,
-    node: &EffectGraphNode,
-) -> Result<Value, ExportProjectError> {
-    let mut value = Mapping::new();
-    value.insert(string_value("id"), number_value(node.id.0)?);
-    value.insert(
-        string_value("position"),
-        graph_position_value(&node.position)?,
-    );
-    match &node.kind {
-        EffectGraphNodeKind::Source(source) => {
-            value.insert(string_value("type"), Value::String("source".to_string()));
-            value.insert(
-                string_value("start"),
-                Value::String(seconds_string(source.start.as_seconds_f64())),
-            );
-            value.insert(
-                string_value("duration"),
-                Value::String(seconds_string(source.duration.as_seconds_f64())),
-            );
-            value.insert(string_value("target"), effect_target_value(&source.target)?);
-            value.insert(
-                string_value("scope"),
-                Value::String(
-                    match source.scope {
-                        EffectScope::PerFixture => "per_fixture",
-                        EffectScope::WholeTarget => "whole_target",
-                    }
-                    .to_string(),
-                ),
-            );
-            write_effect_clip_fields(
-                session,
-                from_document,
-                &mut value,
-                &EffectClip {
-                    definition: source.definition.clone(),
-                    param_overrides: source.param_overrides.clone(),
-                },
-            )?;
-        }
-        EffectGraphNodeKind::Operator(operator) => {
-            value.insert(string_value("type"), Value::String("operator".to_string()));
-            value.insert(
-                string_value("operator"),
-                Value::String(graph_operator_name(&operator.operator).to_string()),
-            );
-            if !operator.params.is_empty() {
-                value.insert(
-                    string_value("params"),
-                    Value::Mapping(
-                        operator
-                            .params
-                            .iter()
-                            .map(|(name, param)| {
-                                Ok((
-                                    string_value(name.as_str()),
-                                    effect_param_value(session, from_document, param)?,
-                                ))
-                            })
-                            .collect::<Result<Mapping, ExportProjectError>>()?,
-                    ),
-                );
-            }
-        }
-        EffectGraphNodeKind::Output => {
-            value.insert(string_value("type"), Value::String("output".to_string()));
-        }
-    }
-    Ok(Value::Mapping(value))
-}
-
 fn graph_position_value(position: &GraphNodePosition) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
     value.insert(string_value("x"), number_value(position.x)?);
@@ -1710,12 +1720,12 @@ fn graph_position_value(position: &GraphNodePosition) -> Result<Value, ExportPro
 
 fn graph_edge_value(edge: &EffectGraphEdge) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
-    value.insert(string_value("from_node"), number_value(edge.from_node.0)?);
+    value.insert(string_value("from"), number_value(edge.from.0)?);
     value.insert(
         string_value("from_port"),
         Value::String(edge.from_port.0.clone()),
     );
-    value.insert(string_value("to_node"), number_value(edge.to_node.0)?);
+    value.insert(string_value("to"), number_value(edge.to.0)?);
     value.insert(
         string_value("to_port"),
         Value::String(edge.to_port.0.clone()),
@@ -1723,7 +1733,8 @@ fn graph_edge_value(edge: &EffectGraphEdge) -> Result<Value, ExportProjectError>
     Ok(Value::Mapping(value))
 }
 
-fn graph_operator_name(operator: &GraphOperator) -> &'static str {
+fn graph_operator_name(operator: &GraphOperatorRef) -> &'static str {
+    let GraphOperatorRef::Builtin(operator) = operator;
     match operator {
         GraphOperator::Max => "max",
         GraphOperator::Add => "add",
@@ -1734,7 +1745,6 @@ fn graph_operator_name(operator: &GraphOperator) -> &'static str {
         GraphOperator::Colorize => "colorize",
         GraphOperator::Delay => "delay",
         GraphOperator::Echo => "echo",
-        GraphOperator::RemapNearest => "remap_nearest",
     }
 }
 
@@ -1814,27 +1824,22 @@ fn automation_binding_value(binding: &AutomationBinding) -> Result<Value, Export
 fn automation_target_value(target: &AutomationTarget) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
     match target {
-        AutomationTarget::EffectClipParam { clip_id, param } => {
+        AutomationTarget::EffectParam { effect_id, param } => {
             value.insert(
                 string_value("type"),
-                Value::String("effect_clip_param".to_string()),
+                Value::String("effect_param".to_string()),
             );
-            value.insert(string_value("clip_id"), number_value(clip_id.0)?);
+            value.insert(string_value("effect_id"), number_value(effect_id.0)?);
             value.insert(
                 string_value("param"),
                 Value::String(param.as_str().to_string()),
             );
         }
-        AutomationTarget::GraphNodeParam {
-            clip_id,
-            node_id,
-            param,
-        } => {
+        AutomationTarget::CompositionNodeParam { node_id, param } => {
             value.insert(
                 string_value("type"),
-                Value::String("graph_node_param".to_string()),
+                Value::String("composition_node_param".to_string()),
             );
-            value.insert(string_value("clip_id"), number_value(clip_id.0)?);
             value.insert(string_value("node_id"), number_value(node_id.0)?);
             value.insert(
                 string_value("param"),
@@ -3217,11 +3222,19 @@ impl DomainResolver<'_> {
             .iter()
             .map(|collection| parse_mark_collection(&document_path, collection))
             .collect::<Result<Vec<_>, _>>()?;
-        let clips = sequence_values(&document_path, &value, "clips")?
+        let layers = sequence_values(&document_path, &value, "layers")?
             .iter()
-            .map(|clip| self.parse_sequence_clip(&document_path, clip))
+            .map(|layer| parse_sequence_layer(&document_path, layer))
             .collect::<Result<Vec<_>, _>>()?;
-        let effects = effect_inst_mirror_from_clips(&clips);
+        let effects = sequence_values(&document_path, &value, "effects")?
+            .iter()
+            .map(|effect| self.parse_sequence_effect(&document_path, effect))
+            .collect::<Result<Vec<_>, _>>()?;
+        let clips = clips_from_effects(&effects);
+        let composition_graph = self.parse_composition_graph(
+            &document_path,
+            required_field(&document_path, &value, "composition_graph")?,
+        )?;
         let automation_clips = optional_sequence(&value, "automation_clips")
             .unwrap_or_default()
             .iter()
@@ -3243,7 +3256,9 @@ impl DomainResolver<'_> {
                 audio,
                 mark_collections,
                 clips,
+                layers,
                 effects,
+                composition_graph,
                 automation_clips,
             },
         );
@@ -3307,33 +3322,15 @@ impl DomainResolver<'_> {
         Ok(SequenceAudio::Asset(id))
     }
 
-    fn parse_sequence_clip(
+    fn parse_sequence_effect(
         &mut self,
         path: &Utf8Path,
         value: &Value,
-    ) -> Result<SequenceClip, LoadProjectError> {
-        let kind = match string_field(path, value, "type")? {
-            "effect" => SequenceClipKind::Effect(self.parse_effect_clip(path, value)?),
-            "graph" => SequenceClipKind::Graph(EffectGraphClip {
-                nodes: sequence_values(path, value, "nodes")?
-                    .iter()
-                    .map(|node| self.parse_graph_node(path, node))
-                    .collect::<Result<Vec<_>, _>>()?,
-                edges: sequence_values(path, value, "edges")?
-                    .iter()
-                    .map(|edge| parse_graph_edge(path, edge))
-                    .collect::<Result<Vec<_>, _>>()?,
-            }),
-            other => {
-                return Err(LoadProjectError::InvalidDocument {
-                    path: path.to_path_buf(),
-                    range: source_range_for_field_value(path, value, "type"),
-                    message: format!("unsupported sequence clip type `{other}`"),
-                });
-            }
-        };
-        Ok(SequenceClip {
-            id: SequenceClipId(u32_field(path, value, "id")?),
+    ) -> Result<EffectInst, LoadProjectError> {
+        let effect = self.parse_effect_clip(path, value)?;
+        Ok(EffectInst {
+            id: EffectInstId(u32_field(path, value, "id")?),
+            layer_id: SequenceLayerId(u32_field(path, value, "layer_id")?),
             start: parse_duration_as_time(string_field(path, value, "start")?).map_err(
                 |error| {
                     with_yaml_location(
@@ -3352,6 +3349,53 @@ impl DomainResolver<'_> {
             })?,
             target: parse_effect_target(path, required_field(path, value, "target")?)?,
             scope: parse_effect_scope(path, value)?,
+            definition: effect.definition,
+            param_overrides: effect.param_overrides,
+        })
+    }
+
+    fn parse_composition_graph(
+        &mut self,
+        path: &Utf8Path,
+        value: &Value,
+    ) -> Result<SequenceCompositionGraph, LoadProjectError> {
+        Ok(SequenceCompositionGraph {
+            nodes: sequence_values(path, value, "nodes")?
+                .iter()
+                .map(|node| self.parse_composition_graph_node(path, node))
+                .collect::<Result<Vec<_>, _>>()?,
+            edges: sequence_values(path, value, "edges")?
+                .iter()
+                .map(|edge| parse_graph_edge(path, edge))
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+
+    fn parse_composition_graph_node(
+        &mut self,
+        path: &Utf8Path,
+        value: &Value,
+    ) -> Result<CompositionGraphNode, LoadProjectError> {
+        let kind = match string_field(path, value, "type")? {
+            "layer" => CompositionGraphNodeKind::Layer {
+                layer_id: SequenceLayerId(u32_field(path, value, "layer_id")?),
+            },
+            "operator" => CompositionGraphNodeKind::Operator(GraphOperatorNode {
+                operator: GraphOperatorRef::Builtin(parse_graph_operator(path, value)?),
+                params: self.parse_graph_operator_params(path, value)?,
+            }),
+            "output" => CompositionGraphNodeKind::Output,
+            other => {
+                return Err(LoadProjectError::InvalidDocument {
+                    path: path.to_path_buf(),
+                    range: source_range_for_field_value(path, value, "type"),
+                    message: format!("unsupported composition graph node type `{other}`"),
+                });
+            }
+        };
+        Ok(CompositionGraphNode {
+            id: CompositionGraphNodeId(u32_field(path, value, "id")?),
+            position: parse_graph_position(path, required_field(path, value, "position")?)?,
             kind,
         })
     }
@@ -3401,59 +3445,6 @@ impl DomainResolver<'_> {
         Ok(EffectClip {
             definition,
             param_overrides: params,
-        })
-    }
-
-    fn parse_graph_node(
-        &mut self,
-        path: &Utf8Path,
-        value: &Value,
-    ) -> Result<EffectGraphNode, LoadProjectError> {
-        let kind = match string_field(path, value, "type")? {
-            "source" => {
-                let effect = self.parse_effect_clip(path, value)?;
-                EffectGraphNodeKind::Source(GraphSourceNode {
-                    start: parse_duration_as_time(string_field(path, value, "start")?).map_err(
-                        |error| {
-                            with_yaml_location(
-                                error,
-                                path,
-                                source_range_for_field_value(path, value, "start"),
-                            )
-                        },
-                    )?,
-                    duration: parse_duration(string_field(path, value, "duration")?).map_err(
-                        |error| {
-                            with_yaml_location(
-                                error,
-                                path,
-                                source_range_for_field_value(path, value, "duration"),
-                            )
-                        },
-                    )?,
-                    target: parse_effect_target(path, required_field(path, value, "target")?)?,
-                    scope: parse_effect_scope(path, value)?,
-                    definition: effect.definition,
-                    param_overrides: effect.param_overrides,
-                })
-            }
-            "operator" => EffectGraphNodeKind::Operator(GraphOperatorNode {
-                operator: parse_graph_operator(path, value)?,
-                params: self.parse_graph_operator_params(path, value)?,
-            }),
-            "output" => EffectGraphNodeKind::Output,
-            other => {
-                return Err(LoadProjectError::InvalidDocument {
-                    path: path.to_path_buf(),
-                    range: source_range_for_field_value(path, value, "type"),
-                    message: format!("unsupported graph node type `{other}`"),
-                });
-            }
-        };
-        Ok(EffectGraphNode {
-            id: EffectGraphNodeId(u32_field(path, value, "id")?),
-            position: parse_graph_position(path, required_field(path, value, "position")?)?,
-            kind,
         })
     }
 
@@ -3700,24 +3691,47 @@ fn parse_automation_curve(path: &Utf8Path, value: &Value) -> Result<Curve, LoadP
     Ok(curve)
 }
 
-fn effect_inst_mirror_from_clips(clips: &[SequenceClip]) -> Vec<EffectInst> {
-    clips
+fn clips_from_effects(effects: &[EffectInst]) -> Vec<SequenceClip> {
+    effects
         .iter()
-        .filter_map(|clip| {
-            let SequenceClipKind::Effect(effect) = &clip.kind else {
-                return None;
-            };
-            Some(EffectInst {
-                id: EffectInstId(clip.id.0),
-                start: clip.start.clone(),
-                duration: clip.duration.clone(),
-                target: clip.target.clone(),
-                scope: clip.scope.clone(),
+        .map(|effect| SequenceClip {
+            id: SequenceClipId(effect.id.0),
+            start: effect.start.clone(),
+            duration: effect.duration.clone(),
+            target: effect.target.clone(),
+            scope: effect.scope.clone(),
+            kind: SequenceClipKind::Effect(EffectClip {
                 definition: effect.definition.clone(),
                 param_overrides: effect.param_overrides.clone(),
-            })
+            }),
         })
         .collect()
+}
+
+fn parse_sequence_layer(path: &Utf8Path, value: &Value) -> Result<SequenceLayer, LoadProjectError> {
+    Ok(SequenceLayer {
+        id: SequenceLayerId(u32_field(path, value, "id")?),
+        name: string_field(path, value, "name")?.to_string(),
+        color: parse_color(string_field(path, value, "color")?).map_err(|error| {
+            with_yaml_location(
+                error,
+                path,
+                source_range_for_field_value(path, value, "color"),
+            )
+        })?,
+        enabled: optional_field(value, "enabled")
+            .map(|enabled| {
+                enabled
+                    .as_bool()
+                    .ok_or_else(|| LoadProjectError::InvalidDocument {
+                        path: path.to_path_buf(),
+                        range: source_range_for_field_value(path, value, "enabled"),
+                        message: "layer enabled must be a bool".to_string(),
+                    })
+            })
+            .transpose()?
+            .unwrap_or(true),
+    })
 }
 
 fn parse_automation_binding(
@@ -3736,11 +3750,9 @@ fn parse_automation_binding(
 
 fn automation_binding_mirror(target: &AutomationTarget) -> (EffectInstId, Identifier) {
     match target {
-        AutomationTarget::EffectClipParam { clip_id, param } => {
-            (EffectInstId(clip_id.0), param.clone())
-        }
-        AutomationTarget::GraphNodeParam { clip_id, param, .. } => {
-            (EffectInstId(clip_id.0), param.clone())
+        AutomationTarget::EffectParam { effect_id, param } => (effect_id.clone(), param.clone()),
+        AutomationTarget::CompositionNodeParam { node_id, param } => {
+            (EffectInstId(node_id.0), param.clone())
         }
     }
 }
@@ -3750,13 +3762,12 @@ fn parse_automation_target(
     value: &Value,
 ) -> Result<AutomationTarget, LoadProjectError> {
     Ok(match string_field(path, value, "type")? {
-        "effect_clip_param" => AutomationTarget::EffectClipParam {
-            clip_id: SequenceClipId(u32_field(path, value, "clip_id")?),
+        "effect_param" => AutomationTarget::EffectParam {
+            effect_id: EffectInstId(u32_field(path, value, "effect_id")?),
             param: parse_identifier_field(path, value, "param")?,
         },
-        "graph_node_param" => AutomationTarget::GraphNodeParam {
-            clip_id: SequenceClipId(u32_field(path, value, "clip_id")?),
-            node_id: EffectGraphNodeId(u32_field(path, value, "node_id")?),
+        "composition_node_param" => AutomationTarget::CompositionNodeParam {
+            node_id: CompositionGraphNodeId(u32_field(path, value, "node_id")?),
             param: parse_identifier_field(path, value, "param")?,
         },
         other => {
@@ -4009,9 +4020,9 @@ fn parse_graph_position(
 
 fn parse_graph_edge(path: &Utf8Path, value: &Value) -> Result<EffectGraphEdge, LoadProjectError> {
     Ok(EffectGraphEdge {
-        from_node: EffectGraphNodeId(u32_field(path, value, "from_node")?),
+        from: CompositionGraphNodeId(u32_field(path, value, "from")?),
         from_port: GraphPortId(string_field(path, value, "from_port")?.to_string()),
-        to_node: EffectGraphNodeId(u32_field(path, value, "to_node")?),
+        to: CompositionGraphNodeId(u32_field(path, value, "to")?),
         to_port: GraphPortId(string_field(path, value, "to_port")?.to_string()),
     })
 }
@@ -4027,7 +4038,6 @@ fn parse_graph_operator(path: &Utf8Path, value: &Value) -> Result<GraphOperator,
         "colorize" => Ok(GraphOperator::Colorize),
         "delay" => Ok(GraphOperator::Delay),
         "echo" => Ok(GraphOperator::Echo),
-        "remap_nearest" => Ok(GraphOperator::RemapNearest),
         other => Err(LoadProjectError::InvalidDocument {
             path: path.to_path_buf(),
             range: source_range_for_field_value(path, value, "operator"),

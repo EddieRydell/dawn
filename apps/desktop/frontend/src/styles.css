@@ -240,13 +240,21 @@ button:focus-visible,
 
 .editor-shell {
   display: grid;
-  grid-template-rows: 34px 32px 1fr;
+  grid-template-rows: 34px 1fr;
   min-width: 0;
   flex: 1;
   background: var(--dawn-bg);
 }
 
+.editor-shell.has-editor-toolbar {
+  grid-template-rows: 34px 32px 1fr;
+}
+
 .editor-shell.has-conflict-banner {
+  grid-template-rows: 34px 36px 1fr;
+}
+
+.editor-shell.has-editor-toolbar.has-conflict-banner {
   grid-template-rows: 34px 32px 36px 1fr;
 }
 
@@ -562,18 +570,6 @@ button:focus-visible,
   color: #c7c0b6;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.mark-display-select {
-  flex: 0 0 78px;
-  width: 78px;
-  height: 24px;
-  margin: 0 8px;
-  border: 1px solid #373b42;
-  border-radius: 4px;
-  background: #17181b;
-  color: #ebe7df;
-  font-size: 12px;
 }
 
 .sequence-audio-status {
@@ -1590,6 +1586,12 @@ button:focus-visible,
   pointer-events: none;
 }
 
+.menu-label {
+  padding: 5px 8px 3px;
+  color: #a8a29a;
+  font-size: 11px;
+}
+
 .menu-separator {
   height: 1px;
   margin: 5px 3px;
@@ -1829,7 +1831,7 @@ button:focus-visible,
 
 .graph-workspace {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
 }
@@ -1879,7 +1881,8 @@ button:focus-visible,
 }
 
 .graph-modal-body {
-  display: block;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
 }
 
@@ -1920,7 +1923,7 @@ button:focus-visible,
   overflow: visible;
 }
 
-.graph-flow-node-card.source {
+.graph-flow-node-card.layer {
   border-left: 3px solid #6abf8a;
 }
 
@@ -1948,6 +1951,7 @@ button:focus-visible,
 .graph-flow-node-title {
   display: flex;
   align-items: center;
+  gap: 7px;
   min-width: 0;
   overflow: hidden;
   border-bottom: 1px solid #30343a;
@@ -1957,6 +1961,20 @@ button:focus-visible,
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.graph-flow-node-title span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.graph-flow-node-swatch {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border: 1px solid rgb(255 255 255 / 38%);
+  border-radius: 2px;
 }
 
 .graph-flow-node-body {
@@ -1983,6 +2001,23 @@ button:focus-visible,
 .graph-flow-edge path {
   stroke: #8ecae6;
   stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.react-flow__edge.graph-flow-edge:hover path {
+  stroke-width: 3;
+  filter: drop-shadow(0 0 5px rgb(142 202 230 / 45%));
+}
+
+.react-flow__edge.graph-flow-edge.selected path,
+.react-flow__edge.selected.graph-flow-edge path {
+  stroke-width: 3;
+  filter: drop-shadow(0 0 6px rgb(255 250 240 / 38%));
+}
+
+.react-flow__edge.graph-flow-edge .react-flow__edge-interaction {
+  stroke-width: 18;
 }
 
 .graph-flow-controls {
@@ -2000,6 +2035,22 @@ button:focus-visible,
 
 .graph-flow-controls button:hover {
   background: #272a2f;
+}
+
+.graph-flow-minimap {
+  border: 1px solid #30343a;
+  border-radius: 6px;
+  background: #1d1f23;
+  overflow: hidden;
+}
+
+.graph-flow-minimap .react-flow__minimap-mask {
+  fill: rgb(17 18 20 / 72%);
+}
+
+.graph-flow-minimap .react-flow__minimap-node {
+  fill: #454a53;
+  stroke: #ebe7df;
 }
 
 .icon-button {
