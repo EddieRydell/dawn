@@ -15,14 +15,15 @@ use crate::dto::{
     AppSettings, AppSnapshot, AudioTransportSnapshot, AudioTransportState, BufferExternalState,
     DiagnosticSeverity, DocumentDefaultObjectKey, DocumentDescriptor, DocumentObjectDescriptor,
     DocumentViewId, EditorBuffer, EditorViewMode, GuiDocument, GuiDocumentRequest, GuiEditCommand,
-    GuiEditResult, LiveOutputSnapshot, ObjectKind, ProjectDiagnostic, ProjectTreeMode,
-    SequenceAudio, SequenceSelectionEdit, SequenceSelectionEditResult, WorkspaceEntry,
-    WorkspaceEntryKind, WorkspaceLayoutState,
+    GuiEditResult, LiveOutputSnapshot, NewSequenceRequest, ObjectKind, ProjectDiagnostic,
+    ProjectTreeMode, SequenceAudio, SequenceSelectionEdit, SequenceSelectionEditResult,
+    WorkspaceEntry, WorkspaceEntryKind, WorkspaceLayoutState,
 };
 use crate::persistence::{
     PersistedEditorViewStateUpdate, PersistedProjectSession, PersistedSequenceViewportStateUpdate,
     PersistenceService, ProjectRestoreState,
 };
+use yaml_serde::{Mapping, Value};
 
 pub struct DesktopState {
     snapshot: Mutex<AppSnapshot>,
@@ -527,6 +528,127 @@ impl DesktopState {
 
     pub fn create_directory(&self, parent: &str, name: &str) -> AppSnapshot {
         self.create_fs_entry(parent, name, FsEntryKind::Directory)
+    }
+
+    pub fn create_new_project(&self, parent_path: &str, directory_name: &str) -> AppSnapshot {
+        if !valid_child_name(directory_name) {
+            return self.snapshot_with_error(
+                "project.create",
+                directory_name,
+                "Project folder name must be a single path segment",
+            );
+        }
+        let parent = Utf8PathBuf::from(parent_path);
+        if !parent.is_dir() {
+            return self.snapshot_with_error(
+                "project.create",
+                parent_path,
+                "Parent location is not a directory",
+            );
+        }
+        let root = parent.join(directory_name);
+        if root.exists() {
+            return self.snapshot_with_error(
+                "project.create",
+                root.as_str(),
+                "Project folder already exists",
+            );
+        }
+        let files = new_project_files(directory_name);
+        if let Err(error) = write_new_project_files(&root, &files) {
+            return self.snapshot_with_error("project.create", root.as_str(), &error);
+        }
+        self.apply_project_open_check(
+            root.join("project.dawn").as_str(),
+            check_project(&root.join("project.dawn")),
+        )
+    }
+
+    pub fn create_sequence(&self, request: NewSequenceRequest) -> AppSnapshot {
+        let Some(project) = self.project_session() else {
+            return self.snapshot();
+        };
+        let sequence_path = Utf8PathBuf::from(&request.file_path);
+        if !valid_sequence_path(&sequence_path) {
+            return self.snapshot_with_error(
+                "sequence.create",
+                &request.file_path,
+                "Sequence path must be a relative .sequence.dawn file under sequences/",
+            );
+        }
+        if !valid_object_key(&request.object_key) {
+            return self.snapshot_with_error(
+                "sequence.create",
+                &request.file_path,
+                "Sequence id must start with a letter or underscore and contain only letters, digits, or underscores",
+            );
+        }
+        if !request.duration_seconds.is_finite() || request.duration_seconds <= 0.0 {
+            return self.snapshot_with_error(
+                "sequence.create",
+                &request.file_path,
+                "Duration must be greater than zero",
+            );
+        }
+        if request.frame_rate == 0 {
+            return self.snapshot_with_error(
+                "sequence.create",
+                &request.file_path,
+                "Frame rate must be greater than zero",
+            );
+        }
+        let Some(absolute_sequence_path) = absolute_project_path(&project, &sequence_path) else {
+            return self.snapshot_with_error(
+                "sequence.create",
+                &request.file_path,
+                "Sequence path is outside the loaded project",
+            );
+        };
+        if absolute_sequence_path.exists() {
+            return self.snapshot_with_error(
+                "sequence.create",
+                &request.file_path,
+                "Sequence file already exists",
+            );
+        }
+        let entrypoint = project.source.source_root.join(&project.source.entrypoint);
+        let result = fs::create_dir_all(
+            absolute_sequence_path
+                .parent()
+                .unwrap_or(&project.source.source_root),
+        )
+        .and_then(|()| {
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&absolute_sequence_path)
+                .and_then(|mut file| {
+                    use std::io::Write;
+                    file.write_all(
+                        sequence_boilerplate(
+                            &request.object_key,
+                            request.duration_seconds,
+                            request.frame_rate,
+                        )
+                        .as_bytes(),
+                    )
+                })
+        })
+        .map_err(|error| error.to_string())
+        .and_then(|()| add_sequence_to_project_entrypoint(&entrypoint, &request.object_key));
+        if let Err(error) = result {
+            return self.snapshot_with_error("sequence.create", &request.file_path, &error);
+        }
+        let refreshed =
+            self.apply_project_refresh_check(entrypoint.as_str(), check_project(&entrypoint));
+        if refreshed
+            .diagnostics
+            .iter()
+            .any(|diagnostic| matches!(diagnostic.severity, DiagnosticSeverity::Error))
+        {
+            return refreshed;
+        }
+        self.open_file_path(&request.file_path)
     }
 
     pub fn rename_path(&self, path: &str, new_name: &str) -> AppSnapshot {
@@ -2217,6 +2339,189 @@ fn upsert_tab(tabs: &mut Vec<EditorBuffer>, buffer: EditorBuffer) {
     }
 }
 
+struct ProjectBoilerplateFile {
+    path: &'static str,
+    text: String,
+}
+
+fn new_project_files(project_name: &str) -> Vec<ProjectBoilerplateFile> {
+    let project_id = object_key_from_name(project_name);
+    vec![
+        ProjectBoilerplateFile {
+            path: "project.dawn",
+            text: format!(
+                "imports:\n- from: setups/main.setup.dawn\n  as: setups\n- from: sequences\n  as: sequences\n{project_id}:\n  type: project\n  setup: setups.main\n  sequences:\n  - sequences.main\n"
+            ),
+        },
+        ProjectBoilerplateFile {
+            path: "setups/main.setup.dawn",
+            text: "imports:\n- from: ../layouts/main.layout.dawn\n  as: layouts\n- from: ../patches/main.patch.dawn\n  as: patches\nmain:\n  type: setup\n  layout: layouts.main\n  patch: patches.main\n  controllers:\n  - output_controller\noutput_controller:\n  type: controller\n  protocol: sacn\n  output:\n    channel_order: rgb\n    type: linear_rgb\n    output_count: 1\n    pixels_per_output: 1\n    first_universe: 1\n"
+                .to_string(),
+        },
+        ProjectBoilerplateFile {
+            path: "layouts/main.layout.dawn",
+            text: "main:\n  type: layout\n  target_order: []\n  fixtures: []\n  groups: []\n"
+                .to_string(),
+        },
+        ProjectBoilerplateFile {
+            path: "patches/main.patch.dawn",
+            text: "main:\n  type: patch\n  routes: []\n".to_string(),
+        },
+        ProjectBoilerplateFile {
+            path: "sequences/main.sequence.dawn",
+            text: sequence_boilerplate("main", 60.0, 60),
+        },
+    ]
+}
+
+fn write_new_project_files(
+    root: &Utf8Path,
+    files: &[ProjectBoilerplateFile],
+) -> Result<(), String> {
+    fs::create_dir(root).map_err(|error| error.to_string())?;
+    for file in files {
+        let path = root.join(file.path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        fs::write(path, &file.text).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn sequence_boilerplate(object_key: &str, duration_seconds: f64, frame_rate: u32) -> String {
+    format!(
+        "{object_key}:\n  type: sequence\n  duration: {}s\n  frame_rate: {frame_rate}\n  audio: null\n  mark_collections:\n  - key: marks\n    name: Marks\n    color: '#38bdf8'\n    marks: []\n  layers:\n  - id: 0\n    name: Default\n    color: '#38bdf8'\n    enabled: true\n  effects: []\n  composition_graph:\n    nodes:\n    - id: 1\n      position:\n        x: 80.0\n        y: 80.0\n      type: layer\n      layer_id: 0\n    - id: 2\n      position:\n        x: 420.0\n        y: 80.0\n      type: output\n    edges:\n    - from: 1\n      from_port: output\n      to: 2\n      to_port: input\n  automation_clips: []\n",
+        seconds_literal(duration_seconds)
+    )
+}
+
+fn add_sequence_to_project_entrypoint(
+    entrypoint: &Utf8Path,
+    object_key: &str,
+) -> Result<(), String> {
+    let text = fs::read_to_string(entrypoint).map_err(|error| error.to_string())?;
+    let mut value: Value = yaml_serde::from_str(&text).map_err(|error| error.to_string())?;
+    let map = mapping_mut(&mut value)?;
+    ensure_sequences_import(map)?;
+    let sequence_ref = format!("sequences.{object_key}");
+    let project_value = project_root_value_mut(map)?;
+    let project = mapping_mut(project_value)?;
+    let sequences = project
+        .entry(Value::String("sequences".to_string()))
+        .or_insert_with(|| Value::Sequence(Vec::new()));
+    let Value::Sequence(sequences) = sequences else {
+        return Err("project sequences must be a sequence".to_string());
+    };
+    if !sequences
+        .iter()
+        .any(|item| item.as_str() == Some(sequence_ref.as_str()))
+    {
+        sequences.push(Value::String(sequence_ref));
+    }
+    let next = yaml_serde::to_string(&value).map_err(|error| error.to_string())?;
+    fs::write(entrypoint, next).map_err(|error| error.to_string())
+}
+
+fn ensure_sequences_import(map: &mut Mapping) -> Result<(), String> {
+    let imports = map
+        .entry(Value::String("imports".to_string()))
+        .or_insert_with(|| Value::Sequence(Vec::new()));
+    let Value::Sequence(imports) = imports else {
+        return Err("imports must be a sequence".to_string());
+    };
+    let mut normalized = Vec::new();
+    let mut inserted_sequences = false;
+    for import in imports.drain(..) {
+        if import_alias(&import) == Some("sequences") {
+            if !inserted_sequences {
+                normalized.push(import_value("sequences", "sequences"));
+                inserted_sequences = true;
+            }
+        } else {
+            normalized.push(import);
+        }
+    }
+    if !inserted_sequences {
+        normalized.push(import_value("sequences", "sequences"));
+    }
+    *imports = normalized;
+    Ok(())
+}
+
+fn import_value(from: &str, alias: &str) -> Value {
+    let mut import = Mapping::new();
+    import.insert(
+        Value::String("from".to_string()),
+        Value::String(from.to_string()),
+    );
+    import.insert(
+        Value::String("as".to_string()),
+        Value::String(alias.to_string()),
+    );
+    Value::Mapping(import)
+}
+
+fn import_alias(value: &Value) -> Option<&str> {
+    mapping_ref(value)?
+        .get(Value::String("as".to_string()))
+        .and_then(Value::as_str)
+}
+
+fn project_root_value_mut(map: &mut Mapping) -> Result<&mut Value, String> {
+    map.iter_mut()
+        .find_map(|(key, value)| {
+            if key.as_str() == Some("imports") {
+                return None;
+            }
+            mapping_ref(value)
+                .and_then(|object| object.get(Value::String("type".to_string())))
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind == "project")
+                .then_some(value)
+        })
+        .ok_or_else(|| "project.dawn does not contain a project object".to_string())
+}
+
+fn mapping_mut(value: &mut Value) -> Result<&mut Mapping, String> {
+    match value {
+        Value::Mapping(map) => Ok(map),
+        _ => Err("expected a YAML mapping".to_string()),
+    }
+}
+
+fn mapping_ref(value: &Value) -> Option<&Mapping> {
+    match value {
+        Value::Mapping(map) => Some(map),
+        _ => None,
+    }
+}
+
+fn seconds_literal(seconds: f64) -> String {
+    if seconds.fract() == 0.0 {
+        format!("{seconds:.0}")
+    } else {
+        seconds.to_string()
+    }
+}
+
+fn object_key_from_name(name: &str) -> String {
+    let mut key = String::new();
+    for character in name.chars() {
+        if character.is_ascii_alphanumeric() || character == '_' {
+            key.push(character.to_ascii_lowercase());
+        } else if !key.ends_with('_') {
+            key.push('_');
+        }
+    }
+    let key = key.trim_matches('_').to_string();
+    if key.is_empty() || key.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+        format!("project_{key}")
+    } else {
+        key
+    }
+}
+
 #[derive(Clone, Copy)]
 enum FsEntryKind {
     File,
@@ -2245,6 +2550,26 @@ fn absolute_project_path(
 
 fn valid_child_name(name: &str) -> bool {
     !name.is_empty() && !name.contains('/') && !name.contains('\\') && name != "." && name != ".."
+}
+
+fn valid_object_key(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+fn valid_sequence_path(path: &Utf8Path) -> bool {
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, camino::Utf8Component::Normal(_)))
+        && path.starts_with("sequences")
+        && path
+            .file_name()
+            .is_some_and(|name| name.ends_with(".sequence.dawn"))
 }
 
 fn path_matches_or_is_child(candidate: &str, parent: &str) -> bool {

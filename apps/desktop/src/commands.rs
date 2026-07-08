@@ -7,8 +7,9 @@ use tauri_specta::{Builder, collect_commands};
 use crate::dto::{
     AppSettings, AppSnapshot, AudioTransportState, DocumentViewId, EditorViewMode, FixtureGuiEdit,
     GuiDocument, GuiDocumentRequest, GuiEditCommand, GuiEditResult, LayoutGuiEdit,
-    SequenceClipRasterRequest, SequenceClipRasterResponse, SequenceClipRasterResultBatch,
-    SequenceGuiEdit, SequenceSelectionEdit, SequenceSelectionEditResult, WorkspaceLayoutState,
+    NewSequenceRequest, SequenceClipRasterRequest, SequenceClipRasterResponse,
+    SequenceClipRasterResultBatch, SequenceGuiEdit, SequenceSelectionEdit,
+    SequenceSelectionEditResult, WorkspaceLayoutState,
 };
 use crate::persistence::{
     PersistedEditorViewStateUpdate, PersistedPreviewWindowState,
@@ -70,7 +71,9 @@ pub fn open_project(path: String, state: State<'_, DesktopState>) -> AppSnapshot
 #[tauri::command]
 #[specta::specta]
 pub fn choose_new_project_parent_directory() -> Option<String> {
-    None
+    rfd::FileDialog::new()
+        .pick_folder()
+        .and_then(|path| path.to_str().map(ToString::to_string))
 }
 
 #[tauri::command]
@@ -80,8 +83,13 @@ pub fn create_new_project(
     directory_name: String,
     state: State<'_, DesktopState>,
 ) -> AppSnapshot {
-    let (_parent_path, _directory_name) = (parent_path, directory_name);
-    state.snapshot()
+    state.create_new_project(&parent_path, &directory_name)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn create_sequence(request: NewSequenceRequest, state: State<'_, DesktopState>) -> AppSnapshot {
+    state.create_sequence(request)
 }
 
 #[tauri::command]
@@ -469,6 +477,7 @@ pub fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         open_project,
         choose_new_project_parent_directory,
         create_new_project,
+        create_sequence,
         open_file,
         close_file,
         set_active_file,

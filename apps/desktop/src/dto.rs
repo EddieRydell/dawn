@@ -23,6 +23,15 @@ pub struct AppSnapshot {
     pub live_output: LiveOutputSnapshot,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct NewSequenceRequest {
+    pub file_path: String,
+    pub object_key: String,
+    pub duration_seconds: f64,
+    pub frame_rate: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceLayoutState {
@@ -894,6 +903,9 @@ pub struct SequenceEffectScriptParam {
     rename_all_fields = "camelCase"
 )]
 pub enum SequenceGuiEdit {
+    SetDuration {
+        duration_seconds: f64,
+    },
     SetAudio {
         #[serde(rename = "import")]
         import_path: Option<String>,

@@ -6,6 +6,7 @@ import type { AppSnapshot, WorkspaceLayoutState } from "../types";
 import { EditorPane } from "./EditorPane";
 import { ExportFseqDialog } from "./ExportFseqDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
+import { NewSequenceDialog } from "./NewSequenceDialog";
 import { ProjectTree } from "./ProjectTree";
 import { SettingsDialog } from "./SettingsDialog";
 import { StatusBar } from "./StatusBar";
@@ -51,6 +52,7 @@ export function App() {
       <WorkspaceMain snapshot={snapshot} />
       <StatusBar snapshot={snapshot} />
       <NewProjectDialog />
+      <NewSequenceDialog />
       <ExportFseqDialog />
       <SettingsDialog />
       {snapshot.projectRoot === null && (

@@ -1,3 +1,4 @@
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight, GitBranch, Monitor, Music, Pause, Play, RadioTower, SkipBack, Square } from "lucide-react";
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
@@ -99,7 +100,7 @@ export function SequenceTransportControls({
       <button
         type="button"
         title="Choose audio"
-        onClick={() => void runGuiEditCommand(commands.chooseSequenceAudio)}
+        onClick={() => void chooseAudioWithResizePrompt(document)}
       >
         <Music size={15} />
       </button>
@@ -109,6 +110,37 @@ export function SequenceTransportControls({
       </span>
     </div>
   );
+}
+
+async function chooseAudioWithResizePrompt(document: SequenceEditorDocument) {
+  const result = await runGuiEditCommand(commands.chooseSequenceAudio);
+  if (result.document.type !== "sequence" || result.document.document.audio === null) return;
+  const durationSeconds = await loadAudioDurationSeconds(result.document.document.audio.resolvedPath);
+  if (durationSeconds === null || Math.abs(durationSeconds - document.durationSeconds) < 0.01) return;
+  const resize = window.confirm(
+    `Resize sequence to ${formatSeconds(durationSeconds)} to match ${result.document.document.audio.fileName}?`
+  );
+  if (!resize) return;
+  await runGuiEditCommand(() =>
+    commands.applySequenceGuiEdit({
+      type: "setDuration",
+      durationSeconds
+    })
+  );
+}
+
+function loadAudioDurationSeconds(path: string): Promise<number | null> {
+  return new Promise((resolve) => {
+    const audio = new Audio();
+    audio.preload = "metadata";
+    audio.onloadedmetadata = () => {
+      resolve(Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null);
+    };
+    audio.onerror = () => {
+      resolve(null);
+    };
+    audio.src = convertFileSrc(path);
+  });
 }
 
 export function useSequenceTransport(transport: AppSnapshot["audioTransport"]): AudioTransportViewSnapshot {

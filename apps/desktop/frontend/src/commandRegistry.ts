@@ -4,8 +4,10 @@ import { runSnapshotCommand, useAppStore } from "./store";
 
 export type CommandId =
   | "file.newProject"
+  | "file.newSequence"
   | "file.openProject"
   | "file.save"
+  | "file.reloadFromDisk"
   | "file.exportFseq"
   | "file.settings"
   | "edit.undo"
@@ -30,6 +32,14 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
       return Promise.resolve();
     }
   },
+  "file.newSequence": {
+    id: "file.newSequence",
+    label: "New Sequence...",
+    run: () => {
+      window.dispatchEvent(new CustomEvent("dawn:new-sequence"));
+      return Promise.resolve();
+    }
+  },
   "file.openProject": {
     id: "file.openProject",
     label: "Open Project...",
@@ -48,6 +58,14 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
       const text = store.localText;
       await runSnapshotCommand(commands.updateActiveText.bind(null, text));
       await runSnapshotCommand(commands.flushAutosave);
+    }
+  },
+  "file.reloadFromDisk": {
+    id: "file.reloadFromDisk",
+    label: "Reload From Disk",
+    run: async () => {
+      await runSnapshotCommand(commands.reloadActiveBufferFromDisk);
+      await refreshActiveGuiDocument();
     }
   },
   "file.exportFseq": {

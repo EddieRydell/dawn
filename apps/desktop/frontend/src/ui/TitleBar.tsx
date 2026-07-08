@@ -16,7 +16,18 @@ export function TitleBar() {
         Dawn
       </div>
       <nav className="menu-row">
-        <Menu label="File" commands={["file.newProject", "file.openProject", "file.save", "file.exportFseq", "file.settings"]} />
+        <Menu
+          label="File"
+          commands={[
+            "file.newProject",
+            "file.newSequence",
+            "file.openProject",
+            "file.save",
+            "file.reloadFromDisk",
+            "file.exportFseq",
+            "file.settings"
+          ]}
+        />
         <Menu label="Edit" commands={["file.save"]} />
         <ViewMenu />
       </nav>

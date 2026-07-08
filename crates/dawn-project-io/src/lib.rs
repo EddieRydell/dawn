@@ -2372,7 +2372,8 @@ impl Loader {
             let name = effect.name().as_str().to_string();
             let id = EffectDefinitionId(name.clone());
             self.effect_source_text.insert(id.clone(), source.clone());
-            self.source_map.objects.insert(
+            self.insert_source_object(
+                relative,
                 SourceObjectId {
                     kind: SourceObjectKind::EffectDefinition,
                     id: id.0.clone(),
@@ -2381,7 +2382,7 @@ impl Loader {
                     document: relative.to_path_buf(),
                     object_key: name.clone(),
                 },
-            );
+            )?;
             visible.insert(
                 AliasObjectKey {
                     alias: None,
@@ -2458,7 +2459,8 @@ impl Loader {
                 }
             };
             object_types.push(object.source_kind());
-            self.source_map.objects.insert(
+            self.insert_source_object(
+                relative,
                 SourceObjectId {
                     kind: object.source_kind(),
                     id: object.id_string(),
@@ -2467,7 +2469,7 @@ impl Loader {
                     document: relative.to_path_buf(),
                     object_key: key.to_string(),
                 },
-            );
+            )?;
             visible.insert(
                 AliasObjectKey {
                     alias: None,
@@ -2482,7 +2484,15 @@ impl Loader {
 
         let mut import_edges = Vec::new();
         let mut imported_visible = Vec::new();
+        let mut import_aliases = IndexSet::new();
         for import in &imports {
+            if !import_aliases.insert(import.alias.clone()) {
+                return Err(LoadProjectError::InvalidDocument {
+                    path: relative.to_path_buf(),
+                    range: None,
+                    message: format!("duplicate import alias `{}`", import.alias),
+                });
+            }
             let targets = self.resolve_import(relative, &import.from)?;
             let mut names = IndexSet::new();
             for target in &targets {
@@ -2541,6 +2551,26 @@ impl Loader {
                 },
             },
         );
+        Ok(())
+    }
+
+    fn insert_source_object(
+        &mut self,
+        path: &Utf8Path,
+        id: SourceObjectId,
+        location: SourceObjectLocation,
+    ) -> Result<(), LoadProjectError> {
+        if let Some(existing) = self.source_map.objects.get(&id) {
+            return Err(LoadProjectError::InvalidDocument {
+                path: path.to_path_buf(),
+                range: None,
+                message: format!(
+                    "duplicate {:?} object id `{}` already defined in {}",
+                    id.kind, id.id, existing.document
+                ),
+            });
+        }
+        self.source_map.objects.insert(id, location);
         Ok(())
     }
 

@@ -1657,16 +1657,19 @@ button:focus-visible,
   opacity: 0.55;
 }
 
-.new-project-dialog {
+.new-project-dialog,
+.new-sequence-dialog {
   width: min(520px, calc(100vw - 32px));
 }
 
-.new-project-form {
+.new-project-form,
+.new-sequence-form {
   display: grid;
   gap: 12px;
 }
 
 .new-project-form label,
+.new-sequence-form label,
 .export-fseq-form label {
   display: grid;
   gap: 5px;
@@ -1675,6 +1678,7 @@ button:focus-visible,
 }
 
 .new-project-form input,
+.new-sequence-form input,
 .export-fseq-form input {
   min-width: 0;
   height: 30px;
@@ -1683,6 +1687,12 @@ button:focus-visible,
   background: #17181b;
   padding: 0 8px;
   color: #ebe7df;
+}
+
+.new-sequence-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .export-fseq-form {

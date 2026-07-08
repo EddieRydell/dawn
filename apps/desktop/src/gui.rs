@@ -1,18 +1,20 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::time::Duration;
 
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use dawn_language::effect::{
     CurveId, CurveSource, EffectDefinitionId, EffectInst, EffectInstId, EffectParamValue,
     EffectScope, EffectTarget,
 };
 use dawn_language::effect_dsl::{EffectKind, Identifier, Type, Value as EffectValue};
 use dawn_language::sequence::{
-    AutomationBinding, AutomationClip, AutomationClipId, AutomationMapping, AutomationTarget,
-    CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind, EffectClip,
-    EffectGraphEdge, GraphNodePosition, GraphOperator, GraphOperatorNode, GraphOperatorRef,
-    GraphPortId, MarkCollection, MarkCollectionKey, SequenceAudio as DomainSequenceAudio,
-    SequenceClip, SequenceClipId, SequenceClipKind, SequenceId, SequenceLayerId,
+    AssetId, AutomationBinding, AutomationClip, AutomationClipId, AutomationMapping,
+    AutomationTarget, CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind,
+    EffectClip, EffectGraphEdge, GraphNodePosition, GraphOperator, GraphOperatorNode,
+    GraphOperatorRef, GraphPortId, MarkCollection, MarkCollectionKey,
+    SequenceAudio as DomainSequenceAudio, SequenceClip, SequenceClipId, SequenceClipKind,
+    SequenceId, SequenceLayerId,
 };
 use dawn_language::setup::{
     FixtureDefinitionId, FixtureGroupId, FixtureInstanceId, Geometry as DomainGeometry, LayoutId,
@@ -23,7 +25,8 @@ use dawn_language::values::{
     Rotation3 as DomainRotation3, Scale3 as DomainScale3,
 };
 use dawn_project_io::{
-    ProjectSession, SourceMap, SourceObjectId, SourceObjectKind, SourceObjectLocation,
+    ProjectSession, ReferencedAsset, SourceMap, SourceObjectId, SourceObjectKind,
+    SourceObjectLocation,
 };
 use indexmap::IndexMap;
 
@@ -1569,20 +1572,20 @@ fn edit_sequence(
     };
     let sequence_id = SequenceId(resolved.source_id.id.clone());
     match edit {
+        SequenceGuiEdit::SetDuration { duration_seconds } => {
+            if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
+                return Err(GuiMutationError::Invalid(
+                    "Sequence duration must be greater than zero.".to_string(),
+                ));
+            }
+            sequence_mut(session, &sequence_id)?.duration = dawn_duration(duration_seconds);
+        }
         SequenceGuiEdit::SetAudio { import_path } => {
             let audio = match import_path {
                 Some(import_path) => {
-                    let asset = session
-                        .source
-                        .referenced_assets
-                        .iter()
-                        .find(|asset| asset.relative_path.as_str() == import_path)
-                        .ok_or_else(|| {
-                            GuiMutationError::Invalid(
-                                "Audio asset was not found in the loaded project.".to_string(),
-                            )
-                        })?;
-                    DomainSequenceAudio::Asset(asset.id.clone())
+                    let document = resolved.location.document.clone();
+                    let id = register_sequence_audio_asset(session, &document, &import_path)?;
+                    DomainSequenceAudio::Asset(id)
                 }
                 None => DomainSequenceAudio::None,
             };
@@ -2733,6 +2736,67 @@ fn sequence_mut<'a>(
         .sequences
         .get_mut(id)
         .ok_or_else(|| GuiMutationError::Invalid("Sequence was not found.".to_string()))
+}
+
+fn register_sequence_audio_asset(
+    session: &mut ProjectSession,
+    document: &Utf8Path,
+    import_path: &str,
+) -> Result<AssetId, GuiMutationError> {
+    if let Some(asset) = session
+        .source
+        .referenced_assets
+        .iter()
+        .find(|asset| asset.relative_path.as_str() == import_path)
+    {
+        return Ok(asset.id.clone());
+    }
+
+    let document_path = session.source.source_root.join(document);
+    let document_dir = document_path
+        .parent()
+        .unwrap_or(&session.source.source_root)
+        .to_path_buf();
+    let selected_path = document_dir.join(import_path);
+    let absolute_path = fs::canonicalize(&selected_path)
+        .map_err(|error| GuiMutationError::Invalid(format!("Audio file was not found: {error}")))?;
+    let absolute_path = Utf8PathBuf::from_path_buf(absolute_path).map_err(|path| {
+        GuiMutationError::Invalid(format!("Audio path is not valid UTF-8: {}", path.display()))
+    })?;
+    if !absolute_path.is_file() {
+        return Err(GuiMutationError::Invalid(
+            "Selected audio path is not a file.".to_string(),
+        ));
+    }
+
+    if let Some(asset) = session
+        .source
+        .referenced_assets
+        .iter()
+        .find(|asset| asset.absolute_path == absolute_path)
+    {
+        return Ok(asset.id.clone());
+    }
+
+    let relative_path = absolute_path
+        .strip_prefix(&session.source.source_root)
+        .map(Utf8Path::to_path_buf)
+        .unwrap_or_else(|_| Utf8PathBuf::from(import_path));
+    let next_id = session
+        .source
+        .referenced_assets
+        .iter()
+        .map(|asset| asset.id.0)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    let id = AssetId(next_id);
+    session.source.referenced_assets.push(ReferencedAsset {
+        id: id.clone(),
+        relative_path,
+        absolute_path,
+    });
+    Ok(id)
 }
 
 fn fixture_definition_mut<'a>(
