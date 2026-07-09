@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type Reac
 
 import { clamp } from "./shared";
 
-export function InspectorScrollArea({ children }: { children: ReactNode }) {
+export function InspectorScrollArea({ children, footer }: { children: ReactNode; footer?: ReactNode }) {
   const contentRef = useRef<HTMLDivElement | null>(null);
   const railRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ pointerId: number; startY: number; startScrollTop: number } | null>(null);
@@ -46,9 +46,12 @@ export function InspectorScrollArea({ children }: { children: ReactNode }) {
   }, [metrics.height, metrics.scrollable]);
 
   return (
-    <aside className="gui-inspector-shell">
-      <div ref={contentRef} className="gui-inspector">
-        <div onKeyDownCapture={commitInspectorFieldOnEnter}>{children}</div>
+    <aside className={`gui-inspector-shell ${footer === undefined ? "" : "with-footer"}`}>
+      <div className="gui-inspector-content-shell">
+        <div ref={contentRef} className="gui-inspector">
+          <div onKeyDownCapture={commitInspectorFieldOnEnter}>{children}</div>
+        </div>
+        {footer}
       </div>
       <div className="editor-scrollbar" aria-hidden={!metrics.scrollable}>
         <div

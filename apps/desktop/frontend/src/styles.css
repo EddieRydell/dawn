@@ -640,6 +640,13 @@ button:focus-visible,
   background: #202226;
 }
 
+.gui-inspector-content-shell {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+}
+
 .gui-inspector {
   min-width: 0;
   min-height: 0;
@@ -760,6 +767,59 @@ button:focus-visible,
   border-color: #454a53;
   background: #17181b;
   color: #ebe7df;
+}
+
+.sequence-inspector-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid #373b42;
+  background: #1d1f23;
+}
+
+.sequence-inspector-tabs button {
+  min-width: 0;
+  height: 34px;
+  overflow: hidden;
+  border: 0;
+  border-right: 1px solid #373b42;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 6px;
+  color: #c7c0b6;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sequence-inspector-tabs button:last-child {
+  border-right: 0;
+}
+
+.sequence-inspector-tabs button:hover {
+  background: #2c3036;
+}
+
+.sequence-inspector-tabs button.active {
+  background: #31543f;
+  color: #fffaf0;
+}
+
+.sequence-layer-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.sequence-layer-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.sequence-layer-row button {
+  padding: 5px 7px;
 }
 
 .mark-section {
