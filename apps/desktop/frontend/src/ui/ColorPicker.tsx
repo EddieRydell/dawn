@@ -10,22 +10,29 @@ export function ColorPicker({
   label,
   className = "",
   triggerClassName = "",
+  openRequestKey = 0,
+  stopTriggerPointerDownPropagation = false,
   commit
 }: {
   value: string;
   label: string;
   className?: string;
   triggerClassName?: string;
+  openRequestKey?: number;
+  stopTriggerPointerDownPropagation?: boolean;
   commit: (value: string) => Promise<void>;
 }) {
   const normalizedValue = normalizeHexColor(value) ?? "#ffffff";
-  const [open, setOpen] = useState(false);
-  const [pickerDraft, setPickerDraft] = useState(normalizedValue);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const [dismissedOpenRequestKey, setDismissedOpenRequestKey] = useState(0);
+  const [pickerDraft, setPickerDraft] = useState({ value: normalizedValue, requestKey: openRequestKey });
   const rootRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const [popoverPosition, setPopoverPosition] = useState({ top: 0, left: 0 });
-  const draft = open ? pickerDraft : normalizedValue;
+  const requestedOpen = openRequestKey !== 0 && dismissedOpenRequestKey !== openRequestKey;
+  const open = internalOpen || requestedOpen;
+  const draft = open ? (pickerDraft.requestKey === openRequestKey ? pickerDraft.value : normalizedValue) : normalizedValue;
   const rgb = useMemo(() => hexToRgb(draft), [draft]);
   const hsv = useMemo(() => rgbToHsv(rgb), [rgb]);
 
@@ -47,10 +54,14 @@ export function ColorPicker({
     const closeOnPointerDown = (event: MouseEvent) => {
       const target = event.target as Node;
       if (rootRef.current?.contains(target) === true || popoverRef.current?.contains(target) === true) return;
-      setOpen(false);
+      setInternalOpen(false);
+      setDismissedOpenRequestKey(openRequestKey);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") {
+        setInternalOpen(false);
+        setDismissedOpenRequestKey(openRequestKey);
+      }
     };
     updatePopoverPosition();
     window.addEventListener("mousedown", closeOnPointerDown);
@@ -63,12 +74,12 @@ export function ColorPicker({
       window.removeEventListener("resize", updatePopoverPosition);
       window.removeEventListener("scroll", updatePopoverPosition, true);
     };
-  }, [open]);
+  }, [open, openRequestKey]);
 
   const commitColor = (candidate: string) => {
     const next = normalizeHexColor(candidate);
     if (next === null) return;
-    setPickerDraft(next);
+    setPickerDraft({ value: next, requestKey: openRequestKey });
     if (next !== normalizedValue) void commit(next);
   };
 
@@ -89,9 +100,13 @@ export function ColorPicker({
         aria-label={label}
         title={label}
         style={{ "--color-picker-value": draft } as CSSProperties}
+        onPointerDown={(event) => {
+          if (stopTriggerPointerDownPropagation) event.stopPropagation();
+        }}
         onClick={() => {
-          if (!open) setPickerDraft(normalizedValue);
-          setOpen(!open);
+          if (!open) setPickerDraft({ value: normalizedValue, requestKey: openRequestKey });
+          setInternalOpen(!open);
+          if (open) setDismissedOpenRequestKey(openRequestKey);
         }}
       />
       {open && createPortal(
@@ -99,8 +114,19 @@ export function ColorPicker({
           ref={popoverRef}
           className="color-picker-popover"
           style={{ top: popoverPosition.top, left: popoverPosition.left }}
+          onPointerDown={(event) => { event.stopPropagation(); }}
+          onPointerMove={(event) => { event.stopPropagation(); }}
+          onPointerUp={(event) => { event.stopPropagation(); }}
+          onPointerCancel={(event) => { event.stopPropagation(); }}
+          onClick={(event) => { event.stopPropagation(); }}
         >
-          <HexColorPicker color={draft} onChange={setPickerDraft} onChangeEnd={commitColor} />
+          <HexColorPicker
+            color={draft}
+            onChange={(next) => {
+              setPickerDraft({ value: next, requestKey: openRequestKey });
+            }}
+            onChangeEnd={commitColor}
+          />
           <div className="color-picker-grid">
             <label>
               Hex

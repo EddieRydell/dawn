@@ -948,10 +948,9 @@ function ColorCurveParam({
 }) {
   const [drafts, setDrafts] = useState(points);
   const draftsRef = useRef(points);
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const [pointsCollapsed, setPointsCollapsed] = useState(true);
+  const [stopPickerRequest, setStopPickerRequest] = useState<{ index: number; key: number } | null>(null);
   const gradientRef = useRef<HTMLDivElement | null>(null);
-  const draggingPoint = useRef<{ index: number; moved: boolean } | null>(null);
+  const draggingPoint = useRef<{ index: number; pointerId: number; startClientX: number; moved: boolean } | null>(null);
   const lastCommittedValues = useRef(points.map((point) => point.value.toLowerCase()));
   const pointsSignature = curvePointsSignature(points);
   const pendingSignature = useRef<string | null>(null);
@@ -968,7 +967,6 @@ function ColorCurveParam({
     setDrafts(points);
     draftsRef.current = points;
     lastCommittedValues.current = points.map((point) => point.value.toLowerCase());
-    setSelectedIndex((index) => Math.min(index, points.length - 1));
   }, [points, pointsSignature]);
   const update = (next: EditedColorCurvePoint[]) => {
     if (readOnly) {
@@ -992,45 +990,15 @@ function ColorCurveParam({
     const nextIndex = nearestColorPointIndex(next, point);
     setDrafts(next);
     draftsRef.current = next;
-    setSelectedIndex(nextIndex);
     if (commitChange) {
       update(next);
     }
     return nextIndex;
   };
-  const commitDraftValue = (index: number, candidate = drafts[index]?.value) => {
-    const draft = candidate ?? points[index]?.value;
-    if (draft === undefined || draft === "") return;
-    if (!isHexColor(draft)) {
-      const fallback = points[index];
-      if (fallback !== undefined) {
-        setDrafts((current) => replaceAt(current, index, fallback));
-      }
-      return;
-    }
-    const next = draft.toLowerCase();
-    const currentPoint = drafts[index] ?? points[index];
-    if (currentPoint === undefined) return;
-    setDrafts((current) => replaceAt(current, index, { ...(current[index] ?? currentPoint), value: next }));
-    if (next !== lastCommittedValues.current[index]) {
-      lastCommittedValues.current = replaceAt(lastCommittedValues.current, index, next);
-      update(replaceAt(drafts, index, { ...currentPoint, value: next }));
-    }
-  };
-  const commitDraftPoint = (index: number) => {
-    const point = draftsRef.current[index];
-    if (!point) return;
-    if (!isHexColor(point.value)) {
-      commitDraftValue(index);
-      return;
-    }
-    update(replaceAt(draftsRef.current, index, { time: clamp(point.time, 0, 1), value: point.value.toLowerCase() }));
-  };
   const deletePoint = (index: number) => {
     if (draftsRef.current.length <= 1) return;
     const next = draftsRef.current.filter((_, pointIndex) => pointIndex !== index);
     update(next);
-    setSelectedIndex(Math.min(index, next.length - 1));
   };
   const pointFromPointer = (event: PointerEvent<HTMLElement>, color: string): EditedColorCurvePoint => {
     const rect = gradientRef.current?.getBoundingClientRect();
@@ -1057,58 +1025,69 @@ function ColorCurveParam({
           const previous = draftsRef.current[draftsRef.current.length - 1]?.value ?? CURVE_EDITOR.defaultColor;
           const point = pointFromPointer(event, previous);
           update([...draftsRef.current, point]);
-          setSelectedIndex(nearestColorPointIndex(draftsRef.current, point));
-        }}
-        onPointerMove={(event) => {
-          const drag = draggingPoint.current;
-          if (drag === null) return;
-          const point = draftsRef.current[drag.index];
-          if (point === undefined) return;
-          const nextIndex = setPoint(drag.index, pointFromPointer(event, point.value), false);
-          draggingPoint.current = { index: nextIndex, moved: true };
-        }}
-        onPointerUp={(event) => {
-          if (draggingPoint.current === null) return;
-          event.currentTarget.releasePointerCapture(event.pointerId);
-          const moved = draggingPoint.current.moved;
-          draggingPoint.current = null;
-          if (moved) {
-            update(draftsRef.current);
-          }
-        }}
-        onPointerCancel={(event) => {
-          if (draggingPoint.current === null) return;
-          event.currentTarget.releasePointerCapture(event.pointerId);
-          const moved = draggingPoint.current.moved;
-          draggingPoint.current = null;
-          if (moved) {
-            update(draftsRef.current);
-          }
         }}
       >
         {!readOnly && drafts.map((point, index) => {
           return (
             <span
               key={index}
-              className={`color-curve-stop ${index === selectedIndex ? "selected" : ""}`}
+              className="color-curve-stop"
               style={{ left: `${point.time * 100}%` }}
               onPointerDown={(event) => {
+                if (!event.currentTarget.contains(event.target as Node)) return;
                 event.stopPropagation();
-                event.currentTarget.parentElement?.setPointerCapture(event.pointerId);
-                draggingPoint.current = { index, moved: false };
-                setSelectedIndex(index);
+                event.currentTarget.setPointerCapture(event.pointerId);
+                draggingPoint.current = { index, pointerId: event.pointerId, startClientX: event.clientX, moved: false };
+              }}
+              onPointerMove={(event) => {
+                const drag = draggingPoint.current;
+                if (drag === null || drag.pointerId !== event.pointerId) return;
+                const point = draftsRef.current[drag.index];
+                if (point === undefined) return;
+                const moved = drag.moved || Math.abs(event.clientX - drag.startClientX) > 2;
+                if (!moved) return;
+                const nextIndex = setPoint(drag.index, pointFromPointer(event, point.value), false);
+                draggingPoint.current = { ...drag, index: nextIndex, moved: true };
+              }}
+              onPointerUp={(event) => {
+                const drag = draggingPoint.current;
+                if (drag === null || drag.pointerId !== event.pointerId) return;
+                try {
+                  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                    event.currentTarget.releasePointerCapture(event.pointerId);
+                  }
+                } finally {
+                  draggingPoint.current = null;
+                  if (drag.moved) {
+                    update(draftsRef.current);
+                  } else {
+                    setStopPickerRequest((request) => ({ index: drag.index, key: (request?.key ?? 0) + 1 }));
+                  }
+                }
+              }}
+              onPointerCancel={(event) => {
+                const drag = draggingPoint.current;
+                if (drag === null || drag.pointerId !== event.pointerId) return;
+                try {
+                  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                    event.currentTarget.releasePointerCapture(event.pointerId);
+                  }
+                } finally {
+                  draggingPoint.current = null;
+                  if (drag.moved) update(draftsRef.current);
+                }
               }}
               onContextMenu={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
                 deletePoint(index);
               }}
-              onFocus={() => { setSelectedIndex(index); }}
             >
               <span className="color-curve-stop-line" />
               <ColorPicker
                 className="color-curve-stop-color-picker"
                 triggerClassName="color-curve-stop-color-trigger"
+                openRequestKey={stopPickerRequest?.index === index ? stopPickerRequest.key : 0}
                 value={isHexColor(point.value) ? point.value : (points[index]?.value ?? CURVE_EDITOR.defaultColor)}
                 label={`${name} stop ${index + 1} color`}
                 commit={(value) => {
@@ -1120,82 +1099,6 @@ function ColorCurveParam({
           );
         })}
       </div>
-      {!readOnly && (
-        <div className="float-curve-points-panel">
-            <button
-              type="button"
-              className="float-curve-points-toggle"
-              onClick={() => { setPointsCollapsed((collapsed) => !collapsed); }}
-            >
-              {pointsCollapsed ? <ChevronRight size={13} /> : <ChevronRight className="expanded" size={13} />}
-              <span>Stops</span>
-              <strong>{drafts.length}</strong>
-            </button>
-            {!pointsCollapsed && (
-              <div className="float-curve-point-list">
-                {drafts.map((point, index) => {
-                  const displayedColor = isHexColor(point.value) ? point.value : (points[index]?.value ?? CURVE_EDITOR.defaultColor);
-                  return (
-                    <div
-                      key={index}
-                      className={`color-curve-point-row-compact ${index === selectedIndex ? "selected" : ""}`}
-                      onPointerDown={() => { setSelectedIndex(index); }}
-                    >
-                      <label>
-                        <span>t</span>
-                        <input
-                          type="number"
-                          min={0}
-                          max={1}
-                          step={0.01}
-                          value={point.time}
-                          onFocus={() => { setSelectedIndex(index); }}
-                          onChange={(event) => {
-                            setPoint(index, { ...point, time: Number(event.currentTarget.value) }, false);
-                          }}
-                          onBlur={() => { commitDraftPoint(index); }}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              commitDraftPoint(index);
-                              event.currentTarget.blur();
-                            }
-                          }}
-                        />
-                      </label>
-                      <div onFocus={() => { setSelectedIndex(index); }}>
-                        <ColorPicker
-                          value={displayedColor}
-                          label={`${name} stop ${index + 1} color`}
-                          commit={(value) => {
-                            setPoint(index, { ...point, value }, true);
-                            return Promise.resolve();
-                          }}
-                        />
-                      </div>
-                      <input
-                        value={point.value}
-                        onFocus={() => { setSelectedIndex(index); }}
-                        onChange={(event) => {
-                          setPoint(index, { ...point, value: event.currentTarget.value }, false);
-                        }}
-                        onBlur={() => { commitDraftValue(index); }}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            commitDraftValue(index);
-                            event.currentTarget.blur();
-                          }
-                        }}
-                      />
-                      <button type="button" className="float-curve-point-delete" disabled={drafts.length <= 1} onClick={() => { deletePoint(index); }}>
-                        <Minus size={14} />
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-        </div>
-      )}
     </div>
   );
 }

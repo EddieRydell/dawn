@@ -1514,11 +1514,12 @@ button:focus-visible,
   border: 0;
   background: transparent;
   padding: 0;
-  cursor: grab;
+  cursor: pointer;
 }
 
-.color-curve-stop.selected {
-  filter: drop-shadow(0 0 3px #f0c46b);
+.color-curve-stop:hover,
+.color-curve-stop:focus-within {
+  filter: drop-shadow(0 0 4px #fffaf0);
 }
 
 .color-curve-stop-line {
@@ -1548,7 +1549,8 @@ button:focus-visible,
   border: 0;
   background: transparent !important;
   box-shadow: none;
-  cursor: grab;
+  cursor: pointer;
+  pointer-events: none;
 }
 
 .gui-inspector .color-curve-stop-color-trigger:hover,
@@ -1557,55 +1559,6 @@ button:focus-visible,
 .color-curve-stop-color-trigger:focus-visible {
   border: 0;
   box-shadow: none;
-}
-
-.color-curve-stop:focus-within {
-  filter: drop-shadow(0 0 3px #fffaf0);
-}
-
-.color-curve-point-row-compact {
-  display: grid;
-  grid-template-columns: minmax(0, 0.8fr) auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 3px 5px;
-  cursor: default;
-}
-
-.color-curve-point-row-compact + .color-curve-point-row-compact {
-  border-top: 1px solid #2c3036;
-}
-
-.color-curve-point-row-compact.selected {
-  background: #24332b;
-}
-
-.color-curve-point-row-compact label {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 4px;
-  margin: 0;
-  color: #8f9298;
-}
-
-.color-curve-point-row-compact > input,
-.color-curve-point-row-compact > label input {
-  height: 22px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  padding: 0 2px;
-  color: #ebe7df;
-  font-variant-numeric: tabular-nums;
-}
-
-.color-curve-point-row-compact > input:focus,
-.color-curve-point-row-compact > label input:focus {
-  background: #17181b;
-  box-shadow: inset 0 -1px 0 #6abf8a;
-  outline: none;
 }
 
 .curve-point-row.selected input {
