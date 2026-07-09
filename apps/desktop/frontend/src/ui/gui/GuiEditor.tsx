@@ -187,6 +187,7 @@ function GuiEditorInner({
             selected={selected}
             setSelected={setSelected}
             sequenceSelection={sequenceSelection}
+            setSequenceSelection={setSequenceSelection}
             automationClipChooser={automationClipChooser}
             setAutomationClipChooser={setAutomationClipChooser}
             activeMarkCollectionKey={activeMarkCollectionKey}

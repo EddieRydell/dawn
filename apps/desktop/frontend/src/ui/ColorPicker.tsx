@@ -1,0 +1,215 @@
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { HexColorPicker } from "react-colorful";
+
+type RgbColor = { r: number; g: number; b: number };
+type HsvColor = { h: number; s: number; v: number };
+
+export function ColorPicker({
+  value,
+  label,
+  commit
+}: {
+  value: string;
+  label: string;
+  commit: (value: string) => Promise<void>;
+}) {
+  const normalizedValue = normalizeHexColor(value) ?? "#ffffff";
+  const [open, setOpen] = useState(false);
+  const [pickerDraft, setPickerDraft] = useState(normalizedValue);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const draft = open ? pickerDraft : normalizedValue;
+  const rgb = useMemo(() => hexToRgb(draft), [draft]);
+  const hsv = useMemo(() => rgbToHsv(rgb), [rgb]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnPointerDown = (event: MouseEvent) => {
+      if (rootRef.current?.contains(event.target as Node) === true) return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", closeOnPointerDown);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("mousedown", closeOnPointerDown);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  const commitColor = (candidate: string) => {
+    const next = normalizeHexColor(candidate);
+    if (next === null) return;
+    setPickerDraft(next);
+    if (next !== normalizedValue) void commit(next);
+  };
+
+  const updateRgb = (nextRgb: RgbColor) => {
+    commitColor(rgbToHex(nextRgb));
+  };
+
+  const updateHsv = (nextHsv: HsvColor) => {
+    commitColor(rgbToHex(hsvToRgb(nextHsv)));
+  };
+
+  return (
+    <div ref={rootRef} className="color-picker">
+      <button
+        type="button"
+        className="color-picker-trigger"
+        aria-label={label}
+        title={label}
+        style={{ "--color-picker-value": draft } as CSSProperties}
+        onClick={() => {
+          if (!open) setPickerDraft(normalizedValue);
+          setOpen(!open);
+        }}
+      />
+      {open && (
+        <div className="color-picker-popover">
+          <HexColorPicker color={draft} onChange={setPickerDraft} onChangeEnd={commitColor} />
+          <div className="color-picker-grid">
+            <label>
+              Hex
+              <input
+                key={`hex:${draft}`}
+                defaultValue={draft}
+                onBlur={(event) => {
+                  commitColor(event.currentTarget.value);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    commitColor(event.currentTarget.value);
+                    event.currentTarget.blur();
+                  }
+                }}
+              />
+            </label>
+            <NumberColorInput label="R" value={rgb.r} min={0} max={255} commit={(r) => { updateRgb({ ...rgb, r }); }} />
+            <NumberColorInput label="G" value={rgb.g} min={0} max={255} commit={(g) => { updateRgb({ ...rgb, g }); }} />
+            <NumberColorInput label="B" value={rgb.b} min={0} max={255} commit={(b) => { updateRgb({ ...rgb, b }); }} />
+            <NumberColorInput label="H" value={Math.round(hsv.h)} min={0} max={360} commit={(h) => { updateHsv({ ...hsv, h }); }} />
+            <NumberColorInput label="S" value={Math.round(hsv.s)} min={0} max={100} commit={(s) => { updateHsv({ ...hsv, s }); }} />
+            <NumberColorInput label="V" value={Math.round(hsv.v)} min={0} max={100} commit={(v) => { updateHsv({ ...hsv, v }); }} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NumberColorInput({
+  label,
+  value,
+  min,
+  max,
+  commit
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  commit: (value: number) => void;
+}) {
+  return (
+    <label>
+      {label}
+      <input
+        key={`${label}:${value}`}
+        type="number"
+        min={min}
+        max={max}
+        defaultValue={value}
+        onBlur={(event) => {
+          const next = Number(event.currentTarget.value);
+          if (Number.isFinite(next)) commit(Math.round(clamp(next, min, max)));
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+        }}
+      />
+    </label>
+  );
+}
+
+function normalizeHexColor(value: string): string | null {
+  const trimmed = value.trim();
+  const match = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(trimmed);
+  if (match === null) return null;
+  const hex = match[1] ?? "";
+  if (hex.length === 3) {
+    const [red = "0", green = "0", blue = "0"] = hex;
+    return `#${red}${red}${green}${green}${blue}${blue}`.toLowerCase();
+  }
+  return `#${hex}`.toLowerCase();
+}
+
+function hexToRgb(hex: string): RgbColor {
+  const normalized = normalizeHexColor(hex) ?? "#ffffff";
+  return {
+    r: Number.parseInt(normalized.slice(1, 3), 16),
+    g: Number.parseInt(normalized.slice(3, 5), 16),
+    b: Number.parseInt(normalized.slice(5, 7), 16)
+  };
+}
+
+function rgbToHex({ r, g, b }: RgbColor) {
+  return `#${hexByte(r)}${hexByte(g)}${hexByte(b)}`;
+}
+
+function hexByte(value: number) {
+  return Math.round(clamp(value, 0, 255)).toString(16).padStart(2, "0");
+}
+
+function rgbToHsv({ r, g, b }: RgbColor): HsvColor {
+  const red = r / 255;
+  const green = g / 255;
+  const blue = b / 255;
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  const delta = max - min;
+  const h =
+    delta === 0
+      ? 0
+      : max === red
+        ? 60 * (((green - blue) / delta) % 6)
+        : max === green
+          ? 60 * ((blue - red) / delta + 2)
+          : 60 * ((red - green) / delta + 4);
+  return {
+    h: h < 0 ? h + 360 : h,
+    s: max === 0 ? 0 : (delta / max) * 100,
+    v: max * 100
+  };
+}
+
+function hsvToRgb({ h, s, v }: HsvColor): RgbColor {
+  const normalizedHue = ((h % 360) + 360) % 360;
+  const saturation = clamp(s, 0, 100) / 100;
+  const value = clamp(v, 0, 100) / 100;
+  const chroma = value * saturation;
+  const x = chroma * (1 - Math.abs(((normalizedHue / 60) % 2) - 1));
+  const m = value - chroma;
+  const [red, green, blue] =
+    normalizedHue < 60
+      ? [chroma, x, 0]
+      : normalizedHue < 120
+        ? [x, chroma, 0]
+        : normalizedHue < 180
+          ? [0, chroma, x]
+          : normalizedHue < 240
+            ? [0, x, chroma]
+            : normalizedHue < 300
+              ? [x, 0, chroma]
+              : [chroma, 0, x];
+  return {
+    r: Math.round((red + m) * 255),
+    g: Math.round((green + m) * 255),
+    b: Math.round((blue + m) * 255)
+  };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}

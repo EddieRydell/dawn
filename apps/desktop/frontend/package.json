@@ -25,6 +25,7 @@
     "lucide-react": "catalog:",
     "react": "catalog:",
     "react-arborist": "catalog:",
+    "react-colorful": "catalog:",
     "react-dom": "catalog:",
     "zustand": "catalog:"
   },

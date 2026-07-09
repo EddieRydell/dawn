@@ -1781,6 +1781,25 @@ fn edit_sequence(
             *mark = dawn_time(time_seconds.max(0.0));
             collection.marks.sort_by_key(|time| time.0);
         }
+        SequenceGuiEdit::ReassignMarkCollection {
+            collection_key,
+            index,
+            target_collection_key,
+        } => {
+            if collection_key != target_collection_key {
+                let sequence = sequence_mut(session, &sequence_id)?;
+                let mark = {
+                    let collection = mark_collection_mut(sequence, &collection_key)?;
+                    if (index as usize) >= collection.marks.len() {
+                        return Err(GuiMutationError::Invalid("Mark was not found.".to_string()));
+                    }
+                    collection.marks.remove(index as usize)
+                };
+                let target_collection = mark_collection_mut(sequence, &target_collection_key)?;
+                target_collection.marks.push(mark);
+                target_collection.marks.sort_by_key(|time| time.0);
+            }
+        }
         SequenceGuiEdit::AddMark {
             collection_key,
             time_seconds,

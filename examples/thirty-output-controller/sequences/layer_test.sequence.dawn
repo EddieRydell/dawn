@@ -9,8 +9,10 @@ layer_test:
   mark_collections:
   - key: marks
     name: Marks
-    color: '#38bdf8'
-    marks: []
+    color: '#45b7ff'
+    marks:
+    - 59.533478052s
+    - 59.825583004s
   layers:
   - id: 0
     name: Default

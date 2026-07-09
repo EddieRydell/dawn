@@ -1102,6 +1102,11 @@ pub enum SequenceGuiEdit {
         index: u32,
         time_seconds: f64,
     },
+    ReassignMarkCollection {
+        collection_key: String,
+        index: u32,
+        target_collection_key: String,
+    },
     DeleteMark {
         collection_key: String,
         index: u32,

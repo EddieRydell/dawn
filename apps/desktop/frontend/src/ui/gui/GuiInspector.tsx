@@ -8,6 +8,7 @@ export function GuiInspector({
   selected,
   setSelected,
   sequenceSelection,
+  setSequenceSelection,
   automationClipChooser,
   setAutomationClipChooser,
   activeMarkCollectionKey,
@@ -19,6 +20,7 @@ export function GuiInspector({
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
   sequenceSelection: SequenceSelection;
+  setSequenceSelection: (selection: SequenceSelection) => void;
   automationClipChooser: AutomationClipChooser;
   setAutomationClipChooser: (chooser: AutomationClipChooser) => void;
   activeMarkCollectionKey: string | null;
@@ -33,6 +35,7 @@ export function GuiInspector({
         selected={selected}
         setSelected={setSelected}
         sequenceSelection={sequenceSelection}
+        setSequenceSelection={setSequenceSelection}
         automationClipChooser={automationClipChooser}
         setAutomationClipChooser={setAutomationClipChooser}
         activeMarkCollectionKey={activeMarkCollectionKey}
