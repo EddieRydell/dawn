@@ -18,7 +18,7 @@ const PROJECT_TREE_MAX_WIDTH_PX = 520;
 const WORKSPACE_LAYOUT_SAVE_DELAY_MS = 250;
 
 export function App() {
-  const { snapshot, error, hydrate } = useAppStore();
+  const { snapshot, error, hydrate, compositionGraphEditing } = useAppStore();
 
   useEffect(() => {
     void hydrate();
@@ -42,7 +42,7 @@ export function App() {
       <TitleBar />
       <div className="alert-stack">
         {error !== null && error !== "" && <div className="error-strip">{error}</div>}
-        {snapshot.renderError !== null && snapshot.renderError !== "" && (
+        {!compositionGraphEditing && snapshot.renderError !== null && snapshot.renderError !== "" && (
           <div className="error-strip">{snapshot.renderError}</div>
         )}
         {snapshot.previewError !== null && snapshot.previewError !== "" && (

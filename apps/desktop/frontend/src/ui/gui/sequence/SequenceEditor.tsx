@@ -1,6 +1,8 @@
-import type { KeyboardEvent } from "react";
+import { useCallback, type KeyboardEvent } from "react";
 
 import type { SequenceEditorDocument } from "../../../types";
+import { commands } from "../../../api";
+import { runSnapshotCommand } from "../../../store";
 
 import type { AudioTransportViewSnapshot, AutomationClipChooser, GuiFocus, SequenceSelection } from "../shared";
 
@@ -47,11 +49,29 @@ export function SequenceEditor({
       : selected?.type === "graphEdge"
         ? { type: "edge" as const, id: selected.edgeId }
         : null;
+  const setSelectedGraphItem = useCallback(
+    (item: { type: "node"; id: string } | { type: "edge"; id: string } | null) => {
+      if (item === null) {
+        setSelected(null);
+        return;
+      }
+      setSelected(
+        item.type === "node"
+          ? { type: "graphNode", nodeId: item.id }
+          : { type: "graphEdge", edgeId: item.id }
+      );
+    },
+    [setSelected]
+  );
+  const closeCompositionGraph = useCallback(() => {
+    setCompositionGraphOpen(false);
+    setSelected(null);
+    void runSnapshotCommand(commands.finishCompositionGraphEditing);
+  }, [setCompositionGraphOpen, setSelected]);
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape" && compositionGraphOpen) {
       event.preventDefault();
-      setCompositionGraphOpen(false);
-      if (selected?.type === "graphNode" || selected?.type === "graphEdge") setSelected(null);
+      closeCompositionGraph();
       return;
     }
     if (event.key === "Escape" && automationClipChooser !== null) {
@@ -82,17 +102,8 @@ export function SequenceEditor({
         <GraphEditorModal
           document={document}
           selectedItem={selectedGraphItem}
-          setSelectedItem={(item) => {
-            if (item === null) {
-              setSelected(null);
-              return;
-            }
-            setSelected(item.type === "node" ? { type: "graphNode", nodeId: item.id } : { type: "graphEdge", edgeId: item.id });
-          }}
-          onClose={() => {
-            setCompositionGraphOpen(false);
-            if (selected?.type === "graphNode" || selected?.type === "graphEdge") setSelected(null);
-          }}
+          setSelectedItem={setSelectedGraphItem}
+          onClose={closeCompositionGraph}
         />
       )}
     </div>

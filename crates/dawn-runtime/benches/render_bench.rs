@@ -178,12 +178,11 @@ fn render_raster_columns(
     sample: &dawn_runtime::PreparedEffectRasterSample,
     scenario: RasterScenario,
 ) -> Vec<Color> {
-    let duration_frames = renderer.duration_seconds() * f64::from(renderer.frame_rate());
-    let sample_step_frames = (duration_frames / scenario.columns as f64).max(4.0);
     let mut raster = Vec::with_capacity(scenario.columns * scenario.rows);
     for column in 0..scenario.columns {
-        let sample_seconds = renderer.start_seconds()
-            + (column as f64 * sample_step_frames) / f64::from(renderer.frame_rate());
+        let sample_seconds = renderer
+            .sampled_raster_column_seconds(column, scenario.columns)
+            .expect("benchmark raster column time should resolve");
         let colors = renderer
             .render_sampled_raster_column(sample, sample_seconds)
             .expect("benchmark raster column should render");

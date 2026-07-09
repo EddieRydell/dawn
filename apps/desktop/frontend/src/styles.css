@@ -1490,12 +1490,51 @@ button:focus-visible,
 }
 
 .status-diagnostics-button {
+  position: relative;
   height: 22px;
   border: 0;
   border-radius: 4px;
   background: transparent;
   padding: 0 5px;
   font-size: 12px;
+  color: inherit;
+  font: inherit;
+  cursor: default;
+}
+
+.status-diagnostics-button:focus-visible {
+  outline: 1px solid #7aa2f7;
+  outline-offset: 2px;
+}
+
+.status-diagnostics-tooltip {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 40;
+  display: none;
+  width: min(560px, calc(100vw - 24px));
+  max-height: 260px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid #3b4658;
+  border-radius: 4px;
+  background: #12151b;
+  color: #e5e0d8;
+  box-shadow: 0 10px 24px rgb(0 0 0 / 35%);
+  text-align: left;
+  white-space: normal;
+}
+
+.status-diagnostics-tooltip span {
+  display: block;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+.status-diagnostics-button:hover .status-diagnostics-tooltip,
+.status-diagnostics-button:focus-visible .status-diagnostics-tooltip {
+  display: block;
 }
 
 .status-ok {
@@ -1922,10 +1961,10 @@ button:focus-visible,
   position: relative;
   display: grid;
   grid-template-rows: 32px 64px;
-  width: 168px;
-  height: 96px;
+  width: 100%;
+  height: 100%;
   border: 1px solid #454a53;
-  border-radius: 6px;
+  border-radius: 2px;
   background: #1d1f23;
   padding: 0;
   box-shadow: 0 1px 0 rgb(255 255 255 / 4%) inset;
@@ -1989,45 +2028,96 @@ button:focus-visible,
 
 .graph-flow-node-body {
   position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
   min-height: 0;
+  padding: 8px 10px;
+}
+
+.graph-flow-port-column {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-evenly;
+  min-width: 0;
+}
+
+.graph-flow-port-column.outputs {
+  text-align: right;
+}
+
+.graph-flow-port-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 20px;
+  color: #b9bec6;
+  font-size: 10px;
+}
+
+.graph-flow-port-column.outputs .graph-flow-port-row {
+  justify-content: flex-end;
 }
 
 .graph-flow-handle {
+  z-index: 3;
   width: 10px !important;
   height: 10px !important;
   border: 1px solid #111214 !important;
   background: #8ecae6 !important;
 }
 
+.graph-flow-resize-edge,
+.graph-flow-resize-corner {
+  z-index: 2;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+.graph-flow-resize-edge.left,
+.graph-flow-resize-edge.right {
+  width: 14px !important;
+}
+
+.graph-flow-resize-edge.top,
+.graph-flow-resize-edge.bottom {
+  height: 14px !important;
+}
+
+.graph-flow-resize-corner {
+  width: 22px !important;
+  height: 22px !important;
+}
+
 .graph-flow-handle.input {
-  left: -5px !important;
+  left: -16px !important;
 }
 
 .graph-flow-handle.output {
-  right: -5px !important;
+  right: -16px !important;
   background: #6abf8a !important;
 }
 
-.graph-flow-edge path {
+.graph-flow-edge .react-flow__edge-path {
   stroke: #8ecae6;
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
-.react-flow__edge.graph-flow-edge:hover path {
+.react-flow__edge.graph-flow-edge:hover .react-flow__edge-path {
   stroke-width: 3;
   filter: drop-shadow(0 0 5px rgb(142 202 230 / 45%));
 }
 
-.react-flow__edge.graph-flow-edge.selected path,
-.react-flow__edge.selected.graph-flow-edge path {
+.react-flow__edge.graph-flow-edge.selected .react-flow__edge-path,
+.react-flow__edge.selected.graph-flow-edge .react-flow__edge-path {
   stroke-width: 3;
   filter: drop-shadow(0 0 6px rgb(255 250 240 / 38%));
 }
 
 .react-flow__edge.graph-flow-edge .react-flow__edge-interaction {
-  stroke-width: 18;
+  vector-effect: non-scaling-stroke;
 }
 
 .graph-flow-controls {
@@ -2142,4 +2232,51 @@ button:focus-visible,
   height: 1px;
   margin: 5px 0;
   background: #30343a;
+}
+
+.graph-delete-dialog-backdrop {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 48%);
+}
+
+.graph-delete-dialog {
+  display: grid;
+  gap: 14px;
+  width: min(420px, calc(100vw - 32px));
+  border: 1px solid #454a53;
+  border-radius: 4px;
+  background: #1d1f23;
+  box-shadow: 0 16px 48px rgb(0 0 0 / 48%);
+  padding: 18px;
+  color: #ebe7df;
+}
+
+.graph-delete-dialog h3,
+.graph-delete-dialog p {
+  margin: 0;
+}
+
+.graph-delete-dialog label {
+  display: grid;
+  gap: 6px;
+}
+
+.graph-delete-dialog select {
+  height: 32px;
+}
+
+.graph-delete-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.graph-delete-dialog .danger-button {
+  border-color: #7a3e43;
+  background: #4a2529;
+  color: #ffe4e4;
 }

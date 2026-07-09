@@ -4,8 +4,7 @@ import type {
   SequenceEffectParam,
   SequenceEffectParamValue,
   SequenceEffectScope,
-  SequenceEffectScript,
-  SequenceGraphOperatorParam
+  SequenceEffectScript
 } from "../../../types";
 import { commands } from "../../../api";
 import { runGuiEditCommand } from "../../../store";
@@ -13,6 +12,7 @@ import { InspectorScrollArea, Readout } from "../InspectorScrollArea";
 import { formatSeconds, roundToNanosecond, type AutomationClipChooser, type GuiFocus, type SequenceSelection } from "../shared";
 import { ColorField, EffectParamInput } from "./params/EffectParamInput";
 import { graphEdgeId, graphEdgeLineages, parseGraphEdgeId } from "./graphEdge";
+import { graphOperatorDefinition } from "./graphOperator";
 import { defaultMarkColor, nextCollectionKey } from "./marks";
 import { selectedEffectId, selectionCompatibleWithFocusedItem, selectionCount } from "./sequenceSelection";
 import { targetsEqual } from "./sequenceTargets";
@@ -213,13 +213,19 @@ const id = selectedEffectId(selected);
             <h2>Graph Operator</h2>
             <div className="inspector-readout-grid">
               <Readout label="Node" value={selectedGraphNode.id} />
-              <Readout label="Operator" value={operatorLabel(operator.operator)} />
+              <Readout
+                label="Operator"
+                value={graphOperatorDefinition(
+                  selectedCompositionGraph.operatorCatalog,
+                  operator.operator
+                ).displayName}
+              />
               <Readout label="Inputs" value={String(incoming)} />
               <Readout label="Outputs" value={String(outgoing)} />
             </div>
             {operator.params.length > 0 && (
               <GraphParamSection
-                params={operator.params.map(graphOperatorParamToEffectParam)}
+                params={operator.params}
                 document={document}
                 commitParam={(name, value) =>
                   runGuiEditCommand(() =>
@@ -505,7 +511,8 @@ const id = selectedEffectId(selected);
                       void runGuiEditCommand(() =>
                         commands.applySequenceGuiEdit({
                           type: "deleteLayer",
-                          id: layer.id
+                          id: layer.id,
+                          migrateToLayerId: 0
                         })
                       );
                     }}
@@ -627,20 +634,4 @@ function GraphParamSection({
       </div>
     </>
   );
-}
-
-function graphOperatorParamToEffectParam(param: SequenceGraphOperatorParam): SequenceEffectParam {
-  return {
-    name: param.name,
-    kind: param.kind,
-    options: [],
-    editable: true,
-    value: param.value,
-    curveSource: null,
-    automation: null
-  };
-}
-
-function operatorLabel(operator: string) {
-  return operator.replace(/[A-Z]/g, (match) => ` ${match}`).replace(/^./, (match) => match.toUpperCase());
 }

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::sync::{Mutex, mpsc};
 use std::thread;
@@ -8,6 +8,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use dawn_project_io::{
     IoDiagnostic, IoDiagnosticSeverity, ProjectCheckReport, ProjectSession, SourceDocument,
     SourceDocumentKind, SourceObjectKind, check_document_text, check_project, save_project,
+    source_document_text as generated_source_document_text,
 };
 use indexmap::IndexSet;
 
@@ -612,6 +613,7 @@ impl DesktopState {
             );
         }
         let entrypoint = project.source.source_root.join(&project.source.entrypoint);
+        let sequence_imports = sequence_library_imports(&project, &sequence_path);
         let result = fs::create_dir_all(
             absolute_sequence_path
                 .parent()
@@ -629,6 +631,7 @@ impl DesktopState {
                             &request.object_key,
                             request.duration_seconds,
                             request.frame_rate,
+                            &sequence_imports,
                         )
                         .as_bytes(),
                     )
@@ -825,6 +828,16 @@ impl DesktopState {
                 document: crate::gui::blocked(error.message(), Vec::new()),
             };
         }
+        let generated_text = match generated_source_texts(&edited, &affected_paths) {
+            Ok(text) => text,
+            Err(message) => {
+                let snapshot = self.snapshot_with_error("gui.edit", &request.path, &message);
+                return GuiEditResult {
+                    snapshot,
+                    document: crate::gui::blocked(message, Vec::new()),
+                };
+            }
+        };
         let document = crate::gui::project_gui_document(Some(&edited), &request);
         self.push_gui_history(GuiHistoryEntry {
             before,
@@ -833,7 +846,7 @@ impl DesktopState {
             status_path: request.path.clone(),
         });
         self.schedule_gui_save(&edited, affected_paths, request.path.clone());
-        let snapshot = self.apply_gui_project_update(edited, "GUI edit applied");
+        let snapshot = self.apply_gui_project_update(edited, "GUI edit applied", generated_text);
         GuiEditResult { snapshot, document }
     }
 
@@ -847,6 +860,20 @@ impl DesktopState {
         };
         self.apply_gui_edit(request, GuiEditCommand::Sequence { edit })
             .snapshot
+    }
+
+    pub fn finish_composition_graph_editing(&self) -> AppSnapshot {
+        match self.render_refresh.lock() {
+            Ok(mut scheduler) => scheduler.invalidate_pending(),
+            Err(poisoned) => poisoned.into_inner().invalidate_pending(),
+        }
+        let render_error = self
+            .project_session()
+            .and_then(|session| self.refresh_render_session(&session.project));
+        self.update_snapshot(|snapshot| {
+            snapshot.render_error =
+                render_error.map(|error| format!("Render refresh failed: {error:?}"));
+        })
     }
 
     pub fn apply_sequence_selection_edit(
@@ -957,6 +984,22 @@ impl DesktopState {
         let snapshot = if edited.project == previous_project {
             self.snapshot()
         } else {
+            let generated_text = match generated_source_texts(&edited, &affected_paths) {
+                Ok(text) => text,
+                Err(message) => {
+                    return SequenceSelectionEditResult {
+                        snapshot: self.snapshot_with_error(
+                            "gui.sequence.selection",
+                            &request.path,
+                            &message,
+                        ),
+                        document: crate::gui::blocked(message, Vec::new()),
+                        selection: None,
+                        copied_count: 0,
+                        skipped_count: 0,
+                    };
+                }
+            };
             self.push_gui_history(GuiHistoryEntry {
                 before,
                 after: edited.clone(),
@@ -964,7 +1007,7 @@ impl DesktopState {
                 status_path: request.path.clone(),
             });
             self.schedule_gui_save(&edited, affected_paths, request.path.clone());
-            self.apply_gui_project_update(edited, "GUI selection edit applied")
+            self.apply_gui_project_update(edited, "GUI selection edit applied", generated_text)
         };
         SequenceSelectionEditResult {
             snapshot,
@@ -994,7 +1037,13 @@ impl DesktopState {
             entry.affected_paths.clone(),
             entry.status_path.clone(),
         );
-        self.apply_gui_project_update(entry.before, "GUI edit undone")
+        let generated_text = match generated_source_texts(&entry.before, &entry.affected_paths) {
+            Ok(text) => text,
+            Err(message) => {
+                return self.snapshot_with_error("gui.undo", &entry.status_path, &message);
+            }
+        };
+        self.apply_gui_project_update(entry.before, "GUI edit undone", generated_text)
     }
 
     pub fn redo_active_edit(&self) -> AppSnapshot {
@@ -1016,7 +1065,13 @@ impl DesktopState {
             entry.affected_paths.clone(),
             entry.status_path.clone(),
         );
-        self.apply_gui_project_update(entry.after, "GUI edit redone")
+        let generated_text = match generated_source_texts(&entry.after, &entry.affected_paths) {
+            Ok(text) => text,
+            Err(message) => {
+                return self.snapshot_with_error("gui.redo", &entry.status_path, &message);
+            }
+        };
+        self.apply_gui_project_update(entry.after, "GUI edit redone", generated_text)
     }
 
     fn apply_project_open_check(
@@ -1197,7 +1252,12 @@ impl DesktopState {
         })
     }
 
-    fn apply_gui_project_update(&self, session: ProjectSession, status: &str) -> AppSnapshot {
+    fn apply_gui_project_update(
+        &self,
+        session: ProjectSession,
+        status: &str,
+        generated_text: BTreeMap<String, String>,
+    ) -> AppSnapshot {
         let entries = workspace_entries(&session);
         let root = session.source.source_root.to_string();
         let project_model = session.project.clone();
@@ -1225,6 +1285,7 @@ impl DesktopState {
             if active_descriptor.is_some() {
                 snapshot.active_document_descriptor = active_descriptor;
             }
+            refresh_clean_buffers(snapshot, &generated_text);
             snapshot.status = status.to_string();
             snapshot.project_revision = snapshot.project_revision.saturating_add(1);
         })
@@ -1822,6 +1883,10 @@ impl RenderRefreshScheduler {
             .map_err(|_| RenderRefreshScheduleError)
     }
 
+    fn invalidate_pending(&mut self) {
+        self.latest_sequence = self.latest_sequence.saturating_add(1);
+    }
+
     fn drain_current_results(&self) -> Vec<RenderRefreshResult> {
         self.receiver
             .try_iter()
@@ -2111,6 +2176,48 @@ fn workspace_entry(path: Utf8PathBuf) -> WorkspaceEntry {
     }
 }
 
+fn generated_source_texts(
+    session: &ProjectSession,
+    paths: &BTreeSet<String>,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut texts = BTreeMap::new();
+    for path in paths {
+        match generated_source_document_text(session, Utf8Path::new(path)) {
+            Ok(Some(text)) => {
+                texts.insert(path.clone(), text);
+            }
+            Ok(None) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(texts)
+}
+
+fn refresh_clean_buffers(snapshot: &mut AppSnapshot, generated_text: &BTreeMap<String, String>) {
+    for (path, text) in generated_text {
+        if let Some(tab) = snapshot.tabs.iter_mut().find(|tab| tab.path == *path) {
+            if tab.dirty {
+                tab.external_state = BufferExternalState::ChangedOnDisk;
+            } else {
+                tab.text = text.clone();
+                tab.external_state = BufferExternalState::Current;
+            }
+        }
+        if let Some(buffer) = snapshot
+            .active_buffer
+            .as_mut()
+            .filter(|buffer| buffer.path == *path)
+        {
+            if buffer.dirty {
+                buffer.external_state = BufferExternalState::ChangedOnDisk;
+            } else {
+                buffer.text = text.clone();
+                buffer.external_state = BufferExternalState::Current;
+            }
+        }
+    }
+}
+
 fn editor_buffer(session: &ProjectSession, document: &SourceDocument) -> EditorBuffer {
     let disk_path = session.source.source_root.join(&document.relative_path);
     let text = fs::read_to_string(&disk_path).unwrap_or_else(|_| source_document_text(document));
@@ -2369,7 +2476,7 @@ fn new_project_files(project_name: &str) -> Vec<ProjectBoilerplateFile> {
         },
         ProjectBoilerplateFile {
             path: "sequences/main.sequence.dawn",
-            text: sequence_boilerplate("main", 60.0, 60),
+            text: sequence_boilerplate("main", 60.0, 60, &[]),
         },
     ]
 }
@@ -2389,11 +2496,81 @@ fn write_new_project_files(
     Ok(())
 }
 
-fn sequence_boilerplate(object_key: &str, duration_seconds: f64, frame_rate: u32) -> String {
+fn sequence_boilerplate(
+    object_key: &str,
+    duration_seconds: f64,
+    frame_rate: u32,
+    imports: &[(&str, Utf8PathBuf)],
+) -> String {
+    let imports = if imports.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "imports:\n{}",
+            imports
+                .iter()
+                .map(|(alias, from)| format!("- from: {from}\n  as: {alias}\n"))
+                .collect::<String>()
+        )
+    };
     format!(
-        "{object_key}:\n  type: sequence\n  duration: {}s\n  frame_rate: {frame_rate}\n  audio: null\n  mark_collections:\n  - key: marks\n    name: Marks\n    color: '#38bdf8'\n    marks: []\n  layers:\n  - id: 0\n    name: Default\n    color: '#38bdf8'\n    enabled: true\n  effects: []\n  composition_graph:\n    nodes:\n    - id: 1\n      position:\n        x: 80.0\n        y: 80.0\n      type: layer\n      layer_id: 0\n    - id: 2\n      position:\n        x: 420.0\n        y: 80.0\n      type: output\n    edges:\n    - from: 1\n      from_port: output\n      to: 2\n      to_port: input\n  automation_clips: []\n",
+        "{imports}{object_key}:\n  type: sequence\n  duration: {}s\n  frame_rate: {frame_rate}\n  audio: null\n  mark_collections:\n  - key: marks\n    name: Marks\n    color: '#38bdf8'\n    marks: []\n  layers:\n  - id: 0\n    name: Default\n    color: '#38bdf8'\n    enabled: true\n  effects: []\n  composition_graph:\n    nodes:\n    - id: 1\n      position:\n        x: 80.0\n        y: 80.0\n      type: layer\n      layer_id: 0\n    - id: 2\n      position:\n        x: 420.0\n        y: 80.0\n      type: output\n    edges:\n    - from: 1\n      from_port: output\n      to: 2\n      to_port: input\n  automation_clips: []\n",
         seconds_literal(duration_seconds)
     )
+}
+
+fn sequence_library_imports(
+    project: &ProjectSession,
+    sequence_path: &Utf8Path,
+) -> Vec<(&'static str, Utf8PathBuf)> {
+    ["effects", "curves"]
+        .into_iter()
+        .filter(|alias| project_library_exists(project, alias))
+        .map(|alias| {
+            (
+                alias,
+                relative_path_from_document(sequence_path, Utf8Path::new(alias)),
+            )
+        })
+        .collect()
+}
+
+fn project_library_exists(project: &ProjectSession, alias: &str) -> bool {
+    let alias_path = Utf8Path::new(alias);
+    project.source.source_root.join(alias).is_dir()
+        || project
+            .source
+            .documents
+            .keys()
+            .any(|path| path.starts_with(alias_path))
+}
+
+fn relative_path_from_document(from_document: &Utf8Path, target: &Utf8Path) -> Utf8PathBuf {
+    let from_dir = from_document.parent().unwrap_or_else(|| Utf8Path::new(""));
+    let from_components = normal_components(from_dir);
+    let target_components = normal_components(target);
+    let common_len = from_components
+        .iter()
+        .zip(target_components.iter())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut relative = Utf8PathBuf::new();
+    for _ in common_len..from_components.len() {
+        relative.push("..");
+    }
+    for component in target_components.iter().skip(common_len) {
+        relative.push(component);
+    }
+    relative
+}
+
+fn normal_components(path: &Utf8Path) -> Vec<String> {
+    path.components()
+        .filter_map(|component| match component {
+            camino::Utf8Component::Normal(part) => Some(part.to_string()),
+            _ => None,
+        })
+        .collect()
 }
 
 fn add_sequence_to_project_entrypoint(

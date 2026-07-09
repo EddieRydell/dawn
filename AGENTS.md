@@ -18,6 +18,7 @@ Do not reintroduce custom benchmark CLIs, JSON reporters, legacy aliases, or old
 ## Agent-Specific Instructions
 
 Do not write tests unless specifically requested.
+Never reinvent a pattern or solve a problem that has already been solved. Use dependencies (after asking the user) to solve problems rather than reinventing the wheel.
 Avoid using strings in internal logic. Prefer enums or other structured data.
 Do not reintroduce generated web bindings or desktop schema files.
 Avoid unrelated edits to lockfiles, IDE files, or generated assets. 

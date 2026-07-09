@@ -753,6 +753,12 @@ fn sequence_with_graph(
     left_group_id: u32,
     right_group_id: u32,
 ) -> Sequence {
+    let input_ports = operator
+        .definition()
+        .inputs
+        .iter()
+        .map(|port| port.source_name)
+        .collect::<Vec<_>>();
     let mut left = constant_effect(
         1,
         0.0,
@@ -803,8 +809,8 @@ fn sequence_with_graph(
             },
         ],
         edges: vec![
-            node_edge(1, "output", 3, "a"),
-            node_edge(2, "output", 3, "b"),
+            node_edge(1, "output", 3, input_ports[0]),
+            node_edge(2, "output", 3, input_ports[1]),
             node_edge(3, "output", 4, "input"),
         ],
     };

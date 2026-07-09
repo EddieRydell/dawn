@@ -87,7 +87,8 @@ function GuiEditorInner({
       ? restoreState?.sequenceViewports[`${gui.document.path}::${gui.document.objectKey}`]
       : undefined;
   const [selected, setSelected] = useState<GuiFocus>(null);
-  const [compositionGraphOpen, setCompositionGraphOpen] = useState(false);
+  const compositionGraphOpen = useAppStore((store) => store.compositionGraphEditing);
+  const setCompositionGraphOpen = useAppStore((store) => store.setCompositionGraphEditing);
   const [automationClipChooser, setAutomationClipChooser] = useState<AutomationClipChooser>(null);
   const [activeMarkCollectionKey, setActiveMarkCollectionKey] = useState<string | null>(() =>
     gui.type === "sequence"
@@ -113,7 +114,14 @@ function GuiEditorInner({
     return () => {
       window.removeEventListener(OPEN_LAYER_GRAPH_EVENT, openLayerGraph);
     };
-  }, [gui.type]);
+  }, [gui.type, setCompositionGraphOpen]);
+
+  useEffect(
+    () => () => {
+      setCompositionGraphOpen(false);
+    },
+    [setCompositionGraphOpen]
+  );
 
   return (
     <div

@@ -201,6 +201,12 @@ pub fn apply_sequence_gui_edit(
 
 #[tauri::command]
 #[specta::specta]
+pub fn finish_composition_graph_editing(state: State<'_, DesktopState>) -> AppSnapshot {
+    state.finish_composition_graph_editing()
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn apply_sequence_selection_edit(
     edit: SequenceSelectionEdit,
     state: State<'_, DesktopState>,
@@ -492,6 +498,7 @@ pub fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         take_sequence_clip_raster_results,
         apply_gui_edit,
         apply_sequence_gui_edit,
+        finish_composition_graph_editing,
         apply_sequence_selection_edit,
         choose_sequence_audio,
         clear_sequence_audio,

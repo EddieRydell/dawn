@@ -1040,7 +1040,6 @@ fn render_effect_raster(
     let columns = display_column_count
         .min(stride_limited_columns)
         .clamp(1, settings.max_columns.max(1)) as usize;
-    let sample_step_frames = (duration_frames / columns as f64).max(min_frame_stride);
     let rows = target_pixel_count
         .min(display_row_count as usize)
         .min(settings.max_rows.max(1) as usize);
@@ -1050,8 +1049,9 @@ fn render_effect_raster(
         if !should_continue() {
             return Err(RasterRenderFailure::Cancelled);
         }
-        let sample_seconds =
-            start_seconds + (column as f64 * sample_step_frames) / f64::from(renderer.frame_rate());
+        let sample_seconds = renderer
+            .sampled_raster_column_seconds(column, columns)
+            .map_err(|error| RasterRenderFailure::Error(format!("{error:?}")))?;
         let colors = renderer
             .render_sampled_raster_column(&sample, sample_seconds)
             .map_err(|error| RasterRenderFailure::Error(format!("{error:?}")))?;

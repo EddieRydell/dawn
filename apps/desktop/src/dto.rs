@@ -756,6 +756,7 @@ pub enum SequenceTimelineClipKind {
 #[serde(rename_all = "camelCase")]
 pub struct SequenceCompositionGraph {
     pub id: u32,
+    pub operator_catalog: Vec<SequenceGraphOperatorDefinition>,
     pub nodes: Vec<SequenceGraphNode>,
     pub edges: Vec<SequenceGraphEdge>,
 }
@@ -766,6 +767,8 @@ pub struct SequenceGraphNode {
     pub id: String,
     pub x: f64,
     pub y: f64,
+    pub inputs: Vec<SequenceGraphPortDefinition>,
+    pub outputs: Vec<SequenceGraphPortDefinition>,
     pub kind: SequenceGraphNodeKind,
 }
 
@@ -784,7 +787,7 @@ pub enum SequenceGraphNodeKind {
     },
     Operator {
         operator: SequenceGraphOperator,
-        params: Vec<SequenceGraphOperatorParam>,
+        params: Vec<SequenceEffectParam>,
     },
     Output,
 }
@@ -814,10 +817,27 @@ pub enum SequenceGraphOperator {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SequenceGraphOperatorParam {
-    pub name: String,
-    pub kind: SequenceEffectParamKind,
-    pub value: SequenceEffectParamValue,
+pub struct SequenceGraphOperatorDefinition {
+    pub operator: SequenceGraphOperator,
+    pub source_name: String,
+    pub display_name: String,
+    pub inputs: Vec<SequenceGraphPortDefinition>,
+    pub outputs: Vec<SequenceGraphPortDefinition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceGraphPortDefinition {
+    pub source_name: String,
+    pub display_name: String,
+    pub cardinality: SequenceGraphPortCardinality,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SequenceGraphPortCardinality {
+    One,
+    Many,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -921,6 +941,12 @@ pub enum SequenceGuiEdit {
         name: String,
         color: String,
     },
+    CreateLayerAt {
+        name: String,
+        color: String,
+        x: f64,
+        y: f64,
+    },
     RenameLayer {
         id: u32,
         name: String,
@@ -935,6 +961,7 @@ pub enum SequenceGuiEdit {
     },
     DeleteLayer {
         id: u32,
+        migrate_to_layer_id: u32,
     },
     SetEffectLayer {
         id: u32,

@@ -24,7 +24,7 @@ use dawn_language::sequence::{
     EffectClip, EffectGraphEdge, GraphNodePosition, GraphOperator, GraphOperatorNode,
     GraphOperatorRef, GraphPortId, MarkCollection, MarkCollectionKey, Sequence, SequenceAudio,
     SequenceClip, SequenceClipId, SequenceClipKind, SequenceCompositionGraph, SequenceId,
-    SequenceLayer, SequenceLayerId,
+    SequenceLayer, SequenceLayerId, validate_graph_interface,
 };
 use dawn_language::setup::{
     ControllerAddress, ControllerDefinition, ControllerDefinitionId, ControllerId,
@@ -308,6 +308,140 @@ pub fn source_document_text(
         return Ok(None);
     };
     document_text(document).map(Some)
+}
+
+pub fn ensure_document_can_reference(
+    session: &mut ProjectSession,
+    from_document: &Utf8Path,
+    kind: SourceObjectKind,
+    id: &str,
+) -> Result<(), ExportProjectError> {
+    let alias =
+        canonical_reference_alias(&kind).ok_or_else(|| ExportProjectError::InvalidReference {
+            path: from_document.to_path_buf(),
+            reference: id.to_string(),
+            message: format!("no canonical import alias exists for {kind:?} references"),
+        })?;
+    let target = SourceObjectId {
+        kind,
+        id: id.to_string(),
+    };
+    let location = session
+        .source
+        .source_map
+        .objects
+        .get(&target)
+        .ok_or_else(|| ExportProjectError::InvalidReference {
+            path: from_document.to_path_buf(),
+            reference: id.to_string(),
+            message: "target is missing from the source map".to_string(),
+        })?;
+    let target_document = location.document.clone();
+    let import_from = canonical_import_from(from_document, alias, &target_document);
+    let import_targets = canonical_import_targets(&session.source, alias, &target_document);
+
+    let document = session
+        .source
+        .documents
+        .get_mut(from_document)
+        .ok_or_else(|| ExportProjectError::InvalidReference {
+            path: from_document.to_path_buf(),
+            reference: id.to_string(),
+            message: "source document is missing from the source project".to_string(),
+        })?;
+    if let Some(existing) = document.imports.iter().find(|import| import.alias == alias) {
+        if existing.from != import_from {
+            return Err(ExportProjectError::InvalidReference {
+                path: from_document.to_path_buf(),
+                reference: id.to_string(),
+                message: format!(
+                    "import alias `{alias}` already points to `{}` instead of `{import_from}`",
+                    existing.from
+                ),
+            });
+        }
+    } else {
+        document.imports.push(ImportDecl {
+            from: import_from.clone(),
+            alias: alias.to_string(),
+        });
+    }
+
+    let edges = session
+        .source
+        .import_graph
+        .entry(from_document.to_path_buf())
+        .or_default();
+    if let Some(existing) = edges.iter_mut().find(|edge| edge.alias == alias) {
+        if existing.from != import_from {
+            return Err(ExportProjectError::InvalidReference {
+                path: from_document.to_path_buf(),
+                reference: id.to_string(),
+                message: format!(
+                    "import alias `{alias}` already points to `{}` instead of `{import_from}`",
+                    existing.from
+                ),
+            });
+        }
+        for target in import_targets {
+            if !existing.targets.contains(&target) {
+                existing.targets.push(target);
+            }
+        }
+    } else {
+        edges.push(ImportEdge {
+            alias: alias.to_string(),
+            from: import_from,
+            targets: import_targets,
+        });
+    }
+    Ok(())
+}
+
+fn canonical_reference_alias(kind: &SourceObjectKind) -> Option<&'static str> {
+    match kind {
+        SourceObjectKind::EffectDefinition => Some("effects"),
+        SourceObjectKind::Curve => Some("curves"),
+        _ => None,
+    }
+}
+
+fn canonical_import_from(
+    from_document: &Utf8Path,
+    alias: &str,
+    target_document: &Utf8Path,
+) -> Utf8PathBuf {
+    let alias_path = Utf8Path::new(alias);
+    let import_target = if target_document.starts_with(alias_path) {
+        Utf8PathBuf::from(alias)
+    } else {
+        target_document.to_path_buf()
+    };
+    relative_path_from_document(from_document, &import_target)
+}
+
+fn canonical_import_targets(
+    source: &SourceProject,
+    alias: &str,
+    target_document: &Utf8Path,
+) -> Vec<Utf8PathBuf> {
+    let alias_path = Utf8Path::new(alias);
+    let mut targets = if target_document.starts_with(alias_path) {
+        source
+            .documents
+            .keys()
+            .filter(|path| path.starts_with(alias_path))
+            .cloned()
+            .collect::<Vec<_>>()
+    } else {
+        vec![target_document.to_path_buf()]
+    };
+    if !targets.iter().any(|target| target == target_document) {
+        targets.push(target_document.to_path_buf());
+    }
+    targets.sort();
+    targets.dedup();
+    targets
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1735,17 +1869,7 @@ fn graph_edge_value(edge: &EffectGraphEdge) -> Result<Value, ExportProjectError>
 
 fn graph_operator_name(operator: &GraphOperatorRef) -> &'static str {
     let GraphOperatorRef::Builtin(operator) = operator;
-    match operator {
-        GraphOperator::Max => "max",
-        GraphOperator::Add => "add",
-        GraphOperator::Multiply => "multiply",
-        GraphOperator::IntensityModulate => "intensity_modulate",
-        GraphOperator::Dim => "dim",
-        GraphOperator::Invert => "invert",
-        GraphOperator::Colorize => "colorize",
-        GraphOperator::Delay => "delay",
-        GraphOperator::Echo => "echo",
-    }
+    operator.definition().source_name
 }
 
 fn automation_clip_value(clip: &AutomationClip) -> Result<Value, ExportProjectError> {
@@ -3389,7 +3513,7 @@ impl DomainResolver<'_> {
         path: &Utf8Path,
         value: &Value,
     ) -> Result<SequenceCompositionGraph, LoadProjectError> {
-        Ok(SequenceCompositionGraph {
+        let graph = SequenceCompositionGraph {
             nodes: sequence_values(path, value, "nodes")?
                 .iter()
                 .map(|node| self.parse_composition_graph_node(path, node))
@@ -3398,7 +3522,13 @@ impl DomainResolver<'_> {
                 .iter()
                 .map(|edge| parse_graph_edge(path, edge))
                 .collect::<Result<Vec<_>, _>>()?,
-        })
+        };
+        validate_graph_interface(&graph).map_err(|error| LoadProjectError::InvalidDocument {
+            path: path.to_path_buf(),
+            range: None,
+            message: error.message,
+        })?;
+        Ok(graph)
     }
 
     fn parse_composition_graph_node(
@@ -4058,22 +4188,12 @@ fn parse_graph_edge(path: &Utf8Path, value: &Value) -> Result<EffectGraphEdge, L
 }
 
 fn parse_graph_operator(path: &Utf8Path, value: &Value) -> Result<GraphOperator, LoadProjectError> {
-    match string_field(path, value, "operator")? {
-        "max" => Ok(GraphOperator::Max),
-        "add" => Ok(GraphOperator::Add),
-        "multiply" => Ok(GraphOperator::Multiply),
-        "intensity_modulate" => Ok(GraphOperator::IntensityModulate),
-        "dim" => Ok(GraphOperator::Dim),
-        "invert" => Ok(GraphOperator::Invert),
-        "colorize" => Ok(GraphOperator::Colorize),
-        "delay" => Ok(GraphOperator::Delay),
-        "echo" => Ok(GraphOperator::Echo),
-        other => Err(LoadProjectError::InvalidDocument {
-            path: path.to_path_buf(),
-            range: source_range_for_field_value(path, value, "operator"),
-            message: format!("unsupported graph operator `{other}`"),
-        }),
-    }
+    let name = string_field(path, value, "operator")?;
+    GraphOperator::from_source_name(name).ok_or_else(|| LoadProjectError::InvalidDocument {
+        path: path.to_path_buf(),
+        range: source_range_for_field_value(path, value, "operator"),
+        message: format!("unsupported graph operator `{name}`"),
+    })
 }
 
 fn parse_curve(path: &Utf8Path, value: &Value) -> Result<Curve, LoadProjectError> {

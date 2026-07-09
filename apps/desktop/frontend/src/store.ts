@@ -12,6 +12,7 @@ type AppStore = {
   guiRequest: GuiDocumentRequest | null;
   guiDocument: GuiDocument | null;
   guiResetRevision: number;
+  compositionGraphEditing: boolean;
   error: string | null;
   localText: string;
   setSnapshot: (snapshot: AppSnapshot, source?: SnapshotApplySource) => void;
@@ -19,6 +20,7 @@ type AppStore = {
   setGuiRequest: (request: GuiDocumentRequest | null) => void;
   setGuiDocument: (document: GuiDocument | null) => void;
   resetGuiLocalState: () => void;
+  setCompositionGraphEditing: (editing: boolean) => void;
   applyGuiEditResult: (result: GuiEditResult) => void;
   setError: (error: string | null) => void;
   setLocalText: (text: string) => void;
@@ -31,6 +33,7 @@ export const useAppStore = create<AppStore>((set) => ({
   guiRequest: null,
   guiDocument: null,
   guiResetRevision: 0,
+  compositionGraphEditing: false,
   error: null,
   localText: "",
   setSnapshot: (snapshot, source = "command") => {
@@ -64,7 +67,13 @@ export const useAppStore = create<AppStore>((set) => ({
     set({ guiDocument });
   },
   resetGuiLocalState: () => {
-    set((current) => ({ guiResetRevision: current.guiResetRevision + 1 }));
+    set((current) => ({
+      guiResetRevision: current.guiResetRevision + 1,
+      compositionGraphEditing: false
+    }));
+  },
+  setCompositionGraphEditing: (compositionGraphEditing) => {
+    set({ compositionGraphEditing });
   },
   applyGuiEditResult: (result) => {
     set((current) => {
@@ -73,13 +82,17 @@ export const useAppStore = create<AppStore>((set) => ({
         result.snapshot.audioTransport,
         "command"
       );
-      return {
+      const nextState: Partial<AppStore> = {
         snapshot: {
           ...result.snapshot,
           audioTransport
         },
         guiDocument: result.document
       };
+      if (result.snapshot.activeBuffer !== null && effectiveEditorViewMode(result.snapshot) === "text") {
+        nextState.localText = result.snapshot.activeBuffer.text;
+      }
+      return nextState;
     });
   },
   setError: (error) => {

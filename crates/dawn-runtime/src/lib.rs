@@ -23,7 +23,7 @@ use dawn_language::sequence::{
     AutomationBinding, AutomationClip, AutomationMapping, AutomationTarget, CompositionGraphNodeId,
     CompositionGraphNodeKind, EffectClip, GraphOperator, GraphOperatorRef, GraphPortId,
     MarkCollectionKey, Sequence, SequenceClip, SequenceClipId, SequenceClipKind,
-    SequenceCompositionGraph, SequenceId, SequenceLayerId,
+    SequenceCompositionGraph, SequenceId, SequenceLayerId, validate_graph_interface,
 };
 use dawn_language::setup::{
     FixtureGroupId, FixtureInst, FixtureInstanceId, Geometry, Layout, SetupId,
@@ -397,6 +397,27 @@ impl PreparedEffectRasterRenderer {
         self.target.len()
     }
 
+    pub fn sampled_raster_column_seconds(
+        &self,
+        column_index: usize,
+        column_count: usize,
+    ) -> Result<f64, RenderError> {
+        if column_count == 0 || column_index >= column_count {
+            return Err(RenderError::InvalidTiming {
+                reason: "raster column index must be within a non-empty raster".to_string(),
+            });
+        }
+        let end_frame = ((self.start_seconds + self.duration_seconds) * f64::from(self.frame_rate))
+            .ceil()
+            .max(self.index_start_frame as f64) as u64;
+        let active_frame_count = end_frame.saturating_sub(self.index_start_frame).max(1);
+        let sample_offset = (((column_index as f64 + 0.5) * active_frame_count as f64
+            / column_count as f64)
+            .floor() as u64)
+            .min(active_frame_count.saturating_sub(1));
+        Ok((self.index_start_frame + sample_offset) as f64 / f64::from(self.frame_rate))
+    }
+
     pub fn render_target_colors(&self, audio_seconds: f64) -> Result<Vec<Color>, RenderError> {
         if !audio_seconds.is_finite() {
             return Err(RenderError::InvalidTiming {
@@ -637,10 +658,11 @@ impl<'a> EffectRasterPrepareBatch<'a> {
 
         let start_seconds = clip.start.as_seconds_f64();
         let duration_seconds = clip.duration.as_seconds_f64();
-        let index_start_frame = (start_seconds * f64::from(self.frame_rate))
-            .floor()
-            .max(0.0) as u64;
-        let index_frame_count = frame_count(duration_seconds, self.frame_rate);
+        let index_start_frame = (start_seconds * f64::from(self.frame_rate)).ceil().max(0.0) as u64;
+        let index_end_frame = ((start_seconds + duration_seconds) * f64::from(self.frame_rate))
+            .ceil()
+            .max(index_start_frame as f64) as u64;
+        let index_frame_count = index_end_frame.saturating_sub(index_start_frame).max(1);
         let effects_by_frame = build_effect_frame_index_for_window(
             &effects,
             index_start_frame,
@@ -802,6 +824,9 @@ fn prepare_composition_graph(
     graph: &SequenceCompositionGraph,
 ) -> Result<PreparedCompositionGraph, RenderError> {
     let full_target = Arc::new(full_rig_target_pixels(context.fixtures)?);
+    validate_graph_interface(graph).map_err(|error| RenderError::BadGraph {
+        message: error.message,
+    })?;
     validate_composition_graph_layers(context.sequence, graph)?;
     let node_ids = composition_graph_node_ids(graph)?;
     let node_indexes = node_ids
@@ -851,9 +876,10 @@ fn prepare_composition_graph(
                     kind: PreparedGraphNodeKind::Operator {
                         operator: operator.clone(),
                         inputs,
-                        params: prepare_params(
+                        params: prepare_operator_params(
                             context.project,
                             context.sequence,
+                            operator,
                             &operator_node.params,
                             EffectParamTiming {
                                 start_seconds: 0.0,
@@ -1040,37 +1066,13 @@ fn topological_composition_graph_order(
 }
 
 fn validate_operator_inputs(operator: &GraphOperator, inputs: &[usize]) -> Result<(), RenderError> {
-    let valid = match operator {
-        GraphOperator::Max
-        | GraphOperator::Add
-        | GraphOperator::Multiply
-        | GraphOperator::IntensityModulate => inputs.len() == 2,
-        GraphOperator::Dim
-        | GraphOperator::Invert
-        | GraphOperator::Colorize
-        | GraphOperator::Delay
-        | GraphOperator::Echo => inputs.len() == 1,
-    };
+    let valid = inputs.len() == operator.definition().inputs.len();
     if valid {
         Ok(())
     } else {
         Err(RenderError::BadGraph {
             message: format!("operator {:?} has wrong input count", operator),
         })
-    }
-}
-
-fn operator_input_ports(operator: &GraphOperator) -> &'static [&'static str] {
-    match operator {
-        GraphOperator::Max
-        | GraphOperator::Add
-        | GraphOperator::Multiply
-        | GraphOperator::IntensityModulate => &["a", "b"],
-        GraphOperator::Dim
-        | GraphOperator::Invert
-        | GraphOperator::Colorize
-        | GraphOperator::Delay
-        | GraphOperator::Echo => &["input"],
     }
 }
 
@@ -1116,7 +1118,7 @@ fn composition_node_inputs(
 fn composition_input_ports(
     graph: &SequenceCompositionGraph,
     node_id: &CompositionGraphNodeId,
-) -> Result<&'static [&'static str], RenderError> {
+) -> Result<Vec<&'static str>, RenderError> {
     Ok(composition_node_input_ports(
         &graph_node(graph, node_id)?.kind,
     ))
@@ -1131,16 +1133,21 @@ fn composition_output_ports(
     ))
 }
 
-fn composition_node_input_ports(kind: &CompositionGraphNodeKind) -> &'static [&'static str] {
+fn composition_node_input_ports(kind: &CompositionGraphNodeKind) -> Vec<&'static str> {
     match kind {
-        CompositionGraphNodeKind::Layer { .. } => &[],
+        CompositionGraphNodeKind::Layer { .. } => vec![],
         CompositionGraphNodeKind::Operator(operator) => {
             match builtin_graph_operator(&operator.operator) {
-                Ok(operator) => operator_input_ports(operator),
-                Err(_) => &[],
+                Ok(operator) => operator
+                    .definition()
+                    .inputs
+                    .iter()
+                    .map(|port| port.source_name)
+                    .collect(),
+                Err(_) => vec![],
             }
         }
-        CompositionGraphNodeKind::Output => &["input"],
+        CompositionGraphNodeKind::Output => vec!["input"],
     }
 }
 
@@ -1393,6 +1400,30 @@ fn prepare_params(
             ))
         })
         .collect()
+}
+
+fn prepare_operator_params(
+    project: &DawnProject,
+    sequence: &Sequence,
+    operator: &GraphOperator,
+    overrides: &IndexMap<Identifier, EffectParamValue>,
+    timing: EffectParamTiming,
+) -> Result<IndexMap<Identifier, Value>, RenderError> {
+    let mut params = operator
+        .definition()
+        .params
+        .iter()
+        .filter_map(|param| {
+            param
+                .default
+                .as_ref()
+                .map(|default| (param.name.clone(), default.clone()))
+        })
+        .collect::<IndexMap<_, _>>();
+    for (name, value) in prepare_params(project, sequence, overrides, timing)? {
+        params.insert(name, value);
+    }
+    Ok(params)
 }
 
 #[derive(Clone, Copy)]
@@ -2121,7 +2152,7 @@ fn render_graph_operator(
                 .collect())
         }
         GraphOperator::Dim => {
-            let amount = float_param(params, "amount", 0.5).clamp(0.0, 1.0);
+            let amount = float_param(params, "amount")?.clamp(0.0, 1.0);
             let source = render_graph_node(graph, inputs[0], sample_seconds, layer_buffers, cache)?;
             Ok(source
                 .into_iter()
@@ -2133,7 +2164,7 @@ fn render_graph_operator(
             Ok(source.into_iter().map(invert_color).collect())
         }
         GraphOperator::Colorize => {
-            let tint = color_param(params, "color", color_rgb(255, 255, 255));
+            let tint = color_param(params, "color")?;
             let source = render_graph_node(graph, inputs[0], sample_seconds, layer_buffers, cache)?;
             Ok(source
                 .into_iter()
@@ -2141,7 +2172,7 @@ fn render_graph_operator(
                 .collect())
         }
         GraphOperator::Delay => {
-            let delay = float_param(params, "seconds", 0.1).max(0.0);
+            let delay = float_param(params, "seconds")?.max(0.0);
             render_graph_node(
                 graph,
                 inputs[0],
@@ -2151,9 +2182,9 @@ fn render_graph_operator(
             )
         }
         GraphOperator::Echo => {
-            let delay = float_param(params, "seconds", 0.1).max(0.0);
-            let repeats = int_param(params, "repeats", 3).clamp(1, 32);
-            let decay = float_param(params, "decay", 0.5).clamp(0.0, 1.0);
+            let delay = float_param(params, "seconds")?.max(0.0);
+            let repeats = int_param(params, "repeats")?.clamp(1, 32);
+            let decay = float_param(params, "decay")?.clamp(0.0, 1.0);
             let mut output = vec![black(); graph.nodes[inputs[0]].target.len()];
             for repeat in 0..=repeats {
                 let source = render_graph_node(
@@ -2477,49 +2508,49 @@ fn intensity(color: Color) -> f64 {
     f64::from(color.red.max(color.green).max(color.blue)) / 255.0
 }
 
-fn float_param(params: &IndexMap<Identifier, Value>, name: &str, default: f64) -> f64 {
-    let Ok(name) = Identifier::new(name.to_string()) else {
-        return default;
-    };
+fn float_param(params: &IndexMap<Identifier, Value>, name: &str) -> Result<f64, RenderError> {
+    let name = Identifier::new(name.to_string()).map_err(|_| RenderError::BadGraph {
+        message: format!("invalid operator parameter name `{name}`"),
+    })?;
     params
         .get(&name)
         .and_then(|value| match value {
             Value::Float(value) => Some(*value),
-            Value::Int(value) => Some(*value as f64),
             _ => None,
         })
-        .unwrap_or(default)
+        .ok_or_else(|| RenderError::BadGraph {
+            message: format!("missing or invalid operator parameter `{}`", name.as_str()),
+        })
 }
 
-fn int_param(params: &IndexMap<Identifier, Value>, name: &str, default: i64) -> i64 {
-    let Ok(name) = Identifier::new(name.to_string()) else {
-        return default;
-    };
+fn int_param(params: &IndexMap<Identifier, Value>, name: &str) -> Result<i64, RenderError> {
+    let name = Identifier::new(name.to_string()).map_err(|_| RenderError::BadGraph {
+        message: format!("invalid operator parameter name `{name}`"),
+    })?;
     params
         .get(&name)
         .and_then(|value| match value {
             Value::Int(value) => Some(*value),
-            Value::Float(value) => Some(value.round() as i64),
             _ => None,
         })
-        .unwrap_or(default)
+        .ok_or_else(|| RenderError::BadGraph {
+            message: format!("missing or invalid operator parameter `{}`", name.as_str()),
+        })
 }
 
-fn color_param(params: &IndexMap<Identifier, Value>, name: &str, default: Color) -> Color {
-    let Ok(name) = Identifier::new(name.to_string()) else {
-        return default;
-    };
+fn color_param(params: &IndexMap<Identifier, Value>, name: &str) -> Result<Color, RenderError> {
+    let name = Identifier::new(name.to_string()).map_err(|_| RenderError::BadGraph {
+        message: format!("invalid operator parameter name `{name}`"),
+    })?;
     params
         .get(&name)
         .and_then(|value| match value {
             Value::Color(value) => Some(*value),
             _ => None,
         })
-        .unwrap_or(default)
-}
-
-fn color_rgb(red: u8, green: u8, blue: u8) -> Color {
-    Color { red, green, blue }
+        .ok_or_else(|| RenderError::BadGraph {
+            message: format!("missing or invalid operator parameter `{}`", name.as_str()),
+        })
 }
 
 fn black() -> Color {
