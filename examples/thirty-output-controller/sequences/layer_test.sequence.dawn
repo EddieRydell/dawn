@@ -64,6 +64,12 @@ layer_test:
           points:
           - time: 0.0
             value: '#ffffff'
+          - time: 0.304
+            value: '#ffffff'
+          - time: 0.657
+            value: '#000000'
+          - time: 0.863
+            value: '#000000'
       pulse_shape:
         type: curve
         curve:

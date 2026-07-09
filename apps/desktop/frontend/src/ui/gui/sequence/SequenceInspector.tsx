@@ -376,18 +376,17 @@ function LayerInspectorPanel({ document }: { document: SequenceEditorDocument })
                 )
               }
             />
-            <input
-              type="color"
+            <ColorPicker
               value={layer.color}
-              aria-label={`${layer.name} color`}
-              onChange={(event) =>
-                void runGuiEditCommand(() =>
+              label={`${layer.name} color`}
+              commit={(color) =>
+                runGuiEditCommand(() =>
                   commands.applySequenceGuiEdit({
                     type: "setLayerColor",
                     id: layer.id,
-                    color: event.currentTarget.value
+                    color
                   })
-                )
+                ).then(() => undefined)
               }
             />
             <input

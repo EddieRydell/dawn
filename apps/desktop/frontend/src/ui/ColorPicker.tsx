@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { HexColorPicker } from "react-colorful";
 
 type RgbColor = { r: number; g: number; b: number };
@@ -7,34 +8,60 @@ type HsvColor = { h: number; s: number; v: number };
 export function ColorPicker({
   value,
   label,
+  className = "",
+  triggerClassName = "",
   commit
 }: {
   value: string;
   label: string;
+  className?: string;
+  triggerClassName?: string;
   commit: (value: string) => Promise<void>;
 }) {
   const normalizedValue = normalizeHexColor(value) ?? "#ffffff";
   const [open, setOpen] = useState(false);
   const [pickerDraft, setPickerDraft] = useState(normalizedValue);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [popoverPosition, setPopoverPosition] = useState({ top: 0, left: 0 });
   const draft = open ? pickerDraft : normalizedValue;
   const rgb = useMemo(() => hexToRgb(draft), [draft]);
   const hsv = useMemo(() => rgbToHsv(rgb), [rgb]);
 
   useEffect(() => {
     if (!open) return;
+    const updatePopoverPosition = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (rect === undefined) return;
+      const width = 258;
+      const height = 348;
+      const gap = 6;
+      const below = rect.bottom + gap;
+      const above = rect.top - height - gap;
+      setPopoverPosition({
+        top: below + height > window.innerHeight - 8 ? Math.max(8, above) : below,
+        left: clamp(rect.left, 8, window.innerWidth - width - 8)
+      });
+    };
     const closeOnPointerDown = (event: MouseEvent) => {
-      if (rootRef.current?.contains(event.target as Node) === true) return;
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target) === true || popoverRef.current?.contains(target) === true) return;
       setOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
     };
+    updatePopoverPosition();
     window.addEventListener("mousedown", closeOnPointerDown);
     window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", updatePopoverPosition);
+    window.addEventListener("scroll", updatePopoverPosition, true);
     return () => {
       window.removeEventListener("mousedown", closeOnPointerDown);
       window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", updatePopoverPosition);
+      window.removeEventListener("scroll", updatePopoverPosition, true);
     };
   }, [open]);
 
@@ -54,10 +81,11 @@ export function ColorPicker({
   };
 
   return (
-    <div ref={rootRef} className="color-picker">
+    <div ref={rootRef} className={`color-picker ${className}`}>
       <button
+        ref={triggerRef}
         type="button"
-        className="color-picker-trigger"
+        className={`color-picker-trigger ${triggerClassName}`}
         aria-label={label}
         title={label}
         style={{ "--color-picker-value": draft } as CSSProperties}
@@ -66,8 +94,12 @@ export function ColorPicker({
           setOpen(!open);
         }}
       />
-      {open && (
-        <div className="color-picker-popover">
+      {open && createPortal(
+        <div
+          ref={popoverRef}
+          className="color-picker-popover"
+          style={{ top: popoverPosition.top, left: popoverPosition.left }}
+        >
           <HexColorPicker color={draft} onChange={setPickerDraft} onChangeEnd={commitColor} />
           <div className="color-picker-grid">
             <label>
@@ -93,7 +125,8 @@ export function ColorPicker({
             <NumberColorInput label="S" value={Math.round(hsv.s)} min={0} max={100} commit={(s) => { updateHsv({ ...hsv, s }); }} />
             <NumberColorInput label="V" value={Math.round(hsv.v)} min={0} max={100} commit={(v) => { updateHsv({ ...hsv, v }); }} />
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

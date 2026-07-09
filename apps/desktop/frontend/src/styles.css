@@ -933,10 +933,8 @@ button:focus-visible,
 }
 
 .color-picker-popover {
-  position: absolute;
-  z-index: 60;
-  top: calc(100% + 6px);
-  left: 0;
+  position: fixed;
+  z-index: 240;
   display: grid;
   width: 236px;
   gap: 10px;
@@ -1090,8 +1088,7 @@ button:focus-visible,
 }
 
 .effect-param-row > label input,
-.effect-param-row > label select,
-.effect-param-row > label .effect-param-color {
+.effect-param-row > label select {
   font-weight: 400;
 }
 
@@ -1536,20 +1533,30 @@ button:focus-visible,
   pointer-events: none;
 }
 
-.color-curve-stop-picker {
+.color-curve-stop-color-picker {
   position: absolute;
   inset: 0;
   display: block;
-  margin: 0;
-  pointer-events: none;
+  width: auto;
+  height: auto;
 }
 
-.color-curve-stop-picker input {
+.gui-inspector .color-curve-stop-color-trigger,
+.color-curve-stop-color-trigger {
   width: 100%;
   height: 100%;
-  opacity: 0;
+  border: 0;
+  background: transparent !important;
+  box-shadow: none;
   cursor: grab;
-  pointer-events: none;
+}
+
+.gui-inspector .color-curve-stop-color-trigger:hover,
+.gui-inspector .color-curve-stop-color-trigger:focus-visible,
+.color-curve-stop-color-trigger:hover,
+.color-curve-stop-color-trigger:focus-visible {
+  border: 0;
+  box-shadow: none;
 }
 
 .color-curve-stop:focus-within {
@@ -1583,7 +1590,8 @@ button:focus-visible,
   color: #8f9298;
 }
 
-.color-curve-point-row-compact input {
+.color-curve-point-row-compact > input,
+.color-curve-point-row-compact > label input {
   height: 22px;
   border: 0;
   border-radius: 0;
@@ -1593,32 +1601,17 @@ button:focus-visible,
   font-variant-numeric: tabular-nums;
 }
 
-.color-curve-point-row-compact input:focus {
+.color-curve-point-row-compact > input:focus,
+.color-curve-point-row-compact > label input:focus {
   background: #17181b;
   box-shadow: inset 0 -1px 0 #6abf8a;
   outline: none;
-}
-
-.color-swatch-picker {
-  position: relative;
-  display: grid;
-  margin: 0;
-}
-
-.color-swatch-picker input {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  cursor: pointer;
 }
 
 .curve-point-row.selected input {
   border-color: #6abf8a;
 }
 
-.effect-param-color,
 .curve-point-row {
   display: grid;
   grid-template-columns: auto auto minmax(0, 1fr);
@@ -1632,14 +1625,6 @@ button:focus-visible,
 
 .color-curve-point-row {
   grid-template-columns: minmax(0, 0.7fr) auto auto minmax(0, 1fr) auto;
-}
-
-.color-swatch {
-  width: 24px;
-  height: 24px;
-  border: 1px solid #ebe7df;
-  border-radius: 4px;
-  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 22%);
 }
 
 .effect-param-group button {

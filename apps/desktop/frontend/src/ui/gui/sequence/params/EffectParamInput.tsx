@@ -8,6 +8,7 @@ import type { ColorCurvePoint, FloatCurvePoint, SequenceAutomationClip, Sequence
 
 import { runGuiEditCommand } from "../../../../store";
 
+import { ColorPicker } from "../../../ColorPicker";
 import { clamp, type AutomationClipChooser } from "../../shared";
 
 const CURVE_EDITOR = {
@@ -92,7 +93,15 @@ export function EffectParamInput({
         />
       );
     case "color":
-      return <ParamShell name={param.name}><ColorField key={`${param.name}:${param.value.value.toLowerCase()}`} label={param.name} value={param.value.value} commit={(value) => commit({ type: "color", value })} showLabel={false} /></ParamShell>;
+      return (
+        <ParamShell name={param.name}>
+          <ColorPicker
+            value={param.value.value}
+            label={param.name}
+            commit={(value) => commit({ type: "color", value })}
+          />
+        </ParamShell>
+      );
     case "enum":
       return (
         <ParamShell name={param.name} automated={automated}>
@@ -365,7 +374,7 @@ function ColorArrayParam({ name, values, commit }: { name: string; values: strin
       remove={(index) => void commit(values.filter((_, itemIndex) => itemIndex !== index))}
       move={(from, to) => void commit(moveArrayItem(values, from, to))}
       rows={values.map((value, index) => (
-        <ColorField key={`${index}:${value}`} label={`#${index + 1}`} value={value} commit={(next) => commit(replaceAt(values, index, next))} />
+        <ColorPicker key={`${index}:${value}`} label={`${name} ${index + 1}`} value={value} commit={(next) => commit(replaceAt(values, index, next))} />
       ))}
     />
   );
@@ -486,61 +495,6 @@ function NumberParam({
       />
     </label>
   );
-}
-
-export function ColorField({ label, value, commit, showLabel = true }: { label: string; value: string; commit: (value: string) => Promise<void>; showLabel?: boolean }) {
-  const committedValue = value.toLowerCase();
-  const [draft, setDraft] = useState(committedValue);
-  const lastCommitted = useRef(committedValue);
-  const commitDraft = (candidate = draft) => {
-    if (!isHexColor(candidate)) {
-      setDraft(committedValue);
-      return;
-    }
-    const next = candidate.toLowerCase();
-    setDraft(next);
-    if (next !== lastCommitted.current) {
-      lastCommitted.current = next;
-      void commit(next);
-    }
-  };
-  const displayedColor = isHexColor(draft) ? draft : committedValue;
-  const control = (
-      <div className="effect-param-color">
-        <span className="color-swatch" style={{ background: displayedColor }} />
-        <input
-          type="color"
-          value={displayedColor}
-          onChange={(event) => {
-            setDraft(event.currentTarget.value);
-          }}
-          onBlur={() => { commitDraft(); }}
-        />
-        <input
-          value={draft}
-          onChange={(event) => { setDraft(event.currentTarget.value); }}
-          onBlur={() => { commitDraft(); }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              commitDraft();
-              event.currentTarget.blur();
-            }
-          }}
-        />
-      </div>
-  );
-  if (!showLabel) return control;
-  return (
-    <label>
-      {label}
-      {control}
-    </label>
-  );
-}
-
-function openColorPicker(input: HTMLInputElement | null | undefined) {
-  if (input === null || input === undefined) return;
-  input.showPicker();
 }
 
 type EditedCurvePoint = EditedFloatCurvePoint | EditedColorCurvePoint;
@@ -997,7 +951,6 @@ function ColorCurveParam({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [pointsCollapsed, setPointsCollapsed] = useState(true);
   const gradientRef = useRef<HTMLDivElement | null>(null);
-  const colorInputRefs = useRef<Array<HTMLInputElement | null>>([]);
   const draggingPoint = useRef<{ index: number; moved: boolean } | null>(null);
   const lastCommittedValues = useRef(points.map((point) => point.value.toLowerCase()));
   const pointsSignature = curvePointsSignature(points);
@@ -1134,7 +1087,6 @@ function ColorCurveParam({
         }}
       >
         {!readOnly && drafts.map((point, index) => {
-          const displayedColor = isHexColor(point.value) ? point.value : (points[index]?.value ?? CURVE_EDITOR.defaultColor);
           return (
             <span
               key={index}
@@ -1146,11 +1098,6 @@ function ColorCurveParam({
                 draggingPoint.current = { index, moved: false };
                 setSelectedIndex(index);
               }}
-              onDoubleClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                openColorPicker(colorInputRefs.current[index]);
-              }}
               onContextMenu={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
@@ -1159,19 +1106,16 @@ function ColorCurveParam({
               onFocus={() => { setSelectedIndex(index); }}
             >
               <span className="color-curve-stop-line" />
-              <label className="color-curve-stop-picker" title={`Gradient stop ${index + 1}`}>
-                <input
-                  ref={(input) => {
-                    colorInputRefs.current[index] = input;
-                  }}
-                  type="color"
-                  value={displayedColor}
-                  onChange={(event) => {
-                    setPoint(index, { ...point, value: event.currentTarget.value }, false);
-                  }}
-                  onBlur={() => { commitDraftValue(index); }}
-                />
-              </label>
+              <ColorPicker
+                className="color-curve-stop-color-picker"
+                triggerClassName="color-curve-stop-color-trigger"
+                value={isHexColor(point.value) ? point.value : (points[index]?.value ?? CURVE_EDITOR.defaultColor)}
+                label={`${name} stop ${index + 1} color`}
+                commit={(value) => {
+                  setPoint(index, { ...point, value }, true);
+                  return Promise.resolve();
+                }}
+              />
             </span>
           );
         })}
@@ -1218,18 +1162,16 @@ function ColorCurveParam({
                           }}
                         />
                       </label>
-                      <label className="color-swatch-picker">
-                        <span className="color-swatch" style={{ background: displayedColor }} />
-                        <input
-                          type="color"
+                      <div onFocus={() => { setSelectedIndex(index); }}>
+                        <ColorPicker
                           value={displayedColor}
-                          onFocus={() => { setSelectedIndex(index); }}
-                          onChange={(event) => {
-                            setPoint(index, { ...point, value: event.currentTarget.value }, false);
+                          label={`${name} stop ${index + 1} color`}
+                          commit={(value) => {
+                            setPoint(index, { ...point, value }, true);
+                            return Promise.resolve();
                           }}
-                          onBlur={() => { commitDraftValue(index); }}
                         />
-                      </label>
+                      </div>
                       <input
                         value={point.value}
                         onFocus={() => { setSelectedIndex(index); }}
