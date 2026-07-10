@@ -1,11 +1,11 @@
 use super::bytecode::{
-    ArithmeticOp, BoolSlot, ColorSlot, CompareOp, ContextRead, FloatBinary, FloatSlot, FloatUnary,
-    GeneratorContextId, Instruction, IntArithmeticOp, IntSlot, MarkOp, RefSlot, RegisterFunction,
-    SlotLayout, TargetItemsOp, ValueSlot,
+    ArithmeticOp, BoolSlot, ColorBinary, ColorSlot, CompareOp, ContextRead, FloatBinary, FloatSlot,
+    FloatUnary, GeneratorContextId, Instruction, IntArithmeticOp, IntSlot, MarkOp, RefSlot,
+    RegisterFunction, SlotLayout, TargetItemsOp, ValueSlot,
 };
 use super::types::{Identifier, Type, Value};
 use super::types::{TargetItemValue, TargetItemsValue, TargetPixelValue, TargetValue};
-use super::{CompiledEffect, EffectKind, ParamDecl};
+use super::{CompiledEffect, CompiledOperator, EffectKind, ParamDecl};
 use crate::values::{Color, Curve, CurveValue, Marks};
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -23,6 +23,17 @@ pub struct RunContext {
     pub pixel_fraction: f64,
     pub global_marks: Marks,
     //TODO location based effects
+}
+
+pub type OperatorRunContext = RunContext;
+
+pub trait SignalSampler {
+    fn sample_signal(
+        &mut self,
+        input: usize,
+        seconds: f64,
+        pixel_index: usize,
+    ) -> Result<Color, RuntimeError>;
 }
 
 #[derive(Clone, Debug)]
@@ -54,12 +65,12 @@ impl RuntimeError {
 }
 
 #[derive(Clone, Debug)]
-pub struct BoundEffectParams {
+pub struct BoundParams {
     values: Vec<BoundParamValue>,
 }
 
 #[derive(Debug, Default)]
-pub struct EffectBindCache {
+pub struct DslBindCache {
     curves: HashMap<CurveCacheKey, Arc<PreparedCurve>>,
 }
 
@@ -92,7 +103,7 @@ enum BoundParamValue {
 }
 
 impl BoundParamValue {
-    fn from_value(ty: &Type, value: Value, cache: &mut EffectBindCache) -> Self {
+    fn from_value(ty: &Type, value: Value, cache: &mut DslBindCache) -> Self {
         match value {
             Value::Void => Self::Void,
             Value::Int(value) => Self::Int(value),
@@ -127,7 +138,7 @@ impl BoundParamValue {
     }
 }
 
-impl EffectBindCache {
+impl DslBindCache {
     fn prepared_curve(&mut self, ty: &Type, raw: Arc<Curve>) -> Arc<PreparedCurve> {
         let key = CurveCacheKey {
             ptr: Arc::as_ptr(&raw).cast::<()>() as usize,
@@ -222,7 +233,7 @@ impl PreparedCurve {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct EffectVmScratch {
+pub struct DslVmScratch {
     registers: VmRegisters,
     param_overrides: Vec<Option<RuntimeValue>>,
     dirty_param_overrides: Vec<usize>,
@@ -277,18 +288,40 @@ impl VmRegisters {
 pub(crate) fn bind_effect_params(
     effect: &CompiledEffect,
     params: &IndexMap<Identifier, Value>,
-) -> BoundEffectParams {
-    let mut cache = EffectBindCache::default();
+) -> BoundParams {
+    let mut cache = DslBindCache::default();
     bind_effect_params_cached(effect, params, &mut cache)
 }
 
 pub(crate) fn bind_effect_params_cached(
     effect: &CompiledEffect,
     params: &IndexMap<Identifier, Value>,
-    cache: &mut EffectBindCache,
-) -> BoundEffectParams {
-    BoundEffectParams {
+    cache: &mut DslBindCache,
+) -> BoundParams {
+    BoundParams {
         values: effect
+            .params
+            .iter()
+            .map(|param| bind_param_value(&param.ty, resolve_param(param, params), cache))
+            .collect(),
+    }
+}
+
+pub(crate) fn bind_operator_params(
+    operator: &CompiledOperator,
+    params: &IndexMap<Identifier, Value>,
+) -> BoundParams {
+    let mut cache = DslBindCache::default();
+    bind_operator_params_cached(operator, params, &mut cache)
+}
+
+pub(crate) fn bind_operator_params_cached(
+    operator: &CompiledOperator,
+    params: &IndexMap<Identifier, Value>,
+    cache: &mut DslBindCache,
+) -> BoundParams {
+    BoundParams {
+        values: operator
             .params
             .iter()
             .map(|param| bind_param_value(&param.ty, resolve_param(param, params), cache))
@@ -298,9 +331,9 @@ pub(crate) fn bind_effect_params_cached(
 
 pub(crate) fn run_sample_effect(
     effect: &CompiledEffect,
-    params: &BoundEffectParams,
+    params: &BoundParams,
     context: &RunContext,
-    scratch: &mut EffectVmScratch,
+    scratch: &mut DslVmScratch,
 ) -> Result<Color, RuntimeError> {
     if effect.kind != EffectKind::Sample {
         return Err(RuntimeError::new("cannot sample generator effect"));
@@ -310,15 +343,16 @@ pub(crate) fn run_sample_effect(
         params,
         VmContext::Sample(context),
         scratch,
+        None,
     );
     vm.run_color()
 }
 
 pub(crate) fn run_generator_effect(
     effect: &CompiledEffect,
-    params: &BoundEffectParams,
+    params: &BoundParams,
     context: &GeneratorContext,
-    scratch: &mut EffectVmScratch,
+    scratch: &mut DslVmScratch,
 ) -> Result<Vec<GeneratedEffect>, RuntimeError> {
     if effect.kind != EffectKind::Generator {
         return Err(RuntimeError::new("cannot generate sample effect"));
@@ -328,9 +362,27 @@ pub(crate) fn run_generator_effect(
         params,
         VmContext::Generator(context),
         scratch,
+        None,
     );
     let _ = vm.run()?;
     Ok(std::mem::take(&mut vm.scratch.generated))
+}
+
+pub(crate) fn run_operator(
+    operator: &CompiledOperator,
+    params: &BoundParams,
+    context: &OperatorRunContext,
+    sampler: &mut dyn SignalSampler,
+    scratch: &mut DslVmScratch,
+) -> Result<Color, RuntimeError> {
+    let mut vm = Vm::new(
+        &operator.function,
+        params,
+        VmContext::Sample(context),
+        scratch,
+        Some(sampler),
+    );
+    vm.run_color()
 }
 
 #[derive(Clone, Debug)]
@@ -391,11 +443,12 @@ fn clone_runtime(value: &RuntimeValue) -> RuntimeValue {
 
 struct Vm<'a> {
     function: &'a RegisterFunction,
-    params: &'a BoundEffectParams,
+    params: &'a BoundParams,
     context: VmContext<'a>,
-    scratch: &'a mut EffectVmScratch,
+    scratch: &'a mut DslVmScratch,
     ip: usize,
     loop_iterations: usize,
+    signal_sampler: Option<&'a mut (dyn SignalSampler + 'a)>,
 }
 
 #[derive(Clone, Copy)]
@@ -407,9 +460,10 @@ enum VmContext<'a> {
 impl<'a> Vm<'a> {
     fn new(
         function: &'a RegisterFunction,
-        params: &'a BoundEffectParams,
+        params: &'a BoundParams,
         context: VmContext<'a>,
-        scratch: &'a mut EffectVmScratch,
+        scratch: &'a mut DslVmScratch,
+        signal_sampler: Option<&'a mut (dyn SignalSampler + 'a)>,
     ) -> Self {
         scratch.registers.prepare(function);
         if scratch.param_overrides.len() != params.values.len() {
@@ -433,6 +487,7 @@ impl<'a> Vm<'a> {
             scratch,
             ip: 0,
             loop_iterations: 0,
+            signal_sampler,
         }
     }
 
@@ -524,6 +579,21 @@ impl<'a> Vm<'a> {
                         }
                         _ => self.set_value(*dst, sample_prepared_curve(curve, position)?)?,
                     }
+                }
+                Instruction::SignalSample {
+                    dst,
+                    input,
+                    seconds,
+                } => {
+                    let seconds = self.float(*seconds)?;
+                    let pixel_index = usize::try_from(sample_context(self.context)?.pixel_index)
+                        .map_err(|_| RuntimeError::new("pixel index cannot be negative"))?;
+                    let sampler = self
+                        .signal_sampler
+                        .as_deref_mut()
+                        .ok_or_else(|| RuntimeError::new("Signal sampler is unavailable"))?;
+                    let color = sampler.sample_signal(*input, seconds, pixel_index)?;
+                    self.set_color(*dst, color)?;
                 }
                 Instruction::Member {
                     dst,
@@ -697,6 +767,34 @@ impl<'a> Vm<'a> {
                     let left = self.color(*left)?;
                     let right = self.color(*right)?;
                     self.set_color(*dst, mix_colors(left, right, amount))?;
+                }
+                Instruction::ColorBinary {
+                    dst,
+                    op,
+                    left,
+                    right,
+                } => {
+                    let left = self.color(*left)?;
+                    let right = self.color(*right)?;
+                    let color = match op {
+                        ColorBinary::Add => add_colors(left, right),
+                        ColorBinary::Multiply => multiply_colors(left, right),
+                        ColorBinary::Max => max_colors(left, right),
+                    };
+                    self.set_color(*dst, color)?;
+                }
+                Instruction::ColorScale { dst, color, scale } => {
+                    let color = self.color(*color)?;
+                    let scale = self.float(*scale)?;
+                    self.set_color(*dst, scale_color(color, scale))?;
+                }
+                Instruction::ColorIntensity { dst, color } => {
+                    let color = self.color(*color)?;
+                    self.set_float(*dst, color_intensity(color))?;
+                }
+                Instruction::ColorInvert { dst, color } => {
+                    let color = self.color(*color)?;
+                    self.set_color(*dst, invert_color(color))?;
                 }
                 Instruction::Rgb {
                     dst,
@@ -1443,7 +1541,7 @@ fn resolve_param(param: &ParamDecl, params: &IndexMap<Identifier, Value>) -> Val
     default_value(&param.ty)
 }
 
-fn bind_param_value(ty: &Type, value: Value, cache: &mut EffectBindCache) -> BoundParamValue {
+fn bind_param_value(ty: &Type, value: Value, cache: &mut DslBindCache) -> BoundParamValue {
     match (ty, value) {
         (Type::Float, Value::Int(value)) => BoundParamValue::Float(value as f64),
         (ty, value) => BoundParamValue::from_value(ty, value, cache),
@@ -1453,6 +1551,7 @@ fn bind_param_value(ty: &Type, value: Value, cache: &mut EffectBindCache) -> Bou
 fn default_value(ty: &Type) -> Value {
     match ty {
         Type::Void => Value::Void,
+        Type::Signal => Value::Void,
         Type::Int => Value::Int(0),
         Type::Float => Value::Float(0.0),
         Type::Bool => Value::Bool(false),
@@ -1542,7 +1641,7 @@ fn sample_context(context: VmContext<'_>) -> Result<&RunContext, RuntimeError> {
     }
 }
 
-fn to_int_runtime(value: &RuntimeValue, params: &BoundEffectParams) -> Result<i64, RuntimeError> {
+fn to_int_runtime(value: &RuntimeValue, params: &BoundParams) -> Result<i64, RuntimeError> {
     let _ = params;
     match value {
         RuntimeValue::Int(value) => Ok(*value),
@@ -1551,7 +1650,7 @@ fn to_int_runtime(value: &RuntimeValue, params: &BoundEffectParams) -> Result<i6
     }
 }
 
-fn to_float_runtime(value: &RuntimeValue, params: &BoundEffectParams) -> Result<f64, RuntimeError> {
+fn to_float_runtime(value: &RuntimeValue, params: &BoundParams) -> Result<f64, RuntimeError> {
     let _ = params;
     match value {
         RuntimeValue::Int(value) => Ok(*value as f64),
@@ -1562,7 +1661,7 @@ fn to_float_runtime(value: &RuntimeValue, params: &BoundEffectParams) -> Result<
 
 fn to_curve_runtime<'a>(
     value: &'a RuntimeValue,
-    params: &'a BoundEffectParams,
+    params: &'a BoundParams,
 ) -> Result<&'a Curve, RuntimeError> {
     let _ = params;
     match value {
@@ -1683,7 +1782,7 @@ fn for_each_target_pixel(
     })
 }
 
-fn values_equal(left: &RuntimeValue, right: &RuntimeValue, params: &BoundEffectParams) -> bool {
+fn values_equal(left: &RuntimeValue, right: &RuntimeValue, params: &BoundParams) -> bool {
     let _ = params;
     runtime_refs_equal(left, right)
 }
@@ -1965,6 +2064,42 @@ fn scale_color(color: Color, scale: f64) -> Color {
         red: channel_byte(color.red as f64 * scale),
         green: channel_byte(color.green as f64 * scale),
         blue: channel_byte(color.blue as f64 * scale),
+    }
+}
+
+fn add_colors(left: Color, right: Color) -> Color {
+    Color {
+        red: left.red.saturating_add(right.red),
+        green: left.green.saturating_add(right.green),
+        blue: left.blue.saturating_add(right.blue),
+    }
+}
+
+fn multiply_colors(left: Color, right: Color) -> Color {
+    Color {
+        red: ((u16::from(left.red) * u16::from(right.red) + 127) / 255) as u8,
+        green: ((u16::from(left.green) * u16::from(right.green) + 127) / 255) as u8,
+        blue: ((u16::from(left.blue) * u16::from(right.blue) + 127) / 255) as u8,
+    }
+}
+
+fn max_colors(left: Color, right: Color) -> Color {
+    Color {
+        red: left.red.max(right.red),
+        green: left.green.max(right.green),
+        blue: left.blue.max(right.blue),
+    }
+}
+
+fn color_intensity(color: Color) -> f64 {
+    f64::from(color.red.max(color.green).max(color.blue)) / 255.0
+}
+
+fn invert_color(color: Color) -> Color {
+    Color {
+        red: 255 - color.red,
+        green: 255 - color.green,
+        blue: 255 - color.blue,
     }
 }
 

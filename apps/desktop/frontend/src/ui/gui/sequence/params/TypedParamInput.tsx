@@ -35,18 +35,22 @@ type EffectParamAutomationControls = {
   setAutomationClipChooser: (chooser: AutomationClipChooser) => void;
 };
 
-export function EffectParamInput({
+export function TypedParamInput({
   param,
   commitParam,
   curveLibrary,
   markCollections,
-  automation = null
+  automation = null,
+  linkCurveParam,
+  unlinkCurveParam
 }: {
   param: SequenceEffectParam;
   commitParam: (name: string, value: SequenceEffectParamValue) => Promise<void>;
   curveLibrary: SequenceCurveLibraryItem[];
   markCollections: SequenceMarkCollection[];
   automation?: EffectParamAutomationControls | null;
+  linkCurveParam: (name: string, curve: SequenceCurveLibraryItem) => Promise<void>;
+  unlinkCurveParam: (name: string) => Promise<void>;
 }) {
   const commit = (value: SequenceEffectParamValue) => {
     return commitParam(param.name, value);
@@ -116,7 +120,6 @@ export function EffectParamInput({
       return (
         <ParamShell name={param.name} automated={automated}>
         <CurveParamSourceShell
-          effectId={automation?.effectId ?? 0}
           param={param}
           valueType="float"
           curveLibrary={curveLibrary}
@@ -124,6 +127,8 @@ export function EffectParamInput({
           commit={(points) => commit({ type: "floatCurve", points })}
           disabled={automated}
           actions={automationActions}
+          linkCurveParam={linkCurveParam}
+          unlinkCurveParam={unlinkCurveParam}
           render={(props) => <FloatCurveParamShell name={param.name} {...props} />}
         />
         </ParamShell>
@@ -132,12 +137,13 @@ export function EffectParamInput({
       return (
         <ParamShell name={param.name}>
         <CurveParamSourceShell
-          effectId={automation?.effectId ?? 0}
           param={param}
           valueType="color"
           curveLibrary={curveLibrary}
           points={normalizeColorCurvePoints(param.value.points)}
           commit={(points) => commit({ type: "colorCurve", points })}
+          linkCurveParam={linkCurveParam}
+          unlinkCurveParam={unlinkCurveParam}
           render={(props) => <ColorCurveParamShell name={param.name} {...props} />}
         />
         </ParamShell>
@@ -510,7 +516,6 @@ type CurveEditorProps<T extends EditedCurvePoint> = {
 type CurveCopyAction = "edit" | "flipHorizontal" | "flipVertical";
 
 function CurveParamSourceShell<T extends EditedCurvePoint>({
-  effectId,
   param,
   valueType,
   curveLibrary,
@@ -518,9 +523,10 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
   commit,
   disabled = false,
   actions = null,
+  linkCurveParam,
+  unlinkCurveParam,
   render
 }: {
-  effectId: number;
   param: SequenceEffectParam;
   valueType: "float" | "color";
   curveLibrary: SequenceCurveLibraryItem[];
@@ -528,6 +534,8 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
   commit: (points: T[]) => Promise<void>;
   disabled?: boolean;
   actions?: ReactNode;
+  linkCurveParam: (name: string, curve: SequenceCurveLibraryItem) => Promise<void>;
+  unlinkCurveParam: (name: string) => Promise<void>;
   render: (props: CurveEditorProps<T>) => ReactNode;
 }) {
   const [pendingCopyAction, setPendingCopyAction] = useState<CurveCopyAction | null>(null);
@@ -538,24 +546,8 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
   const selectedCurveIndex = linked && source.path !== null && source.objectKey !== null
     ? matchingCurves.findIndex((item) => item.path === source.path && item.objectKey === source.objectKey)
     : -1;
-  const unlinkCopy = () =>
-    runGuiEditCommand(() =>
-      commands.applySequenceGuiEdit({
-        type: "unlinkEffectCurveParam",
-        id: effectId,
-        name: param.name
-      })
-    ).then(() => undefined);
-  const linkCurve = (curve: SequenceCurveLibraryItem) =>
-    runGuiEditCommand(() =>
-      commands.applySequenceGuiEdit({
-        type: "linkEffectCurveParam",
-        id: effectId,
-        name: param.name,
-        curvePath: curve.path,
-        objectKey: curve.objectKey
-      })
-    ).then(() => undefined);
+  const unlinkCopy = () => unlinkCurveParam(param.name);
+  const linkCurve = (curve: SequenceCurveLibraryItem) => linkCurveParam(param.name, curve);
   const requestEditableCopy = (action: CurveCopyAction) => {
     if (!linked) return;
     setPendingCopyAction(action);

@@ -52,6 +52,24 @@ fn invalid_effect_dsl_reports_exact_span() {
 }
 
 #[test]
+fn invalid_operator_dsl_reports_operator_compile_diagnostic() {
+    let diagnostics = check_document_text(
+        Utf8Path::new("operators/bad.operator.dawn"),
+        "operator Bad { input Signal source; color sample() { return source.at(true); } }",
+    );
+    let diagnostic = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == IoDiagnosticCode::OperatorCompile)
+        .unwrap();
+    assert_eq!(
+        diagnostic.path,
+        Utf8Path::new("operators/bad.operator.dawn")
+    );
+    assert_eq!(diagnostic.severity, IoDiagnosticSeverity::Error);
+    assert!(diagnostic.range.is_some());
+}
+
+#[test]
 fn invalid_reference_reports_dawn_reference_diagnostic() {
     let temp = tempfile::tempdir().unwrap();
     let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();

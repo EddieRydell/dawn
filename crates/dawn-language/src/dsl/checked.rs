@@ -1,10 +1,20 @@
-use super::ast::{BinaryOp, Block, FunctionDecl, ParamDecl, UnaryOp};
+use super::ast::{BinaryOp, Block, FunctionDecl, OperatorInputDecl, ParamDecl, UnaryOp};
 use super::lexer::TextSpan;
 use super::types::{Identifier, Type, Value};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CheckedModule {
     pub effects: Vec<CheckedEffectDecl>,
+    pub operators: Vec<CheckedOperatorDecl>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CheckedOperatorDecl {
+    pub name: Identifier,
+    pub inputs: Vec<OperatorInputDecl>,
+    pub params: Vec<ParamDecl>,
+    pub entrypoint: FunctionDecl,
+    pub body: CheckedBlock,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -73,6 +83,10 @@ pub(crate) enum CheckedExprKind {
     Call {
         callee: Box<CheckedExpr>,
         args: Vec<CheckedExpr>,
+    },
+    SignalSample {
+        input: Identifier,
+        seconds: Box<CheckedExpr>,
     },
     Unary {
         op: UnaryOp,

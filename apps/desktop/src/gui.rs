@@ -3,18 +3,21 @@ use std::fs;
 use std::time::Duration;
 
 use camino::{Utf8Path, Utf8PathBuf};
+use dawn_language::dsl::{EffectKind, Identifier, Type, Value as EffectValue};
 use dawn_language::effect::{
     CurveId, CurveSource, EffectDefinitionId, EffectInst, EffectInstId, EffectParamValue,
     EffectScope, EffectTarget,
 };
-use dawn_language::effect_dsl::{EffectKind, Identifier, Type, Value as EffectValue};
+use dawn_language::operator::{
+    BuiltinOperator, GraphOperatorNode, OperatorDefinition, OperatorDefinitionId,
+    OperatorPortCardinality, OperatorPortDefinition, OperatorRef, validate_composition_graph,
+};
 use dawn_language::sequence::{
     AssetId, AutomationBinding, AutomationClip, AutomationClipId, AutomationMapping,
     AutomationTarget, CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind,
-    EffectClip, EffectGraphEdge, GraphNodePosition, GraphOperator, GraphOperatorNode,
-    GraphOperatorRef, GraphPortCardinality, GraphPortDefinition, GraphPortId, MarkCollection,
-    MarkCollectionKey, SequenceAudio as DomainSequenceAudio, SequenceClip, SequenceClipId,
-    SequenceClipKind, SequenceId, SequenceLayerId, validate_graph_interface,
+    EffectClip, EffectGraphEdge, GraphNodePosition, GraphPortId, MarkCollection, MarkCollectionKey,
+    SequenceAudio as DomainSequenceAudio, SequenceClip, SequenceClipId, SequenceClipKind,
+    SequenceId, SequenceLayerId,
 };
 use dawn_language::setup::{
     FixtureDefinitionId, FixtureGroupId, FixtureInstanceId, Geometry as DomainGeometry, LayoutId,
@@ -37,16 +40,16 @@ use crate::dto::{
     GuiEditCommand, GuiObjectRef, LayoutFixturePlacement, LayoutGuiDocument, LayoutGuiEdit,
     LayoutTarget, LayoutTargetKind, ObjectKind, Point3Meters, ProjectDiagnostic,
     ResolvedLayoutFixture, Rotation3Degrees, Scale3, SequenceAudio, SequenceAutomationBinding,
-    SequenceAutomationClip, SequenceAutomationMapping, SequenceCompositionGraph,
-    SequenceCurveLibraryItem, SequenceCurveLibraryPoints, SequenceCurveValueType, SequenceEffect,
-    SequenceEffectParam, SequenceEffectParamCurveSource, SequenceEffectParamKind,
-    SequenceEffectParamValue, SequenceEffectScope, SequenceEffectScript, SequenceEffectScriptKind,
-    SequenceEffectScriptParam, SequenceGraphEdge, SequenceGraphNode, SequenceGraphNodeKind,
-    SequenceGraphOperator, SequenceGraphOperatorDefinition, SequenceGraphPortCardinality,
-    SequenceGraphPortDefinition, SequenceGuiDocument, SequenceGuiEdit, SequenceLane, SequenceLayer,
-    SequenceMarkCollection, SequenceMarkRef, SequenceParamAutomation, SequencePasteAnchor,
-    SequenceResizeEdge, SequenceSelection, SequenceSelectionEdit, SequenceTimelineClipKind,
-    Transform,
+    SequenceAutomationClip, SequenceAutomationMapping, SequenceBuiltinOperator,
+    SequenceCompositionGraph, SequenceCurveLibraryItem, SequenceCurveLibraryPoints,
+    SequenceCurveValueType, SequenceEffect, SequenceEffectParam, SequenceEffectParamCurveSource,
+    SequenceEffectParamKind, SequenceEffectParamValue, SequenceEffectScope, SequenceEffectScript,
+    SequenceEffectScriptKind, SequenceEffectScriptParam, SequenceGraphEdge, SequenceGraphNode,
+    SequenceGraphNodeKind, SequenceGraphOperator, SequenceGraphOperatorDefinition,
+    SequenceGraphPortCardinality, SequenceGraphPortDefinition, SequenceGuiDocument,
+    SequenceGuiEdit, SequenceLane, SequenceLayer, SequenceMarkCollection, SequenceMarkRef,
+    SequenceParamAutomation, SequencePasteAnchor, SequenceResizeEdge, SequenceSelection,
+    SequenceSelectionEdit, SequenceTimelineClipKind, Transform,
 };
 
 #[derive(Debug)]
@@ -311,6 +314,7 @@ fn object_kind_for_source(kind: &SourceObjectKind) -> ObjectKind {
         SourceObjectKind::Curve => ObjectKind::Curve,
         SourceObjectKind::Sequence => ObjectKind::Sequence,
         SourceObjectKind::EffectDefinition | SourceObjectKind::EffectInstance => ObjectKind::Effect,
+        SourceObjectKind::OperatorDefinition => ObjectKind::Operator,
     }
 }
 
@@ -363,9 +367,28 @@ fn project_sequence(session: &ProjectSession, resolved: &ResolvedGuiObject) -> G
         .collect();
     let composition_graph = SequenceCompositionGraph {
         id: 0,
-        operator_catalog: GraphOperator::ALL
+        operator_catalog: BuiltinOperator::ALL
             .iter()
-            .map(graph_operator_definition_to_gui)
+            .map(|builtin| {
+                graph_operator_definition_to_gui(
+                    OperatorRef::Builtin(builtin.clone()),
+                    builtin.definition(),
+                )
+            })
+            .chain(
+                session
+                    .project
+                    .definitions
+                    .operators
+                    .definitions
+                    .iter()
+                    .map(|(id, definition)| {
+                        graph_operator_definition_to_gui(
+                            OperatorRef::Custom(id.clone()),
+                            definition,
+                        )
+                    }),
+            )
             .collect(),
         nodes: sequence
             .composition_graph
@@ -755,8 +778,8 @@ fn sequence_composition_graph_node(
         id: graph_node_id(&node.id),
         x: node.position.x,
         y: node.position.y,
-        inputs: graph_node_inputs(&node.kind),
-        outputs: graph_node_outputs(&node.kind),
+        inputs: graph_node_inputs(session, &node.kind),
+        outputs: graph_node_outputs(session, &node.kind),
         kind: match &node.kind {
             CompositionGraphNodeKind::Layer { layer_id } => {
                 let layer = sequence.layers.iter().find(|layer| layer.id == *layer_id);
@@ -790,9 +813,15 @@ fn graph_operator_params(
     node_id: &CompositionGraphNodeId,
     operator: &GraphOperatorNode,
 ) -> Vec<SequenceEffectParam> {
-    let GraphOperatorRef::Builtin(builtin) = &operator.operator;
-    builtin
-        .definition()
+    let Some(definition) = session
+        .project
+        .definitions
+        .operators
+        .resolve(&operator.operator)
+    else {
+        return Vec::new();
+    };
+    definition
         .params
         .iter()
         .filter_map(|declaration| {
@@ -823,40 +852,55 @@ fn graph_operator_params(
         .collect()
 }
 
-fn graph_operator_definition_to_gui(operator: &GraphOperator) -> SequenceGraphOperatorDefinition {
-    let definition = operator.definition();
+fn graph_operator_definition_to_gui(
+    operator: OperatorRef,
+    definition: &OperatorDefinition,
+) -> SequenceGraphOperatorDefinition {
     SequenceGraphOperatorDefinition {
-        operator: graph_operator_to_gui(&GraphOperatorRef::Builtin(operator.clone())),
-        source_name: definition.source_name.to_string(),
-        display_name: definition.display_name.to_string(),
+        operator: graph_operator_to_gui(&operator),
+        source_name: definition.source_name.clone(),
+        display_name: definition.display_name.clone(),
         inputs: definition.inputs.iter().map(graph_port_to_gui).collect(),
-        outputs: definition.outputs.iter().map(graph_port_to_gui).collect(),
+        outputs: vec![graph_port_to_gui(&definition.output)],
+        params: definition
+            .params
+            .iter()
+            .filter_map(|param| {
+                Some(crate::dto::SequenceEffectScriptParam {
+                    name: param.name.as_str().to_string(),
+                    kind: param_kind(&param.ty)?,
+                })
+            })
+            .collect(),
     }
 }
 
-fn graph_port_to_gui(port: &GraphPortDefinition) -> SequenceGraphPortDefinition {
+fn graph_port_to_gui(port: &OperatorPortDefinition) -> SequenceGraphPortDefinition {
     SequenceGraphPortDefinition {
         source_name: port.source_name.to_string(),
         display_name: port.display_name.to_string(),
         cardinality: match port.cardinality {
-            GraphPortCardinality::One => SequenceGraphPortCardinality::One,
-            GraphPortCardinality::Many => SequenceGraphPortCardinality::Many,
+            OperatorPortCardinality::One => SequenceGraphPortCardinality::One,
+            OperatorPortCardinality::Many => SequenceGraphPortCardinality::Many,
         },
     }
 }
 
-fn graph_node_inputs(kind: &CompositionGraphNodeKind) -> Vec<SequenceGraphPortDefinition> {
+fn graph_node_inputs(
+    session: &ProjectSession,
+    kind: &CompositionGraphNodeKind,
+) -> Vec<SequenceGraphPortDefinition> {
     match kind {
         CompositionGraphNodeKind::Layer { .. } => vec![],
-        CompositionGraphNodeKind::Operator(operator) => {
-            let GraphOperatorRef::Builtin(operator) = &operator.operator;
-            operator
-                .definition()
-                .inputs
-                .iter()
-                .map(graph_port_to_gui)
-                .collect()
-        }
+        CompositionGraphNodeKind::Operator(operator) => session
+            .project
+            .definitions
+            .operators
+            .resolve(&operator.operator)
+            .into_iter()
+            .flat_map(|definition| definition.inputs.iter())
+            .map(graph_port_to_gui)
+            .collect(),
         CompositionGraphNodeKind::Output => vec![SequenceGraphPortDefinition {
             source_name: "input".to_string(),
             display_name: "Input".to_string(),
@@ -865,31 +909,47 @@ fn graph_node_inputs(kind: &CompositionGraphNodeKind) -> Vec<SequenceGraphPortDe
     }
 }
 
-fn graph_node_outputs(kind: &CompositionGraphNodeKind) -> Vec<SequenceGraphPortDefinition> {
+fn graph_node_outputs(
+    session: &ProjectSession,
+    kind: &CompositionGraphNodeKind,
+) -> Vec<SequenceGraphPortDefinition> {
     match kind {
-        CompositionGraphNodeKind::Layer { .. } | CompositionGraphNodeKind::Operator(_) => {
+        CompositionGraphNodeKind::Layer { .. } => {
             vec![SequenceGraphPortDefinition {
                 source_name: "output".to_string(),
                 display_name: "Output".to_string(),
                 cardinality: SequenceGraphPortCardinality::Many,
             }]
         }
+        CompositionGraphNodeKind::Operator(operator) => session
+            .project
+            .definitions
+            .operators
+            .resolve(&operator.operator)
+            .map(|definition| vec![graph_port_to_gui(&definition.output)])
+            .unwrap_or_default(),
         CompositionGraphNodeKind::Output => vec![],
     }
 }
 
-fn graph_operator_to_gui(operator: &GraphOperatorRef) -> SequenceGraphOperator {
-    let GraphOperatorRef::Builtin(operator) = operator;
+fn graph_operator_to_gui(operator: &OperatorRef) -> SequenceGraphOperator {
     match operator {
-        GraphOperator::Max => SequenceGraphOperator::Max,
-        GraphOperator::Add => SequenceGraphOperator::Add,
-        GraphOperator::Multiply => SequenceGraphOperator::Multiply,
-        GraphOperator::IntensityModulate => SequenceGraphOperator::IntensityModulate,
-        GraphOperator::Dim => SequenceGraphOperator::Dim,
-        GraphOperator::Invert => SequenceGraphOperator::Invert,
-        GraphOperator::Colorize => SequenceGraphOperator::Colorize,
-        GraphOperator::Delay => SequenceGraphOperator::Delay,
-        GraphOperator::Echo => SequenceGraphOperator::Echo,
+        OperatorRef::Builtin(operator) => SequenceGraphOperator::Builtin {
+            operator: match operator {
+                BuiltinOperator::Max => SequenceBuiltinOperator::Max,
+                BuiltinOperator::Add => SequenceBuiltinOperator::Add,
+                BuiltinOperator::Multiply => SequenceBuiltinOperator::Multiply,
+                BuiltinOperator::IntensityModulate => SequenceBuiltinOperator::IntensityModulate,
+                BuiltinOperator::Dim => SequenceBuiltinOperator::Dim,
+                BuiltinOperator::Invert => SequenceBuiltinOperator::Invert,
+                BuiltinOperator::Colorize => SequenceBuiltinOperator::Colorize,
+                BuiltinOperator::Delay => SequenceBuiltinOperator::Delay,
+                BuiltinOperator::Echo => SequenceBuiltinOperator::Echo,
+            },
+        },
+        OperatorRef::Custom(id) => SequenceGraphOperator::Custom {
+            definition_id: id.0.clone(),
+        },
     }
 }
 
@@ -1030,7 +1090,12 @@ fn param_kind(ty: &Type) -> Option<SequenceEffectParamKind> {
             },
             _ => SequenceEffectParamKind::FloatArray,
         },
-        Type::Void | Type::Timeline | Type::Target | Type::TargetItems | Type::TargetItem => {
+        Type::Void
+        | Type::Signal
+        | Type::Timeline
+        | Type::Target
+        | Type::TargetItems
+        | Type::TargetItem => {
             return None;
         }
     })
@@ -1150,7 +1215,12 @@ fn default_value_for_type(ty: &Type) -> Option<SequenceEffectParamValue> {
             }
             _ => SequenceEffectParamValue::FloatCurveArray { values: Vec::new() },
         },
-        Type::Void | Type::Timeline | Type::Target | Type::TargetItems | Type::TargetItem => {
+        Type::Void
+        | Type::Signal
+        | Type::Timeline
+        | Type::Target
+        | Type::TargetItems
+        | Type::TargetItem => {
             return None;
         }
     })
@@ -1173,7 +1243,12 @@ fn default_effect_param_value(ty: &Type) -> Option<EffectParamValue> {
             let item = default_effect_param_value(inner)?;
             EffectParamValue::Array(vec![item])
         }
-        Type::Void | Type::Timeline | Type::Target | Type::TargetItems | Type::TargetItem => {
+        Type::Void
+        | Type::Signal
+        | Type::Timeline
+        | Type::Target
+        | Type::TargetItems
+        | Type::TargetItem => {
             return None;
         }
     })
@@ -1683,6 +1758,9 @@ fn edit_sequence(
         SequenceGuiEdit::UnlinkEffectCurveParam { id, name } => {
             Some(current_curve_param_value(session, resolved, *id, name)?)
         }
+        SequenceGuiEdit::UnlinkGraphOperatorCurveParam { node_id, name } => Some(
+            current_graph_curve_param_value(session, resolved, node_id, name)?,
+        ),
         _ => None,
     };
     let sequence_id = SequenceId(resolved.source_id.id.clone());
@@ -2062,15 +2140,38 @@ fn edit_sequence(
                 .insert(identifier(&name)?, effect_param_value_from_gui(value)?);
         }
         SequenceGuiEdit::AddGraphOperatorNode { operator, x, y } => {
+            let operator = graph_operator_from_gui(&operator);
+            let definition = session
+                .project
+                .definitions
+                .operators
+                .resolve(&operator)
+                .cloned()
+                .ok_or_else(|| {
+                    GuiMutationError::Invalid("Operator definition was not found.".to_string())
+                })?;
+            if let OperatorRef::Custom(id) = &operator {
+                ensure_document_can_reference(
+                    session,
+                    &resolved.location.document,
+                    SourceObjectKind::OperatorDefinition,
+                    &id.0,
+                )
+                .map_err(|error| GuiMutationError::Blocked(error.to_string()))?;
+            }
             let sequence = sequence_mut(session, &sequence_id)?;
+            let mut params = IndexMap::new();
+            for declaration in &definition.params {
+                if declaration.default.is_none() {
+                    let value = required_operator_param_value(declaration.ty.clone(), sequence)?;
+                    params.insert(declaration.name.clone(), value);
+                }
+            }
             let next_id = next_composition_node_id(sequence);
             sequence.composition_graph.nodes.push(CompositionGraphNode {
                 id: CompositionGraphNodeId(next_id),
                 position: GraphNodePosition { x, y },
-                kind: CompositionGraphNodeKind::Operator(GraphOperatorNode {
-                    operator: GraphOperatorRef::Builtin(graph_operator_from_gui(&operator)),
-                    params: IndexMap::new(),
-                }),
+                kind: CompositionGraphNodeKind::Operator(GraphOperatorNode { operator, params }),
             });
         }
         SequenceGuiEdit::MoveGraphNode { node_id, x, y } => {
@@ -2123,6 +2224,7 @@ fn edit_sequence(
                     "Graph node cannot connect to itself.".to_string(),
                 ));
             }
+            let definitions = session.project.definitions.operators.clone();
             let sequence = sequence_mut(session, &sequence_id)?;
             let from = parse_graph_node_id(&from_node)?;
             let to = parse_graph_node_id(&to_node)?;
@@ -2141,8 +2243,8 @@ fn edit_sequence(
                 .nodes
                 .iter()
                 .find(|node| node.id == to)
-                .and_then(|node| graph_input_cardinality(&node.kind, &to_port))
-                == Some(GraphPortCardinality::One);
+                .and_then(|node| graph_input_cardinality(&definitions, &node.kind, &to_port))
+                == Some(OperatorPortCardinality::One);
             if single_input {
                 graph
                     .edges
@@ -2154,7 +2256,7 @@ fn edit_sequence(
                 to,
                 to_port: GraphPortId(to_port),
             });
-            validate_graph_interface(&graph)
+            validate_composition_graph(&graph, &definitions)
                 .map_err(|error| GuiMutationError::Invalid(error.message))?;
             sequence.composition_graph = graph;
         }
@@ -2179,6 +2281,7 @@ fn edit_sequence(
             name,
             value,
         } => {
+            let definitions = session.project.definitions.operators.clone();
             let sequence = sequence_mut(session, &sequence_id)?;
             let node_id = parse_graph_node_id(&node_id)?;
             let mut graph = sequence.composition_graph.clone();
@@ -2197,9 +2300,63 @@ fn edit_sequence(
             operator
                 .params
                 .insert(identifier(&name)?, effect_param_value_from_gui(value)?);
-            validate_graph_interface(&graph)
+            validate_composition_graph(&graph, &definitions)
                 .map_err(|error| GuiMutationError::Invalid(error.message))?;
             sequence.composition_graph = graph;
+        }
+        SequenceGuiEdit::LinkGraphOperatorCurveParam {
+            node_id,
+            name,
+            curve_path: _,
+            object_key,
+        } => {
+            let curve = CurveId(object_key);
+            if !session
+                .project
+                .definitions
+                .curves
+                .definitions
+                .contains_key(&curve)
+            {
+                return Err(GuiMutationError::Invalid(
+                    "Curve was not found.".to_string(),
+                ));
+            }
+            ensure_document_can_reference(
+                session,
+                &resolved.location.document,
+                SourceObjectKind::Curve,
+                &curve.0,
+            )
+            .map_err(|error| GuiMutationError::Blocked(error.to_string()))?;
+            let node_id = parse_graph_node_id(&node_id)?;
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let node = composition_graph_node_mut(sequence, &node_id)?;
+            let CompositionGraphNodeKind::Operator(operator) = &mut node.kind else {
+                return Err(GuiMutationError::Invalid(
+                    "Graph node is not an operator.".to_string(),
+                ));
+            };
+            operator.params.insert(
+                identifier(&name)?,
+                EffectParamValue::Curve(CurveSource::Reference(curve)),
+            );
+        }
+        SequenceGuiEdit::UnlinkGraphOperatorCurveParam { node_id, name } => {
+            let value = unlink_curve_value.ok_or_else(|| {
+                GuiMutationError::Invalid("Curve param could not be resolved.".to_string())
+            })?;
+            let node_id = parse_graph_node_id(&node_id)?;
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let node = composition_graph_node_mut(sequence, &node_id)?;
+            let CompositionGraphNodeKind::Operator(operator) = &mut node.kind else {
+                return Err(GuiMutationError::Invalid(
+                    "Graph node is not an operator.".to_string(),
+                ));
+            };
+            operator
+                .params
+                .insert(identifier(&name)?, effect_param_value_from_gui(value)?);
         }
         SequenceGuiEdit::AddAutomationClip {
             start_seconds,
@@ -2450,6 +2607,92 @@ fn current_curve_param_value(
             "Param is not a curve param.".to_string(),
         )),
     }
+}
+
+fn current_graph_curve_param_value(
+    session: &ProjectSession,
+    resolved: &ResolvedGuiObject,
+    node_id: &str,
+    name: &str,
+) -> Result<SequenceEffectParamValue, GuiMutationError> {
+    let sequence_id = SequenceId(resolved.source_id.id.clone());
+    let sequence = session
+        .project
+        .sequences
+        .get(&sequence_id)
+        .ok_or_else(|| GuiMutationError::Invalid("Sequence was not found.".to_string()))?;
+    let node_id = parse_graph_node_id(node_id)?;
+    let node = sequence
+        .composition_graph
+        .nodes
+        .iter()
+        .find(|node| node.id == node_id)
+        .ok_or_else(|| GuiMutationError::Invalid("Graph node was not found.".to_string()))?;
+    let CompositionGraphNodeKind::Operator(operator) = &node.kind else {
+        return Err(GuiMutationError::Invalid(
+            "Graph node is not an operator.".to_string(),
+        ));
+    };
+    if let Some(value) = operator
+        .params
+        .iter()
+        .find_map(|(key, value)| (key.as_str() == name).then_some(value))
+    {
+        return match value {
+            EffectParamValue::Curve(_) => Ok(effect_param_value(session, value)),
+            _ => Err(GuiMutationError::Invalid(
+                "Param is not a curve param.".to_string(),
+            )),
+        };
+    }
+    let definition = session
+        .project
+        .definitions
+        .operators
+        .resolve(&operator.operator)
+        .ok_or_else(|| {
+            GuiMutationError::Invalid("Operator definition was not found.".to_string())
+        })?;
+    let param = definition
+        .params
+        .iter()
+        .find(|param| param.name.as_str() == name)
+        .ok_or_else(|| GuiMutationError::Invalid("Operator param was not found.".to_string()))?;
+    match &param.ty {
+        Type::Curve(inner) => Ok(param
+            .default
+            .as_ref()
+            .and_then(default_param_value)
+            .unwrap_or_else(|| match inner.as_ref() {
+                Type::Color => SequenceEffectParamValue::ColorCurve { points: Vec::new() },
+                _ => SequenceEffectParamValue::FloatCurve { points: Vec::new() },
+            })),
+        _ => Err(GuiMutationError::Invalid(
+            "Param is not a curve param.".to_string(),
+        )),
+    }
+}
+
+fn required_operator_param_value(
+    ty: Type,
+    sequence: &dawn_language::sequence::Sequence,
+) -> Result<EffectParamValue, GuiMutationError> {
+    if ty == Type::Marks {
+        return sequence
+            .mark_collections
+            .first()
+            .map(|collection| EffectParamValue::Marks(collection.key.clone()))
+            .ok_or_else(|| {
+                GuiMutationError::Invalid(
+                    "A required marks parameter needs a mark collection.".to_string(),
+                )
+            });
+    }
+    default_effect_param_value(&ty).ok_or_else(|| {
+        GuiMutationError::Invalid(
+            "A valid required operator parameter could not be created.".to_string(),
+        )
+    })
 }
 
 fn copy_sequence_selection(
@@ -3057,22 +3300,20 @@ fn ensure_graph_node_exists(
 }
 
 fn graph_input_cardinality(
+    definitions: &dawn_language::operator::OperatorDefinitionStore,
     kind: &CompositionGraphNodeKind,
     source_name: &str,
-) -> Option<GraphPortCardinality> {
+) -> Option<OperatorPortCardinality> {
     match kind {
         CompositionGraphNodeKind::Layer { .. } => None,
-        CompositionGraphNodeKind::Operator(operator) => {
-            let GraphOperatorRef::Builtin(operator) = &operator.operator;
-            operator
-                .definition()
-                .inputs
-                .iter()
-                .find(|port| port.source_name == source_name)
-                .map(|port| port.cardinality.clone())
-        }
+        CompositionGraphNodeKind::Operator(operator) => definitions
+            .resolve(&operator.operator)?
+            .inputs
+            .iter()
+            .find(|port| port.source_name == source_name)
+            .map(|port| port.cardinality.clone()),
         CompositionGraphNodeKind::Output => {
-            (source_name == "input").then_some(GraphPortCardinality::Many)
+            (source_name == "input").then_some(OperatorPortCardinality::Many)
         }
     }
 }
@@ -3141,17 +3382,22 @@ fn create_sequence_layer(
     Ok(())
 }
 
-fn graph_operator_from_gui(operator: &SequenceGraphOperator) -> GraphOperator {
+fn graph_operator_from_gui(operator: &SequenceGraphOperator) -> OperatorRef {
     match operator {
-        SequenceGraphOperator::Max => GraphOperator::Max,
-        SequenceGraphOperator::Add => GraphOperator::Add,
-        SequenceGraphOperator::Multiply => GraphOperator::Multiply,
-        SequenceGraphOperator::IntensityModulate => GraphOperator::IntensityModulate,
-        SequenceGraphOperator::Dim => GraphOperator::Dim,
-        SequenceGraphOperator::Invert => GraphOperator::Invert,
-        SequenceGraphOperator::Colorize => GraphOperator::Colorize,
-        SequenceGraphOperator::Delay => GraphOperator::Delay,
-        SequenceGraphOperator::Echo => GraphOperator::Echo,
+        SequenceGraphOperator::Builtin { operator } => OperatorRef::Builtin(match operator {
+            SequenceBuiltinOperator::Max => BuiltinOperator::Max,
+            SequenceBuiltinOperator::Add => BuiltinOperator::Add,
+            SequenceBuiltinOperator::Multiply => BuiltinOperator::Multiply,
+            SequenceBuiltinOperator::IntensityModulate => BuiltinOperator::IntensityModulate,
+            SequenceBuiltinOperator::Dim => BuiltinOperator::Dim,
+            SequenceBuiltinOperator::Invert => BuiltinOperator::Invert,
+            SequenceBuiltinOperator::Colorize => BuiltinOperator::Colorize,
+            SequenceBuiltinOperator::Delay => BuiltinOperator::Delay,
+            SequenceBuiltinOperator::Echo => BuiltinOperator::Echo,
+        }),
+        SequenceGraphOperator::Custom { definition_id } => {
+            OperatorRef::Custom(OperatorDefinitionId(definition_id.clone()))
+        }
     }
 }
 
@@ -3495,18 +3741,23 @@ mod tests {
     use std::time::Duration;
 
     use camino::Utf8PathBuf;
+    use dawn_language::dsl::compile_operators;
+    use dawn_language::effect::{CurveDefinition, CurveId, CurveSource, EffectParamValue};
     use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
+    use dawn_language::operator::{
+        BuiltinOperator, GraphOperatorNode, OperatorDefinitionId, OperatorRef,
+        custom_operator_definition,
+    };
     use dawn_language::sequence::{
         CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind, EffectGraphEdge,
-        GraphNodePosition, GraphOperator, GraphOperatorNode, GraphOperatorRef, GraphPortId,
-        Sequence, SequenceAudio, SequenceCompositionGraph, SequenceId, SequenceLayer,
-        SequenceLayerId,
+        GraphNodePosition, GraphPortId, Sequence, SequenceAudio, SequenceCompositionGraph,
+        SequenceId, SequenceLayer, SequenceLayerId,
     };
     use dawn_language::setup::{LayoutId, PatchId, Setup, SetupId};
-    use dawn_language::values::{Color, DawnDuration};
+    use dawn_language::values::{Color, Curve, CurvePoint, CurveValue, DawnDuration};
     use dawn_project_io::{
-        ProjectSession, SourceMap, SourceObjectId, SourceObjectKind, SourceObjectLocation,
-        SourceProject,
+        ProjectSession, SourceDocument, SourceDocumentKind, SourceMap, SourceObjectId,
+        SourceObjectKind, SourceObjectLocation, SourceProject,
     };
     use indexmap::IndexMap;
 
@@ -3658,6 +3909,146 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn custom_operator_adds_import_and_supports_typed_and_curve_params() {
+        let mut session = test_session(test_sequence_with_graph(true));
+        let compiled = compile_operators(
+            "operator Gain { input Signal source; param float amount; param curve<float> shape; color sample() { return source.at(seconds()) * amount; } }",
+        )
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+        let operator_id = OperatorDefinitionId("Gain".to_string());
+        session.project.definitions.operators.insert(
+            operator_id.clone(),
+            custom_operator_definition(operator_id.clone(), compiled),
+        );
+        session.project.definitions.curves.insert(
+            CurveId("shape".to_string()),
+            CurveDefinition {
+                curve: Curve {
+                    points: vec![CurvePoint {
+                        position: 0.0,
+                        value: CurveValue::Float(1.0),
+                    }],
+                },
+            },
+        );
+        session.source.documents.insert(
+            Utf8PathBuf::from("sequences.dawn"),
+            SourceDocument {
+                relative_path: Utf8PathBuf::from("sequences.dawn"),
+                imports: Vec::new(),
+                exported_objects: vec!["seq".to_string()],
+                kind: SourceDocumentKind::Dawn {
+                    value: yaml_serde::Value::Mapping(yaml_serde::Mapping::new()),
+                    object_types: vec![SourceObjectKind::Sequence],
+                },
+            },
+        );
+        session.source.source_map.objects.insert(
+            SourceObjectId {
+                kind: SourceObjectKind::OperatorDefinition,
+                id: "Gain".to_string(),
+            },
+            SourceObjectLocation {
+                document: Utf8PathBuf::from("operators/gain.operator.dawn"),
+                object_key: "Gain".to_string(),
+            },
+        );
+        session.source.source_map.objects.insert(
+            SourceObjectId {
+                kind: SourceObjectKind::Curve,
+                id: "shape".to_string(),
+            },
+            SourceObjectLocation {
+                document: Utf8PathBuf::from("curves/shape.curve.dawn"),
+                object_key: "shape".to_string(),
+            },
+        );
+
+        apply_sequence_edit(
+            &mut session,
+            SequenceGuiEdit::AddGraphOperatorNode {
+                operator: crate::dto::SequenceGraphOperator::Custom {
+                    definition_id: "Gain".to_string(),
+                },
+                x: 100.0,
+                y: 100.0,
+            },
+        )
+        .unwrap();
+        assert!(
+            session.source.documents[&Utf8PathBuf::from("sequences.dawn")]
+                .imports
+                .iter()
+                .any(|import| import.alias == "operators")
+        );
+        let node_id = test_sequence(&session)
+            .composition_graph
+            .nodes
+            .iter()
+            .map(|node| node.id.0)
+            .max()
+            .unwrap();
+        {
+            let sequence = session
+                .project
+                .sequences
+                .get_mut(&SequenceId("seq".to_string()))
+                .unwrap();
+            sequence.composition_graph.edges.push(graph_edge(
+                CompositionGraphNodeId(1),
+                "output",
+                CompositionGraphNodeId(node_id),
+                "source",
+            ));
+            sequence.composition_graph.edges.push(graph_edge(
+                CompositionGraphNodeId(node_id),
+                "output",
+                CompositionGraphNodeId(2),
+                "input",
+            ));
+        }
+        apply_sequence_edit(
+            &mut session,
+            SequenceGuiEdit::UpdateGraphOperatorParam {
+                node_id: format!("node:{node_id}"),
+                name: "amount".to_string(),
+                value: crate::dto::SequenceEffectParamValue::Float { value: 0.75 },
+            },
+        )
+        .unwrap();
+        apply_sequence_edit(
+            &mut session,
+            SequenceGuiEdit::LinkGraphOperatorCurveParam {
+                node_id: format!("node:{node_id}"),
+                name: "shape".to_string(),
+                curve_path: "curves/shape.curve.dawn".to_string(),
+                object_key: "shape".to_string(),
+            },
+        )
+        .unwrap();
+        let node = test_sequence(&session)
+            .composition_graph
+            .nodes
+            .iter()
+            .find(|node| node.id.0 == node_id)
+            .unwrap();
+        let CompositionGraphNodeKind::Operator(operator) = &node.kind else {
+            panic!("expected operator");
+        };
+        assert_eq!(
+            operator.params[&super::identifier("amount").unwrap()],
+            EffectParamValue::Float(0.75)
+        );
+        assert!(matches!(
+            operator.params[&super::identifier("shape").unwrap()],
+            EffectParamValue::Curve(CurveSource::Reference(_))
+        ));
+    }
+
     fn apply_sequence_edit(
         session: &mut ProjectSession,
         edit: SequenceGuiEdit,
@@ -3779,7 +4170,7 @@ mod tests {
             id: CompositionGraphNodeId(id),
             position: GraphNodePosition { x: 120.0, y: 0.0 },
             kind: CompositionGraphNodeKind::Operator(GraphOperatorNode {
-                operator: GraphOperatorRef::Builtin(GraphOperator::Dim),
+                operator: OperatorRef::Builtin(BuiltinOperator::Dim),
                 params: IndexMap::new(),
             }),
         }

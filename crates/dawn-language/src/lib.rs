@@ -10,9 +10,10 @@
     )
 )]
 
+pub mod dsl;
 pub mod effect;
-pub mod effect_dsl;
 pub mod model;
+pub mod operator;
 pub mod sequence;
 pub mod setup;
 pub mod values;

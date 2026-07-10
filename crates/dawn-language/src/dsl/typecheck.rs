@@ -1,6 +1,9 @@
-use super::ast::{BinaryOp, Block, EffectDecl, Expr, ExprKind, Module, ParamDecl, Stmt, UnaryOp};
+use super::ast::{
+    BinaryOp, Block, EffectDecl, Expr, ExprKind, Module, OperatorDecl, ParamDecl, Stmt, UnaryOp,
+};
 use super::checked::{
-    CheckedBlock, CheckedEffectDecl, CheckedExpr, CheckedExprKind, CheckedModule, CheckedStmt,
+    CheckedBlock, CheckedEffectDecl, CheckedExpr, CheckedExprKind, CheckedModule,
+    CheckedOperatorDecl, CheckedStmt,
 };
 use super::diagnostic::Diagnostic;
 use super::lexer::TextSpan;
@@ -16,8 +19,13 @@ pub(crate) fn check_module(module: Module) -> Result<CheckedModule, Vec<Diagnost
         .into_iter()
         .map(|effect| checker.check_effect(effect))
         .collect();
+    let operators = module
+        .operators
+        .into_iter()
+        .map(|operator| checker.check_operator(operator))
+        .collect();
     if checker.diagnostics.is_empty() {
-        Ok(CheckedModule { effects })
+        Ok(CheckedModule { effects, operators })
     } else {
         Err(checker.diagnostics)
     }
@@ -28,6 +36,67 @@ struct Checker {
 }
 
 impl Checker {
+    fn check_operator(&mut self, operator: OperatorDecl) -> CheckedOperatorDecl {
+        if operator.inputs.is_empty() {
+            self.error(
+                TextSpan { start: 0, end: 0 },
+                "operator must declare at least one Signal input",
+            );
+        }
+        if operator.entrypoint.name.as_str() != "sample" {
+            self.error(
+                TextSpan { start: 0, end: 0 },
+                "operator entrypoint must be named `sample`",
+            );
+        }
+        if operator.entrypoint.return_type != Type::Color {
+            self.error(
+                TextSpan { start: 0, end: 0 },
+                "operator entrypoint must return `Color`",
+            );
+        }
+        if !operator.entrypoint.params.is_empty() {
+            self.error(
+                TextSpan { start: 0, end: 0 },
+                "operator entrypoint does not accept arguments",
+            );
+        }
+
+        let mut env = IndexMap::new();
+        for input in &operator.inputs {
+            if env.insert(input.name.clone(), Type::Signal).is_some() {
+                self.error(
+                    TextSpan { start: 0, end: 0 },
+                    format!("duplicate operator input `{}`", input.name.as_str()),
+                );
+            }
+        }
+        for param in &operator.params {
+            self.check_param(param);
+            if env.insert(param.name.clone(), param.ty.clone()).is_some() {
+                self.error(
+                    TextSpan { start: 0, end: 0 },
+                    format!("duplicate operator member `{}`", param.name.as_str()),
+                );
+            }
+        }
+        let (body, returns) =
+            self.check_block(operator.entrypoint.body.clone(), &mut env, &Type::Color);
+        if !returns {
+            self.error(
+                TextSpan { start: 0, end: 0 },
+                "`sample` must return a color on all paths",
+            );
+        }
+        CheckedOperatorDecl {
+            name: operator.name,
+            inputs: operator.inputs,
+            params: operator.params,
+            entrypoint: operator.entrypoint,
+            body,
+        }
+    }
+
     fn check_effect(&mut self, effect: EffectDecl) -> CheckedEffectDecl {
         let is_sample = effect.entrypoint.name.as_str() == "sample";
         let is_generator = effect.entrypoint.name.as_str() == "generate";
@@ -89,14 +158,16 @@ impl Checker {
     }
 
     fn check_param(&mut self, param: &ParamDecl) {
-        if matches!(
-            param.ty,
-            Type::Timeline | Type::Target | Type::TargetItems | Type::TargetItem
-        ) {
+        if type_contains_signal(&param.ty)
+            || matches!(
+                param.ty,
+                Type::Timeline | Type::Target | Type::TargetItems | Type::TargetItem
+            )
+        {
             self.error(
                 TextSpan { start: 0, end: 0 },
                 format!(
-                    "`{}` uses an internal generator context type and cannot be a param",
+                    "`{}` uses a context-only type and cannot be a param",
                     param.name.as_str()
                 ),
             );
@@ -156,6 +227,12 @@ impl Checker {
                 name,
                 initializer,
             } => {
+                if type_contains_signal(&ty) {
+                    self.error(
+                        TextSpan { start: 0, end: 0 },
+                        "Signal can only be declared as an operator input",
+                    );
+                }
                 let initializer = initializer.map(|initializer| {
                     let checked = self.check_expr(initializer, env, Some(&ty));
                     self.require_assignable(&ty, &checked.ty, checked.span);
@@ -362,6 +439,10 @@ impl Checker {
                             Type::Void
                         }
                     },
+                    Type::Signal => {
+                        self.error(span, "Signal only supports `at(float)`");
+                        Type::Void
+                    }
                     _ => {
                         self.error(target.span, "member access requires TargetItem");
                         Type::Void
@@ -376,6 +457,27 @@ impl Checker {
                 )
             }
             ExprKind::Call { callee, args } => {
+                if let ExprKind::Member { target, member } = &callee.kind
+                    && member.as_str() == "at"
+                    && let ExprKind::Variable(input) = &target.kind
+                    && env.get(input) == Some(&Type::Signal)
+                {
+                    self.require_arg_count("Signal.at", args.len(), 1, span);
+                    let seconds = args.first().cloned().unwrap_or(Expr {
+                        kind: ExprKind::Literal(Value::Float(0.0)),
+                        span,
+                    });
+                    let seconds = self.check_expr(seconds, env, Some(&Type::Float));
+                    self.require_assignable(&Type::Float, &seconds.ty, seconds.span);
+                    return CheckedExpr {
+                        kind: CheckedExprKind::SignalSample {
+                            input: input.clone(),
+                            seconds: Box::new(seconds),
+                        },
+                        span,
+                        ty: Type::Color,
+                    };
+                }
                 let callee = self.check_expr(*callee, env, None);
                 let ty = if let CheckedExprKind::Variable(name) = &callee.kind {
                     self.check_builtin_call(name.as_str(), &args, env, span)
@@ -481,11 +583,33 @@ impl Checker {
                 self.require_arg(args, 0, &Type::Float, env);
                 Type::Float
             }
-            "min" | "max" => {
+            "min" => {
                 self.require_arg_count(name, args.len(), 2, span);
                 self.require_arg(args, 0, &Type::Float, env);
                 self.require_arg(args, 1, &Type::Float, env);
                 Type::Float
+            }
+            "max" => {
+                self.require_arg_count(name, args.len(), 2, span);
+                let first = self.require_arg_any(args, 0, env);
+                if first == Type::Color {
+                    self.require_arg(args, 1, &Type::Color, env);
+                    Type::Color
+                } else {
+                    self.require_assignable(&Type::Float, &first, span);
+                    self.require_arg(args, 1, &Type::Float, env);
+                    Type::Float
+                }
+            }
+            "intensity" => {
+                self.require_arg_count(name, args.len(), 1, span);
+                self.require_arg(args, 0, &Type::Color, env);
+                Type::Float
+            }
+            "invert" => {
+                self.require_arg_count(name, args.len(), 1, span);
+                self.require_arg(args, 0, &Type::Color, env);
+                Type::Color
             }
             "clamp" | "smoothstep" => {
                 self.require_arg_count(name, args.len(), 3, span);
@@ -612,6 +736,14 @@ impl Checker {
 
     fn check_binary(&mut self, op: BinaryOp, left: &Type, right: &Type, span: TextSpan) -> Type {
         match op {
+            BinaryOp::Add if left == &Type::Color && right == &Type::Color => Type::Color,
+            BinaryOp::Multiply
+                if (left == &Type::Color
+                    && matches!(right, Type::Color | Type::Float | Type::Int))
+                    || (right == &Type::Color && matches!(left, Type::Float | Type::Int)) =>
+            {
+                Type::Color
+            }
             BinaryOp::Add
             | BinaryOp::Subtract
             | BinaryOp::Multiply
@@ -717,8 +849,9 @@ fn builtin_arg_type(name: &str, index: usize) -> Option<Type> {
         {
             Some(Type::Marks)
         }
-        "rgb" | "hsv" | "rand" | "srand" | "sin" | "cos" | "abs" | "floor" | "min" | "max"
-        | "clamp" | "smoothstep" | "section_position" => Some(Type::Float),
+        "intensity" | "invert" => Some(Type::Color),
+        "rgb" | "hsv" | "rand" | "srand" | "sin" | "cos" | "abs" | "floor" | "min" | "clamp"
+        | "smoothstep" | "section_position" => Some(Type::Float),
         "curve_crossing" if index == 0 => Some(Type::curve(Type::Float)),
         "curve_float_clamped" if index == 0 => Some(Type::curve(Type::Float)),
         "curve_color_scaled" if index == 0 => Some(Type::curve(Type::Color)),
@@ -729,6 +862,14 @@ fn builtin_arg_type(name: &str, index: usize) -> Option<Type> {
 
 fn numeric(ty: &Type) -> bool {
     matches!(ty, Type::Int | Type::Float)
+}
+
+fn type_contains_signal(ty: &Type) -> bool {
+    match ty {
+        Type::Signal => true,
+        Type::Curve(inner) | Type::Array(inner) => type_contains_signal(inner),
+        _ => false,
+    }
 }
 
 fn type_of_value(value: &Value) -> Type {

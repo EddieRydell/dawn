@@ -2108,8 +2108,41 @@ button:focus-visible,
 
 .graph-modal-body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   grid-template-rows: minmax(0, 1fr);
   min-height: 0;
+}
+
+.graph-operator-inspector {
+  width: 300px;
+  min-height: 0;
+  border-left: 1px solid #30343a;
+  background: #181a1d;
+  padding: 14px;
+  overflow: auto;
+}
+
+.graph-operator-inspector-heading {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 14px;
+}
+
+.graph-operator-inspector-heading span,
+.graph-operator-no-params {
+  color: #8e9299;
+  font-size: 11px;
+}
+
+.graph-operator-inspector-heading h3 {
+  margin: 0;
+  color: #f0ece4;
+  font-size: 15px;
+}
+
+.graph-operator-inspector-heading code {
+  color: #a9c7ad;
+  font-size: 11px;
 }
 
 .graph-flow-pane {
@@ -2403,6 +2436,15 @@ button:focus-visible,
 
 .graph-context-menu button:disabled {
   color: #696b70;
+}
+
+.graph-context-menu-heading {
+  padding: 7px 8px 3px;
+  color: #777c84;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .graph-context-menu-divider {

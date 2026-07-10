@@ -1,4 +1,5 @@
 use crate::effect::{CurveDefinitionStore, EffectDefinitionStore};
+use crate::operator::OperatorDefinitionStore;
 use crate::sequence::Sequence;
 use crate::setup::{
     ControllerDefinitionStore, ControllerId, FixtureDefinitionStore, Layout, LayoutId, Patch,
@@ -33,4 +34,5 @@ pub struct ProjectDefinitionStores {
     pub fixtures: FixtureDefinitionStore,
     pub curves: CurveDefinitionStore,
     pub controllers: ControllerDefinitionStore,
+    pub operators: OperatorDefinitionStore,
 }

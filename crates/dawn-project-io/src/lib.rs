@@ -12,19 +12,24 @@
 
 use camino::Utf8Component;
 use camino::{Utf8Path, Utf8PathBuf};
+use dawn_language::dsl::{
+    Diagnostic as DslDiagnostic, Identifier, compile_effects, compile_operators,
+};
 use dawn_language::effect::{
     CurveDefinition, CurveId, CurveSource, EffectDefinition, EffectDefinitionId, EffectInst,
     EffectInstId, EffectParamValue, EffectScope, EffectTarget,
 };
-use dawn_language::effect_dsl::{Diagnostic as EffectDiagnostic, Identifier, compile_effects};
 use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
+use dawn_language::operator::{
+    BuiltinOperator, GraphOperatorNode, OperatorDefinitionId, OperatorDefinitionStore, OperatorRef,
+    custom_operator_definition, validate_composition_graph,
+};
 use dawn_language::sequence::{
     AssetId, AutomationBinding, AutomationClip, AutomationClipId, AutomationMapping,
     AutomationTarget, CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind,
-    EffectClip, EffectGraphEdge, GraphNodePosition, GraphOperator, GraphOperatorNode,
-    GraphOperatorRef, GraphPortId, MarkCollection, MarkCollectionKey, Sequence, SequenceAudio,
-    SequenceClip, SequenceClipId, SequenceClipKind, SequenceCompositionGraph, SequenceId,
-    SequenceLayer, SequenceLayerId, validate_graph_interface,
+    EffectClip, EffectGraphEdge, GraphNodePosition, GraphPortId, MarkCollection, MarkCollectionKey,
+    Sequence, SequenceAudio, SequenceClip, SequenceClipId, SequenceClipKind,
+    SequenceCompositionGraph, SequenceId, SequenceLayer, SequenceLayerId,
 };
 use dawn_language::setup::{
     ControllerAddress, ControllerDefinition, ControllerDefinitionId, ControllerId,
@@ -93,6 +98,12 @@ pub fn check_document_text(path: &Utf8Path, text: &str) -> Vec<IoDiagnostic> {
     {
         return effect_diagnostics(path, text);
     }
+    if path
+        .file_name()
+        .is_some_and(|file_name| file_name.ends_with(".operator.dawn"))
+    {
+        return operator_diagnostics(path, text);
+    }
 
     match parse_yaml_value(path, text) {
         Ok(_) => Vec::new(),
@@ -133,6 +144,7 @@ pub enum IoDiagnosticCode {
     DawnLoad,
     DawnReference,
     EffectCompile,
+    OperatorCompile,
     IoRead,
     YamlParse,
 }
@@ -143,6 +155,7 @@ impl IoDiagnosticCode {
             Self::DawnLoad => "dawn.load",
             Self::DawnReference => "dawn.reference",
             Self::EffectCompile => "effect.compile",
+            Self::OperatorCompile => "operator.compile",
             Self::IoRead => "io.read",
             Self::YamlParse => "yaml.parse",
         }
@@ -401,6 +414,7 @@ pub fn ensure_document_can_reference(
 fn canonical_reference_alias(kind: &SourceObjectKind) -> Option<&'static str> {
     match kind {
         SourceObjectKind::EffectDefinition => Some("effects"),
+        SourceObjectKind::OperatorDefinition => Some("operators"),
         SourceObjectKind::Curve => Some("curves"),
         _ => None,
     }
@@ -483,6 +497,7 @@ pub enum SourceObjectKind {
     Curve,
     Sequence,
     EffectDefinition,
+    OperatorDefinition,
     EffectInstance,
 }
 
@@ -507,6 +522,9 @@ pub enum SourceDocumentKind {
         object_types: Vec<SourceObjectKind>,
     },
     Effect {
+        source: String,
+    },
+    Operator {
         source: String,
     },
 }
@@ -570,6 +588,10 @@ pub enum LoadProjectError {
         path: Utf8PathBuf,
         diagnostics: Vec<IoDiagnostic>,
     },
+    InvalidOperator {
+        path: Utf8PathBuf,
+        diagnostics: Vec<IoDiagnostic>,
+    },
 }
 
 #[derive(Debug)]
@@ -617,6 +639,17 @@ impl fmt::Display for LoadProjectError {
                         .join(", ")
                 )
             }
+            Self::InvalidOperator { path, diagnostics } => {
+                write!(
+                    formatter,
+                    "{path}: invalid operator: {}",
+                    diagnostics
+                        .iter()
+                        .map(|diagnostic| diagnostic.message.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
         }
     }
 }
@@ -646,10 +679,9 @@ fn discover_reachable_file(
         path: absolute.clone(),
         source,
     })?;
-    if relative
-        .file_name()
-        .is_some_and(|file_name| file_name.ends_with(".effect.dawn"))
-    {
+    if relative.file_name().is_some_and(|file_name| {
+        file_name.ends_with(".effect.dawn") || file_name.ends_with(".operator.dawn")
+    }) {
         return Ok(());
     }
 
@@ -748,17 +780,36 @@ fn effect_diagnostics(path: &Utf8Path, text: &str) -> Vec<IoDiagnostic> {
         Ok(_) => Vec::new(),
         Err(diagnostics) => diagnostics
             .into_iter()
-            .map(|diagnostic| effect_diagnostic(path, text, diagnostic))
+            .map(|diagnostic| {
+                dsl_diagnostic(path, text, diagnostic, IoDiagnosticCode::EffectCompile)
+            })
             .collect(),
     }
 }
 
-fn effect_diagnostic(path: &Utf8Path, text: &str, diagnostic: EffectDiagnostic) -> IoDiagnostic {
+fn operator_diagnostics(path: &Utf8Path, text: &str) -> Vec<IoDiagnostic> {
+    match compile_operators(text) {
+        Ok(_) => Vec::new(),
+        Err(diagnostics) => diagnostics
+            .into_iter()
+            .map(|diagnostic| {
+                dsl_diagnostic(path, text, diagnostic, IoDiagnosticCode::OperatorCompile)
+            })
+            .collect(),
+    }
+}
+
+fn dsl_diagnostic(
+    path: &Utf8Path,
+    text: &str,
+    diagnostic: DslDiagnostic,
+    code: IoDiagnosticCode,
+) -> IoDiagnostic {
     IoDiagnostic {
         path: path.to_path_buf(),
         range: Some(byte_range(text, diagnostic.span.start, diagnostic.span.end)),
         severity: IoDiagnosticSeverity::Error,
-        code: IoDiagnosticCode::EffectCompile,
+        code,
         message: diagnostic.message,
     }
 }
@@ -823,6 +874,17 @@ fn load_error_diagnostic(error: LoadProjectError) -> IoDiagnostic {
                 .collect::<Vec<_>>()
                 .join(", "),
         },
+        LoadProjectError::InvalidOperator { path, diagnostics } => IoDiagnostic {
+            path,
+            range: None,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::OperatorCompile,
+            message: diagnostics
+                .into_iter()
+                .map(|diagnostic| diagnostic.message)
+                .collect::<Vec<_>>()
+                .join(", "),
+        },
     }
 }
 
@@ -839,6 +901,14 @@ fn push_load_error_diagnostics(diagnostics: &mut Vec<IoDiagnostic>, error: LoadP
             ..
         } => {
             for diagnostic in effect_diagnostics {
+                push_diagnostic(diagnostics, diagnostic);
+            }
+        }
+        LoadProjectError::InvalidOperator {
+            diagnostics: operator_diagnostics,
+            ..
+        } => {
+            for diagnostic in operator_diagnostics {
                 push_diagnostic(diagnostics, diagnostic);
             }
         }
@@ -1063,6 +1133,7 @@ fn document_text(document: &SourceDocument) -> Result<String, ExportProjectError
             })
         }
         SourceDocumentKind::Effect { source } => Ok(source.clone()),
+        SourceDocumentKind::Operator { source } => Ok(source.clone()),
     }
 }
 
@@ -1081,6 +1152,7 @@ fn sync_project_source(session: &mut ProjectSession) -> Result<(), ExportProject
         let existing = match &document.kind {
             SourceDocumentKind::Dawn { value, .. } => mapping(value).cloned(),
             SourceDocumentKind::Effect { .. } => None,
+            SourceDocumentKind::Operator { .. } => None,
         };
 
         let mut root = Mapping::new();
@@ -1161,6 +1233,12 @@ fn has_typed_object(session: &ProjectSession, id: &SourceObjectId) -> bool {
             .effects
             .definitions
             .contains_key(&EffectDefinitionId(id.id.clone())),
+        SourceObjectKind::OperatorDefinition => session
+            .project
+            .definitions
+            .operators
+            .definitions
+            .contains_key(&OperatorDefinitionId(id.id.clone())),
         SourceObjectKind::EffectInstance => false,
     }
 }
@@ -1247,13 +1325,13 @@ fn serialize_source_object(
                 .ok_or_else(|| missing_typed_object(from_document, id))?;
             sequence_value(session, from_document, sequence)
         }
-        SourceObjectKind::EffectDefinition | SourceObjectKind::EffectInstance => {
-            Err(ExportProjectError::InvalidReference {
-                path: from_document.to_path_buf(),
-                reference: id.id.clone(),
-                message: "effect definitions are preserved as effect source documents".to_string(),
-            })
-        }
+        SourceObjectKind::EffectDefinition
+        | SourceObjectKind::OperatorDefinition
+        | SourceObjectKind::EffectInstance => Err(ExportProjectError::InvalidReference {
+            path: from_document.to_path_buf(),
+            reference: id.id.clone(),
+            message: "DSL definitions are preserved as source documents".to_string(),
+        }),
     }
 }
 
@@ -1759,7 +1837,11 @@ fn composition_graph_node_value(
             value.insert(string_value("type"), Value::String("operator".to_string()));
             value.insert(
                 string_value("operator"),
-                Value::String(graph_operator_name(&operator.operator).to_string()),
+                Value::String(graph_operator_name(
+                    session,
+                    from_document,
+                    &operator.operator,
+                )?),
             );
             if !operator.params.is_empty() {
                 value.insert(
@@ -1867,9 +1949,20 @@ fn graph_edge_value(edge: &EffectGraphEdge) -> Result<Value, ExportProjectError>
     Ok(Value::Mapping(value))
 }
 
-fn graph_operator_name(operator: &GraphOperatorRef) -> &'static str {
-    let GraphOperatorRef::Builtin(operator) = operator;
-    operator.definition().source_name
+fn graph_operator_name(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    operator: &OperatorRef,
+) -> Result<String, ExportProjectError> {
+    match operator {
+        OperatorRef::Builtin(operator) => Ok(operator.definition().source_name.clone()),
+        OperatorRef::Custom(id) => write_reference(
+            session,
+            from_document,
+            SourceObjectKind::OperatorDefinition,
+            &id.0,
+        ),
+    }
 }
 
 fn automation_clip_value(clip: &AutomationClip) -> Result<Value, ExportProjectError> {
@@ -2397,6 +2490,7 @@ struct Loader {
     loading_documents: IndexSet<Utf8PathBuf>,
     source_map: SourceMap,
     effect_source_text: IndexMap<EffectDefinitionId, String>,
+    operator_definitions: OperatorDefinitionStore,
     referenced_assets: Vec<ReferencedAsset>,
     next_asset_id: u32,
 }
@@ -2428,6 +2522,7 @@ impl Loader {
             loading_documents: IndexSet::new(),
             source_map: SourceMap::default(),
             effect_source_text: IndexMap::new(),
+            operator_definitions: OperatorDefinitionStore::default(),
             referenced_assets: Vec::new(),
             next_asset_id: 1,
         })
@@ -2465,6 +2560,8 @@ impl Loader {
         let file_name = relative.file_name().unwrap_or_default();
         let result = if file_name.ends_with(".effect.dawn") {
             self.load_effect_document(relative, &absolute)
+        } else if file_name.ends_with(".operator.dawn") {
+            self.load_operator_document(relative, &absolute)
         } else {
             self.load_dawn_document(relative, &absolute)
         };
@@ -2486,7 +2583,14 @@ impl Loader {
                 path: relative.to_path_buf(),
                 diagnostics: diagnostics
                     .into_iter()
-                    .map(|diagnostic| effect_diagnostic(relative, &source, diagnostic))
+                    .map(|diagnostic| {
+                        dsl_diagnostic(
+                            relative,
+                            &source,
+                            diagnostic,
+                            IoDiagnosticCode::EffectCompile,
+                        )
+                    })
                     .collect(),
             })?;
         let mut visible = IndexMap::new();
@@ -2526,6 +2630,72 @@ impl Loader {
                 imports: Vec::new(),
                 exported_objects,
                 kind: SourceDocumentKind::Effect { source },
+            },
+        );
+        Ok(())
+    }
+
+    fn load_operator_document(
+        &mut self,
+        relative: &Utf8Path,
+        absolute: &Utf8Path,
+    ) -> Result<(), LoadProjectError> {
+        let source = fs::read_to_string(absolute).map_err(|source| LoadProjectError::Io {
+            path: absolute.to_path_buf(),
+            source,
+        })?;
+        let compiled = compile_operators(&source).map_err(|diagnostics| {
+            LoadProjectError::InvalidOperator {
+                path: relative.to_path_buf(),
+                diagnostics: diagnostics
+                    .into_iter()
+                    .map(|diagnostic| {
+                        dsl_diagnostic(
+                            relative,
+                            &source,
+                            diagnostic,
+                            IoDiagnosticCode::OperatorCompile,
+                        )
+                    })
+                    .collect(),
+            }
+        })?;
+        let mut visible = IndexMap::new();
+        let mut exported_objects = Vec::new();
+        for operator in compiled {
+            let name = operator.name().as_str().to_string();
+            let id = OperatorDefinitionId(name.clone());
+            let definition = custom_operator_definition(id.clone(), operator);
+            self.operator_definitions.insert(id.clone(), definition);
+            self.insert_source_object(
+                relative,
+                SourceObjectId {
+                    kind: SourceObjectKind::OperatorDefinition,
+                    id: id.0.clone(),
+                },
+                SourceObjectLocation {
+                    document: relative.to_path_buf(),
+                    object_key: name.clone(),
+                },
+            )?;
+            visible.insert(
+                AliasObjectKey {
+                    alias: None,
+                    object: name.clone(),
+                },
+                ResolvedObject::OperatorDefinition(id),
+            );
+            exported_objects.push(name);
+        }
+        self.visible_objects.insert(relative.to_path_buf(), visible);
+        self.import_graph.insert(relative.to_path_buf(), Vec::new());
+        self.documents.insert(
+            relative.to_path_buf(),
+            SourceDocument {
+                relative_path: relative.to_path_buf(),
+                imports: Vec::new(),
+                exported_objects,
+                kind: SourceDocumentKind::Operator { source },
             },
         );
         Ok(())
@@ -2765,6 +2935,7 @@ impl Loader {
             sequences: IndexMap::new(),
             definitions: ProjectDefinitionStores::default(),
         };
+        project.definitions.operators = self.operator_definitions.clone();
 
         let mut resolver = DomainResolver {
             loader: self,
@@ -2921,6 +3092,11 @@ impl Loader {
         match &document.kind {
             SourceDocumentKind::Dawn { value, .. } => Ok(value),
             SourceDocumentKind::Effect { .. } => Err(LoadProjectError::InvalidDocument {
+                path: path.to_path_buf(),
+                range: None,
+                message: "expected YAML Dawn document".to_string(),
+            }),
+            SourceDocumentKind::Operator { .. } => Err(LoadProjectError::InvalidDocument {
                 path: path.to_path_buf(),
                 range: None,
                 message: "expected YAML Dawn document".to_string(),
@@ -3370,6 +3546,14 @@ impl DomainResolver<'_> {
         let (document_path, _, value) = self
             .loader
             .object_value(&ResolvedObject::Sequence(id.clone()))?;
+        let duration =
+            parse_duration(string_field(&document_path, &value, "duration")?).map_err(|error| {
+                with_yaml_location(
+                    error,
+                    &document_path,
+                    source_range_for_field_value(&document_path, &value, "duration"),
+                )
+            })?;
         let audio = self.parse_audio(&document_path, &value)?;
         let mark_collections = optional_sequence(&value, "mark_collections")
             .unwrap_or_default()
@@ -3398,14 +3582,7 @@ impl DomainResolver<'_> {
             id.clone(),
             Sequence {
                 id: id.clone(),
-                duration: parse_duration(string_field(&document_path, &value, "duration")?)
-                    .map_err(|error| {
-                        with_yaml_location(
-                            error,
-                            &document_path,
-                            source_range_for_field_value(&document_path, &value, "duration"),
-                        )
-                    })?,
+                duration,
                 frame_rate: u32_field(&document_path, &value, "frame_rate")?,
                 audio,
                 mark_collections,
@@ -3523,11 +3700,13 @@ impl DomainResolver<'_> {
                 .map(|edge| parse_graph_edge(path, edge))
                 .collect::<Result<Vec<_>, _>>()?,
         };
-        validate_graph_interface(&graph).map_err(|error| LoadProjectError::InvalidDocument {
-            path: path.to_path_buf(),
-            range: None,
-            message: error.message,
-        })?;
+        validate_composition_graph(&graph, &self.project.definitions.operators).map_err(
+            |error| LoadProjectError::InvalidDocument {
+                path: path.to_path_buf(),
+                range: None,
+                message: error.message,
+            },
+        )?;
         Ok(graph)
     }
 
@@ -3541,7 +3720,7 @@ impl DomainResolver<'_> {
                 layer_id: SequenceLayerId(u32_field(path, value, "layer_id")?),
             },
             "operator" => CompositionGraphNodeKind::Operator(GraphOperatorNode {
-                operator: GraphOperatorRef::Builtin(parse_graph_operator(path, value)?),
+                operator: self.parse_graph_operator_ref(path, value)?,
                 params: self.parse_graph_operator_params(path, value)?,
             }),
             "output" => CompositionGraphNodeKind::Output,
@@ -3640,6 +3819,25 @@ impl DomainResolver<'_> {
             .map(Option::unwrap_or_default)
     }
 
+    fn parse_graph_operator_ref(
+        &self,
+        path: &Utf8Path,
+        value: &Value,
+    ) -> Result<OperatorRef, LoadProjectError> {
+        let name = string_field(path, value, "operator")?;
+        if let Some(builtin) = BuiltinOperator::from_source_name(name) {
+            return Ok(OperatorRef::Builtin(builtin));
+        }
+        match self.loader.resolve_reference(path, name)? {
+            ResolvedObject::OperatorDefinition(id) => Ok(OperatorRef::Custom(id)),
+            _ => Err(LoadProjectError::InvalidReference {
+                path: path.to_path_buf(),
+                range: source_range_for_field_value(path, value, "operator"),
+                reference: name.to_string(),
+            }),
+        }
+    }
+
     fn resolve_effect_definition(
         &mut self,
         id: &EffectDefinitionId,
@@ -3666,7 +3864,12 @@ impl DomainResolver<'_> {
                 diagnostics: diagnostics
                     .into_iter()
                     .map(|diagnostic| {
-                        effect_diagnostic(&self.loader.entrypoint, source, diagnostic)
+                        dsl_diagnostic(
+                            &self.loader.entrypoint,
+                            source,
+                            diagnostic,
+                            IoDiagnosticCode::EffectCompile,
+                        )
                     })
                     .collect(),
             })?;
@@ -4010,6 +4213,7 @@ enum ResolvedObject {
     Curve(CurveId),
     Sequence(SequenceId),
     EffectDefinition(EffectDefinitionId),
+    OperatorDefinition(OperatorDefinitionId),
 }
 
 impl ResolvedObject {
@@ -4024,6 +4228,7 @@ impl ResolvedObject {
             Self::Curve(_) => SourceObjectKind::Curve,
             Self::Sequence(_) => SourceObjectKind::Sequence,
             Self::EffectDefinition(_) => SourceObjectKind::EffectDefinition,
+            Self::OperatorDefinition(_) => SourceObjectKind::OperatorDefinition,
         }
     }
 
@@ -4038,6 +4243,7 @@ impl ResolvedObject {
             Self::Curve(id) => id.0.clone(),
             Self::Sequence(id) => id.0.clone(),
             Self::EffectDefinition(id) => id.0.clone(),
+            Self::OperatorDefinition(id) => id.0.clone(),
         }
     }
 }
@@ -4184,15 +4390,6 @@ fn parse_graph_edge(path: &Utf8Path, value: &Value) -> Result<EffectGraphEdge, L
         from_port: GraphPortId(string_field(path, value, "from_port")?.to_string()),
         to: CompositionGraphNodeId(u32_field(path, value, "to")?),
         to_port: GraphPortId(string_field(path, value, "to_port")?.to_string()),
-    })
-}
-
-fn parse_graph_operator(path: &Utf8Path, value: &Value) -> Result<GraphOperator, LoadProjectError> {
-    let name = string_field(path, value, "operator")?;
-    GraphOperator::from_source_name(name).ok_or_else(|| LoadProjectError::InvalidDocument {
-        path: path.to_path_buf(),
-        range: source_range_for_field_value(path, value, "operator"),
-        message: format!("unsupported graph operator `{name}`"),
     })
 }
 

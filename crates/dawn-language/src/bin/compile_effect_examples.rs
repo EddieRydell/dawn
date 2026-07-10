@@ -1,4 +1,4 @@
-use dawn_language::effect_dsl::compile_effects;
+use dawn_language::dsl::compile_effects;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};

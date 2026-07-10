@@ -4,6 +4,20 @@ use super::types::{Identifier, Type, Value};
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Module {
     pub effects: Vec<EffectDecl>,
+    pub operators: Vec<OperatorDecl>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct OperatorDecl {
+    pub name: Identifier,
+    pub inputs: Vec<OperatorInputDecl>,
+    pub params: Vec<ParamDecl>,
+    pub entrypoint: FunctionDecl,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OperatorInputDecl {
+    pub name: Identifier,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -8,30 +8,93 @@ mod typecheck;
 mod vm;
 
 use bytecode::{RegisterFunction, register_function_reads_only_written_slots};
-use compiler::compile_checked_effects;
+use compiler::{compile_checked_effects, compile_checked_operators};
 pub use diagnostic::Diagnostic;
 use indexmap::IndexMap;
 use parser::parse_module;
 use std::hash::{Hash, Hasher};
 use typecheck::check_module;
 pub use vm::{
-    BoundEffectParams, EffectBindCache, EffectVmScratch, GeneratedEffect, GeneratorContext,
-    RunContext, RuntimeError,
+    BoundParams, DslBindCache, DslVmScratch, GeneratedEffect, GeneratorContext, OperatorRunContext,
+    RunContext, RuntimeError, SignalSampler,
 };
 
 pub(crate) mod lexer;
 pub mod types;
 
 pub use crate::values::{Color, Curve, CurvePoint, CurveValue, Marks};
-pub use ast::ParamDecl;
+pub use ast::{OperatorInputDecl, ParamDecl};
 pub use types::{
     Identifier, TargetItemValue, TargetItemsValue, TargetPixelValue, TargetValue, Type, Value,
 };
 
 pub fn compile_effects(source: &str) -> Result<Vec<CompiledEffect>, Vec<Diagnostic>> {
     let module = parse_module(source)?;
+    if !module.operators.is_empty() {
+        return Err(vec![Diagnostic::new(
+            lexer::TextSpan { start: 0, end: 0 },
+            "operator declarations are not allowed in effect sources",
+        )]);
+    }
     let module = check_module(module)?;
     Ok(compile_checked_effects(module))
+}
+
+pub fn compile_operators(source: &str) -> Result<Vec<CompiledOperator>, Vec<Diagnostic>> {
+    compile_operators_inner(source, false)
+}
+
+pub(crate) fn compile_builtin_operators(
+    source: &str,
+) -> Result<Vec<CompiledOperator>, Vec<Diagnostic>> {
+    compile_operators_inner(source, true)
+}
+
+fn compile_operators_inner(
+    source: &str,
+    allow_reserved_names: bool,
+) -> Result<Vec<CompiledOperator>, Vec<Diagnostic>> {
+    let module = parse_module(source)?;
+    if !module.effects.is_empty() {
+        return Err(vec![Diagnostic::new(
+            lexer::TextSpan { start: 0, end: 0 },
+            "effect declarations are not allowed in operator sources",
+        )]);
+    }
+    if !allow_reserved_names {
+        const RESERVED: &[&str] = &[
+            "Max",
+            "Add",
+            "Multiply",
+            "IntensityModulate",
+            "Dim",
+            "Invert",
+            "Colorize",
+            "Delay",
+            "Echo",
+            "max",
+            "add",
+            "multiply",
+            "intensity_modulate",
+            "dim",
+            "invert",
+            "colorize",
+            "delay",
+            "echo",
+        ];
+        if let Some(operator) = module
+            .operators
+            .iter()
+            .find(|operator| RESERVED.contains(&operator.name.as_str()))
+        {
+            return Err(vec![Diagnostic::new(
+                lexer::TextSpan { start: 0, end: 0 },
+                format!("operator name `{}` is reserved", operator.name.as_str()),
+            )]);
+        }
+    }
+    let module = check_module(module)?;
+    Ok(compile_checked_operators(module))
 }
 
 #[derive(Clone, Debug)]
@@ -40,6 +103,68 @@ pub struct CompiledEffect {
     params: Vec<ParamDecl>,
     kind: EffectKind,
     function: RegisterFunction,
+}
+
+#[derive(Clone, Debug)]
+pub struct CompiledOperator {
+    pub(crate) name: Identifier,
+    pub(crate) inputs: Vec<OperatorInputDecl>,
+    pub(crate) params: Vec<ParamDecl>,
+    pub(crate) function: RegisterFunction,
+}
+
+impl PartialEq for CompiledOperator {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.inputs == other.inputs
+            && self.params == other.params
+            && self.function == other.function
+    }
+}
+
+impl CompiledOperator {
+    pub fn name(&self) -> &Identifier {
+        &self.name
+    }
+
+    pub fn inputs(&self) -> &[OperatorInputDecl] {
+        &self.inputs
+    }
+
+    pub fn params(&self) -> &[ParamDecl] {
+        &self.params
+    }
+
+    pub fn bind_params(&self, params: &IndexMap<Identifier, Value>) -> BoundParams {
+        vm::bind_operator_params(self, params)
+    }
+
+    pub fn bind_params_cached(
+        &self,
+        params: &IndexMap<Identifier, Value>,
+        cache: &mut DslBindCache,
+    ) -> BoundParams {
+        vm::bind_operator_params_cached(self, params, cache)
+    }
+
+    pub fn sample_bound(
+        &self,
+        params: &BoundParams,
+        context: &OperatorRunContext,
+        sampler: &mut dyn SignalSampler,
+        scratch: &mut DslVmScratch,
+    ) -> Result<Color, RuntimeError> {
+        vm::run_operator(self, params, context, sampler, scratch)
+    }
+}
+
+pub fn hash_compiled_operator<H: Hasher>(operator: &CompiledOperator, state: &mut H) {
+    operator.name.hash(state);
+    for input in &operator.inputs {
+        input.name.hash(state);
+    }
+    hash_param_decls(&operator.params, state);
+    hash_register_function(&operator.function, state);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,36 +212,36 @@ impl CompiledEffect {
         context: &RunContext,
     ) -> Result<Color, RuntimeError> {
         let bound = self.bind_params(params);
-        let mut scratch = EffectVmScratch::default();
+        let mut scratch = DslVmScratch::default();
         self.sample_bound(&bound, context, &mut scratch)
     }
 
-    pub fn bind_params(&self, params: &IndexMap<Identifier, Value>) -> BoundEffectParams {
+    pub fn bind_params(&self, params: &IndexMap<Identifier, Value>) -> BoundParams {
         vm::bind_effect_params(self, params)
     }
 
     pub fn bind_params_cached(
         &self,
         params: &IndexMap<Identifier, Value>,
-        cache: &mut EffectBindCache,
-    ) -> BoundEffectParams {
+        cache: &mut DslBindCache,
+    ) -> BoundParams {
         vm::bind_effect_params_cached(self, params, cache)
     }
 
     pub fn sample_bound(
         &self,
-        params: &BoundEffectParams,
+        params: &BoundParams,
         context: &RunContext,
-        scratch: &mut EffectVmScratch,
+        scratch: &mut DslVmScratch,
     ) -> Result<Color, RuntimeError> {
         vm::run_sample_effect(self, params, context, scratch)
     }
 
     pub fn generate_bound(
         &self,
-        params: &BoundEffectParams,
+        params: &BoundParams,
         context: &GeneratorContext,
-        scratch: &mut EffectVmScratch,
+        scratch: &mut DslVmScratch,
     ) -> Result<Vec<GeneratedEffect>, RuntimeError> {
         vm::run_generator_effect(self, params, context, scratch)
     }

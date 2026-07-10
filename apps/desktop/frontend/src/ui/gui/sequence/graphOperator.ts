@@ -7,9 +7,16 @@ export function graphOperatorDefinition(
   catalog: SequenceGraphOperatorDefinition[],
   operator: SequenceGraphOperator
 ) {
-  const definition = catalog.find((candidate) => candidate.operator === operator);
+  const key = graphOperatorKey(operator);
+  const definition = catalog.find((candidate) => graphOperatorKey(candidate.operator) === key);
   if (definition === undefined) {
-    throw new Error(`Missing graph operator catalog entry for ${operator}`);
+    throw new Error(`Missing graph operator catalog entry for ${key}`);
   }
   return definition;
+}
+
+export function graphOperatorKey(operator: SequenceGraphOperator) {
+  return operator.type === "builtin"
+    ? `builtin:${operator.operator}`
+    : `custom:${operator.definitionId}`;
 }

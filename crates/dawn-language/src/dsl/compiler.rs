@@ -1,18 +1,24 @@
 use super::ast::{BinaryOp, UnaryOp};
 use super::bytecode::{
-    ArithmeticOp, BoolSlot, ColorSlot, CompareOp, ContextRead, FloatBinary, FloatSlot, FloatUnary,
-    GeneratorContextId, Instruction, IntArithmeticOp, IntSlot, LocalId, MarkOp, ParamId, RefSlot,
-    RegisterFunction, SlotLayout, Target, TargetItemsOp, ValueSlot, slot_layout_id,
+    ArithmeticOp, BoolSlot, ColorBinary, ColorSlot, CompareOp, ContextRead, FloatBinary, FloatSlot,
+    FloatUnary, GeneratorContextId, Instruction, IntArithmeticOp, IntSlot, LocalId, MarkOp,
+    ParamId, RefSlot, RegisterFunction, SlotLayout, Target, TargetItemsOp, ValueSlot,
+    slot_layout_id,
 };
 use super::checked::{
-    CheckedBlock, CheckedEffectDecl, CheckedExpr, CheckedExprKind, CheckedModule, CheckedStmt,
+    CheckedBlock, CheckedEffectDecl, CheckedExpr, CheckedExprKind, CheckedModule,
+    CheckedOperatorDecl, CheckedStmt,
 };
 use super::types::{Identifier, Type, Value};
-use super::{CompiledEffect, EffectKind};
+use super::{CompiledEffect, CompiledOperator, EffectKind};
 use indexmap::IndexMap;
 
 pub(crate) fn compile_checked_effects(module: CheckedModule) -> Vec<CompiledEffect> {
     module.effects.into_iter().map(compile_effect).collect()
+}
+
+pub(crate) fn compile_checked_operators(module: CheckedModule) -> Vec<CompiledOperator> {
+    module.operators.into_iter().map(compile_operator).collect()
 }
 
 fn compile_effect(effect: CheckedEffectDecl) -> CompiledEffect {
@@ -30,6 +36,17 @@ fn compile_effect(effect: CheckedEffectDecl) -> CompiledEffect {
     }
 }
 
+fn compile_operator(operator: CheckedOperatorDecl) -> CompiledOperator {
+    let function =
+        FunctionCompiler::new_operator(&operator.params, &operator.inputs).compile(operator.body);
+    CompiledOperator {
+        name: operator.name,
+        inputs: operator.inputs,
+        params: operator.params,
+        function,
+    }
+}
+
 struct FunctionCompiler {
     instructions: Vec<Instruction>,
     constants: Vec<Value>,
@@ -37,6 +54,7 @@ struct FunctionCompiler {
     param_types: Vec<Type>,
     layout: SlotLayout,
     kind: EffectKind,
+    signal_inputs: IndexMap<Identifier, usize>,
 }
 
 #[derive(Clone)]
@@ -73,7 +91,21 @@ impl FunctionCompiler {
             param_types: params.iter().map(|param| param.ty.clone()).collect(),
             layout: SlotLayout::default(),
             kind,
+            signal_inputs: IndexMap::new(),
         }
+    }
+
+    fn new_operator(
+        params: &[super::ast::ParamDecl],
+        inputs: &[super::ast::OperatorInputDecl],
+    ) -> Self {
+        let mut compiler = Self::new(params, EffectKind::Sample);
+        compiler.signal_inputs = inputs
+            .iter()
+            .enumerate()
+            .map(|(index, input)| (input.name.clone(), index))
+            .collect();
+        compiler
     }
 
     fn compile(mut self, block: CheckedBlock) -> RegisterFunction {
@@ -291,6 +323,21 @@ impl FunctionCompiler {
                 };
                 self.compile_builtin_call(name, args, result_ty)
             }
+            CheckedExprKind::SignalSample { input, seconds } => {
+                let seconds = self.float_slot_from_expr(*seconds);
+                let dst = self.allocate_slot(&Type::Color);
+                let input = self
+                    .signal_inputs
+                    .get(&input)
+                    .copied()
+                    .unwrap_or_else(|| unreachable!("checked Signal input exists"));
+                self.emit(Instruction::SignalSample {
+                    dst: self.color_slot(dst),
+                    input,
+                    seconds,
+                });
+                dst
+            }
             CheckedExprKind::Unary { op, expr } => {
                 let src = self.compile_expr(*expr);
                 let dst = self.allocate_slot(&result_ty);
@@ -407,18 +454,48 @@ impl FunctionCompiler {
                     value: args[0],
                 });
             }
-            "min" | "max" => {
+            "min" => {
                 let args = self.compile_float_args(args);
                 let dst = self.float_slot(dst);
                 self.emit(Instruction::FloatBinary {
                     dst,
-                    op: if name.as_str() == "min" {
-                        FloatBinary::Min
-                    } else {
-                        FloatBinary::Max
-                    },
+                    op: FloatBinary::Min,
                     left: args[0],
                     right: args[1],
+                });
+            }
+            "max" if result_ty == Type::Color => {
+                let args = self.compile_args(args);
+                self.emit(Instruction::ColorBinary {
+                    dst: self.color_slot(dst),
+                    op: ColorBinary::Max,
+                    left: self.color_slot(args[0]),
+                    right: self.color_slot(args[1]),
+                });
+            }
+            "max" => {
+                let args = self.compile_float_args(args);
+                let dst = self.float_slot(dst);
+                self.emit(Instruction::FloatBinary {
+                    dst,
+                    op: FloatBinary::Max,
+                    left: args[0],
+                    right: args[1],
+                });
+            }
+            "intensity" => {
+                let args = self.compile_args(args);
+                let dst = self.float_slot(dst);
+                self.emit(Instruction::ColorIntensity {
+                    dst,
+                    color: self.color_slot(args[0]),
+                });
+            }
+            "invert" => {
+                let args = self.compile_args(args);
+                self.emit(Instruction::ColorInvert {
+                    dst: self.color_slot(dst),
+                    color: self.color_slot(args[0]),
                 });
             }
             "clamp" => {
@@ -642,6 +719,33 @@ impl FunctionCompiler {
 
     fn emit_binary(&mut self, dst: ValueSlot, op: BinaryOp, left: ValueSlot, right: ValueSlot) {
         match op {
+            BinaryOp::Add if matches!(dst, ValueSlot::Color(_)) => {
+                self.emit(Instruction::ColorBinary {
+                    dst: self.color_slot(dst),
+                    op: ColorBinary::Add,
+                    left: self.color_slot(left),
+                    right: self.color_slot(right),
+                });
+            }
+            BinaryOp::Multiply if matches!(dst, ValueSlot::Color(_)) => match (left, right) {
+                (ValueSlot::Color(left), ValueSlot::Color(right)) => {
+                    self.emit(Instruction::ColorBinary {
+                        dst: self.color_slot(dst),
+                        op: ColorBinary::Multiply,
+                        left,
+                        right,
+                    });
+                }
+                (ValueSlot::Color(color), scale) | (scale, ValueSlot::Color(color)) => {
+                    let scale = self.float_slot(scale);
+                    self.emit(Instruction::ColorScale {
+                        dst: self.color_slot(dst),
+                        color,
+                        scale,
+                    });
+                }
+                _ => unreachable!("checked color multiplication"),
+            },
             BinaryOp::Add
             | BinaryOp::Subtract
             | BinaryOp::Multiply

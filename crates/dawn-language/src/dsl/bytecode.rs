@@ -132,6 +132,7 @@ fn instruction_read_slots(instruction: &Instruction, mut read: impl FnMut(ValueS
             read(*index);
         }
         Instruction::CurveParamSample { position, .. } => read(ValueSlot::Float(*position)),
+        Instruction::SignalSample { seconds, .. } => read(ValueSlot::Float(*seconds)),
         Instruction::Member { target, .. } => read(ValueSlot::Ref(*target)),
         Instruction::IntToFloat { src, .. } | Instruction::NegInt { src, .. } => {
             read(ValueSlot::Int(*src));
@@ -185,6 +186,17 @@ fn instruction_read_slots(instruction: &Instruction, mut read: impl FnMut(ValueS
             read(ValueSlot::Color(*left));
             read(ValueSlot::Color(*right));
             read(ValueSlot::Float(*amount));
+        }
+        Instruction::ColorBinary { left, right, .. } => {
+            read(ValueSlot::Color(*left));
+            read(ValueSlot::Color(*right));
+        }
+        Instruction::ColorScale { color, scale, .. } => {
+            read(ValueSlot::Color(*color));
+            read(ValueSlot::Float(*scale));
+        }
+        Instruction::ColorIntensity { color, .. } | Instruction::ColorInvert { color, .. } => {
+            read(ValueSlot::Color(*color));
         }
         Instruction::Rgb {
             red, green, blue, ..
@@ -321,6 +333,7 @@ fn instruction_write_slots(instruction: &Instruction, mut write: impl FnMut(Valu
         | Instruction::CurveParamFloatClamped { dst, .. }
         | Instruction::CurveCrossing { dst, .. }
         | Instruction::CurveParamCrossing { dst, .. } => write(ValueSlot::Float(*dst)),
+        Instruction::ColorIntensity { dst, .. } => write(ValueSlot::Float(*dst)),
         Instruction::LoadBoolParam { dst, .. }
         | Instruction::Not { dst, .. }
         | Instruction::FloatCompare { dst, .. }
@@ -332,6 +345,10 @@ fn instruction_write_slots(instruction: &Instruction, mut write: impl FnMut(Valu
         | Instruction::Hsv { dst, .. }
         | Instruction::CurveColorScaled { dst, .. }
         | Instruction::CurveParamColorScaled { dst, .. } => write(ValueSlot::Color(*dst)),
+        Instruction::SignalSample { dst, .. }
+        | Instruction::ColorBinary { dst, .. }
+        | Instruction::ColorScale { dst, .. }
+        | Instruction::ColorInvert { dst, .. } => write(ValueSlot::Color(*dst)),
         Instruction::LoadRefParam { dst, .. } | Instruction::MakeArray { dst, .. } => {
             write(ValueSlot::Ref(*dst));
         }
@@ -405,6 +422,7 @@ impl ValueSlot {
                 Self::Color(slot)
             }
             Type::Void
+            | Type::Signal
             | Type::Marks
             | Type::Timeline
             | Type::Target
@@ -476,6 +494,11 @@ pub(crate) enum Instruction {
         dst: ValueSlot,
         param: ParamId,
         position: FloatSlot,
+    },
+    SignalSample {
+        dst: ColorSlot,
+        input: usize,
+        seconds: FloatSlot,
     },
     Member {
         dst: ValueSlot,
@@ -580,6 +603,25 @@ pub(crate) enum Instruction {
         right: ColorSlot,
         amount: FloatSlot,
     },
+    ColorBinary {
+        dst: ColorSlot,
+        op: ColorBinary,
+        left: ColorSlot,
+        right: ColorSlot,
+    },
+    ColorScale {
+        dst: ColorSlot,
+        color: ColorSlot,
+        scale: FloatSlot,
+    },
+    ColorIntensity {
+        dst: FloatSlot,
+        color: ColorSlot,
+    },
+    ColorInvert {
+        dst: ColorSlot,
+        color: ColorSlot,
+    },
     Rgb {
         dst: ColorSlot,
         red: FloatSlot,
@@ -680,6 +722,13 @@ pub(crate) enum FloatUnary {
     Cos,
     Abs,
     Floor,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum ColorBinary {
+    Add,
+    Multiply,
+    Max,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

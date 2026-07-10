@@ -1,6 +1,8 @@
 imports:
 - from: ..\effects
   as: effects
+- from: ..\operators
+  as: operators
 layer_test:
   type: sequence
   duration: 249.753832s
@@ -18,42 +20,22 @@ layer_test:
     name: Default
     color: '#38bdf8'
     enabled: true
-  effects:
   - id: 1
-    layer_id: 0
-    start: 58.345405153s
-    duration: 0.567058732s
-    target:
-      type: fixture
-      id: 1
-    scope: whole_target
-    params:
-      gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-      pulse_shape:
-        type: curve
-        curve:
-          type: curve
-          value_type: float
-          points:
-          - time: 0.0
-            value: 1.0
-          - time: 1.0
-            value: 0.0
-    script: effects.Pulse
+    name: Layer 2
+    color: '#f45b69'
+    enabled: true
+  - id: 2
+    name: Layer 3
+    color: '#37a987'
+    enabled: true
+  effects:
   - id: 2
     layer_id: 0
-    start: 58.653636606s
+    start: 59.863877422s
     duration: 0.567058732s
     target:
-      type: fixture
-      id: 2
+      type: group
+      id: 1
     scope: whole_target
     params:
       gradient:
@@ -83,12 +65,52 @@ layer_test:
           - time: 1.0
             value: 0.0
     script: effects.Pulse
+  - id: 3
+    layer_id: 1
+    start: 56.679046844s
+    duration: 0.534750118s
+    target:
+      type: group
+      id: 1
+    scope: whole_target
+    params:
+      palette:
+        type: curve
+        curve:
+          type: curve
+          value_type: color
+          points:
+          - time: 0.0
+            value: '#ffffff'
+          - time: 0.678
+            value: '#0007ff'
+          - time: 0.939
+            value: '#000000'
+      sparkle_color:
+        type: color
+        value: '#ff0000'
+      shimmer_level:
+        type: float
+        value: 0.1
+      sparkle_level:
+        type: float
+        value: 10.0
+      wave_speed:
+        type: float
+        value: 1.0
+      wave_scale:
+        type: float
+        value: 10.0
+      sparkle_speed:
+        type: float
+        value: 4.0
+    script: effects.ShimmerField
   composition_graph:
     nodes:
     - id: 1
       position:
-        x: 155.92883176232573
-        y: 178.82800324620172
+        x: 413.1114966826567
+        y: 45.88434876430756
       type: layer
       layer_id: 0
     - id: 2
@@ -96,8 +118,62 @@ layer_test:
         x: 810.1220282307067
         y: 176.67931611539086
       type: output
+    - id: 3
+      position:
+        x: 346.238291333068
+        y: 205.18646022077405
+      type: layer
+      layer_id: 1
+    - id: 4
+      position:
+        x: 405.018173835174
+        y: 378.542744194707
+      type: layer
+      layer_id: 2
+    - id: 5
+      position:
+        x: 559.4871410280349
+        y: 199.9255387006803
+      type: operator
+      operator: echo
+      params:
+        repeats:
+          type: integer
+          value: 10
+        seconds:
+          type: float
+          value: 0.8
+        decay:
+          type: float
+          value: 0.3
+    - id: 6
+      position:
+        x: 610.0
+        y: 45.0
+      type: operator
+      operator: operators.Gain
+      params:
+        amount:
+          type: float
+          value: 1.0
     edges:
     - from: 1
+      from_port: output
+      to: 6
+      to_port: source
+    - from: 6
+      from_port: output
+      to: 2
+      to_port: input
+    - from: 4
+      from_port: output
+      to: 2
+      to_port: input
+    - from: 3
+      from_port: output
+      to: 5
+      to_port: input
+    - from: 5
       from_port: output
       to: 2
       to_port: input

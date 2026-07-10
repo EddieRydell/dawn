@@ -202,10 +202,10 @@ fn frame_index_for_audio_seconds(audio_seconds: f64, frame_rate: u32, frame_coun
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dawn_language::dsl::compile_effects;
     use dawn_language::effect::{
         EffectDefinition, EffectDefinitionId, EffectInst, EffectInstId, EffectScope, EffectTarget,
     };
-    use dawn_language::effect_dsl::compile_effects;
     use dawn_language::model::{ProjectDefinitionStores, ProjectId, ProjectRoot};
     use dawn_language::sequence::{
         CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind, EffectClip,
@@ -397,6 +397,7 @@ mod tests {
                 fixtures,
                 curves: dawn_language::effect::CurveDefinitionStore::default(),
                 controllers: ControllerDefinitionStore::default(),
+                operators: dawn_language::operator::OperatorDefinitionStore::default(),
             },
         }
     }

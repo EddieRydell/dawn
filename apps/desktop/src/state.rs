@@ -2311,7 +2311,9 @@ fn source_document_text(document: &SourceDocument) -> String {
         SourceDocumentKind::Dawn { value, .. } => {
             yaml_serde::to_string(value).unwrap_or_else(|_| String::new())
         }
-        SourceDocumentKind::Effect { source } => source.clone(),
+        SourceDocumentKind::Effect { source } | SourceDocumentKind::Operator { source } => {
+            source.clone()
+        }
     }
 }
 
@@ -2354,6 +2356,11 @@ fn document_object_kinds(document: &SourceDocument) -> Vec<ObjectKind> {
             .iter()
             .map(|_| ObjectKind::Effect)
             .collect(),
+        SourceDocumentKind::Operator { .. } => document
+            .exported_objects
+            .iter()
+            .map(|_| ObjectKind::Operator)
+            .collect(),
     }
 }
 
@@ -2368,6 +2375,7 @@ fn object_kind(kind: &SourceObjectKind) -> ObjectKind {
         SourceObjectKind::Curve => ObjectKind::Curve,
         SourceObjectKind::Sequence => ObjectKind::Sequence,
         SourceObjectKind::EffectDefinition | SourceObjectKind::EffectInstance => ObjectKind::Effect,
+        SourceObjectKind::OperatorDefinition => ObjectKind::Operator,
     }
 }
 

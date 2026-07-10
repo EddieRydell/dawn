@@ -39,7 +39,8 @@ import {
   parseGraphEdgeId,
   type GraphEdgeIdParts
 } from "./graphEdge";
-import { graphOperatorDefinition } from "./graphOperator";
+import { graphOperatorDefinition, graphOperatorKey } from "./graphOperator";
+import { TypedParamInput } from "./params/TypedParamInput";
 
 type GraphNodeData = {
   label: string;
@@ -136,6 +137,11 @@ export function GraphEditorWorkspace({
     [graph.nodes, graph.operatorCatalog]
   );
   const edgeLineages = useMemo(() => graphEdgeLineages(graph), [graph]);
+  const selectedOperator = useMemo(() => {
+    if (selectedItem?.type !== "node") return null;
+    const node = graph.nodes.find((candidate) => candidate.id === selectedItem.id);
+    return node?.kind.type === "operator" ? { node, kind: node.kind } : null;
+  }, [graph.nodes, selectedItem]);
 
   const edges = useMemo<Edge[]>(
     () =>
@@ -200,8 +206,87 @@ export function GraphEditorWorkspace({
             effects={document.effects}
           />
         </div>
+        {selectedOperator !== null && (
+          <GraphOperatorInspector
+            node={selectedOperator.node}
+            kind={selectedOperator.kind}
+            definition={graphOperatorDefinition(graph.operatorCatalog, selectedOperator.kind.operator)}
+            document={document}
+          />
+        )}
       </div>
     </div>
+  );
+}
+
+function GraphOperatorInspector({
+  node,
+  kind,
+  definition,
+  document
+}: {
+  node: SequenceGraphNode;
+  kind: Extract<SequenceGraphNode["kind"], { type: "operator" }>;
+  definition: SequenceGraphOperatorDefinition;
+  document: SequenceEditorDocument;
+}) {
+  return (
+    <aside className="graph-operator-inspector">
+      <div className="graph-operator-inspector-heading">
+        <span>{kind.operator.type === "builtin" ? "Built-in operator" : "Project operator"}</span>
+        <h3>{definition.displayName}</h3>
+        <code>{definition.sourceName}</code>
+      </div>
+      {kind.params.length === 0 ? (
+        <p className="graph-operator-no-params">No parameters</p>
+      ) : (
+        <div className="effect-param-section">
+          <h3>Parameters</h3>
+          {kind.params.map((param, index) => (
+            <div
+              key={`${node.id}:${param.name}`}
+              className={`effect-param-row ${index % 2 === 0 ? "effect-param-row-even" : "effect-param-row-odd"}`}
+            >
+              <TypedParamInput
+                param={param}
+                commitParam={(name, value) =>
+                  runGuiEditCommand(() =>
+                    commands.applySequenceGuiEdit({
+                      type: "updateGraphOperatorParam",
+                      nodeId: node.id,
+                      name,
+                      value
+                    })
+                  ).then(() => undefined)
+                }
+                curveLibrary={document.curveLibrary}
+                markCollections={document.markCollections}
+                linkCurveParam={(name, curve) =>
+                  runGuiEditCommand(() =>
+                    commands.applySequenceGuiEdit({
+                      type: "linkGraphOperatorCurveParam",
+                      nodeId: node.id,
+                      name,
+                      curvePath: curve.path,
+                      objectKey: curve.objectKey
+                    })
+                  ).then(() => undefined)
+                }
+                unlinkCurveParam={(name) =>
+                  runGuiEditCommand(() =>
+                    commands.applySequenceGuiEdit({
+                      type: "unlinkGraphOperatorCurveParam",
+                      nodeId: node.id,
+                      name
+                    })
+                  ).then(() => undefined)
+                }
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </aside>
   );
 }
 
@@ -472,9 +557,25 @@ function GraphFlowCanvas({
               >
                 Layer
               </button>
-              {operatorCatalog.map((definition) => (
+              <div className="graph-context-menu-heading">Built-in operators</div>
+              {operatorCatalog.filter((definition) => definition.operator.type === "builtin").map((definition) => (
                 <button
-                  key={definition.operator}
+                  key={graphOperatorKey(definition.operator)}
+                  type="button"
+                  onClick={() => {
+                    addOperatorAt(definition.operator, contextMenu.flowX, contextMenu.flowY);
+                    closeContextMenu();
+                  }}
+                >
+                  {definition.displayName}
+                </button>
+              ))}
+              {operatorCatalog.some((definition) => definition.operator.type === "custom") && (
+                <div className="graph-context-menu-heading">Project operators</div>
+              )}
+              {operatorCatalog.filter((definition) => definition.operator.type === "custom").map((definition) => (
+                <button
+                  key={graphOperatorKey(definition.operator)}
                   type="button"
                   onClick={() => {
                     addOperatorAt(definition.operator, contextMenu.flowX, contextMenu.flowY);

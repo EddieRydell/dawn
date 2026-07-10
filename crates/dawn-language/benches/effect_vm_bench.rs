@@ -1,6 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use dawn_language::effect_dsl::{
-    CompiledEffect, EffectBindCache, EffectVmScratch, GeneratorContext, Identifier, RunContext,
+use dawn_language::dsl::{
+    CompiledEffect, DslBindCache, DslVmScratch, GeneratorContext, Identifier, RunContext,
     TargetItemValue, TargetPixelValue, TargetValue, Value, compile_effects,
 };
 use dawn_language::values::{Color, Curve, CurvePoint, CurveValue, DawnTime, Marks};
@@ -32,7 +32,7 @@ fn bench_effect_vm(c: &mut Criterion) {
 
     c.bench_function("constant_color_floor", |b| {
         let context = sample_context();
-        let mut scratch = EffectVmScratch::default();
+        let mut scratch = DslVmScratch::default();
         b.iter(|| {
             black_box(
                 constant
@@ -108,7 +108,7 @@ fn bench_sample(
     let effect = sample_effect(effect_name, source);
     let bound = effect.bind_params(&params);
     let context = sample_context();
-    let mut scratch = EffectVmScratch::default();
+    let mut scratch = DslVmScratch::default();
     effect
         .sample_bound(&bound, &context, &mut scratch)
         .expect("sample benchmark effect should run");
@@ -134,7 +134,7 @@ fn bench_generator(
     let effect = sample_effect(effect_name, source);
     let bound = effect.bind_params(&params);
     let context = generator_context();
-    let mut scratch = EffectVmScratch::default();
+    let mut scratch = DslVmScratch::default();
     let generated = effect
         .generate_bound(&bound, &context, &mut scratch)
         .expect("generator benchmark effect should run");
@@ -160,7 +160,7 @@ fn bench_binding(c: &mut Criterion) {
     });
 
     c.bench_function("bind_curve_params_cached", |b| {
-        let mut cache = EffectBindCache::default();
+        let mut cache = DslBindCache::default();
         b.iter(|| black_box(effect.bind_params_cached(black_box(&params), &mut cache)));
     });
 }

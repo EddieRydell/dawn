@@ -1,6 +1,9 @@
 use camino::{Utf8Path, Utf8PathBuf};
+use dawn_language::operator::{OperatorDefinitionId, OperatorRef};
+use dawn_language::sequence::CompositionGraphNodeKind;
 use dawn_project_io::{
-    SourceDocumentKind, export_project, load_project, save_project, source_file_list,
+    SourceDocumentKind, SourceObjectId, SourceObjectKind, export_project, load_project,
+    save_project, source_file_list,
 };
 use std::fs;
 
@@ -48,7 +51,10 @@ fn example_projects_roundtrip() {
         );
 
         for (path, document) in &original.source.documents {
-            if matches!(document.kind, SourceDocumentKind::Effect { .. }) {
+            if matches!(
+                document.kind,
+                SourceDocumentKind::Effect { .. } | SourceDocumentKind::Operator { .. }
+            ) {
                 let original_bytes = fs::read(original.source.source_root.join(path)).unwrap();
                 let exported_bytes = fs::read(output.join(path)).unwrap();
                 assert_eq!(original_bytes, exported_bytes, "{path}");
@@ -58,6 +64,38 @@ fn example_projects_roundtrip() {
         if entrypoint.ends_with(Utf8Path::new(
             "examples/thirty-output-controller/project.dawn",
         )) {
+            assert!(
+                original
+                    .project
+                    .definitions
+                    .operators
+                    .get(&OperatorDefinitionId("Gain".to_string()))
+                    .is_some()
+            );
+            assert!(
+                original
+                    .source
+                    .source_map
+                    .objects
+                    .contains_key(&SourceObjectId {
+                        kind: SourceObjectKind::OperatorDefinition,
+                        id: "Gain".to_string(),
+                    })
+            );
+            let layer_test = original
+                .project
+                .sequences
+                .values()
+                .find(|sequence| sequence.id.0 == "layer_test")
+                .unwrap();
+            assert!(layer_test.composition_graph.nodes.iter().any(|node| {
+                matches!(
+                    &node.kind,
+                    CompositionGraphNodeKind::Operator(operator)
+                        if operator.operator
+                            == OperatorRef::Custom(OperatorDefinitionId("Gain".to_string()))
+                )
+            }));
             assert!(
                 !original.source.referenced_assets.is_empty(),
                 "thirty-output-controller should reference audio"

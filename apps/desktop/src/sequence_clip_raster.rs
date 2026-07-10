@@ -7,11 +7,11 @@ use std::sync::{
 };
 use std::thread;
 
+use dawn_language::dsl::{EffectKind, hash_compiled_effect};
 use dawn_language::effect::{
     CurveDefinition, CurveId, CurveSource, EffectDefinition, EffectInst, EffectInstId,
     EffectParamValue, EffectScope, EffectTarget,
 };
-use dawn_language::effect_dsl::{EffectKind, hash_compiled_effect};
 use dawn_language::model::DawnProject;
 use dawn_language::sequence::{
     AutomationBinding, AutomationMapping, MarkCollectionKey, Sequence, SequenceId,

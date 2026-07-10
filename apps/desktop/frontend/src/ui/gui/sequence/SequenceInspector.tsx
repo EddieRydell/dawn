@@ -15,7 +15,7 @@ import { runGuiEditCommand } from "../../../store";
 import { ColorPicker } from "../../ColorPicker";
 import { InspectorScrollArea, Readout } from "../InspectorScrollArea";
 import { roundToNanosecond, type AutomationClipChooser, type GuiFocus, type SequenceSelection } from "../shared";
-import { EffectParamInput } from "./params/EffectParamInput";
+import { TypedParamInput } from "./params/TypedParamInput";
 import { defaultMarkColor, nextCollectionKey } from "./marks";
 import { selectedEffectId, selectionCompatibleWithFocusedItem, selectionCount } from "./sequenceSelection";
 import { targetsEqual } from "./sequenceTargets";
@@ -307,7 +307,7 @@ function EffectInspectorPanel({
                 key={`${effect.id}:${param.name}`}
                 className={`effect-param-row ${index % 2 === 0 ? "effect-param-row-even" : "effect-param-row-odd"}`}
               >
-                <EffectParamInput
+                <TypedParamInput
                   param={param}
                   commitParam={(name, value) =>
                     runGuiEditCommand(() =>
@@ -321,6 +321,26 @@ function EffectInspectorPanel({
                   }
                   curveLibrary={document.curveLibrary}
                   markCollections={document.markCollections}
+                  linkCurveParam={(name, curve) =>
+                    runGuiEditCommand(() =>
+                      commands.applySequenceGuiEdit({
+                        type: "linkEffectCurveParam",
+                        id: effect.id,
+                        name,
+                        curvePath: curve.path,
+                        objectKey: curve.objectKey
+                      })
+                    ).then(() => undefined)
+                  }
+                  unlinkCurveParam={(name) =>
+                    runGuiEditCommand(() =>
+                      commands.applySequenceGuiEdit({
+                        type: "unlinkEffectCurveParam",
+                        id: effect.id,
+                        name
+                      })
+                    ).then(() => undefined)
+                  }
                   automation={{
                     effectId: effect.id,
                     effectStartSeconds: effect.startSeconds,

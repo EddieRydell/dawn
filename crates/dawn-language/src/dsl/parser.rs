@@ -1,6 +1,6 @@
 use super::ast::{
-    BinaryOp, Block, EffectDecl, Expr, ExprKind, FunctionDecl, FunctionParam, Module, ParamDecl,
-    Stmt, UnaryOp,
+    BinaryOp, Block, EffectDecl, Expr, ExprKind, FunctionDecl, FunctionParam, Module, OperatorDecl,
+    OperatorInputDecl, ParamDecl, Stmt, UnaryOp,
 };
 use super::diagnostic::Diagnostic;
 use super::lexer::{Keyword, TextSpan, Token, TokenKind, lex};
@@ -47,19 +47,75 @@ impl<'source> Parser<'source> {
 
     fn parse_module(&mut self) -> Module {
         let mut effects = Vec::new();
+        let mut operators = Vec::new();
         while !self.at(TokenKind::Eof) {
             let start_cursor = self.cursor;
             if self.consume_keyword(Keyword::Effect) {
                 if let Some(effect) = self.parse_effect() {
                     effects.push(effect);
                 }
+            } else if self.consume_keyword(Keyword::Operator) {
+                if let Some(operator) = self.parse_operator() {
+                    operators.push(operator);
+                }
             } else {
-                self.error_here("expected `effect` declaration");
+                self.error_here("expected `effect` or `operator` declaration");
                 self.advance();
             }
             self.ensure_progress(start_cursor, "parser made no progress in module");
         }
-        Module { effects }
+        Module { effects, operators }
+    }
+
+    fn parse_operator(&mut self) -> Option<OperatorDecl> {
+        let name = self.parse_identifier()?;
+        self.expect(TokenKind::LeftBrace, "expected `{` after operator name");
+        let mut inputs = Vec::new();
+        let mut params = Vec::new();
+        let mut entrypoint = None;
+
+        while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::Eof) {
+            let start_cursor = self.cursor;
+            if self.consume_keyword(Keyword::Input) {
+                let ty = self.parse_type()?;
+                let name = self.parse_identifier()?;
+                self.expect(TokenKind::Semicolon, "expected `;` after input");
+                if ty != Type::Signal {
+                    self.error_here("operator inputs must have type `Signal`");
+                }
+                inputs.push(OperatorInputDecl { name });
+            } else if self.consume_keyword(Keyword::Param) {
+                if let Some(param) = self.parse_param() {
+                    params.push(param);
+                }
+            } else {
+                if entrypoint.is_some() {
+                    self.error_here("operator may contain only one entrypoint function");
+                }
+                entrypoint = self.parse_function();
+            }
+            self.ensure_progress(start_cursor, "parser made no progress in operator");
+        }
+
+        self.expect(TokenKind::RightBrace, "expected `}` after operator body");
+        let entrypoint = entrypoint.unwrap_or_else(|| FunctionDecl {
+            return_type: Type::Void,
+            name: Identifier::new("sample".to_string())
+                .unwrap_or_else(|_| unreachable!("static identifier is valid")),
+            params: Vec::new(),
+            body: Block {
+                statements: Vec::new(),
+            },
+        });
+        if entrypoint.return_type == Type::Void && entrypoint.body.statements.is_empty() {
+            self.error_here("operator must contain `color sample()`");
+        }
+        Some(OperatorDecl {
+            name,
+            inputs,
+            params,
+            entrypoint,
+        })
     }
 
     fn parse_effect(&mut self) -> Option<EffectDecl> {
@@ -476,16 +532,18 @@ impl<'source> Parser<'source> {
                 span: token.span,
                 kind: ExprKind::Literal(Value::Bool(false)),
             },
-            TokenKind::Identifier => match self.identifier_from_span(token.span) {
-                Some(identifier) => Expr {
-                    span: token.span,
-                    kind: ExprKind::Variable(identifier),
-                },
-                None => Expr {
-                    span: token.span,
-                    kind: ExprKind::Literal(Value::Void),
-                },
-            },
+            TokenKind::Identifier | TokenKind::Keyword(Keyword::Input) => {
+                match self.identifier_from_span(token.span) {
+                    Some(identifier) => Expr {
+                        span: token.span,
+                        kind: ExprKind::Variable(identifier),
+                    },
+                    None => Expr {
+                        span: token.span,
+                        kind: ExprKind::Literal(Value::Void),
+                    },
+                }
+            }
             TokenKind::LeftParen => {
                 let expr = self.parse_expression();
                 self.expect(TokenKind::RightParen, "expected `)` after expression");
@@ -551,10 +609,17 @@ impl<'source> Parser<'source> {
                 self.advance();
                 Some(Type::Color)
             }
+            TokenKind::Identifier if self.text(token.span) == "Signal" => {
+                self.advance();
+                Some(Type::Signal)
+            }
             TokenKind::Keyword(Keyword::Curve) => {
                 self.advance();
                 self.expect(TokenKind::LessThan, "expected `<` after `curve`");
                 let item = self.parse_type()?;
+                if type_contains_signal(&item) {
+                    self.error_here("Signal cannot be used as a generic type");
+                }
                 self.expect(TokenKind::GreaterThan, "expected `>` after curve type");
                 Some(Type::curve(item))
             }
@@ -562,6 +627,9 @@ impl<'source> Parser<'source> {
                 self.advance();
                 self.expect(TokenKind::LessThan, "expected `<` after `array`");
                 let item = self.parse_type()?;
+                if type_contains_signal(&item) {
+                    self.error_here("Signal cannot be used as a generic type");
+                }
                 self.expect(TokenKind::GreaterThan, "expected `>` after array type");
                 Some(Type::array(item))
             }
@@ -595,7 +663,7 @@ impl<'source> Parser<'source> {
 
     fn parse_identifier(&mut self) -> Option<Identifier> {
         let token = self.current().clone();
-        if token.kind != TokenKind::Identifier {
+        if token.kind != TokenKind::Identifier && token.kind != TokenKind::Keyword(Keyword::Input) {
             self.error(token.span, "expected identifier");
             return None;
         }
@@ -760,3 +828,11 @@ static EOF_TOKEN: Token = Token {
     kind: TokenKind::Eof,
     span: TextSpan { start: 0, end: 0 },
 };
+
+fn type_contains_signal(ty: &Type) -> bool {
+    match ty {
+        Type::Signal => true,
+        Type::Curve(inner) | Type::Array(inner) => type_contains_signal(inner),
+        _ => false,
+    }
+}

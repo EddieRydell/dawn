@@ -261,6 +261,7 @@ pub enum ObjectKind {
     Sequence,
     Curve,
     Effect,
+    Operator,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -802,8 +803,19 @@ pub struct SequenceGraphEdge {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum SequenceGraphOperator {
+    Builtin { operator: SequenceBuiltinOperator },
+    Custom { definition_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SequenceBuiltinOperator {
     Max,
     Add,
     Multiply,
@@ -823,6 +835,7 @@ pub struct SequenceGraphOperatorDefinition {
     pub display_name: String,
     pub inputs: Vec<SequenceGraphPortDefinition>,
     pub outputs: Vec<SequenceGraphPortDefinition>,
+    pub params: Vec<SequenceEffectScriptParam>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -1036,6 +1049,16 @@ pub enum SequenceGuiEdit {
         node_id: String,
         name: String,
         value: SequenceEffectParamValue,
+    },
+    LinkGraphOperatorCurveParam {
+        node_id: String,
+        name: String,
+        curve_path: String,
+        object_key: String,
+    },
+    UnlinkGraphOperatorCurveParam {
+        node_id: String,
+        name: String,
     },
     AddAutomationClip {
         start_seconds: f64,

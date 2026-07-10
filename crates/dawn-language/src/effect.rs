@@ -1,5 +1,5 @@
-use crate::effect_dsl::CompiledEffect;
-use crate::effect_dsl::types::Identifier;
+use crate::dsl::CompiledEffect;
+use crate::dsl::types::Identifier;
 use crate::sequence::{MarkCollectionKey, SequenceLayerId};
 use crate::setup::{FixtureGroupId, FixtureInstanceId};
 use crate::values::{Curve, DawnDuration, DawnTime};

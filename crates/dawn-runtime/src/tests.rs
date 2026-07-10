@@ -1,17 +1,20 @@
 use std::time::Duration;
 
+use dawn_language::dsl::{Identifier, compile_effects, compile_operators};
 use dawn_language::effect::{
     CurveDefinition, CurveId, CurveSource, EffectDefinition, EffectDefinitionId, EffectInst,
     EffectInstId, EffectParamValue, EffectScope, EffectTarget,
 };
-use dawn_language::effect_dsl::{Identifier, compile_effects};
 use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
+use dawn_language::operator::{
+    BuiltinOperator, GraphOperatorNode, OperatorDefinitionId, OperatorRef,
+    custom_operator_definition,
+};
 use dawn_language::sequence::{
     AutomationClip, AutomationClipId, CompositionGraphNode, CompositionGraphNodeId,
-    CompositionGraphNodeKind, EffectClip, EffectGraphEdge, GraphNodePosition, GraphOperator,
-    GraphOperatorNode, GraphOperatorRef, GraphPortId, MarkCollectionKey, Sequence, SequenceAudio,
-    SequenceClip, SequenceClipId, SequenceClipKind, SequenceCompositionGraph, SequenceId,
-    SequenceLayer, SequenceLayerId,
+    CompositionGraphNodeKind, EffectClip, EffectGraphEdge, GraphNodePosition, GraphPortId,
+    MarkCollectionKey, Sequence, SequenceAudio, SequenceClip, SequenceClipId, SequenceClipKind,
+    SequenceCompositionGraph, SequenceId, SequenceLayer, SequenceLayerId,
 };
 use dawn_language::setup::{
     ControllerDefinitionStore, FixtureDefinition, FixtureDefinitionId, FixtureDefinitionStore,
@@ -200,7 +203,7 @@ fn active_effects_compose_with_channel_max() {
 
 #[test]
 fn graph_max_renders_two_sources() {
-    let renderer = renderer_for(sequence_with_graph(GraphOperator::Max, 1, 1));
+    let renderer = renderer_for(sequence_with_graph(BuiltinOperator::Max, 1, 1));
 
     assert_eq!(
         renderer.render_frame(0).unwrap().fixtures[0].pixels[0],
@@ -210,7 +213,11 @@ fn graph_max_renders_two_sources() {
 
 #[test]
 fn graph_intensity_modulate_uses_max_rgb_channel() {
-    let renderer = renderer_for(sequence_with_graph(GraphOperator::IntensityModulate, 1, 1));
+    let renderer = renderer_for(sequence_with_graph(
+        BuiltinOperator::IntensityModulate,
+        1,
+        1,
+    ));
 
     assert_eq!(
         renderer.render_frame(0).unwrap().fixtures[0].pixels[0],
@@ -220,7 +227,7 @@ fn graph_intensity_modulate_uses_max_rgb_channel() {
 
 #[test]
 fn composition_graph_mixes_mismatched_layer_targets() {
-    let renderer = renderer_for(sequence_with_graph(GraphOperator::Add, 1, 2));
+    let renderer = renderer_for(sequence_with_graph(BuiltinOperator::Add, 1, 2));
     let frame = renderer.render_frame(0).unwrap();
 
     assert_eq!(frame.fixtures[0].pixels[0], color(200, 0, 0));
@@ -560,6 +567,59 @@ fn renderer_for(sequence: Sequence) -> PreparedSequenceRenderer {
     prepare(sequence).unwrap()
 }
 
+fn custom_operator_renderer(
+    source: &str,
+    params: IndexMap<Identifier, EffectParamValue>,
+) -> PreparedSequenceRenderer {
+    let compiled = compile_operators(source)
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    let id = OperatorDefinitionId(compiled.name().as_str().to_string());
+    let mut sequence = sequence_with_effects(vec![constant_effect(
+        1,
+        0.0,
+        10.0,
+        1,
+        EffectScope::WholeTarget,
+        "Red",
+        IndexMap::new(),
+    )]);
+    sequence.composition_graph = SequenceCompositionGraph {
+        nodes: vec![
+            layer_node(1, 0, 0.0, 0.0),
+            CompositionGraphNode {
+                id: CompositionGraphNodeId(2),
+                position: GraphNodePosition { x: 160.0, y: 0.0 },
+                kind: CompositionGraphNodeKind::Operator(GraphOperatorNode {
+                    operator: OperatorRef::Custom(id.clone()),
+                    params,
+                }),
+            },
+            CompositionGraphNode {
+                id: CompositionGraphNodeId(3),
+                position: GraphNodePosition { x: 320.0, y: 0.0 },
+                kind: CompositionGraphNodeKind::Output,
+            },
+        ],
+        edges: vec![
+            node_edge(1, "output", 2, "source"),
+            node_edge(2, "output", 3, "input"),
+        ],
+    };
+    let mut project = project(sequence);
+    project
+        .definitions
+        .operators
+        .insert(id.clone(), custom_operator_definition(id, compiled));
+    PreparedSequenceRenderer::prepare(&project, &SetupId("setup".to_string()), &seq_id()).unwrap()
+}
+
+fn identifier(value: &str) -> Identifier {
+    Identifier::new(value.to_string()).unwrap()
+}
+
 fn prepare(sequence: Sequence) -> Result<PreparedSequenceRenderer, RenderError> {
     PreparedSequenceRenderer::prepare(&project(sequence), &SetupId("setup".to_string()), &seq_id())
 }
@@ -664,6 +724,7 @@ fn definitions() -> ProjectDefinitionStores {
             )]),
         },
         controllers: ControllerDefinitionStore::default(),
+        operators: dawn_language::operator::OperatorDefinitionStore::default(),
     }
 }
 
@@ -749,7 +810,7 @@ fn sequence_with_effects(effects: Vec<EffectInst>) -> Sequence {
 }
 
 fn sequence_with_graph(
-    operator: GraphOperator,
+    operator: BuiltinOperator,
     left_group_id: u32,
     right_group_id: u32,
 ) -> Sequence {
@@ -757,7 +818,7 @@ fn sequence_with_graph(
         .definition()
         .inputs
         .iter()
-        .map(|port| port.source_name)
+        .map(|port| port.source_name.clone())
         .collect::<Vec<_>>();
     let mut left = constant_effect(
         1,
@@ -798,7 +859,7 @@ fn sequence_with_graph(
                 id: CompositionGraphNodeId(3),
                 position: GraphNodePosition { x: 160.0, y: 60.0 },
                 kind: CompositionGraphNodeKind::Operator(GraphOperatorNode {
-                    operator: GraphOperatorRef::Builtin(operator),
+                    operator: OperatorRef::Builtin(operator),
                     params: IndexMap::new(),
                 }),
             },
@@ -809,8 +870,8 @@ fn sequence_with_graph(
             },
         ],
         edges: vec![
-            node_edge(1, "output", 3, input_ports[0]),
-            node_edge(2, "output", 3, input_ports[1]),
+            node_edge(1, "output", 3, &input_ports[0]),
+            node_edge(2, "output", 3, &input_ports[1]),
             node_edge(3, "output", 4, "input"),
         ],
     };
@@ -829,6 +890,59 @@ fn default_layers() -> Vec<SequenceLayer> {
         },
         enabled: true,
     }]
+}
+
+#[test]
+fn custom_operator_samples_current_signal_with_parameter_override() {
+    let renderer = custom_operator_renderer(
+        "operator Gain { input Signal source; param float amount = 1.0; color sample() { return source.at(seconds()) * amount; } }",
+        IndexMap::from([(identifier("amount"), EffectParamValue::Float(0.5))]),
+    );
+    assert_eq!(
+        renderer.render_seconds(1.0).unwrap().fixtures[0].pixels[0],
+        color(100, 0, 0)
+    );
+}
+
+#[test]
+fn custom_operator_shifted_sampling_is_black_outside_sequence() {
+    let renderer = custom_operator_renderer(
+        "operator Shift { input Signal source; color sample() { return source.at(seconds() - 1.0); } }",
+        IndexMap::new(),
+    );
+    assert_eq!(
+        renderer.render_seconds(0.5).unwrap().fixtures[0].pixels[0],
+        color(0, 0, 0)
+    );
+    assert_eq!(
+        renderer.render_seconds(1.5).unwrap().fixtures[0].pixels[0],
+        color(200, 0, 0)
+    );
+}
+
+#[test]
+fn graph_render_cache_reuses_shared_rgb_buffers() {
+    let renderer = renderer_for(sequence_with_effects(vec![constant_effect(
+        1,
+        0.0,
+        10.0,
+        1,
+        EffectScope::WholeTarget,
+        "Red",
+        IndexMap::new(),
+    )]));
+    let mut cache = HashMap::new();
+    let first = render_graph_node(&renderer, 0, 1.0, &mut cache).unwrap();
+    let second = render_graph_node(&renderer, 0, 1.0, &mut cache).unwrap();
+    assert!(Arc::ptr_eq(&first, &second));
+}
+
+#[test]
+fn builtin_delay_executes_embedded_operator_dsl() {
+    assert!(matches!(
+        &BuiltinOperator::Delay.definition().implementation,
+        dawn_language::operator::OperatorImplementation::Dsl(_)
+    ));
 }
 
 fn default_composition_graph() -> SequenceCompositionGraph {

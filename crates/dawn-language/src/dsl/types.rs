@@ -45,6 +45,7 @@ pub enum Type {
     Float,
     Bool,
     Color,
+    Signal,
     Marks,
     Timeline,
     Target,

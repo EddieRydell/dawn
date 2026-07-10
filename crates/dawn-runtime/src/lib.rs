@@ -10,20 +10,22 @@
     )
 )]
 
+use dawn_language::dsl::{
+    BoundParams, DslBindCache, DslVmScratch, EffectKind, GeneratedEffect, GeneratorContext,
+    Identifier, OperatorRunContext, RunContext, RuntimeError, SignalSampler, TargetItemValue,
+    TargetPixelValue, TargetValue, Type, Value,
+};
 use dawn_language::effect::{
     CurveSource, EffectDefinitionId, EffectInstId, EffectParamValue, EffectScope, EffectTarget,
 };
-use dawn_language::effect_dsl::{
-    BoundEffectParams, EffectBindCache, EffectKind, EffectVmScratch, GeneratedEffect,
-    GeneratorContext, Identifier, RunContext, RuntimeError, TargetItemValue, TargetPixelValue,
-    TargetValue, Type, Value,
-};
 use dawn_language::model::DawnProject;
+use dawn_language::operator::{
+    BuiltinOperator, OperatorDefinition, OperatorImplementation, validate_composition_graph,
+};
 use dawn_language::sequence::{
     AutomationBinding, AutomationClip, AutomationMapping, AutomationTarget, CompositionGraphNodeId,
-    CompositionGraphNodeKind, EffectClip, GraphOperator, GraphOperatorRef, GraphPortId,
-    MarkCollectionKey, Sequence, SequenceClip, SequenceClipId, SequenceClipKind,
-    SequenceCompositionGraph, SequenceId, SequenceLayerId, validate_graph_interface,
+    CompositionGraphNodeKind, EffectClip, GraphPortId, MarkCollectionKey, Sequence, SequenceClip,
+    SequenceClipId, SequenceClipKind, SequenceCompositionGraph, SequenceId, SequenceLayerId,
 };
 use dawn_language::setup::{
     FixtureGroupId, FixtureInst, FixtureInstanceId, Geometry, Layout, SetupId,
@@ -44,6 +46,7 @@ pub struct RenderedTargetPixelAddress {
 pub struct PreparedSequenceRenderer {
     frame_rate: u32,
     frame_count: u64,
+    duration_seconds: f64,
     fixtures: Vec<PreparedFixture>,
     effects: Vec<PreparedEffect>,
     layers: Vec<PreparedLayer>,
@@ -78,7 +81,7 @@ pub struct EffectRasterPrepareBatch<'a> {
     groups: IndexMap<FixtureGroupId, Vec<FixtureInstanceId>>,
     frame_rate: u32,
     frame_count: u64,
-    bind_cache: EffectBindCache,
+    bind_cache: DslBindCache,
     target_cache: PrepareTargetCache,
 }
 
@@ -213,7 +216,7 @@ impl PreparedSequenceRenderer {
 
         let mut effects = Vec::with_capacity(sequence.effects.len());
         let mut generated_child_count = 0usize;
-        let mut bind_cache = EffectBindCache::default();
+        let mut bind_cache = DslBindCache::default();
         let mut target_cache = PrepareTargetCache::default();
         let layer_ids = sequence
             .layers
@@ -274,6 +277,7 @@ impl PreparedSequenceRenderer {
         Ok(Self {
             frame_rate,
             frame_count,
+            duration_seconds,
             fixtures,
             effects,
             layers,
@@ -330,35 +334,7 @@ impl PreparedSequenceRenderer {
         clock_seconds: f64,
     ) -> Result<RenderedFrame, RenderError> {
         let sample_seconds = frame_index as f64 / f64::from(self.frame_rate);
-        let mut layer_buffers = IndexMap::<SequenceLayerId, Vec<RenderedFixture>>::new();
-        for layer in &self.layers {
-            let mut rendered = blank_rendered_fixtures(&self.fixtures);
-            if layer.enabled
-                && let Some(active_effects) = self.effects_by_frame.get(frame_index as usize)
-            {
-                for effect_index in active_effects {
-                    if !layer.effects.contains(effect_index) {
-                        continue;
-                    }
-                    let Some(effect) = self.effects.get(*effect_index) else {
-                        continue;
-                    };
-                    if sample_seconds < effect.start_seconds
-                        || sample_seconds >= effect.start_seconds + effect.duration_seconds
-                    {
-                        continue;
-                    }
-                    render_effect(effect, &mut rendered, sample_seconds)?;
-                }
-            }
-            layer_buffers.insert(layer.id.clone(), rendered);
-        }
-        let rendered = render_composition_graph(
-            &self.composition_graph,
-            &self.fixtures,
-            &layer_buffers,
-            sample_seconds,
-        )?;
+        let rendered = render_composition_graph(self, sample_seconds)?;
 
         Ok(RenderedFrame {
             frame_index,
@@ -367,6 +343,36 @@ impl PreparedSequenceRenderer {
             sample_seconds,
             fixtures: rendered,
         })
+    }
+
+    fn render_layer_at(
+        &self,
+        layer: &PreparedLayer,
+        sample_seconds: f64,
+    ) -> Result<Vec<RenderedFixture>, RenderError> {
+        let mut rendered = blank_rendered_fixtures(&self.fixtures);
+        if !layer.enabled || !sample_seconds.is_finite() || sample_seconds < 0.0 {
+            return Ok(rendered);
+        }
+
+        let frame_index = (sample_seconds * f64::from(self.frame_rate)).floor() as usize;
+        if let Some(active_effects) = self.effects_by_frame.get(frame_index) {
+            for effect_index in active_effects {
+                if !layer.effects.contains(effect_index) {
+                    continue;
+                }
+                let Some(effect) = self.effects.get(*effect_index) else {
+                    continue;
+                };
+                if sample_seconds < effect.start_seconds
+                    || sample_seconds >= effect.start_seconds + effect.duration_seconds
+                {
+                    continue;
+                }
+                render_effect(effect, &mut rendered, sample_seconds)?;
+            }
+        }
+        Ok(rendered)
     }
 }
 
@@ -619,7 +625,7 @@ impl<'a> EffectRasterPrepareBatch<'a> {
             groups,
             frame_rate,
             frame_count,
-            bind_cache: EffectBindCache::default(),
+            bind_cache: DslBindCache::default(),
             target_cache: PrepareTargetCache::default(),
         })
     }
@@ -699,7 +705,7 @@ struct PrepareEffectContext<'a> {
     groups: &'a IndexMap<FixtureGroupId, Vec<FixtureInstanceId>>,
     effects: &'a mut Vec<PreparedEffect>,
     generated_child_count: &'a mut usize,
-    bind_cache: &'a mut EffectBindCache,
+    bind_cache: &'a mut DslBindCache,
     target_cache: &'a mut PrepareTargetCache,
 }
 
@@ -824,8 +830,10 @@ fn prepare_composition_graph(
     graph: &SequenceCompositionGraph,
 ) -> Result<PreparedCompositionGraph, RenderError> {
     let full_target = Arc::new(full_rig_target_pixels(context.fixtures)?);
-    validate_graph_interface(graph).map_err(|error| RenderError::BadGraph {
-        message: error.message,
+    validate_composition_graph(graph, &context.project.definitions.operators).map_err(|error| {
+        RenderError::BadGraph {
+            message: error.message,
+        }
     })?;
     validate_composition_graph_layers(context.sequence, graph)?;
     let node_ids = composition_graph_node_ids(graph)?;
@@ -840,7 +848,6 @@ fn prepare_composition_graph(
     for edge in &graph.edges {
         let from = node_index(&node_indexes, &edge.from)?;
         let to = node_index(&node_indexes, &edge.to)?;
-        validate_composition_edge_ports(graph, &node_ids[from], &node_ids[to], edge)?;
         incoming[to].push((edge.to_port.clone(), from));
     }
 
@@ -857,8 +864,32 @@ fn prepare_composition_graph(
                 },
             },
             CompositionGraphNodeKind::Operator(operator_node) => {
-                let operator = builtin_graph_operator(&operator_node.operator)?;
-                let inputs = composition_node_inputs(&node.kind, &incoming[*node_index])?
+                let definition = context
+                    .project
+                    .definitions
+                    .operators
+                    .resolve(&operator_node.operator)
+                    .ok_or_else(|| RenderError::BadGraph {
+                        message: "missing operator definition".to_string(),
+                    })?
+                    .clone();
+                let inputs = definition
+                    .inputs
+                    .iter()
+                    .map(|port| {
+                        incoming[*node_index]
+                            .iter()
+                            .find_map(|(input_port, node)| {
+                                (input_port.0 == port.source_name).then_some(*node)
+                            })
+                            .ok_or_else(|| RenderError::BadGraph {
+                                message: format!(
+                                    "composition graph input port `{}` is not connected",
+                                    port.source_name
+                                ),
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
                     .into_iter()
                     .map(|input| {
                         let prepared_index = prepared_index_by_node[input];
@@ -870,16 +901,15 @@ fn prepare_composition_graph(
                             })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                validate_operator_inputs(operator, &inputs)?;
                 PreparedGraphNode {
                     target: Arc::clone(&full_target),
                     kind: PreparedGraphNodeKind::Operator {
-                        operator: operator.clone(),
+                        definition: Box::new(definition.clone()),
                         inputs,
                         params: prepare_operator_params(
                             context.project,
                             context.sequence,
-                            operator,
+                            &definition,
                             &operator_node.params,
                             EffectParamTiming {
                                 start_seconds: 0.0,
@@ -995,12 +1025,6 @@ fn validate_composition_graph_layers(
     Ok(())
 }
 
-fn builtin_graph_operator(operator: &GraphOperatorRef) -> Result<&GraphOperator, RenderError> {
-    match operator {
-        GraphOperatorRef::Builtin(operator) => Ok(operator),
-    }
-}
-
 fn node_index(
     indexes: &IndexMap<CompositionGraphNodeId, usize>,
     node_id: &CompositionGraphNodeId,
@@ -1063,100 +1087,6 @@ fn topological_composition_graph_order(
         });
     }
     Ok(order)
-}
-
-fn validate_operator_inputs(operator: &GraphOperator, inputs: &[usize]) -> Result<(), RenderError> {
-    let valid = inputs.len() == operator.definition().inputs.len();
-    if valid {
-        Ok(())
-    } else {
-        Err(RenderError::BadGraph {
-            message: format!("operator {:?} has wrong input count", operator),
-        })
-    }
-}
-
-fn validate_composition_edge_ports(
-    graph: &SequenceCompositionGraph,
-    from: &CompositionGraphNodeId,
-    to: &CompositionGraphNodeId,
-    edge: &dawn_language::sequence::EffectGraphEdge,
-) -> Result<(), RenderError> {
-    if !composition_output_ports(graph, from)?.contains(&edge.from_port.0.as_str()) {
-        return Err(RenderError::BadGraph {
-            message: format!(
-                "unknown composition graph output port `{}`",
-                edge.from_port.0
-            ),
-        });
-    }
-    if !composition_input_ports(graph, to)?.contains(&edge.to_port.0.as_str()) {
-        return Err(RenderError::BadGraph {
-            message: format!("unknown composition graph input port `{}`", edge.to_port.0),
-        });
-    }
-    Ok(())
-}
-
-fn composition_node_inputs(
-    kind: &CompositionGraphNodeKind,
-    incoming: &[(GraphPortId, usize)],
-) -> Result<Vec<usize>, RenderError> {
-    composition_node_input_ports(kind)
-        .iter()
-        .map(|port| {
-            incoming
-                .iter()
-                .find_map(|(input_port, node)| (input_port.0 == *port).then_some(*node))
-                .ok_or_else(|| RenderError::BadGraph {
-                    message: format!("composition graph input port `{port}` is not connected"),
-                })
-        })
-        .collect()
-}
-
-fn composition_input_ports(
-    graph: &SequenceCompositionGraph,
-    node_id: &CompositionGraphNodeId,
-) -> Result<Vec<&'static str>, RenderError> {
-    Ok(composition_node_input_ports(
-        &graph_node(graph, node_id)?.kind,
-    ))
-}
-
-fn composition_output_ports(
-    graph: &SequenceCompositionGraph,
-    node_id: &CompositionGraphNodeId,
-) -> Result<&'static [&'static str], RenderError> {
-    Ok(composition_node_output_ports(
-        &graph_node(graph, node_id)?.kind,
-    ))
-}
-
-fn composition_node_input_ports(kind: &CompositionGraphNodeKind) -> Vec<&'static str> {
-    match kind {
-        CompositionGraphNodeKind::Layer { .. } => vec![],
-        CompositionGraphNodeKind::Operator(operator) => {
-            match builtin_graph_operator(&operator.operator) {
-                Ok(operator) => operator
-                    .definition()
-                    .inputs
-                    .iter()
-                    .map(|port| port.source_name)
-                    .collect(),
-                Err(_) => vec![],
-            }
-        }
-        CompositionGraphNodeKind::Output => vec!["input"],
-    }
-}
-
-fn composition_node_output_ports(kind: &CompositionGraphNodeKind) -> &'static [&'static str] {
-    match kind {
-        CompositionGraphNodeKind::Layer { .. } => &["output"],
-        CompositionGraphNodeKind::Operator(_) => &["output"],
-        CompositionGraphNodeKind::Output => &[],
-    }
 }
 
 fn prepare_timing(sequence: &Sequence) -> Result<(), RenderError> {
@@ -1405,12 +1335,11 @@ fn prepare_params(
 fn prepare_operator_params(
     project: &DawnProject,
     sequence: &Sequence,
-    operator: &GraphOperator,
+    definition: &OperatorDefinition,
     overrides: &IndexMap<Identifier, EffectParamValue>,
     timing: EffectParamTiming,
 ) -> Result<IndexMap<Identifier, Value>, RenderError> {
-    let mut params = operator
-        .definition()
+    let mut params = definition
         .params
         .iter()
         .filter_map(|param| {
@@ -1693,14 +1622,14 @@ struct GeneratorPrepareContext<'a> {
     fixtures: &'a [PreparedFixture],
     effects: &'a mut Vec<PreparedEffect>,
     generated_child_count: &'a mut usize,
-    bind_cache: &'a mut EffectBindCache,
+    bind_cache: &'a mut DslBindCache,
     target_cache: &'a mut PrepareTargetCache,
 }
 
 fn expand_generator(
     context: &mut GeneratorPrepareContext<'_>,
-    definition: &dawn_language::effect_dsl::CompiledEffect,
-    params: &BoundEffectParams,
+    definition: &dawn_language::dsl::CompiledEffect,
+    params: &BoundParams,
     expansion: GeneratorExpansion,
 ) -> Result<(), RenderError> {
     if expansion.depth >= MAX_GENERATOR_DEPTH {
@@ -1708,7 +1637,7 @@ fn expand_generator(
             message: "generator depth limit exceeded".to_string(),
         });
     }
-    let mut scratch = EffectVmScratch::default();
+    let mut scratch = DslVmScratch::default();
     let target = generator_context_target(context.target_cache, &expansion.target);
     let generated = definition.generate_bound(
         params,
@@ -1795,7 +1724,7 @@ fn prepare_generated_child(
 }
 
 fn validate_generated_params(
-    definition: &dawn_language::effect_dsl::CompiledEffect,
+    definition: &dawn_language::dsl::CompiledEffect,
     params: &IndexMap<Identifier, Value>,
 ) -> Result<(), RenderError> {
     for key in params.keys() {
@@ -2003,7 +1932,7 @@ fn render_effect(
 ) -> Result<(), RenderError> {
     let local_seconds = sample_seconds - effect.start_seconds;
     let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
-    let mut scratch = EffectVmScratch::default();
+    let mut scratch = DslVmScratch::default();
 
     if let Some(groups) = &effect.sample_groups {
         for group in groups {
@@ -2033,37 +1962,37 @@ fn render_effect(
 }
 
 fn render_composition_graph(
-    graph: &PreparedCompositionGraph,
-    fixtures: &[PreparedFixture],
-    layer_buffers: &IndexMap<SequenceLayerId, Vec<RenderedFixture>>,
+    renderer: &PreparedSequenceRenderer,
     sample_seconds: f64,
 ) -> Result<Vec<RenderedFixture>, RenderError> {
-    let mut cache = HashMap::<GraphRenderCacheKey, Vec<Color>>::new();
+    let mut cache = HashMap::<GraphRenderCacheKey, Arc<Vec<Color>>>::new();
     let output = render_graph_node(
-        graph,
-        graph.output_index,
+        renderer,
+        renderer.composition_graph.output_index,
         sample_seconds,
-        layer_buffers,
         &mut cache,
     )?;
-    Ok(unflatten_rendered_fixtures(fixtures, &output))
+    Ok(unflatten_rendered_fixtures(
+        &renderer.fixtures,
+        output.as_ref(),
+    ))
 }
 
 fn render_graph_node(
-    graph: &PreparedCompositionGraph,
+    renderer: &PreparedSequenceRenderer,
     node_index: usize,
     sample_seconds: f64,
-    layer_buffers: &IndexMap<SequenceLayerId, Vec<RenderedFixture>>,
-    cache: &mut HashMap<GraphRenderCacheKey, Vec<Color>>,
-) -> Result<Vec<Color>, RenderError> {
+    cache: &mut HashMap<GraphRenderCacheKey, Arc<Vec<Color>>>,
+) -> Result<Arc<Vec<Color>>, RenderError> {
     let frame_key = (sample_seconds * 1_000_000.0).round() as i64;
     let key = GraphRenderCacheKey {
         node_index,
         frame_key,
     };
     if let Some(colors) = cache.get(&key) {
-        return Ok(colors.clone());
+        return Ok(Arc::clone(colors));
     }
+    let graph = &renderer.composition_graph;
     let node = graph
         .nodes
         .get(node_index)
@@ -2071,150 +2000,210 @@ fn render_graph_node(
             message: "graph node index is out of bounds".to_string(),
         })?;
     let colors = match &node.kind {
-        PreparedGraphNodeKind::Layer { layer_id } => layer_buffers
-            .get(layer_id)
-            .map(|fixtures| flatten_rendered_fixtures(fixtures))
-            .unwrap_or_else(|| vec![black(); node.target.len()]),
+        PreparedGraphNodeKind::Layer { layer_id } => Arc::new(
+            renderer
+                .layers
+                .iter()
+                .find(|layer| layer.id == *layer_id)
+                .map(|layer| renderer.render_layer_at(layer, sample_seconds))
+                .transpose()?
+                .map(|fixtures| flatten_rendered_fixtures(&fixtures))
+                .unwrap_or_else(|| vec![black(); node.target.len()]),
+        ),
         PreparedGraphNodeKind::Operator {
-            operator,
+            definition,
             inputs,
             params,
             automation,
         } => {
             let params = apply_automation_params(params.clone(), automation, sample_seconds);
             render_graph_operator(
-                graph,
-                operator,
+                renderer,
+                definition,
                 inputs,
                 &params,
+                node.target.as_ref(),
                 sample_seconds,
-                layer_buffers,
                 cache,
             )?
         }
         PreparedGraphNodeKind::Output { inputs } => {
             let mut output = vec![black(); node.target.len()];
             for input in inputs {
-                let source =
-                    render_graph_node(graph, *input, sample_seconds, layer_buffers, cache)?;
-                for (target, source) in output.iter_mut().zip(source) {
+                let source = render_graph_node(renderer, *input, sample_seconds, cache)?;
+                for (target, source) in output.iter_mut().zip(source.iter().copied()) {
                     compose_max(target, source);
                 }
             }
-            output
+            Arc::new(output)
         }
     };
-    cache.insert(key, colors.clone());
+    cache.insert(key, Arc::clone(&colors));
     Ok(colors)
 }
 
 fn render_graph_operator(
-    graph: &PreparedCompositionGraph,
-    operator: &GraphOperator,
+    renderer: &PreparedSequenceRenderer,
+    definition: &OperatorDefinition,
     inputs: &[usize],
     params: &IndexMap<Identifier, Value>,
+    target: &[PreparedTargetPixel],
     sample_seconds: f64,
-    layer_buffers: &IndexMap<SequenceLayerId, Vec<RenderedFixture>>,
-    cache: &mut HashMap<GraphRenderCacheKey, Vec<Color>>,
-) -> Result<Vec<Color>, RenderError> {
-    match operator {
-        GraphOperator::Max => binary_graph_op(
-            graph,
-            inputs,
-            sample_seconds,
-            layer_buffers,
-            cache,
-            max_color,
-        ),
-        GraphOperator::Add => binary_graph_op(
-            graph,
-            inputs,
-            sample_seconds,
-            layer_buffers,
-            cache,
-            add_color,
-        ),
-        GraphOperator::Multiply => binary_graph_op(
-            graph,
-            inputs,
-            sample_seconds,
-            layer_buffers,
-            cache,
-            multiply_color,
-        ),
-        GraphOperator::IntensityModulate => {
-            let source = render_graph_node(graph, inputs[0], sample_seconds, layer_buffers, cache)?;
-            let mask = render_graph_node(graph, inputs[1], sample_seconds, layer_buffers, cache)?;
-            Ok(source
-                .into_iter()
-                .zip(mask)
-                .map(|(source, mask)| scale_color(source, intensity(mask)))
-                .collect())
-        }
-        GraphOperator::Dim => {
-            let amount = float_param(params, "amount")?.clamp(0.0, 1.0);
-            let source = render_graph_node(graph, inputs[0], sample_seconds, layer_buffers, cache)?;
-            Ok(source
-                .into_iter()
-                .map(|color| scale_color(color, amount))
-                .collect())
-        }
-        GraphOperator::Invert => {
-            let source = render_graph_node(graph, inputs[0], sample_seconds, layer_buffers, cache)?;
-            Ok(source.into_iter().map(invert_color).collect())
-        }
-        GraphOperator::Colorize => {
-            let tint = color_param(params, "color")?;
-            let source = render_graph_node(graph, inputs[0], sample_seconds, layer_buffers, cache)?;
-            Ok(source
-                .into_iter()
-                .map(|color| scale_color(tint, intensity(color)))
-                .collect())
-        }
-        GraphOperator::Delay => {
-            let delay = float_param(params, "seconds")?.max(0.0);
-            render_graph_node(
-                graph,
-                inputs[0],
-                sample_seconds - delay,
-                layer_buffers,
+    cache: &mut HashMap<GraphRenderCacheKey, Arc<Vec<Color>>>,
+) -> Result<Arc<Vec<Color>>, RenderError> {
+    let OperatorImplementation::Native(operator) = &definition.implementation else {
+        let OperatorImplementation::Dsl(compiled) = &definition.implementation else {
+            unreachable!("operator implementation is native or DSL")
+        };
+        let bound = compiled.bind_params(params);
+        let duration = renderer.duration_seconds;
+        let mut output = Vec::with_capacity(target.len());
+        let mut scratch = DslVmScratch::default();
+        for (flat_pixel_index, pixel) in target.iter().enumerate() {
+            let context = OperatorRunContext {
+                progress: (sample_seconds / duration).clamp(0.0, 1.0),
+                seconds: sample_seconds,
+                duration,
+                pixel_index: pixel.pixel_index as i64,
+                pixel_count: pixel.pixel_count as i64,
+                pixel_fraction: pixel.pixel_fraction,
+                global_marks: Marks { marks: Vec::new() },
+            };
+            let mut sampler = GraphSignalSampler {
+                renderer,
+                inputs,
                 cache,
-            )
+                flat_pixel_index,
+                duration,
+            };
+            output.push(compiled.sample_bound(&bound, &context, &mut sampler, &mut scratch)?);
         }
-        GraphOperator::Echo => {
+        return Ok(Arc::new(output));
+    };
+    match operator {
+        BuiltinOperator::Max => binary_graph_op(renderer, inputs, sample_seconds, cache, max_color),
+        BuiltinOperator::Add => binary_graph_op(renderer, inputs, sample_seconds, cache, add_color),
+        BuiltinOperator::Multiply => {
+            binary_graph_op(renderer, inputs, sample_seconds, cache, multiply_color)
+        }
+        BuiltinOperator::IntensityModulate => {
+            let source = render_graph_node(renderer, inputs[0], sample_seconds, cache)?;
+            let mask = render_graph_node(renderer, inputs[1], sample_seconds, cache)?;
+            Ok(Arc::new(
+                source
+                    .iter()
+                    .copied()
+                    .zip(mask.iter().copied())
+                    .map(|(source, mask)| scale_color(source, intensity(mask)))
+                    .collect(),
+            ))
+        }
+        BuiltinOperator::Dim => {
+            let amount = float_param(params, "amount")?.clamp(0.0, 1.0);
+            let source = render_graph_node(renderer, inputs[0], sample_seconds, cache)?;
+            Ok(Arc::new(
+                source
+                    .iter()
+                    .copied()
+                    .map(|color| scale_color(color, amount))
+                    .collect(),
+            ))
+        }
+        BuiltinOperator::Invert => {
+            let source = render_graph_node(renderer, inputs[0], sample_seconds, cache)?;
+            Ok(Arc::new(source.iter().copied().map(invert_color).collect()))
+        }
+        BuiltinOperator::Colorize => {
+            let tint = color_param(params, "color")?;
+            let source = render_graph_node(renderer, inputs[0], sample_seconds, cache)?;
+            Ok(Arc::new(
+                source
+                    .iter()
+                    .copied()
+                    .map(|color| scale_color(tint, intensity(color)))
+                    .collect(),
+            ))
+        }
+        BuiltinOperator::Delay => Err(RenderError::BadGraph {
+            message: "Delay must use its DSL implementation".to_string(),
+        }),
+        BuiltinOperator::Echo => {
             let delay = float_param(params, "seconds")?.max(0.0);
             let repeats = int_param(params, "repeats")?.clamp(1, 32);
             let decay = float_param(params, "decay")?.clamp(0.0, 1.0);
-            let mut output = vec![black(); graph.nodes[inputs[0]].target.len()];
+            let mut output =
+                vec![black(); renderer.composition_graph.nodes[inputs[0]].target.len()];
             for repeat in 0..=repeats {
                 let source = render_graph_node(
-                    graph,
+                    renderer,
                     inputs[0],
                     sample_seconds - delay * repeat as f64,
-                    layer_buffers,
                     cache,
                 )?;
                 let amount = decay.powi(repeat as i32);
-                for (target, source) in output.iter_mut().zip(source) {
+                for (target, source) in output.iter_mut().zip(source.iter().copied()) {
                     compose_max(target, scale_color(source, amount));
                 }
             }
-            Ok(output)
+            Ok(Arc::new(output))
         }
     }
 }
 
 fn binary_graph_op(
-    graph: &PreparedCompositionGraph,
+    renderer: &PreparedSequenceRenderer,
     inputs: &[usize],
     sample_seconds: f64,
-    layer_buffers: &IndexMap<SequenceLayerId, Vec<RenderedFixture>>,
-    cache: &mut HashMap<GraphRenderCacheKey, Vec<Color>>,
+    cache: &mut HashMap<GraphRenderCacheKey, Arc<Vec<Color>>>,
     op: fn(Color, Color) -> Color,
-) -> Result<Vec<Color>, RenderError> {
-    let left = render_graph_node(graph, inputs[0], sample_seconds, layer_buffers, cache)?;
-    let right = render_graph_node(graph, inputs[1], sample_seconds, layer_buffers, cache)?;
-    Ok(left.into_iter().zip(right).map(|(l, r)| op(l, r)).collect())
+) -> Result<Arc<Vec<Color>>, RenderError> {
+    let left = render_graph_node(renderer, inputs[0], sample_seconds, cache)?;
+    let right = render_graph_node(renderer, inputs[1], sample_seconds, cache)?;
+    Ok(Arc::new(
+        left.iter()
+            .copied()
+            .zip(right.iter().copied())
+            .map(|(l, r)| op(l, r))
+            .collect(),
+    ))
+}
+
+struct GraphSignalSampler<'a> {
+    renderer: &'a PreparedSequenceRenderer,
+    inputs: &'a [usize],
+    cache: &'a mut HashMap<GraphRenderCacheKey, Arc<Vec<Color>>>,
+    flat_pixel_index: usize,
+    duration: f64,
+}
+
+impl SignalSampler for GraphSignalSampler<'_> {
+    fn sample_signal(
+        &mut self,
+        input: usize,
+        seconds: f64,
+        _pixel_index: usize,
+    ) -> Result<Color, RuntimeError> {
+        if !seconds.is_finite() || seconds < 0.0 || seconds >= self.duration {
+            return Ok(black());
+        }
+        let node = self
+            .inputs
+            .get(input)
+            .copied()
+            .ok_or_else(|| RuntimeError {
+                message: "Signal input index is out of bounds".to_string(),
+            })?;
+        let colors =
+            render_graph_node(self.renderer, node, seconds, self.cache).map_err(|error| {
+                RuntimeError {
+                    message: format!("failed to sample Signal: {error:?}"),
+                }
+            })?;
+        Ok(colors
+            .get(self.flat_pixel_index)
+            .copied()
+            .unwrap_or_else(black))
+    }
 }
 
 fn target_color_lookup(target: &[PreparedTargetPixel]) -> HashMap<TargetColorAddress, Vec<usize>> {
@@ -2239,7 +2228,7 @@ fn render_effect_target_colors(
 ) -> Result<(), RenderError> {
     let local_seconds = sample_seconds - effect.start_seconds;
     let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
-    let mut scratch = EffectVmScratch::default();
+    let mut scratch = DslVmScratch::default();
 
     if let Some(groups) = &effect.sample_groups {
         for group in groups {
@@ -2290,7 +2279,7 @@ fn render_sampled_effect_target_colors(
 ) -> Result<(), RenderError> {
     let local_seconds = sample_seconds - effect.start_seconds;
     let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
-    let mut scratch = EffectVmScratch::default();
+    let mut scratch = DslVmScratch::default();
 
     if let Some(groups) = &effect_pixels.groups {
         for group in groups {
@@ -2322,7 +2311,7 @@ fn sample_effect_pixel(
     pixel: &PreparedTargetPixel,
     progress: f64,
     local_seconds: f64,
-    scratch: &mut EffectVmScratch,
+    scratch: &mut DslVmScratch,
 ) -> Result<Color, RuntimeError> {
     sample_effect_group(
         effect,
@@ -2342,7 +2331,7 @@ fn sample_effect_group(
     sample_context: PreparedSampleContext,
     progress: f64,
     local_seconds: f64,
-    scratch: &mut EffectVmScratch,
+    scratch: &mut DslVmScratch,
 ) -> Result<Color, RuntimeError> {
     let context = RunContext {
         progress,
@@ -2637,9 +2626,9 @@ struct PreparedEffect {
     duration_seconds: f64,
     target: Arc<Vec<PreparedTargetPixel>>,
     sample_groups: Option<Vec<PreparedSampleContextGroup>>,
-    definition: dawn_language::effect_dsl::CompiledEffect,
+    definition: dawn_language::dsl::CompiledEffect,
     params: IndexMap<Identifier, Value>,
-    bound_params: BoundEffectParams,
+    bound_params: BoundParams,
     automation: Vec<PreparedAutomation>,
 }
 
@@ -2668,7 +2657,7 @@ enum PreparedGraphNodeKind {
         layer_id: SequenceLayerId,
     },
     Operator {
-        operator: GraphOperator,
+        definition: Box<OperatorDefinition>,
         inputs: Vec<usize>,
         params: IndexMap<Identifier, Value>,
         automation: Vec<PreparedAutomation>,
