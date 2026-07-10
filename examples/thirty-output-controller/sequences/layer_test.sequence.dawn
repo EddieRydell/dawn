@@ -30,8 +30,8 @@ layer_test:
     enabled: true
   effects:
   - id: 2
-    layer_id: 0
-    start: 59.863877422s
+    layer_id: 2
+    start: 59.851226103s
     duration: 0.567058732s
     target:
       type: group
@@ -155,7 +155,7 @@ layer_test:
       params:
         amount:
           type: float
-          value: 1.0
+          value: 10.0
     edges:
     - from: 1
       from_port: output
