@@ -1,7 +1,8 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use dawn_language::dsl::{
     CompiledEffect, DslBindCache, DslVmScratch, GeneratorContext, Identifier, RunContext,
-    TargetItemValue, TargetPixelValue, TargetValue, Value, compile_effects,
+    SignalSampler, TargetItemValue, TargetPixelValue, TargetValue, Value, compile_effects,
+    compile_operators,
 };
 use dawn_language::values::{Color, Curve, CurvePoint, CurveValue, DawnTime, Marks};
 use indexmap::IndexMap;
@@ -13,6 +14,8 @@ const PULSE_SOURCE: &str =
     include_str!("../../../examples/thirty-output-controller/effects/pulse.effect.dawn");
 const SCAN_SWEEP_SOURCE: &str =
     include_str!("../../../examples/thirty-output-controller/effects/scan-sweep.effect.dawn");
+const IMPACT_BURST_SOURCE: &str =
+    include_str!("../../../examples/thirty-output-controller/effects/impact-burst.effect.dawn");
 const SPARKLE_COMET_SOURCE: &str =
     include_str!("../../../examples/thirty-output-controller/effects/sparkle-comet.effect.dawn");
 const SHIMMER_FIELD_SOURCE: &str =
@@ -62,6 +65,13 @@ fn bench_effect_vm(c: &mut Criterion) {
     );
     bench_sample(
         c,
+        "impact_burst_branch_sample",
+        "ImpactBurst",
+        IMPACT_BURST_SOURCE,
+        impact_burst_params(),
+    );
+    bench_sample(
+        c,
         "sparkle_comet_rand_trig_sample",
         "SparkleComet",
         SPARKLE_COMET_SOURCE,
@@ -81,6 +91,13 @@ fn bench_effect_vm(c: &mut Criterion) {
         MARK_CHASE_SOURCE,
         mark_chase_child_params(),
     );
+    bench_sample(
+        c,
+        "mark_pulse_child_sample",
+        "MarkPulseChild",
+        MARK_PULSE_SOURCE,
+        mark_pulse_child_params(),
+    );
     bench_generator(
         c,
         "mark_pulse_generator",
@@ -95,7 +112,54 @@ fn bench_effect_vm(c: &mut Criterion) {
         MARK_CHASE_SOURCE,
         mark_chase_params(),
     );
+    bench_operator(c);
     bench_binding(c);
+}
+
+fn bench_operator(c: &mut Criterion) {
+    let operator = compile_operators(include_str!(
+        "../../../examples/thirty-output-controller/operators/gain.operator.dawn"
+    ))
+    .expect("Gain operator source should compile")
+    .into_iter()
+    .next()
+    .expect("Gain operator should exist");
+    let bound = operator.bind_params(&params([("amount", Value::Float(0.65))]));
+    let context = sample_context();
+    let mut sampler = ConstantSignalSampler;
+    let mut scratch = DslVmScratch::default();
+
+    c.bench_function("operator_gain_signal_sample", |b| {
+        b.iter(|| {
+            black_box(
+                operator
+                    .sample_bound(
+                        black_box(&bound),
+                        black_box(&context),
+                        &mut sampler,
+                        &mut scratch,
+                    )
+                    .expect("Gain operator sample should run"),
+            )
+        });
+    });
+}
+
+struct ConstantSignalSampler;
+
+impl SignalSampler for ConstantSignalSampler {
+    fn sample_signal(
+        &mut self,
+        _input: usize,
+        _seconds: f64,
+        _pixel_index: usize,
+    ) -> Result<Color, dawn_language::dsl::RuntimeError> {
+        Ok(Color {
+            red: 120,
+            green: 80,
+            blue: 40,
+        })
+    }
 }
 
 fn bench_sample(
@@ -240,6 +304,22 @@ fn scan_sweep_params() -> IndexMap<Identifier, Value> {
     ])
 }
 
+fn impact_burst_params() -> IndexMap<Identifier, Value> {
+    params([
+        ("gradient", Value::Curve(color_curve())),
+        ("intensity", Value::Curve(float_curve())),
+        ("direction", enum_value("outward")),
+        ("color_mode", enum_value("from_edge")),
+        ("center_position", Value::Float(0.5)),
+        ("start_radius", Value::Float(0.0)),
+        ("end_radius", Value::Float(0.75)),
+        ("edge_width", Value::Float(0.2)),
+        ("glow_width", Value::Float(0.25)),
+        ("glow_level", Value::Float(0.35)),
+        ("mirror", Value::Bool(false)),
+    ])
+}
+
 fn sparkle_comet_params() -> IndexMap<Identifier, Value> {
     params([
         ("gradient", Value::Curve(color_curve())),
@@ -317,6 +397,26 @@ fn mark_pulse_params() -> IndexMap<Identifier, Value> {
         ("section_edge_fade_pixels", Value::Float(1.0)),
         ("sections_per_mark", Value::Int(3)),
         ("seed", Value::Float(29.0)),
+    ])
+}
+
+fn mark_pulse_child_params() -> IndexMap<Identifier, Value> {
+    params([
+        (
+            "base",
+            Value::Color(Color {
+                red: 0,
+                green: 0,
+                blue: 0,
+            }),
+        ),
+        ("accent", Value::Curve(color_curve())),
+        ("hue", Value::Curve(float_curve())),
+        ("hue_mix", Value::Float(0.35)),
+        ("section_width_pixels", Value::Int(5)),
+        ("section_edge_fade_pixels", Value::Float(1.0)),
+        ("parent_duration", Value::Float(24.0)),
+        ("child_start", Value::Float(4.0)),
     ])
 }
 

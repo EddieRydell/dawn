@@ -630,6 +630,29 @@ impl<'a> Vm<'a> {
                     };
                     self.set_float(*dst, value)?;
                 }
+                Instruction::FloatArithmeticConst {
+                    dst,
+                    op,
+                    value,
+                    constant_bits,
+                    constant_left,
+                } => {
+                    let value = self.float(*value)?;
+                    let constant = f64::from_bits(*constant_bits);
+                    let (left, right) = if *constant_left {
+                        (constant, value)
+                    } else {
+                        (value, constant)
+                    };
+                    let value = match op {
+                        ArithmeticOp::Add => left + right,
+                        ArithmeticOp::Subtract => left - right,
+                        ArithmeticOp::Multiply => left * right,
+                        ArithmeticOp::Divide => left / right,
+                        ArithmeticOp::Remainder => left % right,
+                    };
+                    self.set_float(*dst, value)?;
+                }
                 Instruction::IntArithmetic {
                     dst,
                     op,
@@ -654,6 +677,28 @@ impl<'a> Vm<'a> {
                 } => {
                     let left = self.float(*left)?;
                     let right = self.float(*right)?;
+                    let value = match op {
+                        CompareOp::Less => left < right,
+                        CompareOp::LessEqual => left <= right,
+                        CompareOp::Greater => left > right,
+                        CompareOp::GreaterEqual => left >= right,
+                    };
+                    self.set_bool(*dst, value)?;
+                }
+                Instruction::FloatCompareConst {
+                    dst,
+                    op,
+                    value,
+                    constant_bits,
+                    constant_left,
+                } => {
+                    let value = self.float(*value)?;
+                    let constant = f64::from_bits(*constant_bits);
+                    let (left, right) = if *constant_left {
+                        (constant, value)
+                    } else {
+                        (value, constant)
+                    };
                     let value = match op {
                         CompareOp::Less => left < right,
                         CompareOp::LessEqual => left <= right,
@@ -723,6 +768,20 @@ impl<'a> Vm<'a> {
                     };
                     self.set_float(*dst, result)?;
                 }
+                Instruction::FloatBinaryConst {
+                    dst,
+                    op,
+                    value,
+                    constant_bits,
+                } => {
+                    let value = self.float(*value)?;
+                    let constant = f64::from_bits(*constant_bits);
+                    let result = match op {
+                        FloatBinary::Min => value.min(constant),
+                        FloatBinary::Max => value.max(constant),
+                    };
+                    self.set_float(*dst, result)?;
+                }
                 Instruction::Clamp {
                     dst,
                     value,
@@ -733,6 +792,18 @@ impl<'a> Vm<'a> {
                     let min = self.float(*min)?;
                     let max = self.float(*max)?;
                     self.set_float(*dst, value.clamp(min, max))?;
+                }
+                Instruction::ClampConst {
+                    dst,
+                    value,
+                    min_bits,
+                    max_bits,
+                } => {
+                    let value = self.float(*value)?;
+                    self.set_float(
+                        *dst,
+                        value.clamp(f64::from_bits(*min_bits), f64::from_bits(*max_bits)),
+                    )?;
                 }
                 Instruction::Smoothstep {
                     dst,

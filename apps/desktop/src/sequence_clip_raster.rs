@@ -1044,6 +1044,7 @@ fn render_effect_raster(
         .min(display_row_count as usize)
         .min(settings.max_rows.max(1) as usize);
     let sample = renderer.prepare_sampled_raster(rows);
+    let mut render_scratch = dawn_runtime::EffectRasterRenderScratch::default();
     let mut pixels_rgba = vec![0u8; rows * columns * 4];
     for column in 0..columns {
         if !should_continue() {
@@ -1053,7 +1054,7 @@ fn render_effect_raster(
             .sampled_raster_column_seconds(column, columns)
             .map_err(|error| RasterRenderFailure::Error(format!("{error:?}")))?;
         let colors = renderer
-            .render_sampled_raster_column(&sample, sample_seconds)
+            .render_sampled_raster_column_with_scratch(&sample, sample_seconds, &mut render_scratch)
             .map_err(|error| RasterRenderFailure::Error(format!("{error:?}")))?;
         for row in 0..rows {
             let Some(color) = colors.get(row) else {

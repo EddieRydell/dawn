@@ -3,14 +3,17 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use dawn_language::sequence::SequenceClipId;
 use dawn_language::values::Color;
 use dawn_project_io::load_project;
-use dawn_runtime::{PreparedEffectRasterRenderer, PreparedSequenceRenderer, RenderedFrame};
+use dawn_runtime::{
+    EffectRasterRenderScratch, PreparedEffectRasterRenderer, PreparedSequenceRenderer,
+    RenderedFrame, SequenceRenderScratch,
+};
 use std::hint::black_box;
 
 const SCENARIOS: [RenderScenario; 7] = [
     RenderScenario {
         frame: 144,
-        checksum: 0x3f76_8cdc_06a4_bd8e,
-        active_effect_count: 1,
+        checksum: 0xe050_9990_c9eb_6c98,
+        active_effect_count: 3,
     },
     RenderScenario {
         frame: 2088,
@@ -19,7 +22,7 @@ const SCENARIOS: [RenderScenario; 7] = [
     },
     RenderScenario {
         frame: 5904,
-        checksum: 0x2cd4_8e9a_6687_58d7,
+        checksum: 0x859f_7f0a_afbf_31d7,
         active_effect_count: 180,
     },
     RenderScenario {
@@ -38,9 +41,9 @@ const SCENARIOS: [RenderScenario; 7] = [
         active_effect_count: 301,
     },
     RenderScenario {
-        frame: 25934,
-        checksum: 0xb987_4f83_3a52_d549,
-        active_effect_count: 211,
+        frame: 7707,
+        checksum: 0x94eb_b8f8_8b27_c8f3,
+        active_effect_count: 212,
     },
 ];
 
@@ -50,14 +53,14 @@ const RASTER_SCENARIOS: [RasterScenario; 2] = [
         effect_id: 75,
         columns: 256,
         rows: 50,
-        checksum: 0x5185_944c_8772_1aee,
+        checksum: 0x68d2_2650_911c_2f4d,
     },
     RasterScenario {
-        name: "raster_generator_mark_pulse_76",
-        effect_id: 76,
+        name: "raster_generator_mark_pulse_77",
+        effect_id: 77,
         columns: 256,
         rows: 50,
-        checksum: 0x9e95_b38b_5f33_f35d,
+        checksum: 0xb9e9_5ed0_d289_caf2,
     },
 ];
 
@@ -88,10 +91,23 @@ fn bench_render(c: &mut Criterion) {
         .expect("benchmark project should have a root sequence");
     let renderer = PreparedSequenceRenderer::prepare(&session.project, setup_id, sequence_id)
         .expect("benchmark project should prepare");
+    let operator_sequence_id = session
+        .project
+        .root
+        .sequences
+        .get(1)
+        .expect("benchmark project should have an operator sequence");
+    let operator_renderer =
+        PreparedSequenceRenderer::prepare(&session.project, setup_id, operator_sequence_id)
+            .expect("benchmark operator sequence should prepare");
 
     assert_scenarios(&renderer);
     let raster_renderers = prepare_raster_renderers(&session.project, setup_id, sequence_id);
     assert_raster_scenarios(&raster_renderers);
+    let operator_frame = operator_renderer
+        .render_frame(3594)
+        .expect("benchmark operator frame should render");
+    assert_eq!(checksum_frame(&operator_frame), 0xb408_c3df_8a24_afaa);
 
     c.bench_function("prepare_thirty_output_controller", |b| {
         b.iter(|| {
@@ -107,16 +123,54 @@ fn bench_render(c: &mut Criterion) {
     });
 
     for scenario in SCENARIOS {
+        let mut scratch = SequenceRenderScratch::default();
         c.bench_function(&format!("render_frame_{}", scenario.frame), |b| {
             b.iter(|| {
                 black_box(
                     renderer
-                        .render_frame(black_box(scenario.frame))
+                        .render_frame_with_scratch(black_box(scenario.frame), &mut scratch)
                         .expect("benchmark frame should render"),
                 )
             });
         });
     }
+
+    let mut playback_scratch = SequenceRenderScratch::default();
+    c.bench_function("render_playback_dense_60_frames", |b| {
+        b.iter(|| {
+            for frame in 19_050..19_110 {
+                black_box(
+                    renderer
+                        .render_frame_with_scratch(black_box(frame), &mut playback_scratch)
+                        .expect("benchmark playback frame should render"),
+                );
+            }
+        });
+    });
+
+    let mut operator_scratch = SequenceRenderScratch::default();
+    c.bench_function("render_operator_graph_gain_echo", |b| {
+        b.iter(|| {
+            black_box(
+                operator_renderer
+                    .render_frame_with_scratch(black_box(3594), &mut operator_scratch)
+                    .expect("benchmark operator frame should render"),
+            )
+        });
+    });
+
+    let mut operator_playback_scratch = SequenceRenderScratch::default();
+    c.bench_function("render_operator_playback_60_frames", |b| {
+        b.iter(|| {
+            for frame in 3_570..3_630 {
+                black_box(
+                    operator_renderer
+                        .render_frame_with_scratch(black_box(frame), &mut operator_playback_scratch)
+                        .expect("benchmark operator playback frame should render"),
+                );
+            }
+        });
+    });
 
     for (scenario, renderer) in RASTER_SCENARIOS.into_iter().zip(raster_renderers.iter()) {
         let sample = renderer.prepare_sampled_raster(scenario.rows);
@@ -179,12 +233,13 @@ fn render_raster_columns(
     scenario: RasterScenario,
 ) -> Vec<Color> {
     let mut raster = Vec::with_capacity(scenario.columns * scenario.rows);
+    let mut scratch = EffectRasterRenderScratch::default();
     for column in 0..scenario.columns {
         let sample_seconds = renderer
             .sampled_raster_column_seconds(column, scenario.columns)
             .expect("benchmark raster column time should resolve");
         let colors = renderer
-            .render_sampled_raster_column(sample, sample_seconds)
+            .render_sampled_raster_column_with_scratch(sample, sample_seconds, &mut scratch)
             .expect("benchmark raster column should render");
         assert_eq!(colors.len(), scenario.rows);
         raster.extend(colors);

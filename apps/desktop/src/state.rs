@@ -264,7 +264,7 @@ impl DesktopState {
         self.drain_render_refresh_results();
         let audio_transport = self.audio_snapshot();
         match self.show_render.lock() {
-            Ok(show_render) => show_render.render_current_sequence_frame(&audio_transport),
+            Ok(mut show_render) => show_render.render_current_sequence_frame(&audio_transport),
             Err(poisoned) => poisoned
                 .into_inner()
                 .render_current_sequence_frame(&audio_transport),
@@ -1504,8 +1504,8 @@ impl DesktopState {
                     session,
                 } => {
                     match self.show_render.lock() {
-                        Ok(mut show_render) => show_render.apply_prepared(session),
-                        Err(poisoned) => poisoned.into_inner().apply_prepared(session),
+                        Ok(mut show_render) => show_render.apply_prepared(*session),
+                        Err(poisoned) => poisoned.into_inner().apply_prepared(*session),
                     }
                     self.clear_render_error_if_set();
                 }
@@ -1920,7 +1920,7 @@ impl RenderRefreshResult {
 enum RenderRefreshResult {
     Refreshed {
         sequence: u64,
-        session: crate::show_render::PreparedRenderSession,
+        session: Box<crate::show_render::PreparedRenderSession>,
     },
     Failed {
         sequence: u64,
@@ -1932,7 +1932,10 @@ fn render_refresh_worker(
     receiver: mpsc::Receiver<SequencedRenderRefreshRequest>,
     sender: mpsc::Sender<RenderRefreshResult>,
 ) {
-    while let Ok(pending) = receiver.recv() {
+    while let Ok(mut pending) = receiver.recv() {
+        while let Ok(newer) = receiver.try_recv() {
+            pending = newer;
+        }
         let result = match crate::show_render::prepare_render_session(
             &pending.payload.project,
             &pending.payload.setup_id,
@@ -1940,7 +1943,7 @@ fn render_refresh_worker(
         ) {
             Ok(session) => RenderRefreshResult::Refreshed {
                 sequence: pending.sequence,
-                session,
+                session: Box::new(session),
             },
             Err(error) => RenderRefreshResult::Failed {
                 sequence: pending.sequence,

@@ -148,6 +148,12 @@ fn instruction_read_slots(instruction: &Instruction, mut read: impl FnMut(ValueS
             read(ValueSlot::Float(*left));
             read(ValueSlot::Float(*right));
         }
+        Instruction::FloatArithmeticConst { value, .. }
+        | Instruction::FloatCompareConst { value, .. }
+        | Instruction::FloatBinaryConst { value, .. }
+        | Instruction::ClampConst { value, .. } => {
+            read(ValueSlot::Float(*value));
+        }
         Instruction::IntArithmetic { left, right, .. } => {
             read(ValueSlot::Int(*left));
             read(ValueSlot::Int(*right));
@@ -322,10 +328,13 @@ fn instruction_write_slots(instruction: &Instruction, mut write: impl FnMut(Valu
         | Instruction::IntToFloat { dst, .. }
         | Instruction::NegFloat { dst, .. }
         | Instruction::FloatArithmetic { dst, .. }
+        | Instruction::FloatArithmeticConst { dst, .. }
         | Instruction::SectionPosition { dst, .. }
         | Instruction::FloatUnary { dst, .. }
         | Instruction::FloatBinary { dst, .. }
+        | Instruction::FloatBinaryConst { dst, .. }
         | Instruction::Clamp { dst, .. }
+        | Instruction::ClampConst { dst, .. }
         | Instruction::Smoothstep { dst, .. }
         | Instruction::MixFloat { dst, .. }
         | Instruction::Rand { dst, .. }
@@ -337,6 +346,7 @@ fn instruction_write_slots(instruction: &Instruction, mut write: impl FnMut(Valu
         Instruction::LoadBoolParam { dst, .. }
         | Instruction::Not { dst, .. }
         | Instruction::FloatCompare { dst, .. }
+        | Instruction::FloatCompareConst { dst, .. }
         | Instruction::ValueEqual { dst, .. }
         | Instruction::EnumParamEqualConst { dst, .. } => write(ValueSlot::Bool(*dst)),
         Instruction::LoadColorParam { dst, .. }
@@ -527,6 +537,13 @@ pub(crate) enum Instruction {
         left: FloatSlot,
         right: FloatSlot,
     },
+    FloatArithmeticConst {
+        dst: FloatSlot,
+        op: ArithmeticOp,
+        value: FloatSlot,
+        constant_bits: u64,
+        constant_left: bool,
+    },
     IntArithmetic {
         dst: IntSlot,
         op: IntArithmeticOp,
@@ -538,6 +555,13 @@ pub(crate) enum Instruction {
         op: CompareOp,
         left: FloatSlot,
         right: FloatSlot,
+    },
+    FloatCompareConst {
+        dst: BoolSlot,
+        op: CompareOp,
+        value: FloatSlot,
+        constant_bits: u64,
+        constant_left: bool,
     },
     ValueEqual {
         dst: BoolSlot,
@@ -579,11 +603,23 @@ pub(crate) enum Instruction {
         left: FloatSlot,
         right: FloatSlot,
     },
+    FloatBinaryConst {
+        dst: FloatSlot,
+        op: FloatBinary,
+        value: FloatSlot,
+        constant_bits: u64,
+    },
     Clamp {
         dst: FloatSlot,
         value: FloatSlot,
         min: FloatSlot,
         max: FloatSlot,
+    },
+    ClampConst {
+        dst: FloatSlot,
+        value: FloatSlot,
+        min_bits: u64,
+        max_bits: u64,
     },
     Smoothstep {
         dst: FloatSlot,

@@ -12,6 +12,7 @@ use super::checked::{
 use super::types::{Identifier, Type, Value};
 use super::{CompiledEffect, CompiledOperator, EffectKind};
 use indexmap::IndexMap;
+use std::collections::{HashMap, HashSet};
 
 pub(crate) fn compile_checked_effects(module: CheckedModule) -> Vec<CompiledEffect> {
     module.effects.into_iter().map(compile_effect).collect()
@@ -55,6 +56,9 @@ struct FunctionCompiler {
     layout: SlotLayout,
     kind: EffectKind,
     signal_inputs: IndexMap<Identifier, usize>,
+    assigned_names: HashSet<Identifier>,
+    context_reads: HashMap<ContextRead, ValueSlot>,
+    param_reads: HashMap<ParamId, ValueSlot>,
 }
 
 #[derive(Clone)]
@@ -62,6 +66,97 @@ enum Binding {
     Param(ParamId),
     Local(LocalId),
     GeneratorContext(GeneratorContextId),
+}
+
+fn collect_assigned_names(block: &CheckedBlock, assigned: &mut HashSet<Identifier>) {
+    for statement in &block.statements {
+        collect_statement_assigned_names(statement, assigned);
+    }
+}
+
+fn collect_statement_assigned_names(statement: &CheckedStmt, assigned: &mut HashSet<Identifier>) {
+    match statement {
+        CheckedStmt::Assign { name, .. } => {
+            assigned.insert(name.clone());
+        }
+        CheckedStmt::If {
+            then_block,
+            else_block,
+            ..
+        } => {
+            collect_assigned_names(then_block, assigned);
+            if let Some(else_block) = else_block {
+                collect_assigned_names(else_block, assigned);
+            }
+        }
+        CheckedStmt::For {
+            initializer,
+            update,
+            body,
+            ..
+        } => {
+            collect_statement_assigned_names(initializer, assigned);
+            collect_statement_assigned_names(update, assigned);
+            collect_assigned_names(body, assigned);
+        }
+        CheckedStmt::Local { .. }
+        | CheckedStmt::Expr(_)
+        | CheckedStmt::Emit { .. }
+        | CheckedStmt::Return(_) => {}
+    }
+}
+
+fn context_read(name: &Identifier) -> Option<ContextRead> {
+    match name.as_str() {
+        "progress" => Some(ContextRead::Progress),
+        "seconds" => Some(ContextRead::Seconds),
+        "duration" => Some(ContextRead::Duration),
+        "pixel_index" => Some(ContextRead::PixelIndex),
+        "pixel_count" => Some(ContextRead::PixelCount),
+        "pixel_fraction" => Some(ContextRead::PixelFraction),
+        _ => None,
+    }
+}
+
+fn float_const_operand(
+    op: BinaryOp,
+    result_ty: &Type,
+    left: &CheckedExpr,
+    right: &CheckedExpr,
+) -> Option<(bool, f64)> {
+    let supported = match op {
+        BinaryOp::Add
+        | BinaryOp::Subtract
+        | BinaryOp::Multiply
+        | BinaryOp::Divide
+        | BinaryOp::Remainder => matches!(result_ty, Type::Float),
+        BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => true,
+        _ => false,
+    };
+    if !supported {
+        return None;
+    }
+    if let Some(constant) = numeric_literal(left) {
+        return Some((true, constant));
+    }
+    numeric_literal(right).map(|constant| (false, constant))
+}
+
+fn numeric_literal(expr: &CheckedExpr) -> Option<f64> {
+    match &expr.kind {
+        CheckedExprKind::Literal(Value::Int(value)) => Some(*value as f64),
+        CheckedExprKind::Literal(Value::Float(value)) => Some(*value),
+        _ => None,
+    }
+}
+
+fn numeric_literal_argument(args: &[CheckedExpr]) -> Option<(usize, f64)> {
+    if args.len() != 2 {
+        return None;
+    }
+    numeric_literal(&args[0])
+        .map(|constant| (0, constant))
+        .or_else(|| numeric_literal(&args[1]).map(|constant| (1, constant)))
 }
 
 impl FunctionCompiler {
@@ -92,6 +187,9 @@ impl FunctionCompiler {
             layout: SlotLayout::default(),
             kind,
             signal_inputs: IndexMap::new(),
+            assigned_names: HashSet::new(),
+            context_reads: HashMap::new(),
+            param_reads: HashMap::new(),
         }
     }
 
@@ -109,6 +207,7 @@ impl FunctionCompiler {
     }
 
     fn compile(mut self, block: CheckedBlock) -> RegisterFunction {
+        collect_assigned_names(&block, &mut self.assigned_names);
         self.compile_block(block);
         let void = self.allocate_slot(&Type::Void);
         let constant = self.add_constant(Value::Void);
@@ -140,16 +239,29 @@ impl FunctionCompiler {
                 name,
                 initializer,
             } => {
-                let slot = self.allocate_local(name, &ty);
-                if let Some(initializer) = initializer {
-                    let value = self.compile_expr(initializer);
-                    let value = self.coerce_slot(value, &ty);
-                    self.emit(Instruction::Move {
-                        dst: slot,
-                        src: value,
-                    });
-                } else {
-                    self.emit(Instruction::LoadDefault { dst: slot, ty });
+                let bind_directly = !self.assigned_names.contains(&name)
+                    && initializer
+                        .as_ref()
+                        .is_some_and(|initializer| self.initializer_can_bind_directly(initializer));
+                match initializer {
+                    Some(initializer) if bind_directly => {
+                        let value = self.compile_expr(initializer);
+                        let value = self.coerce_slot(value, &ty);
+                        self.bind_local(name, value);
+                    }
+                    Some(initializer) => {
+                        let slot = self.allocate_local(name, &ty);
+                        let value = self.compile_expr(initializer);
+                        let value = self.coerce_slot(value, &ty);
+                        self.emit(Instruction::Move {
+                            dst: slot,
+                            src: value,
+                        });
+                    }
+                    None => {
+                        let slot = self.allocate_local(name, &ty);
+                        self.emit(Instruction::LoadDefault { dst: slot, ty });
+                    }
                 }
             }
             CheckedStmt::Assign { name, value } => {
@@ -183,19 +295,27 @@ impl FunctionCompiler {
             } => {
                 let condition = self.compile_expr(condition);
                 let condition = self.bool_slot(condition);
+                let dominating_context_reads = self.context_reads.clone();
+                let dominating_param_reads = self.param_reads.clone();
                 let false_jump = self.emit_jump(Instruction::JumpIfFalse {
                     condition,
                     target: usize::MAX,
                 });
+                self.context_reads = dominating_context_reads.clone();
+                self.param_reads = dominating_param_reads.clone();
                 self.compile_block(then_block);
                 if let Some(else_block) = else_block {
                     let end_jump = self.emit_jump(Instruction::Jump(usize::MAX));
                     self.patch_jump(false_jump, self.current_target());
+                    self.context_reads = dominating_context_reads.clone();
+                    self.param_reads = dominating_param_reads.clone();
                     self.compile_block(else_block);
                     self.patch_jump(end_jump, self.current_target());
                 } else {
                     self.patch_jump(false_jump, self.current_target());
                 }
+                self.context_reads = dominating_context_reads;
+                self.param_reads = dominating_param_reads;
             }
             CheckedStmt::For {
                 initializer,
@@ -208,6 +328,8 @@ impl FunctionCompiler {
                 let loop_start = self.current_target();
                 let condition = self.compile_expr(condition);
                 let condition = self.bool_slot(condition);
+                let dominating_context_reads = self.context_reads.clone();
+                let dominating_param_reads = self.param_reads.clone();
                 let end_jump = self.emit_jump(Instruction::JumpIfFalse {
                     condition,
                     target: usize::MAX,
@@ -217,6 +339,8 @@ impl FunctionCompiler {
                 self.compile_statement(*update);
                 self.emit(Instruction::Jump(loop_start));
                 self.patch_jump(end_jump, self.current_target());
+                self.context_reads = dominating_context_reads;
+                self.param_reads = dominating_param_reads;
                 let _ = self.scopes.pop();
             }
             CheckedStmt::Emit { effect, fields } => {
@@ -248,8 +372,16 @@ impl FunctionCompiler {
             }
             CheckedExprKind::Variable(name) => match self.lookup(&name) {
                 Some(Binding::Param(slot)) => {
+                    if !self.assigned_names.contains(&name)
+                        && let Some(cached) = self.param_reads.get(&slot)
+                    {
+                        return *cached;
+                    }
                     let dst = self.allocate_slot(&result_ty);
                     self.emit_load_param(dst, slot);
+                    if !self.assigned_names.contains(&name) {
+                        self.param_reads.insert(slot, dst);
+                    }
                     dst
                 }
                 Some(Binding::Local(slot)) => slot,
@@ -359,34 +491,89 @@ impl FunctionCompiler {
                 }
                 dst
             }
-            CheckedExprKind::Binary { op, left, right } => match op {
-                BinaryOp::And => self.compile_short_circuit(false, *left, *right, result_ty),
-                BinaryOp::Or => self.compile_short_circuit(true, *left, *right, result_ty),
-                BinaryOp::Equal | BinaryOp::NotEqual => {
-                    if let Some(dst) = self.compile_enum_param_const_equal(op, &left, &right) {
-                        dst
-                    } else {
+            CheckedExprKind::Binary { op, left, right } => {
+                if let Some((constant_left, constant)) =
+                    float_const_operand(op, &result_ty, &left, &right)
+                {
+                    return self.compile_float_const_binary(
+                        op,
+                        *left,
+                        *right,
+                        result_ty,
+                        constant_left,
+                        constant,
+                    );
+                }
+                match op {
+                    BinaryOp::And => self.compile_short_circuit(false, *left, *right, result_ty),
+                    BinaryOp::Or => self.compile_short_circuit(true, *left, *right, result_ty),
+                    BinaryOp::Equal | BinaryOp::NotEqual => {
+                        if let Some(dst) = self.compile_enum_param_const_equal(op, &left, &right) {
+                            dst
+                        } else {
+                            let left = self.compile_expr(*left);
+                            let right = self.compile_expr(*right);
+                            let dst = self.allocate_slot(&result_ty);
+                            self.emit_binary(dst, op, left, right);
+                            dst
+                        }
+                    }
+                    _ => {
+                        let result_slot_ty = if op == BinaryOp::Divide && result_ty == Type::Int {
+                            Type::Float
+                        } else {
+                            result_ty
+                        };
                         let left = self.compile_expr(*left);
                         let right = self.compile_expr(*right);
-                        let dst = self.allocate_slot(&result_ty);
+                        let dst = self.allocate_slot(&result_slot_ty);
                         self.emit_binary(dst, op, left, right);
                         dst
                     }
                 }
-                _ => {
-                    let result_slot_ty = if op == BinaryOp::Divide && result_ty == Type::Int {
-                        Type::Float
-                    } else {
-                        result_ty
-                    };
-                    let left = self.compile_expr(*left);
-                    let right = self.compile_expr(*right);
-                    let dst = self.allocate_slot(&result_slot_ty);
-                    self.emit_binary(dst, op, left, right);
-                    dst
-                }
-            },
+            }
         }
+    }
+
+    fn compile_float_const_binary(
+        &mut self,
+        op: BinaryOp,
+        left: CheckedExpr,
+        right: CheckedExpr,
+        result_ty: Type,
+        constant_left: bool,
+        constant: f64,
+    ) -> ValueSlot {
+        let value = if constant_left { right } else { left };
+        let value = self.float_slot_from_expr(value);
+        let dst = self.allocate_slot(&result_ty);
+        match op {
+            BinaryOp::Add
+            | BinaryOp::Subtract
+            | BinaryOp::Multiply
+            | BinaryOp::Divide
+            | BinaryOp::Remainder => {
+                let dst = self.float_slot(dst);
+                self.emit(Instruction::FloatArithmeticConst {
+                    dst,
+                    op: arithmetic_op(op),
+                    value,
+                    constant_bits: constant.to_bits(),
+                    constant_left,
+                });
+            }
+            BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
+                self.emit(Instruction::FloatCompareConst {
+                    dst: self.bool_slot(dst),
+                    op: compare_op(op),
+                    value,
+                    constant_bits: constant.to_bits(),
+                    constant_left,
+                })
+            }
+            _ => unreachable!("float constant binary operation is arithmetic or comparison"),
+        }
+        dst
     }
 
     fn compile_short_circuit(
@@ -399,6 +586,8 @@ impl FunctionCompiler {
         let dst = self.allocate_slot(&result_ty);
         let left = self.compile_expr(left);
         self.emit(Instruction::Move { dst, src: left });
+        let dominating_context_reads = self.context_reads.clone();
+        let dominating_param_reads = self.param_reads.clone();
         let condition = self.bool_slot(dst);
         let jump = if jump_when_true {
             self.emit_jump(Instruction::JumpIfTrue {
@@ -414,6 +603,8 @@ impl FunctionCompiler {
         let right = self.compile_expr(right);
         self.emit(Instruction::Move { dst, src: right });
         self.patch_jump(jump, self.current_target());
+        self.context_reads = dominating_context_reads;
+        self.param_reads = dominating_param_reads;
         dst
     }
 
@@ -423,6 +614,15 @@ impl FunctionCompiler {
         args: Vec<CheckedExpr>,
         result_ty: Type,
     ) -> ValueSlot {
+        if let Some(read) = context_read(&name) {
+            if let Some(slot) = self.context_reads.get(&read) {
+                return *slot;
+            }
+            let dst = self.allocate_slot(&result_ty);
+            self.emit_context_read(dst, read);
+            self.context_reads.insert(read, dst);
+            return dst;
+        }
         let dst = self.allocate_slot(&result_ty);
         match name.as_str() {
             "progress" => self.emit_context_read(dst, ContextRead::Progress),
@@ -455,14 +655,26 @@ impl FunctionCompiler {
                 });
             }
             "min" => {
-                let args = self.compile_float_args(args);
                 let dst = self.float_slot(dst);
-                self.emit(Instruction::FloatBinary {
-                    dst,
-                    op: FloatBinary::Min,
-                    left: args[0],
-                    right: args[1],
-                });
+                if let Some((constant_index, constant)) = numeric_literal_argument(&args) {
+                    let mut args = args;
+                    let value = args.remove(if constant_index == 0 { 1 } else { 0 });
+                    let value = self.float_slot_from_expr(value);
+                    self.emit(Instruction::FloatBinaryConst {
+                        dst,
+                        op: FloatBinary::Min,
+                        value,
+                        constant_bits: constant.to_bits(),
+                    });
+                } else {
+                    let args = self.compile_float_args(args);
+                    self.emit(Instruction::FloatBinary {
+                        dst,
+                        op: FloatBinary::Min,
+                        left: args[0],
+                        right: args[1],
+                    });
+                }
             }
             "max" if result_ty == Type::Color => {
                 let args = self.compile_args(args);
@@ -474,14 +686,26 @@ impl FunctionCompiler {
                 });
             }
             "max" => {
-                let args = self.compile_float_args(args);
                 let dst = self.float_slot(dst);
-                self.emit(Instruction::FloatBinary {
-                    dst,
-                    op: FloatBinary::Max,
-                    left: args[0],
-                    right: args[1],
-                });
+                if let Some((constant_index, constant)) = numeric_literal_argument(&args) {
+                    let mut args = args;
+                    let value = args.remove(if constant_index == 0 { 1 } else { 0 });
+                    let value = self.float_slot_from_expr(value);
+                    self.emit(Instruction::FloatBinaryConst {
+                        dst,
+                        op: FloatBinary::Max,
+                        value,
+                        constant_bits: constant.to_bits(),
+                    });
+                } else {
+                    let args = self.compile_float_args(args);
+                    self.emit(Instruction::FloatBinary {
+                        dst,
+                        op: FloatBinary::Max,
+                        left: args[0],
+                        right: args[1],
+                    });
+                }
             }
             "intensity" => {
                 let args = self.compile_args(args);
@@ -499,14 +723,29 @@ impl FunctionCompiler {
                 });
             }
             "clamp" => {
-                let args = self.compile_float_args(args);
                 let dst = self.float_slot(dst);
-                self.emit(Instruction::Clamp {
-                    dst,
-                    value: args[0],
-                    min: args[1],
-                    max: args[2],
-                });
+                let bounds = args
+                    .get(1)
+                    .and_then(numeric_literal)
+                    .zip(args.get(2).and_then(numeric_literal));
+                if let Some((min, max)) = bounds {
+                    let mut args = args;
+                    let value = self.float_slot_from_expr(args.remove(0));
+                    self.emit(Instruction::ClampConst {
+                        dst,
+                        value,
+                        min_bits: min.to_bits(),
+                        max_bits: max.to_bits(),
+                    });
+                } else {
+                    let args = self.compile_float_args(args);
+                    self.emit(Instruction::Clamp {
+                        dst,
+                        value: args[0],
+                        min: args[1],
+                        max: args[2],
+                    });
+                }
             }
             "smoothstep" => {
                 let args = self.compile_float_args(args);
@@ -873,10 +1112,24 @@ impl FunctionCompiler {
 
     fn allocate_local(&mut self, name: Identifier, ty: &Type) -> LocalId {
         let slot = self.allocate_slot(ty);
+        self.bind_local(name, slot);
+        slot
+    }
+
+    fn bind_local(&mut self, name: Identifier, slot: LocalId) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, Binding::Local(slot));
         }
-        slot
+    }
+
+    fn initializer_can_bind_directly(&self, initializer: &CheckedExpr) -> bool {
+        let CheckedExprKind::Variable(name) = &initializer.kind else {
+            return true;
+        };
+        match self.lookup(name) {
+            Some(Binding::Local(_)) => !self.assigned_names.contains(name),
+            Some(Binding::Param(_) | Binding::GeneratorContext(_)) | None => true,
+        }
     }
 
     fn allocate_slot(&mut self, ty: &Type) -> ValueSlot {

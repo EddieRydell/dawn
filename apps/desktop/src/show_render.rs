@@ -1,7 +1,7 @@
 use dawn_language::model::DawnProject;
 use dawn_language::sequence::SequenceId;
 use dawn_language::setup::SetupId;
-use dawn_runtime::{PreparedSequenceRenderer, RenderError, RenderedFrame};
+use dawn_runtime::{PreparedSequenceRenderer, RenderError, RenderedFrame, SequenceRenderScratch};
 
 use crate::dto::{AudioTransportSnapshot, AudioTransportState};
 
@@ -80,12 +80,12 @@ impl ShowRenderService {
     }
 
     pub fn render_current_sequence_frame(
-        &self,
+        &mut self,
         audio: &AudioTransportSnapshot,
     ) -> Result<AudioClockRenderedFrame, ShowRenderError> {
         let session = self
             .session
-            .as_ref()
+            .as_mut()
             .ok_or(ShowRenderError::NoRenderSession)?;
         match audio.state {
             AudioTransportState::Stopped
@@ -100,7 +100,7 @@ impl ShowRenderService {
         }
         let frame = session
             .renderer
-            .render_seconds(audio.position_seconds)
+            .render_seconds_with_scratch(audio.position_seconds, &mut session.scratch)
             .map_err(ShowRenderError::Render)?;
         Ok(AudioClockRenderedFrame {
             audio_generation: audio.generation,
@@ -158,6 +158,7 @@ impl ShowRenderService {
             setup_id: session.setup_id,
             sequence_id: session.sequence_id,
             renderer: session.renderer,
+            scratch: SequenceRenderScratch::default(),
         });
     }
 }
@@ -172,6 +173,7 @@ struct RenderSession {
     setup_id: SetupId,
     sequence_id: SequenceId,
     renderer: PreparedSequenceRenderer,
+    scratch: SequenceRenderScratch,
 }
 
 pub fn prepare_render_session(
