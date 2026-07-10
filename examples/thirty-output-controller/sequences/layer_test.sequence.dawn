@@ -62,16 +62,16 @@ layer_test:
           type: curve
           value_type: color
           points:
-          - time: 0.017
-            value: '#ffffff'
-          - time: 0.16
-            value: '#0052ff'
-          - time: 0.518
-            value: '#ff0000'
-          - time: 0.819
+          - time: 0.047
             value: '#000000'
-          - time: 0.96
+          - time: 0.167
+            value: '#0052ff'
+          - time: 0.329
             value: '#ffffff'
+          - time: 0.587
+            value: '#ff0000'
+          - time: 0.795
+            value: '#0052ff'
       pulse_shape:
         type: curve
         curve:

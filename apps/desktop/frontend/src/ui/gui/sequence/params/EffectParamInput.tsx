@@ -949,6 +949,7 @@ function ColorCurveParam({
   const [drafts, setDrafts] = useState(points);
   const draftsRef = useRef(points);
   const [stopPickerRequest, setStopPickerRequest] = useState<{ index: number; key: number } | null>(null);
+  const stopPickerRequestKey = useRef(0);
   const gradientRef = useRef<HTMLDivElement | null>(null);
   const draggingPoint = useRef<{ index: number; pointerId: number; startClientX: number; moved: boolean } | null>(null);
   const lastCommittedValues = useRef(points.map((point) => point.value.toLowerCase()));
@@ -1008,6 +1009,60 @@ function ColorCurveParam({
       value: color
     };
   };
+  const pointFromClientX = (clientX: number, color: string): EditedColorCurvePoint => {
+    const rect = gradientRef.current?.getBoundingClientRect();
+    if (rect === undefined) return { time: 0, value: color };
+    return {
+      time: roundCurveValue(clamp((clientX - rect.left) / Math.max(1, rect.width), 0, 1)),
+      value: color
+    };
+  };
+  const endStopDrag = (pointerId: number, cancelled: boolean) => {
+    const drag = draggingPoint.current;
+    if (drag === null || drag.pointerId !== pointerId) return;
+    draggingPoint.current = null;
+    if (drag.moved) {
+      update(draftsRef.current);
+    } else if (!cancelled) {
+      setStopPickerRequest((request) =>
+        request?.index === drag.index
+          ? null
+          : { index: drag.index, key: ++stopPickerRequestKey.current }
+      );
+    }
+  };
+  const moveStopDrag = (pointerId: number, clientX: number) => {
+    const drag = draggingPoint.current;
+    if (drag === null || drag.pointerId !== pointerId) return;
+    const point = draftsRef.current[drag.index];
+    if (point === undefined) return;
+    const moved = drag.moved || Math.abs(clientX - drag.startClientX) > 2;
+    if (!moved) return;
+    const nextIndex = setPoint(drag.index, pointFromClientX(clientX, point.value), false);
+    draggingPoint.current = { ...drag, index: nextIndex, moved: true };
+  };
+  const startStopDrag = (index: number, pointerId: number, clientX: number) => {
+    draggingPoint.current = { index, pointerId, startClientX: clientX, moved: false };
+    const handlePointerMove = (event: globalThis.PointerEvent) => {
+      moveStopDrag(event.pointerId, event.clientX);
+    };
+    const handlePointerUp = (event: globalThis.PointerEvent) => {
+      cleanup();
+      endStopDrag(event.pointerId, false);
+    };
+    const handlePointerCancel = (event: globalThis.PointerEvent) => {
+      cleanup();
+      endStopDrag(event.pointerId, true);
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerCancel);
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerCancel);
+  };
   const gradient = colorCurveGradient(drafts);
   return (
     <div className="effect-param-group color-curve-editor">
@@ -1032,50 +1087,17 @@ function ColorCurveParam({
             <span
               key={index}
               className="color-curve-stop"
+              draggable={false}
               style={{ left: `${point.time * 100}%` }}
               onPointerDown={(event) => {
                 if (!event.currentTarget.contains(event.target as Node)) return;
+                if (event.button !== 0) return;
+                event.preventDefault();
                 event.stopPropagation();
-                event.currentTarget.setPointerCapture(event.pointerId);
-                draggingPoint.current = { index, pointerId: event.pointerId, startClientX: event.clientX, moved: false };
+                startStopDrag(index, event.pointerId, event.clientX);
               }}
-              onPointerMove={(event) => {
-                const drag = draggingPoint.current;
-                if (drag === null || drag.pointerId !== event.pointerId) return;
-                const point = draftsRef.current[drag.index];
-                if (point === undefined) return;
-                const moved = drag.moved || Math.abs(event.clientX - drag.startClientX) > 2;
-                if (!moved) return;
-                const nextIndex = setPoint(drag.index, pointFromPointer(event, point.value), false);
-                draggingPoint.current = { ...drag, index: nextIndex, moved: true };
-              }}
-              onPointerUp={(event) => {
-                const drag = draggingPoint.current;
-                if (drag === null || drag.pointerId !== event.pointerId) return;
-                try {
-                  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                    event.currentTarget.releasePointerCapture(event.pointerId);
-                  }
-                } finally {
-                  draggingPoint.current = null;
-                  if (drag.moved) {
-                    update(draftsRef.current);
-                  } else {
-                    setStopPickerRequest((request) => ({ index: drag.index, key: (request?.key ?? 0) + 1 }));
-                  }
-                }
-              }}
-              onPointerCancel={(event) => {
-                const drag = draggingPoint.current;
-                if (drag === null || drag.pointerId !== event.pointerId) return;
-                try {
-                  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                    event.currentTarget.releasePointerCapture(event.pointerId);
-                  }
-                } finally {
-                  draggingPoint.current = null;
-                  if (drag.moved) update(draftsRef.current);
-                }
+              onDragStart={(event) => {
+                event.preventDefault();
               }}
               onContextMenu={(event) => {
                 event.preventDefault();
@@ -1088,6 +1110,9 @@ function ColorCurveParam({
                 className="color-curve-stop-color-picker"
                 triggerClassName="color-curve-stop-color-trigger"
                 openRequestKey={stopPickerRequest?.index === index ? stopPickerRequest.key : 0}
+                onOpenChange={(open) => {
+                  if (!open && stopPickerRequest?.index === index) setStopPickerRequest(null);
+                }}
                 value={isHexColor(point.value) ? point.value : (points[index]?.value ?? CURVE_EDITOR.defaultColor)}
                 label={`${name} stop ${index + 1} color`}
                 commit={(value) => {

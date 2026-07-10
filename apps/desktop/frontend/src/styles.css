@@ -1515,6 +1515,8 @@ button:focus-visible,
   background: transparent;
   padding: 0;
   cursor: pointer;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 .color-curve-stop:hover,
@@ -1540,6 +1542,8 @@ button:focus-visible,
   display: block;
   width: auto;
   height: auto;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 .gui-inspector .color-curve-stop-color-trigger,

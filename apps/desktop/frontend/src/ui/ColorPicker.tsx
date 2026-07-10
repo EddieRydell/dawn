@@ -12,6 +12,7 @@ export function ColorPicker({
   triggerClassName = "",
   openRequestKey = 0,
   stopTriggerPointerDownPropagation = false,
+  onOpenChange,
   commit
 }: {
   value: string;
@@ -20,6 +21,7 @@ export function ColorPicker({
   triggerClassName?: string;
   openRequestKey?: number;
   stopTriggerPointerDownPropagation?: boolean;
+  onOpenChange?: (open: boolean) => void;
   commit: (value: string) => Promise<void>;
 }) {
   const normalizedValue = normalizeHexColor(value) ?? "#ffffff";
@@ -56,11 +58,13 @@ export function ColorPicker({
       if (rootRef.current?.contains(target) === true || popoverRef.current?.contains(target) === true) return;
       setInternalOpen(false);
       setDismissedOpenRequestKey(openRequestKey);
+      onOpenChange?.(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setInternalOpen(false);
         setDismissedOpenRequestKey(openRequestKey);
+        onOpenChange?.(false);
       }
     };
     updatePopoverPosition();
@@ -74,7 +78,7 @@ export function ColorPicker({
       window.removeEventListener("resize", updatePopoverPosition);
       window.removeEventListener("scroll", updatePopoverPosition, true);
     };
-  }, [open, openRequestKey]);
+  }, [onOpenChange, open, openRequestKey]);
 
   const commitColor = (candidate: string) => {
     const next = normalizeHexColor(candidate);
@@ -107,6 +111,7 @@ export function ColorPicker({
           if (!open) setPickerDraft({ value: normalizedValue, requestKey: openRequestKey });
           setInternalOpen(!open);
           if (open) setDismissedOpenRequestKey(openRequestKey);
+          onOpenChange?.(!open);
         }}
       />
       {open && createPortal(
