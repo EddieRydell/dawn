@@ -1,3 +1,4 @@
+use dawn_project_io::SourceObjectKind;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -262,6 +263,23 @@ pub enum ObjectKind {
     Curve,
     Effect,
     Operator,
+}
+
+impl From<&SourceObjectKind> for ObjectKind {
+    fn from(kind: &SourceObjectKind) -> Self {
+        match kind {
+            SourceObjectKind::Project => Self::Project,
+            SourceObjectKind::Setup => Self::Setup,
+            SourceObjectKind::Controller => Self::Controller,
+            SourceObjectKind::Layout => Self::Layout,
+            SourceObjectKind::Patch => Self::Patch,
+            SourceObjectKind::FixtureDefinition => Self::Fixture,
+            SourceObjectKind::Curve => Self::Curve,
+            SourceObjectKind::Sequence => Self::Sequence,
+            SourceObjectKind::EffectDefinition | SourceObjectKind::EffectInstance => Self::Effect,
+            SourceObjectKind::OperatorDefinition => Self::Operator,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

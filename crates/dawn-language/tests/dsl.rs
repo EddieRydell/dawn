@@ -33,6 +33,18 @@ fn builtin_operator_names_are_reserved() {
 }
 
 #[test]
+fn enum_params_require_an_option() {
+    let diagnostics =
+        compile_effects("effect Bad { param enum mode {}; color sample() { return #000000; } }")
+            .expect_err("empty enum must fail");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("must declare an option"))
+    );
+}
+
+#[test]
 fn signal_is_only_valid_as_an_operator_input() {
     assert!(compile_operators("operator Bad { input Signal source; param Signal stored; color sample() { return source.at(seconds()); } }").is_err());
     assert!(compile_operators("operator Bad { input Signal source; param array<Signal> stored; color sample() { return source.at(seconds()); } }").is_err());

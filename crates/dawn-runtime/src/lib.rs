@@ -24,14 +24,15 @@ use dawn_language::operator::{
     BuiltinOperator, OperatorDefinition, OperatorImplementation, validate_composition_graph,
 };
 use dawn_language::sequence::{
-    AutomationBinding, AutomationClip, AutomationMapping, AutomationTarget, CompositionGraphNodeId,
-    CompositionGraphNodeKind, EffectClip, GraphPortId, MarkCollectionKey, Sequence, SequenceClip,
-    SequenceClipId, SequenceClipKind, SequenceCompositionGraph, SequenceId, SequenceLayerId,
+    AutomationBinding, AutomationClip, AutomationMapping, AutomationTarget, AutomationValue,
+    CompositionGraphNodeId, CompositionGraphNodeKind, EffectClip, GraphPortId, MarkCollectionKey,
+    Sequence, SequenceClip, SequenceClipId, SequenceClipKind, SequenceCompositionGraph, SequenceId,
+    SequenceLayerId, automation_value_at,
 };
 use dawn_language::setup::{
     FixtureGroupId, FixtureInst, FixtureInstanceId, Geometry, Layout, SetupId,
 };
-use dawn_language::values::{Color, Curve, CurvePoint, CurveValue, DawnTime, Marks};
+use dawn_language::values::{Color, DawnTime, Marks};
 use indexmap::{IndexMap, IndexSet};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -325,7 +326,7 @@ impl PreparedSequenceRenderer {
             },
             &sequence.composition_graph,
         )?;
-        let layer_cache_history_micros = layer_cache_history_micros(&composition_graph);
+        let layer_cache_history_micros = layer_cache_history_micros(&composition_graph)?;
         Ok(Self {
             render_cache_id: next_render_cache_id(),
             frame_rate,
@@ -950,7 +951,7 @@ fn prepare_effect_clip(
             });
         }
         EffectKind::Generator => {
-            let params = apply_automation_params(params, &automation, start_seconds);
+            let params = apply_automation_params(params, &automation, start_seconds)?;
             let bound_params = definition
                 .compiled
                 .bind_params_cached(&params, context.bind_cache);
@@ -1653,20 +1654,22 @@ fn apply_automation_params(
     mut params: IndexMap<Identifier, Value>,
     automation: &[PreparedAutomation],
     sample_seconds: f64,
-) -> IndexMap<Identifier, Value> {
+) -> Result<IndexMap<Identifier, Value>, RenderError> {
     for automation in automation {
-        let normalized = sample_automation_clip(&automation.clip, sample_seconds);
-        params.insert(
-            automation_param(&automation.binding).clone(),
-            automation_value(
-                &automation.clip,
-                &automation.binding,
-                normalized,
-                sample_seconds,
-            ),
-        );
+        let value = automation_value_at(&automation.clip, &automation.binding, sample_seconds)
+            .map(|value| match value {
+                AutomationValue::Int(value) => Value::Int(value),
+                AutomationValue::Float(value) => Value::Float(value),
+                AutomationValue::Bool(value) => Value::Bool(value),
+                AutomationValue::Enum(value) => Value::Enum(value),
+                AutomationValue::FloatCurve(value) => Value::Curve(Arc::new(value)),
+            })
+            .ok_or_else(|| RenderError::BadGraph {
+                message: "enum automation mapping has no values".to_string(),
+            })?;
+        params.insert(automation_param(&automation.binding).clone(), value);
     }
-    params
+    Ok(params)
 }
 
 fn automation_param(binding: &AutomationBinding) -> &Identifier {
@@ -1674,115 +1677,6 @@ fn automation_param(binding: &AutomationBinding) -> &Identifier {
         AutomationTarget::EffectParam { param, .. }
         | AutomationTarget::CompositionNodeParam { param, .. } => param,
     }
-}
-
-fn automation_value(
-    clip: &AutomationClip,
-    binding: &AutomationBinding,
-    normalized: f64,
-    sample_seconds: f64,
-) -> Value {
-    match &binding.mapping {
-        AutomationMapping::Float { min, max } => Value::Float(lerp(*min, *max, normalized)),
-        AutomationMapping::Int { min, max } => {
-            Value::Int(lerp(*min as f64, *max as f64, normalized).round() as i64)
-        }
-        AutomationMapping::Bool => Value::Bool(normalized >= 0.5),
-        AutomationMapping::Enum { values } => {
-            if values.is_empty() {
-                return Value::Void;
-            }
-            let index = if values.is_empty() {
-                0
-            } else {
-                ((normalized.clamp(0.0, 1.0) * values.len() as f64).floor() as usize)
-                    .min(values.len().saturating_sub(1))
-            };
-            Value::Enum(values[index].clone())
-        }
-        AutomationMapping::FloatCurve { min, max } => Value::Curve(Arc::new(float_curve_window(
-            clip,
-            *min,
-            *max,
-            sample_seconds,
-        ))),
-    }
-}
-
-fn sample_automation_clip(clip: &AutomationClip, sample_seconds: f64) -> f64 {
-    let start_seconds = clip.start.as_seconds_f64();
-    let duration_seconds = clip.duration.as_seconds_f64();
-    let position = if duration_seconds <= 0.0 {
-        0.0
-    } else {
-        ((sample_seconds - start_seconds) / duration_seconds).clamp(0.0, 1.0)
-    };
-    sample_float_curve(&clip.curve, position).clamp(0.0, 1.0)
-}
-
-fn float_curve_window(clip: &AutomationClip, min: f64, max: f64, sample_seconds: f64) -> Curve {
-    let start_seconds = clip.start.as_seconds_f64();
-    let duration_seconds = clip.duration.as_seconds_f64().max(0.000000001);
-    let sample_position = ((sample_seconds - start_seconds) / duration_seconds).clamp(0.0, 1.0);
-    let points = clip
-        .curve
-        .points
-        .iter()
-        .filter_map(|point| {
-            let position = point.position - sample_position;
-            (0.0..=1.0).contains(&position).then(|| CurvePoint {
-                position,
-                value: CurveValue::Float(lerp(min, max, curve_point_float(point))),
-            })
-        })
-        .collect::<Vec<_>>();
-    if points.is_empty() {
-        return Curve {
-            points: vec![CurvePoint {
-                position: 0.0,
-                value: CurveValue::Float(lerp(
-                    min,
-                    max,
-                    sample_automation_clip(clip, sample_seconds),
-                )),
-            }],
-        };
-    }
-    Curve { points }
-}
-
-fn sample_float_curve(curve: &Curve, position: f64) -> f64 {
-    let Some(first) = curve.points.first() else {
-        return 0.0;
-    };
-    if position <= first.position {
-        return curve_point_float(first);
-    }
-    for pair in curve.points.windows(2) {
-        let left = &pair[0];
-        let right = &pair[1];
-        if position <= right.position {
-            let span = right.position - left.position;
-            let amount = if span <= 0.0 {
-                0.0
-            } else {
-                (position - left.position) / span
-            };
-            return lerp(curve_point_float(left), curve_point_float(right), amount);
-        }
-    }
-    curve.points.last().map(curve_point_float).unwrap_or(0.0)
-}
-
-fn curve_point_float(point: &CurvePoint) -> f64 {
-    match point.value {
-        CurveValue::Float(value) => value,
-        CurveValue::Color(_) => 0.0,
-    }
-}
-
-fn lerp(min: f64, max: f64, amount: f64) -> f64 {
-    min + (max - min) * amount.clamp(0.0, 1.0)
 }
 
 const MAX_GENERATOR_DEPTH: usize = 4;
@@ -2144,7 +2038,7 @@ fn render_effect(
 ) -> Result<(), RenderError> {
     let local_seconds = sample_seconds - effect.start_seconds;
     let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
-    let automated_bound_params = effect_bound_params_at(effect, sample_seconds, bind_cache);
+    let automated_bound_params = effect_bound_params_at(effect, sample_seconds, bind_cache)?;
     let bound_params = automated_bound_params
         .as_ref()
         .unwrap_or(&effect.bound_params);
@@ -2337,8 +2231,15 @@ fn render_graph_node_with_scratch(
             automation,
             bound_params,
         } => {
-            let automated_params = (!automation.is_empty())
-                .then(|| apply_automation_params(params.clone(), automation, sample_seconds));
+            let automated_params = if automation.is_empty() {
+                None
+            } else {
+                Some(apply_automation_params(
+                    params.clone(),
+                    automation,
+                    sample_seconds,
+                )?)
+            };
             let params = automated_params.as_ref().unwrap_or(params);
             let mut operator_vm_scratch = std::mem::take(&mut scratch.operator_vm[node_index]);
             let rendered = render_graph_operator(GraphOperatorRenderContext {
@@ -2664,7 +2565,7 @@ fn render_effect_target_colors(
     let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
     let mut scratch = DslVmScratch::default();
     let mut bind_cache = DslBindCache::default();
-    let automated_bound_params = effect_bound_params_at(effect, sample_seconds, &mut bind_cache);
+    let automated_bound_params = effect_bound_params_at(effect, sample_seconds, &mut bind_cache)?;
     let bound_params = automated_bound_params
         .as_ref()
         .unwrap_or(&effect.bound_params);
@@ -2733,7 +2634,7 @@ fn render_sampled_effect_target_colors(
 ) -> Result<(), RenderError> {
     let local_seconds = sample_seconds - effect.start_seconds;
     let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
-    let automated_bound_params = effect_bound_params_at(effect, sample_seconds, bind_cache);
+    let automated_bound_params = effect_bound_params_at(effect, sample_seconds, bind_cache)?;
     let bound_params = automated_bound_params
         .as_ref()
         .unwrap_or(&effect.bound_params);
@@ -2824,12 +2725,15 @@ fn effect_bound_params_at(
     effect: &PreparedEffect,
     sample_seconds: f64,
     bind_cache: &mut DslBindCache,
-) -> Option<BoundParams> {
+) -> Result<Option<BoundParams>, RenderError> {
     if effect.automation.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let params = apply_automation_params(effect.params.clone(), &effect.automation, sample_seconds);
-    Some(effect.definition.bind_params_cached(&params, bind_cache))
+    let params =
+        apply_automation_params(effect.params.clone(), &effect.automation, sample_seconds)?;
+    Ok(Some(
+        effect.definition.bind_params_cached(&params, bind_cache),
+    ))
 }
 
 fn prepare_sample_context_groups(
@@ -3037,50 +2941,47 @@ fn int_param(params: &IndexMap<Identifier, Value>, name: &str) -> Result<i64, Re
         })
 }
 
-fn layer_cache_history_micros(graph: &PreparedCompositionGraph) -> i64 {
-    let history_seconds = graph
-        .nodes
-        .iter()
-        .filter_map(|node| {
-            let PreparedGraphNodeKind::Operator {
-                definition,
-                params,
-                automation,
-                ..
-            } = &node.kind
-            else {
-                return None;
-            };
-            if !matches!(
-                definition.implementation,
-                OperatorImplementation::Native(BuiltinOperator::Echo)
+fn layer_cache_history_micros(graph: &PreparedCompositionGraph) -> Result<i64, RenderError> {
+    let mut history_seconds = 0.0_f64;
+    for node in &graph.nodes {
+        let PreparedGraphNodeKind::Operator {
+            definition,
+            params,
+            automation,
+            ..
+        } = &node.kind
+        else {
+            continue;
+        };
+        if !matches!(
+            definition.implementation,
+            OperatorImplementation::Native(BuiltinOperator::Echo)
+        ) {
+            continue;
+        }
+        let mut delay = float_param(params, "seconds")?.max(0.0);
+        let mut repeats = int_param(params, "repeats")?.clamp(1, 32);
+        for automation in automation {
+            match (
+                automation_param(&automation.binding).as_str(),
+                &automation.binding.mapping,
             ) {
-                return None;
-            }
-            let mut delay = float_param(params, "seconds").unwrap_or(0.0).max(0.0);
-            let mut repeats = int_param(params, "repeats").unwrap_or(1).clamp(1, 32);
-            for automation in automation {
-                match (
-                    automation_param(&automation.binding).as_str(),
-                    &automation.binding.mapping,
-                ) {
-                    ("seconds", AutomationMapping::Float { min, max }) => {
-                        delay = delay.max(*min).max(*max).max(0.0);
-                    }
-                    ("repeats", AutomationMapping::Int { min, max }) => {
-                        repeats = repeats.max(*min).max(*max).clamp(1, 32);
-                    }
-                    _ => {}
+                ("seconds", AutomationMapping::Float { min, max }) => {
+                    delay = delay.max(*min).max(*max).max(0.0);
                 }
+                ("repeats", AutomationMapping::Int { min, max }) => {
+                    repeats = repeats.max(*min).max(*max).clamp(1, 32);
+                }
+                _ => {}
             }
-            Some(delay * repeats as f64)
-        })
-        .fold(0.0_f64, f64::max);
-    if !history_seconds.is_finite() || history_seconds <= 0.0 {
+        }
+        history_seconds = history_seconds.max(delay * repeats as f64);
+    }
+    Ok(if !history_seconds.is_finite() || history_seconds <= 0.0 {
         0
     } else {
         (history_seconds * 1_000_000.0).ceil() as i64
-    }
+    })
 }
 
 fn color_param(params: &IndexMap<Identifier, Value>, name: &str) -> Result<Color, RenderError> {

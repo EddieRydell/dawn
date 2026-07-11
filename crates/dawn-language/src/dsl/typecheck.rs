@@ -158,6 +158,15 @@ impl Checker {
     }
 
     fn check_param(&mut self, param: &ParamDecl) {
+        if matches!(&param.ty, Type::Enum(options) if options.is_empty()) {
+            self.error(
+                TextSpan { start: 0, end: 0 },
+                format!(
+                    "enum param `{}` must declare an option",
+                    param.name.as_str()
+                ),
+            );
+        }
         if type_contains_signal(&param.ty)
             || matches!(
                 param.ty,

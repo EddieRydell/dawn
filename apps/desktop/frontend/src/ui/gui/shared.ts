@@ -223,12 +223,3 @@ export function formatSeconds(value: number) {
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
-
-export function formatMs(value: number) {
-  return `${value.toFixed(1)}ms`;
-}
-
-export function formatSignedMs(value: number) {
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${formatMs(value)}`;
-}

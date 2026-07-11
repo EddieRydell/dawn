@@ -9,6 +9,9 @@
     "test": "node --test src/**/*.test.js",
     "knip": "knip"
   },
+  "knip": {
+    "ignoreExportsUsedInFile": true
+  },
   "dependencies": {
     "@codemirror/commands": "catalog:",
     "@codemirror/lang-cpp": "catalog:",

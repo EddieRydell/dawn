@@ -7,7 +7,7 @@ import { Trash2 } from "lucide-react";
 
 import { commands } from "../../../api";
 
-import type { AppSettings, LayoutTarget, PersistedSequenceViewportState, SequenceAudio, SequenceAutomationClip, SequenceClipRaster, SequenceEditorDocument, SequenceEffectScope, SequenceEffectScript } from "../../../types";
+import type { AppSettings, LayoutTarget, PersistedSequenceViewportState, SequenceAutomationClip, SequenceClipRaster, SequenceEditorDocument, SequenceEffectScope, SequenceEffectScript } from "../../../types";
 
 import { runGuiEditCommand, runSnapshotCommand, useAppStore } from "../../../store";
 
@@ -16,6 +16,7 @@ import { clamp, formatSeconds, roundToNanosecond, type AutomationClipChooser, ty
 import { defaultMarkColor, drawSequenceMarks, committedMarkDrafts, markIndexAfterMove, nextCollectionKey, useMarkDisplayMode } from "./marks";
 
 import { targetsEqual } from "./sequenceTargets";
+import { drawWaveformStrip, useSequenceWaveform } from "./sequenceWaveform";
 
 import { buildSequenceClipLayout, constrainEffectLaneDelta, constrainEffectMoveDelta, constrainEffectResizeDelta, constrainMarkDelta, effectMoveDrafts, effectResizeDrafts, hitSequence, hitSequenceMark, markMoveDrafts, markRefLookup, mergeSequenceSelection, MIN_EFFECT_DURATION_SECONDS, nextEffectSelection, nextMarkSelection, normalizedRect, selectedEffectId, selectionCount, selectionFromMarqueeEffects, selectionFromMarqueeMarks, sequenceHoverEqual, setMarkDraft, singleEffectSelectionFocus, singleSelectionFocus, selectionFromSingle, type MarkDraftLookup, type SequenceClipLayout, type SequenceContextMenu, type SequenceHover, type SequenceMarquee, type SequenceDraft, type SequenceViewport } from "./sequenceSelection";
 
@@ -385,7 +386,8 @@ export function SequenceCanvas({
       audioStripHeight,
       document.durationSeconds,
       viewport.pxPerSecond,
-      scrollXSeconds
+      scrollXSeconds,
+      SEQUENCE_COLORS
     );
     drawTimelineGrid(ctx, left, top, rect.width, rect.height, viewport.pxPerSecond, scrollXSeconds, document.frameRate);
     drawSequenceMarks(
@@ -1472,12 +1474,6 @@ export function SequenceCanvas({
   );
 }
 
-type WaveformAudio = { durationSeconds: number; sampleRate: number; levels: WaveformLevel[] };
-
-type WaveformLevel = { samplesPerPeak: number; mins: Float32Array; maxes: Float32Array };
-
-type WaveformState = { key: string | null; audio: WaveformAudio | null };
-
 type ClipRasterState = {
   requestKey: string;
   projectRevision: number | null;
@@ -1504,11 +1500,6 @@ type QueuedClipRasterDecode = {
 const CLIP_RASTER_REQUEST_THROTTLE_MS = 50;
 const CLIP_RASTER_DECODE_CHUNK_SIZE = 2;
 const CLIP_RASTER_DECODED_BYTE_BUDGET = 64 * 1024 * 1024;
-const WAVEFORM_CACHE_LIMIT = 4;
-
-const waveformCache = new Map<string, { request: Promise<WaveformAudio | null>; lastUsed: number }>();
-let waveformCacheAccess = 1;
-
 type ClipRasterRequestItem = { effectId: number; displayColumnCount: number; requestedColumns: number; requestedRows: number };
 type ClipRasterKeyContext = { rasterSettingsKey: string; requestedColumns: number; requestedRows: number };
 
@@ -1762,36 +1753,6 @@ function useSequenceClipRasters(
   };
 }
 
-function useSequenceWaveform(audio: SequenceAudio | null): WaveformState {
-  const key = audio?.exists === true ? audio.resolvedPath : null;
-  const [state, setState] = useState<WaveformState>({ key, audio: null });
-
-  useEffect(() => {
-    if (key === null) return;
-    let cancelled = false;
-    let cached = waveformCache.get(key);
-    if (cached === undefined) {
-      const request = decodeWaveformPeaks(key);
-      cached = { request, lastUsed: waveformCacheAccess++ };
-      waveformCache.set(key, cached);
-      evictWaveformCache();
-    } else {
-      cached.lastUsed = waveformCacheAccess++;
-    }
-    const request = cached.request;
-    void request.then((waveformAudio) => {
-      if (!cancelled) {
-        setState({ key, audio: waveformAudio });
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [key]);
-
-  return state.key === key ? state : { key, audio: null };
-}
-
 function clipRasterKey(
   path: string,
   objectKey: string | null,
@@ -1838,21 +1799,6 @@ function evictDecodedClipRasters(rasters: Map<string, DecodedClipRaster>, protec
     if (raster === undefined) return;
     byteLength -= raster.byteLength;
     rasters.delete(evictRasterKey);
-  }
-}
-
-function evictWaveformCache() {
-  while (waveformCache.size > WAVEFORM_CACHE_LIMIT) {
-    let evictKey: string | null = null;
-    let oldest = Number.POSITIVE_INFINITY;
-    for (const [key, entry] of waveformCache) {
-      if (entry.lastUsed < oldest) {
-        oldest = entry.lastUsed;
-        evictKey = key;
-      }
-    }
-    if (evictKey === null) return;
-    waveformCache.delete(evictKey);
   }
 }
 
@@ -2252,138 +2198,6 @@ function drawClipRasterWarning(
   ctx.lineTo(rect.x + rect.width - 4, rect.y + size + 4);
   ctx.closePath();
   ctx.fill();
-}
-
-async function decodeWaveformPeaks(path: string): Promise<WaveformAudio | null> {
-  try {
-    const response = await fetch(convertFileSrc(path));
-    if (!response.ok) return null;
-    const arrayBuffer = await response.arrayBuffer();
-    const context = new AudioContext();
-    try {
-      const audioBuffer = await context.decodeAudioData(arrayBuffer);
-      const waveform = buildWaveformAudio(audioBuffer);
-      await context.close();
-      return waveform;
-    } catch {
-      await context.close();
-      return null;
-    }
-  } catch {
-    return null;
-  }
-}
-
-function buildWaveformAudio(buffer: AudioBuffer): WaveformAudio {
-  const baseSamplesPerPeak = displaySamplesPerPeak(buffer.sampleRate);
-  const channels = Array.from({ length: buffer.numberOfChannels }, (_, index) => buffer.getChannelData(index));
-  const bucketCount = Math.max(1, Math.ceil(buffer.length / baseSamplesPerPeak));
-  const mins = new Float32Array(bucketCount);
-  const maxes = new Float32Array(bucketCount);
-  for (let bucket = 0; bucket < bucketCount; bucket += 1) {
-    const start = bucket * baseSamplesPerPeak;
-    const end = Math.min(buffer.length, start + baseSamplesPerPeak);
-    let min = 0;
-    let max = 0;
-    for (const channel of channels) {
-      for (let index = start; index < end; index += 1) {
-        const sample = channel[index] ?? 0;
-        min = Math.min(min, sample);
-        max = Math.max(max, sample);
-      }
-    }
-    mins[bucket] = min;
-    maxes[bucket] = max;
-  }
-
-  const levels: WaveformLevel[] = [{ samplesPerPeak: baseSamplesPerPeak, mins, maxes }];
-  while ((levels[levels.length - 1]?.mins.length ?? 0) > 1) {
-    const previous = levels[levels.length - 1];
-    if (previous === undefined) break;
-    levels.push(coarsenWaveformLevel(previous));
-  }
-  return { durationSeconds: buffer.duration, sampleRate: buffer.sampleRate, levels };
-}
-
-function coarsenWaveformLevel(level: WaveformLevel): WaveformLevel {
-  const bucketCount = Math.ceil(level.mins.length / 2);
-  const mins = new Float32Array(bucketCount);
-  const maxes = new Float32Array(bucketCount);
-  for (let bucket = 0; bucket < bucketCount; bucket += 1) {
-    const left = bucket * 2;
-    const right = left + 1;
-    mins[bucket] = Math.min(level.mins[left] ?? 0, level.mins[right] ?? level.mins[left] ?? 0);
-    maxes[bucket] = Math.max(level.maxes[left] ?? 0, level.maxes[right] ?? level.maxes[left] ?? 0);
-  }
-  return {
-    samplesPerPeak: level.samplesPerPeak * 2,
-    mins,
-    maxes
-  };
-}
-
-function displaySamplesPerPeak(sampleRate: number): number {
-  return clamp(Math.round(sampleRate * 0.02), 512, 4096);
-}
-
-function drawWaveformStrip(
-  ctx: CanvasRenderingContext2D,
-  audio: WaveformAudio | null,
-  left: number,
-  top: number,
-  width: number,
-  height: number,
-  durationSeconds: number,
-  pxPerSecond: number,
-  scrollXSeconds: number
-) {
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(left, top, width, height);
-  ctx.clip();
-  ctx.strokeStyle = SEQUENCE_COLORS.grid;
-  ctx.beginPath();
-  ctx.moveTo(left, top + height / 2 + 0.5);
-  ctx.lineTo(left + width, top + height / 2 + 0.5);
-  ctx.stroke();
-  if (audio !== null && audio.durationSeconds > 0 && audio.levels.length > 0) {
-    const samplesPerSecond = audio.sampleRate;
-    const samplesPerPixel = samplesPerSecond / pxPerSecond;
-    const level = waveformLevelForZoom(audio.levels, samplesPerPixel);
-    const xPerPeak = (level.samplesPerPeak / samplesPerSecond) * pxPerSecond;
-    const clipEndSeconds = Math.min(durationSeconds, audio.durationSeconds);
-    const visibleStartSeconds = Math.max(0, scrollXSeconds);
-    const visibleEndSeconds = Math.min(clipEndSeconds, scrollXSeconds + width / pxPerSecond);
-    const firstIndex = Math.max(0, Math.floor((visibleStartSeconds * samplesPerSecond) / level.samplesPerPeak));
-    const lastIndex = Math.min(
-      level.mins.length - 1,
-      Math.ceil((visibleEndSeconds * samplesPerSecond) / level.samplesPerPeak)
-    );
-    const centerY = top + height / 2;
-    const maxAmplitude = Math.max(1, height / 2 - 4);
-    ctx.fillStyle = SEQUENCE_COLORS.accent;
-    for (let index = firstIndex; index <= lastIndex; index += 1) {
-      const timeSeconds = (index * level.samplesPerPeak) / samplesPerSecond;
-      if (timeSeconds > clipEndSeconds) break;
-      const x = left + (timeSeconds - scrollXSeconds) * pxPerSecond;
-      if (x > left + width) break;
-      if (x + xPerPeak < left) continue;
-      const min = level.mins[index] ?? 0;
-      const max = level.maxes[index] ?? 0;
-      const y1 = centerY - max * maxAmplitude;
-      const y2 = centerY - min * maxAmplitude;
-      ctx.fillRect(x, y1, Math.max(1, xPerPeak), Math.max(1, y2 - y1));
-    }
-  }
-  ctx.restore();
-}
-
-function waveformLevelForZoom(levels: WaveformLevel[], samplesPerPixel: number): WaveformLevel {
-  return levels.find((level) => level.samplesPerPeak >= samplesPerPixel) ?? levels[levels.length - 1] ?? {
-    samplesPerPeak: 1,
-    mins: new Float32Array([0]),
-    maxes: new Float32Array([0])
-  };
 }
 
 function drawTimelineGrid(

@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::sync::{Mutex, mpsc};
-use std::thread;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -25,10 +24,15 @@ use crate::persistence::{
     PersistenceService, ProjectRestoreState,
 };
 use crate::project_templates::{new_project_files, write_new_project_files};
+use crate::state_tasks::{
+    GuiHistory, GuiHistoryEntry, GuiSavePayload, GuiSaveResult, GuiSaveScheduler,
+    RenderRefreshPayload, RenderRefreshResult, RenderRefreshScheduler, gui_save_scheduler,
+    render_refresh_scheduler,
+};
 
 pub struct DesktopState {
     snapshot: Mutex<AppSnapshot>,
-    project: Mutex<Option<ProjectSession>>,
+    project: Mutex<Option<Arc<ProjectSession>>>,
     gui_history: Mutex<GuiHistory>,
     gui_save: Mutex<GuiSaveScheduler>,
     render_refresh: Mutex<RenderRefreshScheduler>,
@@ -45,8 +49,8 @@ impl DesktopState {
             snapshot: Mutex::new(empty_snapshot()),
             project: Mutex::new(None),
             gui_history: Mutex::new(GuiHistory::new(100)),
-            gui_save: Mutex::new(GuiSaveScheduler::new()),
-            render_refresh: Mutex::new(RenderRefreshScheduler::new()),
+            gui_save: Mutex::new(gui_save_scheduler()),
+            render_refresh: Mutex::new(render_refresh_scheduler()),
             audio: Mutex::new(crate::audio::AudioEngine::new()),
             show_render: Mutex::new(crate::show_render::ShowRenderService::new()),
             sequence_clip_raster: Mutex::new(
@@ -183,7 +187,7 @@ impl DesktopState {
         match (self.project_session(), sequence_id) {
             (Some(project), Some(sequence_id)) => {
                 self.unload_render_session();
-                self.schedule_sequence_render_prepare(project.project, sequence_id);
+                self.schedule_sequence_render_prepare(project, sequence_id);
             }
             _ => {
                 self.unload_render_session();
@@ -581,55 +585,20 @@ impl DesktopState {
             return self.snapshot();
         };
         let sequence_path = Utf8PathBuf::from(&request.file_path);
-        if !valid_sequence_path(&sequence_path) {
+        let Ok(duration) = Duration::try_from_secs_f64(request.duration_seconds) else {
             return self.snapshot_with_error(
                 "sequence.create",
                 &request.file_path,
-                "Sequence path must be a relative .sequence.dawn file under sequences/",
-            );
-        }
-        if !valid_object_key(&request.object_key) {
-            return self.snapshot_with_error(
-                "sequence.create",
-                &request.file_path,
-                "Sequence id must start with a letter or underscore and contain only letters, digits, or underscores",
-            );
-        }
-        if !request.duration_seconds.is_finite() || request.duration_seconds <= 0.0 {
-            return self.snapshot_with_error(
-                "sequence.create",
-                &request.file_path,
-                "Duration must be greater than zero",
-            );
-        }
-        if request.frame_rate == 0 {
-            return self.snapshot_with_error(
-                "sequence.create",
-                &request.file_path,
-                "Frame rate must be greater than zero",
-            );
-        }
-        let Some(absolute_sequence_path) = absolute_project_path(&project, &sequence_path) else {
-            return self.snapshot_with_error(
-                "sequence.create",
-                &request.file_path,
-                "Sequence path is outside the loaded project",
+                "Sequence duration is outside the supported range",
             );
         };
-        if absolute_sequence_path.exists() {
-            return self.snapshot_with_error(
-                "sequence.create",
-                &request.file_path,
-                "Sequence file already exists",
-            );
-        }
         let entrypoint = project.source.source_root.join(&project.source.entrypoint);
-        let mut edited = project.clone();
+        let mut edited = (*project).clone();
         if let Err(error) = dawn_project_io::insert_sequence(
             &mut edited,
             sequence_path.clone(),
             request.object_key.clone(),
-            dawn_language::values::DawnDuration(Duration::from_secs_f64(request.duration_seconds)),
+            dawn_language::values::DawnDuration(duration),
             request.frame_rate,
         )
         .and_then(|_| save_project(&edited).map(|_| ()))
@@ -735,7 +704,7 @@ impl DesktopState {
 
     pub fn get_gui_document(&self, request: GuiDocumentRequest) -> GuiDocument {
         let project = self.project_session();
-        crate::gui::project_gui_document(project.as_ref(), &request)
+        crate::gui::project_gui_document(project.as_deref(), &request)
     }
 
     pub fn request_sequence_clip_rasters(
@@ -750,12 +719,11 @@ impl DesktopState {
             .as_ref()
             .map(|project| project.project.root.setup.clone());
         let sequence_id = self.resolve_sequence_id(&request.document);
-        let project_model = project.map(|project| project.project);
         match self.sequence_clip_raster.lock() {
             Ok(mut raster) => raster.request(
                 project_revision,
                 raster_settings,
-                project_model,
+                project,
                 setup_id,
                 sequence_id,
                 request,
@@ -763,7 +731,7 @@ impl DesktopState {
             Err(poisoned) => poisoned.into_inner().request(
                 project_revision,
                 raster_settings,
-                project_model,
+                project,
                 setup_id,
                 sequence_id,
                 request,
@@ -806,7 +774,7 @@ impl DesktopState {
                 document: crate::gui::blocked("No project is loaded.", Vec::new()),
             };
         };
-        let affected_paths = match crate::gui::affected_paths(&project, &request, &edit) {
+        let affected_paths = match crate::gui::affected_paths(&project, &request) {
             Ok(paths) => paths,
             Err(error) => {
                 let snapshot = self.snapshot_with_error("gui.edit", &request.path, error.message());
@@ -831,8 +799,8 @@ impl DesktopState {
             };
         }
 
-        let before = project.clone();
-        let mut edited = project;
+        let before = Arc::clone(&project);
+        let mut edited = (*project).clone();
         if let Err(error) = crate::gui::apply_edit(&mut edited, &request, edit) {
             let snapshot = self.snapshot_with_error("gui.edit", &request.path, error.message());
             return GuiEditResult {
@@ -851,13 +819,14 @@ impl DesktopState {
             }
         };
         let document = crate::gui::project_gui_document(Some(&edited), &request);
+        let edited = Arc::new(edited);
         self.push_gui_history(GuiHistoryEntry {
             before,
-            after: edited.clone(),
+            after: Arc::clone(&edited),
             affected_paths: affected_paths.clone(),
             status_path: request.path.clone(),
         });
-        self.schedule_gui_save(&edited, affected_paths, request.path.clone());
+        self.schedule_gui_save(Arc::clone(&edited), affected_paths, request.path.clone());
         let snapshot = self.apply_gui_project_update(edited, "GUI edit applied", generated_text);
         GuiEditResult { snapshot, document }
     }
@@ -917,13 +886,7 @@ impl DesktopState {
                 skipped_count: 0,
             };
         };
-        let affected_paths = match crate::gui::affected_paths(
-            &project,
-            &request,
-            &GuiEditCommand::Sequence {
-                edit: crate::dto::SequenceGuiEdit::DeleteEffect { id: 0 },
-            },
-        ) {
+        let affected_paths = match crate::gui::affected_paths(&project, &request) {
             Ok(paths) => paths,
             Err(error) => {
                 return SequenceSelectionEditResult {
@@ -956,9 +919,9 @@ impl DesktopState {
             };
         }
 
-        let before = project.clone();
-        let mut edited = project;
-        let previous_project = edited.project.clone();
+        let before =
+            (!matches!(&edit, SequenceSelectionEdit::Copy { .. })).then(|| Arc::clone(&project));
+        let mut edited = (*project).clone();
         let mutation = match self.sequence_clipboard.lock() {
             Ok(mut clipboard) => crate::gui::apply_sequence_selection_edit(
                 &mut edited,
@@ -993,9 +956,7 @@ impl DesktopState {
             }
         };
         let document = crate::gui::project_gui_document(Some(&edited), &request);
-        let snapshot = if edited.project == previous_project {
-            self.snapshot()
-        } else {
+        let snapshot = if let Some(before) = before {
             let generated_text = match generated_source_texts(&edited, &affected_paths) {
                 Ok(text) => text,
                 Err(message) => {
@@ -1012,14 +973,17 @@ impl DesktopState {
                     };
                 }
             };
+            let edited = Arc::new(edited);
             self.push_gui_history(GuiHistoryEntry {
                 before,
-                after: edited.clone(),
+                after: Arc::clone(&edited),
                 affected_paths: affected_paths.clone(),
                 status_path: request.path.clone(),
             });
-            self.schedule_gui_save(&edited, affected_paths, request.path.clone());
+            self.schedule_gui_save(Arc::clone(&edited), affected_paths, request.path.clone());
             self.apply_gui_project_update(edited, "GUI selection edit applied", generated_text)
+        } else {
+            self.snapshot()
         };
         SequenceSelectionEditResult {
             snapshot,
@@ -1051,7 +1015,7 @@ impl DesktopState {
         };
         self.push_gui_redo(entry.clone());
         self.schedule_gui_save(
-            &entry.before,
+            Arc::clone(&entry.before),
             entry.affected_paths.clone(),
             entry.status_path.clone(),
         );
@@ -1079,7 +1043,7 @@ impl DesktopState {
         };
         self.push_gui_undo_from_redo(entry.clone());
         self.schedule_gui_save(
-            &entry.after,
+            Arc::clone(&entry.after),
             entry.affected_paths.clone(),
             entry.status_path.clone(),
         );
@@ -1143,8 +1107,8 @@ impl DesktopState {
             .as_ref()
             .and_then(|(_, active_path)| descriptor_for_path(&session, Utf8Path::new(active_path)));
         match self.project.lock() {
-            Ok(mut project) => *project = Some(session),
-            Err(poisoned) => *poisoned.into_inner() = Some(session),
+            Ok(mut project) => *project = Some(Arc::new(session)),
+            Err(poisoned) => *poisoned.into_inner() = Some(Arc::new(session)),
         }
         self.unload_render_session();
         self.update_snapshot(|snapshot| {
@@ -1228,7 +1192,7 @@ impl DesktopState {
         // opens are allowed to replace tabs, buffers, GUI state, or transport.
         let entries = workspace_entries(&session);
         let root = session.source.source_root.to_string();
-        let project_model = session.project.clone();
+        let render_error = self.refresh_render_session(&session.project);
         let active_descriptor = self.snapshot().active_file.as_deref().and_then(|path| {
             let relative_path = Utf8Path::new(path);
             session
@@ -1243,10 +1207,9 @@ impl DesktopState {
                 })
         });
         match self.project.lock() {
-            Ok(mut project) => *project = Some(session),
-            Err(poisoned) => *poisoned.into_inner() = Some(session),
+            Ok(mut project) => *project = Some(Arc::new(session)),
+            Err(poisoned) => *poisoned.into_inner() = Some(Arc::new(session)),
         }
-        let render_error = self.refresh_render_session(&project_model);
         self.update_snapshot(|snapshot| {
             snapshot.project_root = Some(root);
             snapshot.project_entries = entries;
@@ -1270,13 +1233,12 @@ impl DesktopState {
 
     fn apply_gui_project_update(
         &self,
-        session: ProjectSession,
+        session: Arc<ProjectSession>,
         status: &str,
         generated_text: BTreeMap<String, String>,
     ) -> AppSnapshot {
         let entries = workspace_entries(&session);
         let root = session.source.source_root.to_string();
-        let project_model = session.project.clone();
         let active_descriptor = self.snapshot().active_file.as_deref().and_then(|path| {
             let relative_path = Utf8Path::new(path);
             session
@@ -1291,10 +1253,10 @@ impl DesktopState {
                 })
         });
         match self.project.lock() {
-            Ok(mut project) => *project = Some(session),
-            Err(poisoned) => *poisoned.into_inner() = Some(session),
+            Ok(mut project) => *project = Some(Arc::clone(&session)),
+            Err(poisoned) => *poisoned.into_inner() = Some(Arc::clone(&session)),
         }
-        self.schedule_render_refresh(project_model);
+        self.schedule_render_refresh(Arc::clone(&session));
         self.update_snapshot(|snapshot| {
             snapshot.project_root = Some(root);
             snapshot.project_entries = entries;
@@ -1307,7 +1269,7 @@ impl DesktopState {
         })
     }
 
-    fn project_session(&self) -> Option<ProjectSession> {
+    fn project_session(&self) -> Option<Arc<ProjectSession>> {
         match self.project.lock() {
             Ok(project) => project.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
@@ -1404,7 +1366,7 @@ impl DesktopState {
 
     fn resolve_sequence_audio(&self, request: &GuiDocumentRequest) -> Option<SequenceAudio> {
         let project = self.project_session();
-        match crate::gui::project_gui_document(project.as_ref(), request) {
+        match crate::gui::project_gui_document(project.as_deref(), request) {
             GuiDocument::Sequence { document } => document.audio,
             _ => None,
         }
@@ -1460,7 +1422,7 @@ impl DesktopState {
         }
     }
 
-    fn schedule_render_refresh(&self, project: dawn_language::model::DawnProject) {
+    fn schedule_render_refresh(&self, project: Arc<ProjectSession>) {
         let target = match self.show_render.lock() {
             Ok(show_render) => show_render.active_target(),
             Err(poisoned) => poisoned.into_inner().active_target(),
@@ -1468,7 +1430,7 @@ impl DesktopState {
         let Some((setup_id, sequence_id)) = target else {
             return;
         };
-        if !project.sequences.contains_key(&sequence_id) {
+        if !project.project.sequences.contains_key(&sequence_id) {
             self.unload_render_session();
             return;
         }
@@ -1477,39 +1439,33 @@ impl DesktopState {
             setup_id,
             sequence_id,
         };
-        match self.render_refresh.lock() {
-            Ok(mut scheduler) => {
-                let _ = scheduler.schedule(request);
-            }
-            Err(poisoned) => {
-                let mut scheduler = poisoned.into_inner();
-                let _ = scheduler.schedule(request);
-            }
-        }
+        self.enqueue_render_refresh(request);
     }
 
     fn schedule_sequence_render_prepare(
         &self,
-        project: dawn_language::model::DawnProject,
+        project: Arc<ProjectSession>,
         sequence_id: dawn_language::sequence::SequenceId,
     ) {
-        if !project.sequences.contains_key(&sequence_id) {
+        if !project.project.sequences.contains_key(&sequence_id) {
             self.unload_render_session();
             return;
         }
         let request = RenderRefreshPayload {
-            setup_id: project.root.setup.clone(),
+            setup_id: project.project.root.setup.clone(),
             project,
             sequence_id,
         };
-        match self.render_refresh.lock() {
-            Ok(mut scheduler) => {
-                let _ = scheduler.schedule(request);
-            }
-            Err(poisoned) => {
-                let mut scheduler = poisoned.into_inner();
-                let _ = scheduler.schedule(request);
-            }
+        self.enqueue_render_refresh(request);
+    }
+
+    fn enqueue_render_refresh(&self, request: RenderRefreshPayload) {
+        let failed = match self.render_refresh.lock() {
+            Ok(mut scheduler) => scheduler.schedule(request).is_err(),
+            Err(poisoned) => poisoned.into_inner().schedule(request).is_err(),
+        };
+        if failed {
+            self.set_render_error_if_changed("Render refresh worker is unavailable.".to_string());
         }
     }
 
@@ -1682,13 +1638,13 @@ impl DesktopState {
 
     fn schedule_gui_save(
         &self,
-        session: &ProjectSession,
+        session: Arc<ProjectSession>,
         affected_paths: std::collections::BTreeSet<String>,
         status_path: String,
     ) {
         let path_for_error = status_path.clone();
         let request = GuiSavePayload {
-            session: session.clone(),
+            session,
             affected_paths,
             status_path,
         };
@@ -1785,279 +1741,9 @@ fn project_path_is_structural(project: &ProjectSession, path: &Utf8Path) -> bool
         })
 }
 
-struct GuiSaveScheduler {
-    sender: mpsc::Sender<SequencedGuiSaveRequest>,
-    receiver: mpsc::Receiver<GuiSaveResult>,
-    latest_sequence: u64,
-}
-
-impl GuiSaveScheduler {
-    fn new() -> Self {
-        let (request_sender, request_receiver) = mpsc::channel();
-        let (result_sender, result_receiver) = mpsc::channel();
-        thread::spawn(move || gui_save_worker(request_receiver, result_sender));
-        Self {
-            sender: request_sender,
-            receiver: result_receiver,
-            latest_sequence: 0,
-        }
-    }
-
-    fn schedule(&mut self, payload: GuiSavePayload) -> Result<(), GuiSaveScheduleError> {
-        self.latest_sequence = self.latest_sequence.saturating_add(1);
-        self.sender
-            .send(SequencedGuiSaveRequest {
-                sequence: self.latest_sequence,
-                payload,
-            })
-            .map_err(|_| GuiSaveScheduleError)
-    }
-
-    fn drain_current_results(&self) -> Vec<GuiSaveResult> {
-        self.receiver
-            .try_iter()
-            .filter(|result| result.sequence() == self.latest_sequence)
-            .collect()
-    }
-}
-
-struct SequencedGuiSaveRequest {
-    sequence: u64,
-    payload: GuiSavePayload,
-}
-
-struct GuiSavePayload {
-    session: ProjectSession,
-    affected_paths: std::collections::BTreeSet<String>,
-    status_path: String,
-}
-
-struct GuiSaveScheduleError;
-
-impl GuiSaveResult {
-    fn sequence(&self) -> u64 {
-        match self {
-            GuiSaveResult::Saved { sequence, .. } | GuiSaveResult::Failed { sequence, .. } => {
-                *sequence
-            }
-        }
-    }
-}
-
-enum GuiSaveResult {
-    Saved {
-        sequence: u64,
-        session: Box<ProjectSession>,
-        affected_paths: std::collections::BTreeSet<String>,
-    },
-    Failed {
-        sequence: u64,
-        status_path: String,
-        message: String,
-    },
-}
-
-fn gui_save_worker(
-    receiver: mpsc::Receiver<SequencedGuiSaveRequest>,
-    sender: mpsc::Sender<GuiSaveResult>,
-) {
-    let debounce = Duration::from_millis(250);
-    while let Ok(mut pending) = receiver.recv() {
-        while let Ok(next) = receiver.recv_timeout(debounce) {
-            pending = next;
-        }
-        let result = match save_project(&pending.payload.session) {
-            Ok(_) => GuiSaveResult::Saved {
-                sequence: pending.sequence,
-                session: Box::new(pending.payload.session),
-                affected_paths: pending.payload.affected_paths,
-            },
-            Err(error) => GuiSaveResult::Failed {
-                sequence: pending.sequence,
-                status_path: pending.payload.status_path,
-                message: error.to_string(),
-            },
-        };
-        if sender.send(result).is_err() {
-            break;
-        }
-    }
-}
-
-struct RenderRefreshScheduler {
-    sender: mpsc::Sender<SequencedRenderRefreshRequest>,
-    receiver: mpsc::Receiver<RenderRefreshResult>,
-    latest_sequence: u64,
-}
-
-impl RenderRefreshScheduler {
-    fn new() -> Self {
-        let (request_sender, request_receiver) = mpsc::channel();
-        let (result_sender, result_receiver) = mpsc::channel();
-        thread::spawn(move || render_refresh_worker(request_receiver, result_sender));
-        Self {
-            sender: request_sender,
-            receiver: result_receiver,
-            latest_sequence: 0,
-        }
-    }
-
-    fn schedule(
-        &mut self,
-        payload: RenderRefreshPayload,
-    ) -> Result<(), RenderRefreshScheduleError> {
-        self.latest_sequence = self.latest_sequence.saturating_add(1);
-        self.sender
-            .send(SequencedRenderRefreshRequest {
-                sequence: self.latest_sequence,
-                payload,
-            })
-            .map_err(|_| RenderRefreshScheduleError)
-    }
-
-    fn invalidate_pending(&mut self) {
-        self.latest_sequence = self.latest_sequence.saturating_add(1);
-    }
-
-    fn drain_current_results(&self) -> Vec<RenderRefreshResult> {
-        self.receiver
-            .try_iter()
-            .filter(|result| result.sequence() == self.latest_sequence)
-            .collect()
-    }
-}
-
-struct SequencedRenderRefreshRequest {
-    sequence: u64,
-    payload: RenderRefreshPayload,
-}
-
-struct RenderRefreshPayload {
-    project: dawn_language::model::DawnProject,
-    setup_id: dawn_language::setup::SetupId,
-    sequence_id: dawn_language::sequence::SequenceId,
-}
-
-struct RenderRefreshScheduleError;
-
-impl RenderRefreshResult {
-    fn sequence(&self) -> u64 {
-        match self {
-            RenderRefreshResult::Refreshed { sequence, .. }
-            | RenderRefreshResult::Failed { sequence, .. } => *sequence,
-        }
-    }
-}
-
-enum RenderRefreshResult {
-    Refreshed {
-        sequence: u64,
-        session: Box<crate::show_render::PreparedRenderSession>,
-    },
-    Failed {
-        sequence: u64,
-        message: String,
-    },
-}
-
-fn render_refresh_worker(
-    receiver: mpsc::Receiver<SequencedRenderRefreshRequest>,
-    sender: mpsc::Sender<RenderRefreshResult>,
-) {
-    while let Ok(mut pending) = receiver.recv() {
-        while let Ok(newer) = receiver.try_recv() {
-            pending = newer;
-        }
-        let result = match crate::show_render::prepare_render_session(
-            &pending.payload.project,
-            &pending.payload.setup_id,
-            &pending.payload.sequence_id,
-        ) {
-            Ok(session) => RenderRefreshResult::Refreshed {
-                sequence: pending.sequence,
-                session: Box::new(session),
-            },
-            Err(error) => RenderRefreshResult::Failed {
-                sequence: pending.sequence,
-                message: format!("{error:?}"),
-            },
-        };
-        if sender.send(result).is_err() {
-            break;
-        }
-    }
-}
-
 impl Default for DesktopState {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[derive(Clone)]
-struct GuiHistoryEntry {
-    before: ProjectSession,
-    after: ProjectSession,
-    affected_paths: BTreeSet<String>,
-    status_path: String,
-}
-
-struct GuiHistory {
-    undo: Vec<GuiHistoryEntry>,
-    redo: Vec<GuiHistoryEntry>,
-    limit: usize,
-}
-
-impl GuiHistory {
-    fn new(limit: usize) -> Self {
-        Self {
-            undo: Vec::new(),
-            redo: Vec::new(),
-            limit,
-        }
-    }
-
-    fn push_undo(&mut self, entry: GuiHistoryEntry) {
-        self.undo.push(entry);
-        self.trim_undo();
-        self.redo.clear();
-    }
-
-    fn push_undo_from_redo(&mut self, entry: GuiHistoryEntry) {
-        self.undo.push(entry);
-        self.trim_undo();
-    }
-
-    fn peek_undo(&self) -> Option<GuiHistoryEntry> {
-        self.undo.last().cloned()
-    }
-
-    fn pop_undo(&mut self) -> Option<GuiHistoryEntry> {
-        self.undo.pop()
-    }
-
-    fn push_redo(&mut self, entry: GuiHistoryEntry) {
-        self.redo.push(entry);
-    }
-
-    fn peek_redo(&self) -> Option<GuiHistoryEntry> {
-        self.redo.last().cloned()
-    }
-
-    fn pop_redo(&mut self) -> Option<GuiHistoryEntry> {
-        self.redo.pop()
-    }
-
-    fn clear(&mut self) {
-        self.undo.clear();
-        self.redo.clear();
-    }
-
-    fn trim_undo(&mut self) {
-        if self.undo.len() > self.limit {
-            let overflow = self.undo.len() - self.limit;
-            self.undo.drain(0..overflow);
-        }
     }
 }
 
@@ -2348,7 +2034,7 @@ fn document_descriptor(path: &Utf8Path, document: &SourceDocument) -> DocumentDe
         .iter()
         .map(|object| DocumentObjectDescriptor {
             key: object.id().to_string(),
-            kind: object_kind(object.kind()),
+            kind: ObjectKind::from(object.kind()),
         })
         .collect::<Vec<_>>();
     let available_views = available_views(&objects);
@@ -2367,21 +2053,6 @@ fn empty_document_descriptor(path: &Utf8Path) -> DocumentDescriptor {
         objects: Vec::new(),
         available_views: vec![DocumentViewId::Text],
         default_object_keys: Vec::new(),
-    }
-}
-
-fn object_kind(kind: &SourceObjectKind) -> ObjectKind {
-    match kind {
-        SourceObjectKind::Project => ObjectKind::Project,
-        SourceObjectKind::Setup => ObjectKind::Setup,
-        SourceObjectKind::Controller => ObjectKind::Controller,
-        SourceObjectKind::Layout => ObjectKind::Layout,
-        SourceObjectKind::Patch => ObjectKind::Patch,
-        SourceObjectKind::FixtureDefinition => ObjectKind::Fixture,
-        SourceObjectKind::Curve => ObjectKind::Curve,
-        SourceObjectKind::Sequence => ObjectKind::Sequence,
-        SourceObjectKind::EffectDefinition | SourceObjectKind::EffectInstance => ObjectKind::Effect,
-        SourceObjectKind::OperatorDefinition => ObjectKind::Operator,
     }
 }
 
@@ -2478,26 +2149,6 @@ fn absolute_project_path(
 
 fn valid_child_name(name: &str) -> bool {
     !name.is_empty() && !name.contains('/') && !name.contains('\\') && name != "." && name != ".."
-}
-
-fn valid_object_key(value: &str) -> bool {
-    let mut chars = value.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    (first.is_ascii_alphabetic() || first == '_')
-        && chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
-}
-
-fn valid_sequence_path(path: &Utf8Path) -> bool {
-    !path.is_absolute()
-        && path
-            .components()
-            .all(|component| matches!(component, camino::Utf8Component::Normal(_)))
-        && path.starts_with("sequences")
-        && path
-            .file_name()
-            .is_some_and(|name| name.ends_with(".sequence.dawn"))
 }
 
 fn path_matches_or_is_child(candidate: &str, parent: &str) -> bool {

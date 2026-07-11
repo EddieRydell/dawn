@@ -4,7 +4,7 @@ use crate::effect::{
 };
 use crate::identity::SourceIdentity;
 use crate::operator::GraphOperatorNode;
-use crate::values::{Color, Curve, DawnDuration, DawnTime};
+use crate::values::{Color, Curve, CurvePoint, CurveValue, DawnDuration, DawnTime};
 use indexmap::IndexMap;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -166,6 +166,114 @@ pub enum AutomationMapping {
     Bool,
     Enum { values: Vec<Identifier> },
     FloatCurve { min: f64, max: f64 },
+}
+
+pub enum AutomationValue {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Enum(Identifier),
+    FloatCurve(Curve),
+}
+
+pub fn automation_value_at(
+    clip: &AutomationClip,
+    binding: &AutomationBinding,
+    sample_seconds: f64,
+) -> Option<AutomationValue> {
+    let normalized = sample_automation_clip(clip, sample_seconds);
+    Some(match &binding.mapping {
+        AutomationMapping::Float { min, max } => {
+            AutomationValue::Float(lerp(*min, *max, normalized))
+        }
+        AutomationMapping::Int { min, max } => {
+            AutomationValue::Int(lerp(*min as f64, *max as f64, normalized).round() as i64)
+        }
+        AutomationMapping::Bool => AutomationValue::Bool(normalized >= 0.5),
+        AutomationMapping::Enum { values } => {
+            let index = ((normalized.clamp(0.0, 1.0) * values.len() as f64).floor() as usize)
+                .min(values.len().checked_sub(1)?);
+            AutomationValue::Enum(values[index].clone())
+        }
+        AutomationMapping::FloatCurve { min, max } => {
+            AutomationValue::FloatCurve(float_curve_window(clip, *min, *max, sample_seconds))
+        }
+    })
+}
+
+fn sample_automation_clip(clip: &AutomationClip, sample_seconds: f64) -> f64 {
+    let duration = clip.duration.as_seconds_f64();
+    let position = if duration <= 0.0 {
+        0.0
+    } else {
+        ((sample_seconds - clip.start.as_seconds_f64()) / duration).clamp(0.0, 1.0)
+    };
+    sample_float_curve(&clip.curve, position).clamp(0.0, 1.0)
+}
+
+fn float_curve_window(clip: &AutomationClip, min: f64, max: f64, sample_seconds: f64) -> Curve {
+    let duration = clip.duration.as_seconds_f64().max(f64::EPSILON);
+    let sample_position =
+        ((sample_seconds - clip.start.as_seconds_f64()) / duration).clamp(0.0, 1.0);
+    let points = clip
+        .curve
+        .points
+        .iter()
+        .filter_map(|point| {
+            let position = point.position - sample_position;
+            (0.0..=1.0).contains(&position).then(|| CurvePoint {
+                position,
+                value: CurveValue::Float(lerp(min, max, curve_point_float(point))),
+            })
+        })
+        .collect::<Vec<_>>();
+    Curve {
+        points: if points.is_empty() {
+            vec![CurvePoint {
+                position: 0.0,
+                value: CurveValue::Float(lerp(
+                    min,
+                    max,
+                    sample_automation_clip(clip, sample_seconds),
+                )),
+            }]
+        } else {
+            points
+        },
+    }
+}
+
+fn sample_float_curve(curve: &Curve, position: f64) -> f64 {
+    let Some(first) = curve.points.first() else {
+        return 0.0;
+    };
+    if position <= first.position {
+        return curve_point_float(first);
+    }
+    for pair in curve.points.windows(2) {
+        let (left, right) = (&pair[0], &pair[1]);
+        if position <= right.position {
+            let span = right.position - left.position;
+            let amount = if span <= 0.0 {
+                0.0
+            } else {
+                (position - left.position) / span
+            };
+            return lerp(curve_point_float(left), curve_point_float(right), amount);
+        }
+    }
+    curve.points.last().map(curve_point_float).unwrap_or(0.0)
+}
+
+fn curve_point_float(point: &CurvePoint) -> f64 {
+    match point.value {
+        CurveValue::Float(value) => value,
+        CurveValue::Color(_) => 0.0,
+    }
+}
+
+fn lerp(min: f64, max: f64, amount: f64) -> f64 {
+    min + (max - min) * amount.clamp(0.0, 1.0)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

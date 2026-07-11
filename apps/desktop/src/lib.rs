@@ -17,6 +17,7 @@ pub mod bindings;
 pub mod commands;
 pub mod dto;
 pub mod gui;
+mod gui_geometry;
 pub mod persistence;
 pub mod preview;
 mod project_templates;
@@ -24,6 +25,7 @@ pub mod sequence_clip_raster;
 mod sequence_integrity;
 pub mod show_render;
 pub mod state;
+mod state_tasks;
 
 pub fn run() -> Result<(), tauri::Error> {
     let bindings = bindings::builder();

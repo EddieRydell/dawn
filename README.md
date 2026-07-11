@@ -42,9 +42,12 @@ That makes the project useful as a technical showcase for:
 ```text
 apps/desktop/                 Tauri desktop app
 apps/desktop/src/             Rust desktop service, app state, commands, persistence
+apps/desktop/src/state_tasks.rs Background save/render scheduling and GUI history
+apps/desktop/src/gui_geometry.rs Read-only fixture/layout geometry projection
 apps/desktop/frontend/        React/TypeScript frontend
+apps/desktop/frontend/src/ui/gui/sequence/sequenceWaveform.ts  Timeline waveform cache/rendering
 crates/dawn-language/         Core Dawn model, sequence types, effect DSL, compiler, VM
-crates/dawn-project-io/       Dawn project loading, validation, source maps, save/export
+crates/dawn-project-io/       Dawn project loading, diagnostics, source ownership, save/export
 crates/dawn-runtime/          Prepared sequence and effect rendering
 examples/                     Example Dawn projects and fixtures
 docs/                         Performance and regression tracking notes
@@ -100,7 +103,7 @@ Regenerates TypeScript bindings from the Rust desktop API.
 pnpm check
 ```
 
-Runs generated bindings, frontend type checking, linting, frontend build, Rust formatting checks, `cargo check`, and Clippy.
+Runs generated bindings, frontend type checking, linting, dead-export analysis, frontend tests/build, and the Rust format, check, test, and Clippy gates.
 
 ```bash
 cargo fmt
@@ -124,11 +127,10 @@ Runs the full Criterion benchmark set.
 
 A Dawn project starts at a `project.dawn` entrypoint. That file imports the rest of the show definition: setups, fixture definitions, layouts, patches, curves, effects, sequences, and assets.
 
-Project IO loads the reachable source files, validates references, tracks source locations for diagnostics, compiles effect definitions, and builds a typed `DawnProject`. The desktop app mutates that typed project state through Rust commands, then saves Dawn source documents through the IO layer.
+Project IO loads reachable source files, validates imports and references, tracks source locations for diagnostics, compiles DSL definitions, and builds the authoritative typed `DawnProject`. `SourceProject` retains document ownership, import, original-source, and asset metadata; it is not a second editable project model. GUI commands make one private mutable candidate from the current immutable project snapshot; accepted snapshots are shared by state, history, save, and render work. Project IO serializes typed state directly without reparsing or synchronizing a YAML model.
 
-At render time, `dawn-runtime` prepares the selected setup and sequence, resolves targets and fixture pixels, evaluates effect clips, applies automation, and composes layers through the sequence graph.
+At render time, `dawn-runtime` prepares the selected setup and sequence, resolves targets and fixture pixels, evaluates effect clips, applies the language crate's canonical automation semantics, and composes layers through the sequence graph.
 
 ## Status
 
 Dawn is an active prototype. The codebase emphasizes fast iteration, typed state, explicit validation, and a single project model shared by the editor, GUI workflows, and renderer.
-

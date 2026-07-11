@@ -78,7 +78,7 @@ export const commands = {
   }
 };
 
-export function guiEditResultFromSelection(result: SequenceSelectionEditResult): GuiEditResult {
+function guiEditResultFromSelection(result: SequenceSelectionEditResult): GuiEditResult {
   return {
     snapshot: result.snapshot,
     document: result.document

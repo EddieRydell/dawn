@@ -1639,11 +1639,7 @@ fn default_value(ty: &Type) -> Value {
         })),
         Type::Curve(_) => Value::Curve(Arc::new(Curve { points: Vec::new() })),
         Type::Array(_) => Value::Array(Arc::new(Vec::new())),
-        Type::Enum(options) => options
-            .first()
-            .cloned()
-            .map(Value::Enum)
-            .unwrap_or(Value::Void),
+        Type::Enum(options) => Value::Enum(options[0].clone()),
     }
 }
 

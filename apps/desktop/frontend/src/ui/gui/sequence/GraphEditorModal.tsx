@@ -122,7 +122,7 @@ export function GraphEditorModal({
   );
 }
 
-export function GraphEditorWorkspace({
+function GraphEditorWorkspace({
   document,
   selectedItem,
   setSelectedItem

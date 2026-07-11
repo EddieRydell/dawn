@@ -18,6 +18,7 @@ use dawn_language::sequence::{
 };
 use dawn_language::setup::SetupId;
 use dawn_language::values::{Curve, CurveValue, DawnTime};
+use dawn_project_io::ProjectSession;
 use dawn_runtime::{
     EffectRasterPrepareBatch, PreparedEffectRasterRenderer, RenderedTargetPixelAddress,
     resolve_effect_target_pixel_addresses,
@@ -71,7 +72,7 @@ impl SequenceClipRasterService {
         &mut self,
         project_revision: u32,
         settings: EffectRasterSettings,
-        project: Option<DawnProject>,
+        project: Option<Arc<ProjectSession>>,
         setup_id: Option<SetupId>,
         sequence_id: Option<SequenceId>,
         request: SequenceClipRasterRequest,
@@ -282,7 +283,7 @@ impl SequenceClipRasterService {
             return empty_response(project_revision, request_id, true);
         };
 
-        let Some(sequence) = project.sequences.get(&sequence_id) else {
+        let Some(sequence) = project.project.sequences.get(&sequence_id) else {
             self.active = None;
             return empty_response(project_revision, request_id, true);
         };
@@ -346,7 +347,7 @@ impl SequenceClipRasterService {
             };
             let cache_key =
                 RasterCacheKey::new(&base_key, effect_id, request_item.display_column_count);
-            let signature = match render_signature(&project, &setup_id, sequence, effect) {
+            let signature = match render_signature(&project.project, &setup_id, sequence, effect) {
                 Ok(signature) => signature,
                 Err(message) => RenderInputSignature::Invalid { message },
             };
@@ -558,7 +559,7 @@ struct ActiveRasterJob {
 
 struct RasterScheduleInput {
     project_revision: u32,
-    project: Option<DawnProject>,
+    project: Option<Arc<ProjectSession>>,
     setup_id: Option<SetupId>,
     sequence_id: Option<SequenceId>,
     document_key: RasterDocumentKey,
@@ -569,7 +570,7 @@ struct RasterScheduleInput {
 struct RasterMissingWorkInput {
     request_id: u32,
     document_key: RasterDocumentKey,
-    project: DawnProject,
+    project: Arc<ProjectSession>,
     setup_id: SetupId,
     sequence_id: SequenceId,
     settings: EffectRasterSettings,
@@ -682,7 +683,7 @@ struct RasterJob {
     job_id: u32,
     request_id: u32,
     document_key: RasterDocumentKey,
-    project: DawnProject,
+    project: Arc<ProjectSession>,
     setup_id: SetupId,
     sequence_id: SequenceId,
     settings: EffectRasterSettings,
@@ -761,7 +762,7 @@ fn raster_worker(
         let mut completed = true;
         let work_items = std::mem::take(&mut job.work_items);
         let (mut prepare_batch, prepare_batch_error) = match EffectRasterPrepareBatch::prepare(
-            &job.project,
+            &job.project.project,
             &job.setup_id,
             &job.sequence_id,
         ) {

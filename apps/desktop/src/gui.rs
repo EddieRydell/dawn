@@ -15,9 +15,10 @@ use dawn_language::operator::{
 };
 use dawn_language::sequence::{
     AssetId, AutomationBinding, AutomationClip, AutomationClipId, AutomationMapping,
-    AutomationTarget, CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind,
-    EffectGraphEdge, GraphNodePosition, GraphPortId, MarkCollection, MarkCollectionKey,
-    SequenceAudio as DomainSequenceAudio, SequenceId, SequenceLayerId,
+    AutomationTarget, AutomationValue, CompositionGraphNode, CompositionGraphNodeId,
+    CompositionGraphNodeKind, EffectGraphEdge, GraphNodePosition, GraphPortId, MarkCollection,
+    MarkCollectionKey, SequenceAudio as DomainSequenceAudio, SequenceId, SequenceLayerId,
+    automation_value_at,
 };
 use dawn_language::setup::{
     FixtureDefinitionId, FixtureGroupId, FixtureInstanceId, Geometry as DomainGeometry, LayoutId,
@@ -28,15 +29,14 @@ use dawn_language::values::{
     Rotation3 as DomainRotation3, Scale3 as DomainScale3,
 };
 use dawn_project_io::{
-    ProjectSession, ReferencedAsset, SourceObjectId, SourceObjectKind,
-    ensure_document_can_reference_source, is_project_owned_path, relative_path_from_document,
+    ProjectSession, ReferencedAsset, SourceObjectKind, ensure_document_can_reference_source,
+    is_project_owned_path, relative_path_from_document,
 };
 use indexmap::IndexMap;
 
 use crate::dto::{
     ColorCurvePoint, DiagnosticSeverity, DocumentViewId, EffectScriptReference, FixtureDefinition,
-    FixtureGuiDocument, FixtureGuiEdit, FloatCurvePoint, Geometry, GeometryRenderBounds,
-    GeometryRenderGuide, GeometryRenderPlan, GeometryRenderPoint, GuiDocument, GuiDocumentRequest,
+    FixtureGuiDocument, FixtureGuiEdit, FloatCurvePoint, GuiDocument, GuiDocumentRequest,
     GuiEditCommand, GuiObjectRef, LayoutFixturePlacement, LayoutGuiDocument, LayoutGuiEdit,
     LayoutTarget, LayoutTargetKind, ObjectKind, Point3Meters, ProjectDiagnostic,
     ResolvedLayoutFixture, Rotation3Degrees, Scale3, SequenceAudio, SequenceAutomationBinding,
@@ -50,6 +50,10 @@ use crate::dto::{
     SequenceGuiDocument, SequenceGuiEdit, SequenceLane, SequenceLayer, SequenceMarkCollection,
     SequenceMarkRef, SequenceParamAutomation, SequencePasteAnchor, SequenceResizeEdge,
     SequenceSelection, SequenceSelectionEdit, SequenceTimelineClipKind, Transform,
+};
+use crate::gui_geometry::{
+    color_hex, distance_span_meters, empty_resolved_fixture, geometry, geometry_summary,
+    layout_bounds, point3_meters, render_plan,
 };
 
 #[derive(Debug)]
@@ -89,7 +93,7 @@ pub fn project_gui_document(
             );
         }
     };
-    if !is_project_owned_path(&resolved.location.document) {
+    if !is_project_owned_path(resolved.identity.document()) {
         return blocked(
             "Imported dependency documents are read-only.",
             vec![gui_diagnostic(
@@ -117,20 +121,10 @@ pub fn project_gui_document(
 pub fn affected_paths(
     session: &ProjectSession,
     request: &GuiDocumentRequest,
-    edit: &GuiEditCommand,
 ) -> Result<BTreeSet<String>, GuiMutationError> {
     let resolved = resolve_request(session, request).map_err(GuiMutationError::Invalid)?;
     ensure_owned_gui_document(&resolved)?;
-    match (request.view.clone(), edit) {
-        (DocumentViewId::Sequence, GuiEditCommand::Sequence { .. })
-        | (DocumentViewId::Layout, GuiEditCommand::Layout { .. })
-        | (DocumentViewId::Fixture, GuiEditCommand::Fixture { .. }) => {
-            Ok(BTreeSet::from([resolved.location.document.to_string()]))
-        }
-        _ => Err(GuiMutationError::Invalid(
-            "GUI edit type does not match the requested document view.".to_string(),
-        )),
-    }
+    Ok(BTreeSet::from([resolved.identity.document().to_string()]))
 }
 
 pub fn apply_edit(
@@ -138,23 +132,22 @@ pub fn apply_edit(
     request: &GuiDocumentRequest,
     edit: GuiEditCommand,
 ) -> Result<(), GuiMutationError> {
-    let mut candidate = session.clone();
-    let resolved = resolve_request(&candidate, request).map_err(GuiMutationError::Invalid)?;
+    let resolved = resolve_request(session, request).map_err(GuiMutationError::Invalid)?;
     ensure_owned_gui_document(&resolved)?;
     match (request.view.clone(), edit) {
         (DocumentViewId::Sequence, GuiEditCommand::Sequence { edit }) => {
-            edit_sequence(&mut candidate, &resolved, edit)?;
+            edit_sequence(session, &resolved, edit)?;
             let sequence_id = SequenceId(SourceIdentity::new(
-                resolved.location.document.clone(),
-                resolved.source_id.id().to_string(),
+                resolved.identity.document().to_path_buf(),
+                resolved.identity.object().to_string(),
             ));
-            crate::sequence_integrity::validate_sequence_integrity(&candidate, &sequence_id)?;
+            crate::sequence_integrity::validate_sequence_integrity(session, &sequence_id)?;
         }
         (DocumentViewId::Layout, GuiEditCommand::Layout { edit }) => {
-            edit_layout(&mut candidate, &resolved, edit)?;
+            edit_layout(session, &resolved, edit)?;
         }
         (DocumentViewId::Fixture, GuiEditCommand::Fixture { edit }) => {
-            edit_fixture(&mut candidate, &resolved.location, edit)?;
+            edit_fixture(session, &resolved.identity, edit)?;
         }
         _ => {
             return Err(GuiMutationError::Invalid(
@@ -162,7 +155,6 @@ pub fn apply_edit(
             ));
         }
     }
-    *session = candidate;
     Ok(())
 }
 
@@ -197,23 +189,15 @@ pub(crate) fn apply_sequence_selection_edit(
     edit: SequenceSelectionEdit,
     clipboard: &mut Option<SequenceClipboard>,
 ) -> Result<SequenceSelectionMutation, GuiMutationError> {
-    let mut candidate = session.clone();
     let mut candidate_clipboard = clipboard.clone();
-    let result = apply_sequence_selection_edit_inner(
-        &mut candidate,
-        request,
-        edit,
-        &mut candidate_clipboard,
-    )?;
-    if candidate.project != session.project {
-        let resolved = resolve_request(&candidate, request).map_err(GuiMutationError::Invalid)?;
-        let sequence_id = SequenceId(SourceIdentity::new(
-            resolved.location.document,
-            resolved.source_id.id().to_string(),
-        ));
-        crate::sequence_integrity::validate_sequence_integrity(&candidate, &sequence_id)?;
-    }
-    *session = candidate;
+    let result =
+        apply_sequence_selection_edit_inner(session, request, edit, &mut candidate_clipboard)?;
+    let resolved = resolve_request(session, request).map_err(GuiMutationError::Invalid)?;
+    let sequence_id = SequenceId(SourceIdentity::new(
+        resolved.identity.document().to_path_buf(),
+        resolved.identity.object().to_string(),
+    ));
+    crate::sequence_integrity::validate_sequence_integrity(session, &sequence_id)?;
     *clipboard = candidate_clipboard;
     Ok(result)
 }
@@ -232,8 +216,8 @@ fn apply_sequence_selection_edit_inner(
     let resolved = resolve_request(session, request).map_err(GuiMutationError::Invalid)?;
     ensure_owned_gui_document(&resolved)?;
     let sequence_id = SequenceId(SourceIdentity::new(
-        resolved.location.document.clone(),
-        resolved.source_id.id().to_string(),
+        resolved.identity.document().to_path_buf(),
+        resolved.identity.object().to_string(),
     ));
     match edit {
         SequenceSelectionEdit::Copy { selection } => {
@@ -308,19 +292,23 @@ fn apply_sequence_selection_edit_inner(
 }
 
 struct ResolvedGuiObject {
-    source_ref: GuiObjectRef,
-    source_id: SourceObjectId,
-    location: SourceObjectLocation,
+    identity: SourceIdentity,
+    kind: SourceObjectKind,
 }
 
-#[derive(Clone)]
-struct SourceObjectLocation {
-    document: Utf8PathBuf,
-    object_key: String,
+impl ResolvedGuiObject {
+    fn source_ref(&self) -> GuiObjectRef {
+        GuiObjectRef {
+            path: self.identity.document().to_string(),
+            object_key: self.identity.object().to_string(),
+            kind: ObjectKind::from(&self.kind),
+            id: self.identity.object().to_string(),
+        }
+    }
 }
 
 fn ensure_owned_gui_document(resolved: &ResolvedGuiObject) -> Result<(), GuiMutationError> {
-    if is_project_owned_path(&resolved.location.document) {
+    if is_project_owned_path(resolved.identity.document()) {
         Ok(())
     } else {
         Err(GuiMutationError::Blocked(
@@ -353,17 +341,8 @@ fn resolve_request(
         return Err("GUI request must include an object key for this document.".to_string());
     }
     Ok(ResolvedGuiObject {
-        source_ref: GuiObjectRef {
-            path: path.to_string(),
-            object_key: source_id.id().to_string(),
-            kind: object_kind_for_source(source_id.kind()),
-            id: source_id.id().to_string(),
-        },
-        source_id: source_id.clone(),
-        location: SourceObjectLocation {
-            document: path.to_path_buf(),
-            object_key: source_id.id().to_string(),
-        },
+        identity: SourceIdentity::new(path.to_path_buf(), source_id.id().to_string()),
+        kind: source_id.kind().clone(),
     })
 }
 
@@ -376,31 +355,16 @@ fn source_kind_for_view(view: &DocumentViewId) -> Result<SourceObjectKind, Strin
     }
 }
 
-fn object_kind_for_source(kind: &SourceObjectKind) -> ObjectKind {
-    match kind {
-        SourceObjectKind::Project => ObjectKind::Project,
-        SourceObjectKind::Setup => ObjectKind::Setup,
-        SourceObjectKind::Controller => ObjectKind::Controller,
-        SourceObjectKind::Layout => ObjectKind::Layout,
-        SourceObjectKind::Patch => ObjectKind::Patch,
-        SourceObjectKind::FixtureDefinition => ObjectKind::Fixture,
-        SourceObjectKind::Curve => ObjectKind::Curve,
-        SourceObjectKind::Sequence => ObjectKind::Sequence,
-        SourceObjectKind::EffectDefinition | SourceObjectKind::EffectInstance => ObjectKind::Effect,
-        SourceObjectKind::OperatorDefinition => ObjectKind::Operator,
-    }
-}
-
 fn project_sequence(session: &ProjectSession, resolved: &ResolvedGuiObject) -> GuiDocument {
     let id = SequenceId(SourceIdentity::new(
-        resolved.location.document.clone(),
-        resolved.source_id.id().to_string(),
+        resolved.identity.document().to_path_buf(),
+        resolved.identity.object().to_string(),
     ));
     let Some(sequence) = session.project.sequences.get(&id) else {
         return blocked(
             "Sequence is not available in the checked project model.",
             vec![gui_diagnostic(
-                resolved.location.document.as_ref(),
+                resolved.identity.document().as_ref(),
                 "gui.sequence",
                 "Sequence is not available in the checked project model.",
             )],
@@ -486,12 +450,12 @@ fn project_sequence(session: &ProjectSession, resolved: &ResolvedGuiObject) -> G
     };
     GuiDocument::Sequence {
         document: SequenceGuiDocument {
-            path: resolved.location.document.to_string(),
-            source_ref: resolved.source_ref.clone(),
-            object_key: resolved.location.object_key.clone(),
+            path: resolved.identity.document().to_string(),
+            source_ref: resolved.source_ref(),
+            object_key: resolved.identity.object().to_string(),
             duration_seconds: sequence.duration.as_seconds_f64(),
             frame_rate: sequence.frame_rate as f64,
-            audio: sequence_audio(session, &resolved.location.document, &sequence.audio),
+            audio: sequence_audio(session, resolved.identity.document(), &sequence.audio),
             mark_collections: sequence
                 .mark_collections
                 .iter()
@@ -577,8 +541,8 @@ fn automation_clips(sequence: &dawn_language::sequence::Sequence) -> Vec<Sequenc
 
 fn project_layout(session: &ProjectSession, resolved: &ResolvedGuiObject) -> GuiDocument {
     let id = LayoutId(SourceIdentity::new(
-        resolved.location.document.clone(),
-        resolved.source_id.id().to_string(),
+        resolved.identity.document().to_path_buf(),
+        resolved.identity.object().to_string(),
     ));
     let Some(layout) = session.project.layouts.get(&id) else {
         return blocked(
@@ -611,8 +575,8 @@ fn project_layout(session: &ProjectSession, resolved: &ResolvedGuiObject) -> Gui
                 .unwrap_or_else(empty_resolved_fixture);
             LayoutFixturePlacement {
                 source_ref: GuiObjectRef {
-                    path: resolved.location.document.to_string(),
-                    object_key: resolved.location.object_key.clone(),
+                    path: resolved.identity.document().to_string(),
+                    object_key: resolved.identity.object().to_string(),
                     kind: ObjectKind::Fixture,
                     id: fixture.id.0.to_string(),
                 },
@@ -638,10 +602,10 @@ fn project_layout(session: &ProjectSession, resolved: &ResolvedGuiObject) -> Gui
     let render_bounds = layout_bounds(&fixtures);
     GuiDocument::Layout {
         document: LayoutGuiDocument {
-            path: resolved.location.document.to_string(),
-            source_ref: resolved.source_ref.clone(),
-            object_key: resolved.location.object_key.clone(),
-            name: resolved.location.object_key.clone(),
+            path: resolved.identity.document().to_string(),
+            source_ref: resolved.source_ref(),
+            object_key: resolved.identity.object().to_string(),
+            name: resolved.identity.object().to_string(),
             render_bounds,
             fixtures,
         },
@@ -652,18 +616,18 @@ fn project_fixture(session: &ProjectSession, resolved: &ResolvedGuiObject) -> Gu
     let fixtures = session
         .source
         .documents
-        .get(&resolved.location.document)
+        .get(resolved.identity.document())
         .into_iter()
         .flat_map(|document| document.objects())
         .filter(|object| object.kind() == &SourceObjectKind::FixtureDefinition)
         .filter_map(|object| {
             let definition_id = FixtureDefinitionId(SourceIdentity::new(
-                resolved.location.document.clone(),
+                resolved.identity.document().to_path_buf(),
                 object.id().to_string(),
             ));
             let definition = session.project.definitions.fixtures.get(&definition_id)?;
             let source_ref = GuiObjectRef {
-                path: resolved.location.document.to_string(),
+                path: resolved.identity.document().to_string(),
                 object_key: object.id().to_string(),
                 kind: ObjectKind::Fixture,
                 id: object.id().to_string(),
@@ -682,9 +646,9 @@ fn project_fixture(session: &ProjectSession, resolved: &ResolvedGuiObject) -> Gu
         .collect::<Vec<_>>();
     GuiDocument::Fixture {
         document: FixtureGuiDocument {
-            path: resolved.location.document.to_string(),
-            source_ref: Some(resolved.source_ref.clone()),
-            selected_object_key: Some(resolved.location.object_key.clone()),
+            path: resolved.identity.document().to_string(),
+            source_ref: Some(resolved.source_ref()),
+            selected_object_key: Some(resolved.identity.object().to_string()),
             fixtures,
         },
     }
@@ -1487,254 +1451,6 @@ fn array_param_from_sequence_values(
     }
 }
 
-fn geometry(geometry: &DomainGeometry) -> Geometry {
-    match geometry {
-        DomainGeometry::Points { points } => Geometry::Points {
-            points: points.iter().map(|point| point3_meters(*point)).collect(),
-        },
-        DomainGeometry::Lines { points, pixels } => Geometry::Lines {
-            points: points.iter().map(|point| point3_meters(*point)).collect(),
-            pixels: *pixels,
-        },
-        DomainGeometry::Arc {
-            center,
-            radius,
-            start_degrees,
-            end_degrees,
-            pixels,
-        } => Geometry::Arc {
-            center: point3_meters(*center),
-            radius_meters: distance_span_meters(*radius),
-            start_degrees: *start_degrees,
-            end_degrees: *end_degrees,
-            pixels: *pixels,
-        },
-    }
-}
-
-fn render_plan(geometry: &DomainGeometry, bulb_radius: DistanceSpan) -> GeometryRenderPlan {
-    let emitters = emitters(geometry);
-    let guides = guides(geometry);
-    let bounds = bounds_for_points(emitters.iter().cloned());
-    GeometryRenderPlan {
-        emitters,
-        guides,
-        bounds,
-        bulb_radius_meters: distance_span_meters(bulb_radius),
-    }
-}
-
-fn emitters(geometry: &DomainGeometry) -> Vec<GeometryRenderPoint> {
-    match geometry {
-        DomainGeometry::Points { points } => {
-            points.iter().map(|point| render_point(*point)).collect()
-        }
-        DomainGeometry::Lines { points, pixels } => line_emitters(points, *pixels),
-        DomainGeometry::Arc {
-            center,
-            radius,
-            start_degrees,
-            end_degrees,
-            pixels,
-        } => arc_emitters(*center, *radius, *start_degrees, *end_degrees, *pixels),
-    }
-}
-
-fn guides(geometry: &DomainGeometry) -> Vec<GeometryRenderGuide> {
-    match geometry {
-        DomainGeometry::Lines { points, .. } => points
-            .windows(2)
-            .filter_map(|window| {
-                let [from, to] = window else {
-                    return None;
-                };
-                Some(GeometryRenderGuide::Line {
-                    from: render_point(*from),
-                    to: render_point(*to),
-                })
-            })
-            .collect(),
-        DomainGeometry::Arc {
-            center,
-            radius,
-            start_degrees,
-            end_degrees,
-            ..
-        } => {
-            let radius_meters = distance_span_meters(*radius);
-            let start = arc_point(*center, radius_meters, *start_degrees);
-            let end = arc_point(*center, radius_meters, *end_degrees);
-            vec![GeometryRenderGuide::Arc {
-                start,
-                end,
-                radius_x_meters: radius_meters,
-                radius_y_meters: radius_meters,
-                rotation: 0.0,
-                large_arc: (*end_degrees - *start_degrees).abs() > 180.0,
-                sweep_positive: end_degrees >= start_degrees,
-            }]
-        }
-        DomainGeometry::Points { .. } => Vec::new(),
-    }
-}
-
-fn line_emitters(points: &[Point3], pixels: u32) -> Vec<GeometryRenderPoint> {
-    if points.is_empty() || pixels == 0 {
-        return Vec::new();
-    }
-    if points.len() == 1 || pixels == 1 {
-        return vec![render_point(points[0])];
-    }
-    let last = points[points.len() - 1];
-    let first = points[0];
-    (0..pixels)
-        .map(|index| {
-            let t = f64::from(index) / f64::from(pixels.saturating_sub(1));
-            GeometryRenderPoint {
-                x_meters: lerp(distance_meters(first.x), distance_meters(last.x), t),
-                y_meters: lerp(distance_meters(first.y), distance_meters(last.y), t),
-                z_meters: lerp(distance_meters(first.z), distance_meters(last.z), t),
-            }
-        })
-        .collect()
-}
-
-fn arc_emitters(
-    center: Point3,
-    radius: DistanceSpan,
-    start_degrees: f64,
-    end_degrees: f64,
-    pixels: u32,
-) -> Vec<GeometryRenderPoint> {
-    if pixels == 0 {
-        return Vec::new();
-    }
-    let radius_meters = distance_span_meters(radius);
-    (0..pixels)
-        .map(|index| {
-            let t = if pixels == 1 {
-                0.0
-            } else {
-                f64::from(index) / f64::from(pixels.saturating_sub(1))
-            };
-            arc_point(center, radius_meters, lerp(start_degrees, end_degrees, t))
-        })
-        .collect()
-}
-
-fn arc_point(center: Point3, radius_meters: f64, degrees: f64) -> GeometryRenderPoint {
-    let radians = degrees.to_radians();
-    GeometryRenderPoint {
-        x_meters: distance_meters(center.x) + radius_meters * radians.cos(),
-        y_meters: distance_meters(center.y) + radius_meters * radians.sin(),
-        z_meters: distance_meters(center.z),
-    }
-}
-
-fn render_point(point: Point3) -> GeometryRenderPoint {
-    GeometryRenderPoint {
-        x_meters: distance_meters(point.x),
-        y_meters: distance_meters(point.y),
-        z_meters: distance_meters(point.z),
-    }
-}
-
-fn point3_meters(point: Point3) -> Point3Meters {
-    Point3Meters {
-        x_meters: distance_meters(point.x),
-        y_meters: distance_meters(point.y),
-        z_meters: distance_meters(point.z),
-    }
-}
-
-fn distance_meters(distance: Distance) -> f64 {
-    distance.micrometers as f64 / 1_000_000.0
-}
-
-fn distance_span_meters(distance: DistanceSpan) -> f64 {
-    distance.micrometers as f64 / 1_000_000.0
-}
-
-fn lerp(start: f64, end: f64, t: f64) -> f64 {
-    start + (end - start) * t
-}
-
-fn bounds_for_points(points: impl Iterator<Item = GeometryRenderPoint>) -> GeometryRenderBounds {
-    let mut min_x = 0.0_f64;
-    let mut min_y = 0.0_f64;
-    let mut max_x = 1.0_f64;
-    let mut max_y = 1.0_f64;
-    let mut saw = false;
-    for point in points {
-        if !saw {
-            min_x = point.x_meters;
-            min_y = point.y_meters;
-            max_x = point.x_meters;
-            max_y = point.y_meters;
-            saw = true;
-        } else {
-            min_x = min_x.min(point.x_meters);
-            min_y = min_y.min(point.y_meters);
-            max_x = max_x.max(point.x_meters);
-            max_y = max_y.max(point.y_meters);
-        }
-    }
-    if (max_x - min_x).abs() < 1.0 {
-        max_x = min_x + 1.0;
-    }
-    if (max_y - min_y).abs() < 1.0 {
-        max_y = min_y + 1.0;
-    }
-    GeometryRenderBounds {
-        min_x_meters: min_x,
-        min_y_meters: min_y,
-        max_x_meters: max_x,
-        max_y_meters: max_y,
-    }
-}
-
-fn layout_bounds(fixtures: &[LayoutFixturePlacement]) -> GeometryRenderBounds {
-    bounds_for_points(fixtures.iter().map(|fixture| GeometryRenderPoint {
-        x_meters: fixture.transform.position.x_meters,
-        y_meters: fixture.transform.position.y_meters,
-        z_meters: fixture.transform.position.z_meters,
-    }))
-}
-
-fn geometry_summary(geometry: &DomainGeometry) -> String {
-    match geometry {
-        DomainGeometry::Points { points } => format!("{} points", points.len()),
-        DomainGeometry::Lines { pixels, .. } => format!("{pixels} line pixels"),
-        DomainGeometry::Arc { pixels, .. } => format!("{pixels} arc pixels"),
-    }
-}
-
-fn empty_resolved_fixture() -> ResolvedLayoutFixture {
-    ResolvedLayoutFixture {
-        name: "Missing fixture".to_string(),
-        color_model: "rgb".to_string(),
-        bulb_diameter_meters: 0.05,
-        geometry_summary: "Missing".to_string(),
-        render_plan: GeometryRenderPlan {
-            emitters: Vec::new(),
-            guides: Vec::new(),
-            bounds: GeometryRenderBounds {
-                min_x_meters: 0.0,
-                min_y_meters: 0.0,
-                max_x_meters: 1.0,
-                max_y_meters: 1.0,
-            },
-            bulb_radius_meters: 0.025,
-        },
-        source_path: String::new(),
-        object_key: None,
-    }
-}
-
-fn color_hex(color: Color) -> String {
-    format!("#{:02x}{:02x}{:02x}", color.red, color.green, color.blue)
-}
-
 fn gui_diagnostic(path: &str, code: &str, message: &str) -> ProjectDiagnostic {
     ProjectDiagnostic {
         path: path.to_string(),
@@ -1751,8 +1467,8 @@ fn edit_layout(
     edit: LayoutGuiEdit,
 ) -> Result<(), GuiMutationError> {
     let layout_id = LayoutId(SourceIdentity::new(
-        resolved.location.document.clone(),
-        resolved.source_id.id().to_string(),
+        resolved.identity.document().to_path_buf(),
+        resolved.identity.object().to_string(),
     ));
     let layout = session
         .project
@@ -1778,7 +1494,7 @@ fn edit_layout(
 
 fn edit_fixture(
     session: &mut ProjectSession,
-    location: &SourceObjectLocation,
+    identity: &SourceIdentity,
     edit: FixtureGuiEdit,
 ) -> Result<(), GuiMutationError> {
     match edit {
@@ -1786,7 +1502,7 @@ fn edit_fixture(
             object_key,
             bulb_diameter_meters,
         } => {
-            let definition = fixture_definition_mut(session, &location.document, &object_key)?;
+            let definition = fixture_definition_mut(session, identity.document(), &object_key)?;
             definition.bulb_radius = distance_span(bulb_diameter_meters / 2.0);
             Ok(())
         }
@@ -1795,7 +1511,7 @@ fn edit_fixture(
             point_index,
             point,
         } => {
-            let definition = fixture_definition_mut(session, &location.document, &object_key)?;
+            let definition = fixture_definition_mut(session, identity.document(), &object_key)?;
             let DomainGeometry::Points { points } = &mut definition.geometry else {
                 return Err(GuiMutationError::Invalid(
                     "Fixture geometry does not contain movable points.".to_string(),
@@ -1833,8 +1549,8 @@ fn edit_sequence(
         _ => None,
     };
     let sequence_id = SequenceId(SourceIdentity::new(
-        resolved.location.document.clone(),
-        resolved.source_id.id().to_string(),
+        resolved.identity.document().to_path_buf(),
+        resolved.identity.object().to_string(),
     ));
     match edit {
         SequenceGuiEdit::SetDuration { duration_seconds } => {
@@ -1848,7 +1564,7 @@ fn edit_sequence(
         SequenceGuiEdit::SetAudio { import_path } => {
             let audio = match import_path {
                 Some(import_path) => {
-                    let document = resolved.location.document.clone();
+                    let document = resolved.identity.document().to_path_buf();
                     let id = register_sequence_audio_asset(session, &document, &import_path)?;
                     DomainSequenceAudio::Asset(id)
                 }
@@ -2024,7 +1740,7 @@ fn edit_sequence(
             let params = effect_definition.compiled.params().to_vec();
             ensure_document_can_reference_source(
                 session,
-                &resolved.location.document,
+                resolved.identity.document(),
                 SourceObjectKind::EffectDefinition,
                 &definition.0,
             )
@@ -2201,7 +1917,7 @@ fn edit_sequence(
             }
             ensure_document_can_reference_source(
                 session,
-                &resolved.location.document,
+                resolved.identity.document(),
                 SourceObjectKind::EffectDefinition,
                 &definition.0,
             )
@@ -2244,7 +1960,7 @@ fn edit_sequence(
             }
             ensure_document_can_reference_source(
                 session,
-                &resolved.location.document,
+                resolved.identity.document(),
                 SourceObjectKind::Curve,
                 &curve.0,
             )
@@ -2265,7 +1981,7 @@ fn edit_sequence(
                 .insert(identifier(&name)?, effect_param_value_from_gui(value)?);
         }
         SequenceGuiEdit::AddGraphOperatorNode { operator, x, y } => {
-            let operator = graph_operator_from_gui(&operator);
+            let operator = graph_operator_from_gui(&operator)?;
             let definition = session
                 .project
                 .definitions
@@ -2278,7 +1994,7 @@ fn edit_sequence(
             if let OperatorRef::Custom(id) = &operator {
                 ensure_document_can_reference_source(
                     session,
-                    &resolved.location.document,
+                    resolved.identity.document(),
                     SourceObjectKind::OperatorDefinition,
                     &id.0,
                 )
@@ -2462,7 +2178,7 @@ fn edit_sequence(
             }
             ensure_document_can_reference_source(
                 session,
-                &resolved.location.document,
+                resolved.identity.document(),
                 SourceObjectKind::Curve,
                 &curve.0,
             )
@@ -2707,8 +2423,8 @@ fn current_curve_param_value(
     name: &str,
 ) -> Result<SequenceEffectParamValue, GuiMutationError> {
     let sequence_id = SequenceId(SourceIdentity::new(
-        resolved.location.document.clone(),
-        resolved.source_id.id().to_string(),
+        resolved.identity.document().to_path_buf(),
+        resolved.identity.object().to_string(),
     ));
     let sequence = session
         .project
@@ -2768,8 +2484,8 @@ fn current_graph_curve_param_value(
     name: &str,
 ) -> Result<SequenceEffectParamValue, GuiMutationError> {
     let sequence_id = SequenceId(SourceIdentity::new(
-        resolved.location.document.clone(),
-        resolved.source_id.id().to_string(),
+        resolved.identity.document().to_path_buf(),
+        resolved.identity.object().to_string(),
     ));
     let sequence = session
         .project
@@ -3540,8 +3256,10 @@ fn create_sequence_layer(
     Ok(())
 }
 
-fn graph_operator_from_gui(operator: &SequenceGraphOperator) -> OperatorRef {
-    match operator {
+fn graph_operator_from_gui(
+    operator: &SequenceGraphOperator,
+) -> Result<OperatorRef, GuiMutationError> {
+    Ok(match operator {
         SequenceGraphOperator::Builtin { operator } => OperatorRef::Builtin(match operator {
             SequenceBuiltinOperator::Max => BuiltinOperator::Max,
             SequenceBuiltinOperator::Add => BuiltinOperator::Add,
@@ -3556,10 +3274,10 @@ fn graph_operator_from_gui(operator: &SequenceGraphOperator) -> OperatorRef {
         SequenceGraphOperator::Custom { path, object_key } => {
             OperatorRef::Custom(OperatorDefinitionId(SourceIdentity::new(
                 Utf8PathBuf::from(path),
-                object_key.clone(),
+                identifier(object_key)?.as_str().to_string(),
             )))
         }
-    }
+    })
 }
 
 fn mark_collection_mut<'a>(
@@ -3686,84 +3404,19 @@ fn automation_binding_value_at(
     binding: &AutomationBinding,
     seconds: f64,
 ) -> Result<EffectParamValue, GuiMutationError> {
-    let normalized = sample_gui_automation_clip(clip, seconds);
-    Ok(match &binding.mapping {
-        AutomationMapping::Float { min, max } => {
-            EffectParamValue::Float(lerp(*min, *max, normalized))
-        }
-        AutomationMapping::Int { min, max } => {
-            EffectParamValue::Int(lerp(*min as f64, *max as f64, normalized).round() as i64)
-        }
-        AutomationMapping::Bool => EffectParamValue::Bool(normalized >= 0.5),
-        AutomationMapping::Enum { values } => {
-            if values.is_empty() {
-                return Err(GuiMutationError::Invalid(
-                    "Enum automation mapping has no values.".to_string(),
-                ));
+    automation_value_at(clip, binding, seconds)
+        .map(|value| match value {
+            AutomationValue::Int(value) => EffectParamValue::Int(value),
+            AutomationValue::Float(value) => EffectParamValue::Float(value),
+            AutomationValue::Bool(value) => EffectParamValue::Bool(value),
+            AutomationValue::Enum(value) => EffectParamValue::Enum(value),
+            AutomationValue::FloatCurve(value) => {
+                EffectParamValue::Curve(CurveSource::Inline(value))
             }
-            let index = ((normalized.clamp(0.0, 1.0) * values.len() as f64).floor() as usize)
-                .min(values.len().saturating_sub(1));
-            EffectParamValue::Enum(values[index].clone())
-        }
-        AutomationMapping::FloatCurve { min, max } => {
-            EffectParamValue::Curve(CurveSource::Inline(Curve {
-                points: vec![CurvePoint {
-                    position: 0.0,
-                    value: CurveValue::Float(lerp(*min, *max, normalized)),
-                }],
-            }))
-        }
-    })
-}
-
-fn sample_gui_automation_clip(clip: &AutomationClip, seconds: f64) -> f64 {
-    let start_seconds = clip.start.as_seconds_f64();
-    let duration_seconds = clip.duration.as_seconds_f64();
-    let position = if duration_seconds <= 0.0 {
-        0.0
-    } else {
-        ((seconds - start_seconds) / duration_seconds).clamp(0.0, 1.0)
-    };
-    sample_gui_float_curve(&clip.curve, position).clamp(0.0, 1.0)
-}
-
-fn sample_gui_float_curve(curve: &Curve, position: f64) -> f64 {
-    let mut points = curve.points.iter().collect::<Vec<_>>();
-    points.sort_by(|left, right| left.position.total_cmp(&right.position));
-    let Some(first) = points.first() else {
-        return 0.0;
-    };
-    if position <= first.position {
-        return gui_curve_point_float(first);
-    }
-    for pair in points.windows(2) {
-        let left = pair[0];
-        let right = pair[1];
-        if position <= right.position {
-            let span = right.position - left.position;
-            let amount = if span <= 0.0 {
-                0.0
-            } else {
-                (position - left.position) / span
-            };
-            return lerp(
-                gui_curve_point_float(left),
-                gui_curve_point_float(right),
-                amount,
-            );
-        }
-    }
-    points
-        .last()
-        .map(|point| gui_curve_point_float(point))
-        .unwrap_or(0.0)
-}
-
-fn gui_curve_point_float(point: &CurvePoint) -> f64 {
-    match point.value {
-        CurveValue::Float(value) => value,
-        CurveValue::Color(_) => 0.0,
-    }
+        })
+        .ok_or_else(|| {
+            GuiMutationError::Invalid("Enum automation mapping has no values.".to_string())
+        })
 }
 
 fn default_automation_curve() -> Curve {
@@ -4083,7 +3736,7 @@ mod tests {
                 Vec::new(),
                 vec![SourceObjectId::new(SourceObjectKind::Sequence, "seq".to_string()).unwrap()],
                 SourceDocumentKind::Dawn {
-                    value: yaml_serde::Value::Mapping(yaml_serde::Mapping::new()),
+                    original_value: yaml_serde::Value::Mapping(yaml_serde::Mapping::new()),
                 },
             )
             .unwrap(),
@@ -4108,7 +3761,7 @@ mod tests {
                 Vec::new(),
                 vec![SourceObjectId::new(SourceObjectKind::Curve, "shape".to_string()).unwrap()],
                 SourceDocumentKind::Dawn {
-                    value: yaml_serde::Value::Mapping(yaml_serde::Mapping::new()),
+                    original_value: yaml_serde::Value::Mapping(yaml_serde::Mapping::new()),
                 },
             )
             .unwrap(),
@@ -4246,7 +3899,7 @@ mod tests {
                                 .unwrap(),
                         ],
                         SourceDocumentKind::Dawn {
-                            value: yaml_serde::Value::Mapping(yaml_serde::Mapping::new()),
+                            original_value: yaml_serde::Value::Mapping(yaml_serde::Mapping::new()),
                         },
                     )
                     .unwrap(),
