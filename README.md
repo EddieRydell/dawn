@@ -42,12 +42,16 @@ That makes the project useful as a technical showcase for:
 ```text
 apps/desktop/                 Tauri desktop app
 apps/desktop/src/             Rust desktop service, app state, commands, persistence
+apps/desktop/src/state/       Desktop audio, workspace, GUI edit, project, render, and filesystem workflows
+apps/desktop/src/gui/         Typed GUI projection, edit, selection, and domain-conversion modules
 apps/desktop/src/state_tasks.rs Background save/render scheduling and GUI history
 apps/desktop/src/gui_geometry.rs Read-only fixture/layout geometry projection
 apps/desktop/frontend/        React/TypeScript frontend
 apps/desktop/frontend/src/ui/gui/sequence/sequenceWaveform.ts  Timeline waveform cache/rendering
 crates/dawn-language/         Core Dawn model, sequence types, effect DSL, compiler, VM
 crates/dawn-project-io/       Dawn project loading, diagnostics, source ownership, save/export
+crates/dawn-project-io/src/loader/  Project loading, import resolution, and document parsing
+crates/dawn-project-io/src/serialization/  Domain-specific Dawn document serialization
 crates/dawn-runtime/          Prepared sequence and effect rendering
 examples/                     Example Dawn projects and fixtures
 docs/                         Performance and regression tracking notes

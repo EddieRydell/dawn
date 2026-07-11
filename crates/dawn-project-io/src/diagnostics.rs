@@ -1,0 +1,429 @@
+use super::*;
+
+pub(crate) fn discover_reachable_files(
+    path: &Utf8Path,
+) -> Result<(Utf8PathBuf, Vec<Utf8PathBuf>), LoadProjectError> {
+    let loader = Loader::new(path)?;
+    let mut discovered = IndexSet::new();
+    discover_reachable_file(&loader.source_root, &loader.entrypoint, &mut discovered)?;
+    Ok((loader.source_root, discovered.into_iter().collect()))
+}
+
+pub(crate) fn discover_reachable_file(
+    source_root: &Utf8Path,
+    relative: &Utf8Path,
+    discovered: &mut IndexSet<Utf8PathBuf>,
+) -> Result<(), LoadProjectError> {
+    if !discovered.insert(relative.to_path_buf()) {
+        return Ok(());
+    }
+
+    let absolute = source_root.join(relative);
+    let text = fs::read_to_string(&absolute).map_err(|source| LoadProjectError::Io {
+        path: absolute.clone(),
+        source,
+    })?;
+    if relative.file_name().is_some_and(|file_name| {
+        file_name.ends_with(".effect.dawn") || file_name.ends_with(".operator.dawn")
+    }) {
+        return Ok(());
+    }
+
+    let value = parse_yaml_value(relative, &text)?;
+    let Some(map) = mapping(&value) else {
+        return Ok(());
+    };
+    for import in parse_imports(relative, map)? {
+        let importer_dir = relative.parent().unwrap_or_else(|| Utf8Path::new(""));
+        let target_relative = normalize_relative(importer_dir.join(&import.from));
+        let target_absolute = source_root.join(&target_relative);
+        if target_absolute.is_dir() {
+            for child in sorted_dawn_children(source_root, &target_absolute)? {
+                discover_reachable_file(source_root, &child, discovered)?;
+            }
+        } else if target_absolute.is_file() {
+            discover_reachable_file(source_root, &target_relative, discovered)?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn parse_yaml_value(path: &Utf8Path, text: &str) -> Result<Value, LoadProjectError> {
+    let node = marked_yaml::parse_yaml_with_options(
+        0,
+        text,
+        marked_yaml::LoaderOptions::default().error_on_duplicate_keys(true),
+    )
+    .map_err(|source| LoadProjectError::ParseYaml {
+        path: path.to_path_buf(),
+        range: marked_yaml_error_range(&source),
+        message: source.to_string(),
+    })?;
+    let value: Value =
+        yaml_serde::from_str(text).map_err(|source| LoadProjectError::ParseYaml {
+            path: path.to_path_buf(),
+            range: yaml_error_range(&source),
+            message: source.to_string(),
+        })?;
+    let source_index = YamlSourceIndex::from_value_and_node(&value, &node);
+    YAML_SOURCE_INDICES.with(|indices| {
+        indices
+            .borrow_mut()
+            .insert(path.to_path_buf(), source_index);
+    });
+    Ok(value)
+}
+
+pub(crate) fn sorted_dawn_children(
+    source_root: &Utf8Path,
+    absolute: &Utf8Path,
+) -> Result<Vec<Utf8PathBuf>, LoadProjectError> {
+    let mut children = Vec::new();
+    for entry in fs::read_dir(absolute).map_err(|source| LoadProjectError::Io {
+        path: absolute.to_path_buf(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| LoadProjectError::Io {
+            path: absolute.to_path_buf(),
+            source,
+        })?;
+        let path = Utf8PathBuf::from_path_buf(entry.path()).map_err(|path| {
+            LoadProjectError::InvalidDocument {
+                path: absolute.to_path_buf(),
+                range: None,
+                message: format!("non-utf8 import child path `{}`", path.display()),
+            }
+        })?;
+        if path.is_file() && path.file_name().is_some_and(|name| name.ends_with(".dawn")) {
+            children.push(relative_path(source_root, &path)?);
+        }
+    }
+    children.sort();
+    Ok(children)
+}
+
+pub(crate) fn check_absolute_document(
+    source_root: &Utf8Path,
+    relative: &Utf8Path,
+) -> Vec<IoDiagnostic> {
+    let path = source_root.join(relative);
+    match fs::read_to_string(&path) {
+        Ok(text) => {
+            let diagnostic_path = relative.to_path_buf();
+            check_document_text(&diagnostic_path, &text)
+        }
+        Err(source) => vec![IoDiagnostic {
+            path: relative.to_path_buf(),
+            range: None,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::IoRead,
+            message: source.to_string(),
+        }],
+    }
+}
+
+pub(crate) fn effect_diagnostics(path: &Utf8Path, text: &str) -> Vec<IoDiagnostic> {
+    match compile_effects(text) {
+        Ok(_) => Vec::new(),
+        Err(diagnostics) => diagnostics
+            .into_iter()
+            .map(|diagnostic| {
+                dsl_diagnostic(path, text, diagnostic, IoDiagnosticCode::EffectCompile)
+            })
+            .collect(),
+    }
+}
+
+pub(crate) fn operator_diagnostics(path: &Utf8Path, text: &str) -> Vec<IoDiagnostic> {
+    match compile_operators(text) {
+        Ok(_) => Vec::new(),
+        Err(diagnostics) => diagnostics
+            .into_iter()
+            .map(|diagnostic| {
+                dsl_diagnostic(path, text, diagnostic, IoDiagnosticCode::OperatorCompile)
+            })
+            .collect(),
+    }
+}
+
+pub(crate) fn dsl_diagnostic(
+    path: &Utf8Path,
+    text: &str,
+    diagnostic: DslDiagnostic,
+    code: IoDiagnosticCode,
+) -> IoDiagnostic {
+    IoDiagnostic {
+        path: path.to_path_buf(),
+        range: Some(byte_range(text, diagnostic.span.start, diagnostic.span.end)),
+        severity: IoDiagnosticSeverity::Error,
+        code,
+        message: diagnostic.message,
+    }
+}
+
+pub(crate) fn load_error_diagnostic(error: LoadProjectError) -> IoDiagnostic {
+    match error {
+        LoadProjectError::InvalidEntrypoint { path } => IoDiagnostic {
+            path,
+            range: None,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::DawnLoad,
+            message: "invalid entrypoint".to_string(),
+        },
+        LoadProjectError::Io { path, source } => IoDiagnostic {
+            path,
+            range: None,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::IoRead,
+            message: source.to_string(),
+        },
+        LoadProjectError::ParseYaml {
+            path,
+            message,
+            range,
+        } => IoDiagnostic {
+            path,
+            range,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::YamlParse,
+            message,
+        },
+        LoadProjectError::InvalidDocument {
+            path,
+            range,
+            message,
+        } => IoDiagnostic {
+            path,
+            range,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::DawnLoad,
+            message,
+        },
+        LoadProjectError::InvalidReference {
+            path,
+            range,
+            reference,
+        } => IoDiagnostic {
+            path,
+            range,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::DawnReference,
+            message: format!("invalid reference {reference}"),
+        },
+        LoadProjectError::InvalidEffect { path, diagnostics } => IoDiagnostic {
+            path,
+            range: None,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::EffectCompile,
+            message: diagnostics
+                .into_iter()
+                .map(|diagnostic| diagnostic.message)
+                .collect::<Vec<_>>()
+                .join(", "),
+        },
+        LoadProjectError::InvalidOperator { path, diagnostics } => IoDiagnostic {
+            path,
+            range: None,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::OperatorCompile,
+            message: diagnostics
+                .into_iter()
+                .map(|diagnostic| diagnostic.message)
+                .collect::<Vec<_>>()
+                .join(", "),
+        },
+    }
+}
+
+pub(crate) fn push_diagnostic(diagnostics: &mut Vec<IoDiagnostic>, diagnostic: IoDiagnostic) {
+    if !diagnostics.contains(&diagnostic) {
+        diagnostics.push(diagnostic);
+    }
+}
+
+pub(crate) fn push_load_error_diagnostics(
+    diagnostics: &mut Vec<IoDiagnostic>,
+    error: LoadProjectError,
+) {
+    match error {
+        LoadProjectError::InvalidEffect {
+            diagnostics: effect_diagnostics,
+            ..
+        } => {
+            for diagnostic in effect_diagnostics {
+                push_diagnostic(diagnostics, diagnostic);
+            }
+        }
+        LoadProjectError::InvalidOperator {
+            diagnostics: operator_diagnostics,
+            ..
+        } => {
+            for diagnostic in operator_diagnostics {
+                push_diagnostic(diagnostics, diagnostic);
+            }
+        }
+        other => push_diagnostic(diagnostics, load_error_diagnostic(other)),
+    }
+}
+
+pub(crate) fn with_yaml_location(
+    error: LoadProjectError,
+    path: &Utf8Path,
+    range: Option<TextRange>,
+) -> LoadProjectError {
+    match error {
+        LoadProjectError::InvalidDocument { message, .. } => LoadProjectError::InvalidDocument {
+            path: path.to_path_buf(),
+            range,
+            message,
+        },
+        LoadProjectError::InvalidReference { reference, .. } => {
+            LoadProjectError::InvalidReference {
+                path: path.to_path_buf(),
+                range,
+                reference,
+            }
+        }
+        other => other,
+    }
+}
+
+pub(crate) fn yaml_error_range(error: &yaml_serde::Error) -> Option<TextRange> {
+    let location = error.location()?;
+    let line = location.line().saturating_sub(1) as u32;
+    let character = location.column().saturating_sub(1) as u32;
+    Some(TextRange {
+        start: TextPosition { line, character },
+        end: TextPosition {
+            line,
+            character: character.saturating_add(1),
+        },
+    })
+}
+
+pub(crate) fn marked_yaml_error_range(error: &MarkedYamlError) -> Option<TextRange> {
+    match error {
+        MarkedYamlError::TopLevelMustBeMapping(marker)
+        | MarkedYamlError::TopLevelMustBeSequence(marker)
+        | MarkedYamlError::UnexpectedAnchor(marker)
+        | MarkedYamlError::MappingKeyMustBeScalar(marker)
+        | MarkedYamlError::UnexpectedTag(marker)
+        | MarkedYamlError::ScanError(marker, _) => Some(marker_range(marker)),
+        MarkedYamlError::DuplicateKey(inner) => span_range(inner.key.span()),
+    }
+}
+
+pub(crate) fn marker_range(marker: &Marker) -> TextRange {
+    let line = marker.line().saturating_sub(1) as u32;
+    let character = marker.column().saturating_sub(1) as u32;
+    TextRange {
+        start: TextPosition { line, character },
+        end: TextPosition {
+            line,
+            character: character.saturating_add(1),
+        },
+    }
+}
+
+pub(crate) fn span_range(span: &marked_yaml::Span) -> Option<TextRange> {
+    let start = span.start()?;
+    let end = span.end().unwrap_or(start);
+    let start_line = start.line().saturating_sub(1) as u32;
+    let start_character = start.column().saturating_sub(1) as u32;
+    let end_line = end.line().saturating_sub(1) as u32;
+    let mut end_character = end.column().saturating_sub(1) as u32;
+    if start_line == end_line && start_character == end_character {
+        end_character = end_character.saturating_add(1);
+    }
+    Some(TextRange {
+        start: TextPosition {
+            line: start_line,
+            character: start_character,
+        },
+        end: TextPosition {
+            line: end_line,
+            character: end_character,
+        },
+    })
+}
+
+pub(crate) fn node_range(node: &Node) -> Option<TextRange> {
+    match node {
+        Node::Scalar(scalar) => scalar_range(scalar),
+        Node::Mapping(mapping) => span_range(mapping.span()),
+        Node::Sequence(sequence) => span_range(sequence.span()),
+    }
+}
+
+pub(crate) fn scalar_range(scalar: &marked_yaml::types::MarkedScalarNode) -> Option<TextRange> {
+    let start = scalar.span().start()?;
+    let line = start.line().saturating_sub(1) as u32;
+    let character = start.column().saturating_sub(1) as u32;
+    let width = scalar.as_str().chars().count().max(1) as u32;
+    Some(TextRange {
+        start: TextPosition { line, character },
+        end: TextPosition {
+            line,
+            character: character.saturating_add(width),
+        },
+    })
+}
+
+pub(crate) fn source_range_for_value(path: &Utf8Path, value: &Value) -> Option<TextRange> {
+    YAML_SOURCE_INDICES.with(|indices| {
+        indices
+            .borrow_mut()
+            .get_mut(path)
+            .and_then(|index| index.range_for_value(value))
+    })
+}
+
+pub(crate) fn source_range_for_field_value(
+    path: &Utf8Path,
+    value: &Value,
+    key: &str,
+) -> Option<TextRange> {
+    YAML_SOURCE_INDICES.with(|indices| {
+        indices
+            .borrow_mut()
+            .get_mut(path)
+            .and_then(|index| index.range_for_field_value(value, key))
+    })
+}
+
+pub(crate) fn source_range_for_scalar(path: &Utf8Path, value: &str) -> Option<TextRange> {
+    YAML_SOURCE_INDICES.with(|indices| {
+        indices
+            .borrow_mut()
+            .get_mut(path)
+            .and_then(|index| index.range_for_scalar(value))
+    })
+}
+
+pub(crate) fn byte_range(text: &str, start: usize, end: usize) -> TextRange {
+    let start = byte_position(text, start);
+    let mut end = byte_position(text, end);
+    if end == start {
+        end.character = end.character.saturating_add(1);
+    }
+    TextRange { start, end }
+}
+
+pub(crate) fn byte_position(text: &str, byte_offset: usize) -> TextPosition {
+    let clamped = byte_offset.min(text.len());
+    let mut line = 0;
+    let mut line_start = 0;
+    for (index, character) in text.char_indices() {
+        if index >= clamped {
+            break;
+        }
+        if character == '\n' {
+            line += 1;
+            line_start = index + character.len_utf8();
+        }
+    }
+    TextPosition {
+        line,
+        character: text[line_start..clamped].chars().count() as u32,
+    }
+}

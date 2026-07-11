@@ -5,7 +5,9 @@
 This is a Rust workspace. Domain types and canonical automation evaluation live in `crates/dawn-language`; project parsing, import/source ownership, diagnostics, and serialization live in `crates/dawn-project-io`; playback preparation and rendering live in `crates/dawn-runtime`. The desktop service and UI state live under `apps/desktop/src`. Example Dawn projects and fixtures are in `examples/`.
 
 The typed `DawnProject` is authoritative after loading. `SourceProject` records document ownership, imports, original source needed for non-YAML DSL documents, and referenced assets. Saving derives YAML directly from typed state; do not add a synchronization or typed-to-YAML mutation phase.
-Project/source metadata and project-owned/relative-path policy live in `crates/dawn-project-io/src/source.rs`; loading, resolution, diagnostics, and serialization operate on that single source model from the IO crate root.
+Project/source metadata and project-owned/relative-path policy live in `crates/dawn-project-io/src/source.rs`. Loading, import resolution, parsing, diagnostics, and serialization live in their descriptive modules under `crates/dawn-project-io/src`; `lib.rs` is the public facade.
+
+Desktop state orchestration is split by workflow under `apps/desktop/src/state`, and typed GUI behavior is split into projection, editing, selection, and model conversion under `apps/desktop/src/gui`. Keep new behavior with the owning workflow instead of growing the module roots.
 Mutual Dawn document imports are valid. The loader indexes a document's local objects before following imports; do not reject an in-progress document as a cycle error.
 
 ## Testing Guidelines

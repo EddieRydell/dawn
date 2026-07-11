@@ -1,0 +1,578 @@
+use super::*;
+
+pub(super) fn sequence_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    sequence: &Sequence,
+) -> Result<Value, ExportProjectError> {
+    let mut value = typed_object("sequence");
+    value.insert(
+        string_value("duration"),
+        Value::String(seconds_string(sequence.duration.as_seconds_f64())),
+    );
+    value.insert(
+        string_value("frame_rate"),
+        number_value(sequence.frame_rate)?,
+    );
+    match &sequence.audio {
+        SequenceAudio::None => {
+            value.insert(string_value("audio"), Value::Null);
+        }
+        SequenceAudio::Asset(id) => {
+            let asset = session
+                .source
+                .referenced_assets
+                .iter()
+                .find(|asset| asset.id == *id)
+                .ok_or_else(|| ExportProjectError::InvalidReference {
+                    path: from_document.to_path_buf(),
+                    reference: id.0.to_string(),
+                    message: "sequence audio asset is missing from source metadata".to_string(),
+                })?;
+            value.insert(
+                string_value("audio"),
+                Value::String(
+                    relative_path_from_document(from_document, &asset.relative_path).to_string(),
+                ),
+            );
+        }
+    }
+    value.insert(
+        string_value("mark_collections"),
+        Value::Sequence(
+            sequence
+                .mark_collections
+                .iter()
+                .map(mark_collection_value)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    value.insert(
+        string_value("layers"),
+        Value::Sequence(
+            sequence
+                .layers
+                .iter()
+                .map(sequence_layer_value)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    value.insert(
+        string_value("effects"),
+        Value::Sequence(
+            sequence
+                .effects
+                .iter()
+                .map(|effect| sequence_effect_value(session, from_document, effect))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    value.insert(
+        string_value("composition_graph"),
+        composition_graph_value(session, from_document, &sequence.composition_graph)?,
+    );
+    value.insert(
+        string_value("automation_clips"),
+        Value::Sequence(
+            sequence
+                .automation_clips
+                .iter()
+                .map(automation_clip_value)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+pub(super) fn sequence_layer_value(layer: &SequenceLayer) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("id"), number_value(layer.id.0)?);
+    value.insert(string_value("name"), Value::String(layer.name.clone()));
+    value.insert(
+        string_value("color"),
+        Value::String(color_string(layer.color)),
+    );
+    value.insert(string_value("enabled"), Value::Bool(layer.enabled));
+    Ok(Value::Mapping(value))
+}
+
+pub(super) fn sequence_effect_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    effect: &EffectInst,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("id"), number_value(effect.id.0)?);
+    value.insert(string_value("layer_id"), number_value(effect.layer_id.0)?);
+    value.insert(
+        string_value("start"),
+        Value::String(seconds_string(effect.start.as_seconds_f64())),
+    );
+    value.insert(
+        string_value("duration"),
+        Value::String(seconds_string(effect.duration.as_seconds_f64())),
+    );
+    value.insert(string_value("target"), effect_target_value(&effect.target)?);
+    value.insert(
+        string_value("scope"),
+        Value::String(
+            match effect.scope {
+                EffectScope::PerFixture => "per_fixture",
+                EffectScope::WholeTarget => "whole_target",
+            }
+            .to_string(),
+        ),
+    );
+    write_effect_clip_fields(
+        session,
+        from_document,
+        &mut value,
+        &EffectClip {
+            definition: effect.definition.clone(),
+            param_overrides: effect.param_overrides.clone(),
+        },
+    )?;
+    Ok(Value::Mapping(value))
+}
+
+pub(super) fn composition_graph_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    graph: &SequenceCompositionGraph,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(
+        string_value("nodes"),
+        Value::Sequence(
+            graph
+                .nodes
+                .iter()
+                .map(|node| composition_graph_node_value(session, from_document, node))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    value.insert(
+        string_value("edges"),
+        Value::Sequence(
+            graph
+                .edges
+                .iter()
+                .map(graph_edge_value)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+pub(super) fn composition_graph_node_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    node: &CompositionGraphNode,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("id"), number_value(node.id.0)?);
+    value.insert(
+        string_value("position"),
+        graph_position_value(&node.position)?,
+    );
+    match &node.kind {
+        CompositionGraphNodeKind::Layer { layer_id } => {
+            value.insert(string_value("type"), Value::String("layer".to_string()));
+            value.insert(string_value("layer_id"), number_value(layer_id.0)?);
+        }
+        CompositionGraphNodeKind::Operator(operator) => {
+            value.insert(string_value("type"), Value::String("operator".to_string()));
+            value.insert(
+                string_value("operator"),
+                Value::String(graph_operator_name(
+                    session,
+                    from_document,
+                    &operator.operator,
+                )?),
+            );
+            if !operator.params.is_empty() {
+                value.insert(
+                    string_value("params"),
+                    Value::Mapping(
+                        operator
+                            .params
+                            .iter()
+                            .map(|(name, param)| {
+                                Ok((
+                                    string_value(name.as_str()),
+                                    effect_param_value(session, from_document, param)?,
+                                ))
+                            })
+                            .collect::<Result<Mapping, ExportProjectError>>()?,
+                    ),
+                );
+            }
+        }
+        CompositionGraphNodeKind::Output => {
+            value.insert(string_value("type"), Value::String("output".to_string()));
+        }
+    }
+    Ok(Value::Mapping(value))
+}
+
+pub(super) fn mark_collection_value(
+    collection: &MarkCollection,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(
+        string_value("key"),
+        Value::String(collection.key.name.clone()),
+    );
+    value.insert(string_value("name"), Value::String(collection.name.clone()));
+    value.insert(
+        string_value("color"),
+        Value::String(color_string(collection.display_color)),
+    );
+    value.insert(
+        string_value("marks"),
+        Value::Sequence(
+            collection
+                .marks
+                .iter()
+                .map(|time| Value::String(seconds_string(time.as_seconds_f64())))
+                .collect(),
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+pub(super) fn write_effect_clip_fields(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    value: &mut Mapping,
+    effect: &EffectClip,
+) -> Result<(), ExportProjectError> {
+    if !effect.param_overrides.is_empty() {
+        value.insert(
+            string_value("params"),
+            Value::Mapping(
+                effect
+                    .param_overrides
+                    .iter()
+                    .map(|(name, param)| {
+                        Ok((
+                            string_value(name.as_str()),
+                            effect_param_value(session, from_document, param)?,
+                        ))
+                    })
+                    .collect::<Result<Mapping, ExportProjectError>>()?,
+            ),
+        );
+    }
+    value.insert(
+        string_value("script"),
+        Value::String(write_source_reference(
+            session,
+            from_document,
+            SourceObjectKind::EffectDefinition,
+            &effect.definition.0,
+        )?),
+    );
+    Ok(())
+}
+
+pub(super) fn graph_position_value(
+    position: &GraphNodePosition,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("x"), number_value(position.x)?);
+    value.insert(string_value("y"), number_value(position.y)?);
+    Ok(Value::Mapping(value))
+}
+
+pub(super) fn graph_edge_value(edge: &EffectGraphEdge) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("from"), number_value(edge.from.0)?);
+    value.insert(
+        string_value("from_port"),
+        Value::String(edge.from_port.0.clone()),
+    );
+    value.insert(string_value("to"), number_value(edge.to.0)?);
+    value.insert(
+        string_value("to_port"),
+        Value::String(edge.to_port.0.clone()),
+    );
+    Ok(Value::Mapping(value))
+}
+
+pub(super) fn graph_operator_name(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    operator: &OperatorRef,
+) -> Result<String, ExportProjectError> {
+    match operator {
+        OperatorRef::Builtin(operator) => Ok(operator.definition().source_name.clone()),
+        OperatorRef::Custom(id) => write_source_reference(
+            session,
+            from_document,
+            SourceObjectKind::OperatorDefinition,
+            &id.0,
+        ),
+    }
+}
+
+pub(super) fn automation_clip_value(clip: &AutomationClip) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("id"), number_value(clip.id.0)?);
+    value.insert(
+        string_value("start"),
+        Value::String(seconds_string(clip.start.as_seconds_f64())),
+    );
+    value.insert(
+        string_value("duration"),
+        Value::String(seconds_string(clip.duration.as_seconds_f64())),
+    );
+    value.insert(
+        string_value("anchor_lane_index"),
+        number_value(clip.anchor_lane_index)?,
+    );
+    value.insert(string_value("lane_index"), number_value(clip.lane_index)?);
+    value.insert(string_value("curve"), automation_curve_value(&clip.curve)?);
+    value.insert(
+        string_value("bindings"),
+        Value::Sequence(
+            clip.bindings
+                .iter()
+                .map(automation_binding_value)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+pub(super) fn automation_curve_value(curve: &Curve) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(
+        string_value("value_type"),
+        Value::String("float".to_string()),
+    );
+    value.insert(
+        string_value("points"),
+        Value::Sequence(
+            curve
+                .points
+                .iter()
+                .map(|point| {
+                    let mut value = Mapping::new();
+                    value.insert(string_value("time"), number_value(point.position)?);
+                    let CurveValue::Float(point_value) = point.value else {
+                        return Err(ExportProjectError::InvalidReference {
+                            path: Utf8PathBuf::from("<sync>"),
+                            reference: "automation.curve".to_string(),
+                            message: "automation curves must contain float points".to_string(),
+                        });
+                    };
+                    value.insert(string_value("value"), number_value(point_value)?);
+                    Ok(Value::Mapping(value))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+pub(super) fn automation_binding_value(
+    binding: &AutomationBinding,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(
+        string_value("target"),
+        automation_target_value(&binding.target)?,
+    );
+    value.insert(
+        string_value("mapping"),
+        automation_mapping_value(&binding.mapping)?,
+    );
+    Ok(Value::Mapping(value))
+}
+
+pub(super) fn automation_target_value(
+    target: &AutomationTarget,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    match target {
+        AutomationTarget::EffectParam { effect_id, param } => {
+            value.insert(
+                string_value("type"),
+                Value::String("effect_param".to_string()),
+            );
+            value.insert(string_value("effect_id"), number_value(effect_id.0)?);
+            value.insert(
+                string_value("param"),
+                Value::String(param.as_str().to_string()),
+            );
+        }
+        AutomationTarget::CompositionNodeParam { node_id, param } => {
+            value.insert(
+                string_value("type"),
+                Value::String("composition_node_param".to_string()),
+            );
+            value.insert(string_value("node_id"), number_value(node_id.0)?);
+            value.insert(
+                string_value("param"),
+                Value::String(param.as_str().to_string()),
+            );
+        }
+    }
+    Ok(Value::Mapping(value))
+}
+
+pub(super) fn automation_mapping_value(
+    mapping: &AutomationMapping,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    match mapping {
+        AutomationMapping::Float { min, max } => {
+            value.insert(string_value("type"), Value::String("float".to_string()));
+            value.insert(string_value("min"), number_value(*min)?);
+            value.insert(string_value("max"), number_value(*max)?);
+        }
+        AutomationMapping::Int { min, max } => {
+            value.insert(string_value("type"), Value::String("int".to_string()));
+            value.insert(string_value("min"), number_value(*min)?);
+            value.insert(string_value("max"), number_value(*max)?);
+        }
+        AutomationMapping::Bool => {
+            value.insert(string_value("type"), Value::String("bool".to_string()));
+        }
+        AutomationMapping::Enum { values } => {
+            value.insert(string_value("type"), Value::String("enum".to_string()));
+            value.insert(
+                string_value("values"),
+                Value::Sequence(
+                    values
+                        .iter()
+                        .map(|value| Value::String(value.as_str().to_string()))
+                        .collect(),
+                ),
+            );
+        }
+        AutomationMapping::FloatCurve { min, max } => {
+            value.insert(
+                string_value("type"),
+                Value::String("float_curve".to_string()),
+            );
+            value.insert(string_value("min"), number_value(*min)?);
+            value.insert(string_value("max"), number_value(*max)?);
+        }
+    }
+    Ok(Value::Mapping(value))
+}
+
+pub(super) fn effect_param_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    param: &EffectParamValue,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    match param {
+        EffectParamValue::Int(inner) => {
+            value.insert(string_value("type"), Value::String("integer".to_string()));
+            value.insert(string_value("value"), number_value(*inner)?);
+        }
+        EffectParamValue::Float(inner) => {
+            value.insert(string_value("type"), Value::String("float".to_string()));
+            value.insert(string_value("value"), number_value(*inner)?);
+        }
+        EffectParamValue::Bool(inner) => {
+            value.insert(string_value("type"), Value::String("bool".to_string()));
+            value.insert(string_value("value"), Value::Bool(*inner));
+        }
+        EffectParamValue::Color(inner) => {
+            value.insert(string_value("type"), Value::String("color".to_string()));
+            value.insert(string_value("value"), Value::String(color_string(*inner)));
+        }
+        EffectParamValue::Enum(inner) => {
+            value.insert(string_value("type"), Value::String("enum".to_string()));
+            value.insert(
+                string_value("value"),
+                Value::String(inner.as_str().to_string()),
+            );
+        }
+        EffectParamValue::Marks(inner) => {
+            value.insert(string_value("type"), Value::String("marks".to_string()));
+            value.insert(string_value("key"), Value::String(inner.name.clone()));
+        }
+        EffectParamValue::Curve(inner) => {
+            value.insert(string_value("type"), Value::String("curve".to_string()));
+            value.insert(
+                string_value("curve"),
+                curve_source_value(session, from_document, inner)?,
+            );
+        }
+        EffectParamValue::Array(values) => {
+            value.insert(string_value("type"), Value::String("array".to_string()));
+            value.insert(
+                string_value("element_type"),
+                Value::String(array_element_type(values).to_string()),
+            );
+            value.insert(
+                string_value("values"),
+                Value::Sequence(
+                    values
+                        .iter()
+                        .map(|item| array_item_value(session, from_document, item))
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+            );
+        }
+    }
+    Ok(Value::Mapping(value))
+}
+
+pub(super) fn array_item_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    param: &EffectParamValue,
+) -> Result<Value, ExportProjectError> {
+    match param {
+        EffectParamValue::Curve(source) => {
+            let mut value = Mapping::new();
+            value.insert(
+                string_value("curve"),
+                curve_source_value(session, from_document, source)?,
+            );
+            Ok(Value::Mapping(value))
+        }
+        _ => effect_param_value(session, from_document, param),
+    }
+}
+
+pub(super) fn array_element_type(values: &[EffectParamValue]) -> &'static str {
+    match values.first() {
+        Some(EffectParamValue::Int(_)) => "integer",
+        Some(EffectParamValue::Float(_)) => "float",
+        Some(EffectParamValue::Bool(_)) => "bool",
+        Some(EffectParamValue::Color(_)) => "color",
+        Some(EffectParamValue::Curve(CurveSource::Inline(curve))) => match curve.points.first() {
+            Some(CurvePoint {
+                value: CurveValue::Color(_),
+                ..
+            }) => "curve_color",
+            _ => "curve_float",
+        },
+        Some(EffectParamValue::Curve(CurveSource::Reference(_))) => "curve",
+        _ => "float",
+    }
+}
+
+pub(super) fn curve_source_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    source: &CurveSource,
+) -> Result<Value, ExportProjectError> {
+    match source {
+        CurveSource::Inline(curve) => curve_value(curve),
+        CurveSource::Reference(id) => Ok(Value::String(write_source_reference(
+            session,
+            from_document,
+            SourceObjectKind::Curve,
+            &id.0,
+        )?)),
+    }
+}
