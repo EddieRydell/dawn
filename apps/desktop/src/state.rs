@@ -7,8 +7,8 @@ use std::time::Duration;
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_project_io::{
     IoDiagnostic, IoDiagnosticSeverity, ProjectCheckReport, ProjectSession, SourceDocument,
-    SourceDocumentKind, SourceObjectKind, check_document_text, check_project, save_project,
-    source_document_text as generated_source_document_text,
+    SourceObjectKind, check_document_text, check_project, check_project_document_text,
+    is_project_owned_path, save_project, source_document_text as generated_source_document_text,
 };
 use indexmap::IndexSet;
 
@@ -24,7 +24,7 @@ use crate::persistence::{
     PersistedEditorViewStateUpdate, PersistedProjectSession, PersistedSequenceViewportStateUpdate,
     PersistenceService, ProjectRestoreState,
 };
-use yaml_serde::{Mapping, Value};
+use crate::project_templates::{new_project_files, write_new_project_files};
 
 pub struct DesktopState {
     snapshot: Mutex<AppSnapshot>,
@@ -379,7 +379,7 @@ impl DesktopState {
             .source
             .documents
             .get(&relative_path)
-            .map(document_descriptor)
+            .map(|document| document_descriptor(&relative_path, document))
             .unwrap_or_else(|| empty_document_descriptor(&relative_path));
         self.update_snapshot(|snapshot| {
             upsert_tab(&mut snapshot.tabs, buffer.clone());
@@ -412,7 +412,7 @@ impl DesktopState {
             .source
             .documents
             .get(&relative_path)
-            .map(document_descriptor)
+            .map(|document| document_descriptor(&relative_path, document))
             .unwrap_or_else(|| empty_document_descriptor(&relative_path));
         self.update_snapshot(|snapshot| {
             snapshot.active_file = Some(buffer.path.clone());
@@ -446,7 +446,7 @@ impl DesktopState {
                         .source
                         .documents
                         .get(Utf8Path::new(&next.path))
-                        .map(document_descriptor)
+                        .map(|document| document_descriptor(Utf8Path::new(&next.path), document))
                 });
                 snapshot.active_buffer = Some(next);
             } else {
@@ -461,7 +461,18 @@ impl DesktopState {
         let active_path = self.snapshot().active_file;
         let diagnostics = active_path
             .as_deref()
-            .map(|path| check_document_text(Utf8Path::new(path), &text))
+            .map(|path| {
+                self.project_session().map_or_else(
+                    || check_document_text(Utf8Path::new(path), &text),
+                    |project| {
+                        check_project_document_text(
+                            &project.source.source_root.join(&project.source.entrypoint),
+                            Utf8Path::new(path),
+                            &text,
+                        )
+                    },
+                )
+            })
             .unwrap_or_default();
         self.update_snapshot(|snapshot| {
             if let Some(buffer) = snapshot.active_buffer.as_mut() {
@@ -613,34 +624,21 @@ impl DesktopState {
             );
         }
         let entrypoint = project.source.source_root.join(&project.source.entrypoint);
-        let sequence_imports = sequence_library_imports(&project, &sequence_path);
-        let result = fs::create_dir_all(
-            absolute_sequence_path
-                .parent()
-                .unwrap_or(&project.source.source_root),
+        let mut edited = project.clone();
+        if let Err(error) = dawn_project_io::insert_sequence(
+            &mut edited,
+            sequence_path.clone(),
+            request.object_key.clone(),
+            dawn_language::values::DawnDuration(Duration::from_secs_f64(request.duration_seconds)),
+            request.frame_rate,
         )
-        .and_then(|()| {
-            fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&absolute_sequence_path)
-                .and_then(|mut file| {
-                    use std::io::Write;
-                    file.write_all(
-                        sequence_boilerplate(
-                            &request.object_key,
-                            request.duration_seconds,
-                            request.frame_rate,
-                            &sequence_imports,
-                        )
-                        .as_bytes(),
-                    )
-                })
-        })
-        .map_err(|error| error.to_string())
-        .and_then(|()| add_sequence_to_project_entrypoint(&entrypoint, &request.object_key));
-        if let Err(error) = result {
-            return self.snapshot_with_error("sequence.create", &request.file_path, &error);
+        .and_then(|_| save_project(&edited).map(|_| ()))
+        {
+            return self.snapshot_with_error(
+                "sequence.create",
+                &request.file_path,
+                &error.to_string(),
+            );
         }
         let refreshed =
             self.apply_project_refresh_check(entrypoint.as_str(), check_project(&entrypoint));
@@ -666,6 +664,13 @@ impl DesktopState {
             );
         }
         let relative_path = Utf8PathBuf::from(path);
+        if project_path_is_structural(&project, &relative_path) {
+            return self.snapshot_with_error(
+                "file.rename",
+                path,
+                "Imported documents and the project entrypoint cannot be renamed from the workspace.",
+            );
+        }
         let Some(from) = absolute_project_path(&project, &relative_path) else {
             return self.snapshot_with_error(
                 "file.rename",
@@ -695,6 +700,13 @@ impl DesktopState {
             return self.snapshot();
         };
         let relative_path = Utf8PathBuf::from(path);
+        if project_path_is_structural(&project, &relative_path) {
+            return self.snapshot_with_error(
+                "file.delete",
+                path,
+                "Imported documents and the project entrypoint cannot be deleted from the workspace.",
+            );
+        }
         let Some(absolute_path) = absolute_project_path(&project, &relative_path) else {
             return self.snapshot_with_error(
                 "file.delete",
@@ -1028,6 +1040,12 @@ impl DesktopState {
             let message = format!("Save or reload {path} before undoing GUI edits.");
             return self.snapshot_with_error("gui.undo.dirty", &path, &message);
         }
+        let generated_text = match generated_source_texts(&entry.before, &entry.affected_paths) {
+            Ok(text) => text,
+            Err(message) => {
+                return self.snapshot_with_error("gui.undo", &entry.status_path, &message);
+            }
+        };
         let Some(entry) = self.pop_gui_undo() else {
             return self.snapshot();
         };
@@ -1037,12 +1055,6 @@ impl DesktopState {
             entry.affected_paths.clone(),
             entry.status_path.clone(),
         );
-        let generated_text = match generated_source_texts(&entry.before, &entry.affected_paths) {
-            Ok(text) => text,
-            Err(message) => {
-                return self.snapshot_with_error("gui.undo", &entry.status_path, &message);
-            }
-        };
         self.apply_gui_project_update(entry.before, "GUI edit undone", generated_text)
     }
 
@@ -1056,6 +1068,12 @@ impl DesktopState {
             let message = format!("Save or reload {path} before redoing GUI edits.");
             return self.snapshot_with_error("gui.redo.dirty", &path, &message);
         }
+        let generated_text = match generated_source_texts(&entry.after, &entry.affected_paths) {
+            Ok(text) => text,
+            Err(message) => {
+                return self.snapshot_with_error("gui.redo", &entry.status_path, &message);
+            }
+        };
         let Some(entry) = self.pop_gui_redo() else {
             return self.snapshot();
         };
@@ -1065,12 +1083,6 @@ impl DesktopState {
             entry.affected_paths.clone(),
             entry.status_path.clone(),
         );
-        let generated_text = match generated_source_texts(&entry.after, &entry.affected_paths) {
-            Ok(text) => text,
-            Err(message) => {
-                return self.snapshot_with_error("gui.redo", &entry.status_path, &message);
-            }
-        };
         self.apply_gui_project_update(entry.after, "GUI edit redone", generated_text)
     }
 
@@ -1118,10 +1130,14 @@ impl DesktopState {
         let restore = self.persistence.restore_for_project(&root, &valid_paths);
         let active = restored_active_buffers(&session, restore.as_ref().map(|item| &item.session))
             .or_else(|| {
-                session.source.documents.get(&entrypoint).map(|document| {
-                    let buffer = editor_buffer(&session, document);
-                    (vec![buffer.clone()], buffer.path)
-                })
+                session
+                    .source
+                    .documents
+                    .get(&entrypoint)
+                    .and_then(|_document| {
+                        let buffer = editor_buffer(&session, &entrypoint)?;
+                        Some((vec![buffer.clone()], buffer.path))
+                    })
             });
         let active_descriptor = active
             .as_ref()
@@ -1219,7 +1235,7 @@ impl DesktopState {
                 .source
                 .documents
                 .get(relative_path)
-                .map(document_descriptor)
+                .map(|document| document_descriptor(relative_path, document))
                 .or_else(|| {
                     absolute_project_path(&session, relative_path)
                         .is_some_and(|path| path.is_file())
@@ -1267,7 +1283,7 @@ impl DesktopState {
                 .source
                 .documents
                 .get(relative_path)
-                .map(document_descriptor)
+                .map(|document| document_descriptor(relative_path, document))
                 .or_else(|| {
                     absolute_project_path(&session, relative_path)
                         .is_some_and(|path| path.is_file())
@@ -1402,18 +1418,23 @@ impl DesktopState {
         let path = Utf8Path::new(&request.path);
         project
             .source
-            .source_map
-            .objects
+            .documents
+            .get(path)?
+            .objects()
             .iter()
-            .find(|(id, location)| {
-                id.kind == SourceObjectKind::Sequence
-                    && location.document == path
+            .find(|object| {
+                object.kind() == &SourceObjectKind::Sequence
                     && request
                         .object_key
                         .as_deref()
-                        .is_none_or(|key| location.object_key == key)
+                        .is_none_or(|key| object.id() == key)
             })
-            .map(|(id, _)| dawn_language::sequence::SequenceId(id.id.clone()))
+            .map(|object| {
+                dawn_language::sequence::SequenceId(dawn_language::identity::SourceIdentity::new(
+                    path.to_path_buf(),
+                    object.id().to_string(),
+                ))
+            })
     }
 
     fn refresh_render_session(
@@ -1751,6 +1772,17 @@ impl DesktopState {
             }
         })
     }
+}
+
+fn project_path_is_structural(project: &ProjectSession, path: &Utf8Path) -> bool {
+    path == project.source.entrypoint
+        || project.source.documents.values().any(|document| {
+            document.imports().iter().any(|edge| {
+                edge.targets()
+                    .iter()
+                    .any(|target| target == path || target.starts_with(path))
+            })
+        })
 }
 
 struct GuiSaveScheduler {
@@ -2118,7 +2150,9 @@ fn workspace_entries(session: &ProjectSession) -> Vec<WorkspaceEntry> {
     let mut paths = IndexSet::new();
     collect_workspace_paths(&session.source.source_root, Utf8Path::new(""), &mut paths);
     for path in session.source.documents.keys() {
-        insert_path_with_parents(&mut paths, path);
+        if is_project_owned_path(path) {
+            insert_path_with_parents(&mut paths, path);
+        }
     }
     paths.sort();
     paths.into_iter().map(workspace_entry).collect()
@@ -2221,34 +2255,33 @@ fn refresh_clean_buffers(snapshot: &mut AppSnapshot, generated_text: &BTreeMap<S
     }
 }
 
-fn editor_buffer(session: &ProjectSession, document: &SourceDocument) -> EditorBuffer {
-    let disk_path = session.source.source_root.join(&document.relative_path);
-    let text = fs::read_to_string(&disk_path).unwrap_or_else(|_| source_document_text(document));
-    EditorBuffer {
-        path: document.relative_path.to_string(),
-        name: document
-            .relative_path
+fn editor_buffer(session: &ProjectSession, relative_path: &Utf8Path) -> Option<EditorBuffer> {
+    let disk_path = session.source.source_root.join(relative_path);
+    let text = fs::read_to_string(&disk_path).ok()?;
+    Some(EditorBuffer {
+        path: relative_path.to_string(),
+        name: relative_path
             .file_name()
             .map(ToString::to_string)
-            .unwrap_or_else(|| document.relative_path.to_string()),
+            .unwrap_or_else(|| relative_path.to_string()),
         text,
         dirty: false,
         external_state: BufferExternalState::Current,
-    }
+    })
 }
 
 fn editor_buffer_for_path(
     session: &ProjectSession,
     relative_path: &Utf8Path,
 ) -> Option<EditorBuffer> {
-    if let Some(document) = session.source.documents.get(relative_path) {
-        return Some(editor_buffer(session, document));
+    if let Some(_document) = session.source.documents.get(relative_path) {
+        return editor_buffer(session, relative_path);
     }
     let path = absolute_project_path(session, relative_path)?;
     if !path.is_file() {
         return None;
     }
-    let text = fs::read_to_string(&path).unwrap_or_default();
+    let text = fs::read_to_string(&path).ok()?;
     Some(EditorBuffer {
         path: relative_path.to_string(),
         name: relative_path
@@ -2293,7 +2326,7 @@ fn descriptor_for_path(
         .source
         .documents
         .get(relative_path)
-        .map(document_descriptor)
+        .map(|document| document_descriptor(relative_path, document))
         .or_else(|| {
             absolute_project_path(session, relative_path)
                 .is_some_and(|path| path.is_file())
@@ -2309,31 +2342,19 @@ fn valid_project_paths(session: &ProjectSession) -> BTreeSet<String> {
         .collect()
 }
 
-fn source_document_text(document: &SourceDocument) -> String {
-    match &document.kind {
-        SourceDocumentKind::Dawn { value, .. } => {
-            yaml_serde::to_string(value).unwrap_or_else(|_| String::new())
-        }
-        SourceDocumentKind::Effect { source } | SourceDocumentKind::Operator { source } => {
-            source.clone()
-        }
-    }
-}
-
-fn document_descriptor(document: &SourceDocument) -> DocumentDescriptor {
+fn document_descriptor(path: &Utf8Path, document: &SourceDocument) -> DocumentDescriptor {
     let objects = document
-        .exported_objects
+        .objects()
         .iter()
-        .zip(document_object_kinds(document))
-        .map(|(key, kind)| DocumentObjectDescriptor {
-            key: key.clone(),
-            kind,
+        .map(|object| DocumentObjectDescriptor {
+            key: object.id().to_string(),
+            kind: object_kind(object.kind()),
         })
         .collect::<Vec<_>>();
     let available_views = available_views(&objects);
     let default_object_keys = default_object_keys(&objects);
     DocumentDescriptor {
-        path: document.relative_path.to_string(),
+        path: path.to_string(),
         objects,
         available_views,
         default_object_keys,
@@ -2346,24 +2367,6 @@ fn empty_document_descriptor(path: &Utf8Path) -> DocumentDescriptor {
         objects: Vec::new(),
         available_views: vec![DocumentViewId::Text],
         default_object_keys: Vec::new(),
-    }
-}
-
-fn document_object_kinds(document: &SourceDocument) -> Vec<ObjectKind> {
-    match &document.kind {
-        SourceDocumentKind::Dawn { object_types, .. } => {
-            object_types.iter().map(object_kind).collect()
-        }
-        SourceDocumentKind::Effect { .. } => document
-            .exported_objects
-            .iter()
-            .map(|_| ObjectKind::Effect)
-            .collect(),
-        SourceDocumentKind::Operator { .. } => document
-            .exported_objects
-            .iter()
-            .map(|_| ObjectKind::Operator)
-            .collect(),
     }
 }
 
@@ -2457,259 +2460,6 @@ fn upsert_tab(tabs: &mut Vec<EditorBuffer>, buffer: EditorBuffer) {
     }
 }
 
-struct ProjectBoilerplateFile {
-    path: &'static str,
-    text: String,
-}
-
-fn new_project_files(project_name: &str) -> Vec<ProjectBoilerplateFile> {
-    let project_id = object_key_from_name(project_name);
-    vec![
-        ProjectBoilerplateFile {
-            path: "project.dawn",
-            text: format!(
-                "imports:\n- from: setups/main.setup.dawn\n  as: setups\n- from: sequences\n  as: sequences\n{project_id}:\n  type: project\n  setup: setups.main\n  sequences:\n  - sequences.main\n"
-            ),
-        },
-        ProjectBoilerplateFile {
-            path: "setups/main.setup.dawn",
-            text: "imports:\n- from: ../layouts/main.layout.dawn\n  as: layouts\n- from: ../patches/main.patch.dawn\n  as: patches\nmain:\n  type: setup\n  layout: layouts.main\n  patch: patches.main\n  controllers:\n  - output_controller\noutput_controller:\n  type: controller\n  protocol: sacn\n  output:\n    channel_order: rgb\n    type: linear_rgb\n    output_count: 1\n    pixels_per_output: 1\n    first_universe: 1\n"
-                .to_string(),
-        },
-        ProjectBoilerplateFile {
-            path: "layouts/main.layout.dawn",
-            text: "main:\n  type: layout\n  target_order: []\n  fixtures: []\n  groups: []\n"
-                .to_string(),
-        },
-        ProjectBoilerplateFile {
-            path: "patches/main.patch.dawn",
-            text: "main:\n  type: patch\n  routes: []\n".to_string(),
-        },
-        ProjectBoilerplateFile {
-            path: "sequences/main.sequence.dawn",
-            text: sequence_boilerplate("main", 60.0, 60, &[]),
-        },
-    ]
-}
-
-fn write_new_project_files(
-    root: &Utf8Path,
-    files: &[ProjectBoilerplateFile],
-) -> Result<(), String> {
-    fs::create_dir(root).map_err(|error| error.to_string())?;
-    for file in files {
-        let path = root.join(file.path);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        fs::write(path, &file.text).map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
-fn sequence_boilerplate(
-    object_key: &str,
-    duration_seconds: f64,
-    frame_rate: u32,
-    imports: &[(&str, Utf8PathBuf)],
-) -> String {
-    let imports = if imports.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "imports:\n{}",
-            imports
-                .iter()
-                .map(|(alias, from)| format!("- from: {from}\n  as: {alias}\n"))
-                .collect::<String>()
-        )
-    };
-    format!(
-        "{imports}{object_key}:\n  type: sequence\n  duration: {}s\n  frame_rate: {frame_rate}\n  audio: null\n  mark_collections:\n  - key: marks\n    name: Marks\n    color: '#38bdf8'\n    marks: []\n  layers:\n  - id: 0\n    name: Default\n    color: '#38bdf8'\n    enabled: true\n  effects: []\n  composition_graph:\n    nodes:\n    - id: 1\n      position:\n        x: 80.0\n        y: 80.0\n      type: layer\n      layer_id: 0\n    - id: 2\n      position:\n        x: 420.0\n        y: 80.0\n      type: output\n    edges:\n    - from: 1\n      from_port: output\n      to: 2\n      to_port: input\n  automation_clips: []\n",
-        seconds_literal(duration_seconds)
-    )
-}
-
-fn sequence_library_imports(
-    project: &ProjectSession,
-    sequence_path: &Utf8Path,
-) -> Vec<(&'static str, Utf8PathBuf)> {
-    ["effects", "curves"]
-        .into_iter()
-        .filter(|alias| project_library_exists(project, alias))
-        .map(|alias| {
-            (
-                alias,
-                relative_path_from_document(sequence_path, Utf8Path::new(alias)),
-            )
-        })
-        .collect()
-}
-
-fn project_library_exists(project: &ProjectSession, alias: &str) -> bool {
-    let alias_path = Utf8Path::new(alias);
-    project.source.source_root.join(alias).is_dir()
-        || project
-            .source
-            .documents
-            .keys()
-            .any(|path| path.starts_with(alias_path))
-}
-
-fn relative_path_from_document(from_document: &Utf8Path, target: &Utf8Path) -> Utf8PathBuf {
-    let from_dir = from_document.parent().unwrap_or_else(|| Utf8Path::new(""));
-    let from_components = normal_components(from_dir);
-    let target_components = normal_components(target);
-    let common_len = from_components
-        .iter()
-        .zip(target_components.iter())
-        .take_while(|(left, right)| left == right)
-        .count();
-    let mut relative = Utf8PathBuf::new();
-    for _ in common_len..from_components.len() {
-        relative.push("..");
-    }
-    for component in target_components.iter().skip(common_len) {
-        relative.push(component);
-    }
-    relative
-}
-
-fn normal_components(path: &Utf8Path) -> Vec<String> {
-    path.components()
-        .filter_map(|component| match component {
-            camino::Utf8Component::Normal(part) => Some(part.to_string()),
-            _ => None,
-        })
-        .collect()
-}
-
-fn add_sequence_to_project_entrypoint(
-    entrypoint: &Utf8Path,
-    object_key: &str,
-) -> Result<(), String> {
-    let text = fs::read_to_string(entrypoint).map_err(|error| error.to_string())?;
-    let mut value: Value = yaml_serde::from_str(&text).map_err(|error| error.to_string())?;
-    let map = mapping_mut(&mut value)?;
-    ensure_sequences_import(map)?;
-    let sequence_ref = format!("sequences.{object_key}");
-    let project_value = project_root_value_mut(map)?;
-    let project = mapping_mut(project_value)?;
-    let sequences = project
-        .entry(Value::String("sequences".to_string()))
-        .or_insert_with(|| Value::Sequence(Vec::new()));
-    let Value::Sequence(sequences) = sequences else {
-        return Err("project sequences must be a sequence".to_string());
-    };
-    if !sequences
-        .iter()
-        .any(|item| item.as_str() == Some(sequence_ref.as_str()))
-    {
-        sequences.push(Value::String(sequence_ref));
-    }
-    let next = yaml_serde::to_string(&value).map_err(|error| error.to_string())?;
-    fs::write(entrypoint, next).map_err(|error| error.to_string())
-}
-
-fn ensure_sequences_import(map: &mut Mapping) -> Result<(), String> {
-    let imports = map
-        .entry(Value::String("imports".to_string()))
-        .or_insert_with(|| Value::Sequence(Vec::new()));
-    let Value::Sequence(imports) = imports else {
-        return Err("imports must be a sequence".to_string());
-    };
-    let mut normalized = Vec::new();
-    let mut inserted_sequences = false;
-    for import in imports.drain(..) {
-        if import_alias(&import) == Some("sequences") {
-            if !inserted_sequences {
-                normalized.push(import_value("sequences", "sequences"));
-                inserted_sequences = true;
-            }
-        } else {
-            normalized.push(import);
-        }
-    }
-    if !inserted_sequences {
-        normalized.push(import_value("sequences", "sequences"));
-    }
-    *imports = normalized;
-    Ok(())
-}
-
-fn import_value(from: &str, alias: &str) -> Value {
-    let mut import = Mapping::new();
-    import.insert(
-        Value::String("from".to_string()),
-        Value::String(from.to_string()),
-    );
-    import.insert(
-        Value::String("as".to_string()),
-        Value::String(alias.to_string()),
-    );
-    Value::Mapping(import)
-}
-
-fn import_alias(value: &Value) -> Option<&str> {
-    mapping_ref(value)?
-        .get(Value::String("as".to_string()))
-        .and_then(Value::as_str)
-}
-
-fn project_root_value_mut(map: &mut Mapping) -> Result<&mut Value, String> {
-    map.iter_mut()
-        .find_map(|(key, value)| {
-            if key.as_str() == Some("imports") {
-                return None;
-            }
-            mapping_ref(value)
-                .and_then(|object| object.get(Value::String("type".to_string())))
-                .and_then(Value::as_str)
-                .is_some_and(|kind| kind == "project")
-                .then_some(value)
-        })
-        .ok_or_else(|| "project.dawn does not contain a project object".to_string())
-}
-
-fn mapping_mut(value: &mut Value) -> Result<&mut Mapping, String> {
-    match value {
-        Value::Mapping(map) => Ok(map),
-        _ => Err("expected a YAML mapping".to_string()),
-    }
-}
-
-fn mapping_ref(value: &Value) -> Option<&Mapping> {
-    match value {
-        Value::Mapping(map) => Some(map),
-        _ => None,
-    }
-}
-
-fn seconds_literal(seconds: f64) -> String {
-    if seconds.fract() == 0.0 {
-        format!("{seconds:.0}")
-    } else {
-        seconds.to_string()
-    }
-}
-
-fn object_key_from_name(name: &str) -> String {
-    let mut key = String::new();
-    for character in name.chars() {
-        if character.is_ascii_alphanumeric() || character == '_' {
-            key.push(character.to_ascii_lowercase());
-        } else if !key.ends_with('_') {
-            key.push('_');
-        }
-    }
-    let key = key.trim_matches('_').to_string();
-    if key.is_empty() || key.as_bytes().first().is_some_and(u8::is_ascii_digit) {
-        format!("project_{key}")
-    } else {
-        key
-    }
-}
-
 #[derive(Clone, Copy)]
 enum FsEntryKind {
     File,
@@ -2720,20 +2470,10 @@ fn absolute_project_path(
     session: &ProjectSession,
     relative_path: &Utf8Path,
 ) -> Option<Utf8PathBuf> {
-    if relative_path.is_absolute() {
+    if !is_project_owned_path(relative_path) {
         return None;
     }
-    let mut normalized = Utf8PathBuf::new();
-    for component in relative_path.components() {
-        match component {
-            camino::Utf8Component::Normal(part) => normalized.push(part),
-            camino::Utf8Component::CurDir => {}
-            camino::Utf8Component::ParentDir
-            | camino::Utf8Component::RootDir
-            | camino::Utf8Component::Prefix(_) => return None,
-        }
-    }
-    Some(session.source.source_root.join(normalized))
+    Some(session.source.source_root.join(relative_path))
 }
 
 fn valid_child_name(name: &str) -> bool {

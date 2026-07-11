@@ -22,7 +22,6 @@ pub struct RunContext {
     pub pixel_count: i64,
     pub pixel_fraction: f64,
     pub global_marks: Marks,
-    //TODO location based effects
 }
 
 pub type OperatorRunContext = RunContext;

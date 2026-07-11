@@ -5,6 +5,7 @@ use dawn_language::effect::{
     CurveDefinition, CurveId, CurveSource, EffectDefinition, EffectDefinitionId, EffectInst,
     EffectInstId, EffectParamValue, EffectScope, EffectTarget,
 };
+use dawn_language::identity::SourceIdentity;
 use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
 use dawn_language::operator::{
     BuiltinOperator, GraphOperatorNode, OperatorDefinitionId, OperatorRef,
@@ -12,9 +13,8 @@ use dawn_language::operator::{
 };
 use dawn_language::sequence::{
     AutomationClip, AutomationClipId, CompositionGraphNode, CompositionGraphNodeId,
-    CompositionGraphNodeKind, EffectClip, EffectGraphEdge, GraphNodePosition, GraphPortId,
-    MarkCollectionKey, Sequence, SequenceAudio, SequenceClip, SequenceClipId, SequenceClipKind,
-    SequenceCompositionGraph, SequenceId, SequenceLayer, SequenceLayerId,
+    CompositionGraphNodeKind, EffectGraphEdge, GraphNodePosition, GraphPortId, MarkCollectionKey,
+    Sequence, SequenceAudio, SequenceCompositionGraph, SequenceId, SequenceLayer, SequenceLayerId,
 };
 use dawn_language::setup::{
     ControllerDefinitionStore, FixtureDefinition, FixtureDefinitionId, FixtureDefinitionStore,
@@ -28,6 +28,10 @@ use dawn_language::values::{
 use indexmap::IndexMap;
 
 use super::*;
+
+fn source_identity(object: &str) -> SourceIdentity {
+    SourceIdentity::new("test.dawn".into(), object.to_string())
+}
 
 #[test]
 fn frame_count_clamping_and_frame_start_sample_time_are_audio_clocked() {
@@ -265,13 +269,13 @@ fn missing_references_fail_and_automation_prepares() {
     )]));
     project.definitions.effects.definitions.clear();
     assert!(matches!(
-        PreparedSequenceRenderer::prepare(&project, &SetupId("setup".to_string()), &seq_id()),
+        PreparedSequenceRenderer::prepare(&project, &SetupId(source_identity("setup")), &seq_id()),
         Err(RenderError::MissingEffect { .. })
     ));
 
     let params = IndexMap::from([(
         ident("gradient"),
-        EffectParamValue::Curve(CurveSource::Reference(CurveId("missing".to_string()))),
+        EffectParamValue::Curve(CurveSource::Reference(CurveId(source_identity("missing")))),
     )]);
     let sequence = sequence_with_effects(vec![constant_effect(
         1,
@@ -373,7 +377,7 @@ fn register_vm_evaluates_core_ops_and_builtins() {
     );
 
     let frame =
-        PreparedSequenceRenderer::prepare(&project, &SetupId("setup".to_string()), &seq_id())
+        PreparedSequenceRenderer::prepare(&project, &SetupId(source_identity("setup")), &seq_id())
             .unwrap()
             .render_frame(0)
             .unwrap();
@@ -441,7 +445,7 @@ fn register_vm_uses_prepared_curve_ops() {
     );
 
     let frame =
-        PreparedSequenceRenderer::prepare(&project, &SetupId("setup".to_string()), &seq_id())
+        PreparedSequenceRenderer::prepare(&project, &SetupId(source_identity("setup")), &seq_id())
             .unwrap()
             .render_frame(0)
             .unwrap();
@@ -472,7 +476,7 @@ fn generator_emits_sample_child_for_selected_fixture_target() {
     );
 
     let frame =
-        PreparedSequenceRenderer::prepare(&project, &SetupId("setup".to_string()), &seq_id())
+        PreparedSequenceRenderer::prepare(&project, &SetupId(source_identity("setup")), &seq_id())
             .unwrap()
             .render_frame(0)
             .unwrap();
@@ -530,7 +534,7 @@ fn generated_child_validation_fails_during_prepare() {
         insert_effect(&mut project, name, source);
 
         assert!(matches!(
-            PreparedSequenceRenderer::prepare(&project, &SetupId("setup".to_string()), &seq_id()),
+            PreparedSequenceRenderer::prepare(&project, &SetupId(source_identity("setup")), &seq_id()),
             Err(RenderError::GeneratorPrepare { .. })
         ));
     }
@@ -558,7 +562,7 @@ fn nested_generator_depth_is_bounded() {
     );
 
     assert!(matches!(
-        PreparedSequenceRenderer::prepare(&project, &SetupId("setup".to_string()), &seq_id()),
+        PreparedSequenceRenderer::prepare(&project, &SetupId(source_identity("setup")), &seq_id()),
         Err(RenderError::GeneratorPrepare { .. })
     ));
 }
@@ -576,7 +580,7 @@ fn custom_operator_renderer(
         .into_iter()
         .next()
         .unwrap();
-    let id = OperatorDefinitionId(compiled.name().as_str().to_string());
+    let id = OperatorDefinitionId(source_identity(compiled.name().as_str()));
     let mut sequence = sequence_with_effects(vec![constant_effect(
         1,
         0.0,
@@ -613,7 +617,8 @@ fn custom_operator_renderer(
         .definitions
         .operators
         .insert(id.clone(), custom_operator_definition(id, compiled));
-    PreparedSequenceRenderer::prepare(&project, &SetupId("setup".to_string()), &seq_id()).unwrap()
+    PreparedSequenceRenderer::prepare(&project, &SetupId(source_identity("setup")), &seq_id())
+        .unwrap()
 }
 
 fn identifier(value: &str) -> Identifier {
@@ -621,27 +626,31 @@ fn identifier(value: &str) -> Identifier {
 }
 
 fn prepare(sequence: Sequence) -> Result<PreparedSequenceRenderer, RenderError> {
-    PreparedSequenceRenderer::prepare(&project(sequence), &SetupId("setup".to_string()), &seq_id())
+    PreparedSequenceRenderer::prepare(
+        &project(sequence),
+        &SetupId(source_identity("setup")),
+        &seq_id(),
+    )
 }
 
 fn project(sequence: Sequence) -> DawnProject {
     let mut setups = IndexMap::new();
     setups.insert(
-        SetupId("setup".to_string()),
+        SetupId(source_identity("setup")),
         Setup {
-            id: SetupId("setup".to_string()),
-            layout: LayoutId("layout".to_string()),
-            patch: PatchId("patch".to_string()),
+            id: SetupId(source_identity("setup")),
+            layout: LayoutId(source_identity("layout")),
+            patch: PatchId(source_identity("patch")),
             controllers: Vec::new(),
         },
     );
     let mut layouts = IndexMap::new();
-    layouts.insert(LayoutId("layout".to_string()), layout());
+    layouts.insert(LayoutId(source_identity("layout")), layout());
 
     DawnProject {
         root: ProjectRoot {
-            id: ProjectId("project".to_string()),
-            setup: SetupId("setup".to_string()),
+            id: ProjectId(source_identity("project")),
+            setup: SetupId(source_identity("setup")),
             sequences: vec![seq_id()],
         },
         setups,
@@ -656,7 +665,7 @@ fn project(sequence: Sequence) -> DawnProject {
 fn definitions() -> ProjectDefinitionStores {
     let mut fixtures = FixtureDefinitionStore::default();
     fixtures.insert(
-        FixtureDefinitionId("two".to_string()),
+        FixtureDefinitionId(source_identity("two")),
         FixtureDefinition {
             bulb_radius: DistanceSpan::ZERO,
             geometry: Geometry::Points {
@@ -702,7 +711,7 @@ fn definitions() -> ProjectDefinitionStores {
     ] {
         let compiled = compile_effects(source).unwrap().into_iter().next().unwrap();
         effects.insert(
-            EffectDefinitionId(name.to_string()),
+            EffectDefinitionId(source_identity(name)),
             EffectDefinition { compiled },
         );
     }
@@ -712,7 +721,7 @@ fn definitions() -> ProjectDefinitionStores {
         fixtures,
         curves: dawn_language::effect::CurveDefinitionStore {
             definitions: IndexMap::from([(
-                CurveId("curve".to_string()),
+                CurveId(source_identity("curve")),
                 CurveDefinition {
                     curve: Curve {
                         points: vec![CurvePoint {
@@ -735,14 +744,14 @@ fn insert_effect(project: &mut DawnProject, name: &str, source: &str) {
         .find(|effect| effect.name().as_str() == name)
         .unwrap();
     project.definitions.effects.insert(
-        EffectDefinitionId(name.to_string()),
+        EffectDefinitionId(source_identity(name)),
         EffectDefinition { compiled },
     );
 }
 
 fn layout() -> Layout {
     Layout {
-        id: LayoutId("layout".to_string()),
+        id: LayoutId(source_identity("layout")),
         target_order: Vec::new(),
         fixtures: vec![fixture(1), fixture(2), fixture(3)],
         groups: vec![
@@ -773,7 +782,7 @@ fn fixture(id: u32) -> FixtureInst {
     FixtureInst {
         id: FixtureInstanceId(id),
         name: format!("Fixture {id}"),
-        definition: FixtureDefinitionId("two".to_string()),
+        definition: FixtureDefinitionId(source_identity("two")),
         position: Point3::default(),
         rotation: Rotation3::default(),
         scale: Scale3::default(),
@@ -781,27 +790,12 @@ fn fixture(id: u32) -> FixtureInst {
 }
 
 fn sequence_with_effects(effects: Vec<EffectInst>) -> Sequence {
-    let clips = effects
-        .iter()
-        .map(|effect| SequenceClip {
-            id: SequenceClipId(effect.id.0),
-            start: effect.start.clone(),
-            duration: effect.duration.clone(),
-            target: effect.target.clone(),
-            scope: effect.scope.clone(),
-            kind: SequenceClipKind::Effect(EffectClip {
-                definition: effect.definition.clone(),
-                param_overrides: effect.param_overrides.clone(),
-            }),
-        })
-        .collect();
     Sequence {
         id: seq_id(),
         duration: duration(10.0),
         frame_rate: 3,
         audio: SequenceAudio::None,
         mark_collections: Vec::new(),
-        clips,
         layers: default_layers(),
         effects,
         composition_graph: default_composition_graph(),
@@ -875,7 +869,6 @@ fn sequence_with_graph(
             node_edge(3, "output", 4, "input"),
         ],
     };
-    sequence.clips = clips_from_effects_for_test(&sequence.effects);
     sequence
 }
 
@@ -959,23 +952,6 @@ fn default_composition_graph() -> SequenceCompositionGraph {
     }
 }
 
-fn clips_from_effects_for_test(effects: &[EffectInst]) -> Vec<SequenceClip> {
-    effects
-        .iter()
-        .map(|effect| SequenceClip {
-            id: SequenceClipId(effect.id.0),
-            start: effect.start.clone(),
-            duration: effect.duration.clone(),
-            target: effect.target.clone(),
-            scope: effect.scope.clone(),
-            kind: SequenceClipKind::Effect(EffectClip {
-                definition: effect.definition.clone(),
-                param_overrides: effect.param_overrides.clone(),
-            }),
-        })
-        .collect()
-}
-
 fn layer_node(id: u32, layer_id: u32, x: f64, y: f64) -> CompositionGraphNode {
     CompositionGraphNode {
         id: CompositionGraphNodeId(id),
@@ -1011,13 +987,13 @@ fn constant_effect(
         duration: duration(effect_duration),
         target: EffectTarget::Group(FixtureGroupId(group_id)),
         scope,
-        definition: EffectDefinitionId(definition.to_string()),
+        definition: EffectDefinitionId(source_identity(definition)),
         param_overrides,
     }
 }
 
 fn seq_id() -> SequenceId {
-    SequenceId("seq".to_string())
+    SequenceId(source_identity("seq"))
 }
 
 fn ident(value: &str) -> Identifier {

@@ -18,6 +18,7 @@ use dawn_language::dsl::{
 use dawn_language::effect::{
     CurveSource, EffectDefinitionId, EffectInstId, EffectParamValue, EffectScope, EffectTarget,
 };
+use dawn_language::identity::SourceIdentity;
 use dawn_language::model::DawnProject;
 use dawn_language::operator::{
     BuiltinOperator, OperatorDefinition, OperatorImplementation, validate_composition_graph,
@@ -34,7 +35,14 @@ use dawn_language::values::{Color, Curve, CurvePoint, CurveValue, DawnTime, Mark
 use indexmap::{IndexMap, IndexSet};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+
+static NEXT_RENDER_CACHE_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_render_cache_id() -> u64 {
+    NEXT_RENDER_CACHE_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RenderedTargetPixelAddress {
@@ -44,6 +52,7 @@ pub struct RenderedTargetPixelAddress {
 
 #[derive(Clone, Debug)]
 pub struct PreparedSequenceRenderer {
+    render_cache_id: u64,
     frame_rate: u32,
     frame_count: u64,
     duration_seconds: f64,
@@ -51,9 +60,11 @@ pub struct PreparedSequenceRenderer {
     fixture_pixel_offsets: Vec<usize>,
     pixel_count: usize,
     effects: Vec<PreparedEffect>,
+    effect_layer_indexes: Vec<usize>,
     layers: Vec<PreparedLayer>,
     composition_graph: PreparedCompositionGraph,
     effects_by_frame: Vec<Vec<usize>>,
+    layer_cache_history_micros: i64,
 }
 
 #[derive(Debug, Default)]
@@ -62,6 +73,9 @@ pub struct SequenceRenderScratch {
     operator_vm: Vec<DslVmScratch>,
     bind_cache: DslBindCache,
     graph_cache: HashMap<GraphRenderCacheKey, Arc<Vec<Color>>>,
+    graph_cache_frame_key: Option<i64>,
+    layer_cache: HashMap<GraphRenderCacheKey, Arc<Vec<Color>>>,
+    render_cache_id: Option<u64>,
     color_buffers: Vec<Vec<Color>>,
 }
 
@@ -172,6 +186,7 @@ pub enum RenderError {
     MissingFixture { fixture_id: FixtureInstanceId },
     MissingFixtureDefinition,
     MissingEffect { effect_id: EffectDefinitionId },
+    MissingEffectInstance { effect_id: EffectInstId },
     MissingCurve,
     MissingMarkCollection { key: MarkCollectionKey },
     BadTarget,
@@ -270,10 +285,6 @@ impl PreparedSequenceRenderer {
             )?;
         }
 
-        let frame_rate = sequence.frame_rate;
-        let duration_seconds = sequence.duration.as_seconds_f64();
-        let frame_count = frame_count(duration_seconds, frame_rate);
-        let effects_by_frame = build_effect_frame_index(&effects, frame_count, frame_rate);
         let layers = sequence
             .layers
             .iter()
@@ -282,15 +293,41 @@ impl PreparedSequenceRenderer {
                 enabled: layer.enabled,
             })
             .collect::<Vec<_>>();
+        let effect_layer_indexes = effects
+            .iter()
+            .map(|effect| {
+                layers
+                    .iter()
+                    .position(|layer| layer.id == effect.layer_id)
+                    .ok_or_else(|| RenderError::BadGraph {
+                        message: format!(
+                            "prepared effect references missing layer {}",
+                            effect.layer_id.0
+                        ),
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let frame_rate = sequence.frame_rate;
+        let duration_seconds = sequence.duration.as_seconds_f64();
+        let frame_count = frame_count(duration_seconds, frame_rate);
+        let mut effects_by_frame = build_effect_frame_index(&effects, frame_count, frame_rate);
+        for active_effects in &mut effects_by_frame {
+            active_effects.sort_unstable_by_key(|effect_index| {
+                (effect_layer_indexes[*effect_index], *effect_index)
+            });
+        }
         let composition_graph = prepare_composition_graph(
             PrepareGraphContext {
                 project,
                 sequence,
                 fixtures: &fixtures,
+                layers: &layers,
             },
             &sequence.composition_graph,
         )?;
+        let layer_cache_history_micros = layer_cache_history_micros(&composition_graph);
         Ok(Self {
+            render_cache_id: next_render_cache_id(),
             frame_rate,
             frame_count,
             duration_seconds,
@@ -298,9 +335,11 @@ impl PreparedSequenceRenderer {
             fixture_pixel_offsets,
             pixel_count,
             effects,
+            effect_layer_indexes,
             layers,
             composition_graph,
             effects_by_frame,
+            layer_cache_history_micros,
         })
     }
 
@@ -359,9 +398,11 @@ impl PreparedSequenceRenderer {
         let Some(active_effects) = self.effects_by_frame.get(frame_index as usize) else {
             return Vec::new();
         };
+        let mut active_effects = active_effects.clone();
+        active_effects.sort_unstable();
         active_effects
-            .iter()
-            .filter_map(|effect_index| self.effects.get(*effect_index))
+            .into_iter()
+            .filter_map(|effect_index| self.effects.get(effect_index))
             .map(|effect| effect.definition.name().as_str())
             .collect()
     }
@@ -372,6 +413,12 @@ impl PreparedSequenceRenderer {
         clock_seconds: f64,
         scratch: &mut SequenceRenderScratch,
     ) -> Result<RenderedFrame, RenderError> {
+        if scratch.render_cache_id != Some(self.render_cache_id) {
+            scratch.graph_cache.clear();
+            scratch.graph_cache_frame_key = None;
+            scratch.layer_cache.clear();
+            scratch.render_cache_id = Some(self.render_cache_id);
+        }
         scratch
             .effect_vm
             .resize_with(self.effects.len(), DslVmScratch::default);
@@ -392,10 +439,11 @@ impl PreparedSequenceRenderer {
 
     fn render_layer_at(
         &self,
-        layer: &PreparedLayer,
+        layer_index: usize,
         sample_seconds: f64,
         scratch: &mut SequenceRenderScratch,
     ) -> Result<Vec<Color>, RenderError> {
+        let layer = &self.layers[layer_index];
         let mut rendered = take_black_color_buffer(scratch, self.pixel_count);
         if !layer.enabled || !sample_seconds.is_finite() || sample_seconds < 0.0 {
             return Ok(rendered);
@@ -403,13 +451,16 @@ impl PreparedSequenceRenderer {
 
         let frame_index = (sample_seconds * f64::from(self.frame_rate)).floor() as usize;
         if let Some(active_effects) = self.effects_by_frame.get(frame_index) {
-            for effect_index in active_effects {
+            let first = active_effects.partition_point(|effect_index| {
+                self.effect_layer_indexes[*effect_index] < layer_index
+            });
+            let last = active_effects.partition_point(|effect_index| {
+                self.effect_layer_indexes[*effect_index] <= layer_index
+            });
+            for effect_index in &active_effects[first..last] {
                 let Some(effect) = self.effects.get(*effect_index) else {
                     continue;
                 };
-                if effect.layer_id != layer.id {
-                    continue;
-                }
                 if sample_seconds < effect.start_seconds
                     || sample_seconds >= effect.start_seconds + effect.duration_seconds
                 {
@@ -729,14 +780,25 @@ impl<'a> EffectRasterPrepareBatch<'a> {
         &mut self,
         clip_id: &SequenceClipId,
     ) -> Result<PreparedEffectRasterRenderer, RenderError> {
-        let clip = self
+        let effect = self
             .sequence
-            .clips
+            .effects
             .iter()
-            .find(|clip| &clip.id == clip_id)
-            .ok_or_else(|| RenderError::MissingEffect {
-                effect_id: EffectDefinitionId(clip_id.0.to_string()),
+            .find(|effect| effect.id.0 == clip_id.0)
+            .ok_or(RenderError::MissingEffectInstance {
+                effect_id: EffectInstId(clip_id.0),
             })?;
+        let clip = SequenceClip {
+            id: clip_id.clone(),
+            start: effect.start.clone(),
+            duration: effect.duration.clone(),
+            target: effect.target.clone(),
+            scope: effect.scope.clone(),
+            kind: SequenceClipKind::Effect(EffectClip {
+                definition: effect.definition.clone(),
+                param_overrides: effect.param_overrides.clone(),
+            }),
+        };
         let SequenceClipKind::Effect(effect) = &clip.kind;
         let mut effects = Vec::new();
         let mut generated_child_count = 0usize;
@@ -754,7 +816,7 @@ impl<'a> EffectRasterPrepareBatch<'a> {
                 compiled_effects: &mut self.compiled_effects,
                 target_cache: &mut self.target_cache,
             },
-            clip,
+            &clip,
             effect,
         )?;
 
@@ -912,6 +974,7 @@ fn prepare_effect_clip(
                         duration_seconds: effect_duration_seconds,
                         target: expansion_target,
                         depth: 0,
+                        definition_source: effect.definition.0.clone(),
                     },
                 )?;
             }
@@ -924,6 +987,7 @@ struct PrepareGraphContext<'a> {
     project: &'a DawnProject,
     sequence: &'a Sequence,
     fixtures: &'a [PreparedFixture],
+    layers: &'a [PreparedLayer],
 }
 
 fn prepare_composition_graph(
@@ -958,12 +1022,22 @@ fn prepare_composition_graph(
         let node_id = &node_ids[*node_index];
         let node = graph_node(graph, node_id)?;
         let prepared = match &node.kind {
-            CompositionGraphNodeKind::Layer { layer_id } => PreparedGraphNode {
-                target: Arc::clone(&full_target),
-                kind: PreparedGraphNodeKind::Layer {
-                    layer_id: layer_id.clone(),
-                },
-            },
+            CompositionGraphNodeKind::Layer { layer_id } => {
+                let layer_index = context
+                    .layers
+                    .iter()
+                    .position(|layer| layer.id == *layer_id)
+                    .ok_or_else(|| RenderError::BadGraph {
+                        message: format!(
+                            "composition graph references missing layer {}",
+                            layer_id.0
+                        ),
+                    })?;
+                PreparedGraphNode {
+                    target: Arc::clone(&full_target),
+                    kind: PreparedGraphNodeKind::Layer { layer_index },
+                }
+            }
             CompositionGraphNodeKind::Operator(operator_node) => {
                 let definition = context
                     .project
@@ -1535,10 +1609,7 @@ fn automation_for_effect_clip(
                             if effect_id.0 == clip_id.0
                     )
                 })
-                .map(move |binding| PreparedAutomation {
-                    clip: clip.clone(),
-                    binding: binding.clone(),
-                })
+                .map(move |binding| prepare_automation(clip, binding))
         })
         .collect()
 }
@@ -1562,12 +1633,20 @@ fn automation_for_composition_node(
                         } if target_node_id == node_id
                     )
                 })
-                .map(move |binding| PreparedAutomation {
-                    clip: clip.clone(),
-                    binding: binding.clone(),
-                })
+                .map(move |binding| prepare_automation(clip, binding))
         })
         .collect()
+}
+
+fn prepare_automation(clip: &AutomationClip, binding: &AutomationBinding) -> PreparedAutomation {
+    let mut clip = clip.clone();
+    clip.curve
+        .points
+        .sort_by(|left, right| left.position.total_cmp(&right.position));
+    PreparedAutomation {
+        clip,
+        binding: binding.clone(),
+    }
 }
 
 fn apply_automation_params(
@@ -1673,17 +1752,15 @@ fn float_curve_window(clip: &AutomationClip, min: f64, max: f64, sample_seconds:
 }
 
 fn sample_float_curve(curve: &Curve, position: f64) -> f64 {
-    let mut points = curve.points.iter().collect::<Vec<_>>();
-    points.sort_by(|left, right| left.position.total_cmp(&right.position));
-    let Some(first) = points.first() else {
+    let Some(first) = curve.points.first() else {
         return 0.0;
     };
     if position <= first.position {
         return curve_point_float(first);
     }
-    for pair in points.windows(2) {
-        let left = pair[0];
-        let right = pair[1];
+    for pair in curve.points.windows(2) {
+        let left = &pair[0];
+        let right = &pair[1];
         if position <= right.position {
             let span = right.position - left.position;
             let amount = if span <= 0.0 {
@@ -1694,10 +1771,7 @@ fn sample_float_curve(curve: &Curve, position: f64) -> f64 {
             return lerp(curve_point_float(left), curve_point_float(right), amount);
         }
     }
-    points
-        .last()
-        .map(|point| curve_point_float(point))
-        .unwrap_or(0.0)
+    curve.points.last().map(curve_point_float).unwrap_or(0.0)
 }
 
 fn curve_point_float(point: &CurvePoint) -> f64 {
@@ -1720,6 +1794,7 @@ struct GeneratorExpansion {
     duration_seconds: f64,
     target: Arc<Vec<PreparedTargetPixel>>,
     depth: usize,
+    definition_source: SourceIdentity,
 }
 
 struct GeneratorPrepareContext<'a> {
@@ -1761,7 +1836,13 @@ fn expand_generator(
             });
         }
         *context.generated_child_count += 1;
-        prepare_generated_child(context, expansion.start_seconds, expansion.depth, child)?;
+        prepare_generated_child(
+            context,
+            expansion.start_seconds,
+            expansion.depth,
+            &expansion.definition_source,
+            child,
+        )?;
     }
     Ok(())
 }
@@ -1770,16 +1851,24 @@ fn prepare_generated_child(
     context: &mut GeneratorPrepareContext<'_>,
     parent_start_seconds: f64,
     parent_depth: usize,
+    definition_source: &SourceIdentity,
     child: GeneratedEffect,
 ) -> Result<(), RenderError> {
-    let effect_id = EffectDefinitionId(child.definition.as_str().to_string());
+    let effect_id = EffectDefinitionId(SourceIdentity::new(
+        definition_source.document().to_path_buf(),
+        child.definition.as_str().to_string(),
+    ));
     let definition = context
         .project
         .definitions
         .effects
         .get(&effect_id)
         .ok_or_else(|| RenderError::GeneratorPrepare {
-            message: format!("generated child effect `{}` does not exist", effect_id.0),
+            message: format!(
+                "generated child effect `{}` does not exist in {}",
+                effect_id.0.object(),
+                effect_id.0.document()
+            ),
         })?;
     let compiled = context
         .compiled_effects
@@ -1828,6 +1917,7 @@ fn prepare_generated_child(
                 duration_seconds,
                 target,
                 depth: parent_depth + 1,
+                definition_source: definition_source.clone(),
             },
         ),
     }
@@ -2101,8 +2191,13 @@ fn render_composition_graph(
     sample_seconds: f64,
     scratch: &mut SequenceRenderScratch,
 ) -> Result<Vec<RenderedFixture>, RenderError> {
+    prune_layer_cache(renderer, sample_seconds, scratch);
+    let frame_key = (sample_seconds * 1_000_000.0).round() as i64;
     let mut cache = std::mem::take(&mut scratch.graph_cache);
-    cache.clear();
+    if scratch.graph_cache_frame_key != Some(frame_key) {
+        recycle_graph_color_buffers(&mut cache, scratch);
+        scratch.graph_cache_frame_key = Some(frame_key);
+    }
     let output = match render_graph_node_with_scratch(
         renderer,
         renderer.composition_graph.output_index,
@@ -2113,15 +2208,43 @@ fn render_composition_graph(
         Ok(output) => output,
         Err(error) => {
             recycle_graph_color_buffers(&mut cache, scratch);
+            scratch.graph_cache_frame_key = None;
             scratch.graph_cache = cache;
             return Err(error);
         }
     };
     let rendered = unflatten_rendered_fixtures(&renderer.fixtures, output.as_ref());
     drop(output);
-    recycle_graph_color_buffers(&mut cache, scratch);
     scratch.graph_cache = cache;
     Ok(rendered)
+}
+
+fn prune_layer_cache(
+    renderer: &PreparedSequenceRenderer,
+    sample_seconds: f64,
+    scratch: &mut SequenceRenderScratch,
+) {
+    let current_frame_key = (sample_seconds * 1_000_000.0).round() as i64;
+    let oldest_frame_key = current_frame_key - renderer.layer_cache_history_micros;
+    let expired = scratch
+        .layer_cache
+        .keys()
+        .filter(|key| {
+            renderer.layer_cache_history_micros == 0
+                || key.frame_key < oldest_frame_key
+                || key.frame_key > current_frame_key
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    for key in expired {
+        let Some(colors) = scratch.layer_cache.remove(&key) else {
+            continue;
+        };
+        if let Ok(mut colors) = Arc::try_unwrap(colors) {
+            colors.clear();
+            scratch.color_buffers.push(colors);
+        }
+    }
 }
 
 fn take_black_color_buffer(scratch: &mut SequenceRenderScratch, len: usize) -> Vec<Color> {
@@ -2159,13 +2282,15 @@ fn render_graph_node(
     sample_seconds: f64,
     cache: &mut HashMap<GraphRenderCacheKey, Arc<Vec<Color>>>,
 ) -> Result<Arc<Vec<Color>>, RenderError> {
-    render_graph_node_with_scratch(
-        renderer,
-        node_index,
-        sample_seconds,
-        cache,
-        &mut SequenceRenderScratch::default(),
-    )
+    let mut scratch = SequenceRenderScratch::default();
+    scratch
+        .effect_vm
+        .resize_with(renderer.effects.len(), DslVmScratch::default);
+    scratch.operator_vm.resize_with(
+        renderer.composition_graph.nodes.len(),
+        DslVmScratch::default,
+    );
+    render_graph_node_with_scratch(renderer, node_index, sample_seconds, cache, &mut scratch)
 }
 
 fn render_graph_node_with_scratch(
@@ -2191,14 +2316,19 @@ fn render_graph_node_with_scratch(
             message: "graph node index is out of bounds".to_string(),
         })?;
     let colors = match &node.kind {
-        PreparedGraphNodeKind::Layer { layer_id } => {
-            let colors =
-                if let Some(layer) = renderer.layers.iter().find(|layer| layer.id == *layer_id) {
-                    renderer.render_layer_at(layer, sample_seconds, scratch)?
-                } else {
-                    take_black_color_buffer(scratch, node.target.len())
-                };
-            Arc::new(colors)
+        PreparedGraphNodeKind::Layer { layer_index } => {
+            if renderer.layer_cache_history_micros > 0
+                && let Some(colors) = scratch.layer_cache.get(&key)
+            {
+                Arc::clone(colors)
+            } else {
+                let colors =
+                    Arc::new(renderer.render_layer_at(*layer_index, sample_seconds, scratch)?);
+                if renderer.layer_cache_history_micros > 0 {
+                    scratch.layer_cache.insert(key, Arc::clone(&colors));
+                }
+                colors
+            }
         }
         PreparedGraphNodeKind::Operator {
             definition,
@@ -2294,7 +2424,7 @@ fn render_graph_operator(
             cache,
             flat_pixel_index: 0,
             duration,
-            last_sample: None,
+            samples: Vec::new(),
             scratch,
         };
         for (flat_pixel_index, pixel) in target.iter().enumerate() {
@@ -2461,7 +2591,7 @@ struct GraphSignalSampler<'a> {
     cache: &'a mut HashMap<GraphRenderCacheKey, Arc<Vec<Color>>>,
     flat_pixel_index: usize,
     duration: f64,
-    last_sample: Option<(GraphRenderCacheKey, Arc<Vec<Color>>)>,
+    samples: Vec<(GraphRenderCacheKey, Arc<Vec<Color>>)>,
     scratch: &'a mut SequenceRenderScratch,
 }
 
@@ -2486,8 +2616,10 @@ impl SignalSampler for GraphSignalSampler<'_> {
             node_index: node,
             frame_key: (seconds * 1_000_000.0).round() as i64,
         };
-        if let Some((last_key, colors)) = &self.last_sample
-            && *last_key == key
+        if let Some((_, colors)) = self
+            .samples
+            .iter()
+            .find(|(sample_key, _)| *sample_key == key)
         {
             return Ok(colors
                 .get(self.flat_pixel_index)
@@ -2503,7 +2635,7 @@ impl SignalSampler for GraphSignalSampler<'_> {
             .get(self.flat_pixel_index)
             .copied()
             .unwrap_or_else(black);
-        self.last_sample = Some((key, colors));
+        self.samples.push((key, colors));
         Ok(color)
     }
 }
@@ -2905,6 +3037,52 @@ fn int_param(params: &IndexMap<Identifier, Value>, name: &str) -> Result<i64, Re
         })
 }
 
+fn layer_cache_history_micros(graph: &PreparedCompositionGraph) -> i64 {
+    let history_seconds = graph
+        .nodes
+        .iter()
+        .filter_map(|node| {
+            let PreparedGraphNodeKind::Operator {
+                definition,
+                params,
+                automation,
+                ..
+            } = &node.kind
+            else {
+                return None;
+            };
+            if !matches!(
+                definition.implementation,
+                OperatorImplementation::Native(BuiltinOperator::Echo)
+            ) {
+                return None;
+            }
+            let mut delay = float_param(params, "seconds").unwrap_or(0.0).max(0.0);
+            let mut repeats = int_param(params, "repeats").unwrap_or(1).clamp(1, 32);
+            for automation in automation {
+                match (
+                    automation_param(&automation.binding).as_str(),
+                    &automation.binding.mapping,
+                ) {
+                    ("seconds", AutomationMapping::Float { min, max }) => {
+                        delay = delay.max(*min).max(*max).max(0.0);
+                    }
+                    ("repeats", AutomationMapping::Int { min, max }) => {
+                        repeats = repeats.max(*min).max(*max).clamp(1, 32);
+                    }
+                    _ => {}
+                }
+            }
+            Some(delay * repeats as f64)
+        })
+        .fold(0.0_f64, f64::max);
+    if !history_seconds.is_finite() || history_seconds <= 0.0 {
+        0
+    } else {
+        (history_seconds * 1_000_000.0).ceil() as i64
+    }
+}
+
 fn color_param(params: &IndexMap<Identifier, Value>, name: &str) -> Result<Color, RenderError> {
     let name = Identifier::new(name.to_string()).map_err(|_| RenderError::BadGraph {
         message: format!("invalid operator parameter name `{name}`"),
@@ -3031,7 +3209,7 @@ struct PreparedGraphNode {
 #[derive(Clone, Debug)]
 enum PreparedGraphNodeKind {
     Layer {
-        layer_id: SequenceLayerId,
+        layer_index: usize,
     },
     Operator {
         definition: Box<OperatorDefinition>,

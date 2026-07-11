@@ -1157,7 +1157,11 @@ fn render_signature(
             let bindings = clip
                 .bindings
                 .iter()
-                .filter(|binding| binding.effect_id == effect.id)
+                .filter(|binding| {
+                    binding
+                        .effect_param()
+                        .is_some_and(|(effect_id, _)| effect_id == &effect.id)
+                })
                 .cloned()
                 .collect::<Vec<_>>();
             (!bindings.is_empty()).then(|| AutomationInputSignature {
@@ -1292,8 +1296,7 @@ fn hash_automation_input_signature<H: Hasher>(clip: &AutomationInputSignature, s
     hash_curve(&clip.curve, state);
     clip.bindings.len().hash(state);
     for binding in &clip.bindings {
-        binding.effect_id.hash(state);
-        binding.param.hash(state);
+        binding.target.hash(state);
         hash_automation_mapping(&binding.mapping, state);
     }
 }

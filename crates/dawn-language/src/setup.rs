@@ -1,22 +1,23 @@
 use indexmap::IndexMap;
 use std::net::IpAddr;
 
+use crate::identity::SourceIdentity;
 use crate::values::{DistanceSpan, Point3, Rotation3, Scale3};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct SetupId(pub String);
+pub struct SetupId(pub SourceIdentity);
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct ControllerId(pub String);
+pub struct ControllerId(pub SourceIdentity);
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct ControllerDefinitionId(pub String);
+pub struct ControllerDefinitionId(pub SourceIdentity);
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct LayoutId(pub String);
+pub struct LayoutId(pub SourceIdentity);
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct PatchId(pub String);
+pub struct PatchId(pub SourceIdentity);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Setup {
@@ -124,7 +125,7 @@ pub struct FixtureInst {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct FixtureDefinitionId(pub String);
+pub struct FixtureDefinitionId(pub SourceIdentity);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FixtureDefinition {

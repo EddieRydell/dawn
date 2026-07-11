@@ -1,5 +1,5 @@
 use camino::Utf8PathBuf;
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use dawn_language::sequence::SequenceClipId;
 use dawn_language::values::Color;
 use dawn_project_io::load_project;
@@ -148,6 +148,22 @@ fn bench_render(c: &mut Criterion) {
         });
     });
 
+    c.bench_function("render_playback_dense_cold_60_frames", |b| {
+        b.iter_batched(
+            SequenceRenderScratch::default,
+            |mut scratch| {
+                for frame in 19_050..19_110 {
+                    black_box(
+                        renderer
+                            .render_frame_with_scratch(black_box(frame), &mut scratch)
+                            .expect("benchmark cold dense playback frame should render"),
+                    );
+                }
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
     let mut operator_scratch = SequenceRenderScratch::default();
     c.bench_function("render_operator_graph_gain_echo", |b| {
         b.iter(|| {
@@ -170,6 +186,22 @@ fn bench_render(c: &mut Criterion) {
                 );
             }
         });
+    });
+
+    c.bench_function("render_operator_playback_cold_60_frames", |b| {
+        b.iter_batched(
+            SequenceRenderScratch::default,
+            |mut scratch| {
+                for frame in 3_570..3_630 {
+                    black_box(
+                        operator_renderer
+                            .render_frame_with_scratch(black_box(frame), &mut scratch)
+                            .expect("benchmark cold operator playback frame should render"),
+                    );
+                }
+            },
+            BatchSize::SmallInput,
+        );
     });
 
     for (scenario, renderer) in RASTER_SCENARIOS.into_iter().zip(raster_renderers.iter()) {

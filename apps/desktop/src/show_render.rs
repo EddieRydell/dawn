@@ -208,11 +208,12 @@ mod tests {
     use dawn_language::effect::{
         EffectDefinition, EffectDefinitionId, EffectInst, EffectInstId, EffectScope, EffectTarget,
     };
+    use dawn_language::identity::SourceIdentity;
     use dawn_language::model::{ProjectDefinitionStores, ProjectId, ProjectRoot};
     use dawn_language::sequence::{
-        CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind, EffectClip,
-        EffectGraphEdge, GraphNodePosition, GraphPortId, Sequence, SequenceAudio, SequenceClip,
-        SequenceClipId, SequenceClipKind, SequenceCompositionGraph, SequenceLayer, SequenceLayerId,
+        CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind, EffectGraphEdge,
+        GraphNodePosition, GraphPortId, Sequence, SequenceAudio, SequenceCompositionGraph,
+        SequenceLayer, SequenceLayerId,
     };
     use dawn_language::setup::{
         ControllerDefinitionStore, FixtureDefinition, FixtureDefinitionId, FixtureDefinitionStore,
@@ -225,12 +226,16 @@ mod tests {
     use indexmap::IndexMap;
     use std::time::Duration;
 
+    fn source_identity(object: &str) -> SourceIdentity {
+        SourceIdentity::new("test.dawn".into(), object.to_string())
+    }
+
     #[test]
     fn prepares_unloads_rejects_unavailable_clocks_and_renders_loaded_states() {
         let project = project();
         let mut service = ShowRenderService::new();
-        let setup_id = SetupId("setup".to_string());
-        let sequence_id = SequenceId("seq".to_string());
+        let setup_id = SetupId(source_identity("setup"));
+        let sequence_id = SequenceId(source_identity("seq"));
 
         service.prepare(&project, &setup_id, &sequence_id).unwrap();
         assert_eq!(service.active_sequence_id(), Some(&sequence_id));
@@ -272,13 +277,19 @@ mod tests {
                 .next()
                 .unwrap();
         effects.insert(
-            EffectDefinitionId("Solid".to_string()),
+            EffectDefinitionId(SourceIdentity::new(
+                "effects.dawn".into(),
+                "Solid".to_string(),
+            )),
             EffectDefinition { compiled },
         );
 
         let mut fixtures = FixtureDefinitionStore::default();
         fixtures.insert(
-            FixtureDefinitionId("pixel".to_string()),
+            FixtureDefinitionId(SourceIdentity::new(
+                "fixtures.dawn".into(),
+                "pixel".to_string(),
+            )),
             FixtureDefinition {
                 bulb_radius: DistanceSpan::ZERO,
                 geometry: Geometry::Points {
@@ -294,48 +305,39 @@ mod tests {
             duration: DawnDuration(Duration::from_secs_f64(1.0)),
             target: EffectTarget::Group(FixtureGroupId(1)),
             scope: EffectScope::WholeTarget,
-            definition: EffectDefinitionId("Solid".to_string()),
+            definition: EffectDefinitionId(SourceIdentity::new(
+                "effects.dawn".into(),
+                "Solid".to_string(),
+            )),
             param_overrides: IndexMap::new(),
         }];
-        let sequence_clips = sequence_effects
-            .iter()
-            .map(|effect| SequenceClip {
-                id: SequenceClipId(effect.id.0),
-                start: effect.start.clone(),
-                duration: effect.duration.clone(),
-                target: effect.target.clone(),
-                scope: effect.scope.clone(),
-                kind: SequenceClipKind::Effect(EffectClip {
-                    definition: effect.definition.clone(),
-                    param_overrides: effect.param_overrides.clone(),
-                }),
-            })
-            .collect();
-
         DawnProject {
             root: ProjectRoot {
-                id: ProjectId("project".to_string()),
-                setup: SetupId("setup".to_string()),
-                sequences: vec![SequenceId("seq".to_string())],
+                id: ProjectId(source_identity("project")),
+                setup: SetupId(source_identity("setup")),
+                sequences: vec![SequenceId(source_identity("seq"))],
             },
             setups: IndexMap::from([(
-                SetupId("setup".to_string()),
+                SetupId(source_identity("setup")),
                 Setup {
-                    id: SetupId("setup".to_string()),
-                    layout: LayoutId("layout".to_string()),
-                    patch: PatchId("patch".to_string()),
+                    id: SetupId(source_identity("setup")),
+                    layout: LayoutId(source_identity("layout")),
+                    patch: PatchId(source_identity("patch")),
                     controllers: Vec::new(),
                 },
             )]),
             layouts: IndexMap::from([(
-                LayoutId("layout".to_string()),
+                LayoutId(source_identity("layout")),
                 Layout {
-                    id: LayoutId("layout".to_string()),
+                    id: LayoutId(source_identity("layout")),
                     target_order: Vec::new(),
                     fixtures: vec![FixtureInst {
                         id: FixtureInstanceId(1),
                         name: "Pixel".to_string(),
-                        definition: FixtureDefinitionId("pixel".to_string()),
+                        definition: FixtureDefinitionId(SourceIdentity::new(
+                            "fixtures.dawn".into(),
+                            "pixel".to_string(),
+                        )),
                         position: Point3::default(),
                         rotation: Rotation3::default(),
                         scale: Scale3::default(),
@@ -350,14 +352,13 @@ mod tests {
             patches: IndexMap::new(),
             controllers: IndexMap::new(),
             sequences: IndexMap::from([(
-                SequenceId("seq".to_string()),
+                SequenceId(source_identity("seq")),
                 Sequence {
-                    id: SequenceId("seq".to_string()),
+                    id: SequenceId(source_identity("seq")),
                     duration: DawnDuration(Duration::from_secs_f64(1.0)),
                     frame_rate: 4,
                     audio: SequenceAudio::None,
                     mark_collections: Vec::new(),
-                    clips: sequence_clips,
                     layers: vec![SequenceLayer {
                         id: SequenceLayerId(0),
                         name: "Default".to_string(),

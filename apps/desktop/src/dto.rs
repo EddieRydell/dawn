@@ -645,9 +645,19 @@ pub struct SequenceAutomationClip {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceAutomationBinding {
-    pub effect_id: u32,
-    pub param: String,
+    pub target: SequenceAutomationTarget,
     pub mapping: SequenceAutomationMapping,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SequenceAutomationTarget {
+    EffectParam { effect_id: u32, param: String },
+    CompositionNodeParam { node_id: String, param: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -810,7 +820,7 @@ pub struct SequenceGraphEdge {
 )]
 pub enum SequenceGraphOperator {
     Builtin { operator: SequenceBuiltinOperator },
-    Custom { definition_id: String },
+    Custom { path: String, object_key: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

@@ -1,4 +1,5 @@
 use crate::effect::{CurveDefinitionStore, EffectDefinitionStore};
+use crate::identity::SourceIdentity;
 use crate::operator::OperatorDefinitionStore;
 use crate::sequence::Sequence;
 use crate::setup::{
@@ -19,7 +20,7 @@ pub struct DawnProject {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct ProjectId(pub String);
+pub struct ProjectId(pub SourceIdentity);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectRoot {

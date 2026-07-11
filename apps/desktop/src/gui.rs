@@ -8,6 +8,7 @@ use dawn_language::effect::{
     CurveId, CurveSource, EffectDefinitionId, EffectInst, EffectInstId, EffectParamValue,
     EffectScope, EffectTarget,
 };
+use dawn_language::identity::SourceIdentity;
 use dawn_language::operator::{
     BuiltinOperator, GraphOperatorNode, OperatorDefinition, OperatorDefinitionId,
     OperatorPortCardinality, OperatorPortDefinition, OperatorRef, validate_composition_graph,
@@ -15,9 +16,8 @@ use dawn_language::operator::{
 use dawn_language::sequence::{
     AssetId, AutomationBinding, AutomationClip, AutomationClipId, AutomationMapping,
     AutomationTarget, CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind,
-    EffectClip, EffectGraphEdge, GraphNodePosition, GraphPortId, MarkCollection, MarkCollectionKey,
-    SequenceAudio as DomainSequenceAudio, SequenceClip, SequenceClipId, SequenceClipKind,
-    SequenceId, SequenceLayerId,
+    EffectGraphEdge, GraphNodePosition, GraphPortId, MarkCollection, MarkCollectionKey,
+    SequenceAudio as DomainSequenceAudio, SequenceId, SequenceLayerId,
 };
 use dawn_language::setup::{
     FixtureDefinitionId, FixtureGroupId, FixtureInstanceId, Geometry as DomainGeometry, LayoutId,
@@ -28,8 +28,8 @@ use dawn_language::values::{
     Rotation3 as DomainRotation3, Scale3 as DomainScale3,
 };
 use dawn_project_io::{
-    ProjectSession, ReferencedAsset, SourceMap, SourceObjectId, SourceObjectKind,
-    SourceObjectLocation, ensure_document_can_reference,
+    ProjectSession, ReferencedAsset, SourceObjectId, SourceObjectKind,
+    ensure_document_can_reference_source, is_project_owned_path, relative_path_from_document,
 };
 use indexmap::IndexMap;
 
@@ -40,16 +40,16 @@ use crate::dto::{
     GuiEditCommand, GuiObjectRef, LayoutFixturePlacement, LayoutGuiDocument, LayoutGuiEdit,
     LayoutTarget, LayoutTargetKind, ObjectKind, Point3Meters, ProjectDiagnostic,
     ResolvedLayoutFixture, Rotation3Degrees, Scale3, SequenceAudio, SequenceAutomationBinding,
-    SequenceAutomationClip, SequenceAutomationMapping, SequenceBuiltinOperator,
-    SequenceCompositionGraph, SequenceCurveLibraryItem, SequenceCurveLibraryPoints,
-    SequenceCurveValueType, SequenceEffect, SequenceEffectParam, SequenceEffectParamCurveSource,
-    SequenceEffectParamKind, SequenceEffectParamValue, SequenceEffectScope, SequenceEffectScript,
-    SequenceEffectScriptKind, SequenceEffectScriptParam, SequenceGraphEdge, SequenceGraphNode,
-    SequenceGraphNodeKind, SequenceGraphOperator, SequenceGraphOperatorDefinition,
-    SequenceGraphPortCardinality, SequenceGraphPortDefinition, SequenceGuiDocument,
-    SequenceGuiEdit, SequenceLane, SequenceLayer, SequenceMarkCollection, SequenceMarkRef,
-    SequenceParamAutomation, SequencePasteAnchor, SequenceResizeEdge, SequenceSelection,
-    SequenceSelectionEdit, SequenceTimelineClipKind, Transform,
+    SequenceAutomationClip, SequenceAutomationMapping, SequenceAutomationTarget,
+    SequenceBuiltinOperator, SequenceCompositionGraph, SequenceCurveLibraryItem,
+    SequenceCurveLibraryPoints, SequenceCurveValueType, SequenceEffect, SequenceEffectParam,
+    SequenceEffectParamCurveSource, SequenceEffectParamKind, SequenceEffectParamValue,
+    SequenceEffectScope, SequenceEffectScript, SequenceEffectScriptKind, SequenceEffectScriptParam,
+    SequenceGraphEdge, SequenceGraphNode, SequenceGraphNodeKind, SequenceGraphOperator,
+    SequenceGraphOperatorDefinition, SequenceGraphPortCardinality, SequenceGraphPortDefinition,
+    SequenceGuiDocument, SequenceGuiEdit, SequenceLane, SequenceLayer, SequenceMarkCollection,
+    SequenceMarkRef, SequenceParamAutomation, SequencePasteAnchor, SequenceResizeEdge,
+    SequenceSelection, SequenceSelectionEdit, SequenceTimelineClipKind, Transform,
 };
 
 #[derive(Debug)]
@@ -89,6 +89,16 @@ pub fn project_gui_document(
             );
         }
     };
+    if !is_project_owned_path(&resolved.location.document) {
+        return blocked(
+            "Imported dependency documents are read-only.",
+            vec![gui_diagnostic(
+                &request.path,
+                "gui.read_only_dependency",
+                "Imported dependency documents are read-only.",
+            )],
+        );
+    }
     match request.view {
         DocumentViewId::Sequence => project_sequence(session, &resolved),
         DocumentViewId::Layout => project_layout(session, &resolved),
@@ -110,6 +120,7 @@ pub fn affected_paths(
     edit: &GuiEditCommand,
 ) -> Result<BTreeSet<String>, GuiMutationError> {
     let resolved = resolve_request(session, request).map_err(GuiMutationError::Invalid)?;
+    ensure_owned_gui_document(&resolved)?;
     match (request.view.clone(), edit) {
         (DocumentViewId::Sequence, GuiEditCommand::Sequence { .. })
         | (DocumentViewId::Layout, GuiEditCommand::Layout { .. })
@@ -127,21 +138,32 @@ pub fn apply_edit(
     request: &GuiDocumentRequest,
     edit: GuiEditCommand,
 ) -> Result<(), GuiMutationError> {
-    let resolved = resolve_request(session, request).map_err(GuiMutationError::Invalid)?;
+    let mut candidate = session.clone();
+    let resolved = resolve_request(&candidate, request).map_err(GuiMutationError::Invalid)?;
+    ensure_owned_gui_document(&resolved)?;
     match (request.view.clone(), edit) {
         (DocumentViewId::Sequence, GuiEditCommand::Sequence { edit }) => {
-            edit_sequence(session, &resolved, edit)
+            edit_sequence(&mut candidate, &resolved, edit)?;
+            let sequence_id = SequenceId(SourceIdentity::new(
+                resolved.location.document.clone(),
+                resolved.source_id.id().to_string(),
+            ));
+            crate::sequence_integrity::validate_sequence_integrity(&candidate, &sequence_id)?;
         }
         (DocumentViewId::Layout, GuiEditCommand::Layout { edit }) => {
-            edit_layout(session, &resolved, edit)
+            edit_layout(&mut candidate, &resolved, edit)?;
         }
         (DocumentViewId::Fixture, GuiEditCommand::Fixture { edit }) => {
-            edit_fixture(session, &resolved.location, edit)
+            edit_fixture(&mut candidate, &resolved.location, edit)?;
         }
-        _ => Err(GuiMutationError::Invalid(
-            "GUI edit type does not match the requested document view.".to_string(),
-        )),
+        _ => {
+            return Err(GuiMutationError::Invalid(
+                "GUI edit type does not match the requested document view.".to_string(),
+            ));
+        }
     }
+    *session = candidate;
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -175,13 +197,44 @@ pub(crate) fn apply_sequence_selection_edit(
     edit: SequenceSelectionEdit,
     clipboard: &mut Option<SequenceClipboard>,
 ) -> Result<SequenceSelectionMutation, GuiMutationError> {
+    let mut candidate = session.clone();
+    let mut candidate_clipboard = clipboard.clone();
+    let result = apply_sequence_selection_edit_inner(
+        &mut candidate,
+        request,
+        edit,
+        &mut candidate_clipboard,
+    )?;
+    if candidate.project != session.project {
+        let resolved = resolve_request(&candidate, request).map_err(GuiMutationError::Invalid)?;
+        let sequence_id = SequenceId(SourceIdentity::new(
+            resolved.location.document,
+            resolved.source_id.id().to_string(),
+        ));
+        crate::sequence_integrity::validate_sequence_integrity(&candidate, &sequence_id)?;
+    }
+    *session = candidate;
+    *clipboard = candidate_clipboard;
+    Ok(result)
+}
+
+fn apply_sequence_selection_edit_inner(
+    session: &mut ProjectSession,
+    request: &GuiDocumentRequest,
+    edit: SequenceSelectionEdit,
+    clipboard: &mut Option<SequenceClipboard>,
+) -> Result<SequenceSelectionMutation, GuiMutationError> {
     if !matches!(request.view, DocumentViewId::Sequence) {
         return Err(GuiMutationError::Invalid(
             "Sequence selection edits require a sequence GUI document.".to_string(),
         ));
     }
     let resolved = resolve_request(session, request).map_err(GuiMutationError::Invalid)?;
-    let sequence_id = SequenceId(resolved.source_id.id.clone());
+    ensure_owned_gui_document(&resolved)?;
+    let sequence_id = SequenceId(SourceIdentity::new(
+        resolved.location.document.clone(),
+        resolved.source_id.id().to_string(),
+    ));
     match edit {
         SequenceSelectionEdit::Copy { selection } => {
             let (next_clipboard, copied_count, skipped_count) =
@@ -260,6 +313,22 @@ struct ResolvedGuiObject {
     location: SourceObjectLocation,
 }
 
+#[derive(Clone)]
+struct SourceObjectLocation {
+    document: Utf8PathBuf,
+    object_key: String,
+}
+
+fn ensure_owned_gui_document(resolved: &ResolvedGuiObject) -> Result<(), GuiMutationError> {
+    if is_project_owned_path(&resolved.location.document) {
+        Ok(())
+    } else {
+        Err(GuiMutationError::Blocked(
+            "Imported dependency documents are read-only.".to_string(),
+        ))
+    }
+}
+
 fn resolve_request(
     session: &ProjectSession,
     request: &GuiDocumentRequest,
@@ -267,16 +336,17 @@ fn resolve_request(
     let path = Utf8Path::new(&request.path);
     let kind = source_kind_for_view(&request.view)?;
     let requested_key = request.object_key.as_deref();
-    let mut matches = session
+    let document = session
         .source
-        .source_map
-        .objects
+        .documents
+        .get(path)
+        .ok_or_else(|| "No matching GUI document was found for this request.".to_string())?;
+    let mut matches = document
+        .objects()
         .iter()
-        .filter(|(id, location)| id.kind == kind && location.document == path)
-        .filter(|(_, location)| {
-            requested_key.is_none_or(|key| location.object_key.as_str() == key)
-        });
-    let Some((source_id, location)) = matches.next() else {
+        .filter(|object| object.kind() == &kind)
+        .filter(|object| requested_key.is_none_or(|key| object.id() == key));
+    let Some(source_id) = matches.next() else {
         return Err("No matching GUI object was found for this request.".to_string());
     };
     if matches.next().is_some() && requested_key.is_none() {
@@ -284,13 +354,16 @@ fn resolve_request(
     }
     Ok(ResolvedGuiObject {
         source_ref: GuiObjectRef {
-            path: location.document.to_string(),
-            object_key: location.object_key.clone(),
-            kind: object_kind_for_source(&source_id.kind),
-            id: source_id.id.clone(),
+            path: path.to_string(),
+            object_key: source_id.id().to_string(),
+            kind: object_kind_for_source(source_id.kind()),
+            id: source_id.id().to_string(),
         },
         source_id: source_id.clone(),
-        location: location.clone(),
+        location: SourceObjectLocation {
+            document: path.to_path_buf(),
+            object_key: source_id.id().to_string(),
+        },
     })
 }
 
@@ -319,7 +392,10 @@ fn object_kind_for_source(kind: &SourceObjectKind) -> ObjectKind {
 }
 
 fn project_sequence(session: &ProjectSession, resolved: &ResolvedGuiObject) -> GuiDocument {
-    let id = SequenceId(resolved.source_id.id.clone());
+    let id = SequenceId(SourceIdentity::new(
+        resolved.location.document.clone(),
+        resolved.source_id.id().to_string(),
+    ));
     let Some(sequence) = session.project.sequences.get(&id) else {
         return blocked(
             "Sequence is not available in the checked project model.",
@@ -359,8 +435,8 @@ fn project_sequence(session: &ProjectSession, resolved: &ResolvedGuiObject) -> G
                 EffectScope::PerFixture => SequenceEffectScope::PerFixture,
                 EffectScope::WholeTarget => SequenceEffectScope::WholeTarget,
             },
-            script: effect.definition.0.clone(),
-            script_source: effect_script_ref(session, &effect.definition.0),
+            script: effect.definition.0.object().to_string(),
+            script_source: Some(effect_script_ref(&effect.definition.0)),
             params: effect_params(session, sequence, effect),
             kind: SequenceTimelineClipKind::Effect,
         })
@@ -415,7 +491,7 @@ fn project_sequence(session: &ProjectSession, resolved: &ResolvedGuiObject) -> G
             object_key: resolved.location.object_key.clone(),
             duration_seconds: sequence.duration.as_seconds_f64(),
             frame_rate: sequence.frame_rate as f64,
-            audio: sequence_audio(session, &sequence.audio),
+            audio: sequence_audio(session, &resolved.location.document, &sequence.audio),
             mark_collections: sequence
                 .mark_collections
                 .iter()
@@ -478,8 +554,20 @@ fn automation_clips(sequence: &dawn_language::sequence::Sequence) -> Vec<Sequenc
                 .bindings
                 .iter()
                 .map(|binding| SequenceAutomationBinding {
-                    effect_id: binding.effect_id.0,
-                    param: binding.param.as_str().to_string(),
+                    target: match &binding.target {
+                        AutomationTarget::EffectParam { effect_id, param } => {
+                            SequenceAutomationTarget::EffectParam {
+                                effect_id: effect_id.0,
+                                param: param.as_str().to_string(),
+                            }
+                        }
+                        AutomationTarget::CompositionNodeParam { node_id, param } => {
+                            SequenceAutomationTarget::CompositionNodeParam {
+                                node_id: graph_node_id(node_id),
+                                param: param.as_str().to_string(),
+                            }
+                        }
+                    },
                     mapping: automation_mapping_to_gui(&binding.mapping),
                 })
                 .collect(),
@@ -488,7 +576,10 @@ fn automation_clips(sequence: &dawn_language::sequence::Sequence) -> Vec<Sequenc
 }
 
 fn project_layout(session: &ProjectSession, resolved: &ResolvedGuiObject) -> GuiDocument {
-    let id = LayoutId(resolved.source_id.id.clone());
+    let id = LayoutId(SourceIdentity::new(
+        resolved.location.document.clone(),
+        resolved.source_id.id().to_string(),
+    ));
     let Some(layout) = session.project.layouts.get(&id) else {
         return blocked(
             "Layout is not available in the checked project model.",
@@ -499,15 +590,14 @@ fn project_layout(session: &ProjectSession, resolved: &ResolvedGuiObject) -> Gui
         .fixtures
         .iter()
         .map(|fixture| {
-            let definition_ref =
-                fixture_source_ref(&session.source.source_map, &fixture.definition);
+            let definition_ref = fixture_source_ref(&fixture.definition);
             let resolved_fixture = session
                 .project
                 .definitions
                 .fixtures
                 .get(&fixture.definition)
                 .map(|definition| ResolvedLayoutFixture {
-                    name: fixture.definition.0.clone(),
+                    name: fixture.definition.0.object().to_string(),
                     color_model: "rgb".to_string(),
                     bulb_diameter_meters: distance_span_meters(definition.bulb_radius) * 2.0,
                     geometry_summary: geometry_summary(&definition.geometry),
@@ -561,26 +651,27 @@ fn project_layout(session: &ProjectSession, resolved: &ResolvedGuiObject) -> Gui
 fn project_fixture(session: &ProjectSession, resolved: &ResolvedGuiObject) -> GuiDocument {
     let fixtures = session
         .source
-        .source_map
-        .objects
-        .iter()
-        .filter(|(id, location)| {
-            id.kind == SourceObjectKind::FixtureDefinition
-                && location.document == resolved.location.document
-        })
-        .filter_map(|(id, location)| {
-            let definition_id = FixtureDefinitionId(id.id.clone());
+        .documents
+        .get(&resolved.location.document)
+        .into_iter()
+        .flat_map(|document| document.objects())
+        .filter(|object| object.kind() == &SourceObjectKind::FixtureDefinition)
+        .filter_map(|object| {
+            let definition_id = FixtureDefinitionId(SourceIdentity::new(
+                resolved.location.document.clone(),
+                object.id().to_string(),
+            ));
             let definition = session.project.definitions.fixtures.get(&definition_id)?;
             let source_ref = GuiObjectRef {
-                path: location.document.to_string(),
-                object_key: location.object_key.clone(),
+                path: resolved.location.document.to_string(),
+                object_key: object.id().to_string(),
                 kind: ObjectKind::Fixture,
-                id: id.id.clone(),
+                id: object.id().to_string(),
             };
             Some(FixtureDefinition {
                 source_ref,
-                object_key: location.object_key.clone(),
-                name: location.object_key.clone(),
+                object_key: object.id().to_string(),
+                name: object.id().to_string(),
                 color_model: "rgb".to_string(),
                 bulb_diameter_meters: distance_span_meters(definition.bulb_radius) * 2.0,
                 geometry: geometry(&definition.geometry),
@@ -609,6 +700,7 @@ fn active_layout_id(session: &ProjectSession) -> Option<LayoutId> {
 
 fn sequence_audio(
     session: &ProjectSession,
+    document: &Utf8Path,
     audio: &dawn_language::sequence::SequenceAudio,
 ) -> Option<SequenceAudio> {
     let dawn_language::sequence::SequenceAudio::Asset(id) = audio else {
@@ -620,7 +712,7 @@ fn sequence_audio(
         .iter()
         .find(|asset| asset.id == *id)
         .map(|asset| SequenceAudio {
-            import_path: asset.relative_path.to_string(),
+            import_path: relative_path_from_document(document, &asset.relative_path).to_string(),
             resolved_path: asset.absolute_path.to_string(),
             file_name: asset
                 .relative_path
@@ -691,16 +783,11 @@ fn effect_target_label(session: &ProjectSession, target: &EffectTarget) -> Strin
     }
 }
 
-fn effect_script_ref(session: &ProjectSession, id: &str) -> Option<EffectScriptReference> {
-    source_location(
-        &session.source.source_map,
-        SourceObjectKind::EffectDefinition,
-        id,
-    )
-    .map(|location| EffectScriptReference {
-        path: location.document.to_string(),
-        effect_name: location.object_key,
-    })
+fn effect_script_ref(id: &SourceIdentity) -> EffectScriptReference {
+    EffectScriptReference {
+        path: id.document().to_string(),
+        effect_name: id.object().to_string(),
+    }
 }
 
 fn effect_scripts(session: &ProjectSession) -> Vec<SequenceEffectScript> {
@@ -710,10 +797,10 @@ fn effect_scripts(session: &ProjectSession) -> Vec<SequenceEffectScript> {
         .effects
         .definitions
         .iter()
-        .filter_map(|(id, definition)| {
-            let source = effect_script_ref(session, &id.0)?;
-            Some(SequenceEffectScript {
-                name: id.0.clone(),
+        .map(|(id, definition)| {
+            let source = effect_script_ref(&id.0);
+            SequenceEffectScript {
+                name: id.0.object().to_string(),
                 kind: match definition.compiled.kind() {
                     EffectKind::Sample => SequenceEffectScriptKind::Sample,
                     EffectKind::Generator => SequenceEffectScriptKind::Generator,
@@ -731,7 +818,7 @@ fn effect_scripts(session: &ProjectSession) -> Vec<SequenceEffectScript> {
                         })
                     })
                     .collect(),
-            })
+            }
         })
         .collect()
 }
@@ -948,7 +1035,8 @@ fn graph_operator_to_gui(operator: &OperatorRef) -> SequenceGraphOperator {
             },
         },
         OperatorRef::Custom(id) => SequenceGraphOperator::Custom {
-            definition_id: id.0.clone(),
+            path: id.0.document().to_string(),
+            object_key: id.0.object().to_string(),
         },
     }
 }
@@ -961,7 +1049,13 @@ fn automation_for_param(
     sequence.automation_clips.iter().find_map(|clip| {
         clip.bindings
             .iter()
-            .find(|binding| binding.effect_id.0 == effect_id && binding.param.as_str() == param)
+            .find(|binding| {
+                binding
+                    .effect_param()
+                    .is_some_and(|(target_effect, target_param)| {
+                        target_effect.0 == effect_id && target_param.as_str() == param
+                    })
+            })
             .map(|binding| SequenceParamAutomation {
                 clip_id: clip.id.0,
                 mapping: automation_mapping_to_gui(&binding.mapping),
@@ -1025,13 +1119,11 @@ fn curve_library(session: &ProjectSession) -> Vec<SequenceCurveLibraryItem> {
         .definitions
         .iter()
         .filter_map(|(id, definition)| {
-            let location =
-                source_location(&session.source.source_map, SourceObjectKind::Curve, &id.0)?;
             let points = curve_points(&definition.curve.points)?;
             Some(SequenceCurveLibraryItem {
-                path: location.document.to_string(),
-                object_key: location.object_key.clone(),
-                display_name: location.object_key,
+                path: id.0.document().to_string(),
+                object_key: id.0.object().to_string(),
+                display_name: id.0.object().to_string(),
                 value_type: match &points {
                     SequenceCurveLibraryPoints::Float { .. } => SequenceCurveValueType::Float,
                     SequenceCurveLibraryPoints::Color { .. } => SequenceCurveValueType::Color,
@@ -1042,28 +1134,12 @@ fn curve_library(session: &ProjectSession) -> Vec<SequenceCurveLibraryItem> {
         .collect()
 }
 
-fn source_location(
-    source_map: &SourceMap,
-    kind: SourceObjectKind,
-    id: &str,
-) -> Option<SourceObjectLocation> {
-    source_map
-        .objects
-        .get(&SourceObjectId {
-            kind,
-            id: id.to_string(),
-        })
-        .cloned()
-}
-
-fn fixture_source_ref(source_map: &SourceMap, id: &FixtureDefinitionId) -> Option<GuiObjectRef> {
-    source_location(source_map, SourceObjectKind::FixtureDefinition, &id.0).map(|location| {
-        GuiObjectRef {
-            path: location.document.to_string(),
-            object_key: location.object_key,
-            kind: ObjectKind::Fixture,
-            id: id.0.clone(),
-        }
+fn fixture_source_ref(id: &FixtureDefinitionId) -> Option<GuiObjectRef> {
+    Some(GuiObjectRef {
+        path: id.0.document().to_string(),
+        object_key: id.0.object().to_string(),
+        kind: ObjectKind::Fixture,
+        id: id.0.object().to_string(),
     })
 }
 
@@ -1280,22 +1356,12 @@ fn curve_source(
             Some(SequenceEffectParamCurveSource::Inline)
         }
         EffectParamValue::Curve(CurveSource::Reference(id)) => {
-            let location =
-                source_location(&session.source.source_map, SourceObjectKind::Curve, &id.0);
+            let _ = session;
             Some(SequenceEffectParamCurveSource::Library {
-                reference: id.0.clone(),
-                path: location
-                    .as_ref()
-                    .map(|location| location.document.to_string()),
-                object_key: location
-                    .as_ref()
-                    .map(|location| location.object_key.clone()),
-                display_name: Some(
-                    location
-                        .as_ref()
-                        .map(|location| location.object_key.clone())
-                        .unwrap_or_else(|| id.0.clone()),
-                ),
+                reference: id.0.object().to_string(),
+                path: Some(id.0.document().to_string()),
+                object_key: Some(id.0.object().to_string()),
+                display_name: Some(id.0.object().to_string()),
             })
         }
         _ => None,
@@ -1684,7 +1750,10 @@ fn edit_layout(
     resolved: &ResolvedGuiObject,
     edit: LayoutGuiEdit,
 ) -> Result<(), GuiMutationError> {
-    let layout_id = LayoutId(resolved.source_id.id.clone());
+    let layout_id = LayoutId(SourceIdentity::new(
+        resolved.location.document.clone(),
+        resolved.source_id.id().to_string(),
+    ));
     let layout = session
         .project
         .layouts
@@ -1751,7 +1820,7 @@ fn edit_sequence(
             script,
             mark_collection_key: Some(_),
             ..
-        } => mark_param_names(session, &script.effect_name)?,
+        } => mark_param_names(session, script)?,
         _ => Vec::new(),
     };
     let unlink_curve_value = match &edit {
@@ -1763,7 +1832,10 @@ fn edit_sequence(
         ),
         _ => None,
     };
-    let sequence_id = SequenceId(resolved.source_id.id.clone());
+    let sequence_id = SequenceId(SourceIdentity::new(
+        resolved.location.document.clone(),
+        resolved.source_id.id().to_string(),
+    ));
     match edit {
         SequenceGuiEdit::SetDuration { duration_seconds } => {
             if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
@@ -1791,15 +1863,10 @@ fn edit_sequence(
         } => {
             let parsed_target = target.map(layout_target_to_effect_target).transpose()?;
             let sequence = sequence_mut(session, &sequence_id)?;
-            clip_mut(sequence, id)?.start = dawn_time(start_seconds.max(0.0));
-            if let Some(target) = parsed_target.clone() {
-                clip_mut(sequence, id)?.target = target;
-            }
-            if let Ok(effect) = effect_mut(sequence, id) {
-                effect.start = dawn_time(start_seconds.max(0.0));
-                if let Some(target) = parsed_target {
-                    effect.target = target;
-                }
+            let effect = effect_mut(sequence, id)?;
+            effect.start = dawn_time(start_seconds.max(0.0));
+            if let Some(target) = parsed_target {
+                effect.target = target;
             }
         }
         SequenceGuiEdit::ResizeEffect {
@@ -1810,36 +1877,29 @@ fn edit_sequence(
             let sequence = sequence_mut(session, &sequence_id)?;
             let start = dawn_time(start_seconds.max(0.0));
             let duration = dawn_duration(duration_seconds.max(0.000000001));
-            let clip = clip_mut(sequence, id)?;
-            clip.start = start.clone();
-            clip.duration = duration.clone();
-            if let Ok(effect) = effect_mut(sequence, id) {
-                effect.start = start;
-                effect.duration = duration;
-            }
+            let effect = effect_mut(sequence, id)?;
+            effect.start = start;
+            effect.duration = duration;
         }
         SequenceGuiEdit::SetEffectScope { id, scope } => {
             let sequence = sequence_mut(session, &sequence_id)?;
             let scope = effect_scope(scope);
-            clip_mut(sequence, id)?.scope = scope.clone();
-            if let Ok(effect) = effect_mut(sequence, id) {
-                effect.scope = scope;
-            }
+            effect_mut(sequence, id)?.scope = scope;
         }
         SequenceGuiEdit::RetargetEffect { id, target } => {
             let sequence = sequence_mut(session, &sequence_id)?;
             let target = layout_target_to_effect_target(target)?;
-            clip_mut(sequence, id)?.target = target.clone();
-            if let Ok(effect) = effect_mut(sequence, id) {
-                effect.target = target;
-            }
+            effect_mut(sequence, id)?.target = target;
         }
         SequenceGuiEdit::DeleteEffect { id } => {
             let sequence = sequence_mut(session, &sequence_id)?;
             sequence.effects.retain(|effect| effect.id.0 != id);
-            sequence.clips.retain(|clip| clip.id.0 != id);
             for clip in &mut sequence.automation_clips {
-                clip.bindings.retain(|binding| binding.effect_id.0 != id);
+                clip.bindings.retain(|binding| {
+                    binding
+                        .effect_param()
+                        .is_none_or(|(effect_id, _)| effect_id.0 != id)
+                });
             }
             sequence
                 .automation_clips
@@ -1898,20 +1958,39 @@ fn edit_sequence(
             }
         }
         SequenceGuiEdit::CreateMarkCollection { key, name, color } => {
-            sequence_mut(session, &sequence_id)?
+            let sequence = sequence_mut(session, &sequence_id)?;
+            if sequence
                 .mark_collections
-                .push(MarkCollection {
-                    key: MarkCollectionKey { name: key },
-                    name,
-                    display_color: parse_color(&color)?,
-                    marks: Vec::new(),
-                });
+                .iter()
+                .any(|collection| collection.key.name == key)
+            {
+                return Err(GuiMutationError::Invalid(
+                    "Mark collection keys must be unique.".to_string(),
+                ));
+            }
+            sequence.mark_collections.push(MarkCollection {
+                key: MarkCollectionKey { name: key },
+                name,
+                display_color: parse_color(&color)?,
+                marks: Vec::new(),
+            });
         }
         SequenceGuiEdit::RenameMarkCollection { key, name } => {
             mark_collection_mut(sequence_mut(session, &sequence_id)?, &key)?.name = name;
         }
         SequenceGuiEdit::DeleteMarkCollection { key } => {
-            sequence_mut(session, &sequence_id)?
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let is_referenced = sequence.effects.iter().any(|effect| {
+                effect.param_overrides.values().any(|value| {
+                    matches!(value, EffectParamValue::Marks(collection) if collection.name == key)
+                })
+            });
+            if is_referenced {
+                return Err(GuiMutationError::Invalid(
+                    "Mark collection is still referenced by an effect.".to_string(),
+                ));
+            }
+            sequence
                 .mark_collections
                 .retain(|collection| collection.key.name != key);
         }
@@ -1932,7 +2011,10 @@ fn edit_sequence(
             start_seconds,
             mark_collection_key,
         } => {
-            let definition = EffectDefinitionId(script.effect_name);
+            let definition = EffectDefinitionId(SourceIdentity::new(
+                Utf8PathBuf::from(&script.path),
+                script.effect_name,
+            ));
             let Some(effect_definition) = session.project.definitions.effects.get(&definition)
             else {
                 return Err(GuiMutationError::Invalid(
@@ -1940,7 +2022,7 @@ fn edit_sequence(
                 ));
             };
             let params = effect_definition.compiled.params().to_vec();
-            ensure_document_can_reference(
+            ensure_document_can_reference_source(
                 session,
                 &resolved.location.document,
                 SourceObjectKind::EffectDefinition,
@@ -1948,6 +2030,15 @@ fn edit_sequence(
             )
             .map_err(|error| GuiMutationError::Blocked(error.to_string()))?;
             let sequence = sequence_mut(session, &sequence_id)?;
+            let layer_id = sequence
+                .layers
+                .first()
+                .map(|layer| layer.id.clone())
+                .ok_or_else(|| {
+                    GuiMutationError::Invalid(
+                        "An effect cannot be added to a sequence without a layer.".to_string(),
+                    )
+                })?;
             let next_id = sequence
                 .effects
                 .iter()
@@ -1968,13 +2059,17 @@ fn edit_sequence(
                 if param_overrides.contains_key(&param.name) {
                     continue;
                 }
-                if let Some(value) = default_effect_param_value(&param.ty) {
-                    param_overrides.insert(param.name.clone(), value);
-                }
+                let value = default_effect_param_value(&param.ty).ok_or_else(|| {
+                    GuiMutationError::Invalid(format!(
+                        "Effect parameter `{}` requires an explicit value.",
+                        param.name.as_str()
+                    ))
+                })?;
+                param_overrides.insert(param.name.clone(), value);
             }
             sequence.effects.push(EffectInst {
                 id: EffectInstId(next_id),
-                layer_id: dawn_language::sequence::SequenceLayerId(0),
+                layer_id,
                 start: dawn_time(start_seconds.max(0.0)),
                 duration: dawn_duration(1.0),
                 target: layout_target_to_effect_target(target)?,
@@ -2078,34 +2173,64 @@ fn edit_sequence(
             effect.layer_id = SequenceLayerId(layer_id);
         }
         SequenceGuiEdit::ChangeEffectScript { id, script } => {
-            let definition = EffectDefinitionId(script.effect_name);
-            if !session
+            let definition = EffectDefinitionId(SourceIdentity::new(
+                Utf8PathBuf::from(&script.path),
+                script.effect_name,
+            ));
+            let Some(effect_definition) = session
                 .project
                 .definitions
                 .effects
                 .definitions
-                .contains_key(&definition)
-            {
+                .get(&definition)
+            else {
                 return Err(GuiMutationError::Invalid(
                     "Effect script was not found.".to_string(),
                 ));
+            };
+            let params = effect_definition.compiled.params().to_vec();
+            let mut param_overrides = IndexMap::new();
+            for param in params.iter().filter(|param| param.default.is_none()) {
+                let value = default_effect_param_value(&param.ty).ok_or_else(|| {
+                    GuiMutationError::Invalid(format!(
+                        "Effect parameter `{}` requires an explicit value before changing scripts.",
+                        param.name.as_str()
+                    ))
+                })?;
+                param_overrides.insert(param.name.clone(), value);
             }
-            ensure_document_can_reference(
+            ensure_document_can_reference_source(
                 session,
                 &resolved.location.document,
                 SourceObjectKind::EffectDefinition,
                 &definition.0,
             )
             .map_err(|error| GuiMutationError::Blocked(error.to_string()))?;
-            effect_mut(sequence_mut(session, &sequence_id)?, id)?.definition = definition;
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let effect = effect_mut(sequence, id)?;
+            effect.definition = definition;
+            effect.param_overrides = param_overrides;
+            for clip in &mut sequence.automation_clips {
+                clip.bindings.retain(|binding| {
+                    binding
+                        .effect_param()
+                        .is_none_or(|(effect_id, _)| effect_id.0 != id)
+                });
+            }
+            sequence
+                .automation_clips
+                .retain(|clip| !clip.bindings.is_empty());
         }
         SequenceGuiEdit::LinkEffectCurveParam {
             id,
             name,
-            curve_path: _,
+            curve_path,
             object_key,
         } => {
-            let curve = CurveId(object_key);
+            let curve = CurveId(SourceIdentity::new(
+                Utf8PathBuf::from(curve_path),
+                object_key,
+            ));
             if !session
                 .project
                 .definitions
@@ -2117,7 +2242,7 @@ fn edit_sequence(
                     "Curve was not found.".to_string(),
                 ));
             }
-            ensure_document_can_reference(
+            ensure_document_can_reference_source(
                 session,
                 &resolved.location.document,
                 SourceObjectKind::Curve,
@@ -2151,7 +2276,7 @@ fn edit_sequence(
                     GuiMutationError::Invalid("Operator definition was not found.".to_string())
                 })?;
             if let OperatorRef::Custom(id) = &operator {
-                ensure_document_can_reference(
+                ensure_document_can_reference_source(
                     session,
                     &resolved.location.document,
                     SourceObjectKind::OperatorDefinition,
@@ -2212,6 +2337,16 @@ fn edit_sequence(
                 .composition_graph
                 .edges
                 .retain(|edge| edge.from != node_id && edge.to != node_id);
+            for clip in &mut sequence.automation_clips {
+                clip.bindings.retain(|binding| {
+                    binding
+                        .composition_node_param()
+                        .is_none_or(|(binding_node_id, _)| binding_node_id != &node_id)
+                });
+            }
+            sequence
+                .automation_clips
+                .retain(|clip| !clip.bindings.is_empty());
         }
         SequenceGuiEdit::ConnectGraphNodes {
             from_node,
@@ -2307,10 +2442,13 @@ fn edit_sequence(
         SequenceGuiEdit::LinkGraphOperatorCurveParam {
             node_id,
             name,
-            curve_path: _,
+            curve_path,
             object_key,
         } => {
-            let curve = CurveId(object_key);
+            let curve = CurveId(SourceIdentity::new(
+                Utf8PathBuf::from(curve_path),
+                object_key,
+            ));
             if !session
                 .project
                 .definitions
@@ -2322,7 +2460,7 @@ fn edit_sequence(
                     "Curve was not found.".to_string(),
                 ));
             }
-            ensure_document_can_reference(
+            ensure_document_can_reference_source(
                 session,
                 &resolved.location.document,
                 SourceObjectKind::Curve,
@@ -2412,11 +2550,13 @@ fn edit_sequence(
             };
             let sequence = sequence_mut(session, &sequence_id)?;
             for clip in &sequence.automation_clips {
-                if clip
-                    .bindings
-                    .iter()
-                    .any(|binding| binding.effect_id.0 == effect_id && binding.param == param)
-                {
+                if clip.bindings.iter().any(|binding| {
+                    binding
+                        .effect_param()
+                        .is_some_and(|(target_effect, target_param)| {
+                            target_effect.0 == effect_id && target_param == &param
+                        })
+                }) {
                     return Err(GuiMutationError::Invalid(
                         "Param is already automated.".to_string(),
                     ));
@@ -2439,10 +2579,8 @@ fn edit_sequence(
                 bindings: vec![AutomationBinding {
                     target: AutomationTarget::EffectParam {
                         effect_id: EffectInstId(effect_id),
-                        param: param.clone(),
+                        param,
                     },
-                    effect_id: EffectInstId(effect_id),
-                    param,
                     mapping,
                 }],
             });
@@ -2485,11 +2623,13 @@ fn edit_sequence(
             let param = identifier(&param)?;
             let sequence = sequence_mut(session, &sequence_id)?;
             for clip in &sequence.automation_clips {
-                if clip
-                    .bindings
-                    .iter()
-                    .any(|binding| binding.effect_id.0 == effect_id && binding.param == param)
-                {
+                if clip.bindings.iter().any(|binding| {
+                    binding
+                        .effect_param()
+                        .is_some_and(|(target_effect, target_param)| {
+                            target_effect.0 == effect_id && target_param == &param
+                        })
+                }) {
                     return Err(GuiMutationError::Invalid(
                         "Param is already automated.".to_string(),
                     ));
@@ -2500,10 +2640,8 @@ fn edit_sequence(
                 .push(AutomationBinding {
                     target: AutomationTarget::EffectParam {
                         effect_id: EffectInstId(effect_id),
-                        param: param.clone(),
+                        param,
                     },
-                    effect_id: EffectInstId(effect_id),
-                    param,
                     mapping: automation_mapping_from_gui(mapping)?,
                 });
         }
@@ -2525,7 +2663,13 @@ fn edit_sequence(
             let Some(binding) = clip
                 .bindings
                 .iter()
-                .find(|binding| binding.effect_id.0 == effect_id && binding.param == param_id)
+                .find(|binding| {
+                    binding
+                        .effect_param()
+                        .is_some_and(|(target_effect, target_param)| {
+                            target_effect.0 == effect_id && target_param == &param_id
+                        })
+                })
                 .cloned()
             else {
                 return Err(GuiMutationError::Invalid(
@@ -2544,10 +2688,15 @@ fn edit_sequence(
                 .insert(param_id.clone(), value);
             automation_clip_mut(sequence, clip_id)?
                 .bindings
-                .retain(|binding| !(binding.effect_id.0 == effect_id && binding.param == param_id));
+                .retain(|binding| {
+                    !binding
+                        .effect_param()
+                        .is_some_and(|(target_effect, target_param)| {
+                            target_effect.0 == effect_id && target_param == &param_id
+                        })
+                });
         }
     }
-    sync_sequence_effect_clips(sequence_mut(session, &sequence_id)?);
     Ok(())
 }
 
@@ -2557,7 +2706,10 @@ fn current_curve_param_value(
     effect_id: u32,
     name: &str,
 ) -> Result<SequenceEffectParamValue, GuiMutationError> {
-    let sequence_id = SequenceId(resolved.source_id.id.clone());
+    let sequence_id = SequenceId(SourceIdentity::new(
+        resolved.location.document.clone(),
+        resolved.source_id.id().to_string(),
+    ));
     let sequence = session
         .project
         .sequences
@@ -2615,7 +2767,10 @@ fn current_graph_curve_param_value(
     node_id: &str,
     name: &str,
 ) -> Result<SequenceEffectParamValue, GuiMutationError> {
-    let sequence_id = SequenceId(resolved.source_id.id.clone());
+    let sequence_id = SequenceId(SourceIdentity::new(
+        resolved.location.document.clone(),
+        resolved.source_id.id().to_string(),
+    ));
     let sequence = session
         .project
         .sequences
@@ -2764,7 +2919,16 @@ fn delete_sequence_selection(
             sequence
                 .effects
                 .retain(|effect| !ids.contains(&effect.id.0));
-            sync_sequence_effect_clips(sequence);
+            for clip in &mut sequence.automation_clips {
+                clip.bindings.retain(|binding| {
+                    binding
+                        .effect_param()
+                        .is_none_or(|(effect_id, _)| !ids.contains(&effect_id.0))
+                });
+            }
+            sequence
+                .automation_clips
+                .retain(|clip| !clip.bindings.is_empty());
         }
         SequenceSelection::Marks { marks } => {
             for (collection_key, indexes) in mark_indexes_by_collection(marks) {
@@ -2835,7 +2999,6 @@ fn paste_sequence_clipboard(
                 pasted_ids.push(next_id);
                 next_id = next_id.saturating_add(1);
             }
-            sync_sequence_effect_clips(sequence);
             Ok(SequenceSelectionMutation {
                 selection: Some(SequenceSelection::Effects { ids: pasted_ids }),
                 copied_count: effects.len() as u32,
@@ -3018,7 +3181,6 @@ fn apply_effect_updates(
         }
         moved.push(update.id);
     }
-    sync_sequence_effect_clips(sequence);
     Ok(moved)
 }
 
@@ -3117,9 +3279,12 @@ fn anchored_lane(
 
 fn mark_param_names(
     session: &ProjectSession,
-    effect_name: &str,
+    script: &EffectScriptReference,
 ) -> Result<Vec<String>, GuiMutationError> {
-    let id = EffectDefinitionId(effect_name.to_string());
+    let id = EffectDefinitionId(SourceIdentity::new(
+        Utf8PathBuf::from(&script.path),
+        script.effect_name.clone(),
+    ));
     let definition = session
         .project
         .definitions
@@ -3214,14 +3379,18 @@ fn fixture_definition_mut<'a>(
 ) -> Result<&'a mut dawn_language::setup::FixtureDefinition, GuiMutationError> {
     let id = session
         .source
-        .source_map
-        .objects
-        .iter()
-        .find_map(|(id, location)| {
-            (id.kind == SourceObjectKind::FixtureDefinition
-                && location.document == document_path
-                && location.object_key == object_key)
-                .then(|| FixtureDefinitionId(id.id.clone()))
+        .documents
+        .get(document_path)
+        .into_iter()
+        .flat_map(|document| document.objects())
+        .find_map(|object| {
+            (object.kind() == &SourceObjectKind::FixtureDefinition && object.id() == object_key)
+                .then(|| {
+                    FixtureDefinitionId(SourceIdentity::new(
+                        document_path.to_path_buf(),
+                        object.id().to_string(),
+                    ))
+                })
         })
         .ok_or_else(|| {
             GuiMutationError::Invalid("Fixture definition was not found.".to_string())
@@ -3244,17 +3413,6 @@ fn effect_mut(
         .iter_mut()
         .find(|effect| effect.id.0 == id)
         .ok_or_else(|| GuiMutationError::Invalid("Effect was not found.".to_string()))
-}
-
-fn clip_mut(
-    sequence: &mut dawn_language::sequence::Sequence,
-    id: u32,
-) -> Result<&mut SequenceClip, GuiMutationError> {
-    sequence
-        .clips
-        .iter_mut()
-        .find(|clip| clip.id.0 == id)
-        .ok_or_else(|| GuiMutationError::Invalid("Clip was not found.".to_string()))
 }
 
 fn composition_graph_node_mut<'a>(
@@ -3395,38 +3553,11 @@ fn graph_operator_from_gui(operator: &SequenceGraphOperator) -> OperatorRef {
             SequenceBuiltinOperator::Delay => BuiltinOperator::Delay,
             SequenceBuiltinOperator::Echo => BuiltinOperator::Echo,
         }),
-        SequenceGraphOperator::Custom { definition_id } => {
-            OperatorRef::Custom(OperatorDefinitionId(definition_id.clone()))
-        }
-    }
-}
-
-fn sync_sequence_effect_clips(sequence: &mut dawn_language::sequence::Sequence) {
-    let mut clips = sequence
-        .effects
-        .iter()
-        .map(|effect| SequenceClip {
-            id: SequenceClipId(effect.id.0),
-            start: effect.start.clone(),
-            duration: effect.duration.clone(),
-            target: effect.target.clone(),
-            scope: effect.scope.clone(),
-            kind: SequenceClipKind::Effect(EffectClip {
-                definition: effect.definition.clone(),
-                param_overrides: effect.param_overrides.clone(),
-            }),
-        })
-        .collect::<Vec<_>>();
-    clips.sort_by_key(|clip| clip.id.0);
-    sequence.clips = clips;
-    for automation_clip in &mut sequence.automation_clips {
-        for binding in &mut automation_clip.bindings {
-            if matches!(binding.target, AutomationTarget::EffectParam { .. }) {
-                binding.target = AutomationTarget::EffectParam {
-                    effect_id: EffectInstId(binding.effect_id.0),
-                    param: binding.param.clone(),
-                };
-            }
+        SequenceGraphOperator::Custom { path, object_key } => {
+            OperatorRef::Custom(OperatorDefinitionId(SourceIdentity::new(
+                Utf8PathBuf::from(path),
+                object_key.clone(),
+            )))
         }
     }
 }
@@ -3743,6 +3874,7 @@ mod tests {
     use camino::Utf8PathBuf;
     use dawn_language::dsl::compile_operators;
     use dawn_language::effect::{CurveDefinition, CurveId, CurveSource, EffectParamValue};
+    use dawn_language::identity::SourceIdentity;
     use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
     use dawn_language::operator::{
         BuiltinOperator, GraphOperatorNode, OperatorDefinitionId, OperatorRef,
@@ -3756,13 +3888,17 @@ mod tests {
     use dawn_language::setup::{LayoutId, PatchId, Setup, SetupId};
     use dawn_language::values::{Color, Curve, CurvePoint, CurveValue, DawnDuration};
     use dawn_project_io::{
-        ProjectSession, SourceDocument, SourceDocumentKind, SourceMap, SourceObjectId,
-        SourceObjectKind, SourceObjectLocation, SourceProject,
+        ProjectSession, SourceDocument, SourceDocumentKind, SourceObjectId, SourceObjectKind,
+        SourceProject,
     };
     use indexmap::IndexMap;
 
     use super::apply_edit;
     use crate::dto::{DocumentViewId, GuiDocumentRequest, GuiEditCommand, SequenceGuiEdit};
+
+    fn source_identity(object: &str) -> SourceIdentity {
+        SourceIdentity::new("sequences.dawn".into(), object.to_string())
+    }
 
     #[test]
     fn create_layer_adds_layer_to_output_edge() {
@@ -3919,13 +4055,19 @@ mod tests {
         .into_iter()
         .next()
         .unwrap();
-        let operator_id = OperatorDefinitionId("Gain".to_string());
+        let operator_id = OperatorDefinitionId(SourceIdentity::new(
+            "operators/gain.operator.dawn".into(),
+            "Gain".to_string(),
+        ));
         session.project.definitions.operators.insert(
             operator_id.clone(),
             custom_operator_definition(operator_id.clone(), compiled),
         );
         session.project.definitions.curves.insert(
-            CurveId("shape".to_string()),
+            CurveId(SourceIdentity::new(
+                "curves/shape.curve.dawn".into(),
+                "shape".to_string(),
+            )),
             CurveDefinition {
                 curve: Curve {
                     points: vec![CurvePoint {
@@ -3937,42 +4079,47 @@ mod tests {
         );
         session.source.documents.insert(
             Utf8PathBuf::from("sequences.dawn"),
-            SourceDocument {
-                relative_path: Utf8PathBuf::from("sequences.dawn"),
-                imports: Vec::new(),
-                exported_objects: vec!["seq".to_string()],
-                kind: SourceDocumentKind::Dawn {
+            SourceDocument::new(
+                Vec::new(),
+                vec![SourceObjectId::new(SourceObjectKind::Sequence, "seq".to_string()).unwrap()],
+                SourceDocumentKind::Dawn {
                     value: yaml_serde::Value::Mapping(yaml_serde::Mapping::new()),
-                    object_types: vec![SourceObjectKind::Sequence],
                 },
-            },
+            )
+            .unwrap(),
         );
-        session.source.source_map.objects.insert(
-            SourceObjectId {
-                kind: SourceObjectKind::OperatorDefinition,
-                id: "Gain".to_string(),
-            },
-            SourceObjectLocation {
-                document: Utf8PathBuf::from("operators/gain.operator.dawn"),
-                object_key: "Gain".to_string(),
-            },
+        session.source.documents.insert(
+            Utf8PathBuf::from("operators/gain.operator.dawn"),
+            SourceDocument::new(
+                Vec::new(),
+                vec![
+                    SourceObjectId::new(SourceObjectKind::OperatorDefinition, "Gain".to_string())
+                        .unwrap(),
+                ],
+                SourceDocumentKind::Operator {
+                    source: String::new(),
+                },
+            )
+            .unwrap(),
         );
-        session.source.source_map.objects.insert(
-            SourceObjectId {
-                kind: SourceObjectKind::Curve,
-                id: "shape".to_string(),
-            },
-            SourceObjectLocation {
-                document: Utf8PathBuf::from("curves/shape.curve.dawn"),
-                object_key: "shape".to_string(),
-            },
+        session.source.documents.insert(
+            Utf8PathBuf::from("curves/shape.curve.dawn"),
+            SourceDocument::new(
+                Vec::new(),
+                vec![SourceObjectId::new(SourceObjectKind::Curve, "shape".to_string()).unwrap()],
+                SourceDocumentKind::Dawn {
+                    value: yaml_serde::Value::Mapping(yaml_serde::Mapping::new()),
+                },
+            )
+            .unwrap(),
         );
 
         apply_sequence_edit(
             &mut session,
             SequenceGuiEdit::AddGraphOperatorNode {
                 operator: crate::dto::SequenceGraphOperator::Custom {
-                    definition_id: "Gain".to_string(),
+                    path: "operators/gain.operator.dawn".to_string(),
+                    object_key: "Gain".to_string(),
                 },
                 x: 100.0,
                 y: 100.0,
@@ -3981,9 +4128,9 @@ mod tests {
         .unwrap();
         assert!(
             session.source.documents[&Utf8PathBuf::from("sequences.dawn")]
-                .imports
+                .imports()
                 .iter()
-                .any(|import| import.alias == "operators")
+                .any(|import| import.alias() == "operators")
         );
         let node_id = test_sequence(&session)
             .composition_graph
@@ -3996,7 +4143,7 @@ mod tests {
             let sequence = session
                 .project
                 .sequences
-                .get_mut(&SequenceId("seq".to_string()))
+                .get_mut(&SequenceId(source_identity("seq")))
                 .unwrap();
             sequence.composition_graph.edges.push(graph_edge(
                 CompositionGraphNodeId(1),
@@ -4068,43 +4215,42 @@ mod tests {
         ProjectSession {
             project: DawnProject {
                 root: ProjectRoot {
-                    id: ProjectId("project".to_string()),
-                    setup: SetupId("setup".to_string()),
-                    sequences: vec![SequenceId("seq".to_string())],
+                    id: ProjectId(source_identity("project")),
+                    setup: SetupId(source_identity("setup")),
+                    sequences: vec![SequenceId(source_identity("seq"))],
                 },
                 setups: IndexMap::from([(
-                    SetupId("setup".to_string()),
+                    SetupId(source_identity("setup")),
                     Setup {
-                        id: SetupId("setup".to_string()),
-                        layout: LayoutId("layout".to_string()),
-                        patch: PatchId("patch".to_string()),
+                        id: SetupId(source_identity("setup")),
+                        layout: LayoutId(source_identity("layout")),
+                        patch: PatchId(source_identity("patch")),
                         controllers: Vec::new(),
                     },
                 )]),
                 layouts: IndexMap::new(),
                 patches: IndexMap::new(),
                 controllers: IndexMap::new(),
-                sequences: IndexMap::from([(SequenceId("seq".to_string()), sequence)]),
+                sequences: IndexMap::from([(SequenceId(source_identity("seq")), sequence)]),
                 definitions: ProjectDefinitionStores::default(),
             },
             source: SourceProject {
                 source_root: Utf8PathBuf::from("."),
                 entrypoint: Utf8PathBuf::from("project.dawn"),
-                documents: IndexMap::new(),
-                import_graph: IndexMap::new(),
-                source_map: SourceMap {
-                    objects: IndexMap::from([(
-                        SourceObjectId {
-                            kind: SourceObjectKind::Sequence,
-                            id: "seq".to_string(),
+                documents: IndexMap::from([(
+                    Utf8PathBuf::from("sequences.dawn"),
+                    SourceDocument::new(
+                        Vec::new(),
+                        vec![
+                            SourceObjectId::new(SourceObjectKind::Sequence, "seq".to_string())
+                                .unwrap(),
+                        ],
+                        SourceDocumentKind::Dawn {
+                            value: yaml_serde::Value::Mapping(yaml_serde::Mapping::new()),
                         },
-                        SourceObjectLocation {
-                            document: Utf8PathBuf::from("sequences.dawn"),
-                            object_key: "seq".to_string(),
-                        },
-                    )]),
-                },
-                effect_source_text: IndexMap::new(),
+                    )
+                    .unwrap(),
+                )]),
                 referenced_assets: Vec::new(),
             },
         }
@@ -4114,18 +4260,17 @@ mod tests {
         session
             .project
             .sequences
-            .get(&SequenceId("seq".to_string()))
+            .get(&SequenceId(source_identity("seq")))
             .unwrap()
     }
 
     fn test_sequence_with_graph(include_output: bool) -> Sequence {
         Sequence {
-            id: SequenceId("seq".to_string()),
+            id: SequenceId(source_identity("seq")),
             duration: DawnDuration(Duration::from_secs(1)),
             frame_rate: 30,
             audio: SequenceAudio::None,
             mark_collections: Vec::new(),
-            clips: Vec::new(),
             layers: vec![SequenceLayer {
                 id: SequenceLayerId(0),
                 name: "Default".to_string(),

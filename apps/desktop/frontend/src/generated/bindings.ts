@@ -341,8 +341,7 @@ export type SequenceAudio = {
 };
 
 export type SequenceAutomationBinding = {
-	effectId: number,
-	param: string,
+	target: SequenceAutomationTarget,
 	mapping: SequenceAutomationMapping,
 };
 
@@ -357,6 +356,8 @@ export type SequenceAutomationClip = {
 };
 
 export type SequenceAutomationMapping = { type: "float"; min: number; max: number } | { type: "int"; min: number; max: number } | { type: "bool" } | { type: "enum"; values: string[] } | { type: "floatCurve"; min: number; max: number };
+
+export type SequenceAutomationTarget = { type: "effectParam"; effectId: number; param: string } | { type: "compositionNodeParam"; nodeId: string; param: string };
 
 export type SequenceBuiltinOperator = "max" | "add" | "multiply" | "intensityModulate" | "dim" | "invert" | "colorize" | "delay" | "echo";
 
@@ -495,7 +496,7 @@ export type SequenceGraphNode = {
 
 export type SequenceGraphNodeKind = { type: "layer"; layerId: number; layerName: string; layerColor: string; enabled: boolean } | { type: "operator"; operator: SequenceGraphOperator; params: SequenceEffectParam[] } | { type: "output" };
 
-export type SequenceGraphOperator = { type: "builtin"; operator: SequenceBuiltinOperator } | { type: "custom"; definitionId: string };
+export type SequenceGraphOperator = { type: "builtin"; operator: SequenceBuiltinOperator } | { type: "custom"; path: string; objectKey: string };
 
 export type SequenceGraphOperatorDefinition = {
 	operator: SequenceGraphOperator,

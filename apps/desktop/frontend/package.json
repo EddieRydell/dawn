@@ -6,6 +6,7 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
+    "test": "node --test src/**/*.test.js",
     "knip": "knip"
   },
   "dependencies": {

@@ -1,6 +1,7 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_project_io::{
     IoDiagnosticCode, IoDiagnosticSeverity, TextRange, check_document_text, check_project,
+    check_project_document_text,
 };
 use std::fs;
 
@@ -92,6 +93,54 @@ fn invalid_reference_reports_dawn_reference_diagnostic() {
     assert_eq!(diagnostic.severity, IoDiagnosticSeverity::Error);
     assert_range(diagnostic.range.as_ref().unwrap(), 2, 9, 2, 22);
     assert!(diagnostic.message.contains("missing.setup"));
+}
+
+#[test]
+fn repeated_reference_text_reports_the_failing_occurrence() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+    let entrypoint = root.join("project.dawn");
+    fs::write(
+        &entrypoint,
+        "imports:\n- from: setup.dawn\n  as: shared\nmain:\n  type: project\n  setup: shared.main\n  sequences: [shared.main]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("setup.dawn"),
+        "imports:\n- from: layout.dawn\n  as: layouts\n- from: patch.dawn\n  as: patches\nmain:\n  type: setup\n  layout: layouts.main\n  patch: patches.main\n  controllers: []\n",
+    )
+    .unwrap();
+    fs::write(root.join("layout.dawn"), "main:\n  type: layout\n").unwrap();
+    fs::write(root.join("patch.dawn"), "main:\n  type: patch\n").unwrap();
+
+    let report = check_project(&entrypoint);
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == IoDiagnosticCode::DawnReference)
+        .unwrap();
+    let range = diagnostic.range.as_ref().unwrap();
+    assert_eq!(range.start.line, 6);
+    assert!(range.start.character >= 14);
+}
+
+#[test]
+fn project_document_override_runs_semantic_validation() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+    write_imported_sequence_project(
+        &root,
+        "  duration: 1s\n  frame_rate: 60\n  audio: null\n  mark_collections: []\n  layers: []\n  effects: []\n  composition_graph: { nodes: [], edges: [] }\n  automation_clips: []\n",
+    );
+    let diagnostics = check_project_document_text(
+        &root.join("project.dawn"),
+        Utf8Path::new("sequence.dawn"),
+        "main:\n  type: sequence\n  duration: invalid\n  frame_rate: 60\n  audio: null\n  mark_collections: []\n  layers: []\n  effects: []\n  composition_graph: { nodes: [], edges: [] }\n  automation_clips: []\n",
+    );
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == Utf8Path::new("sequence.dawn")
+            && diagnostic.code == IoDiagnosticCode::DawnLoad
+    }));
 }
 
 #[test]

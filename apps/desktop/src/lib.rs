@@ -19,7 +19,9 @@ pub mod dto;
 pub mod gui;
 pub mod persistence;
 pub mod preview;
+mod project_templates;
 pub mod sequence_clip_raster;
+mod sequence_integrity;
 pub mod show_render;
 pub mod state;
 

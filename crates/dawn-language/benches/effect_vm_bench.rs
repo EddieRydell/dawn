@@ -143,6 +143,31 @@ fn bench_operator(c: &mut Criterion) {
             )
         });
     });
+
+    let contexts = (0..512)
+        .map(|pixel_index| RunContext {
+            pixel_index,
+            pixel_count: 512,
+            pixel_fraction: pixel_index as f64 / 511.0,
+            ..sample_context()
+        })
+        .collect::<Vec<_>>();
+    c.bench_function("operator_gain_signal_512_pixels", |b| {
+        b.iter(|| {
+            for context in &contexts {
+                black_box(
+                    operator
+                        .sample_bound(
+                            black_box(&bound),
+                            black_box(context),
+                            &mut sampler,
+                            &mut scratch,
+                        )
+                        .expect("Gain operator sample should run"),
+                );
+            }
+        });
+    });
 }
 
 struct ConstantSignalSampler;

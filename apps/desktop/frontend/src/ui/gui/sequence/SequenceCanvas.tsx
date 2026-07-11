@@ -279,7 +279,7 @@ export function SequenceCanvas({
     for (const clip of document.automationClips) {
       if (!clipIds.has(clip.id)) continue;
       for (const binding of clip.bindings) {
-        effectIds.add(binding.effectId);
+        if (binding.target.type === "effectParam") effectIds.add(binding.target.effectId);
       }
     }
     return effectIds;

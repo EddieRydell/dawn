@@ -16,9 +16,11 @@ use dawn_language::dsl::{
     Diagnostic as DslDiagnostic, Identifier, compile_effects, compile_operators,
 };
 use dawn_language::effect::{
-    CurveDefinition, CurveId, CurveSource, EffectDefinition, EffectDefinitionId, EffectInst,
-    EffectInstId, EffectParamValue, EffectScope, EffectTarget,
+    CurveDefinition, CurveDefinitionStore, CurveId, CurveSource, EffectDefinition,
+    EffectDefinitionId, EffectDefinitionStore, EffectInst, EffectInstId, EffectParamValue,
+    EffectScope, EffectTarget,
 };
+use dawn_language::identity::SourceIdentity;
 use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
 use dawn_language::operator::{
     BuiltinOperator, GraphOperatorNode, OperatorDefinitionId, OperatorDefinitionStore, OperatorRef,
@@ -28,14 +30,14 @@ use dawn_language::sequence::{
     AssetId, AutomationBinding, AutomationClip, AutomationClipId, AutomationMapping,
     AutomationTarget, CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind,
     EffectClip, EffectGraphEdge, GraphNodePosition, GraphPortId, MarkCollection, MarkCollectionKey,
-    Sequence, SequenceAudio, SequenceClip, SequenceClipId, SequenceClipKind,
-    SequenceCompositionGraph, SequenceId, SequenceLayer, SequenceLayerId,
+    Sequence, SequenceAudio, SequenceCompositionGraph, SequenceId, SequenceLayer, SequenceLayerId,
 };
 use dawn_language::setup::{
     ControllerAddress, ControllerDefinition, ControllerDefinitionId, ControllerId,
-    ControllerOutput, ControllerOutputIndex, FixtureDefinition, FixtureDefinitionId, FixtureGroup,
-    FixtureGroupId, FixtureInst, FixtureInstanceId, Geometry, Layout, LayoutId, LayoutTarget,
-    Patch, PatchId, PatchRoute, PixelRange, Protocol, RgbChannelOrder, Setup, SetupId,
+    ControllerOutput, ControllerOutputIndex, FixtureDefinition, FixtureDefinitionId,
+    FixtureDefinitionStore, FixtureGroup, FixtureGroupId, FixtureInst, FixtureInstanceId, Geometry,
+    Layout, LayoutId, LayoutTarget, Patch, PatchId, PatchRoute, PixelRange, Protocol,
+    RgbChannelOrder, Setup, SetupId,
 };
 use dawn_language::values::{
     Color, Curve, CurvePoint, CurveValue, DawnDuration, DawnTime, Distance, DistanceSpan, Point3,
@@ -118,6 +120,30 @@ pub fn check_document_text(path: &Utf8Path, text: &str) -> Vec<IoDiagnostic> {
     }
 }
 
+pub fn check_project_document_text(
+    entrypoint: &Utf8Path,
+    document: &Utf8Path,
+    text: &str,
+) -> Vec<IoDiagnostic> {
+    let loader = match Loader::new(entrypoint) {
+        Ok(mut loader) => {
+            loader
+                .source_overrides
+                .insert(normalize_relative(document.to_path_buf()), text.to_string());
+            loader
+        }
+        Err(error) => return vec![load_error_diagnostic(error)],
+    };
+    match loader.load() {
+        Ok(_) => Vec::new(),
+        Err(error) => {
+            let mut diagnostics = Vec::new();
+            push_load_error_diagnostics(&mut diagnostics, error);
+            diagnostics
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectCheckReport {
     pub session: Option<ProjectSession>,
@@ -183,6 +209,10 @@ enum YamlPathSegment {
 #[derive(Clone, Debug, Default)]
 struct YamlSourceIndex {
     entries: Vec<YamlSourceEntry>,
+    value_bindings: IndexMap<usize, Vec<YamlPathSegment>>,
+    claimed_value_paths: IndexSet<Vec<YamlPathSegment>>,
+    scalar_bindings: IndexMap<usize, Vec<YamlPathSegment>>,
+    claimed_scalar_paths: IndexSet<Vec<YamlPathSegment>>,
 }
 
 #[derive(Clone, Debug)]
@@ -235,19 +265,33 @@ impl YamlSourceIndex {
         }
     }
 
-    fn range_for_value(&self, value: &Value) -> Option<TextRange> {
+    fn bound_value_path(&mut self, value: &Value) -> Option<Vec<YamlPathSegment>> {
+        let pointer = std::ptr::from_ref(value).addr();
+        if let Some(path) = self.value_bindings.get(&pointer) {
+            return Some(path.clone());
+        }
+        let path = self
+            .entries
+            .iter()
+            .filter(|entry| &entry.value == value)
+            .map(|entry| &entry.path)
+            .find(|path| !self.claimed_value_paths.contains(*path))?
+            .clone();
+        self.claimed_value_paths.insert(path.clone());
+        self.value_bindings.insert(pointer, path.clone());
+        Some(path)
+    }
+
+    fn range_for_value(&mut self, value: &Value) -> Option<TextRange> {
+        let path = self.bound_value_path(value)?;
         self.entries
             .iter()
-            .find(|entry| &entry.value == value)
+            .find(|entry| entry.path == path)
             .and_then(|entry| entry.range.clone())
     }
 
-    fn range_for_field_value(&self, parent: &Value, key: &str) -> Option<TextRange> {
-        let parent_path = self
-            .entries
-            .iter()
-            .find(|entry| &entry.value == parent)
-            .map(|entry| entry.path.clone())?;
+    fn range_for_field_value(&mut self, parent: &Value, key: &str) -> Option<TextRange> {
+        let parent_path = self.bound_value_path(parent)?;
         let mut field_path = parent_path;
         field_path.push(YamlPathSegment::Key(key.to_string()));
         self.entries
@@ -256,10 +300,25 @@ impl YamlSourceIndex {
             .and_then(|entry| entry.range.clone())
     }
 
-    fn range_for_scalar(&self, value: &str) -> Option<TextRange> {
+    fn range_for_scalar(&mut self, value: &str) -> Option<TextRange> {
+        let pointer = value.as_ptr().addr();
+        let path = if let Some(path) = self.scalar_bindings.get(&pointer) {
+            path.clone()
+        } else {
+            let path = self
+                .entries
+                .iter()
+                .filter(|entry| entry.value.as_str() == Some(value))
+                .map(|entry| &entry.path)
+                .find(|path| !self.claimed_scalar_paths.contains(*path))?
+                .clone();
+            self.claimed_scalar_paths.insert(path.clone());
+            self.scalar_bindings.insert(pointer, path.clone());
+            path
+        };
         self.entries
             .iter()
-            .find(|entry| entry.value.as_str() == Some(value))
+            .find(|entry| entry.path == path)
             .and_then(|entry| entry.range.clone())
     }
 }
@@ -279,23 +338,53 @@ pub fn export_project(
     })?;
 
     let mut synced = session.clone();
+    for path in synced.source.documents.keys() {
+        if !is_project_owned_path(path) {
+            return Err(ExportProjectError::InvalidReference {
+                path: path.clone(),
+                reference: path.to_string(),
+                message: "external imported documents must be vendored before export".to_string(),
+            });
+        }
+    }
+    for asset in &mut synced.source.referenced_assets {
+        if !is_project_owned_path(&asset.relative_path) {
+            let file_name = asset.absolute_path.file_name().ok_or_else(|| {
+                ExportProjectError::InvalidReference {
+                    path: asset.absolute_path.clone(),
+                    reference: asset.absolute_path.to_string(),
+                    message: "external asset has no file name".to_string(),
+                }
+            })?;
+            asset.relative_path = Utf8PathBuf::from("assets")
+                .join(asset.id.0.to_string())
+                .join(file_name);
+        }
+    }
     sync_project_source(&mut synced)?;
     let written_files = write_source_documents(&synced, output_root)?;
 
     let mut copied_assets = Vec::new();
-    for asset in &session.source.referenced_assets {
-        let output_path = output_root.join(&asset.relative_path);
+    for (source_asset, exported_asset) in session
+        .source
+        .referenced_assets
+        .iter()
+        .zip(&synced.source.referenced_assets)
+    {
+        let output_path = output_root.join(&exported_asset.relative_path);
         if let Some(parent) = output_path.parent() {
             fs::create_dir_all(parent).map_err(|source| ExportProjectError::Io {
                 path: parent.to_path_buf(),
                 source,
             })?;
         }
-        fs::copy(&asset.absolute_path, &output_path).map_err(|source| ExportProjectError::Io {
-            path: output_path.clone(),
-            source,
+        fs::copy(&source_asset.absolute_path, &output_path).map_err(|source| {
+            ExportProjectError::Io {
+                path: output_path.clone(),
+                source,
+            }
         })?;
-        copied_assets.push(asset.relative_path.clone());
+        copied_assets.push(exported_asset.relative_path.clone());
     }
 
     Ok(ExportReport {
@@ -320,38 +409,51 @@ pub fn source_document_text(
     let Some(document) = synced.source.documents.get(relative_path) else {
         return Ok(None);
     };
-    document_text(document).map(Some)
+    document_text(relative_path, document).map(Some)
 }
 
-pub fn ensure_document_can_reference(
+fn ensure_document_imports_target(
     session: &mut ProjectSession,
     from_document: &Utf8Path,
-    kind: SourceObjectKind,
-    id: &str,
+    kind: &SourceObjectKind,
+    reference: &str,
+    target_document: Utf8PathBuf,
 ) -> Result<(), ExportProjectError> {
-    let alias =
-        canonical_reference_alias(&kind).ok_or_else(|| ExportProjectError::InvalidReference {
+    let alias_base =
+        canonical_reference_alias(kind).ok_or_else(|| ExportProjectError::InvalidReference {
             path: from_document.to_path_buf(),
-            reference: id.to_string(),
+            reference: reference.to_string(),
             message: format!("no canonical import alias exists for {kind:?} references"),
         })?;
-    let target = SourceObjectId {
-        kind,
-        id: id.to_string(),
-    };
-    let location = session
+    if session
         .source
-        .source_map
-        .objects
-        .get(&target)
-        .ok_or_else(|| ExportProjectError::InvalidReference {
+        .documents
+        .get(from_document)
+        .is_some_and(|document| {
+            document
+                .imports
+                .iter()
+                .any(|edge| edge.targets.contains(&target_document))
+        })
+    {
+        return Ok(());
+    }
+
+    let document = session.source.documents.get(from_document).ok_or_else(|| {
+        ExportProjectError::InvalidReference {
             path: from_document.to_path_buf(),
-            reference: id.to_string(),
-            message: "target is missing from the source map".to_string(),
-        })?;
-    let target_document = location.document.clone();
-    let import_from = canonical_import_from(from_document, alias, &target_document);
-    let import_targets = canonical_import_targets(&session.source, alias, &target_document);
+            reference: reference.to_string(),
+            message: "source document is missing from the source project".to_string(),
+        }
+    })?;
+    let alias = available_import_alias(document, alias_base).ok_or_else(|| {
+        ExportProjectError::InvalidReference {
+            path: from_document.to_path_buf(),
+            reference: reference.to_string(),
+            message: format!("no import alias remains for `{alias_base}`"),
+        }
+    })?;
+    let import_from = relative_path_from_document(from_document, &target_document);
 
     let document = session
         .source
@@ -359,56 +461,186 @@ pub fn ensure_document_can_reference(
         .get_mut(from_document)
         .ok_or_else(|| ExportProjectError::InvalidReference {
             path: from_document.to_path_buf(),
-            reference: id.to_string(),
+            reference: reference.to_string(),
             message: "source document is missing from the source project".to_string(),
         })?;
-    if let Some(existing) = document.imports.iter().find(|import| import.alias == alias) {
-        if existing.from != import_from {
-            return Err(ExportProjectError::InvalidReference {
-                path: from_document.to_path_buf(),
-                reference: id.to_string(),
-                message: format!(
-                    "import alias `{alias}` already points to `{}` instead of `{import_from}`",
-                    existing.from
-                ),
-            });
-        }
-    } else {
-        document.imports.push(ImportDecl {
-            from: import_from.clone(),
-            alias: alias.to_string(),
-        });
-    }
-
-    let edges = session
-        .source
-        .import_graph
-        .entry(from_document.to_path_buf())
-        .or_default();
-    if let Some(existing) = edges.iter_mut().find(|edge| edge.alias == alias) {
-        if existing.from != import_from {
-            return Err(ExportProjectError::InvalidReference {
-                path: from_document.to_path_buf(),
-                reference: id.to_string(),
-                message: format!(
-                    "import alias `{alias}` already points to `{}` instead of `{import_from}`",
-                    existing.from
-                ),
-            });
-        }
-        for target in import_targets {
-            if !existing.targets.contains(&target) {
-                existing.targets.push(target);
-            }
-        }
-    } else {
-        edges.push(ImportEdge {
-            alias: alias.to_string(),
-            from: import_from,
-            targets: import_targets,
-        });
-    }
+    document.imports.push(ImportEdge {
+        from: import_from.clone(),
+        alias: alias.clone(),
+        targets: vec![target_document],
+    });
     Ok(())
+}
+
+pub fn ensure_document_can_reference_source(
+    session: &mut ProjectSession,
+    from_document: &Utf8Path,
+    kind: SourceObjectKind,
+    identity: &SourceIdentity,
+) -> Result<(), ExportProjectError> {
+    session
+        .source
+        .documents
+        .get(identity.document())
+        .and_then(|document| {
+            document
+                .objects
+                .iter()
+                .find(|object| object.kind == kind && object.id == identity.object())
+        })
+        .ok_or_else(|| ExportProjectError::InvalidReference {
+            path: from_document.to_path_buf(),
+            reference: identity.object().to_string(),
+            message: "target is missing from its source document".to_string(),
+        })?;
+    ensure_document_imports_target(
+        session,
+        from_document,
+        &kind,
+        identity.object(),
+        identity.document().to_path_buf(),
+    )
+}
+
+pub fn insert_sequence(
+    session: &mut ProjectSession,
+    path: Utf8PathBuf,
+    object_key: String,
+    duration: DawnDuration,
+    frame_rate: u32,
+) -> Result<SequenceId, ExportProjectError> {
+    if !is_project_owned_path(&path)
+        || !path
+            .file_name()
+            .is_some_and(|name| name.ends_with(".sequence.dawn"))
+    {
+        return Err(ExportProjectError::InvalidReference {
+            path,
+            reference: object_key,
+            message: "sequence path must be an owned .sequence.dawn document".to_string(),
+        });
+    }
+    if Identifier::new(object_key.clone()).is_err()
+        || !duration.as_seconds_f64().is_finite()
+        || duration.as_seconds_f64() <= 0.0
+        || frame_rate == 0
+    {
+        return Err(ExportProjectError::InvalidReference {
+            path,
+            reference: object_key,
+            message: "sequence identity, duration, or frame rate is invalid".to_string(),
+        });
+    }
+    if session.source.documents.contains_key(&path) {
+        return Err(ExportProjectError::InvalidReference {
+            path,
+            reference: object_key,
+            message: "source document already exists".to_string(),
+        });
+    }
+    let identity = SourceIdentity::new(path.clone(), object_key.clone());
+    let id = SequenceId(identity.clone());
+    if session.project.sequences.contains_key(&id) {
+        return Err(ExportProjectError::InvalidReference {
+            path,
+            reference: object_key,
+            message: "sequence already exists".to_string(),
+        });
+    }
+    let layer_id = SequenceLayerId(0);
+    let sequence = Sequence {
+        id: id.clone(),
+        duration,
+        frame_rate,
+        audio: SequenceAudio::None,
+        mark_collections: vec![MarkCollection {
+            key: MarkCollectionKey {
+                name: "marks".to_string(),
+            },
+            name: "Marks".to_string(),
+            display_color: Color {
+                red: 56,
+                green: 189,
+                blue: 248,
+            },
+            marks: Vec::new(),
+        }],
+        layers: vec![SequenceLayer {
+            id: layer_id.clone(),
+            name: "Default".to_string(),
+            color: Color {
+                red: 56,
+                green: 189,
+                blue: 248,
+            },
+            enabled: true,
+        }],
+        effects: Vec::new(),
+        composition_graph: SequenceCompositionGraph {
+            nodes: vec![
+                CompositionGraphNode {
+                    id: CompositionGraphNodeId(1),
+                    position: GraphNodePosition { x: 80.0, y: 80.0 },
+                    kind: CompositionGraphNodeKind::Layer { layer_id },
+                },
+                CompositionGraphNode {
+                    id: CompositionGraphNodeId(2),
+                    position: GraphNodePosition { x: 420.0, y: 80.0 },
+                    kind: CompositionGraphNodeKind::Output,
+                },
+            ],
+            edges: vec![EffectGraphEdge {
+                from: CompositionGraphNodeId(1),
+                from_port: GraphPortId("output".to_string()),
+                to: CompositionGraphNodeId(2),
+                to_port: GraphPortId("input".to_string()),
+            }],
+        },
+        automation_clips: Vec::new(),
+    };
+    let source_document = SourceDocument::new(
+        Vec::new(),
+        vec![SourceObjectId {
+            kind: SourceObjectKind::Sequence,
+            id: identity.object().to_string(),
+        }],
+        SourceDocumentKind::Dawn {
+            value: Value::Mapping(Mapping::new()),
+        },
+    )
+    .map_err(|message| ExportProjectError::InvalidReference {
+        path: path.clone(),
+        reference: object_key.clone(),
+        message,
+    })?;
+    session
+        .source
+        .documents
+        .insert(path.clone(), source_document);
+    session.project.sequences.insert(id.clone(), sequence);
+    session.project.root.sequences.push(id.clone());
+    let entrypoint = session.source.entrypoint.clone();
+    ensure_document_can_reference_source(
+        session,
+        &entrypoint,
+        SourceObjectKind::Sequence,
+        &identity,
+    )?;
+    Ok(id)
+}
+
+fn available_import_alias(document: &SourceDocument, base: &str) -> Option<String> {
+    if document.imports.iter().all(|import| import.alias != base) {
+        return Some(base.to_string());
+    }
+    (2_u32..)
+        .map(|suffix| format!("{base}_{suffix}"))
+        .find(|candidate| {
+            document
+                .imports
+                .iter()
+                .all(|import| import.alias != *candidate)
+        })
 }
 
 fn canonical_reference_alias(kind: &SourceObjectKind) -> Option<&'static str> {
@@ -416,46 +648,9 @@ fn canonical_reference_alias(kind: &SourceObjectKind) -> Option<&'static str> {
         SourceObjectKind::EffectDefinition => Some("effects"),
         SourceObjectKind::OperatorDefinition => Some("operators"),
         SourceObjectKind::Curve => Some("curves"),
+        SourceObjectKind::Sequence => Some("sequences"),
         _ => None,
     }
-}
-
-fn canonical_import_from(
-    from_document: &Utf8Path,
-    alias: &str,
-    target_document: &Utf8Path,
-) -> Utf8PathBuf {
-    let alias_path = Utf8Path::new(alias);
-    let import_target = if target_document.starts_with(alias_path) {
-        Utf8PathBuf::from(alias)
-    } else {
-        target_document.to_path_buf()
-    };
-    relative_path_from_document(from_document, &import_target)
-}
-
-fn canonical_import_targets(
-    source: &SourceProject,
-    alias: &str,
-    target_document: &Utf8Path,
-) -> Vec<Utf8PathBuf> {
-    let alias_path = Utf8Path::new(alias);
-    let mut targets = if target_document.starts_with(alias_path) {
-        source
-            .documents
-            .keys()
-            .filter(|path| path.starts_with(alias_path))
-            .cloned()
-            .collect::<Vec<_>>()
-    } else {
-        vec![target_document.to_path_buf()]
-    };
-    if !targets.iter().any(|target| target == target_document) {
-        targets.push(target_document.to_path_buf());
-    }
-    targets.sort();
-    targets.dedup();
-    targets
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -469,21 +664,29 @@ pub struct SourceProject {
     pub source_root: Utf8PathBuf,
     pub entrypoint: Utf8PathBuf,
     pub documents: IndexMap<Utf8PathBuf, SourceDocument>,
-    pub import_graph: IndexMap<Utf8PathBuf, Vec<ImportEdge>>,
-    pub source_map: SourceMap,
-    pub effect_source_text: IndexMap<EffectDefinitionId, String>,
     pub referenced_assets: Vec<ReferencedAsset>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct SourceMap {
-    pub objects: IndexMap<SourceObjectId, SourceObjectLocation>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SourceObjectId {
-    pub kind: SourceObjectKind,
-    pub id: String,
+    kind: SourceObjectKind,
+    id: String,
+}
+
+impl SourceObjectId {
+    pub fn new(kind: SourceObjectKind, id: String) -> Result<Self, String> {
+        Identifier::new(id.clone())
+            .map_err(|_| format!("invalid source object identifier `{id}`"))?;
+        Ok(Self { kind, id })
+    }
+
+    pub fn kind(&self) -> &SourceObjectKind {
+        &self.kind
+    }
+
+    pub fn id(&self) -> &str {
+        self.id.as_str()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -501,45 +704,104 @@ pub enum SourceObjectKind {
     EffectInstance,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SourceObjectLocation {
-    pub document: Utf8PathBuf,
-    pub object_key: String,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceDocument {
-    pub relative_path: Utf8PathBuf,
-    pub imports: Vec<ImportDecl>,
-    pub exported_objects: Vec<String>,
-    pub kind: SourceDocumentKind,
+    imports: Vec<ImportEdge>,
+    objects: Vec<SourceObjectId>,
+    kind: SourceDocumentKind,
+}
+
+impl SourceDocument {
+    pub fn new(
+        imports: Vec<ImportEdge>,
+        objects: Vec<SourceObjectId>,
+        kind: SourceDocumentKind,
+    ) -> Result<Self, String> {
+        let mut aliases = IndexSet::new();
+        let mut targets = IndexSet::new();
+        for import in &imports {
+            if !aliases.insert(import.alias.clone()) {
+                return Err(format!("duplicate import alias `{}`", import.alias));
+            }
+            for target in &import.targets {
+                if !targets.insert(target.clone()) {
+                    return Err(format!("document `{target}` is imported more than once"));
+                }
+            }
+        }
+        let mut object_ids = IndexSet::new();
+        for object in &objects {
+            if Identifier::new(object.id.clone()).is_err() {
+                return Err(format!("invalid source object identifier `{}`", object.id));
+            }
+            if !object_ids.insert(object.id.clone()) {
+                return Err(format!("duplicate source object `{}`", object.id));
+            }
+            let kind_matches_document = match &kind {
+                SourceDocumentKind::Effect { .. } => {
+                    object.kind == SourceObjectKind::EffectDefinition
+                }
+                SourceDocumentKind::Operator { .. } => {
+                    object.kind == SourceObjectKind::OperatorDefinition
+                }
+                SourceDocumentKind::Dawn { .. } => !matches!(
+                    object.kind,
+                    SourceObjectKind::EffectDefinition | SourceObjectKind::OperatorDefinition
+                ),
+            };
+            if !kind_matches_document {
+                return Err(format!(
+                    "source object `{}` is not valid in this document kind",
+                    object.id
+                ));
+            }
+        }
+        Ok(Self {
+            imports,
+            objects,
+            kind,
+        })
+    }
+
+    pub fn imports(&self) -> &[ImportEdge] {
+        &self.imports
+    }
+
+    pub fn objects(&self) -> &[SourceObjectId] {
+        &self.objects
+    }
+
+    pub fn kind(&self) -> &SourceDocumentKind {
+        &self.kind
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SourceDocumentKind {
-    Dawn {
-        value: Value,
-        object_types: Vec<SourceObjectKind>,
-    },
-    Effect {
-        source: String,
-    },
-    Operator {
-        source: String,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ImportDecl {
-    pub from: Utf8PathBuf,
-    pub alias: String,
+    Dawn { value: Value },
+    Effect { source: String },
+    Operator { source: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImportEdge {
-    pub alias: String,
-    pub from: Utf8PathBuf,
-    pub targets: Vec<Utf8PathBuf>,
+    alias: String,
+    from: Utf8PathBuf,
+    targets: Vec<Utf8PathBuf>,
+}
+
+impl ImportEdge {
+    pub fn alias(&self) -> &str {
+        &self.alias
+    }
+
+    pub fn from(&self) -> &Utf8Path {
+        &self.from
+    }
+
+    pub fn targets(&self) -> &[Utf8PathBuf] {
+        &self.targets
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1022,8 +1284,8 @@ fn scalar_range(scalar: &marked_yaml::types::MarkedScalarNode) -> Option<TextRan
 fn source_range_for_value(path: &Utf8Path, value: &Value) -> Option<TextRange> {
     YAML_SOURCE_INDICES.with(|indices| {
         indices
-            .borrow()
-            .get(path)
+            .borrow_mut()
+            .get_mut(path)
             .and_then(|index| index.range_for_value(value))
     })
 }
@@ -1031,8 +1293,8 @@ fn source_range_for_value(path: &Utf8Path, value: &Value) -> Option<TextRange> {
 fn source_range_for_field_value(path: &Utf8Path, value: &Value, key: &str) -> Option<TextRange> {
     YAML_SOURCE_INDICES.with(|indices| {
         indices
-            .borrow()
-            .get(path)
+            .borrow_mut()
+            .get_mut(path)
             .and_then(|index| index.range_for_field_value(value, key))
     })
 }
@@ -1040,8 +1302,8 @@ fn source_range_for_field_value(path: &Utf8Path, value: &Value, key: &str) -> Op
 fn source_range_for_scalar(path: &Utf8Path, value: &str) -> Option<TextRange> {
     YAML_SOURCE_INDICES.with(|indices| {
         indices
-            .borrow()
-            .get(path)
+            .borrow_mut()
+            .get_mut(path)
             .and_then(|index| index.range_for_scalar(value))
     })
 }
@@ -1098,9 +1360,12 @@ fn write_source_documents(
     session: &ProjectSession,
     output_root: &Utf8Path,
 ) -> Result<Vec<Utf8PathBuf>, ExportProjectError> {
-    let mut written_files = Vec::new();
-    for document in session.source.documents.values() {
-        let output_path = output_root.join(&document.relative_path);
+    let mut prepared = Vec::new();
+    for (relative_path, document) in &session.source.documents {
+        if !is_project_owned_path(relative_path) {
+            continue;
+        }
+        let output_path = output_root.join(relative_path);
         if let Some(parent) = output_path.parent() {
             fs::create_dir_all(parent).map_err(|source| ExportProjectError::Io {
                 path: parent.to_path_buf(),
@@ -1108,27 +1373,69 @@ fn write_source_documents(
             })?;
         }
 
-        let text = document_text(document).map_err(|error| match error {
+        let text = document_text(relative_path, document).map_err(|error| match error {
             ExportProjectError::Serialize { source, .. } => ExportProjectError::Serialize {
                 path: output_path.clone(),
                 source,
             },
             other => other,
         })?;
-        fs::write(&output_path, text).map_err(|source| ExportProjectError::Io {
-            path: output_path.clone(),
-            source,
-        })?;
-        written_files.push(document.relative_path.clone());
+        let previous = if output_path.is_file() {
+            Some(
+                fs::read(&output_path).map_err(|source| ExportProjectError::Io {
+                    path: output_path.clone(),
+                    source,
+                })?,
+            )
+        } else {
+            None
+        };
+        prepared.push((relative_path.clone(), output_path, text, previous));
     }
-    Ok(written_files)
+    let mut written = 0usize;
+    while written < prepared.len() {
+        let (_, output_path, text, _) = &prepared[written];
+        if let Err(write_error) = fs::write(output_path, text) {
+            let mut rollback_failures = Vec::new();
+            for (_, written_path, _, previous) in prepared[..=written].iter().rev() {
+                let rollback = match previous {
+                    Some(bytes) => fs::write(written_path, bytes),
+                    None => fs::remove_file(written_path),
+                };
+                if let Err(error) = rollback {
+                    rollback_failures.push(format!("{written_path}: {error}"));
+                }
+            }
+            if rollback_failures.is_empty() {
+                return Err(ExportProjectError::Io {
+                    path: output_path.clone(),
+                    source: write_error,
+                });
+            }
+            return Err(ExportProjectError::Io {
+                path: output_path.clone(),
+                source: io::Error::other(format!(
+                    "{write_error}; rollback also failed: {}",
+                    rollback_failures.join(", ")
+                )),
+            });
+        }
+        written += 1;
+    }
+    Ok(prepared
+        .into_iter()
+        .map(|(relative_path, _, _, _)| relative_path)
+        .collect())
 }
 
-fn document_text(document: &SourceDocument) -> Result<String, ExportProjectError> {
+fn document_text(
+    relative_path: &Utf8Path,
+    document: &SourceDocument,
+) -> Result<String, ExportProjectError> {
     match &document.kind {
         SourceDocumentKind::Dawn { value, .. } => {
             yaml_serde::to_string(value).map_err(|source| ExportProjectError::Serialize {
-                path: document.relative_path.clone(),
+                path: relative_path.to_path_buf(),
                 source,
             })
         }
@@ -1143,12 +1450,11 @@ fn sync_project_source(session: &mut ProjectSession) -> Result<(), ExportProject
         let Some(document) = session.source.documents.get(&path) else {
             continue;
         };
-        let SourceDocumentKind::Dawn { object_types, .. } = &document.kind else {
+        let SourceDocumentKind::Dawn { .. } = &document.kind else {
             continue;
         };
-        let object_types = object_types.clone();
         let imports = document.imports.clone();
-        let exported_objects = document.exported_objects.clone();
+        let objects = document.objects.clone();
         let existing = match &document.kind {
             SourceDocumentKind::Dawn { value, .. } => mapping(value).cloned(),
             SourceDocumentKind::Effect { .. } => None,
@@ -1159,29 +1465,21 @@ fn sync_project_source(session: &mut ProjectSession) -> Result<(), ExportProject
         if !imports.is_empty() {
             root.insert(string_value("imports"), import_decls_value(&imports));
         }
-        for object_key in &exported_objects {
-            let object_id =
-                source_object_id_for_location(session, &path, object_key).ok_or_else(|| {
-                    ExportProjectError::InvalidReference {
-                        path: path.clone(),
-                        reference: object_key.clone(),
-                        message: "source object is missing from the source map".to_string(),
-                    }
-                })?;
-            let value = if has_typed_object(session, &object_id) {
-                serialize_source_object(session, &path, &object_id)?
+        for object in &objects {
+            let value = if has_typed_object(session, &path, object) {
+                serialize_source_object(session, &path, object)?
             } else {
                 existing
                     .as_ref()
-                    .and_then(|mapping| mapping.get(string_value(object_key)))
+                    .and_then(|mapping| mapping.get(string_value(&object.id)))
                     .cloned()
                     .ok_or_else(|| ExportProjectError::InvalidReference {
                         path: path.clone(),
-                        reference: object_key.clone(),
+                        reference: object.id.clone(),
                         message: "source object is missing from the source document".to_string(),
                     })?
             };
-            root.insert(string_value(object_key), value);
+            root.insert(string_value(&object.id), value);
         }
 
         let Some(document) = session.source.documents.get_mut(&path) else {
@@ -1189,73 +1487,89 @@ fn sync_project_source(session: &mut ProjectSession) -> Result<(), ExportProject
         };
         document.kind = SourceDocumentKind::Dawn {
             value: Value::Mapping(root),
-            object_types,
         };
     }
     Ok(())
 }
 
-fn has_typed_object(session: &ProjectSession, id: &SourceObjectId) -> bool {
+fn has_typed_object(session: &ProjectSession, document: &Utf8Path, id: &SourceObjectId) -> bool {
     match id.kind {
-        SourceObjectKind::Project => session.project.root.id.0 == id.id,
-        SourceObjectKind::Setup => session.project.setups.contains_key(&SetupId(id.id.clone())),
-        SourceObjectKind::Controller => session
-            .project
-            .controllers
-            .contains_key(&ControllerId(id.id.clone())),
-        SourceObjectKind::Layout => session
-            .project
-            .layouts
-            .contains_key(&LayoutId(id.id.clone())),
-        SourceObjectKind::Patch => session
-            .project
-            .patches
-            .contains_key(&PatchId(id.id.clone())),
-        SourceObjectKind::FixtureDefinition => session
-            .project
-            .definitions
-            .fixtures
-            .definitions
-            .contains_key(&FixtureDefinitionId(id.id.clone())),
-        SourceObjectKind::Curve => session
-            .project
-            .definitions
-            .curves
-            .definitions
-            .contains_key(&CurveId(id.id.clone())),
-        SourceObjectKind::Sequence => session
-            .project
-            .sequences
-            .contains_key(&SequenceId(id.id.clone())),
-        SourceObjectKind::EffectDefinition => session
-            .project
-            .definitions
-            .effects
-            .definitions
-            .contains_key(&EffectDefinitionId(id.id.clone())),
-        SourceObjectKind::OperatorDefinition => session
-            .project
-            .definitions
-            .operators
-            .definitions
-            .contains_key(&OperatorDefinitionId(id.id.clone())),
+        SourceObjectKind::Project => qualified_identity(session, document, id)
+            .is_some_and(|identity| session.project.root.id == ProjectId(identity)),
+        SourceObjectKind::Setup => qualified_identity(session, document, id)
+            .is_some_and(|identity| session.project.setups.contains_key(&SetupId(identity))),
+        SourceObjectKind::Controller => {
+            qualified_identity(session, document, id).is_some_and(|identity| {
+                session
+                    .project
+                    .controllers
+                    .contains_key(&ControllerId(identity))
+            })
+        }
+        SourceObjectKind::Layout => qualified_identity(session, document, id)
+            .is_some_and(|identity| session.project.layouts.contains_key(&LayoutId(identity))),
+        SourceObjectKind::Patch => qualified_identity(session, document, id)
+            .is_some_and(|identity| session.project.patches.contains_key(&PatchId(identity))),
+        SourceObjectKind::FixtureDefinition => qualified_identity(session, document, id)
+            .is_some_and(|identity| {
+                session
+                    .project
+                    .definitions
+                    .fixtures
+                    .definitions
+                    .contains_key(&FixtureDefinitionId(identity))
+            }),
+        SourceObjectKind::Curve => {
+            qualified_identity(session, document, id).is_some_and(|identity| {
+                session
+                    .project
+                    .definitions
+                    .curves
+                    .definitions
+                    .contains_key(&CurveId(identity))
+            })
+        }
+        SourceObjectKind::Sequence => {
+            qualified_identity(session, document, id).is_some_and(|identity| {
+                session
+                    .project
+                    .sequences
+                    .contains_key(&SequenceId(identity))
+            })
+        }
+        SourceObjectKind::EffectDefinition => qualified_identity(session, document, id)
+            .is_some_and(|identity| {
+                session
+                    .project
+                    .definitions
+                    .effects
+                    .definitions
+                    .contains_key(&EffectDefinitionId(identity))
+            }),
+        SourceObjectKind::OperatorDefinition => qualified_identity(session, document, id)
+            .is_some_and(|identity| {
+                session
+                    .project
+                    .definitions
+                    .operators
+                    .definitions
+                    .contains_key(&OperatorDefinitionId(identity))
+            }),
         SourceObjectKind::EffectInstance => false,
     }
 }
 
-fn source_object_id_for_location(
+fn qualified_identity(
     session: &ProjectSession,
     document: &Utf8Path,
-    object_key: &str,
-) -> Option<SourceObjectId> {
+    id: &SourceObjectId,
+) -> Option<SourceIdentity> {
     session
         .source
-        .source_map
-        .objects
-        .iter()
-        .find_map(|(id, location)| {
-            (location.document == document && location.object_key == object_key).then(|| id.clone())
-        })
+        .documents
+        .get(document)
+        .is_some_and(|document| document.objects.contains(id))
+        .then(|| SourceIdentity::new(document.to_path_buf(), id.id.clone()))
 }
 
 fn serialize_source_object(
@@ -1266,62 +1580,76 @@ fn serialize_source_object(
     match id.kind {
         SourceObjectKind::Project => project_root_value(session, from_document),
         SourceObjectKind::Setup => {
+            let identity = qualified_identity(session, from_document, id)
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
             let setup = session
                 .project
                 .setups
-                .get(&SetupId(id.id.clone()))
+                .get(&SetupId(identity))
                 .ok_or_else(|| missing_typed_object(from_document, id))?;
             setup_value(session, from_document, setup)
         }
         SourceObjectKind::Controller => {
+            let identity = qualified_identity(session, from_document, id)
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
             let controller = session
                 .project
                 .controllers
-                .get(&ControllerId(id.id.clone()))
+                .get(&ControllerId(identity))
                 .ok_or_else(|| missing_typed_object(from_document, id))?;
             controller_value(controller)
         }
         SourceObjectKind::Layout => {
+            let identity = qualified_identity(session, from_document, id)
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
             let layout = session
                 .project
                 .layouts
-                .get(&LayoutId(id.id.clone()))
+                .get(&LayoutId(identity))
                 .ok_or_else(|| missing_typed_object(from_document, id))?;
             layout_value(session, from_document, layout)
         }
         SourceObjectKind::Patch => {
+            let identity = qualified_identity(session, from_document, id)
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
             let patch = session
                 .project
                 .patches
-                .get(&PatchId(id.id.clone()))
+                .get(&PatchId(identity))
                 .ok_or_else(|| missing_typed_object(from_document, id))?;
             patch_value(session, from_document, patch)
         }
         SourceObjectKind::FixtureDefinition => {
+            let identity = qualified_identity(session, from_document, id)
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
             let definition = session
                 .project
                 .definitions
                 .fixtures
                 .definitions
-                .get(&FixtureDefinitionId(id.id.clone()))
+                .get(&FixtureDefinitionId(identity))
                 .ok_or_else(|| missing_typed_object(from_document, id))?;
             fixture_definition_value(definition)
         }
         SourceObjectKind::Curve => {
+            let identity = qualified_identity(session, from_document, id)
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
             let curve = session
                 .project
                 .definitions
                 .curves
                 .definitions
-                .get(&CurveId(id.id.clone()))
+                .get(&CurveId(identity))
                 .ok_or_else(|| missing_typed_object(from_document, id))?;
             curve_value(&curve.curve)
         }
         SourceObjectKind::Sequence => {
+            let identity = qualified_identity(session, from_document, id)
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
             let sequence = session
                 .project
                 .sequences
-                .get(&SequenceId(id.id.clone()))
+                .get(&SequenceId(identity))
                 .ok_or_else(|| missing_typed_object(from_document, id))?;
             sequence_value(session, from_document, sequence)
         }
@@ -1343,7 +1671,7 @@ fn missing_typed_object(path: &Utf8Path, id: &SourceObjectId) -> ExportProjectEr
     }
 }
 
-fn import_decls_value(imports: &[ImportDecl]) -> Value {
+fn import_decls_value(imports: &[ImportEdge]) -> Value {
     Value::Sequence(
         imports
             .iter()
@@ -1364,7 +1692,7 @@ fn project_root_value(
     let mut value = typed_object("project");
     value.insert(
         string_value("setup"),
-        Value::String(write_reference(
+        Value::String(write_source_reference(
             session,
             from_document,
             SourceObjectKind::Setup,
@@ -1380,7 +1708,7 @@ fn project_root_value(
                 .sequences
                 .iter()
                 .map(|sequence| {
-                    write_reference(
+                    write_source_reference(
                         session,
                         from_document,
                         SourceObjectKind::Sequence,
@@ -1402,7 +1730,7 @@ fn setup_value(
     let mut value = typed_object("setup");
     value.insert(
         string_value("layout"),
-        Value::String(write_reference(
+        Value::String(write_source_reference(
             session,
             from_document,
             SourceObjectKind::Layout,
@@ -1411,7 +1739,7 @@ fn setup_value(
     );
     value.insert(
         string_value("patch"),
-        Value::String(write_reference(
+        Value::String(write_source_reference(
             session,
             from_document,
             SourceObjectKind::Patch,
@@ -1424,7 +1752,7 @@ fn setup_value(
             setup
                 .controllers
                 .iter()
-                .map(|controller| Value::String(controller.0.clone()))
+                .map(|controller| Value::String(controller.0.object().to_string()))
                 .collect(),
         ),
     );
@@ -1561,7 +1889,7 @@ fn fixture_inst_value(
     value.insert(string_value("name"), Value::String(fixture.name.clone()));
     value.insert(
         string_value("fixture"),
-        Value::String(write_reference(
+        Value::String(write_source_reference(
             session,
             from_document,
             SourceObjectKind::FixtureDefinition,
@@ -1617,7 +1945,7 @@ fn patch_route_value(
     value.insert(string_value("fixture"), number_value(route.fixture.0)?);
     value.insert(
         string_value("controller"),
-        Value::String(write_reference(
+        Value::String(write_source_reference(
             session,
             from_document,
             SourceObjectKind::Controller,
@@ -1917,7 +2245,7 @@ fn write_effect_clip_fields(
     }
     value.insert(
         string_value("script"),
-        Value::String(write_reference(
+        Value::String(write_source_reference(
             session,
             from_document,
             SourceObjectKind::EffectDefinition,
@@ -1956,7 +2284,7 @@ fn graph_operator_name(
 ) -> Result<String, ExportProjectError> {
     match operator {
         OperatorRef::Builtin(operator) => Ok(operator.definition().source_name.clone()),
-        OperatorRef::Custom(id) => write_reference(
+        OperatorRef::Custom(id) => write_source_reference(
             session,
             from_document,
             SourceObjectKind::OperatorDefinition,
@@ -2211,7 +2539,7 @@ fn curve_source_value(
 ) -> Result<Value, ExportProjectError> {
     match source {
         CurveSource::Inline(curve) => curve_value(curve),
-        CurveSource::Reference(id) => Ok(Value::String(write_reference(
+        CurveSource::Reference(id) => Ok(Value::String(write_source_reference(
             session,
             from_document,
             SourceObjectKind::Curve,
@@ -2368,47 +2696,35 @@ fn effect_target_value(target: &EffectTarget) -> Result<Value, ExportProjectErro
     Ok(Value::Mapping(value))
 }
 
-fn write_reference(
+fn write_source_reference(
     session: &ProjectSession,
     from_document: &Utf8Path,
     kind: SourceObjectKind,
-    id: &str,
+    identity: &SourceIdentity,
 ) -> Result<String, ExportProjectError> {
-    let target = SourceObjectId {
-        kind: kind.clone(),
-        id: id.to_string(),
-    };
-    let location = session
-        .source
-        .source_map
-        .objects
-        .get(&target)
-        .ok_or_else(|| ExportProjectError::InvalidReference {
-            path: from_document.to_path_buf(),
-            reference: id.to_string(),
-            message: "target is missing from the source map".to_string(),
-        })?;
     let alias = session
         .source
-        .import_graph
+        .documents
         .get(from_document)
         .into_iter()
-        .flatten()
+        .flat_map(|document| &document.imports)
         .find(|edge| {
             edge.targets
                 .iter()
-                .any(|target| target == &location.document)
+                .any(|target| target == identity.document())
         })
         .map(|edge| edge.alias.clone())
         .ok_or_else(|| ExportProjectError::InvalidReference {
             path: from_document.to_path_buf(),
-            reference: id.to_string(),
-            message: "no import alias makes the target visible from this document".to_string(),
+            reference: identity.object().to_string(),
+            message: format!(
+                "no import alias makes the {kind:?} target visible from this document"
+            ),
         })?;
-    Ok(format!("{alias}.{}", location.object_key))
+    Ok(format!("{alias}.{}", identity.object()))
 }
 
-fn relative_path_from_document(from_document: &Utf8Path, target: &Utf8Path) -> Utf8PathBuf {
+pub fn relative_path_from_document(from_document: &Utf8Path, target: &Utf8Path) -> Utf8PathBuf {
     let from_dir = from_document.parent().unwrap_or_else(|| Utf8Path::new(""));
     let from_components = normal_components(from_dir);
     let target_components = normal_components(target);
@@ -2485,14 +2801,15 @@ struct Loader {
     source_root: Utf8PathBuf,
     entrypoint: Utf8PathBuf,
     documents: IndexMap<Utf8PathBuf, SourceDocument>,
-    import_graph: IndexMap<Utf8PathBuf, Vec<ImportEdge>>,
     visible_objects: IndexMap<Utf8PathBuf, IndexMap<AliasObjectKey, ResolvedObject>>,
     loading_documents: IndexSet<Utf8PathBuf>,
-    source_map: SourceMap,
-    effect_source_text: IndexMap<EffectDefinitionId, String>,
+    effect_definitions: EffectDefinitionStore,
+    curve_definitions: CurveDefinitionStore,
+    fixture_definitions: FixtureDefinitionStore,
     operator_definitions: OperatorDefinitionStore,
     referenced_assets: Vec<ReferencedAsset>,
     next_asset_id: u32,
+    source_overrides: IndexMap<Utf8PathBuf, String>,
 }
 
 impl Loader {
@@ -2517,14 +2834,15 @@ impl Loader {
             source_root,
             entrypoint,
             documents: IndexMap::new(),
-            import_graph: IndexMap::new(),
             visible_objects: IndexMap::new(),
             loading_documents: IndexSet::new(),
-            source_map: SourceMap::default(),
-            effect_source_text: IndexMap::new(),
+            effect_definitions: EffectDefinitionStore::default(),
+            curve_definitions: CurveDefinitionStore::default(),
+            fixture_definitions: FixtureDefinitionStore::default(),
             operator_definitions: OperatorDefinitionStore::default(),
             referenced_assets: Vec::new(),
             next_asset_id: 1,
+            source_overrides: IndexMap::new(),
         })
     }
 
@@ -2532,7 +2850,6 @@ impl Loader {
         let entrypoint = self.entrypoint.clone();
         self.load_document(&entrypoint)?;
         let project = self.resolve_project(&entrypoint)?;
-        self.normalize_source_root()?;
         let entrypoint = self.entrypoint.clone();
         Ok(ProjectSession {
             project,
@@ -2540,9 +2857,6 @@ impl Loader {
                 source_root: self.source_root,
                 entrypoint,
                 documents: self.documents,
-                import_graph: self.import_graph,
-                source_map: self.source_map,
-                effect_source_text: self.effect_source_text,
                 referenced_assets: self.referenced_assets,
             },
         })
@@ -2569,15 +2883,26 @@ impl Loader {
         result
     }
 
+    fn read_source(
+        &self,
+        relative: &Utf8Path,
+        absolute: &Utf8Path,
+    ) -> Result<String, LoadProjectError> {
+        if let Some(source) = self.source_overrides.get(relative) {
+            return Ok(source.clone());
+        }
+        fs::read_to_string(absolute).map_err(|source| LoadProjectError::Io {
+            path: absolute.to_path_buf(),
+            source,
+        })
+    }
+
     fn load_effect_document(
         &mut self,
         relative: &Utf8Path,
         absolute: &Utf8Path,
     ) -> Result<(), LoadProjectError> {
-        let source = fs::read_to_string(absolute).map_err(|source| LoadProjectError::Io {
-            path: absolute.to_path_buf(),
-            source,
-        })?;
+        let source = self.read_source(relative, absolute)?;
         let compiled =
             compile_effects(&source).map_err(|diagnostics| LoadProjectError::InvalidEffect {
                 path: relative.to_path_buf(),
@@ -2594,23 +2919,17 @@ impl Loader {
                     .collect(),
             })?;
         let mut visible = IndexMap::new();
-        let mut exported_objects = Vec::new();
-        let mut object_types = Vec::new();
+        let mut objects = Vec::new();
         for effect in compiled {
             let name = effect.name().as_str().to_string();
-            let id = EffectDefinitionId(name.clone());
-            self.effect_source_text.insert(id.clone(), source.clone());
-            self.insert_source_object(
-                relative,
-                SourceObjectId {
-                    kind: SourceObjectKind::EffectDefinition,
-                    id: id.0.clone(),
-                },
-                SourceObjectLocation {
-                    document: relative.to_path_buf(),
-                    object_key: name.clone(),
-                },
-            )?;
+            let id = EffectDefinitionId(SourceIdentity::new(relative.to_path_buf(), name.clone()));
+            self.effect_definitions
+                .insert(id.clone(), EffectDefinition { compiled: effect });
+            let source_object = SourceObjectId {
+                kind: SourceObjectKind::EffectDefinition,
+                id: name.clone(),
+            };
+            objects.push(source_object);
             visible.insert(
                 AliasObjectKey {
                     alias: None,
@@ -2618,20 +2937,16 @@ impl Loader {
                 },
                 ResolvedObject::EffectDefinition(id),
             );
-            exported_objects.push(name);
-            object_types.push(SourceObjectKind::EffectDefinition);
         }
         self.visible_objects.insert(relative.to_path_buf(), visible);
-        self.import_graph.insert(relative.to_path_buf(), Vec::new());
-        self.documents.insert(
-            relative.to_path_buf(),
-            SourceDocument {
-                relative_path: relative.to_path_buf(),
-                imports: Vec::new(),
-                exported_objects,
-                kind: SourceDocumentKind::Effect { source },
-            },
-        );
+        let document =
+            SourceDocument::new(Vec::new(), objects, SourceDocumentKind::Effect { source })
+                .map_err(|message| LoadProjectError::InvalidDocument {
+                    path: relative.to_path_buf(),
+                    range: None,
+                    message,
+                })?;
+        self.documents.insert(relative.to_path_buf(), document);
         Ok(())
     }
 
@@ -2640,10 +2955,7 @@ impl Loader {
         relative: &Utf8Path,
         absolute: &Utf8Path,
     ) -> Result<(), LoadProjectError> {
-        let source = fs::read_to_string(absolute).map_err(|source| LoadProjectError::Io {
-            path: absolute.to_path_buf(),
-            source,
-        })?;
+        let source = self.read_source(relative, absolute)?;
         let compiled = compile_operators(&source).map_err(|diagnostics| {
             LoadProjectError::InvalidOperator {
                 path: relative.to_path_buf(),
@@ -2661,23 +2973,18 @@ impl Loader {
             }
         })?;
         let mut visible = IndexMap::new();
-        let mut exported_objects = Vec::new();
+        let mut objects = Vec::new();
         for operator in compiled {
             let name = operator.name().as_str().to_string();
-            let id = OperatorDefinitionId(name.clone());
+            let id =
+                OperatorDefinitionId(SourceIdentity::new(relative.to_path_buf(), name.clone()));
             let definition = custom_operator_definition(id.clone(), operator);
             self.operator_definitions.insert(id.clone(), definition);
-            self.insert_source_object(
-                relative,
-                SourceObjectId {
-                    kind: SourceObjectKind::OperatorDefinition,
-                    id: id.0.clone(),
-                },
-                SourceObjectLocation {
-                    document: relative.to_path_buf(),
-                    object_key: name.clone(),
-                },
-            )?;
+            let source_object = SourceObjectId {
+                kind: SourceObjectKind::OperatorDefinition,
+                id: name.clone(),
+            };
+            objects.push(source_object);
             visible.insert(
                 AliasObjectKey {
                     alias: None,
@@ -2685,19 +2992,16 @@ impl Loader {
                 },
                 ResolvedObject::OperatorDefinition(id),
             );
-            exported_objects.push(name);
         }
         self.visible_objects.insert(relative.to_path_buf(), visible);
-        self.import_graph.insert(relative.to_path_buf(), Vec::new());
-        self.documents.insert(
-            relative.to_path_buf(),
-            SourceDocument {
-                relative_path: relative.to_path_buf(),
-                imports: Vec::new(),
-                exported_objects,
-                kind: SourceDocumentKind::Operator { source },
-            },
-        );
+        let document =
+            SourceDocument::new(Vec::new(), objects, SourceDocumentKind::Operator { source })
+                .map_err(|message| LoadProjectError::InvalidDocument {
+                    path: relative.to_path_buf(),
+                    range: None,
+                    message,
+                })?;
+        self.documents.insert(relative.to_path_buf(), document);
         Ok(())
     }
 
@@ -2706,10 +3010,7 @@ impl Loader {
         relative: &Utf8Path,
         absolute: &Utf8Path,
     ) -> Result<(), LoadProjectError> {
-        let text = fs::read_to_string(absolute).map_err(|source| LoadProjectError::Io {
-            path: absolute.to_path_buf(),
-            source,
-        })?;
+        let text = self.read_source(relative, absolute)?;
         let value = parse_yaml_value(relative, &text)?;
         let map = mapping(&value).ok_or_else(|| LoadProjectError::InvalidDocument {
             path: relative.to_path_buf(),
@@ -2719,8 +3020,7 @@ impl Loader {
         let imports = parse_imports(relative, map)?;
         let mut visible = IndexMap::new();
 
-        let mut exported_objects = Vec::new();
-        let mut object_types = Vec::new();
+        let mut objects = Vec::new();
         for (key, object_value) in map {
             let Some(key) = key.as_str() else {
                 return Err(LoadProjectError::InvalidDocument {
@@ -2734,16 +3034,37 @@ impl Loader {
             }
             let object_type = string_field(relative, object_value, "type")?;
             let object = match object_type {
-                "project" => ResolvedObject::Project(ProjectId(key.to_string())),
-                "setup" => ResolvedObject::Setup(SetupId(key.to_string())),
-                "controller" => ResolvedObject::Controller(ControllerId(key.to_string())),
-                "layout" => ResolvedObject::Layout(LayoutId(key.to_string())),
-                "patch" => ResolvedObject::Patch(PatchId(key.to_string())),
-                "fixture" => {
-                    ResolvedObject::FixtureDefinition(FixtureDefinitionId(key.to_string()))
-                }
-                "curve" => ResolvedObject::Curve(CurveId(key.to_string())),
-                "sequence" => ResolvedObject::Sequence(SequenceId(key.to_string())),
+                "project" => ResolvedObject::Project(ProjectId(SourceIdentity::new(
+                    relative.to_path_buf(),
+                    key.to_string(),
+                ))),
+                "setup" => ResolvedObject::Setup(SetupId(SourceIdentity::new(
+                    relative.to_path_buf(),
+                    key.to_string(),
+                ))),
+                "controller" => ResolvedObject::Controller(ControllerId(SourceIdentity::new(
+                    relative.to_path_buf(),
+                    key.to_string(),
+                ))),
+                "layout" => ResolvedObject::Layout(LayoutId(SourceIdentity::new(
+                    relative.to_path_buf(),
+                    key.to_string(),
+                ))),
+                "patch" => ResolvedObject::Patch(PatchId(SourceIdentity::new(
+                    relative.to_path_buf(),
+                    key.to_string(),
+                ))),
+                "fixture" => ResolvedObject::FixtureDefinition(FixtureDefinitionId(
+                    SourceIdentity::new(relative.to_path_buf(), key.to_string()),
+                )),
+                "curve" => ResolvedObject::Curve(CurveId(SourceIdentity::new(
+                    relative.to_path_buf(),
+                    key.to_string(),
+                ))),
+                "sequence" => ResolvedObject::Sequence(SequenceId(SourceIdentity::new(
+                    relative.to_path_buf(),
+                    key.to_string(),
+                ))),
                 other => {
                     return Err(LoadProjectError::InvalidDocument {
                         path: relative.to_path_buf(),
@@ -2752,18 +3073,25 @@ impl Loader {
                     });
                 }
             };
-            object_types.push(object.source_kind());
-            self.insert_source_object(
-                relative,
-                SourceObjectId {
-                    kind: object.source_kind(),
-                    id: object.id_string(),
-                },
-                SourceObjectLocation {
-                    document: relative.to_path_buf(),
-                    object_key: key.to_string(),
-                },
-            )?;
+            if let ResolvedObject::Curve(id) = &object {
+                self.curve_definitions.insert(
+                    id.clone(),
+                    CurveDefinition {
+                        curve: parse_curve(relative, object_value)?,
+                    },
+                );
+            }
+            if let ResolvedObject::FixtureDefinition(id) = &object {
+                self.fixture_definitions.insert(
+                    id.clone(),
+                    parse_fixture_definition(relative, object_value)?,
+                );
+            }
+            let source_object = SourceObjectId {
+                kind: object.source_kind(),
+                id: object.id_string(),
+            };
+            objects.push(source_object);
             visible.insert(
                 AliasObjectKey {
                     alias: None,
@@ -2771,7 +3099,6 @@ impl Loader {
                 },
                 object,
             );
-            exported_objects.push(key.to_string());
         }
 
         self.visible_objects.insert(relative.to_path_buf(), visible);
@@ -2779,6 +3106,7 @@ impl Loader {
         let mut import_edges = Vec::new();
         let mut imported_visible = Vec::new();
         let mut import_aliases = IndexSet::new();
+        let mut imported_targets = IndexSet::new();
         for import in &imports {
             if !import_aliases.insert(import.alias.clone()) {
                 return Err(LoadProjectError::InvalidDocument {
@@ -2790,6 +3118,15 @@ impl Loader {
             let targets = self.resolve_import(relative, &import.from)?;
             let mut names = IndexSet::new();
             for target in &targets {
+                if !imported_targets.insert(target.clone()) {
+                    return Err(LoadProjectError::InvalidDocument {
+                        path: relative.to_path_buf(),
+                        range: None,
+                        message: format!(
+                            "document `{target}` is imported more than once; each target must have one alias"
+                        ),
+                    });
+                }
                 self.load_document(target)?;
                 let target_visible = self.visible_objects.get(target).ok_or_else(|| {
                     LoadProjectError::InvalidDocument {
@@ -2831,40 +3168,14 @@ impl Loader {
             visible.extend(imported_visible);
         }
 
-        self.import_graph
-            .insert(relative.to_path_buf(), import_edges);
-        self.documents.insert(
-            relative.to_path_buf(),
-            SourceDocument {
-                relative_path: relative.to_path_buf(),
-                imports,
-                exported_objects,
-                kind: SourceDocumentKind::Dawn {
-                    value,
-                    object_types,
-                },
-            },
-        );
-        Ok(())
-    }
-
-    fn insert_source_object(
-        &mut self,
-        path: &Utf8Path,
-        id: SourceObjectId,
-        location: SourceObjectLocation,
-    ) -> Result<(), LoadProjectError> {
-        if let Some(existing) = self.source_map.objects.get(&id) {
-            return Err(LoadProjectError::InvalidDocument {
-                path: path.to_path_buf(),
-                range: None,
-                message: format!(
-                    "duplicate {:?} object id `{}` already defined in {}",
-                    id.kind, id.id, existing.document
-                ),
-            });
-        }
-        self.source_map.objects.insert(id, location);
+        let document =
+            SourceDocument::new(import_edges, objects, SourceDocumentKind::Dawn { value })
+                .map_err(|message| LoadProjectError::InvalidDocument {
+                    path: relative.to_path_buf(),
+                    range: None,
+                    message,
+                })?;
+        self.documents.insert(relative.to_path_buf(), document);
         Ok(())
     }
 
@@ -2873,6 +3184,13 @@ impl Loader {
         importer: &Utf8Path,
         import_from: &Utf8Path,
     ) -> Result<Vec<Utf8PathBuf>, LoadProjectError> {
+        if import_from.is_absolute() {
+            return Err(LoadProjectError::InvalidDocument {
+                path: importer.to_path_buf(),
+                range: None,
+                message: "import paths must be relative".to_string(),
+            });
+        }
         let importer_dir = importer.parent().unwrap_or_else(|| Utf8Path::new(""));
         let target_relative = normalize_relative(importer_dir.join(import_from));
         let absolute = self.source_root.join(&target_relative);
@@ -2912,7 +3230,10 @@ impl Loader {
 
     fn resolve_project(&mut self, entrypoint: &Utf8Path) -> Result<DawnProject, LoadProjectError> {
         let root_object = self.single_project_object(entrypoint)?;
-        let root_id = ProjectId(root_object.key.clone());
+        let root_id = ProjectId(SourceIdentity::new(
+            entrypoint.to_path_buf(),
+            root_object.key.clone(),
+        ));
         let setup = self.reference_as_setup(
             entrypoint,
             string_field(entrypoint, root_object.value, "setup")?,
@@ -2935,6 +3256,9 @@ impl Loader {
             sequences: IndexMap::new(),
             definitions: ProjectDefinitionStores::default(),
         };
+        project.definitions.effects = self.effect_definitions.clone();
+        project.definitions.curves = self.curve_definitions.clone();
+        project.definitions.fixtures = self.fixture_definitions.clone();
         project.definitions.operators = self.operator_definitions.clone();
 
         let mut resolver = DomainResolver {
@@ -2946,68 +3270,6 @@ impl Loader {
             resolver.resolve_sequence(entrypoint, &sequence)?;
         }
         Ok(project)
-    }
-
-    fn normalize_source_root(&mut self) -> Result<(), LoadProjectError> {
-        let mut paths = self
-            .documents
-            .keys()
-            .map(|path| self.source_root.join(path))
-            .collect::<Vec<_>>();
-        paths.extend(
-            self.referenced_assets
-                .iter()
-                .map(|asset| asset.absolute_path.clone()),
-        );
-        let Some(common_root) = common_parent(&paths) else {
-            return Ok(());
-        };
-        if common_root == self.source_root {
-            return Ok(());
-        }
-
-        let old_root = self.source_root.clone();
-        self.source_root = common_root;
-        self.entrypoint = relative_path(&self.source_root, &old_root.join(&self.entrypoint))?;
-
-        self.documents = self
-            .documents
-            .drain(..)
-            .map(|(path, mut document)| {
-                let next_path = relative_path(&self.source_root, &old_root.join(&path))?;
-                document.relative_path = next_path.clone();
-                Ok((next_path, document))
-            })
-            .collect::<Result<IndexMap<_, _>, LoadProjectError>>()?;
-
-        self.import_graph = self
-            .import_graph
-            .drain(..)
-            .map(|(path, edges)| {
-                let next_path = relative_path(&self.source_root, &old_root.join(&path))?;
-                let edges = edges
-                    .into_iter()
-                    .map(|mut edge| {
-                        edge.targets = edge
-                            .targets
-                            .into_iter()
-                            .map(|target| relative_path(&self.source_root, &old_root.join(target)))
-                            .collect::<Result<Vec<_>, _>>()?;
-                        Ok(edge)
-                    })
-                    .collect::<Result<Vec<_>, LoadProjectError>>()?;
-                Ok((next_path, edges))
-            })
-            .collect::<Result<IndexMap<_, _>, LoadProjectError>>()?;
-
-        for location in self.source_map.objects.values_mut() {
-            location.document =
-                relative_path(&self.source_root, &old_root.join(&location.document))?;
-        }
-        for asset in &mut self.referenced_assets {
-            asset.relative_path = relative_path(&self.source_root, &asset.absolute_path)?;
-        }
-        Ok(())
     }
 
     fn single_project_object<'a>(
@@ -3047,35 +3309,40 @@ impl Loader {
         &self,
         id: &ResolvedObject,
     ) -> Result<(Utf8PathBuf, String, Value), LoadProjectError> {
-        let location = self
-            .source_map
-            .objects
-            .get(&SourceObjectId {
-                kind: id.source_kind(),
-                id: id.id_string(),
+        let identity = id.source_identity();
+        if !self
+            .documents
+            .get(identity.document())
+            .is_some_and(|document| {
+                document
+                    .objects
+                    .iter()
+                    .any(|object| object.kind == id.source_kind() && object.id == identity.object())
             })
-            .ok_or_else(|| LoadProjectError::InvalidReference {
+        {
+            return Err(LoadProjectError::InvalidReference {
                 path: self.entrypoint.clone(),
                 range: None,
                 reference: id.id_string(),
-            })?;
-        let document = self.dawn_document(&location.document)?;
+            });
+        }
+        let document = self.dawn_document(identity.document())?;
         let document_map = mapping(document).ok_or_else(|| LoadProjectError::InvalidDocument {
-            path: location.document.clone(),
+            path: identity.document().to_path_buf(),
             range: None,
             message: "document root must be a mapping".to_string(),
         })?;
         let value = document_map
-            .get(Value::String(location.object_key.clone()))
+            .get(Value::String(identity.object().to_string()))
             .ok_or_else(|| LoadProjectError::InvalidReference {
-                path: location.document.clone(),
+                path: identity.document().to_path_buf(),
                 range: None,
-                reference: location.object_key.clone(),
+                reference: identity.object().to_string(),
             })?
             .clone();
         Ok((
-            location.document.clone(),
-            location.object_key.clone(),
+            identity.document().to_path_buf(),
+            identity.object().to_string(),
             value,
         ))
     }
@@ -3109,12 +3376,13 @@ impl Loader {
         path: &Utf8Path,
         reference: &str,
     ) -> Result<ResolvedObject, LoadProjectError> {
+        let range = source_range_for_scalar(path, reference);
         let (alias, object) =
             reference
                 .split_once('.')
                 .ok_or_else(|| LoadProjectError::InvalidReference {
                     path: path.to_path_buf(),
-                    range: source_range_for_scalar(path, reference),
+                    range: range.clone(),
                     reference: reference.to_string(),
                 })?;
         self.visible_objects
@@ -3128,7 +3396,7 @@ impl Loader {
             .cloned()
             .ok_or_else(|| LoadProjectError::InvalidReference {
                 path: path.to_path_buf(),
-                range: source_range_for_scalar(path, reference),
+                range,
                 reference: reference.to_string(),
             })
     }
@@ -3201,7 +3469,7 @@ impl DomainResolver<'_> {
         };
         let controllers = sequence_field(&document_path, &value, "controllers")?
             .iter()
-            .map(|name| ControllerId(name.to_string()))
+            .map(|name| ControllerId(SourceIdentity::new(document_path.clone(), name.to_string())))
             .collect::<Vec<_>>();
         self.project.setups.insert(
             id.clone(),
@@ -3400,57 +3668,19 @@ impl DomainResolver<'_> {
         path: &Utf8Path,
         id: &FixtureDefinitionId,
     ) -> Result<(), LoadProjectError> {
-        if self
+        if !self
             .project
             .definitions
             .fixtures
             .definitions
             .contains_key(id)
         {
-            return Ok(());
+            return Err(LoadProjectError::InvalidReference {
+                path: path.to_path_buf(),
+                range: None,
+                reference: id.0.object().to_string(),
+            });
         }
-        let (_, _, value) = self
-            .loader
-            .object_value(&ResolvedObject::FixtureDefinition(id.clone()))?;
-        let bulb_diameter = f64_field(path, &value, "bulb_diameter")?;
-        let geometry_value = required_field(path, &value, "geometry")?;
-        let geometry_type = string_field(path, geometry_value, "type")?;
-        let geometry = match geometry_type {
-            "points" => Geometry::Points {
-                points: sequence_values(path, geometry_value, "points")?
-                    .iter()
-                    .map(parse_point3)
-                    .collect::<Result<Vec<_>, _>>()?,
-            },
-            "lines" => Geometry::Lines {
-                points: sequence_values(path, geometry_value, "points")?
-                    .iter()
-                    .map(parse_point3)
-                    .collect::<Result<Vec<_>, _>>()?,
-                pixels: u32_field(path, geometry_value, "pixels")?,
-            },
-            "arc" => Geometry::Arc {
-                center: parse_point3(required_field(path, geometry_value, "center")?)?,
-                radius: distance_span(f64_field(path, geometry_value, "radius")?),
-                start_degrees: f64_field(path, geometry_value, "startDegrees")?,
-                end_degrees: f64_field(path, geometry_value, "endDegrees")?,
-                pixels: u32_field(path, geometry_value, "pixels")?,
-            },
-            other => {
-                return Err(LoadProjectError::InvalidDocument {
-                    path: path.to_path_buf(),
-                    range: None,
-                    message: format!("unsupported fixture geometry `{other}`"),
-                });
-            }
-        };
-        self.project.definitions.fixtures.insert(
-            id.clone(),
-            FixtureDefinition {
-                bulb_radius: distance_span(bulb_diameter / 2.0),
-                geometry,
-            },
-        );
         Ok(())
     }
 
@@ -3482,16 +3712,15 @@ impl DomainResolver<'_> {
         value: &Value,
     ) -> Result<PatchRoute, LoadProjectError> {
         let controller_ref = string_field(path, value, "controller")?;
-        let controller = match self.loader.resolve_reference(path, controller_ref) {
-            Ok(ResolvedObject::Controller(controller)) => controller,
-            Ok(_) => {
+        let controller = match self.loader.resolve_reference(path, controller_ref)? {
+            ResolvedObject::Controller(controller) => controller,
+            _ => {
                 return Err(LoadProjectError::InvalidReference {
                     path: path.to_path_buf(),
                     range: None,
                     reference: controller_ref.to_string(),
                 });
             }
-            Err(_) => ControllerId(controller_ref.to_string()),
         };
         let output = optional_field(value, "output")
             .and_then(Value::as_u64)
@@ -3568,7 +3797,6 @@ impl DomainResolver<'_> {
             .iter()
             .map(|effect| self.parse_sequence_effect(&document_path, effect))
             .collect::<Result<Vec<_>, _>>()?;
-        let clips = clips_from_effects(&effects);
         let composition_graph = self.parse_composition_graph(
             &document_path,
             required_field(&document_path, &value, "composition_graph")?,
@@ -3586,7 +3814,6 @@ impl DomainResolver<'_> {
                 frame_rate: u32_field(&document_path, &value, "frame_rate")?,
                 audio,
                 mark_collections,
-                clips,
                 layers,
                 effects,
                 composition_graph,
@@ -3633,8 +3860,11 @@ impl DomainResolver<'_> {
                 message: format!("audio asset does not exist: {audio_path}"),
             });
         }
-        let relative = relative_path(&self.loader.source_root, &absolute)
-            .unwrap_or_else(|_| Utf8PathBuf::from(audio_path));
+        let relative = match relative_path(&self.loader.source_root, &absolute) {
+            Ok(relative) => relative,
+            Err(_) if !Utf8Path::new(audio_path).is_absolute() => Utf8PathBuf::from(audio_path),
+            Err(error) => return Err(error),
+        };
         if let Some(existing) = self
             .loader
             .referenced_assets
@@ -3842,50 +4072,18 @@ impl DomainResolver<'_> {
         &mut self,
         id: &EffectDefinitionId,
     ) -> Result<(), LoadProjectError> {
-        if self
+        if !self
             .project
             .definitions
             .effects
             .definitions
             .contains_key(id)
         {
-            return Ok(());
-        }
-        let source = self.loader.effect_source_text.get(id).ok_or_else(|| {
-            LoadProjectError::InvalidReference {
-                path: self.loader.entrypoint.clone(),
-                range: None,
-                reference: id.0.clone(),
-            }
-        })?;
-        let compiled =
-            compile_effects(source).map_err(|diagnostics| LoadProjectError::InvalidEffect {
-                path: self.loader.entrypoint.clone(),
-                diagnostics: diagnostics
-                    .into_iter()
-                    .map(|diagnostic| {
-                        dsl_diagnostic(
-                            &self.loader.entrypoint,
-                            source,
-                            diagnostic,
-                            IoDiagnosticCode::EffectCompile,
-                        )
-                    })
-                    .collect(),
-            })?;
-        if !compiled.iter().any(|effect| effect.name().as_str() == id.0) {
             return Err(LoadProjectError::InvalidReference {
                 path: self.loader.entrypoint.clone(),
                 range: None,
-                reference: id.0.clone(),
+                reference: id.0.object().to_string(),
             });
-        }
-        for compiled in compiled {
-            let definition_id = EffectDefinitionId(compiled.name().as_str().to_string());
-            self.project
-                .definitions
-                .effects
-                .insert(definition_id, EffectDefinition { compiled });
         }
         Ok(())
     }
@@ -3978,18 +4176,13 @@ impl DomainResolver<'_> {
     }
 
     fn resolve_curve(&mut self, path: &Utf8Path, id: &CurveId) -> Result<(), LoadProjectError> {
-        if self.project.definitions.curves.definitions.contains_key(id) {
-            return Ok(());
+        if !self.project.definitions.curves.definitions.contains_key(id) {
+            return Err(LoadProjectError::InvalidReference {
+                path: path.to_path_buf(),
+                range: None,
+                reference: id.0.object().to_string(),
+            });
         }
-        let (_, _, value) = self
-            .loader
-            .object_value(&ResolvedObject::Curve(id.clone()))?;
-        self.project.definitions.curves.insert(
-            id.clone(),
-            CurveDefinition {
-                curve: parse_curve(path, &value)?,
-            },
-        );
         Ok(())
     }
 
@@ -4054,23 +4247,6 @@ fn parse_automation_curve(path: &Utf8Path, value: &Value) -> Result<Curve, LoadP
     Ok(curve)
 }
 
-fn clips_from_effects(effects: &[EffectInst]) -> Vec<SequenceClip> {
-    effects
-        .iter()
-        .map(|effect| SequenceClip {
-            id: SequenceClipId(effect.id.0),
-            start: effect.start.clone(),
-            duration: effect.duration.clone(),
-            target: effect.target.clone(),
-            scope: effect.scope.clone(),
-            kind: SequenceClipKind::Effect(EffectClip {
-                definition: effect.definition.clone(),
-                param_overrides: effect.param_overrides.clone(),
-            }),
-        })
-        .collect()
-}
-
 fn parse_sequence_layer(path: &Utf8Path, value: &Value) -> Result<SequenceLayer, LoadProjectError> {
     Ok(SequenceLayer {
         id: SequenceLayerId(u32_field(path, value, "id")?),
@@ -4102,22 +4278,10 @@ fn parse_automation_binding(
     value: &Value,
 ) -> Result<AutomationBinding, LoadProjectError> {
     let target = parse_automation_target(path, required_field(path, value, "target")?)?;
-    let (effect_id, param) = automation_binding_mirror(&target);
     Ok(AutomationBinding {
         target,
-        effect_id,
-        param,
         mapping: parse_automation_mapping(path, required_field(path, value, "mapping")?)?,
     })
-}
-
-fn automation_binding_mirror(target: &AutomationTarget) -> (EffectInstId, Identifier) {
-    match target {
-        AutomationTarget::EffectParam { effect_id, param } => (effect_id.clone(), param.clone()),
-        AutomationTarget::CompositionNodeParam { node_id, param } => {
-            (EffectInstId(node_id.0), param.clone())
-        }
-    }
 }
 
 fn parse_automation_target(
@@ -4217,6 +4381,21 @@ enum ResolvedObject {
 }
 
 impl ResolvedObject {
+    fn source_identity(&self) -> &SourceIdentity {
+        match self {
+            Self::Project(id) => &id.0,
+            Self::Setup(id) => &id.0,
+            Self::Controller(id) => &id.0,
+            Self::Layout(id) => &id.0,
+            Self::Patch(id) => &id.0,
+            Self::FixtureDefinition(id) => &id.0,
+            Self::Curve(id) => &id.0,
+            Self::Sequence(id) => &id.0,
+            Self::EffectDefinition(id) => &id.0,
+            Self::OperatorDefinition(id) => &id.0,
+        }
+    }
+
     fn source_kind(&self) -> SourceObjectKind {
         match self {
             Self::Project(_) => SourceObjectKind::Project,
@@ -4234,16 +4413,16 @@ impl ResolvedObject {
 
     fn id_string(&self) -> String {
         match self {
-            Self::Project(id) => id.0.clone(),
-            Self::Setup(id) => id.0.clone(),
-            Self::Controller(id) => id.0.clone(),
-            Self::Layout(id) => id.0.clone(),
-            Self::Patch(id) => id.0.clone(),
-            Self::FixtureDefinition(id) => id.0.clone(),
-            Self::Curve(id) => id.0.clone(),
-            Self::Sequence(id) => id.0.clone(),
-            Self::EffectDefinition(id) => id.0.clone(),
-            Self::OperatorDefinition(id) => id.0.clone(),
+            Self::Project(id) => id.0.object().to_string(),
+            Self::Setup(id) => id.0.object().to_string(),
+            Self::Controller(id) => id.0.object().to_string(),
+            Self::Layout(id) => id.0.object().to_string(),
+            Self::Patch(id) => id.0.object().to_string(),
+            Self::FixtureDefinition(id) => id.0.object().to_string(),
+            Self::Curve(id) => id.0.object().to_string(),
+            Self::Sequence(id) => id.0.object().to_string(),
+            Self::EffectDefinition(id) => id.0.object().to_string(),
+            Self::OperatorDefinition(id) => id.0.object().to_string(),
         }
     }
 }
@@ -4253,7 +4432,13 @@ struct SourceObjectValue<'a> {
     value: &'a Value,
 }
 
-fn parse_imports(path: &Utf8Path, map: &Mapping) -> Result<Vec<ImportDecl>, LoadProjectError> {
+#[derive(Clone, Debug)]
+struct ParsedImport {
+    from: Utf8PathBuf,
+    alias: String,
+}
+
+fn parse_imports(path: &Utf8Path, map: &Mapping) -> Result<Vec<ParsedImport>, LoadProjectError> {
     let Some(imports) = map.get(Value::String("imports".to_string())) else {
         return Ok(Vec::new());
     };
@@ -4267,7 +4452,7 @@ fn parse_imports(path: &Utf8Path, map: &Mapping) -> Result<Vec<ImportDecl>, Load
     imports
         .iter()
         .map(|import| {
-            Ok(ImportDecl {
+            Ok(ParsedImport {
                 from: Utf8PathBuf::from(string_field(path, import, "from")?),
                 alias: string_field(path, import, "as")?.to_string(),
             })
@@ -4390,6 +4575,47 @@ fn parse_graph_edge(path: &Utf8Path, value: &Value) -> Result<EffectGraphEdge, L
         from_port: GraphPortId(string_field(path, value, "from_port")?.to_string()),
         to: CompositionGraphNodeId(u32_field(path, value, "to")?),
         to_port: GraphPortId(string_field(path, value, "to_port")?.to_string()),
+    })
+}
+
+fn parse_fixture_definition(
+    path: &Utf8Path,
+    value: &Value,
+) -> Result<FixtureDefinition, LoadProjectError> {
+    let bulb_diameter = f64_field(path, value, "bulb_diameter")?;
+    let geometry_value = required_field(path, value, "geometry")?;
+    let geometry = match string_field(path, geometry_value, "type")? {
+        "points" => Geometry::Points {
+            points: sequence_values(path, geometry_value, "points")?
+                .iter()
+                .map(parse_point3)
+                .collect::<Result<Vec<_>, _>>()?,
+        },
+        "lines" => Geometry::Lines {
+            points: sequence_values(path, geometry_value, "points")?
+                .iter()
+                .map(parse_point3)
+                .collect::<Result<Vec<_>, _>>()?,
+            pixels: u32_field(path, geometry_value, "pixels")?,
+        },
+        "arc" => Geometry::Arc {
+            center: parse_point3(required_field(path, geometry_value, "center")?)?,
+            radius: distance_span(f64_field(path, geometry_value, "radius")?),
+            start_degrees: f64_field(path, geometry_value, "startDegrees")?,
+            end_degrees: f64_field(path, geometry_value, "endDegrees")?,
+            pixels: u32_field(path, geometry_value, "pixels")?,
+        },
+        other => {
+            return Err(LoadProjectError::InvalidDocument {
+                path: path.to_path_buf(),
+                range: source_range_for_field_value(path, geometry_value, "type"),
+                message: format!("unsupported fixture geometry `{other}`"),
+            });
+        }
+    };
+    Ok(FixtureDefinition {
+        bulb_radius: distance_span(bulb_diameter / 2.0),
+        geometry,
     })
 }
 
@@ -4723,31 +4949,32 @@ fn relative_path(root: &Utf8Path, path: &Utf8Path) -> Result<Utf8PathBuf, LoadPr
 }
 
 fn normalize_relative(path: Utf8PathBuf) -> Utf8PathBuf {
+    let original = path.clone();
     let mut parts = Vec::new();
     for component in path.components() {
         match component {
             camino::Utf8Component::CurDir => {}
             camino::Utf8Component::ParentDir => {
-                let _ = parts.pop();
+                if parts.last().is_some_and(|part| part != "..") {
+                    let _ = parts.pop();
+                } else {
+                    parts.push("..".to_string());
+                }
             }
             camino::Utf8Component::Normal(part) => parts.push(part.to_string()),
-            camino::Utf8Component::RootDir | camino::Utf8Component::Prefix(_) => {}
+            camino::Utf8Component::RootDir | camino::Utf8Component::Prefix(_) => {
+                return original;
+            }
         }
     }
     parts.into_iter().collect()
 }
 
-fn common_parent(paths: &[Utf8PathBuf]) -> Option<Utf8PathBuf> {
-    let mut iter = paths.iter();
-    let first = iter.next()?;
-    let mut common = first.parent()?.to_path_buf();
-    for path in iter {
-        let parent = path.parent()?;
-        while !parent.starts_with(&common) {
-            common = common.parent()?.to_path_buf();
-        }
-    }
-    Some(common)
+pub fn is_project_owned_path(path: &Utf8Path) -> bool {
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Utf8Component::Normal(_) | Utf8Component::CurDir))
 }
 
 pub fn source_file_list(session: &ProjectSession) -> BTreeMap<Utf8PathBuf, Vec<String>> {
@@ -4755,6 +4982,15 @@ pub fn source_file_list(session: &ProjectSession) -> BTreeMap<Utf8PathBuf, Vec<S
         .source
         .documents
         .iter()
-        .map(|(path, document)| (path.clone(), document.exported_objects.clone()))
+        .map(|(path, document)| {
+            (
+                path.clone(),
+                document
+                    .objects
+                    .iter()
+                    .map(|object| object.id.clone())
+                    .collect(),
+            )
+        })
         .collect()
 }

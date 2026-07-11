@@ -12,6 +12,7 @@
 
 pub mod dsl;
 pub mod effect;
+pub mod identity;
 pub mod model;
 pub mod operator;
 pub mod sequence;

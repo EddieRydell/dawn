@@ -1,5 +1,6 @@
 use crate::dsl::CompiledEffect;
 use crate::dsl::types::Identifier;
+use crate::identity::SourceIdentity;
 use crate::sequence::{MarkCollectionKey, SequenceLayerId};
 use crate::setup::{FixtureGroupId, FixtureInstanceId};
 use crate::values::{Curve, DawnDuration, DawnTime};
@@ -21,7 +22,7 @@ pub struct EffectInst {
 pub struct EffectInstId(pub u32);
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct EffectDefinitionId(pub String);
+pub struct EffectDefinitionId(pub SourceIdentity);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EffectTarget {
@@ -78,7 +79,7 @@ impl EffectDefinitionStore {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct CurveId(pub String);
+pub struct CurveId(pub SourceIdentity);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CurveDefinition {

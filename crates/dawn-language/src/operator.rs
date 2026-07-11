@@ -1,5 +1,6 @@
 use crate::dsl::{CompiledOperator, Identifier, OperatorInputDecl, ParamDecl, Type, Value};
 use crate::effect::EffectParamValue;
+use crate::identity::SourceIdentity;
 use crate::sequence::{CompositionGraphNodeKind, EffectGraphEdge, SequenceCompositionGraph};
 use crate::values::Color;
 use indexmap::IndexMap;
@@ -20,7 +21,7 @@ pub enum BuiltinOperator {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct OperatorDefinitionId(pub String);
+pub struct OperatorDefinitionId(pub SourceIdentity);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OperatorRef {
@@ -55,7 +56,7 @@ pub enum OperatorImplementation {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct OperatorDefinition {
-    pub id: OperatorDefinitionId,
+    pub id: OperatorRef,
     pub source_name: String,
     pub declaration_name: String,
     pub display_name: String,
@@ -164,7 +165,7 @@ fn definition(
     implementation: OperatorImplementation,
 ) -> OperatorDefinition {
     OperatorDefinition {
-        id: OperatorDefinitionId(source_name.to_string()),
+        id: OperatorRef::Builtin(builtin.clone()),
         source_name: source_name.to_string(),
         declaration_name: declaration_name.to_string(),
         display_name: display_name.to_string(),
@@ -292,8 +293,8 @@ pub fn custom_operator_definition(
 ) -> OperatorDefinition {
     let declaration_name = compiled.name().as_str().to_string();
     OperatorDefinition {
-        source_name: id.0.clone(),
-        id,
+        source_name: id.0.object().to_string(),
+        id: OperatorRef::Custom(id),
         display_name: declaration_name.clone(),
         declaration_name,
         inputs: compiled
@@ -576,7 +577,7 @@ pub fn effect_param_matches_type(value: &EffectParamValue, ty: &Type) -> bool {
 pub fn operator_reference_name(reference: &OperatorRef) -> &str {
     match reference {
         OperatorRef::Builtin(builtin) => builtin.definition().source_name.as_str(),
-        OperatorRef::Custom(id) => id.0.as_str(),
+        OperatorRef::Custom(id) => id.0.object(),
     }
 }
 

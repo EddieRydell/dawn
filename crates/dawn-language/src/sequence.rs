@@ -2,12 +2,13 @@ use crate::dsl::types::Identifier;
 use crate::effect::{
     EffectDefinitionId, EffectInst, EffectInstId, EffectParamValue, EffectScope, EffectTarget,
 };
+use crate::identity::SourceIdentity;
 use crate::operator::GraphOperatorNode;
 use crate::values::{Color, Curve, DawnDuration, DawnTime};
 use indexmap::IndexMap;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct SequenceId(pub String);
+pub struct SequenceId(pub SourceIdentity);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sequence {
@@ -16,7 +17,6 @@ pub struct Sequence {
     pub frame_rate: u32,
     pub audio: SequenceAudio,
     pub mark_collections: Vec<MarkCollection>,
-    pub clips: Vec<SequenceClip>,
     pub layers: Vec<SequenceLayer>,
     pub effects: Vec<EffectInst>,
     pub composition_graph: SequenceCompositionGraph,
@@ -128,9 +128,23 @@ pub struct AutomationClipId(pub u32);
 #[derive(Clone, Debug, PartialEq)]
 pub struct AutomationBinding {
     pub target: AutomationTarget,
-    pub effect_id: EffectInstId,
-    pub param: Identifier,
     pub mapping: AutomationMapping,
+}
+
+impl AutomationBinding {
+    pub fn effect_param(&self) -> Option<(&EffectInstId, &Identifier)> {
+        match &self.target {
+            AutomationTarget::EffectParam { effect_id, param } => Some((effect_id, param)),
+            AutomationTarget::CompositionNodeParam { .. } => None,
+        }
+    }
+
+    pub fn composition_node_param(&self) -> Option<(&CompositionGraphNodeId, &Identifier)> {
+        match &self.target {
+            AutomationTarget::CompositionNodeParam { node_id, param } => Some((node_id, param)),
+            AutomationTarget::EffectParam { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
