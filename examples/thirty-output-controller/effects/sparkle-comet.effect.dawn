@@ -1,7 +1,7 @@
 effect SparkleComet {
-  param curve<color> gradient;
-  param curve<float> position;
-  param curve<float> intensity;
+  param gradient gradient;
+  param curve position;
+  param curve intensity;
   param enum color_mode { gradient_tail, bright_head, rainbow_hue } = gradient_tail;
   param color head_color = #ffffff;
   param bool reverse = false;
@@ -37,7 +37,7 @@ effect SparkleComet {
 
     float level = max(trail, core);
     level = max(level, sparkle * trail * clamp(sparkle_gain, 0.0, 1.0));
-    level = level * curve_float_clamped(intensity, progress(), 0.0, 1.0);
+    level = level * curve_clamped(intensity, progress(), 0.0, 1.0);
 
     color value = gradient[clamp(1.0 - distance / max(0.000000001, tail_width), 0.0, 1.0)];
     if (color_mode == bright_head) {

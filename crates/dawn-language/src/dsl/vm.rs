@@ -6,7 +6,7 @@ use super::bytecode::{
 use super::types::{Identifier, Type, Value};
 use super::types::{TargetItemValue, TargetItemsValue, TargetPixelValue, TargetValue};
 use super::{CompiledEffect, CompiledOperator, EffectKind, ParamDecl};
-use crate::values::{Color, Curve, CurveValue, Marks};
+use crate::values::{Color, Curve, Gradient, Marks};
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -70,19 +70,8 @@ pub struct BoundParams {
 
 #[derive(Debug, Default)]
 pub struct DslBindCache {
-    curves: HashMap<CurveCacheKey, Arc<PreparedCurve>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct CurveCacheKey {
-    ptr: usize,
-    kind: CurveCacheKind,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum CurveCacheKind {
-    Float,
-    Color,
+    curves: HashMap<usize, Arc<PreparedCurve>>,
+    gradients: HashMap<usize, Arc<PreparedGradient>>,
 }
 
 #[derive(Clone, Debug)]
@@ -97,12 +86,13 @@ enum BoundParamValue {
     TargetItems(Arc<TargetItemsValue>),
     TargetItem(Arc<TargetItemValue>),
     Curve(Arc<PreparedCurve>),
+    Gradient(Arc<PreparedGradient>),
     Array(Arc<Vec<Value>>),
     Enum(Identifier),
 }
 
 impl BoundParamValue {
-    fn from_value(ty: &Type, value: Value, cache: &mut DslBindCache) -> Self {
+    fn from_value(_ty: &Type, value: Value, cache: &mut DslBindCache) -> Self {
         match value {
             Value::Void => Self::Void,
             Value::Int(value) => Self::Int(value),
@@ -113,7 +103,8 @@ impl BoundParamValue {
             Value::Target(value) => Self::Target(value),
             Value::TargetItems(value) => Self::TargetItems(value),
             Value::TargetItem(value) => Self::TargetItem(value),
-            Value::Curve(value) => Self::Curve(cache.prepared_curve(ty, value)),
+            Value::Curve(value) => Self::Curve(cache.prepared_curve(value)),
+            Value::Gradient(value) => Self::Gradient(cache.prepared_gradient(value)),
             Value::Array(value) => Self::Array(value),
             Value::Enum(value) => Self::Enum(value),
         }
@@ -131,6 +122,7 @@ impl BoundParamValue {
             Self::TargetItems(value) => RuntimeValue::TargetItems(Arc::clone(value)),
             Self::TargetItem(value) => RuntimeValue::TargetItem(Arc::clone(value)),
             Self::Curve(value) => RuntimeValue::PreparedCurve(Arc::clone(value)),
+            Self::Gradient(value) => RuntimeValue::PreparedGradient(Arc::clone(value)),
             Self::Array(value) => RuntimeValue::Array(Arc::clone(value)),
             Self::Enum(value) => RuntimeValue::Enum(value.clone()),
         }
@@ -138,44 +130,42 @@ impl BoundParamValue {
 }
 
 impl DslBindCache {
-    fn prepared_curve(&mut self, ty: &Type, raw: Arc<Curve>) -> Arc<PreparedCurve> {
-        let key = CurveCacheKey {
-            ptr: Arc::as_ptr(&raw).cast::<()>() as usize,
-            kind: CurveCacheKind::from_type(ty),
-        };
+    fn prepared_curve(&mut self, raw: Arc<Curve>) -> Arc<PreparedCurve> {
+        let key = Arc::as_ptr(&raw).cast::<()>() as usize;
         if let Some(curve) = self.curves.get(&key) {
             return Arc::clone(curve);
         }
-        let curve = Arc::new(PreparedCurve::new(ty, raw));
+        let curve = Arc::new(PreparedCurve::new(raw));
         self.curves.insert(key, Arc::clone(&curve));
         curve
     }
-}
 
-impl CurveCacheKind {
-    fn from_type(ty: &Type) -> Self {
-        match ty {
-            Type::Curve(inner) if matches!(inner.as_ref(), Type::Color) => Self::Color,
-            _ => Self::Float,
+    fn prepared_gradient(&mut self, raw: Arc<Gradient>) -> Arc<PreparedGradient> {
+        let key = Arc::as_ptr(&raw).cast::<()>() as usize;
+        if let Some(gradient) = self.gradients.get(&key) {
+            return Arc::clone(gradient);
         }
+        let gradient = Arc::new(PreparedGradient::new(raw));
+        self.gradients.insert(key, Arc::clone(&gradient));
+        gradient
     }
 }
 
 #[derive(Clone, Debug)]
-enum PreparedCurve {
-    Float {
-        raw: Arc<Curve>,
-        segments: Vec<FloatCurveSegment>,
-        crossings: PreparedCurveCrossings,
-    },
-    Color {
-        raw: Arc<Curve>,
-        segments: Vec<ColorCurveSegment>,
-    },
+struct PreparedCurve {
+    raw: Arc<Curve>,
+    segments: Vec<CurveSegment>,
+    crossings: PreparedCurveCrossings,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedGradient {
+    raw: Arc<Gradient>,
+    segments: Vec<GradientSegment>,
 }
 
 #[derive(Clone, Copy, Debug)]
-struct FloatCurveSegment {
+struct CurveSegment {
     start_position: f64,
     end_position: f64,
     start_value: f64,
@@ -183,7 +173,7 @@ struct FloatCurveSegment {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ColorCurveSegment {
+struct GradientSegment {
     start_position: f64,
     end_position: f64,
     start_value: Color,
@@ -206,28 +196,29 @@ struct CrossingSegment {
 }
 
 impl PreparedCurve {
-    fn new(ty: &Type, raw: Arc<Curve>) -> Self {
-        match ty {
-            Type::Curve(inner) if matches!(inner.as_ref(), Type::Color) => Self::Color {
-                segments: prepare_color_segments(&raw),
-                raw,
-            },
-            _ => {
-                let segments = prepare_float_segments(&raw);
-                let crossings = prepare_curve_crossings(&segments);
-                Self::Float {
-                    raw,
-                    segments,
-                    crossings,
-                }
-            }
+    fn new(raw: Arc<Curve>) -> Self {
+        let segments = prepare_float_segments(&raw);
+        let crossings = prepare_curve_crossings(&segments);
+        Self {
+            raw,
+            segments,
+            crossings,
         }
     }
 
     fn raw(&self) -> Arc<Curve> {
-        match self {
-            Self::Float { raw, .. } | Self::Color { raw, .. } => Arc::clone(raw),
-        }
+        Arc::clone(&self.raw)
+    }
+}
+
+impl PreparedGradient {
+    fn new(raw: Arc<Gradient>) -> Self {
+        let segments = prepare_gradient_segments(&raw);
+        Self { raw, segments }
+    }
+
+    fn raw(&self) -> Arc<Gradient> {
+        Arc::clone(&self.raw)
     }
 }
 
@@ -397,7 +388,9 @@ enum RuntimeValue {
     TargetItems(Arc<TargetItemsValue>),
     TargetItem(Arc<TargetItemValue>),
     Curve(Arc<Curve>),
+    Gradient(Arc<Gradient>),
     PreparedCurve(Arc<PreparedCurve>),
+    PreparedGradient(Arc<PreparedGradient>),
     Array(Arc<Vec<Value>>),
     Enum(Identifier),
 }
@@ -415,6 +408,7 @@ impl RuntimeValue {
             Value::TargetItems(value) => Self::TargetItems(Arc::clone(value)),
             Value::TargetItem(value) => Self::TargetItem(Arc::clone(value)),
             Value::Curve(value) => Self::Curve(Arc::clone(value)),
+            Value::Gradient(value) => Self::Gradient(Arc::clone(value)),
             Value::Array(value) => Self::Array(Arc::clone(value)),
             Value::Enum(value) => Self::Enum(value.clone()),
         }
@@ -434,7 +428,9 @@ fn clone_runtime(value: &RuntimeValue) -> RuntimeValue {
         RuntimeValue::TargetItems(value) => RuntimeValue::TargetItems(Arc::clone(value)),
         RuntimeValue::TargetItem(value) => RuntimeValue::TargetItem(Arc::clone(value)),
         RuntimeValue::Curve(value) => RuntimeValue::Curve(Arc::clone(value)),
+        RuntimeValue::Gradient(value) => RuntimeValue::Gradient(Arc::clone(value)),
         RuntimeValue::PreparedCurve(value) => RuntimeValue::PreparedCurve(Arc::clone(value)),
+        RuntimeValue::PreparedGradient(value) => RuntimeValue::PreparedGradient(Arc::clone(value)),
         RuntimeValue::Array(value) => RuntimeValue::Array(Arc::clone(value)),
         RuntimeValue::Enum(value) => RuntimeValue::Enum(value.clone()),
     }
@@ -569,15 +565,7 @@ impl<'a> Vm<'a> {
                 } => {
                     let position = self.float(*position)?;
                     let curve = self.prepared_curve_param(*param)?;
-                    match dst {
-                        ValueSlot::Float(dst) => {
-                            self.set_float(*dst, sample_prepared_float_curve(curve, position)?)?;
-                        }
-                        ValueSlot::Color(dst) => {
-                            self.set_color(*dst, sample_prepared_color_curve(curve, position)?)?;
-                        }
-                        _ => self.set_value(*dst, sample_prepared_curve(curve, position)?)?,
-                    }
+                    self.set_float(*dst, sample_prepared_curve(curve, position)?)?;
                 }
                 Instruction::SignalSample {
                     dst,
@@ -910,11 +898,7 @@ impl<'a> Vm<'a> {
                     let position = self.float(*position)?;
                     let min = self.float(*min)?;
                     let max = self.float(*max)?;
-                    let sampled = RuntimeValue::from_value(&sample_curve(curve, position));
-                    self.set_float(
-                        *dst,
-                        to_float_runtime(&sampled, self.params)?.clamp(min, max),
-                    )?;
+                    self.set_float(*dst, sample_curve(curve, position).clamp(min, max))?;
                 }
                 Instruction::CurveParamFloatClamped {
                     dst,
@@ -927,12 +911,12 @@ impl<'a> Vm<'a> {
                     let min = self.float(*min)?;
                     let max = self.float(*max)?;
                     let curve = self.prepared_curve_param(*param)?;
-                    let value = sample_prepared_float_curve(curve, position)?.clamp(min, max);
+                    let value = sample_prepared_curve(curve, position)?.clamp(min, max);
                     self.set_float(*dst, value)?;
                 }
-                Instruction::CurveColorScaled {
+                Instruction::GradientColorScaled {
                     dst,
-                    curve,
+                    gradient,
                     position,
                     scale,
                 } => {
@@ -940,17 +924,14 @@ impl<'a> Vm<'a> {
                     if scale <= 0.0 {
                         self.set_color(*dst, black())?;
                     } else {
-                        let curve = to_curve_runtime(self.ref_value(*curve)?, self.params)?;
+                        let gradient =
+                            to_gradient_runtime(self.ref_value(*gradient)?, self.params)?;
                         let position = self.float(*position)?;
-                        let Value::Color(color) = sample_curve(curve, position) else {
-                            return Err(RuntimeError::new(
-                                "curve_color_scaled requires color curve",
-                            ));
-                        };
+                        let color = sample_gradient(gradient, position)?;
                         self.set_color(*dst, scale_color(color, scale))?;
                     }
                 }
-                Instruction::CurveParamColorScaled {
+                Instruction::GradientParamColorScaled {
                     dst,
                     param,
                     position,
@@ -961,8 +942,8 @@ impl<'a> Vm<'a> {
                         self.set_color(*dst, black())?;
                     } else {
                         let position = self.float(*position)?;
-                        let curve = self.prepared_curve_param(*param)?;
-                        let color = sample_prepared_color_curve(curve, position)?;
+                        let gradient = self.prepared_gradient_param(*param)?;
+                        let color = sample_prepared_gradient(gradient, position)?;
                         self.set_color(*dst, scale_color(color, scale))?;
                     }
                 }
@@ -1494,13 +1475,25 @@ impl<'a> Vm<'a> {
             }
             RuntimeValue::Curve(curve) => {
                 let position = to_float_runtime(index, self.params)?;
-                Ok(RuntimeValue::from_value(&sample_curve(curve, position)))
+                Ok(RuntimeValue::Float(sample_curve(curve, position)))
             }
             RuntimeValue::PreparedCurve(curve) => {
                 let position = to_float_runtime(index, self.params)?;
-                sample_prepared_curve(curve, position)
+                Ok(RuntimeValue::Float(sample_prepared_curve(curve, position)?))
             }
-            _ => Err(RuntimeError::new("index target is not an array or curve")),
+            RuntimeValue::Gradient(gradient) => {
+                let position = to_float_runtime(index, self.params)?;
+                Ok(RuntimeValue::Color(sample_gradient(gradient, position)?))
+            }
+            RuntimeValue::PreparedGradient(gradient) => {
+                let position = to_float_runtime(index, self.params)?;
+                Ok(RuntimeValue::Color(sample_prepared_gradient(
+                    gradient, position,
+                )?))
+            }
+            _ => Err(RuntimeError::new(
+                "index target is not an array, curve, or gradient",
+            )),
         }
     }
 
@@ -1516,6 +1509,22 @@ impl<'a> Vm<'a> {
         match self.params.values.get(param) {
             Some(BoundParamValue::Curve(curve)) => Ok(curve),
             Some(_) => Err(RuntimeError::new("expected curve")),
+            None => Err(RuntimeError::new("invalid param slot")),
+        }
+    }
+
+    fn prepared_gradient_param(&self, param: usize) -> Result<&PreparedGradient, RuntimeError> {
+        match self.scratch.param_overrides.get(param) {
+            Some(Some(RuntimeValue::PreparedGradient(gradient))) => return Ok(gradient),
+            Some(Some(RuntimeValue::Gradient(_))) => {
+                return Err(RuntimeError::new("unprepared gradient param override"));
+            }
+            Some(Some(_)) => return Err(RuntimeError::new("expected gradient")),
+            _ => {}
+        }
+        match self.params.values.get(param) {
+            Some(BoundParamValue::Gradient(gradient)) => Ok(gradient),
+            Some(_) => Err(RuntimeError::new("expected gradient")),
             None => Err(RuntimeError::new("invalid param slot")),
         }
     }
@@ -1632,6 +1641,8 @@ fn runtime_to_value(value: RuntimeValue) -> Value {
         RuntimeValue::TargetItem(value) => Value::TargetItem(value),
         RuntimeValue::Curve(value) => Value::Curve(value),
         RuntimeValue::PreparedCurve(value) => Value::Curve(value.raw()),
+        RuntimeValue::Gradient(value) => Value::Gradient(value),
+        RuntimeValue::PreparedGradient(value) => Value::Gradient(value.raw()),
         RuntimeValue::Array(value) => Value::Array(value),
         RuntimeValue::Enum(value) => Value::Enum(value),
     }
@@ -1707,10 +1718,20 @@ fn to_curve_runtime<'a>(
     let _ = params;
     match value {
         RuntimeValue::Curve(curve) => Ok(curve),
-        RuntimeValue::PreparedCurve(curve) => match curve.as_ref() {
-            PreparedCurve::Float { raw, .. } | PreparedCurve::Color { raw, .. } => Ok(raw),
-        },
+        RuntimeValue::PreparedCurve(curve) => Ok(&curve.raw),
         _ => Err(RuntimeError::new("expected curve")),
+    }
+}
+
+fn to_gradient_runtime<'a>(
+    value: &'a RuntimeValue,
+    params: &'a BoundParams,
+) -> Result<&'a Gradient, RuntimeError> {
+    let _ = params;
+    match value {
+        RuntimeValue::Gradient(gradient) => Ok(gradient),
+        RuntimeValue::PreparedGradient(gradient) => Ok(&gradient.raw),
+        _ => Err(RuntimeError::new("expected gradient")),
     }
 }
 
@@ -1842,55 +1863,43 @@ fn runtime_refs_equal(left: &RuntimeValue, right: &RuntimeValue) -> bool {
     }
 }
 
-fn prepare_float_segments(curve: &Curve) -> Vec<FloatCurveSegment> {
+fn prepare_float_segments(curve: &Curve) -> Vec<CurveSegment> {
     let Some(first) = curve.points.first() else {
         return Vec::new();
     };
     let mut previous = first;
     let mut segments = Vec::with_capacity(curve.points.len());
     for point in &curve.points {
-        let (CurveValue::Float(start_value), CurveValue::Float(end_value)) =
-            (&previous.value, &point.value)
-        else {
-            previous = point;
-            continue;
-        };
-        segments.push(FloatCurveSegment {
+        segments.push(CurveSegment {
             start_position: previous.position,
             end_position: point.position,
-            start_value: *start_value,
-            end_value: *end_value,
+            start_value: previous.value,
+            end_value: point.value,
         });
         previous = point;
     }
     segments
 }
 
-fn prepare_color_segments(curve: &Curve) -> Vec<ColorCurveSegment> {
-    let Some(first) = curve.points.first() else {
+fn prepare_gradient_segments(gradient: &Gradient) -> Vec<GradientSegment> {
+    let Some(first) = gradient.stops.first() else {
         return Vec::new();
     };
     let mut previous = first;
-    let mut segments = Vec::with_capacity(curve.points.len());
-    for point in &curve.points {
-        let (CurveValue::Color(start_value), CurveValue::Color(end_value)) =
-            (&previous.value, &point.value)
-        else {
-            previous = point;
-            continue;
-        };
-        segments.push(ColorCurveSegment {
+    let mut segments = Vec::with_capacity(gradient.stops.len());
+    for stop in &gradient.stops {
+        segments.push(GradientSegment {
             start_position: previous.position,
-            end_position: point.position,
-            start_value: *start_value,
-            end_value: *end_value,
+            end_position: stop.position,
+            start_value: previous.color,
+            end_value: stop.color,
         });
-        previous = point;
+        previous = stop;
     }
     segments
 }
 
-fn prepare_curve_crossings(segments: &[FloatCurveSegment]) -> PreparedCurveCrossings {
+fn prepare_curve_crossings(segments: &[CurveSegment]) -> PreparedCurveCrossings {
     let crossings = segments
         .iter()
         .map(|segment| CrossingSegment {
@@ -1915,27 +1924,8 @@ fn prepare_curve_crossings(segments: &[FloatCurveSegment]) -> PreparedCurveCross
     }
 }
 
-fn sample_prepared_curve(
-    curve: &PreparedCurve,
-    position: f64,
-) -> Result<RuntimeValue, RuntimeError> {
-    match curve {
-        PreparedCurve::Float { .. } => {
-            sample_prepared_float_curve(curve, position).map(RuntimeValue::Float)
-        }
-        PreparedCurve::Color { .. } => {
-            sample_prepared_color_curve(curve, position).map(RuntimeValue::Color)
-        }
-    }
-}
-
-fn sample_prepared_float_curve(curve: &PreparedCurve, position: f64) -> Result<f64, RuntimeError> {
-    let PreparedCurve::Float { segments, .. } = curve else {
-        return Err(RuntimeError::new(
-            "curve_float_clamped requires float curve",
-        ));
-    };
-    let Some(segment) = find_position_segment(segments, position) else {
+fn sample_prepared_curve(curve: &PreparedCurve, position: f64) -> Result<f64, RuntimeError> {
+    let Some(segment) = find_position_segment(&curve.segments, position) else {
         return Ok(0.0);
     };
     Ok(mix_float_segment(
@@ -1947,15 +1937,12 @@ fn sample_prepared_float_curve(curve: &PreparedCurve, position: f64) -> Result<f
     ))
 }
 
-fn sample_prepared_color_curve(
-    curve: &PreparedCurve,
+fn sample_prepared_gradient(
+    gradient: &PreparedGradient,
     position: f64,
 ) -> Result<Color, RuntimeError> {
-    let PreparedCurve::Color { segments, .. } = curve else {
-        return Err(RuntimeError::new("curve_color_scaled requires color curve"));
-    };
-    let Some(segment) = find_position_segment(segments, position) else {
-        return Err(RuntimeError::new("cannot sample empty color curve"));
+    let Some(segment) = find_position_segment(&gradient.segments, position) else {
+        return Err(RuntimeError::new("cannot sample empty gradient"));
     };
     Ok(mix_colors(
         segment.start_value,
@@ -1968,13 +1955,13 @@ trait PositionSegment {
     fn end_position(&self) -> f64;
 }
 
-impl PositionSegment for FloatCurveSegment {
+impl PositionSegment for CurveSegment {
     fn end_position(&self) -> f64 {
         self.end_position
     }
 }
 
-impl PositionSegment for ColorCurveSegment {
+impl PositionSegment for GradientSegment {
     fn end_position(&self) -> f64 {
         self.end_position
     }
@@ -2004,10 +1991,7 @@ fn segment_t(start_position: f64, end_position: f64, position: f64) -> f64 {
 }
 
 fn curve_crossing(curve: &PreparedCurve, value: f64, fallback: f64) -> Result<f64, RuntimeError> {
-    let PreparedCurve::Float { crossings, .. } = curve else {
-        return Err(RuntimeError::new("curve_crossing requires float curve"));
-    };
-    Ok(match crossings {
+    Ok(match &curve.crossings {
         PreparedCurveCrossings::Increasing(segments) => {
             let index = segments.partition_point(|segment| segment.end_value < value);
             crossing_at(segments.get(index), value).unwrap_or(fallback)
@@ -2057,39 +2041,38 @@ fn crossing_at(segment: Option<&CrossingSegment>, value: f64) -> Option<f64> {
     Some(segment.start_position + (segment.end_position - segment.start_position) * t)
 }
 
-fn sample_curve(curve: &Curve, position: f64) -> Value {
+fn sample_curve(curve: &Curve, position: f64) -> f64 {
     let Some(first) = curve.points.first() else {
-        return Value::Float(0.0);
+        return 0.0;
     };
     let mut previous = first;
     for point in &curve.points {
         if point.position >= position {
             let span = (point.position - previous.position).max(0.000000001);
             let t = ((position - previous.position) / span).clamp(0.0, 1.0);
-            return mix_curve_values(&previous.value, &point.value, t);
+            return previous.value + (point.value - previous.value) * t;
         }
         previous = point;
     }
-    curve_value_to_value(&previous.value)
+    previous.value
 }
 
-fn mix_curve_values(left: &CurveValue, right: &CurveValue, t: f64) -> Value {
-    match (left, right) {
-        (CurveValue::Float(left), CurveValue::Float(right)) => {
-            Value::Float(left + (right - left) * t)
+fn sample_gradient(gradient: &Gradient, position: f64) -> Result<Color, RuntimeError> {
+    let Some(first) = gradient.stops.first() else {
+        return Err(RuntimeError::new("cannot sample empty gradient"));
+    };
+    let mut previous = first;
+    for stop in &gradient.stops {
+        if stop.position >= position {
+            return Ok(mix_colors(
+                previous.color,
+                stop.color,
+                segment_t(previous.position, stop.position, position),
+            ));
         }
-        (CurveValue::Color(left), CurveValue::Color(right)) => {
-            Value::Color(mix_colors(*left, *right, t))
-        }
-        _ => curve_value_to_value(left),
+        previous = stop;
     }
-}
-
-fn curve_value_to_value(value: &CurveValue) -> Value {
-    match value {
-        CurveValue::Float(value) => Value::Float(*value),
-        CurveValue::Color(value) => Value::Color(*value),
-    }
+    Ok(previous.color)
 }
 
 fn mix_colors(left: Color, right: Color, t: f64) -> Color {

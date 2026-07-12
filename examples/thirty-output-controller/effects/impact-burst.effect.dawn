@@ -1,6 +1,6 @@
 effect ImpactBurst {
-  param curve<color> gradient;
-  param curve<float> intensity;
+  param gradient gradient;
+  param curve intensity;
   param enum direction { outward, inward } = outward;
   param enum color_mode { through_effect, from_center, from_edge } = through_effect;
   param float center_position = 0.5;
@@ -29,7 +29,7 @@ effect ImpactBurst {
     float ring = 1.0 - smoothstep(0.0, edge, abs(distance - radius));
     float glow = 1.0 - smoothstep(0.0, max(edge, glow_width), abs(distance - radius));
     float level = max(ring, glow * clamp(glow_level, 0.0, 1.0));
-    level = level * curve_float_clamped(intensity, progress(), 0.0, 1.0);
+    level = level * curve_clamped(intensity, progress(), 0.0, 1.0);
 
     float color_position = progress();
     if (color_mode == from_center) {
@@ -39,6 +39,6 @@ effect ImpactBurst {
       color_position = 1.0 - clamp(distance / max(0.000000001, end_radius), 0.0, 1.0);
     }
 
-    return curve_color_scaled(gradient, clamp(color_position, 0.0, 1.0), level);
+    return gradient_color_scaled(gradient, clamp(color_position, 0.0, 1.0), level);
   }
 }

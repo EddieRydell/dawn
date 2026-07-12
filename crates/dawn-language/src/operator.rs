@@ -565,7 +565,8 @@ pub fn effect_param_matches_type(value: &EffectParamValue, ty: &Type) -> bool {
         | (EffectParamValue::Bool(_), Type::Bool)
         | (EffectParamValue::Color(_), Type::Color)
         | (EffectParamValue::Marks(_), Type::Marks)
-        | (EffectParamValue::Curve(_), Type::Curve(_)) => true,
+        | (EffectParamValue::Curve(_), Type::Curve)
+        | (EffectParamValue::Gradient(_), Type::Gradient) => true,
         (EffectParamValue::Enum(value), Type::Enum(options)) => options.contains(value),
         (EffectParamValue::Array(values), Type::Array(item_type)) => values
             .iter()

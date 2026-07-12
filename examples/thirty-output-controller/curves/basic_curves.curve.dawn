@@ -1,576 +1,207 @@
 ease_down:
   type: curve
-  value_type: float
   points:
-  - time: 0.0
+  - position: 0.0
     value: 1.0
-  - time: 0.125
+  - position: 0.125
     value: 0.766
-  - time: 0.25
+  - position: 0.25
     value: 0.563
-  - time: 0.375
+  - position: 0.375
     value: 0.391
-  - time: 0.5
+  - position: 0.5
     value: 0.25
-  - time: 0.625
+  - position: 0.625
     value: 0.141
-  - time: 0.75
+  - position: 0.75
     value: 0.063
-  - time: 0.875
+  - position: 0.875
     value: 0.016
-  - time: 1.0
+  - position: 1.0
     value: 0.0
 ease_up:
   type: curve
-  value_type: float
   points:
-  - time: 0.0
+  - position: 0.0
     value: 0.0
-  - time: 0.125
+  - position: 0.125
     value: 0.234
-  - time: 0.25
+  - position: 0.25
     value: 0.438
-  - time: 0.375
+  - position: 0.375
     value: 0.609
-  - time: 0.5
+  - position: 0.5
     value: 0.75
-  - time: 0.625
+  - position: 0.625
     value: 0.859
-  - time: 0.75
+  - position: 0.75
     value: 0.938
-  - time: 0.875
+  - position: 0.875
     value: 0.984
-  - time: 1.0
+  - position: 1.0
     value: 1.0
 ease_down_in:
   type: curve
-  value_type: float
   points:
-  - time: 0.0
+  - position: 0.0
     value: 1.0
-  - time: 0.125
+  - position: 0.125
     value: 0.984
-  - time: 0.25
+  - position: 0.25
     value: 0.938
-  - time: 0.375
+  - position: 0.375
     value: 0.859
-  - time: 0.5
+  - position: 0.5
     value: 0.75
-  - time: 0.625
+  - position: 0.625
     value: 0.609
-  - time: 0.75
+  - position: 0.75
     value: 0.438
-  - time: 0.875
+  - position: 0.875
     value: 0.234
-  - time: 1.0
+  - position: 1.0
     value: 0.0
 ease_up_in:
   type: curve
-  value_type: float
   points:
-  - time: 0.0
+  - position: 0.0
     value: 0.0
-  - time: 0.125
+  - position: 0.125
     value: 0.016
-  - time: 0.25
+  - position: 0.25
     value: 0.063
-  - time: 0.375
+  - position: 0.375
     value: 0.141
-  - time: 0.5
+  - position: 0.5
     value: 0.25
-  - time: 0.625
+  - position: 0.625
     value: 0.391
-  - time: 0.75
+  - position: 0.75
     value: 0.563
-  - time: 0.875
+  - position: 0.875
     value: 0.766
-  - time: 1.0
+  - position: 1.0
     value: 1.0
 linear_down:
   type: curve
-  value_type: float
   points:
-  - time: 0.0
+  - position: 0.0
     value: 1.0
-  - time: 1.0
+  - position: 1.0
     value: 0.0
 linear_up:
   type: curve
-  value_type: float
   points:
-  - time: 0.0
+  - position: 0.0
     value: 0.0
-  - time: 1.0
+  - position: 1.0
     value: 1.0
 soft_pulse:
   type: curve
-  value_type: float
   points:
-  - time: 0.0
+  - position: 0.0
     value: 0.0
-  - time: 0.15
+  - position: 0.15
     value: 0.65
-  - time: 0.32
+  - position: 0.32
     value: 1.0
-  - time: 0.6
+  - position: 0.6
     value: 0.42
-  - time: 1.0
+  - position: 1.0
     value: 0.0
 hard_pulse:
   type: curve
-  value_type: float
   points:
-  - time: 0.0
+  - position: 0.0
     value: 1.0
-  - time: 0.08
+  - position: 0.08
     value: 1.0
-  - time: 0.22
+  - position: 0.22
     value: 0.45
-  - time: 1.0
+  - position: 1.0
     value: 0.0
 center_peak:
   type: curve
-  value_type: float
   points:
-  - time: 0.0
+  - position: 0.0
     value: 0.0
-  - time: 0.25
+  - position: 0.25
     value: 0.5
-  - time: 0.5
+  - position: 0.5
     value: 1.0
-  - time: 0.75
+  - position: 0.75
     value: 0.5
-  - time: 1.0
+  - position: 1.0
     value: 0.0
 hold_then_drop:
   type: curve
-  value_type: float
   points:
-  - time: 0.0
+  - position: 0.0
     value: 1.0
-  - time: 0.6
+  - position: 0.6
     value: 1.0
-  - time: 0.78
+  - position: 0.78
     value: 0.35
-  - time: 1.0
+  - position: 1.0
     value: 0.0
 drop_then_hold:
   type: curve
-  value_type: float
   points:
-  - time: 0.0
+  - position: 0.0
     value: 1.0
-  - time: 0.18
+  - position: 0.18
     value: 0.35
-  - time: 0.4
+  - position: 0.4
     value: 0.0
-  - time: 1.0
+  - position: 1.0
     value: 0.0
 hue_sweep:
   type: curve
-  value_type: float
   points:
-  - time: 0.0
+  - position: 0.0
     value: 0.0
-  - time: 0.2
+  - position: 0.2
     value: 55.0
-  - time: 0.4
+  - position: 0.4
     value: 130.0
-  - time: 0.65
+  - position: 0.65
     value: 220.0
-  - time: 0.85
+  - position: 0.85
     value: 300.0
-  - time: 1.0
+  - position: 1.0
     value: 360.0
 hue_warm_shift:
   type: curve
-  value_type: float
   points:
-  - time: 0.0
+  - position: 0.0
     value: 18.0
-  - time: 0.35
+  - position: 0.35
     value: 38.0
-  - time: 0.7
+  - position: 0.7
     value: 350.0
-  - time: 1.0
+  - position: 1.0
     value: 330.0
 hue_cool_shift:
   type: curve
-  value_type: float
   points:
-  - time: 0.0
+  - position: 0.0
     value: 185.0
-  - time: 0.35
+  - position: 0.35
     value: 210.0
-  - time: 0.7
+  - position: 0.7
     value: 255.0
-  - time: 1.0
+  - position: 1.0
     value: 285.0
 hue_ping_pong:
   type: curve
-  value_type: float
   points:
-  - time: 0.0
+  - position: 0.0
     value: 300.0
-  - time: 0.25
+  - position: 0.25
     value: 210.0
-  - time: 0.5
+  - position: 0.5
     value: 120.0
-  - time: 0.75
+  - position: 0.75
     value: 210.0
-  - time: 1.0
+  - position: 1.0
     value: 300.0
-warm_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#fff4d6'
-  - time: 0.35
-    value: '#ffb000'
-  - time: 1.0
-    value: '#ff2a00'
-cool_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#d9ffff'
-  - time: 0.45
-    value: '#00a6ff'
-  - time: 1.0
-    value: '#3d00ff'
-club_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#ffffff'
-  - time: 0.25
-    value: '#ff2bd6'
-  - time: 0.6
-    value: '#2de2ff'
-  - time: 1.0
-    value: '#7cff00'
-fire_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#ffffff'
-  - time: 0.18
-    value: '#ffd15c'
-  - time: 0.55
-    value: '#ff4a00'
-  - time: 1.0
-    value: '#1a0000'
-ice_glass_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#ffffff'
-  - time: 0.18
-    value: '#b9f7ff'
-  - time: 0.55
-    value: '#40b8ff'
-  - time: 1.0
-    value: '#1020a8'
-electric_blue_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#f8ffff'
-  - time: 0.18
-    value: '#00f0ff'
-  - time: 0.52
-    value: '#0066ff'
-  - time: 1.0
-    value: '#050044'
-neon_candy_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#ffffff'
-  - time: 0.2
-    value: '#ff2bd6'
-  - time: 0.5
-    value: '#00f5ff'
-  - time: 0.75
-    value: '#fff200'
-  - time: 1.0
-    value: '#7cff00'
-laser_magenta_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#ffffff'
-  - time: 0.22
-    value: '#ff55ff'
-  - time: 0.58
-    value: '#ba00ff'
-  - time: 1.0
-    value: '#180020'
-acid_green_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#f6ffd6'
-  - time: 0.28
-    value: '#b7ff00'
-  - time: 0.65
-    value: '#00ff66'
-  - time: 1.0
-    value: '#003315'
-sodium_vapor_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#fff8df'
-  - time: 0.35
-    value: '#ffb300'
-  - time: 0.72
-    value: '#ff5a00'
-  - time: 1.0
-    value: '#3b0700'
-molten_gold_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#ffffff'
-  - time: 0.2
-    value: '#ffe680'
-  - time: 0.5
-    value: '#ff9d00'
-  - time: 0.78
-    value: '#b83a00'
-  - time: 1.0
-    value: '#120300'
-ember_core_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#fff0d8'
-  - time: 0.16
-    value: '#ff7a00'
-  - time: 0.5
-    value: '#e00020'
-  - time: 0.82
-    value: '#4d0015'
-  - time: 1.0
-    value: '#000000'
-plasma_storm_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#ffffff'
-  - time: 0.18
-    value: '#55ffea'
-  - time: 0.42
-    value: '#3355ff'
-  - time: 0.7
-    value: '#ff00aa'
-  - time: 1.0
-    value: '#20003f'
-aurora_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#062b31'
-  - time: 0.2
-    value: '#00d2a8'
-  - time: 0.48
-    value: '#77ff66'
-  - time: 0.72
-    value: '#5b7cff'
-  - time: 1.0
-    value: '#2a005f'
-sunset_pop_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#fff1a8'
-  - time: 0.25
-    value: '#ff8a00'
-  - time: 0.52
-    value: '#ff006a'
-  - time: 0.78
-    value: '#7a2cff'
-  - time: 1.0
-    value: '#050019'
-deep_ocean_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#d8ffff'
-  - time: 0.25
-    value: '#00c2c7'
-  - time: 0.55
-    value: '#0065a8'
-  - time: 1.0
-    value: '#000b2e'
-mint_violet_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#eaffff'
-  - time: 0.25
-    value: '#7cffc7'
-  - time: 0.55
-    value: '#48a0ff'
-  - time: 1.0
-    value: '#b33cff'
-hot_pink_lime_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#ffffff'
-  - time: 0.22
-    value: '#ff1493'
-  - time: 0.55
-    value: '#ffea00'
-  - time: 1.0
-    value: '#39ff14'
-redline_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#ffffff'
-  - time: 0.18
-    value: '#ff3030'
-  - time: 0.55
-    value: '#b00000'
-  - time: 1.0
-    value: '#120000'
-white_strobe_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#ffffff'
-  - time: 0.3
-    value: '#f3fbff'
-  - time: 0.72
-    value: '#b9cfff'
-  - time: 1.0
-    value: '#000000'
-blacklight_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#1b003d'
-  - time: 0.3
-    value: '#5600ff'
-  - time: 0.62
-    value: '#ff00f5'
-  - time: 1.0
-    value: '#00124d'
-cyberpunk_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#00fff0'
-  - time: 0.25
-    value: '#005eff'
-  - time: 0.5
-    value: '#ff00cc'
-  - time: 0.76
-    value: '#ffea00'
-  - time: 1.0
-    value: '#050505'
-pastel_sherbet_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#fff2f8'
-  - time: 0.25
-    value: '#ff9fd6'
-  - time: 0.5
-    value: '#ffd166'
-  - time: 0.75
-    value: '#8cffc1'
-  - time: 1.0
-    value: '#9db6ff'
-prism_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#ff0033'
-  - time: 0.18
-    value: '#ff9d00'
-  - time: 0.34
-    value: '#fff200'
-  - time: 0.5
-    value: '#00ff66'
-  - time: 0.68
-    value: '#00b7ff'
-  - time: 0.84
-    value: '#4b3cff'
-  - time: 1.0
-    value: '#d600ff'
-ghost_blue_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#ffffff'
-  - time: 0.22
-    value: '#d8f7ff'
-  - time: 0.58
-    value: '#7ca7ff'
-  - time: 1.0
-    value: '#060c35'
-royal_purple_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#fff7ff'
-  - time: 0.25
-    value: '#c464ff'
-  - time: 0.58
-    value: '#6c00d4'
-  - time: 1.0
-    value: '#120022'
-toxic_sludge_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#f8ff9d'
-  - time: 0.28
-    value: '#a7ff00'
-  - time: 0.6
-    value: '#00b84d'
-  - time: 1.0
-    value: '#1b2b00'
-arctic_pink_gradient:
-  type: curve
-  value_type: color
-  points:
-  - time: 0.0
-    value: '#ffffff'
-  - time: 0.24
-    value: '#9ff7ff'
-  - time: 0.55
-    value: '#7d7cff'
-  - time: 1.0
-    value: '#ff66d8'

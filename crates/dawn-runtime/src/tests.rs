@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use dawn_language::dsl::{Identifier, compile_effects, compile_operators};
 use dawn_language::effect::{
-    CurveDefinition, CurveId, CurveSource, EffectDefinition, EffectDefinitionId, EffectInst,
-    EffectInstId, EffectParamValue, EffectScope, EffectTarget,
+    CurveId, CurveSource, EffectDefinition, EffectDefinitionId, EffectInst, EffectInstId,
+    EffectParamValue, EffectScope, EffectTarget, GradientDefinition, GradientId, GradientSource,
 };
 use dawn_language::identity::SourceIdentity;
 use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
@@ -22,8 +22,8 @@ use dawn_language::setup::{
     PatchId, Setup, SetupId,
 };
 use dawn_language::values::{
-    Color, Curve, CurvePoint, CurveValue, DawnDuration, DawnTime, DistanceSpan, Point3, Rotation3,
-    Scale3,
+    Color, Curve, CurvePoint, DawnDuration, DawnTime, DistanceSpan, Gradient, GradientStop, Point3,
+    Rotation3, Scale3,
 };
 use indexmap::IndexMap;
 
@@ -283,7 +283,7 @@ fn missing_references_fail_and_automation_prepares() {
         1.0,
         1,
         EffectScope::WholeTarget,
-        "CurveColor",
+        "GradientColor",
         params,
     )]);
     assert!(matches!(prepare(sequence), Err(RenderError::MissingCurve)));
@@ -319,11 +319,11 @@ fn missing_references_fail_and_automation_prepares() {
             points: vec![
                 CurvePoint {
                     position: 0.0,
-                    value: CurveValue::Float(0.0),
+                    value: 0.0,
                 },
                 CurvePoint {
                     position: 1.0,
-                    value: CurveValue::Float(1.0),
+                    value: 1.0,
                 },
             ],
         },
@@ -395,26 +395,26 @@ fn register_vm_uses_prepared_curve_ops() {
                 points: vec![
                     CurvePoint {
                         position: 0.0,
-                        value: CurveValue::Float(0.0),
+                        value: 0.0,
                     },
                     CurvePoint {
                         position: 1.0,
-                        value: CurveValue::Float(1.0),
+                        value: 1.0,
                     },
                 ],
             })),
         ),
         (
             ident("palette"),
-            EffectParamValue::Curve(CurveSource::Inline(Curve {
-                points: vec![
-                    CurvePoint {
+            EffectParamValue::Gradient(GradientSource::Inline(Gradient {
+                stops: vec![
+                    GradientStop {
                         position: 0.0,
-                        value: CurveValue::Color(color(0, 0, 0)),
+                        color: color(0, 0, 0),
                     },
-                    CurvePoint {
+                    GradientStop {
                         position: 1.0,
-                        value: CurveValue::Color(color(0, 200, 0)),
+                        color: color(0, 200, 0),
                     },
                 ],
             })),
@@ -433,13 +433,13 @@ fn register_vm_uses_prepared_curve_ops() {
         &mut project,
         "CurveOps",
         "effect CurveOps {
-          param curve<float> level;
-          param curve<color> palette;
+          param curve level;
+          param gradient palette;
           color sample() {
-            float amount = curve_float_clamped(level, 0.5, 0.0, 1.0);
+            float amount = curve_clamped(level, 0.5, 0.0, 1.0);
             float position = curve_crossing(level, 0.5, 0.0);
-            color zero = curve_color_scaled(palette, position, 0.0);
-            return mix(zero, curve_color_scaled(palette, position, amount), 1.0);
+            color zero = gradient_color_scaled(palette, position, 0.0);
+            return mix(zero, gradient_color_scaled(palette, position, amount), 1.0);
           }
         }",
     );
@@ -705,8 +705,8 @@ fn definitions() -> ProjectDefinitionStores {
             "effect MarkCountColor { param marks beats; color sample() { return rgb(mark_count(beats) / 255.0, 0.0, 0.0); } }",
         ),
         (
-            "CurveColor",
-            "effect CurveColor { param curve<color> gradient; color sample() { return gradient[0.0]; } }",
+            "GradientColor",
+            "effect GradientColor { param gradient gradient; color sample() { return gradient[0.0]; } }",
         ),
     ] {
         let compiled = compile_effects(source).unwrap().into_iter().next().unwrap();
@@ -719,14 +719,15 @@ fn definitions() -> ProjectDefinitionStores {
     ProjectDefinitionStores {
         effects,
         fixtures,
-        curves: dawn_language::effect::CurveDefinitionStore {
+        curves: dawn_language::effect::CurveDefinitionStore::default(),
+        gradients: dawn_language::effect::GradientDefinitionStore {
             definitions: IndexMap::from([(
-                CurveId(source_identity("curve")),
-                CurveDefinition {
-                    curve: Curve {
-                        points: vec![CurvePoint {
+                GradientId(source_identity("gradient")),
+                GradientDefinition {
+                    gradient: Gradient {
+                        stops: vec![GradientStop {
                             position: 0.0,
-                            value: CurveValue::Color(color(255, 0, 0)),
+                            color: color(255, 0, 0),
                         }],
                     },
                 },

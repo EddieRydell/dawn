@@ -416,15 +416,16 @@ impl FunctionCompiler {
                 ValueSlot::Ref(dst)
             }
             CheckedExprKind::Index { target, index } => {
-                if let Some(param) = self.curve_param_binding(&target) {
+                if let Some(param) = self.param_binding(&target, &Type::Curve) {
                     let position = self.float_slot_from_expr(*index);
-                    let dst = self.allocate_slot(&result_ty);
+                    let slot = self.allocate_slot(&result_ty);
+                    let dst = self.float_slot(slot);
                     self.emit(Instruction::CurveParamSample {
                         dst,
                         param,
                         position,
                     });
-                    dst
+                    ValueSlot::Float(dst)
                 } else {
                     let target = self.compile_expr(*target);
                     let index = self.compile_expr(*index);
@@ -808,8 +809,8 @@ impl FunctionCompiler {
                 let dst = self.float_slot(dst);
                 self.emit(Instruction::Rand { dst, args });
             }
-            "curve_float_clamped" if args.len() == 4 => {
-                if let Some(param) = self.curve_param_binding(&args[0]) {
+            "curve_clamped" if args.len() == 4 => {
+                if let Some(param) = self.param_binding(&args[0], &Type::Curve) {
                     let registers = self.compile_float_args(args.into_iter().skip(1).collect());
                     let dst = self.float_slot(dst);
                     self.emit(Instruction::CurveParamFloatClamped {
@@ -835,11 +836,11 @@ impl FunctionCompiler {
                     });
                 }
             }
-            "curve_color_scaled" if args.len() == 3 => {
-                if let Some(param) = self.curve_param_binding(&args[0]) {
+            "gradient_color_scaled" if args.len() == 3 => {
+                if let Some(param) = self.param_binding(&args[0], &Type::Gradient) {
                     let registers = self.compile_float_args(args.into_iter().skip(1).collect());
                     let dst = self.color_slot(dst);
-                    self.emit(Instruction::CurveParamColorScaled {
+                    self.emit(Instruction::GradientParamColorScaled {
                         dst,
                         param,
                         position: registers[0],
@@ -847,21 +848,21 @@ impl FunctionCompiler {
                     });
                 } else {
                     let mut args = args;
-                    let curve_expr = args.remove(0);
-                    let curve = self.compile_expr(curve_expr);
-                    let curve = self.ref_slot(curve);
+                    let gradient_expr = args.remove(0);
+                    let gradient = self.compile_expr(gradient_expr);
+                    let gradient = self.ref_slot(gradient);
                     let registers = self.compile_float_args(args);
                     let dst = self.color_slot(dst);
-                    self.emit(Instruction::CurveColorScaled {
+                    self.emit(Instruction::GradientColorScaled {
                         dst,
-                        curve,
+                        gradient,
                         position: registers[0],
                         scale: registers[1],
                     });
                 }
             }
             "curve_crossing" if args.len() == 2 || args.len() == 3 => {
-                if let Some(param) = self.curve_param_binding(&args[0]) {
+                if let Some(param) = self.param_binding(&args[0], &Type::Curve) {
                     let registers = self.compile_float_args(args.into_iter().skip(1).collect());
                     let dst = self.float_slot(dst);
                     self.emit(Instruction::CurveParamCrossing {
@@ -1083,17 +1084,14 @@ impl FunctionCompiler {
         Some(self.add_constant(Value::Enum(name.clone())))
     }
 
-    fn curve_param_binding(&self, expr: &CheckedExpr) -> Option<ParamId> {
+    fn param_binding(&self, expr: &CheckedExpr, expected: &Type) -> Option<ParamId> {
         let CheckedExprKind::Variable(name) = &expr.kind else {
             return None;
         };
         let Some(Binding::Param(param)) = self.lookup(name) else {
             return None;
         };
-        match self.param_types.get(param) {
-            Some(Type::Curve(_)) => Some(param),
-            _ => None,
-        }
+        (self.param_types.get(param) == Some(expected)).then_some(param)
     }
 
     fn coerce_slot(&mut self, slot: ValueSlot, target: &Type) -> ValueSlot {

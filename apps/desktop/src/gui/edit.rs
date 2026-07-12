@@ -77,11 +77,20 @@ pub(super) fn edit_sequence(
         _ => Vec::new(),
     };
     let unlink_curve_value = match &edit {
-        SequenceGuiEdit::UnlinkEffectCurveParam { id, name } => {
-            Some(current_curve_param_value(session, resolved, *id, name)?)
+        SequenceGuiEdit::UnlinkEffectCurve { id, name } => {
+            Some(current_effect_curve_value(session, resolved, *id, name)?)
         }
-        SequenceGuiEdit::UnlinkGraphOperatorCurveParam { node_id, name } => Some(
-            current_graph_curve_param_value(session, resolved, node_id, name)?,
+        SequenceGuiEdit::UnlinkGraphOperatorCurve { node_id, name } => {
+            Some(current_graph_curve_value(session, resolved, node_id, name)?)
+        }
+        _ => None,
+    };
+    let unlink_gradient_value = match &edit {
+        SequenceGuiEdit::UnlinkEffectGradient { id, name } => {
+            Some(current_effect_gradient_value(session, resolved, *id, name)?)
+        }
+        SequenceGuiEdit::UnlinkGraphOperatorGradient { node_id, name } => Some(
+            current_graph_gradient_value(session, resolved, node_id, name)?,
         ),
         _ => None,
     };
@@ -477,44 +486,39 @@ pub(super) fn edit_sequence(
                 .automation_clips
                 .retain(|clip| !clip.bindings.is_empty());
         }
-        SequenceGuiEdit::LinkEffectCurveParam {
+        SequenceGuiEdit::LinkEffectCurve {
             id,
             name,
-            curve_path,
+            source_path,
             object_key,
         } => {
-            let curve = CurveId(SourceIdentity::new(
-                Utf8PathBuf::from(curve_path),
-                object_key,
-            ));
-            if !session
-                .project
-                .definitions
-                .curves
-                .definitions
-                .contains_key(&curve)
-            {
-                return Err(GuiMutationError::Invalid(
-                    "Curve was not found.".to_string(),
-                ));
-            }
-            ensure_document_can_reference_source(
-                session,
-                resolved.identity.document(),
-                SourceObjectKind::Curve,
-                &curve.0,
-            )
-            .map_err(|error| GuiMutationError::Blocked(error.to_string()))?;
+            let value = linked_curve_value(session, resolved, source_path, object_key)?;
             effect_mut(sequence_mut(session, &sequence_id)?, id)?
                 .param_overrides
-                .insert(
-                    identifier(&name)?,
-                    EffectParamValue::Curve(CurveSource::Reference(curve)),
-                );
+                .insert(identifier(&name)?, value);
         }
-        SequenceGuiEdit::UnlinkEffectCurveParam { id, name } => {
+        SequenceGuiEdit::UnlinkEffectCurve { id, name } => {
             let value = unlink_curve_value.ok_or_else(|| {
                 GuiMutationError::Invalid("Curve param could not be resolved.".to_string())
+            })?;
+            effect_mut(sequence_mut(session, &sequence_id)?, id)?
+                .param_overrides
+                .insert(identifier(&name)?, effect_param_value_from_gui(value)?);
+        }
+        SequenceGuiEdit::LinkEffectGradient {
+            id,
+            name,
+            source_path,
+            object_key,
+        } => {
+            let value = linked_gradient_value(session, resolved, source_path, object_key)?;
+            effect_mut(sequence_mut(session, &sequence_id)?, id)?
+                .param_overrides
+                .insert(identifier(&name)?, value);
+        }
+        SequenceGuiEdit::UnlinkEffectGradient { id, name } => {
+            let value = unlink_gradient_value.ok_or_else(|| {
+                GuiMutationError::Invalid("Gradient param could not be resolved.".to_string())
             })?;
             effect_mut(sequence_mut(session, &sequence_id)?, id)?
                 .param_overrides
@@ -695,34 +699,13 @@ pub(super) fn edit_sequence(
                 .map_err(|error| GuiMutationError::Invalid(error.message))?;
             sequence.composition_graph = graph;
         }
-        SequenceGuiEdit::LinkGraphOperatorCurveParam {
+        SequenceGuiEdit::LinkGraphOperatorCurve {
             node_id,
             name,
-            curve_path,
+            source_path,
             object_key,
         } => {
-            let curve = CurveId(SourceIdentity::new(
-                Utf8PathBuf::from(curve_path),
-                object_key,
-            ));
-            if !session
-                .project
-                .definitions
-                .curves
-                .definitions
-                .contains_key(&curve)
-            {
-                return Err(GuiMutationError::Invalid(
-                    "Curve was not found.".to_string(),
-                ));
-            }
-            ensure_document_can_reference_source(
-                session,
-                resolved.identity.document(),
-                SourceObjectKind::Curve,
-                &curve.0,
-            )
-            .map_err(|error| GuiMutationError::Blocked(error.to_string()))?;
+            let value = linked_curve_value(session, resolved, source_path, object_key)?;
             let node_id = parse_graph_node_id(&node_id)?;
             let sequence = sequence_mut(session, &sequence_id)?;
             let node = composition_graph_node_mut(sequence, &node_id)?;
@@ -731,14 +714,44 @@ pub(super) fn edit_sequence(
                     "Graph node is not an operator.".to_string(),
                 ));
             };
-            operator.params.insert(
-                identifier(&name)?,
-                EffectParamValue::Curve(CurveSource::Reference(curve)),
-            );
+            operator.params.insert(identifier(&name)?, value);
         }
-        SequenceGuiEdit::UnlinkGraphOperatorCurveParam { node_id, name } => {
+        SequenceGuiEdit::UnlinkGraphOperatorCurve { node_id, name } => {
             let value = unlink_curve_value.ok_or_else(|| {
                 GuiMutationError::Invalid("Curve param could not be resolved.".to_string())
+            })?;
+            let node_id = parse_graph_node_id(&node_id)?;
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let node = composition_graph_node_mut(sequence, &node_id)?;
+            let CompositionGraphNodeKind::Operator(operator) = &mut node.kind else {
+                return Err(GuiMutationError::Invalid(
+                    "Graph node is not an operator.".to_string(),
+                ));
+            };
+            operator
+                .params
+                .insert(identifier(&name)?, effect_param_value_from_gui(value)?);
+        }
+        SequenceGuiEdit::LinkGraphOperatorGradient {
+            node_id,
+            name,
+            source_path,
+            object_key,
+        } => {
+            let value = linked_gradient_value(session, resolved, source_path, object_key)?;
+            let node_id = parse_graph_node_id(&node_id)?;
+            let sequence = sequence_mut(session, &sequence_id)?;
+            let node = composition_graph_node_mut(sequence, &node_id)?;
+            let CompositionGraphNodeKind::Operator(operator) = &mut node.kind else {
+                return Err(GuiMutationError::Invalid(
+                    "Graph node is not an operator.".to_string(),
+                ));
+            };
+            operator.params.insert(identifier(&name)?, value);
+        }
+        SequenceGuiEdit::UnlinkGraphOperatorGradient { node_id, name } => {
+            let value = unlink_gradient_value.ok_or_else(|| {
+                GuiMutationError::Invalid("Gradient param could not be resolved.".to_string())
             })?;
             let node_id = parse_graph_node_id(&node_id)?;
             let sequence = sequence_mut(session, &sequence_id)?;
@@ -863,7 +876,7 @@ pub(super) fn edit_sequence(
         }
         SequenceGuiEdit::UpdateAutomationCurve { id, curve } => {
             automation_clip_mut(sequence_mut(session, &sequence_id)?, id)?.curve =
-                float_curve(curve);
+                curve_from_points(curve);
         }
         SequenceGuiEdit::DeleteAutomationClip { id } => {
             sequence_mut(session, &sequence_id)?
@@ -955,11 +968,74 @@ pub(super) fn edit_sequence(
     }
     Ok(())
 }
+
+fn linked_curve_value(
+    session: &mut ProjectSession,
+    resolved: &ResolvedGuiObject,
+    source_path: String,
+    object_key: String,
+) -> Result<EffectParamValue, GuiMutationError> {
+    let id = CurveId(SourceIdentity::new(
+        Utf8PathBuf::from(source_path),
+        object_key,
+    ));
+    if !session
+        .project
+        .definitions
+        .curves
+        .definitions
+        .contains_key(&id)
+    {
+        return Err(GuiMutationError::Invalid(
+            "Curve was not found.".to_string(),
+        ));
+    }
+    ensure_document_can_reference_source(
+        session,
+        resolved.identity.document(),
+        SourceObjectKind::Curve,
+        &id.0,
+    )
+    .map_err(|error| GuiMutationError::Blocked(error.to_string()))?;
+    Ok(EffectParamValue::Curve(CurveSource::Reference(id)))
+}
+
+fn linked_gradient_value(
+    session: &mut ProjectSession,
+    resolved: &ResolvedGuiObject,
+    source_path: String,
+    object_key: String,
+) -> Result<EffectParamValue, GuiMutationError> {
+    let id = GradientId(SourceIdentity::new(
+        Utf8PathBuf::from(source_path),
+        object_key,
+    ));
+    if !session
+        .project
+        .definitions
+        .gradients
+        .definitions
+        .contains_key(&id)
+    {
+        return Err(GuiMutationError::Invalid(
+            "Gradient was not found.".to_string(),
+        ));
+    }
+    ensure_document_can_reference_source(
+        session,
+        resolved.identity.document(),
+        SourceObjectKind::Gradient,
+        &id.0,
+    )
+    .map_err(|error| GuiMutationError::Blocked(error.to_string()))?;
+    Ok(EffectParamValue::Gradient(GradientSource::Reference(id)))
+}
 use std::collections::BTreeSet;
 
 use camino::Utf8PathBuf;
 use dawn_language::effect::{
     CurveId, CurveSource, EffectDefinitionId, EffectInst, EffectInstId, EffectParamValue,
+    GradientId, GradientSource,
 };
 use dawn_language::identity::SourceIdentity;
 use dawn_language::operator::{
@@ -978,16 +1054,17 @@ use indexmap::IndexMap;
 
 use super::model::{
     automation_binding_value_at, automation_clip_mut, automation_mapping_from_gui,
-    composition_graph_node_mut, create_sequence_layer, default_automation_curve,
+    composition_graph_node_mut, create_sequence_layer, curve_from_points, default_automation_curve,
     domain_point3_meters, effect_mut, effect_param_value_from_gui, effect_scope,
-    ensure_graph_node_exists, fixture_definition_mut, float_curve, graph_input_cardinality,
+    ensure_graph_node_exists, fixture_definition_mut, graph_input_cardinality,
     graph_operator_from_gui, identifier, layout_target_to_effect_target, mark_collection_mut,
     next_composition_node_id, parse_color, parse_graph_node_id, register_sequence_audio_asset,
     rotation3_degrees, scale3, sequence_mut,
 };
 use super::selection::{
-    current_curve_param_value, current_graph_curve_param_value, effect_lane_index_resolved,
-    mark_param_names, required_operator_param_value,
+    current_effect_curve_value, current_effect_gradient_value, current_graph_curve_value,
+    current_graph_gradient_value, effect_lane_index_resolved, mark_param_names,
+    required_operator_param_value,
 };
 use super::{GuiMutationError, ResolvedGuiObject};
 use crate::dto::{FixtureGuiEdit, LayoutGuiEdit, SequenceGuiEdit};

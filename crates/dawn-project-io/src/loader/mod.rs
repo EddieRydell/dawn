@@ -3,7 +3,7 @@ mod resolve;
 
 use parse::{
     AliasObjectKey, ResolvedObject, SourceObjectValue, parse_curve, parse_fixture_definition,
-    sequence_field, string_field,
+    parse_gradient, sequence_field, string_field,
 };
 pub(crate) use parse::{mapping, normalize_relative, parse_imports, relative_path};
 use resolve::DomainResolver;
@@ -274,6 +274,10 @@ impl Loader {
                     relative.to_path_buf(),
                     key.to_string(),
                 ))),
+                "gradient" => ResolvedObject::Gradient(GradientId(SourceIdentity::new(
+                    relative.to_path_buf(),
+                    key.to_string(),
+                ))),
                 "sequence" => ResolvedObject::Sequence(SequenceId(SourceIdentity::new(
                     relative.to_path_buf(),
                     key.to_string(),
@@ -291,6 +295,14 @@ impl Loader {
                     id.clone(),
                     CurveDefinition {
                         curve: parse_curve(relative, object_value)?,
+                    },
+                );
+            }
+            if let ResolvedObject::Gradient(id) = &object {
+                self.definitions.gradients.insert(
+                    id.clone(),
+                    GradientDefinition {
+                        gradient: parse_gradient(relative, object_value)?,
                     },
                 );
             }
@@ -660,7 +672,9 @@ use std::fs;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_language::dsl::{Identifier, compile_effects, compile_operators};
-use dawn_language::effect::{CurveDefinition, CurveId, EffectDefinition, EffectDefinitionId};
+use dawn_language::effect::{
+    CurveDefinition, CurveId, EffectDefinition, EffectDefinitionId, GradientDefinition, GradientId,
+};
 use dawn_language::identity::SourceIdentity;
 use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
 use dawn_language::operator::{OperatorDefinitionId, custom_operator_definition};

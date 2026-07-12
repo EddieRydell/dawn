@@ -10,14 +10,14 @@ use std::thread;
 use dawn_language::dsl::{EffectKind, hash_compiled_effect};
 use dawn_language::effect::{
     CurveDefinition, CurveId, CurveSource, EffectDefinition, EffectInst, EffectInstId,
-    EffectParamValue, EffectScope, EffectTarget,
+    EffectParamValue, EffectScope, EffectTarget, GradientDefinition, GradientId, GradientSource,
 };
 use dawn_language::model::DawnProject;
 use dawn_language::sequence::{
     AutomationBinding, AutomationMapping, MarkCollectionKey, Sequence, SequenceId,
 };
 use dawn_language::setup::SetupId;
-use dawn_language::values::{Curve, CurveValue, DawnTime};
+use dawn_language::values::{Curve, DawnTime, Gradient};
 use dawn_project_io::ProjectSession;
 use dawn_runtime::{
     EffectRasterPrepareBatch, PreparedEffectRasterRenderer, RenderedTargetPixelAddress,
@@ -1003,6 +1003,7 @@ struct RenderInputSignatureData {
     definition: Option<EffectDefinition>,
     generator_definitions: Vec<(dawn_language::effect::EffectDefinitionId, EffectDefinition)>,
     curve_references: Vec<(CurveId, Option<CurveDefinition>)>,
+    gradient_references: Vec<(GradientId, Option<GradientDefinition>)>,
     mark_references: Vec<(MarkCollectionKey, Option<Vec<DawnTime>>)>,
     target_pixels: Vec<RenderedTargetPixelAddress>,
 }
@@ -1041,6 +1042,7 @@ fn render_signature(
         Vec::new()
     };
     let mut curve_references = Vec::new();
+    let mut gradient_references = Vec::new();
     let mut mark_references = Vec::new();
     for value in effect.param_overrides.values() {
         collect_param_references(
@@ -1048,6 +1050,7 @@ fn render_signature(
             sequence,
             value,
             &mut curve_references,
+            &mut gradient_references,
             &mut mark_references,
         );
     }
@@ -1081,6 +1084,7 @@ fn render_signature(
             definition,
             generator_definitions,
             curve_references,
+            gradient_references,
             mark_references,
             target_pixels,
         },
@@ -1092,11 +1096,15 @@ fn collect_param_references(
     sequence: &Sequence,
     value: &EffectParamValue,
     curve_references: &mut Vec<(CurveId, Option<CurveDefinition>)>,
+    gradient_references: &mut Vec<(GradientId, Option<GradientDefinition>)>,
     mark_references: &mut Vec<(MarkCollectionKey, Option<Vec<DawnTime>>)>,
 ) {
     match value {
         EffectParamValue::Curve(CurveSource::Reference(id)) => {
             curve_references.push((id.clone(), project.definitions.curves.get(id).cloned()));
+        }
+        EffectParamValue::Gradient(GradientSource::Reference(id)) => {
+            gradient_references.push((id.clone(), project.definitions.gradients.get(id).cloned()));
         }
         EffectParamValue::Marks(key) => {
             let marks = sequence
@@ -1113,6 +1121,7 @@ fn collect_param_references(
                     sequence,
                     value,
                     curve_references,
+                    gradient_references,
                     mark_references,
                 );
             }
@@ -1122,7 +1131,8 @@ fn collect_param_references(
         | EffectParamValue::Bool(_)
         | EffectParamValue::Color(_)
         | EffectParamValue::Enum(_)
-        | EffectParamValue::Curve(CurveSource::Inline(_)) => {}
+        | EffectParamValue::Curve(CurveSource::Inline(_))
+        | EffectParamValue::Gradient(GradientSource::Inline(_)) => {}
     }
 }
 
@@ -1165,6 +1175,11 @@ fn hash_render_signature<H: Hasher>(signature: &RenderInputSignature, state: &mu
             for (id, definition) in &data.curve_references {
                 id.hash(state);
                 hash_optional_curve_definition(definition, state);
+            }
+            data.gradient_references.len().hash(state);
+            for (id, definition) in &data.gradient_references {
+                id.hash(state);
+                hash_optional_gradient_definition(definition, state);
             }
             data.mark_references.len().hash(state);
             for (key, marks) in &data.mark_references {
@@ -1224,7 +1239,7 @@ fn hash_automation_mapping<H: Hasher>(mapping: &AutomationMapping, state: &mut H
                 value.hash(state);
             }
         }
-        AutomationMapping::FloatCurve { min, max } => {
+        AutomationMapping::Curve { min, max } => {
             4u8.hash(state);
             min.to_bits().hash(state);
             max.to_bits().hash(state);
@@ -1296,12 +1311,29 @@ fn hash_effect_param_value<H: Hasher>(value: &EffectParamValue, state: &mut H) {
             6u8.hash(state);
             hash_curve_source(source, state);
         }
-        EffectParamValue::Array(values) => {
+        EffectParamValue::Gradient(source) => {
             7u8.hash(state);
+            hash_gradient_source(source, state);
+        }
+        EffectParamValue::Array(values) => {
+            8u8.hash(state);
             values.len().hash(state);
             for value in values {
                 hash_effect_param_value(value, state);
             }
+        }
+    }
+}
+
+fn hash_gradient_source<H: Hasher>(source: &GradientSource, state: &mut H) {
+    match source {
+        GradientSource::Inline(gradient) => {
+            0u8.hash(state);
+            hash_gradient(gradient, state);
+        }
+        GradientSource::Reference(id) => {
+            1u8.hash(state);
+            id.hash(state);
         }
     }
 }
@@ -1346,20 +1378,32 @@ fn hash_optional_curve_definition<H: Hasher>(definition: &Option<CurveDefinition
     }
 }
 
+fn hash_optional_gradient_definition<H: Hasher>(
+    definition: &Option<GradientDefinition>,
+    state: &mut H,
+) {
+    match definition {
+        Some(definition) => {
+            1u8.hash(state);
+            hash_gradient(&definition.gradient, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+fn hash_gradient<H: Hasher>(gradient: &Gradient, state: &mut H) {
+    gradient.stops.len().hash(state);
+    for stop in &gradient.stops {
+        stop.position.to_bits().hash(state);
+        stop.color.hash(state);
+    }
+}
+
 fn hash_curve<H: Hasher>(curve: &Curve, state: &mut H) {
     curve.points.len().hash(state);
     for point in &curve.points {
         point.position.to_bits().hash(state);
-        match point.value {
-            CurveValue::Float(value) => {
-                0u8.hash(state);
-                value.to_bits().hash(state);
-            }
-            CurveValue::Color(value) => {
-                1u8.hash(state);
-                value.hash(state);
-            }
-        }
+        point.value.to_bits().hash(state);
     }
 }
 

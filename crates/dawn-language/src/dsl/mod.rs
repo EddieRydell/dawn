@@ -22,7 +22,7 @@ pub use vm::{
 pub(crate) mod lexer;
 pub mod types;
 
-pub use crate::values::{Color, Curve, CurvePoint, CurveValue, Marks};
+pub use crate::values::{Color, Curve, CurvePoint, Gradient, GradientStop, Marks};
 pub use ast::{OperatorInputDecl, ParamDecl};
 pub use types::{
     Identifier, TargetItemValue, TargetItemsValue, TargetPixelValue, TargetValue, Type, Value,
@@ -322,12 +322,16 @@ fn hash_value<H: Hasher>(value: &Value, state: &mut H) {
             9u8.hash(state);
             hash_curve(value, state);
         }
-        Value::Array(values) => {
+        Value::Gradient(value) => {
             10u8.hash(state);
+            hash_gradient(value, state);
+        }
+        Value::Array(values) => {
+            11u8.hash(state);
             hash_values(values, state);
         }
         Value::Enum(value) => {
-            11u8.hash(state);
+            12u8.hash(state);
             value.hash(state);
         }
     }
@@ -355,15 +359,14 @@ fn hash_curve<H: Hasher>(curve: &Curve, state: &mut H) {
     curve.points.len().hash(state);
     for point in &curve.points {
         point.position.to_bits().hash(state);
-        match point.value {
-            CurveValue::Float(value) => {
-                0u8.hash(state);
-                value.to_bits().hash(state);
-            }
-            CurveValue::Color(value) => {
-                1u8.hash(state);
-                value.hash(state);
-            }
-        }
+        point.value.to_bits().hash(state);
+    }
+}
+
+fn hash_gradient<H: Hasher>(gradient: &Gradient, state: &mut H) {
+    gradient.stops.len().hash(state);
+    for stop in &gradient.stops {
+        stop.position.to_bits().hash(state);
+        stop.color.hash(state);
     }
 }

@@ -4,7 +4,7 @@ use dawn_language::dsl::{
     SignalSampler, TargetItemValue, TargetPixelValue, TargetValue, Value, compile_effects,
     compile_operators,
 };
-use dawn_language::values::{Color, Curve, CurvePoint, CurveValue, DawnTime, Marks};
+use dawn_language::values::{Color, Curve, CurvePoint, DawnTime, Gradient, GradientStop, Marks};
 use indexmap::IndexMap;
 use std::hint::black_box;
 use std::sync::Arc;
@@ -310,15 +310,15 @@ fn target_groups(group_count: i64, pixels_per_group: i64) -> Vec<Arc<TargetItemV
 
 fn pulse_params() -> IndexMap<Identifier, Value> {
     params([
-        ("gradient", Value::Curve(color_curve())),
-        ("pulse_shape", Value::Curve(float_curve())),
+        ("gradient", Value::Gradient(gradient())),
+        ("pulse_shape", Value::Curve(curve())),
     ])
 }
 
 fn scan_sweep_params() -> IndexMap<Identifier, Value> {
     params([
-        ("gradient", Value::Curve(color_curve())),
-        ("intensity", Value::Curve(float_curve())),
+        ("gradient", Value::Gradient(gradient())),
+        ("intensity", Value::Curve(curve())),
         ("direction", enum_value("center_out")),
         ("color_mode", enum_value("scan_head")),
         ("repeats", Value::Float(3.0)),
@@ -331,8 +331,8 @@ fn scan_sweep_params() -> IndexMap<Identifier, Value> {
 
 fn impact_burst_params() -> IndexMap<Identifier, Value> {
     params([
-        ("gradient", Value::Curve(color_curve())),
-        ("intensity", Value::Curve(float_curve())),
+        ("gradient", Value::Gradient(gradient())),
+        ("intensity", Value::Curve(curve())),
         ("direction", enum_value("outward")),
         ("color_mode", enum_value("from_edge")),
         ("center_position", Value::Float(0.5)),
@@ -347,9 +347,9 @@ fn impact_burst_params() -> IndexMap<Identifier, Value> {
 
 fn sparkle_comet_params() -> IndexMap<Identifier, Value> {
     params([
-        ("gradient", Value::Curve(color_curve())),
-        ("position", Value::Curve(float_curve())),
-        ("intensity", Value::Curve(float_curve())),
+        ("gradient", Value::Gradient(gradient())),
+        ("position", Value::Curve(curve())),
+        ("intensity", Value::Curve(curve())),
         ("color_mode", enum_value("rainbow_hue")),
         (
             "head_color",
@@ -380,7 +380,7 @@ fn shimmer_field_params() -> IndexMap<Identifier, Value> {
                 blue: 0,
             }),
         ),
-        ("palette", Value::Curve(color_curve())),
+        ("palette", Value::Gradient(gradient())),
         ("color_mode", enum_value("from_palette")),
         (
             "sparkle_color",
@@ -413,8 +413,8 @@ fn mark_pulse_params() -> IndexMap<Identifier, Value> {
                 blue: 0,
             }),
         ),
-        ("accent", Value::Curve(color_curve())),
-        ("hue", Value::Curve(float_curve())),
+        ("accent", Value::Gradient(gradient())),
+        ("hue", Value::Curve(curve())),
         ("hue_mix", Value::Float(0.35)),
         ("offset_seconds", Value::Float(0.0)),
         ("decay_seconds", Value::Float(0.24)),
@@ -435,8 +435,8 @@ fn mark_pulse_child_params() -> IndexMap<Identifier, Value> {
                 blue: 0,
             }),
         ),
-        ("accent", Value::Curve(color_curve())),
-        ("hue", Value::Curve(float_curve())),
+        ("accent", Value::Gradient(gradient())),
+        ("hue", Value::Curve(curve())),
         ("hue_mix", Value::Float(0.35)),
         ("section_width_pixels", Value::Int(5)),
         ("section_edge_fade_pixels", Value::Float(1.0)),
@@ -459,19 +459,16 @@ fn mark_chase_params() -> IndexMap<Identifier, Value> {
         ("gradient_mode", enum_value("per_pulse")),
         (
             "gradients",
-            curve_array([color_curve(), alternate_color_curve()]),
+            gradient_array([gradient(), alternate_gradient()]),
         ),
-        ("hue", Value::Curve(float_curve())),
+        ("hue", Value::Curve(curve())),
         ("hue_mix", Value::Float(0.35)),
         ("offset_seconds", Value::Float(0.0)),
         ("chase_seconds", Value::Float(0.5)),
         ("pulse_overlap", Value::Float(8.0)),
         ("section_width_pixels", Value::Int(5)),
-        (
-            "chase_positions",
-            curve_array([float_curve(), alternate_float_curve()]),
-        ),
-        ("pulse_shape", Value::Curve(float_curve())),
+        ("chase_positions", curve_array([curve(), alternate_curve()])),
+        ("pulse_shape", Value::Curve(curve())),
     ])
 }
 
@@ -486,13 +483,13 @@ fn mark_chase_child_params() -> IndexMap<Identifier, Value> {
             }),
         ),
         ("gradient_mode", enum_value("per_pulse")),
-        ("gradient", Value::Curve(color_curve())),
-        ("hue", Value::Curve(float_curve())),
+        ("gradient", Value::Gradient(gradient())),
+        ("hue", Value::Curve(curve())),
         ("hue_mix", Value::Float(0.45)),
         ("pulse_overlap", Value::Float(10.0)),
         ("section_width_pixels", Value::Int(5)),
-        ("chase_position", Value::Curve(alternate_float_curve())),
-        ("pulse_shape", Value::Curve(float_curve())),
+        ("chase_position", Value::Curve(alternate_curve())),
+        ("pulse_shape", Value::Curve(curve())),
         ("parent_duration", Value::Float(24.0)),
         ("child_start", Value::Float(4.0)),
     ])
@@ -508,6 +505,15 @@ fn params<const N: usize>(items: [(&str, Value); N]) -> IndexMap<Identifier, Val
 fn curve_array<const N: usize>(curves: [Arc<Curve>; N]) -> Value {
     Value::Array(Arc::new(
         curves.into_iter().map(Value::Curve).collect::<Vec<_>>(),
+    ))
+}
+
+fn gradient_array<const N: usize>(gradients: [Arc<Gradient>; N]) -> Value {
+    Value::Array(Arc::new(
+        gradients
+            .into_iter()
+            .map(Value::Gradient)
+            .collect::<Vec<_>>(),
     ))
 }
 
@@ -527,59 +533,59 @@ fn marks() -> Marks {
     }
 }
 
-fn float_curve() -> Arc<Curve> {
+fn curve() -> Arc<Curve> {
     Arc::new(Curve {
         points: vec![
             CurvePoint {
                 position: 0.0,
-                value: CurveValue::Float(0.0),
+                value: 0.0,
             },
             CurvePoint {
                 position: 0.12,
-                value: CurveValue::Float(1.0),
+                value: 1.0,
             },
             CurvePoint {
                 position: 0.45,
-                value: CurveValue::Float(0.35),
+                value: 0.35,
             },
             CurvePoint {
                 position: 0.78,
-                value: CurveValue::Float(0.8),
+                value: 0.8,
             },
             CurvePoint {
                 position: 1.0,
-                value: CurveValue::Float(0.0),
+                value: 0.0,
             },
         ],
     })
 }
 
-fn alternate_float_curve() -> Arc<Curve> {
+fn alternate_curve() -> Arc<Curve> {
     Arc::new(Curve {
         points: vec![
             CurvePoint {
                 position: 0.0,
-                value: CurveValue::Float(1.0),
+                value: 1.0,
             },
             CurvePoint {
                 position: 0.25,
-                value: CurveValue::Float(0.15),
+                value: 0.15,
             },
             CurvePoint {
                 position: 0.65,
-                value: CurveValue::Float(0.9),
+                value: 0.9,
             },
             CurvePoint {
                 position: 1.0,
-                value: CurveValue::Float(0.2),
+                value: 0.2,
             },
         ],
     })
 }
 
-fn color_curve() -> Arc<Curve> {
-    Arc::new(Curve {
-        points: vec![
+fn gradient() -> Arc<Gradient> {
+    Arc::new(Gradient {
+        stops: vec![
             color_point(0.0, 255, 32, 16),
             color_point(0.28, 255, 184, 24),
             color_point(0.58, 24, 220, 255),
@@ -588,9 +594,9 @@ fn color_curve() -> Arc<Curve> {
     })
 }
 
-fn alternate_color_curve() -> Arc<Curve> {
-    Arc::new(Curve {
-        points: vec![
+fn alternate_gradient() -> Arc<Gradient> {
+    Arc::new(Gradient {
+        stops: vec![
             color_point(0.0, 0, 20, 255),
             color_point(0.35, 0, 255, 180),
             color_point(0.7, 255, 255, 64),
@@ -599,10 +605,10 @@ fn alternate_color_curve() -> Arc<Curve> {
     })
 }
 
-fn color_point(position: f64, red: u8, green: u8, blue: u8) -> CurvePoint {
-    CurvePoint {
+fn color_point(position: f64, red: u8, green: u8, blue: u8) -> GradientStop {
+    GradientStop {
         position,
-        value: CurveValue::Color(Color { red, green, blue }),
+        color: Color { red, green, blue },
     }
 }
 

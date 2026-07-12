@@ -4,7 +4,7 @@ import { ArrowDown, ArrowUp, ChevronRight, CopyPlus, FlipHorizontal2, FlipVertic
 
 import { commands } from "../../../../api";
 
-import type { ColorCurvePoint, FloatCurvePoint, SequenceAutomationClip, SequenceAutomationMapping, SequenceCurveLibraryItem, SequenceEffectParam, SequenceEffectParamValue, SequenceMarkCollection } from "../../../../types";
+import type { SequenceGradientStop, SequenceCurvePoint, SequenceAutomationClip, SequenceAutomationMapping, SequenceCurveLibraryItem, SequenceGradientLibraryItem, SequenceEffectParam, SequenceEffectParamValue, SequenceMarkCollection, SequenceCurveSource, SequenceGradientSource } from "../../../../types";
 
 import { runGuiEditCommand } from "../../../../store";
 
@@ -21,9 +21,9 @@ const CURVE_EDITOR = {
   defaultColor: "#ffffff"
 } as const;
 
-export type EditedFloatCurvePoint = { time: number; value: number };
+export type EditedSequenceCurvePoint = { time: number; value: number };
 
-export type EditedColorCurvePoint = { time: number; value: string };
+export type EditedSequenceGradientStop = { time: number; value: string };
 
 type EffectParamAutomationControls = {
   effectId: number;
@@ -39,18 +39,24 @@ export function TypedParamInput({
   param,
   commitParam,
   curveLibrary,
+  gradientLibrary,
   markCollections,
   automation = null,
-  linkCurveParam,
-  unlinkCurveParam
+  linkCurve,
+  unlinkCurve,
+  linkGradient,
+  unlinkGradient
 }: {
   param: SequenceEffectParam;
   commitParam: (name: string, value: SequenceEffectParamValue) => Promise<void>;
   curveLibrary: SequenceCurveLibraryItem[];
+  gradientLibrary: SequenceGradientLibraryItem[];
   markCollections: SequenceMarkCollection[];
   automation?: EffectParamAutomationControls | null;
-  linkCurveParam: (name: string, curve: SequenceCurveLibraryItem) => Promise<void>;
-  unlinkCurveParam: (name: string) => Promise<void>;
+  linkCurve: (name: string, curve: SequenceCurveLibraryItem) => Promise<void>;
+  unlinkCurve: (name: string) => Promise<void>;
+  linkGradient: (name: string, gradient: SequenceGradientLibraryItem) => Promise<void>;
+  unlinkGradient: (name: string) => Promise<void>;
 }) {
   const commit = (value: SequenceEffectParamValue) => {
     return commitParam(param.name, value);
@@ -116,35 +122,35 @@ export function TypedParamInput({
           </ParamValueRow>
         </ParamShell>
       );
-    case "floatCurve":
+    case "curve":
       return (
         <ParamShell name={param.name} automated={automated}>
-        <CurveParamSourceShell
-          param={param}
-          valueType="float"
-          curveLibrary={curveLibrary}
-          points={automated && automationClip !== null ? automationClipWindowCurve(automationClip, automation?.effectStartSeconds ?? 0, automation?.effectDurationSeconds ?? 1) : normalizeFloatCurvePoints(param.value.points)}
-          commit={(points) => commit({ type: "floatCurve", points })}
+        <CurveSourceShell
+          name={param.name}
+          source={param.curveSource}
+          sources={curveLibrary}
+          points={automated && automationClip !== null ? automationClipWindowCurve(automationClip, automation?.effectStartSeconds ?? 0, automation?.effectDurationSeconds ?? 1) : normalizeSequenceCurvePoints(param.value.points)}
+          commit={(points) => commit({ type: "curve", points })}
           disabled={automated}
           actions={automationActions}
-          linkCurveParam={linkCurveParam}
-          unlinkCurveParam={unlinkCurveParam}
-          render={(props) => <FloatCurveParam name={param.name} {...props} />}
+          linkCurve={linkCurve}
+          unlinkCurve={unlinkCurve}
+          render={(props) => <CurveParam name={param.name} {...props} />}
         />
         </ParamShell>
       );
-    case "colorCurve":
+    case "gradient":
       return (
         <ParamShell name={param.name}>
-        <CurveParamSourceShell
-          param={param}
-          valueType="color"
-          curveLibrary={curveLibrary}
-          points={normalizeColorCurvePoints(param.value.points)}
-          commit={(points) => commit({ type: "colorCurve", points })}
-          linkCurveParam={linkCurveParam}
-          unlinkCurveParam={unlinkCurveParam}
-          render={(props) => <ColorCurveParam name={param.name} {...props} />}
+        <GradientSourceShell
+          name={param.name}
+          source={param.gradientSource}
+          sources={gradientLibrary}
+          points={normalizeSequenceGradientStops(param.value.stops)}
+          commit={(stops) => commit({ type: "gradient", stops })}
+          linkGradient={linkGradient}
+          unlinkGradient={unlinkGradient}
+          render={(props) => <GradientParam name={param.name} {...props} />}
         />
         </ParamShell>
       );
@@ -156,10 +162,10 @@ export function TypedParamInput({
       return <BoolArrayParam name={param.name} values={param.value.values} commit={(values) => commit({ type: "boolArray", values })} />;
     case "colorArray":
       return <ColorArrayParam name={param.name} values={param.value.values} commit={(values) => commit({ type: "colorArray", values })} />;
-    case "floatCurveArray":
-      return <FloatCurveArrayParam name={param.name} values={param.value.values} commit={(values) => commit({ type: "floatCurveArray", values })} />;
-    case "colorCurveArray":
-      return <ColorCurveArrayParam name={param.name} values={param.value.values} commit={(values) => commit({ type: "colorCurveArray", values })} />;
+    case "curveArray":
+      return <CurveArrayParam name={param.name} values={param.value.values} commit={(values) => commit({ type: "curveArray", values })} />;
+    case "gradientArray":
+      return <GradientArrayParam name={param.name} values={param.value.values} commit={(values) => commit({ type: "gradientArray", values })} />;
     case "marks":
       return (
         <ParamShell name={param.name}>
@@ -334,17 +340,17 @@ function defaultAutomationMapping(param: SequenceEffectParam): SequenceAutomatio
       return { type: "bool" };
     case "enum":
       return { type: "enum", values: param.options };
-    case "floatCurve":
-      return { type: "floatCurve", min: 0, max: 1 };
+    case "curve":
+      return { type: "curve", min: 0, max: 1 };
     case "color":
     case "marks":
-    case "colorCurve":
+    case "gradient":
     case "intArray":
     case "floatArray":
     case "boolArray":
     case "colorArray":
-    case "floatCurveArray":
-    case "colorCurveArray":
+    case "curveArray":
+    case "gradientArray":
       return null;
     default:
       return null;
@@ -382,7 +388,7 @@ function ColorArrayParam({ name, values, commit }: { name: string; values: strin
   );
 }
 
-function FloatCurveArrayParam({ name, values, commit }: { name: string; values: FloatCurvePoint[][]; commit: (values: FloatCurvePoint[][]) => Promise<void> }) {
+function CurveArrayParam({ name, values, commit }: { name: string; values: SequenceCurvePoint[][]; commit: (values: SequenceCurvePoint[][]) => Promise<void> }) {
   return (
     <ArrayShell
       name={name}
@@ -390,13 +396,13 @@ function FloatCurveArrayParam({ name, values, commit }: { name: string; values: 
       newValue={() => values[values.length - 1] ?? [{ time: 0, value: 0 }]}
       commit={commit}
       render={(points, index) => (
-        <FloatCurveParam name={`#${index + 1}`} points={normalizeFloatCurvePoints(points)} commit={(next) => commit(replaceAt(values, index, next))} />
+        <CurveParam name={`#${index + 1}`} points={normalizeSequenceCurvePoints(points)} commit={(next) => commit(replaceAt(values, index, next))} />
       )}
     />
   );
 }
 
-function ColorCurveArrayParam({ name, values, commit }: { name: string; values: ColorCurvePoint[][]; commit: (values: ColorCurvePoint[][]) => Promise<void> }) {
+function GradientArrayParam({ name, values, commit }: { name: string; values: SequenceGradientStop[][]; commit: (values: SequenceGradientStop[][]) => Promise<void> }) {
   return (
     <ArrayShell
       name={name}
@@ -404,7 +410,7 @@ function ColorCurveArrayParam({ name, values, commit }: { name: string; values: 
       newValue={() => values[values.length - 1] ?? [{ time: 0, value: CURVE_EDITOR.defaultColor }]}
       commit={commit}
       render={(points, index) => (
-        <ColorCurveParam name={`#${index + 1}`} points={normalizeColorCurvePoints(points)} commit={(next) => commit(replaceAt(values, index, next))} />
+        <GradientParam name={`#${index + 1}`} points={normalizeSequenceGradientStops(points)} commit={(next) => commit(replaceAt(values, index, next))} />
       )}
     />
   );
@@ -495,9 +501,7 @@ function NumberParam({
   );
 }
 
-type EditedCurvePoint = EditedFloatCurvePoint | EditedColorCurvePoint;
-
-type CurveEditorProps<T extends EditedCurvePoint> = {
+type CurveEditorProps<T extends { time: number }> = {
   points: T[];
   commit: (points: T[]) => Promise<void>;
   readOnly?: boolean;
@@ -505,42 +509,124 @@ type CurveEditorProps<T extends EditedCurvePoint> = {
   showName?: boolean;
 };
 
-type CurveCopyAction = "edit" | "flipHorizontal" | "flipVertical";
+type CopyAction = "edit" | "flipHorizontal" | "flipVertical";
 
-function CurveParamSourceShell<T extends EditedCurvePoint>({
-  param,
-  valueType,
-  curveLibrary,
+function CurveSourceShell({
+  name,
+  source,
+  sources,
   points,
   commit,
   disabled = false,
   actions = null,
-  linkCurveParam,
-  unlinkCurveParam,
+  linkCurve,
+  unlinkCurve,
   render
 }: {
-  param: SequenceEffectParam;
-  valueType: "float" | "color";
-  curveLibrary: SequenceCurveLibraryItem[];
+  name: string;
+  source: SequenceCurveSource | null;
+  sources: SequenceCurveLibraryItem[];
+  points: EditedSequenceCurvePoint[];
+  commit: (points: EditedSequenceCurvePoint[]) => Promise<void>;
+  disabled?: boolean;
+  actions?: ReactNode;
+  linkCurve: (name: string, curve: SequenceCurveLibraryItem) => Promise<void>;
+  unlinkCurve: (name: string) => Promise<void>;
+  render: (props: CurveEditorProps<EditedSequenceCurvePoint>) => ReactNode;
+}) {
+  return <LibraryValueShell
+    name={name}
+    label="curve"
+    source={source}
+    sources={sources}
+    points={points}
+    commit={commit}
+    disabled={disabled}
+    actions={actions}
+    link={(curve) => linkCurve(name, curve)}
+    unlink={() => unlinkCurve(name)}
+    flipVerticalPoints={(current) => current.map((point) => ({ ...point, value: roundCurveValue(1 - point.value) }))}
+    render={render}
+  />;
+}
+
+function GradientSourceShell({
+  name,
+  source,
+  sources,
+  points,
+  commit,
+  linkGradient,
+  unlinkGradient,
+  render
+}: {
+  name: string;
+  source: SequenceGradientSource | null;
+  sources: SequenceGradientLibraryItem[];
+  points: EditedSequenceGradientStop[];
+  commit: (stops: EditedSequenceGradientStop[]) => Promise<void>;
+  linkGradient: (name: string, gradient: SequenceGradientLibraryItem) => Promise<void>;
+  unlinkGradient: (name: string) => Promise<void>;
+  render: (props: CurveEditorProps<EditedSequenceGradientStop>) => ReactNode;
+}) {
+  return <LibraryValueShell
+    name={name}
+    label="gradient"
+    source={source}
+    sources={sources}
+    points={points}
+    commit={commit}
+    link={(gradient) => linkGradient(name, gradient)}
+    unlink={() => unlinkGradient(name)}
+    render={render}
+  />;
+}
+
+type LibraryItem = { path: string; objectKey: string; displayName: string };
+type LibraryReference = {
+  type: "library";
+  reference: string;
+  path: string | null;
+  objectKey: string | null;
+  displayName: string | null;
+};
+
+function LibraryValueShell<T extends { time: number }, S extends LibraryItem>({
+  name,
+  label,
+  source,
+  sources,
+  points,
+  commit,
+  disabled = false,
+  actions = null,
+  link,
+  unlink,
+  flipVerticalPoints,
+  render
+}: {
+  name: string;
+  label: "curve" | "gradient";
+  source: { type: "inline" } | LibraryReference | null;
+  sources: S[];
   points: T[];
   commit: (points: T[]) => Promise<void>;
   disabled?: boolean;
   actions?: ReactNode;
-  linkCurveParam: (name: string, curve: SequenceCurveLibraryItem) => Promise<void>;
-  unlinkCurveParam: (name: string) => Promise<void>;
+  link: (source: S) => Promise<void>;
+  unlink: () => Promise<void>;
+  flipVerticalPoints?: (points: T[]) => T[];
   render: (props: CurveEditorProps<T>) => ReactNode;
 }) {
-  const [pendingCopyAction, setPendingCopyAction] = useState<CurveCopyAction | null>(null);
-  const source = param.curveSource?.type === "library" ? param.curveSource : null;
-  const linked = source !== null;
-  const linkedLabel = source?.displayName ?? source?.reference ?? "";
-  const matchingCurves = curveLibrary.filter((item) => item.valueType === valueType);
-  const selectedCurveIndex = linked && source.path !== null && source.objectKey !== null
-    ? matchingCurves.findIndex((item) => item.path === source.path && item.objectKey === source.objectKey)
+  const [pendingCopyAction, setPendingCopyAction] = useState<CopyAction | null>(null);
+  const librarySource = source?.type === "library" ? source : null;
+  const linked = librarySource !== null;
+  const linkedLabel = librarySource?.displayName ?? librarySource?.reference ?? "";
+  const availableSources = sources;
+  const selectedSourceIndex = linked && librarySource.path !== null && librarySource.objectKey !== null
+    ? availableSources.findIndex((item) => item.path === librarySource.path && item.objectKey === librarySource.objectKey)
     : -1;
-  const unlinkCopy = () => unlinkCurveParam(param.name);
-  const linkCurve = (curve: SequenceCurveLibraryItem) => linkCurveParam(param.name, curve);
-  const requestEditableCopy = (action: CurveCopyAction) => {
+  const requestEditableCopy = (action: CopyAction) => {
     if (!linked) return;
     setPendingCopyAction(action);
   };
@@ -553,8 +639,8 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
     }
   };
   const flipVertical = () => {
-    if (valueType !== "float") return;
-    const next = points.map((point) => ({ ...point, value: roundCurveValue(1 - (point.value as number)) })) as T[];
+    if (flipVerticalPoints === undefined) return;
+    const next = flipVerticalPoints(points);
     if (linked) {
       requestEditableCopy("flipVertical");
     } else {
@@ -568,44 +654,44 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
       const next = sortCurvePoints(points.map((point) => ({ ...point, time: roundCurveValue(1 - point.time) }))) as T[];
       void commit(next);
     } else if (action === "flipVertical") {
-      if (valueType !== "float") return;
-      const next = points.map((point) => ({ ...point, value: roundCurveValue(1 - (point.value as number)) })) as T[];
+      if (flipVerticalPoints === undefined) return;
+      const next = flipVerticalPoints(points);
       void commit(next);
     } else {
-      void unlinkCopy();
+      void unlink();
     }
     setPendingCopyAction(null);
   };
   const copyDialogTitle = pendingCopyAction === "flipHorizontal" || pendingCopyAction === "flipVertical"
-    ? `Flip ${param.name} copy?`
-    : `Edit ${param.name} copy?`;
+    ? `Flip ${name} copy?`
+    : `Edit ${name} copy?`;
   const copyDialogDescription = pendingCopyAction === "flipHorizontal" || pendingCopyAction === "flipVertical"
-    ? "This curve is linked from the library. Dawn will make an editable custom copy before applying the flip."
-    : "This curve is linked from the library. Dawn will make an editable custom copy so changes do not modify the library curve.";
+    ? `This ${label} is linked from the library. Dawn will make an editable custom copy before applying the flip.`
+    : `This ${label} is linked from the library. Dawn will make an editable custom copy so changes do not modify the library ${label}.`;
   return (
-    <div className={`curve-source-shell ${linked ? "linked" : ""}`}>
-      <div className="curve-source-row">
+    <div className={`param-source-shell ${linked ? "linked" : ""}`}>
+      <div className="param-source-row">
         <select
-          title={`${param.name} curve source`}
+          title={`${name} ${label} source`}
           disabled={disabled}
-          value={linked ? `library:${selectedCurveIndex}` : "custom"}
+          value={linked ? `library:${selectedSourceIndex}` : "custom"}
           onChange={(event) => {
             const value = event.currentTarget.value;
             if (value === "custom") {
-              if (linked) void unlinkCopy();
+              if (linked) void unlink();
               return;
             }
             const index = Number(value.replace("library:", ""));
-            const curve = matchingCurves[index];
-            if (curve === undefined) return;
-            void linkCurve(curve);
+            const source = availableSources[index];
+            if (source === undefined) return;
+            void link(source);
           }}
         >
-          <option value="custom">Custom curve</option>
-          {linked && selectedCurveIndex === -1 && (
+          <option value="custom">Custom {label}</option>
+          {linked && selectedSourceIndex === -1 && (
             <option value="library:-1">{linkedLabel}</option>
           )}
-          {matchingCurves.map((item, index) => (
+          {availableSources.map((item, index) => (
             <option key={index} value={`library:${index}`}>
               {item.displayName}
             </option>
@@ -614,7 +700,7 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
         {actions !== null && <div className="effect-param-actions">{actions}</div>}
       </div>
       {!disabled && (
-        <div className="curve-action-row">
+        <div className="param-source-actions">
           {linked && (
             <button type="button" className="neutral-button icon-button" title="Make editable copy" onClick={() => { requestEditableCopy("edit"); }}>
               <CopyPlus size={14} />
@@ -623,7 +709,7 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
           <button type="button" className="neutral-button icon-button" title="Flip horizontal" onClick={flipHorizontal}>
             <FlipHorizontal2 size={14} />
           </button>
-          {valueType === "float" && (
+          {flipVerticalPoints !== undefined && (
             <button type="button" className="neutral-button icon-button" title="Flip vertical" onClick={flipVertical}>
               <FlipVertical2 size={14} />
             </button>
@@ -654,7 +740,7 @@ function CurveParamSourceShell<T extends EditedCurvePoint>({
   );
 }
 
-function FloatCurveParam({
+function CurveParam({
   name,
   points,
   commit,
@@ -663,8 +749,8 @@ function FloatCurveParam({
   showName = true
 }: {
   name: string;
-  points: EditedFloatCurvePoint[];
-  commit: (points: EditedFloatCurvePoint[]) => Promise<void>;
+  points: EditedSequenceCurvePoint[];
+  commit: (points: EditedSequenceCurvePoint[]) => Promise<void>;
   readOnly?: boolean;
   requestInlineEdit?: () => void;
   showName?: boolean;
@@ -693,7 +779,7 @@ function FloatCurveParam({
     lastCommittedSignature.current = pointsSignature;
     setSelectedIndex((index) => Math.min(index, points.length - 1));
   }, [points, pointsSignature]);
-  const update = (next: EditedFloatCurvePoint[]) => {
+  const update = (next: EditedSequenceCurvePoint[]) => {
     if (readOnly) {
       requestInlineEdit?.();
       return;
@@ -713,7 +799,7 @@ function FloatCurveParam({
       }
     }
   };
-  const setPoint = (index: number, point: EditedFloatCurvePoint, commitChange: boolean) => {
+  const setPoint = (index: number, point: EditedSequenceCurvePoint, commitChange: boolean) => {
     const next = sortCurvePoints(replaceAt(draftsRef.current, index, point));
     const nextIndex = nearestFloatPointIndex(next, point);
     setDrafts(next);
@@ -735,9 +821,9 @@ function FloatCurveParam({
     if (!point) return;
     update(replaceAt(draftsRef.current, index, { time: clamp(point.time, 0, 1), value: point.value }));
   };
-  const valueRange = floatCurveValueRange(drafts);
-  const path = floatCurveSvgPath(drafts, valueRange);
-  const pointFromPointer = (event: PointerEvent<SVGSVGElement>): EditedFloatCurvePoint => {
+  const valueRange = curveValueRange(drafts);
+  const path = curveSvgPath(drafts, valueRange);
+  const pointFromPointer = (event: PointerEvent<SVGSVGElement>): EditedSequenceCurvePoint => {
     const rect = svgRef.current?.getBoundingClientRect();
     if (rect === undefined) return { time: 0, value: 0 };
     const x = clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
@@ -893,7 +979,7 @@ function FloatCurveParam({
   );
 }
 
-function ColorCurveParam({
+function GradientParam({
   name,
   points,
   commit,
@@ -902,8 +988,8 @@ function ColorCurveParam({
   showName = true
 }: {
   name: string;
-  points: EditedColorCurvePoint[];
-  commit: (points: EditedColorCurvePoint[]) => Promise<void>;
+  points: EditedSequenceGradientStop[];
+  commit: (points: EditedSequenceGradientStop[]) => Promise<void>;
   readOnly?: boolean;
   requestInlineEdit?: () => void;
   showName?: boolean;
@@ -931,7 +1017,7 @@ function ColorCurveParam({
     draftsRef.current = points;
     lastCommittedValues.current = points.map((point) => point.value.toLowerCase());
   }, [points, pointsSignature]);
-  const update = (next: EditedColorCurvePoint[]) => {
+  const update = (next: EditedSequenceGradientStop[]) => {
     if (readOnly) {
       requestInlineEdit?.();
       return;
@@ -948,7 +1034,7 @@ function ColorCurveParam({
       });
     }
   };
-  const setPoint = (index: number, point: EditedColorCurvePoint, commitChange: boolean) => {
+  const setPoint = (index: number, point: EditedSequenceGradientStop, commitChange: boolean) => {
     const next = sortCurvePoints(replaceAt(draftsRef.current, index, point));
     const nextIndex = nearestColorPointIndex(next, point);
     setDrafts(next);
@@ -963,7 +1049,7 @@ function ColorCurveParam({
     const next = draftsRef.current.filter((_, pointIndex) => pointIndex !== index);
     update(next);
   };
-  const pointFromPointer = (event: PointerEvent<HTMLElement>, color: string): EditedColorCurvePoint => {
+  const pointFromPointer = (event: PointerEvent<HTMLElement>, color: string): EditedSequenceGradientStop => {
     const rect = gradientRef.current?.getBoundingClientRect();
     if (rect === undefined) return { time: 0, value: color };
     return {
@@ -971,7 +1057,7 @@ function ColorCurveParam({
       value: color
     };
   };
-  const pointFromClientX = (clientX: number, color: string): EditedColorCurvePoint => {
+  const pointFromClientX = (clientX: number, color: string): EditedSequenceGradientStop => {
     const rect = gradientRef.current?.getBoundingClientRect();
     if (rect === undefined) return { time: 0, value: color };
     return {
@@ -1025,7 +1111,7 @@ function ColorCurveParam({
     window.addEventListener("pointerup", handlePointerUp);
     window.addEventListener("pointercancel", handlePointerCancel);
   };
-  const gradient = colorCurveGradient(drafts);
+  const gradient = gradientCss(drafts);
   return (
     <div className="effect-param-group color-curve-editor">
       {showName && <div className="effect-param-name">{name}</div>}
@@ -1107,7 +1193,7 @@ function sortCurvePoints<T extends { time: number }>(points: T[]) {
   return [...points].sort((left, right) => left.time - right.time);
 }
 
-function floatCurveValueRange(points: EditedFloatCurvePoint[]) {
+function curveValueRange(points: EditedSequenceCurvePoint[]) {
   const values = points.map((point) => point.value).filter(Number.isFinite);
   const min = Math.min(0, ...values);
   const max = Math.max(1, ...values);
@@ -1115,7 +1201,7 @@ function floatCurveValueRange(points: EditedFloatCurvePoint[]) {
   return { min, max };
 }
 
-function floatCurveSvgPath(points: EditedFloatCurvePoint[], range: { min: number; max: number }) {
+function curveSvgPath(points: EditedSequenceCurvePoint[], range: { min: number; max: number }) {
   const sorted = sortCurvePoints(points);
   if (sorted.length === 0) return "";
   return sorted
@@ -1127,7 +1213,7 @@ function floatCurveSvgPath(points: EditedFloatCurvePoint[], range: { min: number
     .join(" ");
 }
 
-function nearestFloatPointIndex(points: EditedFloatCurvePoint[], point: EditedFloatCurvePoint) {
+function nearestFloatPointIndex(points: EditedSequenceCurvePoint[], point: EditedSequenceCurvePoint) {
   let bestIndex = 0;
   let bestDistance = Infinity;
   points.forEach((candidate, index) => {
@@ -1140,7 +1226,7 @@ function nearestFloatPointIndex(points: EditedFloatCurvePoint[], point: EditedFl
   return bestIndex;
 }
 
-function nearestColorPointIndex(points: EditedColorCurvePoint[], point: EditedColorCurvePoint) {
+function nearestColorPointIndex(points: EditedSequenceGradientStop[], point: EditedSequenceGradientStop) {
   let bestIndex = 0;
   let bestDistance = Infinity;
   points.forEach((candidate, index) => {
@@ -1153,7 +1239,7 @@ function nearestColorPointIndex(points: EditedColorCurvePoint[], point: EditedCo
   return bestIndex;
 }
 
-function colorCurveGradient(points: EditedColorCurvePoint[]) {
+function gradientCss(points: EditedSequenceGradientStop[]) {
   const stops = sortCurvePoints(points)
     .filter((point) => isHexColor(point.value))
     .map((point) => `${point.value} ${clamp(point.time, 0, 1) * 100}%`);
@@ -1170,7 +1256,7 @@ function curvePointsSignature(points: Array<{ time: number; value: number | stri
   return JSON.stringify(points);
 }
 
-function normalizeFloatCurvePoints(points: FloatCurvePoint[]): EditedFloatCurvePoint[] {
+function normalizeSequenceCurvePoints(points: SequenceCurvePoint[]): EditedSequenceCurvePoint[] {
   const normalized = points
     .filter((point) => Number.isFinite(point.time) && Number.isFinite(point.value))
     .map((point) => ({ time: clamp(point.time, 0, 1), value: point.value }));
@@ -1181,7 +1267,7 @@ function automationClipWindowCurve(
   clip: SequenceAutomationClip,
   effectStartSeconds: number,
   effectDurationSeconds: number
-): EditedFloatCurvePoint[] {
+): EditedSequenceCurvePoint[] {
   const effectDuration = Math.max(0.000000001, effectDurationSeconds);
   const clipDuration = Math.max(0.000000001, clip.durationSeconds);
   const localTimes = new Set<number>([0, 1]);
@@ -1202,14 +1288,14 @@ function automationClipWindowCurve(
       const clipTime = (seconds - clip.startSeconds) / clipDuration;
       return {
         time,
-        value: sampleFloatCurve(clip.curve, clamp(clipTime, 0, 1))
+        value: sampleCurve(clip.curve, clamp(clipTime, 0, 1))
       };
     });
-  return dedupeFloatCurvePoints(points);
+  return dedupeSequenceCurvePoints(points);
 }
 
-function sampleFloatCurve(points: FloatCurvePoint[], time: number): number {
-  const sorted = normalizeFloatCurvePoints(points).sort((left, right) => left.time - right.time);
+function sampleCurve(points: SequenceCurvePoint[], time: number): number {
+  const sorted = normalizeSequenceCurvePoints(points).sort((left, right) => left.time - right.time);
   const first = sorted[0];
   if (first === undefined) return 0;
   if (time <= first.time) return first.value;
@@ -1224,8 +1310,8 @@ function sampleFloatCurve(points: FloatCurvePoint[], time: number): number {
   return sorted[sorted.length - 1]?.value ?? first.value;
 }
 
-function dedupeFloatCurvePoints(points: EditedFloatCurvePoint[]): EditedFloatCurvePoint[] {
-  const deduped: EditedFloatCurvePoint[] = [];
+function dedupeSequenceCurvePoints(points: EditedSequenceCurvePoint[]): EditedSequenceCurvePoint[] {
+  const deduped: EditedSequenceCurvePoint[] = [];
   for (const point of points) {
     const previous = deduped[deduped.length - 1];
     if (previous !== undefined && Math.abs(previous.time - point.time) < 0.000000001) {
@@ -1237,7 +1323,7 @@ function dedupeFloatCurvePoints(points: EditedFloatCurvePoint[]): EditedFloatCur
   return deduped.length > 0 ? deduped : [{ time: 0, value: 0 }];
 }
 
-function normalizeColorCurvePoints(points: ColorCurvePoint[]): EditedColorCurvePoint[] {
+function normalizeSequenceGradientStops(points: SequenceGradientStop[]): EditedSequenceGradientStop[] {
   const normalized = points
     .filter((point) => isHexColor(point.value))
     .filter((point) => Number.isFinite(point.time))

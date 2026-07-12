@@ -1,16 +1,5 @@
 pub(super) fn curve_value(curve: &Curve) -> Result<Value, ExportProjectError> {
     let mut value = typed_object("curve");
-    let value_type = match curve.points.first() {
-        Some(CurvePoint {
-            value: CurveValue::Color(_),
-            ..
-        }) => "color",
-        _ => "float",
-    };
-    value.insert(
-        string_value("value_type"),
-        Value::String(value_type.to_string()),
-    );
     value.insert(
         string_value("points"),
         Value::Sequence(
@@ -19,14 +8,28 @@ pub(super) fn curve_value(curve: &Curve) -> Result<Value, ExportProjectError> {
                 .iter()
                 .map(|point| {
                     let mut value = Mapping::new();
-                    value.insert(string_value("time"), number_value(point.position)?);
-                    value.insert(
-                        string_value("value"),
-                        match point.value {
-                            CurveValue::Float(inner) => number_value(inner)?,
-                            CurveValue::Color(inner) => Value::String(inner.to_hex()),
-                        },
-                    );
+                    value.insert(string_value("position"), number_value(point.position)?);
+                    value.insert(string_value("value"), number_value(point.value)?);
+                    Ok(Value::Mapping(value))
+                })
+                .collect::<Result<Vec<_>, ExportProjectError>>()?,
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+pub(super) fn gradient_value(gradient: &Gradient) -> Result<Value, ExportProjectError> {
+    let mut value = typed_object("gradient");
+    value.insert(
+        string_value("stops"),
+        Value::Sequence(
+            gradient
+                .stops
+                .iter()
+                .map(|stop| {
+                    let mut value = Mapping::new();
+                    value.insert(string_value("position"), number_value(stop.position)?);
+                    value.insert(string_value("color"), Value::String(stop.color.to_hex()));
                     Ok(Value::Mapping(value))
                 })
                 .collect::<Result<Vec<_>, ExportProjectError>>()?,
@@ -209,7 +212,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use dawn_language::effect::EffectTarget;
 use dawn_language::identity::SourceIdentity;
 use dawn_language::setup::{FixtureInst, Geometry, LayoutTarget, RgbChannelOrder};
-use dawn_language::values::{Curve, CurvePoint, CurveValue, Point3, Rotation3, Scale3};
+use dawn_language::values::{Curve, Gradient, Point3, Rotation3, Scale3};
 use yaml_serde::{Mapping, Value};
 
 use super::ProjectSession;

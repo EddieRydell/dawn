@@ -1,4 +1,4 @@
-use crate::values::{Color, Curve, Marks};
+use crate::values::{Color, Curve, Gradient, Marks};
 use std::sync::Arc;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -51,7 +51,8 @@ pub enum Type {
     Target,
     TargetItems,
     TargetItem,
-    Curve(Box<Type>),
+    Curve,
+    Gradient,
     Array(Box<Type>),
     Enum(Vec<Identifier>),
 }
@@ -68,15 +69,12 @@ pub enum Value {
     TargetItems(Arc<TargetItemsValue>),
     TargetItem(Arc<TargetItemValue>),
     Curve(Arc<Curve>),
+    Gradient(Arc<Gradient>),
     Array(Arc<Vec<Value>>),
     Enum(Identifier),
 }
 
 impl Type {
-    pub fn curve(value_type: Self) -> Self {
-        Self::Curve(Box::new(value_type))
-    }
-
     pub fn array(item_type: Self) -> Self {
         Self::Array(Box::new(item_type))
     }
@@ -100,7 +98,8 @@ impl Type {
             Self::TargetItem => Value::TargetItem(Arc::new(TargetItemValue {
                 pixels: Arc::new(Vec::new()),
             })),
-            Self::Curve(_) => Value::Curve(Arc::new(Curve { points: Vec::new() })),
+            Self::Curve => Value::Curve(Arc::new(Curve { points: Vec::new() })),
+            Self::Gradient => Value::Gradient(Arc::new(Gradient { stops: Vec::new() })),
             Self::Array(_) => Value::Array(Arc::new(Vec::new())),
             Self::Enum(options) => Value::Enum(options[0].clone()),
         }

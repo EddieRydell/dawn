@@ -680,6 +680,9 @@ impl DomainResolver<'_> {
             "curve" => Ok(EffectParamValue::Curve(
                 self.parse_curve_source(path, required_field(path, value, "curve")?)?,
             )),
+            "gradient" => Ok(EffectParamValue::Gradient(
+                self.parse_gradient_source(path, required_field(path, value, "gradient")?)?,
+            )),
             "array" => {
                 let values = sequence_values(path, value, "values")?
                     .iter()
@@ -703,9 +706,14 @@ impl DomainResolver<'_> {
         if optional_field(value, "type").is_some() {
             return self.parse_effect_param(path, value);
         }
-        let curve = required_field(path, value, "curve")?;
-        Ok(EffectParamValue::Curve(
-            self.parse_curve_source(path, curve)?,
+        if let Some(curve) = optional_field(value, "curve") {
+            return Ok(EffectParamValue::Curve(
+                self.parse_curve_source(path, curve)?,
+            ));
+        }
+        let gradient = required_field(path, value, "gradient")?;
+        Ok(EffectParamValue::Gradient(
+            self.parse_gradient_source(path, gradient)?,
         ))
     }
 
@@ -747,6 +755,43 @@ impl DomainResolver<'_> {
             });
         }
         Ok(())
+    }
+
+    pub(super) fn parse_gradient_source(
+        &mut self,
+        path: &Utf8Path,
+        value: &Value,
+    ) -> Result<GradientSource, LoadProjectError> {
+        if let Some(reference) = value.as_str() {
+            let id = match self.loader.resolve_reference(path, reference)? {
+                ResolvedObject::Gradient(gradient) => gradient,
+                _ => {
+                    return Err(LoadProjectError::InvalidReference {
+                        path: path.to_path_buf(),
+                        range: None,
+                        reference: reference.to_string(),
+                    });
+                }
+            };
+            if !self
+                .project
+                .definitions
+                .gradients
+                .definitions
+                .contains_key(&id)
+            {
+                return Err(LoadProjectError::InvalidReference {
+                    path: path.to_path_buf(),
+                    range: None,
+                    reference: id.0.object().to_string(),
+                });
+            }
+            return Ok(GradientSource::Reference(id));
+        }
+        if let Some(gradient) = optional_field(value, "gradient") {
+            return self.parse_gradient_source(path, gradient);
+        }
+        Ok(GradientSource::Inline(parse_gradient(path, value)?))
     }
 
     pub(super) fn parse_automation_clip(
@@ -797,6 +842,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use dawn_language::dsl::Identifier;
 use dawn_language::effect::{
     CurveId, CurveSource, EffectDefinitionId, EffectInst, EffectInstId, EffectParamValue,
+    GradientSource,
 };
 use dawn_language::identity::SourceIdentity;
 use dawn_language::model::DawnProject;
@@ -822,10 +868,10 @@ use super::parse::{
     optional_mapping_ref, optional_sequence, optional_string_field, parse_automation_binding,
     parse_automation_curve, parse_channel_order, parse_color, parse_controller_address,
     parse_curve, parse_duration, parse_duration_as_time, parse_effect_scope, parse_effect_target,
-    parse_fixture_group, parse_graph_edge, parse_graph_position, parse_layout_target,
-    parse_mark_collection, parse_point3, parse_rotation3, parse_scale3, parse_sequence_layer,
-    parse_slot_range, relative_path, required_field, sequence_field, sequence_values, string_field,
-    u32_field, usize_field,
+    parse_fixture_group, parse_gradient, parse_graph_edge, parse_graph_position,
+    parse_layout_target, parse_mark_collection, parse_point3, parse_rotation3, parse_scale3,
+    parse_sequence_layer, parse_slot_range, relative_path, required_field, sequence_field,
+    sequence_values, string_field, u32_field, usize_field,
 };
 use crate::LoadProjectError;
 use crate::diagnostics::{

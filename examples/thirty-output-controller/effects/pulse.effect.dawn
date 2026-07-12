@@ -1,8 +1,8 @@
 effect Pulse {
-  param curve<color> gradient;
-  param curve<float> pulse_shape;
+  param gradient gradient;
+  param curve pulse_shape;
 
   color sample() {
-    return curve_color_scaled(gradient, progress(), pulse_shape[progress()]);
+    return gradient_color_scaled(gradient, progress(), pulse_shape[progress()]);
   }
 }

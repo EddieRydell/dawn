@@ -4,7 +4,7 @@ mod values;
 
 use sequence::sequence_value;
 use setup::{controller_value, fixture_definition_value, layout_value, patch_value, setup_value};
-use values::{curve_value, string_value, typed_object, write_source_reference};
+use values::{curve_value, gradient_value, string_value, typed_object, write_source_reference};
 
 pub(super) fn write_source_documents(
     session: &ProjectSession,
@@ -163,6 +163,16 @@ pub(super) fn has_typed_object(
                     .contains_key(&CurveId(identity))
             })
         }
+        SourceObjectKind::Gradient => {
+            qualified_identity(session, document, id).is_some_and(|identity| {
+                session
+                    .project
+                    .definitions
+                    .gradients
+                    .definitions
+                    .contains_key(&GradientId(identity))
+            })
+        }
         SourceObjectKind::Sequence => {
             qualified_identity(session, document, id).is_some_and(|identity| {
                 session
@@ -277,6 +287,18 @@ pub(super) fn serialize_source_object(
                 .ok_or_else(|| missing_typed_object(from_document, id))?;
             curve_value(&curve.curve)
         }
+        SourceObjectKind::Gradient => {
+            let identity = qualified_identity(session, from_document, id)
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
+            let gradient = session
+                .project
+                .definitions
+                .gradients
+                .definitions
+                .get(&GradientId(identity))
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
+            gradient_value(&gradient.gradient)
+        }
         SourceObjectKind::Sequence => {
             let identity = qualified_identity(session, from_document, id)
                 .ok_or_else(|| missing_typed_object(from_document, id))?;
@@ -358,7 +380,7 @@ pub(super) fn project_root_value(
 use std::{fs, io};
 
 use camino::{Utf8Path, Utf8PathBuf};
-use dawn_language::effect::{CurveId, EffectDefinitionId};
+use dawn_language::effect::{CurveId, EffectDefinitionId, GradientId};
 use dawn_language::identity::SourceIdentity;
 use dawn_language::model::ProjectId;
 use dawn_language::operator::OperatorDefinitionId;

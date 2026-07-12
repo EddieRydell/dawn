@@ -1,7 +1,7 @@
 mod params;
 use params::{
-    automation_mapping_to_gui, curve_library, effect_params, fixture_source_ref, graph_node_id,
-    graph_operator_definition_to_gui, param_kind, sequence_composition_graph_node,
+    automation_mapping_to_gui, curve_library, effect_params, fixture_source_ref, gradient_library,
+    graph_node_id, graph_operator_definition_to_gui, param_kind, sequence_composition_graph_node,
 };
 pub(super) use params::{default_param_value, effect_param_value};
 
@@ -126,6 +126,7 @@ pub(super) fn project_sequence(
             lanes,
             effect_scripts: effect_scripts(session),
             curve_library: curve_library(session),
+            gradient_library: gradient_library(session),
             layers: sequence
                 .layers
                 .iter()
@@ -159,12 +160,9 @@ fn automation_clips(sequence: &dawn_language::sequence::Sequence) -> Vec<Sequenc
                 .curve
                 .points
                 .iter()
-                .filter_map(|point| match point.value {
-                    CurveValue::Float(value) => Some(FloatCurvePoint {
-                        time: point.position,
-                        value,
-                    }),
-                    CurveValue::Color(_) => None,
+                .map(|point| SequenceCurvePoint {
+                    time: point.position,
+                    value: point.value,
                 })
                 .collect(),
             bindings: clip
@@ -452,18 +450,17 @@ use dawn_language::identity::SourceIdentity;
 use dawn_language::operator::{BuiltinOperator, OperatorRef};
 use dawn_language::sequence::{AutomationTarget, SequenceId};
 use dawn_language::setup::{FixtureDefinitionId, LayoutId, LayoutTarget as DomainLayoutTarget};
-use dawn_language::values::CurveValue;
 use dawn_project_io::{ProjectSession, SourceObjectKind, relative_path_from_document};
 
 use super::{ResolvedGuiObject, blocked, gui_diagnostic};
 use crate::dto::{
-    EffectScriptReference, FixtureDefinition, FixtureGuiDocument, FloatCurvePoint, GuiDocument,
-    GuiObjectRef, LayoutFixturePlacement, LayoutGuiDocument, LayoutTarget, LayoutTargetKind,
-    ObjectKind, ResolvedLayoutFixture, Rotation3Degrees, Scale3, SequenceAudio,
-    SequenceAutomationBinding, SequenceAutomationClip, SequenceAutomationTarget,
-    SequenceCompositionGraph, SequenceEffect, SequenceEffectScope, SequenceEffectScript,
-    SequenceEffectScriptKind, SequenceEffectScriptParam, SequenceGraphEdge, SequenceGuiDocument,
-    SequenceLane, SequenceLayer, SequenceMarkCollection, SequenceTimelineClipKind, Transform,
+    EffectScriptReference, FixtureDefinition, FixtureGuiDocument, GuiDocument, GuiObjectRef,
+    LayoutFixturePlacement, LayoutGuiDocument, LayoutTarget, LayoutTargetKind, ObjectKind,
+    ResolvedLayoutFixture, Rotation3Degrees, Scale3, SequenceAudio, SequenceAutomationBinding,
+    SequenceAutomationClip, SequenceAutomationTarget, SequenceCompositionGraph, SequenceCurvePoint,
+    SequenceEffect, SequenceEffectScope, SequenceEffectScript, SequenceEffectScriptKind,
+    SequenceEffectScriptParam, SequenceGraphEdge, SequenceGuiDocument, SequenceLane, SequenceLayer,
+    SequenceMarkCollection, SequenceTimelineClipKind, Transform,
 };
 use crate::gui_geometry::{
     empty_resolved_fixture, geometry, geometry_summary, layout_bounds, point3_meters, render_plan,

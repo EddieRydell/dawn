@@ -615,13 +615,11 @@ impl<'source> Parser<'source> {
             }
             TokenKind::Keyword(Keyword::Curve) => {
                 self.advance();
-                self.expect(TokenKind::LessThan, "expected `<` after `curve`");
-                let item = self.parse_type()?;
-                if type_contains_signal(&item) {
-                    self.error_here("Signal cannot be used as a generic type");
-                }
-                self.expect(TokenKind::GreaterThan, "expected `>` after curve type");
-                Some(Type::curve(item))
+                Some(Type::Curve)
+            }
+            TokenKind::Identifier if self.text(token.span) == "gradient" => {
+                self.advance();
+                Some(Type::Gradient)
             }
             TokenKind::Keyword(Keyword::Array) => {
                 self.advance();
@@ -832,7 +830,7 @@ static EOF_TOKEN: Token = Token {
 fn type_contains_signal(ty: &Type) -> bool {
     match ty {
         Type::Signal => true,
-        Type::Curve(inner) | Type::Array(inner) => type_contains_signal(inner),
+        Type::Array(inner) => type_contains_signal(inner),
         _ => false,
     }
 }

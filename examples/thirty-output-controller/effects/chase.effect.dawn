@@ -1,13 +1,13 @@
 effect Chase {
-  param curve<color> gradient;
+  param gradient gradient;
   param enum gradient_mode { through_effect, across_items, per_pulse } = per_pulse;
   param float pulse_overlap = 8.0;
   param int section_width_pixels = 1;
-  param curve<float> chase_position;
+  param curve chase_position;
   param bool reverse = false;
   param bool extend_to_start = false;
   param bool extend_to_end = false;
-  param curve<float> pulse_shape;
+  param curve pulse_shape;
 
   color sample() {
     float width = max(1.0, section_width_pixels);
@@ -31,7 +31,7 @@ effect Chase {
     float pulse_progress = (progress() - hit) / pulse_duration;
     float level = 0.0;
     if (pulse_progress >= 0.0 && pulse_progress <= 1.0) {
-      level = curve_float_clamped(pulse_shape, pulse_progress, 0.0, 1.0);
+      level = curve_clamped(pulse_shape, pulse_progress, 0.0, 1.0);
     }
 
     float gradient_position = pulse_progress;
@@ -45,6 +45,6 @@ effect Chase {
       gradient_position = pulse_progress;
     }
 
-    return curve_color_scaled(gradient, clamp(gradient_position, 0.0, 1.0), level);
+    return gradient_color_scaled(gradient, clamp(gradient_position, 0.0, 1.0), level);
   }
 }

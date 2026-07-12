@@ -130,25 +130,23 @@ christmas:
         curve:
           id: 1
           curve:
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 1.0
-            - time: 1.0
+            - position: 1.0
               value: 0.0
       gradient:
-        type: curve
-        curve:
+        type: gradient
+        gradient:
           id: 2
-          curve:
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.231
-              value: '#ff7a7a'
-            - time: 0.448
-              value: '#ff0000'
+          gradient:
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.231
+              color: '#ff7a7a'
+            - position: 0.448
+              color: '#ff0000'
       spatial_offset:
         type: float
         value: 0.0

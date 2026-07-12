@@ -1,8 +1,8 @@
 effect MarkPulse {
   param marks beats;
   param color base = #000000;
-  param curve<color> accent;
-  param curve<float> hue;
+  param gradient accent;
+  param curve hue;
   param float hue_mix = 0.35;
   param float offset_seconds = 0.0;
   param float decay_seconds = 0.18;
@@ -40,8 +40,8 @@ effect MarkPulse {
 
 effect MarkPulseChild {
   param color base = #000000;
-  param curve<color> accent;
-  param curve<float> hue;
+  param gradient accent;
+  param curve hue;
   param float hue_mix = 0.35;
   param int section_width_pixels = 5;
   param float section_edge_fade_pixels = 0.0;

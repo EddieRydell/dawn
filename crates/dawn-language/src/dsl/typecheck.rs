@@ -410,7 +410,8 @@ impl Checker {
                 let target = self.check_expr(*target, env, None);
                 let index = match &target.ty {
                     Type::Array(_) => self.check_expr(*index, env, Some(&Type::Int)),
-                    Type::Curve(_) => self.check_expr(*index, env, Some(&Type::Float)),
+                    Type::Curve => self.check_expr(*index, env, Some(&Type::Float)),
+                    Type::Gradient => self.check_expr(*index, env, Some(&Type::Float)),
                     _ => self.check_expr(*index, env, None),
                 };
                 let ty = match &target.ty {
@@ -418,12 +419,19 @@ impl Checker {
                         self.require_assignable(&Type::Int, &index.ty, index.span);
                         item.as_ref().clone()
                     }
-                    Type::Curve(value_type) => {
+                    Type::Curve => {
                         self.require_assignable(&Type::Float, &index.ty, index.span);
-                        value_type.as_ref().clone()
+                        Type::Float
+                    }
+                    Type::Gradient => {
+                        self.require_assignable(&Type::Float, &index.ty, index.span);
+                        Type::Color
                     }
                     _ => {
-                        self.error(target.span, "indexing requires an array or curve");
+                        self.error(
+                            target.span,
+                            "indexing requires an array, curve, or gradient",
+                        );
                         Type::Void
                     }
                 };
@@ -657,24 +665,24 @@ impl Checker {
                 if args.len() != 2 && args.len() != 3 {
                     self.error(span, "`curve_crossing` expects 2 or 3 arguments");
                 }
-                self.require_arg(args, 0, &Type::curve(Type::Float), env);
+                self.require_arg(args, 0, &Type::Curve, env);
                 self.require_arg(args, 1, &Type::Float, env);
                 if args.len() == 3 {
                     self.require_arg(args, 2, &Type::Float, env);
                 }
                 Type::Float
             }
-            "curve_float_clamped" => {
+            "curve_clamped" => {
                 self.require_arg_count(name, args.len(), 4, span);
-                self.require_arg(args, 0, &Type::curve(Type::Float), env);
+                self.require_arg(args, 0, &Type::Curve, env);
                 for index in 1..4 {
                     self.require_arg(args, index, &Type::Float, env);
                 }
                 Type::Float
             }
-            "curve_color_scaled" => {
+            "gradient_color_scaled" => {
                 self.require_arg_count(name, args.len(), 3, span);
-                self.require_arg(args, 0, &Type::curve(Type::Color), env);
+                self.require_arg(args, 0, &Type::Gradient, env);
                 self.require_arg(args, 1, &Type::Float, env);
                 self.require_arg(args, 2, &Type::Float, env);
                 Type::Color
@@ -861,10 +869,10 @@ fn builtin_arg_type(name: &str, index: usize) -> Option<Type> {
         "intensity" | "invert" => Some(Type::Color),
         "rgb" | "hsv" | "rand" | "srand" | "sin" | "cos" | "abs" | "floor" | "min" | "clamp"
         | "smoothstep" | "section_position" => Some(Type::Float),
-        "curve_crossing" if index == 0 => Some(Type::curve(Type::Float)),
-        "curve_float_clamped" if index == 0 => Some(Type::curve(Type::Float)),
-        "curve_color_scaled" if index == 0 => Some(Type::curve(Type::Color)),
-        "curve_crossing" | "curve_float_clamped" | "curve_color_scaled" => Some(Type::Float),
+        "curve_crossing" if index == 0 => Some(Type::Curve),
+        "curve_clamped" if index == 0 => Some(Type::Curve),
+        "gradient_color_scaled" if index == 0 => Some(Type::Gradient),
+        "curve_crossing" | "curve_clamped" | "gradient_color_scaled" => Some(Type::Float),
         _ => None,
     }
 }
@@ -876,7 +884,7 @@ fn numeric(ty: &Type) -> bool {
 fn type_contains_signal(ty: &Type) -> bool {
     match ty {
         Type::Signal => true,
-        Type::Curve(inner) | Type::Array(inner) => type_contains_signal(inner),
+        Type::Array(inner) => type_contains_signal(inner),
         _ => false,
     }
 }
@@ -892,14 +900,8 @@ fn type_of_value(value: &Value) -> Type {
         Value::Target(_) => Type::Target,
         Value::TargetItems(_) => Type::TargetItems,
         Value::TargetItem(_) => Type::TargetItem,
-        Value::Curve(curve) => curve
-            .points
-            .first()
-            .map(|point| match point.value {
-                crate::values::CurveValue::Float(_) => Type::curve(Type::Float),
-                crate::values::CurveValue::Color(_) => Type::curve(Type::Color),
-            })
-            .unwrap_or_else(|| Type::curve(Type::Void)),
+        Value::Curve(_) => Type::Curve,
+        Value::Gradient(_) => Type::Gradient,
         Value::Array(items) => items
             .first()
             .map(|item| Type::array(type_of_value(item)))
@@ -925,7 +927,7 @@ fn value_matches_type(value: &Value, ty: &Type) -> bool {
         (Value::Enum(identifier), Type::Enum(options)) => {
             options.iter().any(|option| option == identifier)
         }
-        (Value::Curve(_), Type::Curve(_)) => true,
+        (Value::Curve(_), Type::Curve) | (Value::Gradient(_), Type::Gradient) => true,
         _ => false,
     }
 }

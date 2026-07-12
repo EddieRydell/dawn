@@ -2,15 +2,15 @@ effect MarkChase {
   param marks beats;
   param color base = #000000;
   param enum gradient_mode { through_effect, across_items, per_pulse } = per_pulse;
-  param array<curve<color>> gradients;
-  param curve<float> hue;
+  param array<gradient> gradients;
+  param curve hue;
   param float hue_mix = 0.35;
   param float offset_seconds = 0.0;
   param float chase_seconds = 0.5;
   param float pulse_overlap = 8.0;
   param int section_width_pixels = 5;
-  param array<curve<float>> chase_positions;
-  param curve<float> pulse_shape;
+  param array<curve> chase_positions;
+  param curve pulse_shape;
 
   void generate() {
     int gradient_count = len(gradients);
@@ -42,13 +42,13 @@ effect MarkChase {
 effect MarkChaseChild {
   param color base = #000000;
   param enum gradient_mode { through_effect, across_items, per_pulse } = per_pulse;
-  param curve<color> gradient;
-  param curve<float> hue;
+  param gradient gradient;
+  param curve hue;
   param float hue_mix = 0.35;
   param float pulse_overlap = 8.0;
   param int section_width_pixels = 5;
-  param curve<float> chase_position;
-  param curve<float> pulse_shape;
+  param curve chase_position;
+  param curve pulse_shape;
   param float parent_duration = 1.0;
   param float child_start = 0.0;
 
@@ -72,7 +72,7 @@ effect MarkChaseChild {
     }
 
     float parent_progress = clamp((child_start + seconds()) / max(0.000000001, parent_duration), 0.0, 1.0);
-    color value = curve_color_scaled(gradient, clamp(gradient_position, 0.0, 1.0), level);
+    color value = gradient_color_scaled(gradient, clamp(gradient_position, 0.0, 1.0), level);
     color hue_color = hsv(hue[parent_progress] / 360.0, 1.0, 1.0);
     return mix(base, mix(value, hue_color, clamp(hue_mix, 0.0, 1.0)), level);
   }

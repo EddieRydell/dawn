@@ -24,6 +24,7 @@ pub(in crate::gui) fn effect_params(
                 editable: automation_for_param(sequence, effect.id.0, param.name.as_str())
                     .is_none(),
                 curve_source: override_value.and_then(curve_source),
+                gradient_source: override_value.and_then(gradient_source),
                 automation: automation_for_param(sequence, effect.id.0, param.name.as_str()),
                 value,
             })
@@ -104,6 +105,7 @@ fn graph_operator_params(
                 .is_none(),
                 value,
                 curve_source: override_value.and_then(curve_source),
+                gradient_source: override_value.and_then(gradient_source),
                 automation: automation_for_composition_param(
                     sequence,
                     node_id,
@@ -281,7 +283,7 @@ pub(in crate::gui) fn automation_mapping_to_gui(
                 .map(|value| value.as_str().to_string())
                 .collect(),
         },
-        AutomationMapping::FloatCurve { min, max } => SequenceAutomationMapping::FloatCurve {
+        AutomationMapping::Curve { min, max } => SequenceAutomationMapping::Curve {
             min: *min,
             max: *max,
         },
@@ -295,18 +297,29 @@ pub(in crate::gui) fn curve_library(session: &ProjectSession) -> Vec<SequenceCur
         .curves
         .definitions
         .iter()
-        .filter_map(|(id, definition)| {
-            let points = curve_points(&definition.curve.points)?;
-            Some(SequenceCurveLibraryItem {
-                path: id.0.document().to_string(),
-                object_key: id.0.object().to_string(),
-                display_name: id.0.object().to_string(),
-                value_type: match &points {
-                    SequenceCurveLibraryPoints::Float { .. } => SequenceCurveValueType::Float,
-                    SequenceCurveLibraryPoints::Color { .. } => SequenceCurveValueType::Color,
-                },
-                points,
-            })
+        .map(|(id, definition)| SequenceCurveLibraryItem {
+            path: id.0.document().to_string(),
+            object_key: id.0.object().to_string(),
+            display_name: id.0.object().to_string(),
+            points: curve_points(&definition.curve),
+        })
+        .collect()
+}
+
+pub(in crate::gui) fn gradient_library(
+    session: &ProjectSession,
+) -> Vec<SequenceGradientLibraryItem> {
+    session
+        .project
+        .definitions
+        .gradients
+        .definitions
+        .iter()
+        .map(|(id, definition)| SequenceGradientLibraryItem {
+            path: id.0.document().to_string(),
+            object_key: id.0.object().to_string(),
+            display_name: id.0.object().to_string(),
+            stops: gradient_stops(&definition.gradient),
         })
         .collect()
 }
@@ -328,19 +341,15 @@ pub(in crate::gui) fn param_kind(ty: &Type) -> Option<SequenceEffectParamKind> {
         Type::Color => SequenceEffectParamKind::Color,
         Type::Enum(_) => SequenceEffectParamKind::Enum,
         Type::Marks => SequenceEffectParamKind::Marks,
-        Type::Curve(inner) => match inner.as_ref() {
-            Type::Color => SequenceEffectParamKind::ColorCurve,
-            _ => SequenceEffectParamKind::FloatCurve,
-        },
+        Type::Curve => SequenceEffectParamKind::Curve,
+        Type::Gradient => SequenceEffectParamKind::Gradient,
         Type::Array(inner) => match inner.as_ref() {
             Type::Int => SequenceEffectParamKind::IntArray,
             Type::Float => SequenceEffectParamKind::FloatArray,
             Type::Bool => SequenceEffectParamKind::BoolArray,
             Type::Color => SequenceEffectParamKind::ColorArray,
-            Type::Curve(curve_inner) => match curve_inner.as_ref() {
-                Type::Color => SequenceEffectParamKind::ColorCurveArray,
-                _ => SequenceEffectParamKind::FloatCurveArray,
-            },
+            Type::Curve => SequenceEffectParamKind::CurveArray,
+            Type::Gradient => SequenceEffectParamKind::GradientArray,
             _ => SequenceEffectParamKind::FloatArray,
         },
         Type::Void
@@ -384,17 +393,32 @@ pub(in crate::gui) fn effect_param_value(
             key: value.name.clone(),
         },
         EffectParamValue::Curve(source) => match source {
-            CurveSource::Inline(curve) => curve_points(&curve.points)
-                .map(curve_points_param_value)
-                .unwrap_or_else(|| SequenceEffectParamValue::FloatCurve { points: Vec::new() }),
+            CurveSource::Inline(curve) => SequenceEffectParamValue::Curve {
+                points: curve_points(curve),
+            },
             CurveSource::Reference(id) => session
                 .project
                 .definitions
                 .curves
                 .get(id)
-                .and_then(|definition| curve_points(&definition.curve.points))
-                .map(curve_points_param_value)
-                .unwrap_or_else(|| SequenceEffectParamValue::FloatCurve { points: Vec::new() }),
+                .map(|definition| SequenceEffectParamValue::Curve {
+                    points: curve_points(&definition.curve),
+                })
+                .unwrap_or_else(|| SequenceEffectParamValue::Curve { points: Vec::new() }),
+        },
+        EffectParamValue::Gradient(source) => match source {
+            GradientSource::Inline(gradient) => SequenceEffectParamValue::Gradient {
+                stops: gradient_stops(gradient),
+            },
+            GradientSource::Reference(id) => session
+                .project
+                .definitions
+                .gradients
+                .get(id)
+                .map(|definition| SequenceEffectParamValue::Gradient {
+                    stops: gradient_stops(&definition.gradient),
+                })
+                .unwrap_or_else(|| SequenceEffectParamValue::Gradient { stops: Vec::new() }),
         },
         EffectParamValue::Array(values) => array_param_value(session, values),
     }
@@ -414,9 +438,12 @@ pub(in crate::gui) fn default_param_value(value: &EffectValue) -> Option<Sequenc
             value: value.as_str().to_string(),
         },
         EffectValue::Marks(_) => SequenceEffectParamValue::Marks { key: String::new() },
-        EffectValue::Curve(curve) => curve_points(&curve.points)
-            .map(curve_points_param_value)
-            .unwrap_or_else(|| SequenceEffectParamValue::FloatCurve { points: Vec::new() }),
+        EffectValue::Curve(curve) => SequenceEffectParamValue::Curve {
+            points: curve_points(curve),
+        },
+        EffectValue::Gradient(gradient) => SequenceEffectParamValue::Gradient {
+            stops: gradient_stops(gradient),
+        },
         EffectValue::Array(values) => {
             let converted = values
                 .iter()
@@ -435,13 +462,26 @@ fn default_value_for_type(ty: &Type) -> Option<SequenceEffectParamValue> {
     default_param_value(&ty.default_value())
 }
 
-fn curve_source(value: &EffectParamValue) -> Option<SequenceEffectParamCurveSource> {
+fn curve_source(value: &EffectParamValue) -> Option<SequenceCurveSource> {
     match value {
-        EffectParamValue::Curve(CurveSource::Inline(_)) => {
-            Some(SequenceEffectParamCurveSource::Inline)
+        EffectParamValue::Curve(CurveSource::Inline(_)) => Some(SequenceCurveSource::Inline),
+        EffectParamValue::Curve(CurveSource::Reference(id)) => Some(SequenceCurveSource::Library {
+            reference: id.0.object().to_string(),
+            path: Some(id.0.document().to_string()),
+            object_key: Some(id.0.object().to_string()),
+            display_name: Some(id.0.object().to_string()),
+        }),
+        _ => None,
+    }
+}
+
+fn gradient_source(value: &EffectParamValue) -> Option<SequenceGradientSource> {
+    match value {
+        EffectParamValue::Gradient(GradientSource::Inline(_)) => {
+            Some(SequenceGradientSource::Inline)
         }
-        EffectParamValue::Curve(CurveSource::Reference(id)) => {
-            Some(SequenceEffectParamCurveSource::Library {
+        EffectParamValue::Gradient(GradientSource::Reference(id)) => {
+            Some(SequenceGradientSource::Library {
                 reference: id.0.object().to_string(),
                 path: Some(id.0.document().to_string()),
                 object_key: Some(id.0.object().to_string()),
@@ -452,47 +492,26 @@ fn curve_source(value: &EffectParamValue) -> Option<SequenceEffectParamCurveSour
     }
 }
 
-fn curve_points(
-    points: &[dawn_language::values::CurvePoint],
-) -> Option<SequenceCurveLibraryPoints> {
-    let first = points.first()?;
-    match first.value {
-        CurveValue::Float(_) => Some(SequenceCurveLibraryPoints::Float {
-            points: points
-                .iter()
-                .filter_map(|point| match point.value {
-                    CurveValue::Float(value) => Some(FloatCurvePoint {
-                        time: point.position,
-                        value,
-                    }),
-                    CurveValue::Color(_) => None,
-                })
-                .collect(),
-        }),
-        CurveValue::Color(_) => Some(SequenceCurveLibraryPoints::Color {
-            points: points
-                .iter()
-                .filter_map(|point| match point.value {
-                    CurveValue::Color(value) => Some(ColorCurvePoint {
-                        time: point.position,
-                        value: value.to_hex(),
-                    }),
-                    CurveValue::Float(_) => None,
-                })
-                .collect(),
-        }),
-    }
+fn curve_points(curve: &Curve) -> Vec<SequenceCurvePoint> {
+    curve
+        .points
+        .iter()
+        .map(|point| SequenceCurvePoint {
+            time: point.position,
+            value: point.value,
+        })
+        .collect()
 }
 
-fn curve_points_param_value(points: SequenceCurveLibraryPoints) -> SequenceEffectParamValue {
-    match points {
-        SequenceCurveLibraryPoints::Float { points } => {
-            SequenceEffectParamValue::FloatCurve { points }
-        }
-        SequenceCurveLibraryPoints::Color { points } => {
-            SequenceEffectParamValue::ColorCurve { points }
-        }
-    }
+fn gradient_stops(gradient: &Gradient) -> Vec<SequenceGradientStop> {
+    gradient
+        .stops
+        .iter()
+        .map(|stop| SequenceGradientStop {
+            time: stop.position,
+            value: stop.color.to_hex(),
+        })
+        .collect()
 }
 
 fn array_param_value(
@@ -537,28 +556,26 @@ fn array_param_from_sequence_values(
                 })
                 .collect(),
         },
-        Some(SequenceEffectParamValue::ColorCurve { .. }) => {
-            SequenceEffectParamValue::ColorCurveArray {
+        Some(SequenceEffectParamValue::Gradient { .. }) => {
+            SequenceEffectParamValue::GradientArray {
                 values: values
                     .iter()
                     .filter_map(|value| match value {
-                        SequenceEffectParamValue::ColorCurve { points } => Some(points.clone()),
+                        SequenceEffectParamValue::Gradient { stops } => Some(stops.clone()),
                         _ => None,
                     })
                     .collect(),
             }
         }
-        Some(SequenceEffectParamValue::FloatCurve { .. }) => {
-            SequenceEffectParamValue::FloatCurveArray {
-                values: values
-                    .iter()
-                    .filter_map(|value| match value {
-                        SequenceEffectParamValue::FloatCurve { points } => Some(points.clone()),
-                        _ => None,
-                    })
-                    .collect(),
-            }
-        }
+        Some(SequenceEffectParamValue::Curve { .. }) => SequenceEffectParamValue::CurveArray {
+            values: values
+                .iter()
+                .filter_map(|value| match value {
+                    SequenceEffectParamValue::Curve { points } => Some(points.clone()),
+                    _ => None,
+                })
+                .collect(),
+        },
         _ => SequenceEffectParamValue::FloatArray {
             values: values
                 .iter()
@@ -571,7 +588,7 @@ fn array_param_from_sequence_values(
     }
 }
 use dawn_language::dsl::{Type, Value as EffectValue};
-use dawn_language::effect::{CurveSource, EffectParamValue};
+use dawn_language::effect::{CurveSource, EffectParamValue, GradientSource};
 use dawn_language::operator::{
     BuiltinOperator, GraphOperatorNode, OperatorDefinition, OperatorPortCardinality,
     OperatorPortDefinition, OperatorRef,
@@ -581,14 +598,14 @@ use dawn_language::sequence::{
     CompositionGraphNodeKind,
 };
 use dawn_language::setup::FixtureDefinitionId;
-use dawn_language::values::CurveValue;
+use dawn_language::values::{Curve, Gradient};
 use dawn_project_io::ProjectSession;
 
 use crate::dto::{
-    ColorCurvePoint, FloatCurvePoint, GuiObjectRef, ObjectKind, SequenceAutomationMapping,
-    SequenceBuiltinOperator, SequenceCurveLibraryItem, SequenceCurveLibraryPoints,
-    SequenceCurveValueType, SequenceEffectParam, SequenceEffectParamCurveSource,
-    SequenceEffectParamKind, SequenceEffectParamValue, SequenceGraphNode, SequenceGraphNodeKind,
+    GuiObjectRef, ObjectKind, SequenceAutomationMapping, SequenceBuiltinOperator,
+    SequenceCurveLibraryItem, SequenceCurvePoint, SequenceCurveSource, SequenceEffectParam,
+    SequenceEffectParamKind, SequenceEffectParamValue, SequenceGradientLibraryItem,
+    SequenceGradientSource, SequenceGradientStop, SequenceGraphNode, SequenceGraphNodeKind,
     SequenceGraphOperator, SequenceGraphOperatorDefinition, SequenceGraphPortCardinality,
     SequenceGraphPortDefinition, SequenceParamAutomation,
 };

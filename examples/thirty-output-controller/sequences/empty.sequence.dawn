@@ -3,6 +3,8 @@ imports:
   as: effects
 - from: ../curves
   as: curves
+- from: ../gradients
+  as: gradients
 empty:
   type: sequence
   duration: 200s
@@ -1661,19 +1663,18 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#eaffff'
-          - time: 0.25
-            value: '#7cffc7'
-          - time: 0.55
-            value: '#48a0ff'
-          - time: 1.0
-            value: '#b33cff'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#eaffff'
+          - position: 0.25
+            color: '#7cffc7'
+          - position: 0.55
+            color: '#48a0ff'
+          - position: 1.0
+            color: '#b33cff'
       hue:
         type: curve
         curve: curves.hue_warm_shift
@@ -1715,8 +1716,8 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve: curves.cool_gradient
+        type: gradient
+        gradient: gradients.cool_gradient
       hue:
         type: curve
         curve: curves.hue_cool_shift
@@ -1752,17 +1753,16 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-          - time: 0.281
-            value: '#ff7300'
-          - time: 0.665
-            value: '#d400ff'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
+          - position: 0.281
+            color: '#ff7300'
+          - position: 0.665
+            color: '#d400ff'
       gradient_mode:
         type: enum
         value: per_pulse
@@ -1785,11 +1785,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       reverse:
         type: bool
@@ -1811,8 +1810,8 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve: curves.fire_gradient
+        type: gradient
+        gradient: gradients.fire_gradient
       hue:
         type: curve
         curve: curves.hue_warm_shift
@@ -1848,17 +1847,16 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-          - time: 0.281
-            value: '#002aff'
-          - time: 0.697
-            value: '#ff5900'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
+          - position: 0.281
+            color: '#002aff'
+          - position: 0.697
+            color: '#ff5900'
       gradient_mode:
         type: enum
         value: per_pulse
@@ -1872,21 +1870,20 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 0.068
+          - position: 0.068
             value: 0.724
-          - time: 0.235
+          - position: 0.235
             value: 0.371
-          - time: 0.421
+          - position: 0.421
             value: 0.217
-          - time: 0.597
+          - position: 0.597
             value: 0.1
-          - time: 0.738
+          - position: 0.738
             value: 0.054
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       extend_to_start:
         type: bool
@@ -1898,11 +1895,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 6
@@ -1915,17 +1911,16 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-          - time: 0.281
-            value: '#0400ff'
-          - time: 0.679
-            value: '#ff1100'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
+          - position: 0.281
+            color: '#0400ff'
+          - position: 0.679
+            color: '#ff1100'
       gradient_mode:
         type: enum
         value: per_pulse
@@ -1948,11 +1943,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 7
@@ -1965,17 +1959,16 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.fire_gradient
+        type: gradient
+        gradient: gradients.fire_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 8
@@ -1988,17 +1981,16 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-          - time: 0.281
-            value: '#ff7300'
-          - time: 0.665
-            value: '#d400ff'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
+          - position: 0.281
+            color: '#ff7300'
+          - position: 0.665
+            color: '#d400ff'
       gradient_mode:
         type: enum
         value: per_pulse
@@ -2012,21 +2004,20 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 0.0
-          - time: 0.068
+          - position: 0.068
             value: 0.276
-          - time: 0.235
+          - position: 0.235
             value: 0.629
-          - time: 0.421
+          - position: 0.421
             value: 0.783
-          - time: 0.597
+          - position: 0.597
             value: 0.9
-          - time: 0.738
+          - position: 0.738
             value: 0.946
-          - time: 1.0
+          - position: 1.0
             value: 1.0
       extend_to_start:
         type: bool
@@ -2038,11 +2029,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 9
@@ -2055,22 +2045,20 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 10
@@ -2083,24 +2071,22 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-          - time: 0.357
-            value: '#ff0000'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
+          - position: 0.357
+            color: '#ff0000'
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 11
@@ -2113,17 +2099,16 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.warm_gradient
+        type: gradient
+        gradient: gradients.warm_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 12
@@ -2136,17 +2121,16 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.club_gradient
+        type: gradient
+        gradient: gradients.club_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 13
@@ -2165,8 +2149,8 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve: curves.fire_gradient
+        type: gradient
+        gradient: gradients.fire_gradient
       hue:
         type: curve
         curve: curves.hue_sweep
@@ -2208,17 +2192,16 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve: curves.cool_gradient
+        type: gradient
+        gradient: gradients.cool_gradient
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 0.0
-          - time: 1.0
+          - position: 1.0
             value: 285.0
       hue_mix:
         type: float
@@ -2258,23 +2241,22 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve: curves.club_gradient
+        type: gradient
+        gradient: gradients.club_gradient
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 300.0
-          - time: 0.312
+          - position: 0.312
             value: 157.466
-          - time: 0.489
+          - position: 0.489
             value: 0.0
-          - time: 0.729
+          - position: 0.729
             value: 57.014
-          - time: 1.0
+          - position: 1.0
             value: 127.602
       hue_mix:
         type: float
@@ -2308,17 +2290,16 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.cool_gradient
+        type: gradient
+        gradient: gradients.cool_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 17
@@ -2331,13 +2312,12 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#94ff66'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#94ff66'
       gradient_mode:
         type: enum
         value: per_pulse
@@ -2360,11 +2340,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 18
@@ -2377,22 +2356,20 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 19
@@ -2405,8 +2382,8 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.club_gradient
+        type: gradient
+        gradient: gradients.club_gradient
       gradient_mode:
         type: enum
         value: per_pulse
@@ -2429,11 +2406,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 20
@@ -2446,19 +2422,18 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-          - time: 0.25
-            value: '#ff2bd6'
-          - time: 0.6
-            value: '#2de2ff'
-          - time: 1.0
-            value: '#ff6600'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
+          - position: 0.25
+            color: '#ff2bd6'
+          - position: 0.6
+            color: '#2de2ff'
+          - position: 1.0
+            color: '#ff6600'
       gradient_mode:
         type: enum
         value: through_effect
@@ -2481,15 +2456,14 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 0.285
+          - position: 0.285
             value: 0.122
-          - time: 0.516
+          - position: 0.516
             value: 0.81
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 21
@@ -2502,8 +2476,8 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.cool_gradient
+        type: gradient
+        gradient: gradients.cool_gradient
       gradient_mode:
         type: enum
         value: per_pulse
@@ -2526,11 +2500,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 22
@@ -2543,17 +2516,16 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#d9ffff'
-          - time: 0.45
-            value: '#ffc800'
-          - time: 1.0
-            value: '#3d00ff'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#d9ffff'
+          - position: 0.45
+            color: '#ffc800'
+          - position: 1.0
+            color: '#3d00ff'
       gradient_mode:
         type: enum
         value: per_pulse
@@ -2576,11 +2548,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 23
@@ -2593,17 +2564,16 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#d9ffff'
-          - time: 0.45
-            value: '#ff0095'
-          - time: 1.0
-            value: '#ff0000'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#d9ffff'
+          - position: 0.45
+            color: '#ff0095'
+          - position: 1.0
+            color: '#ff0000'
       gradient_mode:
         type: enum
         value: per_pulse
@@ -2626,11 +2596,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 24
@@ -2643,17 +2612,16 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.fire_gradient
+        type: gradient
+        gradient: gradients.fire_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 25
@@ -2666,8 +2634,8 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.club_gradient
+        type: gradient
+        gradient: gradients.club_gradient
       gradient_mode:
         type: enum
         value: through_effect
@@ -2690,11 +2658,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 26
@@ -2707,8 +2674,8 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.fire_gradient
+        type: gradient
+        gradient: gradients.fire_gradient
       gradient_mode:
         type: enum
         value: through_effect
@@ -2722,19 +2689,18 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 0.127
+          - position: 0.127
             value: 0.646
-          - time: 0.244
+          - position: 0.244
             value: 0.296
-          - time: 0.483
+          - position: 0.483
             value: 0.126
-          - time: 0.718
+          - position: 0.718
             value: 0.09
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       extend_to_start:
         type: bool
@@ -2746,11 +2712,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 28
@@ -2769,30 +2734,28 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-          - time: 0.353
-            value: '#006eff'
-          - time: 0.702
-            value: '#006eff'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
+          - position: 0.353
+            color: '#006eff'
+          - position: 0.702
+            color: '#006eff'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 0.204
+          - position: 0.204
             value: 0.225
-          - time: 0.718
+          - position: 0.718
             value: 0.533
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -2826,8 +2789,8 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.cool_gradient
+        type: gradient
+        gradient: gradients.cool_gradient
       gradient_mode:
         type: enum
         value: per_pulse
@@ -2841,11 +2804,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       reverse:
         type: bool
@@ -2860,11 +2822,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 30
@@ -2877,8 +2838,8 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.club_gradient
+        type: gradient
+        gradient: gradients.club_gradient
       gradient_mode:
         type: enum
         value: per_pulse
@@ -2892,11 +2853,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 0.0
-          - time: 1.0
+          - position: 1.0
             value: 1.0
       reverse:
         type: bool
@@ -2911,11 +2871,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 31
@@ -2928,8 +2887,8 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.fire_gradient
+        type: gradient
+        gradient: gradients.fire_gradient
       gradient_mode:
         type: enum
         value: per_pulse
@@ -2943,11 +2902,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       reverse:
         type: bool
@@ -2962,11 +2920,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 32
@@ -2979,13 +2936,12 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
       gradient_mode:
         type: enum
         value: through_effect
@@ -2999,11 +2955,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       reverse:
         type: bool
@@ -3018,11 +2973,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 33
@@ -3035,8 +2989,8 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.toxic_sludge_gradient
+        type: gradient
+        gradient: gradients.toxic_sludge_gradient
       gradient_mode:
         type: enum
         value: per_pulse
@@ -3050,11 +3004,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 0.0
-          - time: 1.0
+          - position: 1.0
             value: 1.0
       reverse:
         type: bool
@@ -3069,11 +3022,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 34
@@ -3092,22 +3044,20 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 0.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -3151,111 +3101,101 @@ empty:
         value: per_pulse
       gradients:
         type: array
-        element_type: curve_color
+        element_type: gradient
         values:
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.291
-              value: '#ff0000'
-            - time: 0.5
-              value: '#ff6600'
-            - time: 0.777
-              value: '#ff0000'
-            - time: 1.0
-              value: '#ff0000'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff6600'
-            - time: 1.0
-              value: '#ff0000'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff6600'
-            - time: 1.0
-              value: '#ff0000'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff6600'
-            - time: 1.0
-              value: '#ff0000'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#8000ff'
-            - time: 1.0
-              value: '#00ff66'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#8000ff'
-            - time: 1.0
-              value: '#00ff66'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#8000ff'
-            - time: 1.0
-              value: '#00ff66'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#8000ff'
-            - time: 1.0
-              value: '#00ff66'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#8000ff'
-            - time: 1.0
-              value: '#00ff66'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.291
+              color: '#ff0000'
+            - position: 0.5
+              color: '#ff6600'
+            - position: 0.777
+              color: '#ff0000'
+            - position: 1.0
+              color: '#ff0000'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff6600'
+            - position: 1.0
+              color: '#ff0000'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff6600'
+            - position: 1.0
+              color: '#ff0000'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff6600'
+            - position: 1.0
+              color: '#ff0000'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#8000ff'
+            - position: 1.0
+              color: '#00ff66'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#8000ff'
+            - position: 1.0
+              color: '#00ff66'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#8000ff'
+            - position: 1.0
+              color: '#00ff66'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#8000ff'
+            - position: 1.0
+              color: '#00ff66'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#8000ff'
+            - position: 1.0
+              color: '#00ff66'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -3274,179 +3214,169 @@ empty:
         value: 1
       chase_positions:
         type: array
-        element_type: curve_float
+        element_type: curve
         values:
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 1.0
-            - time: 0.068
+            - position: 0.068
               value: 0.724
-            - time: 0.235
+            - position: 0.235
               value: 0.371
-            - time: 0.421
+            - position: 0.421
               value: 0.217
-            - time: 0.597
+            - position: 0.597
               value: 0.1
-            - time: 0.738
+            - position: 0.738
               value: 0.054
-            - time: 1.0
+            - position: 1.0
               value: 0.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.068
+            - position: 0.068
               value: 0.276
-            - time: 0.235
+            - position: 0.235
               value: 0.629
-            - time: 0.421
+            - position: 0.421
               value: 0.783
-            - time: 0.597
+            - position: 0.597
               value: 0.9
-            - time: 0.738
+            - position: 0.738
               value: 0.946
-            - time: 1.0
+            - position: 1.0
               value: 1.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 1.0
-            - time: 0.068
+            - position: 0.068
               value: 0.724
-            - time: 0.235
+            - position: 0.235
               value: 0.371
-            - time: 0.421
+            - position: 0.421
               value: 0.217
-            - time: 0.597
+            - position: 0.597
               value: 0.1
-            - time: 0.738
+            - position: 0.738
               value: 0.054
-            - time: 1.0
+            - position: 1.0
               value: 0.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 1.0
-            - time: 0.068
+            - position: 0.068
               value: 0.724
-            - time: 0.235
+            - position: 0.235
               value: 0.371
-            - time: 0.421
+            - position: 0.421
               value: 0.217
-            - time: 0.597
+            - position: 0.597
               value: 0.1
-            - time: 0.738
+            - position: 0.738
               value: 0.054
-            - time: 1.0
+            - position: 1.0
               value: 0.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 1.0
-            - time: 0.068
+            - position: 0.068
               value: 0.724
-            - time: 0.235
+            - position: 0.235
               value: 0.371
-            - time: 0.421
+            - position: 0.421
               value: 0.217
-            - time: 0.597
+            - position: 0.597
               value: 0.1
-            - time: 0.738
+            - position: 0.738
               value: 0.054
-            - time: 1.0
+            - position: 1.0
               value: 0.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.068
+            - position: 0.068
               value: 0.276
-            - time: 0.235
+            - position: 0.235
               value: 0.629
-            - time: 0.421
+            - position: 0.421
               value: 0.783
-            - time: 0.597
+            - position: 0.597
               value: 0.9
-            - time: 0.738
+            - position: 0.738
               value: 0.946
-            - time: 1.0
+            - position: 1.0
               value: 1.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 1.0
-            - time: 0.068
+            - position: 0.068
               value: 0.724
-            - time: 0.235
+            - position: 0.235
               value: 0.371
-            - time: 0.421
+            - position: 0.421
               value: 0.217
-            - time: 0.597
+            - position: 0.597
               value: 0.1
-            - time: 0.738
+            - position: 0.738
               value: 0.054
-            - time: 1.0
+            - position: 1.0
               value: 0.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.068
+            - position: 0.068
               value: 0.276
-            - time: 0.235
+            - position: 0.235
               value: 0.629
-            - time: 0.421
+            - position: 0.421
               value: 0.783
-            - time: 0.597
+            - position: 0.597
               value: 0.9
-            - time: 0.738
+            - position: 0.738
               value: 0.946
-            - time: 1.0
+            - position: 1.0
               value: 1.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.068
+            - position: 0.068
               value: 0.276
-            - time: 0.235
+            - position: 0.235
               value: 0.629
-            - time: 0.421
+            - position: 0.421
               value: 0.783
-            - time: 0.597
+            - position: 0.597
               value: 0.9
-            - time: 0.738
+            - position: 0.738
               value: 0.946
-            - time: 1.0
+            - position: 1.0
               value: 1.0
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.MarkChase
   - id: 36
@@ -3465,17 +3395,16 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-          - time: 0.45
-            value: '#00a6ff'
-          - time: 1.0
-            value: '#3d00ff'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
+          - position: 0.45
+            color: '#00a6ff'
+          - position: 1.0
+            color: '#3d00ff'
       hue:
         type: curve
         curve: curves.hue_cool_shift
@@ -3511,17 +3440,16 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.cool_gradient
+        type: gradient
+        gradient: gradients.cool_gradient
       intensity:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       direction:
         type: enum
@@ -3564,8 +3492,8 @@ empty:
         type: color
         value: '#000000'
       palette:
-        type: curve
-        curve: curves.ghost_blue_gradient
+        type: gradient
+        gradient: gradients.ghost_blue_gradient
       color_mode:
         type: enum
         value: from_palette
@@ -3610,22 +3538,20 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 40
@@ -3648,53 +3574,49 @@ empty:
         value: per_pulse
       gradients:
         type: array
-        element_type: curve_color
+        element_type: gradient
         values:
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.379
-              value: '#ff0000'
-            - time: 0.699
-              value: '#ff6600'
-            - time: 1.0
-              value: '#ff6600'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.379
-              value: '#00ffcc'
-            - time: 0.699
-              value: '#a6ff00'
-            - time: 1.0
-              value: '#ff6600'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.379
-              value: '#ff00f7'
-            - time: 0.699
-              value: '#0011ff'
-            - time: 1.0
-              value: '#ff6600'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.379
+              color: '#ff0000'
+            - position: 0.699
+              color: '#ff6600'
+            - position: 1.0
+              color: '#ff6600'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.379
+              color: '#00ffcc'
+            - position: 0.699
+              color: '#a6ff00'
+            - position: 1.0
+              color: '#ff6600'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.379
+              color: '#ff00f7'
+            - position: 0.699
+              color: '#0011ff'
+            - position: 1.0
+              color: '#ff6600'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -3713,39 +3635,37 @@ empty:
         value: 1
       chase_positions:
         type: array
-        element_type: curve_float
+        element_type: curve
         values:
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.125
+            - position: 0.125
               value: 0.234
-            - time: 0.25
+            - position: 0.25
               value: 0.438
-            - time: 0.375
+            - position: 0.375
               value: 0.609
-            - time: 0.5
+            - position: 0.5
               value: 0.75
-            - time: 0.625
+            - position: 0.625
               value: 0.859
-            - time: 0.75
+            - position: 0.75
               value: 0.938
-            - time: 0.875
+            - position: 0.875
               value: 0.984
-            - time: 1.0
+            - position: 1.0
               value: 1.0
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.MarkChase
   - id: 41
@@ -3758,17 +3678,16 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.cool_gradient
+        type: gradient
+        gradient: gradients.cool_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 42
@@ -3781,17 +3700,16 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.electric_blue_gradient
+        type: gradient
+        gradient: gradients.electric_blue_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 43
@@ -3804,17 +3722,16 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.laser_magenta_gradient
+        type: gradient
+        gradient: gradients.laser_magenta_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 44
@@ -3827,8 +3744,8 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.molten_gold_gradient
+        type: gradient
+        gradient: gradients.molten_gold_gradient
       gradient_mode:
         type: enum
         value: per_pulse
@@ -3842,11 +3759,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       reverse:
         type: bool
@@ -3861,11 +3777,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 45
@@ -3881,15 +3796,14 @@ empty:
         type: color
         value: '#000000'
       palette:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.52
-            value: '#d9ffff'
-          - time: 1.0
-            value: '#000000'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.52
+            color: '#d9ffff'
+          - position: 1.0
+            color: '#000000'
       color_mode:
         type: enum
         value: from_palette
@@ -3940,24 +3854,22 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.299
-            value: '#ffffff'
-          - time: 0.959
-            value: '#000000'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.299
+            color: '#ffffff'
+          - position: 0.959
+            color: '#000000'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -3991,8 +3903,8 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.ghost_blue_gradient
+        type: gradient
+        gradient: gradients.ghost_blue_gradient
       gradient_mode:
         type: enum
         value: per_pulse
@@ -4018,11 +3930,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 48
@@ -4035,22 +3946,20 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 49
@@ -4063,17 +3972,16 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.hot_pink_lime_gradient
+        type: gradient
+        gradient: gradients.hot_pink_lime_gradient
       intensity:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       direction:
         type: enum
@@ -4107,21 +4015,20 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.mint_violet_gradient
+        type: gradient
+        gradient: gradients.mint_violet_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 0.303
+          - position: 0.303
             value: 0.145
-          - time: 0.412
+          - position: 0.412
             value: 0.715
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 51
@@ -4134,32 +4041,29 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
       position:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 0.0
-          - time: 1.0
+          - position: 1.0
             value: 1.0
       intensity:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       color_mode:
         type: enum
@@ -4208,30 +4112,28 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#fff0d8'
-          - time: 0.16
-            value: '#ff7a00'
-          - time: 0.5
-            value: '#e00020'
-          - time: 0.82
-            value: '#4d0015'
-          - time: 1.0
-            value: '#000000'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#fff0d8'
+          - position: 0.16
+            color: '#ff7a00'
+          - position: 0.5
+            color: '#e00020'
+          - position: 0.82
+            color: '#4d0015'
+          - position: 1.0
+            color: '#000000'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -4265,8 +4167,8 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.molten_gold_gradient
+        type: gradient
+        gradient: gradients.molten_gold_gradient
       gradient_mode:
         type: enum
         value: per_pulse
@@ -4280,25 +4182,24 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 0.0
-          - time: 0.125
+          - position: 0.125
             value: 0.234
-          - time: 0.25
+          - position: 0.25
             value: 0.437
-          - time: 0.375
+          - position: 0.375
             value: 0.609
-          - time: 0.5
+          - position: 0.5
             value: 0.75
-          - time: 0.625
+          - position: 0.625
             value: 0.859
-          - time: 0.75
+          - position: 0.75
             value: 0.937
-          - time: 0.875
+          - position: 0.875
             value: 0.984
-          - time: 1.0
+          - position: 1.0
             value: 1.0
       reverse:
         type: bool
@@ -4313,11 +4214,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 55
@@ -4330,21 +4230,20 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.ember_core_gradient
+        type: gradient
+        gradient: gradients.ember_core_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 0.303
+          - position: 0.303
             value: 0.145
-          - time: 0.588
+          - position: 0.588
             value: 0.027
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 56
@@ -4357,19 +4256,18 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.mint_violet_gradient
+        type: gradient
+        gradient: gradients.mint_violet_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 0.389
+          - position: 0.389
             value: 0.299
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 57
@@ -4382,8 +4280,8 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.cyberpunk_gradient
+        type: gradient
+        gradient: gradients.cyberpunk_gradient
       gradient_mode:
         type: enum
         value: per_pulse
@@ -4397,25 +4295,24 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 0.125
+          - position: 0.125
             value: 0.766
-          - time: 0.25
+          - position: 0.25
             value: 0.563
-          - time: 0.375
+          - position: 0.375
             value: 0.391
-          - time: 0.5
+          - position: 0.5
             value: 0.25
-          - time: 0.625
+          - position: 0.625
             value: 0.141
-          - time: 0.75
+          - position: 0.75
             value: 0.063
-          - time: 0.875
+          - position: 0.875
             value: 0.016
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       reverse:
         type: bool
@@ -4430,11 +4327,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 58
@@ -4457,77 +4353,70 @@ empty:
         value: per_pulse
       gradients:
         type: array
-        element_type: curve_color
+        element_type: gradient
         values:
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff6600'
-            - time: 1.0
-              value: '#ff0000'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#00ff2a'
-            - time: 1.0
-              value: '#00d5ff'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff6600'
-            - time: 1.0
-              value: '#ff0000'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#8000ff'
-            - time: 1.0
-              value: '#00ff66'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff7b00'
-            - time: 1.0
-              value: '#00ff66'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff007b'
-            - time: 1.0
-              value: '#e1ff00'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff6600'
+            - position: 1.0
+              color: '#ff0000'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#00ff2a'
+            - position: 1.0
+              color: '#00d5ff'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff6600'
+            - position: 1.0
+              color: '#ff0000'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#8000ff'
+            - position: 1.0
+              color: '#00ff66'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff7b00'
+            - position: 1.0
+              color: '#00ff66'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff007b'
+            - position: 1.0
+              color: '#e1ff00'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -4546,125 +4435,118 @@ empty:
         value: 1
       chase_positions:
         type: array
-        element_type: curve_float
+        element_type: curve
         values:
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.068
+            - position: 0.068
               value: 0.276
-            - time: 0.235
+            - position: 0.235
               value: 0.629
-            - time: 0.421
+            - position: 0.421
               value: 0.783
-            - time: 0.597
+            - position: 0.597
               value: 0.9
-            - time: 0.738
+            - position: 0.738
               value: 0.946
-            - time: 1.0
+            - position: 1.0
               value: 1.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 1.0
-            - time: 0.068
+            - position: 0.068
               value: 0.724
-            - time: 0.235
+            - position: 0.235
               value: 0.371
-            - time: 0.421
+            - position: 0.421
               value: 0.217
-            - time: 0.597
+            - position: 0.597
               value: 0.1
-            - time: 0.738
+            - position: 0.738
               value: 0.054
-            - time: 1.0
+            - position: 1.0
               value: 0.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.068
+            - position: 0.068
               value: 0.276
-            - time: 0.235
+            - position: 0.235
               value: 0.629
-            - time: 0.421
+            - position: 0.421
               value: 0.783
-            - time: 0.597
+            - position: 0.597
               value: 0.9
-            - time: 0.738
+            - position: 0.738
               value: 0.946
-            - time: 1.0
+            - position: 1.0
               value: 1.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 1.0
-            - time: 0.068
+            - position: 0.068
               value: 0.724
-            - time: 0.235
+            - position: 0.235
               value: 0.371
-            - time: 0.421
+            - position: 0.421
               value: 0.217
-            - time: 0.597
+            - position: 0.597
               value: 0.1
-            - time: 0.738
+            - position: 0.738
               value: 0.054
-            - time: 1.0
+            - position: 1.0
               value: 0.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.068
+            - position: 0.068
               value: 0.276
-            - time: 0.235
+            - position: 0.235
               value: 0.629
-            - time: 0.421
+            - position: 0.421
               value: 0.783
-            - time: 0.597
+            - position: 0.597
               value: 0.9
-            - time: 0.738
+            - position: 0.738
               value: 0.946
-            - time: 1.0
+            - position: 1.0
               value: 1.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.068
+            - position: 0.068
               value: 0.276
-            - time: 0.235
+            - position: 0.235
               value: 0.629
-            - time: 0.421
+            - position: 0.421
               value: 0.783
-            - time: 0.597
+            - position: 0.597
               value: 0.9
-            - time: 0.738
+            - position: 0.738
               value: 0.946
-            - time: 1.0
+            - position: 1.0
               value: 1.0
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.MarkChase
   - id: 59
@@ -4683,24 +4565,22 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.299
-            value: '#ffffff'
-          - time: 0.959
-            value: '#000000'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.299
+            color: '#ffffff'
+          - position: 0.959
+            color: '#000000'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -4734,19 +4614,18 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.plasma_storm_gradient
+        type: gradient
+        gradient: gradients.plasma_storm_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 0.389
+          - position: 0.389
             value: 0.299
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 61
@@ -4759,22 +4638,20 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 62
@@ -4787,17 +4664,16 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.hot_pink_lime_gradient
+        type: gradient
+        gradient: gradients.hot_pink_lime_gradient
       intensity:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       direction:
         type: enum
@@ -4831,8 +4707,8 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.ghost_blue_gradient
+        type: gradient
+        gradient: gradients.ghost_blue_gradient
       gradient_mode:
         type: enum
         value: per_pulse
@@ -4858,11 +4734,10 @@ empty:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Chase
   - id: 65
@@ -4875,21 +4750,20 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.mint_violet_gradient
+        type: gradient
+        gradient: gradients.mint_violet_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 0.303
+          - position: 0.303
             value: 0.145
-          - time: 0.412
+          - position: 0.412
             value: 0.715
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 66
@@ -4902,32 +4776,29 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
       position:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 0.0
-          - time: 1.0
+          - position: 1.0
             value: 1.0
       intensity:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       color_mode:
         type: enum
@@ -4976,24 +4847,22 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.299
-            value: '#ffffff'
-          - time: 0.959
-            value: '#000000'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.299
+            color: '#ffffff'
+          - position: 0.959
+            color: '#000000'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -5037,77 +4906,70 @@ empty:
         value: per_pulse
       gradients:
         type: array
-        element_type: curve_color
+        element_type: gradient
         values:
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff6600'
-            - time: 1.0
-              value: '#ff0000'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#00ff2a'
-            - time: 1.0
-              value: '#00d5ff'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff6600'
-            - time: 1.0
-              value: '#ff0000'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#8000ff'
-            - time: 1.0
-              value: '#00ff66'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff7b00'
-            - time: 1.0
-              value: '#00ff66'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff007b'
-            - time: 1.0
-              value: '#e1ff00'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff6600'
+            - position: 1.0
+              color: '#ff0000'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#00ff2a'
+            - position: 1.0
+              color: '#00d5ff'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff6600'
+            - position: 1.0
+              color: '#ff0000'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#8000ff'
+            - position: 1.0
+              color: '#00ff66'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff7b00'
+            - position: 1.0
+              color: '#00ff66'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff007b'
+            - position: 1.0
+              color: '#e1ff00'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -5126,125 +4988,118 @@ empty:
         value: 1
       chase_positions:
         type: array
-        element_type: curve_float
+        element_type: curve
         values:
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.068
+            - position: 0.068
               value: 0.276
-            - time: 0.235
+            - position: 0.235
               value: 0.629
-            - time: 0.421
+            - position: 0.421
               value: 0.783
-            - time: 0.597
+            - position: 0.597
               value: 0.9
-            - time: 0.738
+            - position: 0.738
               value: 0.946
-            - time: 1.0
+            - position: 1.0
               value: 1.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 1.0
-            - time: 0.068
+            - position: 0.068
               value: 0.724
-            - time: 0.235
+            - position: 0.235
               value: 0.371
-            - time: 0.421
+            - position: 0.421
               value: 0.217
-            - time: 0.597
+            - position: 0.597
               value: 0.1
-            - time: 0.738
+            - position: 0.738
               value: 0.054
-            - time: 1.0
+            - position: 1.0
               value: 0.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.068
+            - position: 0.068
               value: 0.276
-            - time: 0.235
+            - position: 0.235
               value: 0.629
-            - time: 0.421
+            - position: 0.421
               value: 0.783
-            - time: 0.597
+            - position: 0.597
               value: 0.9
-            - time: 0.738
+            - position: 0.738
               value: 0.946
-            - time: 1.0
+            - position: 1.0
               value: 1.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 1.0
-            - time: 0.068
+            - position: 0.068
               value: 0.724
-            - time: 0.235
+            - position: 0.235
               value: 0.371
-            - time: 0.421
+            - position: 0.421
               value: 0.217
-            - time: 0.597
+            - position: 0.597
               value: 0.1
-            - time: 0.738
+            - position: 0.738
               value: 0.054
-            - time: 1.0
+            - position: 1.0
               value: 0.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.068
+            - position: 0.068
               value: 0.276
-            - time: 0.235
+            - position: 0.235
               value: 0.629
-            - time: 0.421
+            - position: 0.421
               value: 0.783
-            - time: 0.597
+            - position: 0.597
               value: 0.9
-            - time: 0.738
+            - position: 0.738
               value: 0.946
-            - time: 1.0
+            - position: 1.0
               value: 1.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.068
+            - position: 0.068
               value: 0.276
-            - time: 0.235
+            - position: 0.235
               value: 0.629
-            - time: 0.421
+            - position: 0.421
               value: 0.783
-            - time: 0.597
+            - position: 0.597
               value: 0.9
-            - time: 0.738
+            - position: 0.738
               value: 0.946
-            - time: 1.0
+            - position: 1.0
               value: 1.0
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.MarkChase
   - id: 73
@@ -5257,19 +5112,18 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.sodium_vapor_gradient
+        type: gradient
+        gradient: gradients.sodium_vapor_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 0.389
+          - position: 0.389
             value: 0.299
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 74
@@ -5288,24 +5142,22 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.299
-            value: '#ffffff'
-          - time: 0.959
-            value: '#000000'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.299
+            color: '#ffffff'
+          - position: 0.959
+            color: '#000000'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -5342,19 +5194,18 @@ empty:
         type: color
         value: '#000000'
       palette:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.0
-            value: '#ffffff'
-          - time: 0.25
-            value: '#2986ff'
-          - time: 0.6
-            value: '#a1ff2e'
-          - time: 1.0
-            value: '#ff0000'
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
+          - position: 0.25
+            color: '#2986ff'
+          - position: 0.6
+            color: '#a1ff2e'
+          - position: 1.0
+            color: '#ff0000'
       color_mode:
         type: enum
         value: from_palette
@@ -5405,8 +5256,8 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve: curves.warm_gradient
+        type: gradient
+        gradient: gradients.warm_gradient
       hue:
         type: curve
         curve: curves.hue_sweep
@@ -5452,47 +5303,44 @@ empty:
         value: per_pulse
       gradients:
         type: array
-        element_type: curve_color
+        element_type: gradient
         values:
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff6600'
-            - time: 1.0
-              value: '#ff0000'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.243
-              value: '#00ff66'
-            - time: 0.5
-              value: '#8000ff'
-            - time: 1.0
-              value: '#00ff66'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff6600'
+            - position: 1.0
+              color: '#ff0000'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.243
+              color: '#00ff66'
+            - position: 0.5
+              color: '#8000ff'
+            - position: 1.0
+              color: '#00ff66'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 0.231
+          - position: 0.231
             value: 0.873
-          - time: 0.371
+          - position: 0.371
             value: 0.195
-          - time: 0.679
+          - position: 0.679
             value: 0.186
-          - time: 0.76
+          - position: 0.76
             value: 0.457
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -5511,69 +5359,65 @@ empty:
         value: 1
       chase_positions:
         type: array
-        element_type: curve_float
+        element_type: curve
         values:
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.125
+            - position: 0.125
               value: 0.234
-            - time: 0.25
+            - position: 0.25
               value: 0.438
-            - time: 0.375
+            - position: 0.375
               value: 0.609
-            - time: 0.5
+            - position: 0.5
               value: 0.75
-            - time: 0.625
+            - position: 0.625
               value: 0.859
-            - time: 0.75
+            - position: 0.75
               value: 0.938
-            - time: 0.875
+            - position: 0.875
               value: 0.984
-            - time: 1.0
+            - position: 1.0
               value: 1.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 1.0
-            - time: 0.125
+            - position: 0.125
               value: 0.766
-            - time: 0.25
+            - position: 0.25
               value: 0.563
-            - time: 0.375
+            - position: 0.375
               value: 0.391
-            - time: 0.5
+            - position: 0.5
               value: 0.25
-            - time: 0.625
+            - position: 0.625
               value: 0.141
-            - time: 0.75
+            - position: 0.75
               value: 0.063
-            - time: 0.875
+            - position: 0.875
               value: 0.016
-            - time: 1.0
+            - position: 1.0
               value: 0.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 1.0
+            - position: 1.0
               value: 1.0
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.MarkChase
   - id: 79
@@ -5586,17 +5430,16 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.warm_gradient
+        type: gradient
+        gradient: gradients.warm_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 80
@@ -5615,8 +5458,8 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve: curves.cool_gradient
+        type: gradient
+        gradient: gradients.cool_gradient
       hue:
         type: curve
         curve: curves.hue_sweep
@@ -5662,37 +5505,34 @@ empty:
         value: per_pulse
       gradients:
         type: array
-        element_type: curve_color
+        element_type: gradient
         values:
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff6600'
-            - time: 1.0
-              value: '#ff0000'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#8000ff'
-            - time: 1.0
-              value: '#00ff66'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff6600'
+            - position: 1.0
+              color: '#ff0000'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#8000ff'
+            - position: 1.0
+              color: '#00ff66'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -5711,69 +5551,65 @@ empty:
         value: 1
       chase_positions:
         type: array
-        element_type: curve_float
+        element_type: curve
         values:
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.125
+            - position: 0.125
               value: 0.234
-            - time: 0.25
+            - position: 0.25
               value: 0.438
-            - time: 0.375
+            - position: 0.375
               value: 0.609
-            - time: 0.5
+            - position: 0.5
               value: 0.75
-            - time: 0.625
+            - position: 0.625
               value: 0.859
-            - time: 0.75
+            - position: 0.75
               value: 0.938
-            - time: 0.875
+            - position: 0.875
               value: 0.984
-            - time: 1.0
+            - position: 1.0
               value: 1.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 1.0
-            - time: 0.125
+            - position: 0.125
               value: 0.766
-            - time: 0.25
+            - position: 0.25
               value: 0.563
-            - time: 0.375
+            - position: 0.375
               value: 0.391
-            - time: 0.5
+            - position: 0.5
               value: 0.25
-            - time: 0.625
+            - position: 0.625
               value: 0.141
-            - time: 0.75
+            - position: 0.75
               value: 0.063
-            - time: 0.875
+            - position: 0.875
               value: 0.016
-            - time: 1.0
+            - position: 1.0
               value: 0.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 1.0
+            - position: 1.0
               value: 1.0
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.MarkChase
   - id: 82
@@ -5786,17 +5622,16 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.cool_gradient
+        type: gradient
+        gradient: gradients.cool_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 83
@@ -5815,8 +5650,8 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve: curves.club_gradient
+        type: gradient
+        gradient: gradients.club_gradient
       hue:
         type: curve
         curve: curves.hue_sweep
@@ -5862,57 +5697,52 @@ empty:
         value: per_pulse
       gradients:
         type: array
-        element_type: curve_color
+        element_type: gradient
         values:
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff6600'
-            - time: 1.0
-              value: '#ff0000'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#8000ff'
-            - time: 1.0
-              value: '#00ff66'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.45
-              value: '#0bfecd'
-            - time: 1.0
-              value: '#ff00bb'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.553
-              value: '#a3ff66'
-            - time: 1.0
-              value: '#0011ff'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff6600'
+            - position: 1.0
+              color: '#ff0000'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#8000ff'
+            - position: 1.0
+              color: '#00ff66'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.45
+              color: '#0bfecd'
+            - position: 1.0
+              color: '#ff00bb'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.553
+              color: '#a3ff66'
+            - position: 1.0
+              color: '#0011ff'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -5931,69 +5761,65 @@ empty:
         value: 1
       chase_positions:
         type: array
-        element_type: curve_float
+        element_type: curve
         values:
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.125
+            - position: 0.125
               value: 0.234
-            - time: 0.25
+            - position: 0.25
               value: 0.438
-            - time: 0.375
+            - position: 0.375
               value: 0.609
-            - time: 0.5
+            - position: 0.5
               value: 0.75
-            - time: 0.625
+            - position: 0.625
               value: 0.859
-            - time: 0.75
+            - position: 0.75
               value: 0.938
-            - time: 0.875
+            - position: 0.875
               value: 0.984
-            - time: 1.0
+            - position: 1.0
               value: 1.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 1.0
-            - time: 0.125
+            - position: 0.125
               value: 0.766
-            - time: 0.25
+            - position: 0.25
               value: 0.563
-            - time: 0.375
+            - position: 0.375
               value: 0.391
-            - time: 0.5
+            - position: 0.5
               value: 0.25
-            - time: 0.625
+            - position: 0.625
               value: 0.141
-            - time: 0.75
+            - position: 0.75
               value: 0.063
-            - time: 0.875
+            - position: 0.875
               value: 0.016
-            - time: 1.0
+            - position: 1.0
               value: 0.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 1.0
+            - position: 1.0
               value: 1.0
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.MarkChase
   - id: 87
@@ -6012,8 +5838,8 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve: curves.ember_core_gradient
+        type: gradient
+        gradient: gradients.ember_core_gradient
       hue:
         type: curve
         curve: curves.hue_sweep
@@ -6059,47 +5885,43 @@ empty:
         value: per_pulse
       gradients:
         type: array
-        element_type: curve_color
+        element_type: gradient
         values:
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff6600'
-            - time: 1.0
-              value: '#ff0000'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#8000ff'
-            - time: 1.0
-              value: '#00ff66'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.45
-              value: '#00ffcc'
-            - time: 1.0
-              value: '#a6ff00'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff6600'
+            - position: 1.0
+              color: '#ff0000'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#8000ff'
+            - position: 1.0
+              color: '#00ff66'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.45
+              color: '#00ffcc'
+            - position: 1.0
+              color: '#a6ff00'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -6118,69 +5940,65 @@ empty:
         value: 1
       chase_positions:
         type: array
-        element_type: curve_float
+        element_type: curve
         values:
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.125
+            - position: 0.125
               value: 0.234
-            - time: 0.25
+            - position: 0.25
               value: 0.438
-            - time: 0.375
+            - position: 0.375
               value: 0.609
-            - time: 0.5
+            - position: 0.5
               value: 0.75
-            - time: 0.625
+            - position: 0.625
               value: 0.859
-            - time: 0.75
+            - position: 0.75
               value: 0.938
-            - time: 0.875
+            - position: 0.875
               value: 0.984
-            - time: 1.0
+            - position: 1.0
               value: 1.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 1.0
-            - time: 0.125
+            - position: 0.125
               value: 0.766
-            - time: 0.25
+            - position: 0.25
               value: 0.563
-            - time: 0.375
+            - position: 0.375
               value: 0.391
-            - time: 0.5
+            - position: 0.5
               value: 0.25
-            - time: 0.625
+            - position: 0.625
               value: 0.141
-            - time: 0.75
+            - position: 0.75
               value: 0.063
-            - time: 0.875
+            - position: 0.875
               value: 0.016
-            - time: 1.0
+            - position: 1.0
               value: 0.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 1.0
+            - position: 1.0
               value: 1.0
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.MarkChase
   - id: 89
@@ -6199,8 +6017,8 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve: curves.cool_gradient
+        type: gradient
+        gradient: gradients.cool_gradient
       hue:
         type: curve
         curve: curves.hue_sweep
@@ -6246,47 +6064,43 @@ empty:
         value: per_pulse
       gradients:
         type: array
-        element_type: curve_color
+        element_type: gradient
         values:
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff6600'
-            - time: 1.0
-              value: '#ff0000'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#8000ff'
-            - time: 1.0
-              value: '#00ff66'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.45
-              value: '#00ffcc'
-            - time: 1.0
-              value: '#a6ff00'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff6600'
+            - position: 1.0
+              color: '#ff0000'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#8000ff'
+            - position: 1.0
+              color: '#00ff66'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.45
+              color: '#00ffcc'
+            - position: 1.0
+              color: '#a6ff00'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -6305,69 +6119,65 @@ empty:
         value: 1
       chase_positions:
         type: array
-        element_type: curve_float
+        element_type: curve
         values:
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.125
+            - position: 0.125
               value: 0.234
-            - time: 0.25
+            - position: 0.25
               value: 0.438
-            - time: 0.375
+            - position: 0.375
               value: 0.609
-            - time: 0.5
+            - position: 0.5
               value: 0.75
-            - time: 0.625
+            - position: 0.625
               value: 0.859
-            - time: 0.75
+            - position: 0.75
               value: 0.938
-            - time: 0.875
+            - position: 0.875
               value: 0.984
-            - time: 1.0
+            - position: 1.0
               value: 1.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 1.0
-            - time: 0.125
+            - position: 0.125
               value: 0.766
-            - time: 0.25
+            - position: 0.25
               value: 0.563
-            - time: 0.375
+            - position: 0.375
               value: 0.391
-            - time: 0.5
+            - position: 0.5
               value: 0.25
-            - time: 0.625
+            - position: 0.625
               value: 0.141
-            - time: 0.75
+            - position: 0.75
               value: 0.063
-            - time: 0.875
+            - position: 0.875
               value: 0.016
-            - time: 1.0
+            - position: 1.0
               value: 0.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 1.0
+            - position: 1.0
               value: 1.0
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.MarkChase
   - id: 91
@@ -6383,8 +6193,8 @@ empty:
         type: color
         value: '#000000'
       palette:
-        type: curve
-        curve: curves.ghost_blue_gradient
+        type: gradient
+        gradient: gradients.ghost_blue_gradient
       color_mode:
         type: enum
         value: from_palette
@@ -6429,27 +6239,25 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.white_strobe_gradient
+        type: gradient
+        gradient: gradients.white_strobe_gradient
       position:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 0.0
-          - time: 1.0
+          - position: 1.0
             value: 1.0
       intensity:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       color_mode:
         type: enum
@@ -6498,8 +6306,8 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve: curves.fire_gradient
+        type: gradient
+        gradient: gradients.fire_gradient
       hue:
         type: curve
         curve: curves.hue_sweep
@@ -6545,47 +6353,43 @@ empty:
         value: per_pulse
       gradients:
         type: array
-        element_type: curve_color
+        element_type: gradient
         values:
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff6600'
-            - time: 1.0
-              value: '#ff0000'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#8000ff'
-            - time: 1.0
-              value: '#00ff66'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.45
-              value: '#00ffcc'
-            - time: 1.0
-              value: '#a6ff00'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff6600'
+            - position: 1.0
+              color: '#ff0000'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#8000ff'
+            - position: 1.0
+              color: '#00ff66'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.45
+              color: '#00ffcc'
+            - position: 1.0
+              color: '#a6ff00'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -6604,69 +6408,65 @@ empty:
         value: 1
       chase_positions:
         type: array
-        element_type: curve_float
+        element_type: curve
         values:
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.125
+            - position: 0.125
               value: 0.234
-            - time: 0.25
+            - position: 0.25
               value: 0.438
-            - time: 0.375
+            - position: 0.375
               value: 0.609
-            - time: 0.5
+            - position: 0.5
               value: 0.75
-            - time: 0.625
+            - position: 0.625
               value: 0.859
-            - time: 0.75
+            - position: 0.75
               value: 0.938
-            - time: 0.875
+            - position: 0.875
               value: 0.984
-            - time: 1.0
+            - position: 1.0
               value: 1.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 1.0
-            - time: 0.125
+            - position: 0.125
               value: 0.766
-            - time: 0.25
+            - position: 0.25
               value: 0.563
-            - time: 0.375
+            - position: 0.375
               value: 0.391
-            - time: 0.5
+            - position: 0.5
               value: 0.25
-            - time: 0.625
+            - position: 0.625
               value: 0.141
-            - time: 0.75
+            - position: 0.75
               value: 0.063
-            - time: 0.875
+            - position: 0.875
               value: 0.016
-            - time: 1.0
+            - position: 1.0
               value: 0.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 1.0
+            - position: 1.0
               value: 1.0
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.MarkChase
   - id: 95
@@ -6682,8 +6482,8 @@ empty:
         type: color
         value: '#000000'
       palette:
-        type: curve
-        curve: curves.ghost_blue_gradient
+        type: gradient
+        gradient: gradients.ghost_blue_gradient
       color_mode:
         type: enum
         value: from_palette
@@ -6728,27 +6528,25 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.white_strobe_gradient
+        type: gradient
+        gradient: gradients.white_strobe_gradient
       position:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 0.0
-          - time: 1.0
+          - position: 1.0
             value: 1.0
       intensity:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       color_mode:
         type: enum
@@ -6797,8 +6595,8 @@ empty:
         type: color
         value: '#000000'
       accent:
-        type: curve
-        curve: curves.club_gradient
+        type: gradient
+        gradient: gradients.club_gradient
       hue:
         type: curve
         curve: curves.hue_sweep
@@ -6844,47 +6642,43 @@ empty:
         value: per_pulse
       gradients:
         type: array
-        element_type: curve_color
+        element_type: gradient
         values:
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#ff6600'
-            - time: 1.0
-              value: '#ff0000'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.5
-              value: '#8000ff'
-            - time: 1.0
-              value: '#00ff66'
-        - curve:
-            type: curve
-            value_type: color
-            points:
-            - time: 0.0
-              value: '#ffffff'
-            - time: 0.45
-              value: '#00ffcc'
-            - time: 1.0
-              value: '#a6ff00'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#ff6600'
+            - position: 1.0
+              color: '#ff0000'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.5
+              color: '#8000ff'
+            - position: 1.0
+              color: '#00ff66'
+        - gradient:
+            type: gradient
+            stops:
+            - position: 0.0
+              color: '#ffffff'
+            - position: 0.45
+              color: '#00ffcc'
+            - position: 1.0
+              color: '#a6ff00'
       hue:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       hue_mix:
         type: float
@@ -6903,69 +6697,65 @@ empty:
         value: 1
       chase_positions:
         type: array
-        element_type: curve_float
+        element_type: curve
         values:
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 0.125
+            - position: 0.125
               value: 0.234
-            - time: 0.25
+            - position: 0.25
               value: 0.438
-            - time: 0.375
+            - position: 0.375
               value: 0.609
-            - time: 0.5
+            - position: 0.5
               value: 0.75
-            - time: 0.625
+            - position: 0.625
               value: 0.859
-            - time: 0.75
+            - position: 0.75
               value: 0.938
-            - time: 0.875
+            - position: 0.875
               value: 0.984
-            - time: 1.0
+            - position: 1.0
               value: 1.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 1.0
-            - time: 0.125
+            - position: 0.125
               value: 0.766
-            - time: 0.25
+            - position: 0.25
               value: 0.563
-            - time: 0.375
+            - position: 0.375
               value: 0.391
-            - time: 0.5
+            - position: 0.5
               value: 0.25
-            - time: 0.625
+            - position: 0.625
               value: 0.141
-            - time: 0.75
+            - position: 0.75
               value: 0.063
-            - time: 0.875
+            - position: 0.875
               value: 0.016
-            - time: 1.0
+            - position: 1.0
               value: 0.0
         - curve:
             type: curve
-            value_type: float
             points:
-            - time: 0.0
+            - position: 0.0
               value: 0.0
-            - time: 1.0
+            - position: 1.0
               value: 1.0
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.MarkChase
   - id: 99
@@ -6981,8 +6771,8 @@ empty:
         type: color
         value: '#000000'
       palette:
-        type: curve
-        curve: curves.ghost_blue_gradient
+        type: gradient
+        gradient: gradients.ghost_blue_gradient
       color_mode:
         type: enum
         value: from_palette
@@ -7027,27 +6817,25 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.white_strobe_gradient
+        type: gradient
+        gradient: gradients.white_strobe_gradient
       position:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 0.0
-          - time: 1.0
+          - position: 1.0
             value: 1.0
       intensity:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       color_mode:
         type: enum
@@ -7090,17 +6878,16 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.hot_pink_lime_gradient
+        type: gradient
+        gradient: gradients.hot_pink_lime_gradient
       intensity:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       direction:
         type: enum
@@ -7134,21 +6921,20 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.white_strobe_gradient
+        type: gradient
+        gradient: gradients.white_strobe_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 0.08
+          - position: 0.08
             value: 1.0
-          - time: 0.22
+          - position: 0.22
             value: 0.45
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 154
@@ -7161,17 +6947,16 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.cool_gradient
+        type: gradient
+        gradient: gradients.cool_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 155
@@ -7184,17 +6969,16 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.plasma_storm_gradient
+        type: gradient
+        gradient: gradients.plasma_storm_gradient
       intensity:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       direction:
         type: enum
@@ -7228,21 +7012,20 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.white_strobe_gradient
+        type: gradient
+        gradient: gradients.white_strobe_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 0.08
+          - position: 0.08
             value: 1.0
-          - time: 0.22
+          - position: 0.22
             value: 0.45
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 157
@@ -7255,17 +7038,16 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.ghost_blue_gradient
+        type: gradient
+        gradient: gradients.ghost_blue_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 160
@@ -7278,21 +7060,20 @@ empty:
     scope: whole_target
     params:
       gradient:
-        type: curve
-        curve: curves.white_strobe_gradient
+        type: gradient
+        gradient: gradients.white_strobe_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 0.08
+          - position: 0.08
             value: 1.0
-          - time: 0.22
+          - position: 0.22
             value: 0.45
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
   - id: 161
@@ -7305,17 +7086,16 @@ empty:
     scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve: curves.fire_gradient
+        type: gradient
+        gradient: gradients.fire_gradient
       intensity:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
       direction:
         type: enum
@@ -7428,19 +7208,18 @@ empty:
     anchor_lane_index: 0
     lane_index: 0
     curve:
-      value_type: float
       points:
-      - time: 0.0
+      - position: 0.0
         value: 0.0
-      - time: 0.141177356
+      - position: 0.141177356
         value: 0.382
-      - time: 0.179141015
+      - position: 0.179141015
         value: 0.155
-      - time: 0.326764795
+      - position: 0.326764795
         value: 1.0
-      - time: 0.366951594
+      - position: 0.366951594
         value: 0.0
-      - time: 1.0
+      - position: 1.0
         value: 0.8
     bindings:
     - target:
@@ -7457,19 +7236,18 @@ empty:
     anchor_lane_index: 0
     lane_index: 0
     curve:
-      value_type: float
       points:
-      - time: 0.0
+      - position: 0.0
         value: 0.2
-      - time: 0.19282976
+      - position: 0.19282976
         value: 0.782
-      - time: 0.336897972
+      - position: 0.336897972
         value: 0.3
-      - time: 0.475055693
+      - position: 0.475055693
         value: 0.827
-      - time: 0.557802564
+      - position: 0.557802564
         value: 0.2
-      - time: 1.0
+      - position: 1.0
         value: 0.35
     bindings:
     - target:

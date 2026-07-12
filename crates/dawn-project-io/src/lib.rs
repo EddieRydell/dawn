@@ -615,6 +615,7 @@ fn canonical_reference_alias(kind: &SourceObjectKind) -> Option<&'static str> {
         SourceObjectKind::EffectDefinition => Some("effects"),
         SourceObjectKind::OperatorDefinition => Some("operators"),
         SourceObjectKind::Curve => Some("curves"),
+        SourceObjectKind::Gradient => Some("gradients"),
         SourceObjectKind::Sequence => Some("sequences"),
         _ => None,
     }

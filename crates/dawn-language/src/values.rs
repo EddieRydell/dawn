@@ -147,13 +147,18 @@ pub struct Curve {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CurvePoint {
     pub position: f64,
-    pub value: CurveValue,
+    pub value: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum CurveValue {
-    Float(f64),
-    Color(Color),
+pub struct Gradient {
+    pub stops: Vec<GradientStop>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GradientStop {
+    pub position: f64,
+    pub color: Color,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -258,11 +258,8 @@ fn automation_mapping_matches_type(mapping: &AutomationMapping, ty: &Type) -> bo
         (AutomationMapping::Enum { values }, Type::Enum(options)) => {
             !values.is_empty() && values.iter().all(|value| options.contains(value))
         }
-        (AutomationMapping::FloatCurve { min, max }, Type::Curve(inner)) => {
-            matches!(inner.as_ref(), Type::Float)
-                && min.is_finite()
-                && max.is_finite()
-                && min <= max
+        (AutomationMapping::Curve { min, max }, Type::Curve) => {
+            min.is_finite() && max.is_finite() && min <= max
         }
         _ => false,
     }

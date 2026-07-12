@@ -1,6 +1,6 @@
 effect ShimmerField {
   param color base = #000000;
-  param curve<color> palette;
+  param gradient palette;
   param enum color_mode { from_palette, rainbow_hue, fixed_sparkle } = from_palette;
   param color sparkle_color = #ffffff;
   param float density = 0.28;

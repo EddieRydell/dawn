@@ -321,11 +321,11 @@ pub(super) fn effect_param_value_from_gui(
         SequenceEffectParamValue::Marks { key } => {
             EffectParamValue::Marks(MarkCollectionKey { name: key })
         }
-        SequenceEffectParamValue::FloatCurve { points } => {
-            EffectParamValue::Curve(CurveSource::Inline(float_curve(points)))
+        SequenceEffectParamValue::Curve { points } => {
+            EffectParamValue::Curve(CurveSource::Inline(curve_from_points(points)))
         }
-        SequenceEffectParamValue::ColorCurve { points } => {
-            EffectParamValue::Curve(CurveSource::Inline(color_curve(points)?))
+        SequenceEffectParamValue::Gradient { stops } => {
+            EffectParamValue::Gradient(GradientSource::Inline(gradient_from_stops(stops)?))
         }
         SequenceEffectParamValue::IntArray { values } => EffectParamValue::Array(
             values
@@ -345,17 +345,19 @@ pub(super) fn effect_param_value_from_gui(
                 .map(|value| parse_color(&value).map(EffectParamValue::Color))
                 .collect::<Result<Vec<_>, _>>()?,
         ),
-        SequenceEffectParamValue::FloatCurveArray { values } => EffectParamValue::Array(
+        SequenceEffectParamValue::CurveArray { values } => EffectParamValue::Array(
             values
                 .into_iter()
-                .map(|points| EffectParamValue::Curve(CurveSource::Inline(float_curve(points))))
+                .map(|points| {
+                    EffectParamValue::Curve(CurveSource::Inline(curve_from_points(points)))
+                })
                 .collect(),
         ),
-        SequenceEffectParamValue::ColorCurveArray { values } => EffectParamValue::Array(
+        SequenceEffectParamValue::GradientArray { values } => EffectParamValue::Array(
             values
                 .into_iter()
-                .map(|points| color_curve(points).map(CurveSource::Inline))
-                .map(|source| source.map(EffectParamValue::Curve))
+                .map(|stops| gradient_from_stops(stops).map(GradientSource::Inline))
+                .map(|source| source.map(EffectParamValue::Gradient))
                 .collect::<Result<Vec<_>, _>>()?,
         ),
     })
@@ -377,9 +379,7 @@ pub(super) fn automation_mapping_from_gui(
                 .map(|value| identifier(&value))
                 .collect::<Result<Vec<_>, _>>()?,
         },
-        SequenceAutomationMapping::FloatCurve { min, max } => {
-            AutomationMapping::FloatCurve { min, max }
-        }
+        SequenceAutomationMapping::Curve { min, max } => AutomationMapping::Curve { min, max },
     })
 }
 
@@ -394,9 +394,7 @@ pub(super) fn automation_binding_value_at(
             AutomationValue::Float(value) => EffectParamValue::Float(value),
             AutomationValue::Bool(value) => EffectParamValue::Bool(value),
             AutomationValue::Enum(value) => EffectParamValue::Enum(value),
-            AutomationValue::FloatCurve(value) => {
-                EffectParamValue::Curve(CurveSource::Inline(value))
-            }
+            AutomationValue::Curve(value) => EffectParamValue::Curve(CurveSource::Inline(value)),
         })
         .ok_or_else(|| {
             GuiMutationError::Invalid("Enum automation mapping has no values.".to_string())
@@ -408,36 +406,36 @@ pub(super) fn default_automation_curve() -> Curve {
         points: vec![
             CurvePoint {
                 position: 0.0,
-                value: CurveValue::Float(0.0),
+                value: 0.0,
             },
             CurvePoint {
                 position: 1.0,
-                value: CurveValue::Float(1.0),
+                value: 1.0,
             },
         ],
     }
 }
 
-pub(super) fn float_curve(points: Vec<FloatCurvePoint>) -> Curve {
+pub(super) fn curve_from_points(points: Vec<SequenceCurvePoint>) -> Curve {
     Curve {
         points: points
             .into_iter()
             .map(|point| CurvePoint {
                 position: point.time,
-                value: CurveValue::Float(point.value),
+                value: point.value,
             })
             .collect(),
     }
 }
 
-fn color_curve(points: Vec<ColorCurvePoint>) -> Result<Curve, GuiMutationError> {
-    Ok(Curve {
-        points: points
+fn gradient_from_stops(stops: Vec<SequenceGradientStop>) -> Result<Gradient, GuiMutationError> {
+    Ok(Gradient {
+        stops: stops
             .into_iter()
-            .map(|point| {
-                Ok(CurvePoint {
-                    position: point.time,
-                    value: CurveValue::Color(parse_color(&point.value)?),
+            .map(|stop| {
+                Ok(GradientStop {
+                    position: stop.time,
+                    color: parse_color(&stop.value)?,
                 })
             })
             .collect::<Result<Vec<_>, GuiMutationError>>()?,
@@ -477,7 +475,9 @@ use std::fs;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_language::dsl::Identifier;
-use dawn_language::effect::{CurveSource, EffectInst, EffectParamValue, EffectScope, EffectTarget};
+use dawn_language::effect::{
+    CurveSource, EffectInst, EffectParamValue, EffectScope, EffectTarget, GradientSource,
+};
 use dawn_language::identity::SourceIdentity;
 use dawn_language::operator::{
     BuiltinOperator, OperatorDefinitionId, OperatorPortCardinality, OperatorRef,
@@ -490,14 +490,14 @@ use dawn_language::sequence::{
 };
 use dawn_language::setup::{FixtureDefinitionId, FixtureGroupId, FixtureInstanceId};
 use dawn_language::values::{
-    Color, Curve, CurvePoint, CurveValue, Distance, Point3, Rotation3 as DomainRotation3,
-    Scale3 as DomainScale3,
+    Color, Curve, CurvePoint, Distance, Gradient, GradientStop, Point3,
+    Rotation3 as DomainRotation3, Scale3 as DomainScale3,
 };
 use dawn_project_io::{ProjectSession, ReferencedAsset, SourceObjectKind};
 
 use super::GuiMutationError;
 use crate::dto::{
-    ColorCurvePoint, FloatCurvePoint, LayoutTarget, LayoutTargetKind, Point3Meters,
-    Rotation3Degrees, Scale3, SequenceAutomationMapping, SequenceBuiltinOperator,
-    SequenceEffectParamValue, SequenceEffectScope, SequenceGraphOperator,
+    LayoutTarget, LayoutTargetKind, Point3Meters, Rotation3Degrees, Scale3,
+    SequenceAutomationMapping, SequenceBuiltinOperator, SequenceCurvePoint,
+    SequenceEffectParamValue, SequenceEffectScope, SequenceGradientStop, SequenceGraphOperator,
 };

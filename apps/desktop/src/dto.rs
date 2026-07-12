@@ -215,7 +215,7 @@ pub enum BufferExternalState {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct ColorCurvePoint {
+pub struct SequenceGradientStop {
     pub time: f64,
     pub value: String,
 }
@@ -261,6 +261,7 @@ pub enum ObjectKind {
     Patch,
     Sequence,
     Curve,
+    Gradient,
     Effect,
     Operator,
 }
@@ -275,18 +276,12 @@ impl From<&SourceObjectKind> for ObjectKind {
             SourceObjectKind::Patch => Self::Patch,
             SourceObjectKind::FixtureDefinition => Self::Fixture,
             SourceObjectKind::Curve => Self::Curve,
+            SourceObjectKind::Gradient => Self::Gradient,
             SourceObjectKind::Sequence => Self::Sequence,
             SourceObjectKind::EffectDefinition | SourceObjectKind::EffectInstance => Self::Effect,
             SourceObjectKind::OperatorDefinition => Self::Operator,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub enum SequenceCurveValueType {
-    Float,
-    Color,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -297,14 +292,14 @@ pub enum SequenceEffectParamKind {
     Bool,
     Color,
     Enum,
-    FloatCurve,
-    ColorCurve,
+    Curve,
+    Gradient,
     IntArray,
     FloatArray,
     BoolArray,
     ColorArray,
-    FloatCurveArray,
-    ColorCurveArray,
+    CurveArray,
+    GradientArray,
     Marks,
 }
 
@@ -418,7 +413,7 @@ pub enum FixtureGuiEdit {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct FloatCurvePoint {
+pub struct SequenceCurvePoint {
     pub time: f64,
     pub value: f64,
 }
@@ -603,19 +598,16 @@ pub struct SequenceCurveLibraryItem {
     pub path: String,
     pub object_key: String,
     pub display_name: String,
-    pub value_type: SequenceCurveValueType,
-    pub points: SequenceCurveLibraryPoints,
+    pub points: Vec<SequenceCurvePoint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum SequenceCurveLibraryPoints {
-    Float { points: Vec<FloatCurvePoint> },
-    Color { points: Vec<ColorCurvePoint> },
+#[serde(rename_all = "camelCase")]
+pub struct SequenceGradientLibraryItem {
+    pub path: String,
+    pub object_key: String,
+    pub display_name: String,
+    pub stops: Vec<SequenceGradientStop>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -631,6 +623,7 @@ pub struct SequenceGuiDocument {
     pub lanes: Vec<SequenceLane>,
     pub effect_scripts: Vec<SequenceEffectScript>,
     pub curve_library: Vec<SequenceCurveLibraryItem>,
+    pub gradient_library: Vec<SequenceGradientLibraryItem>,
     pub layers: Vec<SequenceLayer>,
     pub effects: Vec<SequenceEffect>,
     pub composition_graph: SequenceCompositionGraph,
@@ -656,7 +649,7 @@ pub struct SequenceAutomationClip {
     pub duration_seconds: f64,
     pub anchor_lane_index: u32,
     pub lane_index: u32,
-    pub curve: Vec<FloatCurvePoint>,
+    pub curve: Vec<SequenceCurvePoint>,
     pub bindings: Vec<SequenceAutomationBinding>,
 }
 
@@ -689,7 +682,7 @@ pub enum SequenceAutomationMapping {
     Int { min: f64, max: f64 },
     Bool,
     Enum { values: Vec<String> },
-    FloatCurve { min: f64, max: f64 },
+    Curve { min: f64, max: f64 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -887,7 +880,23 @@ pub enum SequenceGraphPortCardinality {
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-pub enum SequenceEffectParamCurveSource {
+pub enum SequenceCurveSource {
+    Inline,
+    Library {
+        reference: String,
+        path: Option<String>,
+        object_key: Option<String>,
+        display_name: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SequenceGradientSource {
     Inline,
     Library {
         reference: String,
@@ -905,7 +914,8 @@ pub struct SequenceEffectParam {
     pub options: Vec<String>,
     pub editable: bool,
     pub value: SequenceEffectParamValue,
-    pub curve_source: Option<SequenceEffectParamCurveSource>,
+    pub curve_source: Option<SequenceCurveSource>,
+    pub gradient_source: Option<SequenceGradientSource>,
     pub automation: Option<SequenceParamAutomation>,
 }
 
@@ -923,20 +933,48 @@ pub struct SequenceParamAutomation {
     rename_all_fields = "camelCase"
 )]
 pub enum SequenceEffectParamValue {
-    Int { value: f64 },
-    Float { value: f64 },
-    Bool { value: bool },
-    Color { value: String },
-    Enum { value: String },
-    FloatCurve { points: Vec<FloatCurvePoint> },
-    ColorCurve { points: Vec<ColorCurvePoint> },
-    IntArray { values: Vec<f64> },
-    FloatArray { values: Vec<f64> },
-    BoolArray { values: Vec<bool> },
-    ColorArray { values: Vec<String> },
-    FloatCurveArray { values: Vec<Vec<FloatCurvePoint>> },
-    ColorCurveArray { values: Vec<Vec<ColorCurvePoint>> },
-    Marks { key: String },
+    Int {
+        value: f64,
+    },
+    Float {
+        value: f64,
+    },
+    Bool {
+        value: bool,
+    },
+    Color {
+        value: String,
+    },
+    Enum {
+        value: String,
+    },
+    Curve {
+        points: Vec<SequenceCurvePoint>,
+    },
+    Gradient {
+        stops: Vec<SequenceGradientStop>,
+    },
+    IntArray {
+        values: Vec<f64>,
+    },
+    FloatArray {
+        values: Vec<f64>,
+    },
+    BoolArray {
+        values: Vec<bool>,
+    },
+    ColorArray {
+        values: Vec<String>,
+    },
+    CurveArray {
+        values: Vec<Vec<SequenceCurvePoint>>,
+    },
+    GradientArray {
+        values: Vec<Vec<SequenceGradientStop>>,
+    },
+    Marks {
+        key: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -1038,13 +1076,23 @@ pub enum SequenceGuiEdit {
         name: String,
         value: SequenceEffectParamValue,
     },
-    LinkEffectCurveParam {
+    LinkEffectCurve {
         id: u32,
         name: String,
-        curve_path: String,
+        source_path: String,
         object_key: String,
     },
-    UnlinkEffectCurveParam {
+    UnlinkEffectCurve {
+        id: u32,
+        name: String,
+    },
+    LinkEffectGradient {
+        id: u32,
+        name: String,
+        source_path: String,
+        object_key: String,
+    },
+    UnlinkEffectGradient {
         id: u32,
         name: String,
     },
@@ -1078,13 +1126,23 @@ pub enum SequenceGuiEdit {
         name: String,
         value: SequenceEffectParamValue,
     },
-    LinkGraphOperatorCurveParam {
+    LinkGraphOperatorCurve {
         node_id: String,
         name: String,
-        curve_path: String,
+        source_path: String,
         object_key: String,
     },
-    UnlinkGraphOperatorCurveParam {
+    UnlinkGraphOperatorCurve {
+        node_id: String,
+        name: String,
+    },
+    LinkGraphOperatorGradient {
+        node_id: String,
+        name: String,
+        source_path: String,
+        object_key: String,
+    },
+    UnlinkGraphOperatorGradient {
         node_id: String,
         name: String,
     },
@@ -1112,7 +1170,7 @@ pub enum SequenceGuiEdit {
     },
     UpdateAutomationCurve {
         id: u32,
-        curve: Vec<FloatCurvePoint>,
+        curve: Vec<SequenceCurvePoint>,
     },
     DeleteAutomationClip {
         id: u32,

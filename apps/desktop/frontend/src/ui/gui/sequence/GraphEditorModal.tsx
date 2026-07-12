@@ -260,22 +260,43 @@ function GraphOperatorInspector({
                   ).then(() => undefined)
                 }
                 curveLibrary={document.curveLibrary}
+                gradientLibrary={document.gradientLibrary}
                 markCollections={document.markCollections}
-                linkCurveParam={(name, curve) =>
+                linkCurve={(name, curve) =>
                   runGuiEditCommand(() =>
                     commands.applySequenceGuiEdit({
-                      type: "linkGraphOperatorCurveParam",
+                      type: "linkGraphOperatorCurve",
                       nodeId: node.id,
                       name,
-                      curvePath: curve.path,
+                      sourcePath: curve.path,
                       objectKey: curve.objectKey
                     })
                   ).then(() => undefined)
                 }
-                unlinkCurveParam={(name) =>
+                unlinkCurve={(name) =>
                   runGuiEditCommand(() =>
                     commands.applySequenceGuiEdit({
-                      type: "unlinkGraphOperatorCurveParam",
+                      type: "unlinkGraphOperatorCurve",
+                      nodeId: node.id,
+                      name
+                    })
+                  ).then(() => undefined)
+                }
+                linkGradient={(name, gradient) =>
+                  runGuiEditCommand(() =>
+                    commands.applySequenceGuiEdit({
+                      type: "linkGraphOperatorGradient",
+                      nodeId: node.id,
+                      name,
+                      sourcePath: gradient.path,
+                      objectKey: gradient.objectKey
+                    })
+                  ).then(() => undefined)
+                }
+                unlinkGradient={(name) =>
+                  runGuiEditCommand(() =>
+                    commands.applySequenceGuiEdit({
+                      type: "unlinkGraphOperatorGradient",
                       nodeId: node.id,
                       name
                     })

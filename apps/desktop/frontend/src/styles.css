@@ -1115,7 +1115,7 @@ button:focus-visible,
 }
 
 .effect-param-value-row,
-.curve-source-row {
+.param-source-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -1134,7 +1134,7 @@ button:focus-visible,
 
 .effect-param-value-row input:not([type="checkbox"]):not([type="color"]),
 .effect-param-value-row select,
-.curve-source-row select {
+.param-source-row select {
   height: 30px;
 }
 
@@ -1313,12 +1313,12 @@ button:focus-visible,
   margin: 0;
 }
 
-.curve-source-shell {
+.param-source-shell {
   display: grid;
   gap: 8px;
 }
 
-.curve-source-row {
+.param-source-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -1326,15 +1326,15 @@ button:focus-visible,
   min-height: 30px;
 }
 
-.curve-action-row {
+.param-source-actions {
   display: flex;
   align-items: center;
   gap: 7px;
   min-height: 30px;
 }
 
-.curve-source-shell.linked .float-curve-graph,
-.curve-source-shell.linked .color-curve-gradient {
+.param-source-shell.linked .float-curve-graph,
+.param-source-shell.linked .color-curve-gradient {
   cursor: default;
 }
 

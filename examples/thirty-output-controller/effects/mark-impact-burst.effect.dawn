@@ -1,7 +1,7 @@
 effect MarkImpactBurst {
   param marks beats;
-  param array<curve<color>> gradients;
-  param curve<float> intensity;
+  param array<gradient> gradients;
+  param curve intensity;
   param enum direction { outward, inward } = outward;
   param enum color_mode { through_effect, from_center, from_edge } = through_effect;
   param float offset_seconds = 0.0;

@@ -51,6 +51,7 @@ pub enum SourceObjectKind {
     Patch,
     FixtureDefinition,
     Curve,
+    Gradient,
     Sequence,
     EffectDefinition,
     OperatorDefinition,

@@ -3,6 +3,10 @@ imports:
   as: effects
 - from: ..\operators
   as: operators
+- from: ..\curves\basic_curves.curve.dawn
+  as: curves
+- from: ..\gradients\basic_gradients.gradient.dawn
+  as: gradients
 layer_test:
   type: sequence
   duration: 249.753832s
@@ -12,99 +16,57 @@ layer_test:
   - key: marks
     name: Marks
     color: '#45b7ff'
-    marks:
-    - 59.533478052s
-    - 59.825583004s
+    marks: []
   layers:
   - id: 0
     name: Default
     color: '#38bdf8'
     enabled: true
-  - id: 1
-    name: Layer 2
-    color: '#f45b69'
-    enabled: true
-  - id: 2
-    name: Layer 3
-    color: '#37a987'
-    enabled: true
   effects:
-  - id: 2
-    layer_id: 2
-    start: 59.851226103s
-    duration: 1.496207656s
+  - id: 1
+    layer_id: 0
+    start: 58.302838104s
+    duration: 0.773479974s
     target:
-      type: group
+      type: fixture
       id: 1
-    scope: whole_target
+    scope: per_fixture
     params:
       gradient:
-        type: curve
-        curve:
-          type: curve
-          value_type: color
-          points:
-          - time: 0.047
-            value: '#000000'
-          - time: 0.167
-            value: '#0052ff'
-          - time: 0.329
-            value: '#ffffff'
-          - time: 0.587
-            value: '#ff0000'
-          - time: 0.795
-            value: '#0052ff'
+        type: gradient
+        gradient: gradients.mint_violet_gradient
       pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: float
           points:
-          - time: 0.0
+          - position: 0.0
             value: 1.0
-          - time: 1.0
+          - position: 1.0
             value: 0.0
     script: effects.Pulse
-  - id: 3
-    layer_id: 1
-    start: 56.679046844s
-    duration: 0.534750118s
+  - id: 2
+    layer_id: 0
+    start: 58.637890996s
+    duration: 0.773479974s
     target:
-      type: group
-      id: 1
-    scope: whole_target
+      type: fixture
+      id: 2
+    scope: per_fixture
     params:
-      palette:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
         type: curve
         curve:
           type: curve
-          value_type: color
           points:
-          - time: 0.0
-            value: '#ffffff'
-          - time: 0.678
-            value: '#0007ff'
-          - time: 0.939
-            value: '#000000'
-      sparkle_color:
-        type: color
-        value: '#ff0000'
-      shimmer_level:
-        type: float
-        value: 0.1
-      sparkle_level:
-        type: float
-        value: 10.0
-      wave_speed:
-        type: float
-        value: 1.0
-      wave_scale:
-        type: float
-        value: 10.0
-      sparkle_speed:
-        type: float
-        value: 4.0
-    script: effects.ShimmerField
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    script: effects.Pulse
   composition_graph:
     nodes:
     - id: 1
@@ -120,60 +82,16 @@ layer_test:
       type: output
     - id: 3
       position:
-        x: 346.238291333068
-        y: 205.18646022077405
-      type: layer
-      layer_id: 1
-    - id: 4
-      position:
-        x: 405.018173835174
-        y: 378.542744194707
-      type: layer
-      layer_id: 2
-    - id: 5
-      position:
-        x: 559.4871410280349
-        y: 199.9255387006803
-      type: operator
-      operator: echo
-      params:
-        repeats:
-          type: integer
-          value: 10
-        seconds:
-          type: float
-          value: 0.8
-        decay:
-          type: float
-          value: 0.3
-    - id: 6
-      position:
         x: 610.0
-        y: 45.0
+        y: 110.0
       type: operator
       operator: operators.Gain
-      params:
-        amount:
-          type: float
-          value: 10.0
     edges:
     - from: 1
       from_port: output
-      to: 6
+      to: 3
       to_port: source
-    - from: 6
-      from_port: output
-      to: 2
-      to_port: input
-    - from: 4
-      from_port: output
-      to: 2
-      to_port: input
     - from: 3
-      from_port: output
-      to: 5
-      to_port: input
-    - from: 5
       from_port: output
       to: 2
       to_port: input

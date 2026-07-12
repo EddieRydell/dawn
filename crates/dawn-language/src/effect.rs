@@ -3,7 +3,7 @@ use crate::dsl::{CompiledEffect, Type, Value};
 use crate::identity::SourceIdentity;
 use crate::sequence::{MarkCollectionKey, SequenceLayerId};
 use crate::setup::{FixtureGroupId, FixtureInstanceId};
-use crate::values::{Curve, DawnDuration, DawnTime};
+use crate::values::{Curve, DawnDuration, DawnTime, Gradient};
 use indexmap::IndexMap;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -45,6 +45,7 @@ pub enum EffectParamValue {
     Enum(Identifier),
     Marks(MarkCollectionKey),
     Curve(CurveSource),
+    Gradient(GradientSource),
     Array(Vec<EffectParamValue>),
 }
 
@@ -60,6 +61,9 @@ impl EffectParamValue {
             Value::Bool(value) => Some(Self::Bool(value)),
             Value::Color(value) => Some(Self::Color(value)),
             Value::Curve(value) => Some(Self::Curve(CurveSource::Inline((*value).clone()))),
+            Value::Gradient(value) => {
+                Some(Self::Gradient(GradientSource::Inline((*value).clone())))
+            }
             Value::Array(values) => values
                 .iter()
                 .cloned()
@@ -80,6 +84,12 @@ impl EffectParamValue {
 pub enum CurveSource {
     Inline(Curve),
     Reference(CurveId),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum GradientSource {
+    Inline(Gradient),
+    Reference(GradientId),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -114,6 +124,14 @@ pub struct CurveDefinition {
     pub curve: Curve,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct GradientId(pub SourceIdentity);
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GradientDefinition {
+    pub gradient: Gradient,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CurveDefinitionStore {
     pub definitions: IndexMap<CurveId, CurveDefinition>,
@@ -126,5 +144,24 @@ impl CurveDefinitionStore {
 
     pub fn insert(&mut self, key: CurveId, curve: CurveDefinition) -> Option<CurveDefinition> {
         self.definitions.insert(key, curve)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GradientDefinitionStore {
+    pub definitions: IndexMap<GradientId, GradientDefinition>,
+}
+
+impl GradientDefinitionStore {
+    pub fn get(&self, key: &GradientId) -> Option<&GradientDefinition> {
+        self.definitions.get(key)
+    }
+
+    pub fn insert(
+        &mut self,
+        key: GradientId,
+        gradient: GradientDefinition,
+    ) -> Option<GradientDefinition> {
+        self.definitions.insert(key, gradient)
     }
 }

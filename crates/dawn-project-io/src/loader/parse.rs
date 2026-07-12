@@ -2,19 +2,7 @@ pub(crate) fn parse_automation_curve(
     path: &Utf8Path,
     value: &Value,
 ) -> Result<Curve, LoadProjectError> {
-    let curve = parse_curve(path, value)?;
-    if curve
-        .points
-        .iter()
-        .any(|point| !matches!(point.value, CurveValue::Float(_)))
-    {
-        return Err(LoadProjectError::InvalidDocument {
-            path: path.to_path_buf(),
-            range: source_range_for_value(path, value),
-            message: "automation curves must be float curves".to_string(),
-        });
-    }
-    Ok(curve)
+    parse_curve(path, value)
 }
 
 pub(crate) fn parse_sequence_layer(
@@ -106,7 +94,7 @@ pub(crate) fn parse_automation_mapping(
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         },
-        "float_curve" => AutomationMapping::FloatCurve {
+        "curve" => AutomationMapping::Curve {
             min: f64_field(path, value, "min")?,
             max: f64_field(path, value, "max")?,
         },
@@ -148,6 +136,7 @@ pub(crate) enum ResolvedObject {
     Patch(PatchId),
     FixtureDefinition(FixtureDefinitionId),
     Curve(CurveId),
+    Gradient(GradientId),
     Sequence(SequenceId),
     EffectDefinition(EffectDefinitionId),
     OperatorDefinition(OperatorDefinitionId),
@@ -163,6 +152,7 @@ impl ResolvedObject {
             Self::Patch(id) => &id.0,
             Self::FixtureDefinition(id) => &id.0,
             Self::Curve(id) => &id.0,
+            Self::Gradient(id) => &id.0,
             Self::Sequence(id) => &id.0,
             Self::EffectDefinition(id) => &id.0,
             Self::OperatorDefinition(id) => &id.0,
@@ -178,6 +168,7 @@ impl ResolvedObject {
             Self::Patch(_) => SourceObjectKind::Patch,
             Self::FixtureDefinition(_) => SourceObjectKind::FixtureDefinition,
             Self::Curve(_) => SourceObjectKind::Curve,
+            Self::Gradient(_) => SourceObjectKind::Gradient,
             Self::Sequence(_) => SourceObjectKind::Sequence,
             Self::EffectDefinition(_) => SourceObjectKind::EffectDefinition,
             Self::OperatorDefinition(_) => SourceObjectKind::OperatorDefinition,
@@ -193,6 +184,7 @@ impl ResolvedObject {
             Self::Patch(id) => id.0.object().to_string(),
             Self::FixtureDefinition(id) => id.0.object().to_string(),
             Self::Curve(id) => id.0.object().to_string(),
+            Self::Gradient(id) => id.0.object().to_string(),
             Self::Sequence(id) => id.0.object().to_string(),
             Self::EffectDefinition(id) => id.0.object().to_string(),
             Self::OperatorDefinition(id) => id.0.object().to_string(),
@@ -411,44 +403,33 @@ pub(crate) fn parse_fixture_definition(
 }
 
 pub(crate) fn parse_curve(path: &Utf8Path, value: &Value) -> Result<Curve, LoadProjectError> {
-    let value_type = string_field(path, value, "value_type")?;
     let points = sequence_values(path, value, "points")?
         .iter()
         .map(|point| {
-            let position = f64_field(path, point, "time")?;
-            let value = required_field(path, point, "value")?;
-            let value = match value_type {
-                "float" => CurveValue::Float(value.as_f64().ok_or_else(|| {
-                    LoadProjectError::InvalidDocument {
-                        path: path.to_path_buf(),
-                        range: None,
-                        message: "curve float point must be numeric".to_string(),
-                    }
-                })?),
-                "color" => CurveValue::Color(
-                    parse_color(value.as_str().ok_or_else(|| {
-                        LoadProjectError::InvalidDocument {
-                            path: path.to_path_buf(),
-                            range: None,
-                            message: "curve color point must be a color string".to_string(),
-                        }
-                    })?)
-                    .map_err(|error| {
-                        with_yaml_location(error, path, source_range_for_value(path, value))
-                    })?,
-                ),
-                other => {
-                    return Err(LoadProjectError::InvalidDocument {
-                        path: path.to_path_buf(),
-                        range: source_range_for_field_value(path, value, "value_type"),
-                        message: format!("unsupported curve value type `{other}`"),
-                    });
-                }
-            };
+            let position = f64_field(path, point, "position")?;
+            let value = f64_field(path, point, "value")?;
             Ok(CurvePoint { position, value })
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Curve { points })
+}
+
+pub(crate) fn parse_gradient(path: &Utf8Path, value: &Value) -> Result<Gradient, LoadProjectError> {
+    let stops = sequence_values(path, value, "stops")?
+        .iter()
+        .map(|stop| {
+            let position = f64_field(path, stop, "position")?;
+            let color = parse_color(string_field(path, stop, "color")?).map_err(|error| {
+                with_yaml_location(
+                    error,
+                    path,
+                    source_range_for_field_value(path, stop, "color"),
+                )
+            })?;
+            Ok(GradientStop { position, color })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Gradient { stops })
 }
 
 pub(crate) fn parse_point3(value: &Value) -> Result<Point3, LoadProjectError> {
@@ -736,7 +717,9 @@ pub(crate) fn normalize_relative(path: Utf8PathBuf) -> Utf8PathBuf {
 }
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_language::dsl::Identifier;
-use dawn_language::effect::{CurveId, EffectDefinitionId, EffectInstId, EffectScope, EffectTarget};
+use dawn_language::effect::{
+    CurveId, EffectDefinitionId, EffectInstId, EffectScope, EffectTarget, GradientId,
+};
 use dawn_language::identity::SourceIdentity;
 use dawn_language::model::ProjectId;
 use dawn_language::operator::OperatorDefinitionId;
@@ -751,8 +734,8 @@ use dawn_language::setup::{
     SetupId,
 };
 use dawn_language::values::{
-    Color, Curve, CurvePoint, CurveValue, DawnDuration, DawnTime, Distance, DistanceSpan, Point3,
-    Rotation3, Scale3,
+    Color, Curve, CurvePoint, DawnDuration, DawnTime, Distance, DistanceSpan, Gradient,
+    GradientStop, Point3, Rotation3, Scale3,
 };
 use yaml_serde::{Mapping, Value};
 

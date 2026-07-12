@@ -2,7 +2,7 @@ use crate::dsl::types::Identifier;
 use crate::effect::{EffectInst, EffectInstId};
 use crate::identity::SourceIdentity;
 use crate::operator::GraphOperatorNode;
-use crate::values::{Color, Curve, CurvePoint, CurveValue, DawnDuration, DawnTime};
+use crate::values::{Color, Curve, CurvePoint, DawnDuration, DawnTime};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SequenceId(pub SourceIdentity);
@@ -138,7 +138,7 @@ pub enum AutomationMapping {
     Int { min: i64, max: i64 },
     Bool,
     Enum { values: Vec<Identifier> },
-    FloatCurve { min: f64, max: f64 },
+    Curve { min: f64, max: f64 },
 }
 
 pub enum AutomationValue {
@@ -146,7 +146,7 @@ pub enum AutomationValue {
     Float(f64),
     Bool(bool),
     Enum(Identifier),
-    FloatCurve(Curve),
+    Curve(Curve),
 }
 
 pub fn automation_value_at(
@@ -168,8 +168,8 @@ pub fn automation_value_at(
                 .min(values.len().checked_sub(1)?);
             AutomationValue::Enum(values[index].clone())
         }
-        AutomationMapping::FloatCurve { min, max } => {
-            AutomationValue::FloatCurve(float_curve_window(clip, *min, *max, sample_seconds))
+        AutomationMapping::Curve { min, max } => {
+            AutomationValue::Curve(curve_window(clip, *min, *max, sample_seconds))
         }
     })
 }
@@ -181,10 +181,10 @@ fn sample_automation_clip(clip: &AutomationClip, sample_seconds: f64) -> f64 {
     } else {
         ((sample_seconds - clip.start.as_seconds_f64()) / duration).clamp(0.0, 1.0)
     };
-    sample_float_curve(&clip.curve, position).clamp(0.0, 1.0)
+    sample_curve(&clip.curve, position).clamp(0.0, 1.0)
 }
 
-fn float_curve_window(clip: &AutomationClip, min: f64, max: f64, sample_seconds: f64) -> Curve {
+fn curve_window(clip: &AutomationClip, min: f64, max: f64, sample_seconds: f64) -> Curve {
     let duration = clip.duration.as_seconds_f64().max(f64::EPSILON);
     let sample_position =
         ((sample_seconds - clip.start.as_seconds_f64()) / duration).clamp(0.0, 1.0);
@@ -196,7 +196,7 @@ fn float_curve_window(clip: &AutomationClip, min: f64, max: f64, sample_seconds:
             let position = point.position - sample_position;
             (0.0..=1.0).contains(&position).then(|| CurvePoint {
                 position,
-                value: CurveValue::Float(lerp(min, max, curve_point_float(point))),
+                value: lerp(min, max, point.value),
             })
         })
         .collect::<Vec<_>>();
@@ -204,11 +204,7 @@ fn float_curve_window(clip: &AutomationClip, min: f64, max: f64, sample_seconds:
         points: if points.is_empty() {
             vec![CurvePoint {
                 position: 0.0,
-                value: CurveValue::Float(lerp(
-                    min,
-                    max,
-                    sample_automation_clip(clip, sample_seconds),
-                )),
+                value: lerp(min, max, sample_automation_clip(clip, sample_seconds)),
             }]
         } else {
             points
@@ -216,12 +212,12 @@ fn float_curve_window(clip: &AutomationClip, min: f64, max: f64, sample_seconds:
     }
 }
 
-fn sample_float_curve(curve: &Curve, position: f64) -> f64 {
+fn sample_curve(curve: &Curve, position: f64) -> f64 {
     let Some(first) = curve.points.first() else {
         return 0.0;
     };
     if position <= first.position {
-        return curve_point_float(first);
+        return first.value;
     }
     for pair in curve.points.windows(2) {
         let (left, right) = (&pair[0], &pair[1]);
@@ -232,17 +228,10 @@ fn sample_float_curve(curve: &Curve, position: f64) -> f64 {
             } else {
                 (position - left.position) / span
             };
-            return lerp(curve_point_float(left), curve_point_float(right), amount);
+            return lerp(left.value, right.value, amount);
         }
     }
-    curve.points.last().map(curve_point_float).unwrap_or(0.0)
-}
-
-fn curve_point_float(point: &CurvePoint) -> f64 {
-    match point.value {
-        CurveValue::Float(value) => value,
-        CurveValue::Color(_) => 0.0,
-    }
+    curve.points.last().map(|point| point.value).unwrap_or(0.0)
 }
 
 fn lerp(min: f64, max: f64, amount: f64) -> f64 {

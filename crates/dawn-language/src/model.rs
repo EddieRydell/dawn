@@ -1,4 +1,4 @@
-use crate::effect::{CurveDefinitionStore, EffectDefinitionStore};
+use crate::effect::{CurveDefinitionStore, EffectDefinitionStore, GradientDefinitionStore};
 use crate::identity::SourceIdentity;
 use crate::operator::OperatorDefinitionStore;
 use crate::sequence::Sequence;
@@ -34,6 +34,7 @@ pub struct ProjectDefinitionStores {
     pub effects: EffectDefinitionStore,
     pub fixtures: FixtureDefinitionStore,
     pub curves: CurveDefinitionStore,
+    pub gradients: GradientDefinitionStore,
     pub controllers: ControllerDefinitionStore,
     pub operators: OperatorDefinitionStore,
 }

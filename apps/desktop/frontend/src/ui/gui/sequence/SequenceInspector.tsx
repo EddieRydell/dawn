@@ -320,22 +320,43 @@ function EffectInspectorPanel({
                     ).then(() => undefined)
                   }
                   curveLibrary={document.curveLibrary}
+                  gradientLibrary={document.gradientLibrary}
                   markCollections={document.markCollections}
-                  linkCurveParam={(name, curve) =>
+                  linkCurve={(name, curve) =>
                     runGuiEditCommand(() =>
                       commands.applySequenceGuiEdit({
-                        type: "linkEffectCurveParam",
+                        type: "linkEffectCurve",
                         id: effect.id,
                         name,
-                        curvePath: curve.path,
+                        sourcePath: curve.path,
                         objectKey: curve.objectKey
                       })
                     ).then(() => undefined)
                   }
-                  unlinkCurveParam={(name) =>
+                  unlinkCurve={(name) =>
                     runGuiEditCommand(() =>
                       commands.applySequenceGuiEdit({
-                        type: "unlinkEffectCurveParam",
+                        type: "unlinkEffectCurve",
+                        id: effect.id,
+                        name
+                      })
+                    ).then(() => undefined)
+                  }
+                  linkGradient={(name, gradient) =>
+                    runGuiEditCommand(() =>
+                      commands.applySequenceGuiEdit({
+                        type: "linkEffectGradient",
+                        id: effect.id,
+                        name,
+                        sourcePath: gradient.path,
+                        objectKey: gradient.objectKey
+                      })
+                    ).then(() => undefined)
+                  }
+                  unlinkGradient={(name) =>
+                    runGuiEditCommand(() =>
+                      commands.applySequenceGuiEdit({
+                        type: "unlinkEffectGradient",
                         id: effect.id,
                         name
                       })

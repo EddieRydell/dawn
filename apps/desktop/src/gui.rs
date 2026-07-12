@@ -353,7 +353,7 @@ mod tests {
         SequenceId, SequenceLayer, SequenceLayerId,
     };
     use dawn_language::setup::{LayoutId, PatchId, Setup, SetupId};
-    use dawn_language::values::{Color, Curve, CurvePoint, CurveValue, DawnDuration};
+    use dawn_language::values::{Color, Curve, CurvePoint, DawnDuration};
     use dawn_project_io::{
         ProjectSession, SourceDocument, SourceDocumentKind, SourceObjectId, SourceObjectKind,
         SourceProject,
@@ -516,7 +516,7 @@ mod tests {
     fn custom_operator_adds_import_and_supports_typed_and_curve_params() {
         let mut session = test_session(test_sequence_with_graph(true));
         let compiled = compile_operators(
-            "operator Gain { input Signal source; param float amount; param curve<float> shape; color sample() { return source.at(seconds()) * amount; } }",
+            "operator Gain { input Signal source; param float amount; param curve shape; color sample() { return source.at(seconds()) * amount; } }",
         )
         .unwrap()
         .into_iter()
@@ -539,7 +539,7 @@ mod tests {
                 curve: Curve {
                     points: vec![CurvePoint {
                         position: 0.0,
-                        value: CurveValue::Float(1.0),
+                        value: 1.0,
                     }],
                 },
             },
@@ -636,10 +636,10 @@ mod tests {
         .unwrap();
         apply_sequence_edit(
             &mut session,
-            SequenceGuiEdit::LinkGraphOperatorCurveParam {
+            SequenceGuiEdit::LinkGraphOperatorCurve {
                 node_id: format!("node:{node_id}"),
                 name: "shape".to_string(),
-                curve_path: "curves/shape.curve.dawn".to_string(),
+                source_path: "curves/shape.curve.dawn".to_string(),
                 object_key: "shape".to_string(),
             },
         )

@@ -341,10 +341,6 @@ pub(super) fn automation_clip_value(clip: &AutomationClip) -> Result<Value, Expo
 pub(super) fn automation_curve_value(curve: &Curve) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
     value.insert(
-        string_value("value_type"),
-        Value::String("float".to_string()),
-    );
-    value.insert(
         string_value("points"),
         Value::Sequence(
             curve
@@ -352,15 +348,8 @@ pub(super) fn automation_curve_value(curve: &Curve) -> Result<Value, ExportProje
                 .iter()
                 .map(|point| {
                     let mut value = Mapping::new();
-                    value.insert(string_value("time"), number_value(point.position)?);
-                    let CurveValue::Float(point_value) = point.value else {
-                        return Err(ExportProjectError::InvalidReference {
-                            path: Utf8PathBuf::from("<sync>"),
-                            reference: "automation.curve".to_string(),
-                            message: "automation curves must contain float points".to_string(),
-                        });
-                    };
-                    value.insert(string_value("value"), number_value(point_value)?);
+                    value.insert(string_value("position"), number_value(point.position)?);
+                    value.insert(string_value("value"), number_value(point.value)?);
                     Ok(Value::Mapping(value))
                 })
                 .collect::<Result<Vec<_>, _>>()?,
@@ -445,11 +434,8 @@ pub(super) fn automation_mapping_value(
                 ),
             );
         }
-        AutomationMapping::FloatCurve { min, max } => {
-            value.insert(
-                string_value("type"),
-                Value::String("float_curve".to_string()),
-            );
+        AutomationMapping::Curve { min, max } => {
+            value.insert(string_value("type"), Value::String("curve".to_string()));
             value.insert(string_value("min"), number_value(*min)?);
             value.insert(string_value("max"), number_value(*max)?);
         }
@@ -498,6 +484,13 @@ pub(super) fn effect_param_value(
                 curve_source_value(session, from_document, inner)?,
             );
         }
+        EffectParamValue::Gradient(inner) => {
+            value.insert(string_value("type"), Value::String("gradient".to_string()));
+            value.insert(
+                string_value("gradient"),
+                gradient_source_value(session, from_document, inner)?,
+            );
+        }
         EffectParamValue::Array(values) => {
             value.insert(string_value("type"), Value::String("array".to_string()));
             value.insert(
@@ -532,6 +525,14 @@ pub(super) fn array_item_value(
             );
             Ok(Value::Mapping(value))
         }
+        EffectParamValue::Gradient(source) => {
+            let mut value = Mapping::new();
+            value.insert(
+                string_value("gradient"),
+                gradient_source_value(session, from_document, source)?,
+            );
+            Ok(Value::Mapping(value))
+        }
         _ => effect_param_value(session, from_document, param),
     }
 }
@@ -542,15 +543,25 @@ pub(super) fn array_element_type(values: &[EffectParamValue]) -> &'static str {
         Some(EffectParamValue::Float(_)) => "float",
         Some(EffectParamValue::Bool(_)) => "bool",
         Some(EffectParamValue::Color(_)) => "color",
-        Some(EffectParamValue::Curve(CurveSource::Inline(curve))) => match curve.points.first() {
-            Some(CurvePoint {
-                value: CurveValue::Color(_),
-                ..
-            }) => "curve_color",
-            _ => "curve_float",
-        },
-        Some(EffectParamValue::Curve(CurveSource::Reference(_))) => "curve",
+        Some(EffectParamValue::Curve(_)) => "curve",
+        Some(EffectParamValue::Gradient(_)) => "gradient",
         _ => "float",
+    }
+}
+
+pub(super) fn gradient_source_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    source: &GradientSource,
+) -> Result<Value, ExportProjectError> {
+    match source {
+        GradientSource::Inline(gradient) => gradient_value(gradient),
+        GradientSource::Reference(id) => Ok(Value::String(write_source_reference(
+            session,
+            from_document,
+            SourceObjectKind::Gradient,
+            &id.0,
+        )?)),
     }
 }
 
@@ -569,10 +580,10 @@ pub(super) fn curve_source_value(
         )?)),
     }
 }
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8Path;
 use dawn_language::dsl::Identifier;
 use dawn_language::effect::{
-    CurveSource, EffectDefinitionId, EffectInst, EffectParamValue, EffectScope,
+    CurveSource, EffectDefinitionId, EffectInst, EffectParamValue, EffectScope, GradientSource,
 };
 use dawn_language::operator::OperatorRef;
 use dawn_language::sequence::{
@@ -580,14 +591,14 @@ use dawn_language::sequence::{
     CompositionGraphNodeKind, EffectGraphEdge, GraphNodePosition, MarkCollection, Sequence,
     SequenceAudio, SequenceCompositionGraph, SequenceLayer,
 };
-use dawn_language::values::{Curve, CurvePoint, CurveValue};
+use dawn_language::values::Curve;
 use indexmap::IndexMap;
 use yaml_serde::{Mapping, Value};
 
 use super::ProjectSession;
 use super::values::{
-    curve_value, effect_target_value, number_value, seconds_string, string_value, typed_object,
-    write_source_reference,
+    curve_value, effect_target_value, gradient_value, number_value, seconds_string, string_value,
+    typed_object, write_source_reference,
 };
 use crate::ExportProjectError;
 use crate::source::{SourceObjectKind, relative_path_from_document};

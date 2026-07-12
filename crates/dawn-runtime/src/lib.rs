@@ -17,6 +17,7 @@ use dawn_language::dsl::{
 };
 use dawn_language::effect::{
     CurveSource, EffectDefinitionId, EffectInstId, EffectParamValue, EffectScope, EffectTarget,
+    GradientSource,
 };
 use dawn_language::identity::SourceIdentity;
 use dawn_language::model::DawnProject;
@@ -186,6 +187,7 @@ pub enum RenderError {
     MissingEffect { effect_id: EffectDefinitionId },
     MissingEffectInstance { effect_id: EffectInstId },
     MissingCurve,
+    MissingGradient,
     MissingMarkCollection { key: MarkCollectionKey },
     BadTarget,
     BadGraph { message: String },
@@ -1460,6 +1462,16 @@ fn prepare_param_value(
                 .curve
                 .clone(),
         }))),
+        EffectParamValue::Gradient(source) => Ok(Value::Gradient(Arc::new(match source {
+            GradientSource::Inline(gradient) => gradient.clone(),
+            GradientSource::Reference(id) => project
+                .definitions
+                .gradients
+                .get(id)
+                .ok_or(RenderError::MissingGradient)?
+                .gradient
+                .clone(),
+        }))),
         EffectParamValue::Array(values) => values
             .iter()
             .map(|value| prepare_param_value(project, sequence, value, timing))
@@ -1538,7 +1550,7 @@ fn apply_automation_params(
                 AutomationValue::Float(value) => Value::Float(value),
                 AutomationValue::Bool(value) => Value::Bool(value),
                 AutomationValue::Enum(value) => Value::Enum(value),
-                AutomationValue::FloatCurve(value) => Value::Curve(Arc::new(value)),
+                AutomationValue::Curve(value) => Value::Curve(Arc::new(value)),
             })
             .ok_or_else(|| RenderError::BadGraph {
                 message: "enum automation mapping has no values".to_string(),
@@ -1732,7 +1744,8 @@ fn value_matches_type(value: &Value, ty: &Type) -> bool {
             | (Value::Bool(_), Type::Bool)
             | (Value::Color(_), Type::Color)
             | (Value::Marks(_), Type::Marks)
-            | (Value::Curve(_), Type::Curve(_))
+            | (Value::Curve(_), Type::Curve)
+            | (Value::Gradient(_), Type::Gradient)
             | (Value::Target(_), Type::Target)
             | (Value::TargetItems(_), Type::TargetItems)
             | (Value::TargetItem(_), Type::TargetItem)

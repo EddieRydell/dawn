@@ -394,6 +394,7 @@ mod tests {
                 effects,
                 fixtures,
                 curves: dawn_language::effect::CurveDefinitionStore::default(),
+                gradients: dawn_language::effect::GradientDefinitionStore::default(),
                 controllers: ControllerDefinitionStore::default(),
                 operators: dawn_language::operator::OperatorDefinitionStore::default(),
             },

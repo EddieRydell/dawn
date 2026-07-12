@@ -245,17 +245,17 @@ fn instruction_read_slots(instruction: &Instruction, mut read: impl FnMut(ValueS
             read(ValueSlot::Float(*min));
             read(ValueSlot::Float(*max));
         }
-        Instruction::CurveColorScaled {
-            curve,
+        Instruction::GradientColorScaled {
+            gradient,
             position,
             scale,
             ..
         } => {
-            read(ValueSlot::Ref(*curve));
+            read(ValueSlot::Ref(*gradient));
             read(ValueSlot::Float(*position));
             read(ValueSlot::Float(*scale));
         }
-        Instruction::CurveParamColorScaled {
+        Instruction::GradientParamColorScaled {
             position, scale, ..
         } => {
             read(ValueSlot::Float(*position));
@@ -316,10 +316,10 @@ fn instruction_write_slots(instruction: &Instruction, mut write: impl FnMut(Valu
         | Instruction::LoadGeneratorContext { dst, .. }
         | Instruction::Move { dst, .. }
         | Instruction::Index { dst, .. }
-        | Instruction::CurveParamSample { dst, .. }
         | Instruction::ContextRead { dst, .. }
         | Instruction::Mark { dst, .. }
         | Instruction::TargetItems { dst, .. } => write(*dst),
+        Instruction::CurveParamSample { dst, .. } => write(ValueSlot::Float(*dst)),
         Instruction::LoadIntParam { dst, .. }
         | Instruction::NegInt { dst, .. }
         | Instruction::IntArithmetic { dst, .. }
@@ -353,8 +353,8 @@ fn instruction_write_slots(instruction: &Instruction, mut write: impl FnMut(Valu
         | Instruction::MixColor { dst, .. }
         | Instruction::Rgb { dst, .. }
         | Instruction::Hsv { dst, .. }
-        | Instruction::CurveColorScaled { dst, .. }
-        | Instruction::CurveParamColorScaled { dst, .. } => write(ValueSlot::Color(*dst)),
+        | Instruction::GradientColorScaled { dst, .. }
+        | Instruction::GradientParamColorScaled { dst, .. } => write(ValueSlot::Color(*dst)),
         Instruction::SignalSample { dst, .. }
         | Instruction::ColorBinary { dst, .. }
         | Instruction::ColorScale { dst, .. }
@@ -438,7 +438,8 @@ impl ValueSlot {
             | Type::Target
             | Type::TargetItems
             | Type::TargetItem
-            | Type::Curve(_)
+            | Type::Curve
+            | Type::Gradient
             | Type::Array(_)
             | Type::Enum(_) => {
                 let slot = RefSlot(layout.refs);
@@ -501,7 +502,7 @@ pub(crate) enum Instruction {
         index: ValueSlot,
     },
     CurveParamSample {
-        dst: ValueSlot,
+        dst: FloatSlot,
         param: ParamId,
         position: FloatSlot,
     },
@@ -688,13 +689,13 @@ pub(crate) enum Instruction {
         min: FloatSlot,
         max: FloatSlot,
     },
-    CurveColorScaled {
+    GradientColorScaled {
         dst: ColorSlot,
-        curve: RefSlot,
+        gradient: RefSlot,
         position: FloatSlot,
         scale: FloatSlot,
     },
-    CurveParamColorScaled {
+    GradientParamColorScaled {
         dst: ColorSlot,
         param: ParamId,
         position: FloatSlot,

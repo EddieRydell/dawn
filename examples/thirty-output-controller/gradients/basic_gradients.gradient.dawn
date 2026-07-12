@@ -1,0 +1,326 @@
+warm_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#fff4d6'
+  - position: 0.35
+    color: '#ffb000'
+  - position: 1.0
+    color: '#ff2a00'
+cool_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#d9ffff'
+  - position: 0.45
+    color: '#00a6ff'
+  - position: 1.0
+    color: '#3d00ff'
+club_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#ffffff'
+  - position: 0.25
+    color: '#ff2bd6'
+  - position: 0.6
+    color: '#2de2ff'
+  - position: 1.0
+    color: '#7cff00'
+fire_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#ffffff'
+  - position: 0.18
+    color: '#ffd15c'
+  - position: 0.55
+    color: '#ff4a00'
+  - position: 1.0
+    color: '#1a0000'
+ice_glass_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#ffffff'
+  - position: 0.18
+    color: '#b9f7ff'
+  - position: 0.55
+    color: '#40b8ff'
+  - position: 1.0
+    color: '#1020a8'
+electric_blue_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#f8ffff'
+  - position: 0.18
+    color: '#00f0ff'
+  - position: 0.52
+    color: '#0066ff'
+  - position: 1.0
+    color: '#050044'
+neon_candy_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#ffffff'
+  - position: 0.2
+    color: '#ff2bd6'
+  - position: 0.5
+    color: '#00f5ff'
+  - position: 0.75
+    color: '#fff200'
+  - position: 1.0
+    color: '#7cff00'
+laser_magenta_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#ffffff'
+  - position: 0.22
+    color: '#ff55ff'
+  - position: 0.58
+    color: '#ba00ff'
+  - position: 1.0
+    color: '#180020'
+acid_green_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#f6ffd6'
+  - position: 0.28
+    color: '#b7ff00'
+  - position: 0.65
+    color: '#00ff66'
+  - position: 1.0
+    color: '#003315'
+sodium_vapor_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#fff8df'
+  - position: 0.35
+    color: '#ffb300'
+  - position: 0.72
+    color: '#ff5a00'
+  - position: 1.0
+    color: '#3b0700'
+molten_gold_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#ffffff'
+  - position: 0.2
+    color: '#ffe680'
+  - position: 0.5
+    color: '#ff9d00'
+  - position: 0.78
+    color: '#b83a00'
+  - position: 1.0
+    color: '#120300'
+ember_core_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#fff0d8'
+  - position: 0.16
+    color: '#ff7a00'
+  - position: 0.5
+    color: '#e00020'
+  - position: 0.82
+    color: '#4d0015'
+  - position: 1.0
+    color: '#000000'
+plasma_storm_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#ffffff'
+  - position: 0.18
+    color: '#55ffea'
+  - position: 0.42
+    color: '#3355ff'
+  - position: 0.7
+    color: '#ff00aa'
+  - position: 1.0
+    color: '#20003f'
+aurora_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#062b31'
+  - position: 0.2
+    color: '#00d2a8'
+  - position: 0.48
+    color: '#77ff66'
+  - position: 0.72
+    color: '#5b7cff'
+  - position: 1.0
+    color: '#2a005f'
+sunset_pop_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#fff1a8'
+  - position: 0.25
+    color: '#ff8a00'
+  - position: 0.52
+    color: '#ff006a'
+  - position: 0.78
+    color: '#7a2cff'
+  - position: 1.0
+    color: '#050019'
+deep_ocean_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#d8ffff'
+  - position: 0.25
+    color: '#00c2c7'
+  - position: 0.55
+    color: '#0065a8'
+  - position: 1.0
+    color: '#000b2e'
+mint_violet_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#eaffff'
+  - position: 0.25
+    color: '#7cffc7'
+  - position: 0.55
+    color: '#48a0ff'
+  - position: 1.0
+    color: '#b33cff'
+hot_pink_lime_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#ffffff'
+  - position: 0.22
+    color: '#ff1493'
+  - position: 0.55
+    color: '#ffea00'
+  - position: 1.0
+    color: '#39ff14'
+redline_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#ffffff'
+  - position: 0.18
+    color: '#ff3030'
+  - position: 0.55
+    color: '#b00000'
+  - position: 1.0
+    color: '#120000'
+white_strobe_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#ffffff'
+  - position: 0.3
+    color: '#f3fbff'
+  - position: 0.72
+    color: '#b9cfff'
+  - position: 1.0
+    color: '#000000'
+blacklight_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#1b003d'
+  - position: 0.3
+    color: '#5600ff'
+  - position: 0.62
+    color: '#ff00f5'
+  - position: 1.0
+    color: '#00124d'
+cyberpunk_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#00fff0'
+  - position: 0.25
+    color: '#005eff'
+  - position: 0.5
+    color: '#ff00cc'
+  - position: 0.76
+    color: '#ffea00'
+  - position: 1.0
+    color: '#050505'
+pastel_sherbet_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#fff2f8'
+  - position: 0.25
+    color: '#ff9fd6'
+  - position: 0.5
+    color: '#ffd166'
+  - position: 0.75
+    color: '#8cffc1'
+  - position: 1.0
+    color: '#9db6ff'
+prism_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#ff0033'
+  - position: 0.18
+    color: '#ff9d00'
+  - position: 0.34
+    color: '#fff200'
+  - position: 0.5
+    color: '#00ff66'
+  - position: 0.68
+    color: '#00b7ff'
+  - position: 0.84
+    color: '#4b3cff'
+  - position: 1.0
+    color: '#d600ff'
+ghost_blue_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#ffffff'
+  - position: 0.22
+    color: '#d8f7ff'
+  - position: 0.58
+    color: '#7ca7ff'
+  - position: 1.0
+    color: '#060c35'
+royal_purple_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#fff7ff'
+  - position: 0.25
+    color: '#c464ff'
+  - position: 0.58
+    color: '#6c00d4'
+  - position: 1.0
+    color: '#120022'
+toxic_sludge_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#f8ff9d'
+  - position: 0.28
+    color: '#a7ff00'
+  - position: 0.6
+    color: '#00b84d'
+  - position: 1.0
+    color: '#1b2b00'
+arctic_pink_gradient:
+  type: gradient
+  stops:
+  - position: 0.0
+    color: '#ffffff'
+  - position: 0.24
+    color: '#9ff7ff'
+  - position: 0.55
+    color: '#7d7cff'
+  - position: 1.0
+    color: '#ff66d8'
