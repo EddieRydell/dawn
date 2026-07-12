@@ -1885,8 +1885,7 @@ button:focus-visible,
 }
 
 .new-project-form label,
-.new-sequence-form label,
-.export-fseq-form label {
+.new-sequence-form label {
   display: grid;
   gap: 5px;
   color: #a8a29a;
@@ -1894,8 +1893,7 @@ button:focus-visible,
 }
 
 .new-project-form input,
-.new-sequence-form input,
-.export-fseq-form input {
+.new-sequence-form input {
   min-width: 0;
   height: 30px;
   border: 1px solid #373b42;
@@ -1909,11 +1907,6 @@ button:focus-visible,
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
-}
-
-.export-fseq-form {
-  display: grid;
-  gap: 12px;
 }
 
 .settings-dialog {

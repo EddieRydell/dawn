@@ -1,5 +1,3 @@
-use super::*;
-
 pub(super) fn curve_value(curve: &Curve) -> Result<Value, ExportProjectError> {
     let mut value = typed_object("curve");
     let value_type = match curve.points.first() {
@@ -26,7 +24,7 @@ pub(super) fn curve_value(curve: &Curve) -> Result<Value, ExportProjectError> {
                         string_value("value"),
                         match point.value {
                             CurveValue::Float(inner) => number_value(inner)?,
-                            CurveValue::Color(inner) => Value::String(color_string(inner)),
+                            CurveValue::Color(inner) => Value::String(inner.to_hex()),
                         },
                     );
                     Ok(Value::Mapping(value))
@@ -76,7 +74,7 @@ pub(super) fn geometry_value(geometry: &Geometry) -> Result<Value, ExportProject
             value.insert(string_value("center"), point_value(center)?);
             value.insert(
                 string_value("radius"),
-                number_value(distance_span_meters(*radius))?,
+                number_value(radius.as_meters_f64())?,
             );
             value.insert(string_value("startDegrees"), number_value(*start_degrees)?);
             value.insert(string_value("endDegrees"), number_value(*end_degrees)?);
@@ -96,9 +94,9 @@ pub(super) fn transform_value(fixture: &FixtureInst) -> Result<Value, ExportProj
 
 pub(super) fn point_value(point: &Point3) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
-    value.insert(string_value("x"), number_value(distance_meters(point.x))?);
-    value.insert(string_value("y"), number_value(distance_meters(point.y))?);
-    value.insert(string_value("z"), number_value(distance_meters(point.z))?);
+    value.insert(string_value("x"), number_value(point.x.as_meters_f64())?);
+    value.insert(string_value("y"), number_value(point.y.as_meters_f64())?);
+    value.insert(string_value("z"), number_value(point.z.as_meters_f64())?);
     Ok(Value::Mapping(value))
 }
 
@@ -193,20 +191,8 @@ pub(super) fn number_value<T: serde::Serialize>(value: T) -> Result<Value, Expor
     })
 }
 
-pub(super) fn color_string(color: Color) -> String {
-    format!("#{:02x}{:02x}{:02x}", color.red, color.green, color.blue)
-}
-
 pub(super) fn seconds_string(seconds: f64) -> String {
     format!("{seconds}s")
-}
-
-pub(super) fn distance_meters(distance: Distance) -> f64 {
-    distance.micrometers as f64 / 1_000_000.0
-}
-
-pub(super) fn distance_span_meters(distance: DistanceSpan) -> f64 {
-    distance.micrometers as f64 / 1_000_000.0
 }
 
 pub(super) fn channel_order_name(order: &RgbChannelOrder) -> &'static str {
@@ -219,3 +205,13 @@ pub(super) fn channel_order_name(order: &RgbChannelOrder) -> &'static str {
         RgbChannelOrder::Bgr => "bgr",
     }
 }
+use camino::{Utf8Path, Utf8PathBuf};
+use dawn_language::effect::EffectTarget;
+use dawn_language::identity::SourceIdentity;
+use dawn_language::setup::{FixtureInst, Geometry, LayoutTarget, RgbChannelOrder};
+use dawn_language::values::{Curve, CurvePoint, CurveValue, Point3, Rotation3, Scale3};
+use yaml_serde::{Mapping, Value};
+
+use super::ProjectSession;
+use crate::ExportProjectError;
+use crate::source::SourceObjectKind;

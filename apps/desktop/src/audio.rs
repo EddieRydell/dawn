@@ -8,7 +8,7 @@ use crate::dto::{AudioTransportSnapshot, AudioTransportState, SequenceAudio};
 type KiraManager = AudioManager<DefaultBackend>;
 type KiraStreamingHandle = StreamingSoundHandle<FromFileError>;
 
-pub struct AudioEngine {
+pub(crate) struct AudioEngine {
     driver: Option<Box<dyn AudioDriver>>,
     handle: Option<Box<dyn AudioHandle>>,
     source: Option<LoadedSource>,
@@ -21,7 +21,7 @@ pub struct AudioEngine {
 }
 
 impl AudioEngine {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         match KiraAudioDriver::new() {
             Ok(driver) => Self::with_optional_driver(Some(Box::new(driver)), None),
             Err(error) => Self::with_optional_driver(None, Some(error)),
@@ -339,12 +339,6 @@ impl AudioEngine {
 
     fn bump_generation(&mut self) {
         self.generation = self.generation.saturating_add(1);
-    }
-}
-
-impl Default for AudioEngine {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

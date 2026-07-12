@@ -1,11 +1,8 @@
 use crate::dsl::types::Identifier;
-use crate::effect::{
-    EffectDefinitionId, EffectInst, EffectInstId, EffectParamValue, EffectScope, EffectTarget,
-};
+use crate::effect::{EffectInst, EffectInstId};
 use crate::identity::SourceIdentity;
 use crate::operator::GraphOperatorNode;
 use crate::values::{Color, Curve, CurvePoint, CurveValue, DawnDuration, DawnTime};
-use indexmap::IndexMap;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SequenceId(pub SourceIdentity);
@@ -52,30 +49,6 @@ pub enum CompositionGraphNodeKind {
     Layer { layer_id: SequenceLayerId },
     Operator(GraphOperatorNode),
     Output,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct SequenceClip {
-    pub id: SequenceClipId,
-    pub start: DawnTime,
-    pub duration: DawnDuration,
-    pub target: EffectTarget,
-    pub scope: EffectScope,
-    pub kind: SequenceClipKind,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct SequenceClipId(pub u32);
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum SequenceClipKind {
-    Effect(EffectClip),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct EffectClip {
-    pub definition: EffectDefinitionId,
-    pub param_overrides: IndexMap<Identifier, EffectParamValue>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]

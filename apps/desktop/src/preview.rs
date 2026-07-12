@@ -7,8 +7,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use dawn_language::model::DawnProject;
-use dawn_language::setup::{FixtureInstanceId, Geometry};
-use dawn_language::values::{Distance, DistanceSpan, Point3};
+use dawn_language::setup::FixtureInstanceId;
 use glam::{EulerRot, Mat4, Vec2, Vec3};
 use tauri::async_runtime::block_on;
 use tauri::window::WindowBuilder;
@@ -16,6 +15,7 @@ use tauri::{AppHandle, Emitter, Manager, Window};
 use wgpu::util::DeviceExt;
 
 use crate::dto::AudioTransportState;
+use crate::gui_geometry::{geometry_emitters, point3_meters};
 use crate::show_render::AudioClockRenderIdentity;
 use crate::show_render::ShowRenderError;
 
@@ -27,13 +27,13 @@ const CLEAR_COLOR: wgpu::Color = wgpu::Color {
     a: 1.0,
 };
 
-pub struct PreviewWindowService {
+pub(crate) struct PreviewWindowService {
     running: Mutex<Option<Arc<AtomicBool>>>,
     closing_for_main_shutdown: Arc<AtomicBool>,
 }
 
 impl PreviewWindowService {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             running: Mutex::new(None),
             closing_for_main_shutdown: Arc::new(AtomicBool::new(false)),
@@ -160,12 +160,6 @@ impl PreviewWindowService {
     }
 }
 
-impl Default for PreviewWindowService {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct PreviewScene {
     revision: u64,
@@ -189,22 +183,29 @@ impl PreviewScene {
             let Some(definition) = project.definitions.fixtures.get(&fixture.definition) else {
                 continue;
             };
-            let transform = Mat4::from_translation(point_vec3(fixture.position))
-                * Mat4::from_euler(
-                    EulerRot::XYZ,
-                    fixture.rotation.x.to_radians() as f32,
-                    fixture.rotation.y.to_radians() as f32,
-                    fixture.rotation.z.to_radians() as f32,
-                )
-                * Mat4::from_scale(Vec3::new(
-                    fixture.scale.x as f32,
-                    fixture.scale.y as f32,
-                    fixture.scale.z as f32,
-                ));
-            let radius_meters = distance_span_meters(definition.bulb_radius) as f32;
+            let position = point3_meters(fixture.position);
+            let transform = Mat4::from_translation(Vec3::new(
+                position.x_meters as f32,
+                position.y_meters as f32,
+                position.z_meters as f32,
+            )) * Mat4::from_euler(
+                EulerRot::XYZ,
+                fixture.rotation.x.to_radians() as f32,
+                fixture.rotation.y.to_radians() as f32,
+                fixture.rotation.z.to_radians() as f32,
+            ) * Mat4::from_scale(Vec3::new(
+                fixture.scale.x as f32,
+                fixture.scale.y as f32,
+                fixture.scale.z as f32,
+            ));
+            let radius_meters = definition.bulb_radius.as_meters_f64() as f32;
             let fixture_start = instances.len();
-            for emitter in emitters(&definition.geometry) {
-                let point = transform.transform_point3(emitter);
+            for emitter in geometry_emitters(&definition.geometry) {
+                let point = transform.transform_point3(Vec3::new(
+                    emitter.x_meters as f32,
+                    emitter.y_meters as f32,
+                    emitter.z_meters as f32,
+                ));
                 instances.push(PreviewInstanceGpu {
                     center_radius: [point.x, point.y, radius_meters.max(0.005), 0.0],
                 });
@@ -893,87 +894,6 @@ fn empty_instance_buffer(device: &wgpu::Device, label: &str) -> wgpu::Buffer {
 
 fn instance_position(instance: &PreviewInstanceGpu) -> Vec2 {
     Vec2::new(instance.center_radius[0], instance.center_radius[1])
-}
-
-fn emitters(geometry: &Geometry) -> Vec<Vec3> {
-    match geometry {
-        Geometry::Points { points } => points.iter().map(|point| point_vec3(*point)).collect(),
-        Geometry::Lines { points, pixels } => line_emitters(points, *pixels),
-        Geometry::Arc {
-            center,
-            radius,
-            start_degrees,
-            end_degrees,
-            pixels,
-        } => arc_emitters(*center, *radius, *start_degrees, *end_degrees, *pixels),
-    }
-}
-
-fn line_emitters(points: &[Point3], pixels: u32) -> Vec<Vec3> {
-    if points.is_empty() || pixels == 0 {
-        return Vec::new();
-    }
-    if points.len() == 1 || pixels == 1 {
-        return vec![point_vec3(points[0])];
-    }
-    let first = point_vec3(points[0]);
-    let last = point_vec3(points[points.len() - 1]);
-    (0..pixels)
-        .map(|index| {
-            let t = index as f32 / pixels.saturating_sub(1) as f32;
-            first.lerp(last, t)
-        })
-        .collect()
-}
-
-fn arc_emitters(
-    center: Point3,
-    radius: DistanceSpan,
-    start_degrees: f64,
-    end_degrees: f64,
-    pixels: u32,
-) -> Vec<Vec3> {
-    if pixels == 0 {
-        return Vec::new();
-    }
-    let center = point_vec3(center);
-    let radius_meters = distance_span_meters(radius) as f32;
-    (0..pixels)
-        .map(|index| {
-            let t = if pixels == 1 {
-                0.0
-            } else {
-                index as f64 / f64::from(pixels.saturating_sub(1))
-            };
-            let degrees = lerp(start_degrees, end_degrees, t);
-            let radians = degrees.to_radians() as f32;
-            Vec3::new(
-                center.x + radius_meters * radians.cos(),
-                center.y + radius_meters * radians.sin(),
-                center.z,
-            )
-        })
-        .collect()
-}
-
-fn point_vec3(point: Point3) -> Vec3 {
-    Vec3::new(
-        distance_meters(point.x) as f32,
-        distance_meters(point.y) as f32,
-        distance_meters(point.z) as f32,
-    )
-}
-
-fn distance_meters(distance: Distance) -> f64 {
-    distance.micrometers as f64 / 1_000_000.0
-}
-
-fn distance_span_meters(distance: DistanceSpan) -> f64 {
-    distance.micrometers as f64 / 1_000_000.0
-}
-
-fn lerp(start: f64, end: f64, t: f64) -> f64 {
-    start + (end - start) * t
 }
 
 const PREVIEW_SHADER: &str = include_str!("preview.wgsl");

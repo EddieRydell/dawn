@@ -1,5 +1,5 @@
 use dawn_language::setup::Geometry as DomainGeometry;
-use dawn_language::values::{Color, Distance, DistanceSpan, Point3};
+use dawn_language::values::{DistanceSpan, Point3};
 
 use crate::dto::{
     Geometry, GeometryRenderBounds, GeometryRenderGuide, GeometryRenderPlan, GeometryRenderPoint,
@@ -23,7 +23,7 @@ pub(crate) fn geometry(geometry: &DomainGeometry) -> Geometry {
             pixels,
         } => Geometry::Arc {
             center: point3_meters(*center),
-            radius_meters: distance_span_meters(*radius),
+            radius_meters: radius.as_meters_f64(),
             start_degrees: *start_degrees,
             end_degrees: *end_degrees,
             pixels: *pixels,
@@ -35,18 +35,18 @@ pub(crate) fn render_plan(
     geometry: &DomainGeometry,
     bulb_radius: DistanceSpan,
 ) -> GeometryRenderPlan {
-    let emitters = emitters(geometry);
+    let emitters = geometry_emitters(geometry);
     let guides = guides(geometry);
     let bounds = bounds_for_points(emitters.iter().cloned());
     GeometryRenderPlan {
         emitters,
         guides,
         bounds,
-        bulb_radius_meters: distance_span_meters(bulb_radius),
+        bulb_radius_meters: bulb_radius.as_meters_f64(),
     }
 }
 
-fn emitters(geometry: &DomainGeometry) -> Vec<GeometryRenderPoint> {
+pub(crate) fn geometry_emitters(geometry: &DomainGeometry) -> Vec<GeometryRenderPoint> {
     match geometry {
         DomainGeometry::Points { points } => {
             points.iter().map(|point| render_point(*point)).collect()
@@ -81,7 +81,7 @@ fn guides(geometry: &DomainGeometry) -> Vec<GeometryRenderGuide> {
             end_degrees,
             ..
         } => {
-            let radius_meters = distance_span_meters(*radius);
+            let radius_meters = radius.as_meters_f64();
             vec![GeometryRenderGuide::Arc {
                 start: arc_point(*center, radius_meters, *start_degrees),
                 end: arc_point(*center, radius_meters, *end_degrees),
@@ -108,9 +108,9 @@ fn line_emitters(points: &[Point3], pixels: u32) -> Vec<GeometryRenderPoint> {
         .map(|index| {
             let amount = f64::from(index) / f64::from(pixels - 1);
             GeometryRenderPoint {
-                x_meters: lerp(distance_meters(first.x), distance_meters(last.x), amount),
-                y_meters: lerp(distance_meters(first.y), distance_meters(last.y), amount),
-                z_meters: lerp(distance_meters(first.z), distance_meters(last.z), amount),
+                x_meters: lerp(first.x.as_meters_f64(), last.x.as_meters_f64(), amount),
+                y_meters: lerp(first.y.as_meters_f64(), last.y.as_meters_f64(), amount),
+                z_meters: lerp(first.z.as_meters_f64(), last.z.as_meters_f64(), amount),
             }
         })
         .collect()
@@ -126,7 +126,7 @@ fn arc_emitters(
     if pixels == 0 {
         return Vec::new();
     }
-    let radius_meters = distance_span_meters(radius);
+    let radius_meters = radius.as_meters_f64();
     (0..pixels)
         .map(|index| {
             let amount = if pixels == 1 {
@@ -146,34 +146,26 @@ fn arc_emitters(
 fn arc_point(center: Point3, radius_meters: f64, degrees: f64) -> GeometryRenderPoint {
     let radians = degrees.to_radians();
     GeometryRenderPoint {
-        x_meters: distance_meters(center.x) + radius_meters * radians.cos(),
-        y_meters: distance_meters(center.y) + radius_meters * radians.sin(),
-        z_meters: distance_meters(center.z),
+        x_meters: center.x.as_meters_f64() + radius_meters * radians.cos(),
+        y_meters: center.y.as_meters_f64() + radius_meters * radians.sin(),
+        z_meters: center.z.as_meters_f64(),
     }
 }
 
 fn render_point(point: Point3) -> GeometryRenderPoint {
     GeometryRenderPoint {
-        x_meters: distance_meters(point.x),
-        y_meters: distance_meters(point.y),
-        z_meters: distance_meters(point.z),
+        x_meters: point.x.as_meters_f64(),
+        y_meters: point.y.as_meters_f64(),
+        z_meters: point.z.as_meters_f64(),
     }
 }
 
 pub(crate) fn point3_meters(point: Point3) -> Point3Meters {
     Point3Meters {
-        x_meters: distance_meters(point.x),
-        y_meters: distance_meters(point.y),
-        z_meters: distance_meters(point.z),
+        x_meters: point.x.as_meters_f64(),
+        y_meters: point.y.as_meters_f64(),
+        z_meters: point.z.as_meters_f64(),
     }
-}
-
-fn distance_meters(distance: Distance) -> f64 {
-    distance.micrometers as f64 / 1_000_000.0
-}
-
-pub(crate) fn distance_span_meters(distance: DistanceSpan) -> f64 {
-    distance.micrometers as f64 / 1_000_000.0
 }
 
 fn lerp(start: f64, end: f64, amount: f64) -> f64 {
@@ -249,8 +241,4 @@ pub(crate) fn empty_resolved_fixture() -> ResolvedLayoutFixture {
         source_path: String::new(),
         object_key: None,
     }
-}
-
-pub(crate) fn color_hex(color: Color) -> String {
-    format!("#{:02x}{:02x}{:02x}", color.red, color.green, color.blue)
 }

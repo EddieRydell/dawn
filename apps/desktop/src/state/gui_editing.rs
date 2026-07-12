@@ -1,4 +1,11 @@
-use super::*;
+use std::sync::Arc;
+
+use super::{DesktopState, generated_source_texts, lock_unpoisoned};
+use crate::dto::{
+    AppSnapshot, GuiDocument, GuiDocumentRequest, GuiEditCommand, GuiEditResult,
+    SequenceSelectionEdit, SequenceSelectionEditResult,
+};
+use crate::state_tasks::GuiHistoryEntry;
 
 impl DesktopState {
     pub fn get_gui_document(&self, request: GuiDocumentRequest) -> GuiDocument {
@@ -18,24 +25,14 @@ impl DesktopState {
             .as_ref()
             .map(|project| project.project.root.setup.clone());
         let sequence_id = self.resolve_sequence_id(&request.document);
-        match self.sequence_clip_raster.lock() {
-            Ok(mut raster) => raster.request(
-                project_revision,
-                raster_settings,
-                project,
-                setup_id,
-                sequence_id,
-                request,
-            ),
-            Err(poisoned) => poisoned.into_inner().request(
-                project_revision,
-                raster_settings,
-                project,
-                setup_id,
-                sequence_id,
-                request,
-            ),
-        }
+        lock_unpoisoned(&self.sequence_clip_raster).request(
+            project_revision,
+            raster_settings,
+            project,
+            setup_id,
+            sequence_id,
+            request,
+        )
     }
 
     pub fn take_sequence_clip_raster_results(
@@ -44,21 +41,15 @@ impl DesktopState {
         request_id: u32,
     ) -> crate::dto::SequenceClipRasterResultBatch {
         let project_revision = self.snapshot().project_revision;
-        match self.sequence_clip_raster.lock() {
-            Ok(mut raster) => raster.take_results(project_revision, request, request_id),
-            Err(poisoned) => {
-                poisoned
-                    .into_inner()
-                    .take_results(project_revision, request, request_id)
-            }
-        }
+        lock_unpoisoned(&self.sequence_clip_raster).take_results(
+            project_revision,
+            request,
+            request_id,
+        )
     }
 
     pub fn sequence_clip_raster_pixels(&self, token: &str) -> Option<Vec<u8>> {
-        match self.sequence_clip_raster.lock() {
-            Ok(mut raster) => raster.pixels_rgba_for_token(token),
-            Err(poisoned) => poisoned.into_inner().pixels_rgba_for_token(token),
-        }
+        lock_unpoisoned(&self.sequence_clip_raster).pixels_rgba_for_token(token)
     }
 
     pub fn apply_gui_edit(
@@ -83,13 +74,7 @@ impl DesktopState {
                 };
             }
         };
-        let dirty_path = self
-            .snapshot()
-            .tabs
-            .into_iter()
-            .find(|tab| tab.dirty && affected_paths.contains(&tab.path))
-            .map(|tab| tab.path);
-        if let Some(path) = dirty_path {
+        if let Some(path) = self.dirty_affected_path(&affected_paths) {
             let message = format!("Save or reload {path} before using GUI edits.");
             let snapshot = self.snapshot_with_error("gui.dirty", &path, &message);
             return GuiEditResult {
@@ -119,7 +104,7 @@ impl DesktopState {
         };
         let document = crate::gui::project_gui_document(Some(&edited), &request);
         let edited = Arc::new(edited);
-        self.push_gui_history(GuiHistoryEntry {
+        lock_unpoisoned(&self.gui_history).push_undo(GuiHistoryEntry {
             before,
             after: Arc::clone(&edited),
             affected_paths: affected_paths.clone(),
@@ -130,23 +115,8 @@ impl DesktopState {
         GuiEditResult { snapshot, document }
     }
 
-    pub fn apply_active_sequence_gui_edit(&self, edit: crate::dto::SequenceGuiEdit) -> AppSnapshot {
-        let Some(request) = self.active_sequence_gui_request() else {
-            return self.snapshot_with_error(
-                "gui.sequence",
-                "",
-                "No active sequence GUI document is available.",
-            );
-        };
-        self.apply_gui_edit(request, GuiEditCommand::Sequence { edit })
-            .snapshot
-    }
-
     pub fn finish_composition_graph_editing(&self) -> AppSnapshot {
-        match self.render_refresh.lock() {
-            Ok(mut scheduler) => scheduler.invalidate_pending(),
-            Err(poisoned) => poisoned.into_inner().invalidate_pending(),
-        }
+        lock_unpoisoned(&self.render_refresh).invalidate_pending();
         let render_error = self
             .project_session()
             .and_then(|session| self.refresh_render_session(&session.project));
@@ -201,13 +171,7 @@ impl DesktopState {
                 };
             }
         };
-        let dirty_path = self
-            .snapshot()
-            .tabs
-            .into_iter()
-            .find(|tab| tab.dirty && affected_paths.contains(&tab.path))
-            .map(|tab| tab.path);
-        if let Some(path) = dirty_path {
+        if let Some(path) = self.dirty_affected_path(&affected_paths) {
             let message = format!("Save or reload {path} before using GUI edits.");
             return SequenceSelectionEditResult {
                 snapshot: self.snapshot_with_error("gui.dirty", &path, &message),
@@ -221,23 +185,12 @@ impl DesktopState {
         let before =
             (!matches!(&edit, SequenceSelectionEdit::Copy { .. })).then(|| Arc::clone(&project));
         let mut edited = (*project).clone();
-        let mutation = match self.sequence_clipboard.lock() {
-            Ok(mut clipboard) => crate::gui::apply_sequence_selection_edit(
-                &mut edited,
-                &request,
-                edit,
-                &mut clipboard,
-            ),
-            Err(poisoned) => {
-                let mut clipboard = poisoned.into_inner();
-                crate::gui::apply_sequence_selection_edit(
-                    &mut edited,
-                    &request,
-                    edit,
-                    &mut clipboard,
-                )
-            }
-        };
+        let mutation = crate::gui::apply_sequence_selection_edit(
+            &mut edited,
+            &request,
+            edit,
+            &mut lock_unpoisoned(&self.sequence_clipboard),
+        );
         let mutation = match mutation {
             Ok(mutation) => mutation,
             Err(error) => {
@@ -273,7 +226,7 @@ impl DesktopState {
                 }
             };
             let edited = Arc::new(edited);
-            self.push_gui_history(GuiHistoryEntry {
+            lock_unpoisoned(&self.gui_history).push_undo(GuiHistoryEntry {
                 before,
                 after: Arc::clone(&edited),
                 affected_paths: affected_paths.clone(),
@@ -294,7 +247,7 @@ impl DesktopState {
     }
 
     pub fn undo_active_edit(&self) -> AppSnapshot {
-        let Some(entry) = self.peek_gui_undo() else {
+        let Some(entry) = lock_unpoisoned(&self.gui_history).peek_undo() else {
             return self.update_snapshot(|snapshot| {
                 snapshot.status = "No GUI edit to undo".to_string();
             });
@@ -309,10 +262,14 @@ impl DesktopState {
                 return self.snapshot_with_error("gui.undo", &entry.status_path, &message);
             }
         };
-        let Some(entry) = self.pop_gui_undo() else {
-            return self.snapshot();
+        let entry = {
+            let mut history = lock_unpoisoned(&self.gui_history);
+            let Some(entry) = history.pop_undo() else {
+                return self.snapshot();
+            };
+            history.push_redo(entry.clone());
+            entry
         };
-        self.push_gui_redo(entry.clone());
         self.schedule_gui_save(
             Arc::clone(&entry.before),
             entry.affected_paths.clone(),
@@ -322,7 +279,7 @@ impl DesktopState {
     }
 
     pub fn redo_active_edit(&self) -> AppSnapshot {
-        let Some(entry) = self.peek_gui_redo() else {
+        let Some(entry) = lock_unpoisoned(&self.gui_history).peek_redo() else {
             return self.update_snapshot(|snapshot| {
                 snapshot.status = "No GUI edit to redo".to_string();
             });
@@ -337,10 +294,14 @@ impl DesktopState {
                 return self.snapshot_with_error("gui.redo", &entry.status_path, &message);
             }
         };
-        let Some(entry) = self.pop_gui_redo() else {
-            return self.snapshot();
+        let entry = {
+            let mut history = lock_unpoisoned(&self.gui_history);
+            let Some(entry) = history.pop_redo() else {
+                return self.snapshot();
+            };
+            history.push_undo_from_redo(entry.clone());
+            entry
         };
-        self.push_gui_undo_from_redo(entry.clone());
         self.schedule_gui_save(
             Arc::clone(&entry.after),
             entry.affected_paths.clone(),

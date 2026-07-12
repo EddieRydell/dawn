@@ -25,9 +25,8 @@ use dawn_language::operator::{
 };
 use dawn_language::sequence::{
     AutomationBinding, AutomationClip, AutomationMapping, AutomationTarget, AutomationValue,
-    CompositionGraphNodeId, CompositionGraphNodeKind, EffectClip, GraphPortId, MarkCollectionKey,
-    Sequence, SequenceClip, SequenceClipId, SequenceClipKind, SequenceCompositionGraph, SequenceId,
-    SequenceLayerId, automation_value_at,
+    CompositionGraphNodeId, CompositionGraphNodeKind, GraphPortId, MarkCollectionKey, Sequence,
+    SequenceCompositionGraph, SequenceId, SequenceLayerId, automation_value_at,
 };
 use dawn_language::setup::{
     FixtureGroupId, FixtureInst, FixtureInstanceId, Geometry, Layout, SetupId,
@@ -37,7 +36,6 @@ use indexmap::{IndexMap, IndexSet};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
 static NEXT_RENDER_CACHE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -88,7 +86,6 @@ pub struct PreparedEffectRasterRenderer {
     start_seconds: f64,
     duration_seconds: f64,
     target: Arc<Vec<PreparedTargetPixel>>,
-    target_lookup: HashMap<TargetColorAddress, Vec<usize>>,
     effects: Vec<PreparedEffect>,
     effects_by_frame: Vec<Vec<usize>>,
 }
@@ -486,10 +483,10 @@ impl PreparedEffectRasterRenderer {
         project: &DawnProject,
         setup_id: &SetupId,
         sequence_id: &SequenceId,
-        clip_id: &SequenceClipId,
+        effect_id: &EffectInstId,
     ) -> Result<Self, RenderError> {
         let mut batch = EffectRasterPrepareBatch::prepare(project, setup_id, sequence_id)?;
-        batch.prepare_clip(clip_id)
+        batch.prepare_effect(effect_id)
     }
 
     pub fn start_seconds(&self) -> f64 {
@@ -527,24 +524,6 @@ impl PreparedEffectRasterRenderer {
             .floor() as u64)
             .min(active_frame_count.saturating_sub(1));
         Ok((self.index_start_frame + sample_offset) as f64 / f64::from(self.frame_rate))
-    }
-
-    pub fn render_target_colors(&self, audio_seconds: f64) -> Result<Vec<Color>, RenderError> {
-        if !audio_seconds.is_finite() {
-            return Err(RenderError::InvalidTiming {
-                reason: "audio seconds must be finite".to_string(),
-            });
-        }
-        let max_frame = self.frame_count.saturating_sub(1);
-        let frame_index = (audio_seconds * f64::from(self.frame_rate)).floor();
-        let frame_index = if frame_index < 0.0 {
-            0
-        } else if frame_index > max_frame as f64 {
-            max_frame
-        } else {
-            frame_index as u64
-        };
-        self.render_target_colors_at(frame_index)
     }
 
     pub fn prepare_sampled_raster(&self, row_count: usize) -> PreparedEffectRasterSample {
@@ -591,28 +570,6 @@ impl PreparedEffectRasterRenderer {
         }
     }
 
-    pub fn render_sampled_raster_column(
-        &self,
-        sample: &PreparedEffectRasterSample,
-        audio_seconds: f64,
-    ) -> Result<Vec<Color>, RenderError> {
-        if !audio_seconds.is_finite() {
-            return Err(RenderError::InvalidTiming {
-                reason: "audio seconds must be finite".to_string(),
-            });
-        }
-        let max_frame = self.frame_count.saturating_sub(1);
-        let frame_index = (audio_seconds * f64::from(self.frame_rate)).floor();
-        let frame_index = if frame_index < 0.0 {
-            0
-        } else if frame_index > max_frame as f64 {
-            max_frame
-        } else {
-            frame_index as u64
-        };
-        self.render_sampled_raster_column_at(sample, frame_index)
-    }
-
     pub fn render_sampled_raster_column_with_scratch(
         &self,
         sample: &PreparedEffectRasterSample,
@@ -634,45 +591,6 @@ impl PreparedEffectRasterRenderer {
             frame_index as u64
         };
         self.render_sampled_raster_column_at_with_scratch(sample, frame_index, scratch)
-    }
-
-    fn render_target_colors_at(&self, frame_index: u64) -> Result<Vec<Color>, RenderError> {
-        let sample_seconds = frame_index as f64 / f64::from(self.frame_rate);
-        let mut rendered = vec![black(); self.target.len()];
-
-        let local_frame_index = frame_index.saturating_sub(self.index_start_frame);
-        if let Some(active_effects) = self.effects_by_frame.get(local_frame_index as usize) {
-            for effect_index in active_effects {
-                let Some(effect) = self.effects.get(*effect_index) else {
-                    continue;
-                };
-                if sample_seconds < effect.start_seconds
-                    || sample_seconds >= effect.start_seconds + effect.duration_seconds
-                {
-                    continue;
-                }
-                render_effect_target_colors(
-                    effect,
-                    &self.target_lookup,
-                    &mut rendered,
-                    sample_seconds,
-                )?;
-            }
-        }
-
-        Ok(rendered)
-    }
-
-    fn render_sampled_raster_column_at(
-        &self,
-        sample: &PreparedEffectRasterSample,
-        frame_index: u64,
-    ) -> Result<Vec<Color>, RenderError> {
-        self.render_sampled_raster_column_at_with_scratch(
-            sample,
-            frame_index,
-            &mut EffectRasterRenderScratch::default(),
-        )
     }
 
     fn render_sampled_raster_column_at_with_scratch(
@@ -777,33 +695,21 @@ impl<'a> EffectRasterPrepareBatch<'a> {
         })
     }
 
-    pub fn prepare_clip(
+    pub fn prepare_effect(
         &mut self,
-        clip_id: &SequenceClipId,
+        effect_id: &EffectInstId,
     ) -> Result<PreparedEffectRasterRenderer, RenderError> {
         let effect = self
             .sequence
             .effects
             .iter()
-            .find(|effect| effect.id.0 == clip_id.0)
+            .find(|effect| effect.id == *effect_id)
             .ok_or(RenderError::MissingEffectInstance {
-                effect_id: EffectInstId(clip_id.0),
+                effect_id: effect_id.clone(),
             })?;
-        let clip = SequenceClip {
-            id: clip_id.clone(),
-            start: effect.start.clone(),
-            duration: effect.duration.clone(),
-            target: effect.target.clone(),
-            scope: effect.scope.clone(),
-            kind: SequenceClipKind::Effect(EffectClip {
-                definition: effect.definition.clone(),
-                param_overrides: effect.param_overrides.clone(),
-            }),
-        };
-        let SequenceClipKind::Effect(effect) = &clip.kind;
         let mut effects = Vec::new();
         let mut generated_child_count = 0usize;
-        let target = prepare_effect_clip(
+        let target = prepare_effect_inst(
             PrepareEffectContext {
                 project: self.project,
                 sequence: self.sequence,
@@ -817,12 +723,11 @@ impl<'a> EffectRasterPrepareBatch<'a> {
                 compiled_effects: &mut self.compiled_effects,
                 target_cache: &mut self.target_cache,
             },
-            &clip,
             effect,
         )?;
 
-        let start_seconds = clip.start.as_seconds_f64();
-        let duration_seconds = clip.duration.as_seconds_f64();
+        let start_seconds = effect.start.as_seconds_f64();
+        let duration_seconds = effect.duration.as_seconds_f64();
         let index_start_frame = (start_seconds * f64::from(self.frame_rate)).ceil().max(0.0) as u64;
         let index_end_frame = ((start_seconds + duration_seconds) * f64::from(self.frame_rate))
             .ceil()
@@ -840,18 +745,10 @@ impl<'a> EffectRasterPrepareBatch<'a> {
             index_start_frame,
             start_seconds,
             duration_seconds,
-            target_lookup: target_color_lookup(&target),
             target,
             effects,
             effects_by_frame,
         })
-    }
-
-    pub fn prepare_effect(
-        &mut self,
-        effect_id: &EffectInstId,
-    ) -> Result<PreparedEffectRasterRenderer, RenderError> {
-        self.prepare_clip(&SequenceClipId(effect_id.0))
     }
 }
 
@@ -873,27 +770,7 @@ fn prepare_effect_inst(
     context: PrepareEffectContext<'_>,
     effect: &dawn_language::effect::EffectInst,
 ) -> Result<Arc<Vec<PreparedTargetPixel>>, RenderError> {
-    let clip = SequenceClip {
-        id: SequenceClipId(effect.id.0),
-        start: effect.start.clone(),
-        duration: effect.duration.clone(),
-        target: effect.target.clone(),
-        scope: effect.scope.clone(),
-        kind: SequenceClipKind::Effect(EffectClip {
-            definition: effect.definition.clone(),
-            param_overrides: effect.param_overrides.clone(),
-        }),
-    };
-    let SequenceClipKind::Effect(effect_clip) = &clip.kind;
-    prepare_effect_clip(context, &clip, effect_clip)
-}
-
-fn prepare_effect_clip(
-    context: PrepareEffectContext<'_>,
-    clip: &SequenceClip,
-    effect: &EffectClip,
-) -> Result<Arc<Vec<PreparedTargetPixel>>, RenderError> {
-    let effect_duration_seconds = clip.duration.as_seconds_f64();
+    let effect_duration_seconds = effect.duration.as_seconds_f64();
     if !effect_duration_seconds.is_finite() || effect_duration_seconds <= 0.0 {
         return Err(RenderError::InvalidTiming {
             reason: "effect duration must be positive and finite".to_string(),
@@ -912,19 +789,19 @@ fn prepare_effect_clip(
         .entry(effect.definition.clone())
         .or_insert_with(|| Arc::new(definition.compiled.clone()))
         .clone();
-    let target_ids = prepare_target(&clip.target, context.fixture_ids, context.groups)?;
+    let target_ids = prepare_target(&effect.target, context.fixture_ids, context.groups)?;
     let target = prepare_target_pixels_cached(
         context.target_cache,
         &target_ids,
         context.fixtures,
-        &clip.scope,
+        &effect.scope,
     )?;
-    let start_seconds = clip.start.as_seconds_f64();
+    let start_seconds = effect.start.as_seconds_f64();
     let param_timing = EffectParamTiming {
         start_seconds,
         duration_seconds: effect_duration_seconds,
     };
-    let automation = automation_for_effect_clip(context.sequence, &clip.id);
+    let automation = automation_for_effect(context.sequence, &effect.id);
     let params = prepare_params(
         context.project,
         context.sequence,
@@ -965,7 +842,7 @@ fn prepare_effect_clip(
                 compiled_effects: context.compiled_effects,
                 target_cache: context.target_cache,
             };
-            for expansion_target in generator_expansion_targets(&target, &clip.scope) {
+            for expansion_target in generator_expansion_targets(&target, &effect.scope) {
                 expand_generator(
                     &mut generator_context,
                     &compiled,
@@ -1567,9 +1444,8 @@ fn prepare_param_value(
                     .iter()
                     .filter_map(|mark| {
                         let seconds = mark.as_seconds_f64();
-                        (seconds >= timing.start_seconds && seconds < end_seconds).then(|| {
-                            DawnTime(Duration::from_secs_f64(seconds - timing.start_seconds))
-                        })
+                        (seconds >= timing.start_seconds && seconds < end_seconds)
+                            .then(|| DawnTime::from_seconds_f64(seconds - timing.start_seconds))
                     })
                     .collect(),
             })))
@@ -1593,9 +1469,9 @@ fn prepare_param_value(
     }
 }
 
-fn automation_for_effect_clip(
+fn automation_for_effect(
     sequence: &Sequence,
-    clip_id: &SequenceClipId,
+    target_effect_id: &EffectInstId,
 ) -> Vec<PreparedAutomation> {
     sequence
         .automation_clips
@@ -1607,7 +1483,7 @@ fn automation_for_effect_clip(
                     matches!(
                         &binding.target,
                         AutomationTarget::EffectParam { effect_id, .. }
-                            if effect_id.0 == clip_id.0
+                            if effect_id == target_effect_id
                     )
                 })
                 .map(move |binding| prepare_automation(clip, binding))
@@ -2539,89 +2415,6 @@ impl SignalSampler for GraphSignalSampler<'_> {
         self.samples.push((key, colors));
         Ok(color)
     }
-}
-
-fn target_color_lookup(target: &[PreparedTargetPixel]) -> HashMap<TargetColorAddress, Vec<usize>> {
-    let mut lookup = HashMap::<TargetColorAddress, Vec<usize>>::new();
-    for (target_index, pixel) in target.iter().enumerate() {
-        lookup
-            .entry(TargetColorAddress {
-                fixture_index: pixel.fixture_index,
-                fixture_pixel_index: pixel.fixture_pixel_index,
-            })
-            .or_default()
-            .push(target_index);
-    }
-    lookup
-}
-
-fn render_effect_target_colors(
-    effect: &PreparedEffect,
-    target_lookup: &HashMap<TargetColorAddress, Vec<usize>>,
-    rendered: &mut [Color],
-    sample_seconds: f64,
-) -> Result<(), RenderError> {
-    let local_seconds = sample_seconds - effect.start_seconds;
-    let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
-    let mut scratch = DslVmScratch::default();
-    let mut bind_cache = DslBindCache::default();
-    let automated_bound_params = effect_bound_params_at(effect, sample_seconds, &mut bind_cache)?;
-    let bound_params = automated_bound_params
-        .as_ref()
-        .unwrap_or(&effect.bound_params);
-
-    if let Some(groups) = &effect.sample_groups {
-        for group in groups.iter() {
-            let color = sample_effect_group(
-                effect,
-                bound_params,
-                group.context,
-                progress,
-                local_seconds,
-                &mut scratch,
-            )?;
-            for effect_target_index in &group.target_indexes {
-                let Some(pixel) = effect.target.get(*effect_target_index) else {
-                    continue;
-                };
-                let Some(target_indexes) = target_lookup.get(&TargetColorAddress {
-                    fixture_index: pixel.fixture_index,
-                    fixture_pixel_index: pixel.fixture_pixel_index,
-                }) else {
-                    continue;
-                };
-                for target_index in target_indexes {
-                    if let Some(target) = rendered.get_mut(*target_index) {
-                        compose_max(target, color);
-                    }
-                }
-            }
-        }
-        return Ok(());
-    }
-
-    for pixel in effect.target.iter() {
-        let Some(target_indexes) = target_lookup.get(&TargetColorAddress {
-            fixture_index: pixel.fixture_index,
-            fixture_pixel_index: pixel.fixture_pixel_index,
-        }) else {
-            continue;
-        };
-        let color = sample_effect_pixel(
-            effect,
-            bound_params,
-            pixel,
-            progress,
-            local_seconds,
-            &mut scratch,
-        )?;
-        for target_index in target_indexes {
-            if let Some(target) = rendered.get_mut(*target_index) {
-                compose_max(target, color);
-            }
-        }
-    }
-    Ok(())
 }
 
 fn render_sampled_effect_target_colors(

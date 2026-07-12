@@ -8,7 +8,6 @@ export type CommandId =
   | "file.openProject"
   | "file.save"
   | "file.reloadFromDisk"
-  | "file.exportFseq"
   | "file.settings"
   | "edit.undo"
   | "edit.redo"
@@ -17,7 +16,6 @@ export type CommandId =
   | "project.reload";
 
 export type CommandDefinition = {
-  id: CommandId;
   label: string;
   shortcut?: string;
   run: () => Promise<void>;
@@ -25,7 +23,6 @@ export type CommandDefinition = {
 
 export const commandRegistry: Record<CommandId, CommandDefinition> = {
   "file.newProject": {
-    id: "file.newProject",
     label: "New Project...",
     run: () => {
       window.dispatchEvent(new CustomEvent("dawn:new-project"));
@@ -33,7 +30,6 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     }
   },
   "file.newSequence": {
-    id: "file.newSequence",
     label: "New Sequence...",
     run: () => {
       window.dispatchEvent(new CustomEvent("dawn:new-sequence"));
@@ -41,7 +37,6 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     }
   },
   "file.openProject": {
-    id: "file.openProject",
     label: "Open Project...",
     shortcut: "Ctrl+O",
     run: async () => {
@@ -49,7 +44,6 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     }
   },
   "file.save": {
-    id: "file.save",
     label: "Save",
     shortcut: "Ctrl+S",
     run: async () => {
@@ -61,23 +55,13 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     }
   },
   "file.reloadFromDisk": {
-    id: "file.reloadFromDisk",
     label: "Reload From Disk",
     run: async () => {
       await runSnapshotCommand(commands.reloadActiveBufferFromDisk);
       await refreshActiveGuiDocument();
     }
   },
-  "file.exportFseq": {
-    id: "file.exportFseq",
-    label: "Export FSEQ...",
-    run: () => {
-      window.dispatchEvent(new CustomEvent("dawn:export-fseq"));
-      return Promise.resolve();
-    }
-  },
   "file.settings": {
-    id: "file.settings",
     label: "Settings...",
     run: () => {
       window.dispatchEvent(new CustomEvent("dawn:settings"));
@@ -85,7 +69,6 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     }
   },
   "edit.undo": {
-    id: "edit.undo",
     label: "Undo",
     shortcut: "Ctrl+Z",
     run: async () => {
@@ -95,7 +78,6 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     }
   },
   "edit.redo": {
-    id: "edit.redo",
     label: "Redo",
     shortcut: "Ctrl+Shift+Z / Ctrl+Y",
     run: async () => {
@@ -105,7 +87,6 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     }
   },
   "view.toggleGuiMode": {
-    id: "view.toggleGuiMode",
     label: "GUI Mode",
     run: async () => {
       const mode = (useAppStore.getState().snapshot?.settings.editorViewMode ?? "gui") === "gui" ? "text" : "gui";
@@ -113,7 +94,6 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     }
   },
   "view.toggleProjectTree": {
-    id: "view.toggleProjectTree",
     label: "Project Tree",
     shortcut: "Ctrl+B",
     run: async () => {
@@ -121,7 +101,6 @@ export const commandRegistry: Record<CommandId, CommandDefinition> = {
     }
   },
   "project.reload": {
-    id: "project.reload",
     label: "Reload / Check",
     shortcut: "Ctrl+R",
     run: async () => {

@@ -1,59 +1,14 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::time::Duration;
+use std::collections::BTreeSet;
 
-use camino::{Utf8Path, Utf8PathBuf};
-use dawn_language::dsl::{EffectKind, Identifier, Type, Value as EffectValue};
-use dawn_language::effect::{
-    CurveId, CurveSource, EffectDefinitionId, EffectInst, EffectInstId, EffectParamValue,
-    EffectScope, EffectTarget,
-};
+use camino::Utf8Path;
+use dawn_language::effect::EffectInst;
 use dawn_language::identity::SourceIdentity;
-use dawn_language::operator::{
-    BuiltinOperator, GraphOperatorNode, OperatorDefinition, OperatorDefinitionId,
-    OperatorPortCardinality, OperatorPortDefinition, OperatorRef, validate_composition_graph,
-};
-use dawn_language::sequence::{
-    AssetId, AutomationBinding, AutomationClip, AutomationClipId, AutomationMapping,
-    AutomationTarget, AutomationValue, CompositionGraphNode, CompositionGraphNodeId,
-    CompositionGraphNodeKind, EffectGraphEdge, GraphNodePosition, GraphPortId, MarkCollection,
-    MarkCollectionKey, SequenceAudio as DomainSequenceAudio, SequenceId, SequenceLayerId,
-    automation_value_at,
-};
-use dawn_language::setup::{
-    FixtureDefinitionId, FixtureGroupId, FixtureInstanceId, Geometry as DomainGeometry, LayoutId,
-    LayoutTarget as DomainLayoutTarget,
-};
-use dawn_language::values::{
-    Color, Curve, CurvePoint, CurveValue, DawnDuration, DawnTime, Distance, DistanceSpan, Point3,
-    Rotation3 as DomainRotation3, Scale3 as DomainScale3,
-};
-use dawn_project_io::{
-    ProjectSession, ReferencedAsset, SourceObjectKind, ensure_document_can_reference_source,
-    is_project_owned_path, relative_path_from_document,
-};
-use indexmap::IndexMap;
+use dawn_language::sequence::SequenceId;
+use dawn_project_io::{ProjectSession, SourceObjectKind, is_project_owned_path};
 
 use crate::dto::{
-    ColorCurvePoint, DiagnosticSeverity, DocumentViewId, EffectScriptReference, FixtureDefinition,
-    FixtureGuiDocument, FixtureGuiEdit, FloatCurvePoint, GuiDocument, GuiDocumentRequest,
-    GuiEditCommand, GuiObjectRef, LayoutFixturePlacement, LayoutGuiDocument, LayoutGuiEdit,
-    LayoutTarget, LayoutTargetKind, ObjectKind, Point3Meters, ProjectDiagnostic,
-    ResolvedLayoutFixture, Rotation3Degrees, Scale3, SequenceAudio, SequenceAutomationBinding,
-    SequenceAutomationClip, SequenceAutomationMapping, SequenceAutomationTarget,
-    SequenceBuiltinOperator, SequenceCompositionGraph, SequenceCurveLibraryItem,
-    SequenceCurveLibraryPoints, SequenceCurveValueType, SequenceEffect, SequenceEffectParam,
-    SequenceEffectParamCurveSource, SequenceEffectParamKind, SequenceEffectParamValue,
-    SequenceEffectScope, SequenceEffectScript, SequenceEffectScriptKind, SequenceEffectScriptParam,
-    SequenceGraphEdge, SequenceGraphNode, SequenceGraphNodeKind, SequenceGraphOperator,
-    SequenceGraphOperatorDefinition, SequenceGraphPortCardinality, SequenceGraphPortDefinition,
-    SequenceGuiDocument, SequenceGuiEdit, SequenceLane, SequenceLayer, SequenceMarkCollection,
-    SequenceMarkRef, SequenceParamAutomation, SequencePasteAnchor, SequenceResizeEdge,
-    SequenceSelection, SequenceSelectionEdit, SequenceTimelineClipKind, Transform,
-};
-use crate::gui_geometry::{
-    color_hex, distance_span_meters, empty_resolved_fixture, geometry, geometry_summary,
-    layout_bounds, point3_meters, render_plan,
+    DiagnosticSeverity, DocumentViewId, GuiDocument, GuiDocumentRequest, GuiEditCommand,
+    GuiObjectRef, ObjectKind, ProjectDiagnostic, SequenceSelection, SequenceSelectionEdit,
 };
 
 #[derive(Debug)]
@@ -360,10 +315,14 @@ mod model;
 mod projection;
 mod selection;
 
-use edit::*;
-use model::*;
-use projection::*;
-use selection::*;
+use edit::{edit_fixture, edit_layout, edit_sequence};
+#[cfg(test)]
+use model::identifier;
+use projection::{project_fixture, project_layout, project_sequence};
+use selection::{
+    copy_sequence_selection, delete_sequence_selection, move_effect_selection, move_mark_selection,
+    paste_sequence_clipboard, resize_effect_selection,
+};
 
 fn gui_diagnostic(path: &str, code: &str, message: &str) -> ProjectDiagnostic {
     ProjectDiagnostic {

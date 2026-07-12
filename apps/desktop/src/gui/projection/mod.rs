@@ -1,7 +1,9 @@
-use super::*;
-
 mod params;
-pub(super) use params::*;
+use params::{
+    automation_mapping_to_gui, curve_library, effect_params, fixture_source_ref, graph_node_id,
+    graph_operator_definition_to_gui, param_kind, sequence_composition_graph_node,
+};
+pub(super) use params::{default_param_value, effect_param_value};
 
 pub(super) fn project_sequence(
     session: &ProjectSession,
@@ -113,7 +115,7 @@ pub(super) fn project_sequence(
                 .map(|collection| SequenceMarkCollection {
                     key: collection.key.name.clone(),
                     name: collection.name.clone(),
-                    color: color_hex(collection.display_color),
+                    color: collection.display_color.to_hex(),
                     marks_seconds: collection
                         .marks
                         .iter()
@@ -130,7 +132,7 @@ pub(super) fn project_sequence(
                 .map(|layer| SequenceLayer {
                     id: layer.id.0,
                     name: layer.name.clone(),
-                    color: color_hex(layer.color),
+                    color: layer.color.to_hex(),
                     enabled: layer.enabled,
                     is_default: layer.id.0 == 0,
                 })
@@ -143,9 +145,7 @@ pub(super) fn project_sequence(
     }
 }
 
-pub(super) fn automation_clips(
-    sequence: &dawn_language::sequence::Sequence,
-) -> Vec<SequenceAutomationClip> {
+fn automation_clips(sequence: &dawn_language::sequence::Sequence) -> Vec<SequenceAutomationClip> {
     sequence
         .automation_clips
         .iter()
@@ -219,7 +219,7 @@ pub(super) fn project_layout(
                 .map(|definition| ResolvedLayoutFixture {
                     name: fixture.definition.0.object().to_string(),
                     color_model: "rgb".to_string(),
-                    bulb_diameter_meters: distance_span_meters(definition.bulb_radius) * 2.0,
+                    bulb_diameter_meters: definition.bulb_radius.as_meters_f64() * 2.0,
                     geometry_summary: geometry_summary(&definition.geometry),
                     render_plan: render_plan(&definition.geometry, definition.bulb_radius),
                     source_path: definition_ref
@@ -296,7 +296,7 @@ pub(super) fn project_fixture(
                 object_key: object.id().to_string(),
                 name: object.id().to_string(),
                 color_model: "rgb".to_string(),
-                bulb_diameter_meters: distance_span_meters(definition.bulb_radius) * 2.0,
+                bulb_diameter_meters: definition.bulb_radius.as_meters_f64() * 2.0,
                 geometry: geometry(&definition.geometry),
                 geometry_summary: geometry_summary(&definition.geometry),
                 render_plan: render_plan(&definition.geometry, definition.bulb_radius),
@@ -321,7 +321,7 @@ pub(super) fn active_layout_id(session: &ProjectSession) -> Option<LayoutId> {
         .map(|setup| setup.layout.clone())
 }
 
-pub(super) fn sequence_audio(
+fn sequence_audio(
     session: &ProjectSession,
     document: &Utf8Path,
     audio: &dawn_language::sequence::SequenceAudio,
@@ -346,7 +346,7 @@ pub(super) fn sequence_audio(
         })
 }
 
-pub(super) fn layout_target(target: &DomainLayoutTarget) -> LayoutTarget {
+fn layout_target(target: &DomainLayoutTarget) -> LayoutTarget {
     match target {
         DomainLayoutTarget::Fixture(id) => LayoutTarget {
             kind: LayoutTargetKind::Fixture,
@@ -359,7 +359,7 @@ pub(super) fn layout_target(target: &DomainLayoutTarget) -> LayoutTarget {
     }
 }
 
-pub(super) fn effect_target(target: &EffectTarget) -> LayoutTarget {
+fn effect_target(target: &EffectTarget) -> LayoutTarget {
     match target {
         EffectTarget::Fixture(id) => LayoutTarget {
             kind: LayoutTargetKind::Fixture,
@@ -372,7 +372,7 @@ pub(super) fn effect_target(target: &EffectTarget) -> LayoutTarget {
     }
 }
 
-pub(super) fn layout_target_label(session: &ProjectSession, target: &DomainLayoutTarget) -> String {
+fn layout_target_label(session: &ProjectSession, target: &DomainLayoutTarget) -> String {
     let Some(layout_id) = active_layout_id(session) else {
         return layout_target(target).name;
     };
@@ -395,7 +395,7 @@ pub(super) fn layout_target_label(session: &ProjectSession, target: &DomainLayou
     }
 }
 
-pub(super) fn effect_target_label(session: &ProjectSession, target: &EffectTarget) -> String {
+fn effect_target_label(session: &ProjectSession, target: &EffectTarget) -> String {
     match target {
         EffectTarget::Fixture(id) => {
             layout_target_label(session, &DomainLayoutTarget::Fixture(id.clone()))
@@ -406,14 +406,14 @@ pub(super) fn effect_target_label(session: &ProjectSession, target: &EffectTarge
     }
 }
 
-pub(super) fn effect_script_ref(id: &SourceIdentity) -> EffectScriptReference {
+fn effect_script_ref(id: &SourceIdentity) -> EffectScriptReference {
     EffectScriptReference {
         path: id.document().to_string(),
         effect_name: id.object().to_string(),
     }
 }
 
-pub(super) fn effect_scripts(session: &ProjectSession) -> Vec<SequenceEffectScript> {
+fn effect_scripts(session: &ProjectSession) -> Vec<SequenceEffectScript> {
     session
         .project
         .definitions
@@ -445,3 +445,26 @@ pub(super) fn effect_scripts(session: &ProjectSession) -> Vec<SequenceEffectScri
         })
         .collect()
 }
+use camino::Utf8Path;
+use dawn_language::dsl::EffectKind;
+use dawn_language::effect::{EffectScope, EffectTarget};
+use dawn_language::identity::SourceIdentity;
+use dawn_language::operator::{BuiltinOperator, OperatorRef};
+use dawn_language::sequence::{AutomationTarget, SequenceId};
+use dawn_language::setup::{FixtureDefinitionId, LayoutId, LayoutTarget as DomainLayoutTarget};
+use dawn_language::values::CurveValue;
+use dawn_project_io::{ProjectSession, SourceObjectKind, relative_path_from_document};
+
+use super::{ResolvedGuiObject, blocked, gui_diagnostic};
+use crate::dto::{
+    EffectScriptReference, FixtureDefinition, FixtureGuiDocument, FloatCurvePoint, GuiDocument,
+    GuiObjectRef, LayoutFixturePlacement, LayoutGuiDocument, LayoutTarget, LayoutTargetKind,
+    ObjectKind, ResolvedLayoutFixture, Rotation3Degrees, Scale3, SequenceAudio,
+    SequenceAutomationBinding, SequenceAutomationClip, SequenceAutomationTarget,
+    SequenceCompositionGraph, SequenceEffect, SequenceEffectScope, SequenceEffectScript,
+    SequenceEffectScriptKind, SequenceEffectScriptParam, SequenceGraphEdge, SequenceGuiDocument,
+    SequenceLane, SequenceLayer, SequenceMarkCollection, SequenceTimelineClipKind, Transform,
+};
+use crate::gui_geometry::{
+    empty_resolved_fixture, geometry, geometry_summary, layout_bounds, point3_meters, render_plan,
+};

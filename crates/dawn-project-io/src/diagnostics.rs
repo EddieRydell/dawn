@@ -1,5 +1,3 @@
-use super::*;
-
 pub(crate) fn discover_reachable_files(
     path: &Utf8Path,
 ) -> Result<(Utf8PathBuf, Vec<Utf8PathBuf>), LoadProjectError> {
@@ -427,3 +425,16 @@ pub(crate) fn byte_position(text: &str, byte_offset: usize) -> TextPosition {
         character: text[line_start..clamped].chars().count() as u32,
     }
 }
+use std::fs;
+
+use camino::{Utf8Path, Utf8PathBuf};
+use dawn_language::dsl::{Diagnostic as DslDiagnostic, compile_effects, compile_operators};
+use indexmap::IndexSet;
+use marked_yaml::{LoadError as MarkedYamlError, Marker, Node};
+use yaml_serde::Value;
+
+use crate::loader::{Loader, mapping, normalize_relative, parse_imports, relative_path};
+use crate::{
+    IoDiagnostic, IoDiagnosticCode, IoDiagnosticSeverity, LoadProjectError, TextPosition,
+    TextRange, YAML_SOURCE_INDICES, YamlSourceIndex, check_document_text,
+};

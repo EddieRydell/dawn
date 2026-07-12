@@ -5,7 +5,7 @@ use dawn_runtime::{PreparedSequenceRenderer, RenderError, RenderedFrame, Sequenc
 
 use crate::dto::{AudioTransportSnapshot, AudioTransportState};
 
-pub struct ShowRenderService {
+pub(crate) struct ShowRenderService {
     session: Option<RenderSession>,
     session_generation: u64,
 }
@@ -41,7 +41,7 @@ pub enum ShowRenderError {
 }
 
 impl ShowRenderService {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             session: None,
             session_generation: 0,
@@ -142,14 +142,15 @@ impl ShowRenderService {
         })
     }
 
-    pub fn active_sequence_id(&self) -> Option<&SequenceId> {
-        self.session.as_ref().map(|session| &session.sequence_id)
-    }
-
     pub fn active_target(&self) -> Option<(SetupId, SequenceId)> {
         self.session
             .as_ref()
             .map(|session| (session.setup_id.clone(), session.sequence_id.clone()))
+    }
+
+    #[cfg(test)]
+    fn active_sequence_id(&self) -> Option<&SequenceId> {
+        self.session.as_ref().map(|session| &session.sequence_id)
     }
 
     pub fn apply_prepared(&mut self, session: PreparedRenderSession) {
@@ -160,12 +161,6 @@ impl ShowRenderService {
             renderer: session.renderer,
             scratch: SequenceRenderScratch::default(),
         });
-    }
-}
-
-impl Default for ShowRenderService {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

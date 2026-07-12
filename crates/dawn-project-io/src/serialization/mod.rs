@@ -1,12 +1,10 @@
-use super::*;
-
 mod sequence;
 mod setup;
 mod values;
 
-use sequence::*;
-use setup::*;
-use values::*;
+use sequence::sequence_value;
+use setup::{controller_value, fixture_definition_value, layout_value, patch_value, setup_value};
+use values::{curve_value, string_value, typed_object, write_source_reference};
 
 pub(super) fn write_source_documents(
     session: &ProjectSession,
@@ -357,3 +355,20 @@ pub(super) fn project_root_value(
     );
     Ok(Value::Mapping(value))
 }
+use std::{fs, io};
+
+use camino::{Utf8Path, Utf8PathBuf};
+use dawn_language::effect::{CurveId, EffectDefinitionId};
+use dawn_language::identity::SourceIdentity;
+use dawn_language::model::ProjectId;
+use dawn_language::operator::OperatorDefinitionId;
+use dawn_language::sequence::SequenceId;
+use dawn_language::setup::{ControllerId, FixtureDefinitionId, LayoutId, PatchId, SetupId};
+use yaml_serde::{Mapping, Value};
+
+use crate::ExportProjectError;
+use crate::loader::mapping;
+use crate::source::{
+    ImportEdge, ProjectSession, SourceDocument, SourceDocumentKind, SourceObjectId,
+    SourceObjectKind, is_project_owned_path,
+};

@@ -1,5 +1,3 @@
-use super::*;
-
 pub(in crate::gui) fn effect_params(
     session: &ProjectSession,
     sequence: &dawn_language::sequence::Sequence,
@@ -25,7 +23,7 @@ pub(in crate::gui) fn effect_params(
                 options: param_options(&param.ty),
                 editable: automation_for_param(sequence, effect.id.0, param.name.as_str())
                     .is_none(),
-                curve_source: override_value.and_then(|value| curve_source(session, value)),
+                curve_source: override_value.and_then(curve_source),
                 automation: automation_for_param(sequence, effect.id.0, param.name.as_str()),
                 value,
             })
@@ -53,7 +51,7 @@ pub(in crate::gui) fn sequence_composition_graph_node(
                         .map(|layer| layer.name.clone())
                         .unwrap_or_else(|| format!("Layer {}", layer_id.0)),
                     layer_color: layer
-                        .map(|layer| color_hex(layer.color))
+                        .map(|layer| layer.color.to_hex())
                         .unwrap_or_else(|| "#808080".to_string()),
                     enabled: layer.map(|layer| layer.enabled).unwrap_or(false),
                 }
@@ -71,7 +69,7 @@ pub(in crate::gui) fn graph_node_id(node_id: &CompositionGraphNodeId) -> String 
     format!("node:{}", node_id.0)
 }
 
-pub(in crate::gui) fn graph_operator_params(
+fn graph_operator_params(
     session: &ProjectSession,
     sequence: &dawn_language::sequence::Sequence,
     node_id: &CompositionGraphNodeId,
@@ -105,7 +103,7 @@ pub(in crate::gui) fn graph_operator_params(
                 )
                 .is_none(),
                 value,
-                curve_source: override_value.and_then(|value| curve_source(session, value)),
+                curve_source: override_value.and_then(curve_source),
                 automation: automation_for_composition_param(
                     sequence,
                     node_id,
@@ -139,9 +137,7 @@ pub(in crate::gui) fn graph_operator_definition_to_gui(
     }
 }
 
-pub(in crate::gui) fn graph_port_to_gui(
-    port: &OperatorPortDefinition,
-) -> SequenceGraphPortDefinition {
+fn graph_port_to_gui(port: &OperatorPortDefinition) -> SequenceGraphPortDefinition {
     SequenceGraphPortDefinition {
         source_name: port.source_name.to_string(),
         display_name: port.display_name.to_string(),
@@ -152,7 +148,7 @@ pub(in crate::gui) fn graph_port_to_gui(
     }
 }
 
-pub(in crate::gui) fn graph_node_inputs(
+fn graph_node_inputs(
     session: &ProjectSession,
     kind: &CompositionGraphNodeKind,
 ) -> Vec<SequenceGraphPortDefinition> {
@@ -175,7 +171,7 @@ pub(in crate::gui) fn graph_node_inputs(
     }
 }
 
-pub(in crate::gui) fn graph_node_outputs(
+fn graph_node_outputs(
     session: &ProjectSession,
     kind: &CompositionGraphNodeKind,
 ) -> Vec<SequenceGraphPortDefinition> {
@@ -198,7 +194,7 @@ pub(in crate::gui) fn graph_node_outputs(
     }
 }
 
-pub(in crate::gui) fn graph_operator_to_gui(operator: &OperatorRef) -> SequenceGraphOperator {
+fn graph_operator_to_gui(operator: &OperatorRef) -> SequenceGraphOperator {
     match operator {
         OperatorRef::Builtin(operator) => SequenceGraphOperator::Builtin {
             operator: match operator {
@@ -220,7 +216,7 @@ pub(in crate::gui) fn graph_operator_to_gui(operator: &OperatorRef) -> SequenceG
     }
 }
 
-pub(in crate::gui) fn automation_for_param(
+fn automation_for_param(
     sequence: &dawn_language::sequence::Sequence,
     effect_id: u32,
     param: &str,
@@ -242,7 +238,7 @@ pub(in crate::gui) fn automation_for_param(
     })
 }
 
-pub(in crate::gui) fn automation_for_composition_param(
+fn automation_for_composition_param(
     sequence: &dawn_language::sequence::Sequence,
     node_id: &CompositionGraphNodeId,
     param: &str,
@@ -358,7 +354,7 @@ pub(in crate::gui) fn param_kind(ty: &Type) -> Option<SequenceEffectParamKind> {
     })
 }
 
-pub(in crate::gui) fn param_options(ty: &Type) -> Vec<String> {
+fn param_options(ty: &Type) -> Vec<String> {
     match ty {
         Type::Enum(options) => options
             .iter()
@@ -379,7 +375,7 @@ pub(in crate::gui) fn effect_param_value(
         EffectParamValue::Float(value) => SequenceEffectParamValue::Float { value: *value },
         EffectParamValue::Bool(value) => SequenceEffectParamValue::Bool { value: *value },
         EffectParamValue::Color(value) => SequenceEffectParamValue::Color {
-            value: color_hex(*value),
+            value: value.to_hex(),
         },
         EffectParamValue::Enum(value) => SequenceEffectParamValue::Enum {
             value: value.as_str().to_string(),
@@ -412,7 +408,7 @@ pub(in crate::gui) fn default_param_value(value: &EffectValue) -> Option<Sequenc
         EffectValue::Float(value) => SequenceEffectParamValue::Float { value: *value },
         EffectValue::Bool(value) => SequenceEffectParamValue::Bool { value: *value },
         EffectValue::Color(value) => SequenceEffectParamValue::Color {
-            value: color_hex(*value),
+            value: value.to_hex(),
         },
         EffectValue::Enum(value) => SequenceEffectParamValue::Enum {
             value: value.as_str().to_string(),
@@ -435,109 +431,16 @@ pub(in crate::gui) fn default_param_value(value: &EffectValue) -> Option<Sequenc
     })
 }
 
-pub(in crate::gui) fn default_value_for_type(ty: &Type) -> Option<SequenceEffectParamValue> {
-    Some(match ty {
-        Type::Int => SequenceEffectParamValue::Int { value: 0.0 },
-        Type::Float => SequenceEffectParamValue::Float { value: 0.0 },
-        Type::Bool => SequenceEffectParamValue::Bool { value: false },
-        Type::Color => SequenceEffectParamValue::Color {
-            value: "#ffffff".to_string(),
-        },
-        Type::Enum(options) => SequenceEffectParamValue::Enum {
-            value: options
-                .first()
-                .map(|option| option.as_str().to_string())
-                .unwrap_or_default(),
-        },
-        Type::Marks => SequenceEffectParamValue::Marks { key: String::new() },
-        Type::Curve(inner) => match inner.as_ref() {
-            Type::Color => SequenceEffectParamValue::ColorCurve { points: Vec::new() },
-            _ => SequenceEffectParamValue::FloatCurve { points: Vec::new() },
-        },
-        Type::Array(inner) => match param_kind(inner) {
-            Some(SequenceEffectParamKind::Int) => {
-                SequenceEffectParamValue::IntArray { values: Vec::new() }
-            }
-            Some(SequenceEffectParamKind::Float) => {
-                SequenceEffectParamValue::FloatArray { values: Vec::new() }
-            }
-            Some(SequenceEffectParamKind::Bool) => {
-                SequenceEffectParamValue::BoolArray { values: Vec::new() }
-            }
-            Some(SequenceEffectParamKind::Color) => {
-                SequenceEffectParamValue::ColorArray { values: Vec::new() }
-            }
-            Some(SequenceEffectParamKind::ColorCurve) => {
-                SequenceEffectParamValue::ColorCurveArray { values: Vec::new() }
-            }
-            _ => SequenceEffectParamValue::FloatCurveArray { values: Vec::new() },
-        },
-        Type::Void
-        | Type::Signal
-        | Type::Timeline
-        | Type::Target
-        | Type::TargetItems
-        | Type::TargetItem => {
-            return None;
-        }
-    })
+fn default_value_for_type(ty: &Type) -> Option<SequenceEffectParamValue> {
+    default_param_value(&ty.default_value())
 }
 
-pub(in crate::gui) fn default_effect_param_value(ty: &Type) -> Option<EffectParamValue> {
-    Some(match ty {
-        Type::Int => EffectParamValue::Int(0),
-        Type::Float => EffectParamValue::Float(0.0),
-        Type::Bool => EffectParamValue::Bool(false),
-        Type::Color => EffectParamValue::Color(Color {
-            red: 255,
-            green: 255,
-            blue: 255,
-        }),
-        Type::Enum(options) => EffectParamValue::Enum(options.first()?.clone()),
-        Type::Marks => return None,
-        Type::Curve(inner) => EffectParamValue::Curve(CurveSource::Inline(default_curve(inner))),
-        Type::Array(inner) => {
-            let item = default_effect_param_value(inner)?;
-            EffectParamValue::Array(vec![item])
-        }
-        Type::Void
-        | Type::Signal
-        | Type::Timeline
-        | Type::Target
-        | Type::TargetItems
-        | Type::TargetItem => {
-            return None;
-        }
-    })
-}
-
-pub(in crate::gui) fn default_curve(ty: &Type) -> Curve {
-    let value = match ty {
-        Type::Color => CurveValue::Color(Color {
-            red: 255,
-            green: 255,
-            blue: 255,
-        }),
-        _ => CurveValue::Float(1.0),
-    };
-    Curve {
-        points: vec![CurvePoint {
-            position: 0.0,
-            value,
-        }],
-    }
-}
-
-pub(in crate::gui) fn curve_source(
-    session: &ProjectSession,
-    value: &EffectParamValue,
-) -> Option<SequenceEffectParamCurveSource> {
+fn curve_source(value: &EffectParamValue) -> Option<SequenceEffectParamCurveSource> {
     match value {
         EffectParamValue::Curve(CurveSource::Inline(_)) => {
             Some(SequenceEffectParamCurveSource::Inline)
         }
         EffectParamValue::Curve(CurveSource::Reference(id)) => {
-            let _ = session;
             Some(SequenceEffectParamCurveSource::Library {
                 reference: id.0.object().to_string(),
                 path: Some(id.0.document().to_string()),
@@ -549,7 +452,7 @@ pub(in crate::gui) fn curve_source(
     }
 }
 
-pub(in crate::gui) fn curve_points(
+fn curve_points(
     points: &[dawn_language::values::CurvePoint],
 ) -> Option<SequenceCurveLibraryPoints> {
     let first = points.first()?;
@@ -572,7 +475,7 @@ pub(in crate::gui) fn curve_points(
                 .filter_map(|point| match point.value {
                     CurveValue::Color(value) => Some(ColorCurvePoint {
                         time: point.position,
-                        value: color_hex(value),
+                        value: value.to_hex(),
                     }),
                     CurveValue::Float(_) => None,
                 })
@@ -581,9 +484,7 @@ pub(in crate::gui) fn curve_points(
     }
 }
 
-pub(in crate::gui) fn curve_points_param_value(
-    points: SequenceCurveLibraryPoints,
-) -> SequenceEffectParamValue {
+fn curve_points_param_value(points: SequenceCurveLibraryPoints) -> SequenceEffectParamValue {
     match points {
         SequenceCurveLibraryPoints::Float { points } => {
             SequenceEffectParamValue::FloatCurve { points }
@@ -594,7 +495,7 @@ pub(in crate::gui) fn curve_points_param_value(
     }
 }
 
-pub(in crate::gui) fn array_param_value(
+fn array_param_value(
     session: &ProjectSession,
     values: &[EffectParamValue],
 ) -> SequenceEffectParamValue {
@@ -605,7 +506,7 @@ pub(in crate::gui) fn array_param_value(
     array_param_from_sequence_values(&converted)
 }
 
-pub(in crate::gui) fn array_param_from_sequence_values(
+fn array_param_from_sequence_values(
     values: &[SequenceEffectParamValue],
 ) -> SequenceEffectParamValue {
     match values.first() {
@@ -669,3 +570,25 @@ pub(in crate::gui) fn array_param_from_sequence_values(
         },
     }
 }
+use dawn_language::dsl::{Type, Value as EffectValue};
+use dawn_language::effect::{CurveSource, EffectParamValue};
+use dawn_language::operator::{
+    BuiltinOperator, GraphOperatorNode, OperatorDefinition, OperatorPortCardinality,
+    OperatorPortDefinition, OperatorRef,
+};
+use dawn_language::sequence::{
+    AutomationMapping, AutomationTarget, CompositionGraphNode, CompositionGraphNodeId,
+    CompositionGraphNodeKind,
+};
+use dawn_language::setup::FixtureDefinitionId;
+use dawn_language::values::CurveValue;
+use dawn_project_io::ProjectSession;
+
+use crate::dto::{
+    ColorCurvePoint, FloatCurvePoint, GuiObjectRef, ObjectKind, SequenceAutomationMapping,
+    SequenceBuiltinOperator, SequenceCurveLibraryItem, SequenceCurveLibraryPoints,
+    SequenceCurveValueType, SequenceEffectParam, SequenceEffectParamCurveSource,
+    SequenceEffectParamKind, SequenceEffectParamValue, SequenceGraphNode, SequenceGraphNodeKind,
+    SequenceGraphOperator, SequenceGraphOperatorDefinition, SequenceGraphPortCardinality,
+    SequenceGraphPortDefinition, SequenceParamAutomation,
+};

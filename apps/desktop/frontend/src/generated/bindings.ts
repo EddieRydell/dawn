@@ -26,17 +26,11 @@ export const commands = {
 	requestSequenceClipRasters: (request: SequenceClipRasterRequest) => __TAURI_INVOKE<SequenceClipRasterResponse>("request_sequence_clip_rasters", { request }),
 	takeSequenceClipRasterResults: (request: GuiDocumentRequest, requestId: number) => __TAURI_INVOKE<SequenceClipRasterResultBatch>("take_sequence_clip_raster_results", { request, requestId }).then((v) => (({...v,ready:v.ready.map(i=>i)}) as typeof v)),
 	applyGuiEdit: (request: GuiDocumentRequest, edit: GuiEditCommand) => __TAURI_INVOKE<GuiEditResult>("apply_gui_edit", { request, edit }),
-	applySequenceGuiEdit: (edit: SequenceGuiEdit) => __TAURI_INVOKE<AppSnapshot>("apply_sequence_gui_edit", { edit }),
 	finishCompositionGraphEditing: () => __TAURI_INVOKE<AppSnapshot>("finish_composition_graph_editing"),
 	applySequenceSelectionEdit: (edit: SequenceSelectionEdit) => __TAURI_INVOKE<SequenceSelectionEditResult>("apply_sequence_selection_edit", { edit }),
 	chooseSequenceAudio: (request: GuiDocumentRequest) => __TAURI_INVOKE<GuiEditResult>("choose_sequence_audio", { request }),
-	clearSequenceAudio: (request: GuiDocumentRequest) => __TAURI_INVOKE<AppSnapshot>("clear_sequence_audio", { request }),
-	exportActiveSequenceFseq: (stepMs: number) => __TAURI_INVOKE<AppSnapshot>("export_active_sequence_fseq", { stepMs }),
-	applyLayoutGuiEdit: (edit: LayoutGuiEdit) => __TAURI_INVOKE<AppSnapshot>("apply_layout_gui_edit", { edit }),
-	applyFixtureGuiEdit: (edit: FixtureGuiEdit) => __TAURI_INVOKE<AppSnapshot>("apply_fixture_gui_edit", { edit }),
 	flushAutosave: () => __TAURI_INVOKE<AppSnapshot>("flush_autosave"),
 	reloadActiveBufferFromDisk: () => __TAURI_INVOKE<AppSnapshot>("reload_active_buffer_from_disk"),
-	keepActiveBuffer: () => __TAURI_INVOKE<AppSnapshot>("keep_active_buffer"),
 	createFile: (parent: string, name: string) => __TAURI_INVOKE<AppSnapshot>("create_file", { parent, name }),
 	createDirectory: (parent: string, name: string) => __TAURI_INVOKE<AppSnapshot>("create_directory", { parent, name }),
 	renamePath: (path: string, newName: string) => __TAURI_INVOKE<AppSnapshot>("rename_path", { path, newName }),
@@ -51,9 +45,7 @@ export const commands = {
 	audioRewindToZero: () => __TAURI_INVOKE<AppSnapshot>("audio_rewind_to_zero"),
 	audioSeek: (positionSeconds: number) => __TAURI_INVOKE<AppSnapshot>("audio_seek", { positionSeconds }),
 	setLiveOutputEnabled: (enabled: boolean) => __TAURI_INVOKE<AppSnapshot>("set_live_output_enabled", { enabled }),
-	openPreviewWindow: () => __TAURI_INVOKE<AppSnapshot>("open_preview_window"),
 	setPreviewWindowOpen: (enabled: boolean) => __TAURI_INVOKE<AppSnapshot>("set_preview_window_open", { enabled }),
-	persistAppClose: () => __TAURI_INVOKE<AppSnapshot>("persist_app_close"),
 };
 
 /* Types */

@@ -1,5 +1,3 @@
-use super::*;
-
 pub(super) struct DomainResolver<'a> {
     pub(super) loader: &'a mut Loader,
     pub(super) project: &'a mut DawnProject,
@@ -65,7 +63,7 @@ impl DomainResolver<'_> {
                 controllers: controllers.clone(),
             },
         );
-        self.resolve_layout(&document_path, &layout)?;
+        self.resolve_layout(&layout)?;
         self.resolve_patch(&document_path, &patch)?;
         for controller in controllers {
             self.resolve_controller(&document_path, &controller)?;
@@ -103,22 +101,19 @@ impl DomainResolver<'_> {
                 range: None,
                 message,
             })?;
-        let output = required_mapping(path, &value, "output")?;
-        let output_value = Value::Mapping(output);
-        let output_type = string_field(path, &output_value, "type")?;
-        let channel_order =
-            parse_channel_order(string_field(path, &output_value, "channel_order")?).ok_or_else(
-                || LoadProjectError::InvalidDocument {
-                    path: path.to_path_buf(),
-                    range: None,
-                    message: "invalid channel order".to_string(),
-                },
-            )?;
+        let output = required_field(path, &value, "output")?;
+        let output_type = string_field(path, output, "type")?;
+        let channel_order = parse_channel_order(string_field(path, output, "channel_order")?)
+            .ok_or_else(|| LoadProjectError::InvalidDocument {
+                path: path.to_path_buf(),
+                range: None,
+                message: "invalid channel order".to_string(),
+            })?;
         let outputs = match output_type {
             "linear_rgb" => {
-                let output_count = u32_field(path, &output_value, "output_count")?;
-                let pixels = usize_field(path, &output_value, "pixels_per_output")?;
-                let first_universe = u32_field(path, &output_value, "first_universe")?;
+                let output_count = u32_field(path, output, "output_count")?;
+                let pixels = usize_field(path, output, "pixels_per_output")?;
+                let first_universe = u32_field(path, output, "first_universe")?;
                 (0..output_count)
                     .map(|index| ControllerOutput {
                         channel_order: channel_order.clone(),
@@ -127,7 +122,7 @@ impl DomainResolver<'_> {
                     })
                     .collect()
             }
-            "patched_dmx" => sequence_values(path, &output_value, "universes")?
+            "patched_dmx" => sequence_values(path, output, "universes")?
                 .iter()
                 .map(|universe| {
                     let range = string_field(path, universe, "range")?;
@@ -166,11 +161,7 @@ impl DomainResolver<'_> {
         Ok(())
     }
 
-    pub(super) fn resolve_layout(
-        &mut self,
-        path: &Utf8Path,
-        id: &LayoutId,
-    ) -> Result<(), LoadProjectError> {
+    pub(super) fn resolve_layout(&mut self, id: &LayoutId) -> Result<(), LoadProjectError> {
         if self.project.layouts.contains_key(id) {
             return Ok(());
         }
@@ -178,18 +169,18 @@ impl DomainResolver<'_> {
             .loader
             .object_value(&ResolvedObject::Layout(id.clone()))?;
         let target_order = optional_sequence(&value, "target_order")
-            .unwrap_or_default()
-            .iter()
+            .into_iter()
+            .flatten()
             .map(|target| parse_layout_target(&document_path, target))
             .collect::<Result<Vec<_>, _>>()?;
         let fixtures = optional_sequence(&value, "fixtures")
-            .unwrap_or_default()
-            .iter()
+            .into_iter()
+            .flatten()
             .map(|fixture| self.parse_fixture_inst(&document_path, fixture))
             .collect::<Result<Vec<_>, _>>()?;
         let groups = optional_sequence(&value, "groups")
-            .unwrap_or_default()
-            .iter()
+            .into_iter()
+            .flatten()
             .map(|group| parse_fixture_group(&document_path, group))
             .collect::<Result<Vec<_>, _>>()?;
         for fixture in &fixtures {
@@ -204,7 +195,6 @@ impl DomainResolver<'_> {
                 groups,
             },
         );
-        let _ = path;
         Ok(())
     }
 
@@ -285,8 +275,8 @@ impl DomainResolver<'_> {
             .loader
             .object_value(&ResolvedObject::Patch(id.clone()))?;
         let routes = optional_sequence(&value, "routes")
-            .unwrap_or_default()
-            .iter()
+            .into_iter()
+            .flatten()
             .map(|route| self.parse_patch_route(&document_path, route))
             .collect::<Result<Vec<_>, _>>()?;
         self.project.patches.insert(
@@ -357,11 +347,7 @@ impl DomainResolver<'_> {
         })
     }
 
-    pub(super) fn resolve_sequence(
-        &mut self,
-        path: &Utf8Path,
-        id: &SequenceId,
-    ) -> Result<(), LoadProjectError> {
+    pub(super) fn resolve_sequence(&mut self, id: &SequenceId) -> Result<(), LoadProjectError> {
         if self.project.sequences.contains_key(id) {
             return Ok(());
         }
@@ -378,8 +364,8 @@ impl DomainResolver<'_> {
             })?;
         let audio = self.parse_audio(&document_path, &value)?;
         let mark_collections = optional_sequence(&value, "mark_collections")
-            .unwrap_or_default()
-            .iter()
+            .into_iter()
+            .flatten()
             .map(|collection| parse_mark_collection(&document_path, collection))
             .collect::<Result<Vec<_>, _>>()?;
         let layers = sequence_values(&document_path, &value, "layers")?
@@ -395,8 +381,8 @@ impl DomainResolver<'_> {
             required_field(&document_path, &value, "composition_graph")?,
         )?;
         let automation_clips = optional_sequence(&value, "automation_clips")
-            .unwrap_or_default()
-            .iter()
+            .into_iter()
+            .flatten()
             .map(|clip| self.parse_automation_clip(&document_path, clip))
             .collect::<Result<Vec<_>, _>>()?;
         self.project.sequences.insert(
@@ -413,7 +399,6 @@ impl DomainResolver<'_> {
                 automation_clips,
             },
         );
-        let _ = path;
         Ok(())
     }
 
@@ -481,7 +466,8 @@ impl DomainResolver<'_> {
         path: &Utf8Path,
         value: &Value,
     ) -> Result<EffectInst, LoadProjectError> {
-        let effect = self.parse_effect_clip(path, value)?;
+        let definition = self.parse_effect_definition(path, value)?;
+        let param_overrides = self.parse_param_overrides(path, value)?;
         Ok(EffectInst {
             id: EffectInstId(u32_field(path, value, "id")?),
             layer_id: SequenceLayerId(u32_field(path, value, "layer_id")?),
@@ -503,8 +489,8 @@ impl DomainResolver<'_> {
             })?,
             target: parse_effect_target(path, required_field(path, value, "target")?)?,
             scope: parse_effect_scope(path, value)?,
-            definition: effect.definition,
-            param_overrides: effect.param_overrides,
+            definition,
+            param_overrides,
         })
     }
 
@@ -562,11 +548,11 @@ impl DomainResolver<'_> {
         })
     }
 
-    pub(super) fn parse_effect_clip(
+    fn parse_effect_definition(
         &mut self,
         path: &Utf8Path,
         value: &Value,
-    ) -> Result<EffectClip, LoadProjectError> {
+    ) -> Result<EffectDefinitionId, LoadProjectError> {
         let script_ref = string_field(path, value, "script")?;
         let definition = match self.loader.resolve_reference(path, script_ref)? {
             ResolvedObject::EffectDefinition(definition) => definition,
@@ -579,7 +565,15 @@ impl DomainResolver<'_> {
             }
         };
         self.resolve_effect_definition(&definition)?;
-        let params = optional_mapping(value, "params")
+        Ok(definition)
+    }
+
+    fn parse_param_overrides(
+        &mut self,
+        path: &Utf8Path,
+        value: &Value,
+    ) -> Result<IndexMap<Identifier, EffectParamValue>, LoadProjectError> {
+        Ok(optional_mapping(value, "params")
             .map(|mapping| {
                 mapping
                     .iter()
@@ -589,13 +583,13 @@ impl DomainResolver<'_> {
                                 .ok_or_else(|| LoadProjectError::InvalidDocument {
                                     path: path.to_path_buf(),
                                     range: None,
-                                    message: "effect param keys must be strings".to_string(),
+                                    message: "parameter keys must be strings".to_string(),
                                 })?;
                         let identifier = Identifier::new(key.to_string()).map_err(|_| {
                             LoadProjectError::InvalidDocument {
                                 path: path.to_path_buf(),
                                 range: None,
-                                message: format!("invalid effect param name `{key}`"),
+                                message: format!("invalid parameter name `{key}`"),
                             }
                         })?;
                         Ok((identifier, self.parse_effect_param(path, value)?))
@@ -603,11 +597,7 @@ impl DomainResolver<'_> {
                     .collect::<Result<IndexMap<_, _>, LoadProjectError>>()
             })
             .transpose()?
-            .unwrap_or_default();
-        Ok(EffectClip {
-            definition,
-            param_overrides: params,
-        })
+            .unwrap_or_else(IndexMap::new))
     }
 
     pub(super) fn parse_graph_operator_params(
@@ -615,31 +605,7 @@ impl DomainResolver<'_> {
         path: &Utf8Path,
         value: &Value,
     ) -> Result<IndexMap<Identifier, EffectParamValue>, LoadProjectError> {
-        optional_mapping(value, "params")
-            .map(|mapping| {
-                mapping
-                    .iter()
-                    .map(|(key, value)| {
-                        let key =
-                            key.as_str()
-                                .ok_or_else(|| LoadProjectError::InvalidDocument {
-                                    path: path.to_path_buf(),
-                                    range: None,
-                                    message: "operator param keys must be strings".to_string(),
-                                })?;
-                        let identifier = Identifier::new(key.to_string()).map_err(|_| {
-                            LoadProjectError::InvalidDocument {
-                                path: path.to_path_buf(),
-                                range: None,
-                                message: format!("invalid operator param name `{key}`"),
-                            }
-                        })?;
-                        Ok((identifier, self.parse_effect_param(path, value)?))
-                    })
-                    .collect::<Result<IndexMap<_, _>, LoadProjectError>>()
-            })
-            .transpose()
-            .map(Option::unwrap_or_default)
+        self.parse_param_overrides(path, value)
     }
 
     pub(super) fn parse_graph_operator_ref(
@@ -827,3 +793,42 @@ impl DomainResolver<'_> {
         })
     }
 }
+use camino::{Utf8Path, Utf8PathBuf};
+use dawn_language::dsl::Identifier;
+use dawn_language::effect::{
+    CurveId, CurveSource, EffectDefinitionId, EffectInst, EffectInstId, EffectParamValue,
+};
+use dawn_language::identity::SourceIdentity;
+use dawn_language::model::DawnProject;
+use dawn_language::operator::{
+    BuiltinOperator, GraphOperatorNode, OperatorRef, validate_composition_graph,
+};
+use dawn_language::sequence::{
+    AssetId, AutomationClip, AutomationClipId, CompositionGraphNode, CompositionGraphNodeId,
+    CompositionGraphNodeKind, MarkCollectionKey, Sequence, SequenceAudio, SequenceCompositionGraph,
+    SequenceId, SequenceLayerId,
+};
+use dawn_language::setup::{
+    ControllerDefinition, ControllerDefinitionId, ControllerId, ControllerOutput,
+    ControllerOutputIndex, FixtureDefinitionId, FixtureInst, FixtureInstanceId, Layout, LayoutId,
+    Patch, PatchId, PatchRoute, PixelRange, Protocol, Setup, SetupId,
+};
+use indexmap::{IndexMap, IndexSet};
+use yaml_serde::Value;
+
+use super::Loader;
+use super::parse::{
+    ResolvedObject, bool_field, f64_field, i64_field, optional_field, optional_mapping,
+    optional_mapping_ref, optional_sequence, optional_string_field, parse_automation_binding,
+    parse_automation_curve, parse_channel_order, parse_color, parse_controller_address,
+    parse_curve, parse_duration, parse_duration_as_time, parse_effect_scope, parse_effect_target,
+    parse_fixture_group, parse_graph_edge, parse_graph_position, parse_layout_target,
+    parse_mark_collection, parse_point3, parse_rotation3, parse_scale3, parse_sequence_layer,
+    parse_slot_range, relative_path, required_field, sequence_field, sequence_values, string_field,
+    u32_field, usize_field,
+};
+use crate::LoadProjectError;
+use crate::diagnostics::{
+    source_range_for_field_value, source_range_for_scalar, with_yaml_location,
+};
+use crate::source::ReferencedAsset;

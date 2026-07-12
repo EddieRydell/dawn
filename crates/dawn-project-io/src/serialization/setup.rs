@@ -1,5 +1,3 @@
-use super::*;
-
 pub(super) fn setup_value(
     session: &ProjectSession,
     from_document: &Utf8Path,
@@ -254,7 +252,7 @@ pub(super) fn fixture_definition_value(
     let mut value = typed_object("fixture");
     value.insert(
         string_value("bulb_diameter"),
-        number_value(distance_span_meters(definition.bulb_radius) * 2.0)?,
+        number_value(definition.bulb_radius.as_meters_f64() * 2.0)?,
     );
     value.insert(
         string_value("geometry"),
@@ -262,3 +260,17 @@ pub(super) fn fixture_definition_value(
     );
     Ok(Value::Mapping(value))
 }
+use camino::Utf8Path;
+use dawn_language::setup::{
+    ControllerDefinition, FixtureDefinition, FixtureGroup, FixtureInst, Layout, Patch, PatchRoute,
+    Protocol, Setup,
+};
+use yaml_serde::{Mapping, Value};
+
+use super::ProjectSession;
+use super::values::{
+    channel_order_name, geometry_value, layout_target_value, number_value, string_value,
+    transform_value, typed_object, write_source_reference,
+};
+use crate::ExportProjectError;
+use crate::source::SourceObjectKind;

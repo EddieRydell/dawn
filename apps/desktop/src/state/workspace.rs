@@ -1,4 +1,21 @@
-use super::*;
+use std::fs;
+use std::time::Duration;
+
+use camino::{Utf8Path, Utf8PathBuf};
+use dawn_project_io::{
+    check_document_text, check_project, check_project_document_text, save_project,
+};
+
+use super::{
+    DesktopState, FsEntryKind, absolute_project_path, document_descriptor, editor_buffer_for_path,
+    empty_document_descriptor, normalize_project_entrypoint, project_diagnostic,
+    project_path_is_structural, upsert_tab, valid_child_name,
+};
+use crate::dto::{AppSnapshot, DiagnosticSeverity, EditorViewMode, NewSequenceRequest};
+use crate::persistence::{
+    PersistedEditorViewStateUpdate, PersistedSequenceViewportStateUpdate, ProjectRestoreState,
+};
+use crate::project_templates::{new_project_files, write_new_project_files};
 
 impl DesktopState {
     pub fn open_project_path(&self, path: &str) -> AppSnapshot {

@@ -1,5 +1,3 @@
-use super::*;
-
 pub(super) fn sequence_mut<'a>(
     session: &'a mut ProjectSession,
     id: &SequenceId,
@@ -432,7 +430,7 @@ pub(super) fn float_curve(points: Vec<FloatCurvePoint>) -> Curve {
     }
 }
 
-pub(super) fn color_curve(points: Vec<ColorCurvePoint>) -> Result<Curve, GuiMutationError> {
+fn color_curve(points: Vec<ColorCurvePoint>) -> Result<Curve, GuiMutationError> {
     Ok(Curve {
         points: points
             .into_iter()
@@ -447,26 +445,15 @@ pub(super) fn color_curve(points: Vec<ColorCurvePoint>) -> Result<Curve, GuiMuta
 }
 
 pub(super) fn parse_color(value: &str) -> Result<Color, GuiMutationError> {
-    if value.len() != 7 || !value.starts_with('#') {
-        return Err(GuiMutationError::Invalid(format!(
-            "Invalid color `{value}`."
-        )));
-    }
-    Ok(Color {
-        red: u8::from_str_radix(&value[1..3], 16)
-            .map_err(|_| GuiMutationError::Invalid(format!("Invalid color `{value}`.")))?,
-        green: u8::from_str_radix(&value[3..5], 16)
-            .map_err(|_| GuiMutationError::Invalid(format!("Invalid color `{value}`.")))?,
-        blue: u8::from_str_radix(&value[5..7], 16)
-            .map_err(|_| GuiMutationError::Invalid(format!("Invalid color `{value}`.")))?,
-    })
+    Color::from_hex(value)
+        .ok_or_else(|| GuiMutationError::Invalid(format!("Invalid color `{value}`.")))
 }
 
 pub(super) fn domain_point3_meters(point: Point3Meters) -> Point3 {
     Point3 {
-        x: distance(point.x_meters),
-        y: distance(point.y_meters),
-        z: distance(point.z_meters),
+        x: Distance::from_meters(point.x_meters),
+        y: Distance::from_meters(point.y_meters),
+        z: Distance::from_meters(point.z_meters),
     }
 }
 
@@ -486,22 +473,31 @@ pub(super) fn scale3(scale: Scale3) -> DomainScale3 {
     }
 }
 
-pub(super) fn dawn_time(seconds: f64) -> DawnTime {
-    DawnTime(Duration::from_secs_f64(seconds))
-}
+use std::fs;
 
-pub(super) fn dawn_duration(seconds: f64) -> DawnDuration {
-    DawnDuration(Duration::from_secs_f64(seconds))
-}
+use camino::{Utf8Path, Utf8PathBuf};
+use dawn_language::dsl::Identifier;
+use dawn_language::effect::{CurveSource, EffectInst, EffectParamValue, EffectScope, EffectTarget};
+use dawn_language::identity::SourceIdentity;
+use dawn_language::operator::{
+    BuiltinOperator, OperatorDefinitionId, OperatorPortCardinality, OperatorRef,
+};
+use dawn_language::sequence::{
+    AssetId, AutomationBinding, AutomationClip, AutomationMapping, AutomationValue,
+    CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind, EffectGraphEdge,
+    GraphNodePosition, GraphPortId, MarkCollection, MarkCollectionKey, SequenceId, SequenceLayerId,
+    automation_value_at,
+};
+use dawn_language::setup::{FixtureDefinitionId, FixtureGroupId, FixtureInstanceId};
+use dawn_language::values::{
+    Color, Curve, CurvePoint, CurveValue, Distance, Point3, Rotation3 as DomainRotation3,
+    Scale3 as DomainScale3,
+};
+use dawn_project_io::{ProjectSession, ReferencedAsset, SourceObjectKind};
 
-pub(super) fn distance(value: f64) -> Distance {
-    Distance {
-        micrometers: (value * 1_000_000.0).round() as i64,
-    }
-}
-
-pub(super) fn distance_span(value: f64) -> DistanceSpan {
-    DistanceSpan {
-        micrometers: (value * 1_000_000.0).round() as u64,
-    }
-}
+use super::GuiMutationError;
+use crate::dto::{
+    ColorCurvePoint, FloatCurvePoint, LayoutTarget, LayoutTargetKind, Point3Meters,
+    Rotation3Degrees, Scale3, SequenceAutomationMapping, SequenceBuiltinOperator,
+    SequenceEffectParamValue, SequenceEffectScope, SequenceGraphOperator,
+};

@@ -515,7 +515,7 @@ impl<'a> Vm<'a> {
                     self.set_const_value(*dst, value)?;
                 }
                 Instruction::LoadDefault { dst, ty } => {
-                    self.set_value(*dst, RuntimeValue::from_value(&default_value(ty)))?;
+                    self.set_value(*dst, RuntimeValue::from_value(&ty.default_value()))?;
                 }
                 Instruction::LoadIntParam { dst, param } => {
                     self.load_int_param(*dst, *param)?;
@@ -1608,38 +1608,13 @@ fn resolve_param(param: &ParamDecl, params: &IndexMap<Identifier, Value>) -> Val
     if let Some(default) = &param.default {
         return default.clone();
     }
-    default_value(&param.ty)
+    param.ty.default_value()
 }
 
 fn bind_param_value(ty: &Type, value: Value, cache: &mut DslBindCache) -> BoundParamValue {
     match (ty, value) {
         (Type::Float, Value::Int(value)) => BoundParamValue::Float(value as f64),
         (ty, value) => BoundParamValue::from_value(ty, value, cache),
-    }
-}
-
-fn default_value(ty: &Type) -> Value {
-    match ty {
-        Type::Void => Value::Void,
-        Type::Signal => Value::Void,
-        Type::Int => Value::Int(0),
-        Type::Float => Value::Float(0.0),
-        Type::Bool => Value::Bool(false),
-        Type::Color => Value::Color(Color {
-            red: 0,
-            green: 0,
-            blue: 0,
-        }),
-        Type::Marks => Value::Marks(Arc::new(Marks { marks: Vec::new() })),
-        Type::Timeline => Value::Void,
-        Type::Target => Value::Target(Arc::new(TargetValue { groups: Vec::new() })),
-        Type::TargetItems => Value::TargetItems(Arc::new(TargetItemsValue { groups: Vec::new() })),
-        Type::TargetItem => Value::TargetItem(Arc::new(TargetItemValue {
-            pixels: Arc::new(Vec::new()),
-        })),
-        Type::Curve(_) => Value::Curve(Arc::new(Curve { points: Vec::new() })),
-        Type::Array(_) => Value::Array(Arc::new(Vec::new())),
-        Type::Enum(options) => Value::Enum(options[0].clone()),
     }
 }
 

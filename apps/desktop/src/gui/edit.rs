@@ -1,5 +1,3 @@
-use super::*;
-
 pub(super) fn edit_layout(
     session: &mut ProjectSession,
     resolved: &ResolvedGuiObject,
@@ -42,7 +40,7 @@ pub(super) fn edit_fixture(
             bulb_diameter_meters,
         } => {
             let definition = fixture_definition_mut(session, identity.document(), &object_key)?;
-            definition.bulb_radius = distance_span(bulb_diameter_meters / 2.0);
+            definition.bulb_radius = DistanceSpan::from_meters(bulb_diameter_meters / 2.0);
             Ok(())
         }
         FixtureGuiEdit::MovePoint {
@@ -98,7 +96,8 @@ pub(super) fn edit_sequence(
                     "Sequence duration must be greater than zero.".to_string(),
                 ));
             }
-            sequence_mut(session, &sequence_id)?.duration = dawn_duration(duration_seconds);
+            sequence_mut(session, &sequence_id)?.duration =
+                DawnDuration::from_seconds_f64(duration_seconds);
         }
         SequenceGuiEdit::SetAudio { import_path } => {
             let audio = match import_path {
@@ -119,7 +118,7 @@ pub(super) fn edit_sequence(
             let parsed_target = target.map(layout_target_to_effect_target).transpose()?;
             let sequence = sequence_mut(session, &sequence_id)?;
             let effect = effect_mut(sequence, id)?;
-            effect.start = dawn_time(start_seconds.max(0.0));
+            effect.start = DawnTime::from_seconds_f64(start_seconds.max(0.0));
             if let Some(target) = parsed_target {
                 effect.target = target;
             }
@@ -130,8 +129,8 @@ pub(super) fn edit_sequence(
             duration_seconds,
         } => {
             let sequence = sequence_mut(session, &sequence_id)?;
-            let start = dawn_time(start_seconds.max(0.0));
-            let duration = dawn_duration(duration_seconds.max(0.000000001));
+            let start = DawnTime::from_seconds_f64(start_seconds.max(0.0));
+            let duration = DawnDuration::from_seconds_f64(duration_seconds.max(0.000000001));
             let effect = effect_mut(sequence, id)?;
             effect.start = start;
             effect.duration = duration;
@@ -171,7 +170,7 @@ pub(super) fn edit_sequence(
                 .marks
                 .get_mut(index as usize)
                 .ok_or_else(|| GuiMutationError::Invalid("Mark was not found.".to_string()))?;
-            *mark = dawn_time(time_seconds.max(0.0));
+            *mark = DawnTime::from_seconds_f64(time_seconds.max(0.0));
             collection.marks.sort_by_key(|time| time.0);
         }
         SequenceGuiEdit::ReassignMarkCollection {
@@ -199,7 +198,9 @@ pub(super) fn edit_sequence(
         } => {
             let collection =
                 mark_collection_mut(sequence_mut(session, &sequence_id)?, &collection_key)?;
-            collection.marks.push(dawn_time(time_seconds.max(0.0)));
+            collection
+                .marks
+                .push(DawnTime::from_seconds_f64(time_seconds.max(0.0)));
             collection.marks.sort_by_key(|time| time.0);
         }
         SequenceGuiEdit::DeleteMark {
@@ -314,7 +315,7 @@ pub(super) fn edit_sequence(
                 if param_overrides.contains_key(&param.name) {
                     continue;
                 }
-                let value = default_effect_param_value(&param.ty).ok_or_else(|| {
+                let value = EffectParamValue::default_for_type(&param.ty).ok_or_else(|| {
                     GuiMutationError::Invalid(format!(
                         "Effect parameter `{}` requires an explicit value.",
                         param.name.as_str()
@@ -325,8 +326,8 @@ pub(super) fn edit_sequence(
             sequence.effects.push(EffectInst {
                 id: EffectInstId(next_id),
                 layer_id,
-                start: dawn_time(start_seconds.max(0.0)),
-                duration: dawn_duration(1.0),
+                start: DawnTime::from_seconds_f64(start_seconds.max(0.0)),
+                duration: DawnDuration::from_seconds_f64(1.0),
                 target: layout_target_to_effect_target(target)?,
                 scope: effect_scope(scope),
                 definition,
@@ -446,7 +447,7 @@ pub(super) fn edit_sequence(
             let params = effect_definition.compiled.params().to_vec();
             let mut param_overrides = IndexMap::new();
             for param in params.iter().filter(|param| param.default.is_none()) {
-                let value = default_effect_param_value(&param.ty).ok_or_else(|| {
+                let value = EffectParamValue::default_for_type(&param.ty).ok_or_else(|| {
                     GuiMutationError::Invalid(format!(
                         "Effect parameter `{}` requires an explicit value before changing scripts.",
                         param.name.as_str()
@@ -767,8 +768,8 @@ pub(super) fn edit_sequence(
                 + 1;
             sequence.automation_clips.push(AutomationClip {
                 id: AutomationClipId(next_id),
-                start: dawn_time(start_seconds.max(0.0)),
-                duration: dawn_duration(duration_seconds.max(0.000000001)),
+                start: DawnTime::from_seconds_f64(start_seconds.max(0.0)),
+                duration: DawnDuration::from_seconds_f64(duration_seconds.max(0.000000001)),
                 anchor_lane_index,
                 lane_index,
                 curve: default_automation_curve(),
@@ -847,7 +848,7 @@ pub(super) fn edit_sequence(
             lane_index,
         } => {
             let clip = automation_clip_mut(sequence_mut(session, &sequence_id)?, id)?;
-            clip.start = dawn_time(start_seconds.max(0.0));
+            clip.start = DawnTime::from_seconds_f64(start_seconds.max(0.0));
             clip.anchor_lane_index = anchor_lane_index;
             clip.lane_index = lane_index;
         }
@@ -857,8 +858,8 @@ pub(super) fn edit_sequence(
             duration_seconds,
         } => {
             let clip = automation_clip_mut(sequence_mut(session, &sequence_id)?, id)?;
-            clip.start = dawn_time(start_seconds.max(0.0));
-            clip.duration = dawn_duration(duration_seconds.max(0.000000001));
+            clip.start = DawnTime::from_seconds_f64(start_seconds.max(0.0));
+            clip.duration = DawnDuration::from_seconds_f64(duration_seconds.max(0.000000001));
         }
         SequenceGuiEdit::UpdateAutomationCurve { id, curve } => {
             automation_clip_mut(sequence_mut(session, &sequence_id)?, id)?.curve =
@@ -954,3 +955,39 @@ pub(super) fn edit_sequence(
     }
     Ok(())
 }
+use std::collections::BTreeSet;
+
+use camino::Utf8PathBuf;
+use dawn_language::effect::{
+    CurveId, CurveSource, EffectDefinitionId, EffectInst, EffectInstId, EffectParamValue,
+};
+use dawn_language::identity::SourceIdentity;
+use dawn_language::operator::{
+    GraphOperatorNode, OperatorPortCardinality, OperatorRef, validate_composition_graph,
+};
+use dawn_language::sequence::{
+    AutomationBinding, AutomationClip, AutomationClipId, AutomationTarget, CompositionGraphNode,
+    CompositionGraphNodeId, CompositionGraphNodeKind, EffectGraphEdge, GraphNodePosition,
+    GraphPortId, MarkCollection, MarkCollectionKey, SequenceAudio as DomainSequenceAudio,
+    SequenceId, SequenceLayerId,
+};
+use dawn_language::setup::{Geometry as DomainGeometry, LayoutId};
+use dawn_language::values::{DawnDuration, DawnTime, DistanceSpan};
+use dawn_project_io::{ProjectSession, SourceObjectKind, ensure_document_can_reference_source};
+use indexmap::IndexMap;
+
+use super::model::{
+    automation_binding_value_at, automation_clip_mut, automation_mapping_from_gui,
+    composition_graph_node_mut, create_sequence_layer, default_automation_curve,
+    domain_point3_meters, effect_mut, effect_param_value_from_gui, effect_scope,
+    ensure_graph_node_exists, fixture_definition_mut, float_curve, graph_input_cardinality,
+    graph_operator_from_gui, identifier, layout_target_to_effect_target, mark_collection_mut,
+    next_composition_node_id, parse_color, parse_graph_node_id, register_sequence_audio_asset,
+    rotation3_degrees, scale3, sequence_mut,
+};
+use super::selection::{
+    current_curve_param_value, current_graph_curve_param_value, effect_lane_index_resolved,
+    mark_param_names, required_operator_param_value,
+};
+use super::{GuiMutationError, ResolvedGuiObject};
+use crate::dto::{FixtureGuiEdit, LayoutGuiEdit, SequenceGuiEdit};

@@ -158,15 +158,6 @@ impl CompiledOperator {
     }
 }
 
-pub fn hash_compiled_operator<H: Hasher>(operator: &CompiledOperator, state: &mut H) {
-    operator.name.hash(state);
-    for input in &operator.inputs {
-        input.name.hash(state);
-    }
-    hash_param_decls(&operator.params, state);
-    hash_register_function(&operator.function, state);
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EffectKind {
     Sample,

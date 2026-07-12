@@ -34,14 +34,14 @@ impl<P: Send + 'static, R: SequenceResult + Send + 'static> LatestScheduler<P, R
         }
     }
 
-    pub(crate) fn schedule(&mut self, payload: P) -> Result<(), ScheduleError> {
+    pub(crate) fn schedule(&mut self, payload: P) -> bool {
         self.latest_sequence = self.latest_sequence.saturating_add(1);
         self.sender
             .send(Sequenced {
                 sequence: self.latest_sequence,
                 payload,
             })
-            .map_err(|_| ScheduleError)
+            .is_ok()
     }
 
     pub(crate) fn invalidate_pending(&mut self) {
@@ -55,8 +55,6 @@ impl<P: Send + 'static, R: SequenceResult + Send + 'static> LatestScheduler<P, R
             .collect()
     }
 }
-
-pub(crate) struct ScheduleError;
 
 pub(crate) type GuiSaveScheduler = LatestScheduler<GuiSavePayload, GuiSaveResult>;
 

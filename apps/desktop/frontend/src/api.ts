@@ -5,8 +5,7 @@ import type {
   GuiEditResult,
   LayoutGuiEdit,
   SequenceGuiEdit,
-  SequenceSelectionEdit,
-  SequenceSelectionEditResult
+  SequenceSelectionEdit
 } from "./types";
 
 let currentGuiRequest: GuiDocumentRequest | null = null;
@@ -38,14 +37,6 @@ async function applyCurrentGuiEdit(edit: Parameters<typeof generatedCommands.app
 
 export const commands = {
   ...generatedCommands,
-  applyGuiEdit: async (request: GuiDocumentRequest, edit: Parameters<typeof generatedCommands.applyGuiEdit>[1]) => {
-    const result = await generatedCommands.applyGuiEdit(request, edit);
-    guiEditResultHandler?.(result);
-    if (result.document.type === "blocked") {
-      throw new Error(result.document.reason);
-    }
-    return result;
-  },
   applySequenceGuiEdit: (edit: SequenceGuiEdit) => applyCurrentGuiEdit({ type: "sequence", edit }),
   applySequenceSelectionEdit: async (edit: SequenceSelectionEdit) => {
     const result = await generatedCommands.applySequenceSelectionEdit(edit);
@@ -53,7 +44,7 @@ export const commands = {
     if (guiDiagnostic !== undefined) {
       throw new Error(guiDiagnostic.message);
     }
-    guiEditResultHandler?.(guiEditResultFromSelection(result));
+    guiEditResultHandler?.({ snapshot: result.snapshot, document: result.document });
     return result;
   },
   applyLayoutGuiEdit: (edit: LayoutGuiEdit) => applyCurrentGuiEdit({ type: "layout", edit }),
@@ -69,18 +60,5 @@ export const commands = {
       }
       return result;
     });
-  },
-  clearSequenceAudio: () => {
-    if (currentGuiRequest === null) {
-      throw new Error("Audio clearing attempted without an active GUI document request.");
-    }
-    return generatedCommands.clearSequenceAudio(currentGuiRequest);
   }
 };
-
-function guiEditResultFromSelection(result: SequenceSelectionEditResult): GuiEditResult {
-  return {
-    snapshot: result.snapshot,
-    document: result.document
-  };
-}

@@ -1,4 +1,15 @@
-use super::*;
+use std::fs;
+use std::sync::Arc;
+
+use camino::{Utf8Path, Utf8PathBuf};
+use dawn_project_io::{ProjectSession, check_project};
+
+use super::{
+    DesktopState, FsEntryKind, absolute_project_path, lock_unpoisoned, path_matches_or_is_child,
+    valid_child_name, workspace_entries,
+};
+use crate::dto::{AppSnapshot, BufferExternalState, DiagnosticSeverity, ProjectDiagnostic};
+use crate::state_tasks::{GuiSavePayload, GuiSaveResult};
 
 impl DesktopState {
     pub(super) fn create_fs_entry(
@@ -151,34 +162,17 @@ impl DesktopState {
             affected_paths,
             status_path,
         };
-        match self.gui_save.lock() {
-            Ok(mut scheduler) => {
-                if scheduler.schedule(request).is_err() {
-                    self.snapshot_with_error(
-                        "gui.save",
-                        path_for_error.as_str(),
-                        "GUI save worker is unavailable.",
-                    );
-                }
-            }
-            Err(poisoned) => {
-                let mut scheduler = poisoned.into_inner();
-                if scheduler.schedule(request).is_err() {
-                    self.snapshot_with_error(
-                        "gui.save",
-                        path_for_error.as_str(),
-                        "GUI save worker is unavailable.",
-                    );
-                }
-            }
+        if !lock_unpoisoned(&self.gui_save).schedule(request) {
+            self.snapshot_with_error(
+                "gui.save",
+                path_for_error.as_str(),
+                "GUI save worker is unavailable.",
+            );
         }
     }
 
     pub(super) fn drain_gui_save_results(&self) {
-        let results = match self.gui_save.lock() {
-            Ok(scheduler) => scheduler.drain_current_results(),
-            Err(poisoned) => poisoned.into_inner().drain_current_results(),
-        };
+        let results = lock_unpoisoned(&self.gui_save).drain_current_results();
         for result in results {
             match result {
                 GuiSaveResult::Saved {
@@ -189,7 +183,7 @@ impl DesktopState {
                     if self.project_session().as_ref().is_some_and(|project| {
                         project.source.source_root == session.source.source_root
                     }) {
-                        self.refresh_saved_tabs(&session, &affected_paths);
+                        self.refresh_saved_tabs(&affected_paths);
                     }
                 }
                 GuiSaveResult::Failed {
@@ -205,7 +199,6 @@ impl DesktopState {
 
     pub(super) fn refresh_saved_tabs(
         &self,
-        _session: &ProjectSession,
         paths: &std::collections::BTreeSet<String>,
     ) -> AppSnapshot {
         self.update_snapshot(|snapshot| {

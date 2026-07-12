@@ -1,4 +1,17 @@
-use super::*;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
+use camino::Utf8Path;
+use dawn_project_io::{ProjectCheckReport, ProjectSession, SourceObjectKind};
+
+use super::{
+    DesktopState, descriptor_for_path, editor_buffer, lock_unpoisoned, project_diagnostics,
+    refresh_clean_buffers, restored_active_buffers, workspace_entries,
+};
+use crate::dto::{
+    AppSnapshot, DocumentViewId, GuiDocument, GuiDocumentRequest, ProjectDiagnostic,
+    ProjectTreeMode, SequenceAudio, WorkspaceEntryKind,
+};
 
 impl DesktopState {
     pub(super) fn apply_project_open_check(
@@ -6,7 +19,7 @@ impl DesktopState {
         entrypoint: &str,
         report: ProjectCheckReport,
     ) -> AppSnapshot {
-        self.clear_gui_history();
+        lock_unpoisoned(&self.gui_history).clear();
         let diagnostics = project_diagnostics(&report);
         match report.session {
             Some(session) => self.replace_project(session, diagnostics),
@@ -22,7 +35,7 @@ impl DesktopState {
         entrypoint: &str,
         report: ProjectCheckReport,
     ) -> AppSnapshot {
-        self.clear_gui_history();
+        lock_unpoisoned(&self.gui_history).clear();
         let diagnostics = project_diagnostics(&report);
         match report.session {
             Some(session) => self.refresh_project(session, diagnostics),
@@ -41,7 +54,11 @@ impl DesktopState {
         let entries = workspace_entries(&session);
         let root = session.source.source_root.to_string();
         let entrypoint = session.source.entrypoint.clone();
-        let valid_paths = valid_project_paths(&session);
+        let valid_paths = entries
+            .iter()
+            .filter(|entry| matches!(entry.kind, WorkspaceEntryKind::File))
+            .map(|entry| entry.path.clone())
+            .collect();
         let restore = self.persistence.restore_for_project(&root, &valid_paths);
         let active = restored_active_buffers(&session, restore.as_ref().map(|item| &item.session))
             .or_else(|| {
@@ -57,10 +74,7 @@ impl DesktopState {
         let active_descriptor = active
             .as_ref()
             .and_then(|(_, active_path)| descriptor_for_path(&session, Utf8Path::new(active_path)));
-        match self.project.lock() {
-            Ok(mut project) => *project = Some(Arc::new(session)),
-            Err(poisoned) => *poisoned.into_inner() = Some(Arc::new(session)),
-        }
+        *lock_unpoisoned(&self.project) = Some(Arc::new(session));
         self.unload_render_session();
         self.update_snapshot(|snapshot| {
             snapshot.project_root = Some(root);
@@ -122,14 +136,8 @@ impl DesktopState {
 
     pub(super) fn record_persistent_snapshot(&self, snapshot: &AppSnapshot) {
         if let Err(error) = self.persistence.record_snapshot(snapshot) {
-            match self.snapshot.lock() {
-                Ok(mut current) => {
-                    current.status = format!("Desktop state was not saved: {error}");
-                }
-                Err(poisoned) => {
-                    poisoned.into_inner().status = format!("Desktop state was not saved: {error}");
-                }
-            }
+            lock_unpoisoned(&self.snapshot).status =
+                format!("Desktop state was not saved: {error}");
         }
     }
 
@@ -144,23 +152,12 @@ impl DesktopState {
         let entries = workspace_entries(&session);
         let root = session.source.source_root.to_string();
         let render_error = self.refresh_render_session(&session.project);
-        let active_descriptor = self.snapshot().active_file.as_deref().and_then(|path| {
-            let relative_path = Utf8Path::new(path);
-            session
-                .source
-                .documents
-                .get(relative_path)
-                .map(|document| document_descriptor(relative_path, document))
-                .or_else(|| {
-                    absolute_project_path(&session, relative_path)
-                        .is_some_and(|path| path.is_file())
-                        .then(|| empty_document_descriptor(relative_path))
-                })
-        });
-        match self.project.lock() {
-            Ok(mut project) => *project = Some(Arc::new(session)),
-            Err(poisoned) => *poisoned.into_inner() = Some(Arc::new(session)),
-        }
+        let active_descriptor = self
+            .snapshot()
+            .active_file
+            .as_deref()
+            .and_then(|path| descriptor_for_path(&session, Utf8Path::new(path)));
+        *lock_unpoisoned(&self.project) = Some(Arc::new(session));
         self.update_snapshot(|snapshot| {
             snapshot.project_root = Some(root);
             snapshot.project_entries = entries;
@@ -190,23 +187,12 @@ impl DesktopState {
     ) -> AppSnapshot {
         let entries = workspace_entries(&session);
         let root = session.source.source_root.to_string();
-        let active_descriptor = self.snapshot().active_file.as_deref().and_then(|path| {
-            let relative_path = Utf8Path::new(path);
-            session
-                .source
-                .documents
-                .get(relative_path)
-                .map(|document| document_descriptor(relative_path, document))
-                .or_else(|| {
-                    absolute_project_path(&session, relative_path)
-                        .is_some_and(|path| path.is_file())
-                        .then(|| empty_document_descriptor(relative_path))
-                })
-        });
-        match self.project.lock() {
-            Ok(mut project) => *project = Some(Arc::clone(&session)),
-            Err(poisoned) => *poisoned.into_inner() = Some(Arc::clone(&session)),
-        }
+        let active_descriptor = self
+            .snapshot()
+            .active_file
+            .as_deref()
+            .and_then(|path| descriptor_for_path(&session, Utf8Path::new(path)));
+        *lock_unpoisoned(&self.project) = Some(Arc::clone(&session));
         self.schedule_render_refresh(Arc::clone(&session));
         self.update_snapshot(|snapshot| {
             snapshot.project_root = Some(root);
@@ -221,66 +207,7 @@ impl DesktopState {
     }
 
     pub(super) fn project_session(&self) -> Option<Arc<ProjectSession>> {
-        match self.project.lock() {
-            Ok(project) => project.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        }
-    }
-
-    pub(super) fn push_gui_history(&self, entry: GuiHistoryEntry) {
-        match self.gui_history.lock() {
-            Ok(mut history) => history.push_undo(entry),
-            Err(poisoned) => poisoned.into_inner().push_undo(entry),
-        }
-    }
-
-    pub(super) fn clear_gui_history(&self) {
-        match self.gui_history.lock() {
-            Ok(mut history) => history.clear(),
-            Err(poisoned) => poisoned.into_inner().clear(),
-        }
-    }
-
-    pub(super) fn peek_gui_undo(&self) -> Option<GuiHistoryEntry> {
-        match self.gui_history.lock() {
-            Ok(history) => history.peek_undo(),
-            Err(poisoned) => poisoned.into_inner().peek_undo(),
-        }
-    }
-
-    pub(super) fn pop_gui_undo(&self) -> Option<GuiHistoryEntry> {
-        match self.gui_history.lock() {
-            Ok(mut history) => history.pop_undo(),
-            Err(poisoned) => poisoned.into_inner().pop_undo(),
-        }
-    }
-
-    pub(super) fn push_gui_redo(&self, entry: GuiHistoryEntry) {
-        match self.gui_history.lock() {
-            Ok(mut history) => history.push_redo(entry),
-            Err(poisoned) => poisoned.into_inner().push_redo(entry),
-        }
-    }
-
-    pub(super) fn peek_gui_redo(&self) -> Option<GuiHistoryEntry> {
-        match self.gui_history.lock() {
-            Ok(history) => history.peek_redo(),
-            Err(poisoned) => poisoned.into_inner().peek_redo(),
-        }
-    }
-
-    pub(super) fn pop_gui_redo(&self) -> Option<GuiHistoryEntry> {
-        match self.gui_history.lock() {
-            Ok(mut history) => history.pop_redo(),
-            Err(poisoned) => poisoned.into_inner().pop_redo(),
-        }
-    }
-
-    pub(super) fn push_gui_undo_from_redo(&self, entry: GuiHistoryEntry) {
-        match self.gui_history.lock() {
-            Ok(mut history) => history.push_undo_from_redo(entry),
-            Err(poisoned) => poisoned.into_inner().push_undo_from_redo(entry),
-        }
+        lock_unpoisoned(&self.project).clone()
     }
 
     pub(super) fn dirty_affected_path(&self, affected_paths: &BTreeSet<String>) -> Option<String> {
@@ -292,10 +219,7 @@ impl DesktopState {
     }
 
     pub(super) fn project_revision(&self) -> u64 {
-        match self.snapshot.lock() {
-            Ok(snapshot) => snapshot.project_revision.into(),
-            Err(poisoned) => poisoned.into_inner().project_revision.into(),
-        }
+        lock_unpoisoned(&self.snapshot).project_revision.into()
     }
 
     pub(super) fn active_sequence_gui_request(&self) -> Option<GuiDocumentRequest> {

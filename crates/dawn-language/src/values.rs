@@ -7,12 +7,20 @@ pub struct DawnTime(pub Duration);
 pub struct DawnDuration(pub Duration);
 
 impl DawnTime {
+    pub fn from_seconds_f64(seconds: f64) -> Self {
+        Self(Duration::from_secs_f64(seconds))
+    }
+
     pub fn as_seconds_f64(&self) -> f64 {
         self.0.as_secs_f64()
     }
 }
 
 impl DawnDuration {
+    pub fn from_seconds_f64(seconds: f64) -> Self {
+        Self(Duration::from_secs_f64(seconds))
+    }
+
     pub fn as_seconds_f64(&self) -> f64 {
         self.0.as_secs_f64()
     }
@@ -25,6 +33,16 @@ pub struct Distance {
 
 impl Distance {
     pub const ZERO: Self = Self { micrometers: 0 };
+
+    pub fn from_meters(value: f64) -> Self {
+        Self {
+            micrometers: (value * 1_000_000.0).round() as i64,
+        }
+    }
+
+    pub fn as_meters_f64(self) -> f64 {
+        self.micrometers as f64 / 1_000_000.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,6 +52,16 @@ pub struct DistanceSpan {
 
 impl DistanceSpan {
     pub const ZERO: Self = Self { micrometers: 0 };
+
+    pub fn from_meters(value: f64) -> Self {
+        Self {
+            micrometers: (value * 1_000_000.0).round() as u64,
+        }
+    }
+
+    pub fn as_meters_f64(self) -> f64 {
+        self.micrometers as f64 / 1_000_000.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -92,6 +120,23 @@ pub struct Color {
     pub red: u8,
     pub green: u8,
     pub blue: u8,
+}
+
+impl Color {
+    pub fn from_hex(value: &str) -> Option<Self> {
+        if value.len() != 7 || !value.starts_with('#') {
+            return None;
+        }
+        Some(Self {
+            red: u8::from_str_radix(&value[1..3], 16).ok()?,
+            green: u8::from_str_radix(&value[3..5], 16).ok()?,
+            blue: u8::from_str_radix(&value[5..7], 16).ok()?,
+        })
+    }
+
+    pub fn to_hex(self) -> String {
+        format!("#{:02x}{:02x}{:02x}", self.red, self.green, self.blue)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

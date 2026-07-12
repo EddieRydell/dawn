@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -109,10 +109,6 @@ impl PersistenceService {
         Ok(last_project)
     }
 
-    pub fn is_write_allowed(&self) -> bool {
-        self.inner().write_allowed
-    }
-
     pub fn settings(&self) -> AppSettings {
         self.inner().store.settings.clone()
     }
@@ -151,12 +147,8 @@ impl PersistenceService {
             .store
             .projects
             .remove(&project_root)
-            .unwrap_or_else(|| PersistedProjectSession::new(project_root.clone()));
-        let mut session = session.with_snapshot(snapshot);
-        if let Some(existing) = inner.store.projects.get(&project_root) {
-            session.editor_states = existing.editor_states.clone();
-            session.sequence_viewports = existing.sequence_viewports.clone();
-        }
+            .unwrap_or_else(PersistedProjectSession::new);
+        let session = session.with_snapshot(snapshot);
         inner.store.projects.insert(project_root.clone(), session);
         inner.store.last_project = Some(project_root);
         trim_recent_projects(&mut inner.store);
@@ -176,7 +168,7 @@ impl PersistenceService {
             .store
             .projects
             .entry(project_root.to_string())
-            .or_insert_with(|| PersistedProjectSession::new(project_root.to_string()));
+            .or_insert_with(PersistedProjectSession::new);
         session.editor_states.insert(update.path, update.state);
         inner.save_debounced()
     }
@@ -194,7 +186,7 @@ impl PersistenceService {
             .store
             .projects
             .entry(project_root.to_string())
-            .or_insert_with(|| PersistedProjectSession::new(project_root.to_string()));
+            .or_insert_with(PersistedProjectSession::new);
         session.sequence_viewports.insert(
             sequence_viewport_key(&update.path, &update.object_key),
             update.state,
@@ -212,8 +204,8 @@ impl PersistenceService {
         let stale_tabs = session
             .tabs
             .iter()
-            .filter(|tab| !valid_paths.contains(&tab.path))
-            .map(|tab| tab.path.clone())
+            .filter(|path| !valid_paths.contains(*path))
+            .cloned()
             .collect::<Vec<_>>();
         Some(ProjectSessionRestore {
             session,
@@ -349,8 +341,7 @@ impl Default for PersistedStore {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedProjectSession {
-    pub project_root: String,
-    pub tabs: Vec<PersistedTab>,
+    pub tabs: Vec<String>,
     pub active_file: Option<String>,
     pub project_tree_visible: bool,
     pub audio_position_seconds: f64,
@@ -361,9 +352,8 @@ pub struct PersistedProjectSession {
 }
 
 impl PersistedProjectSession {
-    fn new(project_root: String) -> Self {
+    fn new() -> Self {
         Self {
-            project_root,
             tabs: Vec::new(),
             active_file: None,
             project_tree_visible: true,
@@ -376,13 +366,7 @@ impl PersistedProjectSession {
     }
 
     fn with_snapshot(mut self, snapshot: &AppSnapshot) -> Self {
-        self.tabs = snapshot
-            .tabs
-            .iter()
-            .map(|tab| PersistedTab {
-                path: tab.path.clone(),
-            })
-            .collect();
+        self.tabs = snapshot.tabs.iter().map(|tab| tab.path.clone()).collect();
         self.active_file = snapshot.active_file.clone();
         self.project_tree_visible = snapshot.project_tree_visible;
         self.audio_position_seconds = snapshot.audio_transport.position_seconds;
@@ -390,12 +374,6 @@ impl PersistedProjectSession {
         self.live_output_enabled = snapshot.live_output.enabled;
         self
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct PersistedTab {
-    pub path: String,
 }
 
 pub fn read_window_state<R: Runtime>(window: &Window<R>) -> Option<PersistedWindowState> {
@@ -445,8 +423,4 @@ fn trim_recent_projects(store: &mut PersistedStore) {
     for project in remove {
         store.projects.remove(&project);
     }
-}
-
-pub fn valid_project_file(path: &Path) -> bool {
-    path.is_file()
 }

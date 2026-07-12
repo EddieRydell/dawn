@@ -1,5 +1,3 @@
-use super::*;
-
 pub(super) fn sequence_value(
     session: &ProjectSession,
     from_document: &Utf8Path,
@@ -88,10 +86,7 @@ pub(super) fn sequence_layer_value(layer: &SequenceLayer) -> Result<Value, Expor
     let mut value = Mapping::new();
     value.insert(string_value("id"), number_value(layer.id.0)?);
     value.insert(string_value("name"), Value::String(layer.name.clone()));
-    value.insert(
-        string_value("color"),
-        Value::String(color_string(layer.color)),
-    );
+    value.insert(string_value("color"), Value::String(layer.color.to_hex()));
     value.insert(string_value("enabled"), Value::Bool(layer.enabled));
     Ok(Value::Mapping(value))
 }
@@ -123,14 +118,12 @@ pub(super) fn sequence_effect_value(
             .to_string(),
         ),
     );
-    write_effect_clip_fields(
+    write_effect_fields(
         session,
         from_document,
         &mut value,
-        &EffectClip {
-            definition: effect.definition.clone(),
-            param_overrides: effect.param_overrides.clone(),
-        },
+        &effect.definition,
+        &effect.param_overrides,
     )?;
     Ok(Value::Mapping(value))
 }
@@ -226,7 +219,7 @@ pub(super) fn mark_collection_value(
     value.insert(string_value("name"), Value::String(collection.name.clone()));
     value.insert(
         string_value("color"),
-        Value::String(color_string(collection.display_color)),
+        Value::String(collection.display_color.to_hex()),
     );
     value.insert(
         string_value("marks"),
@@ -241,18 +234,18 @@ pub(super) fn mark_collection_value(
     Ok(Value::Mapping(value))
 }
 
-pub(super) fn write_effect_clip_fields(
+pub(super) fn write_effect_fields(
     session: &ProjectSession,
     from_document: &Utf8Path,
     value: &mut Mapping,
-    effect: &EffectClip,
+    definition: &EffectDefinitionId,
+    param_overrides: &IndexMap<Identifier, EffectParamValue>,
 ) -> Result<(), ExportProjectError> {
-    if !effect.param_overrides.is_empty() {
+    if !param_overrides.is_empty() {
         value.insert(
             string_value("params"),
             Value::Mapping(
-                effect
-                    .param_overrides
+                param_overrides
                     .iter()
                     .map(|(name, param)| {
                         Ok((
@@ -270,7 +263,7 @@ pub(super) fn write_effect_clip_fields(
             session,
             from_document,
             SourceObjectKind::EffectDefinition,
-            &effect.definition.0,
+            &definition.0,
         )?),
     );
     Ok(())
@@ -485,7 +478,7 @@ pub(super) fn effect_param_value(
         }
         EffectParamValue::Color(inner) => {
             value.insert(string_value("type"), Value::String("color".to_string()));
-            value.insert(string_value("value"), Value::String(color_string(*inner)));
+            value.insert(string_value("value"), Value::String(inner.to_hex()));
         }
         EffectParamValue::Enum(inner) => {
             value.insert(string_value("type"), Value::String("enum".to_string()));
@@ -576,3 +569,25 @@ pub(super) fn curve_source_value(
         )?)),
     }
 }
+use camino::{Utf8Path, Utf8PathBuf};
+use dawn_language::dsl::Identifier;
+use dawn_language::effect::{
+    CurveSource, EffectDefinitionId, EffectInst, EffectParamValue, EffectScope,
+};
+use dawn_language::operator::OperatorRef;
+use dawn_language::sequence::{
+    AutomationBinding, AutomationClip, AutomationMapping, AutomationTarget, CompositionGraphNode,
+    CompositionGraphNodeKind, EffectGraphEdge, GraphNodePosition, MarkCollection, Sequence,
+    SequenceAudio, SequenceCompositionGraph, SequenceLayer,
+};
+use dawn_language::values::{Curve, CurvePoint, CurveValue};
+use indexmap::IndexMap;
+use yaml_serde::{Mapping, Value};
+
+use super::ProjectSession;
+use super::values::{
+    curve_value, effect_target_value, number_value, seconds_string, string_value, typed_object,
+    write_source_reference,
+};
+use crate::ExportProjectError;
+use crate::source::{SourceObjectKind, relative_path_from_document};

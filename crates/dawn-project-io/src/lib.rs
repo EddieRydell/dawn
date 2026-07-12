@@ -11,42 +11,20 @@
 )]
 
 use camino::{Utf8Path, Utf8PathBuf};
-use dawn_language::dsl::{
-    Diagnostic as DslDiagnostic, Identifier, compile_effects, compile_operators,
-};
-use dawn_language::effect::{
-    CurveDefinition, CurveId, CurveSource, EffectDefinition, EffectDefinitionId, EffectInst,
-    EffectInstId, EffectParamValue, EffectScope, EffectTarget,
-};
+use dawn_language::dsl::Identifier;
 use dawn_language::identity::SourceIdentity;
-use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
-use dawn_language::operator::{
-    BuiltinOperator, GraphOperatorNode, OperatorDefinitionId, OperatorRef,
-    custom_operator_definition, validate_composition_graph,
-};
 use dawn_language::sequence::{
-    AssetId, AutomationBinding, AutomationClip, AutomationClipId, AutomationMapping,
-    AutomationTarget, CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind,
-    EffectClip, EffectGraphEdge, GraphNodePosition, GraphPortId, MarkCollection, MarkCollectionKey,
-    Sequence, SequenceAudio, SequenceCompositionGraph, SequenceId, SequenceLayer, SequenceLayerId,
+    CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind, EffectGraphEdge,
+    GraphNodePosition, GraphPortId, MarkCollection, MarkCollectionKey, Sequence, SequenceAudio,
+    SequenceCompositionGraph, SequenceId, SequenceLayer, SequenceLayerId,
 };
-use dawn_language::setup::{
-    ControllerAddress, ControllerDefinition, ControllerDefinitionId, ControllerId,
-    ControllerOutput, ControllerOutputIndex, FixtureDefinition, FixtureDefinitionId, FixtureGroup,
-    FixtureGroupId, FixtureInst, FixtureInstanceId, Geometry, Layout, LayoutId, LayoutTarget,
-    Patch, PatchId, PatchRoute, PixelRange, Protocol, RgbChannelOrder, Setup, SetupId,
-};
-use dawn_language::values::{
-    Color, Curve, CurvePoint, CurveValue, DawnDuration, DawnTime, Distance, DistanceSpan, Point3,
-    Rotation3, Scale3,
-};
+use dawn_language::values::{Color, DawnDuration};
 use indexmap::{IndexMap, IndexSet};
-use marked_yaml::{LoadError as MarkedYamlError, Marker, Node};
+use marked_yaml::Node;
 use std::cell::RefCell;
 use std::fmt;
 use std::fs;
 use std::io;
-use std::time::Duration;
 use yaml_serde::{Mapping, Value};
 
 thread_local! {
@@ -397,7 +375,7 @@ pub fn export_project(
     })
 }
 
-pub fn save_project(session: &ProjectSession) -> Result<SaveReport, SaveProjectError> {
+pub fn save_project(session: &ProjectSession) -> Result<SaveReport, ExportProjectError> {
     let written_files = write_source_documents(session, &session.source.source_root)?;
     Ok(SaveReport { written_files })
 }
@@ -425,36 +403,6 @@ fn ensure_document_imports_target(
             reference: reference.to_string(),
             message: format!("no canonical import alias exists for {kind:?} references"),
         })?;
-    if session
-        .source
-        .documents
-        .get(from_document)
-        .is_some_and(|document| {
-            document
-                .imports
-                .iter()
-                .any(|edge| edge.targets.contains(&target_document))
-        })
-    {
-        return Ok(());
-    }
-
-    let document = session.source.documents.get(from_document).ok_or_else(|| {
-        ExportProjectError::InvalidReference {
-            path: from_document.to_path_buf(),
-            reference: reference.to_string(),
-            message: "source document is missing from the source project".to_string(),
-        }
-    })?;
-    let alias = available_import_alias(document, alias_base).ok_or_else(|| {
-        ExportProjectError::InvalidReference {
-            path: from_document.to_path_buf(),
-            reference: reference.to_string(),
-            message: format!("no import alias remains for `{alias_base}`"),
-        }
-    })?;
-    let import_from = relative_path_from_document(from_document, &target_document);
-
     let document = session
         .source
         .documents
@@ -464,6 +412,21 @@ fn ensure_document_imports_target(
             reference: reference.to_string(),
             message: "source document is missing from the source project".to_string(),
         })?;
+    if document
+        .imports
+        .iter()
+        .any(|edge| edge.targets.contains(&target_document))
+    {
+        return Ok(());
+    }
+    let alias = available_import_alias(document, alias_base).ok_or_else(|| {
+        ExportProjectError::InvalidReference {
+            path: from_document.to_path_buf(),
+            reference: reference.to_string(),
+            message: format!("no import alias remains for `{alias_base}`"),
+        }
+    })?;
+    let import_from = relative_path_from_document(from_document, &target_document);
     document.imports.push(ImportEdge {
         from: import_from.clone(),
         alias: alias.clone(),
@@ -711,8 +674,6 @@ pub enum ExportProjectError {
     },
 }
 
-pub type SaveProjectError = ExportProjectError;
-
 impl fmt::Display for LoadProjectError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -754,7 +715,11 @@ impl fmt::Display for LoadProjectError {
 impl std::error::Error for LoadProjectError {}
 
 mod diagnostics;
-use diagnostics::*;
+use diagnostics::{
+    check_absolute_document, discover_reachable_files, effect_diagnostics, load_error_diagnostic,
+    node_range, operator_diagnostics, parse_yaml_value, push_diagnostic,
+    push_load_error_diagnostics,
+};
 
 impl fmt::Display for ExportProjectError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -777,7 +742,7 @@ impl fmt::Display for ExportProjectError {
 impl std::error::Error for ExportProjectError {}
 
 mod serialization;
-use serialization::*;
+use serialization::{document_text, write_source_documents};
 
 mod loader;
-use loader::*;
+use loader::{Loader, normalize_relative};

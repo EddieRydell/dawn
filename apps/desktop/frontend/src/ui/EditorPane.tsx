@@ -289,7 +289,7 @@ export function EditorPane({
             <RefreshCw size={14} />
             Reload from Disk
           </button>
-          <button type="button" onClick={() => void runSnapshotCommand(commands.keepActiveBuffer)}>
+          <button type="button" onClick={() => void runSnapshotCommand(commands.flushAutosave)}>
             <Save size={14} />
             Keep Mine
           </button>

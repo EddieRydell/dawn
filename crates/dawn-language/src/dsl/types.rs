@@ -80,6 +80,31 @@ impl Type {
     pub fn array(item_type: Self) -> Self {
         Self::Array(Box::new(item_type))
     }
+
+    pub fn default_value(&self) -> Value {
+        match self {
+            Self::Void | Self::Signal | Self::Timeline => Value::Void,
+            Self::Int => Value::Int(0),
+            Self::Float => Value::Float(0.0),
+            Self::Bool => Value::Bool(false),
+            Self::Color => Value::Color(Color {
+                red: 0,
+                green: 0,
+                blue: 0,
+            }),
+            Self::Marks => Value::Marks(Arc::new(Marks { marks: Vec::new() })),
+            Self::Target => Value::Target(Arc::new(TargetValue { groups: Vec::new() })),
+            Self::TargetItems => {
+                Value::TargetItems(Arc::new(TargetItemsValue { groups: Vec::new() }))
+            }
+            Self::TargetItem => Value::TargetItem(Arc::new(TargetItemValue {
+                pixels: Arc::new(Vec::new()),
+            })),
+            Self::Curve(_) => Value::Curve(Arc::new(Curve { points: Vec::new() })),
+            Self::Array(_) => Value::Array(Arc::new(Vec::new())),
+            Self::Enum(options) => Value::Enum(options[0].clone()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -169,7 +169,7 @@ pub enum GuiDocument {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct GuiDocumentRequest {
     pub path: String,
@@ -227,7 +227,7 @@ pub enum DiagnosticSeverity {
     Warning,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum DocumentViewId {
     Text,
@@ -1162,13 +1162,6 @@ pub enum SequenceGuiEdit {
         collection_key: String,
         index: u32,
     },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct SequenceKey {
-    pub path: String,
-    pub object_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

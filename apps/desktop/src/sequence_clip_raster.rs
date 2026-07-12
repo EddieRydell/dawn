@@ -32,27 +32,27 @@ use crate::dto::{
 
 const RASTER_CACHE_BYTE_BUDGET: usize = 128 * 1024 * 1024;
 
-pub struct SequenceClipRasterService {
+pub(crate) struct SequenceClipRasterService {
     sender: mpsc::Sender<RasterJob>,
     receiver: mpsc::Receiver<RasterWorkerResult>,
     cache: HashMap<RasterCacheKey, CachedRasterResult>,
     cache_bytes: usize,
     next_cache_access: u64,
     pixels_by_token: HashMap<String, Arc<Vec<u8>>>,
-    pending_results: HashMap<RasterDocumentKey, VecDeque<RasterResultEntry>>,
+    pending_results: HashMap<GuiDocumentRequest, VecDeque<RasterResultEntry>>,
     active: Option<ActiveRasterJob>,
-    next_job_id: u32,
-    latest_job_id: Arc<AtomicU64>,
+    next_request_id: u32,
+    latest_request_id: Arc<AtomicU64>,
 }
 
 impl SequenceClipRasterService {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let (request_sender, request_receiver) = mpsc::channel();
         let (result_sender, result_receiver) = mpsc::channel();
-        let latest_job_id = Arc::new(AtomicU64::new(0));
+        let latest_request_id = Arc::new(AtomicU64::new(0));
         thread::spawn({
-            let latest_job_id = Arc::clone(&latest_job_id);
-            move || raster_worker(request_receiver, result_sender, latest_job_id)
+            let latest_request_id = Arc::clone(&latest_request_id);
+            move || raster_worker(request_receiver, result_sender, latest_request_id)
         });
         Self {
             sender: request_sender,
@@ -63,8 +63,8 @@ impl SequenceClipRasterService {
             pixels_by_token: HashMap::new(),
             pending_results: HashMap::new(),
             active: None,
-            next_job_id: 1,
-            latest_job_id,
+            next_request_id: 1,
+            latest_request_id,
         }
     }
 
@@ -77,30 +77,21 @@ impl SequenceClipRasterService {
         sequence_id: Option<SequenceId>,
         request: SequenceClipRasterRequest,
     ) -> SequenceClipRasterResponse {
-        let document_key = RasterDocumentKey::new(&request.document);
-        let base_key = RasterRequestKey {
-            path: request.document.path.clone(),
-            object_key: request.document.object_key.clone(),
-            display_row_count: request.display_row_count,
-            settings: settings.clone(),
-        };
         self.drain_results();
-        self.prepare_response_and_schedule(RasterScheduleInput {
+        self.prepare_response_and_schedule(
             project_revision,
+            settings,
             project,
             setup_id,
             sequence_id,
-            document_key,
-            base_key,
-            ordered_items: request.items,
-        })
+            request,
+        )
     }
 
     fn drain_results(&mut self) {
         while let Ok(result) = self.receiver.try_recv() {
             match result {
                 RasterWorkerResult::Raster {
-                    job_id,
                     request_id,
                     document_key,
                     cache_key,
@@ -131,10 +122,8 @@ impl SequenceClipRasterService {
                             },
                         );
                     }
-                    self.finish_active_work_item(job_id);
                 }
                 RasterWorkerResult::Error {
-                    job_id,
                     request_id,
                     document_key,
                     cache_key,
@@ -163,10 +152,8 @@ impl SequenceClipRasterService {
                             },
                         );
                     }
-                    self.finish_active_work_item(job_id);
                 }
                 RasterWorkerResult::Complete {
-                    job_id,
                     request_id,
                     document_key,
                 } => {
@@ -174,7 +161,7 @@ impl SequenceClipRasterService {
                     if self
                         .active
                         .as_ref()
-                        .is_some_and(|active| active.job_id == job_id)
+                        .is_some_and(|active| active.request_id == request_id)
                     {
                         self.active = None;
                     }
@@ -193,7 +180,7 @@ impl SequenceClipRasterService {
         request_id: u32,
     ) -> SequenceClipRasterResultBatch {
         self.drain_results();
-        let document_key = RasterDocumentKey::new(&request);
+        let document_key = request;
         let mut ready = Vec::new();
         let mut unavailable = Vec::new();
         let mut errors = Vec::new();
@@ -261,19 +248,17 @@ impl SequenceClipRasterService {
 
     fn prepare_response_and_schedule(
         &mut self,
-        input: RasterScheduleInput,
+        project_revision: u32,
+        settings: EffectRasterSettings,
+        project: Option<Arc<ProjectSession>>,
+        setup_id: Option<SetupId>,
+        sequence_id: Option<SequenceId>,
+        request: SequenceClipRasterRequest,
     ) -> SequenceClipRasterResponse {
-        let RasterScheduleInput {
-            project_revision,
-            project,
-            setup_id,
-            sequence_id,
-            document_key,
-            base_key,
-            ordered_items,
-        } = input;
-        let request_id = self.next_job_id;
-        self.next_job_id += 1;
+        let document_key = request.document.clone();
+        let ordered_items = request.items;
+        let request_id = self.next_request_id;
+        self.next_request_id += 1;
         let Some(project) = project else {
             self.active = None;
             return empty_response(project_revision, request_id, true);
@@ -307,7 +292,10 @@ impl SequenceClipRasterService {
         let stale_keys = self
             .cache
             .keys()
-            .filter(|key| key.matches_request(&base_key) && !current_ids.contains(&key.effect_id))
+            .filter(|key| {
+                key.matches_request(&request.document, request.display_row_count, &settings)
+                    && !current_ids.contains(&key.effect_id)
+            })
             .cloned()
             .collect::<Vec<_>>();
         for key in stale_keys {
@@ -345,8 +333,13 @@ impl SequenceClipRasterService {
             else {
                 continue;
             };
-            let cache_key =
-                RasterCacheKey::new(&base_key, effect_id, request_item.display_column_count);
+            let cache_key = RasterCacheKey::new(
+                &request.document,
+                request.display_row_count,
+                &settings,
+                effect_id,
+                request_item.display_column_count,
+            );
             let signature = match render_signature(&project.project, &setup_id, sequence, effect) {
                 Ok(signature) => signature,
                 Err(message) => RenderInputSignature::Invalid { message },
@@ -399,15 +392,31 @@ impl SequenceClipRasterService {
 
         let protected_keys = requested_cache_keys.into_iter().collect::<HashSet<_>>();
         self.evict_cache_over_budget(&protected_keys);
-        self.schedule_missing_work(RasterMissingWorkInput {
-            request_id,
-            document_key,
-            project,
-            setup_id,
-            sequence_id,
-            settings: base_key.settings.clone(),
-            work_items,
-        });
+        if work_items.is_empty() {
+            self.active = None;
+            self.push_result(document_key, RasterResultEntry::Complete { request_id });
+        } else {
+            let job = RasterJob {
+                request_id,
+                document_key: document_key.clone(),
+                project,
+                setup_id,
+                sequence_id,
+                settings,
+                work_items,
+            };
+            if self.sender.send(job).is_ok() {
+                self.latest_request_id
+                    .store(u64::from(request_id), Ordering::Relaxed);
+                self.active = Some(ActiveRasterJob {
+                    request_id,
+                    document_key,
+                });
+            } else {
+                self.active = None;
+                self.push_result(document_key, RasterResultEntry::Complete { request_id });
+            }
+        }
         SequenceClipRasterResponse {
             project_revision,
             request_id,
@@ -415,65 +424,14 @@ impl SequenceClipRasterService {
         }
     }
 
-    fn schedule_missing_work(&mut self, input: RasterMissingWorkInput) {
-        let RasterMissingWorkInput {
-            request_id,
-            document_key,
-            project,
-            setup_id,
-            sequence_id,
-            settings,
-            work_items,
-        } = input;
-        if work_items.is_empty() {
-            self.active = None;
-            self.push_result(document_key, RasterResultEntry::Complete { request_id });
-            return;
-        }
-        let job_id = request_id;
-        let job = RasterJob {
-            job_id,
-            request_id,
-            document_key: document_key.clone(),
-            project,
-            setup_id,
-            sequence_id,
-            settings,
-            work_items: work_items.clone(),
-        };
-        if self.sender.send(job).is_ok() {
-            self.latest_job_id
-                .store(u64::from(job_id), Ordering::Relaxed);
-            self.active = Some(ActiveRasterJob {
-                job_id,
-                request_id,
-                document_key,
-                work_items,
-            });
-        } else {
-            self.active = None;
-            self.push_result(document_key, RasterResultEntry::Complete { request_id });
-        }
-    }
-
-    fn finish_active_work_item(&mut self, job_id: u32) {
-        let Some(active) = self.active.as_mut() else {
-            return;
-        };
-        if active.job_id != job_id || active.work_items.is_empty() {
-            return;
-        }
-        active.work_items.remove(0);
-    }
-
-    fn push_result(&mut self, document_key: RasterDocumentKey, result: RasterResultEntry) {
+    fn push_result(&mut self, document_key: GuiDocumentRequest, result: RasterResultEntry) {
         self.pending_results
             .entry(document_key)
             .or_default()
             .push_back(result);
     }
 
-    fn is_current_request(&self, document_key: &RasterDocumentKey, request_id: u32) -> bool {
+    fn is_current_request(&self, document_key: &GuiDocumentRequest, request_id: u32) -> bool {
         self.active.as_ref().is_some_and(|active| {
             &active.document_key == document_key && active.request_id == request_id
         })
@@ -544,69 +502,9 @@ impl SequenceClipRasterService {
     }
 }
 
-impl Default for SequenceClipRasterService {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 struct ActiveRasterJob {
-    job_id: u32,
     request_id: u32,
-    document_key: RasterDocumentKey,
-    work_items: Vec<RasterWorkItem>,
-}
-
-struct RasterScheduleInput {
-    project_revision: u32,
-    project: Option<Arc<ProjectSession>>,
-    setup_id: Option<SetupId>,
-    sequence_id: Option<SequenceId>,
-    document_key: RasterDocumentKey,
-    base_key: RasterRequestKey,
-    ordered_items: Vec<crate::dto::SequenceClipRasterRequestItem>,
-}
-
-struct RasterMissingWorkInput {
-    request_id: u32,
-    document_key: RasterDocumentKey,
-    project: Arc<ProjectSession>,
-    setup_id: SetupId,
-    sequence_id: SequenceId,
-    settings: EffectRasterSettings,
-    work_items: Vec<RasterWorkItem>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct RasterDocumentKey {
-    path: String,
-    object_key: Option<String>,
-}
-
-impl RasterDocumentKey {
-    fn new(request: &GuiDocumentRequest) -> Self {
-        Self {
-            path: request.path.clone(),
-            object_key: request.object_key.clone(),
-        }
-    }
-}
-
-impl Eq for RasterDocumentKey {}
-
-impl Hash for RasterDocumentKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.path.hash(state);
-        self.object_key.hash(state);
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct RasterRequestKey {
-    path: String,
-    object_key: Option<String>,
-    display_row_count: u32,
-    settings: EffectRasterSettings,
+    document_key: GuiDocumentRequest,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -622,22 +520,33 @@ struct RasterCacheKey {
 impl Eq for RasterCacheKey {}
 
 impl RasterCacheKey {
-    fn new(request: &RasterRequestKey, effect_id: u32, display_column_count: u32) -> Self {
+    fn new(
+        document: &GuiDocumentRequest,
+        display_row_count: u32,
+        settings: &EffectRasterSettings,
+        effect_id: u32,
+        display_column_count: u32,
+    ) -> Self {
         Self {
-            path: request.path.clone(),
-            object_key: request.object_key.clone(),
+            path: document.path.clone(),
+            object_key: document.object_key.clone(),
             effect_id,
             display_column_count,
-            display_row_count: request.display_row_count,
-            settings: request.settings.clone(),
+            display_row_count,
+            settings: settings.clone(),
         }
     }
 
-    fn matches_request(&self, request: &RasterRequestKey) -> bool {
-        self.path == request.path
-            && self.object_key == request.object_key
-            && self.display_row_count == request.display_row_count
-            && self.settings == request.settings
+    fn matches_request(
+        &self,
+        document: &GuiDocumentRequest,
+        display_row_count: u32,
+        settings: &EffectRasterSettings,
+    ) -> bool {
+        self.path == document.path
+            && self.object_key == document.object_key
+            && self.display_row_count == display_row_count
+            && self.settings == *settings
     }
 }
 
@@ -680,9 +589,8 @@ impl CachedRasterPayload {
 }
 
 struct RasterJob {
-    job_id: u32,
     request_id: u32,
-    document_key: RasterDocumentKey,
+    document_key: GuiDocumentRequest,
     project: Arc<ProjectSession>,
     setup_id: SetupId,
     sequence_id: SequenceId,
@@ -721,34 +629,31 @@ enum RasterResultEntry {
 
 enum RasterWorkerResult {
     Raster {
-        job_id: u32,
         request_id: u32,
-        document_key: RasterDocumentKey,
+        document_key: GuiDocumentRequest,
         cache_key: RasterCacheKey,
         signature: RenderInputSignature,
         signature_key: String,
         payload: CachedRasterPayload,
     },
     Error {
-        job_id: u32,
         request_id: u32,
-        document_key: RasterDocumentKey,
+        document_key: GuiDocumentRequest,
         cache_key: RasterCacheKey,
         signature: RenderInputSignature,
         signature_key: String,
         error: SequenceClipRasterError,
     },
     Complete {
-        job_id: u32,
         request_id: u32,
-        document_key: RasterDocumentKey,
+        document_key: GuiDocumentRequest,
     },
 }
 
 fn raster_worker(
     receiver: mpsc::Receiver<RasterJob>,
     sender: mpsc::Sender<RasterWorkerResult>,
-    latest_job_id: Arc<AtomicU64>,
+    latest_request_id: Arc<AtomicU64>,
 ) {
     let mut raster_cache = HashMap::<RasterRenderCacheKey, CachedRasterValue>::new();
     let mut renderer_cache = HashMap::<String, PreparedEffectRasterRenderer>::new();
@@ -770,14 +675,13 @@ fn raster_worker(
             Err(error) => (None, Some(format!("{error:?}"))),
         };
         for item in work_items {
-            if latest_job_id.load(Ordering::Relaxed) != u64::from(job.job_id) {
+            if latest_request_id.load(Ordering::Relaxed) != u64::from(job.request_id) {
                 completed = false;
                 break;
             }
             let render_cache_key = RasterRenderCacheKey::new(&item);
             let result = match raster_cache.get(&render_cache_key).cloned() {
                 Some(CachedRasterValue::Raster(raster)) => RasterWorkerResult::Raster {
-                    job_id: job.job_id,
                     request_id: job.request_id,
                     document_key: job.document_key.clone(),
                     cache_key: item.cache_key,
@@ -786,7 +690,6 @@ fn raster_worker(
                     payload: raster,
                 },
                 Some(CachedRasterValue::Error(error)) => RasterWorkerResult::Error {
-                    job_id: job.job_id,
                     request_id: job.request_id,
                     document_key: job.document_key.clone(),
                     cache_key: item.cache_key,
@@ -796,7 +699,7 @@ fn raster_worker(
                 },
                 None => {
                     let should_continue =
-                        || latest_job_id.load(Ordering::Relaxed) == u64::from(job.job_id);
+                        || latest_request_id.load(Ordering::Relaxed) == u64::from(job.request_id);
                     let renderer = match renderer_cache.get(&item.signature_key).cloned() {
                         Some(renderer) => Ok(renderer),
                         None => match prepare_batch.as_mut() {
@@ -835,7 +738,6 @@ fn raster_worker(
                                 CachedRasterValue::Raster(raster.clone()),
                             );
                             RasterWorkerResult::Raster {
-                                job_id: job.job_id,
                                 request_id: job.request_id,
                                 document_key: job.document_key.clone(),
                                 cache_key: item.cache_key,
@@ -858,7 +760,6 @@ fn raster_worker(
                             raster_cache
                                 .insert(render_cache_key, CachedRasterValue::Error(error.clone()));
                             RasterWorkerResult::Error {
-                                job_id: job.job_id,
                                 request_id: job.request_id,
                                 document_key: job.document_key.clone(),
                                 cache_key: item.cache_key,
@@ -882,7 +783,6 @@ fn raster_worker(
         if completed
             && sender
                 .send(RasterWorkerResult::Complete {
-                    job_id: job.job_id,
                     request_id: job.request_id,
                     document_key: job.document_key.clone(),
                 })

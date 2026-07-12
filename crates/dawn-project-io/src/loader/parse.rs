@@ -1,5 +1,3 @@
-use super::*;
-
 pub(crate) fn parse_automation_curve(
     path: &Utf8Path,
     value: &Value,
@@ -393,7 +391,7 @@ pub(crate) fn parse_fixture_definition(
         },
         "arc" => Geometry::Arc {
             center: parse_point3(required_field(path, geometry_value, "center")?)?,
-            radius: distance_span(f64_field(path, geometry_value, "radius")?),
+            radius: DistanceSpan::from_meters(f64_field(path, geometry_value, "radius")?),
             start_degrees: f64_field(path, geometry_value, "startDegrees")?,
             end_degrees: f64_field(path, geometry_value, "endDegrees")?,
             pixels: u32_field(path, geometry_value, "pixels")?,
@@ -407,7 +405,7 @@ pub(crate) fn parse_fixture_definition(
         }
     };
     Ok(FixtureDefinition {
-        bulb_radius: distance_span(bulb_diameter / 2.0),
+        bulb_radius: DistanceSpan::from_meters(bulb_diameter / 2.0),
         geometry,
     })
 }
@@ -455,9 +453,9 @@ pub(crate) fn parse_curve(path: &Utf8Path, value: &Value) -> Result<Curve, LoadP
 
 pub(crate) fn parse_point3(value: &Value) -> Result<Point3, LoadProjectError> {
     Ok(Point3 {
-        x: distance(f64_field(Utf8Path::new("<inline>"), value, "x")?),
-        y: distance(f64_field(Utf8Path::new("<inline>"), value, "y")?),
-        z: distance(f64_field(Utf8Path::new("<inline>"), value, "z")?),
+        x: Distance::from_meters(f64_field(Utf8Path::new("<inline>"), value, "x")?),
+        y: Distance::from_meters(f64_field(Utf8Path::new("<inline>"), value, "y")?),
+        z: Distance::from_meters(f64_field(Utf8Path::new("<inline>"), value, "z")?),
     })
 }
 
@@ -510,11 +508,11 @@ pub(crate) fn parse_slot_range(value: &str) -> Option<usize> {
 }
 
 pub(crate) fn parse_duration(value: &str) -> Result<DawnDuration, LoadProjectError> {
-    Ok(DawnDuration(Duration::from_secs_f64(parse_seconds(value)?)))
+    Ok(DawnDuration::from_seconds_f64(parse_seconds(value)?))
 }
 
 pub(crate) fn parse_duration_as_time(value: &str) -> Result<DawnTime, LoadProjectError> {
-    Ok(DawnTime(Duration::from_secs_f64(parse_seconds(value)?)))
+    Ok(DawnTime::from_seconds_f64(parse_seconds(value)?))
 }
 
 pub(crate) fn parse_seconds(value: &str) -> Result<f64, LoadProjectError> {
@@ -535,48 +533,11 @@ pub(crate) fn parse_seconds(value: &str) -> Result<f64, LoadProjectError> {
 }
 
 pub(crate) fn parse_color(value: &str) -> Result<Color, LoadProjectError> {
-    if value.len() != 7 || !value.starts_with('#') {
-        return Err(LoadProjectError::InvalidDocument {
-            path: Utf8PathBuf::from("<color>"),
-            range: None,
-            message: format!("invalid color: {value}"),
-        });
-    }
-    Ok(Color {
-        red: u8::from_str_radix(&value[1..3], 16).map_err(|_| {
-            LoadProjectError::InvalidDocument {
-                path: Utf8PathBuf::from("<color>"),
-                range: None,
-                message: format!("invalid color: {value}"),
-            }
-        })?,
-        green: u8::from_str_radix(&value[3..5], 16).map_err(|_| {
-            LoadProjectError::InvalidDocument {
-                path: Utf8PathBuf::from("<color>"),
-                range: None,
-                message: format!("invalid color: {value}"),
-            }
-        })?,
-        blue: u8::from_str_radix(&value[5..7], 16).map_err(|_| {
-            LoadProjectError::InvalidDocument {
-                path: Utf8PathBuf::from("<color>"),
-                range: None,
-                message: format!("invalid color: {value}"),
-            }
-        })?,
+    Color::from_hex(value).ok_or_else(|| LoadProjectError::InvalidDocument {
+        path: Utf8PathBuf::from("<color>"),
+        range: None,
+        message: format!("invalid color: {value}"),
     })
-}
-
-pub(crate) fn distance(value: f64) -> Distance {
-    Distance {
-        micrometers: (value * 1_000_000.0).round() as i64,
-    }
-}
-
-pub(crate) fn distance_span(value: f64) -> DistanceSpan {
-    DistanceSpan {
-        micrometers: (value * 1_000_000.0).round() as u64,
-    }
 }
 
 pub(crate) fn mapping(value: &Value) -> Option<&Mapping> {
@@ -604,28 +565,16 @@ pub(crate) fn optional_field<'a>(value: &'a Value, key: &str) -> Option<&'a Valu
     mapping(value).and_then(|mapping| mapping.get(Value::String(key.to_string())))
 }
 
-pub(crate) fn required_mapping(
-    path: &Utf8Path,
-    value: &Value,
-    key: &str,
-) -> Result<Mapping, LoadProjectError> {
-    optional_mapping(value, key).ok_or_else(|| LoadProjectError::InvalidDocument {
-        path: path.to_path_buf(),
-        range: source_range_for_value(path, value),
-        message: format!("missing mapping `{key}`"),
-    })
-}
-
-pub(crate) fn optional_mapping(value: &Value, key: &str) -> Option<Mapping> {
-    optional_field(value, key).and_then(|value| mapping(value).cloned())
+pub(crate) fn optional_mapping<'a>(value: &'a Value, key: &str) -> Option<&'a Mapping> {
+    optional_field(value, key).and_then(mapping)
 }
 
 pub(crate) fn optional_mapping_ref<'a>(value: &'a Value, key: &str) -> Option<&'a Mapping> {
     optional_field(value, key).and_then(mapping)
 }
 
-pub(crate) fn optional_sequence(value: &Value, key: &str) -> Option<Vec<Value>> {
-    optional_field(value, key).and_then(|value| value.as_sequence().cloned())
+pub(crate) fn optional_sequence<'a>(value: &'a Value, key: &str) -> Option<&'a Vec<Value>> {
+    optional_field(value, key).and_then(Value::as_sequence)
 }
 
 pub(crate) fn sequence_values<'a>(
@@ -785,3 +734,29 @@ pub(crate) fn normalize_relative(path: Utf8PathBuf) -> Utf8PathBuf {
     }
     parts.into_iter().collect()
 }
+use camino::{Utf8Path, Utf8PathBuf};
+use dawn_language::dsl::Identifier;
+use dawn_language::effect::{CurveId, EffectDefinitionId, EffectInstId, EffectScope, EffectTarget};
+use dawn_language::identity::SourceIdentity;
+use dawn_language::model::ProjectId;
+use dawn_language::operator::OperatorDefinitionId;
+use dawn_language::sequence::{
+    AutomationBinding, AutomationMapping, AutomationTarget, CompositionGraphNodeId,
+    EffectGraphEdge, GraphNodePosition, GraphPortId, MarkCollection, MarkCollectionKey, SequenceId,
+    SequenceLayer, SequenceLayerId,
+};
+use dawn_language::setup::{
+    ControllerAddress, ControllerId, FixtureDefinition, FixtureDefinitionId, FixtureGroup,
+    FixtureGroupId, FixtureInstanceId, Geometry, LayoutId, LayoutTarget, PatchId, RgbChannelOrder,
+    SetupId,
+};
+use dawn_language::values::{
+    Color, Curve, CurvePoint, CurveValue, DawnDuration, DawnTime, Distance, DistanceSpan, Point3,
+    Rotation3, Scale3,
+};
+use yaml_serde::{Mapping, Value};
+
+use crate::diagnostics::{
+    source_range_for_field_value, source_range_for_value, with_yaml_location,
+};
+use crate::{LoadProjectError, SourceObjectKind};

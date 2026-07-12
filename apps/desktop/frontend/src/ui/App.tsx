@@ -4,7 +4,6 @@ import { installGlobalShortcuts } from "../commandRegistry";
 import { runSnapshotCommand, subscribeToSnapshots, useAppStore } from "../store";
 import type { AppSnapshot, WorkspaceLayoutState } from "../types";
 import { EditorPane } from "./EditorPane";
-import { ExportFseqDialog } from "./ExportFseqDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { NewSequenceDialog } from "./NewSequenceDialog";
 import { ProjectTree } from "./ProjectTree";
@@ -53,7 +52,6 @@ export function App() {
       <StatusBar snapshot={snapshot} />
       <NewProjectDialog />
       <NewSequenceDialog />
-      <ExportFseqDialog />
       <SettingsDialog />
       {snapshot.projectRoot === null && (
         <div className="empty-project">

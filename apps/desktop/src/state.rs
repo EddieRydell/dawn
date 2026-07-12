@@ -1,36 +1,27 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_project_io::{
     IoDiagnostic, IoDiagnosticSeverity, ProjectCheckReport, ProjectSession, SourceDocument,
-    SourceObjectKind, check_document_text, check_project, check_project_document_text,
-    is_project_owned_path, save_project, source_document_text as generated_source_document_text,
+    is_project_owned_path, source_document_text as generated_source_document_text,
 };
 use indexmap::IndexSet;
 
 use crate::dto::{
     AppSettings, AppSnapshot, AudioTransportSnapshot, AudioTransportState, BufferExternalState,
     DiagnosticSeverity, DocumentDefaultObjectKey, DocumentDescriptor, DocumentObjectDescriptor,
-    DocumentViewId, EditorBuffer, EditorViewMode, GuiDocument, GuiDocumentRequest, GuiEditCommand,
-    GuiEditResult, LiveOutputSnapshot, NewSequenceRequest, ObjectKind, ProjectDiagnostic,
-    ProjectTreeMode, SequenceAudio, SequenceSelectionEdit, SequenceSelectionEditResult,
-    WorkspaceEntry, WorkspaceEntryKind, WorkspaceLayoutState,
+    DocumentViewId, EditorBuffer, LiveOutputSnapshot, ObjectKind, ProjectDiagnostic,
+    ProjectTreeMode, WorkspaceEntry, WorkspaceEntryKind, WorkspaceLayoutState,
 };
-use crate::persistence::{
-    PersistedEditorViewStateUpdate, PersistedProjectSession, PersistedSequenceViewportStateUpdate,
-    PersistenceService, ProjectRestoreState,
-};
-use crate::project_templates::{new_project_files, write_new_project_files};
+use crate::persistence::{PersistedProjectSession, PersistenceService};
 use crate::state_tasks::{
-    GuiHistory, GuiHistoryEntry, GuiSavePayload, GuiSaveResult, GuiSaveScheduler,
-    RenderRefreshPayload, RenderRefreshResult, RenderRefreshScheduler, gui_save_scheduler,
+    GuiHistory, GuiSaveScheduler, RenderRefreshScheduler, gui_save_scheduler,
     render_refresh_scheduler,
 };
 
-pub struct DesktopState {
+pub(crate) struct DesktopState {
     snapshot: Mutex<AppSnapshot>,
     project: Mutex<Option<Arc<ProjectSession>>>,
     gui_history: Mutex<GuiHistory>,
@@ -43,8 +34,14 @@ pub struct DesktopState {
     persistence: PersistenceService,
 }
 
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 impl DesktopState {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             snapshot: Mutex::new(empty_snapshot()),
             project: Mutex::new(None),
@@ -77,19 +74,13 @@ impl DesktopState {
     pub fn snapshot(&self) -> AppSnapshot {
         self.drain_gui_save_results();
         self.drain_render_refresh_results();
-        let mut snapshot = match self.snapshot.lock() {
-            Ok(snapshot) => snapshot.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        };
+        let mut snapshot = lock_unpoisoned(&self.snapshot).clone();
         snapshot.audio_transport = self.merged_audio_snapshot(&snapshot.audio_transport);
         snapshot
     }
 
     pub fn audio_snapshot(&self) -> AudioTransportSnapshot {
-        match self.audio.lock() {
-            Ok(mut audio) => audio.snapshot(),
-            Err(poisoned) => poisoned.into_inner().snapshot(),
-        }
+        lock_unpoisoned(&self.audio).snapshot()
     }
 
     fn merged_audio_snapshot(&self, previous: &AudioTransportSnapshot) -> AudioTransportSnapshot {
@@ -102,18 +93,11 @@ impl DesktopState {
     }
 
     pub fn update_snapshot(&self, update: impl FnOnce(&mut AppSnapshot)) -> AppSnapshot {
-        let snapshot = match self.snapshot.lock() {
-            Ok(mut snapshot) => {
-                update(&mut snapshot);
-                snapshot.audio_transport = self.merged_audio_snapshot(&snapshot.audio_transport);
-                snapshot.clone()
-            }
-            Err(poisoned) => {
-                let mut snapshot = poisoned.into_inner();
-                update(&mut snapshot);
-                snapshot.audio_transport = self.merged_audio_snapshot(&snapshot.audio_transport);
-                snapshot.clone()
-            }
+        let snapshot = {
+            let mut snapshot = lock_unpoisoned(&self.snapshot);
+            update(&mut snapshot);
+            snapshot.audio_transport = self.merged_audio_snapshot(&snapshot.audio_transport);
+            snapshot.clone()
         };
         self.record_persistent_snapshot(&snapshot);
         snapshot
@@ -154,10 +138,7 @@ impl DesktopState {
     }
 
     pub fn set_render_error_if_changed(&self, message: String) {
-        let current = match self.snapshot.lock() {
-            Ok(snapshot) => snapshot.render_error.clone(),
-            Err(poisoned) => poisoned.into_inner().render_error.clone(),
-        };
+        let current = lock_unpoisoned(&self.snapshot).render_error.clone();
         if current.as_deref() != Some(message.as_str()) {
             self.update_snapshot(|snapshot| {
                 snapshot.render_error = Some(message);
@@ -166,10 +147,7 @@ impl DesktopState {
     }
 
     pub fn clear_render_error_if_set(&self) {
-        let current = match self.snapshot.lock() {
-            Ok(snapshot) => snapshot.render_error.is_some(),
-            Err(poisoned) => poisoned.into_inner().render_error.is_some(),
-        };
+        let current = lock_unpoisoned(&self.snapshot).render_error.is_some();
         if current {
             self.update_snapshot(|snapshot| {
                 snapshot.render_error = None;
@@ -194,12 +172,6 @@ fn project_path_is_structural(project: &ProjectSession, path: &Utf8Path) -> bool
                     .any(|target| target == path || target.starts_with(path))
             })
         })
-}
-
-impl Default for DesktopState {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 fn empty_snapshot() -> AppSnapshot {
@@ -415,24 +387,11 @@ fn editor_buffer_for_path(
     session: &ProjectSession,
     relative_path: &Utf8Path,
 ) -> Option<EditorBuffer> {
-    if let Some(_document) = session.source.documents.get(relative_path) {
-        return editor_buffer(session, relative_path);
-    }
     let path = absolute_project_path(session, relative_path)?;
     if !path.is_file() {
         return None;
     }
-    let text = fs::read_to_string(&path).ok()?;
-    Some(EditorBuffer {
-        path: relative_path.to_string(),
-        name: relative_path
-            .file_name()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| relative_path.to_string()),
-        text,
-        dirty: false,
-        external_state: BufferExternalState::Current,
-    })
+    editor_buffer(session, relative_path)
 }
 
 fn restored_active_buffers(
@@ -441,8 +400,8 @@ fn restored_active_buffers(
 ) -> Option<(Vec<EditorBuffer>, String)> {
     let restore = restore?;
     let mut buffers = Vec::new();
-    for tab in &restore.tabs {
-        let relative_path = Utf8Path::new(&tab.path);
+    for path in &restore.tabs {
+        let relative_path = Utf8Path::new(path);
         if let Some(buffer) = editor_buffer_for_path(session, relative_path) {
             buffers.push(buffer);
         }
@@ -473,14 +432,6 @@ fn descriptor_for_path(
                 .is_some_and(|path| path.is_file())
                 .then(|| empty_document_descriptor(relative_path))
         })
-}
-
-fn valid_project_paths(session: &ProjectSession) -> BTreeSet<String> {
-    workspace_entries(session)
-        .into_iter()
-        .filter(|entry| matches!(entry.kind, WorkspaceEntryKind::File))
-        .map(|entry| entry.path)
-        .collect()
 }
 
 fn document_descriptor(path: &Utf8Path, document: &SourceDocument) -> DocumentDescriptor {

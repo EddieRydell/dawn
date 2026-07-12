@@ -1,5 +1,5 @@
-use crate::dsl::CompiledEffect;
 use crate::dsl::types::Identifier;
+use crate::dsl::{CompiledEffect, Type, Value};
 use crate::identity::SourceIdentity;
 use crate::sequence::{MarkCollectionKey, SequenceLayerId};
 use crate::setup::{FixtureGroupId, FixtureInstanceId};
@@ -46,6 +46,34 @@ pub enum EffectParamValue {
     Marks(MarkCollectionKey),
     Curve(CurveSource),
     Array(Vec<EffectParamValue>),
+}
+
+impl EffectParamValue {
+    pub fn default_for_type(ty: &Type) -> Option<Self> {
+        Self::from_default_value(ty.default_value())
+    }
+
+    fn from_default_value(value: Value) -> Option<Self> {
+        match value {
+            Value::Int(value) => Some(Self::Int(value)),
+            Value::Float(value) => Some(Self::Float(value)),
+            Value::Bool(value) => Some(Self::Bool(value)),
+            Value::Color(value) => Some(Self::Color(value)),
+            Value::Curve(value) => Some(Self::Curve(CurveSource::Inline((*value).clone()))),
+            Value::Array(values) => values
+                .iter()
+                .cloned()
+                .map(Self::from_default_value)
+                .collect::<Option<Vec<_>>>()
+                .map(Self::Array),
+            Value::Enum(value) => Some(Self::Enum(value)),
+            Value::Void
+            | Value::Marks(_)
+            | Value::Target(_)
+            | Value::TargetItems(_)
+            | Value::TargetItem(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

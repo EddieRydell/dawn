@@ -5,33 +5,35 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_specta::{Builder, collect_commands};
 
 use crate::dto::{
-    AppSettings, AppSnapshot, AudioTransportState, DocumentViewId, EditorViewMode, FixtureGuiEdit,
-    GuiDocument, GuiDocumentRequest, GuiEditCommand, GuiEditResult, LayoutGuiEdit,
-    NewSequenceRequest, SequenceClipRasterRequest, SequenceClipRasterResponse,
-    SequenceClipRasterResultBatch, SequenceGuiEdit, SequenceSelectionEdit,
-    SequenceSelectionEditResult, WorkspaceLayoutState,
+    AppSettings, AppSnapshot, AudioTransportState, DocumentViewId, EditorViewMode, GuiDocument,
+    GuiDocumentRequest, GuiEditCommand, GuiEditResult, NewSequenceRequest,
+    SequenceClipRasterRequest, SequenceClipRasterResponse, SequenceClipRasterResultBatch,
+    SequenceGuiEdit, SequenceSelectionEdit, SequenceSelectionEditResult, WorkspaceLayoutState,
 };
 use crate::persistence::{
     PersistedEditorViewStateUpdate, PersistedPreviewWindowState,
-    PersistedSequenceViewportStateUpdate, ProjectRestoreState, read_window_state,
+    PersistedSequenceViewportStateUpdate, ProjectRestoreState,
 };
 use crate::state::DesktopState;
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_snapshot(state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn get_snapshot(state: State<'_, DesktopState>) -> AppSnapshot {
     state.snapshot()
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn update_app_settings(settings: AppSettings, state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn update_app_settings(
+    settings: AppSettings,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
     state.update_app_settings(settings)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn save_workspace_layout_state(
+pub(crate) fn save_workspace_layout_state(
     state_update: WorkspaceLayoutState,
     state: State<'_, DesktopState>,
 ) -> AppSnapshot {
@@ -40,13 +42,13 @@ pub fn save_workspace_layout_state(
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_restored_view_state(state: State<'_, DesktopState>) -> ProjectRestoreState {
+pub(crate) fn get_restored_view_state(state: State<'_, DesktopState>) -> ProjectRestoreState {
     state.restored_view_state()
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn open_project_dialog(state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn open_project_dialog(state: State<'_, DesktopState>) -> AppSnapshot {
     let Some(path) = rfd::FileDialog::new()
         .add_filter("Dawn project", &["dawn"])
         .set_file_name("project.dawn")
@@ -64,13 +66,13 @@ pub fn open_project_dialog(state: State<'_, DesktopState>) -> AppSnapshot {
 
 #[tauri::command]
 #[specta::specta]
-pub fn open_project(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn open_project(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
     state.open_project_path(&path)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn choose_new_project_parent_directory() -> Option<String> {
+pub(crate) fn choose_new_project_parent_directory() -> Option<String> {
     rfd::FileDialog::new()
         .pick_folder()
         .and_then(|path| path.to_str().map(ToString::to_string))
@@ -78,7 +80,7 @@ pub fn choose_new_project_parent_directory() -> Option<String> {
 
 #[tauri::command]
 #[specta::specta]
-pub fn create_new_project(
+pub(crate) fn create_new_project(
     parent_path: String,
     directory_name: String,
     state: State<'_, DesktopState>,
@@ -88,43 +90,49 @@ pub fn create_new_project(
 
 #[tauri::command]
 #[specta::specta]
-pub fn create_sequence(request: NewSequenceRequest, state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn create_sequence(
+    request: NewSequenceRequest,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
     state.create_sequence(request)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn open_file(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn open_file(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
     state.open_file_path(&path)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn close_file(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn close_file(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
     state.close_file_path(&path)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn set_active_file(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn set_active_file(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
     state.set_active_file_path(&path)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn update_active_text(text: String, state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn update_active_text(text: String, state: State<'_, DesktopState>) -> AppSnapshot {
     state.update_active_text(text)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn set_editor_view_mode(mode: EditorViewMode, state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn set_editor_view_mode(
+    mode: EditorViewMode,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
     state.set_editor_view_mode(mode)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn save_editor_view_state(
+pub(crate) fn save_editor_view_state(
     update: PersistedEditorViewStateUpdate,
     state: State<'_, DesktopState>,
 ) -> AppSnapshot {
@@ -133,7 +141,7 @@ pub fn save_editor_view_state(
 
 #[tauri::command]
 #[specta::specta]
-pub fn save_sequence_viewport_state(
+pub(crate) fn save_sequence_viewport_state(
     update: PersistedSequenceViewportStateUpdate,
     state: State<'_, DesktopState>,
 ) -> AppSnapshot {
@@ -142,19 +150,19 @@ pub fn save_sequence_viewport_state(
 
 #[tauri::command]
 #[specta::specta]
-pub fn undo_active_edit(state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn undo_active_edit(state: State<'_, DesktopState>) -> AppSnapshot {
     state.undo_active_edit()
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn redo_active_edit(state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn redo_active_edit(state: State<'_, DesktopState>) -> AppSnapshot {
     state.redo_active_edit()
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_gui_document(
+pub(crate) fn get_gui_document(
     request: GuiDocumentRequest,
     state: State<'_, DesktopState>,
 ) -> GuiDocument {
@@ -163,7 +171,7 @@ pub fn get_gui_document(
 
 #[tauri::command]
 #[specta::specta]
-pub fn request_sequence_clip_rasters(
+pub(crate) fn request_sequence_clip_rasters(
     request: SequenceClipRasterRequest,
     state: State<'_, DesktopState>,
 ) -> SequenceClipRasterResponse {
@@ -172,7 +180,7 @@ pub fn request_sequence_clip_rasters(
 
 #[tauri::command]
 #[specta::specta]
-pub fn take_sequence_clip_raster_results(
+pub(crate) fn take_sequence_clip_raster_results(
     request: GuiDocumentRequest,
     request_id: u32,
     state: State<'_, DesktopState>,
@@ -182,7 +190,7 @@ pub fn take_sequence_clip_raster_results(
 
 #[tauri::command]
 #[specta::specta]
-pub fn apply_gui_edit(
+pub(crate) fn apply_gui_edit(
     request: GuiDocumentRequest,
     edit: GuiEditCommand,
     state: State<'_, DesktopState>,
@@ -192,22 +200,13 @@ pub fn apply_gui_edit(
 
 #[tauri::command]
 #[specta::specta]
-pub fn apply_sequence_gui_edit(
-    edit: SequenceGuiEdit,
-    state: State<'_, DesktopState>,
-) -> AppSnapshot {
-    state.apply_active_sequence_gui_edit(edit)
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn finish_composition_graph_editing(state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn finish_composition_graph_editing(state: State<'_, DesktopState>) -> AppSnapshot {
     state.finish_composition_graph_editing()
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn apply_sequence_selection_edit(
+pub(crate) fn apply_sequence_selection_edit(
     edit: SequenceSelectionEdit,
     state: State<'_, DesktopState>,
 ) -> SequenceSelectionEditResult {
@@ -216,7 +215,7 @@ pub fn apply_sequence_selection_edit(
 
 #[tauri::command]
 #[specta::specta]
-pub fn choose_sequence_audio(
+pub(crate) fn choose_sequence_audio(
     request: GuiDocumentRequest,
     state: State<'_, DesktopState>,
 ) -> GuiEditResult {
@@ -250,68 +249,29 @@ pub fn choose_sequence_audio(
 
 #[tauri::command]
 #[specta::specta]
-pub fn clear_sequence_audio(
-    request: GuiDocumentRequest,
-    state: State<'_, DesktopState>,
-) -> AppSnapshot {
-    state
-        .apply_gui_edit(
-            request,
-            GuiEditCommand::Sequence {
-                edit: SequenceGuiEdit::SetAudio { import_path: None },
-            },
-        )
-        .snapshot
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn export_active_sequence_fseq(step_ms: f64, state: State<'_, DesktopState>) -> AppSnapshot {
-    let _step_ms = step_ms;
-    state.snapshot()
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn apply_layout_gui_edit(edit: LayoutGuiEdit, state: State<'_, DesktopState>) -> AppSnapshot {
-    let _edit = edit;
-    state.snapshot()
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn apply_fixture_gui_edit(edit: FixtureGuiEdit, state: State<'_, DesktopState>) -> AppSnapshot {
-    let _edit = edit;
-    state.snapshot()
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn flush_autosave(state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn flush_autosave(state: State<'_, DesktopState>) -> AppSnapshot {
     state.save_active_buffer()
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn reload_active_buffer_from_disk(state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn reload_active_buffer_from_disk(state: State<'_, DesktopState>) -> AppSnapshot {
     state.reload_active_buffer_from_disk()
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn keep_active_buffer(state: State<'_, DesktopState>) -> AppSnapshot {
-    state.snapshot()
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn create_file(parent: String, name: String, state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn create_file(
+    parent: String,
+    name: String,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
     state.create_file(&parent, &name)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn create_directory(
+pub(crate) fn create_directory(
     parent: String,
     name: String,
     state: State<'_, DesktopState>,
@@ -321,25 +281,29 @@ pub fn create_directory(
 
 #[tauri::command]
 #[specta::specta]
-pub fn rename_path(path: String, new_name: String, state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn rename_path(
+    path: String,
+    new_name: String,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
     state.rename_path(&path, &new_name)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn delete_path(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn delete_path(path: String, state: State<'_, DesktopState>) -> AppSnapshot {
     state.delete_path(&path)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn reload_project(state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn reload_project(state: State<'_, DesktopState>) -> AppSnapshot {
     state.reload_project()
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn toggle_project_tree(state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn toggle_project_tree(state: State<'_, DesktopState>) -> AppSnapshot {
     state.update_snapshot(|snapshot| {
         snapshot.project_tree_visible = !snapshot.project_tree_visible;
     })
@@ -347,7 +311,7 @@ pub fn toggle_project_tree(state: State<'_, DesktopState>) -> AppSnapshot {
 
 #[tauri::command]
 #[specta::specta]
-pub fn load_sequence_audio(
+pub(crate) fn load_sequence_audio(
     request: GuiDocumentRequest,
     app: AppHandle,
     state: State<'_, DesktopState>,
@@ -357,13 +321,13 @@ pub fn load_sequence_audio(
 
 #[tauri::command]
 #[specta::specta]
-pub fn unload_audio(app: AppHandle, state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn unload_audio(app: AppHandle, state: State<'_, DesktopState>) -> AppSnapshot {
     publish_audio_snapshot(&app, state.unload_audio())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn audio_play(app: AppHandle, state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn audio_play(app: AppHandle, state: State<'_, DesktopState>) -> AppSnapshot {
     let snapshot = publish_audio_snapshot(&app, state.audio_play());
     if matches!(snapshot.audio_transport.state, AudioTransportState::Playing) {
         start_audio_transport_poll(app);
@@ -373,25 +337,25 @@ pub fn audio_play(app: AppHandle, state: State<'_, DesktopState>) -> AppSnapshot
 
 #[tauri::command]
 #[specta::specta]
-pub fn audio_pause(app: AppHandle, state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn audio_pause(app: AppHandle, state: State<'_, DesktopState>) -> AppSnapshot {
     publish_audio_snapshot(&app, state.audio_pause())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn audio_stop(app: AppHandle, state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn audio_stop(app: AppHandle, state: State<'_, DesktopState>) -> AppSnapshot {
     publish_audio_snapshot(&app, state.audio_stop())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn audio_rewind_to_zero(app: AppHandle, state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn audio_rewind_to_zero(app: AppHandle, state: State<'_, DesktopState>) -> AppSnapshot {
     publish_audio_snapshot(&app, state.audio_rewind_to_zero())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn audio_seek(
+pub(crate) fn audio_seek(
     position_seconds: f64,
     app: AppHandle,
     state: State<'_, DesktopState>,
@@ -401,7 +365,10 @@ pub fn audio_seek(
 
 #[tauri::command]
 #[specta::specta]
-pub fn set_live_output_enabled(enabled: bool, state: State<'_, DesktopState>) -> AppSnapshot {
+pub(crate) fn set_live_output_enabled(
+    enabled: bool,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
     state.update_snapshot(|snapshot| {
         snapshot.live_output.enabled = enabled;
         snapshot.live_output.status = if enabled {
@@ -414,17 +381,7 @@ pub fn set_live_output_enabled(enabled: bool, state: State<'_, DesktopState>) ->
 
 #[tauri::command]
 #[specta::specta]
-pub fn open_preview_window(
-    app: AppHandle,
-    preview: State<'_, crate::preview::PreviewWindowService>,
-    state: State<'_, DesktopState>,
-) -> AppSnapshot {
-    set_preview_window_open(true, app, preview, state)
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn set_preview_window_open(
+pub(crate) fn set_preview_window_open(
     enabled: bool,
     app: AppHandle,
     preview: State<'_, crate::preview::PreviewWindowService>,
@@ -453,27 +410,7 @@ pub fn set_preview_window_open(
     }
 }
 
-#[tauri::command]
-#[specta::specta]
-pub fn persist_app_close(
-    app: AppHandle,
-    preview: State<'_, crate::preview::PreviewWindowService>,
-    state: State<'_, DesktopState>,
-) -> AppSnapshot {
-    if let Some(main) = app
-        .get_window("main")
-        .and_then(|window| read_window_state(&window))
-        && let Err(error) = state.persistence().record_main_window(main)
-    {
-        return state.set_persistence_error(format!("Main window state was not saved: {error}"));
-    }
-    if let Err(error) = preview.close_for_main_shutdown(&app, state.persistence()) {
-        return state.set_persistence_error(format!("Preview window state was not saved: {error}"));
-    }
-    state.snapshot()
-}
-
-pub fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
+pub(crate) fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
     builder.commands(collect_commands![
         get_snapshot,
         update_app_settings,
@@ -497,17 +434,11 @@ pub fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         request_sequence_clip_rasters,
         take_sequence_clip_raster_results,
         apply_gui_edit,
-        apply_sequence_gui_edit,
         finish_composition_graph_editing,
         apply_sequence_selection_edit,
         choose_sequence_audio,
-        clear_sequence_audio,
-        export_active_sequence_fseq,
-        apply_layout_gui_edit,
-        apply_fixture_gui_edit,
         flush_autosave,
         reload_active_buffer_from_disk,
-        keep_active_buffer,
         create_file,
         create_directory,
         rename_path,
@@ -522,9 +453,7 @@ pub fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         audio_rewind_to_zero,
         audio_seek,
         set_live_output_enabled,
-        open_preview_window,
         set_preview_window_open,
-        persist_app_close
     ])
 }
 

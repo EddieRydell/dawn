@@ -1,5 +1,3 @@
-use super::*;
-
 pub(super) fn current_curve_param_value(
     session: &ProjectSession,
     resolved: &ResolvedGuiObject,
@@ -143,7 +141,7 @@ pub(super) fn required_operator_param_value(
                 )
             });
     }
-    default_effect_param_value(&ty).ok_or_else(|| {
+    EffectParamValue::default_for_type(&ty).ok_or_else(|| {
         GuiMutationError::Invalid(
             "A valid required operator parameter could not be created.".to_string(),
         )
@@ -290,8 +288,9 @@ pub(super) fn paste_sequence_clipboard(
                     lane_count,
                 );
                 value.id = EffectInstId(next_id);
-                value.start =
-                    dawn_time((anchor.time_seconds + effect.start_seconds - min_start).max(0.0));
+                value.start = DawnTime::from_seconds_f64(
+                    (anchor.time_seconds + effect.start_seconds - min_start).max(0.0),
+                );
                 if let Some(Some(target)) = lane_targets.get(target_lane) {
                     value.target = target.clone();
                 }
@@ -322,7 +321,9 @@ pub(super) fn paste_sequence_clipboard(
                     }
                 };
                 let time_seconds = (anchor.time_seconds + mark.time_seconds - min_time).max(0.0);
-                collection.marks.push(dawn_time(time_seconds));
+                collection
+                    .marks
+                    .push(DawnTime::from_seconds_f64(time_seconds));
                 collection.marks.sort_by_key(|time| time.0);
                 let index = collection
                     .marks
@@ -405,7 +406,7 @@ pub(super) fn move_mark_selection(
             let collection = mark_collection_mut(sequence, &collection_key)?;
             if let Some(value) = collection.marks.get_mut(index) {
                 let time_seconds = (value.as_seconds_f64() + time_delta_seconds).max(0.0);
-                *value = dawn_time(time_seconds);
+                *value = DawnTime::from_seconds_f64(time_seconds);
                 moved_times.push(time_seconds);
             }
         }
@@ -434,7 +435,7 @@ pub(super) struct EffectUpdate {
     lane_index: usize,
 }
 
-pub(super) fn effect_selection_updates(
+fn effect_selection_updates(
     session: &ProjectSession,
     sequence_id: &SequenceId,
     ids: &[u32],
@@ -461,7 +462,7 @@ pub(super) fn effect_selection_updates(
         .collect())
 }
 
-pub(super) fn apply_effect_updates(
+fn apply_effect_updates(
     session: &mut ProjectSession,
     sequence_id: &SequenceId,
     updates: Vec<EffectUpdate>,
@@ -474,8 +475,8 @@ pub(super) fn apply_effect_updates(
     let mut moved = Vec::new();
     for update in updates {
         let effect = effect_mut(sequence, update.id)?;
-        effect.start = dawn_time(update.start_seconds.max(0.0));
-        effect.duration = dawn_duration(update.duration_seconds.max(0.000000001));
+        effect.start = DawnTime::from_seconds_f64(update.start_seconds.max(0.0));
+        effect.duration = DawnDuration::from_seconds_f64(update.duration_seconds.max(0.000000001));
         if let Some((_, Some(target))) = targets.iter().find(|(id, _)| *id == update.id) {
             effect.target = target.clone();
         }
@@ -484,7 +485,7 @@ pub(super) fn apply_effect_updates(
     Ok(moved)
 }
 
-pub(super) fn mark_time_seconds(
+fn mark_time_seconds(
     sequence: &dawn_language::sequence::Sequence,
     mark: &SequenceMarkRef,
 ) -> Option<f64> {
@@ -497,9 +498,7 @@ pub(super) fn mark_time_seconds(
         .map(DawnTime::as_seconds_f64)
 }
 
-pub(super) fn mark_indexes_by_collection(
-    marks: &[SequenceMarkRef],
-) -> BTreeMap<String, Vec<usize>> {
+fn mark_indexes_by_collection(marks: &[SequenceMarkRef]) -> BTreeMap<String, Vec<usize>> {
     let mut grouped = BTreeMap::<String, Vec<usize>>::new();
     for mark in marks {
         grouped
@@ -514,7 +513,7 @@ pub(super) fn mark_indexes_by_collection(
     grouped
 }
 
-pub(super) fn effect_lane_index(session: &ProjectSession, target: &EffectTarget) -> usize {
+fn effect_lane_index(session: &ProjectSession, target: &EffectTarget) -> usize {
     effect_lane_index_resolved(session, target).unwrap_or_default()
 }
 
@@ -530,10 +529,7 @@ pub(super) fn effect_lane_index_resolved(
         .position(|candidate| effect_target_matches_layout(target, candidate))
 }
 
-pub(super) fn effect_target_matches_layout(
-    target: &EffectTarget,
-    candidate: &DomainLayoutTarget,
-) -> bool {
+fn effect_target_matches_layout(target: &EffectTarget, candidate: &DomainLayoutTarget) -> bool {
     matches!(
         (target, candidate),
         (EffectTarget::Fixture(left), DomainLayoutTarget::Fixture(right)) if left == right
@@ -543,14 +539,14 @@ pub(super) fn effect_target_matches_layout(
     )
 }
 
-pub(super) fn sequence_lane_count(session: &ProjectSession) -> usize {
+fn sequence_lane_count(session: &ProjectSession) -> usize {
     active_layout_id(session)
         .and_then(|layout_id| session.project.layouts.get(&layout_id))
         .map(|layout| layout.target_order.len())
         .unwrap_or_default()
 }
 
-pub(super) fn target_for_lane(session: &ProjectSession, lane_index: usize) -> Option<EffectTarget> {
+fn target_for_lane(session: &ProjectSession, lane_index: usize) -> Option<EffectTarget> {
     let layout_id = active_layout_id(session)?;
     let layout = session.project.layouts.get(&layout_id)?;
     layout
@@ -559,21 +555,21 @@ pub(super) fn target_for_lane(session: &ProjectSession, lane_index: usize) -> Op
         .map(effect_target_from_layout)
 }
 
-pub(super) fn effect_target_from_layout(target: &DomainLayoutTarget) -> EffectTarget {
+fn effect_target_from_layout(target: &DomainLayoutTarget) -> EffectTarget {
     match target {
         DomainLayoutTarget::Fixture(id) => EffectTarget::Fixture(FixtureInstanceId(id.0)),
         DomainLayoutTarget::Group(id) => EffectTarget::Group(FixtureGroupId(id.0)),
     }
 }
 
-pub(super) fn shifted_lane(lane_index: usize, lane_delta: i32, lane_count: usize) -> usize {
+fn shifted_lane(lane_index: usize, lane_delta: i32, lane_count: usize) -> usize {
     if lane_count == 0 {
         return 0;
     }
     (lane_index as i32 + lane_delta).clamp(0, lane_count.saturating_sub(1) as i32) as usize
 }
 
-pub(super) fn anchored_lane(
+fn anchored_lane(
     anchor_lane: usize,
     lane_index: usize,
     min_lane: usize,
@@ -607,3 +603,24 @@ pub(super) fn mark_param_names(
         .map(|param| param.name.as_str().to_string())
         .collect())
 }
+use std::collections::BTreeMap;
+
+use camino::Utf8PathBuf;
+use dawn_language::dsl::Type;
+use dawn_language::effect::{EffectDefinitionId, EffectInstId, EffectParamValue, EffectTarget};
+use dawn_language::identity::SourceIdentity;
+use dawn_language::sequence::{CompositionGraphNodeKind, SequenceId};
+use dawn_language::setup::{FixtureGroupId, FixtureInstanceId, LayoutTarget as DomainLayoutTarget};
+use dawn_language::values::{DawnDuration, DawnTime};
+use dawn_project_io::ProjectSession;
+
+use super::model::{effect_mut, mark_collection_mut, parse_graph_node_id, sequence_mut};
+use super::projection::{active_layout_id, default_param_value, effect_param_value};
+use super::{
+    ClipboardEffect, ClipboardMark, GuiMutationError, ResolvedGuiObject, SequenceClipboard,
+    SequenceSelectionMutation,
+};
+use crate::dto::{
+    EffectScriptReference, SequenceEffectParamValue, SequenceMarkRef, SequencePasteAnchor,
+    SequenceResizeEdge, SequenceSelection,
+};
