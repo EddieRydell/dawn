@@ -96,11 +96,11 @@ pub(crate) fn validate_sequence_integrity(
             .project
             .definitions
             .effects
-            .get(&effect.definition)
+            .resolve(&effect.definition)
             .ok_or_else(|| {
                 GuiMutationError::Invalid("Effect definition is missing.".to_string())
             })?;
-        for declaration in definition.compiled.params() {
+        for declaration in definition.params.iter() {
             match effect.param_overrides.get(&declaration.name) {
                 Some(value) if effect_param_matches_type(value, &declaration.ty) => {
                     validate_param_references(session, value, &mark_keys)?;
@@ -122,13 +122,11 @@ pub(crate) fn validate_sequence_integrity(
                 None => {}
             }
         }
-        if effect.param_overrides.keys().any(|name| {
-            !definition
-                .compiled
-                .params()
-                .iter()
-                .any(|param| &param.name == name)
-        }) {
+        if effect
+            .param_overrides
+            .keys()
+            .any(|name| !definition.params.iter().any(|param| &param.name == name))
+        {
             return Err(GuiMutationError::Invalid(format!(
                 "Effect {} contains an undeclared parameter.",
                 effect.id.0
@@ -158,11 +156,10 @@ pub(crate) fn validate_sequence_integrity(
                         .project
                         .definitions
                         .effects
-                        .get(&effect.definition)
+                        .resolve(&effect.definition)
                         .and_then(|definition| {
                             definition
-                                .compiled
-                                .params()
+                                .params
                                 .iter()
                                 .find(|declaration| &declaration.name == param)
                         })

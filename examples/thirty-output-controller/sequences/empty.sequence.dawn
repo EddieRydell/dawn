@@ -1699,7 +1699,7 @@ empty:
       seed:
         type: float
         value: 1.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 2
     layer_id: 0
     start: 42.80648335s
@@ -1742,7 +1742,7 @@ empty:
       seed:
         type: float
         value: 21.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 3
     layer_id: 0
     start: 39.261304317s
@@ -1793,7 +1793,7 @@ empty:
       reverse:
         type: bool
         value: false
-    script: effects.Chase
+    effect: builtins.chase
   - id: 4
     layer_id: 0
     start: 45.924220329s
@@ -1836,7 +1836,7 @@ empty:
       seed:
         type: float
         value: 2.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 5
     layer_id: 0
     start: 41.700034975s
@@ -1900,7 +1900,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 6
     layer_id: 0
     start: 41.946364641s
@@ -1948,7 +1948,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 7
     layer_id: 0
     start: 42.398476426s
@@ -1970,7 +1970,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 8
     layer_id: 0
     start: 39.402323362s
@@ -2034,7 +2034,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 9
     layer_id: 0
     start: 39.257519581s
@@ -2060,7 +2060,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 10
     layer_id: 0
     start: 39.93921968s
@@ -2088,7 +2088,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 11
     layer_id: 0
     start: 40.680227993s
@@ -2110,7 +2110,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 12
     layer_id: 0
     start: 41.603225945s
@@ -2132,7 +2132,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 13
     layer_id: 0
     start: 129.512749672s
@@ -2175,7 +2175,7 @@ empty:
       seed:
         type: float
         value: 0.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 14
     layer_id: 0
     start: 132.208042367s
@@ -2224,7 +2224,7 @@ empty:
       seed:
         type: float
         value: 0.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 15
     layer_id: 0
     start: 135.518927819s
@@ -2279,7 +2279,7 @@ empty:
       seed:
         type: float
         value: 0.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 16
     layer_id: 0
     start: 43.232149752s
@@ -2301,7 +2301,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 17
     layer_id: 0
     start: 43.899620133s
@@ -2345,7 +2345,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 18
     layer_id: 0
     start: 43.99819901s
@@ -2371,7 +2371,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 19
     layer_id: 0
     start: 44.05325324s
@@ -2411,7 +2411,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 20
     layer_id: 0
     start: 128.836789387s
@@ -2465,7 +2465,7 @@ empty:
             value: 0.81
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 21
     layer_id: 0
     start: 44.552843918s
@@ -2505,7 +2505,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 22
     layer_id: 0
     start: 44.696725522s
@@ -2553,7 +2553,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 23
     layer_id: 0
     start: 44.947981252s
@@ -2601,7 +2601,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 24
     layer_id: 0
     start: 45.460395646s
@@ -2623,7 +2623,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 25
     layer_id: 0
     start: 45.231936559s
@@ -2663,7 +2663,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 26
     layer_id: 0
     start: 42.002119622s
@@ -2717,7 +2717,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 28
     layer_id: 0
     start: 131.003356878s
@@ -2778,7 +2778,7 @@ empty:
       seed:
         type: float
         value: 0.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 29
     layer_id: 0
     start: 131.167636271s
@@ -2827,7 +2827,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 30
     layer_id: 0
     start: 131.4203985s
@@ -2876,7 +2876,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 31
     layer_id: 0
     start: 131.700257375s
@@ -2925,7 +2925,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 32
     layer_id: 0
     start: 131.86299674s
@@ -2978,7 +2978,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 33
     layer_id: 0
     start: 131.993181635s
@@ -3027,7 +3027,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 34
     layer_id: 0
     start: 130.862931348s
@@ -3080,7 +3080,7 @@ empty:
       seed:
         type: float
         value: 6.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 35
     layer_id: 0
     start: 64.943428748s
@@ -3378,7 +3378,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.MarkChase
+    effect: builtins.mark_chase
   - id: 36
     layer_id: 0
     start: 42.523020286s
@@ -3429,7 +3429,7 @@ empty:
       seed:
         type: float
         value: 40.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 37
     layer_id: 0
     start: 52.010062587s
@@ -3478,7 +3478,7 @@ empty:
       mirror:
         type: bool
         value: false
-    script: effects.ImpactBurst
+    effect: effects.ImpactBurst
   - id: 38
     layer_id: 0
     start: 128.832971742s
@@ -3527,7 +3527,7 @@ empty:
       seed:
         type: float
         value: 0.0
-    script: effects.ShimmerField
+    effect: effects.ShimmerField
   - id: 39
     layer_id: 0
     start: 129.567433419s
@@ -3553,7 +3553,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 40
     layer_id: 0
     start: 133.735190094s
@@ -3667,7 +3667,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.MarkChase
+    effect: builtins.mark_chase
   - id: 41
     layer_id: 0
     start: 64.805438567s
@@ -3689,7 +3689,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 42
     layer_id: 0
     start: 134.66361564s
@@ -3711,7 +3711,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 43
     layer_id: 0
     start: 134.803019432s
@@ -3733,7 +3733,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 44
     layer_id: 0
     start: 135.156399811s
@@ -3782,7 +3782,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 45
     layer_id: 0
     start: 64.831434319s
@@ -3837,7 +3837,7 @@ empty:
       seed:
         type: float
         value: 5.0
-    script: effects.ShimmerField
+    effect: effects.ShimmerField
   - id: 46
     layer_id: 0
     start: 65.379859086s
@@ -3892,7 +3892,7 @@ empty:
       seed:
         type: float
         value: 4.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 47
     layer_id: 0
     start: 68.47608011s
@@ -3935,7 +3935,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 48
     layer_id: 0
     start: 68.077056336s
@@ -3961,7 +3961,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 49
     layer_id: 0
     start: 68.255821671s
@@ -4004,7 +4004,7 @@ empty:
       section_width_pixels:
         type: float
         value: 1.0
-    script: effects.ScanSweep
+    effect: effects.ScanSweep
   - id: 50
     layer_id: 0
     start: 68.668088585s
@@ -4030,7 +4030,7 @@ empty:
             value: 0.715
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 51
     layer_id: 0
     start: 68.968244213s
@@ -4095,7 +4095,7 @@ empty:
       seed:
         type: float
         value: 0.0
-    script: effects.SparkleComet
+    effect: effects.SparkleComet
   - id: 52
     layer_id: 0
     start: 69.467207736s
@@ -4156,7 +4156,7 @@ empty:
       seed:
         type: float
         value: 0.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 54
     layer_id: 0
     start: 70.150575038s
@@ -4219,7 +4219,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 55
     layer_id: 0
     start: 70.339972663s
@@ -4245,7 +4245,7 @@ empty:
             value: 0.027
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 56
     layer_id: 0
     start: 70.685344802s
@@ -4269,7 +4269,7 @@ empty:
             value: 0.299
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 57
     layer_id: 0
     start: 70.679016549s
@@ -4332,7 +4332,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 58
     layer_id: 0
     start: 71.095301395s
@@ -4548,7 +4548,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.MarkChase
+    effect: builtins.mark_chase
   - id: 59
     layer_id: 0
     start: 71.899886606s
@@ -4603,7 +4603,7 @@ empty:
       seed:
         type: float
         value: 7.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 60
     layer_id: 0
     start: 71.10323582s
@@ -4627,7 +4627,7 @@ empty:
             value: 0.299
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 61
     layer_id: 0
     start: 74.416021375s
@@ -4653,7 +4653,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 62
     layer_id: 0
     start: 74.425142885s
@@ -4696,7 +4696,7 @@ empty:
       section_width_pixels:
         type: float
         value: 1.0
-    script: effects.ScanSweep
+    effect: effects.ScanSweep
   - id: 64
     layer_id: 0
     start: 74.914243829s
@@ -4739,7 +4739,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Chase
+    effect: builtins.chase
   - id: 65
     layer_id: 0
     start: 75.106252304s
@@ -4765,7 +4765,7 @@ empty:
             value: 0.715
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 66
     layer_id: 0
     start: 75.406407932s
@@ -4830,7 +4830,7 @@ empty:
       seed:
         type: float
         value: 0.0
-    script: effects.SparkleComet
+    effect: effects.SparkleComet
   - id: 67
     layer_id: 0
     start: 130.000823689s
@@ -4885,7 +4885,7 @@ empty:
       seed:
         type: float
         value: 4.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 72
     layer_id: 0
     start: 77.596542467s
@@ -5101,7 +5101,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.MarkChase
+    effect: builtins.mark_chase
   - id: 73
     layer_id: 0
     start: 77.541399539s
@@ -5125,7 +5125,7 @@ empty:
             value: 0.299
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 74
     layer_id: 0
     start: 78.338050325s
@@ -5180,7 +5180,7 @@ empty:
       seed:
         type: float
         value: 6.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 75
     layer_id: 0
     start: 0s
@@ -5239,7 +5239,7 @@ empty:
       seed:
         type: float
         value: 20.0
-    script: effects.ShimmerField
+    effect: effects.ShimmerField
   - id: 77
     layer_id: 0
     start: 13.695145433s
@@ -5282,7 +5282,7 @@ empty:
       seed:
         type: float
         value: 21.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 78
     layer_id: 0
     start: 13.57752s
@@ -5419,7 +5419,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.MarkChase
+    effect: builtins.mark_chase
   - id: 79
     layer_id: 0
     start: 13.685784945s
@@ -5441,7 +5441,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 80
     layer_id: 0
     start: 26.37752s
@@ -5484,7 +5484,7 @@ empty:
       seed:
         type: float
         value: 22.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 81
     layer_id: 0
     start: 26.37752s
@@ -5611,7 +5611,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.MarkChase
+    effect: builtins.mark_chase
   - id: 82
     layer_id: 0
     start: 26.40038548s
@@ -5633,7 +5633,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 83
     layer_id: 0
     start: 32.785784944s
@@ -5676,7 +5676,7 @@ empty:
       seed:
         type: float
         value: 23.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 84
     layer_id: 0
     start: 32.77752s
@@ -5821,7 +5821,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.MarkChase
+    effect: builtins.mark_chase
   - id: 87
     layer_id: 0
     start: 47.71s
@@ -5864,7 +5864,7 @@ empty:
       seed:
         type: float
         value: 24.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 88
     layer_id: 0
     start: 47.71s
@@ -6000,7 +6000,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.MarkChase
+    effect: builtins.mark_chase
   - id: 89
     layer_id: 0
     start: 51.97752s
@@ -6043,7 +6043,7 @@ empty:
       seed:
         type: float
         value: 25.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 90
     layer_id: 0
     start: 51.97752s
@@ -6179,7 +6179,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.MarkChase
+    effect: builtins.mark_chase
   - id: 91
     layer_id: 0
     start: 52.10752s
@@ -6228,7 +6228,7 @@ empty:
       seed:
         type: float
         value: 25.0
-    script: effects.ShimmerField
+    effect: effects.ShimmerField
   - id: 92
     layer_id: 0
     start: 53.30752s
@@ -6289,7 +6289,7 @@ empty:
       seed:
         type: float
         value: 0.0
-    script: effects.SparkleComet
+    effect: effects.SparkleComet
   - id: 93
     layer_id: 0
     start: 58.37752s
@@ -6332,7 +6332,7 @@ empty:
       seed:
         type: float
         value: 26.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 94
     layer_id: 0
     start: 58.37752s
@@ -6468,7 +6468,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.MarkChase
+    effect: builtins.mark_chase
   - id: 95
     layer_id: 0
     start: 58.50752s
@@ -6517,7 +6517,7 @@ empty:
       seed:
         type: float
         value: 26.0
-    script: effects.ShimmerField
+    effect: effects.ShimmerField
   - id: 96
     layer_id: 0
     start: 59.70752s
@@ -6578,7 +6578,7 @@ empty:
       seed:
         type: float
         value: 0.0
-    script: effects.SparkleComet
+    effect: effects.SparkleComet
   - id: 97
     layer_id: 0
     start: 80.77s
@@ -6621,7 +6621,7 @@ empty:
       seed:
         type: float
         value: 27.0
-    script: effects.MarkPulse
+    effect: builtins.mark_pulse
   - id: 98
     layer_id: 0
     start: 80.77s
@@ -6757,7 +6757,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.MarkChase
+    effect: builtins.mark_chase
   - id: 99
     layer_id: 0
     start: 80.9s
@@ -6806,7 +6806,7 @@ empty:
       seed:
         type: float
         value: 27.0
-    script: effects.ShimmerField
+    effect: effects.ShimmerField
   - id: 100
     layer_id: 0
     start: 82.1s
@@ -6867,7 +6867,7 @@ empty:
       seed:
         type: float
         value: 0.0
-    script: effects.SparkleComet
+    effect: effects.SparkleComet
   - id: 117
     layer_id: 0
     start: 127.37s
@@ -6910,7 +6910,7 @@ empty:
       section_width_pixels:
         type: float
         value: 1.0
-    script: effects.ScanSweep
+    effect: effects.ScanSweep
   - id: 118
     layer_id: 0
     start: 128.47s
@@ -6936,7 +6936,7 @@ empty:
             value: 0.45
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 154
     layer_id: 0
     start: 52.03s
@@ -6958,7 +6958,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 155
     layer_id: 0
     start: 60.35s
@@ -7001,7 +7001,7 @@ empty:
       section_width_pixels:
         type: float
         value: 1.0
-    script: effects.ScanSweep
+    effect: effects.ScanSweep
   - id: 156
     layer_id: 0
     start: 64.2s
@@ -7027,7 +7027,7 @@ empty:
             value: 0.45
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 157
     layer_id: 0
     start: 90.43s
@@ -7049,7 +7049,7 @@ empty:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 160
     layer_id: 0
     start: 127.73s
@@ -7075,7 +7075,7 @@ empty:
             value: 0.45
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 161
     layer_id: 0
     start: 128.38s
@@ -7124,7 +7124,7 @@ empty:
       mirror:
         type: bool
         value: false
-    script: effects.ImpactBurst
+    effect: effects.ImpactBurst
   - id: 163
     layer_id: 172001
     start: 0s
@@ -7133,7 +7133,22 @@ empty:
       type: group
       id: 1
     scope: whole_target
-    script: effects.Pulse
+    params:
+      gradient:
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#000000'
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 0.0
+    effect: builtins.pulse
   - id: 164
     layer_id: 172003
     start: 0s
@@ -7142,7 +7157,22 @@ empty:
       type: group
       id: 1
     scope: whole_target
-    script: effects.Pulse
+    params:
+      gradient:
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#000000'
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 0.0
+    effect: builtins.pulse
   composition_graph:
     nodes:
     - id: 1

@@ -13,8 +13,9 @@ use dawn_language::operator::{
 };
 use dawn_language::sequence::{
     AutomationClip, AutomationClipId, CompositionGraphNode, CompositionGraphNodeId,
-    CompositionGraphNodeKind, EffectGraphEdge, GraphNodePosition, GraphPortId, MarkCollectionKey,
-    Sequence, SequenceAudio, SequenceCompositionGraph, SequenceId, SequenceLayer, SequenceLayerId,
+    CompositionGraphNodeKind, EffectGraphEdge, GraphNodePosition, GraphPortId, MarkCollection,
+    MarkCollectionKey, Sequence, SequenceAudio, SequenceCompositionGraph, SequenceId,
+    SequenceLayer, SequenceLayerId,
 };
 use dawn_language::setup::{
     ControllerDefinitionStore, FixtureDefinition, FixtureDefinitionId, FixtureDefinitionStore,
@@ -490,6 +491,216 @@ fn generator_emits_sample_child_for_selected_fixture_target() {
 }
 
 #[test]
+fn generator_emits_native_sample_with_timing_target_name_and_color() {
+    let params = IndexMap::from([
+        (
+            ident("palette"),
+            EffectParamValue::Gradient(GradientSource::Inline(Gradient {
+                stops: vec![GradientStop {
+                    position: 0.0,
+                    color: color(0, 200, 0),
+                }],
+            })),
+        ),
+        (
+            ident("shape"),
+            EffectParamValue::Curve(CurveSource::Inline(Curve {
+                points: vec![CurvePoint {
+                    position: 0.0,
+                    value: 1.0,
+                }],
+            })),
+        ),
+    ]);
+    let mut project = project(sequence_with_effects(vec![constant_effect(
+        1,
+        1.0,
+        4.0,
+        3,
+        EffectScope::WholeTarget,
+        "NativePulseGenerator",
+        params,
+    )]));
+    insert_effect(
+        &mut project,
+        "NativePulseGenerator",
+        "effect NativePulseGenerator {
+          param gradient palette;
+          param curve shape;
+          void generate() {
+            timeline.emit builtins.pulse {
+              start: 0.5,
+              duration: 2.0,
+              target: pick(fixtures(target), 1.0),
+              gradient: palette,
+              pulse_shape: shape,
+            };
+          }
+        }",
+    );
+
+    let renderer =
+        PreparedSequenceRenderer::prepare(&project, &SetupId(source_identity("setup")), &seq_id())
+            .unwrap();
+
+    assert_eq!(renderer.effects.len(), 1);
+    assert_eq!(renderer.effects[0].name, "Pulse");
+    assert_float(renderer.effects[0].start_seconds, 1.5);
+    assert_float(renderer.effects[0].duration_seconds, 2.0);
+    assert!(
+        renderer.effects[0]
+            .target
+            .iter()
+            .all(|pixel| pixel.fixture_index == 1)
+    );
+    let frame = renderer.render_seconds(2.5).unwrap();
+    assert_eq!(frame.fixtures[0].pixels, vec![black(), black()]);
+    assert_eq!(
+        frame.fixtures[1].pixels,
+        vec![color(0, 200, 0), color(0, 200, 0)]
+    );
+    assert_eq!(frame.fixtures[2].pixels, vec![black(), black()]);
+}
+
+#[test]
+fn generator_emits_native_mark_generator_and_renders_private_child() {
+    let marks_key = MarkCollectionKey {
+        name: "beats".to_string(),
+    };
+    let params = IndexMap::from([
+        (ident("beats"), EffectParamValue::Marks(marks_key.clone())),
+        (
+            ident("accent"),
+            EffectParamValue::Gradient(GradientSource::Inline(Gradient {
+                stops: vec![GradientStop {
+                    position: 0.0,
+                    color: color(200, 0, 0),
+                }],
+            })),
+        ),
+        (
+            ident("hue"),
+            EffectParamValue::Curve(CurveSource::Inline(Curve {
+                points: vec![CurvePoint {
+                    position: 0.0,
+                    value: 0.0,
+                }],
+            })),
+        ),
+    ]);
+    let mut sequence = sequence_with_effects(vec![constant_effect(
+        1,
+        1.0,
+        4.0,
+        3,
+        EffectScope::WholeTarget,
+        "NativeMarkGenerator",
+        params,
+    )]);
+    sequence.mark_collections.push(MarkCollection {
+        key: marks_key,
+        name: "Beats".to_string(),
+        display_color: color(255, 255, 255),
+        marks: vec![time(1.5)],
+    });
+    let mut project = project(sequence);
+    insert_effect(
+        &mut project,
+        "NativeMarkGenerator",
+        "effect NativeMarkGenerator {
+          param marks beats;
+          param gradient accent;
+          param curve hue;
+          void generate() {
+            timeline.emit builtins.mark_pulse {
+              start: 0.5,
+              duration: 2.0,
+              target: pick(fixtures(target), 1.0),
+              beats: beats,
+              accent: accent,
+              hue: hue,
+              hue_mix: 0.0,
+              decay_seconds: 1.0,
+              sections_per_mark: 1,
+            };
+          }
+        }",
+    );
+
+    let renderer =
+        PreparedSequenceRenderer::prepare(&project, &SetupId(source_identity("setup")), &seq_id())
+            .unwrap();
+
+    assert_eq!(renderer.effects.len(), 1);
+    assert_eq!(renderer.effects[0].name, "Mark Pulse");
+    assert_float(renderer.effects[0].start_seconds, 2.0);
+    assert_float(renderer.effects[0].duration_seconds, 1.0);
+    assert!(
+        renderer.effects[0]
+            .target
+            .iter()
+            .all(|pixel| pixel.fixture_index == 1)
+    );
+    let frame = renderer.render_seconds(2.0).unwrap();
+    assert_eq!(frame.fixtures[0].pixels, vec![black(), black()]);
+    assert_eq!(
+        frame.fixtures[1].pixels,
+        vec![color(200, 0, 0), color(200, 0, 0)]
+    );
+    assert_eq!(frame.fixtures[2].pixels, vec![black(), black()]);
+}
+
+#[test]
+fn generated_builtin_parameter_errors_are_explicit() {
+    for (name, fields, expected) in [
+        ("Missing", "", "missing generated param `gradient`"),
+        ("Unknown", "nope: 1.0,", "unknown generated param `nope`"),
+        (
+            "WrongType",
+            "gradient: #ffffff,",
+            "generated param `gradient` has wrong type",
+        ),
+    ] {
+        let mut project = project(sequence_with_effects(vec![constant_effect(
+            1,
+            0.0,
+            2.0,
+            3,
+            EffectScope::WholeTarget,
+            name,
+            IndexMap::new(),
+        )]));
+        insert_effect(
+            &mut project,
+            name,
+            &format!(
+                "effect {name} {{
+                  void generate() {{
+                    timeline.emit builtins.pulse {{
+                      start: 0.0, duration: 1.0, target: target, {fields}
+                    }};
+                  }}
+                }}"
+            ),
+        );
+
+        let error = PreparedSequenceRenderer::prepare(
+            &project,
+            &SetupId(source_identity("setup")),
+            &seq_id(),
+        )
+        .expect_err("invalid generated built-in params must fail");
+        assert!(
+            matches!(
+                error,
+                RenderError::GeneratorPrepare { ref message } if message == expected
+            ),
+            "unexpected error: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn generated_child_validation_fails_during_prepare() {
     for (name, source) in [
         (
@@ -710,10 +921,8 @@ fn definitions() -> ProjectDefinitionStores {
         ),
     ] {
         let compiled = compile_effects(source).unwrap().into_iter().next().unwrap();
-        effects.insert(
-            EffectDefinitionId(source_identity(name)),
-            EffectDefinition { compiled },
-        );
+        let id = EffectDefinitionId(source_identity(name));
+        effects.insert(id.clone(), EffectDefinition::custom(id, compiled));
     }
 
     ProjectDefinitionStores {
@@ -744,10 +953,11 @@ fn insert_effect(project: &mut DawnProject, name: &str, source: &str) {
         .into_iter()
         .find(|effect| effect.name().as_str() == name)
         .unwrap();
-    project.definitions.effects.insert(
-        EffectDefinitionId(source_identity(name)),
-        EffectDefinition { compiled },
-    );
+    let id = EffectDefinitionId(source_identity(name));
+    project
+        .definitions
+        .effects
+        .insert(id.clone(), EffectDefinition::custom(id, compiled));
 }
 
 fn layout() -> Layout {
@@ -988,7 +1198,9 @@ fn constant_effect(
         duration: duration(effect_duration),
         target: EffectTarget::Group(FixtureGroupId(group_id)),
         scope,
-        definition: EffectDefinitionId(source_identity(definition)),
+        definition: dawn_language::effect::EffectRef::Custom(EffectDefinitionId(source_identity(
+            definition,
+        ))),
         param_overrides,
     }
 }

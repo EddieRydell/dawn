@@ -1026,10 +1026,14 @@ fn render_signature(
     let target_pixels =
         resolve_effect_target_pixel_addresses(project, setup_id, &effect.target, &effect.scope)
             .map_err(|error| format!("{error:?}"))?;
-    let definition = project.definitions.effects.get(&effect.definition).cloned();
+    let definition = project
+        .definitions
+        .effects
+        .resolve(&effect.definition)
+        .cloned();
     let generator_definitions = if definition
         .as_ref()
-        .is_some_and(|definition| definition.compiled.kind() == EffectKind::Generator)
+        .is_some_and(|definition| definition.kind == EffectKind::Generator)
     {
         project
             .definitions
@@ -1365,7 +1369,12 @@ fn hash_optional_effect_definition<H: Hasher>(
 }
 
 fn hash_effect_definition<H: Hasher>(definition: &EffectDefinition, state: &mut H) {
-    hash_compiled_effect(&definition.compiled, state);
+    match &definition.implementation {
+        dawn_language::effect::EffectImplementation::Native(builtin) => builtin.hash(state),
+        dawn_language::effect::EffectImplementation::Dsl(compiled) => {
+            hash_compiled_effect(compiled, state)
+        }
+    }
 }
 
 fn hash_optional_curve_definition<H: Hasher>(definition: &Option<CurveDefinition>, state: &mut H) {

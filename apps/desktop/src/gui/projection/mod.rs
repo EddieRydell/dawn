@@ -52,8 +52,14 @@ pub(super) fn project_sequence(
                 EffectScope::PerFixture => SequenceEffectScope::PerFixture,
                 EffectScope::WholeTarget => SequenceEffectScope::WholeTarget,
             },
-            script: effect.definition.0.object().to_string(),
-            script_source: Some(effect_script_ref(&effect.definition.0)),
+            effect: session
+                .project
+                .definitions
+                .effects
+                .resolve(&effect.definition)
+                .map(|definition| definition.display_name.clone())
+                .unwrap_or_else(|| "Missing effect".to_string()),
+            effect_reference: effect_ref_to_gui(&effect.definition),
             params: effect_params(session, sequence, effect),
             kind: SequenceTimelineClipKind::Effect,
         })
@@ -124,7 +130,7 @@ pub(super) fn project_sequence(
                 })
                 .collect(),
             lanes,
-            effect_scripts: effect_scripts(session),
+            effect_definitions: effect_definitions(session),
             curve_library: curve_library(session),
             gradient_library: gradient_library(session),
             layers: sequence
@@ -404,36 +410,46 @@ fn effect_target_label(session: &ProjectSession, target: &EffectTarget) -> Strin
     }
 }
 
-fn effect_script_ref(id: &SourceIdentity) -> EffectScriptReference {
-    EffectScriptReference {
-        path: id.document().to_string(),
-        effect_name: id.object().to_string(),
+fn effect_ref_to_gui(reference: &EffectRef) -> SequenceEffectReference {
+    match reference {
+        EffectRef::Builtin(effect) => SequenceEffectReference::Builtin {
+            effect: builtin_effect_to_gui(*effect),
+        },
+        EffectRef::Custom(id) => SequenceEffectReference::Custom {
+            path: id.0.document().to_string(),
+            effect_name: id.0.object().to_string(),
+        },
     }
 }
 
-fn effect_scripts(session: &ProjectSession) -> Vec<SequenceEffectScript> {
-    session
-        .project
-        .definitions
-        .effects
-        .definitions
-        .iter()
-        .map(|(id, definition)| {
-            let source = effect_script_ref(&id.0);
-            SequenceEffectScript {
-                name: id.0.object().to_string(),
-                kind: match definition.compiled.kind() {
-                    EffectKind::Sample => SequenceEffectScriptKind::Sample,
-                    EffectKind::Generator => SequenceEffectScriptKind::Generator,
+fn builtin_effect_to_gui(effect: BuiltinEffect) -> SequenceBuiltinEffect {
+    match effect {
+        BuiltinEffect::Pulse => SequenceBuiltinEffect::Pulse,
+        BuiltinEffect::Chase => SequenceBuiltinEffect::Chase,
+        BuiltinEffect::Spin => SequenceBuiltinEffect::Spin,
+        BuiltinEffect::MarkPulse => SequenceBuiltinEffect::MarkPulse,
+        BuiltinEffect::MarkChase => SequenceBuiltinEffect::MarkChase,
+    }
+}
+
+fn effect_definitions(session: &ProjectSession) -> Vec<SequenceEffectDefinition> {
+    BuiltinEffect::ALL
+        .into_iter()
+        .map(|builtin| {
+            let definition = builtin.definition();
+            SequenceEffectDefinition {
+                name: definition.display_name.clone(),
+                kind: match definition.kind {
+                    EffectKind::Sample => SequenceEffectDefinitionKind::Sample,
+                    EffectKind::Generator => SequenceEffectDefinitionKind::Generator,
                 },
-                script: source.clone(),
-                import_path: source.path.clone(),
+                effect: effect_ref_to_gui(&EffectRef::Builtin(builtin)),
+                import_path: None,
                 params: definition
-                    .compiled
-                    .params()
+                    .params
                     .iter()
                     .filter_map(|param| {
-                        Some(SequenceEffectScriptParam {
+                        Some(SequenceEffectDefinitionParam {
                             name: param.name.as_str().to_string(),
                             kind: param_kind(&param.ty)?,
                         })
@@ -441,11 +457,41 @@ fn effect_scripts(session: &ProjectSession) -> Vec<SequenceEffectScript> {
                     .collect(),
             }
         })
+        .chain(
+            session
+                .project
+                .definitions
+                .effects
+                .definitions
+                .iter()
+                .map(|(id, definition)| {
+                    let source = effect_ref_to_gui(&EffectRef::Custom(id.clone()));
+                    SequenceEffectDefinition {
+                        name: definition.display_name.clone(),
+                        kind: match definition.kind {
+                            EffectKind::Sample => SequenceEffectDefinitionKind::Sample,
+                            EffectKind::Generator => SequenceEffectDefinitionKind::Generator,
+                        },
+                        effect: source,
+                        import_path: Some(id.0.document().to_string()),
+                        params: definition
+                            .params
+                            .iter()
+                            .filter_map(|param| {
+                                Some(SequenceEffectDefinitionParam {
+                                    name: param.name.as_str().to_string(),
+                                    kind: param_kind(&param.ty)?,
+                                })
+                            })
+                            .collect(),
+                    }
+                }),
+        )
         .collect()
 }
 use camino::Utf8Path;
 use dawn_language::dsl::EffectKind;
-use dawn_language::effect::{EffectScope, EffectTarget};
+use dawn_language::effect::{BuiltinEffect, EffectRef, EffectScope, EffectTarget};
 use dawn_language::identity::SourceIdentity;
 use dawn_language::operator::{BuiltinOperator, OperatorRef};
 use dawn_language::sequence::{AutomationTarget, SequenceId};
@@ -454,13 +500,14 @@ use dawn_project_io::{ProjectSession, SourceObjectKind, relative_path_from_docum
 
 use super::{ResolvedGuiObject, blocked, gui_diagnostic};
 use crate::dto::{
-    EffectScriptReference, FixtureDefinition, FixtureGuiDocument, GuiDocument, GuiObjectRef,
-    LayoutFixturePlacement, LayoutGuiDocument, LayoutTarget, LayoutTargetKind, ObjectKind,
-    ResolvedLayoutFixture, Rotation3Degrees, Scale3, SequenceAudio, SequenceAutomationBinding,
-    SequenceAutomationClip, SequenceAutomationTarget, SequenceCompositionGraph, SequenceCurvePoint,
-    SequenceEffect, SequenceEffectScope, SequenceEffectScript, SequenceEffectScriptKind,
-    SequenceEffectScriptParam, SequenceGraphEdge, SequenceGuiDocument, SequenceLane, SequenceLayer,
-    SequenceMarkCollection, SequenceTimelineClipKind, Transform,
+    FixtureDefinition, FixtureGuiDocument, GuiDocument, GuiObjectRef, LayoutFixturePlacement,
+    LayoutGuiDocument, LayoutTarget, LayoutTargetKind, ObjectKind, ResolvedLayoutFixture,
+    Rotation3Degrees, Scale3, SequenceAudio, SequenceAutomationBinding, SequenceAutomationClip,
+    SequenceAutomationTarget, SequenceBuiltinEffect, SequenceCompositionGraph, SequenceCurvePoint,
+    SequenceEffect, SequenceEffectDefinition, SequenceEffectDefinitionKind,
+    SequenceEffectDefinitionParam, SequenceEffectReference, SequenceEffectScope, SequenceGraphEdge,
+    SequenceGuiDocument, SequenceLane, SequenceLayer, SequenceMarkCollection,
+    SequenceTimelineClipKind, Transform,
 };
 use crate::gui_geometry::{
     empty_resolved_fixture, geometry, geometry_summary, layout_bounds, point3_meters, render_plan,

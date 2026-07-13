@@ -238,7 +238,7 @@ pub(super) fn write_effect_fields(
     session: &ProjectSession,
     from_document: &Utf8Path,
     value: &mut Mapping,
-    definition: &EffectDefinitionId,
+    definition: &EffectRef,
     param_overrides: &IndexMap<Identifier, EffectParamValue>,
 ) -> Result<(), ExportProjectError> {
     if !param_overrides.is_empty() {
@@ -257,15 +257,16 @@ pub(super) fn write_effect_fields(
             ),
         );
     }
-    value.insert(
-        string_value("script"),
-        Value::String(write_source_reference(
+    let reference = match definition {
+        EffectRef::Builtin(builtin) => format!("builtins.{}", builtin.definition().source_name),
+        EffectRef::Custom(definition) => write_source_reference(
             session,
             from_document,
             SourceObjectKind::EffectDefinition,
             &definition.0,
-        )?),
-    );
+        )?,
+    };
+    value.insert(string_value("effect"), Value::String(reference));
     Ok(())
 }
 
@@ -583,7 +584,7 @@ pub(super) fn curve_source_value(
 use camino::Utf8Path;
 use dawn_language::dsl::Identifier;
 use dawn_language::effect::{
-    CurveSource, EffectDefinitionId, EffectInst, EffectParamValue, EffectScope, GradientSource,
+    CurveSource, EffectInst, EffectParamValue, EffectRef, EffectScope, GradientSource,
 };
 use dawn_language::operator::OperatorRef;
 use dawn_language::sequence::{

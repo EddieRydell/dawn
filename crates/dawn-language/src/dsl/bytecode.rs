@@ -1,3 +1,4 @@
+use super::GeneratedEffectRef;
 use super::types::{Identifier, Type, Value};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -729,7 +730,7 @@ pub(crate) enum Instruction {
     },
     CheckLoopLimit,
     Emit {
-        effect: Identifier,
+        effect: GeneratedEffectRef,
         fields: Vec<(Identifier, ValueSlot)>,
     },
     Return(ValueSlot),

@@ -7,7 +7,7 @@ import { Trash2 } from "lucide-react";
 
 import { commands } from "../../../api";
 
-import type { AppSettings, LayoutTarget, PersistedSequenceViewportState, SequenceAutomationClip, SequenceClipRaster, SequenceEditorDocument, SequenceEffectScope, SequenceEffectScript } from "../../../types";
+import type { AppSettings, LayoutTarget, PersistedSequenceViewportState, SequenceAutomationClip, SequenceClipRaster, SequenceEditorDocument, SequenceEffectScope, SequenceEffectDefinition } from "../../../types";
 
 import { runGuiEditCommand, runSnapshotCommand, useAppStore } from "../../../store";
 
@@ -529,8 +529,8 @@ export function SequenceCanvas({
     void runSnapshotCommand(() => commands.audioSeek(positionSeconds));
   };
   const timeFromCanvasX = (x: number) => clamp(roundToNanosecond(viewport.scrollXSeconds + (x - left) / viewport.pxPerSecond), 0, document.durationSeconds);
-  const addEffectFromContextMenu = async (script: SequenceEffectScript, menu: SequenceContextMenu) => {
-    const hasMarksParams = script.params.some((param) => param.kind === "marks");
+  const addEffectFromContextMenu = async (definition: SequenceEffectDefinition, menu: SequenceContextMenu) => {
+    const hasMarksParams = definition.params.some((param) => param.kind === "marks");
     let markCollectionKey = hasMarksParams ? activeMarkCollectionKey ?? document.markCollections[0]?.key ?? null : null;
     if (hasMarksParams && markCollectionKey === null) {
       const newCollectionKey = nextCollectionKey("Marks", document.markCollections);
@@ -552,7 +552,7 @@ export function SequenceCanvas({
     await runGuiEditCommand(() =>
       commands.applySequenceGuiEdit({
         type: "addEffect",
-        script: script.script,
+        effect: definition.effect,
         target,
         scope,
         startSeconds: menu.startSeconds,
@@ -1379,18 +1379,18 @@ export function SequenceCanvas({
                 </ContextMenu.SubTrigger>
                 <ContextMenu.Portal>
                   <ContextMenu.SubContent className="menu-content">
-                    {document.effectScripts.length === 0 ? (
+                    {document.effectDefinitions.length === 0 ? (
                       <ContextMenu.Item className="menu-item" disabled>
-                        No effect scripts
+                        No effects
                       </ContextMenu.Item>
                     ) : (
-                      document.effectScripts.map((script) => (
+                      document.effectDefinitions.map((definition) => (
                         <ContextMenu.Item
-                          key={`${script.script.path}:${script.script.effectName}`}
+                          key={definition.effect.type === "builtin" ? `builtin:${definition.effect.effect}` : `${definition.effect.path}:${definition.effect.effectName}`}
                           className="menu-item"
-                          onSelect={() => void addEffectFromContextMenu(script, sequenceContextMenu)}
+                          onSelect={() => void addEffectFromContextMenu(definition, sequenceContextMenu)}
                         >
-                          {script.name}
+                          {definition.name}
                         </ContextMenu.Item>
                       ))
                     )}

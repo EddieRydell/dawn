@@ -22,7 +22,7 @@ const SCENARIOS: [RenderScenario; 7] = [
     },
     RenderScenario {
         frame: 5904,
-        checksum: 0x859f_7f0a_afbf_31d7,
+        checksum: 0x4f31_7d2c_e784_03b7,
         active_effect_count: 180,
     },
     RenderScenario {
@@ -37,7 +37,7 @@ const SCENARIOS: [RenderScenario; 7] = [
     },
     RenderScenario {
         frame: 19080,
-        checksum: 0xc8d2_ca17_c905_e8f8,
+        checksum: 0x0f6c_daeb_0baa_0142,
         active_effect_count: 301,
     },
     RenderScenario {
@@ -60,7 +60,7 @@ const RASTER_SCENARIOS: [RasterScenario; 2] = [
         effect_id: 77,
         columns: 256,
         rows: 50,
-        checksum: 0xb9e9_5ed0_d289_caf2,
+        checksum: 0x4802_5415_5f97_fc5b,
     },
 ];
 
@@ -107,7 +107,7 @@ fn bench_render(c: &mut Criterion) {
     let operator_frame = operator_renderer
         .render_frame(3594)
         .expect("benchmark operator frame should render");
-    assert_eq!(checksum_frame(&operator_frame), 0xb408_c3df_8a24_afaa);
+    assert_eq!(checksum_frame(&operator_frame), 0xbedb_82fa_9d2f_65ae);
 
     c.bench_function("prepare_thirty_output_controller", |b| {
         b.iter(|| {

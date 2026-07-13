@@ -1,3 +1,4 @@
+use super::GeneratedEffectRef;
 use super::bytecode::{
     ArithmeticOp, BoolSlot, ColorBinary, ColorSlot, CompareOp, ContextRead, FloatBinary, FloatSlot,
     FloatUnary, GeneratorContextId, Instruction, IntArithmeticOp, IntSlot, MarkOp, RefSlot,
@@ -43,7 +44,7 @@ pub struct GeneratorContext {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct GeneratedEffect {
-    pub definition: Identifier,
+    pub definition: GeneratedEffectRef,
     pub start_seconds: f64,
     pub duration_seconds: f64,
     pub target: Arc<TargetItemValue>,
@@ -1389,7 +1390,7 @@ impl<'a> Vm<'a> {
         for slot in args {
             seed = seed * 31.0 + self.scratch.registers.floats[slot.0];
         }
-        (seed.sin() * 43_758.545_312_3).fract().abs()
+        crate::sampling::deterministic_random_seed(seed)
     }
 
     fn generator_context_value(
@@ -1578,7 +1579,7 @@ impl<'a> Vm<'a> {
 
     fn emit_generated(
         &mut self,
-        effect: &Identifier,
+        effect: &GeneratedEffectRef,
         fields: &[(Identifier, ValueSlot)],
     ) -> Result<(), RuntimeError> {
         let mut start_seconds = None;
@@ -2008,22 +2009,7 @@ fn curve_crossing(curve: &PreparedCurve, value: f64, fallback: f64) -> Result<f6
 }
 
 fn curve_crossing_raw(curve: &Curve, value: f64, fallback: f64) -> f64 {
-    let segments = prepare_float_segments(curve);
-    let crossings = prepare_curve_crossings(&segments);
-    match crossings {
-        PreparedCurveCrossings::Increasing(segments) => {
-            let index = segments.partition_point(|segment| segment.end_value < value);
-            crossing_at(segments.get(index), value).unwrap_or(fallback)
-        }
-        PreparedCurveCrossings::Decreasing(segments) => {
-            let index = segments.partition_point(|segment| segment.end_value > value);
-            crossing_at(segments.get(index), value).unwrap_or(fallback)
-        }
-        PreparedCurveCrossings::Mixed(segments) => segments
-            .iter()
-            .find_map(|segment| crossing_at(Some(segment), value))
-            .unwrap_or(fallback),
-    }
+    crate::sampling::curve_crossing(curve, value, fallback)
 }
 
 fn crossing_at(segment: Option<&CrossingSegment>, value: f64) -> Option<f64> {
@@ -2042,44 +2028,19 @@ fn crossing_at(segment: Option<&CrossingSegment>, value: f64) -> Option<f64> {
 }
 
 fn sample_curve(curve: &Curve, position: f64) -> f64 {
-    let Some(first) = curve.points.first() else {
-        return 0.0;
-    };
-    let mut previous = first;
-    for point in &curve.points {
-        if point.position >= position {
-            let span = (point.position - previous.position).max(0.000000001);
-            let t = ((position - previous.position) / span).clamp(0.0, 1.0);
-            return previous.value + (point.value - previous.value) * t;
-        }
-        previous = point;
-    }
-    previous.value
+    crate::sampling::sample_curve(curve, position)
 }
 
 fn sample_gradient(gradient: &Gradient, position: f64) -> Result<Color, RuntimeError> {
-    let Some(first) = gradient.stops.first() else {
-        return Err(RuntimeError::new("cannot sample empty gradient"));
-    };
-    let mut previous = first;
-    for stop in &gradient.stops {
-        if stop.position >= position {
-            return Ok(mix_colors(
-                previous.color,
-                stop.color,
-                segment_t(previous.position, stop.position, position),
-            ));
-        }
-        previous = stop;
-    }
-    Ok(previous.color)
+    crate::sampling::sample_gradient(gradient, position)
+        .ok_or_else(|| RuntimeError::new("cannot sample empty gradient"))
 }
 
 fn mix_colors(left: Color, right: Color, t: f64) -> Color {
     Color {
-        red: channel_byte_lerp(left.red, right.red, t),
-        green: channel_byte_lerp(left.green, right.green, t),
-        blue: channel_byte_lerp(left.blue, right.blue, t),
+        red: channel_byte(left.red as f64 + (right.red as f64 - left.red as f64) * t),
+        green: channel_byte(left.green as f64 + (right.green as f64 - left.green as f64) * t),
+        blue: channel_byte(left.blue as f64 + (right.blue as f64 - left.blue as f64) * t),
     }
 }
 
@@ -2133,10 +2094,6 @@ fn channel(value: f64) -> u8 {
 
 fn channel_byte(value: f64) -> u8 {
     (value.clamp(0.0, 255.0) + 0.5) as u8
-}
-
-fn channel_byte_lerp(left: u8, right: u8, t: f64) -> u8 {
-    channel_byte(left as f64 + (right as f64 - left as f64) * t)
 }
 
 fn hsv(h: f64, s: f64, v: f64) -> Color {

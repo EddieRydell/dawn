@@ -312,7 +312,7 @@ pub enum SequenceEffectScope {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub enum SequenceEffectScriptKind {
+pub enum SequenceEffectDefinitionKind {
     Sample,
     Generator,
 }
@@ -365,10 +365,24 @@ pub struct EditorBuffer {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SequenceEffectReference {
+    Builtin { effect: SequenceBuiltinEffect },
+    Custom { path: String, effect_name: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct EffectScriptReference {
-    pub path: String,
-    pub effect_name: String,
+pub enum SequenceBuiltinEffect {
+    Pulse,
+    Chase,
+    Spin,
+    MarkPulse,
+    MarkChase,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -621,7 +635,7 @@ pub struct SequenceGuiDocument {
     pub audio: Option<SequenceAudio>,
     pub mark_collections: Vec<SequenceMarkCollection>,
     pub lanes: Vec<SequenceLane>,
-    pub effect_scripts: Vec<SequenceEffectScript>,
+    pub effect_definitions: Vec<SequenceEffectDefinition>,
     pub curve_library: Vec<SequenceCurveLibraryItem>,
     pub gradient_library: Vec<SequenceGradientLibraryItem>,
     pub layers: Vec<SequenceLayer>,
@@ -762,8 +776,8 @@ pub struct SequenceEffect {
     pub target: LayoutTarget,
     pub target_label: String,
     pub scope: SequenceEffectScope,
-    pub script: String,
-    pub script_source: Option<EffectScriptReference>,
+    pub effect: String,
+    pub effect_reference: SequenceEffectReference,
     pub params: Vec<SequenceEffectParam>,
     pub kind: SequenceTimelineClipKind,
 }
@@ -856,7 +870,7 @@ pub struct SequenceGraphOperatorDefinition {
     pub display_name: String,
     pub inputs: Vec<SequenceGraphPortDefinition>,
     pub outputs: Vec<SequenceGraphPortDefinition>,
-    pub params: Vec<SequenceEffectScriptParam>,
+    pub params: Vec<SequenceEffectDefinitionParam>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -979,18 +993,18 @@ pub enum SequenceEffectParamValue {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SequenceEffectScript {
+pub struct SequenceEffectDefinition {
     pub name: String,
-    pub kind: SequenceEffectScriptKind,
-    pub script: EffectScriptReference,
+    pub kind: SequenceEffectDefinitionKind,
+    pub effect: SequenceEffectReference,
     #[serde(rename = "import")]
-    pub import_path: String,
-    pub params: Vec<SequenceEffectScriptParam>,
+    pub import_path: Option<String>,
+    pub params: Vec<SequenceEffectDefinitionParam>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct SequenceEffectScriptParam {
+pub struct SequenceEffectDefinitionParam {
     pub name: String,
     pub kind: SequenceEffectParamKind,
 }
@@ -1010,7 +1024,7 @@ pub enum SequenceGuiEdit {
         import_path: Option<String>,
     },
     AddEffect {
-        script: EffectScriptReference,
+        effect: SequenceEffectReference,
         target: LayoutTarget,
         scope: SequenceEffectScope,
         start_seconds: f64,
@@ -1056,9 +1070,9 @@ pub enum SequenceGuiEdit {
         start_seconds: f64,
         duration_seconds: f64,
     },
-    ChangeEffectScript {
+    ChangeEffectDefinition {
         id: u32,
-        script: EffectScriptReference,
+        effect: SequenceEffectReference,
     },
     DeleteEffect {
         id: u32,

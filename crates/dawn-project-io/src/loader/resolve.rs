@@ -552,20 +552,29 @@ impl DomainResolver<'_> {
         &mut self,
         path: &Utf8Path,
         value: &Value,
-    ) -> Result<EffectDefinitionId, LoadProjectError> {
-        let script_ref = string_field(path, value, "script")?;
-        let definition = match self.loader.resolve_reference(path, script_ref)? {
+    ) -> Result<EffectRef, LoadProjectError> {
+        let effect_ref = string_field(path, value, "effect")?;
+        if let Some(name) = effect_ref.strip_prefix("builtins.") {
+            return BuiltinEffect::from_source_name(name)
+                .map(EffectRef::Builtin)
+                .ok_or_else(|| LoadProjectError::InvalidReference {
+                    path: path.to_path_buf(),
+                    range: source_range_for_field_value(path, value, "effect"),
+                    reference: effect_ref.to_string(),
+                });
+        }
+        let definition = match self.loader.resolve_reference(path, effect_ref)? {
             ResolvedObject::EffectDefinition(definition) => definition,
             _ => {
                 return Err(LoadProjectError::InvalidReference {
                     path: path.to_path_buf(),
                     range: None,
-                    reference: script_ref.to_string(),
+                    reference: effect_ref.to_string(),
                 });
             }
         };
         self.resolve_effect_definition(&definition)?;
-        Ok(definition)
+        Ok(EffectRef::Custom(definition))
     }
 
     fn parse_param_overrides(
@@ -841,8 +850,8 @@ impl DomainResolver<'_> {
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_language::dsl::Identifier;
 use dawn_language::effect::{
-    CurveId, CurveSource, EffectDefinitionId, EffectInst, EffectInstId, EffectParamValue,
-    GradientSource,
+    BuiltinEffect, CurveId, CurveSource, EffectDefinitionId, EffectInst, EffectInstId,
+    EffectParamValue, EffectRef, GradientSource,
 };
 use dawn_language::identity::SourceIdentity;
 use dawn_language::model::DawnProject;

@@ -28,6 +28,12 @@ pub use types::{
     Identifier, TargetItemValue, TargetItemsValue, TargetPixelValue, TargetValue, Type, Value,
 };
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum GeneratedEffectRef {
+    Local(Identifier),
+    Builtin(crate::effect::BuiltinEffect),
+}
+
 pub fn compile_effects(source: &str) -> Result<Vec<CompiledEffect>, Vec<Diagnostic>> {
     let module = parse_module(source)?;
     if !module.operators.is_empty() {

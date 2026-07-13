@@ -1,8 +1,10 @@
 use dawn_language::dsl::{
-    Color, DslVmScratch, OperatorRunContext, RuntimeError, SignalSampler, compile_effects,
-    compile_operators,
+    Color, DslVmScratch, GeneratedEffectRef, GeneratorContext, Identifier, OperatorRunContext,
+    RuntimeError, SignalSampler, TargetValue, compile_effects, compile_operators,
 };
+use dawn_language::effect::BuiltinEffect;
 use indexmap::IndexMap;
+use std::sync::Arc;
 
 #[test]
 fn declaration_kinds_are_source_specific() {
@@ -91,6 +93,77 @@ fn signal_sampling_and_color_operations_execute() {
             blue: 116
         }
     );
+}
+
+#[test]
+fn generator_emit_references_preserve_builtin_and_local_identity() {
+    let effect = compile_effects(
+        "effect EmitAll {
+          void generate() {
+            timeline.emit builtins.pulse { start: 0.0, duration: 1.0, target: target };
+            timeline.emit builtins.chase { start: 0.0, duration: 1.0, target: target };
+            timeline.emit builtins.spin { start: 0.0, duration: 1.0, target: target };
+            timeline.emit builtins.mark_pulse { start: 0.0, duration: 1.0, target: target };
+            timeline.emit builtins.mark_chase { start: 0.0, duration: 1.0, target: target };
+            timeline.emit LocalChild { start: 0.0, duration: 1.0, target: target };
+          }
+        }",
+    )
+    .expect("generator compiles")
+    .into_iter()
+    .next()
+    .expect("one effect");
+    let generated = effect
+        .generate_bound(
+            &effect.bind_params(&IndexMap::new()),
+            &GeneratorContext {
+                duration: 1.0,
+                target: Arc::new(TargetValue { groups: Vec::new() }),
+            },
+            &mut DslVmScratch::default(),
+        )
+        .expect("generator runs");
+
+    assert_eq!(
+        generated
+            .iter()
+            .map(|effect| effect.definition.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            GeneratedEffectRef::Builtin(BuiltinEffect::Pulse),
+            GeneratedEffectRef::Builtin(BuiltinEffect::Chase),
+            GeneratedEffectRef::Builtin(BuiltinEffect::Spin),
+            GeneratedEffectRef::Builtin(BuiltinEffect::MarkPulse),
+            GeneratedEffectRef::Builtin(BuiltinEffect::MarkChase),
+            GeneratedEffectRef::Local(Identifier::new("LocalChild".to_string()).unwrap()),
+        ]
+    );
+}
+
+#[test]
+fn qualified_generator_emit_references_report_specific_diagnostics() {
+    for (reference, expected) in [
+        ("builtins.unknown", "unknown built-in effect `unknown`"),
+        (
+            "effects.pulse",
+            "unsupported generated effect namespace `effects`",
+        ),
+        (
+            "builtins.pulse.extra",
+            "generated effect reference must contain exactly two segments",
+        ),
+    ] {
+        let source = format!(
+            "effect Bad {{ void generate() {{ timeline.emit {reference} {{ start: 0.0, duration: 1.0, target: target }}; }} }}"
+        );
+        let diagnostics = compile_effects(&source).expect_err("invalid reference must fail");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains(expected)),
+            "missing `{expected}` in {diagnostics:?}"
+        );
+    }
 }
 
 struct ConstantSignal(Color);

@@ -70,10 +70,10 @@ pub(super) fn edit_sequence(
 ) -> Result<(), GuiMutationError> {
     let add_effect_mark_params = match &edit {
         SequenceGuiEdit::AddEffect {
-            script,
+            effect: effect_reference,
             mark_collection_key: Some(_),
             ..
-        } => mark_param_names(session, script)?,
+        } => mark_param_names(session, effect_reference)?,
         _ => Vec::new(),
     };
     let unlink_curve_value = match &edit {
@@ -270,30 +270,29 @@ pub(super) fn edit_sequence(
                 .insert(identifier(&name)?, value);
         }
         SequenceGuiEdit::AddEffect {
-            script,
+            effect: effect_reference,
             target,
             scope,
             start_seconds,
             mark_collection_key,
         } => {
-            let definition = EffectDefinitionId(SourceIdentity::new(
-                Utf8PathBuf::from(&script.path),
-                script.effect_name,
-            ));
-            let Some(effect_definition) = session.project.definitions.effects.get(&definition)
+            let definition = effect_ref_from_gui(effect_reference)?;
+            let Some(effect_definition) = session.project.definitions.effects.resolve(&definition)
             else {
                 return Err(GuiMutationError::Invalid(
-                    "Effect script was not found.".to_string(),
+                    "Effect was not found.".to_string(),
                 ));
             };
-            let params = effect_definition.compiled.params().to_vec();
-            ensure_document_can_reference_source(
-                session,
-                resolved.identity.document(),
-                SourceObjectKind::EffectDefinition,
-                &definition.0,
-            )
-            .map_err(|error| GuiMutationError::Blocked(error.to_string()))?;
+            let params = effect_definition.params.clone();
+            if let EffectRef::Custom(definition) = &definition {
+                ensure_document_can_reference_source(
+                    session,
+                    resolved.identity.document(),
+                    SourceObjectKind::EffectDefinition,
+                    &definition.0,
+                )
+                .map_err(|error| GuiMutationError::Blocked(error.to_string()))?;
+            }
             let sequence = sequence_mut(session, &sequence_id)?;
             let layer_id = sequence
                 .layers
@@ -437,23 +436,18 @@ pub(super) fn edit_sequence(
                 .ok_or_else(|| GuiMutationError::Invalid("Effect was not found.".to_string()))?;
             effect.layer_id = SequenceLayerId(layer_id);
         }
-        SequenceGuiEdit::ChangeEffectScript { id, script } => {
-            let definition = EffectDefinitionId(SourceIdentity::new(
-                Utf8PathBuf::from(&script.path),
-                script.effect_name,
-            ));
-            let Some(effect_definition) = session
-                .project
-                .definitions
-                .effects
-                .definitions
-                .get(&definition)
+        SequenceGuiEdit::ChangeEffectDefinition {
+            id,
+            effect: effect_reference,
+        } => {
+            let definition = effect_ref_from_gui(effect_reference)?;
+            let Some(effect_definition) = session.project.definitions.effects.resolve(&definition)
             else {
                 return Err(GuiMutationError::Invalid(
-                    "Effect script was not found.".to_string(),
+                    "Effect was not found.".to_string(),
                 ));
             };
-            let params = effect_definition.compiled.params().to_vec();
+            let params = effect_definition.params.clone();
             let mut param_overrides = IndexMap::new();
             for param in params.iter().filter(|param| param.default.is_none()) {
                 let value = EffectParamValue::default_for_type(&param.ty).ok_or_else(|| {
@@ -464,13 +458,15 @@ pub(super) fn edit_sequence(
                 })?;
                 param_overrides.insert(param.name.clone(), value);
             }
-            ensure_document_can_reference_source(
-                session,
-                resolved.identity.document(),
-                SourceObjectKind::EffectDefinition,
-                &definition.0,
-            )
-            .map_err(|error| GuiMutationError::Blocked(error.to_string()))?;
+            if let EffectRef::Custom(definition) = &definition {
+                ensure_document_can_reference_source(
+                    session,
+                    resolved.identity.document(),
+                    SourceObjectKind::EffectDefinition,
+                    &definition.0,
+                )
+                .map_err(|error| GuiMutationError::Blocked(error.to_string()))?;
+            }
             let sequence = sequence_mut(session, &sequence_id)?;
             let effect = effect_mut(sequence, id)?;
             effect.definition = definition;
@@ -1030,12 +1026,27 @@ fn linked_gradient_value(
     .map_err(|error| GuiMutationError::Blocked(error.to_string()))?;
     Ok(EffectParamValue::Gradient(GradientSource::Reference(id)))
 }
+fn effect_ref_from_gui(reference: SequenceEffectReference) -> Result<EffectRef, GuiMutationError> {
+    Ok(match reference {
+        SequenceEffectReference::Builtin { effect } => EffectRef::Builtin(match effect {
+            SequenceBuiltinEffect::Pulse => BuiltinEffect::Pulse,
+            SequenceBuiltinEffect::Chase => BuiltinEffect::Chase,
+            SequenceBuiltinEffect::Spin => BuiltinEffect::Spin,
+            SequenceBuiltinEffect::MarkPulse => BuiltinEffect::MarkPulse,
+            SequenceBuiltinEffect::MarkChase => BuiltinEffect::MarkChase,
+        }),
+        SequenceEffectReference::Custom { path, effect_name } => EffectRef::Custom(
+            EffectDefinitionId(SourceIdentity::new(Utf8PathBuf::from(path), effect_name)),
+        ),
+    })
+}
+
 use std::collections::BTreeSet;
 
 use camino::Utf8PathBuf;
 use dawn_language::effect::{
-    CurveId, CurveSource, EffectDefinitionId, EffectInst, EffectInstId, EffectParamValue,
-    GradientId, GradientSource,
+    BuiltinEffect, CurveId, CurveSource, EffectDefinitionId, EffectInst, EffectInstId,
+    EffectParamValue, EffectRef, GradientId, GradientSource,
 };
 use dawn_language::identity::SourceIdentity;
 use dawn_language::operator::{
@@ -1067,4 +1078,6 @@ use super::selection::{
     required_operator_param_value,
 };
 use super::{GuiMutationError, ResolvedGuiObject};
-use crate::dto::{FixtureGuiEdit, LayoutGuiEdit, SequenceGuiEdit};
+use crate::dto::{
+    FixtureGuiEdit, LayoutGuiEdit, SequenceBuiltinEffect, SequenceEffectReference, SequenceGuiEdit,
+};

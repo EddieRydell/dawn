@@ -3,12 +3,16 @@ pub(in crate::gui) fn effect_params(
     sequence: &dawn_language::sequence::Sequence,
     effect: &dawn_language::effect::EffectInst,
 ) -> Vec<SequenceEffectParam> {
-    let Some(definition) = session.project.definitions.effects.get(&effect.definition) else {
+    let Some(definition) = session
+        .project
+        .definitions
+        .effects
+        .resolve(&effect.definition)
+    else {
         return Vec::new();
     };
     definition
-        .compiled
-        .params()
+        .params
         .iter()
         .filter_map(|param| {
             let kind = param_kind(&param.ty)?;
@@ -130,7 +134,7 @@ pub(in crate::gui) fn graph_operator_definition_to_gui(
             .params
             .iter()
             .filter_map(|param| {
-                Some(crate::dto::SequenceEffectScriptParam {
+                Some(crate::dto::SequenceEffectDefinitionParam {
                     name: param.name.as_str().to_string(),
                     kind: param_kind(&param.ty)?,
                 })

@@ -1,8 +1,0 @@
-effect Pulse {
-  param gradient gradient;
-  param curve pulse_shape;
-
-  color sample() {
-    return gradient_color_scaled(gradient, progress(), pulse_shape[progress()]);
-  }
-}

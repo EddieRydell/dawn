@@ -1,3 +1,4 @@
+use super::GeneratedEffectRef;
 use super::lexer::TextSpan;
 use super::types::{Identifier, Type, Value};
 
@@ -77,7 +78,7 @@ pub(crate) enum Stmt {
         body: Block,
     },
     Emit {
-        effect: Identifier,
+        effect: GeneratedEffectRef,
         fields: Vec<(Identifier, Expr)>,
     },
     Return(Expr),

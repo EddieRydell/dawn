@@ -36,11 +36,10 @@ pub(super) fn current_effect_curve_value(
         .project
         .definitions
         .effects
-        .get(&effect.definition)
+        .resolve(&effect.definition)
         .ok_or_else(|| GuiMutationError::Invalid("Effect definition was not found.".to_string()))?;
     let param = definition
-        .compiled
-        .params()
+        .params
         .iter()
         .find(|param| param.name.as_str() == name)
         .ok_or_else(|| GuiMutationError::Invalid("Effect param was not found.".to_string()))?;
@@ -92,11 +91,10 @@ pub(super) fn current_effect_gradient_value(
         .project
         .definitions
         .effects
-        .get(&effect.definition)
+        .resolve(&effect.definition)
         .ok_or_else(|| GuiMutationError::Invalid("Effect definition was not found.".to_string()))?;
     let param = definition
-        .compiled
-        .params()
+        .params
         .iter()
         .find(|param| param.name.as_str() == name)
         .ok_or_else(|| GuiMutationError::Invalid("Effect param was not found.".to_string()))?;
@@ -697,21 +695,31 @@ fn anchored_lane(
 
 pub(super) fn mark_param_names(
     session: &ProjectSession,
-    script: &EffectScriptReference,
+    reference: &SequenceEffectReference,
 ) -> Result<Vec<String>, GuiMutationError> {
-    let id = EffectDefinitionId(SourceIdentity::new(
-        Utf8PathBuf::from(&script.path),
-        script.effect_name.clone(),
-    ));
+    let reference = match reference {
+        SequenceEffectReference::Builtin { effect } => EffectRef::Builtin(match effect {
+            SequenceBuiltinEffect::Pulse => BuiltinEffect::Pulse,
+            SequenceBuiltinEffect::Chase => BuiltinEffect::Chase,
+            SequenceBuiltinEffect::Spin => BuiltinEffect::Spin,
+            SequenceBuiltinEffect::MarkPulse => BuiltinEffect::MarkPulse,
+            SequenceBuiltinEffect::MarkChase => BuiltinEffect::MarkChase,
+        }),
+        SequenceEffectReference::Custom { path, effect_name } => {
+            EffectRef::Custom(EffectDefinitionId(SourceIdentity::new(
+                Utf8PathBuf::from(path),
+                effect_name.clone(),
+            )))
+        }
+    };
     let definition = session
         .project
         .definitions
         .effects
-        .get(&id)
-        .ok_or_else(|| GuiMutationError::Invalid("Effect script was not found.".to_string()))?;
+        .resolve(&reference)
+        .ok_or_else(|| GuiMutationError::Invalid("Effect was not found.".to_string()))?;
     Ok(definition
-        .compiled
-        .params()
+        .params
         .iter()
         .filter(|param| matches!(param.ty, Type::Marks))
         .map(|param| param.name.as_str().to_string())
@@ -721,7 +729,9 @@ use std::collections::BTreeMap;
 
 use camino::Utf8PathBuf;
 use dawn_language::dsl::Type;
-use dawn_language::effect::{EffectDefinitionId, EffectInstId, EffectParamValue, EffectTarget};
+use dawn_language::effect::{
+    BuiltinEffect, EffectDefinitionId, EffectInstId, EffectParamValue, EffectRef, EffectTarget,
+};
 use dawn_language::identity::SourceIdentity;
 use dawn_language::sequence::{CompositionGraphNodeKind, SequenceId};
 use dawn_language::setup::{FixtureGroupId, FixtureInstanceId, LayoutTarget as DomainLayoutTarget};
@@ -735,6 +745,6 @@ use super::{
     SequenceSelectionMutation,
 };
 use crate::dto::{
-    EffectScriptReference, SequenceEffectParamValue, SequenceMarkRef, SequencePasteAnchor,
-    SequenceResizeEdge, SequenceSelection,
+    SequenceBuiltinEffect, SequenceEffectParamValue, SequenceEffectReference, SequenceMarkRef,
+    SequencePasteAnchor, SequenceResizeEdge, SequenceSelection,
 };

@@ -8,7 +8,7 @@ import type {
   SequenceMarkCollection,
   SequenceMarkRef,
   SequenceEffectScope,
-  SequenceEffectScript
+  SequenceEffectDefinition
 } from "../../../types";
 import { commands } from "../../../api";
 import { runGuiEditCommand } from "../../../store";
@@ -34,15 +34,20 @@ const SEQUENCE_INSPECTOR_TABS: { id: SequenceInspectorTab; label: string }[] = [
   { id: "marks", label: "Marks" }
 ];
 
-function selectedEffectScriptValue(effect: SequenceEffect, scripts: SequenceEffectScript[]) {
-  const currentScript = effect.scriptSource;
-  if (currentScript === null) return "";
-  const index = scripts.findIndex((script) => scriptsEqual(script.script, currentScript));
+function selectedEffectDefinitionValue(effect: SequenceEffect, definitions: SequenceEffectDefinition[]) {
+  const index = definitions.findIndex((definition) => effectReferencesEqual(definition.effect, effect.effectReference));
   return index < 0 ? "" : String(index);
 }
 
-function scriptsEqual(left: SequenceEffectScript["script"], right: SequenceEffectScript["script"]) {
-  return left.path === right.path && left.effectName === right.effectName;
+function effectReferencesEqual(left: SequenceEffectDefinition["effect"], right: SequenceEffectDefinition["effect"]) {
+  if (left.type !== right.type) return false;
+  return left.type === "builtin"
+    ? left.effect === (right.type === "builtin" ? right.effect : undefined)
+    : left.path === (right.type === "custom" ? right.path : undefined) && left.effectName === (right.type === "custom" ? right.effectName : undefined);
+}
+
+function effectReferenceKey(reference: SequenceEffectDefinition["effect"]) {
+  return reference.type === "builtin" ? `builtin:${reference.effect}` : `${reference.path}:${reference.effectName}`;
 }
 
 function defaultLayerColor(index: number) {
@@ -182,7 +187,7 @@ function EffectInspectorPanel({
     );
   }
 
-  const currentScriptValue = selectedEffectScriptValue(effect, document.effectScripts);
+  const currentScriptValue = selectedEffectDefinitionValue(effect, document.effectDefinitions);
   const resizeEffect = (startSeconds: number, durationSeconds: number) =>
     runGuiEditCommand(() =>
       commands.applySequenceGuiEdit({
@@ -257,23 +262,23 @@ function EffectInspectorPanel({
           Effect type
           <select
             value={currentScriptValue}
-            disabled={document.effectScripts.length === 0}
+            disabled={document.effectDefinitions.length === 0}
             onChange={(event) => {
-              const script = document.effectScripts[Number(event.currentTarget.value)]?.script;
-              if (script === undefined) return;
+              const definition = document.effectDefinitions[Number(event.currentTarget.value)]?.effect;
+              if (definition === undefined) return;
               void runGuiEditCommand(() =>
                 commands.applySequenceGuiEdit({
-                  type: "changeEffectScript",
+                  type: "changeEffectDefinition",
                   id: effect.id,
-                  script
+                  effect: definition
                 })
               );
             }}
           >
-            {currentScriptValue === "" && <option value="">{effect.script}</option>}
-            {document.effectScripts.map((script, index) => (
-              <option key={`${script.script.path}:${script.script.effectName}`} value={String(index)}>
-                {script.name}
+            {currentScriptValue === "" && <option value="">{effect.effect}</option>}
+            {document.effectDefinitions.map((definition, index) => (
+              <option key={effectReferenceKey(definition.effect)} value={String(index)}>
+                {definition.name}
               </option>
             ))}
           </select>

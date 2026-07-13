@@ -132,7 +132,7 @@ impl Loader {
             let id = EffectDefinitionId(SourceIdentity::new(relative.to_path_buf(), name.clone()));
             self.definitions
                 .effects
-                .insert(id.clone(), EffectDefinition { compiled: effect });
+                .insert(id.clone(), EffectDefinition::custom(id.clone(), effect));
             let source_object = SourceObjectId {
                 kind: SourceObjectKind::EffectDefinition,
                 id: name.clone(),
@@ -333,6 +333,13 @@ impl Loader {
         let mut import_aliases = IndexSet::new();
         let mut imported_targets = IndexSet::new();
         for import in &imports {
+            if import.alias == "builtins" {
+                return Err(LoadProjectError::InvalidDocument {
+                    path: relative.to_path_buf(),
+                    range: None,
+                    message: "import alias `builtins` is reserved".to_string(),
+                });
+            }
             if !import_aliases.insert(import.alias.clone()) {
                 return Err(LoadProjectError::InvalidDocument {
                     path: relative.to_path_buf(),

@@ -12,15 +12,16 @@
 
 use dawn_language::dsl::{
     BoundParams, CompiledEffect, DslBindCache, DslVmScratch, EffectKind, GeneratedEffect,
-    GeneratorContext, Identifier, OperatorRunContext, RunContext, RuntimeError, SignalSampler,
-    TargetItemValue, TargetPixelValue, TargetValue, Type, Value,
+    GeneratedEffectRef, GeneratorContext, Identifier, OperatorRunContext, ParamDecl, RunContext,
+    RuntimeError, SignalSampler, TargetItemValue, TargetPixelValue, TargetValue, Type, Value,
 };
 use dawn_language::effect::{
-    CurveSource, EffectDefinitionId, EffectInstId, EffectParamValue, EffectScope, EffectTarget,
-    GradientSource,
+    CurveSource, EffectDefinitionId, EffectImplementation, EffectInstId, EffectParamValue,
+    EffectRef, EffectScope, EffectTarget, GradientSource,
 };
 use dawn_language::identity::SourceIdentity;
 use dawn_language::model::DawnProject;
+use dawn_language::native_effect::{self, BoundNativeEffect, NativeGeneratedEffect, NativeSample};
 use dawn_language::operator::{
     BuiltinOperator, OperatorDefinition, OperatorImplementation, validate_composition_graph,
 };
@@ -184,7 +185,7 @@ pub enum RenderError {
     MissingSequence { sequence_id: SequenceId },
     MissingFixture { fixture_id: FixtureInstanceId },
     MissingFixtureDefinition,
-    MissingEffect { effect_id: EffectDefinitionId },
+    MissingEffect { effect_id: EffectRef },
     MissingEffectInstance { effect_id: EffectInstId },
     MissingCurve,
     MissingGradient,
@@ -403,7 +404,7 @@ impl PreparedSequenceRenderer {
         active_effects
             .into_iter()
             .filter_map(|effect_index| self.effects.get(effect_index))
-            .map(|effect| effect.definition.name().as_str())
+            .map(|effect| effect.name.as_str())
             .collect()
     }
 
@@ -782,15 +783,10 @@ fn prepare_effect_inst(
         .project
         .definitions
         .effects
-        .get(&effect.definition)
+        .resolve(&effect.definition)
         .ok_or_else(|| RenderError::MissingEffect {
             effect_id: effect.definition.clone(),
         })?;
-    let compiled = context
-        .compiled_effects
-        .entry(effect.definition.clone())
-        .or_insert_with(|| Arc::new(definition.compiled.clone()))
-        .clone();
     let target_ids = prepare_target(&effect.target, context.fixture_ids, context.groups)?;
     let target = prepare_target_pixels_cached(
         context.target_cache,
@@ -810,30 +806,55 @@ fn prepare_effect_inst(
         &effect.param_overrides,
         param_timing,
     )?;
-    match compiled.kind() {
+    match definition.kind {
         EffectKind::Sample => {
-            let bound_params = compiled.bind_params_cached(&params, context.bind_cache);
+            let implementation = match &definition.implementation {
+                EffectImplementation::Dsl(compiled) => {
+                    let EffectRef::Custom(id) = &effect.definition else {
+                        unreachable!("DSL effects are custom")
+                    };
+                    let compiled = context
+                        .compiled_effects
+                        .entry(id.clone())
+                        .or_insert_with(|| Arc::new(compiled.clone()))
+                        .clone();
+                    PreparedEffectImplementation::Dsl {
+                        bound_params: compiled.bind_params_cached(&params, context.bind_cache),
+                        definition: compiled,
+                    }
+                }
+                EffectImplementation::Native(builtin) => {
+                    match native_effect::bind(*builtin, &params)? {
+                        BoundNativeEffect::Sample(sample) => PreparedEffectImplementation::Native {
+                            builtin: Some(*builtin),
+                            sample,
+                        },
+                        _ => {
+                            return Err(RenderError::GeneratorPrepare {
+                                message: "native sample effect bound as generator".to_string(),
+                            });
+                        }
+                    }
+                }
+            };
             context.effects.push(PreparedEffect {
                 layer_id: context.layer_id.clone(),
                 start_seconds,
                 duration_seconds: effect_duration_seconds,
                 target: Arc::clone(&target),
-                sample_groups: prepare_sample_groups_for_effect(
+                sample_groups: prepare_sample_groups_for_implementation(
                     context.target_cache,
-                    &compiled,
+                    &implementation,
                     &target,
                 ),
-                definition: compiled,
+                name: definition.display_name.clone(),
+                implementation,
                 params,
-                bound_params,
                 automation,
             });
         }
         EffectKind::Generator => {
             let params = apply_automation_params(params, &automation, start_seconds)?;
-            let bound_params = definition
-                .compiled
-                .bind_params_cached(&params, context.bind_cache);
             let mut generator_context = GeneratorPrepareContext {
                 project: context.project,
                 layer_id: context.layer_id.clone(),
@@ -845,18 +866,43 @@ fn prepare_effect_inst(
                 target_cache: context.target_cache,
             };
             for expansion_target in generator_expansion_targets(&target, &effect.scope) {
-                expand_generator(
-                    &mut generator_context,
-                    &compiled,
-                    &bound_params,
-                    GeneratorExpansion {
-                        start_seconds,
-                        duration_seconds: effect_duration_seconds,
-                        target: expansion_target,
-                        depth: 0,
-                        definition_source: effect.definition.0.clone(),
-                    },
-                )?;
+                match &definition.implementation {
+                    EffectImplementation::Dsl(compiled) => {
+                        let EffectRef::Custom(id) = &effect.definition else {
+                            unreachable!("DSL effects are custom")
+                        };
+                        let compiled = generator_context
+                            .compiled_effects
+                            .entry(id.clone())
+                            .or_insert_with(|| Arc::new(compiled.clone()))
+                            .clone();
+                        let bound =
+                            compiled.bind_params_cached(&params, generator_context.bind_cache);
+                        expand_generator(
+                            &mut generator_context,
+                            &compiled,
+                            &bound,
+                            GeneratorExpansion {
+                                start_seconds,
+                                duration_seconds: effect_duration_seconds,
+                                target: expansion_target,
+                                depth: 0,
+                                definition_source: id.0.clone(),
+                            },
+                        )?;
+                    }
+                    EffectImplementation::Native(builtin) => {
+                        let bound = native_effect::bind(*builtin, &params)?;
+                        expand_native_generator(
+                            &mut generator_context,
+                            &bound,
+                            start_seconds,
+                            effect_duration_seconds,
+                            expansion_target,
+                            0,
+                        )?;
+                    }
+                }
             }
         }
     }
@@ -1629,6 +1675,68 @@ fn expand_generator(
     Ok(())
 }
 
+fn expand_native_generator(
+    context: &mut GeneratorPrepareContext<'_>,
+    definition: &BoundNativeEffect,
+    start_seconds: f64,
+    duration_seconds: f64,
+    target: Arc<Vec<PreparedTargetPixel>>,
+    depth: usize,
+) -> Result<(), RenderError> {
+    if depth >= MAX_GENERATOR_DEPTH {
+        return Err(RenderError::GeneratorPrepare {
+            message: "generator depth limit exceeded".to_string(),
+        });
+    }
+    let generated = definition.generate(&GeneratorContext {
+        duration: duration_seconds,
+        target: generator_context_target(context.target_cache, &target),
+    })?;
+    for child in generated {
+        if *context.generated_child_count >= MAX_GENERATED_CHILDREN {
+            return Err(RenderError::GeneratorPrepare {
+                message: format!("generated child limit exceeded ({MAX_GENERATED_CHILDREN})"),
+            });
+        }
+        *context.generated_child_count += 1;
+        prepare_native_child(context, start_seconds, child)?;
+    }
+    Ok(())
+}
+
+fn prepare_native_child(
+    context: &mut GeneratorPrepareContext<'_>,
+    parent_start_seconds: f64,
+    child: NativeGeneratedEffect,
+) -> Result<(), RenderError> {
+    if !child.duration_seconds.is_finite() || child.duration_seconds <= 0.0 {
+        return Err(RenderError::InvalidTiming {
+            reason: "generated effect duration must be positive and finite".to_string(),
+        });
+    }
+    let target = prepared_pixels_from_generated_target_cached(
+        context.target_cache,
+        context.fixtures,
+        child.target,
+    )?;
+    let name = child.sample.display_name().to_string();
+    context.effects.push(PreparedEffect {
+        layer_id: context.layer_id.clone(),
+        start_seconds: parent_start_seconds + child.start_seconds,
+        duration_seconds: child.duration_seconds,
+        sample_groups: prepare_sample_context_groups_cached(context.target_cache, &target),
+        target,
+        name,
+        implementation: PreparedEffectImplementation::Native {
+            builtin: None,
+            sample: child.sample,
+        },
+        params: IndexMap::new(),
+        automation: Vec::new(),
+    });
+    Ok(())
+}
+
 fn prepare_generated_child(
     context: &mut GeneratorPrepareContext<'_>,
     parent_start_seconds: f64,
@@ -1636,28 +1744,34 @@ fn prepare_generated_child(
     definition_source: &SourceIdentity,
     child: GeneratedEffect,
 ) -> Result<(), RenderError> {
-    let effect_id = EffectDefinitionId(SourceIdentity::new(
-        definition_source.document().to_path_buf(),
-        child.definition.as_str().to_string(),
-    ));
+    let effect_ref = match &child.definition {
+        GeneratedEffectRef::Local(name) => {
+            EffectRef::Custom(EffectDefinitionId(SourceIdentity::new(
+                definition_source.document().to_path_buf(),
+                name.as_str().to_string(),
+            )))
+        }
+        GeneratedEffectRef::Builtin(builtin) => EffectRef::Builtin(*builtin),
+    };
     let definition = context
         .project
         .definitions
         .effects
-        .get(&effect_id)
+        .resolve(&effect_ref)
         .ok_or_else(|| RenderError::GeneratorPrepare {
-            message: format!(
-                "generated child effect `{}` does not exist in {}",
-                effect_id.0.object(),
-                effect_id.0.document()
-            ),
+            message: match &effect_ref {
+                EffectRef::Custom(effect_id) => format!(
+                    "generated child effect `{}` does not exist in {}",
+                    effect_id.0.object(),
+                    effect_id.0.document()
+                ),
+                EffectRef::Builtin(builtin) => format!(
+                    "generated built-in effect `{}` does not exist",
+                    builtin.definition().source_name
+                ),
+            },
         })?;
-    let compiled = context
-        .compiled_effects
-        .entry(effect_id)
-        .or_insert_with(|| Arc::new(definition.compiled.clone()))
-        .clone();
-    validate_generated_params(&compiled, &child.params)?;
+    validate_generated_params(&definition.params, &child.params)?;
     let duration_seconds = child.duration_seconds;
     if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
         return Err(RenderError::InvalidTiming {
@@ -1669,54 +1783,109 @@ fn prepare_generated_child(
         context.fixtures,
         child.target,
     )?;
-    let bound_params = compiled.bind_params_cached(&child.params, context.bind_cache);
     let start_seconds = parent_start_seconds + child.start_seconds;
-    match compiled.kind() {
-        EffectKind::Sample => {
-            context.effects.push(PreparedEffect {
-                layer_id: context.layer_id.clone(),
-                start_seconds,
-                duration_seconds,
-                sample_groups: prepare_sample_groups_for_effect(
-                    context.target_cache,
+    match &definition.implementation {
+        EffectImplementation::Dsl(definition_compiled) => {
+            let EffectRef::Custom(effect_id) = &effect_ref else {
+                unreachable!("DSL effects are custom")
+            };
+            let compiled = context
+                .compiled_effects
+                .entry(effect_id.clone())
+                .or_insert_with(|| Arc::new(definition_compiled.clone()))
+                .clone();
+            let bound_params = compiled.bind_params_cached(&child.params, context.bind_cache);
+            match definition.kind {
+                EffectKind::Sample => {
+                    context.effects.push(PreparedEffect {
+                        layer_id: context.layer_id.clone(),
+                        start_seconds,
+                        duration_seconds,
+                        sample_groups: prepare_sample_groups_for_effect(
+                            context.target_cache,
+                            &compiled,
+                            &target,
+                        ),
+                        target,
+                        name: definition.display_name.clone(),
+                        implementation: PreparedEffectImplementation::Dsl {
+                            definition: compiled,
+                            bound_params,
+                        },
+                        params: child.params,
+                        automation: Vec::new(),
+                    });
+                    Ok(())
+                }
+                EffectKind::Generator => expand_generator(
+                    context,
                     &compiled,
-                    &target,
+                    &bound_params,
+                    GeneratorExpansion {
+                        start_seconds,
+                        duration_seconds,
+                        target,
+                        depth: parent_depth + 1,
+                        definition_source: effect_id.0.clone(),
+                    },
                 ),
-                target,
-                definition: compiled,
-                params: child.params,
-                bound_params,
-                automation: Vec::new(),
-            });
-            Ok(())
+            }
         }
-        EffectKind::Generator => expand_generator(
-            context,
-            &compiled,
-            &bound_params,
-            GeneratorExpansion {
-                start_seconds,
-                duration_seconds,
-                target,
-                depth: parent_depth + 1,
-                definition_source: definition_source.clone(),
-            },
-        ),
+        EffectImplementation::Native(builtin) => {
+            let bound = native_effect::bind(*builtin, &child.params)?;
+            match definition.kind {
+                EffectKind::Sample => {
+                    let BoundNativeEffect::Sample(sample) = bound else {
+                        return Err(RenderError::GeneratorPrepare {
+                            message: "native sample effect bound as generator".to_string(),
+                        });
+                    };
+                    let implementation = PreparedEffectImplementation::Native {
+                        builtin: Some(*builtin),
+                        sample,
+                    };
+                    context.effects.push(PreparedEffect {
+                        layer_id: context.layer_id.clone(),
+                        start_seconds,
+                        duration_seconds,
+                        sample_groups: prepare_sample_groups_for_implementation(
+                            context.target_cache,
+                            &implementation,
+                            &target,
+                        ),
+                        target,
+                        name: definition.display_name.clone(),
+                        implementation,
+                        params: child.params,
+                        automation: Vec::new(),
+                    });
+                    Ok(())
+                }
+                EffectKind::Generator => expand_native_generator(
+                    context,
+                    &bound,
+                    start_seconds,
+                    duration_seconds,
+                    target,
+                    parent_depth + 1,
+                ),
+            }
+        }
     }
 }
 
 fn validate_generated_params(
-    definition: &dawn_language::dsl::CompiledEffect,
+    declarations: &[ParamDecl],
     params: &IndexMap<Identifier, Value>,
 ) -> Result<(), RenderError> {
     for key in params.keys() {
-        if !definition.params().iter().any(|param| &param.name == key) {
+        if !declarations.iter().any(|param| &param.name == key) {
             return Err(RenderError::GeneratorPrepare {
                 message: format!("unknown generated param `{}`", key.as_str()),
             });
         }
     }
-    for param in definition.params() {
+    for param in declarations {
         let Some(value) = params.get(&param.name) else {
             if param.default.is_none() {
                 return Err(RenderError::GeneratorPrepare {
@@ -1927,16 +2096,14 @@ fn render_effect(
 ) -> Result<(), RenderError> {
     let local_seconds = sample_seconds - effect.start_seconds;
     let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
-    let automated_bound_params = effect_bound_params_at(effect, sample_seconds, bind_cache)?;
-    let bound_params = automated_bound_params
-        .as_ref()
-        .unwrap_or(&effect.bound_params);
+    let automated = effect_implementation_at(effect, sample_seconds, bind_cache)?;
+    let implementation = automated.as_ref().unwrap_or(&effect.implementation);
 
     if let Some(groups) = &effect.sample_groups {
         for group in groups.iter() {
             let color = sample_effect_group(
                 effect,
-                bound_params,
+                implementation,
                 group.context,
                 progress,
                 local_seconds,
@@ -1957,7 +2124,7 @@ fn render_effect(
     for pixel in effect.target.iter() {
         let color = sample_effect_pixel(
             effect,
-            bound_params,
+            implementation,
             pixel,
             progress,
             local_seconds,
@@ -2440,21 +2607,41 @@ fn render_sampled_effect_target_colors(
 ) -> Result<(), RenderError> {
     let local_seconds = sample_seconds - effect.start_seconds;
     let progress = (local_seconds / effect.duration_seconds).clamp(0.0, 1.0);
-    let automated_bound_params = effect_bound_params_at(effect, sample_seconds, bind_cache)?;
-    let bound_params = automated_bound_params
-        .as_ref()
-        .unwrap_or(&effect.bound_params);
+    let automated = effect_implementation_at(effect, sample_seconds, bind_cache)?;
+    let implementation = automated.as_ref().unwrap_or(&effect.implementation);
+    match implementation {
+        PreparedEffectImplementation::Dsl {
+            definition,
+            bound_params,
+        } => render_sampled_effect_pixels(effect_pixels, rendered, |sample_context| {
+            definition.sample_bound(
+                bound_params,
+                &run_context(effect, sample_context, progress, local_seconds),
+                scratch,
+            )
+        }),
+        PreparedEffectImplementation::Native { sample, .. } => {
+            render_sampled_effect_pixels(effect_pixels, rendered, |sample_context| {
+                sample.sample(&run_context(
+                    effect,
+                    sample_context,
+                    progress,
+                    local_seconds,
+                ))
+            })
+        }
+    }
+}
 
+#[inline(always)]
+fn render_sampled_effect_pixels(
+    effect_pixels: &PreparedSampledEffectPixels,
+    rendered: &mut [Color],
+    mut sample: impl FnMut(PreparedSampleContext) -> Result<Color, RuntimeError>,
+) -> Result<(), RenderError> {
     if let Some(groups) = &effect_pixels.groups {
         for group in groups {
-            let color = sample_effect_group(
-                effect,
-                bound_params,
-                group.context,
-                progress,
-                local_seconds,
-                scratch,
-            )?;
+            let color = sample(group.context)?;
             for row in &group.rows {
                 if let Some(target) = rendered.get_mut(*row) {
                     compose_max(target, color);
@@ -2463,17 +2650,13 @@ fn render_sampled_effect_target_colors(
         }
         return Ok(());
     }
-
     for sampled in &effect_pixels.pixels {
         let pixel = &sampled.pixel;
-        let color = sample_effect_pixel(
-            effect,
-            bound_params,
-            pixel,
-            progress,
-            local_seconds,
-            scratch,
-        )?;
+        let color = sample(PreparedSampleContext {
+            pixel_index: pixel.pixel_index,
+            pixel_count: pixel.pixel_count,
+            pixel_fraction: pixel.pixel_fraction,
+        })?;
         for row in &sampled.rows {
             if let Some(target) = rendered.get_mut(*row) {
                 compose_max(target, color);
@@ -2483,9 +2666,28 @@ fn render_sampled_effect_target_colors(
     Ok(())
 }
 
+#[inline(always)]
+fn run_context(
+    effect: &PreparedEffect,
+    sample_context: PreparedSampleContext,
+    progress: f64,
+    local_seconds: f64,
+) -> RunContext {
+    RunContext {
+        progress,
+        seconds: local_seconds,
+        duration: effect.duration_seconds,
+        pixel_index: sample_context.pixel_index as i64,
+        pixel_count: sample_context.pixel_count as i64,
+        pixel_fraction: sample_context.pixel_fraction,
+        global_marks: Marks { marks: Vec::new() },
+    }
+}
+
+#[inline(always)]
 fn sample_effect_pixel(
     effect: &PreparedEffect,
-    bound_params: &BoundParams,
+    implementation: &PreparedEffectImplementation,
     pixel: &PreparedTargetPixel,
     progress: f64,
     local_seconds: f64,
@@ -2493,7 +2695,7 @@ fn sample_effect_pixel(
 ) -> Result<Color, RuntimeError> {
     sample_effect_group(
         effect,
-        bound_params,
+        implementation,
         PreparedSampleContext {
             pixel_index: pixel.pixel_index,
             pixel_count: pixel.pixel_count,
@@ -2505,41 +2707,59 @@ fn sample_effect_pixel(
     )
 }
 
+#[inline(always)]
 fn sample_effect_group(
     effect: &PreparedEffect,
-    bound_params: &BoundParams,
+    implementation: &PreparedEffectImplementation,
     sample_context: PreparedSampleContext,
     progress: f64,
     local_seconds: f64,
     scratch: &mut DslVmScratch,
 ) -> Result<Color, RuntimeError> {
-    let context = RunContext {
-        progress,
-        seconds: local_seconds,
-        duration: effect.duration_seconds,
-        pixel_index: sample_context.pixel_index as i64,
-        pixel_count: sample_context.pixel_count as i64,
-        pixel_fraction: sample_context.pixel_fraction,
-        global_marks: Marks { marks: Vec::new() },
-    };
-    effect
-        .definition
-        .sample_bound(bound_params, &context, scratch)
+    let context = run_context(effect, sample_context, progress, local_seconds);
+    match implementation {
+        PreparedEffectImplementation::Dsl {
+            definition,
+            bound_params,
+        } => definition.sample_bound(bound_params, &context, scratch),
+        PreparedEffectImplementation::Native { sample, .. } => sample.sample(&context),
+    }
 }
 
-fn effect_bound_params_at(
+fn effect_implementation_at(
     effect: &PreparedEffect,
     sample_seconds: f64,
     bind_cache: &mut DslBindCache,
-) -> Result<Option<BoundParams>, RenderError> {
+) -> Result<Option<PreparedEffectImplementation>, RenderError> {
     if effect.automation.is_empty() {
         return Ok(None);
     }
     let params =
         apply_automation_params(effect.params.clone(), &effect.automation, sample_seconds)?;
-    Ok(Some(
-        effect.definition.bind_params_cached(&params, bind_cache),
-    ))
+    Ok(Some(match &effect.implementation {
+        PreparedEffectImplementation::Dsl { definition, .. } => PreparedEffectImplementation::Dsl {
+            bound_params: definition.bind_params_cached(&params, bind_cache),
+            definition: Arc::clone(definition),
+        },
+        PreparedEffectImplementation::Native { builtin, .. } => match builtin {
+            Some(builtin) => match native_effect::bind(*builtin, &params)? {
+                BoundNativeEffect::Sample(sample) => PreparedEffectImplementation::Native {
+                    builtin: Some(*builtin),
+                    sample,
+                },
+                _ => {
+                    return Err(RenderError::GeneratorPrepare {
+                        message: "automated native sample bound as generator".to_string(),
+                    });
+                }
+            },
+            None => {
+                return Err(RenderError::GeneratorPrepare {
+                    message: "missing native effect identity".to_string(),
+                });
+            }
+        },
+    }))
 }
 
 fn prepare_sample_context_groups(
@@ -2605,6 +2825,21 @@ fn prepare_sample_groups_for_effect(
     eligible
         .then(|| prepare_sample_context_groups_cached(cache, target))
         .flatten()
+}
+
+fn prepare_sample_groups_for_implementation(
+    cache: &mut PrepareTargetCache,
+    implementation: &PreparedEffectImplementation,
+    target: &Arc<Vec<PreparedTargetPixel>>,
+) -> Option<Arc<Vec<PreparedSampleContextGroup>>> {
+    match implementation {
+        PreparedEffectImplementation::Dsl { definition, .. } => {
+            prepare_sample_groups_for_effect(cache, definition, target)
+        }
+        PreparedEffectImplementation::Native { .. } => {
+            prepare_sample_context_groups_cached(cache, target)
+        }
+    }
 }
 
 fn prepare_sampled_effect_pixel_groups(
@@ -2889,10 +3124,22 @@ struct PreparedEffect {
     duration_seconds: f64,
     target: Arc<Vec<PreparedTargetPixel>>,
     sample_groups: Option<Arc<Vec<PreparedSampleContextGroup>>>,
-    definition: Arc<CompiledEffect>,
+    name: String,
+    implementation: PreparedEffectImplementation,
     params: IndexMap<Identifier, Value>,
-    bound_params: BoundParams,
     automation: Vec<PreparedAutomation>,
+}
+
+#[derive(Clone, Debug)]
+enum PreparedEffectImplementation {
+    Dsl {
+        definition: Arc<CompiledEffect>,
+        bound_params: BoundParams,
+    },
+    Native {
+        builtin: Option<dawn_language::effect::BuiltinEffect>,
+        sample: NativeSample,
+    },
 }
 
 #[derive(Clone, Debug)]

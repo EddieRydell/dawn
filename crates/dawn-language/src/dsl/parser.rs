@@ -1,3 +1,4 @@
+use super::GeneratedEffectRef;
 use super::ast::{
     BinaryOp, Block, EffectDecl, Expr, ExprKind, FunctionDecl, FunctionParam, Module, OperatorDecl,
     OperatorInputDecl, ParamDecl, Stmt, UnaryOp,
@@ -5,6 +6,7 @@ use super::ast::{
 use super::diagnostic::Diagnostic;
 use super::lexer::{Keyword, TextSpan, Token, TokenKind, lex};
 use super::types::{Identifier, Type, Value};
+use crate::effect::BuiltinEffect;
 use crate::values::Color;
 use std::sync::Arc;
 
@@ -323,7 +325,7 @@ impl<'source> Parser<'source> {
         if emit_name.as_str() != "emit" {
             self.error_here("expected `emit` after `timeline.`");
         }
-        let effect = self.parse_identifier()?;
+        let effect = self.parse_generated_effect_ref()?;
         self.expect(TokenKind::LeftBrace, "expected `{` after emitted effect id");
         let mut fields = Vec::new();
         while !self.at(TokenKind::RightBrace) && !self.at(TokenKind::Eof) {
@@ -338,6 +340,57 @@ impl<'source> Parser<'source> {
         self.expect(TokenKind::RightBrace, "expected `}` after emit fields");
         let _ = self.consume(TokenKind::Semicolon);
         Some(Stmt::Emit { effect, fields })
+    }
+
+    fn parse_generated_effect_ref(&mut self) -> Option<GeneratedEffectRef> {
+        let namespace_span = self.current().span;
+        let namespace_or_local = self.parse_identifier()?;
+        if !self.consume(TokenKind::Dot) {
+            return Some(GeneratedEffectRef::Local(namespace_or_local));
+        }
+
+        let effect_span = self.current().span;
+        let Some(effect_name) = self.parse_identifier() else {
+            self.error(
+                namespace_span,
+                "generated effect reference must contain exactly two segments",
+            );
+            return Some(GeneratedEffectRef::Local(namespace_or_local));
+        };
+
+        if self.at(TokenKind::Dot) {
+            while self.consume(TokenKind::Dot) {
+                let _ = self.parse_identifier();
+            }
+            self.error(
+                TextSpan {
+                    start: namespace_span.start,
+                    end: self.current().span.start,
+                },
+                "generated effect reference must contain exactly two segments",
+            );
+            return Some(GeneratedEffectRef::Local(namespace_or_local));
+        }
+
+        if namespace_or_local.as_str() != "builtins" {
+            self.error(
+                namespace_span,
+                format!(
+                    "unsupported generated effect namespace `{}`",
+                    namespace_or_local.as_str()
+                ),
+            );
+            return Some(GeneratedEffectRef::Local(namespace_or_local));
+        }
+
+        let Some(builtin) = BuiltinEffect::from_source_name(effect_name.as_str()) else {
+            self.error(
+                effect_span,
+                format!("unknown built-in effect `{}`", effect_name.as_str()),
+            );
+            return Some(GeneratedEffectRef::Local(effect_name));
+        };
+        Some(GeneratedEffectRef::Builtin(builtin))
     }
 
     fn parse_for_clause(&mut self) -> Option<Stmt> {

@@ -44,7 +44,7 @@ layer_test:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 2
     layer_id: 0
     start: 58.637890996s
@@ -66,7 +66,7 @@ layer_test:
             value: 1.0
           - position: 1.0
             value: 0.0
-    script: effects.Pulse
+    effect: builtins.pulse
   - id: 3
     layer_id: 0
     start: 58.793025434s
@@ -97,7 +97,7 @@ layer_test:
       pulse_overlap:
         type: float
         value: 100.0
-    script: effects.Spin
+    effect: builtins.spin
   composition_graph:
     nodes:
     - id: 1

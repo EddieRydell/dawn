@@ -4,14 +4,15 @@ use dawn_language::dsl::{
     SignalSampler, TargetItemValue, TargetPixelValue, TargetValue, Value, compile_effects,
     compile_operators,
 };
+use dawn_language::effect::BuiltinEffect;
+use dawn_language::native_effect::{self, BoundNativeEffect};
 use dawn_language::values::{Color, Curve, CurvePoint, DawnTime, Gradient, GradientStop, Marks};
 use indexmap::IndexMap;
 use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 
-const PULSE_SOURCE: &str =
-    include_str!("../../../examples/thirty-output-controller/effects/pulse.effect.dawn");
+const PULSE_SOURCE: &str = include_str!("../tests/fixtures/native_effect_reference.effect.dawn");
 const SCAN_SWEEP_SOURCE: &str =
     include_str!("../../../examples/thirty-output-controller/effects/scan-sweep.effect.dawn");
 const IMPACT_BURST_SOURCE: &str =
@@ -20,10 +21,6 @@ const SPARKLE_COMET_SOURCE: &str =
     include_str!("../../../examples/thirty-output-controller/effects/sparkle-comet.effect.dawn");
 const SHIMMER_FIELD_SOURCE: &str =
     include_str!("../../../examples/thirty-output-controller/effects/shimmer-field.effect.dawn");
-const MARK_PULSE_SOURCE: &str =
-    include_str!("../../../examples/thirty-output-controller/effects/mark-pulse.effect.dawn");
-const MARK_CHASE_SOURCE: &str =
-    include_str!("../../../examples/thirty-output-controller/effects/mark-chase.effect.dawn");
 
 fn bench_effect_vm(c: &mut Criterion) {
     let constant = sample_effect(
@@ -49,13 +46,14 @@ fn bench_effect_vm(c: &mut Criterion) {
         });
     });
 
-    bench_sample(
+    bench_native_sample(
         c,
         "pulse_curve_sample",
-        "Pulse",
-        PULSE_SOURCE,
+        BuiltinEffect::Pulse,
         pulse_params(),
     );
+    bench_native_sample(c, "chase_sample", BuiltinEffect::Chase, chase_params());
+    bench_native_sample(c, "spin_sample", BuiltinEffect::Spin, spin_params());
     bench_sample(
         c,
         "scan_sweep_branch_sample",
@@ -84,36 +82,100 @@ fn bench_effect_vm(c: &mut Criterion) {
         SHIMMER_FIELD_SOURCE,
         shimmer_field_params(),
     );
-    bench_sample(
+    bench_native_generated_sample(
         c,
         "mark_chase_child_dense_sample",
-        "MarkChaseChild",
-        MARK_CHASE_SOURCE,
-        mark_chase_child_params(),
+        BuiltinEffect::MarkChase,
+        mark_chase_params(),
     );
-    bench_sample(
+    bench_native_generated_sample(
         c,
         "mark_pulse_child_sample",
-        "MarkPulseChild",
-        MARK_PULSE_SOURCE,
-        mark_pulse_child_params(),
-    );
-    bench_generator(
-        c,
-        "mark_pulse_generator",
-        "MarkPulse",
-        MARK_PULSE_SOURCE,
+        BuiltinEffect::MarkPulse,
         mark_pulse_params(),
     );
-    bench_generator(
+    bench_native_generator(
+        c,
+        "mark_pulse_generator",
+        BuiltinEffect::MarkPulse,
+        mark_pulse_params(),
+    );
+    bench_native_generator(
         c,
         "mark_chase_generator",
-        "MarkChase",
-        MARK_CHASE_SOURCE,
+        BuiltinEffect::MarkChase,
         mark_chase_params(),
     );
     bench_operator(c);
     bench_binding(c);
+}
+
+fn bench_native_sample(
+    c: &mut Criterion,
+    name: &str,
+    builtin: BuiltinEffect,
+    params: IndexMap<Identifier, Value>,
+) {
+    let BoundNativeEffect::Sample(sample) =
+        native_effect::bind(builtin, &params).expect("native sample should bind")
+    else {
+        panic!("sample builtin should bind as sample")
+    };
+    let context = sample_context();
+    c.bench_function(name, |b| {
+        b.iter(|| {
+            black_box(
+                sample
+                    .sample(black_box(&context))
+                    .expect("native sample should run"),
+            )
+        })
+    });
+}
+
+fn bench_native_generator(
+    c: &mut Criterion,
+    name: &str,
+    builtin: BuiltinEffect,
+    params: IndexMap<Identifier, Value>,
+) {
+    let bound = native_effect::bind(builtin, &params).expect("native generator should bind");
+    let context = generator_context();
+    c.bench_function(name, |b| {
+        b.iter(|| {
+            black_box(
+                bound
+                    .generate(black_box(&context))
+                    .expect("native generator should run"),
+            )
+        })
+    });
+}
+
+fn bench_native_generated_sample(
+    c: &mut Criterion,
+    name: &str,
+    builtin: BuiltinEffect,
+    params: IndexMap<Identifier, Value>,
+) {
+    let bound = native_effect::bind(builtin, &params).expect("native generator should bind");
+    let sample = bound
+        .generate(&generator_context())
+        .expect("native generator should run")
+        .into_iter()
+        .next()
+        .expect("native generator should emit")
+        .sample;
+    let context = sample_context();
+    c.bench_function(name, |b| {
+        b.iter(|| {
+            black_box(
+                sample
+                    .sample(black_box(&context))
+                    .expect("native child should sample"),
+            )
+        })
+    });
 }
 
 fn bench_operator(c: &mut Criterion) {
@@ -213,33 +275,6 @@ fn bench_sample(
     });
 }
 
-fn bench_generator(
-    c: &mut Criterion,
-    bench_name: &str,
-    effect_name: &str,
-    source: &str,
-    params: IndexMap<Identifier, Value>,
-) {
-    let effect = sample_effect(effect_name, source);
-    let bound = effect.bind_params(&params);
-    let context = generator_context();
-    let mut scratch = DslVmScratch::default();
-    let generated = effect
-        .generate_bound(&bound, &context, &mut scratch)
-        .expect("generator benchmark effect should run");
-    assert!(!generated.is_empty());
-
-    c.bench_function(bench_name, |b| {
-        b.iter(|| {
-            black_box(
-                effect
-                    .generate_bound(black_box(&bound), black_box(&context), &mut scratch)
-                    .expect("generator benchmark effect should run"),
-            )
-        });
-    });
-}
-
 fn bench_binding(c: &mut Criterion) {
     let effect = sample_effect("Pulse", PULSE_SOURCE);
     let params = pulse_params();
@@ -313,6 +348,26 @@ fn pulse_params() -> IndexMap<Identifier, Value> {
         ("gradient", Value::Gradient(gradient())),
         ("pulse_shape", Value::Curve(curve())),
     ])
+}
+
+fn chase_params() -> IndexMap<Identifier, Value> {
+    params([
+        ("gradient", Value::Gradient(gradient())),
+        ("gradient_mode", enum_value("per_pulse")),
+        ("pulse_overlap", Value::Float(8.0)),
+        ("section_width_pixels", Value::Int(5)),
+        ("chase_position", Value::Curve(alternate_curve())),
+        ("reverse", Value::Bool(false)),
+        ("extend_to_start", Value::Bool(false)),
+        ("extend_to_end", Value::Bool(false)),
+        ("pulse_shape", Value::Curve(curve())),
+    ])
+}
+
+fn spin_params() -> IndexMap<Identifier, Value> {
+    let mut params = chase_params();
+    params.insert(identifier("revolutions"), Value::Int(3));
+    params
 }
 
 fn scan_sweep_params() -> IndexMap<Identifier, Value> {
@@ -425,26 +480,6 @@ fn mark_pulse_params() -> IndexMap<Identifier, Value> {
     ])
 }
 
-fn mark_pulse_child_params() -> IndexMap<Identifier, Value> {
-    params([
-        (
-            "base",
-            Value::Color(Color {
-                red: 0,
-                green: 0,
-                blue: 0,
-            }),
-        ),
-        ("accent", Value::Gradient(gradient())),
-        ("hue", Value::Curve(curve())),
-        ("hue_mix", Value::Float(0.35)),
-        ("section_width_pixels", Value::Int(5)),
-        ("section_edge_fade_pixels", Value::Float(1.0)),
-        ("parent_duration", Value::Float(24.0)),
-        ("child_start", Value::Float(4.0)),
-    ])
-}
-
 fn mark_chase_params() -> IndexMap<Identifier, Value> {
     params([
         ("beats", Value::Marks(Arc::new(marks()))),
@@ -469,29 +504,6 @@ fn mark_chase_params() -> IndexMap<Identifier, Value> {
         ("section_width_pixels", Value::Int(5)),
         ("chase_positions", curve_array([curve(), alternate_curve()])),
         ("pulse_shape", Value::Curve(curve())),
-    ])
-}
-
-fn mark_chase_child_params() -> IndexMap<Identifier, Value> {
-    params([
-        (
-            "base",
-            Value::Color(Color {
-                red: 0,
-                green: 0,
-                blue: 0,
-            }),
-        ),
-        ("gradient_mode", enum_value("per_pulse")),
-        ("gradient", Value::Gradient(gradient())),
-        ("hue", Value::Curve(curve())),
-        ("hue_mix", Value::Float(0.45)),
-        ("pulse_overlap", Value::Float(10.0)),
-        ("section_width_pixels", Value::Int(5)),
-        ("chase_position", Value::Curve(alternate_curve())),
-        ("pulse_shape", Value::Curve(curve())),
-        ("parent_duration", Value::Float(24.0)),
-        ("child_start", Value::Float(4.0)),
     ])
 }
 

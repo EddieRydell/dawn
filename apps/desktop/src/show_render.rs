@@ -271,12 +271,13 @@ mod tests {
                 .into_iter()
                 .next()
                 .unwrap();
+        let effect_id = EffectDefinitionId(SourceIdentity::new(
+            "effects.dawn".into(),
+            "Solid".to_string(),
+        ));
         effects.insert(
-            EffectDefinitionId(SourceIdentity::new(
-                "effects.dawn".into(),
-                "Solid".to_string(),
-            )),
-            EffectDefinition { compiled },
+            effect_id.clone(),
+            EffectDefinition::custom(effect_id.clone(), compiled),
         );
 
         let mut fixtures = FixtureDefinitionStore::default();
@@ -300,9 +301,8 @@ mod tests {
             duration: DawnDuration(Duration::from_secs_f64(1.0)),
             target: EffectTarget::Group(FixtureGroupId(1)),
             scope: EffectScope::WholeTarget,
-            definition: EffectDefinitionId(SourceIdentity::new(
-                "effects.dawn".into(),
-                "Solid".to_string(),
+            definition: dawn_language::effect::EffectRef::Custom(EffectDefinitionId(
+                SourceIdentity::new("effects.dawn".into(), "Solid".to_string()),
             )),
             param_overrides: IndexMap::new(),
         }];
