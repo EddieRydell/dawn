@@ -197,6 +197,28 @@ impl DesktopState {
         })
     }
 
+    pub fn autosave_active_text(&self, path: &str, text: String) -> Result<AppSnapshot, String> {
+        if self.snapshot().active_file.as_deref() != Some(path) {
+            return Ok(self.snapshot());
+        }
+        self.update_active_text(text);
+        let snapshot = self.snapshot();
+        let Some(buffer) = snapshot.active_buffer else {
+            return Err("No active text buffer to autosave".to_string());
+        };
+        let Some(project) = self.project_session() else {
+            return Err("No project is open".to_string());
+        };
+        let relative_path = Utf8PathBuf::from(&buffer.path);
+        let Some(path) = absolute_project_path(&project, &relative_path) else {
+            return Err("File path is outside the loaded project".to_string());
+        };
+        fs::write(&path, &buffer.text).map_err(|error| error.to_string())?;
+        self.after_file_saved(&buffer.path);
+        let entrypoint = project.source.source_root.join(&project.source.entrypoint);
+        Ok(self.apply_project_refresh_check(entrypoint.as_str(), check_project(&entrypoint)))
+    }
+
     pub fn set_editor_view_mode(&self, mode: EditorViewMode) -> AppSnapshot {
         let mut settings = self.snapshot().settings;
         settings.editor_view_mode = mode;

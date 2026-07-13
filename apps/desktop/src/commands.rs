@@ -123,6 +123,16 @@ pub(crate) fn update_active_text(text: String, state: State<'_, DesktopState>) -
 
 #[tauri::command]
 #[specta::specta]
+pub(crate) fn autosave_active_text(
+    path: String,
+    text: String,
+    state: State<'_, DesktopState>,
+) -> Result<AppSnapshot, String> {
+    state.autosave_active_text(&path, text)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub(crate) fn set_editor_view_mode(
     mode: EditorViewMode,
     state: State<'_, DesktopState>,
@@ -425,6 +435,7 @@ pub(crate) fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         close_file,
         set_active_file,
         update_active_text,
+        autosave_active_text,
         set_editor_view_mode,
         save_editor_view_state,
         save_sequence_viewport_state,

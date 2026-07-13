@@ -171,8 +171,8 @@ export function EditorPane({
             }
             const text = update.state.doc.toString();
             setLocalText(text);
-            if (snapshot.settings.autosaveTextEdits) {
-              scheduleAutosave(text);
+            if (activePath !== null && snapshot.settings.autosaveTextEdits) {
+              scheduleAutosave(activePath, text);
             }
           }
         }
@@ -532,13 +532,23 @@ function EditorScrollbar({
 
 let autosaveTimer: number | undefined;
 let editorViewStateTimer: number | undefined;
+let autosaveQueue = Promise.resolve();
 
-function scheduleAutosave(text: string) {
+function scheduleAutosave(path: string, text: string) {
   window.clearTimeout(autosaveTimer);
   autosaveTimer = window.setTimeout(() => {
-    void runSnapshotCommand(() => commands.updateActiveText(text)).then(() =>
-      runSnapshotCommand(commands.flushAutosave)
-    );
+    autosaveQueue = autosaveQueue
+      .catch(() => undefined)
+      .then(async () => {
+        const current = useAppStore.getState();
+        if (current.snapshot?.activeFile !== path || current.localText !== text) return;
+        const snapshot = await commands.autosaveActiveText(path, text);
+        useAppStore.getState().setSnapshot(snapshot, "command", true);
+        useAppStore.getState().setError(null);
+      })
+      .catch((error: unknown) => {
+        useAppStore.getState().setError(String(error));
+      });
   }, 450);
 }
 

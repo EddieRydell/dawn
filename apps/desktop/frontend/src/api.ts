@@ -37,6 +37,13 @@ async function applyCurrentGuiEdit(edit: Parameters<typeof generatedCommands.app
 
 export const commands = {
   ...generatedCommands,
+  autosaveActiveText: async (path: string, text: string) => {
+    const result = await generatedCommands.autosaveActiveText(path, text);
+    if (result.status === "error") {
+      throw new Error(result.error);
+    }
+    return result.data;
+  },
   applySequenceGuiEdit: (edit: SequenceGuiEdit) => applyCurrentGuiEdit({ type: "sequence", edit }),
   applySequenceSelectionEdit: async (edit: SequenceSelectionEdit) => {
     const result = await generatedCommands.applySequenceSelectionEdit(edit);

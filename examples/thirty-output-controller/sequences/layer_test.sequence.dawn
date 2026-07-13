@@ -67,6 +67,37 @@ layer_test:
           - position: 1.0
             value: 0.0
     script: effects.Pulse
+  - id: 3
+    layer_id: 0
+    start: 58.793025434s
+    duration: 1.881970102s
+    target:
+      type: group
+      id: 1
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.laser_magenta_gradient
+      chase_position:
+        type: curve
+        curve: curves.ease_down
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+      revolutions:
+        type: integer
+        value: 6
+      pulse_overlap:
+        type: float
+        value: 100.0
+    script: effects.Spin
   composition_graph:
     nodes:
     - id: 1

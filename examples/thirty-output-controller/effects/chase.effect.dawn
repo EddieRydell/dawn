@@ -12,7 +12,8 @@ effect Chase {
   color sample() {
     float width = max(1.0, section_width_pixels);
     float item_count = max(1.0, floor((pixel_count() + width - 1.0) / width));
-    float position = section_position(section_width_pixels);
+    float item_index = floor(pixel_index() / width);
+    float position = item_index / max(1.0, item_count - 1.0);
     float chase_position_value = position;
     if (reverse) {
       chase_position_value = 1.0 - chase_position_value;

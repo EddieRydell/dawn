@@ -17,6 +17,7 @@ export const commands = {
 	closeFile: (path: string) => __TAURI_INVOKE<AppSnapshot>("close_file", { path }),
 	setActiveFile: (path: string) => __TAURI_INVOKE<AppSnapshot>("set_active_file", { path }),
 	updateActiveText: (text: string) => __TAURI_INVOKE<AppSnapshot>("update_active_text", { text }),
+	autosaveActiveText: (path: string, text: string) => typedError<AppSnapshot, string>(__TAURI_INVOKE("autosave_active_text", { path, text })),
 	setEditorViewMode: (mode: EditorViewMode) => __TAURI_INVOKE<AppSnapshot>("set_editor_view_mode", { mode }),
 	saveEditorViewState: (update: PersistedEditorViewStateUpdate) => __TAURI_INVOKE<AppSnapshot>("save_editor_view_state", { update }),
 	saveSequenceViewportState: (update: PersistedSequenceViewportStateUpdate) => __TAURI_INVOKE<AppSnapshot>("save_sequence_viewport_state", { update }),
@@ -617,4 +618,14 @@ export type WorkspaceLayoutState = {
 	projectTreeCollapsed: boolean,
 	inspectorCollapsed: boolean,
 };
+
+/* Tauri Specta runtime */
+async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {
+    try {
+        return { status: "ok", data: await result };
+    } catch (e) {
+        if (e instanceof Error) throw e;
+        return { status: "error", error: e as any };
+    }
+}
 

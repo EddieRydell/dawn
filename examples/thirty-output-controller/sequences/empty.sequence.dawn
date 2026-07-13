@@ -1677,7 +1677,7 @@ empty:
             color: '#b33cff'
       hue:
         type: curve
-        curve: curves.hue_warm_shift
+        curve: curves.linear_up
       hue_mix:
         type: float
         value: 0.35
@@ -1720,7 +1720,7 @@ empty:
         gradient: gradients.cool_gradient
       hue:
         type: curve
-        curve: curves.hue_cool_shift
+        curve: curves.linear_up
       hue_mix:
         type: float
         value: 0.4
@@ -1774,7 +1774,7 @@ empty:
         value: 1
       chase_position:
         type: curve
-        curve: curves.hue_sweep
+        curve: curves.linear_up
       extend_to_start:
         type: bool
         value: false
@@ -1814,7 +1814,7 @@ empty:
         gradient: gradients.fire_gradient
       hue:
         type: curve
-        curve: curves.hue_warm_shift
+        curve: curves.linear_up
       hue_mix:
         type: float
         value: 0.3
@@ -2153,7 +2153,7 @@ empty:
         gradient: gradients.fire_gradient
       hue:
         type: curve
-        curve: curves.hue_sweep
+        curve: curves.linear_up
       hue_mix:
         type: float
         value: 0.45
@@ -3407,7 +3407,7 @@ empty:
             color: '#3d00ff'
       hue:
         type: curve
-        curve: curves.hue_cool_shift
+        curve: curves.linear_up
       hue_mix:
         type: float
         value: 0.1
@@ -5260,7 +5260,7 @@ empty:
         gradient: gradients.warm_gradient
       hue:
         type: curve
-        curve: curves.hue_sweep
+        curve: curves.linear_up
       hue_mix:
         type: float
         value: 0.28
@@ -5462,7 +5462,7 @@ empty:
         gradient: gradients.cool_gradient
       hue:
         type: curve
-        curve: curves.hue_sweep
+        curve: curves.linear_up
       hue_mix:
         type: float
         value: 0.28
@@ -5654,7 +5654,7 @@ empty:
         gradient: gradients.club_gradient
       hue:
         type: curve
-        curve: curves.hue_sweep
+        curve: curves.linear_up
       hue_mix:
         type: float
         value: 0.45
@@ -5842,7 +5842,7 @@ empty:
         gradient: gradients.ember_core_gradient
       hue:
         type: curve
-        curve: curves.hue_sweep
+        curve: curves.linear_up
       hue_mix:
         type: float
         value: 0.38
@@ -6021,7 +6021,7 @@ empty:
         gradient: gradients.cool_gradient
       hue:
         type: curve
-        curve: curves.hue_sweep
+        curve: curves.linear_up
       hue_mix:
         type: float
         value: 0.38
@@ -6310,7 +6310,7 @@ empty:
         gradient: gradients.fire_gradient
       hue:
         type: curve
-        curve: curves.hue_sweep
+        curve: curves.linear_up
       hue_mix:
         type: float
         value: 0.38
@@ -6599,7 +6599,7 @@ empty:
         gradient: gradients.club_gradient
       hue:
         type: curve
-        curve: curves.hue_sweep
+        curve: curves.linear_up
       hue_mix:
         type: float
         value: 0.38

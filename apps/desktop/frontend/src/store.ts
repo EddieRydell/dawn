@@ -15,7 +15,7 @@ type AppStore = {
   compositionGraphEditing: boolean;
   error: string | null;
   localText: string;
-  setSnapshot: (snapshot: AppSnapshot, source?: SnapshotApplySource) => void;
+  setSnapshot: (snapshot: AppSnapshot, source?: SnapshotApplySource, preserveLocalText?: boolean) => void;
   setRestoreState: (restoreState: ProjectRestoreState | null) => void;
   setGuiRequest: (request: GuiDocumentRequest | null) => void;
   setGuiDocument: (document: GuiDocument | null) => void;
@@ -36,7 +36,7 @@ export const useAppStore = create<AppStore>((set) => ({
   compositionGraphEditing: false,
   error: null,
   localText: "",
-  setSnapshot: (snapshot, source = "command") => {
+  setSnapshot: (snapshot, source = "command", preserveLocalText = false) => {
     set((current) => {
       const currentSnapshot = current.snapshot;
       const audioTransport = mergeAudioTransport(
@@ -50,7 +50,7 @@ export const useAppStore = create<AppStore>((set) => ({
           audioTransport
         }
       };
-      if (snapshot.activeBuffer !== null && effectiveEditorViewMode(snapshot) === "text") {
+      if (!preserveLocalText && snapshot.activeBuffer !== null && effectiveEditorViewMode(snapshot) === "text") {
         nextState.localText = snapshot.activeBuffer.text;
       }
       return nextState;
