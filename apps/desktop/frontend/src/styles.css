@@ -161,6 +161,22 @@ button:focus-visible,
   background: var(--dawn-bg-panel);
 }
 
+.project-tree-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 14px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.project-tree-scroll-content {
+  overflow-x: hidden !important;
+  scrollbar-width: none;
+}
+
+.project-tree-scroll-content::-webkit-scrollbar {
+  display: none;
+}
+
 .workspace-resize-handle {
   position: relative;
   z-index: 4;

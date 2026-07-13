@@ -1,9 +1,9 @@
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { File, Folder, FolderPlus, Pencil, Plus, Trash2 } from "lucide-react";
-import { useMemo, useState, type CSSProperties } from "react";
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes } from "react";
 import type { NodeApi } from "react-arborist";
-import { Tree } from "react-arborist";
+import { ListOuterElement, Tree } from "react-arborist";
 import { commands } from "../api";
 import type { AppSnapshot, ProjectDiagnostic, WorkspaceEntry } from "../types";
 import { runSnapshotCommand } from "../store";
@@ -22,6 +22,51 @@ export function ProjectTree({ snapshot }: { snapshot: AppSnapshot }) {
     [snapshot.diagnostics, snapshot.projectEntries, snapshot.projectRoot]
   );
   const [pendingDelete, setPendingDelete] = useState<TreeNode | null>(null);
+  const treeShellRef = useRef<HTMLDivElement | null>(null);
+  const treeRef = useRef<HTMLDivElement | null>(null);
+  const railRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ pointerId: number; startY: number; startScrollTop: number } | null>(null);
+  const [scrollbar, setScrollbar] = useState({ top: 0, height: 0, scrollable: false });
+
+  const updateScrollbar = useCallback(() => {
+    const tree = treeRef.current ?? treeShellRef.current?.querySelector<HTMLDivElement>(".project-tree-scroll-content") ?? null;
+    if (tree === null) return;
+    treeRef.current = tree;
+    const scrollable = tree.scrollHeight > tree.clientHeight + 1;
+    const railHeight = Math.max(1, tree.clientHeight);
+    const height = scrollable ? Math.max(28, (tree.clientHeight / tree.scrollHeight) * railHeight) : railHeight;
+    const maxTop = Math.max(0, railHeight - height);
+    const top = scrollable ? (tree.scrollTop / Math.max(1, tree.scrollHeight - tree.clientHeight)) * maxTop : 0;
+    setScrollbar((current) =>
+      current.top === top && current.height === height && current.scrollable === scrollable
+        ? current
+        : { top, height, scrollable }
+    );
+  }, []);
+
+  useEffect(() => {
+    const tree = treeRef.current ?? treeShellRef.current?.querySelector<HTMLDivElement>(".project-tree-scroll-content") ?? null;
+    if (tree === null) return;
+    treeRef.current = tree;
+    updateScrollbar();
+    const resizeObserver = new ResizeObserver(updateScrollbar);
+    resizeObserver.observe(tree);
+    tree.addEventListener("scroll", updateScrollbar, { passive: true });
+    return () => {
+      resizeObserver.disconnect();
+      tree.removeEventListener("scroll", updateScrollbar);
+    };
+  }, [treeData, updateScrollbar]);
+
+  const scrollToPointer = useCallback((clientY: number) => {
+    const tree = treeRef.current;
+    const rail = railRef.current;
+    if (tree === null || rail === null || !scrollbar.scrollable) return;
+    const railRect = rail.getBoundingClientRect();
+    const maxTop = Math.max(1, railRect.height - scrollbar.height);
+    const top = Math.max(0, Math.min(maxTop, clientY - railRect.top - scrollbar.height / 2));
+    tree.scrollTop = (top / maxTop) * Math.max(1, tree.scrollHeight - tree.clientHeight);
+  }, [scrollbar.height, scrollbar.scrollable]);
 
   return (
     <aside className="project-panel">
@@ -36,21 +81,67 @@ export function ProjectTree({ snapshot }: { snapshot: AppSnapshot }) {
           </button>
         </div>
       </div>
-      <Tree
-        data={treeData}
-        width="100%"
-        height={window.innerHeight - 118}
-        indent={18}
-        rowHeight={28}
-        openByDefault
-        onActivate={(node) => {
-          if (node.data.kind === "file") {
-            void runSnapshotCommand(() => commands.openFile(node.data.id));
-          }
-        }}
-      >
-        {(props) => <TreeRow {...props} requestDelete={setPendingDelete} />}
-      </Tree>
+      <div ref={treeShellRef} className="project-tree-shell">
+        <Tree
+          data={treeData}
+          width="100%"
+          height={window.innerHeight - 118}
+          indent={18}
+          rowHeight={28}
+          openByDefault
+          outerElementType={ProjectTreeScrollContent}
+          onScroll={updateScrollbar}
+          onToggle={() => { window.requestAnimationFrame(updateScrollbar); }}
+          onActivate={(node) => {
+            if (node.data.kind === "file") {
+              void runSnapshotCommand(() => commands.openFile(node.data.id));
+            }
+          }}
+        >
+          {(props) => <TreeRow {...props} requestDelete={setPendingDelete} />}
+        </Tree>
+        <div className="editor-scrollbar" aria-hidden={!scrollbar.scrollable}>
+          <div
+            ref={railRef}
+            className="editor-scrollbar-rail"
+            onPointerDown={(event) => {
+              if (!scrollbar.scrollable) return;
+              event.currentTarget.setPointerCapture(event.pointerId);
+              scrollToPointer(event.clientY);
+            }}
+          >
+            <div
+              className={`editor-scrollbar-thumb ${scrollbar.scrollable ? "" : "disabled"}`}
+              style={{ top: `${scrollbar.top}px`, height: `${scrollbar.height}px` }}
+              onPointerDown={(event) => {
+                if (!scrollbar.scrollable) return;
+                event.stopPropagation();
+                event.currentTarget.setPointerCapture(event.pointerId);
+                dragRef.current = {
+                  pointerId: event.pointerId,
+                  startY: event.clientY,
+                  startScrollTop: treeRef.current?.scrollTop ?? 0
+                };
+              }}
+              onPointerMove={(event) => {
+                const drag = dragRef.current;
+                const tree = treeRef.current;
+                const rail = railRef.current;
+                if (drag === null || tree === null || rail === null || drag.pointerId !== event.pointerId) return;
+                const maxTop = Math.max(1, rail.clientHeight - scrollbar.height);
+                const scrollMax = Math.max(1, tree.scrollHeight - tree.clientHeight);
+                tree.scrollTop = drag.startScrollTop + ((event.clientY - drag.startY) / maxTop) * scrollMax;
+              }}
+              onPointerUp={(event) => {
+                if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
+              }}
+              onPointerCancel={(event) => {
+                if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
+              }}
+            />
+          </div>
+        </div>
+      </div>
       <AlertDialog.Root open={pendingDelete !== null} onOpenChange={(open) => { if (!open) setPendingDelete(null); }}>
         <AlertDialog.Portal>
           <AlertDialog.Overlay className="dialog-overlay" />
@@ -73,6 +164,13 @@ export function ProjectTree({ snapshot }: { snapshot: AppSnapshot }) {
     </aside>
   );
 }
+
+const ProjectTreeScrollContent = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(function ProjectTreeScrollContent(
+  { className, style, ...props },
+  ref
+) {
+  return <ListOuterElement ref={ref} className={`project-tree-scroll-content ${className ?? ""}`} style={style} {...props} />;
+});
 
 function TreeRow({
   node,
