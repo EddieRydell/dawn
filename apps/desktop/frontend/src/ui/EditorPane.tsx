@@ -259,6 +259,7 @@ export function EditorPane({
             {tab.dirty && <span className="dirty-dot" />}
             {tabExternalState(tab) !== "current" && <span className="conflict-dot" />}
             <X
+              className="tab-close"
               size={14}
               onClick={(event) => {
                 event.stopPropagation();

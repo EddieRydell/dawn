@@ -220,6 +220,11 @@ button:focus-visible,
   font-size: 13px;
 }
 
+.tree-row:hover {
+  background: var(--dawn-hover);
+  color: var(--dawn-text-strong);
+}
+
 .tree-row span {
   min-width: 0;
   overflow: hidden;
@@ -294,6 +299,23 @@ button:focus-visible,
 
 .tab.active {
   background: var(--dawn-bg);
+  color: var(--dawn-text-strong);
+}
+
+.tab:hover {
+  background: var(--dawn-hover);
+  color: var(--dawn-text-strong);
+}
+
+.tab-close {
+  flex: 0 0 auto;
+  margin-left: auto;
+  border-radius: 3px;
+  color: var(--dawn-text-muted);
+}
+
+.tab-close:hover {
+  background: #3a3f46;
   color: var(--dawn-text-strong);
 }
 
