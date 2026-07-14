@@ -375,18 +375,17 @@ pub(crate) fn audio_seek(
 
 #[tauri::command]
 #[specta::specta]
-pub(crate) fn set_live_output_enabled(
-    enabled: bool,
+pub(crate) fn set_live_output_active(
+    active: bool,
+    app: AppHandle,
     state: State<'_, DesktopState>,
 ) -> AppSnapshot {
-    state.update_snapshot(|snapshot| {
-        snapshot.live_output.enabled = enabled;
-        snapshot.live_output.status = if enabled {
-            "Enabled".to_string()
-        } else {
-            "Disabled".to_string()
-        };
-    })
+    let snapshot = state.set_live_output_active(active);
+    let _ = app.emit("live_output_changed", snapshot.live_output.clone());
+    if active {
+        start_live_output_poll(app);
+    }
+    snapshot
 }
 
 #[tauri::command]
@@ -463,7 +462,7 @@ pub(crate) fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         audio_stop,
         audio_rewind_to_zero,
         audio_seek,
-        set_live_output_enabled,
+        set_live_output_active,
         set_preview_window_open,
     ])
 }
@@ -481,6 +480,23 @@ fn start_audio_transport_poll(app: AppHandle) {
             let snapshot = state.snapshot();
             let _ = app.emit("audio_transport_changed", snapshot.audio_transport.clone());
             if !matches!(snapshot.audio_transport.state, AudioTransportState::Playing) {
+                break;
+            }
+        }
+    });
+}
+
+fn start_live_output_poll(app: AppHandle) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(50));
+            let state = app.state::<DesktopState>();
+            let snapshot = state.snapshot();
+            let _ = app.emit("live_output_changed", snapshot.live_output.clone());
+            if matches!(
+                snapshot.live_output.state,
+                crate::dto::LiveOutputState::Disabled | crate::dto::LiveOutputState::Error
+            ) {
                 break;
             }
         }

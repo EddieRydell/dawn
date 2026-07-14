@@ -79,6 +79,16 @@ pub(super) fn sequence_value(
                 .collect::<Result<Vec<_>, _>>()?,
         ),
     );
+    value.insert(
+        string_value("control_clips"),
+        Value::Sequence(
+            sequence
+                .control_clips
+                .iter()
+                .map(|clip| control_clip_value(session, from_document, clip))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
     Ok(Value::Mapping(value))
 }
 
@@ -107,7 +117,10 @@ pub(super) fn sequence_effect_value(
         string_value("duration"),
         Value::String(seconds_string(effect.duration.as_seconds_f64())),
     );
-    value.insert(string_value("target"), effect_target_value(&effect.target)?);
+    value.insert(
+        string_value("target"),
+        element_selection_value(session, from_document, &effect.target)?,
+    );
     value.insert(
         string_value("scope"),
         Value::String(
@@ -444,6 +457,92 @@ pub(super) fn automation_mapping_value(
     Ok(Value::Mapping(value))
 }
 
+pub(super) fn control_clip_value(
+    session: &ProjectSession,
+    from: &Utf8Path,
+    clip: &ControlClip,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(string_value("id"), number_value(clip.id.0)?);
+    value.insert(
+        string_value("start"),
+        Value::String(seconds_string(clip.start.as_seconds_f64())),
+    );
+    value.insert(
+        string_value("duration"),
+        Value::String(seconds_string(clip.duration.as_seconds_f64())),
+    );
+    let (target_type, selection) = match &clip.target {
+        ControlTarget::Scalar(selection) => ("scalar", selection),
+        ControlTarget::Indexed(selection) => ("indexed", selection),
+        ControlTarget::FixtureFunction {
+            selection,
+            function,
+        } => {
+            value.insert(string_value("function"), number_value(function.0)?);
+            ("fixture_function", selection)
+        }
+    };
+    value.insert(
+        string_value("target_type"),
+        Value::String(target_type.to_string()),
+    );
+    value.insert(
+        string_value("selection"),
+        element_selection_value(session, from, selection)?,
+    );
+    let mut control = Mapping::new();
+    match &clip.value {
+        ControlValue::ConstantNormalized(normalized) => {
+            control.insert(
+                string_value("type"),
+                Value::String("constant_normalized".to_string()),
+            );
+            control.insert(string_value("value"), number_value(*normalized)?);
+        }
+        ControlValue::NormalizedCurve(curve) => {
+            control.insert(
+                string_value("type"),
+                Value::String("normalized_curve".to_string()),
+            );
+            control.insert(string_value("curve"), curve_value(curve)?);
+        }
+        ControlValue::Indexed {
+            option,
+            range_curve,
+        } => {
+            control.insert(string_value("type"), Value::String("indexed".to_string()));
+            control.insert(string_value("option"), number_value(option.0)?);
+            if let Some(curve) = range_curve {
+                control.insert(string_value("range_curve"), curve_value(curve)?);
+            }
+        }
+        ControlValue::FixtureIndexed { entry, range_curve } => {
+            control.insert(
+                string_value("type"),
+                Value::String("fixture_indexed".to_string()),
+            );
+            control.insert(string_value("entry"), number_value(entry.0)?);
+            if let Some(curve) = range_curve {
+                control.insert(string_value("range_curve"), curve_value(curve)?);
+            }
+        }
+        ControlValue::ConstantColor(color) => {
+            control.insert(
+                string_value("type"),
+                Value::String("constant_color".to_string()),
+            );
+            control.insert(string_value("color"), Value::String(color.to_hex()));
+        }
+        ControlValue::Gradient(gradient) => {
+            control.insert(string_value("type"), Value::String("gradient".to_string()));
+            control.insert(string_value("gradient"), gradient_value(gradient)?);
+        }
+    }
+    value.insert(string_value("value"), Value::Mapping(control));
+    Ok(Value::Mapping(value))
+}
+
 pub(super) fn effect_param_value(
     session: &ProjectSession,
     from_document: &Utf8Path,
@@ -582,6 +681,7 @@ pub(super) fn curve_source_value(
     }
 }
 use camino::Utf8Path;
+use dawn_language::control::{ControlClip, ControlTarget, ControlValue};
 use dawn_language::dsl::Identifier;
 use dawn_language::effect::{
     CurveSource, EffectInst, EffectParamValue, EffectRef, EffectScope, GradientSource,
@@ -598,8 +698,8 @@ use yaml_serde::{Mapping, Value};
 
 use super::ProjectSession;
 use super::values::{
-    curve_value, effect_target_value, gradient_value, number_value, seconds_string, string_value,
-    typed_object, write_source_reference,
+    curve_value, element_selection_value, gradient_value, number_value, seconds_string,
+    string_value, typed_object, write_source_reference,
 };
 use crate::ExportProjectError;
 use crate::source::{SourceObjectKind, relative_path_from_document};

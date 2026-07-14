@@ -625,53 +625,37 @@ fn mark_indexes_by_collection(marks: &[SequenceMarkRef]) -> BTreeMap<String, Vec
     grouped
 }
 
-fn effect_lane_index(session: &ProjectSession, target: &EffectTarget) -> usize {
+fn effect_lane_index(session: &ProjectSession, target: &ElementSelection) -> usize {
     effect_lane_index_resolved(session, target).unwrap_or_default()
 }
 
 pub(super) fn effect_lane_index_resolved(
     session: &ProjectSession,
-    target: &EffectTarget,
+    target: &ElementSelection,
 ) -> Option<usize> {
-    let layout_id = active_layout_id(session)?;
-    let layout = session.project.layouts.get(&layout_id)?;
-    layout
-        .target_order
-        .iter()
-        .position(|candidate| effect_target_matches_layout(target, candidate))
-}
-
-fn effect_target_matches_layout(target: &EffectTarget, candidate: &DomainLayoutTarget) -> bool {
-    matches!(
-        (target, candidate),
-        (EffectTarget::Fixture(left), DomainLayoutTarget::Fixture(right)) if left == right
-    ) || matches!(
-        (target, candidate),
-        (EffectTarget::Group(left), DomainLayoutTarget::Group(right)) if left == right
-    )
+    active_element_tree(session)?
+        .nodes
+        .keys()
+        .position(|candidate| *candidate == target.node)
 }
 
 fn sequence_lane_count(session: &ProjectSession) -> usize {
-    active_layout_id(session)
-        .and_then(|layout_id| session.project.layouts.get(&layout_id))
-        .map(|layout| layout.target_order.len())
+    active_element_tree(session)
+        .map(|tree| tree.nodes.len())
         .unwrap_or_default()
 }
 
-fn target_for_lane(session: &ProjectSession, lane_index: usize) -> Option<EffectTarget> {
-    let layout_id = active_layout_id(session)?;
-    let layout = session.project.layouts.get(&layout_id)?;
-    layout
-        .target_order
-        .get(lane_index)
-        .map(effect_target_from_layout)
-}
-
-fn effect_target_from_layout(target: &DomainLayoutTarget) -> EffectTarget {
-    match target {
-        DomainLayoutTarget::Fixture(id) => EffectTarget::Fixture(FixtureInstanceId(id.0)),
-        DomainLayoutTarget::Group(id) => EffectTarget::Group(FixtureGroupId(id.0)),
-    }
+pub(super) fn target_for_lane(
+    session: &ProjectSession,
+    lane_index: usize,
+) -> Option<ElementSelection> {
+    let tree = active_element_tree(session)?;
+    let node = *tree.nodes.keys().nth(lane_index)?;
+    Some(ElementSelection {
+        tree: tree.id.clone(),
+        node,
+        cells: None,
+    })
 }
 
 fn shifted_lane(lane_index: usize, lane_delta: i32, lane_count: usize) -> usize {
@@ -730,16 +714,16 @@ use std::collections::BTreeMap;
 use camino::Utf8PathBuf;
 use dawn_language::dsl::Type;
 use dawn_language::effect::{
-    BuiltinEffect, EffectDefinitionId, EffectInstId, EffectParamValue, EffectRef, EffectTarget,
+    BuiltinEffect, EffectDefinitionId, EffectInstId, EffectParamValue, EffectRef,
 };
+use dawn_language::element::ElementSelection;
 use dawn_language::identity::SourceIdentity;
 use dawn_language::sequence::{CompositionGraphNodeKind, SequenceId};
-use dawn_language::setup::{FixtureGroupId, FixtureInstanceId, LayoutTarget as DomainLayoutTarget};
 use dawn_language::values::{DawnDuration, DawnTime};
 use dawn_project_io::ProjectSession;
 
 use super::model::{effect_mut, mark_collection_mut, parse_graph_node_id, sequence_mut};
-use super::projection::{active_layout_id, default_param_value, effect_param_value};
+use super::projection::{active_element_tree, default_param_value, effect_param_value};
 use super::{
     ClipboardEffect, ClipboardMark, GuiMutationError, ResolvedGuiObject, SequenceClipboard,
     SequenceSelectionMutation,

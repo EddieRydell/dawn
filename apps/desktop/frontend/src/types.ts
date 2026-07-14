@@ -11,8 +11,8 @@ export type {
   EditorBuffer,
   EditorViewMode,
   SequenceEffectReference,
-  FixtureGuiDocument,
-  FixtureGuiEdit,
+  PropGuiDocument,
+  PropGuiEdit,
   SequenceCurvePoint,
   GeometryRenderBounds,
   GeometryRenderPoint,
@@ -20,10 +20,10 @@ export type {
   GuiDocumentRequest,
   GuiEditCommand,
   GuiEditResult,
-  LayoutGuiDocument,
-  LayoutFixturePlacement,
-  LayoutGuiEdit,
-  LayoutTarget,
+  PreviewGuiDocument,
+  PreviewPropPlacement,
+  PreviewGuiEdit,
+  ElementTarget,
   LiveOutputSnapshot,
   Point3Meters,
   ProjectDiagnostic,
@@ -56,6 +56,8 @@ export type {
   SequenceGraphPortCardinality,
   SequenceGraphPortDefinition,
   SequenceGuiEdit,
+  SetupGuiDocument,
+  SetupGuiEdit,
   SequenceLayer,
   SequenceMarkCollection,
   SequenceMarkRef,
@@ -69,8 +71,9 @@ export type {
 } from "./generated/bindings";
 
 export type {
-  FixtureGuiDocument as FixtureDocument,
+  PropGuiDocument as PropDocument,
   GuiDocument as ActiveGuiDocument,
-  LayoutGuiDocument as LayoutDocument,
-  SequenceGuiDocument as SequenceEditorDocument
+  PreviewGuiDocument as PreviewDocument,
+  SequenceGuiDocument as SequenceEditorDocument,
+  SetupGuiDocument as SetupDocument
 } from "./generated/bindings";

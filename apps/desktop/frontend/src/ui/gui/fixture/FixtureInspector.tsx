@@ -1,10 +1,10 @@
-import type { FixtureDocument } from "../../../types";
+import type { PropDocument } from "../../../types";
 import { commands } from "../../../api";
 import { runGuiEditCommand } from "../../../store";
 import { InspectorScrollArea } from "../InspectorScrollArea";
 import type { GuiFocus } from "../shared";
 
-export function FixtureInspector({ document, selected }: { document: FixtureDocument; selected: GuiFocus }) {
+export function FixtureInspector({ document, selected }: { document: PropDocument; selected: GuiFocus }) {
   const fixture = document.fixtures.find((candidate) => candidate.objectKey === document.selectedObjectKey) ?? document.fixtures[0];
   return (
     <InspectorScrollArea>
@@ -21,7 +21,7 @@ export function FixtureInspector({ document, selected }: { document: FixtureDocu
               defaultValue={fixture.bulbDiameterMeters}
               onBlur={(event) =>
                 void runGuiEditCommand(() =>
-                  commands.applyFixtureGuiEdit({
+                  commands.applyPropGuiEdit({
                     type: "updateBulbDiameter",
                     objectKey: fixture.objectKey,
                     bulbDiameterMeters: Number(event.currentTarget.value)

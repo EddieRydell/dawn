@@ -1,13 +1,11 @@
-use std::collections::HashMap;
-use std::ops::Range;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
 
+use dawn_language::element::ElementCellAddress;
 use dawn_language::model::DawnProject;
-use dawn_language::setup::FixtureInstanceId;
 use glam::{EulerRot, Mat4, Vec2, Vec3};
 use tauri::async_runtime::block_on;
 use tauri::window::WindowBuilder;
@@ -164,7 +162,7 @@ impl PreviewWindowService {
 pub struct PreviewScene {
     revision: u64,
     instances: Vec<PreviewInstanceGpu>,
-    fixture_ranges: HashMap<FixtureInstanceId, Range<usize>>,
+    bindings: Vec<ElementCellAddress>,
     bounds: PreviewBounds,
 }
 
@@ -173,34 +171,37 @@ impl PreviewScene {
         let Some(setup) = project.setups.get(&project.root.setup) else {
             return Self::empty(revision);
         };
-        let Some(layout) = project.layouts.get(&setup.layout) else {
+        let Some(layout) = project.preview_layouts.get(&setup.preview) else {
             return Self::empty(revision);
         };
 
         let mut instances = Vec::new();
-        let mut fixture_ranges = HashMap::new();
-        for fixture in &layout.fixtures {
-            let Some(definition) = project.definitions.fixtures.get(&fixture.definition) else {
+        let mut bindings = Vec::new();
+        for prop in &layout.props {
+            let Some(definition) = project.definitions.props.definitions.get(&prop.definition)
+            else {
                 continue;
             };
-            let position = point3_meters(fixture.position);
+            let position = point3_meters(prop.position);
             let transform = Mat4::from_translation(Vec3::new(
                 position.x_meters as f32,
                 position.y_meters as f32,
                 position.z_meters as f32,
             )) * Mat4::from_euler(
                 EulerRot::XYZ,
-                fixture.rotation.x.to_radians() as f32,
-                fixture.rotation.y.to_radians() as f32,
-                fixture.rotation.z.to_radians() as f32,
+                prop.rotation.x.to_radians() as f32,
+                prop.rotation.y.to_radians() as f32,
+                prop.rotation.z.to_radians() as f32,
             ) * Mat4::from_scale(Vec3::new(
-                fixture.scale.x as f32,
-                fixture.scale.y as f32,
-                fixture.scale.z as f32,
+                prop.scale.x as f32,
+                prop.scale.y as f32,
+                prop.scale.z as f32,
             ));
             let radius_meters = definition.bulb_radius.as_meters_f64() as f32;
-            let fixture_start = instances.len();
-            for emitter in geometry_emitters(&definition.geometry) {
+            for (emitter, binding) in geometry_emitters(&definition.geometry)
+                .into_iter()
+                .zip(&prop.bindings)
+            {
                 let point = transform.transform_point3(Vec3::new(
                     emitter.x_meters as f32,
                     emitter.y_meters as f32,
@@ -209,10 +210,7 @@ impl PreviewScene {
                 instances.push(PreviewInstanceGpu {
                     center_radius: [point.x, point.y, radius_meters.max(0.005), 0.0],
                 });
-            }
-            let fixture_end = instances.len();
-            if fixture_start < fixture_end {
-                fixture_ranges.insert(fixture.id.clone(), fixture_start..fixture_end);
+                bindings.push(*binding);
             }
         }
 
@@ -220,7 +218,7 @@ impl PreviewScene {
         Self {
             revision,
             instances,
-            fixture_ranges,
+            bindings,
             bounds,
         }
     }
@@ -229,7 +227,7 @@ impl PreviewScene {
         Self {
             revision,
             instances: Vec::new(),
-            fixture_ranges: HashMap::new(),
+            bindings: Vec::new(),
             bounds: PreviewBounds::default(),
         }
     }
@@ -482,7 +480,7 @@ impl PreviewRenderer {
         &mut self,
         size: PreviewSize,
         scene: Option<&PreviewScene>,
-        frame: Option<&dawn_runtime::RenderedFrame>,
+        frame: Option<&dawn_runtime::RenderedShowFrame>,
     ) {
         let size = size.clamp_to_max_dimension(self.max_surface_dimension);
         if size.width == 0 || size.height == 0 {
@@ -560,7 +558,7 @@ impl PreviewRenderer {
     fn update_scene(
         &mut self,
         scene: &PreviewScene,
-        frame: Option<&dawn_runtime::RenderedFrame>,
+        frame: Option<&dawn_runtime::RenderedShowFrame>,
         size: PreviewSize,
     ) {
         if self.uploaded_revision != Some(scene.revision) {
@@ -597,20 +595,25 @@ impl PreviewRenderer {
         self.uniform_size = Some(size);
     }
 
-    fn update_colors(&mut self, scene: &PreviewScene, frame: Option<&dawn_runtime::RenderedFrame>) {
+    fn update_colors(
+        &mut self,
+        scene: &PreviewScene,
+        frame: Option<&dawn_runtime::RenderedShowFrame>,
+    ) {
         self.color_scratch.clear();
         self.color_scratch
             .resize(scene.instances.len(), PreviewColorGpu::black());
         if let Some(frame) = frame {
-            for fixture in &frame.fixtures {
-                let Some(range) = scene.fixture_ranges.get(&fixture.fixture_id) else {
-                    continue;
-                };
-                for (target, color) in self.color_scratch[range.clone()]
-                    .iter_mut()
-                    .zip(fixture.pixels.iter())
-                {
-                    *target = PreviewColorGpu::from_color(*color);
+            for (target, binding) in self.color_scratch.iter_mut().zip(&scene.bindings) {
+                let color = frame
+                    .elements
+                    .iter()
+                    .find(|element| element.node() == binding.node)
+                    .and_then(|element| {
+                        element.preview_colors().get(binding.cell as usize).copied()
+                    });
+                if let Some(color) = color {
+                    *target = PreviewColorGpu::from_color(color);
                 }
             }
         }

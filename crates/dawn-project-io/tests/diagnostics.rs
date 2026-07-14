@@ -107,11 +107,15 @@ fn repeated_reference_text_reports_the_failing_occurrence() {
     .unwrap();
     fs::write(
         root.join("setup.dawn"),
-        "imports:\n- from: layout.dawn\n  as: layouts\n- from: patch.dawn\n  as: patches\nmain:\n  type: setup\n  layout: layouts.main\n  patch: patches.main\n  controllers: []\n",
+        "imports:\n- from: display.dawn\n  as: display\n- from: patch.dawn\n  as: patches\nmain:\n  type: setup\n  elements: display.elements\n  preview: display.preview\n  patch: patches.main\n  controllers: []\n",
     )
     .unwrap();
-    fs::write(root.join("layout.dawn"), "main:\n  type: layout\n").unwrap();
-    fs::write(root.join("patch.dawn"), "main:\n  type: patch\n").unwrap();
+    fs::write(root.join("display.dawn"), "elements:\n  type: element_tree\n  roots: [1]\n  nodes:\n  - id: 1\n    name: Pixel\n    type: color\n    cells: 1\n    capability: { type: rgb }\npreview:\n  type: preview_layout\n  element_tree: elements\n  props: []\n").unwrap();
+    fs::write(
+        root.join("patch.dawn"),
+        "main:\n  type: patch\n  nodes: []\n  edges: []\n",
+    )
+    .unwrap();
 
     let report = check_project(&entrypoint);
     let diagnostic = report
@@ -319,11 +323,15 @@ fn write_imported_sequence_project(root: &Utf8Path, sequence_body: &str) {
     .unwrap();
     fs::write(
         root.join("setup.dawn"),
-        "imports:\n  - from: layout.dawn\n    as: layouts\n  - from: patch.dawn\n    as: patches\nmain:\n  type: setup\n  layout: layouts.main\n  patch: patches.main\n  controllers: []\n",
+        "imports:\n  - from: display.dawn\n    as: display\n  - from: patch.dawn\n    as: patches\nmain:\n  type: setup\n  elements: display.elements\n  preview: display.preview\n  patch: patches.main\n  controllers: []\n",
     )
     .unwrap();
-    fs::write(root.join("layout.dawn"), "main:\n  type: layout\n").unwrap();
-    fs::write(root.join("patch.dawn"), "main:\n  type: patch\n").unwrap();
+    fs::write(root.join("display.dawn"), "elements:\n  type: element_tree\n  roots: [1]\n  nodes:\n  - id: 1\n    name: Pixel\n    type: color\n    cells: 1\n    capability: { type: rgb }\npreview:\n  type: preview_layout\n  element_tree: elements\n  props: []\n").unwrap();
+    fs::write(
+        root.join("patch.dawn"),
+        "main:\n  type: patch\n  nodes: []\n  edges: []\n",
+    )
+    .unwrap();
     fs::write(
         root.join("sequence.dawn"),
         format!("main:\n  type: sequence\n{sequence_body}"),

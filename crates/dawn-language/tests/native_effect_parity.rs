@@ -58,8 +58,8 @@ fn target() -> Arc<TargetValue> {
             pixels: Arc::new(
                 (0..24)
                     .map(|pixel| TargetPixelValue {
-                        fixture_index: 0,
-                        fixture_pixel_index: pixel,
+                        element_index: 0,
+                        element_cell_index: pixel,
                         pixel_index: pixel,
                         pixel_count: 24,
                         pixel_fraction: pixel as f64 / 23.0,

@@ -10,6 +10,9 @@
     )
 )]
 
+mod show;
+pub use show::*;
+
 use dawn_language::dsl::{
     BoundParams, CompiledEffect, DslBindCache, DslVmScratch, EffectKind, GeneratedEffect,
     GeneratedEffectRef, GeneratorContext, Identifier, OperatorRunContext, ParamDecl, RunContext,
@@ -17,7 +20,10 @@ use dawn_language::dsl::{
 };
 use dawn_language::effect::{
     CurveSource, EffectDefinitionId, EffectImplementation, EffectInstId, EffectParamValue,
-    EffectRef, EffectScope, EffectTarget, GradientSource,
+    EffectRef, EffectScope, GradientSource,
+};
+use dawn_language::element::{
+    ElementCellRange, ElementNodeId, ElementNodeKind, ElementSelection, ElementTree,
 };
 use dawn_language::identity::SourceIdentity;
 use dawn_language::model::DawnProject;
@@ -30,9 +36,7 @@ use dawn_language::sequence::{
     CompositionGraphNodeId, CompositionGraphNodeKind, GraphPortId, MarkCollectionKey, Sequence,
     SequenceCompositionGraph, SequenceId, SequenceLayerId, automation_value_at,
 };
-use dawn_language::setup::{
-    FixtureGroupId, FixtureInst, FixtureInstanceId, Geometry, Layout, SetupId,
-};
+use dawn_language::setup::SetupId;
 use dawn_language::values::{Color, DawnTime, Marks};
 use indexmap::{IndexMap, IndexSet};
 use std::collections::HashMap;
@@ -47,8 +51,8 @@ fn next_render_cache_id() -> u64 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RenderedTargetPixelAddress {
-    pub fixture_id: FixtureInstanceId,
-    pub fixture_pixel_index: usize,
+    pub element_id: ElementNodeId,
+    pub element_cell_index: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -57,8 +61,8 @@ pub struct PreparedSequenceRenderer {
     frame_rate: u32,
     frame_count: u64,
     duration_seconds: f64,
-    fixtures: Vec<PreparedFixture>,
-    fixture_pixel_offsets: Vec<usize>,
+    elements: Vec<PreparedElement>,
+    element_cell_offsets: Vec<usize>,
     pixel_count: usize,
     effects: Vec<PreparedEffect>,
     effect_layer_indexes: Vec<usize>,
@@ -107,9 +111,9 @@ pub struct EffectRasterRenderScratch {
 pub struct EffectRasterPrepareBatch<'a> {
     project: &'a DawnProject,
     sequence: &'a Sequence,
-    fixtures: Vec<PreparedFixture>,
-    fixture_ids: IndexSet<FixtureInstanceId>,
-    groups: IndexMap<FixtureGroupId, Vec<FixtureInstanceId>>,
+    elements: Vec<PreparedElement>,
+    element_ids: IndexSet<ElementNodeId>,
+    groups: IndexMap<ElementNodeId, Vec<ElementNodeId>>,
     frame_rate: u32,
     frame_count: u64,
     bind_cache: DslBindCache,
@@ -120,7 +124,7 @@ pub struct EffectRasterPrepareBatch<'a> {
 pub fn resolve_effect_target_pixel_addresses(
     project: &DawnProject,
     setup_id: &SetupId,
-    target: &EffectTarget,
+    target: &ElementSelection,
     scope: &EffectScope,
 ) -> Result<Vec<RenderedTargetPixelAddress>, RenderError> {
     let setup = project
@@ -129,35 +133,22 @@ pub fn resolve_effect_target_pixel_addresses(
         .ok_or_else(|| RenderError::MissingSetup {
             setup_id: setup_id.clone(),
         })?;
-    let layout = project
-        .layouts
-        .get(&setup.layout)
-        .ok_or(RenderError::MissingLayout)?;
-    let fixtures = prepare_fixtures(project, layout)?;
-    let fixture_ids = fixtures
+    let tree = project
+        .element_trees
+        .get(&setup.elements)
+        .ok_or(RenderError::MissingElementTree)?;
+    let (elements, groups) = prepare_elements(project, tree)?;
+    let element_ids = elements
         .iter()
-        .map(|fixture| fixture.id.clone())
+        .map(|element| element.id)
         .collect::<IndexSet<_>>();
-    let groups = layout
-        .groups
-        .iter()
-        .map(|group| {
-            let members = layout
-                .fixtures
-                .iter()
-                .filter(|fixture| group.fixtures.iter().any(|member| member == &fixture.id))
-                .map(|fixture| fixture.id.clone())
-                .collect::<Vec<_>>();
-            (group.id.clone(), members)
-        })
-        .collect::<IndexMap<_, _>>();
-    let target_ids = prepare_target(target, &fixture_ids, &groups)?;
-    let pixels = prepare_target_pixels(&target_ids, &fixtures, scope)?;
+    let target = prepare_target(target, &element_ids, &groups)?;
+    let pixels = prepare_target_pixels(&target, &elements, scope)?;
     Ok(pixels
         .into_iter()
         .map(|pixel| RenderedTargetPixelAddress {
-            fixture_id: fixtures[pixel.fixture_index].id.clone(),
-            fixture_pixel_index: pixel.fixture_pixel_index,
+            element_id: elements[pixel.element_index].id,
+            element_cell_index: pixel.element_cell_index,
         })
         .collect())
 }
@@ -168,12 +159,12 @@ pub struct RenderedFrame {
     pub frame_rate: u32,
     pub clock_seconds: f64,
     pub sample_seconds: f64,
-    pub fixtures: Vec<RenderedFixture>,
+    pub elements: Vec<RenderedElement>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct RenderedFixture {
-    pub fixture_id: FixtureInstanceId,
+pub struct RenderedElement {
+    pub element_id: ElementNodeId,
     pub pixels: Vec<Color>,
 }
 
@@ -181,10 +172,9 @@ pub struct RenderedFixture {
 pub enum RenderError {
     InvalidTiming { reason: String },
     MissingSetup { setup_id: SetupId },
-    MissingLayout,
+    MissingElementTree,
     MissingSequence { sequence_id: SequenceId },
-    MissingFixture { fixture_id: FixtureInstanceId },
-    MissingFixtureDefinition,
+    MissingElement { element_id: ElementNodeId },
     MissingEffect { effect_id: EffectRef },
     MissingEffectInstance { effect_id: EffectInstId },
     MissingCurve,
@@ -216,10 +206,10 @@ impl PreparedSequenceRenderer {
             .ok_or_else(|| RenderError::MissingSetup {
                 setup_id: setup_id.clone(),
             })?;
-        let layout = project
-            .layouts
-            .get(&setup.layout)
-            .ok_or(RenderError::MissingLayout)?;
+        let tree = project
+            .element_trees
+            .get(&setup.elements)
+            .ok_or(RenderError::MissingElementTree)?;
         let sequence =
             project
                 .sequences
@@ -229,26 +219,12 @@ impl PreparedSequenceRenderer {
                 })?;
         prepare_timing(sequence)?;
 
-        let fixtures = prepare_fixtures(project, layout)?;
-        let (fixture_pixel_offsets, pixel_count) = fixture_pixel_offsets(&fixtures);
-        let fixture_ids = fixtures
+        let (elements, groups) = prepare_elements(project, tree)?;
+        let (element_cell_offsets, pixel_count) = element_cell_offsets(&elements);
+        let element_ids = elements
             .iter()
-            .map(|fixture| fixture.id.clone())
+            .map(|element| element.id)
             .collect::<IndexSet<_>>();
-        let groups = layout
-            .groups
-            .iter()
-            .map(|group| {
-                let members = layout
-                    .fixtures
-                    .iter()
-                    .filter(|fixture| group.fixtures.iter().any(|member| member == &fixture.id))
-                    .map(|fixture| fixture.id.clone())
-                    .collect::<Vec<_>>();
-                (group.id.clone(), members)
-            })
-            .collect::<IndexMap<_, _>>();
-
         let mut effects = Vec::with_capacity(sequence.effects.len());
         let mut generated_child_count = 0usize;
         let mut bind_cache = DslBindCache::default();
@@ -273,8 +249,8 @@ impl PreparedSequenceRenderer {
                     project,
                     sequence,
                     layer_id: effect.layer_id.clone(),
-                    fixtures: &fixtures,
-                    fixture_ids: &fixture_ids,
+                    elements: &elements,
+                    element_ids: &element_ids,
                     groups: &groups,
                     effects: &mut effects,
                     generated_child_count: &mut generated_child_count,
@@ -321,7 +297,7 @@ impl PreparedSequenceRenderer {
             PrepareGraphContext {
                 project,
                 sequence,
-                fixtures: &fixtures,
+                elements: &elements,
                 layers: &layers,
             },
             &sequence.composition_graph,
@@ -332,8 +308,8 @@ impl PreparedSequenceRenderer {
             frame_rate,
             frame_count,
             duration_seconds,
-            fixtures,
-            fixture_pixel_offsets,
+            elements,
+            element_cell_offsets,
             pixel_count,
             effects,
             effect_layer_indexes,
@@ -434,7 +410,7 @@ impl PreparedSequenceRenderer {
             frame_rate: self.frame_rate,
             clock_seconds,
             sample_seconds,
-            fixtures: rendered,
+            elements: rendered,
         })
     }
 
@@ -469,7 +445,7 @@ impl PreparedSequenceRenderer {
                 }
                 render_effect(
                     effect,
-                    &self.fixture_pixel_offsets,
+                    &self.element_cell_offsets,
                     &mut rendered,
                     sample_seconds,
                     &mut scratch.effect_vm[*effect_index],
@@ -537,8 +513,8 @@ impl PreparedEffectRasterRenderer {
             if let Some(pixel) = self.target.get(target_index) {
                 sample_lookup
                     .entry(TargetColorAddress {
-                        fixture_index: pixel.fixture_index,
-                        fixture_pixel_index: pixel.fixture_pixel_index,
+                        element_index: pixel.element_index,
+                        element_cell_index: pixel.element_cell_index,
                     })
                     .or_default()
                     .push(row_index);
@@ -554,8 +530,8 @@ impl PreparedEffectRasterRenderer {
                     .filter_map(|pixel| {
                         sample_lookup
                             .get(&TargetColorAddress {
-                                fixture_index: pixel.fixture_index,
-                                fixture_pixel_index: pixel.fixture_pixel_index,
+                                element_index: pixel.element_index,
+                                element_cell_index: pixel.element_cell_index,
                             })
                             .map(|rows| PreparedSampledEffectPixel {
                                 pixel: pixel.clone(),
@@ -649,10 +625,10 @@ impl<'a> EffectRasterPrepareBatch<'a> {
             .ok_or_else(|| RenderError::MissingSetup {
                 setup_id: setup_id.clone(),
             })?;
-        let layout = project
-            .layouts
-            .get(&setup.layout)
-            .ok_or(RenderError::MissingLayout)?;
+        let tree = project
+            .element_trees
+            .get(&setup.elements)
+            .ok_or(RenderError::MissingElementTree)?;
         let sequence =
             project
                 .sequences
@@ -662,24 +638,11 @@ impl<'a> EffectRasterPrepareBatch<'a> {
                 })?;
         prepare_timing(sequence)?;
 
-        let fixtures = prepare_fixtures(project, layout)?;
-        let fixture_ids = fixtures
+        let (elements, groups) = prepare_elements(project, tree)?;
+        let element_ids = elements
             .iter()
-            .map(|fixture| fixture.id.clone())
+            .map(|element| element.id)
             .collect::<IndexSet<_>>();
-        let groups = layout
-            .groups
-            .iter()
-            .map(|group| {
-                let members = layout
-                    .fixtures
-                    .iter()
-                    .filter(|fixture| group.fixtures.iter().any(|member| member == &fixture.id))
-                    .map(|fixture| fixture.id.clone())
-                    .collect::<Vec<_>>();
-                (group.id.clone(), members)
-            })
-            .collect::<IndexMap<_, _>>();
         let frame_rate = sequence.frame_rate;
         let duration_seconds = sequence.duration.as_seconds_f64();
         let frame_count = frame_count(duration_seconds, frame_rate);
@@ -687,8 +650,8 @@ impl<'a> EffectRasterPrepareBatch<'a> {
         Ok(Self {
             project,
             sequence,
-            fixtures,
-            fixture_ids,
+            elements,
+            element_ids,
             groups,
             frame_rate,
             frame_count,
@@ -717,8 +680,8 @@ impl<'a> EffectRasterPrepareBatch<'a> {
                 project: self.project,
                 sequence: self.sequence,
                 layer_id: SequenceLayerId(0),
-                fixtures: &self.fixtures,
-                fixture_ids: &self.fixture_ids,
+                elements: &self.elements,
+                element_ids: &self.element_ids,
                 groups: &self.groups,
                 effects: &mut effects,
                 generated_child_count: &mut generated_child_count,
@@ -759,9 +722,9 @@ struct PrepareEffectContext<'a> {
     project: &'a DawnProject,
     sequence: &'a Sequence,
     layer_id: SequenceLayerId,
-    fixtures: &'a [PreparedFixture],
-    fixture_ids: &'a IndexSet<FixtureInstanceId>,
-    groups: &'a IndexMap<FixtureGroupId, Vec<FixtureInstanceId>>,
+    elements: &'a [PreparedElement],
+    element_ids: &'a IndexSet<ElementNodeId>,
+    groups: &'a IndexMap<ElementNodeId, Vec<ElementNodeId>>,
     effects: &'a mut Vec<PreparedEffect>,
     generated_child_count: &'a mut usize,
     bind_cache: &'a mut DslBindCache,
@@ -787,11 +750,11 @@ fn prepare_effect_inst(
         .ok_or_else(|| RenderError::MissingEffect {
             effect_id: effect.definition.clone(),
         })?;
-    let target_ids = prepare_target(&effect.target, context.fixture_ids, context.groups)?;
+    let target_selection = prepare_target(&effect.target, context.element_ids, context.groups)?;
     let target = prepare_target_pixels_cached(
         context.target_cache,
-        &target_ids,
-        context.fixtures,
+        &target_selection,
+        context.elements,
         &effect.scope,
     )?;
     let start_seconds = effect.start.as_seconds_f64();
@@ -858,7 +821,7 @@ fn prepare_effect_inst(
             let mut generator_context = GeneratorPrepareContext {
                 project: context.project,
                 layer_id: context.layer_id.clone(),
-                fixtures: context.fixtures,
+                elements: context.elements,
                 effects: context.effects,
                 generated_child_count: context.generated_child_count,
                 bind_cache: context.bind_cache,
@@ -912,7 +875,7 @@ fn prepare_effect_inst(
 struct PrepareGraphContext<'a> {
     project: &'a DawnProject,
     sequence: &'a Sequence,
-    fixtures: &'a [PreparedFixture],
+    elements: &'a [PreparedElement],
     layers: &'a [PreparedLayer],
 }
 
@@ -920,7 +883,7 @@ fn prepare_composition_graph(
     context: PrepareGraphContext<'_>,
     graph: &SequenceCompositionGraph,
 ) -> Result<PreparedCompositionGraph, RenderError> {
-    let full_target = Arc::new(full_rig_target_pixels(context.fixtures)?);
+    let full_target = Arc::new(full_rig_target_pixels(context.elements)?);
     validate_composition_graph(graph, &context.project.definitions.operators).map_err(|error| {
         RenderError::BadGraph {
             message: error.message,
@@ -1218,68 +1181,113 @@ fn frame_count(duration_seconds: f64, frame_rate: u32) -> u64 {
     (duration_seconds * f64::from(frame_rate)).ceil() as u64
 }
 
-fn prepare_fixtures(
-    project: &DawnProject,
-    layout: &Layout,
-) -> Result<Vec<PreparedFixture>, RenderError> {
-    layout
-        .fixtures
-        .iter()
-        .map(|fixture| prepare_fixture(project, fixture))
-        .collect()
-}
+type PreparedElements = (
+    Vec<PreparedElement>,
+    IndexMap<ElementNodeId, Vec<ElementNodeId>>,
+);
 
-fn prepare_fixture(
+fn prepare_elements(
     project: &DawnProject,
-    fixture: &FixtureInst,
-) -> Result<PreparedFixture, RenderError> {
-    let definition = project
-        .definitions
-        .fixtures
-        .get(&fixture.definition)
-        .ok_or(RenderError::MissingFixtureDefinition)?;
-    Ok(PreparedFixture {
-        id: fixture.id.clone(),
-        pixel_count: pixel_count(&definition.geometry),
-    })
-}
-
-fn pixel_count(geometry: &Geometry) -> usize {
-    match geometry {
-        Geometry::Points { points } => points.len(),
-        Geometry::Lines { pixels, .. } | Geometry::Arc { pixels, .. } => *pixels as usize,
+    tree: &ElementTree,
+) -> Result<PreparedElements, RenderError> {
+    let mut ordered = Vec::new();
+    let mut seen = IndexSet::new();
+    for address in tree.flattened_cells().map_err(|_| RenderError::BadTarget)? {
+        if seen.insert(address.node) {
+            ordered.push(address.node);
+        }
     }
+    let elements = ordered
+        .into_iter()
+        .map(|id| {
+            let node = tree
+                .nodes
+                .get(&id)
+                .ok_or(RenderError::MissingElement { element_id: id })?;
+            let (pixel_count, color_enabled) = match &node.kind {
+                ElementNodeKind::Color { cells, .. } => (*cells as usize, true),
+                ElementNodeKind::Scalar { cells } | ElementNodeKind::Indexed { cells, .. } => {
+                    (*cells as usize, false)
+                }
+                ElementNodeKind::Fixture { profile } => {
+                    let profile = project
+                        .definitions
+                        .fixture_profiles
+                        .definitions
+                        .get(profile)
+                        .ok_or_else(|| RenderError::BadGraph {
+                            message: "fixture element references a missing profile".to_string(),
+                        })?;
+                    let color_enabled = profile.functions.values().any(|function| {
+                        matches!(
+                            function.kind,
+                            dawn_language::fixture_profile::FixtureFunctionKind::ColorMixing { .. }
+                        )
+                    });
+                    (1, color_enabled)
+                }
+                ElementNodeKind::Group { .. } => return Err(RenderError::BadTarget),
+            };
+            Ok(PreparedElement {
+                id,
+                pixel_count,
+                color_enabled,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut groups = IndexMap::new();
+    for (id, node) in &tree.nodes {
+        if matches!(node.kind, ElementNodeKind::Group { .. }) {
+            let selection = ElementSelection {
+                tree: tree.id.clone(),
+                node: *id,
+                cells: None,
+            };
+            let mut members = Vec::new();
+            let mut seen = IndexSet::new();
+            for address in tree
+                .flatten_selection(&selection)
+                .map_err(|_| RenderError::BadTarget)?
+            {
+                if seen.insert(address.node) {
+                    members.push(address.node);
+                }
+            }
+            groups.insert(*id, members);
+        }
+    }
+    Ok((elements, groups))
 }
 
-fn fixture_pixel_offsets(fixtures: &[PreparedFixture]) -> (Vec<usize>, usize) {
+fn element_cell_offsets(elements: &[PreparedElement]) -> (Vec<usize>, usize) {
     let mut pixel_count = 0usize;
-    let offsets = fixtures
+    let offsets = elements
         .iter()
-        .map(|fixture| {
+        .map(|element| {
             let offset = pixel_count;
-            pixel_count += fixture.pixel_count;
+            pixel_count += element.pixel_count;
             offset
         })
         .collect();
     (offsets, pixel_count)
 }
 
-fn unflatten_rendered_fixtures(
-    fixtures: &[PreparedFixture],
+fn unflatten_rendered_elements(
+    elements: &[PreparedElement],
     colors: &[Color],
-) -> Vec<RenderedFixture> {
+) -> Vec<RenderedElement> {
     let mut offset = 0usize;
-    fixtures
+    elements
         .iter()
-        .map(|fixture| {
-            let end = offset.saturating_add(fixture.pixel_count).min(colors.len());
+        .map(|element| {
+            let end = offset.saturating_add(element.pixel_count).min(colors.len());
             let mut pixels = colors[offset..end].to_vec();
-            if pixels.len() < fixture.pixel_count {
-                pixels.resize(fixture.pixel_count, black());
+            if pixels.len() < element.pixel_count {
+                pixels.resize(element.pixel_count, black());
             }
-            offset = offset.saturating_add(fixture.pixel_count);
-            RenderedFixture {
-                fixture_id: fixture.id.clone(),
+            offset = offset.saturating_add(element.pixel_count);
+            RenderedElement {
+                element_id: element.id,
                 pixels,
             }
         })
@@ -1287,21 +1295,21 @@ fn unflatten_rendered_fixtures(
 }
 
 fn full_rig_target_pixels(
-    fixtures: &[PreparedFixture],
+    elements: &[PreparedElement],
 ) -> Result<Vec<PreparedTargetPixel>, RenderError> {
     let mut pixels = Vec::new();
-    for (fixture_index, fixture) in fixtures.iter().enumerate() {
-        let pixel_count = fixture.pixel_count;
-        for fixture_pixel_index in 0..fixture.pixel_count {
-            let pixel_index = fixture_pixel_index;
-            let pixel_fraction = if fixture.pixel_count <= 1 {
+    for (element_index, element) in elements.iter().enumerate() {
+        let pixel_count = element.pixel_count;
+        for element_cell_index in 0..element.pixel_count {
+            let pixel_index = element_cell_index;
+            let pixel_fraction = if element.pixel_count <= 1 {
                 0.0
             } else {
-                fixture_pixel_index as f64 / (fixture.pixel_count - 1) as f64
+                element_cell_index as f64 / (element.pixel_count - 1) as f64
             };
             pixels.push(PreparedTargetPixel {
-                fixture_index,
-                fixture_pixel_index,
+                element_index,
+                element_cell_index,
                 pixel_index,
                 pixel_count,
                 pixel_fraction,
@@ -1312,58 +1320,80 @@ fn full_rig_target_pixels(
 }
 
 fn prepare_target(
-    target: &EffectTarget,
-    fixture_ids: &IndexSet<FixtureInstanceId>,
-    groups: &IndexMap<FixtureGroupId, Vec<FixtureInstanceId>>,
-) -> Result<Vec<FixtureInstanceId>, RenderError> {
-    match target {
-        EffectTarget::Fixture(id) if fixture_ids.contains(id) => Ok(vec![id.clone()]),
-        EffectTarget::Fixture(id) => Err(RenderError::MissingFixture {
-            fixture_id: id.clone(),
-        }),
-        EffectTarget::Group(id) => groups.get(id).cloned().ok_or(RenderError::BadTarget),
+    target: &ElementSelection,
+    element_ids: &IndexSet<ElementNodeId>,
+    groups: &IndexMap<ElementNodeId, Vec<ElementNodeId>>,
+) -> Result<PreparedTargetSelection, RenderError> {
+    if let Some(members) = groups.get(&target.node) {
+        if target.cells.is_some() {
+            return Err(RenderError::BadTarget);
+        }
+        return Ok(PreparedTargetSelection {
+            elements: members.clone(),
+            cells: None,
+        });
     }
+    if !element_ids.contains(&target.node) {
+        return Err(RenderError::MissingElement {
+            element_id: target.node,
+        });
+    }
+    Ok(PreparedTargetSelection {
+        elements: vec![target.node],
+        cells: target.cells,
+    })
 }
 
 fn prepare_target_indexes(
-    target: &[FixtureInstanceId],
-    fixtures: &[PreparedFixture],
+    target: &[ElementNodeId],
+    elements: &[PreparedElement],
 ) -> Result<Vec<usize>, RenderError> {
     target
         .iter()
         .map(|id| {
-            fixtures
+            elements
                 .iter()
-                .position(|fixture| &fixture.id == id)
-                .ok_or_else(|| RenderError::MissingFixture {
-                    fixture_id: id.clone(),
-                })
+                .position(|element| &element.id == id)
+                .ok_or(RenderError::MissingElement { element_id: *id })
         })
         .collect()
 }
 
 fn prepare_target_pixels(
-    target: &[FixtureInstanceId],
-    fixtures: &[PreparedFixture],
+    target: &PreparedTargetSelection,
+    elements: &[PreparedElement],
     scope: &EffectScope,
 ) -> Result<Vec<PreparedTargetPixel>, RenderError> {
-    let indexes = prepare_target_indexes(target, fixtures)?;
+    let indexes = prepare_target_indexes(&target.elements, elements)?;
+    if indexes.iter().any(|index| !elements[*index].color_enabled) {
+        return Err(RenderError::BadTarget);
+    }
     let total_target_pixels = indexes
         .iter()
-        .map(|index| fixtures[*index].pixel_count)
+        .map(|index| {
+            selected_cell_range(elements[*index].pixel_count, target.cells).map(|range| range.len())
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
         .sum::<usize>();
     let mut pixels = Vec::with_capacity(total_target_pixels);
     let mut whole_index = 0usize;
-    for fixture_index in indexes {
-        let fixture_pixel_count = fixtures[fixture_index].pixel_count;
-        for fixture_pixel_index in 0..fixture_pixel_count {
+    for element_index in indexes {
+        let element_cell_count = elements[element_index].pixel_count;
+        let cells = selected_cell_range(element_cell_count, target.cells)?;
+        for (selected_index, element_cell_index) in cells.enumerate() {
             let (pixel_index, pixel_count) = match scope {
-                EffectScope::PerFixture => (fixture_pixel_index, fixture_pixel_count),
+                EffectScope::PerFixture => (
+                    selected_index,
+                    target
+                        .cells
+                        .map_or(element_cell_count, |range| range.count as usize),
+                ),
                 EffectScope::WholeTarget => (whole_index, total_target_pixels),
             };
             pixels.push(PreparedTargetPixel {
-                fixture_index,
-                fixture_pixel_index,
+                element_index,
+                element_cell_index,
                 pixel_index,
                 pixel_count,
                 pixel_fraction: pixel_fraction(pixel_index, pixel_count),
@@ -1374,20 +1404,37 @@ fn prepare_target_pixels(
     Ok(pixels)
 }
 
+fn selected_cell_range(
+    pixel_count: usize,
+    range: Option<ElementCellRange>,
+) -> Result<std::ops::Range<usize>, RenderError> {
+    let Some(range) = range else {
+        return Ok(0..pixel_count);
+    };
+    let start = range.start as usize;
+    let end = start
+        .checked_add(range.count as usize)
+        .ok_or(RenderError::BadTarget)?;
+    if range.count == 0 || end > pixel_count {
+        return Err(RenderError::BadTarget);
+    }
+    Ok(start..end)
+}
+
 fn prepare_target_pixels_cached(
     cache: &mut PrepareTargetCache,
-    target: &[FixtureInstanceId],
-    fixtures: &[PreparedFixture],
+    target: &PreparedTargetSelection,
+    elements: &[PreparedElement],
     scope: &EffectScope,
 ) -> Result<Arc<Vec<PreparedTargetPixel>>, RenderError> {
     let key = PreparedTargetCacheKey {
-        target: target.to_vec(),
+        target: target.clone(),
         scope: PreparedTargetScopeKey::from(scope),
     };
     if let Some(pixels) = cache.prepared_targets.get(&key) {
         return Ok(Arc::clone(pixels));
     }
-    let pixels = Arc::new(prepare_target_pixels(target, fixtures, scope)?);
+    let pixels = Arc::new(prepare_target_pixels(target, elements, scope)?);
     cache.prepared_targets.insert(key, Arc::clone(&pixels));
     Ok(pixels)
 }
@@ -1400,20 +1447,20 @@ fn generator_expansion_targets(
         EffectScope::WholeTarget => vec![Arc::clone(target)],
         EffectScope::PerFixture => {
             let mut targets = Vec::new();
-            let mut fixture_pixels = Vec::new();
-            let mut current_fixture_index = None;
+            let mut element_pixels = Vec::new();
+            let mut current_element_index = None;
 
             for pixel in target.iter() {
-                if current_fixture_index.is_some_and(|index| index != pixel.fixture_index) {
-                    targets.push(Arc::new(fixture_pixels));
-                    fixture_pixels = Vec::new();
+                if current_element_index.is_some_and(|index| index != pixel.element_index) {
+                    targets.push(Arc::new(element_pixels));
+                    element_pixels = Vec::new();
                 }
-                current_fixture_index = Some(pixel.fixture_index);
-                fixture_pixels.push(pixel.clone());
+                current_element_index = Some(pixel.element_index);
+                element_pixels.push(pixel.clone());
             }
 
-            if !fixture_pixels.is_empty() {
-                targets.push(Arc::new(fixture_pixels));
+            if !element_pixels.is_empty() {
+                targets.push(Arc::new(element_pixels));
             }
 
             targets
@@ -1628,7 +1675,7 @@ struct GeneratorExpansion {
 struct GeneratorPrepareContext<'a> {
     project: &'a DawnProject,
     layer_id: SequenceLayerId,
-    fixtures: &'a [PreparedFixture],
+    elements: &'a [PreparedElement],
     effects: &'a mut Vec<PreparedEffect>,
     generated_child_count: &'a mut usize,
     bind_cache: &'a mut DslBindCache,
@@ -1716,7 +1763,7 @@ fn prepare_native_child(
     }
     let target = prepared_pixels_from_generated_target_cached(
         context.target_cache,
-        context.fixtures,
+        context.elements,
         child.target,
     )?;
     let name = child.sample.display_name().to_string();
@@ -1780,7 +1827,7 @@ fn prepare_generated_child(
     }
     let target = prepared_pixels_from_generated_target_cached(
         context.target_cache,
-        context.fixtures,
+        context.elements,
         child.target,
     )?;
     let start_seconds = parent_start_seconds + child.start_seconds;
@@ -1958,8 +2005,8 @@ fn generator_context_target(
 
 fn target_pixel_value(pixel: &PreparedTargetPixel) -> TargetPixelValue {
     TargetPixelValue {
-        fixture_index: pixel.fixture_index as i64,
-        fixture_pixel_index: pixel.fixture_pixel_index as i64,
+        element_index: pixel.element_index as i64,
+        element_cell_index: pixel.element_cell_index as i64,
         pixel_index: pixel.pixel_index as i64,
         pixel_count: pixel.pixel_count as i64,
         pixel_fraction: pixel.pixel_fraction,
@@ -1967,7 +2014,7 @@ fn target_pixel_value(pixel: &PreparedTargetPixel) -> TargetPixelValue {
 }
 
 fn prepared_pixels_from_generated_target(
-    fixtures: &[PreparedFixture],
+    elements: &[PreparedElement],
     target: Arc<TargetItemValue>,
 ) -> Result<Vec<PreparedTargetPixel>, RenderError> {
     target
@@ -1975,23 +2022,23 @@ fn prepared_pixels_from_generated_target(
         .iter()
         .copied()
         .map(|pixel| {
-            let fixture_index = usize::try_from(pixel.fixture_index).map_err(|_| {
+            let element_index = usize::try_from(pixel.element_index).map_err(|_| {
                 RenderError::GeneratorPrepare {
-                    message: "generated target fixture index cannot be negative".to_string(),
+                    message: "generated target element index cannot be negative".to_string(),
                 }
             })?;
-            let fixture_pixel_index = usize::try_from(pixel.fixture_pixel_index).map_err(|_| {
+            let element_cell_index = usize::try_from(pixel.element_cell_index).map_err(|_| {
                 RenderError::GeneratorPrepare {
                     message: "generated target pixel index cannot be negative".to_string(),
                 }
             })?;
-            let fixture =
-                fixtures
-                    .get(fixture_index)
+            let element =
+                elements
+                    .get(element_index)
                     .ok_or_else(|| RenderError::GeneratorPrepare {
-                        message: "generated target fixture index is out of bounds".to_string(),
+                        message: "generated target element index is out of bounds".to_string(),
                     })?;
-            if fixture_pixel_index >= fixture.pixel_count {
+            if element_cell_index >= element.pixel_count {
                 return Err(RenderError::GeneratorPrepare {
                     message: "generated target pixel index is out of bounds".to_string(),
                 });
@@ -2005,8 +2052,8 @@ fn prepared_pixels_from_generated_target(
                     message: "generated target pixel context count cannot be negative".to_string(),
                 })?;
             Ok(PreparedTargetPixel {
-                fixture_index,
-                fixture_pixel_index,
+                element_index,
+                element_cell_index,
                 pixel_index,
                 pixel_count,
                 pixel_fraction: pixel.pixel_fraction,
@@ -2017,7 +2064,7 @@ fn prepared_pixels_from_generated_target(
 
 fn prepared_pixels_from_generated_target_cached(
     cache: &mut PrepareTargetCache,
-    fixtures: &[PreparedFixture],
+    elements: &[PreparedElement],
     target: Arc<TargetItemValue>,
 ) -> Result<Arc<Vec<PreparedTargetPixel>>, RenderError> {
     let key = arc_key(&target);
@@ -2027,7 +2074,7 @@ fn prepared_pixels_from_generated_target_cached(
         return Ok(Arc::clone(&entry.pixels));
     }
     let pixels = Arc::new(prepared_pixels_from_generated_target(
-        fixtures,
+        elements,
         Arc::clone(&target),
     )?);
     cache.generated_targets.insert(
@@ -2088,7 +2135,7 @@ fn build_effect_frame_index_for_window(
 
 fn render_effect(
     effect: &PreparedEffect,
-    fixture_pixel_offsets: &[usize],
+    element_cell_offsets: &[usize],
     rendered: &mut [Color],
     sample_seconds: f64,
     scratch: &mut DslVmScratch,
@@ -2114,7 +2161,7 @@ fn render_effect(
                     continue;
                 };
                 let flat_index =
-                    fixture_pixel_offsets[pixel.fixture_index] + pixel.fixture_pixel_index;
+                    element_cell_offsets[pixel.element_index] + pixel.element_cell_index;
                 compose_max(&mut rendered[flat_index], color);
             }
         }
@@ -2130,7 +2177,7 @@ fn render_effect(
             local_seconds,
             scratch,
         )?;
-        let flat_index = fixture_pixel_offsets[pixel.fixture_index] + pixel.fixture_pixel_index;
+        let flat_index = element_cell_offsets[pixel.element_index] + pixel.element_cell_index;
         compose_max(&mut rendered[flat_index], color);
     }
     Ok(())
@@ -2140,7 +2187,7 @@ fn render_composition_graph(
     renderer: &PreparedSequenceRenderer,
     sample_seconds: f64,
     scratch: &mut SequenceRenderScratch,
-) -> Result<Vec<RenderedFixture>, RenderError> {
+) -> Result<Vec<RenderedElement>, RenderError> {
     prune_layer_cache(renderer, sample_seconds, scratch);
     let frame_key = (sample_seconds * 1_000_000.0).round() as i64;
     let mut cache = std::mem::take(&mut scratch.graph_cache);
@@ -2163,7 +2210,7 @@ fn render_composition_graph(
             return Err(error);
         }
     };
-    let rendered = unflatten_rendered_fixtures(&renderer.fixtures, output.as_ref());
+    let rendered = unflatten_rendered_elements(&renderer.elements, output.as_ref());
     drop(output);
     scratch.graph_cache = cache;
     Ok(rendered)
@@ -2225,6 +2272,7 @@ fn recycle_graph_color_buffers(
     }
 }
 
+#[allow(dead_code)]
 #[cfg(test)]
 fn render_graph_node(
     renderer: &PreparedSequenceRenderer,
@@ -3049,15 +3097,22 @@ fn black() -> Color {
 }
 
 #[derive(Clone, Debug)]
-struct PreparedFixture {
-    id: FixtureInstanceId,
+struct PreparedElement {
+    id: ElementNodeId,
     pixel_count: usize,
+    color_enabled: bool,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct PreparedTargetSelection {
+    elements: Vec<ElementNodeId>,
+    cells: Option<ElementCellRange>,
 }
 
 #[derive(Clone, Debug)]
 struct PreparedTargetPixel {
-    fixture_index: usize,
-    fixture_pixel_index: usize,
+    element_index: usize,
+    element_cell_index: usize,
     pixel_index: usize,
     pixel_count: usize,
     pixel_fraction: f64,
@@ -3113,8 +3168,8 @@ struct PreparedSampledEffectPixelGroup {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct TargetColorAddress {
-    fixture_index: usize,
-    fixture_pixel_index: usize,
+    element_index: usize,
+    element_cell_index: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -3200,7 +3255,7 @@ struct PrepareTargetCache {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct PreparedTargetCacheKey {
-    target: Vec<FixtureInstanceId>,
+    target: PreparedTargetSelection,
     scope: PreparedTargetScopeKey,
 }
 

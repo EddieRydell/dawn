@@ -353,8 +353,8 @@ fn hash_target_items<H: Hasher>(items: &[std::sync::Arc<TargetItemValue>], state
 fn hash_target_pixels<H: Hasher>(pixels: &[TargetPixelValue], state: &mut H) {
     pixels.len().hash(state);
     for pixel in pixels {
-        pixel.fixture_index.hash(state);
-        pixel.fixture_pixel_index.hash(state);
+        pixel.element_index.hash(state);
+        pixel.element_cell_index.hash(state);
         pixel.pixel_index.hash(state);
         pixel.pixel_count.hash(state);
         pixel.pixel_fraction.to_bits().hash(state);

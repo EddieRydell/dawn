@@ -1,8 +1,8 @@
-import type { LayoutDocument } from "../../../types";
+import type { PreviewDocument } from "../../../types";
 import { InspectorScrollArea } from "../InspectorScrollArea";
 import { normalizeTransform, type GuiFocus } from "../shared";
 
-export function LayoutInspector({ document, selected }: { document: LayoutDocument; selected: GuiFocus }) {
+export function LayoutInspector({ document, selected }: { document: PreviewDocument; selected: GuiFocus }) {
   const id = selected?.type === "placement" ? selected.id : null;
   const placement = document.fixtures.find((candidate) => candidate.id === id);
   const transform = placement === undefined ? null : normalizeTransform(placement.transform);

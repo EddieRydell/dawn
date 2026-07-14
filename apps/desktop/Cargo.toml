@@ -12,6 +12,7 @@ camino.workspace = true
 bytemuck.workspace = true
 dawn-project-io.workspace = true
 dawn-language.workspace = true
+dawn-output.workspace = true
 dawn-runtime.workspace = true
 glam.workspace = true
 indexmap.workspace = true

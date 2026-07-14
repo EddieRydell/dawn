@@ -3,8 +3,8 @@ import type {
   AppSnapshot,
   GeometryRenderBounds,
   GeometryRenderPoint,
-  LayoutDocument,
-  LayoutFixturePlacement,
+  PreviewDocument,
+  PreviewPropPlacement,
   Point3Meters,
   SequenceAutomationMapping,
   SequenceSelection as WireSequenceSelection,
@@ -176,8 +176,8 @@ export function unproject(x: number, y: number, canvas: HTMLCanvasElement | null
   };
 }
 
-export function nearestPlacement(document: LayoutDocument, point: Point3): LayoutFixturePlacement | null {
-  let best: LayoutFixturePlacement | null = null;
+export function nearestPlacement(document: PreviewDocument, point: Point3): PreviewPropPlacement | null {
+  let best: PreviewPropPlacement | null = null;
   let bestDistance = Infinity;
   for (const placement of document.fixtures) {
     const transform = normalizeTransform(placement.transform);

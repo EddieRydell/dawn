@@ -2,8 +2,8 @@ mod parse;
 mod resolve;
 
 use parse::{
-    AliasObjectKey, ResolvedObject, SourceObjectValue, parse_curve, parse_fixture_definition,
-    parse_gradient, sequence_field, string_field,
+    AliasObjectKey, ResolvedObject, SourceObjectValue, parse_curve, parse_gradient,
+    parse_prop_definition, sequence_field, string_field,
 };
 pub(crate) use parse::{mapping, normalize_relative, parse_imports, relative_path};
 use resolve::DomainResolver;
@@ -246,50 +246,56 @@ impl Loader {
                 message: format!("invalid object identifier `{key}`"),
             })?;
             let object_type = string_field(relative, object_value, "type")?;
-            let object = match object_type {
-                "project" => ResolvedObject::Project(ProjectId(SourceIdentity::new(
-                    relative.to_path_buf(),
-                    key.to_string(),
-                ))),
-                "setup" => ResolvedObject::Setup(SetupId(SourceIdentity::new(
-                    relative.to_path_buf(),
-                    key.to_string(),
-                ))),
-                "controller" => ResolvedObject::Controller(ControllerId(SourceIdentity::new(
-                    relative.to_path_buf(),
-                    key.to_string(),
-                ))),
-                "layout" => ResolvedObject::Layout(LayoutId(SourceIdentity::new(
-                    relative.to_path_buf(),
-                    key.to_string(),
-                ))),
-                "patch" => ResolvedObject::Patch(PatchId(SourceIdentity::new(
-                    relative.to_path_buf(),
-                    key.to_string(),
-                ))),
-                "fixture" => ResolvedObject::FixtureDefinition(FixtureDefinitionId(
-                    SourceIdentity::new(relative.to_path_buf(), key.to_string()),
-                )),
-                "curve" => ResolvedObject::Curve(CurveId(SourceIdentity::new(
-                    relative.to_path_buf(),
-                    key.to_string(),
-                ))),
-                "gradient" => ResolvedObject::Gradient(GradientId(SourceIdentity::new(
-                    relative.to_path_buf(),
-                    key.to_string(),
-                ))),
-                "sequence" => ResolvedObject::Sequence(SequenceId(SourceIdentity::new(
-                    relative.to_path_buf(),
-                    key.to_string(),
-                ))),
-                other => {
-                    return Err(LoadProjectError::InvalidDocument {
-                        path: relative.to_path_buf(),
-                        range: source_range_for_field_value(relative, object_value, "type"),
-                        message: format!("unsupported object type `{other}`"),
-                    });
-                }
-            };
+            let object =
+                match object_type {
+                    "project" => ResolvedObject::Project(ProjectId(SourceIdentity::new(
+                        relative.to_path_buf(),
+                        key.to_string(),
+                    ))),
+                    "setup" => ResolvedObject::Setup(SetupId(SourceIdentity::new(
+                        relative.to_path_buf(),
+                        key.to_string(),
+                    ))),
+                    "controller" => ResolvedObject::Controller(ControllerId(SourceIdentity::new(
+                        relative.to_path_buf(),
+                        key.to_string(),
+                    ))),
+                    "element_tree" => ResolvedObject::ElementTree(ElementTreeId(
+                        SourceIdentity::new(relative.to_path_buf(), key.to_string()),
+                    )),
+                    "preview_layout" => ResolvedObject::PreviewLayout(PreviewLayoutId(
+                        SourceIdentity::new(relative.to_path_buf(), key.to_string()),
+                    )),
+                    "patch" => ResolvedObject::Patch(PatchId(SourceIdentity::new(
+                        relative.to_path_buf(),
+                        key.to_string(),
+                    ))),
+                    "prop" => ResolvedObject::PropDefinition(PropDefinitionId(
+                        SourceIdentity::new(relative.to_path_buf(), key.to_string()),
+                    )),
+                    "fixture_profile" => ResolvedObject::FixtureProfile(FixtureProfileId(
+                        SourceIdentity::new(relative.to_path_buf(), key.to_string()),
+                    )),
+                    "curve" => ResolvedObject::Curve(CurveId(SourceIdentity::new(
+                        relative.to_path_buf(),
+                        key.to_string(),
+                    ))),
+                    "gradient" => ResolvedObject::Gradient(GradientId(SourceIdentity::new(
+                        relative.to_path_buf(),
+                        key.to_string(),
+                    ))),
+                    "sequence" => ResolvedObject::Sequence(SequenceId(SourceIdentity::new(
+                        relative.to_path_buf(),
+                        key.to_string(),
+                    ))),
+                    other => {
+                        return Err(LoadProjectError::InvalidDocument {
+                            path: relative.to_path_buf(),
+                            range: source_range_for_field_value(relative, object_value, "type"),
+                            message: format!("unsupported object type `{other}`"),
+                        });
+                    }
+                };
             if let ResolvedObject::Curve(id) = &object {
                 self.definitions.curves.insert(
                     id.clone(),
@@ -306,11 +312,11 @@ impl Loader {
                     },
                 );
             }
-            if let ResolvedObject::FixtureDefinition(id) = &object {
-                self.definitions.fixtures.insert(
-                    id.clone(),
-                    parse_fixture_definition(relative, object_value)?,
-                );
+            if let ResolvedObject::PropDefinition(id) = &object {
+                self.definitions
+                    .props
+                    .definitions
+                    .insert(id.clone(), parse_prop_definition(relative, object_value)?);
             }
             let source_object = SourceObjectId {
                 kind: object.source_kind(),
@@ -497,7 +503,8 @@ impl Loader {
                 sequences: sequences.clone(),
             },
             setups: IndexMap::new(),
-            layouts: IndexMap::new(),
+            element_trees: IndexMap::new(),
+            preview_layouts: IndexMap::new(),
             patches: IndexMap::new(),
             controllers: IndexMap::new(),
             sequences: IndexMap::new(),
@@ -513,6 +520,13 @@ impl Loader {
         for sequence in sequences {
             resolver.resolve_sequence(&sequence)?;
         }
+        dawn_language::validation::validate_project(&project).map_err(|error| {
+            LoadProjectError::InvalidDocument {
+                path: entrypoint.to_path_buf(),
+                range: None,
+                message: format!("project validation failed: {error:?}"),
+            }
+        })?;
         Ok(project)
     }
 
@@ -621,19 +635,14 @@ impl Loader {
         reference: &str,
     ) -> Result<ResolvedObject, LoadProjectError> {
         let range = source_range_for_scalar(path, reference);
-        let (alias, object) =
-            reference
-                .split_once('.')
-                .ok_or_else(|| LoadProjectError::InvalidReference {
-                    path: path.to_path_buf(),
-                    range: range.clone(),
-                    reference: reference.to_string(),
-                })?;
+        let (alias, object) = reference
+            .split_once('.')
+            .map_or((None, reference), |(alias, object)| (Some(alias), object));
         self.visible_objects
             .get(path)
             .and_then(|visible| {
                 visible.get(&AliasObjectKey {
-                    alias: Some(alias.to_string()),
+                    alias: alias.map(ToString::to_string),
                     object: object.to_string(),
                 })
             })
@@ -678,15 +687,20 @@ impl Loader {
 use std::fs;
 
 use camino::{Utf8Path, Utf8PathBuf};
+use dawn_language::controller::ControllerId;
 use dawn_language::dsl::{Identifier, compile_effects, compile_operators};
 use dawn_language::effect::{
     CurveDefinition, CurveId, EffectDefinition, EffectDefinitionId, GradientDefinition, GradientId,
 };
+use dawn_language::element::ElementTreeId;
+use dawn_language::fixture_profile::FixtureProfileId;
 use dawn_language::identity::SourceIdentity;
 use dawn_language::model::{DawnProject, ProjectDefinitionStores, ProjectId, ProjectRoot};
 use dawn_language::operator::{OperatorDefinitionId, custom_operator_definition};
+use dawn_language::patch::PatchId;
+use dawn_language::preview::{PreviewLayoutId, PropDefinitionId};
 use dawn_language::sequence::SequenceId;
-use dawn_language::setup::{ControllerId, FixtureDefinitionId, LayoutId, PatchId, SetupId};
+use dawn_language::setup::SetupId;
 use indexmap::{IndexMap, IndexSet};
 use yaml_serde::Value;
 

@@ -1,8 +1,8 @@
 use crate::dsl::types::Identifier;
 use crate::dsl::{CompiledEffect, EffectKind, ParamDecl, Type, Value};
+use crate::element::ElementSelection;
 use crate::identity::SourceIdentity;
 use crate::sequence::{MarkCollectionKey, SequenceLayerId};
-use crate::setup::{FixtureGroupId, FixtureInstanceId};
 use crate::values::{Curve, DawnDuration, DawnTime, Gradient};
 use indexmap::IndexMap;
 use std::sync::LazyLock;
@@ -13,7 +13,7 @@ pub struct EffectInst {
     pub layer_id: SequenceLayerId,
     pub start: DawnTime,
     pub duration: DawnDuration,
-    pub target: EffectTarget,
+    pub target: ElementSelection,
     pub scope: EffectScope,
     pub definition: EffectRef,
     pub param_overrides: IndexMap<Identifier, EffectParamValue>,
@@ -38,12 +38,6 @@ pub enum BuiltinEffect {
     Spin,
     MarkPulse,
     MarkChase,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum EffectTarget {
-    Group(FixtureGroupId),
-    Fixture(FixtureInstanceId),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

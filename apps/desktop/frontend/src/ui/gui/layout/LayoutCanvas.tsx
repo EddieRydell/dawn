@@ -2,20 +2,20 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { commands } from "../../../api";
 
-import type { LayoutDocument } from "../../../types";
+import type { PreviewDocument } from "../../../types";
 
 import { runGuiEditCommand } from "../../../store";
 
 import { denormalizeTransform, drawSpatialCanvas, nearestPlacement, normalizeBounds, normalizePoint, normalizeTransform, round6, unproject, type GuiFocus, type Transform } from "../shared";
 
-type LayoutDragState = { kind: "layout"; id: number; startX: number; startY: number; original: Transform; draft: Transform } | null;
+type LayoutDragState = { kind: "preview"; id: number; startX: number; startY: number; original: Transform; draft: Transform } | null;
 
 export function LayoutCanvas({
   document,
   selected,
   setSelected
 }: {
-  document: LayoutDocument;
+  document: PreviewDocument;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
 }) {
@@ -27,7 +27,7 @@ export function LayoutCanvas({
   useEffect(() => {
     drawSpatialCanvas(canvas.current, viewport, (ctx, project) => {
       for (const fixture of document.fixtures) {
-        const transform = drag.current?.kind === "layout" && drag.current.id === fixture.id ? drag.current.draft : normalizeTransform(fixture.transform);
+        const transform = drag.current?.kind === "preview" && drag.current.id === fixture.id ? drag.current.draft : normalizeTransform(fixture.transform);
         const center = project(transform.position);
         ctx.fillStyle = selected?.type === "placement" && selected.id === fixture.id ? "#6abf8a" : "#d6a35a";
         ctx.beginPath();
@@ -62,7 +62,7 @@ export function LayoutCanvas({
         }
         setSelected({ type: "placement", id: hit.id });
         drag.current = {
-          kind: "layout",
+          kind: "preview",
           id: hit.id,
           startX: world.x,
           startY: world.y,
@@ -89,7 +89,7 @@ export function LayoutCanvas({
         drag.current = null;
         if (!current) return;
         void runGuiEditCommand(() =>
-          commands.applyLayoutGuiEdit({
+          commands.applyPreviewGuiEdit({
             type: "updatePlacementTransform",
             id: current.id,
             transform: denormalizeTransform(current.draft)

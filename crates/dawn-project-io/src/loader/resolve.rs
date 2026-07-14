@@ -15,15 +15,29 @@ impl DomainResolver<'_> {
         let (document_path, _, value) = self
             .loader
             .object_value(&ResolvedObject::Setup(id.clone()))?;
-        let layout_ref = string_field(&document_path, &value, "layout")?;
+        let elements_ref = string_field(&document_path, &value, "elements")?;
+        let preview_ref = string_field(&document_path, &value, "preview")?;
         let patch_ref = string_field(&document_path, &value, "patch")?;
-        let layout = match self.loader.resolve_reference(&document_path, layout_ref)? {
-            ResolvedObject::Layout(layout) => layout,
+        let elements = match self
+            .loader
+            .resolve_reference(&document_path, elements_ref)?
+        {
+            ResolvedObject::ElementTree(elements) => elements,
             _ => {
                 return Err(LoadProjectError::InvalidReference {
-                    path: document_path,
+                    path: document_path.clone(),
                     range: None,
-                    reference: layout_ref.to_string(),
+                    reference: elements_ref.to_string(),
+                });
+            }
+        };
+        let preview = match self.loader.resolve_reference(&document_path, preview_ref)? {
+            ResolvedObject::PreviewLayout(preview) => preview,
+            _ => {
+                return Err(LoadProjectError::InvalidReference {
+                    path: document_path.clone(),
+                    range: None,
+                    reference: preview_ref.to_string(),
                 });
             }
         };
@@ -39,311 +53,720 @@ impl DomainResolver<'_> {
         };
         let controllers = sequence_field(&document_path, &value, "controllers")?
             .iter()
-            .map(|name| {
-                Identifier::new(name.to_string())
-                    .map(|name| {
-                        ControllerId(SourceIdentity::new(
-                            document_path.clone(),
-                            name.as_str().to_string(),
-                        ))
-                    })
-                    .map_err(|_| LoadProjectError::InvalidReference {
+            .map(
+                |reference| match self.loader.resolve_reference(&document_path, reference)? {
+                    ResolvedObject::Controller(controller) => Ok(controller),
+                    _ => Err(LoadProjectError::InvalidReference {
                         path: document_path.clone(),
-                        range: source_range_for_scalar(&document_path, name),
-                        reference: name.to_string(),
-                    })
-            })
+                        range: source_range_for_scalar(&document_path, reference),
+                        reference: reference.clone(),
+                    }),
+                },
+            )
             .collect::<Result<Vec<_>, _>>()?;
         self.project.setups.insert(
             id.clone(),
             Setup {
                 id: id.clone(),
-                layout: layout.clone(),
+                elements: elements.clone(),
+                preview: preview.clone(),
                 patch: patch.clone(),
                 controllers: controllers.clone(),
             },
         );
-        self.resolve_layout(&layout)?;
-        self.resolve_patch(&document_path, &patch)?;
+        self.resolve_element_tree(&elements)?;
+        self.resolve_preview_layout(&preview)?;
+        self.resolve_patch(&patch)?;
         for controller in controllers {
-            self.resolve_controller(&document_path, &controller)?;
+            self.resolve_controller(&controller)?;
         }
         Ok(())
     }
 
-    pub(super) fn resolve_controller(
-        &mut self,
-        path: &Utf8Path,
-        id: &ControllerId,
-    ) -> Result<(), LoadProjectError> {
+    pub(super) fn resolve_controller(&mut self, id: &ControllerId) -> Result<(), LoadProjectError> {
         if self.project.controllers.contains_key(id) {
             return Ok(());
         }
-        let (_, _, value) = self
+        let (path, _, value) = self
             .loader
             .object_value(&ResolvedObject::Controller(id.clone()))?;
-        let protocol = match string_field(path, &value, "protocol")? {
-            "sacn" => Protocol::E131,
-            "artnet" => Protocol::Artnet,
-            other => {
-                return Err(LoadProjectError::InvalidDocument {
-                    path: path.to_path_buf(),
-                    range: None,
-                    message: format!("unsupported controller protocol `{other}`"),
-                });
-            }
-        };
-        let address = optional_string_field(&value, "destination")
-            .map(parse_controller_address)
-            .transpose()
-            .map_err(|message| LoadProjectError::InvalidDocument {
-                path: path.to_path_buf(),
-                range: None,
-                message,
-            })?;
-        let output = required_field(path, &value, "output")?;
-        let output_type = string_field(path, output, "type")?;
-        let channel_order = parse_channel_order(string_field(path, output, "channel_order")?)
-            .ok_or_else(|| LoadProjectError::InvalidDocument {
-                path: path.to_path_buf(),
-                range: None,
-                message: "invalid channel order".to_string(),
-            })?;
-        let outputs = match output_type {
-            "linear_rgb" => {
-                let output_count = u32_field(path, output, "output_count")?;
-                let pixels = usize_field(path, output, "pixels_per_output")?;
-                let first_universe = u32_field(path, output, "first_universe")?;
-                (0..output_count)
-                    .map(|index| ControllerOutput {
-                        channel_order: channel_order.clone(),
-                        pixels,
-                        first_universe: first_universe + index,
-                    })
-                    .collect()
-            }
-            "patched_dmx" => sequence_values(path, output, "universes")?
-                .iter()
-                .map(|universe| {
-                    let range = string_field(path, universe, "range")?;
-                    let slots = parse_slot_range(range).ok_or_else(|| {
-                        LoadProjectError::InvalidDocument {
-                            path: path.to_path_buf(),
-                            range: None,
-                            message: format!("invalid universe range `{range}`"),
-                        }
-                    })?;
-                    Ok(ControllerOutput {
-                        channel_order: channel_order.clone(),
-                        pixels: slots / 3,
-                        first_universe: u32_field(path, universe, "id")?,
-                    })
+        let protocol_value = required_field(&path, &value, "protocol")?;
+        let protocol = match string_field(&path, protocol_value, "type")? {
+            "e131" => {
+                let mode = match string_field(&path, protocol_value, "mode")? {
+                    "multicast" => E131Mode::Multicast,
+                    "unicast" => E131Mode::Unicast {
+                        destination: string_field(&path, protocol_value, "destination")?
+                            .parse()
+                            .map_err(|_| invalid(&path, "invalid E1.31 destination address"))?,
+                    },
+                    other => return Err(invalid(&path, &format!("invalid E1.31 mode `{other}`"))),
+                };
+                ControllerProtocol::E131(E131Config {
+                    source_name: string_field(&path, protocol_value, "source_name")?.to_string(),
+                    bind_address: string_field(&path, protocol_value, "bind_address")?
+                        .parse()
+                        .map_err(|_| invalid(&path, "invalid E1.31 bind address"))?,
+                    priority: u8::try_from(u32_field(&path, protocol_value, "priority")?)
+                        .map_err(|_| invalid(&path, "E1.31 priority must be a u8"))?,
+                    mode,
                 })
-                .collect::<Result<Vec<_>, LoadProjectError>>()?,
+            }
+            "artnet" => ControllerProtocol::ArtNet(ArtNetConfig {
+                bind_address: string_field(&path, protocol_value, "bind_address")?
+                    .parse()
+                    .map_err(|_| invalid(&path, "invalid Art-Net bind socket"))?,
+                destination: string_field(&path, protocol_value, "destination")?
+                    .parse()
+                    .map_err(|_| invalid(&path, "invalid Art-Net destination socket"))?,
+                mode: match string_field(&path, protocol_value, "mode")? {
+                    "unicast" => ArtNetMode::Unicast,
+                    "broadcast" => ArtNetMode::Broadcast,
+                    other => {
+                        return Err(invalid(&path, &format!("invalid Art-Net mode `{other}`")));
+                    }
+                },
+            }),
             other => {
-                return Err(LoadProjectError::InvalidDocument {
-                    path: path.to_path_buf(),
-                    range: None,
-                    message: format!("unsupported controller output type `{other}`"),
-                });
+                return Err(invalid(
+                    &path,
+                    &format!("unsupported controller protocol `{other}`"),
+                ));
             }
         };
-        let definition = ControllerDefinition {
-            protocol,
-            address,
-            outputs,
-        };
-        self.project
-            .definitions
-            .controllers
-            .insert(ControllerDefinitionId(id.0.clone()), definition.clone());
-        self.project.controllers.insert(id.clone(), definition);
+        let ports = sequence_values(&path, &value, "ports")?
+            .iter()
+            .map(|port| {
+                let id = ControllerPortId(u32_field(&path, port, "id")?);
+                let slot_count = u16::try_from(u32_field(&path, port, "slot_count")?)
+                    .map_err(|_| invalid(&path, "controller slot count must be a u16"))?;
+                let address = match &protocol {
+                    ControllerProtocol::E131(_) => ControllerPortAddress::E131Universe(
+                        u16::try_from(u32_field(&path, port, "universe")?)
+                            .map_err(|_| invalid(&path, "E1.31 universe must be a u16"))?,
+                    ),
+                    ControllerProtocol::ArtNet(_) => ControllerPortAddress::ArtNetPort(
+                        u16::try_from(u32_field(&path, port, "port_address")?)
+                            .map_err(|_| invalid(&path, "Art-Net port address must be a u16"))?,
+                    ),
+                };
+                Ok(ControllerPort {
+                    id,
+                    address,
+                    slot_count,
+                })
+            })
+            .collect::<Result<Vec<_>, LoadProjectError>>()?;
+        let controller = Controller { protocol, ports };
+        controller
+            .validate()
+            .map_err(|error| invalid(&path, &format!("invalid controller: {error:?}")))?;
+        self.project.controllers.insert(id.clone(), controller);
         Ok(())
     }
 
-    pub(super) fn resolve_layout(&mut self, id: &LayoutId) -> Result<(), LoadProjectError> {
-        if self.project.layouts.contains_key(id) {
+    pub(super) fn resolve_element_tree(
+        &mut self,
+        id: &ElementTreeId,
+    ) -> Result<(), LoadProjectError> {
+        if self.project.element_trees.contains_key(id) {
             return Ok(());
         }
         let (document_path, _, value) = self
             .loader
-            .object_value(&ResolvedObject::Layout(id.clone()))?;
-        let target_order = optional_sequence(&value, "target_order")
-            .into_iter()
-            .flatten()
-            .map(|target| parse_layout_target(&document_path, target))
+            .object_value(&ResolvedObject::ElementTree(id.clone()))?;
+        let roots = sequence_values(&document_path, &value, "roots")?
+            .iter()
+            .map(|root| {
+                root.as_u64()
+                    .and_then(|raw| u32::try_from(raw).ok())
+                    .map(ElementNodeId)
+                    .ok_or_else(|| invalid(&document_path, "element roots must be u32 ids"))
+            })
             .collect::<Result<Vec<_>, _>>()?;
-        let fixtures = optional_sequence(&value, "fixtures")
-            .into_iter()
-            .flatten()
-            .map(|fixture| self.parse_fixture_inst(&document_path, fixture))
-            .collect::<Result<Vec<_>, _>>()?;
-        let groups = optional_sequence(&value, "groups")
-            .into_iter()
-            .flatten()
-            .map(|group| parse_fixture_group(&document_path, group))
-            .collect::<Result<Vec<_>, _>>()?;
-        for fixture in &fixtures {
-            self.resolve_fixture_definition(&document_path, &fixture.definition)?;
+        let mut nodes = IndexMap::new();
+        for node in sequence_values(&document_path, &value, "nodes")? {
+            let node_id = ElementNodeId(u32_field(&document_path, node, "id")?);
+            let name = string_field(&document_path, node, "name")?.to_string();
+            let kind = match string_field(&document_path, node, "type")? {
+                "group" => ElementNodeKind::Group {
+                    children: sequence_values(&document_path, node, "children")?
+                        .iter()
+                        .map(|child| {
+                            child
+                                .as_u64()
+                                .and_then(|raw| u32::try_from(raw).ok())
+                                .map(ElementNodeId)
+                                .ok_or_else(|| {
+                                    invalid(&document_path, "element children must be u32 ids")
+                                })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                },
+                "color" => ElementNodeKind::Color {
+                    cells: u32_field(&document_path, node, "cells")?,
+                    capability: self.parse_color_capability(
+                        &document_path,
+                        required_field(&document_path, node, "capability")?,
+                    )?,
+                },
+                "scalar" => ElementNodeKind::Scalar {
+                    cells: u32_field(&document_path, node, "cells")?,
+                },
+                "indexed" => ElementNodeKind::Indexed {
+                    cells: u32_field(&document_path, node, "cells")?,
+                    options: sequence_values(&document_path, node, "options")?
+                        .iter()
+                        .map(|option| {
+                            Ok(IndexedOption {
+                                id: IndexedOptionId(u32_field(&document_path, option, "id")?),
+                                name: string_field(&document_path, option, "name")?.to_string(),
+                            })
+                        })
+                        .collect::<Result<Vec<_>, LoadProjectError>>()?,
+                },
+                "fixture" => {
+                    let reference = string_field(&document_path, node, "profile")?;
+                    let profile = match self.loader.resolve_reference(&document_path, reference)? {
+                        ResolvedObject::FixtureProfile(profile) => profile,
+                        _ => {
+                            return Err(LoadProjectError::InvalidReference {
+                                path: document_path.clone(),
+                                range: None,
+                                reference: reference.to_string(),
+                            });
+                        }
+                    };
+                    self.resolve_fixture_profile(&profile)?;
+                    ElementNodeKind::Fixture { profile }
+                }
+                other => {
+                    return Err(invalid(
+                        &document_path,
+                        &format!("invalid element node type `{other}`"),
+                    ));
+                }
+            };
+            if nodes.insert(node_id, ElementNode { name, kind }).is_some() {
+                return Err(invalid(&document_path, "duplicate element node id"));
+            }
         }
-        self.project.layouts.insert(
+        let tree = ElementTree {
+            id: id.clone(),
+            roots,
+            nodes,
+        };
+        tree.validate().map_err(|error| {
+            invalid(&document_path, &format!("invalid element tree: {error:?}"))
+        })?;
+        self.project.element_trees.insert(id.clone(), tree);
+        Ok(())
+    }
+
+    pub(super) fn parse_prop_instance(
+        &self,
+        path: &Utf8Path,
+        value: &Value,
+    ) -> Result<PropInstance, LoadProjectError> {
+        let id = PropInstanceId(u32_field(path, value, "id")?);
+        let name = string_field(path, value, "name")?.to_string();
+        let prop_ref = string_field(path, value, "prop")?;
+        let definition = match self.loader.resolve_reference(path, prop_ref)? {
+            ResolvedObject::PropDefinition(definition) => definition,
+            _ => {
+                return Err(LoadProjectError::InvalidReference {
+                    path: path.to_path_buf(),
+                    range: None,
+                    reference: prop_ref.to_string(),
+                });
+            }
+        };
+        let transform = required_field(path, value, "transform")?;
+        let bindings = sequence_values(path, value, "bindings")?
+            .iter()
+            .map(|binding| {
+                Ok(ElementCellAddress {
+                    node: ElementNodeId(u32_field(path, binding, "node")?),
+                    cell: u32_field(path, binding, "cell")?,
+                })
+            })
+            .collect::<Result<Vec<_>, LoadProjectError>>()?;
+        Ok(PropInstance {
+            id,
+            name,
+            definition,
+            position: parse_point3(required_field(path, transform, "position")?)?,
+            rotation: parse_rotation3(required_field(path, transform, "rotation")?)?,
+            scale: parse_scale3(required_field(path, transform, "scale")?)?,
+            bindings,
+        })
+    }
+
+    pub(super) fn resolve_fixture_profile(
+        &mut self,
+        id: &FixtureProfileId,
+    ) -> Result<(), LoadProjectError> {
+        if self
+            .project
+            .definitions
+            .fixture_profiles
+            .definitions
+            .contains_key(id)
+        {
+            return Ok(());
+        }
+        let (path, _, value) = self
+            .loader
+            .object_value(&ResolvedObject::FixtureProfile(id.clone()))?;
+        let profile = self.parse_fixture_profile(&path, id.clone(), &value)?;
+        profile
+            .validate()
+            .map_err(|error| invalid(&path, &format!("invalid fixture profile: {error:?}")))?;
+        self.project
+            .definitions
+            .fixture_profiles
+            .definitions
+            .insert(id.clone(), profile);
+        Ok(())
+    }
+
+    pub(super) fn resolve_preview_layout(
+        &mut self,
+        id: &PreviewLayoutId,
+    ) -> Result<(), LoadProjectError> {
+        if self.project.preview_layouts.contains_key(id) {
+            return Ok(());
+        }
+        let (path, _, value) = self
+            .loader
+            .object_value(&ResolvedObject::PreviewLayout(id.clone()))?;
+        let tree_ref = string_field(&path, &value, "element_tree")?;
+        let element_tree = match self.loader.resolve_reference(&path, tree_ref)? {
+            ResolvedObject::ElementTree(tree) => tree,
+            _ => {
+                return Err(LoadProjectError::InvalidReference {
+                    path: path.clone(),
+                    range: None,
+                    reference: tree_ref.to_string(),
+                });
+            }
+        };
+        self.resolve_element_tree(&element_tree)?;
+        let props = sequence_values(&path, &value, "props")?
+            .iter()
+            .map(|prop| self.parse_prop_instance(&path, prop))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.project.preview_layouts.insert(
             id.clone(),
-            Layout {
+            PreviewLayout {
                 id: id.clone(),
-                target_order,
-                fixtures,
-                groups,
+                element_tree,
+                props,
             },
         );
         Ok(())
     }
 
-    pub(super) fn parse_fixture_inst(
-        &self,
-        path: &Utf8Path,
-        value: &Value,
-    ) -> Result<FixtureInst, LoadProjectError> {
-        let id = FixtureInstanceId(u32_field(path, value, "id")?);
-        let name = string_field(path, value, "name")?.to_string();
-        let fixture_ref = string_field(path, value, "fixture")?;
-        let definition = match self.loader.resolve_reference(path, fixture_ref)? {
-            ResolvedObject::FixtureDefinition(definition) => definition,
-            _ => {
-                return Err(LoadProjectError::InvalidReference {
-                    path: path.to_path_buf(),
-                    range: None,
-                    reference: fixture_ref.to_string(),
-                });
-            }
-        };
-        let transform = optional_mapping_ref(value, "transform");
-        let position = transform
-            .and_then(|mapping| mapping.get(Value::String("position".to_string())))
-            .map(parse_point3)
-            .transpose()?
-            .unwrap_or_default();
-        let rotation = transform
-            .and_then(|mapping| mapping.get(Value::String("rotation".to_string())))
-            .map(parse_rotation3)
-            .transpose()?
-            .unwrap_or_default();
-        let scale = transform
-            .and_then(|mapping| mapping.get(Value::String("scale".to_string())))
-            .map(parse_scale3)
-            .transpose()?
-            .unwrap_or_default();
-        Ok(FixtureInst {
-            id,
-            name,
-            definition,
-            position,
-            rotation,
-            scale,
-        })
-    }
-
-    pub(super) fn resolve_fixture_definition(
-        &mut self,
-        path: &Utf8Path,
-        id: &FixtureDefinitionId,
-    ) -> Result<(), LoadProjectError> {
-        if !self
-            .project
-            .definitions
-            .fixtures
-            .definitions
-            .contains_key(id)
-        {
-            return Err(LoadProjectError::InvalidReference {
-                path: path.to_path_buf(),
-                range: None,
-                reference: id.0.object().to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    pub(super) fn resolve_patch(
-        &mut self,
-        _path: &Utf8Path,
-        id: &PatchId,
-    ) -> Result<(), LoadProjectError> {
+    pub(super) fn resolve_patch(&mut self, id: &PatchId) -> Result<(), LoadProjectError> {
         if self.project.patches.contains_key(id) {
             return Ok(());
         }
         let (document_path, _, value) = self
             .loader
             .object_value(&ResolvedObject::Patch(id.clone()))?;
-        let routes = optional_sequence(&value, "routes")
-            .into_iter()
-            .flatten()
-            .map(|route| self.parse_patch_route(&document_path, route))
-            .collect::<Result<Vec<_>, _>>()?;
-        self.project.patches.insert(
-            id.clone(),
-            Patch {
-                id: id.clone(),
-                routes,
-            },
-        );
+        let mut nodes = IndexMap::new();
+        for node in sequence_values(&document_path, &value, "nodes")? {
+            let node_id = PatchNodeId(u32_field(&document_path, node, "id")?);
+            let parsed = match string_field(&document_path, node, "type")? {
+                "source" => PatchNode::Source(self.parse_patch_source(&document_path, node)?),
+                "filter" => PatchNode::Filter(self.parse_filter(&document_path, node)?),
+                "sink" => {
+                    let reference = string_field(&document_path, node, "controller")?;
+                    let controller =
+                        match self.loader.resolve_reference(&document_path, reference)? {
+                            ResolvedObject::Controller(controller) => controller,
+                            _ => {
+                                return Err(LoadProjectError::InvalidReference {
+                                    path: document_path.clone(),
+                                    range: None,
+                                    reference: reference.to_string(),
+                                });
+                            }
+                        };
+                    self.resolve_controller(&controller)?;
+                    PatchNode::Sink(PatchSink {
+                        controller,
+                        port: ControllerPortId(u32_field(&document_path, node, "port")?),
+                        start_slot: u16::try_from(u32_field(&document_path, node, "start_slot")?)
+                            .map_err(|_| {
+                            invalid(&document_path, "start_slot must be a u16")
+                        })?,
+                        slot_count: u16::try_from(u32_field(&document_path, node, "slot_count")?)
+                            .map_err(|_| {
+                            invalid(&document_path, "slot_count must be a u16")
+                        })?,
+                    })
+                }
+                other => {
+                    return Err(invalid(
+                        &document_path,
+                        &format!("invalid patch node type `{other}`"),
+                    ));
+                }
+            };
+            if nodes.insert(node_id, parsed).is_some() {
+                return Err(invalid(&document_path, "duplicate patch node id"));
+            }
+        }
+        let edges = sequence_values(&document_path, &value, "edges")?
+            .iter()
+            .map(|edge| {
+                Ok(PatchEdge {
+                    from: PatchNodeId(u32_field(&document_path, edge, "from")?),
+                    from_port: PatchPortId(
+                        u16::try_from(u32_field(&document_path, edge, "from_port")?)
+                            .map_err(|_| invalid(&document_path, "from_port must be a u16"))?,
+                    ),
+                    to: PatchNodeId(u32_field(&document_path, edge, "to")?),
+                    to_port: PatchPortId(
+                        u16::try_from(u32_field(&document_path, edge, "to_port")?)
+                            .map_err(|_| invalid(&document_path, "to_port must be a u16"))?,
+                    ),
+                })
+            })
+            .collect::<Result<Vec<_>, LoadProjectError>>()?;
+        let graph = PatchGraph {
+            id: id.clone(),
+            nodes,
+            edges,
+        };
+        graph
+            .validate()
+            .map_err(|error| invalid(&document_path, &format!("invalid patch graph: {error:?}")))?;
+        self.project.patches.insert(id.clone(), graph);
         Ok(())
     }
 
-    pub(super) fn parse_patch_route(
+    pub(super) fn parse_patch_source(
         &self,
         path: &Utf8Path,
         value: &Value,
-    ) -> Result<PatchRoute, LoadProjectError> {
-        let controller_ref = string_field(path, value, "controller")?;
-        let controller = match self.loader.resolve_reference(path, controller_ref)? {
-            ResolvedObject::Controller(controller) => controller,
+    ) -> Result<PatchSource, LoadProjectError> {
+        let selection =
+            self.parse_element_selection(path, required_field(path, value, "selection")?)?;
+        let width = usize_field(path, value, "width")?;
+        let output = match string_field(path, value, "output")? {
+            "color" => PatchValueType::Color { width },
+            "scalar" => PatchValueType::Scalar { width },
+            "indexed" => PatchValueType::Indexed { width },
+            "fixture_state" => {
+                let reference = string_field(path, value, "profile")?;
+                let profile = match self.loader.resolve_reference(path, reference)? {
+                    ResolvedObject::FixtureProfile(profile) => profile,
+                    _ => {
+                        return Err(LoadProjectError::InvalidReference {
+                            path: path.to_path_buf(),
+                            range: None,
+                            reference: reference.to_string(),
+                        });
+                    }
+                };
+                PatchValueType::FixtureState { width, profile }
+            }
+            other => {
+                return Err(invalid(
+                    path,
+                    &format!("invalid patch source output `{other}`"),
+                ));
+            }
+        };
+        Ok(PatchSource { selection, output })
+    }
+
+    fn parse_element_selection(
+        &self,
+        path: &Utf8Path,
+        value: &Value,
+    ) -> Result<ElementSelection, LoadProjectError> {
+        let reference = string_field(path, value, "tree")?;
+        let tree = match self.loader.resolve_reference(path, reference)? {
+            ResolvedObject::ElementTree(tree) => tree,
             _ => {
                 return Err(LoadProjectError::InvalidReference {
                     path: path.to_path_buf(),
                     range: None,
-                    reference: controller_ref.to_string(),
+                    reference: reference.to_string(),
                 });
             }
         };
-        let output = optional_field(value, "output")
-            .and_then(Value::as_u64)
-            .map(|value| value as u32)
-            .or_else(|| {
-                optional_field(value, "universe")
-                    .and_then(Value::as_u64)
-                    .map(|value| value.saturating_sub(1) as u32)
+        let cells = optional_field(value, "cells")
+            .map(|range| {
+                Ok(ElementCellRange {
+                    start: u32_field(path, range, "start")?,
+                    count: u32_field(path, range, "count")?,
+                })
             })
-            .ok_or_else(|| LoadProjectError::InvalidDocument {
-                path: path.to_path_buf(),
-                range: None,
-                message: "patch route must contain output or universe".to_string(),
-            })?;
-        let start_channel_offset = optional_field(value, "start_channel_offset")
-            .and_then(Value::as_u64)
-            .map(|value| value as u32)
-            .or_else(|| {
-                optional_field(value, "start")
-                    .and_then(Value::as_u64)
-                    .map(|value| value.saturating_sub(1) as u32)
-            })
-            .ok_or_else(|| LoadProjectError::InvalidDocument {
-                path: path.to_path_buf(),
-                range: None,
-                message: "patch route must contain start_channel_offset or start".to_string(),
-            })?;
-        Ok(PatchRoute {
-            fixture: FixtureInstanceId(u32_field(path, value, "fixture")?),
-            fixture_pixels: PixelRange {
-                start: optional_field(value, "fixture_pixel_start")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0) as u32,
-                count: optional_field(value, "fixture_pixel_count")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0) as u32,
+            .transpose()?;
+        Ok(ElementSelection {
+            tree,
+            node: ElementNodeId(u32_field(path, value, "node")?),
+            cells,
+        })
+    }
+
+    fn parse_color_capability(
+        &self,
+        path: &Utf8Path,
+        value: &Value,
+    ) -> Result<ColorCapability, LoadProjectError> {
+        match string_field(path, value, "type")? {
+            "rgb" => Ok(ColorCapability::Rgb),
+            "rgbw" => Ok(ColorCapability::Rgbw),
+            "discrete" => {
+                let emitters = sequence_values(path, value, "emitters")?
+                    .iter()
+                    .map(|emitter| {
+                        Ok(DiscreteEmitter {
+                            id: EmitterId(u32_field(path, emitter, "id")?),
+                            name: string_field(path, emitter, "name")?.to_string(),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, LoadProjectError>>()?;
+                let mappings = sequence_values(path, value, "mappings")?
+                    .iter()
+                    .map(|mapping| {
+                        let mut levels = IndexMap::new();
+                        for level in sequence_values(path, mapping, "levels")? {
+                            levels.insert(
+                                EmitterId(u32_field(path, level, "emitter")?),
+                                f64_field(path, level, "level")?,
+                            );
+                        }
+                        Ok(DiscreteColorMapping {
+                            color: parse_color(string_field(path, mapping, "color")?)?,
+                            levels,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, LoadProjectError>>()?;
+                Ok(ColorCapability::Discrete { emitters, mappings })
+            }
+            other => Err(invalid(
+                path,
+                &format!("invalid color capability `{other}`"),
+            )),
+        }
+    }
+
+    fn parse_filter(
+        &self,
+        path: &Utf8Path,
+        value: &Value,
+    ) -> Result<FilterDefinition, LoadProjectError> {
+        Ok(match string_field(path, value, "filter")? {
+            "color_breakdown" => FilterDefinition::ColorBreakdown {
+                capability: self
+                    .parse_color_capability(path, required_field(path, value, "capability")?)?,
+                cell_count: usize_field(path, value, "cell_count")?,
             },
-            controller,
-            output: ControllerOutputIndex(output),
-            start_channel_offset,
+            "dimming_curve" => FilterDefinition::DimmingCurve {
+                curve: parse_dimming_curve(path, required_field(path, value, "curve")?)?,
+                width: usize_field(path, value, "width")?,
+            },
+            "scale_invert" => FilterDefinition::ScaleInvert {
+                scale: f64_field(path, value, "scale")?,
+                invert: bool_field(path, value, "invert")?,
+                width: usize_field(path, value, "width")?,
+            },
+            "fan_out" => FilterDefinition::FanOut {
+                width: usize_field(path, value, "width")?,
+                outputs: u16::try_from(u32_field(path, value, "outputs")?)
+                    .map_err(|_| invalid(path, "fan-out outputs must be a u16"))?,
+            },
+            "component_reorder" => FilterDefinition::ComponentReorder {
+                components_per_cell: u16::try_from(u32_field(path, value, "components_per_cell")?)
+                    .map_err(|_| invalid(path, "components_per_cell must be a u16"))?,
+                order: sequence_values(path, value, "order")?
+                    .iter()
+                    .map(|item| {
+                        item.as_u64()
+                            .and_then(|raw| u16::try_from(raw).ok())
+                            .ok_or_else(|| invalid(path, "component order values must be u16"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                cell_count: usize_field(path, value, "cell_count")?,
+            },
+            "indexed_value_mapping" => {
+                let mut entries = IndexMap::new();
+                for entry in sequence_values(path, value, "entries")? {
+                    entries.insert(
+                        u32_field(path, entry, "id")?,
+                        f64_field(path, entry, "value")?,
+                    );
+                }
+                FilterDefinition::IndexedValueMapping {
+                    entries,
+                    width: usize_field(path, value, "width")?,
+                }
+            }
+            "quantize_8" => FilterDefinition::Quantize8 {
+                width: usize_field(path, value, "width")?,
+            },
+            "quantize_16" => FilterDefinition::Quantize16 {
+                width: usize_field(path, value, "width")?,
+                byte_order: match string_field(path, value, "byte_order")? {
+                    "coarse_fine" => ByteOrder::CoarseFine,
+                    "fine_coarse" => ByteOrder::FineCoarse,
+                    other => return Err(invalid(path, &format!("invalid byte order `{other}`"))),
+                },
+            },
+            "fixture_profile_encoding" => {
+                let reference = string_field(path, value, "profile")?;
+                let profile = match self.loader.resolve_reference(path, reference)? {
+                    ResolvedObject::FixtureProfile(profile) => profile,
+                    _ => {
+                        return Err(LoadProjectError::InvalidReference {
+                            path: path.to_path_buf(),
+                            range: None,
+                            reference: reference.to_string(),
+                        });
+                    }
+                };
+                FilterDefinition::FixtureProfileEncoding {
+                    profile,
+                    fixture_count: usize_field(path, value, "fixture_count")?,
+                    slot_count: usize_field(path, value, "slot_count")?,
+                }
+            }
+            other => return Err(invalid(path, &format!("invalid patch filter `{other}`"))),
+        })
+    }
+
+    fn parse_fixture_profile(
+        &self,
+        path: &Utf8Path,
+        id: FixtureProfileId,
+        value: &Value,
+    ) -> Result<FixtureProfile, LoadProjectError> {
+        let mut functions = IndexMap::new();
+        for function in sequence_values(path, value, "functions")? {
+            let function_id = FixtureFunctionId(u32_field(path, function, "id")?);
+            let kind = match string_field(path, function, "type")? {
+                "range" => FixtureFunctionKind::Range,
+                "indexed" => FixtureFunctionKind::Indexed {
+                    entries: parse_fixture_entries(path, function)?,
+                },
+                "color_wheel" => FixtureFunctionKind::ColorWheel {
+                    entries: parse_fixture_entries(path, function)?,
+                },
+                "color_mixing" => FixtureFunctionKind::ColorMixing {
+                    model: match string_field(path, function, "model")? {
+                        "rgb" => ColorMixingModel::Rgb,
+                        "rgbw" => ColorMixingModel::Rgbw,
+                        other => {
+                            return Err(invalid(
+                                path,
+                                &format!("invalid color-mixing model `{other}`"),
+                            ));
+                        }
+                    },
+                },
+                other => {
+                    return Err(invalid(
+                        path,
+                        &format!("invalid fixture function `{other}`"),
+                    ));
+                }
+            };
+            let tag = optional_string_field(function, "tag")
+                .map(parse_function_tag)
+                .transpose()
+                .map_err(|message| invalid(path, &message))?;
+            functions.insert(
+                function_id,
+                FixtureFunction {
+                    name: string_field(path, function, "name")?.to_string(),
+                    tag,
+                    kind,
+                    curve: parse_dimming_curve(path, required_field(path, function, "curve")?)?,
+                },
+            );
+        }
+        let channels = sequence_values(path, value, "channels")?
+            .iter()
+            .map(|channel| {
+                let role = match string_field(path, channel, "role")? {
+                    "coarse" => FixtureChannelRole::Coarse {
+                        function: FixtureFunctionId(u32_field(path, channel, "function")?),
+                    },
+                    "fine" => FixtureChannelRole::Fine {
+                        function: FixtureFunctionId(u32_field(path, channel, "function")?),
+                    },
+                    "color_component" => FixtureChannelRole::ColorComponent {
+                        function: FixtureFunctionId(u32_field(path, channel, "function")?),
+                        component: parse_color_component(string_field(path, channel, "component")?)
+                            .ok_or_else(|| invalid(path, "invalid color component"))?,
+                    },
+                    "ignored" => FixtureChannelRole::Ignored,
+                    other => {
+                        return Err(invalid(
+                            path,
+                            &format!("invalid fixture channel role `{other}`"),
+                        ));
+                    }
+                };
+                Ok(FixtureChannel {
+                    slot: u16::try_from(u32_field(path, channel, "slot")?)
+                        .map_err(|_| invalid(path, "fixture slot must be a u16"))?,
+                    role,
+                    curve: parse_dimming_curve(path, required_field(path, channel, "curve")?)?,
+                })
+            })
+            .collect::<Result<Vec<_>, LoadProjectError>>()?;
+        let behavior_rules = sequence_values(path, value, "behavior_rules")?
+            .iter()
+            .map(|rule| {
+                Ok(match string_field(path, rule, "type")? {
+                    "shutter" => FixtureBehaviorRule::Shutter {
+                        function: FixtureFunctionId(u32_field(path, rule, "function")?),
+                        closed: FixtureEntryId(u32_field(path, rule, "closed")?),
+                        open: FixtureEntryId(u32_field(path, rule, "open")?),
+                    },
+                    "dimmer" => FixtureBehaviorRule::Dimmer {
+                        function: FixtureFunctionId(u32_field(path, rule, "function")?),
+                        off: f64_field(path, rule, "off")?,
+                        on: f64_field(path, rule, "on")?,
+                    },
+                    "color_wheel" => FixtureBehaviorRule::ColorWheel {
+                        function: FixtureFunctionId(u32_field(path, rule, "function")?),
+                        entries: sequence_values(path, rule, "entries")?
+                            .iter()
+                            .map(|entry| {
+                                Ok(ColorWheelColorMapping {
+                                    color: parse_color(string_field(path, entry, "color")?)?,
+                                    entry: FixtureEntryId(u32_field(path, entry, "entry")?),
+                                })
+                            })
+                            .collect::<Result<Vec<_>, LoadProjectError>>()?,
+                    },
+                    "prism_gate" => FixtureBehaviorRule::PrismGate {
+                        function: FixtureFunctionId(u32_field(path, rule, "function")?),
+                        disabled: FixtureEntryId(u32_field(path, rule, "disabled")?),
+                        enabled: FixtureEntryId(u32_field(path, rule, "enabled")?),
+                    },
+                    other => {
+                        return Err(invalid(
+                            path,
+                            &format!("invalid fixture behavior rule `{other}`"),
+                        ));
+                    }
+                })
+            })
+            .collect::<Result<Vec<_>, LoadProjectError>>()?;
+        Ok(FixtureProfile {
+            id,
+            functions,
+            channels,
+            behavior_rules,
         })
     }
 
@@ -385,6 +808,11 @@ impl DomainResolver<'_> {
             .flatten()
             .map(|clip| self.parse_automation_clip(&document_path, clip))
             .collect::<Result<Vec<_>, _>>()?;
+        let control_clips = optional_sequence(&value, "control_clips")
+            .into_iter()
+            .flatten()
+            .map(|clip| self.parse_control_clip(&document_path, clip))
+            .collect::<Result<Vec<_>, _>>()?;
         self.project.sequences.insert(
             id.clone(),
             Sequence {
@@ -397,6 +825,7 @@ impl DomainResolver<'_> {
                 effects,
                 composition_graph,
                 automation_clips,
+                control_clips,
             },
         );
         Ok(())
@@ -487,7 +916,7 @@ impl DomainResolver<'_> {
                     source_range_for_field_value(path, value, "duration"),
                 )
             })?,
-            target: parse_effect_target(path, required_field(path, value, "target")?)?,
+            target: self.parse_element_selection(path, required_field(path, value, "target")?)?,
             scope: parse_effect_scope(path, value)?,
             definition,
             param_overrides,
@@ -846,41 +1275,192 @@ impl DomainResolver<'_> {
             bindings,
         })
     }
+
+    fn parse_control_clip(
+        &self,
+        path: &Utf8Path,
+        value: &Value,
+    ) -> Result<ControlClip, LoadProjectError> {
+        let selection =
+            self.parse_element_selection(path, required_field(path, value, "selection")?)?;
+        let target = match string_field(path, value, "target_type")? {
+            "scalar" => ControlTarget::Scalar(selection),
+            "indexed" => ControlTarget::Indexed(selection),
+            "fixture_function" => ControlTarget::FixtureFunction {
+                selection,
+                function: FixtureFunctionId(u32_field(path, value, "function")?),
+            },
+            other => return Err(invalid(path, &format!("invalid control target `{other}`"))),
+        };
+        let control = required_field(path, value, "value")?;
+        let value_kind = match string_field(path, control, "type")? {
+            "constant_normalized" => {
+                ControlValue::ConstantNormalized(f64_field(path, control, "value")?)
+            }
+            "normalized_curve" => ControlValue::NormalizedCurve(parse_curve(
+                path,
+                required_field(path, control, "curve")?,
+            )?),
+            "indexed" => ControlValue::Indexed {
+                option: IndexedOptionId(u32_field(path, control, "option")?),
+                range_curve: optional_field(control, "range_curve")
+                    .map(|curve| parse_curve(path, curve))
+                    .transpose()?,
+            },
+            "fixture_indexed" => ControlValue::FixtureIndexed {
+                entry: FixtureEntryId(u32_field(path, control, "entry")?),
+                range_curve: optional_field(control, "range_curve")
+                    .map(|curve| parse_curve(path, curve))
+                    .transpose()?,
+            },
+            "constant_color" => {
+                ControlValue::ConstantColor(parse_color(string_field(path, control, "color")?)?)
+            }
+            "gradient" => ControlValue::Gradient(parse_gradient(
+                path,
+                required_field(path, control, "gradient")?,
+            )?),
+            other => return Err(invalid(path, &format!("invalid control value `{other}`"))),
+        };
+        Ok(ControlClip {
+            id: ControlClipId(u32_field(path, value, "id")?),
+            start: parse_duration_as_time(string_field(path, value, "start")?)?,
+            duration: parse_duration(string_field(path, value, "duration")?)?,
+            target,
+            value: value_kind,
+        })
+    }
+}
+
+fn invalid(path: &Utf8Path, message: &str) -> LoadProjectError {
+    LoadProjectError::InvalidDocument {
+        path: path.to_path_buf(),
+        range: None,
+        message: message.to_string(),
+    }
+}
+
+fn parse_dimming_curve(path: &Utf8Path, value: &Value) -> Result<DimmingCurve, LoadProjectError> {
+    Ok(match string_field(path, value, "type")? {
+        "linear" => DimmingCurve::Linear,
+        "gamma" => DimmingCurve::Gamma(f64_field(path, value, "value")?),
+        "custom" => DimmingCurve::Custom(parse_curve(path, required_field(path, value, "curve")?)?),
+        other => return Err(invalid(path, &format!("invalid dimming curve `{other}`"))),
+    })
+}
+
+fn parse_fixture_entries(
+    path: &Utf8Path,
+    value: &Value,
+) -> Result<Vec<FixtureIndexedEntry>, LoadProjectError> {
+    sequence_values(path, value, "entries")?
+        .iter()
+        .map(|entry| {
+            Ok(FixtureIndexedEntry {
+                id: FixtureEntryId(u32_field(path, entry, "id")?),
+                name: string_field(path, entry, "name")?.to_string(),
+                dmx_min: u16::try_from(u32_field(path, entry, "dmx_min")?)
+                    .map_err(|_| invalid(path, "dmx_min must be a u16"))?,
+                dmx_max: u16::try_from(u32_field(path, entry, "dmx_max")?)
+                    .map_err(|_| invalid(path, "dmx_max must be a u16"))?,
+                curve_control: bool_field(path, entry, "curve_control")?,
+                color: optional_string_field(entry, "color")
+                    .map(parse_color)
+                    .transpose()?,
+                tag: optional_string_field(entry, "tag")
+                    .map(parse_entry_tag)
+                    .transpose()
+                    .map_err(|message| invalid(path, &message))?,
+            })
+        })
+        .collect()
+}
+
+fn parse_function_tag(value: &str) -> Result<FixtureFunctionTag, String> {
+    Ok(match value {
+        "pan" => FixtureFunctionTag::Pan,
+        "tilt" => FixtureFunctionTag::Tilt,
+        "dimmer" => FixtureFunctionTag::Dimmer,
+        "shutter" => FixtureFunctionTag::Shutter,
+        "zoom" => FixtureFunctionTag::Zoom,
+        "gobo" => FixtureFunctionTag::Gobo,
+        "frost" => FixtureFunctionTag::Frost,
+        "prism" => FixtureFunctionTag::Prism,
+        "color_wheel" => FixtureFunctionTag::ColorWheel,
+        "color_mixing" => FixtureFunctionTag::ColorMixing,
+        other => return Err(format!("invalid fixture function tag `{other}`")),
+    })
+}
+
+fn parse_entry_tag(value: &str) -> Result<FixtureEntryTag, String> {
+    Ok(match value {
+        "shutter_open" => FixtureEntryTag::ShutterOpen,
+        "shutter_closed" => FixtureEntryTag::ShutterClosed,
+        "strobe" => FixtureEntryTag::Strobe,
+        "prism_open" => FixtureEntryTag::PrismOpen,
+        "prism_closed" => FixtureEntryTag::PrismClosed,
+        "gobo_open" => FixtureEntryTag::GoboOpen,
+        other => return Err(format!("invalid fixture entry tag `{other}`")),
+    })
+}
+
+fn parse_color_component(value: &str) -> Option<ColorComponent> {
+    match value {
+        "red" => Some(ColorComponent::Red),
+        "green" => Some(ColorComponent::Green),
+        "blue" => Some(ColorComponent::Blue),
+        "white" => Some(ColorComponent::White),
+        _ => None,
+    }
 }
 use camino::{Utf8Path, Utf8PathBuf};
+use dawn_language::control::{ControlClip, ControlClipId, ControlTarget, ControlValue};
+use dawn_language::controller::{
+    ArtNetConfig, ArtNetMode, Controller, ControllerId, ControllerPort, ControllerPortAddress,
+    ControllerPortId, ControllerProtocol, E131Config, E131Mode,
+};
 use dawn_language::dsl::Identifier;
 use dawn_language::effect::{
     BuiltinEffect, CurveId, CurveSource, EffectDefinitionId, EffectInst, EffectInstId,
     EffectParamValue, EffectRef, GradientSource,
 };
-use dawn_language::identity::SourceIdentity;
+use dawn_language::element::{
+    ColorCapability, DiscreteColorMapping, DiscreteEmitter, ElementCellAddress, ElementCellRange,
+    ElementNode, ElementNodeId, ElementNodeKind, ElementSelection, ElementTree, ElementTreeId,
+    EmitterId, IndexedOption, IndexedOptionId,
+};
+use dawn_language::fixture_profile::{
+    ColorComponent, ColorMixingModel, ColorWheelColorMapping, DimmingCurve, FixtureBehaviorRule,
+    FixtureChannel, FixtureChannelRole, FixtureEntryId, FixtureEntryTag, FixtureFunction,
+    FixtureFunctionId, FixtureFunctionKind, FixtureFunctionTag, FixtureIndexedEntry,
+    FixtureProfile, FixtureProfileId,
+};
 use dawn_language::model::DawnProject;
 use dawn_language::operator::{
     BuiltinOperator, GraphOperatorNode, OperatorRef, validate_composition_graph,
 };
+use dawn_language::patch::{
+    ByteOrder, FilterDefinition, PatchEdge, PatchGraph, PatchId, PatchNode, PatchNodeId,
+    PatchPortId, PatchSink, PatchSource, PatchValueType,
+};
+use dawn_language::preview::{PreviewLayout, PreviewLayoutId, PropInstance, PropInstanceId};
 use dawn_language::sequence::{
     AssetId, AutomationClip, AutomationClipId, CompositionGraphNode, CompositionGraphNodeId,
     CompositionGraphNodeKind, MarkCollectionKey, Sequence, SequenceAudio, SequenceCompositionGraph,
     SequenceId, SequenceLayerId,
 };
-use dawn_language::setup::{
-    ControllerDefinition, ControllerDefinitionId, ControllerId, ControllerOutput,
-    ControllerOutputIndex, FixtureDefinitionId, FixtureInst, FixtureInstanceId, Layout, LayoutId,
-    Patch, PatchId, PatchRoute, PixelRange, Protocol, Setup, SetupId,
-};
+use dawn_language::setup::{Setup, SetupId};
 use indexmap::{IndexMap, IndexSet};
 use yaml_serde::Value;
 
 use super::Loader;
 use super::parse::{
     ResolvedObject, bool_field, f64_field, i64_field, optional_field, optional_mapping,
-    optional_mapping_ref, optional_sequence, optional_string_field, parse_automation_binding,
-    parse_automation_curve, parse_channel_order, parse_color, parse_controller_address,
-    parse_curve, parse_duration, parse_duration_as_time, parse_effect_scope, parse_effect_target,
-    parse_fixture_group, parse_gradient, parse_graph_edge, parse_graph_position,
-    parse_layout_target, parse_mark_collection, parse_point3, parse_rotation3, parse_scale3,
-    parse_sequence_layer, parse_slot_range, relative_path, required_field, sequence_field,
-    sequence_values, string_field, u32_field, usize_field,
+    optional_sequence, optional_string_field, parse_automation_binding, parse_automation_curve,
+    parse_color, parse_curve, parse_duration, parse_duration_as_time, parse_effect_scope,
+    parse_gradient, parse_graph_edge, parse_graph_position, parse_mark_collection, parse_point3,
+    parse_rotation3, parse_scale3, parse_sequence_layer, relative_path, required_field,
+    sequence_field, sequence_values, string_field, u32_field, usize_field,
 };
 use crate::LoadProjectError;
 use crate::diagnostics::{

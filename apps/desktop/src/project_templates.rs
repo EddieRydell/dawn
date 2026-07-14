@@ -18,17 +18,22 @@ pub(crate) fn new_project_files(project_name: &str) -> Vec<ProjectBoilerplateFil
         },
         ProjectBoilerplateFile {
             path: "setups/main.setup.dawn",
-            text: "imports:\n- from: ../layouts/main.layout.dawn\n  as: layouts\n- from: ../patches/main.patch.dawn\n  as: patches\nmain:\n  type: setup\n  layout: layouts.main\n  patch: patches.main\n  controllers:\n  - output_controller\noutput_controller:\n  type: controller\n  protocol: sacn\n  output:\n    channel_order: rgb\n    type: linear_rgb\n    output_count: 1\n    pixels_per_output: 1\n    first_universe: 1\n"
+            text: "imports:\n- from: ../display/main.display.dawn\n  as: display\n- from: ../patches/main.patch.dawn\n  as: patches\nmain:\n  type: setup\n  elements: display.elements\n  preview: display.preview\n  patch: patches.main\n  controllers:\n  - output_controller\noutput_controller:\n  type: controller\n  protocol:\n    type: e131\n    source_name: Dawn\n    bind_address: 0.0.0.0\n    priority: 100\n    mode: multicast\n  ports:\n  - id: 1\n    universe: 1\n    slot_count: 3\n"
                 .to_string(),
         },
         ProjectBoilerplateFile {
-            path: "layouts/main.layout.dawn",
-            text: "main:\n  type: layout\n  target_order: []\n  fixtures: []\n  groups: []\n"
+            path: "display/pixel.prop.dawn",
+            text: "pixel:\n  type: prop\n  bulb_diameter: 0.08\n  geometry:\n    type: points\n    points:\n    - x: 0.0\n      y: 0.0\n      z: 0.0\n"
+                .to_string(),
+        },
+        ProjectBoilerplateFile {
+            path: "display/main.display.dawn",
+            text: "imports:\n- from: pixel.prop.dawn\n  as: props\nelements:\n  type: element_tree\n  roots: [1]\n  nodes:\n  - id: 1\n    name: Pixel\n    type: color\n    cells: 1\n    capability:\n      type: rgb\npreview:\n  type: preview_layout\n  element_tree: elements\n  props:\n  - id: 1\n    name: Pixel\n    prop: props.pixel\n    transform:\n      position: { x: 0.0, y: 0.0, z: 0.0 }\n      rotation: { x: 0.0, y: 0.0, z: 0.0 }\n      scale: { x: 1.0, y: 1.0, z: 1.0 }\n    bindings:\n    - { node: 1, cell: 0 }\n"
                 .to_string(),
         },
         ProjectBoilerplateFile {
             path: "patches/main.patch.dawn",
-            text: "main:\n  type: patch\n  routes: []\n".to_string(),
+            text: "imports:\n- from: ../display/main.display.dawn\n  as: display\n- from: ../setups/main.setup.dawn\n  as: setups\nmain:\n  type: patch\n  nodes:\n  - id: 1\n    type: source\n    selection: { tree: display.elements, node: 1 }\n    output: color\n    width: 1\n  - id: 2\n    type: filter\n    filter: color_breakdown\n    capability: { type: rgb }\n    cell_count: 1\n  - id: 3\n    type: filter\n    filter: quantize_8\n    width: 3\n  - id: 4\n    type: sink\n    controller: setups.output_controller\n    port: 1\n    start_slot: 0\n    slot_count: 3\n  edges:\n  - { from: 1, from_port: 0, to: 2, to_port: 0 }\n  - { from: 2, from_port: 0, to: 3, to_port: 0 }\n  - { from: 3, from_port: 0, to: 4, to_port: 0 }\n".to_string(),
         },
         ProjectBoilerplateFile {
             path: "sequences/main.sequence.dawn",
@@ -60,7 +65,7 @@ pub(crate) fn write_new_project_files(
 
 fn sequence_boilerplate(object_key: &str, duration_seconds: f64, frame_rate: u32) -> String {
     format!(
-        "{object_key}:\n  type: sequence\n  duration: {}s\n  frame_rate: {frame_rate}\n  audio: null\n  mark_collections:\n  - key: marks\n    name: Marks\n    color: '#38bdf8'\n    marks: []\n  layers:\n  - id: 0\n    name: Default\n    color: '#38bdf8'\n    enabled: true\n  effects: []\n  composition_graph:\n    nodes:\n    - id: 1\n      position:\n        x: 80.0\n        y: 80.0\n      type: layer\n      layer_id: 0\n    - id: 2\n      position:\n        x: 420.0\n        y: 80.0\n      type: output\n    edges:\n    - from: 1\n      from_port: output\n      to: 2\n      to_port: input\n  automation_clips: []\n",
+        "{object_key}:\n  type: sequence\n  duration: {}s\n  frame_rate: {frame_rate}\n  audio: null\n  mark_collections:\n  - key: marks\n    name: Marks\n    color: '#38bdf8'\n    marks: []\n  layers:\n  - id: 0\n    name: Default\n    color: '#38bdf8'\n    enabled: true\n  effects: []\n  composition_graph:\n    nodes:\n    - id: 1\n      position:\n        x: 80.0\n        y: 80.0\n      type: layer\n      layer_id: 0\n    - id: 2\n      position:\n        x: 420.0\n        y: 80.0\n      type: output\n    edges:\n    - from: 1\n      from_port: output\n      to: 2\n      to_port: input\n  automation_clips: []\n  control_clips: []\n",
         seconds_literal(duration_seconds)
     )
 }
@@ -87,5 +92,38 @@ fn object_key_from_name(name: &str) -> String {
         format!("project_{key}")
     } else {
         key
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use camino::Utf8PathBuf;
+
+    use super::*;
+
+    #[test]
+    fn new_project_template_loads_as_complete_output_project() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            Utf8PathBuf::from_path_buf(std::env::temp_dir().join(format!("dawn-template-{nonce}")))
+                .unwrap();
+        let files = new_project_files("Template Test");
+        write_new_project_files(&root, &files).unwrap();
+        let session = dawn_project_io::load_project(&root.join("project.dawn")).unwrap();
+        let setup = session
+            .project
+            .setups
+            .get(&session.project.root.setup)
+            .unwrap();
+        assert!(session.project.element_trees.contains_key(&setup.elements));
+        assert!(session.project.preview_layouts.contains_key(&setup.preview));
+        assert!(session.project.patches.contains_key(&setup.patch));
+        assert_eq!(setup.controllers.len(), 1);
+        fs::remove_dir_all(&root).unwrap();
     }
 }

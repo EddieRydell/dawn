@@ -20,7 +20,7 @@ import { defaultMarkColor, nextCollectionKey } from "./marks";
 import { selectedEffectId, selectionCompatibleWithFocusedItem, selectionCount } from "./sequenceSelection";
 import { targetsEqual } from "./sequenceTargets";
 
-type SequenceInspectorTab = "effect" | "layers" | "marks";
+type SequenceInspectorTab = "effect" | "controls" | "layers" | "marks";
 
 type SelectedMarkEntry = {
   ref: SequenceMarkRef;
@@ -30,6 +30,7 @@ type SelectedMarkEntry = {
 
 const SEQUENCE_INSPECTOR_TABS: { id: SequenceInspectorTab; label: string }[] = [
   { id: "effect", label: "Effect" },
+  { id: "controls", label: "Controls" },
   { id: "layers", label: "Layers" },
   { id: "marks", label: "Marks" }
 ];
@@ -114,6 +115,7 @@ export function SequenceInspector({
         />
       )}
       {activeTab === "layers" && <LayerInspectorPanel document={document} />}
+      {activeTab === "controls" && <ControlClipPanel document={document} />}
       {activeTab === "marks" && (
         <MarkInspectorPanel
           document={document}
@@ -128,6 +130,41 @@ export function SequenceInspector({
         />
       )}
     </InspectorScrollArea>
+  );
+}
+
+function ControlClipPanel({ document }: { document: SequenceEditorDocument }) {
+  return (
+    <>
+      <h2>Typed Controls</h2>
+      {document.controlClips.length === 0 && <p>No scalar, indexed, or fixture-function controls.</p>}
+      {document.controlClips.map((clip) => (
+        <div className="control-clip-inspector" key={clip.id}>
+          <strong>{clip.targetLabel}</strong>
+          <span>{clip.controlType} · {clip.value}</span>
+          <label>Start
+            <input type="number" min={0} step={0.01} defaultValue={clip.startSeconds} onBlur={(event) => void runGuiEditCommand(() => commands.applySequenceGuiEdit({
+              type: "moveControlClip",
+              id: clip.id,
+              startSeconds: Number(event.currentTarget.value),
+              anchorLaneIndex: clip.anchorLaneIndex,
+              laneIndex: clip.laneIndex
+            }))} />
+          </label>
+          <label>Duration
+            <input type="number" min={0.001} step={0.01} defaultValue={clip.durationSeconds} onBlur={(event) => void runGuiEditCommand(() => commands.applySequenceGuiEdit({
+              type: "resizeControlClip",
+              id: clip.id,
+              startSeconds: clip.startSeconds,
+              durationSeconds: Number(event.currentTarget.value)
+            }))} />
+          </label>
+          <button type="button" onClick={() => void runGuiEditCommand(() => commands.applySequenceGuiEdit({ type: "deleteControlClip", id: clip.id }))}>
+            <Trash2 size={13} /> Delete
+          </button>
+        </div>
+      ))}
+    </>
   );
 }
 

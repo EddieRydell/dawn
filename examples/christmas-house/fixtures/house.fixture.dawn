@@ -1,6 +1,5 @@
 roof_slope_left:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.32
   geometry:
     type: lines
@@ -11,10 +10,9 @@ roof_slope_left:
     - x: 0.0
       y: 1.7
       z: 0.0
-    pixels: 60
+    point_count: 60
 roof_slope_right:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.32
   geometry:
     type: lines
@@ -25,10 +23,9 @@ roof_slope_right:
     - x: 3.2
       y: 0.0
       z: 0.0
-    pixels: 60
+    point_count: 60
 gutter_line:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.3
   geometry:
     type: lines
@@ -39,10 +36,9 @@ gutter_line:
     - x: 3.6
       y: 0.0
       z: 0.0
-    pixels: 96
+    point_count: 96
 window_outline:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.28
   geometry:
     type: lines
@@ -62,10 +58,9 @@ window_outline:
     - x: -0.65
       y: -0.45
       z: 0.0
-    pixels: 52
+    point_count: 52
 door_outline:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.3
   geometry:
     type: lines
@@ -82,10 +77,9 @@ door_outline:
     - x: 0.55
       y: -0.85
       z: 0.0
-    pixels: 58
+    point_count: 58
 porch_rail:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.28
   geometry:
     type: lines
@@ -105,10 +99,9 @@ porch_rail:
     - x: 1.6
       y: 0.0
       z: 0.0
-    pixels: 56
+    point_count: 56
 wreath_ring:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.32
   geometry:
     type: arc
@@ -119,10 +112,9 @@ wreath_ring:
     radius: 0.42
     startDegrees: 0.0
     endDegrees: 360.0
-    pixels: 36
+    point_count: 36
 tree_outline:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.32
   geometry:
     type: lines
@@ -151,10 +143,9 @@ tree_outline:
     - x: 0.0
       y: 1.25
       z: 0.0
-    pixels: 88
+    point_count: 88
 bush_line:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.28
   geometry:
     type: lines
@@ -180,10 +171,9 @@ bush_line:
     - x: 2.0
       y: 0.0
       z: 0.0
-    pixels: 72
+    point_count: 72
 star:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.42
   geometry:
     type: points
@@ -218,3 +208,5 @@ star:
     - x: -0.16
       y: 0.16
       z: 0.0
+
+

@@ -330,8 +330,9 @@ function guiRequestForDescriptor(
   if (descriptor === null || activePath === null) return null;
   const defaultObject =
     descriptor.defaultObjectKeys.find((item) => item.view === "sequence") ??
-    descriptor.defaultObjectKeys.find((item) => item.view === "layout") ??
-    descriptor.defaultObjectKeys.find((item) => item.view === "fixture");
+    descriptor.defaultObjectKeys.find((item) => item.view === "setup") ??
+    descriptor.defaultObjectKeys.find((item) => item.view === "preview") ??
+    descriptor.defaultObjectKeys.find((item) => item.view === "prop");
   if (defaultObject === undefined) return null;
   return {
     path: activePath,

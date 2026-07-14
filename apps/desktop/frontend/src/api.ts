@@ -1,9 +1,10 @@
 import { commands as generatedCommands } from "./generated/bindings";
 import type {
-  FixtureGuiEdit,
+  PropGuiEdit,
   GuiDocumentRequest,
   GuiEditResult,
-  LayoutGuiEdit,
+  PreviewGuiEdit,
+  SetupGuiEdit,
   SequenceGuiEdit,
   SequenceSelectionEdit
 } from "./types";
@@ -45,6 +46,7 @@ export const commands = {
     return result.data;
   },
   applySequenceGuiEdit: (edit: SequenceGuiEdit) => applyCurrentGuiEdit({ type: "sequence", edit }),
+  applySetupGuiEdit: (edit: SetupGuiEdit) => applyCurrentGuiEdit({ type: "setup", edit }),
   applySequenceSelectionEdit: async (edit: SequenceSelectionEdit) => {
     const result = await generatedCommands.applySequenceSelectionEdit(edit);
     const guiDiagnostic = result.snapshot.diagnostics.find((diagnostic) => diagnostic.code.startsWith("gui."));
@@ -54,8 +56,8 @@ export const commands = {
     guiEditResultHandler?.({ snapshot: result.snapshot, document: result.document });
     return result;
   },
-  applyLayoutGuiEdit: (edit: LayoutGuiEdit) => applyCurrentGuiEdit({ type: "layout", edit }),
-  applyFixtureGuiEdit: (edit: FixtureGuiEdit) => applyCurrentGuiEdit({ type: "fixture", edit }),
+  applyPreviewGuiEdit: (edit: PreviewGuiEdit) => applyCurrentGuiEdit({ type: "preview", edit }),
+  applyPropGuiEdit: (edit: PropGuiEdit) => applyCurrentGuiEdit({ type: "prop", edit }),
   chooseSequenceAudio: () => {
     if (currentGuiRequest === null) {
       throw new Error("Audio selection attempted without an active GUI document request.");

@@ -6,7 +6,7 @@ The project is built as a Rust workspace with a Tauri desktop shell and a React/
 
 ## Why This Exists
 
-Lighting tools often split creative sequencing from the source data that makes a show maintainable. Dawn treats a light show like a real project: fixtures, layouts, patches, curves, effects, sequences, and audio references are stored as Dawn source documents, checked together, and edited through both text and GUI workflows.
+Lighting tools often split creative sequencing from the source data that makes a show maintainable. Dawn treats a light show like a real project: logical element trees, preview props, fixture profiles, typed patch graphs, controllers, effects, sequences, and audio references are stored as Dawn source documents, checked together, and edited through text and GUI workflows.
 
 That makes the project useful as a technical showcase for:
 
@@ -20,10 +20,10 @@ That makes the project useful as a technical showcase for:
 
 - Open and validate Dawn project files.
 - Edit project documents in a CodeMirror-based desktop editor.
-- Work with fixtures, layouts, patches, setups, effects, curves, sequences, and audio-backed timelines.
-- Render lighting frames through the Rust runtime.
+- Work with elements, fixture profiles, preview links, typed patches, controllers, effects, curves, sequences, and audio-backed timelines.
+- Render one shared logical/controller frame through the Rust runtime.
 - Preview effect rasters and sequence output in the desktop UI.
-- Export sequence data for downstream show tooling.
+- Transmit live E1.31 or Art-Net output with blackout and stream lifecycle handling.
 - Generate TypeScript bindings from Rust command and data types.
 - Benchmark effect VM and render performance with Criterion.
 
@@ -45,7 +45,7 @@ apps/desktop/src/             Rust desktop service, app state, commands, persist
 apps/desktop/src/state/       Desktop audio, workspace, GUI edit, project, render, and filesystem workflows
 apps/desktop/src/gui/         Typed GUI projection, edit, selection, and domain-conversion modules
 apps/desktop/src/state_tasks.rs Background save/render scheduling and GUI history
-apps/desktop/src/gui_geometry.rs Read-only fixture/layout geometry projection
+apps/desktop/src/gui_geometry.rs Read-only preview-prop geometry projection
 apps/desktop/frontend/        React/TypeScript frontend
 apps/desktop/frontend/src/ui/gui/sequence/sequenceWaveform.ts  Timeline waveform cache/rendering
 crates/dawn-language/         Core Dawn model, sequence types, effect DSL, compiler, VM
@@ -53,7 +53,8 @@ crates/dawn-project-io/       Dawn project loading, diagnostics, source ownershi
 crates/dawn-project-io/src/loader/  Project loading, import resolution, and document parsing
 crates/dawn-project-io/src/serialization/  Domain-specific Dawn document serialization
 crates/dawn-runtime/          Prepared sequence and effect rendering
-examples/                     Example Dawn projects and fixtures
+crates/dawn-output/           E1.31 and Art-Net socket/codec lifecycle
+examples/                     Example Dawn projects and props
 docs/                         Performance and regression tracking notes
 tools/                        Repository tooling
 ```
@@ -93,7 +94,7 @@ examples/thirty-output-controller/project.dawn
 examples/christmas-house/project.dawn
 ```
 
-`examples/starter` is the smallest project to explore first. `examples/thirty-output-controller` is a larger fixture used for realistic render and performance work.
+`examples/starter` is the smallest project to explore first. `examples/thirty-output-controller` is a larger show used for realistic render and performance work.
 
 ## Development Commands
 
@@ -129,11 +130,11 @@ Runs the full Criterion benchmark set.
 
 ## How A Dawn Project Works
 
-A Dawn project starts at a `project.dawn` entrypoint. That file imports the rest of the show definition: setups, fixture definitions, layouts, patches, curves, effects, sequences, and assets.
+A Dawn project starts at a `project.dawn` entrypoint. That file imports the rest of the show definition: setups, element trees, preview layouts and props, fixture profiles, patch graphs, controllers, curves, effects, sequences, and assets.
 
 Project IO loads reachable source files, validates imports and references, tracks source locations for diagnostics, compiles DSL definitions, and builds the authoritative typed `DawnProject`. `SourceProject` retains document ownership, import, original-source, and asset metadata; it is not a second editable project model. GUI commands make one private mutable candidate from the current immutable project snapshot; accepted snapshots are shared by state, history, save, and render work. Project IO serializes typed state directly without reparsing or synchronizing a YAML model.
 
-At render time, `dawn-runtime` prepares the selected setup and sequence, resolves targets and fixture pixels, evaluates effect clips, applies the language crate's canonical automation semantics, and composes layers through the sequence graph.
+At render time, `dawn-runtime` resolves element selections in tree order, composes color effects, evaluates typed control clips, applies explicit fixture behavior rules, and evaluates the prepared patch graph into exact controller-port buffers. Preview and live output consume that same `RenderedShowFrame`; neither reinterprets colors, fixture channels, or patch ordering. Live output is opt-in for each application run and fails closed by blacking out active ports and terminating E1.31 streams.
 
 ## Status
 

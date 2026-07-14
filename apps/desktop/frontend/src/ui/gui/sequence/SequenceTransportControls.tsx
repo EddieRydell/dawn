@@ -25,6 +25,7 @@ export function SequenceTransportControls({
 }) {
   const unsupported = isSequenceTransportUnsupported(document, transport);
   const activePlayback = isActiveAudioPlayback(transport.state);
+  const liveActive = liveOutput.state === "preparing" || liveOutput.state === "holding" || liveOutput.state === "streaming";
   const stepFrame = (direction: -1 | 1) => {
     stepSequenceFrame(document, transport.positionSeconds, transport.durationSeconds, direction);
   };
@@ -80,9 +81,9 @@ export function SequenceTransportControls({
       </button>
       <button
         type="button"
-        className={liveOutput.enabled ? "active" : ""}
-        title={liveOutput.lastError ?? `Live output: ${liveOutput.status}`}
-        onClick={() => void runSnapshotCommand(() => commands.setLiveOutputEnabled(!liveOutput.enabled))}
+        className={liveActive ? "active" : ""}
+        title={liveOutput.lastError ?? `Live output: ${liveOutput.state}`}
+        onClick={() => void runSnapshotCommand(() => commands.setLiveOutputActive(!liveActive))}
       >
         <RadioTower size={15} />
       </button>
@@ -106,7 +107,7 @@ export function SequenceTransportControls({
       </button>
       <span className="sequence-time-readout">
         {formatSeconds(transport.positionSeconds)} / {formatSeconds(transport.durationSeconds || document.durationSeconds)} | Home {formatSeconds(transport.homeSeconds)}
-        {liveOutput.enabled ? ` | Live ${liveOutput.status} (${liveOutput.activeUniverseCount})` : ""}
+        {liveOutput.state !== "disabled" ? ` | Live ${liveOutput.state} (${liveOutput.activeUniverseCount})` : ""}
       </span>
     </div>
   );

@@ -1,12 +1,11 @@
 use std::collections::{BTreeSet, HashSet};
 
 use dawn_language::dsl::Type;
-use dawn_language::effect::{CurveSource, EffectParamValue, EffectTarget};
+use dawn_language::effect::{CurveSource, EffectParamValue};
 use dawn_language::operator::effect_param_matches_type;
 use dawn_language::sequence::{
     AutomationMapping, AutomationTarget, CompositionGraphNodeKind, MarkCollectionKey, SequenceId,
 };
-use dawn_language::setup::LayoutTarget;
 use dawn_project_io::ProjectSession;
 
 use crate::gui::GuiMutationError;
@@ -69,11 +68,11 @@ pub(crate) fn validate_sequence_integrity(
         .iter()
         .map(|collection| collection.key.clone())
         .collect::<HashSet<_>>();
-    let layout = session
+    let tree = session
         .project
         .setups
         .get(&session.project.root.setup)
-        .and_then(|setup| session.project.layouts.get(&setup.layout));
+        .and_then(|setup| session.project.element_trees.get(&setup.elements));
     for effect in &sequence.effects {
         if !layer_ids.contains(&effect.layer_id) {
             return Err(GuiMutationError::Invalid(format!(
@@ -81,14 +80,15 @@ pub(crate) fn validate_sequence_integrity(
                 effect.id.0
             )));
         }
-        if !layout
-            .ok_or_else(|| GuiMutationError::Invalid("Active layout is missing.".to_string()))?
-            .target_order
-            .iter()
-            .any(|target| effect_target_matches_layout(&effect.target, target))
+        if tree
+            .ok_or_else(|| {
+                GuiMutationError::Invalid("Active element tree is missing.".to_string())
+            })?
+            .flatten_selection(&effect.target)
+            .is_err()
         {
             return Err(GuiMutationError::Invalid(format!(
-                "Effect {} references a missing layout target.",
+                "Effect {} references an invalid element selection.",
                 effect.id.0
             )));
         }
@@ -260,14 +260,4 @@ fn automation_mapping_matches_type(mapping: &AutomationMapping, ty: &Type) -> bo
         }
         _ => false,
     }
-}
-
-fn effect_target_matches_layout(target: &EffectTarget, candidate: &LayoutTarget) -> bool {
-    matches!(
-        (target, candidate),
-        (EffectTarget::Fixture(left), LayoutTarget::Fixture(right)) if left == right
-    ) || matches!(
-        (target, candidate),
-        (EffectTarget::Group(left), LayoutTarget::Group(right)) if left == right
-    )
 }

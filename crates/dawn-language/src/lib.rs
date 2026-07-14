@@ -10,13 +10,20 @@
     )
 )]
 
+pub mod control;
+pub mod controller;
 pub mod dsl;
 pub mod effect;
+pub mod element;
+pub mod fixture_profile;
 pub mod identity;
 pub mod model;
 pub mod native_effect;
 pub mod operator;
+pub mod patch;
+pub mod preview;
 pub mod sampling;
 pub mod sequence;
 pub mod setup;
+pub mod validation;
 pub mod values;

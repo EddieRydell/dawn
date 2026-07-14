@@ -447,7 +447,7 @@ impl Checker {
                 let target = self.check_expr(*target, env, None);
                 let ty = match &target.ty {
                     Type::TargetItem => match member.as_str() {
-                        "fixture_index" | "fixture_pixel_index" | "pixel_index" | "pixel_count" => {
+                        "element_index" | "element_cell_index" | "pixel_index" | "pixel_count" => {
                             Type::Int
                         }
                         "pixel_fraction" => Type::Float,

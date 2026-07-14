@@ -51,6 +51,7 @@ impl DesktopState {
         session: ProjectSession,
         diagnostics: Vec<ProjectDiagnostic>,
     ) -> AppSnapshot {
+        self.suspend_live_output();
         let entries = workspace_entries(&session);
         let root = session.source.source_root.to_string();
         let entrypoint = session.source.entrypoint.clone();
@@ -123,12 +124,6 @@ impl DesktopState {
             if let Some(restore) = restore.as_ref() {
                 snapshot.audio_transport.position_seconds = restore.session.audio_position_seconds;
                 snapshot.audio_transport.home_seconds = restore.session.audio_home_seconds;
-                snapshot.live_output.enabled = restore.session.live_output_enabled;
-                snapshot.live_output.status = if restore.session.live_output_enabled {
-                    "Enabled".to_string()
-                } else {
-                    "Disabled".to_string()
-                };
             }
             snapshot.project_revision = snapshot.project_revision.saturating_add(1);
         })
@@ -146,19 +141,21 @@ impl DesktopState {
         session: ProjectSession,
         diagnostics: Vec<ProjectDiagnostic>,
     ) -> AppSnapshot {
+        self.suspend_live_output();
         // A refresh applies the latest semantic project model in place. It must not
         // reload editor text or reset user-owned editor state; only full project
         // opens are allowed to replace tabs, buffers, GUI state, or transport.
         let entries = workspace_entries(&session);
         let root = session.source.source_root.to_string();
         let render_error = self.refresh_render_session(&session.project);
+        let render_ready = render_error.is_none();
         let active_descriptor = self
             .snapshot()
             .active_file
             .as_deref()
             .and_then(|path| descriptor_for_path(&session, Utf8Path::new(path)));
         *lock_unpoisoned(&self.project) = Some(Arc::new(session));
-        self.update_snapshot(|snapshot| {
+        let snapshot = self.update_snapshot(|snapshot| {
             snapshot.project_root = Some(root);
             snapshot.project_entries = entries;
             if active_descriptor.is_some() {
@@ -176,7 +173,13 @@ impl DesktopState {
             snapshot.render_error =
                 render_error.map(|error| format!("Render refresh failed: {error:?}"));
             snapshot.project_revision = snapshot.project_revision.saturating_add(1);
-        })
+        });
+        if render_ready {
+            self.resume_live_output_after_prepare();
+            self.snapshot()
+        } else {
+            snapshot
+        }
     }
 
     pub(super) fn apply_gui_project_update(
@@ -185,6 +188,7 @@ impl DesktopState {
         status: &str,
         generated_text: BTreeMap<String, String>,
     ) -> AppSnapshot {
+        self.suspend_live_output();
         let entries = workspace_entries(&session);
         let root = session.source.source_root.to_string();
         let active_descriptor = self

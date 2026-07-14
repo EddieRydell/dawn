@@ -328,11 +328,11 @@ pub(in crate::gui) fn gradient_library(
         .collect()
 }
 
-pub(in crate::gui) fn fixture_source_ref(id: &FixtureDefinitionId) -> Option<GuiObjectRef> {
+pub(in crate::gui) fn fixture_source_ref(id: &PropDefinitionId) -> Option<GuiObjectRef> {
     Some(GuiObjectRef {
         path: id.0.document().to_string(),
         object_key: id.0.object().to_string(),
-        kind: ObjectKind::Fixture,
+        kind: ObjectKind::Prop,
         id: id.0.object().to_string(),
     })
 }
@@ -597,11 +597,11 @@ use dawn_language::operator::{
     BuiltinOperator, GraphOperatorNode, OperatorDefinition, OperatorPortCardinality,
     OperatorPortDefinition, OperatorRef,
 };
+use dawn_language::preview::PropDefinitionId;
 use dawn_language::sequence::{
     AutomationMapping, AutomationTarget, CompositionGraphNode, CompositionGraphNodeId,
     CompositionGraphNodeKind,
 };
-use dawn_language::setup::FixtureDefinitionId;
 use dawn_language::values::{Curve, Gradient};
 use dawn_project_io::ProjectSession;
 

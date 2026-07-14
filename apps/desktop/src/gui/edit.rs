@@ -1,21 +1,21 @@
 pub(super) fn edit_layout(
     session: &mut ProjectSession,
     resolved: &ResolvedGuiObject,
-    edit: LayoutGuiEdit,
+    edit: PreviewGuiEdit,
 ) -> Result<(), GuiMutationError> {
-    let layout_id = LayoutId(SourceIdentity::new(
+    let layout_id = PreviewLayoutId(SourceIdentity::new(
         resolved.identity.document().to_path_buf(),
         resolved.identity.object().to_string(),
     ));
     let layout = session
         .project
-        .layouts
+        .preview_layouts
         .get_mut(&layout_id)
         .ok_or_else(|| GuiMutationError::Invalid("Layout was not found.".to_string()))?;
     match edit {
-        LayoutGuiEdit::UpdatePlacementTransform { id, transform } => {
+        PreviewGuiEdit::UpdatePlacementTransform { id, transform } => {
             let fixture = layout
-                .fixtures
+                .props
                 .iter_mut()
                 .find(|fixture| fixture.id.0 == id)
                 .ok_or_else(|| {
@@ -32,10 +32,10 @@ pub(super) fn edit_layout(
 pub(super) fn edit_fixture(
     session: &mut ProjectSession,
     identity: &SourceIdentity,
-    edit: FixtureGuiEdit,
+    edit: PropGuiEdit,
 ) -> Result<(), GuiMutationError> {
     match edit {
-        FixtureGuiEdit::UpdateBulbDiameter {
+        PropGuiEdit::UpdateBulbDiameter {
             object_key,
             bulb_diameter_meters,
         } => {
@@ -43,13 +43,13 @@ pub(super) fn edit_fixture(
             definition.bulb_radius = DistanceSpan::from_meters(bulb_diameter_meters / 2.0);
             Ok(())
         }
-        FixtureGuiEdit::MovePoint {
+        PropGuiEdit::MovePoint {
             object_key,
             point_index,
             point,
         } => {
             let definition = fixture_definition_mut(session, identity.document(), &object_key)?;
-            let DomainGeometry::Points { points } = &mut definition.geometry else {
+            let PropGeometry::Points { points } = &mut definition.geometry else {
                 return Err(GuiMutationError::Invalid(
                     "Fixture geometry does not contain movable points.".to_string(),
                 ));
@@ -98,7 +98,63 @@ pub(super) fn edit_sequence(
         resolved.identity.document().to_path_buf(),
         resolved.identity.object().to_string(),
     ));
+    let element_tree = session
+        .project
+        .setups
+        .get(&session.project.root.setup)
+        .map(|setup| setup.elements.clone())
+        .ok_or_else(|| {
+            GuiMutationError::Invalid("Active element tree was not found.".to_string())
+        })?;
     match edit {
+        SequenceGuiEdit::MoveControlClip {
+            id,
+            start_seconds,
+            anchor_lane_index: _,
+            lane_index,
+        } => {
+            let selection = target_for_lane(session, lane_index as usize).ok_or_else(|| {
+                GuiMutationError::Invalid("Control clip target lane was not found.".to_string())
+            })?;
+            let clip = sequence_mut(session, &sequence_id)?
+                .control_clips
+                .iter_mut()
+                .find(|clip| clip.id.0 == id)
+                .ok_or_else(|| {
+                    GuiMutationError::Invalid("Control clip was not found.".to_string())
+                })?;
+            clip.start = DawnTime::from_seconds_f64(start_seconds.max(0.0));
+            match &mut clip.target {
+                dawn_language::control::ControlTarget::Scalar(target)
+                | dawn_language::control::ControlTarget::Indexed(target) => *target = selection,
+                dawn_language::control::ControlTarget::FixtureFunction {
+                    selection: target,
+                    ..
+                } => {
+                    *target = selection;
+                }
+            }
+        }
+        SequenceGuiEdit::ResizeControlClip {
+            id,
+            start_seconds,
+            duration_seconds,
+        } => {
+            let clip = sequence_mut(session, &sequence_id)?
+                .control_clips
+                .iter_mut()
+                .find(|clip| clip.id.0 == id)
+                .ok_or_else(|| {
+                    GuiMutationError::Invalid("Control clip was not found.".to_string())
+                })?;
+            clip.start = DawnTime::from_seconds_f64(start_seconds.max(0.0));
+            clip.duration = DawnDuration::from_seconds_f64(duration_seconds.max(0.000000001));
+        }
+        SequenceGuiEdit::DeleteControlClip { id } => {
+            sequence_mut(session, &sequence_id)?
+                .control_clips
+                .retain(|clip| clip.id.0 != id);
+        }
         SequenceGuiEdit::SetDuration { duration_seconds } => {
             if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
                 return Err(GuiMutationError::Invalid(
@@ -124,7 +180,9 @@ pub(super) fn edit_sequence(
             start_seconds,
             target,
         } => {
-            let parsed_target = target.map(layout_target_to_effect_target).transpose()?;
+            let parsed_target = target
+                .map(|target| layout_target_to_effect_target(&element_tree, target))
+                .transpose()?;
             let sequence = sequence_mut(session, &sequence_id)?;
             let effect = effect_mut(sequence, id)?;
             effect.start = DawnTime::from_seconds_f64(start_seconds.max(0.0));
@@ -151,7 +209,7 @@ pub(super) fn edit_sequence(
         }
         SequenceGuiEdit::RetargetEffect { id, target } => {
             let sequence = sequence_mut(session, &sequence_id)?;
-            let target = layout_target_to_effect_target(target)?;
+            let target = layout_target_to_effect_target(&element_tree, target)?;
             effect_mut(sequence, id)?.target = target;
         }
         SequenceGuiEdit::DeleteEffect { id } => {
@@ -336,7 +394,7 @@ pub(super) fn edit_sequence(
                 layer_id,
                 start: DawnTime::from_seconds_f64(start_seconds.max(0.0)),
                 duration: DawnDuration::from_seconds_f64(1.0),
-                target: layout_target_to_effect_target(target)?,
+                target: layout_target_to_effect_target(&element_tree, target)?,
                 scope: effect_scope(scope),
                 definition,
                 param_overrides,
@@ -1052,13 +1110,13 @@ use dawn_language::identity::SourceIdentity;
 use dawn_language::operator::{
     GraphOperatorNode, OperatorPortCardinality, OperatorRef, validate_composition_graph,
 };
+use dawn_language::preview::{PreviewLayoutId, PropGeometry};
 use dawn_language::sequence::{
     AutomationBinding, AutomationClip, AutomationClipId, AutomationTarget, CompositionGraphNode,
     CompositionGraphNodeId, CompositionGraphNodeKind, EffectGraphEdge, GraphNodePosition,
     GraphPortId, MarkCollection, MarkCollectionKey, SequenceAudio as DomainSequenceAudio,
     SequenceId, SequenceLayerId,
 };
-use dawn_language::setup::{Geometry as DomainGeometry, LayoutId};
 use dawn_language::values::{DawnDuration, DawnTime, DistanceSpan};
 use dawn_project_io::{ProjectSession, SourceObjectKind, ensure_document_can_reference_source};
 use indexmap::IndexMap;
@@ -1075,9 +1133,9 @@ use super::model::{
 use super::selection::{
     current_effect_curve_value, current_effect_gradient_value, current_graph_curve_value,
     current_graph_gradient_value, effect_lane_index_resolved, mark_param_names,
-    required_operator_param_value,
+    required_operator_param_value, target_for_lane,
 };
 use super::{GuiMutationError, ResolvedGuiObject};
 use crate::dto::{
-    FixtureGuiEdit, LayoutGuiEdit, SequenceBuiltinEffect, SequenceEffectReference, SequenceGuiEdit,
+    PreviewGuiEdit, PropGuiEdit, SequenceBuiltinEffect, SequenceEffectReference, SequenceGuiEdit,
 };

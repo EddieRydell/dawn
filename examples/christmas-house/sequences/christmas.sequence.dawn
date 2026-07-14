@@ -1,4 +1,6 @@
 imports:
+- from: ../layouts/house.layout.dawn
+  as: elements
 - from: ../effects
   as: effects
 christmas:
@@ -36,8 +38,8 @@ christmas:
     start: 0s
     duration: 45s
     target:
-      type: group
-      id: 1
+      tree: elements.house_elements
+      node: 1001
     scope: per_fixture
     params:
       first:
@@ -58,8 +60,8 @@ christmas:
     start: 0s
     duration: 45s
     target:
-      type: group
-      id: 2
+      tree: elements.house_elements
+      node: 1002
     scope: whole_target
     params:
       low:
@@ -77,8 +79,8 @@ christmas:
     start: 0s
     duration: 45s
     target:
-      type: group
-      id: 3
+      tree: elements.house_elements
+      node: 1003
     scope: whole_target
     params:
       base:
@@ -102,8 +104,8 @@ christmas:
     start: 0s
     duration: 45s
     target:
-      type: group
-      id: 4
+      tree: elements.house_elements
+      node: 1004
     scope: per_fixture
     params:
       low:
@@ -121,8 +123,8 @@ christmas:
     start: 8.5s
     duration: 24.3s
     target:
-      type: fixture
-      id: 5
+      tree: elements.house_elements
+      node: 5
     scope: per_fixture
     params:
       intensity:
@@ -170,3 +172,5 @@ christmas:
       to: 2
       to_port: input
   automation_clips: []
+
+

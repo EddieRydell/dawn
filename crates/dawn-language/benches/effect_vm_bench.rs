@@ -321,16 +321,15 @@ fn generator_context() -> GeneratorContext {
 fn target_groups(group_count: i64, pixels_per_group: i64) -> Vec<Arc<TargetItemValue>> {
     let pixel_count = group_count * pixels_per_group;
     (0..group_count)
-        .map(|fixture_index| {
+        .map(|element_index| {
             Arc::new(TargetItemValue {
                 pixels: Arc::new(
                     (0..pixels_per_group)
-                        .map(|fixture_pixel_index| {
-                            let pixel_index =
-                                fixture_index * pixels_per_group + fixture_pixel_index;
+                        .map(|element_cell_index| {
+                            let pixel_index = element_index * pixels_per_group + element_cell_index;
                             TargetPixelValue {
-                                fixture_index,
-                                fixture_pixel_index,
+                                element_index,
+                                element_cell_index,
                                 pixel_index,
                                 pixel_count,
                                 pixel_fraction: pixel_index as f64 / (pixel_count - 1) as f64,

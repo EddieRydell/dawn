@@ -1,9 +1,9 @@
-use dawn_language::setup::Geometry as DomainGeometry;
+use dawn_language::preview::PropGeometry as DomainGeometry;
 use dawn_language::values::{DistanceSpan, Point3};
 
 use crate::dto::{
     Geometry, GeometryRenderBounds, GeometryRenderGuide, GeometryRenderPlan, GeometryRenderPoint,
-    LayoutFixturePlacement, Point3Meters, ResolvedLayoutFixture,
+    Point3Meters, PreviewPropPlacement, ResolvedPreviewProp,
 };
 
 pub(crate) fn geometry(geometry: &DomainGeometry) -> Geometry {
@@ -11,22 +11,25 @@ pub(crate) fn geometry(geometry: &DomainGeometry) -> Geometry {
         DomainGeometry::Points { points } => Geometry::Points {
             points: points.iter().map(|point| point3_meters(*point)).collect(),
         },
-        DomainGeometry::Lines { points, pixels } => Geometry::Lines {
+        DomainGeometry::Lines {
+            points,
+            point_count,
+        } => Geometry::Lines {
             points: points.iter().map(|point| point3_meters(*point)).collect(),
-            pixels: *pixels,
+            pixels: *point_count,
         },
         DomainGeometry::Arc {
             center,
             radius,
             start_degrees,
             end_degrees,
-            pixels,
+            point_count,
         } => Geometry::Arc {
             center: point3_meters(*center),
             radius_meters: radius.as_meters_f64(),
             start_degrees: *start_degrees,
             end_degrees: *end_degrees,
-            pixels: *pixels,
+            pixels: *point_count,
         },
     }
 }
@@ -51,14 +54,17 @@ pub(crate) fn geometry_emitters(geometry: &DomainGeometry) -> Vec<GeometryRender
         DomainGeometry::Points { points } => {
             points.iter().map(|point| render_point(*point)).collect()
         }
-        DomainGeometry::Lines { points, pixels } => line_emitters(points, *pixels),
+        DomainGeometry::Lines {
+            points,
+            point_count,
+        } => line_emitters(points, *point_count),
         DomainGeometry::Arc {
             center,
             radius,
             start_degrees,
             end_degrees,
-            pixels,
-        } => arc_emitters(*center, *radius, *start_degrees, *end_degrees, *pixels),
+            point_count,
+        } => arc_emitters(*center, *radius, *start_degrees, *end_degrees, *point_count),
     }
 }
 
@@ -205,7 +211,7 @@ fn bounds_for_points(points: impl Iterator<Item = GeometryRenderPoint>) -> Geome
     }
 }
 
-pub(crate) fn layout_bounds(fixtures: &[LayoutFixturePlacement]) -> GeometryRenderBounds {
+pub(crate) fn layout_bounds(fixtures: &[PreviewPropPlacement]) -> GeometryRenderBounds {
     bounds_for_points(fixtures.iter().map(|fixture| GeometryRenderPoint {
         x_meters: fixture.transform.position.x_meters,
         y_meters: fixture.transform.position.y_meters,
@@ -216,13 +222,13 @@ pub(crate) fn layout_bounds(fixtures: &[LayoutFixturePlacement]) -> GeometryRend
 pub(crate) fn geometry_summary(geometry: &DomainGeometry) -> String {
     match geometry {
         DomainGeometry::Points { points } => format!("{} points", points.len()),
-        DomainGeometry::Lines { pixels, .. } => format!("{pixels} line pixels"),
-        DomainGeometry::Arc { pixels, .. } => format!("{pixels} arc pixels"),
+        DomainGeometry::Lines { point_count, .. } => format!("{point_count} line points"),
+        DomainGeometry::Arc { point_count, .. } => format!("{point_count} arc points"),
     }
 }
 
-pub(crate) fn empty_resolved_fixture() -> ResolvedLayoutFixture {
-    ResolvedLayoutFixture {
+pub(crate) fn empty_resolved_fixture() -> ResolvedPreviewProp {
+    ResolvedPreviewProp {
         name: "Missing fixture".to_string(),
         color_model: "rgb".to_string(),
         bulb_diameter_meters: 0.05,

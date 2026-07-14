@@ -3,7 +3,10 @@ mod setup;
 mod values;
 
 use sequence::sequence_value;
-use setup::{controller_value, fixture_definition_value, layout_value, patch_value, setup_value};
+use setup::{
+    controller_value, element_tree_value, fixture_profile_value, patch_value, preview_layout_value,
+    prop_definition_value, setup_value,
+};
 use values::{curve_value, gradient_value, string_value, typed_object, write_source_reference};
 
 pub(super) fn write_source_documents(
@@ -140,19 +143,44 @@ pub(super) fn has_typed_object(
                     .contains_key(&ControllerId(identity))
             })
         }
-        SourceObjectKind::Layout => qualified_identity(session, document, id)
-            .is_some_and(|identity| session.project.layouts.contains_key(&LayoutId(identity))),
+        SourceObjectKind::ElementTree => {
+            qualified_identity(session, document, id).is_some_and(|identity| {
+                session
+                    .project
+                    .element_trees
+                    .contains_key(&ElementTreeId(identity))
+            })
+        }
+        SourceObjectKind::PreviewLayout => {
+            qualified_identity(session, document, id).is_some_and(|identity| {
+                session
+                    .project
+                    .preview_layouts
+                    .contains_key(&PreviewLayoutId(identity))
+            })
+        }
         SourceObjectKind::Patch => qualified_identity(session, document, id)
             .is_some_and(|identity| session.project.patches.contains_key(&PatchId(identity))),
-        SourceObjectKind::FixtureDefinition => qualified_identity(session, document, id)
-            .is_some_and(|identity| {
+        SourceObjectKind::PropDefinition => {
+            qualified_identity(session, document, id).is_some_and(|identity| {
                 session
                     .project
                     .definitions
-                    .fixtures
+                    .props
                     .definitions
-                    .contains_key(&FixtureDefinitionId(identity))
-            }),
+                    .contains_key(&PropDefinitionId(identity))
+            })
+        }
+        SourceObjectKind::FixtureProfile => {
+            qualified_identity(session, document, id).is_some_and(|identity| {
+                session
+                    .project
+                    .definitions
+                    .fixture_profiles
+                    .definitions
+                    .contains_key(&FixtureProfileId(identity))
+            })
+        }
         SourceObjectKind::Curve => {
             qualified_identity(session, document, id).is_some_and(|identity| {
                 session
@@ -243,15 +271,25 @@ pub(super) fn serialize_source_object(
                 .ok_or_else(|| missing_typed_object(from_document, id))?;
             controller_value(controller)
         }
-        SourceObjectKind::Layout => {
+        SourceObjectKind::ElementTree => {
+            let identity = qualified_identity(session, from_document, id)
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
+            let tree = session
+                .project
+                .element_trees
+                .get(&ElementTreeId(identity))
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
+            element_tree_value(session, from_document, tree)
+        }
+        SourceObjectKind::PreviewLayout => {
             let identity = qualified_identity(session, from_document, id)
                 .ok_or_else(|| missing_typed_object(from_document, id))?;
             let layout = session
                 .project
-                .layouts
-                .get(&LayoutId(identity))
+                .preview_layouts
+                .get(&PreviewLayoutId(identity))
                 .ok_or_else(|| missing_typed_object(from_document, id))?;
-            layout_value(session, from_document, layout)
+            preview_layout_value(session, from_document, layout)
         }
         SourceObjectKind::Patch => {
             let identity = qualified_identity(session, from_document, id)
@@ -263,17 +301,29 @@ pub(super) fn serialize_source_object(
                 .ok_or_else(|| missing_typed_object(from_document, id))?;
             patch_value(session, from_document, patch)
         }
-        SourceObjectKind::FixtureDefinition => {
+        SourceObjectKind::PropDefinition => {
             let identity = qualified_identity(session, from_document, id)
                 .ok_or_else(|| missing_typed_object(from_document, id))?;
             let definition = session
                 .project
                 .definitions
-                .fixtures
+                .props
                 .definitions
-                .get(&FixtureDefinitionId(identity))
+                .get(&PropDefinitionId(identity))
                 .ok_or_else(|| missing_typed_object(from_document, id))?;
-            fixture_definition_value(definition)
+            prop_definition_value(definition)
+        }
+        SourceObjectKind::FixtureProfile => {
+            let identity = qualified_identity(session, from_document, id)
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
+            let profile = session
+                .project
+                .definitions
+                .fixture_profiles
+                .definitions
+                .get(&FixtureProfileId(identity))
+                .ok_or_else(|| missing_typed_object(from_document, id))?;
+            fixture_profile_value(profile)
         }
         SourceObjectKind::Curve => {
             let identity = qualified_identity(session, from_document, id)
@@ -380,12 +430,17 @@ pub(super) fn project_root_value(
 use std::{fs, io};
 
 use camino::{Utf8Path, Utf8PathBuf};
+use dawn_language::controller::ControllerId;
 use dawn_language::effect::{CurveId, EffectDefinitionId, GradientId};
+use dawn_language::element::ElementTreeId;
+use dawn_language::fixture_profile::FixtureProfileId;
 use dawn_language::identity::SourceIdentity;
 use dawn_language::model::ProjectId;
 use dawn_language::operator::OperatorDefinitionId;
+use dawn_language::patch::PatchId;
+use dawn_language::preview::{PreviewLayoutId, PropDefinitionId};
 use dawn_language::sequence::SequenceId;
-use dawn_language::setup::{ControllerId, FixtureDefinitionId, LayoutId, PatchId, SetupId};
+use dawn_language::setup::SetupId;
 use yaml_serde::{Mapping, Value};
 
 use crate::ExportProjectError;

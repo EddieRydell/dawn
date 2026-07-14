@@ -564,6 +564,7 @@ pub fn insert_sequence(
             }],
         },
         automation_clips: Vec::new(),
+        control_clips: Vec::new(),
     };
     let source_document = SourceDocument::new(
         Vec::new(),

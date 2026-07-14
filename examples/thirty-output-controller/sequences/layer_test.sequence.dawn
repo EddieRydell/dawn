@@ -1,4 +1,6 @@
 imports:
+- from: ../layouts/outputs.layout.dawn
+  as: elements
 - from: ..\effects
   as: effects
 - from: ..\operators
@@ -28,8 +30,8 @@ layer_test:
     start: 58.302838104s
     duration: 0.773479974s
     target:
-      type: fixture
-      id: 1
+      tree: elements.outputs_elements
+      node: 1
     scope: per_fixture
     params:
       gradient:
@@ -50,8 +52,8 @@ layer_test:
     start: 58.637890996s
     duration: 0.773479974s
     target:
-      type: fixture
-      id: 2
+      tree: elements.outputs_elements
+      node: 2
     scope: per_fixture
     params:
       gradient:
@@ -72,8 +74,8 @@ layer_test:
     start: 58.793025434s
     duration: 1.881970102s
     target:
-      type: group
-      id: 1
+      tree: elements.outputs_elements
+      node: 1001
     scope: per_fixture
     params:
       gradient:
@@ -97,6 +99,15 @@ layer_test:
       pulse_overlap:
         type: float
         value: 100.0
+      reverse:
+        type: bool
+        value: true
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
     effect: builtins.spin
   composition_graph:
     nodes:
@@ -127,3 +138,4 @@ layer_test:
       to: 2
       to_port: input
   automation_clips: []
+  control_clips: []

@@ -1657,8 +1657,8 @@ fn member_value(target: &RuntimeValue, member: &Identifier) -> Result<RuntimeVal
         return Err(RuntimeError::new("empty TargetItem has no fields"));
     };
     Ok(match member.as_str() {
-        "fixture_index" => RuntimeValue::Int(pixel.fixture_index),
-        "fixture_pixel_index" => RuntimeValue::Int(pixel.fixture_pixel_index),
+        "element_index" => RuntimeValue::Int(pixel.element_index),
+        "element_cell_index" => RuntimeValue::Int(pixel.element_cell_index),
         "pixel_index" => RuntimeValue::Int(pixel.pixel_index),
         "pixel_count" => RuntimeValue::Int(pixel.pixel_count),
         "pixel_fraction" => RuntimeValue::Float(pixel.pixel_fraction),
@@ -1774,7 +1774,7 @@ fn fixtures(value: &RuntimeValue) -> Result<TargetItemsValue, RuntimeError> {
         if raw_groups
             .last()
             .and_then(|group| group.first())
-            .is_some_and(|first| first.fixture_index == pixel.fixture_index)
+            .is_some_and(|first| first.element_index == pixel.element_index)
         {
             if let Some(group) = raw_groups.last_mut() {
                 group.push(pixel);
@@ -1812,8 +1812,8 @@ fn sections(value: &RuntimeValue, width: f64) -> Result<TargetItemsValue, Runtim
             .last()
             .and_then(|group| group.first())
             .is_some_and(|first| {
-                first.fixture_index == pixel.fixture_index
-                    && first.fixture_pixel_index / width == pixel.fixture_pixel_index / width
+                first.element_index == pixel.element_index
+                    && first.element_cell_index / width == pixel.element_cell_index / width
             })
         {
             if let Some(group) = raw_groups.last_mut() {

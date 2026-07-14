@@ -1,45 +1,121 @@
 imports:
 - from: ../fixtures/house.fixture.dawn
-  as: fixtures
-house:
-  type: layout
-  target_order:
-  - type: group
-    id: 1
-  - type: group
-    id: 2
-  - type: group
-    id: 3
-  - type: group
-    id: 4
-  - type: fixture
-    id: 1
-  - type: fixture
-    id: 2
-  - type: fixture
-    id: 3
-  - type: fixture
-    id: 4
-  - type: fixture
-    id: 5
-  - type: fixture
-    id: 6
-  - type: fixture
-    id: 7
-  - type: fixture
-    id: 8
-  - type: fixture
-    id: 9
-  - type: fixture
-    id: 10
-  - type: fixture
-    id: 11
-  - type: fixture
-    id: 12
-  fixtures:
+  as: props
+house_elements:
+  type: element_tree
+  roots:
+  - 1001
+  - 1002
+  - 1003
+  - 1004
+  nodes:
+  - id: 1001
+    name: House Lines
+    type: group
+    children:
+    - 1
+    - 2
+    - 3
+    - 6
+    - 7
+  - id: 1002
+    name: Windows
+    type: group
+    children:
+    - 4
+    - 5
+  - id: 1003
+    name: Yard
+    type: group
+    children:
+    - 9
+    - 10
+    - 11
+  - id: 1004
+    name: Accents
+    type: group
+    children:
+    - 8
+    - 12
   - id: 1
     name: Roof Left
-    fixture: fixtures.roof_slope_left
+    type: color
+    cells: 60
+    capability:
+      type: rgb
+  - id: 2
+    name: Roof Right
+    type: color
+    cells: 60
+    capability:
+      type: rgb
+  - id: 3
+    name: Front Gutter
+    type: color
+    cells: 96
+    capability:
+      type: rgb
+  - id: 4
+    name: Left Window
+    type: color
+    cells: 52
+    capability:
+      type: rgb
+  - id: 5
+    name: Right Window
+    type: color
+    cells: 52
+    capability:
+      type: rgb
+  - id: 6
+    name: Front Door
+    type: color
+    cells: 58
+    capability:
+      type: rgb
+  - id: 7
+    name: Porch Rail
+    type: color
+    cells: 56
+    capability:
+      type: rgb
+  - id: 8
+    name: Wreath
+    type: color
+    cells: 36
+    capability:
+      type: rgb
+  - id: 9
+    name: Left Tree
+    type: color
+    cells: 88
+    capability:
+      type: rgb
+  - id: 10
+    name: Right Tree
+    type: color
+    cells: 88
+    capability:
+      type: rgb
+  - id: 11
+    name: Bushes
+    type: color
+    cells: 72
+    capability:
+      type: rgb
+  - id: 12
+    name: Star
+    type: color
+    cells: 10
+    capability:
+      type: rgb
+house_preview:
+  type: preview_layout
+  element_tree: house_elements
+  props:
+  - id: 1
+    name: Roof Left
+    prop: props.roof_slope_left
     transform:
       position:
         x: -0.05
@@ -53,9 +129,70 @@ house:
         x: 1.0
         y: 1.0
         z: 1.0
+    bindings:
+    - { node: 1, cell: 0 }
+    - { node: 1, cell: 1 }
+    - { node: 1, cell: 2 }
+    - { node: 1, cell: 3 }
+    - { node: 1, cell: 4 }
+    - { node: 1, cell: 5 }
+    - { node: 1, cell: 6 }
+    - { node: 1, cell: 7 }
+    - { node: 1, cell: 8 }
+    - { node: 1, cell: 9 }
+    - { node: 1, cell: 10 }
+    - { node: 1, cell: 11 }
+    - { node: 1, cell: 12 }
+    - { node: 1, cell: 13 }
+    - { node: 1, cell: 14 }
+    - { node: 1, cell: 15 }
+    - { node: 1, cell: 16 }
+    - { node: 1, cell: 17 }
+    - { node: 1, cell: 18 }
+    - { node: 1, cell: 19 }
+    - { node: 1, cell: 20 }
+    - { node: 1, cell: 21 }
+    - { node: 1, cell: 22 }
+    - { node: 1, cell: 23 }
+    - { node: 1, cell: 24 }
+    - { node: 1, cell: 25 }
+    - { node: 1, cell: 26 }
+    - { node: 1, cell: 27 }
+    - { node: 1, cell: 28 }
+    - { node: 1, cell: 29 }
+    - { node: 1, cell: 30 }
+    - { node: 1, cell: 31 }
+    - { node: 1, cell: 32 }
+    - { node: 1, cell: 33 }
+    - { node: 1, cell: 34 }
+    - { node: 1, cell: 35 }
+    - { node: 1, cell: 36 }
+    - { node: 1, cell: 37 }
+    - { node: 1, cell: 38 }
+    - { node: 1, cell: 39 }
+    - { node: 1, cell: 40 }
+    - { node: 1, cell: 41 }
+    - { node: 1, cell: 42 }
+    - { node: 1, cell: 43 }
+    - { node: 1, cell: 44 }
+    - { node: 1, cell: 45 }
+    - { node: 1, cell: 46 }
+    - { node: 1, cell: 47 }
+    - { node: 1, cell: 48 }
+    - { node: 1, cell: 49 }
+    - { node: 1, cell: 50 }
+    - { node: 1, cell: 51 }
+    - { node: 1, cell: 52 }
+    - { node: 1, cell: 53 }
+    - { node: 1, cell: 54 }
+    - { node: 1, cell: 55 }
+    - { node: 1, cell: 56 }
+    - { node: 1, cell: 57 }
+    - { node: 1, cell: 58 }
+    - { node: 1, cell: 59 }
   - id: 2
     name: Roof Right
-    fixture: fixtures.roof_slope_right
+    prop: props.roof_slope_right
     transform:
       position:
         x: 0.0
@@ -69,9 +206,70 @@ house:
         x: 1.0
         y: 1.0
         z: 1.0
+    bindings:
+    - { node: 2, cell: 0 }
+    - { node: 2, cell: 1 }
+    - { node: 2, cell: 2 }
+    - { node: 2, cell: 3 }
+    - { node: 2, cell: 4 }
+    - { node: 2, cell: 5 }
+    - { node: 2, cell: 6 }
+    - { node: 2, cell: 7 }
+    - { node: 2, cell: 8 }
+    - { node: 2, cell: 9 }
+    - { node: 2, cell: 10 }
+    - { node: 2, cell: 11 }
+    - { node: 2, cell: 12 }
+    - { node: 2, cell: 13 }
+    - { node: 2, cell: 14 }
+    - { node: 2, cell: 15 }
+    - { node: 2, cell: 16 }
+    - { node: 2, cell: 17 }
+    - { node: 2, cell: 18 }
+    - { node: 2, cell: 19 }
+    - { node: 2, cell: 20 }
+    - { node: 2, cell: 21 }
+    - { node: 2, cell: 22 }
+    - { node: 2, cell: 23 }
+    - { node: 2, cell: 24 }
+    - { node: 2, cell: 25 }
+    - { node: 2, cell: 26 }
+    - { node: 2, cell: 27 }
+    - { node: 2, cell: 28 }
+    - { node: 2, cell: 29 }
+    - { node: 2, cell: 30 }
+    - { node: 2, cell: 31 }
+    - { node: 2, cell: 32 }
+    - { node: 2, cell: 33 }
+    - { node: 2, cell: 34 }
+    - { node: 2, cell: 35 }
+    - { node: 2, cell: 36 }
+    - { node: 2, cell: 37 }
+    - { node: 2, cell: 38 }
+    - { node: 2, cell: 39 }
+    - { node: 2, cell: 40 }
+    - { node: 2, cell: 41 }
+    - { node: 2, cell: 42 }
+    - { node: 2, cell: 43 }
+    - { node: 2, cell: 44 }
+    - { node: 2, cell: 45 }
+    - { node: 2, cell: 46 }
+    - { node: 2, cell: 47 }
+    - { node: 2, cell: 48 }
+    - { node: 2, cell: 49 }
+    - { node: 2, cell: 50 }
+    - { node: 2, cell: 51 }
+    - { node: 2, cell: 52 }
+    - { node: 2, cell: 53 }
+    - { node: 2, cell: 54 }
+    - { node: 2, cell: 55 }
+    - { node: 2, cell: 56 }
+    - { node: 2, cell: 57 }
+    - { node: 2, cell: 58 }
+    - { node: 2, cell: 59 }
   - id: 3
     name: Front Gutter
-    fixture: fixtures.gutter_line
+    prop: props.gutter_line
     transform:
       position:
         x: 0.0
@@ -85,9 +283,106 @@ house:
         x: 1.0
         y: 1.0
         z: 1.0
+    bindings:
+    - { node: 3, cell: 0 }
+    - { node: 3, cell: 1 }
+    - { node: 3, cell: 2 }
+    - { node: 3, cell: 3 }
+    - { node: 3, cell: 4 }
+    - { node: 3, cell: 5 }
+    - { node: 3, cell: 6 }
+    - { node: 3, cell: 7 }
+    - { node: 3, cell: 8 }
+    - { node: 3, cell: 9 }
+    - { node: 3, cell: 10 }
+    - { node: 3, cell: 11 }
+    - { node: 3, cell: 12 }
+    - { node: 3, cell: 13 }
+    - { node: 3, cell: 14 }
+    - { node: 3, cell: 15 }
+    - { node: 3, cell: 16 }
+    - { node: 3, cell: 17 }
+    - { node: 3, cell: 18 }
+    - { node: 3, cell: 19 }
+    - { node: 3, cell: 20 }
+    - { node: 3, cell: 21 }
+    - { node: 3, cell: 22 }
+    - { node: 3, cell: 23 }
+    - { node: 3, cell: 24 }
+    - { node: 3, cell: 25 }
+    - { node: 3, cell: 26 }
+    - { node: 3, cell: 27 }
+    - { node: 3, cell: 28 }
+    - { node: 3, cell: 29 }
+    - { node: 3, cell: 30 }
+    - { node: 3, cell: 31 }
+    - { node: 3, cell: 32 }
+    - { node: 3, cell: 33 }
+    - { node: 3, cell: 34 }
+    - { node: 3, cell: 35 }
+    - { node: 3, cell: 36 }
+    - { node: 3, cell: 37 }
+    - { node: 3, cell: 38 }
+    - { node: 3, cell: 39 }
+    - { node: 3, cell: 40 }
+    - { node: 3, cell: 41 }
+    - { node: 3, cell: 42 }
+    - { node: 3, cell: 43 }
+    - { node: 3, cell: 44 }
+    - { node: 3, cell: 45 }
+    - { node: 3, cell: 46 }
+    - { node: 3, cell: 47 }
+    - { node: 3, cell: 48 }
+    - { node: 3, cell: 49 }
+    - { node: 3, cell: 50 }
+    - { node: 3, cell: 51 }
+    - { node: 3, cell: 52 }
+    - { node: 3, cell: 53 }
+    - { node: 3, cell: 54 }
+    - { node: 3, cell: 55 }
+    - { node: 3, cell: 56 }
+    - { node: 3, cell: 57 }
+    - { node: 3, cell: 58 }
+    - { node: 3, cell: 59 }
+    - { node: 3, cell: 60 }
+    - { node: 3, cell: 61 }
+    - { node: 3, cell: 62 }
+    - { node: 3, cell: 63 }
+    - { node: 3, cell: 64 }
+    - { node: 3, cell: 65 }
+    - { node: 3, cell: 66 }
+    - { node: 3, cell: 67 }
+    - { node: 3, cell: 68 }
+    - { node: 3, cell: 69 }
+    - { node: 3, cell: 70 }
+    - { node: 3, cell: 71 }
+    - { node: 3, cell: 72 }
+    - { node: 3, cell: 73 }
+    - { node: 3, cell: 74 }
+    - { node: 3, cell: 75 }
+    - { node: 3, cell: 76 }
+    - { node: 3, cell: 77 }
+    - { node: 3, cell: 78 }
+    - { node: 3, cell: 79 }
+    - { node: 3, cell: 80 }
+    - { node: 3, cell: 81 }
+    - { node: 3, cell: 82 }
+    - { node: 3, cell: 83 }
+    - { node: 3, cell: 84 }
+    - { node: 3, cell: 85 }
+    - { node: 3, cell: 86 }
+    - { node: 3, cell: 87 }
+    - { node: 3, cell: 88 }
+    - { node: 3, cell: 89 }
+    - { node: 3, cell: 90 }
+    - { node: 3, cell: 91 }
+    - { node: 3, cell: 92 }
+    - { node: 3, cell: 93 }
+    - { node: 3, cell: 94 }
+    - { node: 3, cell: 95 }
   - id: 4
     name: Left Window
-    fixture: fixtures.window_outline
+    prop: props.window_outline
     transform:
       position:
         x: -1.85
@@ -101,9 +396,62 @@ house:
         x: 1.0
         y: 1.0
         z: 1.0
+    bindings:
+    - { node: 4, cell: 0 }
+    - { node: 4, cell: 1 }
+    - { node: 4, cell: 2 }
+    - { node: 4, cell: 3 }
+    - { node: 4, cell: 4 }
+    - { node: 4, cell: 5 }
+    - { node: 4, cell: 6 }
+    - { node: 4, cell: 7 }
+    - { node: 4, cell: 8 }
+    - { node: 4, cell: 9 }
+    - { node: 4, cell: 10 }
+    - { node: 4, cell: 11 }
+    - { node: 4, cell: 12 }
+    - { node: 4, cell: 13 }
+    - { node: 4, cell: 14 }
+    - { node: 4, cell: 15 }
+    - { node: 4, cell: 16 }
+    - { node: 4, cell: 17 }
+    - { node: 4, cell: 18 }
+    - { node: 4, cell: 19 }
+    - { node: 4, cell: 20 }
+    - { node: 4, cell: 21 }
+    - { node: 4, cell: 22 }
+    - { node: 4, cell: 23 }
+    - { node: 4, cell: 24 }
+    - { node: 4, cell: 25 }
+    - { node: 4, cell: 26 }
+    - { node: 4, cell: 27 }
+    - { node: 4, cell: 28 }
+    - { node: 4, cell: 29 }
+    - { node: 4, cell: 30 }
+    - { node: 4, cell: 31 }
+    - { node: 4, cell: 32 }
+    - { node: 4, cell: 33 }
+    - { node: 4, cell: 34 }
+    - { node: 4, cell: 35 }
+    - { node: 4, cell: 36 }
+    - { node: 4, cell: 37 }
+    - { node: 4, cell: 38 }
+    - { node: 4, cell: 39 }
+    - { node: 4, cell: 40 }
+    - { node: 4, cell: 41 }
+    - { node: 4, cell: 42 }
+    - { node: 4, cell: 43 }
+    - { node: 4, cell: 44 }
+    - { node: 4, cell: 45 }
+    - { node: 4, cell: 46 }
+    - { node: 4, cell: 47 }
+    - { node: 4, cell: 48 }
+    - { node: 4, cell: 49 }
+    - { node: 4, cell: 50 }
+    - { node: 4, cell: 51 }
   - id: 5
     name: Right Window
-    fixture: fixtures.window_outline
+    prop: props.window_outline
     transform:
       position:
         x: 1.85
@@ -117,9 +465,62 @@ house:
         x: 1.0
         y: 1.0
         z: 1.0
+    bindings:
+    - { node: 5, cell: 0 }
+    - { node: 5, cell: 1 }
+    - { node: 5, cell: 2 }
+    - { node: 5, cell: 3 }
+    - { node: 5, cell: 4 }
+    - { node: 5, cell: 5 }
+    - { node: 5, cell: 6 }
+    - { node: 5, cell: 7 }
+    - { node: 5, cell: 8 }
+    - { node: 5, cell: 9 }
+    - { node: 5, cell: 10 }
+    - { node: 5, cell: 11 }
+    - { node: 5, cell: 12 }
+    - { node: 5, cell: 13 }
+    - { node: 5, cell: 14 }
+    - { node: 5, cell: 15 }
+    - { node: 5, cell: 16 }
+    - { node: 5, cell: 17 }
+    - { node: 5, cell: 18 }
+    - { node: 5, cell: 19 }
+    - { node: 5, cell: 20 }
+    - { node: 5, cell: 21 }
+    - { node: 5, cell: 22 }
+    - { node: 5, cell: 23 }
+    - { node: 5, cell: 24 }
+    - { node: 5, cell: 25 }
+    - { node: 5, cell: 26 }
+    - { node: 5, cell: 27 }
+    - { node: 5, cell: 28 }
+    - { node: 5, cell: 29 }
+    - { node: 5, cell: 30 }
+    - { node: 5, cell: 31 }
+    - { node: 5, cell: 32 }
+    - { node: 5, cell: 33 }
+    - { node: 5, cell: 34 }
+    - { node: 5, cell: 35 }
+    - { node: 5, cell: 36 }
+    - { node: 5, cell: 37 }
+    - { node: 5, cell: 38 }
+    - { node: 5, cell: 39 }
+    - { node: 5, cell: 40 }
+    - { node: 5, cell: 41 }
+    - { node: 5, cell: 42 }
+    - { node: 5, cell: 43 }
+    - { node: 5, cell: 44 }
+    - { node: 5, cell: 45 }
+    - { node: 5, cell: 46 }
+    - { node: 5, cell: 47 }
+    - { node: 5, cell: 48 }
+    - { node: 5, cell: 49 }
+    - { node: 5, cell: 50 }
+    - { node: 5, cell: 51 }
   - id: 6
     name: Front Door
-    fixture: fixtures.door_outline
+    prop: props.door_outline
     transform:
       position:
         x: 0.0
@@ -133,9 +534,68 @@ house:
         x: 1.0
         y: 1.0
         z: 1.0
+    bindings:
+    - { node: 6, cell: 0 }
+    - { node: 6, cell: 1 }
+    - { node: 6, cell: 2 }
+    - { node: 6, cell: 3 }
+    - { node: 6, cell: 4 }
+    - { node: 6, cell: 5 }
+    - { node: 6, cell: 6 }
+    - { node: 6, cell: 7 }
+    - { node: 6, cell: 8 }
+    - { node: 6, cell: 9 }
+    - { node: 6, cell: 10 }
+    - { node: 6, cell: 11 }
+    - { node: 6, cell: 12 }
+    - { node: 6, cell: 13 }
+    - { node: 6, cell: 14 }
+    - { node: 6, cell: 15 }
+    - { node: 6, cell: 16 }
+    - { node: 6, cell: 17 }
+    - { node: 6, cell: 18 }
+    - { node: 6, cell: 19 }
+    - { node: 6, cell: 20 }
+    - { node: 6, cell: 21 }
+    - { node: 6, cell: 22 }
+    - { node: 6, cell: 23 }
+    - { node: 6, cell: 24 }
+    - { node: 6, cell: 25 }
+    - { node: 6, cell: 26 }
+    - { node: 6, cell: 27 }
+    - { node: 6, cell: 28 }
+    - { node: 6, cell: 29 }
+    - { node: 6, cell: 30 }
+    - { node: 6, cell: 31 }
+    - { node: 6, cell: 32 }
+    - { node: 6, cell: 33 }
+    - { node: 6, cell: 34 }
+    - { node: 6, cell: 35 }
+    - { node: 6, cell: 36 }
+    - { node: 6, cell: 37 }
+    - { node: 6, cell: 38 }
+    - { node: 6, cell: 39 }
+    - { node: 6, cell: 40 }
+    - { node: 6, cell: 41 }
+    - { node: 6, cell: 42 }
+    - { node: 6, cell: 43 }
+    - { node: 6, cell: 44 }
+    - { node: 6, cell: 45 }
+    - { node: 6, cell: 46 }
+    - { node: 6, cell: 47 }
+    - { node: 6, cell: 48 }
+    - { node: 6, cell: 49 }
+    - { node: 6, cell: 50 }
+    - { node: 6, cell: 51 }
+    - { node: 6, cell: 52 }
+    - { node: 6, cell: 53 }
+    - { node: 6, cell: 54 }
+    - { node: 6, cell: 55 }
+    - { node: 6, cell: 56 }
+    - { node: 6, cell: 57 }
   - id: 7
     name: Porch Rail
-    fixture: fixtures.porch_rail
+    prop: props.porch_rail
     transform:
       position:
         x: 0.0
@@ -149,9 +609,66 @@ house:
         x: 1.0
         y: 1.0
         z: 1.0
+    bindings:
+    - { node: 7, cell: 0 }
+    - { node: 7, cell: 1 }
+    - { node: 7, cell: 2 }
+    - { node: 7, cell: 3 }
+    - { node: 7, cell: 4 }
+    - { node: 7, cell: 5 }
+    - { node: 7, cell: 6 }
+    - { node: 7, cell: 7 }
+    - { node: 7, cell: 8 }
+    - { node: 7, cell: 9 }
+    - { node: 7, cell: 10 }
+    - { node: 7, cell: 11 }
+    - { node: 7, cell: 12 }
+    - { node: 7, cell: 13 }
+    - { node: 7, cell: 14 }
+    - { node: 7, cell: 15 }
+    - { node: 7, cell: 16 }
+    - { node: 7, cell: 17 }
+    - { node: 7, cell: 18 }
+    - { node: 7, cell: 19 }
+    - { node: 7, cell: 20 }
+    - { node: 7, cell: 21 }
+    - { node: 7, cell: 22 }
+    - { node: 7, cell: 23 }
+    - { node: 7, cell: 24 }
+    - { node: 7, cell: 25 }
+    - { node: 7, cell: 26 }
+    - { node: 7, cell: 27 }
+    - { node: 7, cell: 28 }
+    - { node: 7, cell: 29 }
+    - { node: 7, cell: 30 }
+    - { node: 7, cell: 31 }
+    - { node: 7, cell: 32 }
+    - { node: 7, cell: 33 }
+    - { node: 7, cell: 34 }
+    - { node: 7, cell: 35 }
+    - { node: 7, cell: 36 }
+    - { node: 7, cell: 37 }
+    - { node: 7, cell: 38 }
+    - { node: 7, cell: 39 }
+    - { node: 7, cell: 40 }
+    - { node: 7, cell: 41 }
+    - { node: 7, cell: 42 }
+    - { node: 7, cell: 43 }
+    - { node: 7, cell: 44 }
+    - { node: 7, cell: 45 }
+    - { node: 7, cell: 46 }
+    - { node: 7, cell: 47 }
+    - { node: 7, cell: 48 }
+    - { node: 7, cell: 49 }
+    - { node: 7, cell: 50 }
+    - { node: 7, cell: 51 }
+    - { node: 7, cell: 52 }
+    - { node: 7, cell: 53 }
+    - { node: 7, cell: 54 }
+    - { node: 7, cell: 55 }
   - id: 8
     name: Wreath
-    fixture: fixtures.wreath_ring
+    prop: props.wreath_ring
     transform:
       position:
         x: 0.0
@@ -165,9 +682,46 @@ house:
         x: 1.0
         y: 1.0
         z: 1.0
+    bindings:
+    - { node: 8, cell: 0 }
+    - { node: 8, cell: 1 }
+    - { node: 8, cell: 2 }
+    - { node: 8, cell: 3 }
+    - { node: 8, cell: 4 }
+    - { node: 8, cell: 5 }
+    - { node: 8, cell: 6 }
+    - { node: 8, cell: 7 }
+    - { node: 8, cell: 8 }
+    - { node: 8, cell: 9 }
+    - { node: 8, cell: 10 }
+    - { node: 8, cell: 11 }
+    - { node: 8, cell: 12 }
+    - { node: 8, cell: 13 }
+    - { node: 8, cell: 14 }
+    - { node: 8, cell: 15 }
+    - { node: 8, cell: 16 }
+    - { node: 8, cell: 17 }
+    - { node: 8, cell: 18 }
+    - { node: 8, cell: 19 }
+    - { node: 8, cell: 20 }
+    - { node: 8, cell: 21 }
+    - { node: 8, cell: 22 }
+    - { node: 8, cell: 23 }
+    - { node: 8, cell: 24 }
+    - { node: 8, cell: 25 }
+    - { node: 8, cell: 26 }
+    - { node: 8, cell: 27 }
+    - { node: 8, cell: 28 }
+    - { node: 8, cell: 29 }
+    - { node: 8, cell: 30 }
+    - { node: 8, cell: 31 }
+    - { node: 8, cell: 32 }
+    - { node: 8, cell: 33 }
+    - { node: 8, cell: 34 }
+    - { node: 8, cell: 35 }
   - id: 9
     name: Left Tree
-    fixture: fixtures.tree_outline
+    prop: props.tree_outline
     transform:
       position:
         x: -4.47
@@ -181,12 +735,101 @@ house:
         x: 1.0
         y: 1.0
         z: 1.0
+    bindings:
+    - { node: 9, cell: 0 }
+    - { node: 9, cell: 1 }
+    - { node: 9, cell: 2 }
+    - { node: 9, cell: 3 }
+    - { node: 9, cell: 4 }
+    - { node: 9, cell: 5 }
+    - { node: 9, cell: 6 }
+    - { node: 9, cell: 7 }
+    - { node: 9, cell: 8 }
+    - { node: 9, cell: 9 }
+    - { node: 9, cell: 10 }
+    - { node: 9, cell: 11 }
+    - { node: 9, cell: 12 }
+    - { node: 9, cell: 13 }
+    - { node: 9, cell: 14 }
+    - { node: 9, cell: 15 }
+    - { node: 9, cell: 16 }
+    - { node: 9, cell: 17 }
+    - { node: 9, cell: 18 }
+    - { node: 9, cell: 19 }
+    - { node: 9, cell: 20 }
+    - { node: 9, cell: 21 }
+    - { node: 9, cell: 22 }
+    - { node: 9, cell: 23 }
+    - { node: 9, cell: 24 }
+    - { node: 9, cell: 25 }
+    - { node: 9, cell: 26 }
+    - { node: 9, cell: 27 }
+    - { node: 9, cell: 28 }
+    - { node: 9, cell: 29 }
+    - { node: 9, cell: 30 }
+    - { node: 9, cell: 31 }
+    - { node: 9, cell: 32 }
+    - { node: 9, cell: 33 }
+    - { node: 9, cell: 34 }
+    - { node: 9, cell: 35 }
+    - { node: 9, cell: 36 }
+    - { node: 9, cell: 37 }
+    - { node: 9, cell: 38 }
+    - { node: 9, cell: 39 }
+    - { node: 9, cell: 40 }
+    - { node: 9, cell: 41 }
+    - { node: 9, cell: 42 }
+    - { node: 9, cell: 43 }
+    - { node: 9, cell: 44 }
+    - { node: 9, cell: 45 }
+    - { node: 9, cell: 46 }
+    - { node: 9, cell: 47 }
+    - { node: 9, cell: 48 }
+    - { node: 9, cell: 49 }
+    - { node: 9, cell: 50 }
+    - { node: 9, cell: 51 }
+    - { node: 9, cell: 52 }
+    - { node: 9, cell: 53 }
+    - { node: 9, cell: 54 }
+    - { node: 9, cell: 55 }
+    - { node: 9, cell: 56 }
+    - { node: 9, cell: 57 }
+    - { node: 9, cell: 58 }
+    - { node: 9, cell: 59 }
+    - { node: 9, cell: 60 }
+    - { node: 9, cell: 61 }
+    - { node: 9, cell: 62 }
+    - { node: 9, cell: 63 }
+    - { node: 9, cell: 64 }
+    - { node: 9, cell: 65 }
+    - { node: 9, cell: 66 }
+    - { node: 9, cell: 67 }
+    - { node: 9, cell: 68 }
+    - { node: 9, cell: 69 }
+    - { node: 9, cell: 70 }
+    - { node: 9, cell: 71 }
+    - { node: 9, cell: 72 }
+    - { node: 9, cell: 73 }
+    - { node: 9, cell: 74 }
+    - { node: 9, cell: 75 }
+    - { node: 9, cell: 76 }
+    - { node: 9, cell: 77 }
+    - { node: 9, cell: 78 }
+    - { node: 9, cell: 79 }
+    - { node: 9, cell: 80 }
+    - { node: 9, cell: 81 }
+    - { node: 9, cell: 82 }
+    - { node: 9, cell: 83 }
+    - { node: 9, cell: 84 }
+    - { node: 9, cell: 85 }
+    - { node: 9, cell: 86 }
+    - { node: 9, cell: 87 }
   - id: 10
     name: Right Tree
-    fixture: fixtures.tree_outline
+    prop: props.tree_outline
     transform:
       position:
-        x: 4.5
+        x: 4.47
         y: 0.45
         z: 0.0
       rotation:
@@ -197,13 +840,102 @@ house:
         x: 1.0
         y: 1.0
         z: 1.0
+    bindings:
+    - { node: 10, cell: 0 }
+    - { node: 10, cell: 1 }
+    - { node: 10, cell: 2 }
+    - { node: 10, cell: 3 }
+    - { node: 10, cell: 4 }
+    - { node: 10, cell: 5 }
+    - { node: 10, cell: 6 }
+    - { node: 10, cell: 7 }
+    - { node: 10, cell: 8 }
+    - { node: 10, cell: 9 }
+    - { node: 10, cell: 10 }
+    - { node: 10, cell: 11 }
+    - { node: 10, cell: 12 }
+    - { node: 10, cell: 13 }
+    - { node: 10, cell: 14 }
+    - { node: 10, cell: 15 }
+    - { node: 10, cell: 16 }
+    - { node: 10, cell: 17 }
+    - { node: 10, cell: 18 }
+    - { node: 10, cell: 19 }
+    - { node: 10, cell: 20 }
+    - { node: 10, cell: 21 }
+    - { node: 10, cell: 22 }
+    - { node: 10, cell: 23 }
+    - { node: 10, cell: 24 }
+    - { node: 10, cell: 25 }
+    - { node: 10, cell: 26 }
+    - { node: 10, cell: 27 }
+    - { node: 10, cell: 28 }
+    - { node: 10, cell: 29 }
+    - { node: 10, cell: 30 }
+    - { node: 10, cell: 31 }
+    - { node: 10, cell: 32 }
+    - { node: 10, cell: 33 }
+    - { node: 10, cell: 34 }
+    - { node: 10, cell: 35 }
+    - { node: 10, cell: 36 }
+    - { node: 10, cell: 37 }
+    - { node: 10, cell: 38 }
+    - { node: 10, cell: 39 }
+    - { node: 10, cell: 40 }
+    - { node: 10, cell: 41 }
+    - { node: 10, cell: 42 }
+    - { node: 10, cell: 43 }
+    - { node: 10, cell: 44 }
+    - { node: 10, cell: 45 }
+    - { node: 10, cell: 46 }
+    - { node: 10, cell: 47 }
+    - { node: 10, cell: 48 }
+    - { node: 10, cell: 49 }
+    - { node: 10, cell: 50 }
+    - { node: 10, cell: 51 }
+    - { node: 10, cell: 52 }
+    - { node: 10, cell: 53 }
+    - { node: 10, cell: 54 }
+    - { node: 10, cell: 55 }
+    - { node: 10, cell: 56 }
+    - { node: 10, cell: 57 }
+    - { node: 10, cell: 58 }
+    - { node: 10, cell: 59 }
+    - { node: 10, cell: 60 }
+    - { node: 10, cell: 61 }
+    - { node: 10, cell: 62 }
+    - { node: 10, cell: 63 }
+    - { node: 10, cell: 64 }
+    - { node: 10, cell: 65 }
+    - { node: 10, cell: 66 }
+    - { node: 10, cell: 67 }
+    - { node: 10, cell: 68 }
+    - { node: 10, cell: 69 }
+    - { node: 10, cell: 70 }
+    - { node: 10, cell: 71 }
+    - { node: 10, cell: 72 }
+    - { node: 10, cell: 73 }
+    - { node: 10, cell: 74 }
+    - { node: 10, cell: 75 }
+    - { node: 10, cell: 76 }
+    - { node: 10, cell: 77 }
+    - { node: 10, cell: 78 }
+    - { node: 10, cell: 79 }
+    - { node: 10, cell: 80 }
+    - { node: 10, cell: 81 }
+    - { node: 10, cell: 82 }
+    - { node: 10, cell: 83 }
+    - { node: 10, cell: 84 }
+    - { node: 10, cell: 85 }
+    - { node: 10, cell: 86 }
+    - { node: 10, cell: 87 }
   - id: 11
-    name: Front Bushes
-    fixture: fixtures.bush_line
+    name: Bushes
+    prop: props.bush_line
     transform:
       position:
         x: 0.0
-        y: -0.95
+        y: -0.85
         z: 0.0
       rotation:
         x: 0.0
@@ -213,13 +945,86 @@ house:
         x: 1.0
         y: 1.0
         z: 1.0
+    bindings:
+    - { node: 11, cell: 0 }
+    - { node: 11, cell: 1 }
+    - { node: 11, cell: 2 }
+    - { node: 11, cell: 3 }
+    - { node: 11, cell: 4 }
+    - { node: 11, cell: 5 }
+    - { node: 11, cell: 6 }
+    - { node: 11, cell: 7 }
+    - { node: 11, cell: 8 }
+    - { node: 11, cell: 9 }
+    - { node: 11, cell: 10 }
+    - { node: 11, cell: 11 }
+    - { node: 11, cell: 12 }
+    - { node: 11, cell: 13 }
+    - { node: 11, cell: 14 }
+    - { node: 11, cell: 15 }
+    - { node: 11, cell: 16 }
+    - { node: 11, cell: 17 }
+    - { node: 11, cell: 18 }
+    - { node: 11, cell: 19 }
+    - { node: 11, cell: 20 }
+    - { node: 11, cell: 21 }
+    - { node: 11, cell: 22 }
+    - { node: 11, cell: 23 }
+    - { node: 11, cell: 24 }
+    - { node: 11, cell: 25 }
+    - { node: 11, cell: 26 }
+    - { node: 11, cell: 27 }
+    - { node: 11, cell: 28 }
+    - { node: 11, cell: 29 }
+    - { node: 11, cell: 30 }
+    - { node: 11, cell: 31 }
+    - { node: 11, cell: 32 }
+    - { node: 11, cell: 33 }
+    - { node: 11, cell: 34 }
+    - { node: 11, cell: 35 }
+    - { node: 11, cell: 36 }
+    - { node: 11, cell: 37 }
+    - { node: 11, cell: 38 }
+    - { node: 11, cell: 39 }
+    - { node: 11, cell: 40 }
+    - { node: 11, cell: 41 }
+    - { node: 11, cell: 42 }
+    - { node: 11, cell: 43 }
+    - { node: 11, cell: 44 }
+    - { node: 11, cell: 45 }
+    - { node: 11, cell: 46 }
+    - { node: 11, cell: 47 }
+    - { node: 11, cell: 48 }
+    - { node: 11, cell: 49 }
+    - { node: 11, cell: 50 }
+    - { node: 11, cell: 51 }
+    - { node: 11, cell: 52 }
+    - { node: 11, cell: 53 }
+    - { node: 11, cell: 54 }
+    - { node: 11, cell: 55 }
+    - { node: 11, cell: 56 }
+    - { node: 11, cell: 57 }
+    - { node: 11, cell: 58 }
+    - { node: 11, cell: 59 }
+    - { node: 11, cell: 60 }
+    - { node: 11, cell: 61 }
+    - { node: 11, cell: 62 }
+    - { node: 11, cell: 63 }
+    - { node: 11, cell: 64 }
+    - { node: 11, cell: 65 }
+    - { node: 11, cell: 66 }
+    - { node: 11, cell: 67 }
+    - { node: 11, cell: 68 }
+    - { node: 11, cell: 69 }
+    - { node: 11, cell: 70 }
+    - { node: 11, cell: 71 }
   - id: 12
     name: Star
-    fixture: fixtures.star
+    prop: props.star
     transform:
       position:
         x: 0.0
-        y: 4.66
+        y: 3.5
         z: 0.0
       rotation:
         x: 0.0
@@ -229,28 +1034,15 @@ house:
         x: 1.0
         y: 1.0
         z: 1.0
-  groups:
-  - id: 1
-    name: House Lines
-    members:
-    - 1
-    - 2
-    - 3
-    - 6
-    - 7
-  - id: 2
-    name: Windows
-    members:
-    - 4
-    - 5
-  - id: 3
-    name: Yard
-    members:
-    - 9
-    - 10
-    - 11
-  - id: 4
-    name: Accents
-    members:
-    - 8
-    - 12
+    bindings:
+    - { node: 12, cell: 0 }
+    - { node: 12, cell: 1 }
+    - { node: 12, cell: 2 }
+    - { node: 12, cell: 3 }
+    - { node: 12, cell: 4 }
+    - { node: 12, cell: 5 }
+    - { node: 12, cell: 6 }
+    - { node: 12, cell: 7 }
+    - { node: 12, cell: 8 }
+    - { node: 12, cell: 9 }
+

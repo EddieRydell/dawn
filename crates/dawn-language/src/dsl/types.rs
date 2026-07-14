@@ -123,8 +123,8 @@ pub struct TargetItemValue {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TargetPixelValue {
-    pub fixture_index: i64,
-    pub fixture_pixel_index: i64,
+    pub element_index: i64,
+    pub element_cell_index: i64,
     pub pixel_index: i64,
     pub pixel_count: i64,
     pub pixel_fraction: f64,

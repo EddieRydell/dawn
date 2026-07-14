@@ -8,7 +8,7 @@ ease_down:
   - position: 0.125
     value: 0.766
   - position: 0.1875
-    value: 0.660
+    value: 0.66
   - position: 0.25
     value: 0.563
   - position: 0.3125
@@ -45,7 +45,7 @@ ease_up:
   - position: 0.125
     value: 0.234
   - position: 0.1875
-    value: 0.340
+    value: 0.34
   - position: 0.25
     value: 0.438
   - position: 0.3125
@@ -102,7 +102,7 @@ ease_down_in:
   - position: 0.75
     value: 0.438
   - position: 0.8125
-    value: 0.340
+    value: 0.34
   - position: 0.875
     value: 0.234
   - position: 0.9375
@@ -139,7 +139,7 @@ ease_up_in:
   - position: 0.75
     value: 0.563
   - position: 0.8125
-    value: 0.660
+    value: 0.66
   - position: 0.875
     value: 0.766
   - position: 0.9375

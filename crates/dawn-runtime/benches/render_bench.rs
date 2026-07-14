@@ -288,9 +288,9 @@ fn project_path() -> Utf8PathBuf {
 fn checksum_frame(frame: &RenderedFrame) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     hash = checksum_u64(hash, frame.frame_index);
-    for fixture in &frame.fixtures {
-        hash = checksum_u32(hash, fixture.fixture_id.0);
-        hash = checksum_colors_with_seed(hash, &fixture.pixels);
+    for element in &frame.elements {
+        hash = checksum_u32(hash, element.element_id.0);
+        hash = checksum_colors_with_seed(hash, &element.pixels);
     }
     hash
 }

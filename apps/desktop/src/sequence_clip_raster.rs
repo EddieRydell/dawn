@@ -10,7 +10,7 @@ use std::thread;
 use dawn_language::dsl::{EffectKind, hash_compiled_effect};
 use dawn_language::effect::{
     CurveDefinition, CurveId, CurveSource, EffectDefinition, EffectInst, EffectInstId,
-    EffectParamValue, EffectScope, EffectTarget, GradientDefinition, GradientId, GradientSource,
+    EffectParamValue, EffectScope, GradientDefinition, GradientId, GradientSource,
 };
 use dawn_language::model::DawnProject;
 use dawn_language::sequence::{
@@ -1198,8 +1198,8 @@ fn hash_render_signature<H: Hasher>(signature: &RenderInputSignature, state: &mu
             }
             data.target_pixels.len().hash(state);
             for pixel in &data.target_pixels {
-                pixel.fixture_id.hash(state);
-                pixel.fixture_pixel_index.hash(state);
+                pixel.element_id.hash(state);
+                pixel.element_cell_index.hash(state);
             }
         }
         RenderInputSignature::Invalid { message } => {
@@ -1265,17 +1265,8 @@ fn hash_effect_inst<H: Hasher>(effect: &EffectInst, state: &mut H) {
     }
 }
 
-fn hash_effect_target<H: Hasher>(target: &EffectTarget, state: &mut H) {
-    match target {
-        EffectTarget::Group(id) => {
-            0u8.hash(state);
-            id.hash(state);
-        }
-        EffectTarget::Fixture(id) => {
-            1u8.hash(state);
-            id.hash(state);
-        }
-    }
+fn hash_effect_target<H: Hasher>(target: &dawn_language::element::ElementSelection, state: &mut H) {
+    target.hash(state);
 }
 
 fn hash_effect_scope<H: Hasher>(scope: &EffectScope, state: &mut H) {

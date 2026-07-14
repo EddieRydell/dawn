@@ -346,7 +346,6 @@ pub struct PersistedProjectSession {
     pub project_tree_visible: bool,
     pub audio_position_seconds: f64,
     pub audio_home_seconds: f64,
-    pub live_output_enabled: bool,
     pub editor_states: BTreeMap<String, PersistedEditorViewState>,
     pub sequence_viewports: BTreeMap<String, PersistedSequenceViewportState>,
 }
@@ -359,7 +358,6 @@ impl PersistedProjectSession {
             project_tree_visible: true,
             audio_position_seconds: 0.0,
             audio_home_seconds: 0.0,
-            live_output_enabled: false,
             editor_states: BTreeMap::new(),
             sequence_viewports: BTreeMap::new(),
         }
@@ -371,7 +369,6 @@ impl PersistedProjectSession {
         self.project_tree_visible = snapshot.project_tree_visible;
         self.audio_position_seconds = snapshot.audio_transport.position_seconds;
         self.audio_home_seconds = snapshot.audio_transport.home_seconds;
-        self.live_output_enabled = snapshot.live_output.enabled;
         self
     }
 }

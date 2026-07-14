@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/desktop", "crates/dawn-language", "crates/dawn-project-io", "crates/dawn-runtime"]
+members = ["apps/desktop", "crates/dawn-language", "crates/dawn-output", "crates/dawn-project-io", "crates/dawn-runtime"]
 resolver = "2"
 
 [workspace.package]
@@ -9,15 +9,18 @@ version = "0.1.0"
 
 [workspace.dependencies]
 bytemuck = { version = "1.25.0", features = ["derive"] }
+artnet_protocol = "0.4.4"
 camino = "1.2.4"
 criterion = "0.8.2"
 dawn-language = { path = "crates/dawn-language" }
+dawn-output = { path = "crates/dawn-output" }
 dawn-project-io = { path = "crates/dawn-project-io" }
 dawn-runtime = { path = "crates/dawn-runtime" }
 glam = "0.33.2"
 indexmap = "2.14.0"
 kira = "0.12.1"
 marked-yaml = "0.8.0"
+sacn = "0.11.1"
 rfd = "0.17.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1"

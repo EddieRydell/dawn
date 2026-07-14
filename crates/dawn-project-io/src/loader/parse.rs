@@ -132,9 +132,11 @@ pub(crate) enum ResolvedObject {
     Project(ProjectId),
     Setup(SetupId),
     Controller(ControllerId),
-    Layout(LayoutId),
+    ElementTree(ElementTreeId),
+    PreviewLayout(PreviewLayoutId),
     Patch(PatchId),
-    FixtureDefinition(FixtureDefinitionId),
+    PropDefinition(PropDefinitionId),
+    FixtureProfile(FixtureProfileId),
     Curve(CurveId),
     Gradient(GradientId),
     Sequence(SequenceId),
@@ -148,9 +150,11 @@ impl ResolvedObject {
             Self::Project(id) => &id.0,
             Self::Setup(id) => &id.0,
             Self::Controller(id) => &id.0,
-            Self::Layout(id) => &id.0,
+            Self::ElementTree(id) => &id.0,
+            Self::PreviewLayout(id) => &id.0,
             Self::Patch(id) => &id.0,
-            Self::FixtureDefinition(id) => &id.0,
+            Self::PropDefinition(id) => &id.0,
+            Self::FixtureProfile(id) => &id.0,
             Self::Curve(id) => &id.0,
             Self::Gradient(id) => &id.0,
             Self::Sequence(id) => &id.0,
@@ -164,9 +168,11 @@ impl ResolvedObject {
             Self::Project(_) => SourceObjectKind::Project,
             Self::Setup(_) => SourceObjectKind::Setup,
             Self::Controller(_) => SourceObjectKind::Controller,
-            Self::Layout(_) => SourceObjectKind::Layout,
+            Self::ElementTree(_) => SourceObjectKind::ElementTree,
+            Self::PreviewLayout(_) => SourceObjectKind::PreviewLayout,
             Self::Patch(_) => SourceObjectKind::Patch,
-            Self::FixtureDefinition(_) => SourceObjectKind::FixtureDefinition,
+            Self::PropDefinition(_) => SourceObjectKind::PropDefinition,
+            Self::FixtureProfile(_) => SourceObjectKind::FixtureProfile,
             Self::Curve(_) => SourceObjectKind::Curve,
             Self::Gradient(_) => SourceObjectKind::Gradient,
             Self::Sequence(_) => SourceObjectKind::Sequence,
@@ -180,9 +186,11 @@ impl ResolvedObject {
             Self::Project(id) => id.0.object().to_string(),
             Self::Setup(id) => id.0.object().to_string(),
             Self::Controller(id) => id.0.object().to_string(),
-            Self::Layout(id) => id.0.object().to_string(),
+            Self::ElementTree(id) => id.0.object().to_string(),
+            Self::PreviewLayout(id) => id.0.object().to_string(),
             Self::Patch(id) => id.0.object().to_string(),
-            Self::FixtureDefinition(id) => id.0.object().to_string(),
+            Self::PropDefinition(id) => id.0.object().to_string(),
+            Self::FixtureProfile(id) => id.0.object().to_string(),
             Self::Curve(id) => id.0.object().to_string(),
             Self::Gradient(id) => id.0.object().to_string(),
             Self::Sequence(id) => id.0.object().to_string(),
@@ -228,48 +236,6 @@ pub(crate) fn parse_imports(
         .collect()
 }
 
-pub(crate) fn parse_layout_target(
-    path: &Utf8Path,
-    value: &Value,
-) -> Result<LayoutTarget, LoadProjectError> {
-    match string_field(path, value, "type")? {
-        "fixture" => Ok(LayoutTarget::Fixture(FixtureInstanceId(u32_field(
-            path, value, "id",
-        )?))),
-        "group" => Ok(LayoutTarget::Group(FixtureGroupId(u32_field(
-            path, value, "id",
-        )?))),
-        other => Err(LoadProjectError::InvalidDocument {
-            path: path.to_path_buf(),
-            range: source_range_for_field_value(path, value, "type"),
-            message: format!("invalid layout target type `{other}`"),
-        }),
-    }
-}
-
-pub(crate) fn parse_fixture_group(
-    path: &Utf8Path,
-    value: &Value,
-) -> Result<FixtureGroup, LoadProjectError> {
-    Ok(FixtureGroup {
-        id: FixtureGroupId(u32_field(path, value, "id")?),
-        name: string_field(path, value, "name")?.to_string(),
-        fixtures: sequence_values(path, value, "members")?
-            .iter()
-            .map(|member| {
-                member
-                    .as_u64()
-                    .map(|value| FixtureInstanceId(value as u32))
-                    .ok_or_else(|| LoadProjectError::InvalidDocument {
-                        path: path.to_path_buf(),
-                        range: None,
-                        message: "group members must be fixture ids".to_string(),
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-    })
-}
-
 pub(crate) fn parse_mark_collection(
     path: &Utf8Path,
     value: &Value,
@@ -303,25 +269,6 @@ pub(crate) fn parse_mark_collection(
             })
             .collect::<Result<Vec<_>, _>>()?,
     })
-}
-
-pub(crate) fn parse_effect_target(
-    path: &Utf8Path,
-    value: &Value,
-) -> Result<EffectTarget, LoadProjectError> {
-    match string_field(path, value, "type")? {
-        "fixture" => Ok(EffectTarget::Fixture(FixtureInstanceId(u32_field(
-            path, value, "id",
-        )?))),
-        "group" => Ok(EffectTarget::Group(FixtureGroupId(u32_field(
-            path, value, "id",
-        )?))),
-        other => Err(LoadProjectError::InvalidDocument {
-            path: path.to_path_buf(),
-            range: source_range_for_field_value(path, value, "type"),
-            message: format!("invalid effect target type `{other}`"),
-        }),
-    }
 }
 
 pub(crate) fn parse_effect_scope(
@@ -361,42 +308,42 @@ pub(crate) fn parse_graph_edge(
     })
 }
 
-pub(crate) fn parse_fixture_definition(
+pub(crate) fn parse_prop_definition(
     path: &Utf8Path,
     value: &Value,
-) -> Result<FixtureDefinition, LoadProjectError> {
+) -> Result<PropDefinition, LoadProjectError> {
     let bulb_diameter = f64_field(path, value, "bulb_diameter")?;
     let geometry_value = required_field(path, value, "geometry")?;
     let geometry = match string_field(path, geometry_value, "type")? {
-        "points" => Geometry::Points {
+        "points" => PropGeometry::Points {
             points: sequence_values(path, geometry_value, "points")?
                 .iter()
                 .map(parse_point3)
                 .collect::<Result<Vec<_>, _>>()?,
         },
-        "lines" => Geometry::Lines {
+        "lines" => PropGeometry::Lines {
             points: sequence_values(path, geometry_value, "points")?
                 .iter()
                 .map(parse_point3)
                 .collect::<Result<Vec<_>, _>>()?,
-            pixels: u32_field(path, geometry_value, "pixels")?,
+            point_count: u32_field(path, geometry_value, "point_count")?,
         },
-        "arc" => Geometry::Arc {
+        "arc" => PropGeometry::Arc {
             center: parse_point3(required_field(path, geometry_value, "center")?)?,
             radius: DistanceSpan::from_meters(f64_field(path, geometry_value, "radius")?),
             start_degrees: f64_field(path, geometry_value, "startDegrees")?,
             end_degrees: f64_field(path, geometry_value, "endDegrees")?,
-            pixels: u32_field(path, geometry_value, "pixels")?,
+            point_count: u32_field(path, geometry_value, "point_count")?,
         },
         other => {
             return Err(LoadProjectError::InvalidDocument {
                 path: path.to_path_buf(),
                 range: source_range_for_field_value(path, geometry_value, "type"),
-                message: format!("unsupported fixture geometry `{other}`"),
+                message: format!("unsupported prop geometry `{other}`"),
             });
         }
     };
-    Ok(FixtureDefinition {
+    Ok(PropDefinition {
         bulb_radius: DistanceSpan::from_meters(bulb_diameter / 2.0),
         geometry,
     })
@@ -454,38 +401,6 @@ pub(crate) fn parse_scale3(value: &Value) -> Result<Scale3, LoadProjectError> {
         y: f64_field(Utf8Path::new("<inline>"), value, "y")?,
         z: f64_field(Utf8Path::new("<inline>"), value, "z")?,
     })
-}
-
-pub(crate) fn parse_controller_address(value: &str) -> Result<ControllerAddress, String> {
-    let (ip, port) = value
-        .split_once(':')
-        .ok_or_else(|| "controller destination must be ip:port".to_string())?;
-    let ip = ip
-        .parse()
-        .map_err(|_| "controller destination ip is invalid".to_string())?;
-    let port = port
-        .parse()
-        .map_err(|_| "controller destination port is invalid".to_string())?;
-    Ok(ControllerAddress { ip, port })
-}
-
-pub(crate) fn parse_channel_order(value: &str) -> Option<RgbChannelOrder> {
-    match value {
-        "rgb" => Some(RgbChannelOrder::Rgb),
-        "rbg" => Some(RgbChannelOrder::Rbg),
-        "grb" => Some(RgbChannelOrder::Grb),
-        "gbr" => Some(RgbChannelOrder::Gbr),
-        "brg" => Some(RgbChannelOrder::Brg),
-        "bgr" => Some(RgbChannelOrder::Bgr),
-        _ => None,
-    }
-}
-
-pub(crate) fn parse_slot_range(value: &str) -> Option<usize> {
-    let (start, end) = value.split_once("..")?;
-    let start = start.parse::<usize>().ok()?;
-    let end = end.parse::<usize>().ok()?;
-    end.checked_sub(start).map(|slots| slots + 1)
 }
 
 pub(crate) fn parse_duration(value: &str) -> Result<DawnDuration, LoadProjectError> {
@@ -547,10 +462,6 @@ pub(crate) fn optional_field<'a>(value: &'a Value, key: &str) -> Option<&'a Valu
 }
 
 pub(crate) fn optional_mapping<'a>(value: &'a Value, key: &str) -> Option<&'a Mapping> {
-    optional_field(value, key).and_then(mapping)
-}
-
-pub(crate) fn optional_mapping_ref<'a>(value: &'a Value, key: &str) -> Option<&'a Mapping> {
     optional_field(value, key).and_then(mapping)
 }
 
@@ -716,23 +627,22 @@ pub(crate) fn normalize_relative(path: Utf8PathBuf) -> Utf8PathBuf {
     parts.into_iter().collect()
 }
 use camino::{Utf8Path, Utf8PathBuf};
+use dawn_language::controller::ControllerId;
 use dawn_language::dsl::Identifier;
-use dawn_language::effect::{
-    CurveId, EffectDefinitionId, EffectInstId, EffectScope, EffectTarget, GradientId,
-};
+use dawn_language::effect::{CurveId, EffectDefinitionId, EffectInstId, EffectScope, GradientId};
+use dawn_language::element::ElementTreeId;
+use dawn_language::fixture_profile::FixtureProfileId;
 use dawn_language::identity::SourceIdentity;
 use dawn_language::model::ProjectId;
 use dawn_language::operator::OperatorDefinitionId;
+use dawn_language::patch::PatchId;
+use dawn_language::preview::{PreviewLayoutId, PropDefinition, PropDefinitionId, PropGeometry};
 use dawn_language::sequence::{
     AutomationBinding, AutomationMapping, AutomationTarget, CompositionGraphNodeId,
     EffectGraphEdge, GraphNodePosition, GraphPortId, MarkCollection, MarkCollectionKey, SequenceId,
     SequenceLayer, SequenceLayerId,
 };
-use dawn_language::setup::{
-    ControllerAddress, ControllerId, FixtureDefinition, FixtureDefinitionId, FixtureGroup,
-    FixtureGroupId, FixtureInstanceId, Geometry, LayoutId, LayoutTarget, PatchId, RgbChannelOrder,
-    SetupId,
-};
+use dawn_language::setup::SetupId;
 use dawn_language::values::{
     Color, Curve, CurvePoint, DawnDuration, DawnTime, Distance, DistanceSpan, Gradient,
     GradientStop, Point3, Rotation3, Scale3,

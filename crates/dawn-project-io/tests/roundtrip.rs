@@ -142,17 +142,17 @@ fn external_audio_does_not_expand_project_ownership_and_exports_inside_destinati
     .unwrap();
     fs::write(
         project_root.join("setup.dawn"),
-        "imports:\n- from: layout.dawn\n  as: layouts\n- from: patch.dawn\n  as: patches\nmain:\n  type: setup\n  layout: layouts.main\n  patch: patches.main\n  controllers: []\n",
+        "imports:\n- from: display.dawn\n  as: display\n- from: patch.dawn\n  as: patches\nmain:\n  type: setup\n  elements: display.elements\n  preview: display.preview\n  patch: patches.main\n  controllers: []\n",
     )
     .unwrap();
     fs::write(
-        project_root.join("layout.dawn"),
-        "main:\n  type: layout\n  target_order: []\n  fixtures: []\n  groups: []\n",
+        project_root.join("display.dawn"),
+        "elements:\n  type: element_tree\n  roots: [1]\n  nodes:\n  - id: 1\n    name: Pixel\n    type: color\n    cells: 1\n    capability: { type: rgb }\npreview:\n  type: preview_layout\n  element_tree: elements\n  props: []\n",
     )
     .unwrap();
     fs::write(
         project_root.join("patch.dawn"),
-        "main:\n  type: patch\n  routes: []\n",
+        "main:\n  type: patch\n  nodes: []\n  edges: []\n",
     )
     .unwrap();
     fs::write(
@@ -297,6 +297,80 @@ fn external_source_documents_remain_dependencies_and_cannot_escape_export() {
     assert!(loaded.source.documents.contains_key(dependency_path));
     assert!(!dawn_project_io::is_project_owned_path(dependency_path));
     assert!(export_project(&loaded, &temp_root.join("export")).is_err());
+}
+
+#[test]
+fn fixture_behavior_rules_roundtrip() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+    let entrypoint = write_fixture_profile_project(&root, "behavior_rules");
+
+    let loaded = load_project(&entrypoint).unwrap();
+    assert_eq!(
+        loaded
+            .project
+            .definitions
+            .fixture_profiles
+            .definitions
+            .values()
+            .next()
+            .unwrap()
+            .behavior_rules
+            .len(),
+        1
+    );
+    save_project(&loaded).unwrap();
+
+    let saved_profile = fs::read_to_string(root.join("profile.dawn")).unwrap();
+    assert!(saved_profile.contains("behavior_rules:"));
+    let reloaded = load_project(&entrypoint).unwrap();
+    assert_eq!(loaded.project, reloaded.project);
+}
+
+#[test]
+fn legacy_fixture_rule_field_is_rejected() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = Utf8PathBuf::from_path_buf(temp.path().to_path_buf()).unwrap();
+    let legacy_field = ["auto", "mation"].concat();
+    let entrypoint = write_fixture_profile_project(&root, &legacy_field);
+
+    assert!(load_project(&entrypoint).is_err());
+}
+
+fn write_fixture_profile_project(root: &Utf8Path, rule_field: &str) -> Utf8PathBuf {
+    fs::write(
+        root.join("project.dawn"),
+        "imports:\n- from: setup.dawn\n  as: setups\n- from: sequence.dawn\n  as: sequences\nmain:\n  type: project\n  setup: setups.main\n  sequences: [sequences.main]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("setup.dawn"),
+        "imports:\n- from: layout.dawn\n  as: layouts\n- from: patch.dawn\n  as: patches\nmain:\n  type: setup\n  elements: layouts.elements\n  preview: layouts.preview\n  patch: patches.main\n  controllers: []\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("layout.dawn"),
+        "imports:\n- from: profile.dawn\n  as: profiles\nelements:\n  type: element_tree\n  roots: [1]\n  nodes:\n  - id: 1\n    name: Fixture\n    type: fixture\n    profile: profiles.basic\npreview:\n  type: preview_layout\n  element_tree: elements\n  props: []\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("patch.dawn"),
+        "main:\n  type: patch\n  nodes: []\n  edges: []\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("sequence.dawn"),
+        "main:\n  type: sequence\n  duration: 1s\n  frame_rate: 30\n  audio: null\n  mark_collections: []\n  layers: []\n  effects: []\n  composition_graph:\n    nodes:\n    - id: 1\n      position: { x: 0, y: 0 }\n      type: output\n    edges: []\n  automation_clips: []\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("profile.dawn"),
+        format!(
+            "basic:\n  type: fixture_profile\n  functions:\n  - id: 1\n    name: Dimmer\n    type: range\n    curve: {{ type: linear }}\n  channels:\n  - slot: 0\n    role: coarse\n    function: 1\n    curve: {{ type: linear }}\n  {rule_field}:\n  - type: dimmer\n    function: 1\n    off: 0.0\n    on: 1.0\n"
+        ),
+    )
+    .unwrap();
+    root.join("project.dawn")
 }
 
 fn example_entrypoints() -> Vec<Utf8PathBuf> {

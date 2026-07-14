@@ -1,4 +1,5 @@
 mod params;
+use crate::gui::selection::effect_lane_index_resolved;
 use params::{
     automation_mapping_to_gui, curve_library, effect_params, fixture_source_ref, gradient_library,
     graph_node_id, graph_operator_definition_to_gui, param_kind, sequence_composition_graph_node,
@@ -23,15 +24,13 @@ pub(super) fn project_sequence(
             )],
         );
     };
-    let layout = active_layout_id(session).and_then(|id| session.project.layouts.get(&id));
-    let lanes = layout
-        .map(|layout| {
-            layout
-                .target_order
+    let lanes = active_element_tree(session)
+        .map(|tree| {
+            tree.nodes
                 .iter()
-                .map(|target| SequenceLane {
-                    target: layout_target(target),
-                    label: layout_target_label(session, target),
+                .map(|(node_id, node)| SequenceLane {
+                    target: element_target(*node_id, &node.kind),
+                    label: node.name.clone(),
                 })
                 .collect()
         })
@@ -107,6 +106,45 @@ pub(super) fn project_sequence(
             })
             .collect(),
     };
+    let control_clips = match sequence
+        .control_clips
+        .iter()
+        .map(|clip| {
+            let lane_index = effect_lane_index_resolved(session, clip.target.selection())
+                .ok_or(clip.id.0)? as u32;
+            Ok(SequenceControlClip {
+                id: clip.id.0,
+                start_seconds: clip.start.as_seconds_f64(),
+                duration_seconds: clip.duration.as_seconds_f64(),
+                anchor_lane_index: lane_index,
+                lane_index,
+                target: effect_target(clip.target.selection()),
+                target_label: effect_target_label(session, clip.target.selection()),
+                control_type: match &clip.target {
+                    dawn_language::control::ControlTarget::Scalar(_) => "scalar".to_string(),
+                    dawn_language::control::ControlTarget::Indexed(_) => "indexed".to_string(),
+                    dawn_language::control::ControlTarget::FixtureFunction { function, .. } => {
+                        format!("fixture function {}", function.0)
+                    }
+                },
+                value: format!("{:?}", clip.value),
+            })
+        })
+        .collect::<Result<Vec<_>, u32>>()
+    {
+        Ok(clips) => clips,
+        Err(id) => {
+            let message = format!("Control clip {id} does not resolve to a sequence lane.");
+            return blocked(
+                &message,
+                vec![gui_diagnostic(
+                    resolved.identity.document().as_ref(),
+                    "gui.sequence.control_target",
+                    &message,
+                )],
+            );
+        }
+    };
     GuiDocument::Sequence {
         document: SequenceGuiDocument {
             path: resolved.identity.document().to_string(),
@@ -145,6 +183,7 @@ pub(super) fn project_sequence(
                 })
                 .collect(),
             effects,
+            control_clips,
             composition_graph,
             automation_clips: automation_clips(sequence),
             degraded: false,
@@ -200,27 +239,28 @@ pub(super) fn project_layout(
     session: &ProjectSession,
     resolved: &ResolvedGuiObject,
 ) -> GuiDocument {
-    let id = LayoutId(SourceIdentity::new(
+    let id = PreviewLayoutId(SourceIdentity::new(
         resolved.identity.document().to_path_buf(),
         resolved.identity.object().to_string(),
     ));
-    let Some(layout) = session.project.layouts.get(&id) else {
+    let Some(layout) = session.project.preview_layouts.get(&id) else {
         return blocked(
             "Layout is not available in the checked project model.",
             Vec::new(),
         );
     };
     let fixtures = layout
-        .fixtures
+        .props
         .iter()
         .map(|fixture| {
             let definition_ref = fixture_source_ref(&fixture.definition);
             let resolved_fixture = session
                 .project
                 .definitions
-                .fixtures
+                .props
+                .definitions
                 .get(&fixture.definition)
-                .map(|definition| ResolvedLayoutFixture {
+                .map(|definition| ResolvedPreviewProp {
                     name: fixture.definition.0.object().to_string(),
                     color_model: "rgb".to_string(),
                     bulb_diameter_meters: definition.bulb_radius.as_meters_f64() * 2.0,
@@ -233,11 +273,11 @@ pub(super) fn project_layout(
                     object_key: definition_ref.map(|source_ref| source_ref.object_key),
                 })
                 .unwrap_or_else(empty_resolved_fixture);
-            LayoutFixturePlacement {
+            PreviewPropPlacement {
                 source_ref: GuiObjectRef {
                     path: resolved.identity.document().to_string(),
                     object_key: resolved.identity.object().to_string(),
-                    kind: ObjectKind::Fixture,
+                    kind: ObjectKind::Prop,
                     id: fixture.id.0.to_string(),
                 },
                 id: fixture.id.0,
@@ -260,8 +300,8 @@ pub(super) fn project_layout(
         })
         .collect::<Vec<_>>();
     let render_bounds = layout_bounds(&fixtures);
-    GuiDocument::Layout {
-        document: LayoutGuiDocument {
+    GuiDocument::Preview {
+        document: PreviewGuiDocument {
             path: resolved.identity.document().to_string(),
             source_ref: resolved.source_ref(),
             object_key: resolved.identity.object().to_string(),
@@ -282,20 +322,25 @@ pub(super) fn project_fixture(
         .get(resolved.identity.document())
         .into_iter()
         .flat_map(|document| document.objects())
-        .filter(|object| object.kind() == &SourceObjectKind::FixtureDefinition)
+        .filter(|object| object.kind() == &SourceObjectKind::PropDefinition)
         .filter_map(|object| {
-            let definition_id = FixtureDefinitionId(SourceIdentity::new(
+            let definition_id = PropDefinitionId(SourceIdentity::new(
                 resolved.identity.document().to_path_buf(),
                 object.id().to_string(),
             ));
-            let definition = session.project.definitions.fixtures.get(&definition_id)?;
+            let definition = session
+                .project
+                .definitions
+                .props
+                .definitions
+                .get(&definition_id)?;
             let source_ref = GuiObjectRef {
                 path: resolved.identity.document().to_string(),
                 object_key: object.id().to_string(),
-                kind: ObjectKind::Fixture,
+                kind: ObjectKind::Prop,
                 id: object.id().to_string(),
             };
-            Some(FixtureDefinition {
+            Some(PropDefinition {
                 source_ref,
                 object_key: object.id().to_string(),
                 name: object.id().to_string(),
@@ -307,8 +352,8 @@ pub(super) fn project_fixture(
             })
         })
         .collect::<Vec<_>>();
-    GuiDocument::Fixture {
-        document: FixtureGuiDocument {
+    GuiDocument::Prop {
+        document: PropGuiDocument {
             path: resolved.identity.document().to_string(),
             source_ref: Some(resolved.source_ref()),
             selected_object_key: Some(resolved.identity.object().to_string()),
@@ -317,12 +362,12 @@ pub(super) fn project_fixture(
     }
 }
 
-pub(super) fn active_layout_id(session: &ProjectSession) -> Option<LayoutId> {
+pub(super) fn active_element_tree(session: &ProjectSession) -> Option<&ElementTree> {
     session
         .project
         .setups
         .get(&session.project.root.setup)
-        .map(|setup| setup.layout.clone())
+        .and_then(|setup| session.project.element_trees.get(&setup.elements))
 }
 
 fn sequence_audio(
@@ -350,64 +395,40 @@ fn sequence_audio(
         })
 }
 
-fn layout_target(target: &DomainLayoutTarget) -> LayoutTarget {
-    match target {
-        DomainLayoutTarget::Fixture(id) => LayoutTarget {
-            kind: LayoutTargetKind::Fixture,
-            name: id.0.to_string(),
+fn element_target(id: ElementNodeId, kind: &ElementNodeKind) -> ElementTarget {
+    ElementTarget {
+        kind: if matches!(kind, ElementNodeKind::Group { .. }) {
+            ElementTargetKind::Group
+        } else {
+            ElementTargetKind::Element
         },
-        DomainLayoutTarget::Group(id) => LayoutTarget {
-            kind: LayoutTargetKind::Group,
-            name: id.0.to_string(),
-        },
+        name: id.0.to_string(),
     }
 }
 
-fn effect_target(target: &EffectTarget) -> LayoutTarget {
-    match target {
-        EffectTarget::Fixture(id) => LayoutTarget {
-            kind: LayoutTargetKind::Fixture,
-            name: id.0.to_string(),
+fn effect_target(target: &ElementSelection) -> ElementTarget {
+    active_target(target.node, None)
+}
+
+fn active_target(id: ElementNodeId, kind: Option<&ElementNodeKind>) -> ElementTarget {
+    ElementTarget {
+        kind: if kind.is_some_and(|kind| matches!(kind, ElementNodeKind::Group { .. })) {
+            ElementTargetKind::Group
+        } else {
+            ElementTargetKind::Element
         },
-        EffectTarget::Group(id) => LayoutTarget {
-            kind: LayoutTargetKind::Group,
-            name: id.0.to_string(),
-        },
+        name: id.0.to_string(),
     }
 }
 
-fn layout_target_label(session: &ProjectSession, target: &DomainLayoutTarget) -> String {
-    let Some(layout_id) = active_layout_id(session) else {
-        return layout_target(target).name;
-    };
-    let Some(layout) = session.project.layouts.get(&layout_id) else {
-        return layout_target(target).name;
-    };
-    match target {
-        DomainLayoutTarget::Fixture(id) => layout
-            .fixtures
-            .iter()
-            .find(|fixture| fixture.id == *id)
-            .map(|fixture| fixture.name.clone())
-            .unwrap_or_else(|| format!("Fixture {}", id.0)),
-        DomainLayoutTarget::Group(id) => layout
-            .groups
-            .iter()
-            .find(|group| group.id == *id)
-            .map(|group| group.name.clone())
-            .unwrap_or_else(|| format!("Group {}", id.0)),
-    }
-}
-
-fn effect_target_label(session: &ProjectSession, target: &EffectTarget) -> String {
-    match target {
-        EffectTarget::Fixture(id) => {
-            layout_target_label(session, &DomainLayoutTarget::Fixture(id.clone()))
-        }
-        EffectTarget::Group(id) => {
-            layout_target_label(session, &DomainLayoutTarget::Group(id.clone()))
-        }
-    }
+fn effect_target_label(session: &ProjectSession, target: &ElementSelection) -> String {
+    session
+        .project
+        .element_trees
+        .get(&target.tree)
+        .and_then(|tree| tree.nodes.get(&target.node))
+        .map(|node| node.name.clone())
+        .unwrap_or_else(|| format!("Element {}", target.node.0))
 }
 
 fn effect_ref_to_gui(reference: &EffectRef) -> SequenceEffectReference {
@@ -491,20 +512,21 @@ fn effect_definitions(session: &ProjectSession) -> Vec<SequenceEffectDefinition>
 }
 use camino::Utf8Path;
 use dawn_language::dsl::EffectKind;
-use dawn_language::effect::{BuiltinEffect, EffectRef, EffectScope, EffectTarget};
+use dawn_language::effect::{BuiltinEffect, EffectRef, EffectScope};
+use dawn_language::element::{ElementNodeId, ElementNodeKind, ElementSelection, ElementTree};
 use dawn_language::identity::SourceIdentity;
 use dawn_language::operator::{BuiltinOperator, OperatorRef};
+use dawn_language::preview::{PreviewLayoutId, PropDefinitionId};
 use dawn_language::sequence::{AutomationTarget, SequenceId};
-use dawn_language::setup::{FixtureDefinitionId, LayoutId, LayoutTarget as DomainLayoutTarget};
 use dawn_project_io::{ProjectSession, SourceObjectKind, relative_path_from_document};
 
 use super::{ResolvedGuiObject, blocked, gui_diagnostic};
 use crate::dto::{
-    FixtureDefinition, FixtureGuiDocument, GuiDocument, GuiObjectRef, LayoutFixturePlacement,
-    LayoutGuiDocument, LayoutTarget, LayoutTargetKind, ObjectKind, ResolvedLayoutFixture,
-    Rotation3Degrees, Scale3, SequenceAudio, SequenceAutomationBinding, SequenceAutomationClip,
-    SequenceAutomationTarget, SequenceBuiltinEffect, SequenceCompositionGraph, SequenceCurvePoint,
-    SequenceEffect, SequenceEffectDefinition, SequenceEffectDefinitionKind,
+    ElementTarget, ElementTargetKind, GuiDocument, GuiObjectRef, ObjectKind, PreviewGuiDocument,
+    PreviewPropPlacement, PropDefinition, PropGuiDocument, ResolvedPreviewProp, Rotation3Degrees,
+    Scale3, SequenceAudio, SequenceAutomationBinding, SequenceAutomationClip,
+    SequenceAutomationTarget, SequenceBuiltinEffect, SequenceCompositionGraph, SequenceControlClip,
+    SequenceCurvePoint, SequenceEffect, SequenceEffectDefinition, SequenceEffectDefinitionKind,
     SequenceEffectDefinitionParam, SequenceEffectReference, SequenceEffectScope, SequenceGraphEdge,
     SequenceGuiDocument, SequenceLane, SequenceLayer, SequenceMarkCollection,
     SequenceTimelineClipKind, Transform,

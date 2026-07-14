@@ -5,18 +5,26 @@ imports:
   as: patches
 main:
   type: setup
-  layout: layouts.house
+  elements: layouts.house_elements
+  preview: layouts.house_preview
   patch: patches.main
   controllers:
   - house_controller
 house_controller:
   type: controller
-  protocol: artnet
-  output:
-    type: patched_dmx
-    channel_order: rgb
-    universes:
-    - id: 1
-      range: 1..510
-    - id: 2
-      range: 1..510
+  protocol:
+    type: artnet
+    bind_address: 0.0.0.0:0
+    destination: 255.255.255.255:6454
+    mode: broadcast
+  ports:
+  - id: 1
+    port_address: 1
+    slot_count: 510
+  - id: 2
+    port_address: 2
+    slot_count: 510
+  - id: 3
+    port_address: 3
+    slot_count: 510
+

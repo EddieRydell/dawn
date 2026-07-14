@@ -15,9 +15,11 @@ use tauri::Manager;
 pub mod audio;
 pub mod bindings;
 pub mod commands;
+mod desktop_foundation_tests;
 pub mod dto;
 pub mod gui;
 mod gui_geometry;
+mod live_output;
 pub mod persistence;
 pub mod preview;
 mod project_templates;
@@ -65,6 +67,7 @@ pub fn run() -> Result<(), tauri::Error> {
                             }
                             let preview = close_app.state::<preview::PreviewWindowService>();
                             let _ = preview.close_for_main_shutdown(&close_app, state.persistence());
+                            state.shutdown_live_output();
                         });
                     }
                     if settings_snapshot.settings.reopen_last_project

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { commands } from "../../../api";
 
-import type { FixtureDocument } from "../../../types";
+import type { PropDocument } from "../../../types";
 
 import { runGuiEditCommand } from "../../../store";
 
@@ -16,7 +16,7 @@ export function FixtureCanvas({
   selected,
   setSelected
 }: {
-  document: FixtureDocument;
+  document: PropDocument;
   selected: GuiFocus;
   setSelected: (id: GuiFocus) => void;
 }) {
@@ -82,7 +82,7 @@ export function FixtureCanvas({
         drag.current = null;
         if (!current) return;
         void runGuiEditCommand(() =>
-          commands.applyFixtureGuiEdit({
+          commands.applyPropGuiEdit({
             type: "movePoint",
             objectKey: current.objectKey,
             pointIndex: current.pointIndex,

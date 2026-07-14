@@ -12,8 +12,8 @@ use indexmap::IndexSet;
 use crate::dto::{
     AppSettings, AppSnapshot, AudioTransportSnapshot, AudioTransportState, BufferExternalState,
     DiagnosticSeverity, DocumentDefaultObjectKey, DocumentDescriptor, DocumentObjectDescriptor,
-    DocumentViewId, EditorBuffer, LiveOutputSnapshot, ObjectKind, ProjectDiagnostic,
-    ProjectTreeMode, WorkspaceEntry, WorkspaceEntryKind, WorkspaceLayoutState,
+    DocumentViewId, EditorBuffer, ObjectKind, ProjectDiagnostic, ProjectTreeMode, WorkspaceEntry,
+    WorkspaceEntryKind, WorkspaceLayoutState,
 };
 use crate::persistence::{PersistedProjectSession, PersistenceService};
 use crate::state_tasks::{
@@ -27,8 +27,9 @@ pub(crate) struct DesktopState {
     gui_history: Mutex<GuiHistory>,
     gui_save: Mutex<GuiSaveScheduler>,
     render_refresh: Mutex<RenderRefreshScheduler>,
-    audio: Mutex<crate::audio::AudioEngine>,
-    show_render: Mutex<crate::show_render::ShowRenderService>,
+    audio: Arc<Mutex<crate::audio::AudioEngine>>,
+    show_render: Arc<Mutex<crate::show_render::ShowRenderService>>,
+    live_output: Mutex<crate::live_output::LiveOutputService>,
     sequence_clip_raster: Mutex<crate::sequence_clip_raster::SequenceClipRasterService>,
     sequence_clipboard: Mutex<Option<crate::gui::SequenceClipboard>>,
     persistence: PersistenceService,
@@ -42,14 +43,19 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl DesktopState {
     pub(crate) fn new() -> Self {
+        let audio = Arc::new(Mutex::new(crate::audio::AudioEngine::new()));
+        let show_render = Arc::new(Mutex::new(crate::show_render::ShowRenderService::new()));
+        let live_output =
+            crate::live_output::LiveOutputService::new(audio.clone(), show_render.clone());
         Self {
             snapshot: Mutex::new(empty_snapshot()),
             project: Mutex::new(None),
             gui_history: Mutex::new(GuiHistory::new(100)),
             gui_save: Mutex::new(gui_save_scheduler()),
             render_refresh: Mutex::new(render_refresh_scheduler()),
-            audio: Mutex::new(crate::audio::AudioEngine::new()),
-            show_render: Mutex::new(crate::show_render::ShowRenderService::new()),
+            audio,
+            show_render,
+            live_output: Mutex::new(live_output),
             sequence_clip_raster: Mutex::new(
                 crate::sequence_clip_raster::SequenceClipRasterService::new(),
             ),
@@ -74,7 +80,9 @@ impl DesktopState {
     pub fn snapshot(&self) -> AppSnapshot {
         self.drain_gui_save_results();
         self.drain_render_refresh_results();
+        let live_output = lock_unpoisoned(&self.live_output).snapshot();
         let mut snapshot = lock_unpoisoned(&self.snapshot).clone();
+        snapshot.live_output = live_output;
         snapshot.audio_transport = self.merged_audio_snapshot(&snapshot.audio_transport);
         snapshot
     }
@@ -154,6 +162,56 @@ impl DesktopState {
             });
         }
     }
+
+    pub fn set_live_output_active(&self, active: bool) -> AppSnapshot {
+        let live_output = if active {
+            let Some(project) = self.project_session() else {
+                return self.update_snapshot(|snapshot| {
+                    snapshot.live_output.state = crate::dto::LiveOutputState::Error;
+                    snapshot.live_output.last_error = Some("No project is loaded.".to_string());
+                });
+            };
+            let active = project
+                .project
+                .setups
+                .get(&project.project.root.setup)
+                .map(|setup| setup.controllers.clone());
+            let render_ready = lock_unpoisoned(&self.show_render).active_target().is_some();
+            let Some(active) = active.filter(|active| render_ready && !active.is_empty()) else {
+                return self.update_snapshot(|snapshot| {
+                    snapshot.live_output.state = crate::dto::LiveOutputState::Error;
+                    snapshot.live_output.last_error = Some(
+                        "Live output requires a prepared sequence and at least one active controller."
+                            .to_string(),
+                    );
+                });
+            };
+            lock_unpoisoned(&self.live_output).enable(project.project.controllers.clone(), active)
+        } else {
+            lock_unpoisoned(&self.live_output).disable()
+        };
+        self.update_snapshot(|snapshot| snapshot.live_output = live_output)
+    }
+
+    pub(super) fn suspend_live_output(&self) {
+        let live_output = lock_unpoisoned(&self.live_output).suspend();
+        lock_unpoisoned(&self.snapshot).live_output = live_output;
+    }
+
+    pub(super) fn disable_live_output(&self) {
+        let live_output = lock_unpoisoned(&self.live_output).disable();
+        lock_unpoisoned(&self.snapshot).live_output = live_output;
+    }
+
+    pub(super) fn resume_live_output_after_prepare(&self) {
+        if lock_unpoisoned(&self.live_output).take_resume_after_prepare() {
+            let _ = self.set_live_output_active(true);
+        }
+    }
+
+    pub(crate) fn shutdown_live_output(&self) {
+        lock_unpoisoned(&self.live_output).shutdown();
+    }
 }
 
 mod audio;
@@ -192,12 +250,7 @@ fn empty_snapshot() -> AppSnapshot {
         preview_error: None,
         preview_open: false,
         audio_transport: crate::audio::AudioEngine::empty_snapshot(),
-        live_output: LiveOutputSnapshot {
-            enabled: false,
-            status: "Disabled".to_string(),
-            active_universe_count: 0,
-            last_error: None,
-        },
+        live_output: crate::live_output::disabled_snapshot(0),
     }
 }
 
@@ -466,8 +519,9 @@ fn available_views(objects: &[DocumentObjectDescriptor]) -> Vec<DocumentViewId> 
     let mut views = vec![DocumentViewId::Text];
     for object in objects {
         let view = match object.kind {
-            ObjectKind::Layout => Some(DocumentViewId::Layout),
-            ObjectKind::Fixture => Some(DocumentViewId::Fixture),
+            ObjectKind::Setup => Some(DocumentViewId::Setup),
+            ObjectKind::Preview => Some(DocumentViewId::Preview),
+            ObjectKind::Prop => Some(DocumentViewId::Prop),
             ObjectKind::Sequence => Some(DocumentViewId::Sequence),
             _ => None,
         };
@@ -485,8 +539,9 @@ fn default_object_keys(objects: &[DocumentObjectDescriptor]) -> Vec<DocumentDefa
         .iter()
         .filter_map(|object| {
             let view = match object.kind {
-                ObjectKind::Layout => DocumentViewId::Layout,
-                ObjectKind::Fixture => DocumentViewId::Fixture,
+                ObjectKind::Setup => DocumentViewId::Setup,
+                ObjectKind::Preview => DocumentViewId::Preview,
+                ObjectKind::Prop => DocumentViewId::Prop,
                 ObjectKind::Sequence => DocumentViewId::Sequence,
                 _ => return None,
             };
@@ -502,8 +557,9 @@ fn same_view(left: &DocumentViewId, right: &DocumentViewId) -> bool {
     matches!(
         (left, right),
         (DocumentViewId::Text, DocumentViewId::Text)
-            | (DocumentViewId::Layout, DocumentViewId::Layout)
-            | (DocumentViewId::Fixture, DocumentViewId::Fixture)
+            | (DocumentViewId::Setup, DocumentViewId::Setup)
+            | (DocumentViewId::Preview, DocumentViewId::Preview)
+            | (DocumentViewId::Prop, DocumentViewId::Prop)
             | (DocumentViewId::Sequence, DocumentViewId::Sequence)
     )
 }

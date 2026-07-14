@@ -7,7 +7,7 @@ import { Trash2 } from "lucide-react";
 
 import { commands } from "../../../api";
 
-import type { AppSettings, LayoutTarget, PersistedSequenceViewportState, SequenceAutomationClip, SequenceClipRaster, SequenceEditorDocument, SequenceEffectScope, SequenceEffectDefinition } from "../../../types";
+import type { AppSettings, ElementTarget, PersistedSequenceViewportState, SequenceAutomationClip, SequenceClipRaster, SequenceEditorDocument, SequenceEffectScope, SequenceEffectDefinition } from "../../../types";
 
 import { runGuiEditCommand, runSnapshotCommand, useAppStore } from "../../../store";
 
@@ -656,7 +656,7 @@ export function SequenceCanvas({
     setSelected(null);
     updateSequenceSelection(null);
   };
-  const retargetContextEffect = async (effectId: number, target: LayoutTarget) => {
+  const retargetContextEffect = async (effectId: number, target: ElementTarget) => {
     await runGuiEditCommand(() => commands.applySequenceGuiEdit({ type: "retargetEffect", id: effectId, target }));
   };
   const markCollectionsForMenu = () => {

@@ -9,7 +9,7 @@ impl DesktopState {
     pub(super) fn refresh_render_session(
         &self,
         project: &dawn_language::model::DawnProject,
-    ) -> Option<dawn_runtime::RenderError> {
+    ) -> Option<dawn_runtime::ShowPrepareError> {
         let mut show_render = lock_unpoisoned(&self.show_render);
         let result = show_render.refresh_project(project);
         if result.is_err() {
@@ -69,11 +69,13 @@ impl DesktopState {
                 } => {
                     lock_unpoisoned(&self.show_render).apply_prepared(*session);
                     self.clear_render_error_if_set();
+                    self.resume_live_output_after_prepare();
                 }
                 RenderRefreshResult::Failed {
                     sequence: _,
                     message,
                 } => {
+                    self.suspend_live_output();
                     self.set_render_error_if_changed(format!("Render refresh failed: {message}"));
                 }
             }
@@ -81,6 +83,7 @@ impl DesktopState {
     }
 
     pub(super) fn unload_render_session(&self) {
+        self.disable_live_output();
         lock_unpoisoned(&self.show_render).unload();
     }
 }

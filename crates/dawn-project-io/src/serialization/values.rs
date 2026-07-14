@@ -38,10 +38,10 @@ pub(super) fn gradient_value(gradient: &Gradient) -> Result<Value, ExportProject
     Ok(Value::Mapping(value))
 }
 
-pub(super) fn geometry_value(geometry: &Geometry) -> Result<Value, ExportProjectError> {
+pub(super) fn geometry_value(geometry: &PropGeometry) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
     match geometry {
-        Geometry::Points { points } => {
+        PropGeometry::Points { points } => {
             value.insert(string_value("type"), Value::String("points".to_string()));
             value.insert(
                 string_value("points"),
@@ -53,7 +53,10 @@ pub(super) fn geometry_value(geometry: &Geometry) -> Result<Value, ExportProject
                 ),
             );
         }
-        Geometry::Lines { points, pixels } => {
+        PropGeometry::Lines {
+            points,
+            point_count,
+        } => {
             value.insert(string_value("type"), Value::String("lines".to_string()));
             value.insert(
                 string_value("points"),
@@ -64,14 +67,14 @@ pub(super) fn geometry_value(geometry: &Geometry) -> Result<Value, ExportProject
                         .collect::<Result<Vec<_>, _>>()?,
                 ),
             );
-            value.insert(string_value("pixels"), number_value(*pixels)?);
+            value.insert(string_value("point_count"), number_value(*point_count)?);
         }
-        Geometry::Arc {
+        PropGeometry::Arc {
             center,
             radius,
             start_degrees,
             end_degrees,
-            pixels,
+            point_count,
         } => {
             value.insert(string_value("type"), Value::String("arc".to_string()));
             value.insert(string_value("center"), point_value(center)?);
@@ -81,17 +84,17 @@ pub(super) fn geometry_value(geometry: &Geometry) -> Result<Value, ExportProject
             );
             value.insert(string_value("startDegrees"), number_value(*start_degrees)?);
             value.insert(string_value("endDegrees"), number_value(*end_degrees)?);
-            value.insert(string_value("pixels"), number_value(*pixels)?);
+            value.insert(string_value("point_count"), number_value(*point_count)?);
         }
     }
     Ok(Value::Mapping(value))
 }
 
-pub(super) fn transform_value(fixture: &FixtureInst) -> Result<Value, ExportProjectError> {
+pub(super) fn transform_value(prop: &PropInstance) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
-    value.insert(string_value("position"), point_value(&fixture.position)?);
-    value.insert(string_value("rotation"), rotation_value(&fixture.rotation)?);
-    value.insert(string_value("scale"), scale_value(&fixture.scale)?);
+    value.insert(string_value("position"), point_value(&prop.position)?);
+    value.insert(string_value("rotation"), rotation_value(&prop.rotation)?);
+    value.insert(string_value("scale"), scale_value(&prop.scale)?);
     Ok(Value::Mapping(value))
 }
 
@@ -119,32 +122,27 @@ pub(super) fn scale_value(scale: &Scale3) -> Result<Value, ExportProjectError> {
     Ok(Value::Mapping(value))
 }
 
-pub(super) fn layout_target_value(target: &LayoutTarget) -> Result<Value, ExportProjectError> {
+pub(super) fn element_selection_value(
+    session: &ProjectSession,
+    from_document: &Utf8Path,
+    target: &ElementSelection,
+) -> Result<Value, ExportProjectError> {
     let mut value = Mapping::new();
-    match target {
-        LayoutTarget::Fixture(id) => {
-            value.insert(string_value("type"), Value::String("fixture".to_string()));
-            value.insert(string_value("id"), number_value(id.0)?);
-        }
-        LayoutTarget::Group(id) => {
-            value.insert(string_value("type"), Value::String("group".to_string()));
-            value.insert(string_value("id"), number_value(id.0)?);
-        }
-    }
-    Ok(Value::Mapping(value))
-}
-
-pub(super) fn effect_target_value(target: &EffectTarget) -> Result<Value, ExportProjectError> {
-    let mut value = Mapping::new();
-    match target {
-        EffectTarget::Fixture(id) => {
-            value.insert(string_value("type"), Value::String("fixture".to_string()));
-            value.insert(string_value("id"), number_value(id.0)?);
-        }
-        EffectTarget::Group(id) => {
-            value.insert(string_value("type"), Value::String("group".to_string()));
-            value.insert(string_value("id"), number_value(id.0)?);
-        }
+    value.insert(
+        string_value("tree"),
+        Value::String(write_source_reference(
+            session,
+            from_document,
+            SourceObjectKind::ElementTree,
+            &target.tree.0,
+        )?),
+    );
+    value.insert(string_value("node"), number_value(target.node.0)?);
+    if let Some(range) = target.cells {
+        let mut cells = Mapping::new();
+        cells.insert(string_value("start"), number_value(range.start)?);
+        cells.insert(string_value("count"), number_value(range.count)?);
+        value.insert(string_value("cells"), Value::Mapping(cells));
     }
     Ok(Value::Mapping(value))
 }
@@ -155,6 +153,9 @@ pub(super) fn write_source_reference(
     kind: SourceObjectKind,
     identity: &SourceIdentity,
 ) -> Result<String, ExportProjectError> {
+    if identity.document() == from_document {
+        return Ok(identity.object().to_string());
+    }
     let alias = session
         .source
         .documents
@@ -198,20 +199,10 @@ pub(super) fn seconds_string(seconds: f64) -> String {
     format!("{seconds}s")
 }
 
-pub(super) fn channel_order_name(order: &RgbChannelOrder) -> &'static str {
-    match order {
-        RgbChannelOrder::Rgb => "rgb",
-        RgbChannelOrder::Rbg => "rbg",
-        RgbChannelOrder::Grb => "grb",
-        RgbChannelOrder::Gbr => "gbr",
-        RgbChannelOrder::Brg => "brg",
-        RgbChannelOrder::Bgr => "bgr",
-    }
-}
 use camino::{Utf8Path, Utf8PathBuf};
-use dawn_language::effect::EffectTarget;
+use dawn_language::element::ElementSelection;
 use dawn_language::identity::SourceIdentity;
-use dawn_language::setup::{FixtureInst, Geometry, LayoutTarget, RgbChannelOrder};
+use dawn_language::preview::{PropGeometry, PropInstance};
 use dawn_language::values::{Curve, Gradient, Point3, Rotation3, Scale3};
 use yaml_serde::{Mapping, Value};
 

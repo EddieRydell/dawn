@@ -1,5 +1,5 @@
 vertical_113:
-  type: fixture
+  type: prop
   bulb_diameter: 0.05
   geometry:
     type: lines
@@ -10,4 +10,4 @@ vertical_113:
     - x: 0.0
       y: 11.2
       z: 0.0
-    pixels: 113
+    point_count: 113

@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
 import { commands, setGuiEditResultHandler } from "./api";
 import { effectiveEditorViewMode } from "./editorViewMode";
-import type { AppSnapshot, AudioTransportSnapshot, GuiDocument, GuiDocumentRequest, GuiEditResult, ProjectRestoreState } from "./types";
+import type { AppSnapshot, AudioTransportSnapshot, GuiDocument, GuiDocumentRequest, GuiEditResult, LiveOutputSnapshot, ProjectRestoreState } from "./types";
 
 type SnapshotApplySource = "event" | "command" | "hydrate";
 
@@ -139,6 +139,11 @@ export function subscribeToSnapshots(): Promise<() => void> {
         },
         "event"
       );
+    }),
+    listen<LiveOutputSnapshot>("live_output_changed", (event) => {
+      const current = useAppStore.getState().snapshot;
+      if (current === null || event.payload.generation < current.liveOutput.generation) return;
+      useAppStore.getState().setSnapshot({ ...current, liveOutput: event.payload }, "event");
     })
   ]).then((unsubscribes) => () => {
     for (const unsubscribe of unsubscribes) {

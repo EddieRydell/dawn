@@ -1,0 +1,14 @@
+[package]
+name = "dawn-output"
+edition.workspace = true
+version.workspace = true
+description = "Dawn E1.31 and Art-Net output transports"
+authors = ["Dawn"]
+license = "MIT"
+
+[dependencies]
+artnet_protocol.workspace = true
+dawn-language.workspace = true
+dawn-runtime.workspace = true
+indexmap.workspace = true
+sacn.workspace = true

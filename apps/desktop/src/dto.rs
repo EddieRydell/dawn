@@ -154,14 +154,17 @@ pub struct AudioTransportSnapshot {
     rename_all_fields = "camelCase"
 )]
 pub enum GuiDocument {
+    Setup {
+        document: SetupGuiDocument,
+    },
     Sequence {
         document: SequenceGuiDocument,
     },
-    Layout {
-        document: LayoutGuiDocument,
+    Preview {
+        document: PreviewGuiDocument,
     },
-    Fixture {
-        document: FixtureGuiDocument,
+    Prop {
+        document: PropGuiDocument,
     },
     Blocked {
         reason: String,
@@ -193,9 +196,10 @@ pub struct GuiObjectRef {
     rename_all_fields = "camelCase"
 )]
 pub enum GuiEditCommand {
+    Setup { edit: SetupGuiEdit },
     Sequence { edit: SequenceGuiEdit },
-    Layout { edit: LayoutGuiEdit },
-    Fixture { edit: FixtureGuiEdit },
+    Preview { edit: PreviewGuiEdit },
+    Prop { edit: PropGuiEdit },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -231,9 +235,168 @@ pub enum DiagnosticSeverity {
 #[serde(rename_all = "camelCase")]
 pub enum DocumentViewId {
     Text,
-    Layout,
-    Fixture,
+    Setup,
+    Preview,
+    Prop,
     Sequence,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupGuiDocument {
+    pub path: String,
+    pub source_ref: GuiObjectRef,
+    pub object_key: String,
+    pub elements: Vec<SetupElementNode>,
+    pub fixture_profiles: Vec<SetupFixtureProfile>,
+    pub preview_links: Vec<SetupPreviewLink>,
+    pub patch_nodes: Vec<SetupPatchNode>,
+    pub patch_edges: Vec<SetupPatchEdge>,
+    pub controllers: Vec<SetupController>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupElementNode {
+    pub id: u32,
+    pub name: String,
+    pub kind: SetupElementKind,
+    pub parent: Option<u32>,
+    pub children: Vec<u32>,
+    pub cell_count: Option<u32>,
+    pub capability: Option<String>,
+    pub profile: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SetupElementKind {
+    Group,
+    Color,
+    Scalar,
+    Indexed,
+    Fixture,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupFixtureProfile {
+    pub id: String,
+    pub name: String,
+    pub function_count: u32,
+    pub channel_count: u32,
+    pub behavior_rule_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupPreviewLink {
+    pub prop_id: u32,
+    pub name: String,
+    pub point_count: u32,
+    pub bindings: Vec<SetupElementCell>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupElementCell {
+    pub node: u32,
+    pub cell: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupPatchNode {
+    pub id: u32,
+    pub kind: SetupPatchNodeKind,
+    pub label: String,
+    pub width: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SetupPatchNodeKind {
+    Source,
+    Filter,
+    Sink,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupPatchEdge {
+    pub from_node: u32,
+    pub from_port: u16,
+    pub to_node: u32,
+    pub to_port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupController {
+    pub id: String,
+    pub protocol: String,
+    pub bind_address: String,
+    pub destination: Option<String>,
+    pub mode: String,
+    pub priority: Option<u8>,
+    pub source_name: Option<String>,
+    pub ports: Vec<SetupControllerPort>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupControllerPort {
+    pub id: u32,
+    pub address: u16,
+    pub slot_count: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SetupGuiEdit {
+    RenameElement {
+        id: u32,
+        name: String,
+    },
+    SetElementCellCount {
+        id: u32,
+        cells: u32,
+    },
+    ReorderElements {
+        parent: Option<u32>,
+        ordered_ids: Vec<u32>,
+    },
+    SetPreviewBindings {
+        prop_id: u32,
+        bindings: Vec<SetupElementCell>,
+    },
+    AutoLinkPreview {
+        prop_id: u32,
+        node: u32,
+        start_cell: u32,
+    },
+    ConnectPatch {
+        from_node: u32,
+        from_port: u16,
+        to_node: u32,
+        to_port: u16,
+    },
+    DisconnectPatch {
+        from_node: u32,
+        from_port: u16,
+        to_node: u32,
+        to_port: u16,
+    },
+    SetControllerPort {
+        controller: String,
+        port: u32,
+        address: u16,
+        slot_count: u16,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -245,9 +408,9 @@ pub enum EditorViewMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub enum LayoutTargetKind {
+pub enum ElementTargetKind {
     Group,
-    Fixture,
+    Element,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -256,8 +419,10 @@ pub enum ObjectKind {
     Project,
     Setup,
     Controller,
-    Layout,
-    Fixture,
+    ElementTree,
+    Preview,
+    Prop,
+    FixtureProfile,
     Patch,
     Sequence,
     Curve,
@@ -272,9 +437,11 @@ impl From<&SourceObjectKind> for ObjectKind {
             SourceObjectKind::Project => Self::Project,
             SourceObjectKind::Setup => Self::Setup,
             SourceObjectKind::Controller => Self::Controller,
-            SourceObjectKind::Layout => Self::Layout,
+            SourceObjectKind::ElementTree => Self::ElementTree,
+            SourceObjectKind::PreviewLayout => Self::Preview,
             SourceObjectKind::Patch => Self::Patch,
-            SourceObjectKind::FixtureDefinition => Self::Fixture,
+            SourceObjectKind::PropDefinition => Self::Prop,
+            SourceObjectKind::FixtureProfile => Self::FixtureProfile,
             SourceObjectKind::Curve => Self::Curve,
             SourceObjectKind::Gradient => Self::Gradient,
             SourceObjectKind::Sequence => Self::Sequence,
@@ -387,7 +554,7 @@ pub enum SequenceBuiltinEffect {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct FixtureDefinition {
+pub struct PropDefinition {
     pub source_ref: GuiObjectRef,
     pub object_key: String,
     pub name: String,
@@ -400,11 +567,11 @@ pub struct FixtureDefinition {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct FixtureGuiDocument {
+pub struct PropGuiDocument {
     pub path: String,
     pub source_ref: Option<GuiObjectRef>,
     pub selected_object_key: Option<String>,
-    pub fixtures: Vec<FixtureDefinition>,
+    pub fixtures: Vec<PropDefinition>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -413,7 +580,7 @@ pub struct FixtureGuiDocument {
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-pub enum FixtureGuiEdit {
+pub enum PropGuiEdit {
     UpdateBulbDiameter {
         object_key: String,
         bulb_diameter_meters: f64,
@@ -505,23 +672,23 @@ pub struct GeometryRenderPoint {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct LayoutGuiDocument {
+pub struct PreviewGuiDocument {
     pub path: String,
     pub source_ref: GuiObjectRef,
     pub object_key: String,
     pub name: String,
     pub render_bounds: GeometryRenderBounds,
-    pub fixtures: Vec<LayoutFixturePlacement>,
+    pub fixtures: Vec<PreviewPropPlacement>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct LayoutFixturePlacement {
+pub struct PreviewPropPlacement {
     pub source_ref: GuiObjectRef,
     pub id: u32,
     pub name: String,
     pub transform: Transform,
-    pub resolved_fixture: ResolvedLayoutFixture,
+    pub resolved_fixture: ResolvedPreviewProp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -530,24 +697,52 @@ pub struct LayoutFixturePlacement {
     rename_all = "camelCase",
     rename_all_fields = "camelCase"
 )]
-pub enum LayoutGuiEdit {
+pub enum PreviewGuiEdit {
     UpdatePlacementTransform { id: u32, transform: Transform },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct LayoutTarget {
-    pub kind: LayoutTargetKind,
+pub struct ElementTarget {
+    pub kind: ElementTargetKind,
     pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveOutputSnapshot {
-    pub enabled: bool,
-    pub status: String,
+    pub state: LiveOutputState,
+    pub generation: u32,
+    pub active_controller_count: u32,
     pub active_universe_count: u32,
+    pub controllers: Vec<LiveOutputControllerSnapshot>,
     pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum LiveOutputState {
+    Disabled,
+    Preparing,
+    Holding,
+    Streaming,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveOutputControllerSnapshot {
+    pub id: String,
+    pub state: LiveOutputControllerState,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum LiveOutputControllerState {
+    Opening,
+    Active,
+    Error,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -570,7 +765,7 @@ pub struct ProjectDiagnostic {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
-pub struct ResolvedLayoutFixture {
+pub struct ResolvedPreviewProp {
     pub name: String,
     pub color_model: String,
     pub bulb_diameter_meters: f64,
@@ -640,6 +835,7 @@ pub struct SequenceGuiDocument {
     pub gradient_library: Vec<SequenceGradientLibraryItem>,
     pub layers: Vec<SequenceLayer>,
     pub effects: Vec<SequenceEffect>,
+    pub control_clips: Vec<SequenceControlClip>,
     pub composition_graph: SequenceCompositionGraph,
     pub automation_clips: Vec<SequenceAutomationClip>,
     pub degraded: bool,
@@ -773,7 +969,7 @@ pub struct SequenceEffect {
     pub layer_id: u32,
     pub start_seconds: f64,
     pub duration_seconds: f64,
-    pub target: LayoutTarget,
+    pub target: ElementTarget,
     pub target_label: String,
     pub scope: SequenceEffectScope,
     pub effect: String,
@@ -786,6 +982,20 @@ pub struct SequenceEffect {
 #[serde(rename_all = "camelCase")]
 pub enum SequenceTimelineClipKind {
     Effect,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceControlClip {
+    pub id: u32,
+    pub start_seconds: f64,
+    pub duration_seconds: f64,
+    pub anchor_lane_index: u32,
+    pub lane_index: u32,
+    pub target: ElementTarget,
+    pub target_label: String,
+    pub control_type: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -1023,9 +1233,23 @@ pub enum SequenceGuiEdit {
         #[serde(rename = "import")]
         import_path: Option<String>,
     },
+    MoveControlClip {
+        id: u32,
+        start_seconds: f64,
+        anchor_lane_index: u32,
+        lane_index: u32,
+    },
+    ResizeControlClip {
+        id: u32,
+        start_seconds: f64,
+        duration_seconds: f64,
+    },
+    DeleteControlClip {
+        id: u32,
+    },
     AddEffect {
         effect: SequenceEffectReference,
-        target: LayoutTarget,
+        target: ElementTarget,
         scope: SequenceEffectScope,
         start_seconds: f64,
         mark_collection_key: Option<String>,
@@ -1063,7 +1287,7 @@ pub enum SequenceGuiEdit {
     MoveEffect {
         id: u32,
         start_seconds: f64,
-        target: Option<LayoutTarget>,
+        target: Option<ElementTarget>,
     },
     ResizeEffect {
         id: u32,
@@ -1079,7 +1303,7 @@ pub enum SequenceGuiEdit {
     },
     RetargetEffect {
         id: u32,
-        target: LayoutTarget,
+        target: ElementTarget,
     },
     SetEffectScope {
         id: u32,
@@ -1239,7 +1463,7 @@ pub enum SequenceGuiEdit {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceLane {
-    pub target: LayoutTarget,
+    pub target: ElementTarget,
     pub label: String,
 }
 

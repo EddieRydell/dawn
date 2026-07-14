@@ -74,7 +74,7 @@ pub(super) fn fixture_definition_mut<'a>(
     session: &'a mut ProjectSession,
     document_path: &Utf8Path,
     object_key: &str,
-) -> Result<&'a mut dawn_language::setup::FixtureDefinition, GuiMutationError> {
+) -> Result<&'a mut dawn_language::preview::PropDefinition, GuiMutationError> {
     let id = session
         .source
         .documents
@@ -82,13 +82,14 @@ pub(super) fn fixture_definition_mut<'a>(
         .into_iter()
         .flat_map(|document| document.objects())
         .find_map(|object| {
-            (object.kind() == &SourceObjectKind::FixtureDefinition && object.id() == object_key)
-                .then(|| {
-                    FixtureDefinitionId(SourceIdentity::new(
+            (object.kind() == &SourceObjectKind::PropDefinition && object.id() == object_key).then(
+                || {
+                    PropDefinitionId(SourceIdentity::new(
                         document_path.to_path_buf(),
                         object.id().to_string(),
                     ))
-                })
+                },
+            )
         })
         .ok_or_else(|| {
             GuiMutationError::Invalid("Fixture definition was not found.".to_string())
@@ -96,7 +97,7 @@ pub(super) fn fixture_definition_mut<'a>(
     session
         .project
         .definitions
-        .fixtures
+        .props
         .definitions
         .get_mut(&id)
         .ok_or_else(|| GuiMutationError::Invalid("Fixture definition was not loaded.".to_string()))
@@ -297,15 +298,17 @@ pub(super) fn effect_scope(scope: SequenceEffectScope) -> EffectScope {
 }
 
 pub(super) fn layout_target_to_effect_target(
-    target: LayoutTarget,
-) -> Result<EffectTarget, GuiMutationError> {
+    tree: &ElementTreeId,
+    target: ElementTarget,
+) -> Result<ElementSelection, GuiMutationError> {
     let id = target
         .name
         .parse::<u32>()
         .map_err(|_| GuiMutationError::Invalid("Layout target id must be numeric.".to_string()))?;
-    Ok(match target.kind {
-        LayoutTargetKind::Fixture => EffectTarget::Fixture(FixtureInstanceId(id)),
-        LayoutTargetKind::Group => EffectTarget::Group(FixtureGroupId(id)),
+    Ok(ElementSelection {
+        tree: tree.clone(),
+        node: ElementNodeId(id),
+        cells: None,
     })
 }
 
@@ -476,19 +479,20 @@ use std::fs;
 use camino::{Utf8Path, Utf8PathBuf};
 use dawn_language::dsl::Identifier;
 use dawn_language::effect::{
-    CurveSource, EffectInst, EffectParamValue, EffectScope, EffectTarget, GradientSource,
+    CurveSource, EffectInst, EffectParamValue, EffectScope, GradientSource,
 };
+use dawn_language::element::{ElementNodeId, ElementSelection, ElementTreeId};
 use dawn_language::identity::SourceIdentity;
 use dawn_language::operator::{
     BuiltinOperator, OperatorDefinitionId, OperatorPortCardinality, OperatorRef,
 };
+use dawn_language::preview::PropDefinitionId;
 use dawn_language::sequence::{
     AssetId, AutomationBinding, AutomationClip, AutomationMapping, AutomationValue,
     CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind, EffectGraphEdge,
     GraphNodePosition, GraphPortId, MarkCollection, MarkCollectionKey, SequenceId, SequenceLayerId,
     automation_value_at,
 };
-use dawn_language::setup::{FixtureDefinitionId, FixtureGroupId, FixtureInstanceId};
 use dawn_language::values::{
     Color, Curve, CurvePoint, Distance, Gradient, GradientStop, Point3,
     Rotation3 as DomainRotation3, Scale3 as DomainScale3,
@@ -497,7 +501,7 @@ use dawn_project_io::{ProjectSession, ReferencedAsset, SourceObjectKind};
 
 use super::GuiMutationError;
 use crate::dto::{
-    LayoutTarget, LayoutTargetKind, Point3Meters, Rotation3Degrees, Scale3,
-    SequenceAutomationMapping, SequenceBuiltinOperator, SequenceCurvePoint,
-    SequenceEffectParamValue, SequenceEffectScope, SequenceGradientStop, SequenceGraphOperator,
+    ElementTarget, Point3Meters, Rotation3Degrees, Scale3, SequenceAutomationMapping,
+    SequenceBuiltinOperator, SequenceCurvePoint, SequenceEffectParamValue, SequenceEffectScope,
+    SequenceGradientStop, SequenceGraphOperator,
 };

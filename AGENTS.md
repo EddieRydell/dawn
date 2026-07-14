@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This is a Rust workspace. Domain types and canonical automation evaluation live in `crates/dawn-language`; project parsing, import/source ownership, diagnostics, and serialization live in `crates/dawn-project-io`; playback preparation and rendering live in `crates/dawn-runtime`. The desktop service and UI state live under `apps/desktop/src`. Example Dawn projects and fixtures are in `examples/`.
+This is a Rust workspace. Domain types and canonical automation-clip evaluation live in `crates/dawn-language`; project parsing, import/source ownership, diagnostics, and serialization live in `crates/dawn-project-io`; playback preparation and rendering live in `crates/dawn-runtime`. The desktop service and UI state live under `apps/desktop/src`. Example Dawn projects and fixtures are in `examples/`.
 
 The typed `DawnProject` is authoritative after loading. `SourceProject` records document ownership, imports, original source needed for non-YAML DSL documents, and referenced assets. Saving derives YAML directly from typed state; do not add a synchronization or typed-to-YAML mutation phase.
 Project/source metadata and project-owned/relative-path policy live in `crates/dawn-project-io/src/source.rs`. Loading, import resolution, parsing, diagnostics, and serialization live in their descriptive modules under `crates/dawn-project-io/src`; `lib.rs` is the public facade.

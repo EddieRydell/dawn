@@ -1,4 +1,4 @@
-import type { LayoutTarget, SequenceEditorDocument, SequenceEffect, SequenceMarkCollection, SequenceMarkRef, SequenceSelection } from "../../../types";
+import type { ElementTarget, SequenceEditorDocument, SequenceEffect, SequenceMarkCollection, SequenceMarkRef, SequenceSelection } from "../../../types";
 
 import { clamp, type GuiFocus } from "../shared";
 
@@ -78,7 +78,7 @@ export function buildSequenceClipLayout(
   top: number,
   bounds: SequenceClipLayoutBounds
 ): SequenceClipLayout[] {
-  const laneIndexByTarget = new Map<LayoutTarget["kind"], Map<string, number>>();
+  const laneIndexByTarget = new Map<ElementTarget["kind"], Map<string, number>>();
   document.lanes.forEach((lane, index) => {
     const byName = laneIndexByTarget.get(lane.target.kind) ?? new Map<string, number>();
     if (!byName.has(lane.target.name)) byName.set(lane.target.name, index);
@@ -154,7 +154,7 @@ function clipFromDraft(
   };
 }
 
-function laneIndexForTarget(lanes: Map<LayoutTarget["kind"], Map<string, number>>, target: LayoutTarget): number {
+function laneIndexForTarget(lanes: Map<ElementTarget["kind"], Map<string, number>>, target: ElementTarget): number {
   return lanes.get(target.kind)?.get(target.name) ?? 0;
 }
 

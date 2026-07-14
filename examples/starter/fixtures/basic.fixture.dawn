@@ -1,6 +1,5 @@
 vertical_113:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.05
   geometry:
     type: lines
@@ -11,10 +10,9 @@ vertical_113:
     - x: 0.0
       y: 11.2
       z: 0.0
-    pixels: 113
+    point_count: 113
 horizontal_50:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.05
   geometry:
     type: lines
@@ -25,10 +23,9 @@ horizontal_50:
     - x: 4.9
       y: 0.0
       z: 0.0
-    pixels: 50
+    point_count: 50
 pixel_bar_100:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.045
   geometry:
     type: lines
@@ -39,10 +36,9 @@ pixel_bar_100:
     - x: 5.0
       y: 0.0
       z: 0.0
-    pixels: 100
+    point_count: 100
 single_pixel:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.08
   geometry:
     type: points
@@ -51,8 +47,7 @@ single_pixel:
       y: 0.0
       z: 0.0
 two_eye_blinder:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.12
   geometry:
     type: points
@@ -64,8 +59,7 @@ two_eye_blinder:
       y: 0.0
       z: 0.0
 grid_4x4:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.055
   geometry:
     type: points
@@ -119,8 +113,7 @@ grid_4x4:
       y: -0.6
       z: 0.0
 rectangle_96:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.05
   geometry:
     type: lines
@@ -140,10 +133,9 @@ rectangle_96:
     - x: -1.2
       y: 0.75
       z: 0.0
-    pixels: 96
+    point_count: 96
 triangle_75:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.05
   geometry:
     type: lines
@@ -160,10 +152,9 @@ triangle_75:
     - x: -1.0
       y: -0.6
       z: 0.0
-    pixels: 75
+    point_count: 75
 half_arc_60:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.05
   geometry:
     type: arc
@@ -174,10 +165,9 @@ half_arc_60:
     radius: 1.2
     startDegrees: 0.0
     endDegrees: 180.0
-    pixels: 60
+    point_count: 60
 circle_72:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.05
   geometry:
     type: arc
@@ -188,10 +178,9 @@ circle_72:
     radius: 1.0
     startDegrees: 0.0
     endDegrees: 360.0
-    pixels: 72
+    point_count: 72
 tree_outline_88:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.05
   geometry:
     type: lines
@@ -220,10 +209,9 @@ tree_outline_88:
     - x: 0.0
       y: 1.25
       z: 0.0
-    pixels: 88
+    point_count: 88
 star_10:
-  type: fixture
-  color_model: rgb
+  type: prop
   bulb_diameter: 0.07
   geometry:
     type: points
@@ -258,3 +246,5 @@ star_10:
     - x: -0.16
       y: 0.16
       z: 0.0
+
+

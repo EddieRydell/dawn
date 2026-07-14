@@ -20,6 +20,7 @@ import { handleSequencePlaybackShortcut, isSequenceTransportUnsupported } from "
 import { markSelectionConsumesKey } from "./sequence/sequenceSelection";
 import { WorkspaceResizeHandle } from "../WorkspaceResizeHandle";
 import { OPEN_LAYER_GRAPH_EVENT } from "../uiEvents";
+import { SetupEditor } from "./setup/SetupEditor";
 
 const INSPECTOR_MIN_WIDTH_PX = 240;
 const INSPECTOR_MAX_WIDTH_PX = 560;
@@ -50,6 +51,9 @@ export function GuiEditor({
   }
   if (gui.type === "blocked") {
     return <BlockedGui reason={gui.reason} diagnostics={gui.diagnostics} />;
+  }
+  if (gui.type === "setup") {
+    return <SetupEditor document={gui.document} />;
   }
 
   const editorKey = `${guiEditorKey(snapshot.activeFile, gui)}:${resetRevision}`;
@@ -161,8 +165,8 @@ function GuiEditorInner({
           setVisibleMarkCollectionKeys={setVisibleMarkCollectionKeys}
         />
       )}
-      {gui.type === "layout" && <LayoutCanvas document={gui.document} selected={selected} setSelected={setSelected} />}
-      {gui.type === "fixture" && (
+      {gui.type === "preview" && <LayoutCanvas document={gui.document} selected={selected} setSelected={setSelected} />}
+      {gui.type === "prop" && (
         <FixtureCanvas document={gui.document} selected={selected} setSelected={setSelected} />
       )}
       <div className={`gui-inspector-resize-shell ${workspaceLayout.inspectorCollapsed ? "collapsed" : ""}`}>
@@ -204,9 +208,10 @@ function GuiEditorInner({
 function guiEditorKey(activeFile: string | null, gui: ReadyGuiDocument) {
   switch (gui.type) {
     case "sequence":
-    case "layout":
+    case "preview":
+    case "setup":
       return `${activeFile ?? ""}:${gui.type}:${gui.document.path}:${gui.document.objectKey}`;
-    case "fixture":
+    case "prop":
       return `${activeFile ?? ""}:${gui.type}:${gui.document.path}:${gui.document.selectedObjectKey ?? ""}`;
   }
 }
