@@ -15,6 +15,7 @@ import { effectiveEditorViewMode } from "../editorViewMode";
 import { runSnapshotCommand, useAppStore } from "../store";
 import { GuiEditor } from "./gui/GuiEditor";
 import { SequenceTransportControls, useSequenceTransport } from "./gui/sequence/SequenceTransportControls";
+import { THEME_METRICS } from "../theme";
 
 type BufferExternalState = "current" | "changedOnDisk" | "deletedOnDisk";
 type EditorBufferWithExternalState = NonNullable<AppSnapshot["activeBuffer"]>;
@@ -260,7 +261,7 @@ export function EditorPane({
             {tabExternalState(tab) !== "current" && <span className="conflict-dot" />}
             <X
               className="tab-close"
-              size={14}
+              size={THEME_METRICS.iconSizeSmall}
               onClick={(event) => {
                 event.stopPropagation();
                 void runSnapshotCommand(() => commands.closeFile(tab.path));
@@ -287,11 +288,11 @@ export function EditorPane({
               : "This file changed on disk."}
           </span>
           <button type="button" onClick={() => void runSnapshotCommand(commands.reloadActiveBufferFromDisk)}>
-            <RefreshCw size={14} />
+            <RefreshCw size={THEME_METRICS.iconSizeSmall} />
             Reload from Disk
           </button>
           <button type="button" onClick={() => void runSnapshotCommand(commands.flushAutosave)}>
-            <Save size={14} />
+            <Save size={THEME_METRICS.iconSizeSmall} />
             Keep Mine
           </button>
         </div>
@@ -577,11 +578,6 @@ function tabExternalState(tab: AppSnapshot["tabs"][number]): BufferExternalState
   return tab.externalState;
 }
 
-function squiggleDataUri(color: string): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="6" height="3" viewBox="0 0 6 3"><path d="M0 2.2 Q1.5 .8 3 2.2 T6 2.2" fill="none" stroke="${color}" stroke-width=".8"/></svg>`;
-  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
-}
-
 function createState(
   text: string,
   path: string | null,
@@ -609,56 +605,6 @@ function createState(
         ...defaultKeymap
       ]),
       EditorView.updateListener.of(onUpdate),
-      EditorView.theme({
-        "&": { height: "100%", backgroundColor: "var(--dawn-bg)", color: "var(--dawn-text)" },
-        ".cm-scroller": {
-          fontFamily: "Consolas, 'SFMono-Regular', monospace",
-          fontSize: "13px",
-          scrollbarWidth: "none"
-        },
-        ".cm-scroller::-webkit-scrollbar": { display: "none" },
-        ".cm-content": { caretColor: "var(--dawn-accent)" },
-        ".cm-cursor": { borderLeftColor: "var(--dawn-accent)" },
-        ".cm-selectionBackground": { backgroundColor: "var(--dawn-accent-bg) !important" },
-        ".cm-gutters": { backgroundColor: "var(--dawn-bg-rail)", color: "var(--dawn-text-muted)", borderRight: "1px solid var(--dawn-border)" },
-        ".cm-lintRange": {
-          backgroundPosition: "left calc(100% - 1px)",
-          backgroundRepeat: "repeat-x",
-          paddingBottom: "0",
-          textDecoration: "none"
-        },
-        ".cm-lintRange-error": { backgroundImage: squiggleDataUri("var(--dawn-color-df6b6b)") },
-        ".cm-lintRange-warning": { backgroundImage: squiggleDataUri("var(--dawn-color-e3a84f)") },
-        ".cm-lintRange-active": { backgroundColor: "transparent" },
-        ".cm-tooltip.cm-tooltip-lint": {
-          border: "1px solid var(--dawn-border-control)",
-          borderRadius: "5px",
-          backgroundColor: "var(--dawn-bg-panel)",
-          boxShadow: "0 10px 26px var(--dawn-color-rgb-0-0-0-38)",
-          color: "var(--dawn-text)",
-          overflow: "hidden"
-        },
-        ".cm-tooltip-lint .cm-diagnostic": {
-          maxWidth: "420px",
-          borderLeft: "0",
-          backgroundColor: "var(--dawn-bg-panel)",
-          padding: "7px 9px",
-          color: "var(--dawn-text)",
-          fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
-          fontSize: "12px",
-          lineHeight: "1.35"
-        },
-        ".cm-tooltip-lint .cm-diagnostic-error": { backgroundColor: "var(--dawn-color-261b1e)" },
-        ".cm-tooltip-lint .cm-diagnostic-warning": { backgroundColor: "var(--dawn-color-292319)" },
-        ".cm-tooltip-lint .cm-diagnosticText": {
-          color: "var(--dawn-text)"
-        },
-        ".cm-tooltip-lint .cm-diagnostic-message": {
-          color: "var(--dawn-text)",
-          overflowWrap: "anywhere"
-        },
-        ".cm-tooltip-lint .cm-diagnostic-location, .cm-tooltip-lint .cm-diagnostic-code": { display: "none" }
-      })
     ]
   });
 }

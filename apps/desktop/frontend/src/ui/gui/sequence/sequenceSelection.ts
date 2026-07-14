@@ -5,6 +5,7 @@ import { clamp, type GuiFocus } from "../shared";
 import { markIndexAfterMove, type MarkDisplayMode } from "./marks";
 
 import { targetsEqual } from "./sequenceTargets";
+import { THEME_METRICS } from "../../../theme";
 
 export type SequenceDraft = { id: number; startSeconds: number; durationSeconds: number; laneIndex: number };
 
@@ -29,8 +30,8 @@ export type SequenceMarquee = { mode: "effects" | "marks"; startX: number; start
 export const MIN_EFFECT_DURATION_SECONDS = 0.000000001;
 
 const SEQUENCE_HIT_RADII = {
-  effectResizeHandlePx: 8,
-  markPx: 5
+  effectResizeHandlePx: THEME_METRICS.sequenceEffectResizeHitWidth,
+  markPx: THEME_METRICS.sequenceMarkHitRadius
 } as const;
 
 export type SequenceViewport = {
@@ -119,7 +120,7 @@ export function buildSequenceClipLayout(
         const startSeconds = clip.effect.startSeconds;
         const endSeconds = startSeconds + clip.effect.durationSeconds;
         const x = left + (startSeconds - viewport.scrollXSeconds) * viewport.pxPerSecond;
-        const width = Math.max(12, (endSeconds - startSeconds) * viewport.pxPerSecond);
+      const width = Math.max(THEME_METRICS.sequenceClipMinWidth, (endSeconds - startSeconds) * viewport.pxPerSecond);
         layouts.push({
           effect: clip.effect,
           laneIndex,
@@ -127,7 +128,7 @@ export function buildSequenceClipLayout(
             x,
             y: top + laneIndex * viewport.laneHeight - viewport.scrollY + clip.slot * slotHeight + 2,
             width,
-            height: Math.max(8, slotHeight - 4)
+        height: Math.max(THEME_METRICS.sequenceClipMinHeight, slotHeight - THEME_METRICS.sequenceClipHandleInset)
           }
         });
       }

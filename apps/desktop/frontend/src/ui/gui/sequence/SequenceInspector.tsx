@@ -1,7 +1,7 @@
 import { useState } from "react";
 
 import { Pencil, Plus, Trash2 } from "lucide-react";
-import { THEME_COLORS } from "../../../theme";
+import { THEME_COLORS, THEME_METRICS } from "../../../theme";
 
 import type {
   SequenceEditorDocument,
@@ -161,7 +161,7 @@ function ControlClipPanel({ document }: { document: SequenceEditorDocument }) {
             }))} />
           </label>
           <button type="button" onClick={() => void runGuiEditCommand(() => commands.applySequenceGuiEdit({ type: "deleteControlClip", id: clip.id }))}>
-            <Trash2 size={13} /> Delete
+            <Trash2 size={THEME_METRICS.iconSizeExtraSmall} /> Delete
           </button>
         </div>
       ))}
@@ -650,7 +650,7 @@ function MarkInspectorPanel({
       <div className="mark-section">
         <h3>Collections</h3>
         <button type="button" className="neutral-button icon-text-button" onClick={createCollection}>
-          <Plus size={14} />
+          <Plus size={THEME_METRICS.iconSizeSmall} />
           Add collection
         </button>
         {document.markCollections.length > 0 && (
@@ -732,7 +732,7 @@ function MarkInspectorPanel({
                     setEditingCollectionKey(collection.key);
                   }}
                 >
-                  <Pencil size={14} />
+                  <Pencil size={THEME_METRICS.iconSizeSmall} />
                 </button>
                 <button
                   type="button"
@@ -743,7 +743,7 @@ function MarkInspectorPanel({
                     deleteCollection(collection);
                   }}
                 >
-                  <Trash2 size={14} />
+                  <Trash2 size={THEME_METRICS.iconSizeSmall} />
                 </button>
               </div>
             ))}
@@ -787,7 +787,7 @@ function MarkInspectorPanel({
                     deleteSelectedMark(entry);
                   }}
                 >
-                  <Trash2 size={14} />
+                  <Trash2 size={THEME_METRICS.iconSizeSmall} />
                 </button>
               </div>
             ))}

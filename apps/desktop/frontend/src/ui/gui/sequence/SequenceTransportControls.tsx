@@ -11,6 +11,7 @@ import { runGuiEditCommand, runSnapshotCommand } from "../../../store";
 
 import { clamp, formatSeconds, type AudioTransportViewSnapshot } from "../shared";
 import { requestOpenLayerGraph } from "../../uiEvents";
+import { THEME_METRICS } from "../../../theme";
 
 export function SequenceTransportControls({
   document,
@@ -43,7 +44,7 @@ export function SequenceTransportControls({
         disabled={unsupported || activePlayback}
         onClick={() => void runSnapshotCommand(commands.audioPlay)}
       >
-        <Play size={15} />
+        <Play size={THEME_METRICS.iconSizeCompact} />
       </button>
       <button
         type="button"
@@ -51,13 +52,13 @@ export function SequenceTransportControls({
         disabled={unsupported || !activePlayback}
         onClick={() => void runSnapshotCommand(commands.audioPause)}
       >
-        <Pause size={15} />
+        <Pause size={THEME_METRICS.iconSizeCompact} />
       </button>
       <button type="button" title="Stop" disabled={unsupported} onClick={() => void runSnapshotCommand(commands.audioStop)}>
-        <Square size={14} />
+        <Square size={THEME_METRICS.iconSizeSmall} />
       </button>
       <button type="button" title="Rewind to zero" disabled={unsupported} onClick={() => void runSnapshotCommand(commands.audioRewindToZero)}>
-        <SkipBack size={15} />
+        <SkipBack size={THEME_METRICS.iconSizeCompact} />
       </button>
       <button
         type="button"
@@ -67,7 +68,7 @@ export function SequenceTransportControls({
           stepFrame(-1);
         }}
       >
-        <ChevronLeft size={16} />
+        <ChevronLeft size={THEME_METRICS.iconSizeMedium} />
       </button>
       <button
         type="button"
@@ -77,7 +78,7 @@ export function SequenceTransportControls({
           stepFrame(1);
         }}
       >
-        <ChevronRight size={16} />
+        <ChevronRight size={THEME_METRICS.iconSizeMedium} />
       </button>
       <button
         type="button"
@@ -85,7 +86,7 @@ export function SequenceTransportControls({
         title={liveOutput.lastError ?? `Live output: ${liveOutput.state}`}
         onClick={() => void runSnapshotCommand(() => commands.setLiveOutputActive(!liveActive))}
       >
-        <RadioTower size={15} />
+        <RadioTower size={THEME_METRICS.iconSizeCompact} />
       </button>
       <button
         type="button"
@@ -93,17 +94,17 @@ export function SequenceTransportControls({
         title={previewOpen ? "Close preview" : "Open preview"}
         onClick={() => void runSnapshotCommand(() => commands.setPreviewWindowOpen(!previewOpen))}
       >
-        <Monitor size={15} />
+        <Monitor size={THEME_METRICS.iconSizeCompact} />
       </button>
       <button type="button" title="Open layer graph" onClick={requestOpenLayerGraph}>
-        <GitBranch size={15} />
+        <GitBranch size={THEME_METRICS.iconSizeCompact} />
       </button>
       <button
         type="button"
         title="Choose audio"
         onClick={() => void chooseAudioWithResizePrompt(document)}
       >
-        <Music size={15} />
+        <Music size={THEME_METRICS.iconSizeCompact} />
       </button>
       <span className="sequence-time-readout">
         {formatSeconds(transport.positionSeconds)} / {formatSeconds(transport.durationSeconds || document.durationSeconds)} | Home {formatSeconds(transport.homeSeconds)}

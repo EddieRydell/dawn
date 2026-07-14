@@ -1,7 +1,8 @@
 import { useCallback, useRef, type KeyboardEvent, type PointerEvent } from "react";
+import { THEME_METRICS } from "../theme";
 
-const COLLAPSE_THRESHOLD_PX = 160;
-const KEYBOARD_STEP_PX = 16;
+const COLLAPSE_THRESHOLD_PX = THEME_METRICS.workspaceCollapseThreshold;
+const KEYBOARD_STEP_PX = THEME_METRICS.workspaceKeyboardStep;
 
 export type ResizeDirection = "left" | "right";
 
@@ -81,7 +82,7 @@ export function WorkspaceResizeHandle({
       const drag = dragRef.current;
       if (drag === null || drag.pointerId !== event.pointerId) return;
       const pointerDelta = event.clientX - drag.startX;
-      if (Math.abs(pointerDelta) > 2) drag.moved = true;
+      if (Math.abs(pointerDelta) > THEME_METRICS.interactionDragThreshold) drag.moved = true;
       const rawWidth = direction === "left" ? drag.startWidth + pointerDelta : drag.startWidth - pointerDelta;
       if (rawWidth < COLLAPSE_THRESHOLD_PX) {
         onChange({ collapsed: true, width: value });

@@ -27,6 +27,7 @@ Do not write tests unless specifically requested.
 Never reinvent a pattern or solve a problem that has already been solved. Use dependencies (after asking the user) to solve problems rather than reinventing the wheel.
 Avoid using strings in internal logic. Prefer enums or other structured data.
 All static color literals must be defined in `apps/desktop/frontend/src/styles.css` as CSS custom properties. TypeScript, JSX, Rust, and tests must reference CSS-backed tokens or receive data-driven colors; do not define palette values elsewhere.
+All static frontend styling values—including typography, spacing, dimensions, shape, elevation, layering, motion, opacity, form geometry, icon sizes, scrollbar geometry, visualization metrics, responsive breakpoints, and accessibility geometry—must be defined in `apps/desktop/frontend/src/styles.css`. TypeScript and JSX may only use CSS-backed values or genuinely runtime/data-dependent values such as measured geometry, coordinates, and user/project colors.
 Do not reintroduce generated web bindings or desktop schema files.
 Avoid unrelated edits to lockfiles, IDE files, or generated assets. 
 Check both Rust and desktop manifests before assuming a command or dependency belongs at the workspace root. 

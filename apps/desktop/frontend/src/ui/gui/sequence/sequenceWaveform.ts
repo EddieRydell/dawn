@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import type { SequenceAudio } from "../../../types";
 import { clamp } from "../shared";
+import { THEME_METRICS } from "../../../theme";
 
 type WaveformLevel = { samplesPerPeak: number; mins: Float32Array; maxes: Float32Array };
 type WaveformAudio = { durationSeconds: number; sampleRate: number; levels: WaveformLevel[] };
@@ -122,8 +123,8 @@ export function drawWaveformStrip(
   ctx.clip();
   ctx.strokeStyle = colors.grid;
   ctx.beginPath();
-  ctx.moveTo(left, top + height / 2 + 0.5);
-  ctx.lineTo(left + width, top + height / 2 + 0.5);
+  ctx.moveTo(left, top + height / 2 + THEME_METRICS.visualHairlineOffset);
+  ctx.lineTo(left + width, top + height / 2 + THEME_METRICS.visualHairlineOffset);
   ctx.stroke();
   if (audio !== null && audio.durationSeconds > 0 && audio.levels.length > 0) {
     const samplesPerPixel = audio.sampleRate / pxPerSecond;
@@ -139,7 +140,7 @@ function drawWaveformLevel(ctx: CanvasRenderingContext2D, level: WaveformLevel, 
   const first = Math.max(0, Math.floor((Math.max(0, scrollXSeconds) * audio.sampleRate) / level.samplesPerPeak));
   const last = Math.min(level.mins.length - 1, Math.ceil((Math.min(clipEnd, scrollXSeconds + width / pxPerSecond) * audio.sampleRate) / level.samplesPerPeak));
   const centerY = top + height / 2;
-  const amplitude = Math.max(1, height / 2 - 4);
+  const amplitude = Math.max(THEME_METRICS.visualMinSize, height / 2 - THEME_METRICS.waveformAmplitudeInset);
   ctx.fillStyle = color;
   for (let index = first; index <= last; index += 1) {
     const seconds = (index * level.samplesPerPeak) / audio.sampleRate;
@@ -148,6 +149,6 @@ function drawWaveformLevel(ctx: CanvasRenderingContext2D, level: WaveformLevel, 
     if (x + xPerPeak < left) continue;
     const y1 = centerY - (level.maxes[index] ?? 0) * amplitude;
     const y2 = centerY - (level.mins[index] ?? 0) * amplitude;
-    ctx.fillRect(x, y1, Math.max(1, xPerPeak), Math.max(1, y2 - y1));
+    ctx.fillRect(x, y1, Math.max(THEME_METRICS.visualMinSize, xPerPeak), Math.max(THEME_METRICS.visualMinSize, y2 - y1));
   }
 }

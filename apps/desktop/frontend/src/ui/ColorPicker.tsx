@@ -1,4 +1,4 @@
-import { THEME_COLORS } from "../theme";
+import { THEME_COLORS, THEME_METRICS } from "../theme";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { HexColorPicker } from "react-colorful";
@@ -44,14 +44,14 @@ export function ColorPicker({
     const updatePopoverPosition = () => {
       const rect = triggerRef.current?.getBoundingClientRect();
       if (rect === undefined) return;
-      const width = 258;
-      const height = 348;
-      const gap = 6;
+      const width = THEME_METRICS.colorPickerWidth;
+      const height = THEME_METRICS.colorPickerHeight;
+      const gap = THEME_METRICS.popoverGap;
       const below = rect.bottom + gap;
       const above = rect.top - height - gap;
       setPopoverPosition({
-        top: below + height > window.innerHeight - 8 ? Math.max(8, above) : below,
-        left: clamp(rect.left, 8, window.innerWidth - width - 8)
+        top: below + height > window.innerHeight - THEME_METRICS.popoverOffset ? Math.max(THEME_METRICS.popoverOffset, above) : below,
+        left: clamp(rect.left, THEME_METRICS.popoverOffset, window.innerWidth - width - THEME_METRICS.popoverOffset)
       });
     };
     const closeOnPointerDown = (event: MouseEvent) => {

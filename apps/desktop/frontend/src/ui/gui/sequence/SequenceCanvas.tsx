@@ -17,25 +17,25 @@ import { defaultMarkColor, drawSequenceMarks, committedMarkDrafts, markIndexAfte
 
 import { targetsEqual } from "./sequenceTargets";
 import { drawWaveformStrip, useSequenceWaveform } from "./sequenceWaveform";
-import { THEME_COLORS } from "../../../theme";
+import { THEME_COLORS, THEME_METRICS, THEME_TYPOGRAPHY } from "../../../theme";
 
 import { buildSequenceClipLayout, constrainEffectLaneDelta, constrainEffectMoveDelta, constrainEffectResizeDelta, constrainMarkDelta, effectMoveDrafts, effectResizeDrafts, hitSequence, hitSequenceMark, markMoveDrafts, markRefLookup, mergeSequenceSelection, MIN_EFFECT_DURATION_SECONDS, nextEffectSelection, nextMarkSelection, normalizedRect, selectedEffectId, selectionCount, selectionFromMarqueeEffects, selectionFromMarqueeMarks, sequenceHoverEqual, setMarkDraft, singleEffectSelectionFocus, singleSelectionFocus, selectionFromSingle, type MarkDraftLookup, type SequenceClipLayout, type SequenceContextMenu, type SequenceHover, type SequenceMarquee, type SequenceDraft, type SequenceViewport } from "./sequenceSelection";
 
 const SEQUENCE_CANVAS = {
-  leftGutterPx: 128,
-  topPx: 66,
-  audioStripTopPx: 28,
-  initialPxPerSecond: 80,
-  initialLaneHeightPx: 42,
-  minPxPerSecond: 0.01,
-  maxPxPerSecond: 600,
-  maxZoomPxPerSecond: 12000,
-  minLaneHeightPx: 24,
-  maxLaneHeightPx: 600,
-  wheelZoomScale: 0.002,
-  scrubStepSeconds: 0.01,
-  nudgeSeconds: 0.001,
-  shiftedNudgeSeconds: 0.01
+  leftGutterPx: THEME_METRICS.sequenceLeftGutter,
+  topPx: THEME_METRICS.sequenceTop,
+  audioStripTopPx: THEME_METRICS.sequenceAudioStripTop,
+  initialPxPerSecond: THEME_METRICS.sequenceInitialPixelsPerSecond,
+  initialLaneHeightPx: THEME_METRICS.sequenceInitialLaneHeight,
+  minPxPerSecond: THEME_METRICS.sequenceMinPixelsPerSecond,
+  maxPxPerSecond: THEME_METRICS.sequenceMaxPixelsPerSecond,
+  maxZoomPxPerSecond: THEME_METRICS.sequenceMaxZoomPixelsPerSecond,
+  minLaneHeightPx: THEME_METRICS.sequenceMinLaneHeight,
+  maxLaneHeightPx: THEME_METRICS.sequenceMaxLaneHeight,
+  wheelZoomScale: THEME_METRICS.sequenceWheelZoomScale,
+  scrubStepSeconds: THEME_METRICS.sequenceScrubStep,
+  nudgeSeconds: THEME_METRICS.sequenceNudgeStep,
+  shiftedNudgeSeconds: THEME_METRICS.sequenceShiftedNudgeStep
 } as const;
 
 const SEQUENCE_COLORS = {
@@ -69,7 +69,7 @@ const SEQUENCE_COLORS = {
   playhead: THEME_COLORS.playhead
 } as const;
 
-const SEQUENCE_DRAG_THRESHOLD_PX = 4;
+const SEQUENCE_DRAG_THRESHOLD_PX = THEME_METRICS.sequenceDragThreshold;
 
 type SequenceDragState =
   | null
@@ -304,7 +304,7 @@ export function SequenceCanvas({
     ctx.clearRect(0, 0, rect.width, rect.height);
     ctx.fillStyle = SEQUENCE_COLORS.page;
     ctx.fillRect(0, 0, rect.width, rect.height);
-    ctx.font = "12px Inter, sans-serif";
+    ctx.font = THEME_TYPOGRAPHY.sequence;
 
     const timelineWidth = Math.max(1, rect.width - left);
     const laneCount = document.lanes.length;
@@ -338,13 +338,13 @@ export function SequenceCanvas({
       }
       ctx.strokeStyle = SEQUENCE_COLORS.grid;
       ctx.beginPath();
-      ctx.moveTo(left, y + viewport.laneHeight + 0.5);
-      ctx.lineTo(rect.width, y + viewport.laneHeight + 0.5);
+      ctx.moveTo(left, y + viewport.laneHeight + THEME_METRICS.visualHairlineOffset);
+      ctx.lineTo(rect.width, y + viewport.laneHeight + THEME_METRICS.visualHairlineOffset);
       ctx.stroke();
       ctx.fillStyle = SEQUENCE_COLORS.panel;
       ctx.fillRect(0, y, left, viewport.laneHeight);
       ctx.fillStyle = SEQUENCE_COLORS.textMuted;
-      ctx.fillText(lane.label, 12, y + viewport.laneHeight / 2 + 4);
+      ctx.fillText(lane.label, THEME_METRICS.sequenceLabelX, y + viewport.laneHeight / 2 + THEME_METRICS.sequenceLabelYOffset);
       for (let row = 0; row < rowCount; row += 1) {
         const automationY = y + viewport.laneHeight + row * automationRowHeight;
         ctx.fillStyle = (expandedRowIndex + row + 1) % 2 === 0 ? SEQUENCE_COLORS.page : SEQUENCE_COLORS.laneAlt;
@@ -352,11 +352,11 @@ export function SequenceCanvas({
         ctx.fillStyle = SEQUENCE_COLORS.panel;
         ctx.fillRect(0, automationY, left, automationRowHeight);
         ctx.fillStyle = SEQUENCE_COLORS.automation;
-        ctx.fillText(`Automation ${row + 1}`, 12, automationY + automationRowHeight / 2 + 4);
+        ctx.fillText(`Automation ${row + 1}`, THEME_METRICS.sequenceLabelX, automationY + automationRowHeight / 2 + THEME_METRICS.sequenceLabelYOffset);
         ctx.strokeStyle = SEQUENCE_COLORS.grid;
         ctx.beginPath();
-        ctx.moveTo(left, automationY + automationRowHeight + 0.5);
-        ctx.lineTo(rect.width, automationY + automationRowHeight + 0.5);
+        ctx.moveTo(left, automationY + automationRowHeight + THEME_METRICS.visualHairlineOffset);
+        ctx.lineTo(rect.width, automationY + automationRowHeight + THEME_METRICS.visualHairlineOffset);
         ctx.stroke();
       }
     });
@@ -374,8 +374,8 @@ export function SequenceCanvas({
     ctx.fillRect(left, audioStripTop, timelineWidth, audioStripHeight);
     ctx.strokeStyle = SEQUENCE_COLORS.gridFaint;
     ctx.beginPath();
-    ctx.moveTo(0, top + 0.5);
-    ctx.lineTo(rect.width, top + 0.5);
+    ctx.moveTo(0, top + THEME_METRICS.visualHairlineOffset);
+    ctx.lineTo(rect.width, top + THEME_METRICS.visualHairlineOffset);
     ctx.stroke();
 
     drawWaveformStrip(
@@ -438,12 +438,12 @@ export function SequenceCanvas({
       }
       const clipSelected = selectedEffectIds.has(clip.effect.id) || (selected?.type === "effect" && selected.id === clip.effect.id);
       ctx.strokeStyle = clipSelected ? SEQUENCE_COLORS.clipSelected : hoverResize !== null ? SEQUENCE_COLORS.clipHover : automationTargeted ? SEQUENCE_COLORS.accent : SEQUENCE_COLORS.clipBorder;
-      ctx.lineWidth = clipSelected || hoverResize !== null || automationTargeted ? 2 : 1;
-      ctx.strokeRect(clip.rect.x + 0.5, clip.rect.y + 0.5, Math.max(0, clip.rect.width - 1), Math.max(0, clip.rect.height - 1));
+      ctx.lineWidth = clipSelected || hoverResize !== null || automationTargeted ? THEME_METRICS.visualLineWidthStrong : THEME_METRICS.visualLineWidth;
+      ctx.strokeRect(clip.rect.x + THEME_METRICS.visualHairlineOffset, clip.rect.y + THEME_METRICS.visualHairlineOffset, Math.max(0, clip.rect.width - THEME_METRICS.visualLineWidth), Math.max(0, clip.rect.height - THEME_METRICS.visualLineWidth));
       if (hoverResize === "left" || hoverResize === "right") {
         const handleX = hoverResize === "left" ? clip.rect.x : clip.rect.x + clip.rect.width;
         ctx.fillStyle = SEQUENCE_COLORS.warning;
-        ctx.fillRect(handleX - 2, clip.rect.y + 4, 4, Math.max(4, clip.rect.height - 8));
+        ctx.fillRect(handleX - THEME_METRICS.sequenceClipHandleHalfWidth, clip.rect.y + THEME_METRICS.sequenceClipHandleInset, THEME_METRICS.sequenceClipHandleHalfWidth * 2, Math.max(THEME_METRICS.sequenceClipHandleHeight, clip.rect.height - THEME_METRICS.sequenceClipHandleInset * 2));
       }
     }
     for (const clip of visibleAutomationClips) {
@@ -463,12 +463,12 @@ export function SequenceCanvas({
         ctx.fillRect(clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height);
       }
       ctx.strokeStyle = choosingCandidate ? SEQUENCE_COLORS.accent : selectedClip ? SEQUENCE_COLORS.clipSelected : hoverResize !== null ? SEQUENCE_COLORS.clipHover : SEQUENCE_COLORS.clipBorder;
-      ctx.lineWidth = choosingHover || selectedClip || hoverResize !== null ? 2 : 1;
-      ctx.strokeRect(clip.rect.x + 0.5, clip.rect.y + 0.5, Math.max(0, clip.rect.width - 1), Math.max(0, clip.rect.height - 1));
+      ctx.lineWidth = choosingHover || selectedClip || hoverResize !== null ? THEME_METRICS.visualLineWidthStrong : THEME_METRICS.visualLineWidth;
+      ctx.strokeRect(clip.rect.x + THEME_METRICS.visualHairlineOffset, clip.rect.y + THEME_METRICS.visualHairlineOffset, Math.max(0, clip.rect.width - THEME_METRICS.visualLineWidth), Math.max(0, clip.rect.height - THEME_METRICS.visualLineWidth));
       if (!choosingCandidate && (hoverResize === "left" || hoverResize === "right")) {
         const handleX = hoverResize === "left" ? clip.rect.x : clip.rect.x + clip.rect.width;
         ctx.fillStyle = SEQUENCE_COLORS.warning;
-        ctx.fillRect(handleX - 2, clip.rect.y + 4, 4, Math.max(4, clip.rect.height - 8));
+        ctx.fillRect(handleX - THEME_METRICS.sequenceClipHandleHalfWidth, clip.rect.y + THEME_METRICS.sequenceClipHandleInset, THEME_METRICS.sequenceClipHandleHalfWidth * 2, Math.max(THEME_METRICS.sequenceClipHandleHeight, clip.rect.height - THEME_METRICS.sequenceClipHandleInset * 2));
       }
     }
     ctx.restore();
@@ -477,32 +477,32 @@ export function SequenceCanvas({
     const homeX = left + (clamp(homeSeconds, 0, document.durationSeconds) - scrollXSeconds) * viewport.pxPerSecond;
     if (homeX >= left && homeX <= rect.width) {
       ctx.strokeStyle = SEQUENCE_COLORS.accent;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = THEME_METRICS.visualLineWidth;
+      ctx.setLineDash([THEME_METRICS.sequenceMarkerDashSize, THEME_METRICS.sequenceMarkerDashSize]);
       ctx.beginPath();
-      ctx.moveTo(homeX + 0.5, top);
-      ctx.lineTo(homeX + 0.5, rect.height);
+      ctx.moveTo(homeX + THEME_METRICS.visualHairlineOffset, top);
+      ctx.lineTo(homeX + THEME_METRICS.visualHairlineOffset, rect.height);
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = SEQUENCE_COLORS.accent;
-      ctx.fillRect(homeX - 3, top, 7, 4);
+      ctx.fillRect(homeX - THEME_METRICS.sequenceMarkerHalfWidth, top, THEME_METRICS.sequenceMarkerWidth, THEME_METRICS.sequenceMarkerHeight);
     }
     if (playheadX >= left && playheadX <= rect.width) {
       ctx.strokeStyle = SEQUENCE_COLORS.warning;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = THEME_METRICS.visualLineWidth;
       ctx.beginPath();
-      ctx.moveTo(playheadX + 0.5, top);
-      ctx.lineTo(playheadX + 0.5, rect.height);
+        ctx.moveTo(playheadX + THEME_METRICS.visualHairlineOffset, top);
+        ctx.lineTo(playheadX + THEME_METRICS.visualHairlineOffset, rect.height);
       ctx.stroke();
     }
     if (selectedTimeSeconds !== null) {
       const selectedX = left + (clamp(selectedTimeSeconds, 0, document.durationSeconds) - scrollXSeconds) * viewport.pxPerSecond;
       if (selectedX >= left && selectedX <= rect.width) {
         ctx.strokeStyle = SEQUENCE_COLORS.markMarquee;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = THEME_METRICS.visualLineWidth;
         ctx.beginPath();
-        ctx.moveTo(selectedX + 0.5, top);
-        ctx.lineTo(selectedX + 0.5, rect.height);
+        ctx.moveTo(selectedX + THEME_METRICS.visualHairlineOffset, top);
+        ctx.lineTo(selectedX + THEME_METRICS.visualHairlineOffset, rect.height);
         ctx.stroke();
       }
     }
@@ -510,15 +510,15 @@ export function SequenceCanvas({
       const box = normalizedRect(marquee.startX, marquee.startY, marquee.x, marquee.y);
       ctx.fillStyle = marquee.mode === "marks" ? SEQUENCE_COLORS.markMarqueeFill : SEQUENCE_COLORS.effectMarqueeFill;
       ctx.strokeStyle = marquee.mode === "marks" ? SEQUENCE_COLORS.markMarquee : SEQUENCE_COLORS.warning;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = THEME_METRICS.visualLineWidth;
       ctx.fillRect(box.x, box.y, box.width, box.height);
-      ctx.strokeRect(box.x + 0.5, box.y + 0.5, Math.max(0, box.width - 1), Math.max(0, box.height - 1));
+      ctx.strokeRect(box.x + THEME_METRICS.visualHairlineOffset, box.y + THEME_METRICS.visualHairlineOffset, Math.max(0, box.width - THEME_METRICS.visualLineWidth), Math.max(0, box.height - THEME_METRICS.visualLineWidth));
     }
 
     ctx.strokeStyle = SEQUENCE_COLORS.playhead;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = THEME_METRICS.visualLineWidth;
     ctx.beginPath();
-    ctx.moveTo(left + 0.5, top);
+    ctx.moveTo(left + THEME_METRICS.visualHairlineOffset, top);
     ctx.lineTo(left, rect.height);
     ctx.stroke();
   }, [activeAutomationTargetEffectIds, automationClipChooser, automationHover, automationRowHeight, automationRowsByLane, document, left, top, audioStripTop, audioStripHeight, viewport, visibleClips, visibleAutomationClips, selected, selectedEffectIds, selectedMarks, playheadSeconds, homeSeconds, selectedLaneIndex, selectedTimeSeconds, marquee, waveform.audio, visibleMarkCollections, mode, markDrafts, hover, clipRasters]);
@@ -1455,7 +1455,7 @@ export function SequenceCanvas({
                     </ContextMenu.Portal>
                   </ContextMenu.Sub>
                   <ContextMenu.Item className="menu-item danger" onSelect={() => void deleteSelectedEffect(sequenceContextMenu.effectId)}>
-                    <Trash2 size={14} /> Delete Effect
+                    <Trash2 size={THEME_METRICS.iconSizeSmall} /> Delete Effect
                   </ContextMenu.Item>
                 </>
               )}
@@ -1463,7 +1463,7 @@ export function SequenceCanvas({
                 <>
                   <ContextMenu.Separator className="menu-separator" />
                   <ContextMenu.Item className="menu-item danger" onSelect={() => void deleteContextMark(sequenceContextMenu)}>
-                    <Trash2 size={14} /> Delete Mark
+                    <Trash2 size={THEME_METRICS.iconSizeSmall} /> Delete Mark
                   </ContextMenu.Item>
                 </>
               )}
@@ -1819,7 +1819,7 @@ type AutomationClipLayout = {
 };
 
 function automationLaneRowHeight(laneHeight: number): number {
-  return Math.max(18, laneHeight * 0.42);
+  return Math.max(THEME_METRICS.automationRowMinHeight, laneHeight * 0.42);
 }
 
 function automationRowCounts(clips: SequenceAutomationClip[], laneCount: number): number[] {
@@ -1921,9 +1921,9 @@ function buildAutomationClipLayout(
           clip,
           rect: {
             x,
-            y: top + expandedLaneTop(laneIndex, rowsByLane, viewport.laneHeight, rowHeight) - viewport.scrollY + viewport.laneHeight + clip.laneIndex * rowHeight + clip.slot * slotHeight + 2,
-            width: Math.max(12, clip.durationSeconds * viewport.pxPerSecond),
-            height: Math.max(8, slotHeight - 4)
+            y: top + expandedLaneTop(laneIndex, rowsByLane, viewport.laneHeight, rowHeight) - viewport.scrollY + viewport.laneHeight + clip.laneIndex * rowHeight + clip.slot * slotHeight + THEME_METRICS.sequenceClipSlotOffset,
+            width: Math.max(THEME_METRICS.sequenceClipMinWidth, clip.durationSeconds * viewport.pxPerSecond),
+            height: Math.max(THEME_METRICS.sequenceClipMinHeight, slotHeight - THEME_METRICS.sequenceClipHandleInset)
           }
         });
       }
@@ -2004,7 +2004,7 @@ function hitAutomationClip(clips: AutomationClipLayout[], x: number, y: number) 
   for (const clip of [...clips].reverse()) {
     const { rect } = clip;
     if (x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height) {
-      const resize: "left" | "right" | "none" = x - rect.x < 8 ? "left" : rect.x + rect.width - x < 8 ? "right" : "none";
+      const resize: "left" | "right" | "none" = x - rect.x < THEME_METRICS.sequenceEffectResizeHitWidth ? "left" : rect.x + rect.width - x < THEME_METRICS.sequenceEffectResizeHitWidth ? "right" : "none";
       return { ...clip, resize };
     }
   }
@@ -2019,35 +2019,35 @@ function drawAutomationCurve(
   const graph = automationCurveGraphRect(rect);
   ctx.fillStyle = SEQUENCE_COLORS.automationGraph;
   ctx.fillRect(graph.x, graph.y, graph.width, graph.height);
-  ctx.lineWidth = 1;
+  ctx.lineWidth = THEME_METRICS.visualLineWidth;
   ctx.strokeStyle = SEQUENCE_COLORS.automationGraphGrid;
   ctx.beginPath();
-  const columns = 4;
-  const rows = 4;
+  const columns = THEME_METRICS.automationGridColumns;
+  const rows = THEME_METRICS.automationGridRows;
   for (let column = 1; column < columns; column += 1) {
-    const x = graph.x + (graph.width * column) / columns + 0.5;
+    const x = graph.x + (graph.width * column) / columns + THEME_METRICS.visualHairlineOffset;
     ctx.moveTo(x, graph.y);
     ctx.lineTo(x, graph.y + graph.height);
   }
   for (let row = 1; row < rows; row += 1) {
-    const y = graph.y + (graph.height * row) / rows + 0.5;
+    const y = graph.y + (graph.height * row) / rows + THEME_METRICS.visualHairlineOffset;
     ctx.moveTo(graph.x, y);
     ctx.lineTo(graph.x + graph.width, y);
   }
   ctx.stroke();
   ctx.strokeStyle = SEQUENCE_COLORS.automationGraphGridMajor;
   ctx.beginPath();
-  ctx.moveTo(graph.x, graph.y + graph.height / 2 + 0.5);
-  ctx.lineTo(graph.x + graph.width, graph.y + graph.height / 2 + 0.5);
-  ctx.moveTo(graph.x + graph.width / 2 + 0.5, graph.y);
-  ctx.lineTo(graph.x + graph.width / 2 + 0.5, graph.y + graph.height);
+  ctx.moveTo(graph.x, graph.y + graph.height / 2 + THEME_METRICS.visualHairlineOffset);
+  ctx.lineTo(graph.x + graph.width, graph.y + graph.height / 2 + THEME_METRICS.visualHairlineOffset);
+  ctx.moveTo(graph.x + graph.width / 2 + THEME_METRICS.visualHairlineOffset, graph.y);
+      ctx.lineTo(graph.x + graph.width / 2 + THEME_METRICS.visualHairlineOffset, graph.y + graph.height);
   ctx.stroke();
   ctx.strokeStyle = SEQUENCE_COLORS.grid;
-  ctx.strokeRect(graph.x + 0.5, graph.y + 0.5, Math.max(0, graph.width - 1), Math.max(0, graph.height - 1));
+  ctx.strokeRect(graph.x + THEME_METRICS.visualHairlineOffset, graph.y + THEME_METRICS.visualHairlineOffset, Math.max(0, graph.width - THEME_METRICS.visualLineWidth), Math.max(0, graph.height - THEME_METRICS.visualLineWidth));
   if (clip.curve.length === 0) return;
   const curvePoints = automationCurveCanvasPoints(clip.curve, rect);
   ctx.strokeStyle = SEQUENCE_COLORS.accent;
-  ctx.lineWidth = 3;
+  ctx.lineWidth = THEME_METRICS.automationCurveWidth;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.beginPath();
@@ -2062,21 +2062,21 @@ function drawAutomationCurve(
   for (const point of curvePoints) {
     ctx.fillStyle = THEME_COLORS.text;
     ctx.strokeStyle = SEQUENCE_COLORS.page;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = THEME_METRICS.visualLineWidthStrong;
     ctx.beginPath();
-    ctx.arc(point.x, point.y, 4, 0, Math.PI * 2);
+    ctx.arc(point.x, point.y, THEME_METRICS.automationPointRadius, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
   }
 }
 
 function automationCurveGraphRect(rect: { x: number; y: number; width: number; height: number }) {
-  const padding = Math.min(6, Math.max(2, rect.height * 0.12));
+  const padding = Math.min(THEME_METRICS.automationGraphPaddingMax, Math.max(THEME_METRICS.automationGraphPaddingMin, rect.height * THEME_METRICS.automationGraphPaddingRatio));
   return {
     x: rect.x + padding,
     y: rect.y + padding,
-    width: Math.max(1, rect.width - padding * 2),
-    height: Math.max(1, rect.height - padding * 2)
+    width: Math.max(THEME_METRICS.visualMinSize, rect.width - padding * 2),
+    height: Math.max(THEME_METRICS.visualMinSize, rect.height - padding * 2)
   };
 }
 
@@ -2189,14 +2189,14 @@ function drawClipRasterWarning(
   ctx: CanvasRenderingContext2D,
   rect: { x: number; y: number; width: number; height: number }
 ) {
-  const size = Math.min(12, Math.max(6, rect.height - 6));
+  const size = Math.min(THEME_METRICS.rasterWarningSizeMax, Math.max(THEME_METRICS.rasterWarningSizeMin, rect.height - THEME_METRICS.rasterWarningSizeMin));
   ctx.fillStyle = THEME_COLORS.rasterWarningOverlay;
   ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
   ctx.fillStyle = SEQUENCE_COLORS.warning;
   ctx.beginPath();
-  ctx.moveTo(rect.x + rect.width - size - 4, rect.y + 4);
-  ctx.lineTo(rect.x + rect.width - 4, rect.y + 4);
-  ctx.lineTo(rect.x + rect.width - 4, rect.y + size + 4);
+  ctx.moveTo(rect.x + rect.width - size - THEME_METRICS.rasterWarningInset, rect.y + THEME_METRICS.rasterWarningInset);
+  ctx.lineTo(rect.x + rect.width - THEME_METRICS.rasterWarningInset, rect.y + THEME_METRICS.rasterWarningInset);
+  ctx.lineTo(rect.x + rect.width - THEME_METRICS.rasterWarningInset, rect.y + size + THEME_METRICS.rasterWarningInset);
   ctx.closePath();
   ctx.fill();
 }
@@ -2213,7 +2213,7 @@ function drawTimelineGrid(
 ) {
   const tick = chooseTimelineTick(pxPerSecond, frameRate);
   const firstMinor = Math.floor(scrollXSeconds / tick.minorSeconds) * tick.minorSeconds;
-  ctx.lineWidth = 1;
+  ctx.lineWidth = THEME_METRICS.visualLineWidth;
   for (let time = firstMinor; ; time += tick.minorSeconds) {
     const x = left + (time - scrollXSeconds) * pxPerSecond;
     if (x > width) break;
@@ -2226,7 +2226,7 @@ function drawTimelineGrid(
     ctx.stroke();
     if (labeled) {
       ctx.fillStyle = SEQUENCE_COLORS.timelineLabel;
-      ctx.fillText(formatTimelineSeconds(time, tick.labelSeconds), x + 5, 18);
+      ctx.fillText(formatTimelineSeconds(time, tick.labelSeconds), x + THEME_METRICS.timelineLabelX, THEME_METRICS.timelineLabelY);
     }
   }
 }
@@ -2249,8 +2249,8 @@ function chooseTimelineTick(pxPerSecond: number, frameRate: number) {
     30,
     60
   ])).sort((left, right) => left - right);
-  const minorSeconds = minorCandidates.find((candidate) => candidate * pxPerSecond >= 24) ?? 60;
-  const labelSeconds = minorCandidates.find((candidate) => candidate >= minorSeconds && candidate * pxPerSecond >= 110) ?? minorSeconds * 5;
+    const minorSeconds = minorCandidates.find((candidate) => candidate * pxPerSecond >= THEME_METRICS.timelineMinGridWidth) ?? 60;
+    const labelSeconds = minorCandidates.find((candidate) => candidate >= minorSeconds && candidate * pxPerSecond >= THEME_METRICS.timelineMinLabelWidth) ?? minorSeconds * 5;
   return { minorSeconds, labelSeconds };
 }
 

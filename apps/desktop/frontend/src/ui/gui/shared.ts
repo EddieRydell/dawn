@@ -3,14 +3,12 @@ import type {
   AppSnapshot,
   GeometryRenderBounds,
   GeometryRenderPoint,
-  PreviewDocument,
-  PreviewPropPlacement,
   Point3Meters,
   SequenceAutomationMapping,
   SequenceSelection as WireSequenceSelection,
   Transform as WireTransform
 } from "../../types";
-import { THEME_COLORS } from "../../theme";
+import { THEME_COLORS, THEME_METRICS, THEME_TYPOGRAPHY } from "../../theme";
 
 export type Point3 = { x: number; y: number; z: number };
 
@@ -39,9 +37,9 @@ export type GuiFocus =
   | null;
 
 export const GUI_CANVAS = {
-  spatialPaddingPx: 42,
-  pointHitMeters: 0.8,
-  placementHitMeters: 1.2,
+  spatialPaddingPx: THEME_METRICS.canvasPadding,
+  pointHitMeters: THEME_METRICS.canvasPointHitRadius,
+  placementHitMeters: THEME_METRICS.canvasPlacementHitRadius,
   meterRoundScale: 1_000_000,
   nanosecondRoundScale: 1_000_000_000
 } as const;
@@ -132,7 +130,7 @@ export function drawSpatialCanvas(
   ctx.clearRect(0, 0, rect.width, rect.height);
   ctx.fillStyle = GUI_COLORS.canvasBackground;
   ctx.fillRect(0, 0, rect.width, rect.height);
-  ctx.font = "12px Inter, sans-serif";
+  ctx.font = THEME_TYPOGRAPHY.canvas;
   const view = viewport ?? fitViewport(bounds, rect.width, rect.height);
   const project = (point: Point3) => projectPoint(point, rect.width, rect.height, view);
   drawGrid(ctx, rect.width, rect.height, view);
@@ -144,8 +142,9 @@ export type SpatialViewport = { scale: number; fitScale: number; offsetX: number
 export function fitViewport(bounds: RenderBounds, width: number, height: number): SpatialViewport {
   const spanX = Math.max(1, bounds.maxX - bounds.minX);
   const spanY = Math.max(1, bounds.maxY - bounds.minY);
-  const scale = Math.min((width - 84) / spanX, (height - 84) / spanY);
-  return { scale, fitScale: scale, offsetX: 42 - bounds.minX * scale, offsetY: height - 42 + bounds.minY * scale };
+  const padding = THEME_METRICS.canvasPadding;
+  const scale = Math.min((width - padding * 2) / spanX, (height - padding * 2) / spanY);
+  return { scale, fitScale: scale, offsetX: padding - bounds.minX * scale, offsetY: height - padding + bounds.minY * scale };
 }
 
 function drawGrid(ctx: CanvasRenderingContext2D, width: number, height: number, view: SpatialViewport) {
@@ -154,12 +153,12 @@ function drawGrid(ctx: CanvasRenderingContext2D, width: number, height: number, 
   const right = (width - view.offsetX) / view.scale;
   const bottom = (view.offsetY - height) / view.scale;
   const top = view.offsetY / view.scale;
-  ctx.font = "11px Inter, sans-serif";
+  ctx.font = THEME_TYPOGRAPHY.canvasLabel;
   for (let value = Math.floor(left / meters) * meters; value <= right; value += meters) {
     const x = view.offsetX + value * view.scale;
     ctx.strokeStyle = Math.abs(value) < 1e-8 ? GUI_COLORS.axis : (Math.round(value / meters) % 5 === 0 ? GUI_COLORS.majorGrid : GUI_COLORS.canvasGrid);
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
-    if (x > 4 && x < width - 28) { ctx.fillStyle = GUI_COLORS.label; ctx.fillText(`${value}m`, x + 3, height - 7); }
+    if (x > THEME_METRICS.canvasLabelLeftInset && x < width - THEME_METRICS.canvasLabelRightInset) { ctx.fillStyle = GUI_COLORS.label; ctx.fillText(`${value}m`, x + THEME_METRICS.canvasLabelLeftInset - 1, height - THEME_METRICS.canvasLabelBottomInset); }
   }
   for (let value = Math.floor(bottom / meters) * meters; value <= top; value += meters) {
     const y = view.offsetY - value * view.scale;
@@ -167,7 +166,7 @@ function drawGrid(ctx: CanvasRenderingContext2D, width: number, height: number, 
     ctx.beginPath();
     ctx.moveTo(0, y); ctx.lineTo(width, y);
     ctx.stroke();
-    if (y > 14 && y < height - 4) { ctx.fillStyle = GUI_COLORS.label; ctx.fillText(`${value}m`, 5, y - 3); }
+    if (y > THEME_METRICS.canvasLabelTopInset && y < height - THEME_METRICS.canvasLabelLeftInset) { ctx.fillStyle = GUI_COLORS.label; ctx.fillText(`${value}m`, THEME_METRICS.canvasLabelXOffset, y - THEME_METRICS.canvasLabelYOffset); }
   }
 }
 
@@ -185,20 +184,6 @@ export function unproject(x: number, y: number, canvas: HTMLCanvasElement | null
     y: (view.offsetY - y) / view.scale,
     z: 0
   };
-}
-
-export function nearestPlacement(document: PreviewDocument, point: Point3, hitRadiusMeters: number = GUI_CANVAS.placementHitMeters): PreviewPropPlacement | null {
-  let best: PreviewPropPlacement | null = null;
-  let bestDistance = Infinity;
-  for (const placement of document.fixtures) {
-    const transform = normalizeTransform(placement.transform);
-    const distance = Math.hypot(transform.position.x - point.x, transform.position.y - point.y);
-    if (distance < bestDistance && distance < hitRadiusMeters) {
-      best = placement;
-      bestDistance = distance;
-    }
-  }
-  return best;
 }
 
 export function nearestPoint(points: Point3[], point: Point3, hitRadiusMeters: number = GUI_CANVAS.pointHitMeters) {

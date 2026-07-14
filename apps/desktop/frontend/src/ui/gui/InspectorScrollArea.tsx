@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { clamp } from "./shared";
+import { THEME_METRICS } from "../../theme";
 
 export function InspectorScrollArea({ children, footer }: { children: ReactNode; footer?: ReactNode }) {
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -13,7 +14,7 @@ export function InspectorScrollArea({ children, footer }: { children: ReactNode;
     if (content === null) return;
     const scrollable = content.scrollHeight > content.clientHeight + 1;
     const railHeight = Math.max(1, content.clientHeight);
-    const height = scrollable ? Math.max(28, (content.clientHeight / content.scrollHeight) * railHeight) : railHeight;
+    const height = scrollable ? Math.max(THEME_METRICS.scrollbarThumbMinHeight, (content.clientHeight / content.scrollHeight) * railHeight) : railHeight;
     const maxTop = Math.max(0, railHeight - height);
     const top = scrollable ? (content.scrollTop / Math.max(1, content.scrollHeight - content.clientHeight)) * maxTop : 0;
     setMetrics({ top, height, scrollable });

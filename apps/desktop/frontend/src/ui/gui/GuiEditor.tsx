@@ -14,6 +14,7 @@ import { BlockedGui } from "./BlockedGui";
 
 import { SequenceEditor } from "./sequence/SequenceEditor";
 import { useAppStore } from "../../store";
+import { THEME_METRICS } from "../../theme";
 
 import { handleSequencePlaybackShortcut, isSequenceTransportUnsupported } from "./sequence/SequenceTransportControls";
 
@@ -22,8 +23,8 @@ import { WorkspaceResizeHandle } from "../WorkspaceResizeHandle";
 import { OPEN_LAYER_GRAPH_EVENT } from "../uiEvents";
 import { SetupEditor } from "./setup/SetupEditor";
 
-const INSPECTOR_MIN_WIDTH_PX = 240;
-const INSPECTOR_MAX_WIDTH_PX = 560;
+const INSPECTOR_MIN_WIDTH_PX = THEME_METRICS.inspectorMinWidth;
+const INSPECTOR_MAX_WIDTH_PX = THEME_METRICS.inspectorMaxWidth;
 
 export function GuiEditor({
   guiDocument,
@@ -132,7 +133,7 @@ function GuiEditorInner({
       className="gui-editor-shell"
       style={{
         gridTemplateColumns: workspaceLayout.inspectorCollapsed
-          ? "minmax(0, 1fr) 8px"
+          ? "var(--dawn-gui-grid-template-collapsed)"
           : `minmax(0, 1fr) ${workspaceLayout.inspectorWidthPx}px`
       }}
       onKeyDownCapture={(event) => {

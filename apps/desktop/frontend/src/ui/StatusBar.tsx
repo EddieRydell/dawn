@@ -1,6 +1,7 @@
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { AppSnapshot, ProjectDiagnostic } from "../types";
+import { THEME_METRICS } from "../theme";
 
 export function StatusBar({ snapshot }: { snapshot: AppSnapshot }) {
   const errorDiagnostics = snapshot.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
@@ -11,13 +12,13 @@ export function StatusBar({ snapshot }: { snapshot: AppSnapshot }) {
       <span>{snapshot.projectRoot ?? "No project"}</span>
       <DiagnosticChip
         diagnostics={errorDiagnostics}
-        icon={errorDiagnostics.length > 0 ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
+        icon={errorDiagnostics.length > 0 ? <AlertTriangle size={THEME_METRICS.iconSizeSmall} /> : <CheckCircle2 size={THEME_METRICS.iconSizeSmall} />}
         label={`${errorDiagnostics.length} errors`}
         tone={errorDiagnostics.length > 0 ? "status-problem" : "status-ok"}
       />
       <DiagnosticChip
         diagnostics={warningDiagnostics}
-        icon={<AlertTriangle size={14} />}
+        icon={<AlertTriangle size={THEME_METRICS.iconSizeSmall} />}
         label={`${warningDiagnostics.length} warnings`}
         tone="status-warning"
       />

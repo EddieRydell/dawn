@@ -5,6 +5,28 @@ function cssColor(name: string): string {
   return value;
 }
 
+function cssNumber(name: string): number {
+  const value = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name));
+  if (!Number.isFinite(value)) throw new Error(`Missing CSS numeric token: ${name}`);
+  return value;
+}
+
+function cssValue(name: string): string {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  if (value === "") throw new Error(`Missing CSS style token: ${name}`);
+  return value;
+}
+
+export const THEME_TYPOGRAPHY = {
+  canvas: cssValue("--dawn-canvas-font"),
+  canvasLabel: cssValue("--dawn-canvas-label-font"),
+  sequence: cssValue("--dawn-sequence-font")
+} as const;
+
+export const THEME_LAYOUT = {
+  projectTreeWidth: cssValue("--dawn-project-tree-width")
+} as const;
+
 export const THEME_COLORS = {
   background: cssColor("--dawn-bg"),
   page: cssColor("--dawn-bg-page"),
@@ -29,6 +51,9 @@ export const THEME_COLORS = {
   canvasAxis: cssColor("--dawn-canvas-axis"),
   canvasMajorGrid: cssColor("--dawn-canvas-major-grid"),
   canvasLabel: cssColor("--dawn-canvas-label"),
+  layoutSelected: cssColor("--dawn-layout-selected"),
+  layoutLabel: cssColor("--dawn-layout-label"),
+  layoutEmitter: cssColor("--dawn-layout-emitter"),
   automation: cssColor("--dawn-automation"),
   playhead: cssColor("--dawn-playhead"),
   markBlue: cssColor("--dawn-mark-blue"),
@@ -66,4 +91,127 @@ export const THEME_COLORS = {
   effectMarqueeFill: cssColor("--dawn-effect-marquee-fill"),
   rasterWarningOverlay: cssColor("--dawn-raster-warning-overlay"),
   emptyGradient: cssColor("--dawn-empty-gradient")
+} as const;
+
+export const THEME_METRICS = {
+  projectPanelMinWidth: cssNumber("--dawn-project-panel-min-width"),
+  projectPanelMaxWidth: cssNumber("--dawn-project-panel-max-width"),
+  inspectorMinWidth: cssNumber("--dawn-inspector-min-width"),
+  inspectorMaxWidth: cssNumber("--dawn-inspector-max-width"),
+  canvasPadding: cssNumber("--dawn-canvas-padding"),
+  iconButtonSize: cssNumber("--dawn-icon-button-size"),
+  iconSizeSmall: cssNumber("--dawn-icon-size-sm"),
+  iconSizeMedium: cssNumber("--dawn-icon-size-md"),
+  iconSizeExtraSmall: cssNumber("--dawn-icon-size-xs"),
+  iconSizeCompact: cssNumber("--dawn-icon-size-compact"),
+  menuOffset: cssNumber("--dawn-menu-offset"),
+  projectTreeIndent: cssNumber("--dawn-project-tree-indent"),
+  projectTreeRowHeight: cssNumber("--dawn-project-tree-row-height"),
+  projectTreeViewportInset: cssNumber("--dawn-project-tree-viewport-inset"),
+  resizeHandleWidth: cssNumber("--dawn-resize-handle-width"),
+  controlHeightSmall: cssNumber("--dawn-control-height-sm"),
+  controlHeightMedium: cssNumber("--dawn-control-height-md"),
+  controlHeightLarge: cssNumber("--dawn-control-height-lg"),
+  colorPickerWidth: cssNumber("--dawn-palette-picker-width"),
+  colorPickerHeight: cssNumber("--dawn-palette-picker-height"),
+  popoverOffset: cssNumber("--dawn-popover-offset"),
+  popoverGap: cssNumber("--dawn-popover-gap"),
+  workspaceCollapseThreshold: cssNumber("--dawn-workspace-collapse-threshold"),
+  workspaceKeyboardStep: cssNumber("--dawn-workspace-keyboard-step"),
+  interactionDragThreshold: cssNumber("--dawn-interaction-drag-threshold"),
+  workspaceLayoutSaveDelay: cssNumber("--dawn-workspace-layout-save-delay"),
+  sequenceLeftGutter: cssNumber("--dawn-sequence-left-gutter"),
+  sequenceTop: cssNumber("--dawn-sequence-top"),
+  sequenceAudioStripTop: cssNumber("--dawn-sequence-audio-strip-top"),
+  sequenceInitialPixelsPerSecond: cssNumber("--dawn-sequence-initial-pixels-per-second"),
+  sequenceInitialLaneHeight: cssNumber("--dawn-sequence-initial-lane-height"),
+  sequenceMinPixelsPerSecond: cssNumber("--dawn-sequence-min-pixels-per-second"),
+  sequenceMaxPixelsPerSecond: cssNumber("--dawn-sequence-max-pixels-per-second"),
+  sequenceMaxZoomPixelsPerSecond: cssNumber("--dawn-sequence-max-zoom-pixels-per-second"),
+  sequenceMinLaneHeight: cssNumber("--dawn-sequence-min-lane-height"),
+  sequenceMaxLaneHeight: cssNumber("--dawn-sequence-max-lane-height"),
+  graphGridGap: cssNumber("--dawn-graph-grid-gap"),
+  graphNodeStrokeWidth: cssNumber("--dawn-graph-node-stroke-width"),
+  curveEditorWidth: cssNumber("--dawn-curve-editor-width"),
+  curveEditorHeight: cssNumber("--dawn-curve-editor-height"),
+  canvasPointHitRadius: cssNumber("--dawn-canvas-point-hit-radius"),
+  canvasPlacementHitRadius: cssNumber("--dawn-canvas-placement-hit-radius"),
+  scrollbarThumbMinHeight: cssNumber("--dawn-scrollbar-thumb-min-height"),
+  graphEdgeInteractionWidth: cssNumber("--dawn-graph-edge-interaction-width"),
+  graphNodeMinHeight: cssNumber("--dawn-graph-node-min-height"),
+  graphNodeMinWidth: cssNumber("--dawn-graph-node-min-width"),
+  graphNodeStrokeWidthStrong: cssNumber("--dawn-graph-node-stroke-width-strong"),
+  graphPointRadius: cssNumber("--dawn-graph-point-radius"),
+  graphPointRadiusSelected: cssNumber("--dawn-graph-point-radius-selected"),
+  sequenceEffectResizeHitWidth: cssNumber("--dawn-sequence-effect-resize-hit-width"),
+  sequenceMarkHitRadius: cssNumber("--dawn-sequence-mark-hit-radius"),
+  visualLineWidth: cssNumber("--dawn-visual-line-width"),
+  visualLineWidthStrong: cssNumber("--dawn-visual-line-width-strong"),
+  visualMinSize: cssNumber("--dawn-visual-min-size"),
+  visualHairlineOffset: cssNumber("--dawn-visual-hairline-offset"),
+  sequenceLabelX: cssNumber("--dawn-sequence-label-x"),
+  sequenceLabelYOffset: cssNumber("--dawn-sequence-label-y-offset"),
+  sequenceClipMinWidth: cssNumber("--dawn-sequence-clip-min-width"),
+  sequenceClipMinHeight: cssNumber("--dawn-sequence-clip-min-height"),
+  sequenceClipSlotOffset: cssNumber("--dawn-sequence-clip-slot-offset"),
+  sequenceClipHandleHalfWidth: cssNumber("--dawn-sequence-clip-handle-half-width"),
+  sequenceClipHandleHeight: cssNumber("--dawn-sequence-clip-handle-height"),
+  sequenceClipHandleInset: cssNumber("--dawn-sequence-clip-handle-inset"),
+  sequenceMarkerHalfWidth: cssNumber("--dawn-sequence-marker-half-width"),
+  sequenceMarkerWidth: cssNumber("--dawn-sequence-marker-width"),
+  sequenceMarkerHeight: cssNumber("--dawn-sequence-marker-height"),
+  sequenceMarkerDashSize: cssNumber("--dawn-sequence-marker-dash-size"),
+  automationGraphPaddingMin: cssNumber("--dawn-automation-graph-padding-min"),
+  automationGraphPaddingMax: cssNumber("--dawn-automation-graph-padding-max"),
+  automationGraphPaddingRatio: cssNumber("--dawn-automation-graph-padding-ratio"),
+  automationCurveWidth: cssNumber("--dawn-automation-curve-width"),
+  automationPointRadius: cssNumber("--dawn-automation-point-radius"),
+  automationPointRadiusSelected: cssNumber("--dawn-automation-point-radius-selected"),
+  curvePointRadius: cssNumber("--dawn-curve-point-radius"),
+  curvePointRadiusSelected: cssNumber("--dawn-curve-point-radius-selected"),
+  automationGridColumns: cssNumber("--dawn-automation-grid-columns"),
+  automationGridRows: cssNumber("--dawn-automation-grid-rows"),
+  automationRowMinHeight: cssNumber("--dawn-automation-row-min-height"),
+  waveformAmplitudeInset: cssNumber("--dawn-waveform-amplitude-inset"),
+  timelineLabelX: cssNumber("--dawn-timeline-label-x"),
+  timelineLabelY: cssNumber("--dawn-timeline-label-y"),
+  timelineMinLabelWidth: cssNumber("--dawn-timeline-min-label-width"),
+  timelineMinGridWidth: cssNumber("--dawn-timeline-min-grid-width"),
+  rasterWarningSizeMin: cssNumber("--dawn-raster-warning-size-min"),
+  rasterWarningSizeMax: cssNumber("--dawn-raster-warning-size-max"),
+  rasterWarningInset: cssNumber("--dawn-raster-warning-inset"),
+  automationLabelOffsetY: cssNumber("--dawn-automation-label-offset-y"),
+  sequenceDragThreshold: cssNumber("--dawn-sequence-drag-threshold"),
+  sequenceWheelZoomScale: cssNumber("--dawn-sequence-wheel-zoom-scale"),
+  sequenceScrubStep: cssNumber("--dawn-sequence-scrub-step"),
+  sequenceNudgeStep: cssNumber("--dawn-sequence-nudge-step"),
+  sequenceShiftedNudgeStep: cssNumber("--dawn-sequence-shifted-nudge-step"),
+  markCullPadding: cssNumber("--dawn-mark-cull-padding"),
+  markSelectedHalfWidth: cssNumber("--dawn-mark-selected-half-width"),
+  markOverlayOpacity: cssNumber("--dawn-mark-overlay-opacity"),
+  markStripOpacity: cssNumber("--dawn-mark-strip-opacity"),
+  opacityFull: cssNumber("--dawn-opacity-full"),
+  canvasLabelLeftInset: cssNumber("--dawn-canvas-label-left-inset"),
+  canvasLabelRightInset: cssNumber("--dawn-canvas-label-right-inset"),
+  canvasLabelBottomInset: cssNumber("--dawn-canvas-label-bottom-inset"),
+  canvasLabelTopInset: cssNumber("--dawn-canvas-label-top-inset"),
+  canvasLabelXOffset: cssNumber("--dawn-canvas-label-x-offset"),
+  canvasLabelYOffset: cssNumber("--dawn-canvas-label-y-offset"),
+  layoutPointRadius: cssNumber("--dawn-layout-point-radius"),
+  layoutSelectedPointRadius: cssNumber("--dawn-layout-selected-point-radius"),
+  layoutEmitterHalfSize: cssNumber("--dawn-layout-emitter-half-size"),
+  layoutLabelOffsetX: cssNumber("--dawn-layout-label-offset-x"),
+  layoutLabelOffsetY: cssNumber("--dawn-layout-label-offset-y"),
+  layoutSelectionDash: cssNumber("--dawn-layout-selection-dash"),
+  layoutSelectionGap: cssNumber("--dawn-layout-selection-gap"),
+  spatialPointRadius: cssNumber("--dawn-spatial-point-radius"),
+  spatialHitRadius: cssNumber("--dawn-spatial-hit-radius"),
+  spatialPanThreshold: cssNumber("--dawn-spatial-pan-threshold"),
+  layoutSelectedAlpha: cssNumber("--dawn-layout-selected-alpha"),
+  layoutUnselectedAlpha: cssNumber("--dawn-layout-unselected-alpha"),
+  layoutLabelAlpha: cssNumber("--dawn-layout-label-alpha"),
+  layoutSelectedLineWidth: cssNumber("--dawn-layout-selected-line-width"),
+  layoutUnselectedLineWidth: cssNumber("--dawn-layout-unselected-line-width"),
+  layoutLineWidth: cssNumber("--dawn-layout-line-width"),
+  layoutLineWidthSelected: cssNumber("--dawn-layout-line-width-selected")
 } as const;

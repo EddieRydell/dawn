@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import { commands } from "../../../api";
 import type { PreviewDocument } from "../../../types";
 import { runGuiEditCommand } from "../../../store";
-import { THEME_COLORS } from "../../../theme";
+import { THEME_COLORS, THEME_METRICS } from "../../../theme";
 import { denormalizeTransform, drawSpatialCanvas, normalizeBounds, normalizePoint, normalizeTransform, round6, unproject, type GuiFocus, type Point3, type Transform } from "../shared";
 import { SpatialControls, useSpacePressed, useSpatialViewport } from "../SpatialViewport";
 
@@ -51,7 +51,7 @@ export function LayoutCanvas({ document, selected, setSelected }: { document: Pr
   });
 
   const hitFixture = (point: Point3) => {
-    const radius = 12 / spatial.view.scale;
+    const radius = THEME_METRICS.spatialHitRadius / spatial.view.scale;
     let closest: { fixture: PreviewDocument["fixtures"][number]; distance: number } | null = null;
     for (const fixture of document.fixtures) {
       const points = pointsFor(fixture);
@@ -82,35 +82,36 @@ export function LayoutCanvas({ document, selected, setSelected }: { document: Pr
         if (points.length > 0 && (isSelected || isHovered)) {
           const firstPoint = points[0];
           ctx.save();
-          ctx.strokeStyle = isSelected ? "#d7dbe0" : "#aeb4bc";
-          ctx.globalAlpha = isSelected ? 0.42 : 0.28;
-          ctx.lineWidth = isSelected ? 18 : 14;
+          ctx.strokeStyle = isSelected ? THEME_COLORS.layoutSelected : THEME_COLORS.layoutLabel;
+          ctx.globalAlpha = isSelected ? THEME_METRICS.layoutSelectedAlpha : THEME_METRICS.layoutUnselectedAlpha;
+          ctx.lineWidth = isSelected ? THEME_METRICS.layoutSelectedLineWidth : THEME_METRICS.layoutUnselectedLineWidth;
           ctx.lineCap = "round";
           ctx.lineJoin = "round";
           ctx.beginPath();
           points.forEach((point, index) => { const projected = project(point); if (index === 0) ctx.moveTo(projected.x, projected.y); else ctx.lineTo(projected.x, projected.y); });
-          if (points.length === 1 && firstPoint) { const projected = project(firstPoint); ctx.arc(projected.x, projected.y, 8, 0, Math.PI * 2); }
+          if (points.length === 1 && firstPoint) { const projected = project(firstPoint); ctx.arc(projected.x, projected.y, THEME_METRICS.layoutSelectedPointRadius, 0, Math.PI * 2); }
           ctx.stroke();
-          ctx.globalAlpha = 0.9;
-          ctx.lineWidth = isSelected ? 2 : 1;
+          ctx.globalAlpha = THEME_METRICS.layoutLabelAlpha;
+          ctx.lineWidth = isSelected ? THEME_METRICS.layoutLineWidthSelected : THEME_METRICS.layoutLineWidth;
           ctx.stroke();
           ctx.restore();
         }
         if (isSelected || isHovered) {
           const labelPoint = points[0] === undefined ? { x: active.position.x, y: active.position.y, z: active.position.z } : points[0];
           const projectedLabelPoint = project(labelPoint);
-          ctx.fillStyle = THEME_COLORS.text; ctx.fillText(fixture.name, projectedLabelPoint.x + 10, projectedLabelPoint.y - 8);
+          ctx.fillStyle = THEME_COLORS.text; ctx.fillText(fixture.name, projectedLabelPoint.x + THEME_METRICS.layoutLabelOffsetX, projectedLabelPoint.y - THEME_METRICS.layoutLabelOffsetY);
         }
         for (const [index] of fixture.resolvedFixture.renderPlan.emitters.entries()) {
           const point = points[index];
           if (!point) continue;
           const projected = project(point);
-          ctx.fillStyle = THEME_COLORS.automation; ctx.fillRect(projected.x - 2, projected.y - 2, 4, 4);
+          const halfSize = THEME_METRICS.layoutEmitterHalfSize;
+          ctx.fillStyle = THEME_COLORS.automation; ctx.fillRect(projected.x - halfSize, projected.y - halfSize, halfSize * 2, halfSize * 2);
         }
       }
       const box = gesture.current?.type === "box" ? gesture.current : null;
       if (box) {
-        ctx.strokeStyle = THEME_COLORS.accent; ctx.setLineDash([5, 3]);
+      ctx.strokeStyle = THEME_COLORS.accent; ctx.setLineDash([THEME_METRICS.layoutSelectionDash, THEME_METRICS.layoutSelectionGap]);
         ctx.strokeRect(Math.min(box.x, box.currentX), Math.min(box.y, box.currentY), Math.abs(box.currentX - box.x), Math.abs(box.currentY - box.y));
         ctx.setLineDash([]);
       }
@@ -139,7 +140,7 @@ export function LayoutCanvas({ document, selected, setSelected }: { document: Pr
       onPointerMove={(event) => {
         const current = gesture.current; if (!current) return;
         if (current.type === "box") { const rect = event.currentTarget.getBoundingClientRect(); gesture.current = { ...current, currentX: event.clientX - rect.left, currentY: event.clientY - rect.top }; render((value) => value + 1); return; }
-        if (current.type === "empty" && Math.hypot(event.clientX - current.x, event.clientY - current.y) > 3) gesture.current = { type: "pan", x: current.x, y: current.y };
+        if (current.type === "empty" && Math.hypot(event.clientX - current.x, event.clientY - current.y) > THEME_METRICS.spatialPanThreshold) gesture.current = { type: "pan", x: current.x, y: current.y };
         const active = gesture.current;
         if (active?.type === "pan") { spatial.panBy(event.clientX - active.x, event.clientY - active.y); gesture.current = { ...active, x: event.clientX, y: event.clientY }; return; }
         if (active?.type !== "object") return;

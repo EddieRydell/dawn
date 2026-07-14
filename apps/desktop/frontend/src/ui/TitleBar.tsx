@@ -5,6 +5,7 @@ import { commandRegistry } from "../commandRegistry";
 import { useAppStore } from "../store";
 import { setGlobalMarkDisplayMode, useMarkDisplayMode, type MarkDisplayMode } from "./gui/sequence/marks";
 import { requestOpenLayerGraph } from "./uiEvents";
+import { THEME_METRICS } from "../theme";
 
 const appWindow = getCurrentWindow();
 
@@ -31,13 +32,13 @@ export function TitleBar() {
       </nav>
       <div className="window-controls">
         <button onClick={() => void appWindow.minimize()} aria-label="Minimize">
-          <Minus size={15} />
+        <Minus size={THEME_METRICS.iconSizeCompact} />
         </button>
         <button onClick={() => void appWindow.toggleMaximize()} aria-label="Maximize">
-          <Maximize2 size={14} />
+          <Maximize2 size={THEME_METRICS.iconSizeSmall} />
         </button>
         <button className="close" onClick={() => void appWindow.close()} aria-label="Close">
-          <X size={15} />
+          <X size={THEME_METRICS.iconSizeCompact} />
         </button>
       </div>
     </header>
@@ -52,7 +53,7 @@ function ViewMenu() {
     <DropdownMenu.Root>
       <DropdownMenu.Trigger className="menu-trigger">View</DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content className="menu-content" sideOffset={7}>
+        <DropdownMenu.Content className="menu-content" sideOffset={THEME_METRICS.menuOffset}>
           <DropdownMenu.CheckboxItem
             checked={checked}
             className="menu-item"
@@ -110,7 +111,7 @@ function MarkDisplayItem({ value, label }: { value: MarkDisplayMode; label: stri
     <DropdownMenu.RadioItem className="menu-item" value={value}>
       <span>{label}</span>
       <DropdownMenu.ItemIndicator>
-        <Check size={13} />
+        <Check size={THEME_METRICS.iconSizeExtraSmall} />
       </DropdownMenu.ItemIndicator>
     </DropdownMenu.RadioItem>
   );
@@ -132,7 +133,7 @@ function Menu({ label, commands }: { label: string; commands: Array<keyof typeof
     <DropdownMenu.Root>
       <DropdownMenu.Trigger className="menu-trigger">{label}</DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content className="menu-content" sideOffset={7}>
+        <DropdownMenu.Content className="menu-content" sideOffset={THEME_METRICS.menuOffset}>
           {commands.map((id) => {
             const command = commandRegistry[id];
             return (

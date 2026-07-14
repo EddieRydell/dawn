@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import { commands } from "../../../api";
 import type { PropDocument } from "../../../types";
 import { runGuiEditCommand } from "../../../store";
-import { THEME_COLORS } from "../../../theme";
+import { THEME_COLORS, THEME_METRICS } from "../../../theme";
 import { BlockedGui } from "../BlockedGui";
 import { denormalizePoint, drawSpatialCanvas, nearestPoint, normalizeBounds, normalizePoint, round6, unproject, type GuiFocus, type Point3 } from "../shared";
 import { SpatialControls, useSpacePressed, useSpatialViewport } from "../SpatialViewport";
@@ -32,7 +32,7 @@ export function FixtureCanvas({ document, selected, setSelected }: { document: P
         const source = gesture.current?.type === "point" && gesture.current.pointIndex === index ? gesture.current.draft : normalizePoint(point);
         const projected = project(source);
         ctx.fillStyle = selected?.type === "point" && selected.index === index ? THEME_COLORS.accent : THEME_COLORS.playhead;
-        ctx.beginPath(); ctx.arc(projected.x, projected.y, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(projected.x, projected.y, THEME_METRICS.spatialPointRadius, 0, Math.PI * 2); ctx.fill();
       });
     }, spatial.view);
   }, [bounds, fixture, revision, selected, spatial]);
@@ -48,14 +48,14 @@ export function FixtureCanvas({ document, selected, setSelected }: { document: P
         event.currentTarget.setPointerCapture(event.pointerId); setMenu(null);
         if (event.button === 1 || spacePressed.current) { gesture.current = { type: "pan", x: event.clientX, y: event.clientY }; return; }
         if (fixture.geometry.type !== "points") return;
-        const points = fixture.geometry.points.map(normalizePoint); const index = nearestPoint(points, worldAt(event), 12 / spatial.view.scale);
+        const points = fixture.geometry.points.map(normalizePoint); const index = nearestPoint(points, worldAt(event), THEME_METRICS.spatialHitRadius / spatial.view.scale);
         if (index === null) { gesture.current = { type: "empty", x: event.clientX, y: event.clientY }; return; }
         const point = points[index]; if (!point) return;
         setSelected({ type: "point", index }); gesture.current = { type: "point", objectKey: fixture.objectKey, pointIndex: index, draft: point };
       }}
       onPointerMove={(event) => {
         const current = gesture.current; if (!current) return;
-        if (current.type === "empty" && Math.hypot(event.clientX - current.x, event.clientY - current.y) > 3) gesture.current = { type: "pan", x: current.x, y: current.y };
+        if (current.type === "empty" && Math.hypot(event.clientX - current.x, event.clientY - current.y) > THEME_METRICS.spatialPanThreshold) gesture.current = { type: "pan", x: current.x, y: current.y };
         const active = gesture.current;
         if (active?.type === "pan") { spatial.panBy(event.clientX - active.x, event.clientY - active.y); gesture.current = { ...active, x: event.clientX, y: event.clientY }; return; }
         if (active?.type !== "point") return;

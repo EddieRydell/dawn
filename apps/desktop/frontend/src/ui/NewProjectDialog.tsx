@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { SyntheticEvent } from "react";
 import { commands } from "../api";
 import { useAppStore } from "../store";
+import { THEME_METRICS } from "../theme";
 
 const NEW_PROJECT_EVENT = "dawn:new-project";
 
@@ -86,7 +87,7 @@ export function NewProjectDialog() {
               <div className="new-project-location-row">
                 <input readOnly value={parentPath} />
                 <button type="button" onClick={() => void browseParent()}>
-                  <FolderOpen size={14} />
+                  <FolderOpen size={THEME_METRICS.iconSizeSmall} />
                   Browse...
                 </button>
               </div>

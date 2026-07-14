@@ -1,5 +1,5 @@
 import "@xyflow/react/dist/style.css";
-import { THEME_COLORS } from "../../../theme";
+import { THEME_COLORS, THEME_METRICS } from "../../../theme";
 
 import {
   Background,
@@ -114,7 +114,7 @@ export function GraphEditorModal({
             <span>Sequence layers</span>
           </div>
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close graph editor">
-            <X size={16} />
+            <X size={THEME_METRICS.iconSizeMedium} />
           </button>
         </div>
         <GraphEditorWorkspace document={document} selectedItem={selectedItem} setSelectedItem={setSelectedItem} />
@@ -161,7 +161,7 @@ function GraphEditorWorkspace({
           },
           style: {
             stroke: color,
-            strokeWidth: 2
+            strokeWidth: THEME_METRICS.graphNodeStrokeWidthStrong
           }
         };
       }),
@@ -480,7 +480,7 @@ function GraphFlowCanvas({
         deleteKeyCode={null}
         defaultEdgeOptions={{
           type: "default",
-          interactionWidth: 32,
+          interactionWidth: THEME_METRICS.graphEdgeInteractionWidth,
           className: "graph-flow-edge"
         }}
         onInit={(instance) => {
@@ -538,8 +538,8 @@ function GraphFlowCanvas({
         }}
         onSelectionChange={handleSelectionChange}
       >
-        <Background color={THEME_COLORS.hover} gap={32} />
-        <MiniMap className="graph-flow-minimap" nodeStrokeWidth={2} pannable zoomable />
+        <Background color={THEME_COLORS.hover} gap={THEME_METRICS.graphGridGap} />
+        <MiniMap className="graph-flow-minimap" nodeStrokeWidth={THEME_METRICS.graphNodeStrokeWidth} pannable zoomable />
         <Controls className="graph-flow-controls" showInteractive={false} />
       </ReactFlow>
       {contextMenu !== null && (
@@ -683,8 +683,8 @@ function GraphFlowNodeView({ data }: NodeProps<GraphFlowNode>) {
           key={position}
           position={position}
           variant={ResizeControlVariant.Line}
-          minWidth={140}
-          minHeight={80}
+          minWidth={THEME_METRICS.graphNodeMinWidth}
+          minHeight={THEME_METRICS.graphNodeMinHeight}
           className="graph-flow-resize-edge"
         />
       ))}
@@ -692,8 +692,8 @@ function GraphFlowNodeView({ data }: NodeProps<GraphFlowNode>) {
         <NodeResizeControl
           key={position}
           position={position}
-          minWidth={140}
-          minHeight={80}
+          minWidth={THEME_METRICS.graphNodeMinWidth}
+          minHeight={THEME_METRICS.graphNodeMinHeight}
           className="graph-flow-resize-corner"
         />
       ))}

@@ -7,6 +7,7 @@ import { ListOuterElement, Tree } from "react-arborist";
 import { commands } from "../api";
 import type { AppSnapshot, ProjectDiagnostic, WorkspaceEntry } from "../types";
 import { runSnapshotCommand } from "../store";
+import { THEME_LAYOUT, THEME_METRICS } from "../theme";
 
 type TreeNode = {
   id: string;
@@ -34,7 +35,7 @@ export function ProjectTree({ snapshot }: { snapshot: AppSnapshot }) {
     treeRef.current = tree;
     const scrollable = tree.scrollHeight > tree.clientHeight + 1;
     const railHeight = Math.max(1, tree.clientHeight);
-    const height = scrollable ? Math.max(28, (tree.clientHeight / tree.scrollHeight) * railHeight) : railHeight;
+    const height = scrollable ? Math.max(THEME_METRICS.scrollbarThumbMinHeight, (tree.clientHeight / tree.scrollHeight) * railHeight) : railHeight;
     const maxTop = Math.max(0, railHeight - height);
     const top = scrollable ? (tree.scrollTop / Math.max(1, tree.scrollHeight - tree.clientHeight)) * maxTop : 0;
     setScrollbar((current) =>
@@ -74,20 +75,20 @@ export function ProjectTree({ snapshot }: { snapshot: AppSnapshot }) {
         <span>Project</span>
         <div className="panel-actions">
           <button aria-label="New file" onClick={() => { createFile(""); }}>
-            <Plus size={15} />
+          <Plus size={THEME_METRICS.iconSizeCompact} />
           </button>
           <button aria-label="New folder" onClick={() => { createDirectory(""); }}>
-            <FolderPlus size={15} />
+          <FolderPlus size={THEME_METRICS.iconSizeCompact} />
           </button>
         </div>
       </div>
       <div ref={treeShellRef} className="project-tree-shell">
         <Tree
           data={treeData}
-          width="100%"
-          height={window.innerHeight - 118}
-          indent={18}
-          rowHeight={28}
+          width={THEME_LAYOUT.projectTreeWidth}
+          height={window.innerHeight - THEME_METRICS.projectTreeViewportInset}
+          indent={THEME_METRICS.projectTreeIndent}
+          rowHeight={THEME_METRICS.projectTreeRowHeight}
           openByDefault
           outerElementType={ProjectTreeScrollContent}
           onScroll={updateScrollbar}
@@ -197,7 +198,7 @@ function TreeRow({
             }
           }}
         >
-          <Icon size={15} />
+          <Icon size={THEME_METRICS.iconSizeCompact} />
           <span>{node.data.name}</span>
         </div>
       </ContextMenu.Trigger>
@@ -206,18 +207,18 @@ function TreeRow({
           {node.data.kind === "directory" && (
             <>
               <ContextMenu.Item className="menu-item" onSelect={() => { createFile(node.data.id); }}>
-                <Plus size={14} /> New File
+                <Plus size={THEME_METRICS.iconSizeSmall} /> New File
               </ContextMenu.Item>
               <ContextMenu.Item className="menu-item" onSelect={() => { createDirectory(node.data.id); }}>
-                <FolderPlus size={14} /> New Folder
+                <FolderPlus size={THEME_METRICS.iconSizeSmall} /> New Folder
               </ContextMenu.Item>
             </>
           )}
           <ContextMenu.Item className="menu-item" onSelect={() => { renameNode(node.data); }}>
-            <Pencil size={14} /> Rename
+            <Pencil size={THEME_METRICS.iconSizeSmall} /> Rename
           </ContextMenu.Item>
           <ContextMenu.Item className="menu-item danger" onSelect={() => { requestDelete(node.data); }}>
-            <Trash2 size={14} /> Delete
+            <Trash2 size={THEME_METRICS.iconSizeSmall} /> Delete
           </ContextMenu.Item>
         </ContextMenu.Content>
       </ContextMenu.Portal>

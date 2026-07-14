@@ -11,10 +11,11 @@ import { SettingsDialog } from "./SettingsDialog";
 import { StatusBar } from "./StatusBar";
 import { TitleBar } from "./TitleBar";
 import { WorkspaceResizeHandle } from "./WorkspaceResizeHandle";
+import { THEME_METRICS } from "../theme";
 
-const PROJECT_TREE_MIN_WIDTH_PX = 220;
-const PROJECT_TREE_MAX_WIDTH_PX = 520;
-const WORKSPACE_LAYOUT_SAVE_DELAY_MS = 250;
+const PROJECT_TREE_MIN_WIDTH_PX = THEME_METRICS.projectPanelMinWidth;
+const PROJECT_TREE_MAX_WIDTH_PX = THEME_METRICS.projectPanelMaxWidth;
+const WORKSPACE_LAYOUT_SAVE_DELAY_MS = THEME_METRICS.workspaceLayoutSaveDelay;
 
 export function App() {
   const { snapshot, error, hydrate, compositionGraphEditing } = useAppStore();
@@ -87,7 +88,7 @@ function WorkspaceMain({ snapshot }: { snapshot: AppSnapshot }) {
       {snapshot.projectTreeVisible ? (
         <div
           className={`project-panel-shell ${layout.projectTreeCollapsed ? "collapsed" : ""}`}
-          style={{ width: layout.projectTreeCollapsed ? 8 : layout.projectTreeWidthPx }}
+          style={{ width: layout.projectTreeCollapsed ? THEME_METRICS.resizeHandleWidth : layout.projectTreeWidthPx }}
         >
           {!layout.projectTreeCollapsed && <ProjectTree snapshot={snapshot} />}
           <WorkspaceResizeHandle

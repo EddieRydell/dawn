@@ -3,7 +3,7 @@ import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { ArrowDown, ArrowUp, ChevronRight, CopyPlus, FlipHorizontal2, FlipVertical2, Link2, Link2Off, Minus, Plus, Trash2, X } from "lucide-react";
 
 import { commands } from "../../../../api";
-import { THEME_COLORS } from "../../../../theme";
+import { THEME_COLORS, THEME_METRICS } from "../../../../theme";
 
 import type { SequenceGradientStop, SequenceCurvePoint, SequenceAutomationClip, SequenceAutomationMapping, SequenceCurveLibraryItem, SequenceGradientLibraryItem, SequenceEffectParam, SequenceEffectParamValue, SequenceMarkCollection, SequenceCurveSource, SequenceGradientSource } from "../../../../types";
 
@@ -13,8 +13,8 @@ import { ColorPicker } from "../../../ColorPicker";
 import { clamp, type AutomationClipChooser } from "../../shared";
 
 const CURVE_EDITOR = {
-  width: 240,
-  height: 120,
+  width: THEME_METRICS.curveEditorWidth,
+  height: THEME_METRICS.curveEditorHeight,
   roundScale: 1000,
   flatRangeEpsilon: 0.0001,
   colorMismatchDistance: 0.001,
@@ -287,7 +287,7 @@ function automationBindingControl(
           )
         }
       >
-        <Link2Off size={14} />
+        <Link2Off size={THEME_METRICS.iconSizeSmall} />
       </button>
     );
   }
@@ -302,7 +302,7 @@ function automationBindingControl(
           setAutomationClipChooser({ effectId, param: param.name, mapping });
         }}
       >
-        <Link2 size={14} />
+        <Link2 size={THEME_METRICS.iconSizeSmall} />
       </button>
       <button
         type="button"
@@ -320,11 +320,11 @@ function automationBindingControl(
           )
         }
       >
-        <Plus size={14} />
+        <Plus size={THEME_METRICS.iconSizeSmall} />
       </button>
       {choosing && (
         <button type="button" className="neutral-button icon-button" title="Cancel choosing" onClick={() => { setAutomationClipChooser(null); }}>
-          <X size={14} />
+          <X size={THEME_METRICS.iconSizeSmall} />
         </button>
       )}
     </>
@@ -435,7 +435,7 @@ function ArrayShell<T>({
       <div className="array-param-header">
         <div className="effect-param-name">{name}</div>
         <button type="button" className="neutral-button" title="Add item" onClick={() => void commit([...values, newValue()])}>
-          <Plus size={14} />
+          <Plus size={THEME_METRICS.iconSizeSmall} />
         </button>
       </div>
       {values.map((value, index) => (
@@ -443,13 +443,13 @@ function ArrayShell<T>({
           <div className="array-param-row-main">{render(value, index)}</div>
           <div className="array-param-actions">
             <button type="button" className="neutral-button" title="Move up" disabled={index === 0} onClick={() => void commit(moveArrayItem(values, index, index - 1))}>
-              <ArrowUp size={14} />
+              <ArrowUp size={THEME_METRICS.iconSizeSmall} />
             </button>
             <button type="button" className="neutral-button" title="Move down" disabled={index >= values.length - 1} onClick={() => void commit(moveArrayItem(values, index, index + 1))}>
-              <ArrowDown size={14} />
+              <ArrowDown size={THEME_METRICS.iconSizeSmall} />
             </button>
             <button type="button" className="neutral-button" title="Remove item" onClick={() => void commit(values.filter((_, itemIndex) => itemIndex !== index))}>
-              <Trash2 size={14} />
+              <Trash2 size={THEME_METRICS.iconSizeSmall} />
             </button>
           </div>
         </div>
@@ -704,15 +704,15 @@ function LibraryValueShell<T extends { time: number }, S extends LibraryItem>({
         <div className="param-source-actions">
           {linked && (
             <button type="button" className="neutral-button icon-button" title="Make editable copy" onClick={() => { requestEditableCopy("edit"); }}>
-              <CopyPlus size={14} />
+              <CopyPlus size={THEME_METRICS.iconSizeSmall} />
             </button>
           )}
           <button type="button" className="neutral-button icon-button" title="Flip horizontal" onClick={flipHorizontal}>
-            <FlipHorizontal2 size={14} />
+            <FlipHorizontal2 size={THEME_METRICS.iconSizeSmall} />
           </button>
           {flipVerticalPoints !== undefined && (
             <button type="button" className="neutral-button icon-button" title="Flip vertical" onClick={flipVertical}>
-              <FlipVertical2 size={14} />
+              <FlipVertical2 size={THEME_METRICS.iconSizeSmall} />
             </button>
           )}
         </div>
@@ -884,7 +884,7 @@ function CurveParam({
               className={`float-curve-point ${index === selectedIndex ? "selected" : ""}`}
               cx={x}
               cy={y}
-              r={index === selectedIndex ? 5 : 4}
+              r={index === selectedIndex ? THEME_METRICS.curvePointRadiusSelected : THEME_METRICS.curvePointRadius}
               tabIndex={0}
               onPointerDown={(event) => {
                 event.stopPropagation();
@@ -909,7 +909,7 @@ function CurveParam({
               className="float-curve-points-toggle"
               onClick={() => { setPointsCollapsed((collapsed) => !collapsed); }}
             >
-              {pointsCollapsed ? <ChevronRight size={13} /> : <ChevronRight className="expanded" size={13} />}
+              {pointsCollapsed ? <ChevronRight size={THEME_METRICS.iconSizeExtraSmall} /> : <ChevronRight className="expanded" size={THEME_METRICS.iconSizeExtraSmall} />}
               <span>Points</span>
               <strong>{drafts.length}</strong>
             </button>
@@ -968,7 +968,7 @@ function CurveParam({
                       disabled={drafts.length <= 1}
                       onClick={() => { deletePoint(index); }}
                     >
-                      <Minus size={14} />
+                      <Minus size={THEME_METRICS.iconSizeSmall} />
                     </button>
                   </div>
                 ))}
@@ -1085,7 +1085,7 @@ function GradientParam({
     if (drag === null || drag.pointerId !== pointerId) return;
     const point = draftsRef.current[drag.index];
     if (point === undefined) return;
-    const moved = drag.moved || Math.abs(clientX - drag.startClientX) > 2;
+    const moved = drag.moved || Math.abs(clientX - drag.startClientX) > THEME_METRICS.interactionDragThreshold;
     if (!moved) return;
     const nextIndex = setPoint(drag.index, pointFromClientX(clientX, point.value), false);
     draggingPoint.current = { ...drag, index: nextIndex, moved: true };

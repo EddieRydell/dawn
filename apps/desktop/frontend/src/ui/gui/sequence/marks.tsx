@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { SequenceMarkCollection } from "../../../types";
-import { THEME_COLORS } from "../../../theme";
+import { THEME_COLORS, THEME_METRICS } from "../../../theme";
 
 import type { GuiFocus } from "../shared";
 
@@ -12,10 +12,10 @@ export type MarkDisplayMode = "overlay" | "strip" | "hidden";
 const DEFAULT_MARK_COLORS = [THEME_COLORS.markBlue, THEME_COLORS.markOrange, THEME_COLORS.markGreen, THEME_COLORS.markPink, THEME_COLORS.markYellow, THEME_COLORS.markRed];
 
 const MARK_DRAWING = {
-  cullPaddingPx: 6,
-  overlayAlpha: 0.55,
-  stripAlpha: 0.75,
-  selectedCapHalfWidthPx: 4,
+  cullPaddingPx: THEME_METRICS.markCullPadding,
+  overlayAlpha: THEME_METRICS.markOverlayOpacity,
+  stripAlpha: THEME_METRICS.markStripOpacity,
+  selectedCapHalfWidthPx: THEME_METRICS.markSelectedHalfWidth,
   selectedStroke: THEME_COLORS.textStrong
 } as const;
 
@@ -75,19 +75,19 @@ export function drawSequenceMarks(
         (selected?.type === "mark" && selected.collectionKey === collection.key && selected.index === index) ||
         (selectedMarks.get(collection.key)?.has(index) ?? false);
       ctx.strokeStyle = collection.color;
-      ctx.lineWidth = isSelected ? 2 : 1;
+      ctx.lineWidth = isSelected ? THEME_METRICS.visualLineWidthStrong : THEME_METRICS.visualLineWidth;
       ctx.globalAlpha = mode === "strip" ? MARK_DRAWING.stripAlpha : MARK_DRAWING.overlayAlpha;
       ctx.beginPath();
-      ctx.moveTo(x + 0.5, y1);
-      ctx.lineTo(x + 0.5, y2);
+      ctx.moveTo(x + THEME_METRICS.visualHairlineOffset, y1);
+      ctx.lineTo(x + THEME_METRICS.visualHairlineOffset, y2);
       ctx.stroke();
       if (isSelected) {
-        ctx.globalAlpha = 1;
+        ctx.globalAlpha = THEME_METRICS.opacityFull;
         ctx.strokeStyle = MARK_DRAWING.selectedStroke;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = THEME_METRICS.visualLineWidth;
         ctx.beginPath();
-        ctx.moveTo(x - MARK_DRAWING.selectedCapHalfWidthPx, y1 + 0.5);
-        ctx.lineTo(x + MARK_DRAWING.selectedCapHalfWidthPx, y1 + 0.5);
+        ctx.moveTo(x - MARK_DRAWING.selectedCapHalfWidthPx, y1 + THEME_METRICS.visualHairlineOffset);
+        ctx.lineTo(x + MARK_DRAWING.selectedCapHalfWidthPx, y1 + THEME_METRICS.visualHairlineOffset);
         ctx.stroke();
       }
     }
