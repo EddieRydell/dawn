@@ -1046,12 +1046,12 @@ button:focus-visible,
 
 .spatial-controls {
   position: absolute;
-  right: 12px;
-  bottom: 12px;
+  right: var(--dawn-space-8);
+  bottom: var(--dawn-space-8);
   display: flex;
   align-items: center;
   gap: var(--dawn-space-2);
-  padding: 4px;
+  padding: var(--dawn-space-3);
   border: var(--dawn-border-width) solid var(--dawn-grid-spatial-major);
   border-radius: var(--dawn-radius-xl);
   background: var(--dawn-error-underline);
@@ -1060,8 +1060,8 @@ button:focus-visible,
 }
 
 .spatial-controls button {
-  min-width: 24px;
-  height: 24px;
+  min-width: var(--dawn-control-height-sm);
+  height: var(--dawn-control-height-sm);
   border: 0;
   border-radius: var(--dawn-radius-sm);
   background: transparent;
@@ -1070,31 +1070,31 @@ button:focus-visible,
 }
 
 .spatial-controls button:hover { background: var(--dawn-surface-graph-hover); }
-.spatial-controls span { min-width: 42px; text-align: center; }
+.spatial-controls span { min-width: calc(var(--dawn-control-height-sm) * 2); text-align: center; }
 
 .spatial-context-menu {
   position: absolute;
   z-index: var(--dawn-z-scrollbar-thumb);
   display: grid;
-  min-width: 120px;
-  padding: 4px;
-  border: var(--dawn-border-width) solid #454c56;
+  min-width: calc(var(--dawn-control-height-md) * 4);
+  padding: var(--dawn-space-3);
+  border: var(--dawn-border-width) solid var(--dawn-border-control);
   border-radius: var(--dawn-radius-lg);
-  background: #171a1f;
+  background: var(--dawn-bg-panel);
   box-shadow: var(--dawn-shadow-popover);
 }
 
 .spatial-context-menu button {
-  padding: 5px 8px;
+  padding: var(--dawn-space-4) var(--dawn-space-8);
   border: 0;
   border-radius: var(--dawn-radius-sm);
   background: transparent;
-  color: #ebe7df;
+  color: var(--dawn-text);
   text-align: left;
   cursor: pointer;
 }
 
-.spatial-context-menu button:hover { background: #303741; }
+.spatial-context-menu button:hover { background: var(--dawn-hover); }
 
 .sequence-canvas-shell {
   position: relative;
