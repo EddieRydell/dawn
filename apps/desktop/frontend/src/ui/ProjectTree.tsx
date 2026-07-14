@@ -17,6 +17,8 @@ type TreeNode = {
   children?: TreeNode[];
 };
 
+type ProjectFileKind = "default" | "project" | "setup" | "layout" | "fixture" | "patch" | "curve" | "gradient" | "effect" | "sequence" | "operator";
+
 export function ProjectTree({ snapshot }: { snapshot: AppSnapshot }) {
   const treeData = useMemo(
     () => buildTree(snapshot.projectEntries, snapshot.diagnostics, snapshot.projectRoot),
@@ -228,9 +230,31 @@ function TreeRow({
 
 function treeRowClassName(node: NodeApi<TreeNode>): string {
   const classes = ["tree-row"];
+  if (node.data.kind === "file") classes.push(`file-kind-${projectFileKind(node.data.name)}`);
   if (node.isSelected) classes.push("selected");
   if (node.data.kind === "file" && node.data.hasError) classes.push("file-error");
   return classes.join(" ");
+}
+
+function projectFileKind(name: string): ProjectFileKind {
+  if (name === "project.dawn") return "project";
+  const match = /\.([a-z]+)\.dawn$/i.exec(name);
+  const suffix = match?.[1]?.toLowerCase();
+  switch (suffix) {
+    case "setup":
+    case "layout":
+    case "fixture":
+    case "patch":
+    case "curve":
+    case "gradient":
+    case "effect":
+    case "sequence":
+    case "operator":
+      return suffix;
+    case undefined:
+    default:
+      return "default";
+  }
 }
 
 function buildTree(

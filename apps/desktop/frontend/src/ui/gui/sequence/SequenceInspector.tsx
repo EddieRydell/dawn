@@ -31,9 +31,9 @@ type SelectedMarkEntry = {
 
 const SEQUENCE_INSPECTOR_TABS: { id: SequenceInspectorTab; label: string }[] = [
   { id: "effect", label: "Effect" },
-  { id: "controls", label: "Controls" },
   { id: "layers", label: "Layers" },
-  { id: "marks", label: "Marks" }
+  { id: "marks", label: "Marks" },
+  { id: "controls", label: "Controls" }
 ];
 
 function selectedEffectDefinitionValue(effect: SequenceEffect, definitions: SequenceEffectDefinition[]) {
