@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { Pencil, Plus, Trash2 } from "lucide-react";
+import { THEME_COLORS } from "../../../theme";
 
 import type {
   SequenceEditorDocument,
@@ -52,8 +53,8 @@ function effectReferenceKey(reference: SequenceEffectDefinition["effect"]) {
 }
 
 function defaultLayerColor(index: number) {
-  const colors = ["#50a0ff", "#f45b69", "#37a987", "#f6b84b", "#9b6dff", "#e86fb0"];
-  return colors[index % colors.length] ?? "#50a0ff";
+  const colors = [THEME_COLORS.graphBlue, THEME_COLORS.graphRed, THEME_COLORS.graphGreen, THEME_COLORS.graphYellow, THEME_COLORS.graphPurple, THEME_COLORS.graphPink];
+  return colors[index % colors.length] ?? THEME_COLORS.graphBlue;
 }
 
 export function SequenceInspector({

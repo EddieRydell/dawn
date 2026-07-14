@@ -13,8 +13,8 @@ test("edge ids roundtrip and reject malformed input", () => {
 test("edge lineage reports single, mixed, and absent upstream layers", () => {
   const graph = {
     nodes: [
-      { id: "layer:1", x: 0, y: 0, inputs: [], outputs: [], kind: { type: "layer", layerId: 1, layerName: "One", layerColor: "#111111", enabled: true } },
-      { id: "layer:2", x: 0, y: 0, inputs: [], outputs: [], kind: { type: "layer", layerId: 2, layerName: "Two", layerColor: "#222222", enabled: true } },
+      { id: "layer:1", x: 0, y: 0, inputs: [], outputs: [], kind: { type: "layer", layerId: 1, layerName: "One", layerColor: "layer-one", enabled: true } },
+      { id: "layer:2", x: 0, y: 0, inputs: [], outputs: [], kind: { type: "layer", layerId: 2, layerName: "Two", layerColor: "layer-two", enabled: true } },
       { id: "mix", x: 0, y: 0, inputs: [], outputs: [], kind: { type: "output" } },
       { id: "orphan", x: 0, y: 0, inputs: [], outputs: [], kind: { type: "output" } }
     ],
@@ -27,7 +27,7 @@ test("edge lineage reports single, mixed, and absent upstream layers", () => {
   };
   const lineages = graphEdgeLineages(graph);
 
-  assert.equal(lineages.get(graphEdgeId(graph.edges[0])).color, "#111111");
+  assert.equal(lineages.get(graphEdgeId(graph.edges[0])).color, "layer-one");
   assert.equal(lineages.get(graphEdgeId(graph.edges[2])).color, GRAPH_NEUTRAL_EDGE_COLOR);
   assert.equal(lineages.get(graphEdgeId(graph.edges[3])).label, "No upstream layer");
 });

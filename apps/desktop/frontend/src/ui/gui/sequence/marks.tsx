@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { SequenceMarkCollection } from "../../../types";
+import { THEME_COLORS } from "../../../theme";
 
 import type { GuiFocus } from "../shared";
 
@@ -8,14 +9,14 @@ import { getMarkDraft, markDraftEntries, setMarkDraft, type MarkDraftLookup, typ
 
 export type MarkDisplayMode = "overlay" | "strip" | "hidden";
 
-const DEFAULT_MARK_COLORS = ["#38bdf8", "#f97316", "#22c55e", "#e879f9", "#facc15", "#ef4444"];
+const DEFAULT_MARK_COLORS = [THEME_COLORS.markBlue, THEME_COLORS.markOrange, THEME_COLORS.markGreen, THEME_COLORS.markPink, THEME_COLORS.markYellow, THEME_COLORS.markRed];
 
 const MARK_DRAWING = {
   cullPaddingPx: 6,
   overlayAlpha: 0.55,
   stripAlpha: 0.75,
   selectedCapHalfWidthPx: 4,
-  selectedStroke: "#fffaf0"
+  selectedStroke: THEME_COLORS.textStrong
 } as const;
 
 let markDisplayMode: MarkDisplayMode = "overlay";
@@ -130,7 +131,7 @@ export function nextCollectionKey(name: string, collections: SequenceMarkCollect
 }
 
 export function defaultMarkColor(index: number) {
-  return DEFAULT_MARK_COLORS[index % DEFAULT_MARK_COLORS.length] ?? "#38bdf8";
+  return DEFAULT_MARK_COLORS[index % DEFAULT_MARK_COLORS.length] ?? THEME_COLORS.markBlue;
 }
 
 function snakeCaseKey(value: string) {

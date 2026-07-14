@@ -1,3 +1,4 @@
+import { THEME_COLORS } from "../theme";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { HexColorPicker } from "react-colorful";
@@ -24,7 +25,7 @@ export function ColorPicker({
   onOpenChange?: (open: boolean) => void;
   commit: (value: string) => Promise<void>;
 }) {
-  const normalizedValue = normalizeHexColor(value) ?? "#ffffff";
+  const normalizedValue = normalizeHexColor(value) ?? THEME_COLORS.white;
   const [internalOpen, setInternalOpen] = useState(false);
   const [dismissedOpenRequestKey, setDismissedOpenRequestKey] = useState(0);
   const [pickerDraft, setPickerDraft] = useState({ value: normalizedValue, requestKey: openRequestKey });
@@ -210,7 +211,7 @@ function normalizeHexColor(value: string): string | null {
 }
 
 function hexToRgb(hex: string): RgbColor {
-  const normalized = normalizeHexColor(hex) ?? "#ffffff";
+  const normalized = normalizeHexColor(hex) ?? THEME_COLORS.white;
   return {
     r: Number.parseInt(normalized.slice(1, 3), 16),
     g: Number.parseInt(normalized.slice(3, 5), 16),

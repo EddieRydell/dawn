@@ -17,6 +17,7 @@ import { defaultMarkColor, drawSequenceMarks, committedMarkDrafts, markIndexAfte
 
 import { targetsEqual } from "./sequenceTargets";
 import { drawWaveformStrip, useSequenceWaveform } from "./sequenceWaveform";
+import { THEME_COLORS } from "../../../theme";
 
 import { buildSequenceClipLayout, constrainEffectLaneDelta, constrainEffectMoveDelta, constrainEffectResizeDelta, constrainMarkDelta, effectMoveDrafts, effectResizeDrafts, hitSequence, hitSequenceMark, markMoveDrafts, markRefLookup, mergeSequenceSelection, MIN_EFFECT_DURATION_SECONDS, nextEffectSelection, nextMarkSelection, normalizedRect, selectedEffectId, selectionCount, selectionFromMarqueeEffects, selectionFromMarqueeMarks, sequenceHoverEqual, setMarkDraft, singleEffectSelectionFocus, singleSelectionFocus, selectionFromSingle, type MarkDraftLookup, type SequenceClipLayout, type SequenceContextMenu, type SequenceHover, type SequenceMarquee, type SequenceDraft, type SequenceViewport } from "./sequenceSelection";
 
@@ -38,34 +39,34 @@ const SEQUENCE_CANVAS = {
 } as const;
 
 const SEQUENCE_COLORS = {
-  page: "#111214",
-  panel: "#17181b",
-  laneAlt: "#15171a",
-  laneSelected: "rgb(106 191 138 / 12%)",
-  grid: "#24272c",
-  border: "#373b42",
-  gridFaint: "#2c3036",
-  timelineMajor: "#343941",
-  timelineMinor: "#1f2227",
-  timelineLabel: "#a8a29a",
-  textMuted: "#c7c0b6",
-  textFaint: "#696b70",
-  overlay: "rgb(255 250 240 / 10%)",
-  clipSelected: "#f0f0f0",
-  clipHover: "#d8d2c9",
-  clipBorder: "#8a8d93",
-  automation: "#8ecae6",
-  automationFill: "rgb(142 202 230 / 28%)",
-  automationGraph: "#070809",
-  automationGraphGrid: "#16191d",
-  automationGraphGridMajor: "#24282e",
-  accent: "#6abf8a",
-  accentSubtle: "rgb(106 191 138 / 14%)",
-  warning: "#f0c46b",
-  markMarquee: "#8ecae6",
-  markMarqueeFill: "rgb(142 202 230 / 12%)",
-  effectMarqueeFill: "rgb(240 196 107 / 12%)",
-  playhead: "#d6a35a"
+  page: THEME_COLORS.page,
+  panel: THEME_COLORS.panel,
+  laneAlt: THEME_COLORS.sequenceLaneAlternate,
+  laneSelected: THEME_COLORS.sequenceLaneSelected,
+  grid: THEME_COLORS.sequenceGrid,
+  border: THEME_COLORS.border,
+  gridFaint: THEME_COLORS.sequenceGridFaint,
+  timelineMajor: THEME_COLORS.timelineMajor,
+  timelineMinor: THEME_COLORS.timelineMinor,
+  timelineLabel: THEME_COLORS.textMuted,
+  textMuted: THEME_COLORS.textSoft,
+  textFaint: THEME_COLORS.textFaint,
+  overlay: THEME_COLORS.overlay,
+  clipSelected: THEME_COLORS.clipSelected,
+  clipHover: THEME_COLORS.clipHover,
+  clipBorder: THEME_COLORS.clipBorder,
+  automation: THEME_COLORS.automation,
+  automationFill: THEME_COLORS.automationFill,
+  automationGraph: THEME_COLORS.automationGraph,
+  automationGraphGrid: THEME_COLORS.automationGraphGrid,
+  automationGraphGridMajor: THEME_COLORS.automationGraphMajorGrid,
+  accent: THEME_COLORS.accent,
+  accentSubtle: THEME_COLORS.accentSubtle,
+  warning: THEME_COLORS.warning,
+  markMarquee: THEME_COLORS.automation,
+  markMarqueeFill: THEME_COLORS.markMarqueeFill,
+  effectMarqueeFill: THEME_COLORS.effectMarqueeFill,
+  playhead: THEME_COLORS.playhead
 } as const;
 
 const SEQUENCE_DRAG_THRESHOLD_PX = 4;
@@ -2059,7 +2060,7 @@ function drawAutomationCurve(
   ctx.lineCap = "butt";
   ctx.lineJoin = "miter";
   for (const point of curvePoints) {
-    ctx.fillStyle = "#ebe7df";
+    ctx.fillStyle = THEME_COLORS.text;
     ctx.strokeStyle = SEQUENCE_COLORS.page;
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -2189,7 +2190,7 @@ function drawClipRasterWarning(
   rect: { x: number; y: number; width: number; height: number }
 ) {
   const size = Math.min(12, Math.max(6, rect.height - 6));
-  ctx.fillStyle = "rgb(17 18 20 / 72%)";
+  ctx.fillStyle = THEME_COLORS.rasterWarningOverlay;
   ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
   ctx.fillStyle = SEQUENCE_COLORS.warning;
   ctx.beginPath();

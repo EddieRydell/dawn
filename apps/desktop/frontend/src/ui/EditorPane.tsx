@@ -610,51 +610,51 @@ function createState(
       ]),
       EditorView.updateListener.of(onUpdate),
       EditorView.theme({
-        "&": { height: "100%", backgroundColor: "#17181b", color: "#ebe7df" },
+        "&": { height: "100%", backgroundColor: "var(--dawn-bg)", color: "var(--dawn-text)" },
         ".cm-scroller": {
           fontFamily: "Consolas, 'SFMono-Regular', monospace",
           fontSize: "13px",
           scrollbarWidth: "none"
         },
         ".cm-scroller::-webkit-scrollbar": { display: "none" },
-        ".cm-content": { caretColor: "#6abf8a" },
-        ".cm-cursor": { borderLeftColor: "#6abf8a" },
-        ".cm-selectionBackground": { backgroundColor: "#31543f !important" },
-        ".cm-gutters": { backgroundColor: "#1d1f23", color: "#77736d", borderRight: "1px solid #373b42" },
+        ".cm-content": { caretColor: "var(--dawn-accent)" },
+        ".cm-cursor": { borderLeftColor: "var(--dawn-accent)" },
+        ".cm-selectionBackground": { backgroundColor: "var(--dawn-accent-bg) !important" },
+        ".cm-gutters": { backgroundColor: "var(--dawn-bg-rail)", color: "var(--dawn-text-muted)", borderRight: "1px solid var(--dawn-border)" },
         ".cm-lintRange": {
           backgroundPosition: "left calc(100% - 1px)",
           backgroundRepeat: "repeat-x",
           paddingBottom: "0",
           textDecoration: "none"
         },
-        ".cm-lintRange-error": { backgroundImage: squiggleDataUri("#df6b6b") },
-        ".cm-lintRange-warning": { backgroundImage: squiggleDataUri("#e3a84f") },
+        ".cm-lintRange-error": { backgroundImage: squiggleDataUri("var(--dawn-color-df6b6b)") },
+        ".cm-lintRange-warning": { backgroundImage: squiggleDataUri("var(--dawn-color-e3a84f)") },
         ".cm-lintRange-active": { backgroundColor: "transparent" },
         ".cm-tooltip.cm-tooltip-lint": {
-          border: "1px solid #454a53",
+          border: "1px solid var(--dawn-border-control)",
           borderRadius: "5px",
-          backgroundColor: "#202226",
-          boxShadow: "0 10px 26px rgb(0 0 0 / 38%)",
-          color: "#ebe7df",
+          backgroundColor: "var(--dawn-bg-panel)",
+          boxShadow: "0 10px 26px var(--dawn-color-rgb-0-0-0-38)",
+          color: "var(--dawn-text)",
           overflow: "hidden"
         },
         ".cm-tooltip-lint .cm-diagnostic": {
           maxWidth: "420px",
           borderLeft: "0",
-          backgroundColor: "#202226",
+          backgroundColor: "var(--dawn-bg-panel)",
           padding: "7px 9px",
-          color: "#ebe7df",
+          color: "var(--dawn-text)",
           fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
           fontSize: "12px",
           lineHeight: "1.35"
         },
-        ".cm-tooltip-lint .cm-diagnostic-error": { backgroundColor: "#261b1e" },
-        ".cm-tooltip-lint .cm-diagnostic-warning": { backgroundColor: "#292319" },
+        ".cm-tooltip-lint .cm-diagnostic-error": { backgroundColor: "var(--dawn-color-261b1e)" },
+        ".cm-tooltip-lint .cm-diagnostic-warning": { backgroundColor: "var(--dawn-color-292319)" },
         ".cm-tooltip-lint .cm-diagnosticText": {
-          color: "#ebe7df"
+          color: "var(--dawn-text)"
         },
         ".cm-tooltip-lint .cm-diagnostic-message": {
-          color: "#ebe7df",
+          color: "var(--dawn-text)",
           overflowWrap: "anywhere"
         },
         ".cm-tooltip-lint .cm-diagnostic-location, .cm-tooltip-lint .cm-diagnostic-code": { display: "none" }
@@ -827,14 +827,14 @@ function languageForPath(path: string | null): Extension {
 }
 
 const dawnHighlightStyle = HighlightStyle.define([
-  { tag: tags.keyword, color: "#d99adf" },
-  { tag: [tags.name, tags.propertyName, tags.attributeName], color: "#87c7ff" },
-  { tag: [tags.variableName, tags.definition(tags.variableName)], color: "#ebe7df" },
-  { tag: [tags.function(tags.variableName), tags.function(tags.definition(tags.variableName))], color: "#8fd6b5" },
-  { tag: [tags.string, tags.special(tags.string)], color: "#e8bf7a" },
-  { tag: [tags.number, tags.bool, tags.null], color: "#f09a86" },
-  { tag: [tags.operator, tags.punctuation, tags.separator], color: "#a8a29a" },
-  { tag: tags.comment, color: "#77736d", fontStyle: "italic" },
-  { tag: [tags.typeName, tags.className], color: "#a6d189" },
-  { tag: tags.invalid, color: "#ff8f8f" }
+  { tag: tags.keyword, color: "var(--dawn-code-keyword)" },
+  { tag: [tags.name, tags.propertyName, tags.attributeName], color: "var(--dawn-code-name)" },
+  { tag: [tags.variableName, tags.definition(tags.variableName)], color: "var(--dawn-text)" },
+  { tag: [tags.function(tags.variableName), tags.function(tags.definition(tags.variableName))], color: "var(--dawn-code-function)" },
+  { tag: [tags.string, tags.special(tags.string)], color: "var(--dawn-code-string)" },
+  { tag: [tags.number, tags.bool, tags.null], color: "var(--dawn-code-number)" },
+  { tag: [tags.operator, tags.punctuation, tags.separator], color: "var(--dawn-text-muted)" },
+  { tag: tags.comment, color: "var(--dawn-text-muted)", fontStyle: "italic" },
+  { tag: [tags.typeName, tags.className], color: "var(--dawn-code-type)" },
+  { tag: tags.invalid, color: "var(--dawn-code-invalid)" }
 ]);

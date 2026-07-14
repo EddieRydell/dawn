@@ -3,6 +3,7 @@ import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { ArrowDown, ArrowUp, ChevronRight, CopyPlus, FlipHorizontal2, FlipVertical2, Link2, Link2Off, Minus, Plus, Trash2, X } from "lucide-react";
 
 import { commands } from "../../../../api";
+import { THEME_COLORS } from "../../../../theme";
 
 import type { SequenceGradientStop, SequenceCurvePoint, SequenceAutomationClip, SequenceAutomationMapping, SequenceCurveLibraryItem, SequenceGradientLibraryItem, SequenceEffectParam, SequenceEffectParamValue, SequenceMarkCollection, SequenceCurveSource, SequenceGradientSource } from "../../../../types";
 
@@ -17,8 +18,8 @@ const CURVE_EDITOR = {
   roundScale: 1000,
   flatRangeEpsilon: 0.0001,
   colorMismatchDistance: 0.001,
-  emptyGradient: "#17181b",
-  defaultColor: "#ffffff"
+  emptyGradient: THEME_COLORS.emptyGradient,
+  defaultColor: THEME_COLORS.white
 } as const;
 
 export type EditedSequenceCurvePoint = { time: number; value: number };

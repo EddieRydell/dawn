@@ -1,4 +1,5 @@
 import "@xyflow/react/dist/style.css";
+import { THEME_COLORS } from "../../../theme";
 
 import {
   Background,
@@ -537,7 +538,7 @@ function GraphFlowCanvas({
         }}
         onSelectionChange={handleSelectionChange}
       >
-        <Background color="#2c3036" gap={32} />
+        <Background color={THEME_COLORS.hover} gap={32} />
         <MiniMap className="graph-flow-minimap" nodeStrokeWidth={2} pannable zoomable />
         <Controls className="graph-flow-controls" showInteractive={false} />
       </ReactFlow>
@@ -863,6 +864,6 @@ function nextNodeX(graph: { nodes: SequenceGraphNode[] }) {
 }
 
 function layerColor(index: number) {
-  const colors = ["#50a0ff", "#f45b69", "#37a987", "#f6b84b", "#9b6dff", "#e86fb0"];
-  return colors[index % colors.length] ?? "#50a0ff";
+  const colors = [THEME_COLORS.graphBlue, THEME_COLORS.graphRed, THEME_COLORS.graphGreen, THEME_COLORS.graphYellow, THEME_COLORS.graphPurple, THEME_COLORS.graphPink];
+  return colors[index % colors.length] ?? THEME_COLORS.graphBlue;
 }

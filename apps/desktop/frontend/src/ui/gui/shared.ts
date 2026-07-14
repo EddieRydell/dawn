@@ -10,6 +10,7 @@ import type {
   SequenceSelection as WireSequenceSelection,
   Transform as WireTransform
 } from "../../types";
+import { THEME_COLORS } from "../../theme";
 
 export type Point3 = { x: number; y: number; z: number };
 
@@ -37,8 +38,7 @@ export type GuiFocus =
   | { type: "point"; index: number }
   | null;
 
-const GUI_CANVAS = {
-  gridStepPx: 32,
+export const GUI_CANVAS = {
   spatialPaddingPx: 42,
   pointHitMeters: 0.8,
   placementHitMeters: 1.2,
@@ -47,8 +47,12 @@ const GUI_CANVAS = {
 } as const;
 
 const GUI_COLORS = {
-  canvasBackground: "#17181b",
-  canvasGrid: "#2c3036"
+  canvasBackground: THEME_COLORS.canvasBackground,
+  canvasGrid: THEME_COLORS.hover,
+  guide: THEME_COLORS.canvasGuide,
+  axis: THEME_COLORS.canvasAxis,
+  majorGrid: THEME_COLORS.canvasMajorGrid,
+  label: THEME_COLORS.canvasLabel
 } as const;
 
 export function normalizePoint(point: Point3Meters | GeometryRenderPoint): Point3 {
@@ -114,7 +118,8 @@ export function normalizeBounds(bounds: GeometryRenderBounds): RenderBounds {
 export function drawSpatialCanvas(
   canvas: HTMLCanvasElement | null,
   bounds: RenderBounds,
-  draw: (ctx: CanvasRenderingContext2D, project: (point: Point3) => { x: number; y: number }) => void
+  draw: (ctx: CanvasRenderingContext2D, project: (point: Point3) => { x: number; y: number }) => void,
+  viewport?: SpatialViewport
 ) {
   if (!canvas) return;
   const rect = canvas.getBoundingClientRect();
@@ -128,61 +133,67 @@ export function drawSpatialCanvas(
   ctx.fillStyle = GUI_COLORS.canvasBackground;
   ctx.fillRect(0, 0, rect.width, rect.height);
   ctx.font = "12px Inter, sans-serif";
-  const project = (point: Point3) => projectPoint(point, rect.width, rect.height, bounds);
-  drawGrid(ctx, rect.width, rect.height);
+  const view = viewport ?? fitViewport(bounds, rect.width, rect.height);
+  const project = (point: Point3) => projectPoint(point, rect.width, rect.height, view);
+  drawGrid(ctx, rect.width, rect.height, view);
   draw(ctx, project);
 }
 
-function drawGrid(ctx: CanvasRenderingContext2D, width: number, height: number) {
-  ctx.strokeStyle = GUI_COLORS.canvasGrid;
-  ctx.lineWidth = 1;
-  for (let x = 0; x < width; x += GUI_CANVAS.gridStepPx) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, height);
-    ctx.stroke();
-  }
-  for (let y = 0; y < height; y += GUI_CANVAS.gridStepPx) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(width, y);
-    ctx.stroke();
-  }
-}
+export type SpatialViewport = { scale: number; fitScale: number; offsetX: number; offsetY: number };
 
-function projectPoint(point: Point3, width: number, height: number, bounds: RenderBounds) {
-  const padding = GUI_CANVAS.spatialPaddingPx;
+export function fitViewport(bounds: RenderBounds, width: number, height: number): SpatialViewport {
   const spanX = Math.max(1, bounds.maxX - bounds.minX);
   const spanY = Math.max(1, bounds.maxY - bounds.minY);
-  const scale = Math.min((width - padding * 2) / spanX, (height - padding * 2) / spanY);
-  return {
-    x: padding + (point.x - bounds.minX) * scale,
-    y: height - padding - (point.y - bounds.minY) * scale
-  };
+  const scale = Math.min((width - 84) / spanX, (height - 84) / spanY);
+  return { scale, fitScale: scale, offsetX: 42 - bounds.minX * scale, offsetY: height - 42 + bounds.minY * scale };
 }
 
-export function unproject(x: number, y: number, canvas: HTMLCanvasElement | null, bounds: RenderBounds): Point3 {
+function drawGrid(ctx: CanvasRenderingContext2D, width: number, height: number, view: SpatialViewport) {
+  const meters = view.scale > 180 ? 1 : view.scale > 70 ? 2 : view.scale > 25 ? 5 : view.scale > 8 ? 10 : 20;
+  const left = -view.offsetX / view.scale;
+  const right = (width - view.offsetX) / view.scale;
+  const bottom = (view.offsetY - height) / view.scale;
+  const top = view.offsetY / view.scale;
+  ctx.font = "11px Inter, sans-serif";
+  for (let value = Math.floor(left / meters) * meters; value <= right; value += meters) {
+    const x = view.offsetX + value * view.scale;
+    ctx.strokeStyle = Math.abs(value) < 1e-8 ? GUI_COLORS.axis : (Math.round(value / meters) % 5 === 0 ? GUI_COLORS.majorGrid : GUI_COLORS.canvasGrid);
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
+    if (x > 4 && x < width - 28) { ctx.fillStyle = GUI_COLORS.label; ctx.fillText(`${value}m`, x + 3, height - 7); }
+  }
+  for (let value = Math.floor(bottom / meters) * meters; value <= top; value += meters) {
+    const y = view.offsetY - value * view.scale;
+    ctx.strokeStyle = Math.abs(value) < 1e-8 ? GUI_COLORS.axis : (Math.round(value / meters) % 5 === 0 ? GUI_COLORS.majorGrid : GUI_COLORS.canvasGrid);
+    ctx.beginPath();
+    ctx.moveTo(0, y); ctx.lineTo(width, y);
+    ctx.stroke();
+    if (y > 14 && y < height - 4) { ctx.fillStyle = GUI_COLORS.label; ctx.fillText(`${value}m`, 5, y - 3); }
+  }
+}
+
+function projectPoint(point: Point3, _width: number, _height: number, view: SpatialViewport) {
+  return { x: view.offsetX + point.x * view.scale, y: view.offsetY - point.y * view.scale };
+}
+
+export function unproject(x: number, y: number, canvas: HTMLCanvasElement | null, bounds: RenderBounds, viewport?: SpatialViewport): Point3 {
   const rect = canvas?.getBoundingClientRect();
   const width = rect?.width ?? 1;
   const height = rect?.height ?? 1;
-  const padding = GUI_CANVAS.spatialPaddingPx;
-  const spanX = Math.max(1, bounds.maxX - bounds.minX);
-  const spanY = Math.max(1, bounds.maxY - bounds.minY);
-  const scale = Math.min((width - padding * 2) / spanX, (height - padding * 2) / spanY);
+  const view = viewport ?? fitViewport(bounds, width, height);
   return {
-    x: bounds.minX + (x - padding) / scale,
-    y: bounds.minY + (height - padding - y) / scale,
+    x: (x - view.offsetX) / view.scale,
+    y: (view.offsetY - y) / view.scale,
     z: 0
   };
 }
 
-export function nearestPlacement(document: PreviewDocument, point: Point3): PreviewPropPlacement | null {
+export function nearestPlacement(document: PreviewDocument, point: Point3, hitRadiusMeters: number = GUI_CANVAS.placementHitMeters): PreviewPropPlacement | null {
   let best: PreviewPropPlacement | null = null;
   let bestDistance = Infinity;
   for (const placement of document.fixtures) {
     const transform = normalizeTransform(placement.transform);
     const distance = Math.hypot(transform.position.x - point.x, transform.position.y - point.y);
-    if (distance < bestDistance && distance < GUI_CANVAS.placementHitMeters) {
+    if (distance < bestDistance && distance < hitRadiusMeters) {
       best = placement;
       bestDistance = distance;
     }
@@ -190,14 +201,14 @@ export function nearestPlacement(document: PreviewDocument, point: Point3): Prev
   return best;
 }
 
-export function nearestPoint(points: Point3[], point: Point3) {
+export function nearestPoint(points: Point3[], point: Point3, hitRadiusMeters: number = GUI_CANVAS.pointHitMeters) {
   let best: number | null = null;
   let bestDistance = Infinity;
   for (let index = 0; index < points.length; index += 1) {
     const candidate = points[index];
     if (candidate === undefined) continue;
     const distance = Math.hypot(candidate.x - point.x, candidate.y - point.y);
-    if (distance < bestDistance && distance < GUI_CANVAS.pointHitMeters) {
+    if (distance < bestDistance && distance < hitRadiusMeters) {
       best = index;
       bestDistance = distance;
     }
