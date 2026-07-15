@@ -633,8 +633,7 @@ export function SequenceCanvas({
       commands.applySequenceGuiEdit({
         type: "bindAutomationParam",
         clipId,
-        effectId: chooser.effectId,
-        param: chooser.param,
+        target: chooser.target,
         mapping: chooser.mapping
       })
     ).then(() => {
@@ -643,6 +642,11 @@ export function SequenceCanvas({
   };
   const deleteSelectedEffect = async (effectId: number) => {
     await runGuiEditCommand(() => commands.applySequenceGuiEdit({ type: "deleteEffect", id: effectId }));
+    setSelected(null);
+    updateSequenceSelection(null);
+  };
+  const deleteAutomationClip = async (clipId: number) => {
+    await runGuiEditCommand(() => commands.applySequenceGuiEdit({ type: "deleteAutomationClip", id: clipId }));
     setSelected(null);
     updateSequenceSelection(null);
   };
@@ -754,6 +758,10 @@ export function SequenceCanvas({
           void deleteSelectedEffect(focusedEffectId);
           return;
         }
+        if (selected?.type === "automationClip") {
+          void deleteAutomationClip(selected.id);
+          return;
+        }
         if (selectedMark === null) return;
         void runGuiEditCommand(() =>
           commands.applySequenceGuiEdit({
@@ -802,7 +810,12 @@ export function SequenceCanvas({
           }
           setSelected({ type: "automationClip", id: automationHit.clip.id });
           updateSequenceSelection(null);
-          setSequenceContextMenu({ kind: "blank", laneIndex: automationHit.clip.anchorLaneIndex, startSeconds });
+          setSequenceContextMenu({
+            kind: "automation",
+            laneIndex: automationHit.clip.anchorLaneIndex,
+            startSeconds,
+            clipId: automationHit.clip.id
+          });
           return;
         }
         const hit = hitSequence(visibleClips, x, y);
@@ -1456,6 +1469,14 @@ export function SequenceCanvas({
                   </ContextMenu.Sub>
                   <ContextMenu.Item className="menu-item danger" onSelect={() => void deleteSelectedEffect(sequenceContextMenu.effectId)}>
                     <Trash2 size={THEME_METRICS.iconSizeSmall} /> Delete Effect
+                  </ContextMenu.Item>
+                </>
+              )}
+              {sequenceContextMenu.kind === "automation" && (
+                <>
+                  <ContextMenu.Separator className="menu-separator" />
+                  <ContextMenu.Item className="menu-item danger" onSelect={() => void deleteAutomationClip(sequenceContextMenu.clipId)}>
+                    <Trash2 size={THEME_METRICS.iconSizeSmall} /> Delete Automation Clip
                   </ContextMenu.Item>
                 </>
               )}

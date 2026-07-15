@@ -1669,6 +1669,18 @@ button:focus-visible,
   min-width: 0;
 }
 
+.effect-param-automation-range {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--dawn-space-3);
+  color: var(--dawn-text-soft);
+}
+
+.effect-param-automation-range input {
+  opacity: var(--dawn-opacity-full);
+}
+
 .effect-param-value-control > label,
 .effect-param-value-control .effect-param-check {
   margin-bottom: 0;

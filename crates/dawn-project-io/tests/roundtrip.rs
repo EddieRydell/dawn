@@ -69,9 +69,7 @@ fn example_projects_roundtrip() {
             }
         }
 
-        if entrypoint.ends_with(Utf8Path::new(
-            "examples/thirty-output-controller/project.dawn",
-        )) {
+        if entrypoint.ends_with(Utf8Path::new("examples/starter/project.dawn")) {
             assert!(
                 original
                     .project
@@ -115,7 +113,7 @@ fn example_projects_roundtrip() {
             }));
             assert!(
                 !original.source.referenced_assets.is_empty(),
-                "thirty-output-controller should reference audio"
+                "starter should reference audio"
             );
             for asset in &original.source.referenced_assets {
                 assert!(
@@ -378,9 +376,5 @@ fn example_entrypoints() -> Vec<Utf8PathBuf> {
         .parent()
         .and_then(Utf8Path::parent)
         .unwrap();
-    vec![
-        workspace_root.join("examples/starter/project.dawn"),
-        workspace_root.join("examples/christmas-house/project.dawn"),
-        workspace_root.join("examples/thirty-output-controller/project.dawn"),
-    ]
+    vec![workspace_root.join("examples/starter/project.dawn")]
 }

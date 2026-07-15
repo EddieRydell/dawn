@@ -307,7 +307,7 @@ fn valid_example_project_loads_without_diagnostics() {
         .parent()
         .and_then(Utf8Path::parent)
         .unwrap();
-    let entrypoint = workspace_root.join("examples/thirty-output-controller/project.dawn");
+    let entrypoint = workspace_root.join("examples/starter/project.dawn");
 
     let report = check_project(&entrypoint);
 

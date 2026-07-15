@@ -18,6 +18,7 @@ export type MarkRefLookup = Map<string, Set<number>>;
 export type SequenceContextMenu =
   | { kind: "blank"; laneIndex: number; startSeconds: number }
   | { kind: "effect"; laneIndex: number; startSeconds: number; effectId: number }
+  | { kind: "automation"; laneIndex: number; startSeconds: number; clipId: number }
   | { kind: "mark"; laneIndex: number; startSeconds: number; collectionKey: string; index: number };
 
 export type SequenceHover =

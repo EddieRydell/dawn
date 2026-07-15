@@ -5,12 +5,12 @@ import { ArrowDown, ArrowUp, ChevronRight, CopyPlus, FlipHorizontal2, FlipVertic
 import { commands } from "../../../../api";
 import { THEME_COLORS, THEME_METRICS } from "../../../../theme";
 
-import type { SequenceGradientStop, SequenceCurvePoint, SequenceAutomationClip, SequenceAutomationMapping, SequenceCurveLibraryItem, SequenceGradientLibraryItem, SequenceEffectParam, SequenceEffectParamValue, SequenceMarkCollection, SequenceCurveSource, SequenceGradientSource } from "../../../../types";
+import type { SequenceGradientStop, SequenceCurvePoint, SequenceAutomationClip, SequenceAutomationMapping, SequenceAutomationTarget, SequenceCurveLibraryItem, SequenceGradientLibraryItem, SequenceEffectParam, SequenceEffectParamValue, SequenceMarkCollection, SequenceCurveSource, SequenceGradientSource } from "../../../../types";
 
 import { runGuiEditCommand } from "../../../../store";
 
 import { ColorPicker } from "../../../ColorPicker";
-import { clamp, type AutomationClipChooser } from "../../shared";
+import { automationTargetsEqual, clamp, type AutomationClipChooser } from "../../shared";
 
 const CURVE_EDITOR = {
   width: THEME_METRICS.curveEditorWidth,
@@ -26,10 +26,10 @@ export type EditedSequenceCurvePoint = { time: number; value: number };
 
 export type EditedSequenceGradientStop = { time: number; value: string };
 
-type EffectParamAutomationControls = {
-  effectId: number;
-  effectStartSeconds: number;
-  effectDurationSeconds: number;
+type ParamAutomationControls = {
+  target: SequenceAutomationTarget;
+  targetStartSeconds: number;
+  targetDurationSeconds: number;
   automationClips: SequenceAutomationClip[];
   canCreateAutomationClip: boolean;
   automationClipChooser: AutomationClipChooser;
@@ -53,7 +53,7 @@ export function TypedParamInput({
   curveLibrary: SequenceCurveLibraryItem[];
   gradientLibrary: SequenceGradientLibraryItem[];
   markCollections: SequenceMarkCollection[];
-  automation?: EffectParamAutomationControls | null;
+  automation?: ParamAutomationControls | null;
   linkCurve: (name: string, curve: SequenceCurveLibraryItem) => Promise<void>;
   unlinkCurve: (name: string) => Promise<void>;
   linkGradient: (name: string, gradient: SequenceGradientLibraryItem) => Promise<void>;
@@ -61,6 +61,17 @@ export function TypedParamInput({
 }) {
   const commit = (value: SequenceEffectParamValue) => {
     return commitParam(param.name, value);
+  };
+  const commitAutomationMapping = async (mapping: SequenceAutomationMapping) => {
+    if (automation === null || param.automation === null) return;
+    await runGuiEditCommand(() =>
+      commands.applySequenceGuiEdit({
+        type: "updateAutomationParamMapping",
+        clipId: param.automation?.clipId ?? 0,
+        target: automation.target,
+        mapping
+      })
+    );
   };
   const automated = param.automation !== null;
 
@@ -76,7 +87,7 @@ export function TypedParamInput({
     automation === null
       ? null
       : automationBindingControl(
-          automation.effectId,
+          automation.target,
           param,
           automation.automationClips,
           automation.canCreateAutomationClip,
@@ -89,10 +100,14 @@ export function TypedParamInput({
       : automation.automationClips.find((clip) => clip.id === param.automation?.clipId) ?? null;
 
   switch (param.value.type) {
-    case "int":
-      return <ParamShell name={param.name} automated={automated}><ParamValueRow actions={automationActions}><NumberParam key={`${param.name}:${param.value.value}`} value={param.value.value} step={1} disabled={automated} commit={(value) => commit({ type: "int", value: Math.max(0, Math.round(value)) })} /></ParamValueRow></ParamShell>;
-    case "float":
-      return <ParamShell name={param.name} automated={automated}><ParamValueRow actions={automationActions}><NumberParam key={`${param.name}:${param.value.value}`} value={param.value.value} step={0.05} disabled={automated} commit={(value) => commit({ type: "float", value })} /></ParamValueRow></ParamShell>;
+    case "int": {
+      const mapping = param.automation?.mapping.type === "int" ? param.automation.mapping : null;
+      return <ParamShell name={param.name} automated={automated}><ParamValueRow actions={automationActions}>{mapping === null ? <NumberParam key={`${param.name}:${param.value.value}`} value={param.value.value} step={1} disabled={automated} commit={(value) => commit({ type: "int", value: Math.max(0, Math.round(value)) })} /> : <AutomationRangeParam mapping={mapping} step={1} commit={commitAutomationMapping} />}</ParamValueRow></ParamShell>;
+    }
+    case "float": {
+      const mapping = param.automation?.mapping.type === "float" ? param.automation.mapping : null;
+      return <ParamShell name={param.name} automated={automated}><ParamValueRow actions={automationActions}>{mapping === null ? <NumberParam key={`${param.name}:${param.value.value}`} value={param.value.value} step={0.05} disabled={automated} commit={(value) => commit({ type: "float", value })} /> : <AutomationRangeParam mapping={mapping} step={0.05} commit={commitAutomationMapping} />}</ParamValueRow></ParamShell>;
+    }
     case "bool":
       return (
         <BoolParam
@@ -130,7 +145,7 @@ export function TypedParamInput({
           name={param.name}
           source={param.curveSource}
           sources={curveLibrary}
-          points={automated && automationClip !== null ? automationClipWindowCurve(automationClip, automation?.effectStartSeconds ?? 0, automation?.effectDurationSeconds ?? 1) : normalizeSequenceCurvePoints(param.value.points)}
+          points={automated && automationClip !== null ? automationClipWindowCurve(automationClip, automation?.targetStartSeconds ?? 0, automation?.targetDurationSeconds ?? 1) : normalizeSequenceCurvePoints(param.value.points)}
           commit={(points) => commit({ type: "curve", points })}
           disabled={automated}
           actions={automationActions}
@@ -260,7 +275,7 @@ function NumberArrayParam({ name, values, step, commit }: { name: string; values
 }
 
 function automationBindingControl(
-  effectId: number,
+  target: SequenceAutomationTarget,
   param: SequenceEffectParam,
   clips: SequenceAutomationClip[],
   canCreateAutomationClip: boolean,
@@ -269,7 +284,7 @@ function automationBindingControl(
 ) {
   const mapping = defaultAutomationMapping(param);
   if (mapping === null) return null;
-  const choosing = automationClipChooser?.effectId === effectId && automationClipChooser.param === param.name;
+  const choosing = automationClipChooser !== null && automationTargetsEqual(automationClipChooser.target, target);
   if (param.automation !== null) {
     return (
       <button
@@ -281,8 +296,7 @@ function automationBindingControl(
             commands.applySequenceGuiEdit({
               type: "unbindAutomationParam",
               clipId: param.automation?.clipId ?? 0,
-              effectId,
-              param: param.name
+              target
             })
           )
         }
@@ -299,7 +313,7 @@ function automationBindingControl(
         title="Link existing automation"
         disabled={clips.length === 0}
         onClick={() => {
-          setAutomationClipChooser({ effectId, param: param.name, mapping });
+          setAutomationClipChooser({ target, mapping });
         }}
       >
         <Link2 size={THEME_METRICS.iconSizeSmall} />
@@ -313,8 +327,7 @@ function automationBindingControl(
           void runGuiEditCommand(() =>
             commands.applySequenceGuiEdit({
               type: "createAndBindAutomationClip",
-              effectId,
-              param: param.name,
+              target,
               mapping
             })
           )
@@ -499,6 +512,25 @@ function NumberParam({
         }}
       />
     </label>
+  );
+}
+
+function AutomationRangeParam({
+  mapping,
+  step,
+  commit
+}: {
+  mapping: Extract<SequenceAutomationMapping, { type: "float" } | { type: "int" }>;
+  step: number;
+  commit: (mapping: SequenceAutomationMapping) => Promise<void>;
+}) {
+  return (
+    <div className="effect-param-automation-range">
+      <span>Min</span>
+      <NumberParam value={mapping.min} step={step} commit={(min) => commit({ ...mapping, min })} />
+      <span>Max</span>
+      <NumberParam value={mapping.max} step={step} commit={(max) => commit({ ...mapping, max })} />
+    </div>
   );
 }
 
@@ -1266,17 +1298,17 @@ function normalizeSequenceCurvePoints(points: SequenceCurvePoint[]): EditedSeque
 
 function automationClipWindowCurve(
   clip: SequenceAutomationClip,
-  effectStartSeconds: number,
-  effectDurationSeconds: number
+  targetStartSeconds: number,
+  targetDurationSeconds: number
 ): EditedSequenceCurvePoint[] {
-  const effectDuration = Math.max(0.000000001, effectDurationSeconds);
+  const targetDuration = Math.max(0.000000001, targetDurationSeconds);
   const clipDuration = Math.max(0.000000001, clip.durationSeconds);
   const localTimes = new Set<number>([0, 1]);
 
   for (const point of clip.curve) {
     if (!Number.isFinite(point.time) || !Number.isFinite(point.value)) continue;
     const seconds = clip.startSeconds + clamp(point.time, 0, 1) * clipDuration;
-    const localTime = (seconds - effectStartSeconds) / effectDuration;
+    const localTime = (seconds - targetStartSeconds) / targetDuration;
     if (localTime > 0 && localTime < 1) {
       localTimes.add(roundCurveValue(localTime));
     }
@@ -1285,7 +1317,7 @@ function automationClipWindowCurve(
   const points = [...localTimes]
     .sort((left, right) => left - right)
     .map((time) => {
-      const seconds = effectStartSeconds + time * effectDuration;
+      const seconds = targetStartSeconds + time * targetDuration;
       const clipTime = (seconds - clip.startSeconds) / clipDuration;
       return {
         time,

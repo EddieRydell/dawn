@@ -5,6 +5,7 @@ import type {
   GeometryRenderPoint,
   Point3Meters,
   SequenceAutomationMapping,
+  SequenceAutomationTarget,
   SequenceSelection as WireSequenceSelection,
   Transform as WireTransform
 } from "../../types";
@@ -21,10 +22,19 @@ export type ReadyGuiDocument = Exclude<ActiveGuiDocument, { type: "blocked" }>;
 export type SequenceSelection = WireSequenceSelection | null;
 
 export type AutomationClipChooser = {
-  effectId: number;
-  param: string;
+  target: SequenceAutomationTarget;
   mapping: SequenceAutomationMapping;
 } | null;
+
+export function automationTargetsEqual(
+  left: SequenceAutomationTarget,
+  right: SequenceAutomationTarget
+) {
+  if (left.type !== right.type) return false;
+  return left.type === "effectParam"
+    ? left.effectId === (right.type === "effectParam" ? right.effectId : undefined) && left.param === right.param
+    : left.nodeId === (right.type === "compositionNodeParam" ? right.nodeId : undefined) && left.param === right.param;
+}
 
 export type GuiFocus =
   | { type: "effect"; id: number }

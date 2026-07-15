@@ -843,48 +843,17 @@ pub(super) fn edit_sequence(
                 bindings: Vec::new(),
             });
         }
-        SequenceGuiEdit::CreateAndBindAutomationClip {
-            effect_id,
-            param,
-            mapping,
-        } => {
-            let param = identifier(&param)?;
+        SequenceGuiEdit::CreateAndBindAutomationClip { target, mapping } => {
+            let target = automation_target_from_gui(target)?;
             let mapping = automation_mapping_from_gui(mapping)?;
-            let (effect_start, effect_duration, anchor_lane_index) = {
+            let (start, duration, anchor_lane_index) = {
                 let sequence = session.project.sequences.get(&sequence_id).ok_or_else(|| {
                     GuiMutationError::Invalid("Sequence was not found.".to_string())
                 })?;
-                let effect = sequence
-                    .effects
-                    .iter()
-                    .find(|effect| effect.id.0 == effect_id)
-                    .ok_or_else(|| {
-                        GuiMutationError::Invalid("Effect was not found.".to_string())
-                    })?;
-                let anchor_lane_index = effect_lane_index_resolved(session, &effect.target)
-                    .ok_or_else(|| {
-                        GuiMutationError::Invalid("Effect lane was not found.".to_string())
-                    })?;
-                (
-                    effect.start.clone(),
-                    effect.duration.clone(),
-                    anchor_lane_index as u32,
-                )
+                automation_target_timing(session, sequence, &target)?
             };
             let sequence = sequence_mut(session, &sequence_id)?;
-            for clip in &sequence.automation_clips {
-                if clip.bindings.iter().any(|binding| {
-                    binding
-                        .effect_param()
-                        .is_some_and(|(target_effect, target_param)| {
-                            target_effect.0 == effect_id && target_param == &param
-                        })
-                }) {
-                    return Err(GuiMutationError::Invalid(
-                        "Param is already automated.".to_string(),
-                    ));
-                }
-            }
+            ensure_automation_target_available(sequence, &target)?;
             let next_id = sequence
                 .automation_clips
                 .iter()
@@ -894,18 +863,12 @@ pub(super) fn edit_sequence(
                 + 1;
             sequence.automation_clips.push(AutomationClip {
                 id: AutomationClipId(next_id),
-                start: effect_start,
-                duration: effect_duration,
+                start,
+                duration,
                 anchor_lane_index,
                 lane_index: 0,
                 curve: default_automation_curve(),
-                bindings: vec![AutomationBinding {
-                    target: AutomationTarget::EffectParam {
-                        effect_id: EffectInstId(effect_id),
-                        param,
-                    },
-                    mapping,
-                }],
+                bindings: vec![AutomationBinding { target, mapping }],
             });
         }
         SequenceGuiEdit::MoveAutomationClip {
@@ -932,6 +895,21 @@ pub(super) fn edit_sequence(
             automation_clip_mut(sequence_mut(session, &sequence_id)?, id)?.curve =
                 curve_from_points(curve);
         }
+        SequenceGuiEdit::UpdateAutomationParamMapping {
+            clip_id,
+            target,
+            mapping,
+        } => {
+            let target = automation_target_from_gui(target)?;
+            let binding = automation_clip_mut(sequence_mut(session, &sequence_id)?, clip_id)?
+                .bindings
+                .iter_mut()
+                .find(|binding| binding.target == target)
+                .ok_or_else(|| {
+                    GuiMutationError::Invalid("Automation binding was not found.".to_string())
+                })?;
+            binding.mapping = automation_mapping_from_gui(mapping)?;
+        }
         SequenceGuiEdit::DeleteAutomationClip { id } => {
             sequence_mut(session, &sequence_id)?
                 .automation_clips
@@ -939,41 +917,21 @@ pub(super) fn edit_sequence(
         }
         SequenceGuiEdit::BindAutomationParam {
             clip_id,
-            effect_id,
-            param,
+            target,
             mapping,
         } => {
-            let param = identifier(&param)?;
+            let target = automation_target_from_gui(target)?;
             let sequence = sequence_mut(session, &sequence_id)?;
-            for clip in &sequence.automation_clips {
-                if clip.bindings.iter().any(|binding| {
-                    binding
-                        .effect_param()
-                        .is_some_and(|(target_effect, target_param)| {
-                            target_effect.0 == effect_id && target_param == &param
-                        })
-                }) {
-                    return Err(GuiMutationError::Invalid(
-                        "Param is already automated.".to_string(),
-                    ));
-                }
-            }
+            ensure_automation_target_available(sequence, &target)?;
             automation_clip_mut(sequence, clip_id)?
                 .bindings
                 .push(AutomationBinding {
-                    target: AutomationTarget::EffectParam {
-                        effect_id: EffectInstId(effect_id),
-                        param,
-                    },
+                    target,
                     mapping: automation_mapping_from_gui(mapping)?,
                 });
         }
-        SequenceGuiEdit::UnbindAutomationParam {
-            clip_id,
-            effect_id,
-            param,
-        } => {
-            let param_id = identifier(&param)?;
+        SequenceGuiEdit::UnbindAutomationParam { clip_id, target } => {
+            let target = automation_target_from_gui(target)?;
             let sequence = sequence_mut(session, &sequence_id)?;
             let clip = sequence
                 .automation_clips
@@ -986,39 +944,131 @@ pub(super) fn edit_sequence(
             let Some(binding) = clip
                 .bindings
                 .iter()
-                .find(|binding| {
-                    binding
-                        .effect_param()
-                        .is_some_and(|(target_effect, target_param)| {
-                            target_effect.0 == effect_id && target_param == &param_id
-                        })
-                })
+                .find(|binding| binding.target == target)
                 .cloned()
             else {
                 return Err(GuiMutationError::Invalid(
                     "Automation binding was not found.".to_string(),
                 ));
             };
-            let effect_start = sequence
-                .effects
-                .iter()
-                .find(|effect| effect.id.0 == effect_id)
-                .map(|effect| effect.start.as_seconds_f64())
-                .ok_or_else(|| GuiMutationError::Invalid("Effect was not found.".to_string()))?;
-            let value = automation_binding_value_at(&clip, &binding, effect_start)?;
-            effect_mut(sequence, effect_id)?
-                .param_overrides
-                .insert(param_id.clone(), value);
+            let sample_seconds = match &target {
+                AutomationTarget::EffectParam { effect_id, .. } => sequence
+                    .effects
+                    .iter()
+                    .find(|effect| &effect.id == effect_id)
+                    .map(|effect| effect.start.as_seconds_f64())
+                    .ok_or_else(|| {
+                        GuiMutationError::Invalid("Effect was not found.".to_string())
+                    })?,
+                AutomationTarget::CompositionNodeParam { .. } => clip.start.as_seconds_f64(),
+            };
+            let value = automation_binding_value_at(&clip, &binding, sample_seconds)?;
+            match &target {
+                AutomationTarget::EffectParam { effect_id, param } => {
+                    effect_mut(sequence, effect_id.0)?
+                        .param_overrides
+                        .insert(param.clone(), value);
+                }
+                AutomationTarget::CompositionNodeParam { node_id, param } => {
+                    let node = composition_graph_node_mut(sequence, node_id)?;
+                    let CompositionGraphNodeKind::Operator(operator) = &mut node.kind else {
+                        return Err(GuiMutationError::Invalid(
+                            "Automation graph node is not an operator.".to_string(),
+                        ));
+                    };
+                    operator.params.insert(param.clone(), value);
+                }
+            }
             automation_clip_mut(sequence, clip_id)?
                 .bindings
-                .retain(|binding| {
-                    !binding
-                        .effect_param()
-                        .is_some_and(|(target_effect, target_param)| {
-                            target_effect.0 == effect_id && target_param == &param_id
-                        })
-                });
+                .retain(|binding| binding.target != target);
         }
+    }
+    Ok(())
+}
+
+fn automation_target_from_gui(
+    target: SequenceAutomationTarget,
+) -> Result<AutomationTarget, GuiMutationError> {
+    Ok(match target {
+        SequenceAutomationTarget::EffectParam { effect_id, param } => {
+            AutomationTarget::EffectParam {
+                effect_id: EffectInstId(effect_id),
+                param: identifier(&param)?,
+            }
+        }
+        SequenceAutomationTarget::CompositionNodeParam { node_id, param } => {
+            AutomationTarget::CompositionNodeParam {
+                node_id: parse_graph_node_id(&node_id)?,
+                param: identifier(&param)?,
+            }
+        }
+    })
+}
+
+fn automation_target_timing(
+    session: &ProjectSession,
+    sequence: &dawn_language::sequence::Sequence,
+    target: &AutomationTarget,
+) -> Result<(DawnTime, DawnDuration, u32), GuiMutationError> {
+    match target {
+        AutomationTarget::EffectParam { effect_id, .. } => {
+            let effect = sequence
+                .effects
+                .iter()
+                .find(|effect| &effect.id == effect_id)
+                .ok_or_else(|| GuiMutationError::Invalid("Effect was not found.".to_string()))?;
+            let anchor_lane_index = effect_lane_index_resolved(session, &effect.target)
+                .ok_or_else(|| {
+                    GuiMutationError::Invalid("Effect lane was not found.".to_string())
+                })?;
+            Ok((
+                effect.start.clone(),
+                effect.duration.clone(),
+                anchor_lane_index as u32,
+            ))
+        }
+        AutomationTarget::CompositionNodeParam { node_id, .. } => {
+            let node = sequence
+                .composition_graph
+                .nodes
+                .iter()
+                .find(|node| &node.id == node_id)
+                .ok_or_else(|| {
+                    GuiMutationError::Invalid("Automation graph node is missing.".to_string())
+                })?;
+            if !matches!(node.kind, CompositionGraphNodeKind::Operator(_)) {
+                return Err(GuiMutationError::Invalid(
+                    "Automation graph node is not an operator.".to_string(),
+                ));
+            }
+            if sequence.layers.is_empty() {
+                return Err(GuiMutationError::Invalid(
+                    "Sequence has no lane for automation.".to_string(),
+                ));
+            }
+            Ok((
+                DawnTime::from_seconds_f64(0.0),
+                sequence.duration.clone(),
+                0,
+            ))
+        }
+    }
+}
+
+fn ensure_automation_target_available(
+    sequence: &dawn_language::sequence::Sequence,
+    target: &AutomationTarget,
+) -> Result<(), GuiMutationError> {
+    if sequence
+        .automation_clips
+        .iter()
+        .flat_map(|clip| &clip.bindings)
+        .any(|binding| &binding.target == target)
+    {
+        return Err(GuiMutationError::Invalid(
+            "Param is already automated.".to_string(),
+        ));
     }
     Ok(())
 }
@@ -1137,5 +1187,6 @@ use super::selection::{
 };
 use super::{GuiMutationError, ResolvedGuiObject};
 use crate::dto::{
-    PreviewGuiEdit, PropGuiEdit, SequenceBuiltinEffect, SequenceEffectReference, SequenceGuiEdit,
+    PreviewGuiEdit, PropGuiEdit, SequenceAutomationTarget, SequenceBuiltinEffect,
+    SequenceEffectReference, SequenceGuiEdit,
 };

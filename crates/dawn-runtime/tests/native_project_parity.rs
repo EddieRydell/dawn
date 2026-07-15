@@ -7,7 +7,7 @@ use dawn_runtime::PreparedSequenceRenderer;
 #[test]
 fn native_effects_match_reference_dsl_in_real_project_frames() {
     let root = camino::Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/thirty-output-controller/project.dawn");
+        .join("../../examples/starter/project.dawn");
     let session = load_project(&root).unwrap();
     let mut reference_project = session.project.clone();
     let document = camino::Utf8PathBuf::from("tests/native-effect-reference.effect.dawn");

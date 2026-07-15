@@ -14,13 +14,13 @@ use std::time::Duration;
 
 const PULSE_SOURCE: &str = include_str!("../tests/fixtures/native_effect_reference.effect.dawn");
 const SCAN_SWEEP_SOURCE: &str =
-    include_str!("../../../examples/thirty-output-controller/effects/scan-sweep.effect.dawn");
+    include_str!("../../../examples/starter/effects/scan-sweep.effect.dawn");
 const IMPACT_BURST_SOURCE: &str =
-    include_str!("../../../examples/thirty-output-controller/effects/impact-burst.effect.dawn");
+    include_str!("../../../examples/starter/effects/impact-burst.effect.dawn");
 const SPARKLE_COMET_SOURCE: &str =
-    include_str!("../../../examples/thirty-output-controller/effects/sparkle-comet.effect.dawn");
+    include_str!("../../../examples/starter/effects/sparkle-comet.effect.dawn");
 const SHIMMER_FIELD_SOURCE: &str =
-    include_str!("../../../examples/thirty-output-controller/effects/shimmer-field.effect.dawn");
+    include_str!("../../../examples/starter/effects/shimmer-field.effect.dawn");
 
 fn bench_effect_vm(c: &mut Criterion) {
     let constant = sample_effect(
@@ -180,7 +180,7 @@ fn bench_native_generated_sample(
 
 fn bench_operator(c: &mut Criterion) {
     let operator = compile_operators(include_str!(
-        "../../../examples/thirty-output-controller/operators/gain.operator.dawn"
+        "../../../examples/starter/operators/gain.operator.dawn"
     ))
     .expect("Gain operator source should compile")
     .into_iter()

@@ -61,7 +61,7 @@ trigonometry, HSV color generation, dense mixed arithmetic, marks, target sectio
 loops, and `timeline.emit`.
 
 `crates/dawn-runtime/benches/render_bench.rs` measures the real
-`examples/thirty-output-controller/project.dawn` renderer:
+`examples/starter/project.dawn` renderer:
 
 - renderer preparation
 - frames `144`, `2088`, `5904`, `9504`, `11520`, `19080`, and `25934`

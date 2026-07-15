@@ -90,11 +90,9 @@ After the app opens, load one of the example project entrypoints:
 
 ```text
 examples/starter/project.dawn
-examples/thirty-output-controller/project.dawn
-examples/christmas-house/project.dawn
 ```
 
-`examples/starter` is the smallest project to explore first. `examples/thirty-output-controller` is a larger show used for realistic render and performance work.
+`examples/starter` is the complete 30-output starter project, including example effects, gradients, curves, operators, sequences, and audio assets.
 
 ## Development Commands
 

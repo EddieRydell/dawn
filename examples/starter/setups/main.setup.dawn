@@ -1,23 +1,24 @@
 imports:
-- from: ../layouts/main.layout.dawn
+- from: ../layouts/outputs.layout.dawn
   as: layouts
-- from: ../patches/main.patch.dawn
+- from: ../patches/outputs.patch.dawn
   as: patches
 main:
   type: setup
-  elements: layouts.main_elements
-  preview: layouts.main_preview
-  patch: patches.main
+  elements: layouts.outputs_elements
+  preview: layouts.outputs_preview
+  patch: patches.outputs
   controllers:
   - output_controller
 output_controller:
   type: controller
   protocol:
     type: e131
-    source_name: Dawn Starter
+    source_name: Dawn Thirty Output Controller
     bind_address: 0.0.0.0
     priority: 100
-    mode: multicast
+    mode: unicast
+    destination: 192.168.7.2
   ports:
   - id: 1
     universe: 1
@@ -109,4 +110,3 @@ output_controller:
   - id: 30
     universe: 30
     slot_count: 339
-

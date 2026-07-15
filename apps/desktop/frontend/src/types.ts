@@ -33,6 +33,7 @@ export type {
   SequenceAudio,
   SequenceAutomationClip,
   SequenceAutomationMapping,
+  SequenceAutomationTarget,
   SequenceClipRaster,
   SequenceClipRasterError,
   SequenceClipRasterRequest,

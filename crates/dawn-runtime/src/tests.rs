@@ -14,7 +14,7 @@ fn example(name: &str) -> dawn_project_io::ProjectSession {
 
 #[test]
 fn every_example_prepares_and_produces_exact_controller_widths() {
-    for name in ["starter", "christmas-house", "thirty-output-controller"] {
+    for name in ["starter"] {
         let session = example(name);
         let sequence_id = session.project.root.sequences.first().unwrap();
         let renderer = PreparedRenderSession::prepare(
@@ -55,7 +55,7 @@ fn every_example_prepares_and_produces_exact_controller_widths() {
 
 #[test]
 fn preview_and_controller_buffers_are_from_one_deterministic_show_frame() {
-    let session = example("thirty-output-controller");
+    let session = example("starter");
     let sequence_id = session.project.root.sequences.first().unwrap();
     let renderer =
         PreparedRenderSession::prepare(&session.project, &session.project.root.setup, sequence_id)
@@ -110,7 +110,7 @@ fn preview_and_controller_buffers_are_from_one_deterministic_show_frame() {
 
 #[test]
 fn logical_state_covers_every_element_leaf_in_tree_order() {
-    let session = example("christmas-house");
+    let session = example("starter");
     let sequence_id = session.project.root.sequences.first().unwrap();
     let renderer =
         PreparedRenderSession::prepare(&session.project, &session.project.root.setup, sequence_id)

@@ -103,6 +103,8 @@ export function SequenceEditor({
           document={document}
           selectedItem={selectedGraphItem}
           setSelectedItem={setSelectedGraphItem}
+          automationClipChooser={automationClipChooser}
+          setAutomationClipChooser={setAutomationClipChooser}
           onClose={closeCompositionGraph}
         />
       )}

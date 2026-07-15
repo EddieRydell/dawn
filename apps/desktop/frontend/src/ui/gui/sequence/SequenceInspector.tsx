@@ -184,6 +184,33 @@ function EffectInspectorPanel({
   automationClipChooser: AutomationClipChooser;
   setAutomationClipChooser: (chooser: AutomationClipChooser) => void;
 }) {
+  const automationClip = selected?.type === "automationClip"
+    ? document.automationClips.find((clip) => clip.id === selected.id) ?? null
+    : null;
+  if (automationClip !== null) {
+    return (
+      <>
+        <h2>Automation Clip</h2>
+        <div className="inspector-readout-grid">
+          <Readout label="Start" value={`${automationClip.startSeconds.toFixed(3)}s`} />
+          <Readout label="Duration" value={`${automationClip.durationSeconds.toFixed(3)}s`} />
+          <Readout label="Bindings" value={String(automationClip.bindings.length)} />
+        </div>
+        <button
+          type="button"
+          onClick={() =>
+            void runGuiEditCommand(() =>
+              commands.applySequenceGuiEdit({ type: "deleteAutomationClip", id: automationClip.id })
+            ).then(() => {
+              setSelected(null);
+            })
+          }
+        >
+          <Trash2 size={THEME_METRICS.iconSizeExtraSmall} /> Delete automation clip
+        </button>
+      </>
+    );
+  }
   const id = selectedEffectId(selected);
   const effect = document.effects.find((candidate) => candidate.id === id);
 
@@ -406,9 +433,9 @@ function EffectInspectorPanel({
                     ).then(() => undefined)
                   }
                   automation={{
-                    effectId: effect.id,
-                    effectStartSeconds: effect.startSeconds,
-                    effectDurationSeconds: effect.durationSeconds,
+                    target: { type: "effectParam", effectId: effect.id, param: param.name },
+                    targetStartSeconds: effect.startSeconds,
+                    targetDurationSeconds: effect.durationSeconds,
                     automationClips: document.automationClips,
                     canCreateAutomationClip: document.lanes.some((lane) => targetsEqual(lane.target, effect.target)),
                     automationClipChooser,

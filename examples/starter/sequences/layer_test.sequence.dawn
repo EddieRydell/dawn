@@ -1,0 +1,319 @@
+imports:
+- from: ../layouts/outputs.layout.dawn
+  as: elements
+- from: ..\effects
+  as: effects
+- from: ..\operators
+  as: operators
+- from: ..\curves\basic_curves.curve.dawn
+  as: curves
+- from: ..\gradients\basic_gradients.gradient.dawn
+  as: gradients
+layer_test:
+  type: sequence
+  duration: 249.753832s
+  frame_rate: 60
+  audio: ..\audio\Babokon - All We Are.mp3
+  mark_collections:
+  - key: marks
+    name: Marks
+    color: '#45b7ff'
+    marks: []
+  layers:
+  - id: 0
+    name: Default
+    color: '#38bdf8'
+    enabled: true
+  - id: 1
+    name: Time Warp
+    color: '#f45b69'
+    enabled: true
+  effects:
+  - id: 1
+    layer_id: 0
+    start: 58.302838104s
+    duration: 0.773479974s
+    target:
+      tree: elements.outputs_elements
+      node: 1
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 2
+    layer_id: 0
+    start: 58.631778101s
+    duration: 0.773479974s
+    target:
+      tree: elements.outputs_elements
+      node: 2
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 3
+    layer_id: 0
+    start: 58.979683103s
+    duration: 1.5123879169999999s
+    target:
+      tree: elements.outputs_elements
+      node: 1001
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.ember_core_gradient
+      chase_position:
+        type: curve
+        curve: curves.ease_down
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+      revolutions:
+        type: integer
+        value: 6
+      pulse_overlap:
+        type: float
+        value: 100.0
+      reverse:
+        type: bool
+        value: true
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+    effect: builtins.spin
+  - id: 4
+    layer_id: 0
+    start: 58.971400977s
+    duration: 1s
+    target:
+      tree: elements.outputs_elements
+      node: 1001
+    scope: whole_target
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.ember_core_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 5
+    layer_id: 0
+    start: 59.202995451s
+    duration: 1.5123879169999999s
+    target:
+      tree: elements.outputs_elements
+      node: 1001
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.ember_core_gradient
+      chase_position:
+        type: curve
+        curve: curves.ease_down
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+      revolutions:
+        type: integer
+        value: 6
+      pulse_overlap:
+        type: float
+        value: 100.0
+      reverse:
+        type: bool
+        value: false
+      extend_to_start:
+        type: bool
+        value: false
+      extend_to_end:
+        type: bool
+        value: false
+    effect: builtins.spin
+  - id: 6
+    layer_id: 1
+    start: 64.321722383s
+    duration: 2.728596483s
+    target:
+      tree: elements.outputs_elements
+      node: 1001
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
+          - position: 0.123
+            color: '#ffffff'
+      chase_position:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+      revolutions:
+        type: integer
+        value: 25
+      pulse_overlap:
+        type: float
+        value: 80.0
+      section_width_pixels:
+        type: integer
+        value: 0
+    effect: builtins.spin
+  - id: 7
+    layer_id: 0
+    start: 64.273299852s
+    duration: 0.454959606s
+    target:
+      tree: elements.outputs_elements
+      node: 1001
+    scope: whole_target
+    params:
+      gradient:
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
+          - position: 0.104
+            color: '#ffffff'
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 8
+    layer_id: 0
+    start: 66.949970828s
+    duration: 0.454959606s
+    target:
+      tree: elements.outputs_elements
+      node: 1001
+    scope: whole_target
+    params:
+      gradient:
+        type: gradient
+        gradient:
+          type: gradient
+          stops:
+          - position: 0.0
+            color: '#ffffff'
+          - position: 0.104
+            color: '#ffffff'
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  composition_graph:
+    nodes:
+    - id: 1
+      position:
+        x: 413.1114966826567
+        y: 45.88434876430756
+      type: layer
+      layer_id: 0
+    - id: 2
+      position:
+        x: 810.1220282307067
+        y: 176.67931611539086
+      type: output
+    - id: 4
+      position:
+        x: 360.66313382209586
+        y: 277.9154371506117
+      type: layer
+      layer_id: 1
+    - id: 5
+      position:
+        x: 584.7223781550713
+        y: 229.7714711823636
+      type: operator
+      operator: operators.TimeWarp
+    edges:
+    - from: 1
+      from_port: output
+      to: 2
+      to_port: input
+    - from: 4
+      from_port: output
+      to: 5
+      to_port: source
+    - from: 5
+      from_port: output
+      to: 2
+      to_port: input
+  automation_clips: []
+  control_clips: []

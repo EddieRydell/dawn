@@ -1394,8 +1394,7 @@ pub enum SequenceGuiEdit {
         lane_index: u32,
     },
     CreateAndBindAutomationClip {
-        effect_id: u32,
-        param: String,
+        target: SequenceAutomationTarget,
         mapping: SequenceAutomationMapping,
     },
     MoveAutomationClip {
@@ -1413,19 +1412,22 @@ pub enum SequenceGuiEdit {
         id: u32,
         curve: Vec<SequenceCurvePoint>,
     },
+    UpdateAutomationParamMapping {
+        clip_id: u32,
+        target: SequenceAutomationTarget,
+        mapping: SequenceAutomationMapping,
+    },
     DeleteAutomationClip {
         id: u32,
     },
     BindAutomationParam {
         clip_id: u32,
-        effect_id: u32,
-        param: String,
+        target: SequenceAutomationTarget,
         mapping: SequenceAutomationMapping,
     },
     UnbindAutomationParam {
         clip_id: u32,
-        effect_id: u32,
-        param: String,
+        target: SequenceAutomationTarget,
     },
     CreateMarkCollection {
         key: String,

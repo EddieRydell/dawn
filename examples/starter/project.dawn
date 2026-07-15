@@ -1,10 +1,11 @@
 imports:
 - from: setups/main.setup.dawn
   as: setups
-- from: sequences/example.sequence.dawn
+- from: sequences
   as: sequences
 starter:
   type: project
   setup: setups.main
   sequences:
-  - sequences.example
+  - sequences.empty
+  - sequences.layer_test

@@ -64,7 +64,7 @@ position, smoothstep, enum comparisons, curve clamping, seeded random paths, tri
 dense mixed arithmetic, marks, target sections, `pick`, arrays, loops, and `timeline.emit`.
 
 The renderer benches live in `crates/dawn-runtime/benches/render_bench.rs`. They load
-`examples/thirty-output-controller/project.dawn`, benchmark renderer preparation, and render frames
+`examples/starter/project.dawn`, benchmark renderer preparation, and render frames
 `144`, `2088`, `5904`, `9504`, `11520`, `19080`, and `25934`.
 
 Renderer benches assert frame checksums and active effect counts. Update those committed expected
@@ -96,7 +96,7 @@ Current coverage:
 - `pnpm check`
 - Rust tests under `crates/*/tests` and desktop service tests where present
 
-When adding future coverage, prefer realistic fixtures from `examples/thirty-output-controller`.
+When adding future coverage, prefer realistic fixtures from `examples/starter`.
 Use temporary directories for invalid or synthetic Dawn documents.
 
 ### Document Editing And Serialization

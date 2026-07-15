@@ -42,6 +42,7 @@ import {
 } from "./graphEdge";
 import { graphOperatorDefinition, graphOperatorKey } from "./graphOperator";
 import { TypedParamInput } from "./params/TypedParamInput";
+import type { AutomationClipChooser } from "../shared";
 
 type GraphNodeData = {
   label: string;
@@ -98,11 +99,15 @@ export function GraphEditorModal({
   document,
   selectedItem,
   setSelectedItem,
+  automationClipChooser,
+  setAutomationClipChooser,
   onClose
 }: {
   document: SequenceEditorDocument;
   selectedItem: SelectedGraphItem;
   setSelectedItem: (item: SelectedGraphItem) => void;
+  automationClipChooser: AutomationClipChooser;
+  setAutomationClipChooser: (chooser: AutomationClipChooser) => void;
   onClose: () => void;
 }) {
   return (
@@ -117,7 +122,16 @@ export function GraphEditorModal({
             <X size={THEME_METRICS.iconSizeMedium} />
           </button>
         </div>
-        <GraphEditorWorkspace document={document} selectedItem={selectedItem} setSelectedItem={setSelectedItem} />
+        <GraphEditorWorkspace
+          document={document}
+          selectedItem={selectedItem}
+          setSelectedItem={setSelectedItem}
+          automationClipChooser={automationClipChooser}
+          setAutomationClipChooser={(chooser) => {
+            setAutomationClipChooser(chooser);
+            if (chooser !== null) onClose();
+          }}
+        />
       </div>
     </div>
   );
@@ -126,11 +140,15 @@ export function GraphEditorModal({
 function GraphEditorWorkspace({
   document,
   selectedItem,
-  setSelectedItem
+  setSelectedItem,
+  automationClipChooser,
+  setAutomationClipChooser
 }: {
   document: SequenceEditorDocument;
   selectedItem: SelectedGraphItem;
   setSelectedItem: (item: SelectedGraphItem) => void;
+  automationClipChooser: AutomationClipChooser;
+  setAutomationClipChooser: (chooser: AutomationClipChooser) => void;
 }) {
   const graph = document.compositionGraph;
   const flowNodes = useMemo(
@@ -213,6 +231,8 @@ function GraphEditorWorkspace({
             kind={selectedOperator.kind}
             definition={graphOperatorDefinition(graph.operatorCatalog, selectedOperator.kind.operator)}
             document={document}
+            automationClipChooser={automationClipChooser}
+            setAutomationClipChooser={setAutomationClipChooser}
           />
         )}
       </div>
@@ -224,12 +244,16 @@ function GraphOperatorInspector({
   node,
   kind,
   definition,
-  document
+  document,
+  automationClipChooser,
+  setAutomationClipChooser
 }: {
   node: SequenceGraphNode;
   kind: Extract<SequenceGraphNode["kind"], { type: "operator" }>;
   definition: SequenceGraphOperatorDefinition;
   document: SequenceEditorDocument;
+  automationClipChooser: AutomationClipChooser;
+  setAutomationClipChooser: (chooser: AutomationClipChooser) => void;
 }) {
   return (
     <aside className="graph-operator-inspector">
@@ -303,6 +327,15 @@ function GraphOperatorInspector({
                     })
                   ).then(() => undefined)
                 }
+                automation={{
+                  target: { type: "compositionNodeParam", nodeId: node.id, param: param.name },
+                  targetStartSeconds: 0,
+                  targetDurationSeconds: document.durationSeconds,
+                  automationClips: document.automationClips,
+                  canCreateAutomationClip: document.lanes.length > 0,
+                  automationClipChooser,
+                  setAutomationClipChooser
+                }}
               />
             </div>
           ))}

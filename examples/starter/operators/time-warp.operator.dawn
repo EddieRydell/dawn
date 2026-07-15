@@ -1,0 +1,12 @@
+operator TimeWarp {
+  input Signal source;
+  param float speed = 1.0;
+
+  color sample() {
+    float sampled_seconds = seconds() * speed;
+    if (speed < 0.0) {
+      sampled_seconds = duration() + sampled_seconds - 0.000000001;
+    }
+    return source.at(sampled_seconds);
+  }
+}

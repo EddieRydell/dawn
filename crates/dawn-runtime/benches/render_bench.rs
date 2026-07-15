@@ -109,7 +109,7 @@ fn bench_render(c: &mut Criterion) {
         .expect("benchmark operator frame should render");
     assert_eq!(checksum_frame(&operator_frame), 0xbedb_82fa_9d2f_65ae);
 
-    c.bench_function("prepare_thirty_output_controller", |b| {
+    c.bench_function("prepare_starter", |b| {
         b.iter(|| {
             black_box(
                 PreparedSequenceRenderer::prepare(
@@ -282,7 +282,7 @@ fn render_raster_columns(
 fn project_path() -> Utf8PathBuf {
     Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join("examples/thirty-output-controller/project.dawn")
+        .join("examples/starter/project.dawn")
 }
 
 fn checksum_frame(frame: &RenderedFrame) -> u64 {
