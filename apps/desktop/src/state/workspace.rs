@@ -168,6 +168,9 @@ impl DesktopState {
         let diagnostics = active_path
             .as_deref()
             .map(|path| {
+                if is_operator_document(path) {
+                    return check_document_text(Utf8Path::new(path), &text);
+                }
                 self.project_session().map_or_else(
                     || check_document_text(Utf8Path::new(path), &text),
                     |project| {
@@ -182,11 +185,12 @@ impl DesktopState {
             .unwrap_or_default();
         self.update_snapshot(|snapshot| {
             if let Some(buffer) = snapshot.active_buffer.as_mut() {
+                let changed = buffer.text != text;
                 buffer.text = text.clone();
-                buffer.dirty = true;
+                buffer.dirty |= changed;
                 if let Some(tab) = snapshot.tabs.iter_mut().find(|tab| tab.path == buffer.path) {
-                    tab.text = text;
-                    tab.dirty = true;
+                    tab.text = text.clone();
+                    tab.dirty |= changed;
                 }
             }
             if let Some(active_path) = active_path.as_deref() {
@@ -204,17 +208,29 @@ impl DesktopState {
         if self.snapshot().active_file.as_deref() != Some(path) {
             return Ok(self.snapshot());
         }
+        let pending_matches = lock_unpoisoned(&self.pending_operator_rewrite)
+            .as_ref()
+            .is_some_and(|pending| pending.path == Utf8Path::new(path));
+        if pending_matches
+            && self
+                .snapshot()
+                .active_buffer
+                .as_ref()
+                .is_some_and(|buffer| buffer.text == text)
+        {
+            return Ok(self.snapshot());
+        }
         self.update_active_text(text);
         let snapshot = self.snapshot();
-        let Some(buffer) = snapshot.active_buffer else {
+        let Some(buffer) = snapshot.active_buffer.as_ref() else {
             return Err("No active text buffer to autosave".to_string());
         };
+        if is_operator_document(&buffer.path) {
+            return Ok(snapshot);
+        }
         let Some(project) = self.project_session() else {
             return Err("No project is open".to_string());
         };
-        if let Some(snapshot) = self.save_operator_draft(&buffer.path, &buffer.text)? {
-            return Ok(snapshot);
-        }
         let relative_path = Utf8PathBuf::from(&buffer.path);
         let Some(path) = absolute_project_path(&project, &relative_path) else {
             return Err("File path is outside the loaded project".to_string());
@@ -435,4 +451,10 @@ impl DesktopState {
         let entrypoint = project.source.source_root.join(&project.source.entrypoint);
         self.apply_project_refresh_check(entrypoint.as_str(), check_project(&entrypoint))
     }
+}
+
+fn is_operator_document(path: &str) -> bool {
+    Utf8Path::new(path)
+        .file_name()
+        .is_some_and(|name| name.ends_with(".operator.dawn"))
 }
