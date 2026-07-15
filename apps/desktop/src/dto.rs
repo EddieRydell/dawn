@@ -22,6 +22,162 @@ pub struct AppSnapshot {
     pub preview_open: bool,
     pub audio_transport: AudioTransportSnapshot,
     pub live_output: LiveOutputSnapshot,
+    pub pending_operator_rewrite: Option<PendingOperatorRewrite>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingOperatorRewrite {
+    pub token: u32,
+    pub path: String,
+    pub definitions: Vec<OperatorDefinitionRewriteDescription>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorDefinitionRewriteDescription {
+    pub old_name: String,
+    pub exact_replacement: Option<String>,
+    pub candidates: Vec<OperatorDefinitionCandidate>,
+    pub usage_count: u32,
+    pub usages: Vec<OperatorRewriteUsageDescription>,
+    pub removed_or_changed_params: Vec<String>,
+    pub new_required_params: Vec<OperatorRequiredParamDescription>,
+    pub removed_ports: Vec<String>,
+    pub new_ports: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorRewriteUsageDescription {
+    pub sequence_path: String,
+    pub sequence_name: String,
+    pub node_id: String,
+    pub upstream_sources: Vec<OperatorUpstreamSourceDescription>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorUpstreamSourceDescription {
+    pub node_id: String,
+    pub port: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorDefinitionCandidate {
+    pub name: String,
+    pub params: Vec<OperatorSchemaParam>,
+    pub input_ports: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorSchemaParam {
+    pub name: String,
+    pub value_type: String,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorRequiredParamDescription {
+    pub name: String,
+    pub value_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorRewriteResolution {
+    pub definitions: Vec<OperatorDefinitionResolution>,
+    pub usage_definitions: Vec<OperatorUsageDefinitionResolution>,
+    pub parameters: Vec<OperatorParameterResolution>,
+    pub usage_parameters: Vec<OperatorUsageParameterResolution>,
+    pub ports: Vec<OperatorPortResolution>,
+    pub usage_ports: Vec<OperatorUsagePortResolution>,
+    pub required_values: Vec<OperatorRequiredValueResolution>,
+    pub required_connections: Vec<OperatorRequiredConnectionResolution>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorUsageDefinitionResolution {
+    pub sequence_path: String,
+    pub sequence_name: String,
+    pub node_id: String,
+    pub replacement_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorUsageParameterResolution {
+    pub sequence_path: String,
+    pub sequence_name: String,
+    pub node_id: String,
+    pub old_name: String,
+    pub new_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorUsagePortResolution {
+    pub sequence_path: String,
+    pub sequence_name: String,
+    pub node_id: String,
+    pub old_name: String,
+    pub new_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorDefinitionResolution {
+    pub old_name: String,
+    pub replacement_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorParameterResolution {
+    pub old_definition: String,
+    pub old_name: String,
+    pub new_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorPortResolution {
+    pub old_definition: String,
+    pub old_name: String,
+    pub new_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorRequiredValueResolution {
+    pub sequence_path: String,
+    pub sequence_name: String,
+    pub node_id: String,
+    pub name: String,
+    pub value: SequenceEffectParamValue,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorRequiredConnectionResolution {
+    pub sequence_path: String,
+    pub sequence_name: String,
+    pub node_id: String,
+    pub input_port: String,
+    pub from_node: String,
+    pub from_port: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorRewriteValidation {
+    pub valid: bool,
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -864,6 +1020,7 @@ pub struct SequenceAutomationClip {
     pub lane_index: u32,
     pub curve: Vec<SequenceCurvePoint>,
     pub bindings: Vec<SequenceAutomationBinding>,
+    pub detached_bindings: Vec<SequenceDetachedAutomationBinding>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -871,6 +1028,22 @@ pub struct SequenceAutomationClip {
 pub struct SequenceAutomationBinding {
     pub target: SequenceAutomationTarget,
     pub mapping: SequenceAutomationMapping,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceDetachedAutomationBinding {
+    pub target: SequenceAutomationTarget,
+    pub mapping: SequenceAutomationMapping,
+    pub reason: SequenceAutomationDetachmentReason,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SequenceAutomationDetachmentReason {
+    TargetDeleted,
+    DefinitionChanged,
+    OperatorSchemaChanged,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -1428,6 +1601,16 @@ pub enum SequenceGuiEdit {
     UnbindAutomationParam {
         clip_id: u32,
         target: SequenceAutomationTarget,
+    },
+    RebindDetachedAutomation {
+        clip_id: u32,
+        detached_index: u32,
+        target: SequenceAutomationTarget,
+        mapping: SequenceAutomationMapping,
+    },
+    DiscardDetachedAutomation {
+        clip_id: u32,
+        detached_index: u32,
     },
     CreateMarkCollection {
         key: String,

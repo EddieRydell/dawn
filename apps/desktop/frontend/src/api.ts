@@ -36,6 +36,12 @@ async function applyCurrentGuiEdit(edit: Parameters<typeof generatedCommands.app
   return result;
 }
 
+function handleGuiEditResult(result: GuiEditResult) {
+  guiEditResultHandler?.(result);
+  if (result.document.type === "blocked") throw new Error(result.document.reason);
+  return result;
+}
+
 export const commands = {
   ...generatedCommands,
   autosaveActiveText: async (path: string, text: string) => {
@@ -46,6 +52,19 @@ export const commands = {
     return result.data;
   },
   applySequenceGuiEdit: (edit: SequenceGuiEdit) => applyCurrentGuiEdit({ type: "sequence", edit }),
+  rebindDetachedAutomation: (
+    clipId: number,
+    detachedIndex: number,
+    target: import("./types").SequenceAutomationTarget,
+    mapping: import("./types").SequenceAutomationMapping
+  ) => {
+    if (currentGuiRequest === null) throw new Error("Detached automation rebind requires an active GUI document.");
+    return generatedCommands.rebindDetachedAutomation(currentGuiRequest, clipId, detachedIndex, target, mapping).then(handleGuiEditResult);
+  },
+  discardDetachedAutomation: (clipId: number, detachedIndex: number) => {
+    if (currentGuiRequest === null) throw new Error("Discarding detached automation requires an active GUI document.");
+    return generatedCommands.discardDetachedAutomation(currentGuiRequest, clipId, detachedIndex).then(handleGuiEditResult);
+  },
   applySetupGuiEdit: (edit: SetupGuiEdit) => applyCurrentGuiEdit({ type: "setup", edit }),
   applySequenceSelectionEdit: async (edit: SequenceSelectionEdit) => {
     const result = await generatedCommands.applySequenceSelectionEdit(edit);

@@ -32,6 +32,8 @@ pub(crate) struct DesktopState {
     live_output: Mutex<crate::live_output::LiveOutputService>,
     sequence_clip_raster: Mutex<crate::sequence_clip_raster::SequenceClipRasterService>,
     sequence_clipboard: Mutex<Option<crate::gui::SequenceClipboard>>,
+    pending_operator_rewrite: Mutex<Option<PendingOperatorRewriteState>>,
+    next_operator_rewrite_token: Mutex<u32>,
     persistence: PersistenceService,
 }
 
@@ -60,6 +62,8 @@ impl DesktopState {
                 crate::sequence_clip_raster::SequenceClipRasterService::new(),
             ),
             sequence_clipboard: Mutex::new(None),
+            pending_operator_rewrite: Mutex::new(None),
+            next_operator_rewrite_token: Mutex::new(1),
             persistence: PersistenceService::new(),
         }
     }
@@ -217,6 +221,7 @@ impl DesktopState {
 mod audio;
 mod filesystem;
 mod gui_editing;
+mod operator_rewrite;
 mod project_lifecycle;
 mod rendering;
 mod workspace;
@@ -251,7 +256,15 @@ fn empty_snapshot() -> AppSnapshot {
         preview_open: false,
         audio_transport: crate::audio::AudioEngine::empty_snapshot(),
         live_output: crate::live_output::disabled_snapshot(0),
+        pending_operator_rewrite: None,
     }
+}
+
+pub(crate) struct PendingOperatorRewriteState {
+    pub token: u32,
+    pub project_revision: u32,
+    pub path: Utf8PathBuf,
+    pub compiled: dawn_project_io::CompiledOperatorDocument,
 }
 
 fn sanitize_workspace_layout(state: WorkspaceLayoutState) -> WorkspaceLayoutState {

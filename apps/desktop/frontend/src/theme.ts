@@ -28,6 +28,7 @@ export const THEME_LAYOUT = {
 } as const;
 
 export const THEME_COLORS = {
+  defaultProjectColor: cssColor("--dawn-default-project-color"),
   background: cssColor("--dawn-bg"),
   page: cssColor("--dawn-bg-page"),
   panel: cssColor("--dawn-bg-panel"),

@@ -6,6 +6,7 @@ import type { AppSnapshot, WorkspaceLayoutState } from "../types";
 import { EditorPane } from "./EditorPane";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { NewSequenceDialog } from "./NewSequenceDialog";
+import { OperatorRewriteDialog } from "./OperatorRewriteDialog";
 import { ProjectTree } from "./ProjectTree";
 import { SettingsDialog } from "./SettingsDialog";
 import { StatusBar } from "./StatusBar";
@@ -54,6 +55,7 @@ export function App() {
       <NewProjectDialog />
       <NewSequenceDialog />
       <SettingsDialog />
+      <OperatorRewriteDialog />
       {snapshot.projectRoot === null && (
         <div className="empty-project">
           <button onClick={() => void runSnapshotCommand(commands.openProjectDialog)}>Open Project...</button>

@@ -21,6 +21,7 @@
   --dawn-danger-text: #ffd7d7;
   --dawn-danger-surface: #261b1e;
   --dawn-warning-surface: #292319;
+  --dawn-default-project-color: #000000;
   --dawn-code-keyword: #d99adf;
   --dawn-code-name: #87c7ff;
   --dawn-code-function: #8fd6b5;
@@ -255,6 +256,8 @@
   --dawn-inspector-min-width: 240px;
   --dawn-inspector-max-width: 560px;
   --dawn-dialog-max-width: 520px;
+  --dawn-operator-rewrite-max-width: 760px;
+  --dawn-operator-rewrite-max-height: 68vh;
   --dawn-graph-dialog-max-width: 1180px;
   --dawn-editor-tooltip-max-width: 420px;
   --dawn-inspector-padding: var(--dawn-space-9);
@@ -3120,6 +3123,48 @@ button:focus-visible,
 .graph-delete-dialog label {
   display: grid;
   gap: var(--dawn-space-4);
+}
+
+.operator-rewrite-dialog {
+  width: min(var(--dawn-operator-rewrite-max-width), calc(100vw - var(--dawn-toolbar-height)));
+}
+
+.operator-rewrite-scroll {
+  display: grid;
+  gap: var(--dawn-space-8);
+  max-height: var(--dawn-operator-rewrite-max-height);
+  overflow-y: auto;
+  margin-top: var(--dawn-space-8);
+}
+
+.operator-rewrite-scroll details {
+  display: grid;
+  gap: var(--dawn-space-6);
+  border: var(--dawn-border-width) solid var(--dawn-border-soft);
+  background: var(--dawn-bg-rail);
+  padding: var(--dawn-space-7);
+}
+
+.operator-rewrite-scroll summary {
+  color: var(--dawn-text-strong);
+  cursor: pointer;
+}
+
+.operator-rewrite-scroll label {
+  display: grid;
+  gap: var(--dawn-space-3);
+  color: var(--dawn-text-muted);
+}
+
+.operator-rewrite-scroll input,
+.operator-rewrite-scroll select {
+  min-width: 0;
+  height: var(--dawn-control-height-md);
+  border: var(--dawn-border-width) solid var(--dawn-border);
+  border-radius: var(--dawn-radius-md);
+  background: var(--dawn-bg);
+  padding: var(--dawn-space-0) var(--dawn-space-5);
+  color: var(--dawn-text);
 }
 
 .graph-delete-dialog select {

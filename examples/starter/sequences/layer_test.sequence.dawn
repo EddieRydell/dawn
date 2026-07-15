@@ -29,54 +29,10 @@ layer_test:
     color: '#f45b69'
     enabled: true
   effects:
-  - id: 1
-    layer_id: 0
-    start: 58.302838104s
-    duration: 0.773479974s
-    target:
-      tree: elements.outputs_elements
-      node: 1
-    scope: per_fixture
-    params:
-      gradient:
-        type: gradient
-        gradient: gradients.mint_violet_gradient
-      pulse_shape:
-        type: curve
-        curve:
-          type: curve
-          points:
-          - position: 0.0
-            value: 1.0
-          - position: 1.0
-            value: 0.0
-    effect: builtins.pulse
-  - id: 2
-    layer_id: 0
-    start: 58.631778101s
-    duration: 0.773479974s
-    target:
-      tree: elements.outputs_elements
-      node: 2
-    scope: per_fixture
-    params:
-      gradient:
-        type: gradient
-        gradient: gradients.mint_violet_gradient
-      pulse_shape:
-        type: curve
-        curve:
-          type: curve
-          points:
-          - position: 0.0
-            value: 1.0
-          - position: 1.0
-            value: 0.0
-    effect: builtins.pulse
   - id: 3
-    layer_id: 0
+    layer_id: 1
     start: 58.979683103s
-    duration: 1.5123879169999999s
+    duration: 1.341233727s
     target:
       tree: elements.outputs_elements
       node: 1001
@@ -136,9 +92,9 @@ layer_test:
             value: 0.0
     effect: builtins.pulse
   - id: 5
-    layer_id: 0
+    layer_id: 1
     start: 59.202995451s
-    duration: 1.5123879169999999s
+    duration: 1.341233727s
     target:
       tree: elements.outputs_elements
       node: 1001
@@ -277,6 +233,666 @@ layer_test:
           - position: 1.0
             value: 0.0
     effect: builtins.pulse
+  - id: 9
+    layer_id: 0
+    start: 58.316900777s
+    duration: 0.726459291s
+    target:
+      tree: elements.outputs_elements
+      node: 3
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 10
+    layer_id: 0
+    start: 58.645840774s
+    duration: 0.442290816s
+    target:
+      tree: elements.outputs_elements
+      node: 4
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 11
+    layer_id: 0
+    start: 58.316900777s
+    duration: 0.726459291s
+    target:
+      tree: elements.outputs_elements
+      node: 5
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 12
+    layer_id: 0
+    start: 58.645840774s
+    duration: 0.442290816s
+    target:
+      tree: elements.outputs_elements
+      node: 6
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 13
+    layer_id: 0
+    start: 58.316900777s
+    duration: 0.726459291s
+    target:
+      tree: elements.outputs_elements
+      node: 7
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 14
+    layer_id: 0
+    start: 58.645840774s
+    duration: 0.442290816s
+    target:
+      tree: elements.outputs_elements
+      node: 8
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 15
+    layer_id: 0
+    start: 58.316900777s
+    duration: 0.726459291s
+    target:
+      tree: elements.outputs_elements
+      node: 9
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 16
+    layer_id: 0
+    start: 58.645840774s
+    duration: 0.442290816s
+    target:
+      tree: elements.outputs_elements
+      node: 10
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 17
+    layer_id: 0
+    start: 58.316900777s
+    duration: 0.726459291s
+    target:
+      tree: elements.outputs_elements
+      node: 11
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 18
+    layer_id: 0
+    start: 58.645840774s
+    duration: 0.442290816s
+    target:
+      tree: elements.outputs_elements
+      node: 12
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 19
+    layer_id: 0
+    start: 58.316900777s
+    duration: 0.726459291s
+    target:
+      tree: elements.outputs_elements
+      node: 13
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 20
+    layer_id: 0
+    start: 58.645840774s
+    duration: 0.442290816s
+    target:
+      tree: elements.outputs_elements
+      node: 14
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 21
+    layer_id: 0
+    start: 58.316900777s
+    duration: 0.726459291s
+    target:
+      tree: elements.outputs_elements
+      node: 15
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 22
+    layer_id: 0
+    start: 58.645840774s
+    duration: 0.442290816s
+    target:
+      tree: elements.outputs_elements
+      node: 16
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 23
+    layer_id: 0
+    start: 58.316900777s
+    duration: 0.726459291s
+    target:
+      tree: elements.outputs_elements
+      node: 17
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 24
+    layer_id: 0
+    start: 58.645840774s
+    duration: 0.442290816s
+    target:
+      tree: elements.outputs_elements
+      node: 18
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 27
+    layer_id: 0
+    start: 58.316900777s
+    duration: 0.726459291s
+    target:
+      tree: elements.outputs_elements
+      node: 1
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 28
+    layer_id: 0
+    start: 58.645840774s
+    duration: 0.442290816s
+    target:
+      tree: elements.outputs_elements
+      node: 2
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 31
+    layer_id: 0
+    start: 58.316998448s
+    duration: 0.726459291s
+    target:
+      tree: elements.outputs_elements
+      node: 23
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 32
+    layer_id: 0
+    start: 58.645938445s
+    duration: 0.442290816s
+    target:
+      tree: elements.outputs_elements
+      node: 24
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 33
+    layer_id: 0
+    start: 58.316998448s
+    duration: 0.726459291s
+    target:
+      tree: elements.outputs_elements
+      node: 25
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 34
+    layer_id: 0
+    start: 58.645938445s
+    duration: 0.442290816s
+    target:
+      tree: elements.outputs_elements
+      node: 26
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 35
+    layer_id: 0
+    start: 58.316998448s
+    duration: 0.726459291s
+    target:
+      tree: elements.outputs_elements
+      node: 27
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 36
+    layer_id: 0
+    start: 58.645938445s
+    duration: 0.442290816s
+    target:
+      tree: elements.outputs_elements
+      node: 28
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 37
+    layer_id: 0
+    start: 58.316998448s
+    duration: 0.726459291s
+    target:
+      tree: elements.outputs_elements
+      node: 29
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 38
+    layer_id: 0
+    start: 58.645938445s
+    duration: 0.442290816s
+    target:
+      tree: elements.outputs_elements
+      node: 30
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 39
+    layer_id: 0
+    start: 58.316998448s
+    duration: 0.726459291s
+    target:
+      tree: elements.outputs_elements
+      node: 21
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 40
+    layer_id: 0
+    start: 58.645938445s
+    duration: 0.442290816s
+    target:
+      tree: elements.outputs_elements
+      node: 22
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 41
+    layer_id: 0
+    start: 58.316998448s
+    duration: 0.726459291s
+    target:
+      tree: elements.outputs_elements
+      node: 19
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
+  - id: 42
+    layer_id: 0
+    start: 58.645938445s
+    duration: 0.442290816s
+    target:
+      tree: elements.outputs_elements
+      node: 20
+    scope: per_fixture
+    params:
+      gradient:
+        type: gradient
+        gradient: gradients.mint_violet_gradient
+      pulse_shape:
+        type: curve
+        curve:
+          type: curve
+          points:
+          - position: 0.0
+            value: 1.0
+          - position: 1.0
+            value: 0.0
+    effect: builtins.pulse
   composition_graph:
     nodes:
     - id: 1
@@ -315,5 +931,110 @@ layer_test:
       from_port: output
       to: 2
       to_port: input
-  automation_clips: []
+  automation_clips:
+  - id: 1
+    start: 0s
+    duration: 249.753832s
+    anchor_lane_index: 0
+    lane_index: 0
+    curve:
+      points:
+      - position: 0.0
+        value: 0.505
+      - position: 0.236141781
+        value: 0.484
+      - position: 0.239764138
+        value: 0.491
+      - position: 0.240208315
+        value: 0.47
+      - position: 0.240521765
+        value: 0.442
+      - position: 0.240779495
+        value: 0.372
+      - position: 0.241084551
+        value: 0.197
+      - position: 0.241392031
+        value: 0.0
+      - position: 0.241398748
+        value: 0.0
+      - position: 0.242473437
+        value: 0.0
+      - position: 0.243386924
+        value: 0.519
+      - position: 0.257535598
+        value: 0.484
+      - position: 0.260943084
+        value: 0.491
+      - position: 0.265687827
+        value: 0.512
+      - position: 0.265720643
+        value: 0.239
+      - position: 0.265817938
+        value: 1.0
+      - position: 0.265868316
+        value: 0.477
+      - position: 0.266040602
+        value: 0.505
+      - position: 0.266095706
+        value: 0.0
+      - position: 0.266164435
+        value: 0.03
+      - position: 0.266204683
+        value: 0.505
+      - position: 0.266385173
+        value: 0.498
+      - position: 0.26642615
+        value: 1.0
+      - position: 0.266598479
+        value: 0.505
+      - position: 0.266664296
+        value: 0.023
+      - position: 0.266746153
+        value: 0.498
+      - position: 0.266791077
+        value: 1.0
+      - position: 0.266897974
+        value: 1.0
+      - position: 0.266951254
+        value: 0.477
+      - position: 0.266982755
+        value: 0.0
+      - position: 0.267148152
+        value: 0.491
+      - position: 0.267222354
+        value: 0.965
+      - position: 0.267312234
+        value: 0.47
+      - position: 0.267373485
+        value: 1.0
+      - position: 0.267459907
+        value: 0.505
+      - position: 0.267543047
+        value: 0.477
+      - position: 0.267587281
+        value: 0.009
+      - position: 0.267675748
+        value: 0.0
+      - position: 0.267727354
+        value: 0.449
+      - position: 0.267854989
+        value: 0.484
+      - position: 0.267922157
+        value: 1.0
+      - position: 0.268163962
+        value: 1.0
+      - position: 0.268177396
+        value: 0.512
+      - position: 1.0
+        value: 1.0
+    bindings:
+    - target:
+        type: composition_node_param
+        node_id: 5
+        param: offset_seconds
+      mapping:
+        type: float
+        min: -1.0
+        max: 1.0
+    detached_bindings: []
   control_clips: []

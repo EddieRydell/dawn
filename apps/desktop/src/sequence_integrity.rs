@@ -133,6 +133,7 @@ pub(crate) fn validate_sequence_integrity(
             )));
         }
     }
+    let mut automation_targets = HashSet::new();
     for clip in &sequence.automation_clips {
         if !clip.start.as_seconds_f64().is_finite()
             || !clip.duration.as_seconds_f64().is_finite()
@@ -141,6 +142,19 @@ pub(crate) fn validate_sequence_integrity(
             return Err(GuiMutationError::Invalid(
                 "Automation clip timing must be finite and positive.".to_string(),
             ));
+        }
+        for target in clip
+            .bindings
+            .iter()
+            .map(|binding| &binding.target)
+            .chain(clip.detached_bindings.iter().map(|binding| &binding.target))
+        {
+            if !automation_targets.insert(target) {
+                return Err(GuiMutationError::Invalid(
+                    "Automation targets must be unique across active and detached bindings."
+                        .to_string(),
+                ));
+            }
         }
         for binding in &clip.bindings {
             let ty = match &binding.target {

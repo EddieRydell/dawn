@@ -195,7 +195,37 @@ function EffectInspectorPanel({
           <Readout label="Start" value={`${automationClip.startSeconds.toFixed(3)}s`} />
           <Readout label="Duration" value={`${automationClip.durationSeconds.toFixed(3)}s`} />
           <Readout label="Bindings" value={String(automationClip.bindings.length)} />
+          <Readout label="Detached" value={String(automationClip.detachedBindings.length)} />
         </div>
+        {automationClip.detachedBindings.map((binding, index) => (
+          <div key={`${binding.target.type}-${index}`}>
+            <span className="status-warning">Detached</span>
+            <p>{automationTargetLabel(binding.target)} · {detachmentReasonLabel(binding.reason)}</p>
+            <div className="effect-param-actions">
+              <button
+                type="button"
+                onClick={() => void runGuiEditCommand(() => commands.rebindDetachedAutomation(
+                  automationClip.id,
+                  index,
+                  binding.target,
+                  binding.mapping
+                ))}
+              >
+                Rebind
+              </button>
+              <button
+                type="button"
+                className="danger"
+                onClick={() => void runGuiEditCommand(() => commands.discardDetachedAutomation(
+                  automationClip.id,
+                  index
+                ))}
+              >
+                Discard provenance
+              </button>
+            </div>
+          </div>
+        ))}
         <button
           type="button"
           onClick={() =>
@@ -449,6 +479,20 @@ function EffectInspectorPanel({
       )}
     </>
   );
+}
+
+function automationTargetLabel(target: import("../../../types").SequenceAutomationTarget): string {
+  return target.type === "effectParam"
+    ? `Effect ${target.effectId} · ${target.param}`
+    : `Node ${target.nodeId} · ${target.param}`;
+}
+
+function detachmentReasonLabel(reason: import("../../../types").SequenceAutomationDetachmentReason): string {
+  switch (reason) {
+    case "targetDeleted": return "target deleted";
+    case "definitionChanged": return "definition changed";
+    case "operatorSchemaChanged": return "operator schema changed";
+  }
 }
 
 function LayerInspectorPanel({ document }: { document: SequenceEditorDocument }) {

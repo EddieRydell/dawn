@@ -808,6 +808,21 @@ impl DomainResolver<'_> {
             .flatten()
             .map(|clip| self.parse_automation_clip(&document_path, clip))
             .collect::<Result<Vec<_>, _>>()?;
+        let mut automation_targets = IndexSet::new();
+        for target in automation_clips.iter().flat_map(|clip| {
+            clip.bindings
+                .iter()
+                .map(|binding| &binding.target)
+                .chain(clip.detached_bindings.iter().map(|binding| &binding.target))
+        }) {
+            if !automation_targets.insert(target.clone()) {
+                return Err(LoadProjectError::InvalidDocument {
+                    path: document_path.clone(),
+                    range: source_range_for_field_value(&document_path, &value, "automation_clips"),
+                    message: "sequence has duplicate automation targets".to_string(),
+                });
+            }
+        }
         let control_clips = optional_sequence(&value, "control_clips")
             .into_iter()
             .flatten()
@@ -1241,9 +1256,18 @@ impl DomainResolver<'_> {
             .iter()
             .map(|binding| parse_automation_binding(path, binding))
             .collect::<Result<Vec<_>, _>>()?;
+        let detached_bindings = optional_sequence(value, "detached_bindings")
+            .into_iter()
+            .flatten()
+            .map(|binding| parse_detached_automation_binding(path, binding))
+            .collect::<Result<Vec<_>, _>>()?;
         let mut seen = IndexSet::new();
-        for binding in &bindings {
-            if !seen.insert(binding.target.clone()) {
+        for target in bindings
+            .iter()
+            .map(|binding| &binding.target)
+            .chain(detached_bindings.iter().map(|binding| &binding.target))
+        {
+            if !seen.insert(target.clone()) {
                 return Err(LoadProjectError::InvalidDocument {
                     path: path.to_path_buf(),
                     range: source_range_for_field_value(path, value, "bindings"),
@@ -1273,6 +1297,7 @@ impl DomainResolver<'_> {
             lane_index: u32_field(path, value, "lane_index")?,
             curve: parse_automation_curve(path, required_field(path, value, "curve")?)?,
             bindings,
+            detached_bindings,
         })
     }
 
@@ -1457,10 +1482,11 @@ use super::Loader;
 use super::parse::{
     ResolvedObject, bool_field, f64_field, i64_field, optional_field, optional_mapping,
     optional_sequence, optional_string_field, parse_automation_binding, parse_automation_curve,
-    parse_color, parse_curve, parse_duration, parse_duration_as_time, parse_effect_scope,
-    parse_gradient, parse_graph_edge, parse_graph_position, parse_mark_collection, parse_point3,
-    parse_rotation3, parse_scale3, parse_sequence_layer, relative_path, required_field,
-    sequence_field, sequence_values, string_field, u32_field, usize_field,
+    parse_color, parse_curve, parse_detached_automation_binding, parse_duration,
+    parse_duration_as_time, parse_effect_scope, parse_gradient, parse_graph_edge,
+    parse_graph_position, parse_mark_collection, parse_point3, parse_rotation3, parse_scale3,
+    parse_sequence_layer, relative_path, required_field, sequence_field, sequence_values,
+    string_field, u32_field, usize_field,
 };
 use crate::LoadProjectError;
 use crate::diagnostics::{

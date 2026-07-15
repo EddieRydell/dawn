@@ -7,8 +7,10 @@ use tauri_specta::{Builder, collect_commands};
 use crate::dto::{
     AppSettings, AppSnapshot, AudioTransportState, DocumentViewId, EditorViewMode, GuiDocument,
     GuiDocumentRequest, GuiEditCommand, GuiEditResult, NewSequenceRequest,
-    SequenceClipRasterRequest, SequenceClipRasterResponse, SequenceClipRasterResultBatch,
-    SequenceGuiEdit, SequenceSelectionEdit, SequenceSelectionEditResult, WorkspaceLayoutState,
+    OperatorRewriteResolution, OperatorRewriteValidation, SequenceAutomationMapping,
+    SequenceAutomationTarget, SequenceClipRasterRequest, SequenceClipRasterResponse,
+    SequenceClipRasterResultBatch, SequenceGuiEdit, SequenceSelectionEdit,
+    SequenceSelectionEditResult, WorkspaceLayoutState,
 };
 use crate::persistence::{
     PersistedEditorViewStateUpdate, PersistedPreviewWindowState,
@@ -216,6 +218,48 @@ pub(crate) fn finish_composition_graph_editing(state: State<'_, DesktopState>) -
 
 #[tauri::command]
 #[specta::specta]
+pub(crate) fn rebind_detached_automation(
+    request: GuiDocumentRequest,
+    clip_id: u32,
+    detached_index: u32,
+    target: SequenceAutomationTarget,
+    mapping: SequenceAutomationMapping,
+    state: State<'_, DesktopState>,
+) -> GuiEditResult {
+    state.apply_gui_edit(
+        request,
+        GuiEditCommand::Sequence {
+            edit: SequenceGuiEdit::RebindDetachedAutomation {
+                clip_id,
+                detached_index,
+                target,
+                mapping,
+            },
+        },
+    )
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn discard_detached_automation(
+    request: GuiDocumentRequest,
+    clip_id: u32,
+    detached_index: u32,
+    state: State<'_, DesktopState>,
+) -> GuiEditResult {
+    state.apply_gui_edit(
+        request,
+        GuiEditCommand::Sequence {
+            edit: SequenceGuiEdit::DiscardDetachedAutomation {
+                clip_id,
+                detached_index,
+            },
+        },
+    )
+}
+
+#[tauri::command]
+#[specta::specta]
 pub(crate) fn apply_sequence_selection_edit(
     edit: SequenceSelectionEdit,
     state: State<'_, DesktopState>,
@@ -261,6 +305,32 @@ pub(crate) fn choose_sequence_audio(
 #[specta::specta]
 pub(crate) fn flush_autosave(state: State<'_, DesktopState>) -> AppSnapshot {
     state.save_active_buffer()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn validate_operator_rewrite(
+    token: u32,
+    resolution: OperatorRewriteResolution,
+    state: State<'_, DesktopState>,
+) -> OperatorRewriteValidation {
+    state.validate_operator_rewrite(token, resolution)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn apply_operator_rewrite(
+    token: u32,
+    resolution: OperatorRewriteResolution,
+    state: State<'_, DesktopState>,
+) -> AppSnapshot {
+    state.apply_operator_rewrite(token, resolution)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn cancel_operator_rewrite(token: u32, state: State<'_, DesktopState>) -> AppSnapshot {
+    state.cancel_operator_rewrite(token)
 }
 
 #[tauri::command]
@@ -445,9 +515,14 @@ pub(crate) fn register(builder: Builder<tauri::Wry>) -> Builder<tauri::Wry> {
         take_sequence_clip_raster_results,
         apply_gui_edit,
         finish_composition_graph_editing,
+        rebind_detached_automation,
+        discard_detached_automation,
         apply_sequence_selection_edit,
         choose_sequence_audio,
         flush_autosave,
+        validate_operator_rewrite,
+        apply_operator_rewrite,
+        cancel_operator_rewrite,
         reload_active_buffer_from_disk,
         create_file,
         create_directory,

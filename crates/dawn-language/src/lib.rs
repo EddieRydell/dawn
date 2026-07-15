@@ -20,6 +20,7 @@ pub mod identity;
 pub mod model;
 pub mod native_effect;
 pub mod operator;
+pub mod operator_rewrite;
 pub mod patch;
 pub mod preview;
 pub mod sampling;

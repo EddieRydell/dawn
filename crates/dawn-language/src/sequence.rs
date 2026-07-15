@@ -95,6 +95,35 @@ pub struct AutomationClip {
     pub lane_index: u32,
     pub curve: Curve,
     pub bindings: Vec<AutomationBinding>,
+    pub detached_bindings: Vec<DetachedAutomationBinding>,
+}
+
+impl AutomationClip {
+    pub fn detach_bindings(
+        &mut self,
+        reason: AutomationDetachmentReason,
+        matches: impl Fn(&AutomationTarget) -> bool,
+    ) {
+        let mut retained = Vec::with_capacity(self.bindings.len());
+        for binding in self.bindings.drain(..) {
+            if matches(&binding.target) {
+                self.detached_bindings.push(DetachedAutomationBinding {
+                    target: binding.target,
+                    mapping: binding.mapping,
+                    reason: reason.clone(),
+                });
+            } else {
+                retained.push(binding);
+            }
+        }
+        self.bindings = retained;
+    }
+
+    pub fn bind(&mut self, target: AutomationTarget, mapping: AutomationMapping) {
+        self.detached_bindings
+            .retain(|binding| binding.target != target);
+        self.bindings.push(AutomationBinding { target, mapping });
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -104,6 +133,20 @@ pub struct AutomationClipId(pub u32);
 pub struct AutomationBinding {
     pub target: AutomationTarget,
     pub mapping: AutomationMapping,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DetachedAutomationBinding {
+    pub target: AutomationTarget,
+    pub mapping: AutomationMapping,
+    pub reason: AutomationDetachmentReason,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AutomationDetachmentReason {
+    TargetDeleted,
+    DefinitionChanged,
+    OperatorSchemaChanged,
 }
 
 impl AutomationBinding {

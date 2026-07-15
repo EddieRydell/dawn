@@ -327,7 +327,7 @@ fn source_kind_for_view(view: &DocumentViewId) -> Result<SourceObjectKind, Strin
 }
 
 mod edit;
-mod model;
+pub(crate) mod model;
 mod projection;
 mod selection;
 mod setup;

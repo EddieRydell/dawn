@@ -330,15 +330,10 @@ pub(super) fn delete_sequence_selection(
                 .effects
                 .retain(|effect| !ids.contains(&effect.id.0));
             for clip in &mut sequence.automation_clips {
-                clip.bindings.retain(|binding| {
-                    binding
-                        .effect_param()
-                        .is_none_or(|(effect_id, _)| !ids.contains(&effect_id.0))
+                clip.detach_bindings(AutomationDetachmentReason::TargetDeleted, |target| {
+                    matches!(target, AutomationTarget::EffectParam { effect_id, .. } if ids.contains(&effect_id.0))
                 });
             }
-            sequence
-                .automation_clips
-                .retain(|clip| !clip.bindings.is_empty());
         }
         SequenceSelection::Marks { marks } => {
             for (collection_key, indexes) in mark_indexes_by_collection(marks) {
@@ -718,7 +713,9 @@ use dawn_language::effect::{
 };
 use dawn_language::element::ElementSelection;
 use dawn_language::identity::SourceIdentity;
-use dawn_language::sequence::{CompositionGraphNodeKind, SequenceId};
+use dawn_language::sequence::{
+    AutomationDetachmentReason, AutomationTarget, CompositionGraphNodeKind, SequenceId,
+};
 use dawn_language::values::{DawnDuration, DawnTime};
 use dawn_project_io::ProjectSession;
 

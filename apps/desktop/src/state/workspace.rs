@@ -8,7 +8,7 @@ use dawn_project_io::{
 
 use super::{
     DesktopState, FsEntryKind, absolute_project_path, document_descriptor, editor_buffer_for_path,
-    empty_document_descriptor, normalize_project_entrypoint, project_diagnostic,
+    empty_document_descriptor, lock_unpoisoned, normalize_project_entrypoint, project_diagnostic,
     project_path_is_structural, upsert_tab, valid_child_name,
 };
 use crate::dto::{AppSnapshot, DiagnosticSeverity, EditorViewMode, NewSequenceRequest};
@@ -161,6 +161,9 @@ impl DesktopState {
     }
 
     pub fn update_active_text(&self, text: String) -> AppSnapshot {
+        if lock_unpoisoned(&self.pending_operator_rewrite).is_some() {
+            self.invalidate_operator_rewrite();
+        }
         let active_path = self.snapshot().active_file;
         let diagnostics = active_path
             .as_deref()
@@ -209,6 +212,9 @@ impl DesktopState {
         let Some(project) = self.project_session() else {
             return Err("No project is open".to_string());
         };
+        if let Some(snapshot) = self.save_operator_draft(&buffer.path, &buffer.text)? {
+            return Ok(snapshot);
+        }
         let relative_path = Utf8PathBuf::from(&buffer.path);
         let Some(path) = absolute_project_path(&project, &relative_path) else {
             return Err("File path is outside the loaded project".to_string());
@@ -233,6 +239,13 @@ impl DesktopState {
         let Some(project) = self.project_session() else {
             return self.snapshot();
         };
+        match self.save_operator_draft(&buffer.path, &buffer.text) {
+            Ok(Some(snapshot)) => return snapshot,
+            Ok(None) => {}
+            Err(error) => {
+                return self.snapshot_with_error("file.save", &buffer.path, &error);
+            }
+        }
         let relative_path = Utf8PathBuf::from(&buffer.path);
         let Some(path) = absolute_project_path(&project, &relative_path) else {
             return self.snapshot_with_error(

@@ -349,6 +349,41 @@ pub(super) fn automation_clip_value(clip: &AutomationClip) -> Result<Value, Expo
                 .collect::<Result<Vec<_>, _>>()?,
         ),
     );
+    value.insert(
+        string_value("detached_bindings"),
+        Value::Sequence(
+            clip.detached_bindings
+                .iter()
+                .map(detached_automation_binding_value)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+    );
+    Ok(Value::Mapping(value))
+}
+
+fn detached_automation_binding_value(
+    binding: &DetachedAutomationBinding,
+) -> Result<Value, ExportProjectError> {
+    let mut value = Mapping::new();
+    value.insert(
+        string_value("target"),
+        automation_target_value(&binding.target)?,
+    );
+    value.insert(
+        string_value("mapping"),
+        automation_mapping_value(&binding.mapping)?,
+    );
+    value.insert(
+        string_value("reason"),
+        Value::String(
+            match binding.reason {
+                AutomationDetachmentReason::TargetDeleted => "target_deleted",
+                AutomationDetachmentReason::DefinitionChanged => "definition_changed",
+                AutomationDetachmentReason::OperatorSchemaChanged => "operator_schema_changed",
+            }
+            .to_string(),
+        ),
+    );
     Ok(Value::Mapping(value))
 }
 
@@ -688,9 +723,10 @@ use dawn_language::effect::{
 };
 use dawn_language::operator::OperatorRef;
 use dawn_language::sequence::{
-    AutomationBinding, AutomationClip, AutomationMapping, AutomationTarget, CompositionGraphNode,
-    CompositionGraphNodeKind, EffectGraphEdge, GraphNodePosition, MarkCollection, Sequence,
-    SequenceAudio, SequenceCompositionGraph, SequenceLayer,
+    AutomationBinding, AutomationClip, AutomationDetachmentReason, AutomationMapping,
+    AutomationTarget, CompositionGraphNode, CompositionGraphNodeKind, DetachedAutomationBinding,
+    EffectGraphEdge, GraphNodePosition, MarkCollection, Sequence, SequenceAudio,
+    SequenceCompositionGraph, SequenceLayer,
 };
 use dawn_language::values::Curve;
 use indexmap::IndexMap;

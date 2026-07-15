@@ -19,6 +19,7 @@ impl DesktopState {
         entrypoint: &str,
         report: ProjectCheckReport,
     ) -> AppSnapshot {
+        *lock_unpoisoned(&self.pending_operator_rewrite) = None;
         lock_unpoisoned(&self.gui_history).clear();
         let diagnostics = project_diagnostics(&report);
         match report.session {
@@ -35,6 +36,7 @@ impl DesktopState {
         entrypoint: &str,
         report: ProjectCheckReport,
     ) -> AppSnapshot {
+        *lock_unpoisoned(&self.pending_operator_rewrite) = None;
         lock_unpoisoned(&self.gui_history).clear();
         let diagnostics = project_diagnostics(&report);
         match report.session {
@@ -78,6 +80,7 @@ impl DesktopState {
         *lock_unpoisoned(&self.project) = Some(Arc::new(session));
         self.unload_render_session();
         self.update_snapshot(|snapshot| {
+            snapshot.pending_operator_rewrite = None;
             snapshot.project_root = Some(root);
             snapshot.project_tree_visible = restore
                 .as_ref()
@@ -156,6 +159,7 @@ impl DesktopState {
             .and_then(|path| descriptor_for_path(&session, Utf8Path::new(path)));
         *lock_unpoisoned(&self.project) = Some(Arc::new(session));
         let snapshot = self.update_snapshot(|snapshot| {
+            snapshot.pending_operator_rewrite = None;
             snapshot.project_root = Some(root);
             snapshot.project_entries = entries;
             if active_descriptor.is_some() {
@@ -188,6 +192,7 @@ impl DesktopState {
         status: &str,
         generated_text: BTreeMap<String, String>,
     ) -> AppSnapshot {
+        *lock_unpoisoned(&self.pending_operator_rewrite) = None;
         self.suspend_live_output();
         let entries = workspace_entries(&session);
         let root = session.source.source_root.to_string();
@@ -199,6 +204,7 @@ impl DesktopState {
         *lock_unpoisoned(&self.project) = Some(Arc::clone(&session));
         self.schedule_render_refresh(Arc::clone(&session));
         self.update_snapshot(|snapshot| {
+            snapshot.pending_operator_rewrite = None;
             snapshot.project_root = Some(root);
             snapshot.project_entries = entries;
             if active_descriptor.is_some() {

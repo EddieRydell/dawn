@@ -214,25 +214,48 @@ fn automation_clips(sequence: &dawn_language::sequence::Sequence) -> Vec<Sequenc
                 .bindings
                 .iter()
                 .map(|binding| SequenceAutomationBinding {
-                    target: match &binding.target {
-                        AutomationTarget::EffectParam { effect_id, param } => {
-                            SequenceAutomationTarget::EffectParam {
-                                effect_id: effect_id.0,
-                                param: param.as_str().to_string(),
-                            }
+                    target: automation_target_to_gui(&binding.target),
+                    mapping: automation_mapping_to_gui(&binding.mapping),
+                })
+                .collect(),
+            detached_bindings: clip
+                .detached_bindings
+                .iter()
+                .map(|binding| SequenceDetachedAutomationBinding {
+                    target: automation_target_to_gui(&binding.target),
+                    mapping: automation_mapping_to_gui(&binding.mapping),
+                    reason: match binding.reason {
+                        AutomationDetachmentReason::TargetDeleted => {
+                            SequenceAutomationDetachmentReason::TargetDeleted
                         }
-                        AutomationTarget::CompositionNodeParam { node_id, param } => {
-                            SequenceAutomationTarget::CompositionNodeParam {
-                                node_id: graph_node_id(node_id),
-                                param: param.as_str().to_string(),
-                            }
+                        AutomationDetachmentReason::DefinitionChanged => {
+                            SequenceAutomationDetachmentReason::DefinitionChanged
+                        }
+                        AutomationDetachmentReason::OperatorSchemaChanged => {
+                            SequenceAutomationDetachmentReason::OperatorSchemaChanged
                         }
                     },
-                    mapping: automation_mapping_to_gui(&binding.mapping),
                 })
                 .collect(),
         })
         .collect()
+}
+
+fn automation_target_to_gui(target: &AutomationTarget) -> SequenceAutomationTarget {
+    match target {
+        AutomationTarget::EffectParam { effect_id, param } => {
+            SequenceAutomationTarget::EffectParam {
+                effect_id: effect_id.0,
+                param: param.as_str().to_string(),
+            }
+        }
+        AutomationTarget::CompositionNodeParam { node_id, param } => {
+            SequenceAutomationTarget::CompositionNodeParam {
+                node_id: graph_node_id(node_id),
+                param: param.as_str().to_string(),
+            }
+        }
+    }
 }
 
 pub(super) fn project_layout(
@@ -517,7 +540,7 @@ use dawn_language::element::{ElementNodeId, ElementNodeKind, ElementSelection, E
 use dawn_language::identity::SourceIdentity;
 use dawn_language::operator::{BuiltinOperator, OperatorRef};
 use dawn_language::preview::{PreviewLayoutId, PropDefinitionId};
-use dawn_language::sequence::{AutomationTarget, SequenceId};
+use dawn_language::sequence::{AutomationDetachmentReason, AutomationTarget, SequenceId};
 use dawn_project_io::{ProjectSession, SourceObjectKind, relative_path_from_document};
 
 use super::{ResolvedGuiObject, blocked, gui_diagnostic};
@@ -525,11 +548,12 @@ use crate::dto::{
     ElementTarget, ElementTargetKind, GuiDocument, GuiObjectRef, ObjectKind, PreviewGuiDocument,
     PreviewPropPlacement, PropDefinition, PropGuiDocument, ResolvedPreviewProp, Rotation3Degrees,
     Scale3, SequenceAudio, SequenceAutomationBinding, SequenceAutomationClip,
-    SequenceAutomationTarget, SequenceBuiltinEffect, SequenceCompositionGraph, SequenceControlClip,
-    SequenceCurvePoint, SequenceEffect, SequenceEffectDefinition, SequenceEffectDefinitionKind,
-    SequenceEffectDefinitionParam, SequenceEffectReference, SequenceEffectScope, SequenceGraphEdge,
-    SequenceGuiDocument, SequenceLane, SequenceLayer, SequenceMarkCollection,
-    SequenceTimelineClipKind, Transform,
+    SequenceAutomationDetachmentReason, SequenceAutomationTarget, SequenceBuiltinEffect,
+    SequenceCompositionGraph, SequenceControlClip, SequenceCurvePoint,
+    SequenceDetachedAutomationBinding, SequenceEffect, SequenceEffectDefinition,
+    SequenceEffectDefinitionKind, SequenceEffectDefinitionParam, SequenceEffectReference,
+    SequenceEffectScope, SequenceGraphEdge, SequenceGuiDocument, SequenceLane, SequenceLayer,
+    SequenceMarkCollection, SequenceTimelineClipKind, Transform,
 };
 use crate::gui_geometry::{
     empty_resolved_fixture, geometry, geometry_summary, layout_bounds, point3_meters, render_plan,

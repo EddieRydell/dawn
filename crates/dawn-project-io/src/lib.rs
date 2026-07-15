@@ -126,6 +126,96 @@ pub fn check_project_document_text(
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct CompiledOperatorDocument {
+    pub path: Utf8PathBuf,
+    pub definitions: dawn_language::operator::OperatorDefinitionStore,
+    document: SourceDocument,
+}
+
+pub fn compile_operator_document(
+    path: &Utf8Path,
+    text: &str,
+) -> Result<CompiledOperatorDocument, Vec<IoDiagnostic>> {
+    let compiled = dawn_language::dsl::compile_operators(text).map_err(|diagnostics| {
+        diagnostics
+            .into_iter()
+            .map(|diagnostic| {
+                diagnostics::dsl_diagnostic(
+                    path,
+                    text,
+                    diagnostic,
+                    IoDiagnosticCode::OperatorCompile,
+                )
+            })
+            .collect::<Vec<_>>()
+    })?;
+    let mut definitions = dawn_language::operator::OperatorDefinitionStore::default();
+    let mut objects = Vec::new();
+    for operator in compiled {
+        let name = operator.name().as_str().to_string();
+        let id = dawn_language::operator::OperatorDefinitionId(SourceIdentity::new(
+            path.to_path_buf(),
+            name.clone(),
+        ));
+        definitions.insert(
+            id.clone(),
+            dawn_language::operator::custom_operator_definition(id, operator),
+        );
+        objects.push(
+            SourceObjectId::new(SourceObjectKind::OperatorDefinition, name).map_err(|message| {
+                vec![IoDiagnostic {
+                    path: path.to_path_buf(),
+                    range: None,
+                    severity: IoDiagnosticSeverity::Error,
+                    code: IoDiagnosticCode::OperatorCompile,
+                    message,
+                }]
+            })?,
+        );
+    }
+    let document = SourceDocument::new(
+        Vec::new(),
+        objects,
+        SourceDocumentKind::Operator {
+            source: text.to_string(),
+        },
+    )
+    .map_err(|message| {
+        vec![IoDiagnostic {
+            path: path.to_path_buf(),
+            range: None,
+            severity: IoDiagnosticSeverity::Error,
+            code: IoDiagnosticCode::OperatorCompile,
+            message,
+        }]
+    })?;
+    Ok(CompiledOperatorDocument {
+        path: path.to_path_buf(),
+        definitions,
+        document,
+    })
+}
+
+pub fn apply_compiled_operator_document(
+    session: &mut ProjectSession,
+    compiled: CompiledOperatorDocument,
+) {
+    session
+        .project
+        .definitions
+        .operators
+        .definitions
+        .retain(|id, _| id.0.document() != compiled.path);
+    for (id, definition) in compiled.definitions.definitions {
+        session.project.definitions.operators.insert(id, definition);
+    }
+    session
+        .source
+        .documents
+        .insert(compiled.path, compiled.document);
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct ProjectCheckReport {
     pub session: Option<ProjectSession>,
     pub diagnostics: Vec<IoDiagnostic>,

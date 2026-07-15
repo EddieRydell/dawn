@@ -216,15 +216,10 @@ pub(super) fn edit_sequence(
             let sequence = sequence_mut(session, &sequence_id)?;
             sequence.effects.retain(|effect| effect.id.0 != id);
             for clip in &mut sequence.automation_clips {
-                clip.bindings.retain(|binding| {
-                    binding
-                        .effect_param()
-                        .is_none_or(|(effect_id, _)| effect_id.0 != id)
+                clip.detach_bindings(AutomationDetachmentReason::TargetDeleted, |target| {
+                    matches!(target, AutomationTarget::EffectParam { effect_id, .. } if effect_id.0 == id)
                 });
             }
-            sequence
-                .automation_clips
-                .retain(|clip| !clip.bindings.is_empty());
         }
         SequenceGuiEdit::MoveMark {
             collection_key,
@@ -530,15 +525,10 @@ pub(super) fn edit_sequence(
             effect.definition = definition;
             effect.param_overrides = param_overrides;
             for clip in &mut sequence.automation_clips {
-                clip.bindings.retain(|binding| {
-                    binding
-                        .effect_param()
-                        .is_none_or(|(effect_id, _)| effect_id.0 != id)
+                clip.detach_bindings(AutomationDetachmentReason::DefinitionChanged, |target| {
+                    matches!(target, AutomationTarget::EffectParam { effect_id, .. } if effect_id.0 == id)
                 });
             }
-            sequence
-                .automation_clips
-                .retain(|clip| !clip.bindings.is_empty());
         }
         SequenceGuiEdit::LinkEffectCurve {
             id,
@@ -652,15 +642,10 @@ pub(super) fn edit_sequence(
                 .edges
                 .retain(|edge| edge.from != node_id && edge.to != node_id);
             for clip in &mut sequence.automation_clips {
-                clip.bindings.retain(|binding| {
-                    binding
-                        .composition_node_param()
-                        .is_none_or(|(binding_node_id, _)| binding_node_id != &node_id)
+                clip.detach_bindings(AutomationDetachmentReason::TargetDeleted, |target| {
+                    matches!(target, AutomationTarget::CompositionNodeParam { node_id: binding_node_id, .. } if binding_node_id == &node_id)
                 });
             }
-            sequence
-                .automation_clips
-                .retain(|clip| !clip.bindings.is_empty());
         }
         SequenceGuiEdit::ConnectGraphNodes {
             from_node,
@@ -841,6 +826,7 @@ pub(super) fn edit_sequence(
                 lane_index,
                 curve: default_automation_curve(),
                 bindings: Vec::new(),
+                detached_bindings: Vec::new(),
             });
         }
         SequenceGuiEdit::CreateAndBindAutomationClip { target, mapping } => {
@@ -853,7 +839,7 @@ pub(super) fn edit_sequence(
                 automation_target_timing(session, sequence, &target)?
             };
             let sequence = sequence_mut(session, &sequence_id)?;
-            ensure_automation_target_available(sequence, &target)?;
+            ensure_automation_target_available(sequence, &target, None)?;
             let next_id = sequence
                 .automation_clips
                 .iter()
@@ -869,6 +855,7 @@ pub(super) fn edit_sequence(
                 lane_index: 0,
                 curve: default_automation_curve(),
                 bindings: vec![AutomationBinding { target, mapping }],
+                detached_bindings: Vec::new(),
             });
         }
         SequenceGuiEdit::MoveAutomationClip {
@@ -922,13 +909,9 @@ pub(super) fn edit_sequence(
         } => {
             let target = automation_target_from_gui(target)?;
             let sequence = sequence_mut(session, &sequence_id)?;
-            ensure_automation_target_available(sequence, &target)?;
+            ensure_automation_target_available(sequence, &target, Some(clip_id))?;
             automation_clip_mut(sequence, clip_id)?
-                .bindings
-                .push(AutomationBinding {
-                    target,
-                    mapping: automation_mapping_from_gui(mapping)?,
-                });
+                .bind(target, automation_mapping_from_gui(mapping)?);
         }
         SequenceGuiEdit::UnbindAutomationParam { clip_id, target } => {
             let target = automation_target_from_gui(target)?;
@@ -982,6 +965,37 @@ pub(super) fn edit_sequence(
             automation_clip_mut(sequence, clip_id)?
                 .bindings
                 .retain(|binding| binding.target != target);
+        }
+        SequenceGuiEdit::RebindDetachedAutomation {
+            clip_id,
+            detached_index,
+            target,
+            mapping,
+        } => {
+            let target = automation_target_from_gui(target)?;
+            let mapping = automation_mapping_from_gui(mapping)?;
+            let sequence = sequence_mut(session, &sequence_id)?;
+            ensure_automation_target_available(sequence, &target, Some(clip_id))?;
+            let clip = automation_clip_mut(sequence, clip_id)?;
+            if detached_index as usize >= clip.detached_bindings.len() {
+                return Err(GuiMutationError::Invalid(
+                    "Detached automation binding was not found.".to_string(),
+                ));
+            }
+            clip.detached_bindings.remove(detached_index as usize);
+            clip.bind(target, mapping);
+        }
+        SequenceGuiEdit::DiscardDetachedAutomation {
+            clip_id,
+            detached_index,
+        } => {
+            let clip = automation_clip_mut(sequence_mut(session, &sequence_id)?, clip_id)?;
+            if detached_index as usize >= clip.detached_bindings.len() {
+                return Err(GuiMutationError::Invalid(
+                    "Detached automation binding was not found.".to_string(),
+                ));
+            }
+            clip.detached_bindings.remove(detached_index as usize);
         }
     }
     Ok(())
@@ -1059,13 +1073,18 @@ fn automation_target_timing(
 fn ensure_automation_target_available(
     sequence: &dawn_language::sequence::Sequence,
     target: &AutomationTarget,
+    binding_clip_id: Option<u32>,
 ) -> Result<(), GuiMutationError> {
-    if sequence
-        .automation_clips
-        .iter()
-        .flat_map(|clip| &clip.bindings)
-        .any(|binding| &binding.target == target)
-    {
+    if sequence.automation_clips.iter().any(|clip| {
+        clip.bindings
+            .iter()
+            .any(|binding| &binding.target == target)
+            || (binding_clip_id != Some(clip.id.0)
+                && clip
+                    .detached_bindings
+                    .iter()
+                    .any(|binding| &binding.target == target))
+    }) {
         return Err(GuiMutationError::Invalid(
             "Param is already automated.".to_string(),
         ));
@@ -1162,10 +1181,10 @@ use dawn_language::operator::{
 };
 use dawn_language::preview::{PreviewLayoutId, PropGeometry};
 use dawn_language::sequence::{
-    AutomationBinding, AutomationClip, AutomationClipId, AutomationTarget, CompositionGraphNode,
-    CompositionGraphNodeId, CompositionGraphNodeKind, EffectGraphEdge, GraphNodePosition,
-    GraphPortId, MarkCollection, MarkCollectionKey, SequenceAudio as DomainSequenceAudio,
-    SequenceId, SequenceLayerId,
+    AutomationBinding, AutomationClip, AutomationClipId, AutomationDetachmentReason,
+    AutomationTarget, CompositionGraphNode, CompositionGraphNodeId, CompositionGraphNodeKind,
+    EffectGraphEdge, GraphNodePosition, GraphPortId, MarkCollection, MarkCollectionKey,
+    SequenceAudio as DomainSequenceAudio, SequenceId, SequenceLayerId,
 };
 use dawn_language::values::{DawnDuration, DawnTime, DistanceSpan};
 use dawn_project_io::{ProjectSession, SourceObjectKind, ensure_document_can_reference_source};

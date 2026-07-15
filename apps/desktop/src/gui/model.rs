@@ -312,7 +312,7 @@ pub(super) fn layout_target_to_effect_target(
     })
 }
 
-pub(super) fn effect_param_value_from_gui(
+pub(crate) fn effect_param_value_from_gui(
     value: SequenceEffectParamValue,
 ) -> Result<EffectParamValue, GuiMutationError> {
     Ok(match value {

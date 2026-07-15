@@ -45,6 +45,30 @@ pub(crate) fn parse_automation_binding(
     })
 }
 
+pub(crate) fn parse_detached_automation_binding(
+    path: &Utf8Path,
+    value: &Value,
+) -> Result<DetachedAutomationBinding, LoadProjectError> {
+    let target = parse_automation_target(path, required_field(path, value, "target")?)?;
+    let reason = match string_field(path, value, "reason")? {
+        "target_deleted" => AutomationDetachmentReason::TargetDeleted,
+        "definition_changed" => AutomationDetachmentReason::DefinitionChanged,
+        "operator_schema_changed" => AutomationDetachmentReason::OperatorSchemaChanged,
+        other => {
+            return Err(LoadProjectError::InvalidDocument {
+                path: path.to_path_buf(),
+                range: source_range_for_field_value(path, value, "reason"),
+                message: format!("unsupported automation detachment reason `{other}`"),
+            });
+        }
+    };
+    Ok(DetachedAutomationBinding {
+        target,
+        mapping: parse_automation_mapping(path, required_field(path, value, "mapping")?)?,
+        reason,
+    })
+}
+
 pub(crate) fn parse_automation_target(
     path: &Utf8Path,
     value: &Value,
@@ -638,9 +662,9 @@ use dawn_language::operator::OperatorDefinitionId;
 use dawn_language::patch::PatchId;
 use dawn_language::preview::{PreviewLayoutId, PropDefinition, PropDefinitionId, PropGeometry};
 use dawn_language::sequence::{
-    AutomationBinding, AutomationMapping, AutomationTarget, CompositionGraphNodeId,
-    EffectGraphEdge, GraphNodePosition, GraphPortId, MarkCollection, MarkCollectionKey, SequenceId,
-    SequenceLayer, SequenceLayerId,
+    AutomationBinding, AutomationDetachmentReason, AutomationMapping, AutomationTarget,
+    CompositionGraphNodeId, DetachedAutomationBinding, EffectGraphEdge, GraphNodePosition,
+    GraphPortId, MarkCollection, MarkCollectionKey, SequenceId, SequenceLayer, SequenceLayerId,
 };
 use dawn_language::setup::SetupId;
 use dawn_language::values::{
